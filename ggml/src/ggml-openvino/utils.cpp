@@ -1816,7 +1816,8 @@ struct static_build_args {
     std::string   weights_path;
 };
 
-// Cached blobs imported in this process, keyed by fingerprint, so a pair or window switch reuses them.
+// Cached blobs imported in this process, keyed by fingerprint, so a pair or window switch reuses them. Cleared with
+// the shared compiled-model cache when the last backend is freed.
 static std::mutex g_imported_blobs_mutex;
 static std::unordered_map<uint64_t, ov::CompiledModel> g_imported_blobs;
 
@@ -2433,15 +2434,16 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                     std::remove(ggml_openvino_model_cache_blob_path(model_cache_dir, fp).c_str());
                     std::remove(ggml_openvino_model_cache_manifest_path(model_cache_dir, fp).c_str());
                     // A decode window built earlier on its own may have left a weights file for this fingerprint.
-                    ggml_openvino_model_cache_remove_weights(ggml_openvino_model_cache_weights_path(model_cache_dir, fp, fp));
+                    ggml_openvino_model_cache_remove_weights(
+                        ggml_openvino_model_cache_weights_path(model_cache_dir, fp, fp));
                 }
                 ggml_openvino_model_cache_remove_weights(pair_weights_path);
                 ggml_openvino_weights_status status = ggml_openvino_weights_status::written;
                 weights_path = model_weights_path;
                 mc_config["NPUW_WEIGHTS_BANK"] = model_bank;
                 mc_decode_config["NPUW_WEIGHTS_BANK"] = model_bank;
-                weights_layout = ggml_openvino_model_cache_write_weights(
-                    weights_path, { model_prefill, model_decode }, /*keep_existing=*/true, &status);
+                weights_layout = ggml_openvino_model_cache_write_weights(weights_path, {model_prefill, model_decode},
+                                                                         /*keep_existing=*/true, &status);
                 if (status == ggml_openvino_weights_status::mismatch) {
                     GGML_LOG_WARN("ggml-openvino: weights differ from %s, using a per-pair weights file\n",
                                   model_weights_path.c_str());
@@ -2449,7 +2451,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                     mc_config["NPUW_WEIGHTS_BANK"] = pair_bank;
                     mc_decode_config["NPUW_WEIGHTS_BANK"] = pair_bank;
                     weights_layout =
-                        ggml_openvino_model_cache_write_weights(weights_path, { model_prefill, model_decode });
+                        ggml_openvino_model_cache_write_weights(weights_path, {model_prefill, model_decode});
                 }
                 if (!weights_layout) {
                     throw std::runtime_error("ggml-openvino: failed to write NPU weights file " + weights_path);
@@ -2688,8 +2690,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                             std::filesystem::u8path(ggml_openvino_model_cache_blob_path(model_cache_dir, fp)), ec1);
                         const auto weights_time =
                             std::filesystem::last_write_time(std::filesystem::u8path(graph.weights_path), ec2);
-                        const bool cached = !ec1 && !ec2 && blob_time >= weights_time &&
-                                            static_blob_valid(model_cache_dir, fp, cgraph);
+                        const bool cached =
+                            !ec1 && !ec2 && blob_time >= weights_time && static_blob_valid(model_cache_dir, fp, cgraph);
                         if (!cached) {
                             ggml_openvino_model_cache_write_manifest(
                                 ggml_openvino_model_cache_manifest_path(model_cache_dir, fp) + ".source.tmp", cgraph,
@@ -2698,12 +2700,13 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                             auto window_decoder =
                                 std::make_shared<GgmlOvDecoder>(cgraph, m_params, window_c_params, model_weights,
                                                                 is_static, stateful, false, true, prefill_chunk_size);
-                            ov::AnyMap window_config = ggml_openvino_npu_prefill_config(compile_config, *window_decoder);
+                            ov::AnyMap window_config =
+                                ggml_openvino_npu_prefill_config(compile_config, *window_decoder);
                             window_config.erase("CACHE_DIR");
                             window_config.erase("CACHE_MODE");
                             window_config["NPUW_WEIGHTS_BANK"] = graph.decode_config.at("NPUW_WEIGHTS_BANK");
-                            static_build_args args{&core,  device,         false, 0, model_cache_dir, cgraph,
-                                                   true,   false,          true,  graph.weights_path};
+                            static_build_args args{&core,  device, false, 0,    model_cache_dir,
+                                                   cgraph, true,   false, true, graph.weights_path};
                             int64_t t_conv = 0, t_compile = 0;
                             auto model = convert_static_model(args, window_decoder, "prefill", t_conv);
                             ggml_openvino_model_cache_retag_weights(model, *graph.weights_layout);
@@ -2757,9 +2760,19 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                             import_config["NPUW_WEIGHTS_BANK"] = graph.decode_config.at("NPUW_WEIGHTS_BANK");
                             import_config[ov::weights_path.name()] = graph.weights_path;
                             import_config[ov::enable_weightless.name()] = true;
-                            import_cached_blob(core, device, ggml_openvino_model_cache_blob_path(model_cache_dir, fp),
-                                               fp, import_config, "prefill");
-                            ++imported;
+                            const std::string blob_path = ggml_openvino_model_cache_blob_path(model_cache_dir, fp);
+                            try {
+                                import_cached_blob(core, device, blob_path, fp, import_config, "prefill");
+                                ++imported;
+                            } catch (const std::exception & e) {
+                                // Drop the invalid entry, as the pair import does; the window is then built
+                                // when a prompt first needs it.
+                                std::remove(blob_path.c_str());
+                                std::remove(ggml_openvino_model_cache_manifest_path(model_cache_dir, fp).c_str());
+                                GGML_LOG_WARN(
+                                    "ggml-openvino: removed the invalid cached prefill model of KV window %d: %s\n",
+                                    window, e.what());
+                            }
                         }
                     }
                     if (window >= m_params.ctx_per_seq) {
@@ -2990,6 +3003,11 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
     return GGML_STATUS_SUCCESS;
 }
 }  // namespace
+
+void ov_clear_imported_blobs() {
+    std::lock_guard<std::mutex> lock(g_imported_blobs_mutex);
+    g_imported_blobs.clear();
+}
 
 // Drop unselected branches except pure top-k sampling. Keeping those branches gives MTP a stable
 // model interface as active slots change; inactive results use private output buffers.
