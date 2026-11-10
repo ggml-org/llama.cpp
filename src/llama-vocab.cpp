@@ -26,6 +26,9 @@
 // helpers
 //
 
+// escaped space symbol - U+2581 (Lower One Eighth Block)
+static const std::string escaped_space = "\xE2\x96\x81";
+
 struct naive_trie {
     naive_trie() : has_value(false), value(0) {
     }
@@ -685,19 +688,18 @@ struct llm_tokenizer_bpe_session {
 
         if (tok_pre == LLAMA_VOCAB_PRE_TYPE_MMBERT) {
             // Metaspace pre-tokenizer: a text starts with an escaped space, and each escaped space starts a new word
-            static const std::string space = "\xe2\x96\x81";
             std::vector<std::string> words;
             for (auto & word : word_collection) {
                 if (word.find_first_not_of('\n') == std::string::npos) {
                     words.push_back(word);
                     continue;
                 }
-                if (word.compare(0, space.size(), space) != 0) {
-                    word = space + word;
+                if (word.compare(0, escaped_space.size(), escaped_space) != 0) {
+                    word = escaped_space + word;
                 }
                 size_t start = 0;
                 while (start < word.size()) {
-                    size_t end = word.find(space, start + space.size());
+                    size_t end = word.find(escaped_space, start + escaped_space.size());
                     end = end == std::string::npos ? word.size() : end;
                     words.push_back(word.substr(start, end - start));
                     start = end;
@@ -882,7 +884,7 @@ struct llm_tokenizer_wpm_session {
             }
 
             // prepend phantom space
-            const std::string word1 = "\xe2\x96\x81" + word;
+            const std::string word1 = escaped_space + word;
             const int n = word1.size();
 
             const size_t current_tokens = output.size();
@@ -1029,9 +1031,6 @@ struct llm_tokenizer_ugm : llm_tokenizer {
         unknown_token_score = min_score - unknown_token_score_penalty;
     }
 
-    // escaped space symbol - U+2581 (Lower One Eighth Block)
-    const std::string escaped_space = "\xE2\x96\x81";
-
     const char * prefix_replacements = NULL;
     size_t prefix_replacements_size = 0;
 
@@ -1177,7 +1176,7 @@ private:
         normalized->clear();
         normalized->reserve(input.size() * 3);
 
-        const std::string space = vocab.get_escape_whitespaces() ? tokenizer.escaped_space : " ";
+        const std::string space = vocab.get_escape_whitespaces() ? escaped_space : " ";
 
         const bool shall_prepend_space = !vocab.get_treat_whitespace_as_suffix() && vocab.get_add_space_prefix();
         const bool shall_append_space  =  vocab.get_treat_whitespace_as_suffix() && vocab.get_add_space_prefix();
@@ -3778,11 +3777,11 @@ std::string llama_vocab::impl::token_to_piece_for_cache(llama_token token, bool 
 }
 
 static void llama_escape_whitespace(std::string & text) {
-    replace_all(text, " ", "\xe2\x96\x81");
+    replace_all(text, " ", escaped_space);
 }
 
 static void llama_unescape_whitespace(std::string & word) {
-    replace_all(word, "\xe2\x96\x81", " ");
+    replace_all(word, escaped_space, " ");
 }
 
 static std::string llama_decode_text(const std::string & text) {
@@ -3841,8 +3840,8 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                         std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
                         llama_escape_whitespace(text);
 
-                        if (prepend_space && (!prepend_first || text.rfind("\xE2\x96\x81", 0) != 0)) {
-                            text.insert(0, "\xE2\x96\x81");
+                        if (prepend_space && (!prepend_first || text.rfind(escaped_space, 0) != 0)) {
+                            text.insert(0, escaped_space);
                         }
 
 #ifdef PRETOKENIZERDEBUG
@@ -3896,7 +3895,6 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                         }
 
                         // Metaspace prepend_scheme "first": add U+2581 only at the start of the input
-                        static const std::string escaped_space = "\xE2\x96\x81";
                         if (metaspace_prepend_scheme == LLAMA_METASPACE_PREPEND_SCHEME_FIRST &&
                             &fragment == &fragment_buffer.front() && text.rfind(escaped_space, 0) != 0) {
                             text.insert(0, escaped_space);
