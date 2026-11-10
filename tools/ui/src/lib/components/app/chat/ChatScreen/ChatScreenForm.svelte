@@ -93,6 +93,7 @@
 		uploadedFiles = [];
 		clearDraft();
 
+		// called in the same task: the page still sees the form as it was sent (expanded or not)
 		const success = await onSend?.(messageToSend, filesToSend);
 
 		if (!success) {

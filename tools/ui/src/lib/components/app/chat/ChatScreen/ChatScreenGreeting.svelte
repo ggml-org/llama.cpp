@@ -1,20 +1,14 @@
 <script lang="ts">
-	import { CHAT_GREETING_ENTER_DELAY_MS } from '$lib/constants';
+	import { CHAT_FORM_RESIZE_MS, CHAT_GREETING_ENTER_DELAY_MS } from '$lib/constants';
 	import { serverStore } from '$lib/stores';
 
 	interface Props {
-		/** Wait before fading in, by default until the moving form is halfway in. */
-		enterDelayMs?: number;
 		/** Transparent but still in place, e.g. behind the expanded chat form. */
 		faded?: boolean;
 		isEmpty: boolean;
 	}
 
-	let {
-		enterDelayMs = CHAT_GREETING_ENTER_DELAY_MS,
-		faded = false,
-		isEmpty = false
-	}: Props = $props();
+	let { faded = false, isEmpty = false }: Props = $props();
 
 	let hasEntered = $state(false);
 
@@ -37,12 +31,16 @@
 
 	let enterClass = $derived([
 		'transition-opacity duration-300 ease-[cubic-bezier(0.23,1,0.32,1)]',
-		(!hasEntered || faded) && 'opacity-0'
+		!hasEntered && 'opacity-0'
 	]);
 </script>
 
+<!-- fades out right away, and back in once the collapsing form has settled -->
 <div
+	style:transition-delay="{faded ? 0 : CHAT_FORM_RESIZE_MS}ms"
 	class={[
+		'transition-opacity duration-300',
+		faded && 'opacity-0',
 		'pointer-events-none mb-4 hidden px-4 text-center text-balance',
 		isEmpty && 'md:mb-8 block!',
 		isEmpty && !faded && 'pointer-events-auto',
@@ -54,9 +52,8 @@
 		isEmpty && 'md:absolute md:inset-x-0 md:bottom-[calc(100%-var(--chat-form-padding-top))]'
 	]}
 >
-	<!-- fading out goes right away; fading (back) in waits for the form to settle -->
-	<div style:transition-delay="{faded ? 0 : enterDelayMs}ms" class={enterClass}>
-		<h1 class="mb-2 text-2xl font-bold tracking-tight md:text-3xl">Hello there</h1>
+	<div style:transition-delay="{CHAT_GREETING_ENTER_DELAY_MS}ms" class={enterClass}>
+		<h1 class="mb-2 text-2xl font-semibold tracking-tight md:text-3xl">Hello there</h1>
 
 		<p class="text-muted-foreground md:text-lg">
 			{serverStore.props?.modalities?.audio ? 'Record audio, type a message ' : 'Type a message'} or upload

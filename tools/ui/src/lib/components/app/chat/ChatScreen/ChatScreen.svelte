@@ -16,6 +16,8 @@
 	} from '$lib/components/app';
 	import {
 		CHAT_FORM_BOTTOM_OFFSET,
+		CHAT_FORM_CHROME_FADE_MS,
+		CHAT_FORM_EASE_OUT,
 		CHAT_FORM_MOVE_IN_EASING,
 		CHAT_FORM_MOVE_IN_MS,
 		CHAT_FORM_MOVE_OUT_EASING,
@@ -24,8 +26,6 @@
 		CHAT_FORM_MOVE_SHIFT_PX,
 		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
 		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
-		CHAT_FORM_RESIZE_MS,
-		CHAT_GREETING_ENTER_DELAY_MS,
 		ROUTES
 	} from '$lib/constants';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
@@ -56,32 +56,12 @@
 	);
 	// where the form is drawn: follows `isEmpty` once the form has faded out
 	let isFormCentered = $state(untrack(() => isEmpty));
-
-	// Collapsing the expanded form brings the greeting back: it waits for the form to
-	// shrink back first instead of fading in over it
-	let greetingEnterDelayMs = $state(CHAT_GREETING_ENTER_DELAY_MS);
-	let wasComposerExpanded = untrack(() => uiStore.isComposerExpanded);
-
-	$effect(() => {
-		const expanded = uiStore.isComposerExpanded;
-
-		if (expanded === wasComposerExpanded) return;
-
-		wasComposerExpanded = expanded;
-		greetingEnterDelayMs = expanded ? CHAT_GREETING_ENTER_DELAY_MS : CHAT_FORM_RESIZE_MS;
-
-		const timer = setTimeout(
-			() => (greetingEnterDelayMs = CHAT_GREETING_ENTER_DELAY_MS),
-			CHAT_FORM_RESIZE_MS * 2
-		);
-
-		return () => clearTimeout(timer);
-	});
 	// While the form moves between its centered and bottom positions it fades (see
 	// moveForm); otherwise its position eases, in step with the form expanding and
 	// collapsing, which settles it at the bottom while expanded
 	let isFormMoving = $state(false);
 	let isFormHeldAtBottom = $state(false);
+	let isFormLifted = $derived(isFormCentered && !isFormHeldAtBottom);
 	let formWrapper: HTMLElement | undefined = $state();
 	let chatScreenForm: ChatScreenForm | undefined = $state();
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
@@ -290,7 +270,7 @@
 	// the form growing (the editor expanding, more lines) keeps the latest message
 	// in view above it while the reader sits at the bottom
 	$effect(() => {
-		if (formWrapper) return stick.followGrowthOf(formWrapper);
+		if (formWrapper) return stick.followSizeOf(formWrapper);
 	});
 </script>
 
@@ -316,7 +296,7 @@
 		<!-- a phone pins the gauge to the top right, across from the menu toggle; like the toggle,
 		     it steps aside while the expanded chat form covers the screen and its collapse key -->
 		{#if deviceStore.isMobile && showContextGauge.current && !uiStore.isComposerExpanded}
-			<div transition:fade={{ duration: 150 }}>
+			<div transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}>
 				<ChatFormContextGauge
 					class="sidebar-reveal-pin-top fixed top-(--corner-control-top) right-4 z-20 size-10 rounded-full bg-muted/60 border border-border/20 shadow-sm backdrop-blur-sm"
 					corner
@@ -328,7 +308,7 @@
 		     chat has neither yet, and offers the directory in the + menu instead. Like the keys,
 		     it steps aside while the expanded chat form covers the screen -->
 		{#if deviceStore.isMobile && page.params.id && !uiStore.isComposerExpanded}
-			<div transition:fade={{ duration: 150 }}>
+			<div transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}>
 				<ChatScreenMobileHeader
 					onWorkingDirectoryClick={() => chatScreenForm?.openWorkingDirectoryPicker()}
 				/>
@@ -347,6 +327,7 @@
 
 		<div
 			bind:this={formWrapper}
+			style:--chat-form-resize-ease={isFormLifted ? CHAT_FORM_EASE_OUT : undefined}
 			style:padding-top="var(--chat-form-padding-top)"
 			class={[
 				// moves between the centered (empty chat) and bottomed positions with
@@ -364,34 +345,20 @@
 						: deviceStore.isIOSSafari
 							? 'bottom-2 left-2 right-2'
 							: 'bottom-3 right-2 left-2',
-				// Centered on a new chat. Expanded, the form settles at the bottom and its card
-				// grows by exactly the distance it drops (set below, see ChatForm), so its top
-				// edge stays where the collapsed card's was, through the whole transition. It is
-				// lifted by its sticky bottom offset (1rem pinned plus the drop), not a
-				// translate: both that and the card's height are then laid out on the main
-				// thread and start on the same frame, where a composited translate starts a
-				// frame ahead on a quick reversal and the top edge jumps by that frame's travel
-				isFormCentered && !isFormHeldAtBottom
-					? [
-							'md:[--chat-form-drop:calc(50dvh-7rem)] 2xl:[--chat-form-drop:calc(50dvh-4rem)]',
-							// an ease-out without the overshoot: the form can not sink below where it
-							// rests, nor the collapsed card shrink below its text, so an overshoot
-							// would lift the top edge by its last few pixels instead
-							'[--chat-form-resize-ease:cubic-bezier(0.32,0.72,0,1)]',
-							uiStore.isComposerExpanded
-								? 'md:bottom-4'
-								: 'md:bottom-[calc(50dvh-6rem)] 2xl:bottom-[calc(50dvh-3rem)]'
-						]
+				// Lifted to the center on a new chat. Expanded, the form drops to the bottom and
+				// its card grows by exactly that drop (see ChatForm), so its top edge stays put.
+				// The lift is its sticky bottom offset, not a translate: a composited translate
+				// starts a frame ahead of the card's height on a quick reversal
+				isFormLifted &&
+					'md:[--chat-form-drop:calc(50dvh-7rem)] 2xl:[--chat-form-drop:calc(50dvh-4rem)]',
+				isFormLifted && !uiStore.isComposerExpanded
+					? 'md:bottom-[calc(var(--chat-form-drop)+1rem)]'
 					: 'md:bottom-4',
 				!isFormMoving &&
 					'transition-[left,right,bottom] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] max-md:transition-none'
 			]}
 		>
-			<ChatScreenGreeting
-				enterDelayMs={greetingEnterDelayMs}
-				faded={uiStore.isComposerExpanded}
-				isEmpty={isFormCentered && !isFormHeldAtBottom}
-			/>
+			<ChatScreenGreeting faded={uiStore.isComposerExpanded} isEmpty={isFormLifted} />
 
 			<ChatScreenServerError />
 

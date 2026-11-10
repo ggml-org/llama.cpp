@@ -2,6 +2,7 @@
 	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
 	import { Maximize, Minimize } from '@lucide/svelte';
 	import {
+		ActionIcon,
 		ChatAttachmentsList,
 		ChatFormActions,
 		ChatFormCurrentWorkingDirectory,
@@ -11,19 +12,13 @@
 		ChatFormPickers,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
-	import { hasMarkdownStructure } from '$lib/components/app/content/MarkdownEditor/markdown-structure';
-	import { Button } from '$lib/components/ui/button';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
-		CHAT_FORM_EXPAND_MIN_LINES,
-		CHAT_FORM_RESIZE_MS,
-		CHAT_FORM_SHEET_MS,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
+		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
-		SETTING_CONFIG_DEFAULT,
-		UI_DATA_ATTRS
+		SETTING_CONFIG_DEFAULT
 	} from '$lib/constants';
 	import {
 		ContentPartType,
@@ -33,8 +28,8 @@
 		SpecialFileType,
 		ToolSource
 	} from '$lib/enums';
+	import { useChatFormExpansion } from '$lib/hooks/use-chat-form-expansion.svelte';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
-	import { useKeyboardInset } from '$lib/hooks/use-keyboard-inset.svelte';
 	import {
 		chatStore,
 		conversationsStore,
@@ -70,9 +65,9 @@
 		isAudioRecordingSupported,
 		microphoneUnavailableReason
 	} from '$lib/utils/browser-only';
-	import { flushSync, onDestroy, onMount, tick, untrack } from 'svelte';
-	import { toast } from 'svelte-sonner';
+	import { onMount } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		// Data
@@ -155,9 +150,6 @@
 		showWorkingDirectory && deviceStore.isMobile && !conversationsStore.activeConversation
 	);
 
-	// the phone sheet fills the screen, so its actions would sit under an iOS keyboard
-	useKeyboardInset(() => isExpanded && deviceStore.isMobile);
-
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
 		focusInput: refocusInput,
@@ -237,390 +229,29 @@
 	// the card's translucent fill as it looks over the page background, made solid
 	const EXPANDED_SHEET_FILL =
 		'max-md:bg-[color-mix(in_oklab,var(--muted)_60%,var(--background))] max-md:dark:bg-[color-mix(in_oklab,var(--muted)_75%,var(--background))]';
-	/** The phone sheet's ease-out: no overshoot, so it lands without a wobble. */
-	const SHEET_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
-	// Expanded editor: entered once the message holds a markdown block or several lines,
-	// or by hand from the maximize button. Kept while the message has text (deleting a
-	// line does not make it jump back) and left once it is cleared or sent. Collapsing by
-	// hand holds until then too.
-	let isExpanded = $state(false);
-	let isCollapsedByUser = $state(false);
-	let hadText = false;
-
-	$effect(() => {
-		if (!expandable) return;
-
-		const text = value ?? '';
-
-		if (!text.trim()) {
-			if (hadText) {
-				isExpanded = false;
-				isCollapsedByUser = false;
-			}
-
-			hadText = false;
-
-			return;
-		}
-
-		hadText = true;
-
-		if (untrack(() => isExpanded || isCollapsedByUser)) return;
-
-		isExpanded =
-			text.split('\n').length >= CHAT_FORM_EXPAND_MIN_LINES || hasMarkdownStructure(text);
-	});
-
-	$effect(() => {
-		if (expandable) uiStore.isComposerExpanded = isExpanded;
-	});
-
-	// On a phone the expanded form is a full-screen sheet. Animating its size would lay
-	// out (and repaint) the whole screen every frame, so it moves by transform alone, on
-	// the compositor (FLIP): expanding switches to the sheet's layout at once and eases
-	// the card from where the collapsed card was; collapsing slides the sheet down to the
-	// collapsed card's place and only then switches back. The actions get the opposite
-	// shift, so they stay by the bottom edge instead of travelling with the card's top.
 	let cardEl: HTMLDivElement | undefined = $state();
 	let actionsEl: HTMLDivElement | undefined = $state();
-	let cwdEl: HTMLDivElement | undefined = $state();
-	let isSheetMoving = $state(false);
-	// WebKit builds the card's backdrop-filter layer with the last clip the sheet's
-	// animation drew, in the sheet's coordinates, when the blur comes back right as the
-	// card takes its collapsed place: the blur waits for the move to be over
-	let isBlurHeld = $state(false);
-	let collapsedRects: SheetRects | null = null;
-	// where the sheet's bottom edge was when it opened: the collapsed card's place is
-	// held relative to it (see collapseSheet)
-	let sheetBottomAtOpen = 0;
-	let wasExpanded = false;
 
-	type SheetRects = { actions: DOMRect; card: DOMRect; cwd: DOMRect | null; padTop: number };
-	type SheetFrame = { actions: Keyframe; card: Keyframe; cwd: Keyframe };
-
-	function animatesSheet(): boolean {
-		return (
-			matchMedia('(width < 48rem)').matches &&
-			!matchMedia('(prefers-reduced-motion: reduce)').matches
-		);
-	}
-
-	function sheetBottom(): number {
-		return cardEl?.closest('form')?.getBoundingClientRect().bottom ?? 0;
-	}
-
-	function measure(): SheetRects | null {
-		return cardEl && actionsEl
-			? {
-					actions: actionsEl.getBoundingClientRect(),
-					card: cardEl.getBoundingClientRect(),
-					cwd: cwdEl?.getBoundingClientRect() ?? null,
-					padTop: parseFloat(getComputedStyle(cardEl).paddingTop) || 0
-				}
-			: null;
-	}
-
-	/** The laid-out sheet as it is: full screen, the working-directory chip out of sight. */
-	const SHEET_AT_REST: SheetFrame = {
-		actions: { top: '0px' },
-		card: { borderRadius: '0px', clipPath: 'inset(0 0 0 0 round 0px)', top: '0px' },
-		cwd: { left: '0px', opacity: 0, top: '0px' }
-	};
-
-	/**
-	 * The laid-out sheet drawn as the collapsed card at `to`: moved up or down, its edges
-	 * clipped to that card's (its content already sits where the card's does, see the
-	 * sheet's insets), its actions and chip held at their collapsed places. Any top padding
-	 * the sheet has on top of the card's (the status bar's, see pt-safe) is clipped off and
-	 * the sheet raised by it, so its content lands on the card's, not that far below.
-	 *
-	 * Everything moves by relative offsets, not transforms, so it all runs on the main
-	 * thread, on the clip's clock: WebKit hands transforms to its compositor even within
-	 * an animation that also clips, which starts them a frame or two apart, and the
-	 * clipped edges and the content they frame drift apart. An offset reflows nothing
-	 * around it.
-	 */
-	function frameAt(to: SheetRects): SheetFrame {
-		const from = measure()!;
-		const rise = Math.max(0, from.padTop - to.padTop);
-		const dy = to.card.top - from.card.top - rise;
-		const clip = [
-			rise,
-			from.card.right - to.card.right,
-			from.card.height - rise - to.card.height,
-			to.card.left - from.card.left
-		].map((px) => `${Math.max(0, px)}px`);
-
-		return {
-			actions: { top: `${to.actions.top - from.actions.top - dy}px` },
-			card: {
-				borderRadius: '2rem',
-				clipPath: `inset(${clip.join(' ')} round 2rem)`,
-				top: `${dy}px`
-			},
-			cwd: {
-				left: `${to.cwd && from.cwd ? to.cwd.left - from.cwd.left : 0}px`,
-				opacity: 1,
-				top: `${to.cwd && from.cwd ? to.cwd.top - from.cwd.top : 0}px`
-			}
-		};
-	}
-
-	/**
-	 * Plays the frames on the card, its actions and the chip. Nothing holds the last
-	 * frame: WebKit can keep drawing a held, then cancelled, frame's clip on the card
-	 * after its layout changed. A move that ends where the layout does not (collapsing)
-	 * passes `onEnd`, which switches the layout as the animation ends, before that frame
-	 * is painted.
-	 */
-	function animateSheet(
-		frames: SheetFrame[],
-		duration = CHAT_FORM_SHEET_MS,
-		onEnd?: () => void
-	): Promise<unknown> {
-		const options: KeyframeAnimationOptions = { duration, easing: SHEET_EASING };
-		const targets: [HTMLElement | undefined, keyof SheetFrame][] = [
-			[cardEl, 'card'],
-			[actionsEl, 'actions'],
-			[cwdEl, 'cwd']
-		];
-		const animations = targets
-			.filter(([el]) => el)
-			.map(([el, part]) =>
-				el!.animate(
-					frames.map((f) => f[part]),
-					options
-				)
-			);
-
-		if (onEnd) animations[0].addEventListener('finish', onEnd, { once: true });
-
-		return Promise.all(animations.map((a) => a.finished));
-	}
-
-	function clearSheetAnimations() {
-		for (const el of [cardEl, actionsEl, cwdEl]) {
-			el?.getAnimations()
-				.filter((a) => !(a instanceof CSSTransition))
-				.forEach((a) => a.cancel());
-		}
-	}
-
-	// The expanded size is built on the collapsed card's height (on a new chat the card
-	// grows by exactly the distance the form drops, so its top edge stays put), and its
-	// height transition starts from it. A message of a few lines makes that card taller
-	// than its one-line minimum, so the real height is held in a variable on the card,
-	// from expanding until the collapse has settled: a quick toggle back and forth keeps
-	// it rather than measuring a card that is halfway through a transition.
-	let collapsedHold: {
-		card: number;
-		content: number;
-		text: string;
-		editorMax: number;
-		editorMin: number;
-	} | null = null;
-	let collapsedReleaseTimer: ReturnType<typeof setTimeout> | undefined;
-
-	function editorContentHeight(): number {
-		return cardEl?.querySelector<HTMLElement>('.cm-content')?.offsetHeight ?? 0;
-	}
-
-	function setCollapsedHeight(px: number | null) {
-		if (px === null) cardEl?.style.removeProperty('--chat-form-collapsed-height');
-		else cardEl?.style.setProperty('--chat-form-collapsed-height', `${px}px`);
-	}
-
-	function holdCollapsedHeight() {
-		clearTimeout(collapsedReleaseTimer);
-
-		if (collapsedHold || !cardEl) return;
-
-		const editor = getComputedStyle(cardEl.querySelector<HTMLElement>('.chat-form-input')!);
-
-		collapsedHold = {
-			card: cardEl.getBoundingClientRect().height,
-			content: editorContentHeight(),
-			editorMax: parseFloat(editor.maxHeight) || Infinity,
-			editorMin: parseFloat(editor.minHeight) || 0,
-			text: value ?? ''
-		};
-
-		// in place before the switch, with no transition of its own, so the height
-		// transition the switch starts begins at the card's real height
-		cardEl.style.transition = 'none';
-		setCollapsedHeight(collapsedHold.card);
-		void getComputedStyle(cardEl).minHeight;
-		cardEl.style.transition = '';
-	}
-
-	function settleCollapsedHeight() {
-		if (!collapsedHold) return;
-
-		// Back to the height held on expanding, exactly, unless the text changed while
-		// expanded: then to the height the card will have with it (its editor clamped as
-		// when collapsed), so the move stays one line. The editor is only measured then:
-		// mid-move, and as it redraws on taking focus, its height is not the text's
-		const hold = collapsedHold;
-		const editorBox = (content: number) =>
-			Math.max(hold.editorMin, Math.min(content, hold.editorMax));
-
-		setCollapsedHeight(
-			(value ?? '') === hold.text
-				? hold.card
-				: hold.card - editorBox(hold.content) + editorBox(editorContentHeight())
-		);
-
-		clearTimeout(collapsedReleaseTimer);
-		collapsedReleaseTimer = setTimeout(() => {
-			collapsedHold = null;
-			setCollapsedHeight(null);
-		}, CHAT_FORM_RESIZE_MS);
-	}
-
-	// before the DOM switches: where the collapsed card is, and how tall
-	$effect.pre(() => {
-		const expanded = isExpanded;
-
-		untrack(() => {
-			if (expanded === wasExpanded) return;
-
-			if (!expanded) {
-				settleCollapsedHeight();
-
-				return;
-			}
-
-			if (!isSheetMoving && animatesSheet()) collapsedRects = measure();
-
-			holdCollapsedHeight();
-		});
+	const expansion = useChatFormExpansion({
+		// on a phone this leaves focus where it is: focusing would open the keyboard
+		focusInput: () => inputRef?.focus(),
+		getActions: () => actionsEl,
+		getCard: () => cardEl,
+		getValue: () => value,
+		isEnabled: () => expandable
 	});
-
-	// after it switched: ease the sheet in from there
-	$effect(() => {
-		const expanded = isExpanded;
-
-		untrack(() => {
-			if (expanded && !wasExpanded && collapsedRects && !isSheetMoving) {
-				void expandSheet(collapsedRects);
-			}
-
-			if (!expanded) collapsedRects = null;
-
-			wasExpanded = expanded;
-		});
-	});
-
-	async function expandSheet(from: SheetRects) {
-		isSheetMoving = true;
-		// the page lays the form out flush with the screen in the same update (its
-		// wrapper follows uiStore): measure once all of it has landed, before a paint
-		await tick();
-		sheetBottomAtOpen = sheetBottom();
-
-		try {
-			await animateSheet([frameAt(from), SHEET_AT_REST]);
-		} catch {
-			// cancelled (the form went away)
-		}
-
-		clearSheetAnimations();
-		isSheetMoving = false;
-	}
-
-	async function collapseSheet() {
-		if (!collapsedRects || !measure()) {
-			isExpanded = false;
-
-			return;
-		}
-
-		// iOS Safari resizes its viewport while a full-screen sheet is up, and the screen
-		// position the collapsed card had when the sheet opened moves with it: shift that
-		// place by how far the sheet's bottom edge has moved since, so the sheet lands
-		// where the card will rest, in one move
-		const shift = sheetBottom() - sheetBottomAtOpen;
-		const moved = (rect: DOMRect | null) =>
-			rect && new DOMRect(rect.x, rect.y + shift, rect.width, rect.height);
-		const target: SheetRects = {
-			actions: moved(collapsedRects.actions)!,
-			card: moved(collapsedRects.card)!,
-			cwd: moved(collapsedRects.cwd),
-			padTop: collapsedRects.padTop
-		};
-
-		isSheetMoving = true;
-		isBlurHeld = true;
-
-		try {
-			await animateSheet([SHEET_AT_REST, frameAt(target)], CHAT_FORM_SHEET_MS, () => {
-				flushSync(() => (isExpanded = false));
-			});
-		} catch {
-			// cancelled (the form went away): settle at once
-		}
-
-		isExpanded = false;
-		await tick();
-
-		// the text may have changed while expanded, and with it the collapsed height:
-		// close the small remaining gap the same way
-		const settled = measure();
-
-		if (settled && Math.abs(settled.card.top - target.card.top) > 1) {
-			const dy = target.card.top - settled.card.top;
-
-			await animateSheet(
-				[
-					{ actions: {}, card: { top: `${dy}px` }, cwd: {} },
-					{ actions: {}, card: { top: '0px' }, cwd: {} }
-				],
-				CHAT_FORM_SHEET_MS / 2
-			).catch(() => {});
-			clearSheetAnimations();
-		}
-
-		isSheetMoving = false;
-
-		await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-		isBlurHeld = false;
-	}
-
-	// on a phone the page around the expanded sheet takes its fill (see app.css), once
-	// the sheet has settled: repainting the whole page under it mid-move costs frames
-	$effect(() => {
-		if (!expandable || !isExpanded || isSheetMoving) return;
-
-		document.documentElement.setAttribute(UI_DATA_ATTRS.CHAT_FORM_SHEET, '');
-
-		return () => document.documentElement.removeAttribute(UI_DATA_ATTRS.CHAT_FORM_SHEET);
-	});
-
-	onDestroy(() => {
-		clearTimeout(collapsedReleaseTimer);
-
-		if (expandable) uiStore.isComposerExpanded = false;
-	});
-
-	function toggleExpanded() {
-		if (isSheetMoving) return;
-
-		// collapsing an empty form leaves the next message free to expand it again
-		isCollapsedByUser = isExpanded && !!(value ?? '').trim();
-
-		if (isExpanded && animatesSheet()) {
-			void collapseSheet();
-
-			return;
-		}
-
-		isExpanded = !isExpanded;
-		// after the switch, so the editor redrawing as it takes focus can not reach into
-		// the heights measured for it; on a phone focus stays where it is, as focusing
-		// would open the keyboard (and iOS would scroll the page to the editor mid-move)
-		inputRef?.focus();
-	}
+	let isExpanded = $derived(expansion.isExpanded);
+	// shown on hover (always on touch screens) while collapsed, always while expanded: on
+	// the phone sheet it keeps the collapsed card's place, below the status bar
+	let expandToggleClass = $derived(
+		[
+			'absolute top-2.5 right-2.5 z-10 h-8 w-8 rounded-full text-muted-foreground transition-opacity duration-150',
+			isExpanded
+				? 'max-md:top-safe-2.5 max-md:right-[calc(0.625rem+var(--chat-form-side-inset,0.5rem))]'
+				: 'opacity-0 group-hover/chat-form:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100'
+		].join(' ')
+	);
 
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
@@ -683,10 +314,11 @@
 			const isModifier = event.ctrlKey || event.metaKey;
 			const sendOnEnter = currentConfig.sendOnEnter !== false;
 
-			// In the expanded editor, or with the caret inside a code block (``` or
-			// ~~~ fenced, closed or still open while being typed, or indented):
-			// Enter adds a line and only Cmd/Ctrl+Enter submits - skipping submit
-			// lets the editor's own newline through.
+			// In the expanded editor (which says so by its send button), or with the
+			// caret inside a code block (``` or ~~~ fenced, closed or still open
+			// while being typed, or indented): Enter adds a line and only
+			// Cmd/Ctrl+Enter submits - skipping submit lets the editor's own
+			// newline through.
 			if (!isModifier && (isExpanded || inputRef?.isCaretInCodeBlock())) {
 				return;
 			}
@@ -924,13 +556,10 @@
 
 <form
 	class={[
-		// one flex column in both states, so expanding or collapsing changes only
-		// sizes, which ease, never the layout
+		// one flex column in both states, so expanding changes only sizes, which ease
 		'relative flex flex-col',
-		// Expanded: the whole form (card plus the chips below it) never outgrows the room
-		// under the conversation tabs and the form's top padding, so the page itself never
-		// scrolls; past that the card shrinks to fit and the editor scrolls inside. On a
-		// phone it is the whole screen
+		// expanded, the form never outgrows the room under the tabs (the whole screen on a
+		// phone): the page never scrolls, the editor does
 		isExpanded &&
 			'max-h-[calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-2rem)] max-md:max-h-dvh',
 		className
@@ -974,36 +603,30 @@
 	<div
 		bind:this={cardEl}
 		class={[
-			'bg-muted/60 dark:bg-muted/75 border border-border/30 shadow-sm backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl md:rounded-3xl outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] md:rounded-3xl',
-			// on a phone it moves by transform instead (see animateSheet); only its border,
-			// hidden on the sheet and clipped away while it moves, fades back in after
+			INPUT_CLASSES,
+			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl md:rounded-3xl transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))]',
+			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
+			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',
 			// Expanded, it opens to about half the screen, or on a new chat (where the page
-			// sets how far the form drops, see ChatScreen) to its collapsed height plus that
-			// drop, and grows from there with the text. Collapsed, the minimum is its
-			// one-line height, or its real height while expanding and collapsing (see
-			// holdCollapsedHeight), so the transition starts where the card already is
+			// sets how far the form drops) to its collapsed height plus that drop, so its top
+			// edge stays put. The collapsed height is held at the card's real one while it moves
 			'[--chat-form-expanded-min-height:calc(var(--chat-form-drop)+var(--chat-form-collapsed-height))]',
 			isExpanded
 				? 'min-h-[min(var(--chat-form-expanded-min-height,50dvh),calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-5rem))]'
-				: 'min-h-0 md:min-h-(--chat-form-collapsed-height)',
-			// On a phone the expanded card is a square sheet filling the screen. Its
-			// fill is opaque (what the translucent one looks like over the page), so the
-			// Safari toolbar strip below can match it and it needs no backdrop blur, the
-			// costliest thing to repaint, and its actions keep the gap the collapsed form
-			// keeps from the screen's bottom (more in an installed app), or ride 0.5rem above
-			// the keyboard while one is up (see useKeyboardInset; unset, the second term is 0)
-			(isExpanded || isBlurHeld) && 'max-md:backdrop-blur-none',
+				: ['min-h-0', expandable && 'md:min-h-(--chat-form-collapsed-height)'],
+			// the phone sheet's fill is opaque, so Safari's toolbar strip can match it and it
+			// needs no backdrop blur, the costliest thing to repaint
+			(isExpanded || expansion.isBlurHeld) && 'max-md:backdrop-blur-none',
 			isExpanded && [
+				// its actions keep the collapsed form's gap from the screen's bottom, or ride
+				// 0.5rem above the keyboard (unset, the second term is 0)
 				'max-md:min-h-dvh max-md:rounded-none max-md:pb-[max(var(--chat-form-bottom-position,0px),calc(var(--keyboard-inset,-0.5rem)+0.5rem))]',
-				// it reaches the screen's top: its text and collapse button start below the status
-				// bar, which an installed app draws over the page
+				// clear of the status bar, which an installed app draws over the page
 				'max-md:pt-safe',
-				// the sheet fills the screen: no rim and no inner ring around it, so focusing the
-				// editor draws no outline along the screen's edges
+				// no rim, ring or visible border along the screen's edges; the border stays
+				// transparent so nothing inside shifts by its width
 				'max-md:[--glass-edge-side:transparent] max-md:[--glass-edge-mid:transparent] max-md:[--glass-edge-side-focus:transparent] max-md:[--glass-edge-mid-focus:transparent] max-md:[--glass-highlight:transparent]',
-				// no visible border (and so no focus outline): the sheet meets the screen's
-				// edges. Transparent rather than removed, so nothing inside shifts by its width
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
@@ -1011,41 +634,14 @@
 		]}
 		data-slot="input-area"
 	>
-		<!-- Shown on hover (always on touch screens) while collapsed, always while expanded -->
 		{#if expandable}
-			<Tooltip.Root>
-				<Tooltip.Trigger
-					class={[
-						'absolute top-2.5 right-2.5 z-10 transition-opacity duration-150',
-						// on the phone sheet, where the collapsed card's button is (see the
-						// sheet's content inset below)
-						isExpanded && 'max-md:right-[calc(0.625rem+var(--chat-form-side-inset,0.5rem))]',
-						// and below the status bar, which the sheet's padding does not move it past
-						isExpanded && 'max-md:top-safe-2.5',
-						!isExpanded &&
-							'opacity-0 group-hover/chat-form:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100'
-					]}
-				>
-					<Button
-						class="h-8 w-8 rounded-full p-0 text-muted-foreground"
-						onclick={toggleExpanded}
-						type="button"
-						variant="ghost"
-					>
-						<span class="sr-only">{isExpanded ? 'Collapse editor' : 'Expand editor'}</span>
-
-						{#if isExpanded}
-							<Minimize class={ICON_CLASS_DEFAULT} />
-						{:else}
-							<Maximize class={ICON_CLASS_DEFAULT} />
-						{/if}
-					</Button>
-				</Tooltip.Trigger>
-
-				<Tooltip.Content>
-					<p>{isExpanded ? 'Collapse editor' : 'Expand editor'}</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
+			<ActionIcon
+				class={expandToggleClass}
+				icon={isExpanded ? Minimize : Maximize}
+				iconSize={ICON_CLASS_DEFAULT}
+				onclick={expansion.toggle}
+				tooltip={isExpanded ? 'Collapse editor' : 'Expand editor'}
+			/>
 		{/if}
 
 		<ChatAttachmentsList
@@ -1061,10 +657,8 @@
 		<div
 			class={[
 				'relative flex min-h-12 flex-1 flex-col rounded-4xl md:rounded-3xl py-2 pb-2.25 md:py-3!',
-				// The phone sheet is wider on each side than the collapsed card by the page's
-				// side inset (more in an installed app): its content is inset by as much, so
-				// text and actions keep the card's places and widths (nothing reflows, nor
-				// truncates the model name anew) while it moves
+				// the phone sheet is wider than the collapsed card by the page's side inset: its
+				// content is inset by as much, so nothing reflows while it moves
 				isExpanded && 'max-md:px-(--chat-form-side-inset)',
 				isExpanded && 'max-md:rounded-none'
 			]}
@@ -1072,7 +666,7 @@
 			<ChatFormInput
 				bind:this={inputRef}
 				bind:value
-				class={['mb-0.5 px-5 py-1.5 md:pt-0', expandable && 'pr-12']}
+				class={['px-5 py-1.5 md:pt-0', expandable && 'pr-12']}
 				{disabled}
 				expanded={isExpanded}
 				onInput={() => {
@@ -1115,6 +709,7 @@
 						: undefined}
 					{showAddButton}
 					{showModelSelector}
+					submitHint={isExpanded ? 'Cmd/Ctrl+Enter to send' : undefined}
 					{uploadedFiles}
 				/>
 			</div>
@@ -1123,10 +718,9 @@
 
 	<ContextGaugePopup />
 
-	<!-- iOS Safari tints its bottom toolbar from a solid fixed element at the screen's
-	     bottom edge: this strip, under the expanded sheet, carries the sheet's fill. Like
-	     the page's tint, only while the sheet rests: mid-move it would show below it -->
-	{#if isExpanded && !isSheetMoving && deviceStore.isIOSSafari}
+	<!-- iOS Safari tints its bottom toolbar from a solid fixed element at the screen's bottom
+	     edge: this strip carries the sheet's fill while it rests -->
+	{#if isExpanded && !expansion.isSheetMoving && deviceStore.isIOSSafari}
 		<div
 			aria-hidden="true"
 			class={[
@@ -1136,40 +730,19 @@
 		></div>
 	{/if}
 
-	{#if showWorkingDirectory && !deviceStore.isMobile}
-		<div
-			bind:this={cwdEl}
-			class={[
-				'relative self-start transition-[translate,opacity,margin] duration-400 ease-[cubic-bezier(0.3,1.12,0.5,1)] max-md:transition-none',
-				// on a phone the expanded sheet reaches the screen's bottom: the chip gives up
-				// its room (its 1.5 top margin plus its 6 height) and waits below it, out of
-				// sight; it travels there and back with the sheet (see animateSheet)
-				isExpanded &&
-					'max-md:pointer-events-none max-md:-mb-7.5 max-md:translate-y-full max-md:opacity-0'
-			]}
-		>
-			<ChatFormCurrentWorkingDirectory
-				bind:query={pickers.workingDirectoryQuery}
-				customAnchor={mentionAnchor}
-				directory={cwd}
-				{disabled}
-				isOpen={pickers.isWorkingDirectoryPickerOpen}
-				onChange={handleWorkingDirectoryChange}
-				onClose={pickers.handleWorkingDirectoryClose}
-				onOpen={pickers.handleWorkingDirectoryOpen}
-			/>
-		</div>
-	{:else if showWorkingDirectory}
+	{#if showWorkingDirectory}
 		<!-- a phone opens the picker from elsewhere (see isWorkingDirectoryInAddMenu): no chip here -->
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
+			class="self-start"
 			customAnchor={mentionAnchor}
 			directory={cwd}
 			{disabled}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			onChange={handleWorkingDirectoryChange}
 			onClose={pickers.handleWorkingDirectoryClose}
-			showChip={false}
+			onOpen={pickers.handleWorkingDirectoryOpen}
+			showChip={!deviceStore.isMobile}
 		/>
 	{/if}
 </form>

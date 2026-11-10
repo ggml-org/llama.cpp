@@ -9,6 +9,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		BOX_BORDER,
+		CHAT_FORM_CHROME_FADE_MS,
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
@@ -362,7 +363,7 @@
 			     the expanded chat form keeps clear of the bar itself -->
 			{#if deviceStore.isMobile && !uiStore.isComposerExpanded}
 				<div
-					transition:fade={{ duration: 150 }}
+					transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}
 					aria-hidden="true"
 					class="status-bar-fade sidebar-reveal-pin-top pointer-events-none fixed inset-x-0 top-0 z-20"
 				></div>
@@ -390,7 +391,7 @@
 			<!-- the phone sidebar sits under the page, so its toggle rides on the page; it steps
 			     aside while the expanded chat form covers the screen -->
 			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH) && !uiStore.isComposerExpanded}
-				<div transition:fade={{ duration: 150 }}>
+				<div transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}>
 					<ActionIcon
 						ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
 						class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"

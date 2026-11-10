@@ -50,7 +50,16 @@ export const CHAT_GREETING_ENTER_DELAY_MS = CHAT_FORM_MOVE_IN_MS / 2;
 export const CHAT_FORM_RESIZE_MS = 400;
 
 /**
- * On a phone the expanded form is a full-screen sheet that moves by transform,
- * more slowly and without the overshoot (see ChatForm's animateSheet).
+ * On a phone the expanded form is a full-screen sheet, which moves more slowly
+ * (see useChatFormExpansion).
  */
 export const CHAT_FORM_SHEET_MS = 500;
+
+/**
+ * An ease-out without overshoot, for moves that must land exactly: the phone
+ * sheet, and the new chat's form, whose top edge an overshoot would lift.
+ */
+export const CHAT_FORM_EASE_OUT = 'cubic-bezier(0.32, 0.72, 0, 1)';
+
+/** The phone's corner keys and header stepping aside for the expanded form, and back. */
+export const CHAT_FORM_CHROME_FADE_MS = 150;

@@ -1,6 +1,6 @@
 // Guards the follow rules of StickToBottom: right after a press, growth of the
 // content stays put (the reader expanded something), while growth of an element
-// passed to followGrowthOf - the chat form expanding on the reader's click - is
+// passed to followSizeOf - the chat form expanding on the reader's click - is
 // still followed, so the latest message stays in view above it.
 
 import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
@@ -65,7 +65,7 @@ describe('StickToBottom', () => {
 	it('follows a followed element growing right after a press', async () => {
 		const { container, form, stick } = setup();
 
-		cleanup.push(stick.followGrowthOf(form));
+		cleanup.push(stick.followSizeOf(form));
 		await resizeObserved();
 
 		press(container);
@@ -78,7 +78,7 @@ describe('StickToBottom', () => {
 	it('leaves a reader who scrolled away where they are', async () => {
 		const { container, form, stick } = setup();
 
-		cleanup.push(stick.followGrowthOf(form));
+		cleanup.push(stick.followSizeOf(form));
 		container.scrollTop = 0;
 		stick.handleScroll();
 		form.style.height = '350px';

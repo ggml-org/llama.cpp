@@ -29,6 +29,8 @@
 		micWarning?: string | null;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		/** How to send from the keyboard, shown by the send button when it is not plain Enter. */
+		submitHint?: string;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
@@ -52,6 +54,7 @@
 		onWorkingDirectoryClick,
 		showAddButton = true,
 		showModelSelector = true,
+		submitHint,
 		uploadedFiles = []
 	}: Props = $props();
 
@@ -144,6 +147,10 @@
 			/>
 		{/if}
 	</div>
+
+	{#if submitHint}
+		<span class="text-xs whitespace-nowrap text-muted-foreground max-md:hidden">{submitHint}</span>
+	{/if}
 
 	{#if isReasoning && !canSend}
 		<Button

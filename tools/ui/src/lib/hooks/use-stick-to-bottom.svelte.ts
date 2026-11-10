@@ -99,12 +99,11 @@ export class StickToBottom {
 	}
 
 	/**
-	 * Also follows `element`'s growth right after a press. The grace keeps a block
-	 * the reader expands from dragging the viewport, but the chat form expanding on
-	 * their click must carry the conversation along frame by frame, not leave it
-	 * behind and catch up in one jump once the grace ends. Returns the cleanup.
+	 * Also follows `element`'s size changes, even right after a press: the grace keeps
+	 * a block the reader expands from dragging the viewport, but the chat form
+	 * expanding on their click must carry the conversation along. Returns the cleanup.
 	 */
-	followGrowthOf(element: HTMLElement): () => void {
+	followSizeOf(element: HTMLElement): () => void {
 		const observer = new ResizeObserver(() => this.follow(true));
 
 		observer.observe(element);

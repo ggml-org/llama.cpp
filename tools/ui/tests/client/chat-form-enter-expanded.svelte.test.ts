@@ -25,9 +25,7 @@ async function renderExpanded() {
 	const { container } = render(ChatFormTestWrapper, { expandable: true, onSubmit });
 
 	await tick();
-	const toggle = [...container.querySelectorAll('button')].find((button) =>
-		button.textContent?.includes('Expand editor')
-	);
+	const toggle = container.querySelector<HTMLElement>('button[aria-label="Expand editor"]');
 
 	if (!toggle) throw new Error('expand toggle not rendered');
 

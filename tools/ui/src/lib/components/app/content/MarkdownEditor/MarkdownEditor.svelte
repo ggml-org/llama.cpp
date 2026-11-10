@@ -89,7 +89,8 @@
 	const valueSync = Annotation.define<boolean>();
 
 	let host: HTMLDivElement | undefined = $state();
-	let view: EditorView | undefined;
+	// reactive, so what follows the editor's DOM (see getContentDOM) starts once it exists
+	let view = $state.raw<EditorView>();
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 	let previewOpen = $state(false);
