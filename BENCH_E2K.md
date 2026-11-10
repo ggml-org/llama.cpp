@@ -103,3 +103,36 @@ the dependency graph at all and `llama-cli -t 8 --single-turn` runs clean
 (RC=0, Qwen3.8-27B, verified on E16C). The clang-19 workaround is no longer
 needed. `~/bin/*` binaries now come from build-noomp; `~/lib` holds the noomp
 libraries. `llama-e2k` wrapper execs build-noomp/llama-server directly.
+
+## Model selection for E16C: MoE beats dense (Qwen3-30B-A3B)
+
+Dense 27B Q4_K_M is memory-read-bound *by its own weight bytes*: tg scales
+with active-bytes/token, and the effective read rate on this box is ~17 GB/s
+(16.5 GiB / 1.12 t/s), well under the 56 GB/s STREAM ceiling. An MoE model
+only touches its active experts per token, so it reads ~6x less per token:
+
+| model (installed noomp build, t8)  | size    | tg64        | pp512  |
+|------------------------------------|---------|-------------|--------|
+| Qwen3-30B-A3B Q4_K_S (qwen3moe)    | 16.25G  | 6.81 (nr) / 6.90 (rp) | 21.26 |
+| Qwen3.8-27B Q4_K_M (qwen35 dense)  | 15.32G  | 1.12        | 4.07   |
+
+**x6.1 generation, x5.2 prompt throughput at 30B-class quality.**
+Repack makes no difference on the MoE (6.81 vs 6.90 within noise) - unlike
+dense 27B - because gemv over active experts is tiny relative to overhead.
+
+Quality smoke (4 prompts: bat-and-ball, microwave physics, two_sum code,
+average-speed problem, thinking disabled):
+- 30B-A3B: 4/4 correct (10; correct dielectric-heating physics; optimal
+  hash-map two_sum; 355 km / 5 h setup correct).
+- 27B dense: 2/4 (answered 5 cents on bat-and-ball; speed problem 74 km/h
+  correct; physics and code correct). The 27B GGUF appears mid-quantization
+  in quality; MoE was strictly better on reasoning prompts in this sample.
+
+Recommendation: keep `Qwen3-30B-A3B-Instruct-2507-Q4_K_S.gguf` (UD-quant) as
+the daily driver on E16C:
+
+```
+llama-server -m ~/models/Qwen3-30B-A3B-Q4_K_S.gguf -t 8 --port 8080
+```
+
+6.8 t/s is interactive-fast; pp512 21 t/s handles RAG-length prompts.
