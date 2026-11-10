@@ -4946,7 +4946,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         device->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
 
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-        device->xe_fa_support = device->coopmat_support &&
+        device->xe_fa_support = device->coopmat_support && device->properties.limits.maxComputeSharedMemorySize >= 48 * 1024 &&
                                 ((device->vendor_id == VK_VENDOR_ID_INTEL && (device->architecture == INTEL_XE2 || (device->architecture == INTEL_XE1 && device->uma))) ||
                                  (device->subgroup_size == 32 && device->coopmat_support_16x16x16_f32acc && (getenv("GGML_VK_FORCE_XE_FA") != nullptr)));
 #endif

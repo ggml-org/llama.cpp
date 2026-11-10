@@ -3,11 +3,9 @@
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
 #extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
-#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #extension GL_KHR_cooperative_matrix : enable
 #extension GL_KHR_memory_scope_semantics : enable
 #extension GL_KHR_shader_subgroup_basic : enable
-#extension GL_KHR_shader_subgroup_ballot : enable
 #extension GL_EXT_shared_memory_block : enable
 #extension GL_KHR_shader_subgroup_shuffle : enable
 #extension GL_KHR_shader_subgroup_shuffle_relative : enable
@@ -248,7 +246,7 @@ void main() {
     if (q_reg <= max_q_reg_staging) {
         if (sg < qk_sg) {
             if (aligned_q_stride) {
-                [[unroll]] for (uint i = 0; i < q_reg / sg_mat_reduce / 8; ++i) {
+                [[dont_unroll]] for (uint i = 0; i < q_reg / sg_mat_reduce / 8; ++i) {
                     const uint qsh_offset = (qsh_base + sg * q_reg * TN + lane_c * q_reg) / 8 + i * sg_mat_reduce + lane_r;
                     mat2x4 q_temp = data_qm2x4[q_offset];
                     q_temp *= p.scale;
@@ -256,7 +254,7 @@ void main() {
                     q_offset += sg_mat_reduce;
                 }
             } else {
-                [[unroll]] for (uint i = 0; i < q_reg / sg_mat_reduce; ++i) {
+                [[dont_unroll]] for (uint i = 0; i < q_reg / sg_mat_reduce; ++i) {
                     const uint qsh_offset = (qsh_base + sg * q_reg * TN + lane_c * q_reg) + i * sg_mat_reduce + lane_r;
                     float q_temp = data_q[q_offset];
                     q_temp *= p.scale;
@@ -279,7 +277,7 @@ void main() {
             const uint coord_q = sg * TN * TK + qsh_base;
             [[unroll]] for (uint iq = 0; iq < q_reg / TK; ++iq) {
                 if (aligned_q_stride) {
-                    [[unroll]] for (uint idx = 0; idx < TK / sg_mat_reduce / 8; ++idx) {
+                    [[dont_unroll]] for (uint idx = 0; idx < TK / sg_mat_reduce / 8; ++idx) {
                         const uint qsh_offset = (qsh_base + sg * TK * TN + lane_c * TK) / 8 + idx * sg_mat_reduce + lane_r;
                         mat2x4 q_temp = data_qm2x4[q_offset];
                         q_temp *= p.scale;
@@ -287,7 +285,7 @@ void main() {
                         q_offset += sg_mat_reduce;
                     }
                 } else {
-                    [[unroll]] for (uint idx = 0; idx < TK / sg_mat_reduce; ++idx) {
+                    [[dont_unroll]] for (uint idx = 0; idx < TK / sg_mat_reduce; ++idx) {
                         const uint qsh_offset = (qsh_base + sg * TK * TN + lane_c * TK) + idx * sg_mat_reduce + lane_r;
                         float q_temp = data_q[q_offset];
                         q_temp *= p.scale;
@@ -312,14 +310,14 @@ void main() {
 
     if (sg < qk_sg) {
         if (aligned_q_stride) {
-            [[unroll]] for (uint i = 0; i < q_shmem / sg_mat_reduce / 8; ++i) {
+            [[dont_unroll]] for (uint i = 0; i < q_shmem / sg_mat_reduce / 8; ++i) {
                 const uint qsh_offset = (qsh_base + sg * q_shmem * TN + lane_c * q_shmem) / 8 + i * sg_mat_reduce + lane_r;
                 mat2x4 q_temp = data_qm2x4[q_offset + i * sg_mat_reduce];
                 q_temp *= p.scale;
                 F16M2x4Poolsh.M2x4sh[qsh_offset] = f16mat2x4(q_temp);
             }
         } else {
-            [[unroll]] for (uint i = 0; i < q_shmem / sg_mat_reduce; ++i) {
+            [[dont_unroll]] for (uint i = 0; i < q_shmem / sg_mat_reduce; ++i) {
                 const uint qsh_offset = (qsh_base + sg * q_shmem * TN + lane_c * q_shmem) + i * sg_mat_reduce + lane_r;
                 float q_temp = data_q[q_offset + i * sg_mat_reduce];
                 q_temp *= p.scale;
@@ -583,12 +581,12 @@ void main() {
             if (seq_boundary_check && loop + 1 == loop_count) {
                 const uint v_global_coord_base = loop * step_p + sg_v_c * TK + lane_c;
                 if (v_boundary_check) {
-                    [[unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
+                    [[dont_unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
                         const uint v_coord_temp = v_global_coord_base + c * SubGroupSize;
                         uint v_oob_offset = (v_base + v_coord_temp * p.nbv1 + sg_v_r * TM) / 4 + lane_r;
                         uint vsh_temp_offset = vsh_offset + c * SubGroupSize + lane_c + lane_r * 4 * TK;
-                        [[unroll]] for (uint r = 0; r < v_loops - 1; ++r) {
-                            [[unroll]] for (uint idx = 0; idx < TM / sg_mat_reduce / 4; ++idx) {
+                        [[dont_unroll]] for (uint r = 0; r < v_loops - 1; ++r) {
+                            [[dont_unroll]] for (uint idx = 0; idx < TM / sg_mat_reduce / 4; ++idx) {
                                 f16vec4 vv4_temp = (v_coord_temp < p.nek1) ? data_vv4[v_oob_offset + idx * sg_mat_reduce] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                                 F16Poolsh.F16sh[vsh_temp_offset + idx * sg_mat_reduce * TK * 4 + 0 * TK] = vv4_temp.x;
                                 F16Poolsh.F16sh[vsh_temp_offset + idx * sg_mat_reduce * TK * 4 + 1 * TK] = vv4_temp.y;
@@ -601,11 +599,11 @@ void main() {
                     }
 
                     if ((sg_v_r + (v_loops - 1) * v_hori_groups) * TM < HSV) {
-                        [[unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
+                        [[dont_unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
                             const uint v_coord_temp = v_global_coord_base + c * SubGroupSize;
                             const uint v_oob_offset = (v_base + v_coord_temp * p.nbv1 + sg_v_r * TM + TM * (v_loops - 1) * v_hori_groups) / 4 + lane_r;
                             const uint vsh_temp_offset = vsh_offset + TM * (v_loops - 1) * TK * v_hori_groups + c * SubGroupSize + lane_c + lane_r * 4 * TK;
-                            [[unroll]] for (uint idx = 0; idx < TM / sg_mat_reduce / 4; ++idx) {
+                            [[dont_unroll]] for (uint idx = 0; idx < TM / sg_mat_reduce / 4; ++idx) {
                                 f16vec4 vv4_temp = (v_coord_temp < p.nek1) ? data_vv4[v_oob_offset + idx * sg_mat_reduce] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                                 F16Poolsh.F16sh[vsh_temp_offset + idx * sg_mat_reduce * TK * 4 + 0 * TK] = vv4_temp.x;
                                 F16Poolsh.F16sh[vsh_temp_offset + idx * sg_mat_reduce * TK * 4 + 1 * TK] = vv4_temp.y;
@@ -615,12 +613,12 @@ void main() {
                         }
                     }
                 } else {
-                    [[unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
+                    [[dont_unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
                         const uint v_coord_temp = v_global_coord_base + c * SubGroupSize;
                         uint v_oob_offset = (v_base + v_coord_temp * p.nbv1 + sg_v_r * TM) / 4 + lane_r;
                         uint vsh_temp_offset = vsh_offset + c * SubGroupSize + lane_c + lane_r * 4 * TK;
-                        [[unroll]] for (uint r = 0; r < v_loops; ++r) {
-                            [[unroll]] for (uint idx = 0; idx < TM / sg_mat_reduce / 4; ++idx) {
+                        [[dont_unroll]] for (uint r = 0; r < v_loops; ++r) {
+                            [[dont_unroll]] for (uint idx = 0; idx < TM / sg_mat_reduce / 4; ++idx) {
                                 f16vec4 vv4_temp = (v_coord_temp < p.nek1) ? data_vv4[v_oob_offset + idx * sg_mat_reduce] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                                 F16Poolsh.F16sh[vsh_temp_offset + idx * sg_mat_reduce * TK * 4 + 0 * TK] = vv4_temp.x;
                                 F16Poolsh.F16sh[vsh_temp_offset + idx * sg_mat_reduce * TK * 4 + 1 * TK] = vv4_temp.y;
@@ -687,26 +685,26 @@ void main() {
                             const uint v_global_coord_base = d0 * TK + loop * step_p + lane_c;
                             const uint vsh_staging_store = vsh_oob_staging_base + (sg * TM * TK + lane_c * TM) / 4 + lane_r;
                             const uint vsh_staging_load = vsh_oob_staging_base * 4 + sg * TM * TK;
-                            [[dont_unroll]] for (uint idx = 0; idx < acc_count; ++idx) {
+                            [[unroll]] for (uint idx = 0; idx < acc_count; ++idx) {
                                 subgroupBarrier();
-                                [[unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
+                                [[dont_unroll]] for (uint c = 0; c < tk_sg_reduce; ++c) {
                                     const uint v_coord_temp = v_global_coord_base + c * SubGroupSize;
                                     const uint v_oob_offset = (v_base + v_coord_temp * p.nbv1 + sg_o_c * Bc + pv_col * acc_count * TM + idx * TM) / 4 + lane_r;
 
                                     if (v_row_overshoot_check) {
                                         const uint v_row_temp = sg_o_c * Bc + pv_col * acc_count * TM + idx * TM;
                                         if (v_row_temp < HSV) {
-                                            [[unroll]] for (uint r = 0; r < TM / sg_mat_reduce / 4; ++r) {
+                                            [[dont_unroll]] for (uint r = 0; r < TM / sg_mat_reduce / 4; ++r) {
                                                 f16vec4 vv4_temp = (v_coord_temp < p.nek1) ? data_vv4[v_oob_offset + sg_mat_reduce * r] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                                                 F16V4Poolsh.F16V4sh[vsh_staging_store + c * SubGroupSize * TM / 4 + sg_mat_reduce * r] = vv4_temp;
                                             }
                                         } else {
-                                            [[unroll]] for (uint r = 0; r < TM / sg_mat_reduce / 4; ++r) {
+                                            [[dont_unroll]] for (uint r = 0; r < TM / sg_mat_reduce / 4; ++r) {
                                                 F16V4Poolsh.F16V4sh[vsh_staging_store + c * SubGroupSize * TM / 4 + sg_mat_reduce * r] = f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                                             }
                                         }
                                     } else {
-                                        [[unroll]] for (uint r = 0; r < TM / sg_mat_reduce / 4; ++r) {
+                                        [[dont_unroll]] for (uint r = 0; r < TM / sg_mat_reduce / 4; ++r) {
                                             f16vec4 vv4_temp = (v_coord_temp < p.nek1) ? data_vv4[v_oob_offset + sg_mat_reduce * r] : f16vec4(0.0f, 0.0f, 0.0f, 0.0f);
                                             F16V4Poolsh.F16V4sh[vsh_staging_store + c * SubGroupSize * TM / 4 + sg_mat_reduce * r] = vv4_temp;
                                         }
