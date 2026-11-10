@@ -141,7 +141,7 @@ struct gemm_path_i8 {
         row_stride(rs), row_stride_r4(rs4), gemm_rows(std::move(rows)) {}
 };
 
-// Dense Q4 uses the F16 path; this table serves MoE Q4 and the other integer paths.
+// IME2 dense Q4 uses F16; IME1 dense Q4 and MoE use integer kernels.
 template <typename BLOC_TYPE, int64_t INTER_SIZE, bool MOE>
 static gemm_path_i8 resolve_gemm_i8() {
     constexpr size_t blk_len = INTER_SIZE;
@@ -213,9 +213,12 @@ static gemm_path_i8 resolve_gemm_i8() {
         const auto i1_r1 = spacemit_kernels::ime1::quantize_a_i8_r1;
         if constexpr (std::is_same_v<BLOC_TYPE, block_q4_0> || std::is_same_v<BLOC_TYPE, block_q4_1> ||
                       std::is_same_v<BLOC_TYPE, block_q4_K>) {
+            const size_t i1_row = spacemit_kernels::q8_blk_size(blk_len);
             if constexpr (MOE) {
-                const size_t i1_row = spacemit_kernels::q8_blk_size(blk_len);
                 return { spacemit_kernels::ime1::gemm_i8i4_k32, i1_r1, nullptr, a_pack::r1, i1_row, i1_row };
+            } else {
+                return { spacemit_kernels::ime1::gemm_i8i4_k32, i1_r1,
+                         spacemit_kernels::ime1::quantize_a_i8_r4, a_pack::r4, i1_row, i1_row };
             }
         }
     }
@@ -2425,7 +2428,7 @@ const ggml::spacemit::tensor_traits_base * ggml_spacemit_get_optimal_repack_type
 #endif
 
 #if defined(RISCV64_SPACEMIT_IME1)
-                if (cur->ne[2] > 1 && cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
                     return &i8_traits<block_q4_0, 32, 16>();
                 }
 #endif
@@ -2449,7 +2452,7 @@ const ggml::spacemit::tensor_traits_base * ggml_spacemit_get_optimal_repack_type
 #endif
 
 #if defined(RISCV64_SPACEMIT_IME1)
-                if (cur->ne[2] > 1 && cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
                     return &i8_traits<block_q4_1, 32, 16>();
                 }
 #endif
@@ -2473,7 +2476,7 @@ const ggml::spacemit::tensor_traits_base * ggml_spacemit_get_optimal_repack_type
 #endif
 
 #if defined(RISCV64_SPACEMIT_IME1)
-                if (cur->ne[2] > 1 && cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
+                if (cur->ne[1] % 16 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime1)) {
                     return &i8_traits<block_q4_K, 32, 16>();
                 }
 #endif
@@ -2594,10 +2597,14 @@ size_t ggml_spacemit_nbytes(ggml_backend_buffer_type_t buft, const ggml_tensor *
     switch (tensor->type) {
         case GGML_TYPE_Q4_K:
             // Q41Block needs 19 B per row/K32; each Q4_K block contains eight K32 windows.
-            nbytes = ggml::cpu::riscv64_spacemit::use_f16_link(tensor)
-                         ? remap_block_nbytes(sizeof(block_q4_K), 8 * sizeof(ggml::cpu::riscv64_spacemit::Q41Block<32, 32, 2>) / 32, 32)
-                         : (tensor->ne[2] > 1 ? remap_block_nbytes(sizeof(block_q4_K), sizeof(block_q4_1) * 8)
-                                              : add_strided_nbytes(row_nbytes, 1, 1));
+            if (ggml::cpu::riscv64_spacemit::use_f16_link(tensor)) {
+                nbytes = remap_block_nbytes(sizeof(block_q4_K),
+                                           8 * sizeof(ggml::cpu::riscv64_spacemit::Q41Block<32, 32, 2>) / 32, 32);
+            } else if (tensor->ne[2] > 1 || ggml_spacemit_get_optimal_repack_type(tensor)) {
+                nbytes = remap_block_nbytes(sizeof(block_q4_K), sizeof(block_q4_1) * 8);
+            } else {
+                nbytes = add_strided_nbytes(row_nbytes, 1, 1);
+            }
             break;
         case GGML_TYPE_Q6_K:
             nbytes = remap_block_nbytes(sizeof(block_q6_K), sizeof(block_q8_0) * 8, 32);
