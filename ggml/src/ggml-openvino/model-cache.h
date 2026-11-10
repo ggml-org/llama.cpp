@@ -39,8 +39,13 @@ struct ggml_openvino_source_mapping {
     uintptr_t end;
     uint64_t offset;
     uint64_t identity;
+    // The mapping cannot be written, so its pages always hold the file's bytes.
+    bool read_only;
 };
 
+// Find the file mapping that holds [data, data + size), or nullptr. Cache mappings for one buffer lifetime.
+const ggml_openvino_source_mapping * ggml_openvino_find_source_mapping(const void * data, size_t size,
+                                                                     std::vector<ggml_openvino_source_mapping> & mappings);
 // Identify mmap weights without reading their pages. Cache mappings for one buffer lifetime.
 uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::vector<ggml_openvino_source_mapping> & mappings);
 uint64_t ggml_backend_openvino_weight_fingerprint(const ggml_tensor * tensor);
