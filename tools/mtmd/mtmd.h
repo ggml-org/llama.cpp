@@ -353,6 +353,7 @@ DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tok
            "use mtmd_encode_chunk() instead");
 
 // text chunk will be ignored silently, only media chunk will be encoded
+// the output is stored in ctx: do not call it from several threads at once
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
@@ -377,6 +378,7 @@ MTMD_API void         mtmd_batch_free(mtmd_batch * batch);
 // returns 3 if it cannot be batched with the existing chunks in the batch
 MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk);
 
+// thread-safe, the output is stored in the batch
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
@@ -431,11 +433,13 @@ MTMD_API int32_t mtmd_audio_stream_push(mtmd_audio_stream * stream, const float 
 // pad the stream so that all pending rows can be produced
 // end = false: the stream stays open (use it on a pause, to get a partial transcript)
 // end = true:  no more push() is accepted
+// thread-safe across streams
 // returns 0 on success, 1 if the stream has ended
 MTMD_API int32_t mtmd_audio_stream_flush(mtmd_audio_stream * stream, bool end);
 
 // produce the next decoder rows
 // last_token is the token sampled from the previous row, LLAMA_TOKEN_NULL before the first sample
+// thread-safe across streams
 // return value:
 //   > 0 number of rows ready, read them with mtmd_audio_stream_get_output_embd()
 //   0   more audio is needed
@@ -557,6 +561,7 @@ MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
 
 // run one step and update the state in place
 // the caller drives the backbone and collects the audio frames
+// thread-safe across gen states
 MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
                                 mtmd_gen_state * state,
                                 const struct mtmd_gen_inp * inp,
