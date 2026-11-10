@@ -105,6 +105,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_DIAG",            op::translate_diag                             },
         {"GGML_OP_TRI",             op::translate_tri                              },
         {"GGML_OP_SET",             op::translate_set                              },
+        {"GGML_OP_POOL_1D",         op::translate_pool_1d                          },
         {"GGML_OP_POOL_2D",         op::translate_pool_2d                          },
         {"GGML_OP_ROLL",            op::translate_roll                             },
         {"GGML_OP_UPSCALE",         op::translate_upscale                          },

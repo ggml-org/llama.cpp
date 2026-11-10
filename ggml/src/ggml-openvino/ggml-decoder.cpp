@@ -735,6 +735,7 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         break;
     }
+    case GGML_OP_POOL_1D:
     case GGML_OP_POOL_2D: {
         const ggml_op_pool pool_mode = static_cast<ggml_op_pool>(node->op_params[0]);
         switch (pool_mode) {
@@ -3037,8 +3038,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
             break;
         case GGML_OP_SUM_ROWS:
-            // SUM_ROWS reduces ggml axis 0 to size 1 and preserves all other axes, so the
-            // dynamic dim is preserved unless it was axis 0 (then it is summed away).
+        case GGML_OP_POOL_1D:
+            // SUM_ROWS/POOL_1D change only ggml axis 0 and preserve all other axes, so the
+            // dynamic dim is preserved unless it was axis 0.
             m_node_dynamic_dims[node] =
                 (m_node_dynamic_dims[node->src[0]] == 0) ? -1 : m_node_dynamic_dims[node->src[0]];
             break;

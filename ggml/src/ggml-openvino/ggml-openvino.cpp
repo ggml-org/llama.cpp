@@ -1695,6 +1695,17 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_POOL_1D: {
+        const ggml_op_pool pool_mode = static_cast<ggml_op_pool>(op->op_params[0]);
+        if (pool_mode != GGML_OP_POOL_MAX && pool_mode != GGML_OP_POOL_AVG) {
+            return {false, "POOL_1D mode " + std::to_string(pool_mode) + " is not supported"};
+        }
+        // a window fully in the padding gives -FLT_MAX (max) or 0 (avg) in ggml, OV differs
+        if (op->op_params[3] >= op->op_params[1]) {
+            return {false, "POOL_1D with padding >= kernel size is not supported"};
+        }
+        break;
+    }
     case GGML_OP_POOL_2D: {
         if (ggml_openvino_is_gpu()) {
             const int32_t * params = op->op_params;
@@ -2102,9 +2113,12 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (!supported) {
             return {false, "unary op " + std::string(ggml_unary_op_name(ggml_get_unary_op(op))) + " has no op translator"};
         }
-        if (op->type == GGML_TYPE_F32 && (ggml_get_unary_op(op) == GGML_UNARY_OP_EXP ||
-                                          ggml_get_unary_op(op) == GGML_UNARY_OP_EXPM1)) {
-            return {false, "UNARY_EXP / UNARY_EXPM1 with F32 type is not supported"};
+        // OV GPU matches ggml, CPU fails some tests
+        if (op->type == GGML_TYPE_F32 && ggml_get_unary_op(op) == GGML_UNARY_OP_EXP && !ggml_openvino_is_gpu()) {
+            return {false, "UNARY_EXP with F32 type is not supported on " + ggml_openvino_get_device_name()};
+        }
+        if (op->type == GGML_TYPE_F32 && ggml_get_unary_op(op) == GGML_UNARY_OP_EXPM1) {
+            return {false, "UNARY_EXPM1 with F32 type is not supported"};
         }
         break;
     }

@@ -60,6 +60,7 @@ GGML_OP_CONVERTER(translate_set);
 GGML_OP_CONVERTER(translate_diag);
 GGML_OP_CONVERTER(translate_tri);
 GGML_OP_CONVERTER(translate_solve_tri);
+GGML_OP_CONVERTER(translate_pool_1d);
 GGML_OP_CONVERTER(translate_pool_2d);
 GGML_OP_CONVERTER(translate_roll);
 GGML_OP_CONVERTER(translate_upscale);
