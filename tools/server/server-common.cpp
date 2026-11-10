@@ -80,7 +80,7 @@ std::filesystem::path get_server_exec_path() {
         }
         throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
     }
-#elif defined(__OpenBSD__)
+#elif defined(HAVE_GETEXECPATH)
     char path[PATH_MAX];
     
     int result = getexecpath(path, sizeof(path));
