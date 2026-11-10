@@ -4,8 +4,9 @@
  * Reads the Prometheus text of `/metrics` (requires the server's `--metrics`
  * flag) and the per-slot task counters of `/slots`, deriving throughput as
  * counter deltas across refreshes — `/slots` carries no timing fields of its
- * own. When the server runs without `--metrics` the read reports `no-metrics`
- * instead of failing, so the slot table keeps working.
+ * own. The KV-cache share comes from the slot counters too: `/metrics` has
+ * no cache family to read. When the server runs without `--metrics` the read
+ * reports `no-metrics` instead of failing, so the slot table keeps working.
  *
  * Stateless per the service-layer rules: the previous counters sample lives in
  * module scope so deltas survive across calls; no Svelte runes here.
@@ -39,14 +40,15 @@ export interface PerformanceReading {
 	decodePerSec: number | null;
 	requestsProcessing: number | null;
 	requestsDeferred: number | null;
-	/** Share of prompt tokens served from the KV cache since the previous refresh. */
+	/** Share of prompt tokens served from the KV cache since the previous refresh
+	 * (summed slot-counter deltas; `processed` is the computed portion, `cached`
+	 * the KV-hit portion). */
 	cacheHitRate: number | null;
 	slots: PerformanceSlot[];
 }
 
 /** Metric sample names as emitted (the endpoint prefixes them with `llamacpp:`). */
 const METRIC = {
-	cacheTotal: 'prompt_tokens_cached_total',
 	decodeRate: 'predicted_tokens_seconds',
 	decodeTotal: 'tokens_predicted_total',
 	promptRate: 'prompt_tokens_seconds',
@@ -59,9 +61,8 @@ const METRIC = {
 let previous: {
 	at: number;
 	decodeTotal: number | null;
-	promptCachedTotal: number | null;
 	promptTotal: number | null;
-	slots: Map<number, { decoded: number | null; processed: number | null }>;
+	slots: Map<number, { cached: number | null; decoded: number | null; processed: number | null }>;
 } | null = null;
 
 /** Parses Prometheus exposition text into name -> value (labels stripped). */
@@ -115,7 +116,6 @@ export class PerformanceService {
 		const seconds = previous ? (at - previous.at) / 1000 : 0;
 		const values = metricsText === null ? new Map<string, number>() : parseMetrics(metricsText);
 		const promptTotal = pick(values, METRIC.promptTotal);
-		const promptCachedTotal = pick(values, METRIC.cacheTotal);
 		const decodeTotal = pick(values, METRIC.decodeTotal);
 		// windowed gauges when present, deltas across refreshes as fallback
 		const promptPerSec =
@@ -124,19 +124,35 @@ export class PerformanceService {
 		const decodePerSec =
 			pick(values, METRIC.decodeRate) ??
 			deltaRate(decodeTotal, previous?.decodeTotal ?? null, seconds);
-		const cacheHitRate = cacheHitShare(
-			promptCachedTotal,
-			promptTotal,
-			previous?.promptCachedTotal ?? null,
-			previous?.promptTotal ?? null
-		);
-		const slotSnapshots = new Map<number, { decoded: number | null; processed: number | null }>();
+		const slotSnapshots = new Map<
+			number,
+			{ cached: number | null; decoded: number | null; processed: number | null }
+		>();
+
+		let deltaCached = 0;
+		let deltaProcessed = 0;
+
 		const performanceSlots: PerformanceSlot[] = slots.map((slot) => {
 			const processed = slot.n_prompt_tokens_processed ?? null;
+			const cached = slot.n_prompt_tokens_cache ?? null;
 			const decoded = slot.next_token?.[0]?.n_decoded ?? null;
 			const prior = previous?.slots.get(slot.id) ?? null;
 
-			slotSnapshots.set(slot.id, { decoded, processed });
+			// positive deltas only: task stats reset when a new task starts
+			if (cached !== null && prior !== null && prior.cached !== null && cached >= prior.cached) {
+				deltaCached += cached - prior.cached;
+			}
+
+			if (
+				processed !== null &&
+				prior !== null &&
+				prior.processed !== null &&
+				processed >= prior.processed
+			) {
+				deltaProcessed += processed - prior.processed;
+			}
+
+			slotSnapshots.set(slot.id, { cached, decoded, processed });
 
 			return {
 				decoded,
@@ -144,13 +160,15 @@ export class PerformanceService {
 				id: slot.id,
 				isProcessing: slot.is_processing,
 				nCtx: slot.n_ctx,
-				promptCached: slot.n_prompt_tokens_cache ?? null,
+				promptCached: cached,
 				promptPerSec: deltaRate(processed, prior?.processed ?? null, seconds),
 				promptProcessed: processed
 			};
 		});
 
-		previous = { at, decodeTotal, promptCachedTotal, promptTotal, slots: slotSnapshots };
+		previous = { at, decodeTotal, promptTotal, slots: slotSnapshots };
+		const cacheHitRate =
+			deltaCached + deltaProcessed > 0 ? deltaCached / (deltaCached + deltaProcessed) : null;
 
 		return {
 			cacheHitRate,
@@ -190,24 +208,4 @@ export class PerformanceService {
 
 		return text.trim().startsWith('{') && text.includes('--metrics') ? null : text;
 	}
-}
-
-/** KV-cache share of the prompt-token deltas; null until a delta exists. */
-function cacheHitShare(
-	cached: number | null,
-	total: number | null,
-	previousCached: number | null,
-	previousTotal: number | null
-): number | null {
-	if (cached === null || total === null || previousCached === null || previousTotal === null) {
-		return null;
-	}
-
-	const deltaTotal = total - previousTotal;
-
-	if (deltaTotal <= 0) {
-		return null;
-	}
-
-	return Math.min(1, Math.max(0, cached - previousCached) / deltaTotal);
 }
