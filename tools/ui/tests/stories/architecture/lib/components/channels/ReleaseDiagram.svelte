@@ -21,27 +21,27 @@
 
 		<text class="lbl" x="20" y="28">ONCE PER LLAMA.CPP RELEASE</text>
 
-		<rect class="node-lib" height="96" rx="10" width="230" x="20" y="120" />
+		<rect class="node-lib" height="112" rx="10" width="230" x="20" y="112" />
 
-		<text class="t" x="36" y="148">Build</text>
+		<text class="t" x="36" y="142">Build</text>
 
-		<text class="m" x="36" y="170">vite build · adapter-static</text>
+		<text class="m" x="36" y="164">vite build · adapter-static</text>
 
-		<text class="s" x="36" y="196">one dist/, hash router,</text>
+		<text class="s" x="36" y="190">one dist/, hash router,</text>
 
-		<text class="s" x="36" y="212">relative paths</text>
+		<text class="s" x="36" y="208">relative paths</text>
 
-		<path class="wire" d="M250,168 H300" />
+		<path class="wire" d="M250,168 H324" />
 
-		<path class="wire" d="M300,74 V262" />
+		<path class="wire" d="M324,74 V262" />
 
-		<path class="wire" d="M300,74 H338" marker-end="url(#release-arrow)" />
+		<path class="wire" d="M324,74 H338" marker-end="url(#release-arrow)" />
 
-		<path class="wire" d="M300,168 H338" marker-end="url(#release-arrow)" />
+		<path class="wire" d="M324,168 H338" marker-end="url(#release-arrow)" />
 
-		<path class="wire" d="M300,262 H338" marker-end="url(#release-arrow)" />
+		<path class="wire" d="M324,262 H338" marker-end="url(#release-arrow)" />
 
-		<text class="m" x="260" y="160">same dist</text>
+		<text class="m" x="256" y="160">same dist</text>
 
 		<text class="lbl" x="340" y="28">CHANNEL</text>
 

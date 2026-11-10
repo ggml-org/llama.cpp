@@ -177,12 +177,12 @@
 		list-style: none;
 	}
 
+	/* the number set inline in the indent, so it sits on the first line's baseline and the item's text, code and links
+	flow as one run */
 	.editorial > :global(ol li) {
 		counter-increment: rule;
-		display: grid;
-		grid-template-columns: 3rem 1fr;
-		align-items: baseline;
 		padding-bottom: 20px;
+		padding-left: 3rem;
 		border-bottom: 1px solid var(--line-default);
 		font-size: 20px;
 		line-height: 1.45;
@@ -190,6 +190,9 @@
 
 	.editorial > :global(ol li)::before {
 		content: counter(rule);
+		display: inline-block;
+		width: 3rem;
+		margin-left: -3rem;
 		color: var(--fg-muted);
 		font: 500 13px var(--mono);
 	}
