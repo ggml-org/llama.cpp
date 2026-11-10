@@ -9,14 +9,14 @@
 		ModelsSelector
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
 	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
 	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import { ChatService } from '$lib/services';
-	import { conversationsStore, deviceStore, settingsStore } from '$lib/stores';
-	import { getFileTypeCategory } from '$lib/utils';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
+	import { abbreviateWorkingDir, getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
 		canSend?: boolean;
@@ -34,6 +34,8 @@
 		/** How to send from the keyboard, shown by the send button when it is not plain Enter. */
 		submitHint?: string;
 		uploadedFiles?: ChatUploadedFile[];
+		/** The chat's working directory, which the + menu names. */
+		workingDirectory?: string | null;
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
@@ -58,7 +60,8 @@
 		showAddButton = true,
 		showModelSelector = true,
 		submitHint,
-		uploadedFiles = []
+		uploadedFiles = [],
+		workingDirectory = null
 	}: Props = $props();
 
 	let currentConfig = $derived(settingsStore.config);
@@ -119,6 +122,11 @@
 		},
 		get onWorkingDirectoryClick() {
 			return onWorkingDirectoryClick;
+		},
+		get workingDirectoryLabel() {
+			return workingDirectory
+				? abbreviateWorkingDir(workingDirectory, toolsStore.serverHome)
+				: SET_WORKING_DIRECTORY_LABEL;
 		}
 	});
 </script>

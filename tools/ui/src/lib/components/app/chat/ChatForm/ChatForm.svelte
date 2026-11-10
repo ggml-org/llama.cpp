@@ -148,11 +148,10 @@
 	);
 
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
-	// A phone has no chip for the working directory under the form: a chat shows it in its
-	// header (see ChatScreenMobileHeader), and a new chat, which has no header yet, offers it in
-	// the + menu
+	// The + menu offers the working directory, except in a phone's chat, which shows it in its
+	// header (see ChatScreenMobileHeader)
 	let isWorkingDirectoryInAddMenu = $derived(
-		showWorkingDirectory && deviceStore.isMobile && !conversationsStore.activeConversation
+		showWorkingDirectory && !(deviceStore.isMobile && conversationsStore.activeConversation)
 	);
 
 	const pickers = useChatFormPickers({
@@ -802,6 +801,7 @@
 					{showModelSelector}
 					submitHint={isExpanded ? 'Cmd/Ctrl+Enter to send' : undefined}
 					{uploadedFiles}
+					workingDirectory={cwd}
 				/>
 			</div>
 		</div>
@@ -822,18 +822,15 @@
 	{/if}
 
 	{#if showWorkingDirectory}
-		<!-- a phone opens the picker from elsewhere (see isWorkingDirectoryInAddMenu): no chip here -->
+		<!-- opened from the + menu, a phone chat's header or `/cwd` -->
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
-			class="self-start"
 			customAnchor={activePickerAnchor}
 			directory={cwd}
 			{disabled}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			onChange={handleWorkingDirectoryChange}
 			onClose={pickers.handleWorkingDirectoryClose}
-			onOpen={pickers.handleWorkingDirectoryOpen}
-			showChip={!deviceStore.isMobile}
 		/>
 	{/if}
 </form>

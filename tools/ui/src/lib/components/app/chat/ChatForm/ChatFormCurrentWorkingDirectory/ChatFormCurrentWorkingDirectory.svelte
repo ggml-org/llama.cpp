@@ -1,11 +1,10 @@
 <script lang="ts">
-	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
 	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
-	import { FolderOpen } from '@lucide/svelte';
+	import { FolderOpen, X } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as Popover from '$lib/components/ui/popover';
-	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
+	import { HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
 	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
@@ -18,11 +17,10 @@
 	const FOCUS_DELAY_MS = 0;
 
 	interface Props {
-		class?: string;
 		disabled?: boolean;
 		directory?: string | null;
-		/** Controlled open state; the host owns it so the chip click and the
-		 * `/cwd` slash command open the picker through the same path. */
+		/** Controlled open state; the host owns it so the + menu and the `/cwd`
+		 * slash command open the picker through the same path. */
 		isOpen: boolean;
 		/** Two-way bound query, kept in sync with the text after `/cwd `. */
 		query: string;
@@ -31,23 +29,16 @@
 		onChange?: (directory: string | null) => void;
 		/** Lets the host refocus the chat input after the popover closes. */
 		onClose?: () => void;
-		/** Fired when the chip is clicked so the host can open the picker. */
-		onOpen?: () => void;
-		/** Renders the chip trigger; off when the host anchors its own trigger. */
-		showChip?: boolean;
 	}
 
 	let {
-		class: className = '',
 		customAnchor = null,
 		directory = null,
 		disabled = false,
 		isOpen,
 		onChange,
 		onClose,
-		onOpen,
-		query = $bindable(''),
-		showChip = true
+		query = $bindable('')
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -268,22 +259,9 @@
 		}
 	}
 
-	function clearDirectory(event?: MouseEvent) {
-		// Stop the click from bubbling into the chip button and re-opening
-		// the picker on top of the now-cleared state.
-		event?.stopPropagation();
-		event?.preventDefault();
+	function clearDirectory() {
 		onChange?.(null);
 		closePicker();
-	}
-
-	function handleDismiss(event?: MouseEvent) {
-		event?.stopPropagation();
-		event?.preventDefault();
-
-		if (directory) {
-			clearDirectory(event);
-		}
 	}
 
 	function handleOpenChange(open: boolean) {
@@ -296,30 +274,7 @@
 			onClose?.();
 		}
 	}
-
-	let innerWidth = $state(0);
-	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
-
-{#if showChip}
-	<button
-		class={[
-			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-			className
-		]}
-		{disabled}
-		onclick={onOpen}
-		type="button"
-	>
-		<ChatFormCurrentWorkingDirectoryChip
-			{directory}
-			{disabled}
-			{homeBase}
-			onClear={handleDismiss}
-			{showTooltip}
-		/>
-	</button>
-{/if}
 
 <!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and
      lined up with the search results, and text sized for a phone -->
@@ -362,6 +317,23 @@
 				<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
 
 				<span>Browse</span>
+			</button>
+		{/if}
+
+		{#if directory}
+			<button
+				class={[
+					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
+					inDrawer
+						? 'gap-2 rounded-lg px-2 py-2.5 text-[15px]'
+						: 'gap-2 rounded-sm px-2 py-1.5 text-sm'
+				]}
+				onclick={clearDirectory}
+				type="button"
+			>
+				<X class="size-4 shrink-0 text-muted-foreground" />
+
+				<span>Clear working directory</span>
 			</button>
 		{/if}
 
@@ -424,5 +396,3 @@
 		</Popover.Content>
 	</Popover.Root>
 {/if}
-
-<svelte:window bind:innerWidth />
