@@ -7,6 +7,8 @@
 		DialogConversationDelete,
 		DialogConversationRename,
 		DialogDiscoverModels,
+		DialogGroup,
+		DialogGroupPicker,
 		DialogMcpServers,
 		DialogSearch,
 		DialogSettingsChat,
@@ -502,7 +504,7 @@
 	function handleSidebarAction(action: SidebarAction): void {
 		switch (action) {
 			case SidebarAction.NEW_CHAT:
-				afterMobileClose(() => void conversationsStore.openNewChat());
+				afterMobileClose(() => void conversationsStore.openNewChat({ inNewTab: true }));
 
 				break;
 			case SidebarAction.SEARCH:
@@ -706,6 +708,10 @@
 <DialogMcpServers bind:open={mcpDialogOpen} />
 
 <DialogDiscoverModels bind:open={uiStore.discoverModelsOpen} />
+
+<DialogGroup />
+
+<DialogGroupPicker />
 
 <ModelsManagerModelDrawer />
 

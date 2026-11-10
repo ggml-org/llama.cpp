@@ -1,6 +1,8 @@
 <script lang="ts">
+	import SidebarNavigationGroupSubmenu from './SidebarNavigationGroupSubmenu.svelte';
 	import {
 		Download,
+		FolderInput,
 		GitBranch,
 		ListChecks,
 		Loader2,
@@ -10,7 +12,8 @@
 		Pin,
 		PinOff,
 		Square,
-		Trash2
+		Trash2,
+		Unlink
 	} from '@lucide/svelte';
 	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
 	import { TruncatedText } from '$lib/components/app';
@@ -25,15 +28,18 @@
 		SHORTCUT_EXPORT_CONVERSATION,
 		UI_DATA_ATTRS
 	} from '$lib/constants';
+	import type { MenuKind } from '$lib/enums';
 	import { useLongPress } from '$lib/hooks/use-long-press.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import {
 		chatStore,
 		conversationsStore,
 		deviceStore,
+		groupsStore,
 		settingsStore,
 		sidebarDragStore,
-		tabsStore
+		tabsStore,
+		uiStore
 	} from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
 	import { hapticTap } from '$lib/utils';
@@ -134,6 +140,41 @@
 		openInNewTab();
 	}
 
+	function setGroup(groupId: string | null) {
+		void conversationsStore.setConversationGroup(conversation.id, groupId);
+	}
+
+	// a group the chat points at may be gone; then it is in none
+	let groupId = $derived(groupsStore.groupIdOf(conversation));
+
+	// the picker stands in for the submenu where a phone's menu shows no flyouts
+	function handlePickGroup(event: Event) {
+		event.stopPropagation();
+		uiStore.openGroupPicker({ currentGroupId: groupId, onSelect: setGroup });
+	}
+
+	// a chat in a group can move to another one or leave it, a loose chat can join one
+	let groupActions = $derived<MenuAction[]>([
+		{
+			icon: FolderInput,
+			label: 'Move to group',
+			onclick: handlePickGroup,
+			submenu: groupSubmenu
+		},
+		...(groupId
+			? [
+					{
+						icon: Unlink,
+						label: 'Remove from group',
+						onclick: (event: Event) => {
+							event.stopPropagation();
+							setGroup(null);
+						}
+					}
+				]
+			: [])
+	]);
+
 	// the "more actions" dropdown and the right-click menu offer the same actions; the
 	// shortcuts act on the active conversation, so only its row shows them
 	let actions = $derived<MenuAction[]>([
@@ -164,6 +205,7 @@
 			onclick: handleEdit,
 			shortcut: isActive ? SHORTCUT_EDIT_CONVERSATION : undefined
 		},
+		...groupActions,
 		{
 			icon: Download,
 			label: 'Export',
@@ -397,6 +439,16 @@
 		{/if}
 	</button>
 </ContextMenuActions>
+
+{#snippet groupSubmenu({ close, kind }: { close: () => void; kind: MenuKind })}
+	<SidebarNavigationGroupSubmenu
+		currentGroupId={groupId}
+		{kind}
+		label="Move to group"
+		onClose={close}
+		onSelect={setGroup}
+	/>
+{/snippet}
 
 <style>
 	button {
