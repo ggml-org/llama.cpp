@@ -99,11 +99,13 @@
 		gap: calc(var(--u) * 1.2);
 		min-height: 0;
 	}
+	/* the title in Llama Mono, after the feature's name in Pi; Mono's tightest tracking */
 	.title {
 		justify-self: center;
+		font-family: var(--mono);
 		font-size: calc(var(--u) * 3.2);
 		line-height: 0.92;
-		letter-spacing: -0.035em;
+		letter-spacing: -0.03em;
 	}
 	/* Pi, the lines, the models and what runs them, two units in from the margin on both sides like Julien's */
 	.diagram {
