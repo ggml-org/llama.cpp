@@ -366,6 +366,9 @@ export { detectToolUseSupport } from './chat-template-tool-detector';
 // Model memory estimation
 export { minMemoryTierGb } from './model-compatibility';
 
+// GGUF file metadata, e.g. which encoders an mmproj carries
+export { type GgufMetadata, type GgufValue, readGgufMetadata } from './gguf-metadata';
+
 // Cryptography utilities
 
 export { uuid } from './uuid';
