@@ -258,7 +258,6 @@
 	// wrapped, as the wider row of its own would fit it again and flip it straight back
 	let textHeight = $state<number | null>(null);
 	let wrappedAtLength = Infinity;
-	let isSingleRow = $state(untrack(() => singleRow));
 	let canBeSingleRow = $derived(
 		singleRow &&
 			!deviceStore.isMobile &&
@@ -267,6 +266,8 @@
 			!mcpStore.resources.hasAttachments &&
 			!value.includes('\n')
 	);
+	// starts as it will settle, so a phone never draws a frame of the single row
+	let isSingleRow = $state(untrack(() => canBeSingleRow));
 
 	// Re-runs after its own switch too, and measures the text as it is laid out then: the
 	// height the input last reported can be the other layout's
