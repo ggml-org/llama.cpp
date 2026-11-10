@@ -1158,8 +1158,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 
     @autoreleasepool {
         if (dev->mtl_device == nil) {
-            // Allow selecting specific Metal device by index
-            // Use GGML_METAL_DEVICE_INDEX env var, or fall back to device parameter
+            // Allow selecting specific Metal device by index Use GGML_METAL_DEVICE_INDEX env var, or fall back to device parameter
             int device_index = device;
             const char * env_idx = getenv("GGML_METAL_DEVICE_INDEX");
             if (env_idx) {
@@ -1351,9 +1350,7 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                 dev->props.use_shared_buffers = dev->props.has_unified_memory;
                 // An external GPU used to be forced onto shared (host) buffers here.
                 // That makes the card read every weight over the bus on every token:
-                // a q5_K matvec measured 2.80 GFLOPS shared vs 113.7 GFLOPS in VRAM,
-                // and a decode step 1203 ms vs 51 ms. Discrete GPUs get private
-                // buffers; GGML_METAL_SHARED_BUFFERS_ENABLE still forces them back.
+                // a q5_K matvec measured 2.80 GFLOPS shared vs 113.7 GFLOPS in VRAM, and a decode step 1203 ms vs 51 ms. Discrete GPUs get private buffers; GGML_METAL_SHARED_BUFFERS_ENABLE still forces them back.
                 if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
                     dev->props.use_shared_buffers = false;
                 }
@@ -1631,8 +1628,7 @@ static bool ggml_metal_supports_mul_mat_op(
 }
 
 
-// on devices without simdgroup-reduction the kernels run with the real simdgroup
-// width; only the types ported for that width are allowed on MUL_MAT so far
+// on devices without simdgroup-reduction the kernels run with the real simdgroup width; only the types ported for that width are allowed on MUL_MAT so far
 static bool ggml_metal_supports_mul_mat_wide(const struct ggml_tensor * op) {
     if (op->src[1]->type != GGML_TYPE_F32) {
         return false;
@@ -1799,8 +1795,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_CUMSUM:
         case GGML_OP_MEAN:
         case GGML_OP_SOFT_MAX:
-            // the reduce kernels use the device simdgroup width, so they do not need the
-            // simdgroup reduction hardware check (AMD eGPUs report that as false)
+            // the reduce kernels use the device simdgroup width, so they do not need the simdgroup reduction hardware check (AMD eGPUs report that as false)
             return (has_simdgroup_reduction || dev->props.simd_width > 0) && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_L2_NORM:
             return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
@@ -1851,19 +1846,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return true;
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
-        case GGML_OP_MHC_ROUTE:
-            // fused residual-stream routing: f32 only, contiguous inner dim
-            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
-                   op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
-                   ggml_is_contiguous(op) &&
-                   ggml_is_contiguous(op->src[2]) && ggml_is_contiguous(op->src[3]) &&
-                   op->src[0]->nb[0] == sizeof(float) && op->src[1]->nb[0] == sizeof(float);
-        case GGML_OP_MHC_MERGE:
-            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 &&
-                   op->src[2]->type == GGML_TYPE_F32 && op->src[3]->type == GGML_TYPE_F32 &&
-                   ggml_is_contiguous(op) &&
-                   op->src[0]->nb[0] == sizeof(float) && op->src[1]->nb[0] == sizeof(float) &&
-                   op->src[2]->nb[0] == sizeof(float) && op->src[3]->nb[0] == sizeof(float);
         case GGML_OP_FLASH_ATTN_EXT:
             // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
             if (op->src[5] != NULL) {
@@ -1944,8 +1926,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 default:
                     return false;
             }
-            // the vec kernels need no simdgroup matrix, and they are instantiated per simd width,
-            // kv type and (dk,dv) pair, so availability is the real check here
+            // the vec kernels need no simdgroup matrix, and they are instantiated per simd width, kv type and (dk,dv) pair, so availability is the real check here
             if (ggml_metal_op_flash_attn_ext_vec_available(op, dev->props.simd_width, has_bfloat)) {
                 return true;
             }
@@ -2033,8 +2014,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_RWKV_WKV7:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            // the kernel derives nsg from the real simd width; the gate must too,
-            // otherwise every non-Apple GPU keeps this op on the CPU
+            // the kernel derives nsg from the real simd width; the gate must too, otherwise every non-Apple GPU keeps this op on the CPU
             return op->src[2]->ne[0] % dev->props.simd_width == 0;
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
@@ -2773,8 +2753,7 @@ void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_t
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
-        // AMD eGPU drivers return nil for newBufferWithBytesNoCopy on interior pointers
-        // (KV cache views), so fall back to a real buffer and copy the blit result out
+        // AMD eGPU drivers return nil for newBufferWithBytesNoCopy on interior pointers (KV cache views), so fall back to a real buffer and copy the blit result out
         const bool staging_fallback = buf_dst == nil;
         if (staging_fallback) {
             buf_dst = [buf->dev->mtl_device newBufferWithLength:max_data - min_data

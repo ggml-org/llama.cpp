@@ -221,12 +221,6 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
 
     int n_fuse = 1;
 
-    // post-fusion dispatch trace: one line per group actually sent to the GPU
-    if (getenv("GGML_METAL_DISP_LOG")) {
-        static int cnt = 0;
-        if (cnt < 4000) { fprintf(stderr, "DISP %s\n", ggml_op_name(node->op)); cnt++; }
-    }
-
     // check if the current node can run concurrently with other nodes before it
     // the condition is that:
     //  - the current node cannot write to any previous src or dst ranges
@@ -487,14 +481,6 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         case GGML_OP_TRI:
             {
                 n_fuse = ggml_metal_op_tri(ctx, idx);
-            } break;
-        case GGML_OP_MHC_ROUTE:
-            {
-                n_fuse = ggml_metal_op_mhc_route(ctx, idx);
-            } break;
-        case GGML_OP_MHC_MERGE:
-            {
-                n_fuse = ggml_metal_op_mhc_merge(ctx, idx);
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
@@ -2749,8 +2735,7 @@ static int ggml_metal_op_mul_mat_mv(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-// tiled GEMM for devices without simdgroup matrix: beats the matrix-vector path once
-// there are enough src1 rows to amortise the dequantized weight tile
+// tiled GEMM for devices without simdgroup matrix: beats the matrix-vector path once there are enough src1 rows to amortise the dequantized weight tile
 static bool ggml_metal_op_mul_mat_tiled_ok(const ggml_tensor * op) {
     const ggml_type tsrc0 = op->src[0]->type;
 
@@ -2763,8 +2748,7 @@ static bool ggml_metal_op_mul_mat_tiled_ok(const ggml_tensor * op) {
         return false;
     }
 
-    // the tiled kernels read src1 assuming it is contiguous along k; a transposed activation
-    // would be silently misread, so refuse it explicitly
+    // the tiled kernels read src1 assuming it is contiguous along k; a transposed activation would be silently misread, so refuse it explicitly
     if (op->src[1]->nb[0] != sizeof(float)) {
         return false;
     }
@@ -2784,8 +2768,7 @@ static bool ggml_metal_op_mul_mat_tiled_ok(const ggml_tensor * op) {
         return false;
     }
 
-    // q4_K, q6_K and q8_0 are all on by default: the dequant-once tile beats the matvec
-    // row-by-row path from small batches up (measured 4.8x-8.6x on this card).
+    // q4_K, q6_K and q8_0 are all on by default: the dequant-once tile beats the matvec row-by-row path from small batches up (measured 4.8x-8.6x on this card).
     // GGML_METAL_TILED_MIN_N overrides all of them.
     static const int64_t min_n_env = [] {
         const char * s = getenv("GGML_METAL_TILED_MIN_N");
@@ -3278,15 +3261,11 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     const int64_t ne01 = op->src[0]->ne[1]; // batch size
 
     // use vec kernel if the batch size is small and if the head size is supported.
-    // The batch limit is a correctness boundary, not a tuning choice: with `ne01 < 20` removed,
-    // test-backend-ops reports 1171 of 4116 FLASH_ATTN_EXT cases failing (nb=75 alone is 1018 of
-    // them), so the kernel is not validated beyond small batches. See "What is not done".
+    // The batch limit is a correctness boundary, not a tuning choice: with `ne01 < 20` removed, test-backend-ops reports 1171 of 4116 FLASH_ATTN_EXT cases failing (nb=75 alone is 1018 of them), so the kernel is not validated beyond small batches. See "What is not done".
     return (ne00 % 32 == 0);
 }
 
-// the vec kernels are instantiated per (kv type, dk, dv) pair and per simdgroup width; a 64-lane
-// device has only the F16/BF16 baseline instantiations, so every other kv type and every head
-// size outside that list has to keep using the non-vec kernels
+// the vec kernels are instantiated per (kv type, dk, dv) pair and per simdgroup width; a 64-lane device has only the F16/BF16 baseline instantiations, so every other kv type and every head size outside that list has to keep using the non-vec kernels
 bool ggml_metal_op_flash_attn_ext_vec_available(const ggml_tensor * op, int nw, bool has_bfloat) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
@@ -3683,8 +3662,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
-    // simdgroup width: the vec kernels take their cache-row width C from it, and the baseline
-    // NE per (dk,dv) depends on it
+    // simdgroup width: the vec kernels take their cache-row width C from it, and the baseline NE per (dk,dv) depends on it
     const int nw = props_dev->simd_width > 0 ? props_dev->simd_width : 32;
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
@@ -6291,19 +6269,6 @@ int ggml_metal_op_topk_moe_grouped(ggml_metal_op_t ctx, int idx) {
 int ggml_metal_op_mul_mat_tiled(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
-    if (getenv("GGML_METAL_TILED_DEBUG")) {
-        static int n_logged = 0;
-        if (n_logged++ < 40 && op->src[0]->type == GGML_TYPE_Q8_0) {
-            fprintf(stderr,
-                    "[tiled q8] M=%d N=%d K=%d nb01=%llu nb02=%llu nb11=%llu dst_nb0=%llu dst_nb1=%llu ne0=%d ne1=%d\n",
-                    (int) op->ne[1], (int) op->src[1]->ne[1], (int) op->src[0]->ne[0],
-                    (unsigned long long) op->src[0]->nb[1], (unsigned long long) op->src[0]->nb[2],
-                    (unsigned long long) op->src[1]->nb[1],
-                    (unsigned long long) op->nb[0], (unsigned long long) op->nb[1],
-                    (int) op->ne[0], (int) op->ne[1]);
-        }
-    }
-
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
@@ -6352,84 +6317,6 @@ int ggml_metal_op_mul_mat_tiled(ggml_metal_op_t ctx, int idx) {
     } else {
         ggml_metal_encoder_dispatch_threadgroups(enc, (ne01 + 15)/16, (ne11 + 63)/64, 1, 128, 1, 1);
     }
-
-    return 1;
-}
-
-int ggml_metal_op_mhc_route(ggml_metal_op_t ctx, int idx) {
-    ggml_tensor * op = ctx->node(idx);
-
-    ggml_metal_library_t lib = ctx->lib;
-    ggml_metal_encoder_t enc = ctx->enc;
-
-    ggml_tensor * a = op->src[0];
-    ggml_tensor * b = op->src[1];
-
-    ggml_metal_kargs_mhc args = {
-        /*.d     =*/ (int32_t) a->ne[0],
-        /*.n_tok =*/ (int32_t) a->ne[1],
-        /*.n_str =*/ (int32_t) a->ne[2],
-        /*.nb_a1 =*/ a->nb[1],
-        /*.nb_a2 =*/ a->nb[2],
-        /*.nb_b1 =*/ b->nb[1],
-        /*.nb_b2 =*/ b->nb[2],
-        /*.nb_x1 =*/ 0,
-        /*.nb_x2 =*/ 0,
-        /*.nb_p1 =*/ 0,
-        /*.nb_p2 =*/ 0,
-    };
-
-    auto pipeline = ggml_metal_library_get_pipeline_mhc_route(lib);
-
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), 3);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), 4);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         5);
-
-    ggml_metal_encoder_dispatch_threadgroups(enc, (uint32_t) a->ne[1], (uint32_t) a->ne[2], 1, 32, 1, 1);
-
-    return 1;
-}
-
-int ggml_metal_op_mhc_merge(ggml_metal_op_t ctx, int idx) {
-    ggml_tensor * op = ctx->node(idx);
-
-    ggml_metal_library_t lib = ctx->lib;
-    ggml_metal_encoder_t enc = ctx->enc;
-
-    ggml_tensor * a = op->src[0];
-    ggml_tensor * b = op->src[1];
-    ggml_tensor * x = op->src[2];
-    ggml_tensor * p = op->src[3];
-
-    ggml_metal_kargs_mhc args = {
-        /*.d     =*/ (int32_t) a->ne[0],
-        /*.n_tok =*/ (int32_t) a->ne[1],
-        /*.n_str =*/ (int32_t) a->ne[2],
-        /*.nb_a1 =*/ a->nb[1],
-        /*.nb_a2 =*/ a->nb[2],
-        /*.nb_b1 =*/ b->nb[1],
-        /*.nb_b2 =*/ b->nb[2],
-        /*.nb_x1 =*/ x->nb[1],
-        /*.nb_x2 =*/ x->nb[2],
-        /*.nb_p1 =*/ p->nb[1],
-        /*.nb_p2 =*/ p->nb[2],
-    };
-
-    auto pipeline = ggml_metal_library_get_pipeline_mhc_merge(lib);
-
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), 3);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), 4);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         5);
-
-    ggml_metal_encoder_dispatch_threadgroups(enc, (uint32_t) a->ne[1], (uint32_t) a->ne[2], 1, 128, 1, 1);
 
     return 1;
 }

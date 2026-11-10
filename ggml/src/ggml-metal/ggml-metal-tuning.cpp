@@ -26,9 +26,7 @@ int fa_vec_ne01_bucket(int64_t ne01) {
 
 
 
-// NE baked into the baseline (Q == 1) instantiation of kernels/fa_vec_*.metal, derived from the
-// simdgroup width: NL = nw/NE lanes split the row over head blocks, so NL must divide both
-// dk/4 and dv/4. Take the largest power-of-two NL that does, capped at the width.
+// NE baked into the baseline (Q == 1) instantiation of kernels/fa_vec_*.metal, derived from the simdgroup width: NL = nw/NE lanes split the row over head blocks, so NL must divide both dk/4 and dv/4. Take the largest power-of-two NL that does, capped at the width.
 // kernels/fa_vec_common.metal (FA_VEC_NL / FA_VEC_NE) mirrors this rule.
 int fa_vec_baseline_ne(int dk, int dv, int nw) {
     const int dk4 = dk/4;
@@ -1117,8 +1115,7 @@ static const fa_vec_cfg_t * find_cfg(const fa_vec_entry_t * tbl, size_t n, const
 }
 
 fa_vec_cfg_t fa_vec_pick(int gpu_family, int dtype, int dk, int dv, int64_t ne11, int64_t ne01, int nw) {
-    // the tuned table and the (Q,NE) test overrides both encode 32-lane instantiations: NL = nw/NE
-    // changes with the width, so any device of another width runs its baseline config
+    // the tuned table and the (Q,NE) test overrides both encode 32-lane instantiations: NL = nw/NE changes with the width, so any device of another width runs its baseline config
     if (nw != 32) {
         return fa_vec_baseline_cfg(dk, dv, nw);
     }

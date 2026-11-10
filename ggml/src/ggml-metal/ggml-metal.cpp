@@ -773,8 +773,7 @@ static void ggml_backend_metal_device_get_props(ggml_backend_dev_t dev, ggml_bac
     props->caps = {
         /* .async                = */ true,
         /* .host_buffer          = */ false,
-        // mapping a file keeps the weights in host memory; when private buffers
-        // are in use the loader must copy instead, so do not advertise it
+        // mapping a file keeps the weights in host memory; when private buffers are in use the loader must copy instead, so do not advertise it
         /* .buffer_from_host_ptr = */ ggml_metal_device_get_props(ctx_dev)->use_shared_buffers,
         /* .events               = */ true,
         /* .mmap_support         = */ true,

@@ -1280,16 +1280,6 @@ typedef struct {
 } ggml_metal_kargs_topk_moe;
 
 typedef struct {
-    int32_t  d;
-    int32_t  n_tok;
-    int32_t  n_str;
-    uint64_t nb_a1, nb_a2;
-    uint64_t nb_b1, nb_b2;
-    uint64_t nb_x1, nb_x2;
-    uint64_t nb_p1, nb_p2;
-} ggml_metal_kargs_mhc;
-
-typedef struct {
     int32_t  ne01;          // n_tokens
     uint64_t nb01;          // logits row stride
     uint64_t nb1_ids;       // ids row stride
