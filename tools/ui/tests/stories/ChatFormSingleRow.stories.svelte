@@ -14,9 +14,9 @@
 
 	// the default is --chat-form-single-row-radius in app.css; the card is about 3.375rem tall
 	const RADII = [
-		['2rem', 'a pill (2rem, the default)'],
+		['2rem', 'a pill (2rem)'],
 		['1.5rem', '1.5rem, like the two-row form on a desktop'],
-		['1.25rem', '1.25rem'],
+		['1.25rem', '1.25rem (the default)'],
 		['1rem', '1rem'],
 		['0.75rem', '0.75rem']
 	] as const;
