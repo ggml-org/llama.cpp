@@ -2805,8 +2805,23 @@ const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;
     }
-    const auto & voices = ctx->ctx_gen_a->model.gen_voices;
-    return idx < (int32_t) voices.size() ? std::next(voices.begin(), idx)->first.c_str() : nullptr;
+    const auto & model = ctx->ctx_gen_a->model;
+    const auto & voices = model.gen_voices;
+    if (idx >= (int32_t) voices.size()) {
+        return nullptr;
+    }
+    // the default voice goes first, the others keep their order
+    const auto def = voices.find(model.hparams.gen_default_voice);
+    if (def != voices.end() && idx == 0) {
+        return def->first.c_str();
+    }
+    int32_t i = def != voices.end() ? 1 : 0;
+    for (auto it = voices.begin(); it != voices.end(); ++it) {
+        if (it != def && i++ == idx) {
+            return it->first.c_str();
+        }
+    }
+    return nullptr;
 }
 
 mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name) {

@@ -538,6 +538,7 @@ class Keys:
         PROJECTOR_TYPE      = "clip.gen.audio.projector_type" # for mixed modality models
         # name of the weight variant, for settings that are not in the checkpoint
         MODEL_VARIANT       = "clip.gen.audio.model_variant"
+        DEFAULT_VOICE       = "clip.gen.audio.default_voice"
         EMBEDDING_LENGTH    = "clip.gen.audio.embedding_length"
         FEED_FORWARD_LENGTH = "clip.gen.audio.feed_forward_length"
         BLOCK_COUNT         = "clip.gen.audio.block_count"

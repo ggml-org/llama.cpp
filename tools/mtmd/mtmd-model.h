@@ -200,6 +200,7 @@ struct mtmd_hparams {
 
     // name of the weight variant, some pipelines tune themselves on it
     std::string gen_model_variant;
+    std::string gen_default_voice;
 
     // sampling defaults of the generated audio: greedy, no top-k, no repetition penalty
     float   gen_temp           = 0.0f;

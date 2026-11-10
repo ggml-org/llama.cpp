@@ -106,6 +106,7 @@
 #define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
 // name of the weight variant, for settings that are not in the checkpoint
 #define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+#define KEY_GEN_AUDIO_DEFAULT_VOICE "clip.gen.audio.default_voice"
 // sampling defaults of the generated audio, like general.sampling.* for text
 #define KEY_GEN_AUDIO_TEMP           "clip.gen.audio.sampling.temp"
 #define KEY_GEN_AUDIO_TOP_K          "clip.gen.audio.sampling.top_k"

@@ -20,6 +20,8 @@ CODEC_VARIANT   = "keep2_plain"
 CODEC_HEAD      = Path("autoencoder") / "heads" / CODEC_VARIANT / "step_0050000.pt"
 CODEC_STAGES    = [0, 2, 4, 6, 8]  # transformer stages of the decoder
 
+DEFAULT_VOICE = "Savannah_en-American_F_1"
+
 # GDN geometry, hard-coded in the reference (zonos3.reference.lm)
 GDN_HEADS, GDN_HEAD_DIM, GDN_KERNEL = 4, 128, 4
 
@@ -354,6 +356,8 @@ class Zonos3MmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(0)
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(self.global_config["text_config"]["norm_eps"])
         self.gguf_writer.add_gen_audio_model_variant(CODEC_VARIANT)
+        if any(self.dir_model.glob(f"gguf/voices/*/{DEFAULT_VOICE}.embedding.npy")):
+            self.gguf_writer.add_gen_audio_default_voice(DEFAULT_VOICE)
         # softcap and the codec hparams are hard-coded in tools/mtmd
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):

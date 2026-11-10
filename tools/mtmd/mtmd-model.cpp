@@ -214,6 +214,7 @@ struct mtmd_model_loader {
                 hparams.image_size = 0;
                 hparams.patch_size = 1;
                 get_string(KEY_GEN_AUDIO_VARIANT, hparams.gen_model_variant, false);
+                get_string(KEY_GEN_AUDIO_DEFAULT_VOICE, hparams.gen_default_voice, false);
 
             } else {
                 GGML_ASSERT(false && "unknown modality");
@@ -3838,6 +3839,10 @@ mtmd_models mtmd_model_load(const char * fname, const mtmd_model_params & params
         model->hparams.custom_image_max_tokens = params.image_max_tokens;
         loader.load_hparams(*model, modality);
         loader.load_tensors(*model, buft, params.no_alloc);
+        const std::string & def = model->hparams.gen_default_voice;
+        if (!def.empty() && model->gen_voices.find(def) == model->gen_voices.end()) {
+            throw std::runtime_error(string_format("%s: default voice \"%s\" is not a predefined voice\n", __func__, def.c_str()));
+        }
         return model;
     };
 
