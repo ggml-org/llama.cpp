@@ -2024,6 +2024,19 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         return {false, "device is not the selected OpenVINO device"};
     }
 
+    // The write-back of GATED_DELTA_NET rollback snapshots stores into the recurrent cache in this backend's buffer,
+    // so it always runs here. When the GDN that produces the snapshots falls back to ggml, the write-back reads the
+    // packed GDN output wrongly and silently corrupts the cache, so stop with the reason instead.
+    if (GgmlOvDecoder::is_gdn_snapshot_writeback(op)) {
+        const auto gdn_support = ggml_backend_openvino_device_supports_op_impl(dev, op->src[0]->src[0]);
+        if (!gdn_support.is_supported) {
+            GGML_ABORT(
+                "ggml-openvino: %s. Recurrent rollback (n_rs_seq > 0, used by MTP, EAGLE3, DFlash and DSpark "
+                "speculative decoding) is not supported for this model on this device",
+                gdn_support.reason.c_str());
+        }
+    }
+
     static std::unordered_set<ggml_type> supported_types{
         GGML_TYPE_F32,  GGML_TYPE_F16,  GGML_TYPE_BF16, GGML_TYPE_I64,  GGML_TYPE_I32,  GGML_TYPE_Q4_0,
         GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,
