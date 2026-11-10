@@ -92,9 +92,17 @@ enum ggml_sycl_xmx_gather_type {
     GGML_SYCL_XMX_GATHER_Q4_K     = 1 << 10,
     GGML_SYCL_XMX_GATHER_Q5_K     = 1 << 11,
     GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
+    GGML_SYCL_XMX_GATHER_Q2_K     = 1 << 13,
+    GGML_SYCL_XMX_GATHER_Q3_K     = 1 << 14,
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
+
+enum ggml_sycl_mmid_sched_bit {
+    GGML_SYCL_MMID_SCHED_DEVICE    = 1 << 0,
+    GGML_SYCL_MMID_SCHED_UNBOUNDED = 1 << 1,
+};
+extern int g_ggml_sycl_mmid_sched;
 // Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see fused-gemm.cpp).
 // GGML_SYCL_DYNAMIC_PRECISION picks the operand type, this mask the combinations of that type.
 static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;
@@ -443,7 +451,7 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
-struct ggml_sycl_gg_tile {
+struct ggml_sycl_grouped_gemm_tile {
     int32_t expert;
     int32_t n0;
     int32_t n1;
@@ -552,7 +560,7 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
-    std::vector<ggml_sycl_gg_tile> mmid_tile_schedule_host;
+    std::vector<ggml_sycl_grouped_gemm_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 
