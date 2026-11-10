@@ -3625,7 +3625,11 @@ size_t ggml_metal_op_flash_attn_ext_extra_idx(const ggml_tensor * op) {
         return 0;
     }
 
-    return GGML_PAD(sizeof(int32_t)*(size_t) n_kv_max*ne31*ne32*ne33, 16);
+    // the vec kernel strides this buffer by GGML_PAD(n_kv_max, nw), so the buffer must be padded to
+    // the device simdgroup width; 64 is the widest N_SIMDWIDTH there is (32 on Apple, 64 on AMD)
+    const int n_kv_max_padded = GGML_PAD(n_kv_max, 64);
+
+    return GGML_PAD(sizeof(int32_t)*(size_t) n_kv_max_padded*ne31*ne32*ne33, 16);
 }
 
 // size of the contiguous F16 buffers holding the K/V rows referenced by the kv_rows lists
