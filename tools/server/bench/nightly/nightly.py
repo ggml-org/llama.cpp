@@ -164,7 +164,9 @@ def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]
             dest = model_path(home, item)
             if not dest.exists():
                 log(f"downloading {item['repo']}/{item['file']}")
-                hf_hub_download(repo_id=item["repo"], filename=item["file"], revision=item["revision"], local_dir=dest.parent)
+                # local_dir is the repo root: hf_hub_download keeps the file's own subfolder under it
+                hf_hub_download(repo_id=item["repo"], filename=item["file"], revision=item["revision"],
+                                local_dir=repo_dir(home, "models", item["repo"], item["revision"]))
         if model.get("tokenizer"):
             tok = model["tokenizer"]
             # tokenizer files only, one by one: snapshot_download caches the repo file list, and then AIPerf's
