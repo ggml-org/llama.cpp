@@ -239,6 +239,8 @@ That requires `JSON.stringify` when formatted to message content:
 }
 ```
 
+When the client disconnects during an MCP tool call, or the call exceeds `timeout_ms`, `llama-server` sends `notifications/cancelled` with the request id to the MCP server and returns an error.
+
 Set `stream: true` in the request body to stream a tool's output as it runs, instead of waiting for it to finish. Only certain tools accept this (for ex. `exec_shell_command`);
 returns 404 if tool doesn't support it.
 
