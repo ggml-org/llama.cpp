@@ -8368,8 +8368,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     // Fold several query tokens into one GQA row tile, so each K/V block is loaded once per gqa_tok tokens
     uint32_t gqa_tok = 1;
     static const bool disable_qtok_fold = getenv("GGML_VK_FA_QTOK_FOLD_DISABLE") != nullptr;
-    if (!disable_qtok_fold && gqa_ratio > 1 && neq1 > 1 && !use_sparse &&
-        (tuning_params.path == FA_COOPMAT1 || tuning_params.path == FA_SCALAR)) {
+    if (!disable_qtok_fold && gqa_ratio > 1 && neq1 > 1 && !use_sparse) {
         vk_fa_tuning_params fold_params = tuning_params;
         bool fold_pays = true;
         if (tuning_params.path == FA_SCALAR) {

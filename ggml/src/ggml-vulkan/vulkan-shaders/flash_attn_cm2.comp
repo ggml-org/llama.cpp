@@ -114,6 +114,7 @@ f16vec4 faDecodeVVector(const decodeBufFA_V bl_in, const uint blockCoords[2], co
 #endif
 
 layout (binding = 0) readonly buffer Q {uint8_t data_q[];};
+layout (binding = 0) readonly buffer QF32 {float data_qf32[];};
 layout (binding = 1) readonly buffer K {uint8_t data_k[];};
 layout (binding = 2) readonly buffer V {uint8_t data_v[];};
 layout (binding = 3) readonly buffer M {uint8_t data_m[];};
@@ -231,35 +232,54 @@ ACC_TYPE Max(const in uint32_t row, const in uint32_t col, const in ACC_TYPE ele
     return max(elem0, elem1);
 }
 
+Q_TYPE perElemOpFoldedLoadQ(const in uint32_t r, const in uint32_t c, const in Q_TYPE elem) {
+    if (row_valid(r) && c < HSK) {
+        return Q_TYPE(data_qf32[row_tok(r) * p.nb01 + (row_head(r) * p.nb02 + iq3 * p.nb03) / 4 + c]);
+    }
+    return Q_TYPE(0.0);
+}
+
+float16_t perElemOpFoldedLoadMask(const in uint32_t r, const in uint32_t c, const in float16_t elem, const in uint32_t j) {
+    const uint32_t col = j * Bc + c;
+    if (row_valid(r) && col < KV) {
+        return data_mf16[g_m_off_elem + min(row_tok(r), p.nem1 - 1) * KV + col];
+    }
+    return float16_t(uintBitsToFloat(0xFF800000));
+}
+
 // Store the output when doing grouped query attention.
-// Rows index by Q's dimension 2, and the first N rows are valid.
+// Folded rows index both the query token and its GQA head.
 D_TYPE perElemOpGqaStore(const in uint32_t r, const in uint32_t c, const in D_TYPE elem, const in uint32_t o_offset, const in uint32_t iq2, const in uint32_t N)
 {
-    if (r < N && c < HSV) {
-        uint32_t offset = (iq2 + r) * HSV + c;
+    if ((GQA_TOK > 1 ? row_valid(r) : r < N) && c < HSV) {
+        const uint32_t head = GQA_TOK > 1 ? row_head(r) : iq2 + r;
+        const uint32_t token_offset = GQA_TOK > 1 ? row_tok(r) * p.ne1 * HSV : 0u;
+        uint32_t offset = token_offset + head * HSV + c;
         data_o[o_offset + offset] = D_TYPE(elem);
     }
     return elem;
 }
 
-// Store O values for non-GQA split_k. Rows are tokens, not heads.
+// Store O values for non-GQA or folded split_k.
 D_TYPE perElemOpNonGqaSplitKStore(const in uint32_t r, const in uint32_t c, const in D_TYPE elem, const in uint32_t unused, const in uint32_t iq2, const in uint32_t N) {
-    uint32_t global_row = i * Br + r;
-    if (global_row < N && c < HSV) {
+    uint32_t global_row = GQA_TOK > 1 ? row_tok(r) : i * Br + r;
+    const uint32_t head = GQA_TOK > 1 ? row_head(r) : iq2;
+    if ((GQA_TOK > 1 ? row_valid(r) : global_row < N) && c < HSV) {
         uint32_t o_off = HSV * p.ne1
             * (split_k_index + p.k_num * (global_row + p.ne2 * iq3));
-        data_o[o_off + iq2 * HSV + c] = D_TYPE(elem);
+        data_o[o_off + head * HSV + c] = D_TYPE(elem);
     }
     return elem;
 }
 
-// Store L/M values for non-GQA split_k.
+// Store L/M values for non-GQA or folded split_k.
 ACC_TYPE perElemOpNonGqaSplitKStoreCol0(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem, const in uint32_t lm_base, const in uint32_t iq2, const in uint32_t N) {
-    uint32_t global_row = i * Br + r;
-    if (global_row < N && c == 0) {
+    uint32_t global_row = GQA_TOK > 1 ? row_tok(r) : i * Br + r;
+    const uint32_t head = GQA_TOK > 1 ? row_head(r) : iq2;
+    if ((GQA_TOK > 1 ? row_valid(r) : global_row < N) && c == 0) {
         uint32_t lm_off = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3
             + p.ne1 * 2 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3));
-        data_o[lm_off + lm_base + iq2] = D_TYPE(elem);
+        data_o[lm_off + lm_base + head] = D_TYPE(elem);
     }
     return elem;
 }
@@ -310,7 +330,12 @@ void main() {
     coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseA> Qf16;
 
     uint32_t q_offset = gqa_iq1*p.nb01*4/*sizeof(float)*/ + iq2*p.nb02+iq3*p.nb03;
-    coopMatLoadTensorNV(Q, data_q, q_offset, sliceTensorLayoutNV(tensorLayoutQ, i * Br, Br, 0, HSK_pad));
+    if (GQA_TOK > 1) {
+        Q = coopmat<Q_TYPE, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseAccumulator>(0.0);
+        coopMatPerElementNV(Q, Q, perElemOpFoldedLoadQ);
+    } else {
+        coopMatLoadTensorNV(Q, data_q, q_offset, sliceTensorLayoutNV(tensorLayoutQ, i * Br, Br, 0, HSK_pad));
+    }
 
     Q *= Q_TYPE(p.scale);
     Qf16 = coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Br, HSK_pad, gl_MatrixUseA>(Q);
@@ -340,7 +365,7 @@ void main() {
     // mo_offset will point to the tile starting at row i*Br and col 0
     uint32_t mo_offset = mo_stride * i;
 
-    uint32_t m_offset = gqa_iq1*KV * 2 /*sizeof(float16_t)*/;
+    uint32_t m_offset = (GQA_TOK > 1 ? 0u : gqa_iq1)*KV * 2 /*sizeof(float16_t)*/;
     if (p.nem2 != 1 || p.nem3 != 1) {
         m_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV * 2 /*sizeof(float16_t)*/;
         mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
@@ -372,7 +397,14 @@ void main() {
             if (mask_opt_bits != MASK_OPT_ALL_ZERO) {
                 bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
 
-                if (nem1_bounds_check) {
+                if (GQA_TOK > 1) {
+                    coopMatPerElementNV(mv, mv, perElemOpFoldedLoadMask, j);
+                    coopmat<float16_t, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> mvmax;
+                    coopMatReduceNV(mvmax, mv, gl_CooperativeMatrixReduceRowAndColumnNV, maxReduceFp16);
+                    if (mvmax[0] <= NEG_FLT_MAX_OVER_2) {
+                        continue;
+                    }
+                } else if (nem1_bounds_check) {
                     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutM = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
                     tensorLayoutM = setTensorLayoutDimensionNV(tensorLayoutM, p.nem1, KV);
                     tensorLayoutM = setTensorLayoutStrideNV(tensorLayoutM, m_stride, 1);
@@ -511,7 +543,7 @@ void main() {
     if (p.k_num > 1) {
         coopmat<D_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator> O_D = coopmat<D_TYPE, gl_ScopeWorkgroup, Br, HSV_pad, gl_MatrixUseAccumulator>(O);
 
-        if (p.gqa_ratio > 1) {
+        if (p.gqa_ratio > 1 && GQA_TOK == 1) {
             // note: O and Q have swapped coord 1,2.
             uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3));
             coopMatPerElementNV(O_D, O_D, perElemOpGqaStore, o_offset, iq2, N);
@@ -573,7 +605,7 @@ void main() {
     [[unroll]] for (uint i = 0; i < O_D.length(); ++i) { O_D[i] = clamp(O_D[i], D_TYPE(-ACC_TYPE_MAX), D_TYPE(ACC_TYPE_MAX)); }
 #endif
 
-    uint32_t o_offset = gqa_iq1*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV;
+    uint32_t o_offset = (GQA_TOK > 1 ? 0u : gqa_iq1)*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV;
 
     if (p.gqa_ratio > 1) {
         coopMatPerElementNV(O_D, O_D, perElemOpGqaStore, o_offset, iq2, N);
