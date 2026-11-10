@@ -415,7 +415,6 @@ class Zonos3MmprojModel(MmprojModel):
         for si, stage in enumerate(SPK_STAGES):
             for k, (depth, out_ch, (s_f, s_t), expansion) in enumerate(stage):
                 src, dst = f"{fe}mect_block{si + 1}.{k}.", f"fe.b{si + 1}.{k}."
-                oc = out_ch * expansion
                 for r in range(depth):
                     cs, cd = f"{src}cnn_block.{r}.", f"{dst}cnn.{r}."
                     # grouped 3x3 convs, one depthwise kernel per input slot of a group
