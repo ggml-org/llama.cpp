@@ -1,3 +1,5 @@
+include(CheckSymbolExists)
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
 # server-context containing the core server logic, used by llama-server and CLI
@@ -31,6 +33,13 @@ add_library(${TARGET} STATIC
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "OpenBSD")
+    check_symbol_exists(getexecpath "unistd.h" HAVE_GETEXECPATH)
+    if (HAVE_GETEXECPATH)
+        target_compile_definitions(${TARGET} PRIVATE HAVE_GETEXECPATH=1)
+    endif()
 endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
