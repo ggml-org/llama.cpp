@@ -37,8 +37,9 @@
 	}
 </script>
 
+<!-- a column, so on a phone the list starts under the search and takes the rest of the screen -->
 <Dialog.Root onOpenChange={(open) => !open && close()} open={options !== null}>
-	<Dialog.Content class="gap-0 overflow-hidden p-0 md:max-w-md!">
+	<Dialog.Content class="flex flex-col gap-0 overflow-hidden p-0 md:max-w-md!">
 		<Dialog.Title class="sr-only">Move to group</Dialog.Title>
 
 		<div class="p-2">
@@ -53,7 +54,9 @@
 			/>
 		</div>
 
-		<div class="flex max-h-80 flex-col gap-0.5 overflow-y-auto p-1">
+		<div
+			class="flex max-h-80 min-h-0 flex-col gap-0.5 overflow-y-auto p-1 max-md:max-h-none max-md:flex-1"
+		>
 			<button
 				class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent disabled:pointer-events-none disabled:opacity-50"
 				disabled={!newGroupName}
