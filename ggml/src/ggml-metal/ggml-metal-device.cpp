@@ -6,6 +6,7 @@
 
 #include "ggml-impl.h"
 
+#include <algorithm>
 #include <cassert>
 #include <memory>
 #include <string>
@@ -974,7 +975,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     constexpr int NRA = SZ_SIMDGROUP * N_MM_BLOCK_Y * N_MM_SIMD_GROUP_Y;
     constexpr int NRB = SZ_SIMDGROUP * N_MM_BLOCK_X * N_MM_SIMD_GROUP_X;
 
-    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor;
+    const bool prec_f32 = ggml_metal_op_mul_mat_src1_prec_f32(op);
+
+    // the prec_f32 kernels do not use the tensor API
+    const bool has_tensor = ggml_metal_device_get_props(ggml_metal_library_get_device(lib))->has_tensor && !prec_f32;
 
     const bool bc_out = has_tensor
         ? (op->ne[0] % NRA != 0 || op->ne[1] % NRB != 0)
@@ -986,7 +990,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
     const int16_t r2   = (int16_t) (ne12 / op->src[0]->ne[2]);
     const int16_t r3   = (int16_t) (ne13 / op->src[0]->ne[3]);
 
-    snprintf(base, 256, "kernel_mul_mm_%s_%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1));
+    snprintf(base, 256, "kernel_mul_mm_%s_%s%s", ggml_type_name(tsrc0), ggml_type_name(tsrc1), prec_f32 ? "_prec_f32" : "");
     snprintf(name, 256, "%s_bci=%d_bco=%d_ne12=%d_ne13=%d_r2=%d_r3=%d",
              base, bc_inp, bc_out, ne12, ne13, r2, r3);
 
@@ -1016,7 +1020,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm(ggml_meta
         res.nr0 = 64;
         res.nr1 = 32;
 
-        res.smem = bc_out ? 8192 : (4096 + 2048);
+        // element sizes of the src0 and src1 tiles
+        const size_t ts0 = prec_f32 && tsrc0 == GGML_TYPE_F32 ? sizeof(float) : sizeof(ggml_fp16_t);
+        const size_t ts1 = prec_f32                           ? sizeof(float) : sizeof(ggml_fp16_t);
+
+        const size_t smem_ab = 64*32*ts0 + 32*32*ts1;
+        res.smem = bc_out ? std::max<size_t>(8192, smem_ab) : smem_ab;
     }
 
     res.nsg = N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y;
