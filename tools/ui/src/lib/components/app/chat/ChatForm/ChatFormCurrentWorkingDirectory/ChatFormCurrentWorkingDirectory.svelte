@@ -1,10 +1,11 @@
 <script lang="ts">
+	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
 	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
 	import { FolderOpen, X } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as Popover from '$lib/components/ui/popover';
-	import { HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
+	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
 	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
@@ -17,10 +18,11 @@
 	const FOCUS_DELAY_MS = 0;
 
 	interface Props {
+		class?: string;
 		disabled?: boolean;
 		directory?: string | null;
-		/** Controlled open state; the host owns it so the + menu and the `/cwd`
-		 * slash command open the picker through the same path. */
+		/** Controlled open state; the host owns it so the chip, the + menu and the
+		 * `/cwd` slash command open the picker through the same path. */
 		isOpen: boolean;
 		/** Two-way bound query, kept in sync with the text after `/cwd `. */
 		query: string;
@@ -29,16 +31,23 @@
 		onChange?: (directory: string | null) => void;
 		/** Lets the host refocus the chat input after the popover closes. */
 		onClose?: () => void;
+		/** Fired when the chip is clicked so the host can open the picker. */
+		onOpen?: () => void;
+		/** Renders the chip trigger; off when the host anchors its own trigger. */
+		showChip?: boolean;
 	}
 
 	let {
+		class: className = '',
 		customAnchor = null,
 		directory = null,
 		disabled = false,
 		isOpen,
 		onChange,
 		onClose,
-		query = $bindable('')
+		onOpen,
+		query = $bindable(''),
+		showChip = true
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -259,9 +268,22 @@
 		}
 	}
 
-	function clearDirectory() {
+	function clearDirectory(event?: MouseEvent) {
+		// Stop the click from bubbling into the chip button and re-opening
+		// the picker on top of the now-cleared state.
+		event?.stopPropagation();
+		event?.preventDefault();
 		onChange?.(null);
 		closePicker();
+	}
+
+	function handleDismiss(event?: MouseEvent) {
+		event?.stopPropagation();
+		event?.preventDefault();
+
+		if (directory) {
+			clearDirectory(event);
+		}
 	}
 
 	function handleOpenChange(open: boolean) {
@@ -274,7 +296,30 @@
 			onClose?.();
 		}
 	}
+
+	let innerWidth = $state(0);
+	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
+
+{#if showChip}
+	<button
+		class={[
+			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
+			className
+		]}
+		{disabled}
+		onclick={onOpen}
+		type="button"
+	>
+		<ChatFormCurrentWorkingDirectoryChip
+			{directory}
+			{disabled}
+			{homeBase}
+			onClear={handleDismiss}
+			{showTooltip}
+		/>
+	</button>
+{/if}
 
 <!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and
      lined up with the search results, and text sized for a phone -->
@@ -396,3 +441,5 @@
 		</Popover.Content>
 	</Popover.Root>
 {/if}
+
+<svelte:window bind:innerWidth />

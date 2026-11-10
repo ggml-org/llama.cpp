@@ -148,10 +148,12 @@
 	);
 
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
-	// The + menu offers the working directory, except in a phone's chat, which shows it in its
-	// header (see ChatScreenMobileHeader)
+	// On a desktop the chip under the form shows a directory once one is set, and the + menu
+	// sets one until then. A phone has no chip: a chat shows it in its header (see
+	// ChatScreenMobileHeader), and a new chat, which has no header yet, in the + menu
+	let showWorkingDirectoryChip = $derived(showWorkingDirectory && !deviceStore.isMobile && !!cwd);
 	let isWorkingDirectoryInAddMenu = $derived(
-		showWorkingDirectory && !(deviceStore.isMobile && conversationsStore.activeConversation)
+		showWorkingDirectory && (deviceStore.isMobile ? !conversationsStore.activeConversation : !cwd)
 	);
 
 	const pickers = useChatFormPickers({
@@ -815,15 +817,18 @@
 	{/if}
 
 	{#if showWorkingDirectory}
-		<!-- opened from the + menu, a phone chat's header or `/cwd` -->
+		<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
+			class="self-start"
 			customAnchor={activePickerAnchor}
 			directory={cwd}
 			{disabled}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			onChange={handleWorkingDirectoryChange}
 			onClose={pickers.handleWorkingDirectoryClose}
+			onOpen={pickers.handleWorkingDirectoryOpen}
+			showChip={showWorkingDirectoryChip}
 		/>
 	{/if}
 </form>
