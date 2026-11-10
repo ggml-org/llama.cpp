@@ -1,12 +1,7 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
 	import MarkdownSurface from '../MarkdownContent/MarkdownSurface.svelte';
-	import {
-		markdownLivePreview,
-		markdownLivePreviewFocus,
-		type MarkdownLivePreviewOptions,
-		setRenderKey
-	} from './markdown-live-preview';
+	import { markdownLivePreview, type MarkdownLivePreviewOptions } from './markdown-live-preview';
 	import { isInCodeBlock } from './markdown-syntax';
 	import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 	import {
@@ -87,7 +82,7 @@
 	const valueSync = Annotation.define<boolean>();
 
 	let host: HTMLDivElement | undefined = $state();
-	let view: EditorView | undefined = $state.raw();
+	let view: EditorView | undefined;
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 	let previewOpen = $state(false);
@@ -96,13 +91,6 @@
 	// The document's text as of the last edit or sync, so syncing an unchanged `value`
 	// (each keystroke comes back through onChange) costs no serialization
 	let docText = '';
-	// The props the editor is configured with: an effect reconfigures it only on a change
-	let applied:
-		| Pick<
-				Props,
-				'ariaLabel' | 'disabled' | 'editingWidgets' | 'extensions' | 'placeholder' | 'renderKey'
-		  >
-		| undefined;
 
 	function labels(): Extension {
 		return [
@@ -124,7 +112,7 @@
 				diagramSvg = svgHtml;
 				diagramOpen = true;
 			},
-			renderKey: untrack(() => renderKey)
+			renderKey
 		});
 	}
 
@@ -132,7 +120,6 @@
 		if (!host) return;
 
 		docText = value;
-		applied = { ariaLabel, disabled, editingWidgets, extensions, placeholder, renderKey };
 		view = new EditorView({
 			parent: host,
 			state: EditorState.create({
@@ -145,7 +132,6 @@
 					keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
 					markdownSupport,
 					syntaxHighlighting(rawMarkdownStyle),
-					markdownLivePreviewFocus,
 					previewCompartment.of(livePreview()),
 					editableCompartment.of(EditorView.editable.of(!disabled)),
 					EditorView.lineWrapping,
@@ -169,7 +155,21 @@
 	onDestroy(() => view?.destroy());
 
 	function reconfigure(compartment: Compartment, extension: Extension) {
-		untrack(() => view?.dispatch({ effects: compartment.reconfigure(extension) }));
+		view?.dispatch({ effects: compartment.reconfigure(extension) });
+	}
+
+	/** Runs `apply` when a value `read` gives changes: not on mount, the editor starts with them. */
+	function whenChanged(read: () => unknown[], apply: () => void) {
+		let last = read();
+
+		$effect(() => {
+			const next = read();
+
+			if (next.every((value, index) => value === last[index])) return;
+
+			last = next;
+			untrack(apply);
+		});
 	}
 
 	/** The single change that turns `current` into `next`: their differing middle. */
@@ -210,65 +210,27 @@
 		syncValue(value);
 	});
 
-	// Each effect reads its props first, so it runs again when they change, and does
-	// nothing until they differ from what the editor was created or last configured with
-	$effect(() => {
-		const next = disabled;
-
-		if (!applied || next === applied.disabled) return;
-
-		applied.disabled = next;
-		reconfigure(editableCompartment, EditorView.editable.of(!next));
-	});
-
-	$effect(() => {
-		const next = { ariaLabel, placeholder };
-
-		if (
-			!applied ||
-			(next.ariaLabel === applied.ariaLabel && next.placeholder === applied.placeholder)
-		)
-			return;
-
-		Object.assign(applied, next);
-		reconfigure(labelsCompartment, labels());
-	});
-
-	$effect(() => {
-		const next = extensions;
-
-		if (!applied || next === applied.extensions) return;
-
-		applied.extensions = next;
-		reconfigure(customCompartment, next);
-	});
-
-	$effect(() => {
-		const next = editingWidgets;
-
-		if (!applied || next === applied.editingWidgets) return;
-
-		applied.editingWidgets = next;
-		reconfigure(previewCompartment, livePreview());
-	});
-
-	$effect(() => {
-		const next = renderKey;
-
-		if (!applied || next === applied.renderKey) return;
-
-		applied.renderKey = next;
-		untrack(() => view?.dispatch({ effects: setRenderKey(next) }));
-	});
+	whenChanged(
+		() => [extensions],
+		() => reconfigure(customCompartment, extensions)
+	);
+	whenChanged(
+		() => [disabled],
+		() => reconfigure(editableCompartment, EditorView.editable.of(!disabled))
+	);
+	whenChanged(
+		() => [ariaLabel, placeholder],
+		() => reconfigure(labelsCompartment, labels())
+	);
+	// a new preview renders the blocks again when the render key is another one
+	whenChanged(
+		() => [editingWidgets, renderKey],
+		() => reconfigure(previewCompartment, livePreview())
+	);
 
 	$effect(() => {
 		loadHighlightTheme(mode.current === ColorMode.DARK);
 	});
-
-	/** The editor view, once mounted. */
-	export function getView(): EditorView | undefined {
-		return view;
-	}
 
 	/** Cursor offset in the markdown source. */
 	export function getCaretOffset(): number {

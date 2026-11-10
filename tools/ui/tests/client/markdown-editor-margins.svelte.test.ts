@@ -7,7 +7,7 @@ import MarkdownContent from '$lib/components/app/content/MarkdownContent/Markdow
 import {
 	BLOCK_MARGINS_REM,
 	PARAGRAPH_MARGINS_REM
-} from '$lib/components/app/content/MarkdownEditor/markdown-live-preview';
+} from '$lib/components/app/content/MarkdownEditor/markdown-blocks';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 

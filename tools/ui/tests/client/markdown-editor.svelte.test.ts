@@ -98,6 +98,24 @@ describe('MarkdownEditor', () => {
 		expect(reconfigured).toHaveBeenCalledTimes(1);
 	});
 
+	it('keeps the block being edited raw when the render key changes', async () => {
+		const screen = render(MarkdownEditor, { renderKey: 'short', value: 'one\n\ntwo' });
+		const editor = editorIn(screen.container);
+		const blocks = () => [...screen.container.querySelectorAll<HTMLElement>('.cm-md-block')];
+
+		await vi.waitFor(() => expect(blocks()).toHaveLength(2));
+
+		editor.focus();
+		editor.dispatch({ selection: { anchor: 0 } });
+
+		await vi.waitFor(() => expect(blocks().map((block) => block.textContent)).toEqual(['two']));
+
+		await screen.rerender({ renderKey: 'full' });
+		await settle();
+
+		expect(blocks().map((block) => block.textContent)).toEqual(['two']);
+	});
+
 	it('leaves the other rendered blocks untouched while a block is typed in', async () => {
 		const screen = render(MarkdownEditor, { value: '# One\n\ntwo\n\n- three\n\nfour' });
 		const editor = editorIn(screen.container);
