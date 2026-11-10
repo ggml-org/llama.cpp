@@ -1,0 +1,5 @@
+@import 'tailwindcss';
+@import './lib/styles/theme.css';
+
+/* stories may use classes the components do not, so tailwind scans them too */
+@source '../tests';
