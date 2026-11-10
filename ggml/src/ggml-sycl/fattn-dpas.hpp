@@ -7,4 +7,8 @@
 bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst);
 void ggml_sycl_flash_attn_ext_dpas(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+// stage A probe for the sg8 (Xe1) DPAS forms (XMX remedy 7): runs once per device at backend init
+// when GGML_SYCL_FA_SG8_PROBE selects a variant (full / bare); never changes FA dispatch
+void ggml_sycl_fa_sg8_probe(ggml_backend_sycl_context * ctx);
+
 #endif // GGML_SYCL_FATTN_DPAS_HPP

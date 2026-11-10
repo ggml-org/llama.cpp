@@ -65,6 +65,7 @@
 #include "ggml-sycl/backend.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/element_wise.hpp"
+#include "ggml-sycl/fattn-dpas.hpp"
 #include "ggml-sycl/fwht.hpp"
 #include "ggml-sycl/fused-gemm.hpp"
 #include "ggml-sycl/gemm.hpp"
@@ -106,6 +107,11 @@ int g_ggml_sycl_fa_onednn = 1;
 int g_ggml_sycl_fa_onednn_max_kv = 0;
 int g_ggml_sycl_enable_mkl_fa = 1;
 int g_ggml_sycl_fa_dpas = 1;
+int g_ggml_sycl_fa_dpas_sg8 = 0;
+int g_ggml_sycl_dpas_gemm = 1;
+int g_ggml_sycl_xmx_sg8 = 0;
+int g_ggml_sycl_xmx_sg8_grf = 128;
+int g_ggml_sycl_fa_sg8_probe = 0;
 int g_ggml_sycl_memtrace = 0;
 int g_ggml_sycl_memtrace_step = 64;
 int g_ggml_sycl_enable_vmm = 1;
@@ -139,6 +145,22 @@ static int ggml_sycl_get_env_precision(const char * name, int def) {
     }
     GGML_LOG_WARN("%s: unknown %s=%s, using %s\n", __func__, name, env, ggml_sycl_dynamic_precision_names[def]);
     return def;
+}
+
+// value of the GGML_SYCL_FA_SG8_PROBE variable: 1 for "full", 2 for "bare", 0 (off) otherwise
+static int ggml_sycl_get_env_fa_sg8_probe(const char * name) {
+    const char * env = getenv(name);
+    if (!env) {
+        return 0;
+    }
+    if (std::string(env) == "full") {
+        return 1;
+    }
+    if (std::string(env) == "bare") {
+        return 2;
+    }
+    GGML_LOG_WARN("%s: unknown %s=%s, probe off\n", __func__, name, env);
+    return 0;
 }
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
@@ -438,6 +460,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_fa_onednn_max_kv = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN_MAX_KV", 0);
         g_ggml_sycl_enable_mkl_fa = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
         g_ggml_sycl_fa_dpas = ggml_sycl_get_env("GGML_SYCL_FA_DPAS", 1);
+        g_ggml_sycl_fa_dpas_sg8 = ggml_sycl_get_env("GGML_SYCL_FA_DPAS_SG8", 0);
+        g_ggml_sycl_dpas_gemm = ggml_sycl_get_env("GGML_SYCL_DPAS_GEMM", 1);
+        g_ggml_sycl_xmx_sg8 = ggml_sycl_get_env("GGML_SYCL_XMX_SG8", 0);
+        g_ggml_sycl_xmx_sg8_grf = ggml_sycl_get_env("GGML_SYCL_XMX_SG8_GRF", 128) == 256 ? 256 : 128;
+        g_ggml_sycl_fa_sg8_probe = ggml_sycl_get_env_fa_sg8_probe("GGML_SYCL_FA_SG8_PROBE");
         g_ggml_sycl_memtrace = ggml_sycl_get_env("GGML_SYCL_MEMTRACE", 0);
         g_ggml_sycl_memtrace_step = ggml_sycl_get_env("GGML_SYCL_MEMTRACE_STEP", 64);
         g_ggml_sycl_enable_vmm = ggml_sycl_get_env("GGML_SYCL_ENABLE_VMM", 1);
@@ -557,6 +584,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_FA_ONEDNN_MAX_KV: %d\n", g_ggml_sycl_fa_onednn_max_kv);
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_MKL_FA: %d\n", g_ggml_sycl_enable_mkl_fa);
         GGML_LOG_INFO("  GGML_SYCL_FA_DPAS: %d\n", g_ggml_sycl_fa_dpas);
+        GGML_LOG_INFO("  GGML_SYCL_FA_DPAS_SG8: %d\n", g_ggml_sycl_fa_dpas_sg8);
+        GGML_LOG_INFO("  GGML_SYCL_DPAS_GEMM: %d\n", g_ggml_sycl_dpas_gemm);
+        GGML_LOG_INFO("  GGML_SYCL_XMX_SG8: %d\n", g_ggml_sycl_xmx_sg8);
+        GGML_LOG_INFO("  GGML_SYCL_XMX_SG8_GRF: %d\n", g_ggml_sycl_xmx_sg8_grf);
+        GGML_LOG_INFO("  GGML_SYCL_FA_SG8_PROBE: %s\n",
+                      g_ggml_sycl_fa_sg8_probe == 1 ? "full" : g_ggml_sycl_fa_sg8_probe == 2 ? "bare" : "off");
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE: %d\n", g_ggml_sycl_memtrace);
         GGML_LOG_INFO("  GGML_SYCL_MEMTRACE_STEP: %d\n", g_ggml_sycl_memtrace_step);
 #ifdef SYCL_FLASH_ATTN
@@ -3234,6 +3267,60 @@ catch (sycl::exception const &exc) {
 static constexpr int64_t SYCL_F32_DNNL_MIN_GEMM_FLOPS = 256 * 256 * 256;
 #endif
 
+static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream);
+
+// Remedy 3(c) prototype (XMX audit memo, pass 4): wide-column int8 DPAS GEMM for Q4_K weights.
+// Deviation from the pass 4 design: no new kernel over the plain block layout. The run reuses
+// the mmvq XMX kernel and its persistent reorder layout, which holds the same Q4_K bytes in
+// another order, so no extra weight memory is used. The kernel expands the quants to int8 in
+// registers and applies the min correction per 32 value group, as designed.
+// Returns false when the path does not apply; the caller keeps the existing order.
+static bool ggml_sycl_op_mul_mat_dpas_gemm(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
+    const char *src0_dd_i, const float *src1_ddf_i,
+    float *dst_dd_i, const int64_t row_diff,
+    const int64_t src1_ncols, const int ldc, const int id,
+    const queue_ptr &stream) {
+
+    GGML_UNUSED(dst);
+    ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (extra == nullptr) {
+        return false;
+    }
+    if (!extra->optimized_feature.reorder) {
+        // install the persistent reorder on this tensor, the same lazy install the small
+        // batch paths do in opt_for_reorder; the kernel reads only that layout
+        if (!g_ggml_sycl_enable_optimize || !ctx.opt_feature.reorder) {
+            return false;
+        }
+        if (!reorder_qw(src0, stream)) {
+            return false;
+        }
+        extra->optimized_feature.reorder = true;
+    }
+
+    const int64_t ne10 = src1->ne[0];
+    const int64_t padded_col_size = GGML_PAD(ne10, MATRIX_ROW_PADDING);
+
+    ggml_sycl_pool_alloc<char> src1_q8_1(ctx.pool());
+    src1_q8_1.alloc(src1_ncols * padded_col_size * sizeof(block_q8_1) / QK8_1);
+    quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(src1_ddf_i, src1_q8_1.get(), (int) ne10,
+                                                          (int) src1_ncols, (int) padded_col_size, stream);
+
+    const bool ok = ggml_sycl_dpas_gemm_q4_k(id, src0, src0_dd_i, src1_q8_1.get(), dst_dd_i, row_diff,
+                                             src1_ncols, padded_col_size, ldc, stream);
+    if (ok) {
+        static int dpas_gemm_seq = 0;
+        if (dpas_gemm_seq < 128) {
+            GGML_LOG_INFO("[GEMM-DISP] #%d DPAS Q4_K K=%lld nrows=%lld ncols=%lld dev=%d\n",
+                          dpas_gemm_seq, (long long) ne10, (long long) row_diff, (long long) src1_ncols, id);
+        }
+        dpas_gemm_seq++;
+    }
+    return ok;
+}
+
 inline void ggml_sycl_op_mul_mat_sycl(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -3291,6 +3378,22 @@ inline void ggml_sycl_op_mul_mat_sycl(
         return;
     }
 #endif
+
+    // Remedy 3(c) prototype hook: wide-column DPAS GEMM for Q4_K on Xe2, before the fused-gemm
+    // attempt. Split buffers are excluded: their rows live in per-device slices, so the
+    // reorder install cannot run on src0->data. Anything outside the gate falls through.
+    if (g_ggml_sycl_dpas_gemm && src0->type == GGML_TYPE_Q4_K &&
+        src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        dst->op_params[0] == GGML_PREC_DEFAULT &&
+        ggml_is_contiguous(src0) && row_diff == src0->ne[1] &&
+        src0->ne[2] == 1 && src0->ne[3] == 1 && src0->view_src == nullptr &&
+        src1_ncols > MMQ_MAX_BATCH_SIZE && src0->ne[0] % QK_K == 0 &&
+        !ggml_backend_buffer_is_sycl_split(src0->buffer) &&
+        ggml_sycl_xmx_enabled(id) &&
+        ggml_sycl_op_mul_mat_dpas_gemm(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, dst_dd_i,
+                                       row_diff, src1_ncols, ldc, id, stream)) {
+        return;
+    }
 
     // dequantize inside the GEMM instead of writing the f16 weights out and reading them back; src1
     // goes in its own type, so there is no separate conversion pass. The A stage
@@ -8215,6 +8318,7 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     };
 
     set_device_active(device);
+    ggml_sycl_fa_sg8_probe(ctx);
     ggml_backend_t sycl_backend = new ggml_backend {
         /* .guid    = */ ggml_backend_sycl_guid(),
         /* .iface   = */ ggml_backend_sycl_interface,

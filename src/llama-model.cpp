@@ -3284,7 +3284,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     // only the sparse-attention architectures use llama_memory_hybrid_idx
                     // a null filter_idx means the GGUF has no indexer tensors
                     llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
-                    const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_KIMI_K31);
+                    const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_KIMI_K31) ||
+                                               (arch == LLM_ARCH_QWEN35 && hparams.indexer_head_size > 0);
                     if (arch == LLM_ARCH_KIMI_K31) {
                         // DSA layers keep a K-only MLA cache plus a per-token indexer key cache,
                         // the KDA layers stay recurrent
@@ -3319,6 +3320,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             // QSA runs on the dense-attention layers only
                             filter_idx = [&](uint32_t il) {
                                 return il < hparams.n_layer() && !hparams.is_recr(il);
+                            };
+                        }
+
+                        if (arch == LLM_ARCH_QWEN35 && hparams.indexer_head_size > 0) {
+                            // QSA runs on the layers whose compress ratio is set
+                            filter_idx = [&](uint32_t il) {
+                                return il < hparams.n_layer() && hparams.is_indexer_full(il);
                             };
                         }
 

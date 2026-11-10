@@ -136,6 +136,11 @@ extern int g_ggml_sycl_fa_onednn;
 extern int g_ggml_sycl_fa_onednn_max_kv;
 extern int g_ggml_sycl_enable_mkl_fa;
 extern int g_ggml_sycl_fa_dpas;
+extern int g_ggml_sycl_fa_dpas_sg8;
+extern int g_ggml_sycl_dpas_gemm;
+extern int g_ggml_sycl_xmx_sg8;
+extern int g_ggml_sycl_xmx_sg8_grf;
+extern int g_ggml_sycl_fa_sg8_probe;
 extern int g_ggml_sycl_memtrace;
 extern int g_ggml_sycl_memtrace_step;
 extern int g_ggml_sycl_graph_eviction_timeout;
@@ -259,6 +264,14 @@ static inline bool ggml_sycl_xmx_supports_arch(gpu_arch arch) {
            arch == gpu_arch::intel_gpu_lnl_m;
 }
 
+// the sg8 XMX family uses the 8 row DPAS shapes of Xe1. It is a separate predicate on purpose:
+// widening ggml_sycl_xmx_supports_arch would also unlock the Xe2 kernels and the wide DPAS GEMM
+// on these devices.
+static inline bool ggml_sycl_xmx_sg8_supports_arch(gpu_arch arch) {
+    return arch == gpu_arch::intel_gpu_acm_g10 || arch == gpu_arch::intel_gpu_acm_g11 ||
+           arch == gpu_arch::intel_gpu_acm_g12;
+}
+
 // fewest columns for which the XMX kernel is faster than the other kernels
 static inline int ggml_sycl_xmx_min_cols(ggml_type type) {
     return type == GGML_TYPE_Q2_K || type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K ? 1 : 2;
@@ -357,6 +370,11 @@ ggml_sycl_device_info & ggml_sycl_info();
 
 static inline bool ggml_sycl_xmx_enabled(int device) {
     return g_ggml_sycl_enable_xmx_esimd && ggml_sycl_xmx_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
+}
+
+// opt-in prototype path (GGML_SYCL_XMX_SG8, default off), independent of the Xe2 switch above
+static inline bool ggml_sycl_xmx_sg8_enabled(int device) {
+    return g_ggml_sycl_xmx_sg8 && ggml_sycl_xmx_sg8_supports_arch(ggml_sycl_info().devices[device].hw_info.arch);
 }
 
 static constexpr size_t SYCL_BUFFER_ALIGNMENT = 128;

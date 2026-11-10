@@ -98,6 +98,39 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(
     int                stride_col_dst,       // floats between output columns in dst
     dpct::queue_ptr    stream);
 
+// Wide-column int8 DPAS GEMM for reordered Q4_K weights (remedy 3(c) prototype): the XMX
+// mul_mat kernel without the mul_mat_vec column cap, columns run in chunks internally.
+// vy: src1 quantized with quantize_and_reorder_q8_1_soa; src1_padded_col_size is its padded
+// row length in elements. dst is written with leading dimension ldd (floats).
+// Returns false if it does not apply, the caller falls back.
+bool ggml_sycl_dpas_gemm_q4_k(
+    int                device,
+    const ggml_tensor * src0,
+    const char *        src0_dd_i,          // reordered Q4_K weights of this device
+    const char *        src1_ddq_i,         // activations in the SoA Q8_1 layout
+    float *             dst_dd_i,
+    int64_t             row_diff,           // weight rows of this device
+    int64_t             src1_ncols,         // activation columns (tokens)
+    int64_t             src1_padded_col_size,
+    int                 ldd,
+    dpct::queue_ptr     stream);
+
+// sg8 XMX mul_mat_vec for reordered Q4_K weights on Xe1 (remedy 4, stage 1 prototype):
+// the XMX kernel family at a DPAS tile height of 8 rows, opt-in via GGML_SYCL_XMX_SG8.
+// Stage 1 scope: 1..8 columns, long rows only. vy: src1 in the SoA Q8_1 layout, as for
+// the Xe2 XMX path. Returns false if it does not apply, the caller falls back.
+bool ggml_sycl_mul_mat_vec_q_sg8(
+    int                device,
+    const ggml_tensor * src0,
+    const char *        src0_dd_i,          // reordered Q4_K weights of this device
+    const char *        src1_ddq_i,         // activations in the SoA Q8_1 layout
+    float *             dst_dd_i,
+    int64_t             row_diff,           // weight rows of this device
+    int64_t             src1_ncols,         // activation columns (tokens)
+    int64_t             src1_padded_col_size,
+    int                 ldd,
+    dpct::queue_ptr     stream);
+
 // Fused dense-FFN GEMV + GLU over the standard (non-reorder) layout; the gate and up
 // weights may carry different block types (q5_K / iq4_xs, mixed included).
 // vy: src1 quantized with plain quantize_q8_1 (padded rows). stride_col_y is in

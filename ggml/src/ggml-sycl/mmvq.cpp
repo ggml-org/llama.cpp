@@ -2203,6 +2203,94 @@ bool ggml_sycl_mul_mat_vec_q_glu_xmx(int              device,
 #endif // GGML_SYCL_MMVQ_HAS_XMX
 }
 
+bool ggml_sycl_dpas_gemm_q4_k(int device, const ggml_tensor * src0, const char * src0_dd_i,
+                              const char * src1_ddq_i, float * dst_dd_i, int64_t row_diff,
+                              int64_t src1_ncols, int64_t src1_padded_col_size, int ldd,
+                              dpct::queue_ptr stream) {
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+    if (src0->type != GGML_TYPE_Q4_K || !ggml_sycl_xmx_enabled(device)) {
+        return false;
+    }
+    const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra || !extra->optimized_feature.reorder) {
+        return false;
+    }
+
+    const int ne00 = (int) src0->ne[0];
+    if (!ggml_sycl_esimd::xmx_supported(src0_dd_i, ne00)) {
+        return false;
+    }
+
+    // rows under 64 bytes use the variant without 2D block loads, it is not built for the wide tiles
+    const bool short_rows = ne00 < 4 * QK_K;
+    if (short_rows && src1_ncols > 8) {
+        return false;
+    }
+
+    const int stride_y_bytes = (int) (src1_padded_col_size * sizeof(block_q8_1) / QK8_1);
+    // the 2D block loads of the activations need a 64 byte aligned base and a pitch of 16 bytes
+    if ((uintptr_t) src1_ddq_i % 64 != 0 || stride_y_bytes % 16 != 0) {
+        return false;
+    }
+    return ggml_sycl_mul_mat_vec_q_xmx_type(GGML_TYPE_Q4_K, short_rows, src0_dd_i, nullptr, src1_ddq_i,
+                                            dst_dd_i, ne00, row_diff, src1_ncols, stride_y_bytes, ldd, 0, stream);
+#else
+    GGML_UNUSED_VARS(device, src0, src0_dd_i, src1_ddq_i, dst_dd_i, row_diff, src1_ncols,
+                     src1_padded_col_size, ldd, stream);
+    return false;
+#endif // GGML_SYCL_MMVQ_HAS_XMX
+}
+
+bool ggml_sycl_mul_mat_vec_q_sg8(int device, const ggml_tensor * src0, const char * src0_dd_i,
+                                 const char * src1_ddq_i, float * dst_dd_i, int64_t row_diff,
+                                 int64_t src1_ncols, int64_t src1_padded_col_size, int ldd,
+                                 dpct::queue_ptr stream) {
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+    if (src0->type != GGML_TYPE_Q4_K || !ggml_sycl_xmx_sg8_enabled(device)) {
+        return false;
+    }
+    const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra || !extra->optimized_feature.reorder) {
+        return false;
+    }
+
+    // stage 1 scope: decode and small verify batches (1..8 columns), long rows only; the
+    // short row variant is not part of the prototype and keeps the existing path
+    if (src1_ncols < 1 || src1_ncols > 8) {
+        return false;
+    }
+    const int ne00 = (int) src0->ne[0];
+    if (ne00 < 4 * QK_K || !ggml_sycl_esimd::xmx_supported(src0_dd_i, ne00)) {
+        return false;
+    }
+
+    const int stride_y_bytes = (int) (src1_padded_col_size * sizeof(block_q8_1) / QK8_1);
+    // the 2D block loads of the activations need a 64 byte aligned base and a pitch of 16 bytes
+    if ((uintptr_t) src1_ddq_i % 64 != 0 || stride_y_bytes % 16 != 0) {
+        return false;
+    }
+
+    // v1 conservatism: the SR instantiation reads the weights row by row, the transposed 2D
+    // block load at height 8 is not used (its IGC acceptance on Xe1 is unverified)
+    ggml_sycl_esimd::xmx_mul_mat_ncols<ggml_sycl_esimd::xmx_traits_q4_k_sg8<true>>(
+        src0_dd_i, nullptr, src1_ddq_i, dst_dd_i, ne00, (int) row_diff, (int) src1_ncols,
+        stride_y_bytes, ldd, 0, stream);
+
+    static int mmvq_sg8_seq = 0;
+    if (mmvq_sg8_seq < 128) {
+        GGML_LOG_INFO("[MMVQ-DISP] #%d sg8 Q4_K K=%d nrows=%lld ncols=%lld dev=%d grf=%d\n",
+                      mmvq_sg8_seq, ne00, (long long) row_diff, (long long) src1_ncols, device,
+                      g_ggml_sycl_xmx_sg8_grf);
+    }
+    mmvq_sg8_seq++;
+    return true;
+#else
+    GGML_UNUSED_VARS(device, src0, src0_dd_i, src1_ddq_i, dst_dd_i, row_diff, src1_ncols,
+                     src1_padded_col_size, ldd, stream);
+    return false;
+#endif // GGML_SYCL_MMVQ_HAS_XMX
+}
+
 void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1,
                                 ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
                                 const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low,
@@ -2217,6 +2305,11 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
 #ifdef GGML_SYCL_MMVQ_HAS_XMX
     if (ggml_sycl_mul_mat_vec_q_xmx(ctx.device, src0, dst, src0_dd_i, src1_ddq_i, dst_dd_i, row_diff, src1_ncols,
                                     src1_padded_col_size, stream)) {
+        return;
+    }
+    // sg8 trial for Xe1 devices, after the Xe2 XMX trial declined (arch gate or env)
+    if (ggml_sycl_mul_mat_vec_q_sg8(ctx.device, src0, src0_dd_i, src1_ddq_i, dst_dd_i, row_diff, src1_ncols,
+                                    src1_padded_col_size, (int) dst->ne[0], stream)) {
         return;
     }
 #endif // GGML_SYCL_MMVQ_HAS_XMX
