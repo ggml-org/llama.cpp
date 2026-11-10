@@ -97,6 +97,16 @@ enum ggml_sycl_xmx_gather_type {
     GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
     GGML_SYCL_XMX_GATHER_Q2_K     = 1 << 13,
     GGML_SYCL_XMX_GATHER_Q3_K     = 1 << 14,
+    GGML_SYCL_XMX_GATHER_Q5_0     = 1 << 15,
+    GGML_SYCL_XMX_GATHER_Q2_0     = 1 << 16,
+    GGML_SYCL_XMX_GATHER_Q4_0     = 1 << 17,
+    GGML_SYCL_XMX_GATHER_Q4_1     = 1 << 18,
+    GGML_SYCL_XMX_GATHER_Q5_1     = 1 << 19,
+    GGML_SYCL_XMX_GATHER_Q1_0     = 1 << 20,
+    GGML_SYCL_XMX_GATHER_MXFP4    = 1 << 21,
+    GGML_SYCL_XMX_GATHER_NVFP4    = 1 << 22,
+    GGML_SYCL_XMX_GATHER_F16      = 1 << 23,
+    GGML_SYCL_XMX_GATHER_BF16     = 1 << 24,
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
