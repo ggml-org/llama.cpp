@@ -38,6 +38,9 @@ export { conversationsStore } from './conversations/index.svelte';
 // MCP
 export { mcpStore } from './mcp/index.svelte';
 
+// GROUPS (named sidebar sections for chats)
+export { groupsStore } from './groups.svelte';
+
 // MODELS
 export { modelsStore } from './models/index.svelte';
 

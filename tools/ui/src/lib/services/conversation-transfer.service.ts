@@ -175,12 +175,12 @@ export class ConversationTransferService {
 			const record = JSON.parse(trimmed);
 
 			if (record.type === SessionRecordType.SESSION) {
-				// Drop the discriminator and harness marker; the rest is the conversation.
-				const conv = { ...record };
+				// Drop the discriminator, harness marker and group; the rest is the conversation.
+				const { group, ...conv } = record;
 
 				delete conv.type;
 				delete conv.harness;
-				current = { conv: conv as DatabaseConversation, messages: [] };
+				current = { conv: conv as DatabaseConversation, messages: [], ...(group ? { group } : {}) };
 				sessions.push(current);
 			} else if (record.type === SessionRecordType.MESSAGE) {
 				if (!current) {
@@ -210,11 +210,12 @@ export class ConversationTransferService {
 	 * @returns The JSONL string (one record per line)
 	 */
 	static serializeSessionToJsonl(data: ExportedConversation): string {
-		const { conv, messages } = data;
+		const { conv, group, messages } = data;
 		const sessionLine = JSON.stringify({
 			harness: EXPORT_CONV.HARNESS,
 			type: SessionRecordType.SESSION,
-			...conv
+			...conv,
+			...(group ? { group } : {})
 		});
 		const messageLines = messages.map((message: DatabaseMessage) => {
 			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.

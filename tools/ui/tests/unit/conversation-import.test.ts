@@ -38,6 +38,20 @@ describe('ConversationTransferService.parseImportFile', () => {
 		expect(sessions[0].messages[0].content).toBe('hello from a');
 	});
 
+	it('keeps the session group apart from the conversation through a JSONL round trip', () => {
+		const session = { ...makeSession('a'), group: { id: 'g1', name: 'Research' } };
+
+		session.conv.groupId = 'g1';
+
+		const [parsed] = ConversationTransferService.parseSessionsJsonl(
+			ConversationTransferService.serializeSessionToJsonl(session)
+		);
+
+		expect(parsed.group).toEqual({ id: 'g1', name: 'Research' });
+		expect(parsed.conv).not.toHaveProperty('group');
+		expect(parsed.conv.groupId).toBe('g1');
+	});
+
 	it('imports several sessions from one JSONL file', async () => {
 		const jsonl = [makeSession('a'), makeSession('b')]
 			.map((session) => ConversationTransferService.serializeSessionToJsonl(session))
