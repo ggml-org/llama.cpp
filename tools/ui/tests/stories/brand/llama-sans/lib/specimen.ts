@@ -29,7 +29,10 @@ export interface Specimen {
 
 export const specimen = raw as unknown as Specimen;
 
-/** each version's place on the optical size axis: Llama Sans is one font, and UI and Display are its two ends */
-export const opsz: Record<string, number> = { Display: 40, UI: 16 };
+/**
+ * each version's place on the optical size axis: Llama Sans is one font, and UI and Display are two of its named
+ * points (Small, at 10, is the third)
+ */
+export const opsz: Record<string, number> = { Display: 36, UI: 16 };
 
 export const fallback = '"Helvetica Neue", Arial, sans-serif';

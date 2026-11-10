@@ -1,5 +1,5 @@
 <!--
-	One version of Llama Sans (an end of its optical size axis, pinned with opsz), after github.com/mona-sans: a rule with the version's name and the icon, a big statement
+	One version of Llama Sans (a named point on its optical size axis, pinned with opsz), after github.com/mona-sans: a rule with the version's name and the icon, a big statement
 	set in that version, then its sample (children) and specs. side="end" puts the text in the right half.
 -->
 <script lang="ts">

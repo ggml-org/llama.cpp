@@ -1,6 +1,6 @@
 <!--
-	The page a Llama Sans story sits on, set in one version (variant: UI or Display, the optical size axis's two
-	named ends, pinned with opsz) and weight. A copy of the specimen's page template
+	The page a Llama Sans story sits on, set in one version (variant: UI or Display, two of the optical size
+	axis's named points, pinned with opsz) and weight. A copy of the specimen's page template
 	in ggml-org/llama-brand (fonts/specimen/src/lib/templates/Doc.svelte); the specimen's components and data in lib/
 	are copied from there too, so change them there first.
 -->

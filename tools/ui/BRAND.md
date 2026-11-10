@@ -49,7 +49,7 @@ no one. The reasons are in Storybook's **Philosophy**.
 ## Type
 
 - **Llama Sans** for everything people read: headlines, ledes, body, captions. One variable font, weights 400 to
-  700, with optical sizes from 16 to 40 that the browser picks from the font size. Headlines Bold (700), tight
+  700, with optical sizes from 10 to 36 that the browser picks from the font size. Headlines Bold (700), tight
   (letter-spacing -0.02em to -0.035em), line height 0.92 to 0.98.
 - **Llama Mono** only for what is code or data: commands, URLs and repo ids, figures in tables, and
   small uppercase labels (0.12em tracking). Never for headlines or running text.

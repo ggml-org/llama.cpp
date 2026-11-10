@@ -54,7 +54,7 @@
 			</figure>
 
 			<p class="footnote">
-				¹ UI and Display are the two ends of one font’s optical size axis: the same outlines, with
+				¹ UI and Display are two points on one font’s optical size axis: the same outlines, with
 				spacing, kerning and descender depth set for each size.
 			</p>
 		</div>

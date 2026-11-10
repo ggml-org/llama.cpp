@@ -8,7 +8,7 @@
 	import UserInterface from './typography/UserInterface.svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 
-	// Llama Sans: its overview, then in use, from its UI optical size (opsz 16) to its Display one (opsz 40): the design system's own
+	// Llama Sans: its overview, then in use, from its UI optical size (opsz 16) to its Display one (opsz 36): the design system's own
 	// components, running text, headlines and large type, and every glyph, from the brand specimen
 	const { Story } = defineMeta({
 		parameters: {

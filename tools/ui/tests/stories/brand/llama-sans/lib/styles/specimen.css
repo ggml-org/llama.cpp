@@ -60,7 +60,7 @@
 .specimen :where(*:not(svg, svg *, .ds, .ds *)) {
 	all: revert;
 }
-/* the optical size a page or section pins (--opsz-pin, e.g. 'opsz' 40) reaches every element: the font shorthand
+/* the optical size a page or section pins (--opsz-pin, e.g. 'opsz' 36) reaches every element: the font shorthand
    resets font-variation-settings, so the pin can't simply inherit. Unset, the browser picks opsz from font-size */
 .specimen *:not(svg, svg *, .ds, .ds *) {
 	font-variation-settings: var(--opsz-pin, normal) !important;

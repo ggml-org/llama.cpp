@@ -32,7 +32,7 @@
 			name: 'Sans',
 			tagline: [
 				'One font for every size.',
-				'Spaced for text at 16, tight for headlines at 40.',
+				'Spaced for text at 16, tight for headlines at 36.',
 				`Every weight from ${axis.min} to ${axis.max}.`
 			],
 			title: ['Llama', 'Sans']

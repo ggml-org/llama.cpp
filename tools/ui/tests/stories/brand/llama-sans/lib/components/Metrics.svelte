@@ -44,7 +44,7 @@
 	<div>
 		<dt>Optical size axis</dt>
 
-		<dd>16–40</dd>
+		<dd>10–36</dd>
 	</div>
 
 	<div>
@@ -56,7 +56,7 @@
 	<div>
 		<dt>Display</dt>
 
-		<dd>opsz 40 · tracking −22 · kerning 115% · set at line-height 1.15</dd>
+		<dd>opsz 36 · tracking −22 · kerning 115% · set at line-height 1.15</dd>
 	</div>
 
 	<div>

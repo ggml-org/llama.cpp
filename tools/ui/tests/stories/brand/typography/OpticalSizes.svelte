@@ -1,13 +1,13 @@
 <!--
-	Llama Sans's optical size axis: one phrase at one size, set at four points of opsz from UI (16) to Display (40), so
+	Llama Sans's optical size axis: one phrase at one size, set at four points of opsz from Small (10) to Display (36), so
 	the spacing and kerning change is all that differs. Browsers pick the point from font-size on their own.
 -->
 <script lang="ts">
 	const stops = [
+		{ label: 'Small', opsz: 10 },
 		{ label: 'UI', opsz: 16 },
 		{ opsz: 24 },
-		{ opsz: 32 },
-		{ label: 'Display', opsz: 40 }
+		{ label: 'Display', opsz: 36 }
 	];
 </script>
 
