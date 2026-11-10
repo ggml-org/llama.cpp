@@ -848,6 +848,10 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
             case GGML_TYPE_Q6_K:
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_S:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
+            case GGML_TYPE_IQ4_XS:
             case GGML_TYPE_MXFP4:{
                 ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
                 tensor->extra                 = extra;
@@ -4982,6 +4986,25 @@ static bool reorder_qw_iq3_xxs(uint8_t * data_device, size_t size, dpct::queue_p
         }, stream);
 }
 
+// Reorder a slice into the streams of its layout table (ggml_sycl_layout): the first field, which has a stream of
+// its own, is the planar head, the other fields the tail.
+template <typename block_t> static bool reorder_qw_layout(uint8_t * data_device, size_t size, dpct::queue_ptr stream) {
+    using L = ggml_sycl_layout<block_t>;
+    static_assert(L::N > 1 && !L::seg[1].join, "the first field has a stream of its own");
+    return reorder_qw_planar<block_t>(
+        __func__, data_device, size, L::seg[0].aos, L::seg[0].size,
+        [](const block_t & x, int64_t ib, uint8_t * tail, int64_t nblocks) {
+            const uint8_t * b = reinterpret_cast<const uint8_t *>(&x);
+            for (int f = 1; f < L::N; ++f) {
+                uint8_t * dst = tail + ggml_sycl_layout_at<L>(f, ib, nblocks) - nblocks * L::seg[0].size;
+                for (int j = 0; j < L::seg[f].size; ++j) {
+                    dst[j] = b[L::seg[f].aos + j];
+                }
+            }
+        },
+        stream);
+}
+
 // Reorder each expert slice on its own with the type's dense reorder: its layout is the one the dense
 // kernels, the MoE mat-vec and the grouped GEMM (ggml_sycl_layout) read.
 template <typename F>
@@ -5019,6 +5042,22 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             case GGML_TYPE_IQ3_S:
                 return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
                                               [&](uint8_t * x, size_t n) { return reorder_qw_iq3_s(x, n, stream); });
+            case GGML_TYPE_IQ2_XXS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq2_xxs>(x, n, stream);
+                });
+            case GGML_TYPE_IQ2_XS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq2_xs>(x, n, stream);
+                });
+            case GGML_TYPE_IQ2_S:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq2_s>(x, n, stream);
+                });
+            case GGML_TYPE_IQ4_XS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq4_xs>(x, n, stream);
+                });
             case GGML_TYPE_Q4_K:
                 return reorder_qw_q4_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
             case GGML_TYPE_Q5_K:
@@ -5116,6 +5155,10 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_IQ3_XXS:
         case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ4_XS:
         case GGML_TYPE_MXFP4:
             break;
         default:
