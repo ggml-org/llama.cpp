@@ -433,6 +433,16 @@ template <> struct fg_block_traits<block_q3_K>    { static constexpr int qk = QK
 template <> struct fg_block_traits<block_q4_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q5_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q6_K>    { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_q4_0>    { static constexpr int qk = QK4_0; };
+template <> struct fg_block_traits<block_q4_1>    { static constexpr int qk = QK4_1; };
+template <> struct fg_block_traits<block_q5_0>    { static constexpr int qk = QK5_0; };
+template <> struct fg_block_traits<block_q5_1>    { static constexpr int qk = QK5_1; };
+template <> struct fg_block_traits<block_q1_0>    { static constexpr int qk = QK1_0; };
+template <> struct fg_block_traits<block_q2_0>    { static constexpr int qk = QK2_0; };
+template <> struct fg_block_traits<block_mxfp4>   { static constexpr int qk = QK_MXFP4; };
+template <> struct fg_block_traits<block_nvfp4>   { static constexpr int qk = QK_NVFP4; };
+template <> struct fg_block_traits<sycl::half>    { static constexpr int qk = 1; };
+template <> struct fg_block_traits<sycl::ext::oneapi::bfloat16> { static constexpr int qk = 1; };
 
 // The A stages below are the dequantize_block_iq* kernels rewritten for one k step. There a
 // work-item handled one quarter (il) of one 32-wide sub-block (ib); here one lane produces the
@@ -754,6 +764,112 @@ static __dpct_inline__ void fg_stage_a(const block_q6_K * __restrict__ xrow, con
     fg_decode_q6_K<E>(blk->ql, blk->qh, blk->scales, (float) blk->d, ib, a);
 }
 
+// The formats below are one value lambda each: a[i] = (v(2 i), v(2 i + 1)) for k in [0, 32) of the k step.
+template <typename E, typename V> static __dpct_inline__ void fg_stage_values(V && v, typename E::pair * a) {
+#pragma unroll
+    for (int i = 0; i < FG_BK / 2; ++i) {
+        a[i] = E::make(v(2 * i), v(2 * i + 1));
+    }
+}
+
+// 32-value blocks of nibbles: byte j holds k = j (low nibble) and k = j + 16 (high nibble)
+static __dpct_inline__ int fg_nibble(const uint8_t * qs, const int k) {
+    return (k < 16 ? qs[k] : qs[k - 16] >> 4) & 0xf;
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q4_0 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q4_0 blk = xrow[kb];
+    const float      d   = (float) blk.d;
+    fg_stage_values<E>([&](int k) { return d * (fg_nibble(blk.qs, k) - 8); }, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q4_1 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q4_1 blk = xrow[kb];
+    const float      d = (float) blk.dm[0], m = (float) blk.dm[1];
+    fg_stage_values<E>([&](int k) { return d * fg_nibble(blk.qs, k) + m; }, a);
+}
+
+// q5_0 / q5_1: bit k of qh is the fifth bit of value k
+static __dpct_inline__ int fg_q5_code(const uint8_t * qs, const uint32_t qh, const int k) {
+    return fg_nibble(qs, k) | (int) (((qh >> k) & 1) << 4);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q5_0 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q5_0 blk = xrow[kb];
+    const float      d   = (float) blk.d;
+    uint32_t         qh;
+    memcpy(&qh, blk.qh, sizeof(qh));
+    fg_stage_values<E>([&](int k) { return d * (fg_q5_code(blk.qs, qh, k) - 16); }, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q5_1 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q5_1 blk = xrow[kb];
+    const float      d = (float) blk.dm[0], m = (float) blk.dm[1];
+    uint32_t         qh;
+    memcpy(&qh, blk.qh, sizeof(qh));
+    fg_stage_values<E>([&](int k) { return d * fg_q5_code(blk.qs, qh, k) + m; }, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_decode_mxfp4(const uint8_t * __restrict__ qs, const uint8_t e, typename E::pair * a) {
+    const float d = 0.5f * ggml_sycl_e8m0_to_fp32(e);
+    fg_stage_values<E>([&](int k) { return d * kvalues_mxfp4[fg_nibble(qs, k)]; }, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_mxfp4 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    fg_decode_mxfp4<E>(xrow[kb].qs, xrow[kb].e, a);
+}
+
+// q1_0: 128 values per block, four k steps; bit j % 8 of byte j / 8 picks +d or -d
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q1_0 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q1_0 * blk = xrow + kb / (QK1_0 / FG_BK);
+    const uint8_t *    qs  = blk->qs + (kb % (QK1_0 / FG_BK)) * (FG_BK / 8);
+    const float        d   = (float) blk->d;
+    fg_stage_values<E>([&](int k) { return (qs[k / 8] >> (k % 8)) & 1 ? d : -d; }, a);
+}
+
+// q2_0: 64 values per block, two k steps; two bits per value, (q - 1) * d
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_q2_0 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_q2_0 * blk = xrow + kb / (QK2_0 / FG_BK);
+    const uint8_t *    qs  = blk->qs + (kb % (QK2_0 / FG_BK)) * (FG_BK / 4);
+    const float        d   = (float) blk->d;
+    fg_stage_values<E>([&](int k) { return d * (((qs[k / 4] >> (2 * (k % 4))) & 3) - 1); }, a);
+}
+
+// nvfp4: 64 values per block, two k steps of two 16-value sub-blocks with a UE4M3 scale each; byte j of
+// a sub-block holds its value j (low nibble) and j + 8 (high nibble)
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_nvfp4 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_nvfp4 * blk = xrow + kb / (QK_NVFP4 / FG_BK);
+    const int           s0  = (kb % (QK_NVFP4 / FG_BK)) * (FG_BK / QK_NVFP4_SUB);
+    const float         d0 = ggml_sycl_ue4m3_to_fp32(blk->d[s0]), d1 = ggml_sycl_ue4m3_to_fp32(blk->d[s0 + 1]);
+    fg_stage_values<E>(
+        [&](int k) {
+            const uint8_t q = blk->qs[(s0 + k / QK_NVFP4_SUB) * (QK_NVFP4_SUB / 2) + k % (QK_NVFP4_SUB / 2)];
+            return (k < QK_NVFP4_SUB ? d0 : d1) * kvalues_mxfp4[(k % QK_NVFP4_SUB) < QK_NVFP4_SUB / 2 ? q & 0xf : q >> 4];
+        },
+        a);
+}
+
+// f16 / bf16 weights: nothing to decode, one k step is 32 consecutive values
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const sycl::half * __restrict__ xrow, const int kb, typename E::pair * a) {
+    fg_stage_values<E>([&](int k) { return (float) xrow[kb * FG_BK + k]; }, a);
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const sycl::ext::oneapi::bfloat16 * __restrict__ xrow, const int kb,
+                                       typename E::pair * a) {
+    fg_stage_values<E>([&](int k) { return (float) xrow[kb * FG_BK + k]; }, a);
+}
+
 // Reorder (SoA) layout: each block field is one stream over the nblocks of the matrix (of the expert
 // slice for MUL_MAT_ID), in the order reorder_qw() writes them. Block ib holds k step kb.
 template <typename block_q_t> struct fg_soa {
@@ -768,6 +884,16 @@ template <> struct fg_soa<block_q8_0> {
                                       typename E::pair * a) {
         const float d = (float) ((const sycl::half *) (x + nblocks * QK8_0))[ib];
         fg_decode_q8_0<E>((const int8_t *) x + ib * QK8_0, d, a);
+    }
+};
+
+// the MoE reorder of reorder_qw_mxfp4_moe(): [qs][e]
+template <> struct fg_soa<block_mxfp4> {
+    static constexpr bool supported = true;
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int,
+                                      typename E::pair * a) {
+        fg_decode_mxfp4<E>(x + ib * (QK_MXFP4 / 2), x[nblocks * (QK_MXFP4 / 2) + ib], a);
     }
 };
 
@@ -1086,12 +1212,13 @@ static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const
     });
 }
 
-// q8_0 and the k-quants take only the grouped path. The plain kernel decodes A again for every BN columns
-// of a dense batch, and for these formats that costs more than the one dequantization of the library GEMM.
+// Only the iq formats take the plain path; the others take only the grouped path. The plain kernel decodes
+// A again for every BN columns of a dense batch, and for those formats that costs more than the one
+// dequantization of the library GEMM.
 template <typename T> static constexpr bool fg_plain_ok() {
-    return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q2_K> && !std::is_same_v<T, block_q3_K> &&
-           !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
-           !std::is_same_v<T, block_q6_K>;
+    return std::is_same_v<T, block_iq4_nl> || std::is_same_v<T, block_iq3_s> || std::is_same_v<T, block_iq4_xs> ||
+           std::is_same_v<T, block_iq3_xxs> || std::is_same_v<T, block_iq2_xxs> || std::is_same_v<T, block_iq2_xs> ||
+           std::is_same_v<T, block_iq2_s> || std::is_same_v<T, block_iq1_s> || std::is_same_v<T, block_iq1_m>;
 }
 
 template <typename T, bool R> struct fg_tag {
@@ -1129,6 +1256,16 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_Q4_K:    return fg_visit_layout<block_q4_K>(reordered, f);
         case GGML_TYPE_Q5_K:    return fg_visit_layout<block_q5_K>(reordered, f);
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
+        case GGML_TYPE_Q4_0:    return fg_visit_layout<block_q4_0>(reordered, f);
+        case GGML_TYPE_Q4_1:    return fg_visit_layout<block_q4_1>(reordered, f);
+        case GGML_TYPE_Q5_0:    return fg_visit_layout<block_q5_0>(reordered, f);
+        case GGML_TYPE_Q5_1:    return fg_visit_layout<block_q5_1>(reordered, f);
+        case GGML_TYPE_Q1_0:    return fg_visit_layout<block_q1_0>(reordered, f);
+        case GGML_TYPE_Q2_0:    return fg_visit_layout<block_q2_0>(reordered, f);
+        case GGML_TYPE_MXFP4:   return fg_visit_layout<block_mxfp4>(reordered, f);
+        case GGML_TYPE_NVFP4:   return fg_visit_layout<block_nvfp4>(reordered, f);
+        case GGML_TYPE_F16:     return fg_visit_layout<sycl::half>(reordered, f);
+        case GGML_TYPE_BF16:    return fg_visit_layout<sycl::ext::oneapi::bfloat16>(reordered, f);
         default:                return false;
     }
 }
