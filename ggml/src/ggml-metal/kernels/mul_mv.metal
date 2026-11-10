@@ -622,7 +622,7 @@ void kernel_mul_mv_ext_q4_f32_impl(
     const short chpt = 4; // chunks per thread
 
   //const short nxpsg = (32);
-    const short nypsg = (32/nxpsg);
+    const short nypsg = (N_SIMDWIDTH/nxpsg);
 
     const short tx = tiisg%nxpsg;
     const short ty = tiisg/nxpsg;
@@ -725,7 +725,7 @@ void kernel_mul_mv_ext_q4x4_f32_impl(
     const short chpt = 1;
 
   //const short nxpsg = (32);
-    const short nypsg = (32/nxpsg);
+    const short nypsg = (N_SIMDWIDTH/nxpsg);
 
     const short tx = tiisg%nxpsg;
     const short ty = tiisg/nxpsg;
