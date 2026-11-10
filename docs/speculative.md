@@ -86,10 +86,7 @@ See:
 
 ### DFlash2 (`draft-dflash2`)
 
-DFlash2 adds a local convolution to the DFlash layers and a _candidate selector_ on the block. The
-selector keeps the top-k candidates of each block position and scores each of them after each
-candidate of the previous position. The draft then follows the best-scoring path through the block
-instead of taking the argmax of every position on its own.
+[DFlash2](https://inco.ai/blog/dflash2/) adds a local convolution to the DFlash layers and a _candidate selector_ on the block.
 
 DFlash2 drafts convert like DFlash drafts, with `--target-model-dir`:
 
@@ -112,7 +109,7 @@ See:
 
 ### DSpark (`draft-dspark`)
 
-DSpark extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
+[DSpark](https://arxiv.org/pdf/2607.05147) extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
 block per forward pass, but each block position's logits are biased by a low-rank term keyed on
 the previous token, chained in-graph across the block. This keeps drafting at one decode per
 block while recovering some of the left-to-right signal that pure block diffusion loses.
@@ -149,9 +146,8 @@ See:
 
 ### LiliCorr (`draft-lilicorr`)
 
-LiliCorr puts a _candidate scorer_ on the DFlash block: a small transformer over the top-k candidates
-of each block position, conditioned on the target's hidden state at the last position, scores the
-paths through the block like the DFlash2 selector. The draft follows the best-scoring path.
+[LiliCorr](https://arxiv.org/pdf/2608.20530) puts a _candidate scorer_ on the DFlash block: a small transformer over the top-k candidates
+of each block position, conditioned on the target's hidden state at the last position, scores the paths through the block like the DFlash2 selector.
 
 LiliCorr drafts (`LiLiCorrDraftModel`) convert with `--target-model-dir`:
 
