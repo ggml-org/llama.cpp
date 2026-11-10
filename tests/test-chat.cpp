@@ -2160,6 +2160,12 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         })
         .run();
 
+    // Raw control characters in pythonic string arguments must be escaped into valid JSON.
+    tst.test("<|tool_call_start|>[python(code='a\nb')]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({ { "python", R"#({"code": "a\nb"})#", "" } })
+        .run();
+
     // String escape sequences decode to their actual characters (newline + tab here),
     // so a "write a two line file" style call produces real line breaks, not literal "\n".
     tst.test("<|tool_call_start|>[python(code=\"First line\\nSecond line\\tindented\")]<|tool_call_end|>")
