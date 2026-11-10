@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { FolderPlus, Pencil } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
 	import { GROUP_NAME_MAX_LENGTH } from '$lib/constants';
@@ -49,18 +50,31 @@
 	}
 </script>
 
-<Dialog.Root onOpenChange={(open) => !open && close()} open={options !== null}>
-	<Dialog.Content
-		class="max-w-md!"
+<!-- a short prompt, so a phone shows it as a centered card like an alert, not full screen -->
+<AlertDialog.Root onOpenChange={(open) => !open && close()} open={options !== null}>
+	<AlertDialog.Content
+		class="sm:max-w-md"
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			nameInput?.focus();
 			nameInput?.select();
 		}}
 	>
-		<Dialog.Header>
-			<Dialog.Title>{group ? 'Rename group' : 'New group'}</Dialog.Title>
-		</Dialog.Header>
+		<AlertDialog.Header>
+			<AlertDialog.Title class="flex items-center gap-2">
+				{#if group}
+					<Pencil class="h-5 w-5" />
+				{:else}
+					<FolderPlus class="h-5 w-5" />
+				{/if}
+
+				{group ? 'Rename group' : 'New group'}
+			</AlertDialog.Title>
+
+			<AlertDialog.Description>
+				{group ? 'Choose a new name for this group.' : 'Name a group to sort chats into.'}
+			</AlertDialog.Description>
+		</AlertDialog.Header>
 
 		<form class="contents" onsubmit={handleSubmit}>
 			<div class="flex flex-col gap-2">
@@ -76,13 +90,14 @@
 				/>
 			</div>
 
-			<Dialog.Footer class="gap-2">
-				<Button onclick={close} size="sm" variant="secondary">Cancel</Button>
+			<AlertDialog.Footer>
+				<!-- not a submit button, or Enter in the name field would cancel -->
+				<AlertDialog.Cancel type="button">Cancel</AlertDialog.Cancel>
 
-				<Button disabled={!canSave} size="sm" type="submit">
+				<Button disabled={!canSave} type="submit">
 					{group ? 'Save' : 'Create group'}
 				</Button>
-			</Dialog.Footer>
+			</AlertDialog.Footer>
 		</form>
-	</Dialog.Content>
-</Dialog.Root>
+	</AlertDialog.Content>
+</AlertDialog.Root>
