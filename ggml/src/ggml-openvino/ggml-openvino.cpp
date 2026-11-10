@@ -74,13 +74,9 @@ struct ggml_backend_openvino_buffer_context {
     size_t size;
     bool is_remote;
 
-    // File-backed spill or cache-only virtual memory.
+    // OS mapping backing the buffer: anonymous memory, or the file-backed spill.
     void * spill_mapping = nullptr;
     size_t spill_size = 0;
-
-    // Set when ov_buffer owns Level Zero host memory (GGML_OPENVINO_NPU_L0_HOST_TENSORS); the
-    // tensor frees it, so the destructor must not call ggml_aligned_free.
-    bool data_owned_by_ov = false;
 
     // Set for a model buffer that directly wraps the loader's GGUF mmap.
     bool external_memory = false;
@@ -164,9 +160,8 @@ struct ggml_backend_openvino_buffer_context {
                     data = host_tensor.data();
                     memset(data, 0, size);
                     ov_buffer = std::make_shared<ov::Tensor>(std::move(host_tensor));
-                    data_owned_by_ov = true;
                 } catch (const std::exception & e) {
-                    GGML_LOG_WARN("%s: L0 host tensor allocation of %zu bytes failed (%s); using aligned malloc\n",
+                    GGML_LOG_WARN("%s: L0 host tensor allocation of %zu bytes failed (%s); using anonymous memory\n",
                                   __func__, size, e.what());
                     data = nullptr;
                 }
@@ -174,25 +169,9 @@ struct ggml_backend_openvino_buffer_context {
             if (data != nullptr) {
                 // backed by the Level Zero host tensor above
             } else
-#ifdef _WIN32
-            if (ggml_openvino_model_cache_only()) {
-                data = spill_mapping = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-                if (data == nullptr) {
-                    return;
-                }
-                spill_size = size;
-                ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
-            } else
-#else
-            if (ggml_openvino_model_cache_only()) {
-                void * m = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-                if (m == MAP_FAILED) {
-                    return;
-                }
-                data = spill_mapping = m;
-                spill_size = size;
-                ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
-            } else if (const char * spill_dir = ggml_openvino_getenv_str("GGML_OPENVINO_SPILL_DIR")) {
+#ifndef _WIN32
+            if (const char * spill_dir =
+                    ggml_openvino_model_cache_only() ? nullptr : ggml_openvino_getenv_str("GGML_OPENVINO_SPILL_DIR")) {
                 // Disk-backed weight buffer: back the repacked weights with a temp file via MAP_SHARED
                 // instead of anonymous memory. Anonymous pages can only be evicted to swap, so the
                 // repacked buffer stays pinned alongside the mmap'd source and both are resident at once
@@ -232,17 +211,27 @@ struct ggml_backend_openvino_buffer_context {
 #endif
             {
 #ifdef _WIN32
-                if (ggml_openvino_getenv_str("GGML_OPENVINO_SPILL_DIR")) {
+                if (!ggml_openvino_model_cache_only() && ggml_openvino_getenv_str("GGML_OPENVINO_SPILL_DIR")) {
                     GGML_LOG_WARN("%s: GGML_OPENVINO_SPILL_DIR is not supported on Windows, ignoring\n", __func__);
                 }
 #endif
-                data = ggml_aligned_malloc(size);
-                GGML_ASSERT(data);
-                // Demand-zero pages already read as zero; skip the eager memset in lazy mode so the
-                // large, host-untouched prefill compute buffer never becomes resident.
-                if (!lazy_host_alloc) {
-                    memset(data, 0, size);
+                // Anonymous OS memory reads as zero without being touched, so a buffer becomes resident only as it
+                // is written: a weight buffer tensor by tensor while the model loads, the host-untouched prefill
+                // compute buffer never.
+#ifdef _WIN32
+                data = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+                if (data == nullptr) {
+                    return;
                 }
+#else
+                void * m = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                if (m == MAP_FAILED) {
+                    return;
+                }
+                data = m;
+#endif
+                spill_mapping = data;
+                spill_size = size;
                 ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
             }
         }
@@ -270,17 +259,12 @@ struct ggml_backend_openvino_buffer_context {
         if (kv_on_demand) {
             ggml_openvino_kv_storage_unregister(data, size);
         }
+        if (spill_mapping != nullptr) {
 #ifdef _WIN32
-        if (spill_mapping != nullptr) {
             VirtualFree(spill_mapping, 0, MEM_RELEASE);
-        } else
 #else
-        if (spill_mapping != nullptr) {
             munmap(spill_mapping, spill_size);
-        } else
 #endif
-        if (!is_remote && !data_owned_by_ov && !external_memory && data != nullptr) {
-            ggml_aligned_free(data, size);
         }
     }
 };
@@ -296,7 +280,7 @@ struct ggml_backend_openvino_buffer_type_context {
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS)
 // =====================================================
 // The OpenVINO weight Constants are zero-copy views into the host buffers
-// allocated here (ggml_aligned_malloc, anonymous memory). On GPU the plugin
+// allocated here (anonymous memory). On GPU the plugin
 // holds its own device copy after compile_model, so the host pages are dead
 // weight for inference and can be dropped to reclaim RSS (~weights size).
 //
