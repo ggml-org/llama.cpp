@@ -464,6 +464,7 @@ export class DatabaseService {
 					currNode: lastClonedMessage.id,
 					cwd: sourceConv.cwd,
 					forkedFromConversationId: sourceConvId,
+					groupId: sourceConv.groupId,
 					id: newConvId,
 					lastModified: Date.now(),
 					mcpServerOverrides: sourceConv.mcpServerOverrides

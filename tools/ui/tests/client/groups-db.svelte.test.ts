@@ -82,4 +82,17 @@ describe('DatabaseService groups', () => {
 		expect(await groupOf('dangling')).toBeUndefined();
 		expect((await DatabaseService.getAllGroups()).map((group) => group.name)).toContain('Travel');
 	});
+
+	it('keeps a forked chat in the group of the chat it was forked from', async () => {
+		await DatabaseService.createGroup(makeGroup('a'));
+		const source = await DatabaseService.createConversation('source', { groupId: 'a' });
+		const rootId = await DatabaseService.createRootMessage(source.id);
+		const fork = await DatabaseService.forkConversation(source.id, rootId, {
+			includeAttachments: false,
+			name: 'fork'
+		});
+
+		expect(fork.groupId).toBe('a');
+		expect((await DatabaseService.getConversation(fork.id))?.groupId).toBe('a');
+	});
 });
