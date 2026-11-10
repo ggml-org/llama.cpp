@@ -83,7 +83,8 @@ export class ConversationPreferences {
 	/**
 	 * Group the chat about to start goes into, picked before any conversation
 	 * exists. Consumed by `createConversation()` so the first send lands in
-	 * that group. Cleared alongside `pendingCwd`.
+	 * that group. Unlike `pendingCwd` it outlives `resetPending()`, so leaving
+	 * the new-chat tab and coming back keeps it; `openNewChat()` clears it.
 	 */
 	pendingGroupId = $state<string | null>(null);
 
@@ -207,7 +208,6 @@ export class ConversationPreferences {
 	resetPending(): void {
 		this.pendingReasoningEffort = loadReasoningEffortDefault();
 		this.pendingCwd = null;
-		this.pendingGroupId = null;
 	}
 
 	// Working Directory

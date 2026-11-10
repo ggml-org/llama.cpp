@@ -155,6 +155,17 @@ class UiStore {
 		this.modelsSelectorCloseSignal++;
 	}
 
+	/** Drop a removed section, e.g. a deleted group's, from the remembered order and folds. */
+	forgetSidebarSection(id: string): void {
+		this.expandedSidebarSections.delete(id);
+
+		if (this.sidebarSectionOrder.includes(id)) {
+			this.setSidebarSectionOrder(this.sidebarSectionOrder.filter((sectionId) => sectionId !== id));
+		}
+
+		if (this.collapsedSidebarSections.has(id)) this.toggleSidebarSection(id);
+	}
+
 	isSidebarSectionExpanded(id: string): boolean {
 		return this.expandedSidebarSections.has(id);
 	}

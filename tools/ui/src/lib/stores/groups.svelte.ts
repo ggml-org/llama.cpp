@@ -7,11 +7,12 @@
  */
 
 import { browser } from '$app/environment';
-import { GROUP_NAME_MAX_LENGTH } from '$lib/constants';
+import { GROUP_NAME_MAX_LENGTH, SIDEBAR_SECTION_IDS } from '$lib/constants';
 import { DatabaseService } from '$lib/services/database.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import type { Group } from '$lib/types';
+import { uiStore } from '$lib/stores/ui.svelte';
+import type { DatabaseConversation, Group } from '$lib/types';
 import { uuid } from '$lib/utils';
 
 function normalizeName(name: string): string {
@@ -24,6 +25,8 @@ class GroupsStore {
 
 	/** Whether the list was read from the database at least once. */
 	isInitialized = $state(false);
+
+	private byId = $derived(new Map(this.groups.map((group) => [group.id, group])));
 
 	private initPromise: Promise<void> | null = null;
 
@@ -55,7 +58,14 @@ class GroupsStore {
 	}
 
 	get(id: string): Group | undefined {
-		return this.groups.find((group) => group.id === id);
+		return this.byId.get(id);
+	}
+
+	/** The group a conversation is in, null when it is in none or its group is gone. */
+	groupIdOf(conversation: Pick<DatabaseConversation, 'groupId'>): string | null {
+		const { groupId } = conversation;
+
+		return groupId && this.byId.has(groupId) ? groupId : null;
 	}
 
 	/**
@@ -70,7 +80,7 @@ class GroupsStore {
 
 		this.initPromise = (async () => {
 			try {
-				this.groups = await DatabaseService.getAllGroups();
+				await this.reload();
 				this.isInitialized = true;
 			} catch (error) {
 				console.error('Failed to load groups:', error);
@@ -79,6 +89,11 @@ class GroupsStore {
 		})();
 
 		return this.initPromise;
+	}
+
+	/** Reads the groups again, e.g. after an import added some. */
+	async reload(): Promise<void> {
+		this.groups = await DatabaseService.getAllGroups();
 	}
 
 	/**
@@ -96,6 +111,7 @@ class GroupsStore {
 		}
 
 		this.groups = this.groups.filter((group) => group.id !== id);
+		uiStore.forgetSidebarSection(`${SIDEBAR_SECTION_IDS.GROUP_PREFIX}${id}`);
 
 		for (const conversation of conversationsStore.conversations) {
 			if (conversation.groupId === id) {

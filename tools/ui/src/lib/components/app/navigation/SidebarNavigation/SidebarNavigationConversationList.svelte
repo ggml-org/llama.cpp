@@ -14,7 +14,13 @@
 		SIDEBAR_SHOW_MORE_ROW_CLASS
 	} from '$lib/constants';
 	import { SidebarSectionKind } from '$lib/enums';
-	import { conversationsStore, groupsStore, sidebarDragStore, uiStore } from '$lib/stores';
+	import {
+		conversationsStore,
+		deviceStore,
+		groupsStore,
+		sidebarDragStore,
+		uiStore
+	} from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
 	import { buildConversationTree } from '$lib/utils';
 	import { flip } from 'svelte/animate';
@@ -104,8 +110,7 @@
 
 	let unpinnedConversations = $derived(
 		conversationTree.filter(
-			({ conversation }) =>
-				!conversation.pinned && !(conversation.groupId && groupsStore.get(conversation.groupId))
+			({ conversation }) => !conversation.pinned && !groupsStore.groupIdOf(conversation)
 		)
 	);
 
@@ -161,11 +166,7 @@
 	function isUngrouped(convId: string): boolean {
 		const conversation = findConversation(convId);
 
-		return Boolean(
-			conversation &&
-			!conversation.pinned &&
-			!(conversation.groupId && groupsStore.get(conversation.groupId))
-		);
+		return Boolean(conversation && !conversation.pinned && !groupsStore.groupIdOf(conversation));
 	}
 
 	/** Dropping on Pinned pins the chat, wherever it came from. */
@@ -332,8 +333,10 @@
 					open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}
 				>
 					{#snippet trailing()}
+						<!-- shown on hover, and always on a phone, which has none -->
 						<div
-							class="opacity-0 transition-opacity group-focus-within/heading:opacity-100 group-hover/heading:opacity-100 {recentDropdownOpen
+							class="opacity-0 transition-opacity group-focus-within/heading:opacity-100 group-hover/heading:opacity-100 {recentDropdownOpen ||
+							deviceStore.isMobile
 								? 'opacity-100'
 								: ''}"
 						>

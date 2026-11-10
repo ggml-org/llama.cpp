@@ -145,11 +145,9 @@
 	}
 
 	// a group the chat points at may be gone; then it is in none
-	let groupId = $derived(
-		conversation.groupId && groupsStore.get(conversation.groupId) ? conversation.groupId : null
-	);
+	let groupId = $derived(groupsStore.groupIdOf(conversation));
 
-	// a phone has no flyouts: the same entry opens the group picker there
+	// the picker stands in for the submenu where a phone's menu shows no flyouts
 	function handlePickGroup(event: Event) {
 		event.stopPropagation();
 		uiStore.openGroupPicker({ currentGroupId: groupId, onSelect: setGroup });
@@ -161,7 +159,7 @@
 			icon: FolderInput,
 			label: 'Move to group',
 			onclick: handlePickGroup,
-			submenu: deviceStore.isMobile ? undefined : groupSubmenu
+			submenu: groupSubmenu
 		},
 		...(groupId
 			? [

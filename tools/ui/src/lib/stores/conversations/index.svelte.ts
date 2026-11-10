@@ -500,11 +500,20 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * @returns List of conversations with messages, ordered by the input IDs
 	 */
 	async getConversationsForExport(convIds: string[]): Promise<ExportedConversation[]> {
-		const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+		const [fetched, groups] = await Promise.all([
+			DatabaseService.getConversationsWithMessages(convIds),
+			DatabaseService.getAllGroups()
+		]);
+		const groupsById = new Map(groups.map((group) => [group.id, group]));
 
 		return convIds
 			.map((id) => fetched.get(id))
-			.filter((entry): entry is ExportedConversation => entry !== undefined);
+			.filter((entry): entry is ExportedConversation => entry !== undefined)
+			.map((entry) => {
+				const group = entry.conv.groupId ? groupsById.get(entry.conv.groupId) : undefined;
+
+				return group ? { ...entry, group: { id: group.id, name: group.name } } : entry;
+			});
 	}
 
 	/**
@@ -636,14 +645,17 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. With
-	 * Conversation tabs on, it opens in a tab of its own, like the tab bar's
-	 * "+", and the open chat keeps its tab.
+	 * Start a fresh chat by navigating to the bare `#/` new-chat screen.
+	 *
+	 * @param options.inNewTab - With Conversation tabs on, open it in a tab of
+	 *   its own, like the tab bar's "+", so the open chat keeps its tab
 	 */
-	async openNewChat(): Promise<void> {
-		if (settingsStore.config.conversationTabs) await tabsStore.openInNewTab(NEW_CHAT_TAB_ID);
+	async openNewChat({ inNewTab = false } = {}): Promise<void> {
+		if (inNewTab && settingsStore.config.conversationTabs)
+			await tabsStore.openInNewTab(NEW_CHAT_TAB_ID);
 
 		this.clearActiveConversation();
+		this.preferences.pendingGroupId = null;
 		await goto(ROUTES.START);
 	}
 
@@ -682,15 +694,23 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 	/**
 	 * Moves a conversation into a group, or out of one when `groupId` is null.
+	 * A pinned chat that joins a group leaves Pinned, since group sections do
+	 * not show pinned chats.
 	 *
 	 * @param convId - Conversation to move
 	 * @param groupId - Target group, null to take the conversation out of its group
 	 */
 	async setConversationGroup(convId: string, groupId: string | null): Promise<void> {
-		try {
-			await DatabaseService.updateConversation(convId, { groupId: groupId ?? undefined });
+		const pinned = this.conversations.find((conversation) => conversation.id === convId)?.pinned;
+		const updates: Partial<DatabaseConversation> = {
+			groupId: groupId ?? undefined,
+			...(groupId && pinned ? { pinned: false } : {})
+		};
 
-			this.applyConversationUpdate(convId, { groupId: groupId ?? undefined });
+		try {
+			await DatabaseService.updateConversation(convId, updates);
+
+			this.applyConversationUpdate(convId, updates);
 		} catch (error) {
 			console.error('Failed to move conversation to group:', error);
 		}

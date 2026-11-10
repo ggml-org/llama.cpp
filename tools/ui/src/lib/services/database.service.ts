@@ -493,12 +493,15 @@ export class DatabaseService {
 	}
 
 	/**
-	 * Gets all groups, sorted by last update time (newest first).
+	 * Gets all groups, newest first by creation, the order new ones join the
+	 * loaded list in, so a rename does not move a group on the next load.
 	 *
 	 * @returns Array of groups
 	 */
 	static async getAllGroups(): Promise<Group[]> {
-		return await db[IDXDB_TABLES.groups].orderBy('updatedAt').reverse().toArray();
+		const groups = await db[IDXDB_TABLES.groups].toArray();
+
+		return groups.sort((a, b) => b.createdAt - a.createdAt);
 	}
 
 	/**
@@ -572,24 +575,30 @@ export class DatabaseService {
 	 * @returns The conversations written to the database and the ones skipped
 	 */
 	static async importConversations(
-		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
+		data: ExportedConversation[]
 	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const imported: DatabaseConversation[] = [];
 		const skipped: DatabaseConversation[] = [];
 
 		return await db.transaction(
 			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
+			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.groups], db[IDXDB_TABLES.messages]],
 			async () => {
 				for (const item of data) {
-					const { conv, messages } = item;
-					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
+					const { messages } = item;
+					const existing = await db[IDXDB_TABLES.conversations].get(item.conv.id);
 
 					if (existing) {
-						skipped.push(conv);
+						skipped.push(item.conv);
 
 						continue;
 					}
+
+					const conv = { ...item.conv };
+					const groupId = await DatabaseService.importGroup(item);
+
+					if (groupId) conv.groupId = groupId;
+					else delete conv.groupId;
 
 					await db[IDXDB_TABLES.conversations].add(conv);
 					for (const msg of messages) {
@@ -688,6 +697,38 @@ export class DatabaseService {
 		await db[IDXDB_TABLES.messages].update(parentId, {
 			children: [...parent.children, childId]
 		});
+	}
+
+	/**
+	 * Finds the group an imported conversation goes into: the group of the same
+	 * id, else one of the same name, else a new one named after the file's. A
+	 * conversation whose group the file does not carry keeps it only if it exists.
+	 * Runs inside the import transaction.
+	 *
+	 * @returns The group id, or undefined for none
+	 */
+	private static async importGroup(item: ExportedConversation): Promise<string | undefined> {
+		const groups = db[IDXDB_TABLES.groups];
+
+		if (!item.group) {
+			const { groupId } = item.conv;
+
+			return groupId && (await groups.get(groupId)) ? groupId : undefined;
+		}
+
+		const { id, name } = item.group;
+
+		if (await groups.get(id)) return id;
+
+		const sameName = await groups.where('name').equals(name).first();
+
+		if (sameName) return sameName.id;
+
+		const now = Date.now();
+
+		await groups.add({ createdAt: now, id, name, updatedAt: now });
+
+		return id;
 	}
 
 	/**

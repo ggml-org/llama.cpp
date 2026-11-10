@@ -4,6 +4,7 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { MenuKind } from '$lib/enums';
+	import { deviceStore } from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
 	import type { Component } from 'svelte';
 
@@ -25,7 +26,8 @@
 		<Menu.Separator />
 	{/if}
 
-	{#if action.submenu}
+	<!-- a flyout would run off a phone's screen, so there the row runs its onclick -->
+	{#if action.submenu && !deviceStore.isMobile}
 		{@render action.submenu({ close: onClose, kind })}
 	{:else if action.tooltip}
 		<!-- a disabled item takes no pointer events, so the wrapper holds the hover -->

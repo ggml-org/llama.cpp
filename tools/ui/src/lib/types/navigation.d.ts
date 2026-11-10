@@ -26,7 +26,7 @@ export interface MenuAction {
 	onclick: (event: Event) => void;
 	/**
 	 * Flyout rendered in place of the row in a desktop menu, through the kit of
-	 * the menu it is in; the phone drawer keeps `onclick`.
+	 * the menu it is in; a phone's menus keep the row and its `onclick`.
 	 */
 	submenu?: Snippet<[{ close: () => void; kind: MenuKind }]>;
 	variant?: 'default' | 'destructive';

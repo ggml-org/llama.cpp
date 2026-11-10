@@ -504,7 +504,7 @@
 	function handleSidebarAction(action: SidebarAction): void {
 		switch (action) {
 			case SidebarAction.NEW_CHAT:
-				afterMobileClose(() => void conversationsStore.openNewChat());
+				afterMobileClose(() => void conversationsStore.openNewChat({ inNewTab: true }));
 
 				break;
 			case SidebarAction.SEARCH:

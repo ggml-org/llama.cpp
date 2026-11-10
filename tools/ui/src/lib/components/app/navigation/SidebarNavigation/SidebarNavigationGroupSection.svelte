@@ -16,7 +16,13 @@
 		SIDEBAR_SECTION_PREVIEW_COUNT,
 		SIDEBAR_SHOW_MORE_ROW_CLASS
 	} from '$lib/constants';
-	import { conversationsStore, groupsStore, sidebarDragStore, uiStore } from '$lib/stores';
+	import {
+		conversationsStore,
+		deviceStore,
+		groupsStore,
+		sidebarDragStore,
+		uiStore
+	} from '$lib/stores';
 	import type { DatabaseConversation, Group, MenuAction } from '$lib/types';
 	import type { Snippet } from 'svelte';
 	import { slide } from 'svelte/transition';
@@ -48,7 +54,7 @@
 	});
 
 	async function startChat() {
-		await conversationsStore.openNewChat();
+		await conversationsStore.openNewChat({ inNewTab: true });
 		await conversationsStore.assignActiveConversationGroup(group.id);
 	}
 
@@ -59,10 +65,6 @@
 
 	/** A chat dropped on the section joins the group, and leaves Pinned. */
 	async function handleDrop(convId: string) {
-		const conversation = conversationsStore.conversations.find((item) => item.id === convId);
-
-		if (conversation?.pinned) await conversationsStore.toggleConversationPin(convId);
-
 		await conversationsStore.setConversationGroup(convId, group.id);
 	}
 
@@ -104,8 +106,10 @@
 				{open}
 			>
 				{#snippet trailing()}
+					<!-- shown on hover, and always on a phone, which has none -->
 					<div
-						class="flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/heading:opacity-100 group-hover/heading:opacity-100 {dropdownOpen
+						class="flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/heading:opacity-100 group-hover/heading:opacity-100 {dropdownOpen ||
+						deviceStore.isMobile
 							? 'opacity-100'
 							: ''}"
 					>
