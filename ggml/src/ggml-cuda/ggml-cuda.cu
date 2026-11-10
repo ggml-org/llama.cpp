@@ -4,6 +4,7 @@
 
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/graph.cuh"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -734,6 +735,124 @@ std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(g
 #endif // defined(GGML_USE_VMM)
     return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_leg(ctx, device));
 }
+
+ggml_backend_cuda_context::ggml_backend_cuda_context(int device) :
+    device(device),
+    name(GGML_CUDA_NAME + std::to_string(device)),
+    concurrent_stream_context(std::make_unique<ggml_cuda_stream_context>()) {
+}
+
+#ifdef USE_CUDA_GRAPH
+ggml_cuda_graph * ggml_backend_cuda_context::cuda_graph(const void * first_node_ptr, int64_t time_now) {
+    // Give all cached graphs 10s to be reused after an idle period, without updating each graph.
+    if (!cuda_graphs.empty() && time_now - last_graph_use_time >= 10'000'000) {
+        next_graph_eviction_time = time_now + 10'000'000;
+    }
+    last_graph_use_time = time_now;
+
+    // Sweep every 5s during active use, evicting graphs unused for at least 10s.
+    if (time_now >= next_graph_eviction_time) {
+        next_graph_eviction_time = time_now + 5'000'000;
+        for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
+            if (it->first != first_node_ptr && time_now - it->second->last_used_time >= 10'000'000) {
+                it = cuda_graphs.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    auto it = cuda_graphs.find(first_node_ptr);
+    if (it == cuda_graphs.end()) {
+        it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
+    }
+    it->second->last_used_time = time_now;
+    return it->second.get();
+}
+
+bool ggml_backend_cuda_context::any_cuda_graph_enabled() const {
+    for (const auto & [key, graph] : cuda_graphs) {
+        if (graph && graph->is_enabled()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool ggml_backend_cuda_context::any_cuda_graph_has_instance() const {
+    for (const auto & [key, graph] : cuda_graphs) {
+        if (graph && !graph->instances.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif // USE_CUDA_GRAPH
+
+#if defined(GGML_CUDA_USE_PDL)
+bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
+    static const bool env_pdl_enabled = []() {
+        const char * env = getenv("GGML_CUDA_PDL");
+        return env == nullptr || std::atoi(env) != 0;
+    }();
+    if (!env_pdl_enabled) {
+        return false;
+    }
+
+    const int device = ggml_cuda_get_device();
+
+    struct cache_key {
+        int          device;
+        const void * kernel;
+
+        bool operator==(const cache_key & other) const { return device == other.device && kernel == other.kernel; }
+    };
+
+    struct cache_key_hash {
+        // MurmurHash3 mixing function for better hash distribution (vs. just std::hash which in some implementations simply returns the identity)
+        static size_t hash_mix(size_t x) {
+            std::uint64_t       y = x;
+            const std::uint64_t m = 0xe9846af9b1a615d;
+
+            y ^= y >> 32;
+            y *= m;
+            y ^= y >> 32;
+            y *= m;
+            y ^= y >> 28;
+
+            return static_cast<size_t>(y);
+        }
+
+        size_t operator()(const cache_key & key) const {
+            // Use a nonzero seed to avoid mapping all-zero keys to zero
+            size_t h = 42;
+            h        = hash_mix(h + key.device);
+            h        = hash_mix(h + reinterpret_cast<size_t>(key.kernel));
+            return h;
+        }
+    };
+
+    static std::mutex                                          cache_mutex;
+    static std::unordered_map<cache_key, bool, cache_key_hash> cache;
+
+    const cache_key             key = { device, kernel };
+    std::lock_guard<std::mutex> lock(cache_mutex);
+    const auto                  it = cache.find(key);
+    if (it != cache.end()) {
+        return it->second;
+    }
+
+    cudaFuncAttributes attr = {};
+    CUDA_CHECK(cudaFuncGetAttributes(&attr, kernel));
+
+    // PDL device-side primitives are emitted only for PTX versions >= 90.
+    // We have to guard on a loaded kernel's PTX version so a kernel forward-JIT'ed
+    // from pre-Hopper PTX to a Hopper-or-newer GPU does not opt into PDL.
+    const bool can_use_pdl = attr.ptxVersion >= 90;
+    cache.emplace(key, can_use_pdl);
+    return can_use_pdl;
+}
+#endif // defined(GGML_CUDA_USE_PDL)
 
 // destroying a cuBLAS handle while a graph is being captured in a different thread can result in a CUDA error
 // this lock is used to ensure that no cuBLAS handle is destroyed while a graph is being captured
