@@ -68,3 +68,26 @@ llama-server -m Qwen3-8B-Q4_K_M.gguf -ngl 0 -t 8 --repack 0
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF
 cmake --build build -j8 --target llama-server llama-cli llama-bench
 ```
+
+## Threading discovery: libomp sleep-barriers (the real tg bottleneck)
+Token generation scales only 0.16 -> 0.31 -> 0.55 -> 0.69 -> 0.75 t/s for
+t=1..8 (x4.7), while an 8-thread kernel harness on the same file reaches x7.3.
+The gap is NOT the kernels: the production `ggml_vec_dot_q4_K_q8_K` streams a
+real GGUF mmap at 12.4 G weights/s/core, and libomp barrier microbenchmarks on
+lcc/e2k show sleep-based barriers (~90-167 us each, thread-pool has one per
+graph node). With `OMP_WAIT_POLICY=active` (+ OMP_PROC_BIND=spread,
+OMP_PLACES=cores):
+
+| config                | tg64  | pp512 |
+|-----------------------|-------|-------|
+| default               | 0.73  | 3.54  |
+| WAIT_POLICY=active    | 1.09  | 3.54  |
+| active + bind         | 1.11  | -     |
+
+**+52% tg, pp unchanged.** This is a pure runtime fix; `~/bin/llama-e2k`
+wrapper and `~/.bashrc` export these vars. A noomp build (GGML_OPENMP=OFF,
+ggml's own spin-barrier pool) is being validated as a compile-time equivalent.
+
+Root cause: lcc's libomp ports a blocking (condvar) barrier; on Elbrus the
+futex wake latency dominates since every node sync costs ~2x a core's work
+slice at 8 threads.
