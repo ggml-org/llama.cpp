@@ -190,16 +190,16 @@
 	{#snippet heading()}
 		<ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
 			<div
-				class="group/project flex min-h-9 w-full items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-foreground/10 hover:text-foreground md:min-h-8 {isLanding
+				class="group/project flex min-h-9 w-full items-center gap-1 rounded-lg pr-1 transition-colors hover:bg-foreground/10 hover:text-foreground max-md:min-h-12 max-md:rounded-2xl md:min-h-8 {isLanding
 					? 'invisible'
 					: ''} {holdsActive && !open
-					? 'bg-foreground/5 text-accent-foreground'
+					? 'bg-accent text-accent-foreground'
 					: 'text-foreground/75'} {contextMenuOpen || dropdownOpen ? 'bg-foreground/10' : ''}"
 				{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: dragId }}
 			>
 				<button
 					aria-expanded={open}
-					class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch rounded-lg pl-2 text-left"
+					class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch rounded-lg pl-2 text-left max-md:gap-3.5 max-md:pl-3.5"
 					onclick={() => uiStore.toggleSidebarSection(foldId)}
 					ondragstart={(event) => event.preventDefault()}
 					onpointerdown={handlePointerDown}
@@ -219,7 +219,11 @@
 						/>
 					</span>
 
-					<TruncatedText class="text-sm" showTooltip={false} text={project.name} />
+					<TruncatedText
+						class="text-sm max-md:text-[17px]"
+						showTooltip={false}
+						text={project.name}
+					/>
 				</button>
 
 				{#if !isSelectionMode}
@@ -251,9 +255,7 @@
 
 	<CollapsibleRegion {open}>
 		<!-- the chats hang off the project's icon on a thin guide line -->
-		<ul
-			class="ml-[15px] flex min-w-0 flex-col gap-4 border-l border-foreground/10 pl-1.5 md:gap-0.5"
-		>
+		<ul class="ml-[15px] flex min-w-0 flex-col border-l border-foreground/10 pl-1.5 md:gap-0.5">
 			{#each shownConversations as conversation (conversation.id)}
 				<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 					{@render conversationRow(conversation)}
