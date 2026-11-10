@@ -23258,7 +23258,7 @@ static void ggml_cl_flash_attn_decompose_kq_p8(
 // GGML_OPENCL_FA_DECOMPOSE=0 disables it, =1 enables it for any Adreno GPU and
 // head size. GGML_OPENCL_FA_DECOMPOSE_MB sets the KQ scratch budget (default 256).
 // GGML_OPENCL_FA_KQ_P8=0 disables U8 probabilities and int8 KQV.
-// GGML_OPENCL_FA_KQV_DIRECT=1 enables direct PV for small query batches.
+// GGML_OPENCL_FA_KQV_DIRECT=0 disables direct PV for small query batches.
 static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
@@ -23351,7 +23351,7 @@ static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const 
         k->nb[1] * n_kv / 16 <= backend_ctx->image_max_buffer_size;
 
     static const char * direct_env = getenv("GGML_OPENCL_FA_KQV_DIRECT");
-    const bool kqv_direct = direct_env && direct_env[0] && direct_env[0] != '0' && kq_p8 &&
+    const bool kqv_direct = (!direct_env || direct_env[0] != '0') && kq_p8 &&
         backend_ctx->kernel_fa_kqv_direct_f16 != nullptr && backend_ctx->kernel_fa_kqv_direct_reduce != nullptr &&
         v->ne[1] == n_kv && v->ne[2] == n_head_kv &&
         n_q <= 32 / (n_head / n_head_kv) && dv >= 128 && dv <= INT_MAX && (dv % 128) == 0 &&
