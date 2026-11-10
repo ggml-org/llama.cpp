@@ -184,3 +184,26 @@ export function markdownLivePreview(options: MarkdownLivePreviewOptions = {}): E
 
 	return [focusTracking, copyRenderedSelection, field];
 }
+
+/**
+ * The editor without the preview: every block shows its raw text, with the same inline
+ * widgets (see MarkdownLivePreviewOptions.editingWidgets) over the whole document.
+ */
+export function markdownPlainText(
+	editingWidgets?: MarkdownLivePreviewOptions['editingWidgets']
+): Extension {
+	if (!editingWidgets) return [];
+
+	const widgetsOf = (state: EditorState) =>
+		Decoration.set(editingWidgets(state, 0, state.doc.length), true);
+	const field = StateField.define<DecorationSet>({
+		create: widgetsOf,
+		provide: (f) => [
+			EditorView.decorations.from(f),
+			EditorView.atomicRanges.from(f, (value) => () => value)
+		],
+		update: (value, tr) => (tr.docChanged ? widgetsOf(tr.state) : value)
+	});
+
+	return field;
+}

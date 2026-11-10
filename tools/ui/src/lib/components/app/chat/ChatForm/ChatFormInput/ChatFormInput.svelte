@@ -30,6 +30,8 @@
 
 	let editor: MarkdownEditor | undefined = $state();
 
+	let livePreview = $derived(settingsStore.config[SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW] !== false);
+
 	// Rendered mention badges label paths by these, so the blocks render again on a change
 	let renderKey = $derived(
 		`${settingsStore.config[SETTINGS_KEYS.SHOW_FULL_PATH_IN_MENTIONS]}|${toolsStore.serverHome ?? ''}`
@@ -103,6 +105,7 @@
 		{disabled}
 		editingWidgets={fileMentionWidgets}
 		{extensions}
+		{livePreview}
 		onChange={handleChange}
 		{placeholder}
 		{renderKey}

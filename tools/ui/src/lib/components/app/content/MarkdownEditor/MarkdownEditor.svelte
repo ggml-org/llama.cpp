@@ -1,7 +1,11 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
 	import MarkdownSurface from '../MarkdownContent/MarkdownSurface.svelte';
-	import { markdownLivePreview, type MarkdownLivePreviewOptions } from './markdown-live-preview';
+	import {
+		markdownLivePreview,
+		type MarkdownLivePreviewOptions,
+		markdownPlainText
+	} from './markdown-live-preview';
 	import { isInCodeBlock } from './markdown-syntax';
 	import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 	import {
@@ -34,6 +38,8 @@
 		editingWidgets?: MarkdownLivePreviewOptions['editingWidgets'];
 		/** Extra extensions, ahead of the default keymaps (e.g. their own key handling). */
 		extensions?: Extension[];
+		/** Render the markdown as it is written; off, the editor shows the plain text. */
+		livePreview?: boolean;
 		onChange?: (value: string) => void;
 		placeholder?: string;
 		/** What the rendered blocks depend on besides their text, see MarkdownLivePreviewOptions. */
@@ -47,6 +53,7 @@
 		disabled = false,
 		editingWidgets,
 		extensions = [],
+		livePreview = true,
 		onChange,
 		placeholder = '',
 		renderKey = '',
@@ -100,20 +107,25 @@
 		];
 	}
 
-	function livePreview(): Extension {
-		return markdownLivePreview({
-			editingWidgets,
-			onPreviewCode: (code, language) => {
-				previewCode = code;
-				previewLanguage = language;
-				previewOpen = true;
-			},
-			onPreviewDiagram: (svgHtml) => {
-				diagramSvg = svgHtml;
-				diagramOpen = true;
-			},
-			renderKey
-		});
+	function previewExtension(): Extension {
+		if (!livePreview) return markdownPlainText(editingWidgets);
+
+		return [
+			syntaxHighlighting(rawMarkdownStyle),
+			markdownLivePreview({
+				editingWidgets,
+				onPreviewCode: (code, language) => {
+					previewCode = code;
+					previewLanguage = language;
+					previewOpen = true;
+				},
+				onPreviewDiagram: (svgHtml) => {
+					diagramSvg = svgHtml;
+					diagramOpen = true;
+				},
+				renderKey
+			})
+		];
 	}
 
 	onMount(() => {
@@ -131,8 +143,7 @@
 					keymap.of([{ key: 'Shift-Enter', run: insertNewlineContinueMarkup }]),
 					keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
 					markdownSupport,
-					syntaxHighlighting(rawMarkdownStyle),
-					previewCompartment.of(livePreview()),
+					previewCompartment.of(previewExtension()),
 					editableCompartment.of(EditorView.editable.of(!disabled)),
 					EditorView.lineWrapping,
 					labelsCompartment.of(labels()),
@@ -224,8 +235,8 @@
 	);
 	// a new preview renders the blocks again when the render key is another one
 	whenChanged(
-		() => [editingWidgets, renderKey],
-		() => reconfigure(previewCompartment, livePreview())
+		() => [editingWidgets, livePreview, renderKey],
+		() => reconfigure(previewCompartment, previewExtension())
 	);
 
 	$effect(() => {

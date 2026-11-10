@@ -5,6 +5,8 @@
 
 import { EditorView } from '@codemirror/view';
 import ChatFormInput from '$lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInput.svelte';
+import { SETTINGS_KEYS } from '$lib/constants';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
@@ -87,6 +89,33 @@ describe('ChatFormInput', () => {
 			expect(screen.container.querySelector('.cm-md-block h1')?.textContent).toBe('Title');
 			expect(screen.container.querySelector('.cm-md-block strong')?.textContent).toBe('bold');
 		});
+	});
+
+	it('shows the plain markdown, with mention badges, while the live preview setting is off', async () => {
+		settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, false);
+
+		try {
+			const screen = render(ChatFormInput, { value: `# Title\n\nsee ${MENTION}` });
+			const editor = editorIn(screen.container);
+
+			editor.contentDOM.blur();
+			await settle();
+
+			const lines = [...screen.container.querySelectorAll('.cm-line')].map((l) => l.textContent);
+
+			expect(screen.container.querySelector('.cm-md-block')).toBeNull();
+			expect(lines[0]).toBe('# Title');
+			expect(lines.at(-1)).toContain('notes.md');
+			expect(lines.at(-1)).not.toContain('file://');
+
+			settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, true);
+
+			await vi.waitFor(() =>
+				expect(screen.container.querySelector('.cm-md-block h1')?.textContent).toBe('Title')
+			);
+		} finally {
+			settingsStore.updateConfig(SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW, true);
+		}
 	});
 
 	it('lets the form handle a key first and keeps it from the editor', async () => {
