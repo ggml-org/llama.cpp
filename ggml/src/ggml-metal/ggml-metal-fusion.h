@@ -20,8 +20,7 @@ struct ggml_metal_device_props;
 
 // the maximum number of nodes that can be fused in a single kernel
 // (also the maximum length of a packed fusion group during graph optimization)
-// 32 rather than 16: the grouped MoE routing chain (sigmoid, bias, group top-k,
-// masking, final top-k, weight gather, norm, scale) is 23 raw nodes
+// 32 rather than 16: the grouped MoE routing chain (sigmoid, bias, group top-k, masking, final top-k, weight gather, norm, scale) is 23 raw nodes
 #define GGML_METAL_FUSION_MAX 32
 
 typedef enum ggml_metal_fusion_mode {
