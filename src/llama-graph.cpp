@@ -516,28 +516,17 @@ void llm_graph_input_rs::set_input_rep(const llama_memory_recurrent_context * mc
 
     const int64_t n_seqs = ubatch->n_seqs;
 
-    // the graph uses either the mask or the counts, the unused one is not allocated
-    float   * mask = rep_mask->buffer ? (float   *) rep_mask->data : nullptr;
-    int32_t * reps = rep_n->buffer    ? (int32_t *) rep_n->data    : nullptr;
+    int32_t * reps = (int32_t *) rep_n->data;
     int32_t * cols = (int32_t *) rep_cols->data;
 
-    GGML_ASSERT(!mask || ggml_backend_buffer_is_host(rep_mask->buffer));
-    GGML_ASSERT(!reps || ggml_backend_buffer_is_host(rep_n->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(rep_n->buffer));
     GGML_ASSERT(ggml_backend_buffer_is_host(rep_cols->buffer));
 
     for (int64_t s = 0; s < n_seqs; ++s) {
         const int64_t n_rep = mctx->get_rs_rep(s);
         GGML_ASSERT(n_rep <= n_pend);
 
-        if (reps) {
-            reps[s] = n_rep;
-        }
-
-        if (mask) {
-            for (int64_t j = 0; j < n_pend; ++j) {
-                mask[s*n_pend + j] = j < n_rep ? 1.0f : 0.0f;
-            }
-        }
+        reps[s] = n_rep;
 
         // the conv history is [window | pending]: the window after the kept tokens
         for (int64_t c = 0; c < n_conv; ++c) {
@@ -4156,10 +4145,6 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
             inp->n_conv = std::max<int64_t>(inp->n_conv, (int64_t) (hparams.ple_conv_kernel - 1)*hparams.ple_ngram_size);
         }
         inp->n_pend = cparams.n_rs_seq + 1;
-
-        inp->rep_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, 1, 1, inp->n_pend, n_seqs);
-        ggml_set_input(inp->rep_mask);
-        ggml_set_name(inp->rep_mask, "rs_rep_mask");
 
         inp->rep_cols = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, inp->n_conv, n_seqs);
         ggml_set_input(inp->rep_cols);

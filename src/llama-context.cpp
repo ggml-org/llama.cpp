@@ -148,12 +148,6 @@ static const llm_fused_op_probe llm_fused_op_gdn_ch_probe = {
     /*.n_tokens_per_seq =*/ 16,
 };
 
-static const llm_fused_op_probe llm_fused_op_gdn_replay_probe = {
-    /*.op               =*/ LLM_FUSED_OP_GDN_REPLAY,
-    /*.name             =*/ "fused Gated Delta Net (replay)",
-    /*.n_tokens_per_seq =*/ 2,
-};
-
 static const llm_fused_op_probe llm_fused_op_lid_probe = {
     /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
     /*.name             =*/ "Lightning Indexer",
@@ -215,10 +209,8 @@ llama_context::llama_context(
     }
 
     // [EXPERIMENTAL] deferred commit for delta-net: keep one state and the inputs of the last ubatch
-    // LLAMA_RS_REPLAY=1: replay in the gdn op where the devices support it, else in the graph; 2: always in the graph
-    cparams.rs_replay       = false;
-    cparams.rs_replay_fused = false;
-    cparams.auto_frep       = false;
+    // LLAMA_RS_REPLAY=1: the gdn op replays the kept pending tokens before the new ones
+    cparams.rs_replay = false;
     if (cparams.n_rs_seq > 0) {
         const char * env = getenv("LLAMA_RS_REPLAY");
         const bool supported = model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN3NEXT ||
@@ -229,8 +221,6 @@ llama_context::llama_context(
             LLAMA_LOG_WARN("%s: LLAMA_RS_REPLAY is not supported for qwen3next with SPLIT_MODE_TENSOR, using snapshots\n", __func__);
             cparams.rs_replay = false;
         }
-        // resolved in resolve_fused_ops()
-        cparams.auto_frep = cparams.rs_replay && atoi(env) == 1;
     }
 
     cparams.n_threads               = params.n_threads;
@@ -760,14 +750,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_gdn_ar_probe, cparams.fused_gdn_ar);
         resolve(llm_fused_op_gdn_ch_probe, cparams.fused_gdn_ch);
         cparams.auto_fgdn = false;
-    }
-
-    // a device without the replay in its gdn op falls back to the replay in the graph
-    if (cparams.auto_frep) {
-        LLAMA_LOG_INFO("%s: resolving fused Gated Delta Net replay support:\n", func);
-        cparams.rs_replay_fused = cparams.fused_gdn_ar && cparams.fused_gdn_ch;
-        resolve(llm_fused_op_gdn_replay_probe, cparams.rs_replay_fused);
-        cparams.auto_frep = false;
     }
 
     if (cparams.auto_flid) {

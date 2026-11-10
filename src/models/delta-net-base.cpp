@@ -211,53 +211,19 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
         store(b, cgb, n_pend);
     };
 
-    // replay inside the gdn op of the new tokens
-    if (cparams.rs_replay_fused) {
-        ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, pk, pv, pgb, inp->rep_n, 1, keep);
-        res->add_fused_node({LLM_FUSED_OP_GDN_REPLAY, result, il});
+    // the gdn op replays the kept pending tokens, then runs the new tokens
+    ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, pk, pv, pgb, inp->rep_n, 1, keep);
 
-        ggml_tensor * output = ggml_view_4d(ctx0, result, S_v, H_v, n_seq_tokens, n_seqs,
-                ggml_row_size(result->type, S_v),
-                ggml_row_size(result->type, S_v*H_v),
-                ggml_row_size(result->type, S_v*H_v*n_seq_tokens), 0);
-        cb(output, "attn_output", il);
-
-        // keep: the state after the replay, else the final state
-        ggml_tensor * new_state = ggml_view_2d(ctx0, result, hparams.n_embd_s(), n_seqs,
-                ggml_row_size(result->type, hparams.n_embd_s()),
-                ggml_row_size(result->type, S_v*H_v*n_seq_tokens*n_seqs));
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_state, state_dst));
-
-        store_inputs();
-
-        return output;
-    }
-
-    // dropped and unused slots get beta = 0 and no decay, so they do not change the state
-    ggml_tensor * pg = ggml_mul(ctx0, ggml_view_4d(ctx0, pgb, g0, H_v, n_pend, n_seqs, pgb->nb[1], pgb->nb[2], pgb->nb[3], 0),
-            inp->rep_mask);
-    ggml_tensor * pb = ggml_mul(ctx0, ggml_view_4d(ctx0, pgb, 1, H_v, n_pend, n_seqs, pgb->nb[1], pgb->nb[2], pgb->nb[3],
-            n_pend*pgb->nb[2]), inp->rep_mask);
-
-    // the new tokens start from the replayed state
-    auto rep = build_delta_net(pk, pk, pv, pg, pb, s, il);
-    cb(rep.second, "rep_state", il);
-
-    auto attn_out = build_delta_net(q, k, v, g, b, rep.second, il);
-    ggml_tensor * output = attn_out.first;
+    ggml_tensor * output = ggml_view_4d(ctx0, result, S_v, H_v, n_seq_tokens, n_seqs,
+            ggml_row_size(result->type, S_v),
+            ggml_row_size(result->type, S_v*H_v),
+            ggml_row_size(result->type, S_v*H_v*n_seq_tokens), 0);
     cb(output, "attn_output", il);
 
-    // keep: commit the replayed state, the new tokens stay pending; else the final state. The gdn is expanded first
-    // and the replayed state is read through a new view of the replay result, so that both cases have the same nodes
-    // in the same order with the same kind of sources
-    ggml_build_forward_expand(gf, output);
-
-    ggml_tensor * new_state = attn_out.second;
-    if (keep) {
-        ggml_tensor * rep_res = rep.second->view_src ? rep.second->view_src : rep.second;
-        new_state = ggml_view_4d(ctx0, rep_res, rep.second->ne[0], rep.second->ne[1], rep.second->ne[2], rep.second->ne[3],
-                rep.second->nb[1], rep.second->nb[2], rep.second->nb[3], rep.second->view_offs);
-    }
+    // keep: the state after the replay, else the final state
+    ggml_tensor * new_state = ggml_view_2d(ctx0, result, hparams.n_embd_s(), n_seqs,
+            ggml_row_size(result->type, hparams.n_embd_s()),
+            ggml_row_size(result->type, S_v*H_v*n_seq_tokens*n_seqs));
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_state, state_dst));
 
     store_inputs();

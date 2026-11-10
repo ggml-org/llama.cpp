@@ -51,7 +51,6 @@ enum llm_fused_op {
     LLM_FUSED_OP_FLASH_ATTN_KV_ROWS,
     LLM_FUSED_OP_GDN_AR,
     LLM_FUSED_OP_GDN_CH,
-    LLM_FUSED_OP_GDN_REPLAY,
     LLM_FUSED_OP_LIGHTNING_INDEXER,
     LLM_FUSED_OP_DSV4_HC_PRE,
     LLM_FUSED_OP_DSV4_HC_COMB,
@@ -316,7 +315,6 @@ public:
     bool          has_rep  = false;
     int64_t       n_conv   = 0;       // conv window columns, the widest conv of the model
     int64_t       n_pend   = 0;       // pending slots per seq
-    ggml_tensor * rep_mask = nullptr; // F32 [1, 1, n_pend, n_seqs], 1 for kept pending tokens
     ggml_tensor * rep_n    = nullptr; // I32 [n_seqs], kept pending tokens
     ggml_tensor * rep_cols = nullptr; // I32 [n_conv, n_seqs], conv history columns of the window after the kept tokens
 
