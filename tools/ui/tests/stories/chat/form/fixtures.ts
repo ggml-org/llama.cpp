@@ -1,5 +1,5 @@
 import jpgAsset from '../../fixtures/assets/1.jpg?url';
-import pdfAsset from '../../fixtures/assets/example.pdf?raw';
+import pdfAsset from '../../fixtures/assets/example.pdf?inline';
 import svgAsset from '../../fixtures/assets/hf-logo.svg?url';
 import {
 	BuiltInTool,
@@ -61,7 +61,13 @@ export const fileAttachments: ChatUploadedFile[] = [
 		type: 'image/svg+xml'
 	},
 	{
-		file: new File([pdfAsset], 'example.pdf', { type: 'application/pdf' }),
+		// the PDF inlined as a data URL and decoded to its bytes: ?raw read it as UTF-8 text, which mangled the binary
+		// and left control characters in the built chunk
+		file: new File(
+			[Uint8Array.from(atob(pdfAsset.split(',')[1]), (c) => c.charCodeAt(0))],
+			'example.pdf',
+			{ type: 'application/pdf' }
+		),
 		id: '3',
 		name: 'example.pdf',
 		size: 351048,
