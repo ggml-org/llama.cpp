@@ -191,7 +191,7 @@ class PocketTTSModel(TextModel):
         # unigram segmentation, so use the UGM tokenizer instead
         from sentencepiece import sentencepiece_model_pb2 as model
 
-        proto = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        proto = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         proto.ParseFromString(open(self.dir_model / "tokenizer.model", "rb").read())
         assert proto.trainer_spec.model_type == 1, "expected a unigram tokenizer"
 
