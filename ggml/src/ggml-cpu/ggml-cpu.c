@@ -1805,6 +1805,9 @@ static void ggml_compute_forward_mul_mat_id(
             const int64_t i1 = ir % ne1;
             const int64_t i2 = ir / ne1;
             const int32_t expert = *(const int32_t *) ((const char *) ids->data + i1*ids->nb[0] + i2*ids->nb[1]);
+            if (expert < 0) {
+                continue;
+            }
             float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2);
             if (per_ch_exp) {
                 const char * sp = sd + expert*scale->nb[1];
