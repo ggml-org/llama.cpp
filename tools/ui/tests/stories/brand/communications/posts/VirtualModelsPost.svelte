@@ -2,13 +2,13 @@
 	Pi's Virtual Models, after Julien's post and in its layout: the title centred at the top, Pi on the left with the
 	model picked in it, a line from it to each model it can send a query to (where it runs in a Mono label, its name as
 	a headline) and, at the right, what runs that model. Pi's and Hugging Face's marks are their own files (from
-	pi.dev/press-kit and huggingface.co/brand), never recoloured; llama.cpp's is the icon typed in the ground's ink with
-	its name under it. Each mark keeps half its height clear all round. The local route is the cinder detail.
+	pi.dev/press-kit and huggingface.co/brand), never recoloured; llama.cpp's is its lockup, typed in the ground's ink.
+	Each mark keeps half its height clear all round. The local route is the cinder detail.
 -->
 <script lang="ts">
 	import hfMark from './logos/hugging-face.svg?url';
 	import piMark from './logos/pi.svg?url';
-	import { FORMATS, ICON, type VirtualModelsCopy } from './post';
+	import { FORMATS, LOCKUP, type VirtualModelsCopy } from './post';
 	import PostFrame from './PostFrame.svelte';
 
 	interface Props {
@@ -68,9 +68,7 @@
 
 						<div class="runner">
 							{#if route.runner === 'llama.cpp'}
-								<span aria-hidden="true" class="icon">{ICON}</span>
-
-								<span class="runner-name mono">llama<span class="cpp">.cpp</span></span>
+								<span class="lockup">{LOCKUP}llama<span class="cpp">.cpp</span></span>
 							{:else}
 								<img alt="" class="mark" src={hfMark} />
 
@@ -219,8 +217,11 @@
 		min-width: calc(var(--u) * 5);
 		margin-left: calc(var(--u) * 2);
 	}
-	.icon {
-		font: 700 calc(var(--u) * 2.8) / 1 var(--sans);
+	/* the lockup as BRAND.md types it: U+E002 and the name in Llama Mono at 90% of the size, so its icon matches
+	   Llama's */
+	.lockup {
+		font: 700 calc(var(--u) * 1.3 * 0.9) / 1 var(--mono);
+		white-space: nowrap;
 	}
 	.mark {
 		display: block;
@@ -233,11 +234,6 @@
 		letter-spacing: -0.01em;
 		line-height: 1;
 		white-space: nowrap;
-	}
-	.runner-name.mono {
-		font-family: var(--mono);
-		font-weight: 700;
-		letter-spacing: 0;
 	}
 	.cpp {
 		color: var(--art-cinder);
