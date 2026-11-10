@@ -19,7 +19,22 @@ constexpr bool ggml_sycl_grouped_gemm_esimd_has = std::is_same_v<block_q_t, bloc
                                                   std::is_same_v<block_q_t, block_q3_K> ||
                                                   std::is_same_v<block_q_t, block_q4_K> ||
                                                   std::is_same_v<block_q_t, block_q5_K> ||
-                                                  std::is_same_v<block_q_t, block_q6_K>;
+                                                  std::is_same_v<block_q_t, block_q6_K> ||
+                                                  std::is_same_v<block_q_t, block_q4_0> ||
+                                                  std::is_same_v<block_q_t, block_q4_1> ||
+                                                  std::is_same_v<block_q_t, block_q5_0> ||
+                                                  std::is_same_v<block_q_t, block_q5_1> ||
+                                                  std::is_same_v<block_q_t, block_q1_0> ||
+                                                  std::is_same_v<block_q_t, block_q2_0> ||
+                                                  std::is_same_v<block_q_t, block_mxfp4> ||
+                                                  std::is_same_v<block_q_t, block_nvfp4> ||
+                                                  std::is_same_v<block_q_t, block_iq2_xxs> ||
+                                                  std::is_same_v<block_q_t, block_iq2_xs> ||
+                                                  std::is_same_v<block_q_t, block_iq2_s> ||
+                                                  std::is_same_v<block_q_t, block_iq1_s> ||
+                                                  std::is_same_v<block_q_t, block_iq1_m> ||
+                                                  std::is_same_v<block_q_t, sycl::half> ||
+                                                  std::is_same_v<block_q_t, sycl::ext::oneapi::bfloat16>;
 
 template <typename block_q_t, typename T, int NW>
 bool ggml_sycl_grouped_gemm_esimd(const char * src0_dd, size_t expert_stride, const ggml_sycl_grouped_gemm_tile * tiles,
