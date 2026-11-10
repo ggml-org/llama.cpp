@@ -248,13 +248,13 @@
 		straight before the name, in Llama Sans or in Llama Mono, which carries it too.
 	</p>
 
-	<div class="display">
+	<div class="display" data-readme="icon-glyphs">
 		<p class="lockup mono">llama.cpp</p>
 
 		<p class="lockup">Llama</p>
 	</div>
 
-	<div class="pair">
+	<div class="pair" data-readme="icon-glyphs">
 		<p>
 			<span class="tag">U+E002 · the lockup</span><span class="small-sample">Llama</span>
 		</p>
@@ -284,7 +284,7 @@
 		are the design system's own buttons.
 	</p>
 
-	<div class="buttons">
+	<div class="buttons" data-readme="icon-buttons">
 		<div class="row">
 			<Button size="sm"><span class="glyph"></span> Open in Llama</Button>
 
@@ -324,12 +324,12 @@
 	<div class="contexts">
 		<!-- the README banner, as on github.com/ggml-org/llama.cpp: the cover, 3:1, the lockup centred at its size -->
 		{#each ['dark', 'light'] as const as tone (tone)}
-			<div class="ctx banner mono {tone}">
+			<div class="ctx banner mono {tone}" data-readme="banner-llama-cpp">
 				<span class="mark">llama<span class="cpp">.cpp</span></span>
 			</div>
 		{/each}
 
-		<div class="ctx header mono">
+		<div class="ctx header mono" data-readme="lockup-in-context">
 			<span style:font-size="16.2px" class="mark">llama<span class="cpp">.cpp</span></span>
 
 			<span class="links">docs · server · cli</span>
@@ -337,18 +337,19 @@
 			<Button size="sm">Download</Button>
 		</div>
 
-		<div class="ctx header dark">
+		<div class="ctx header dark" data-readme="lockup-in-context">
 			<span style:font-size="16px" class="mark">Llama</span>
 
 			<span class="links">Settings</span>
 		</div>
 
 		<!-- terminal output: Llama Mono's own one-cell icon, so the columns line up -->
-		<pre class="ctx terminal"><span class="prompt">$</span> llama-server -m model.gguf --port 9931
+		<pre class="ctx terminal" data-readme="lockup-in-context"><span class="prompt">$</span
+			> llama-server -m model.gguf --port 9931
 <span class="banner"> llama.cpp</span> b6123 · listening on http://127.0.0.1:9931
 <span class="banner"> llama.cpp</span> b6123 · slot 0 ready, ctx 32768</pre>
 
-		<div class="ctx footer mono">
+		<div class="ctx footer mono" data-readme="lockup-in-context">
 			<span style:font-size="11.7px" class="mark">llama<span class="cpp">.cpp</span></span>
 
 			<span class="links">MIT licence · ggml-org</span>
@@ -356,7 +357,12 @@
 
 		<!-- the hero, on the day sky and the night sky: the Llama lockup (llama.cpp's stays on neutral grounds) -->
 		{#each [{ field: DAY_SKY, ink: '#111111', name: 'day sky' }, { field: NIGHT_SKY, ink: '#fafafa', name: 'night sky' }] as b (b.name)}
-			<div style:background={b.field} style:color={b.ink} class="ctx hero">
+			<div
+				style:background={b.field}
+				style:color={b.ink}
+				class="ctx hero"
+				data-readme="banner-llama"
+			>
 				<span style:font-size="clamp(40px, 7vw, 64px)" class="mark">Llama</span>
 			</div>
 		{/each}
@@ -376,7 +382,7 @@
 		and 10 from the text.
 	</p>
 
-	<div class="badges">
+	<div class="badges" data-readme="icon-badges">
 		{#each badges as b (b.name)}
 			{#each ['dark', 'light'] as const as tone (tone)}
 				<a class="badge {tone}" href="#top" onclick={(e) => e.preventDefault()}>
@@ -425,7 +431,7 @@
 		stands for, never as a word on its own.
 	</p>
 
-	<div class="inline">
+	<div class="inline" data-readme="icon-inline">
 		<p style:font-size="14px">
 			Models load with  llama.cpp and run locally in  Llama, on your own machine.
 		</p>
@@ -531,7 +537,7 @@
 	</div>
 
 	<!-- the native apps in place, light and dark: a Mac's desktop, the menu bar over the Dock, and a PC's taskbar -->
-	<div class="in-place">
+	<div class="in-place" data-readme="icon-in-place">
 		{#each ['light', 'dark'] as const as mode (mode)}
 			<figure class="in-place-card">
 				<MockDesktop align="between" height={250} {mode}>
@@ -566,7 +572,7 @@
 		side. A designed splash screen will follow.
 	</p>
 
-	<div class="splashes">
+	<div class="splashes" data-readme="icon-splash">
 		{#each splashes as s (s.label)}
 			{@const p = placed(s.w, s.h, splash)}
 			<figure class="splash-card">

@@ -109,7 +109,7 @@
 
 	{#each lockups as l (l.name)}
 		{@const w = l.end + 2 * CLEAR}
-		<figure class="construction">
+		<figure class="construction" data-readme="lockup-construction">
 			<svg
 				aria-label="How the {l.name} lockup is built"
 				role="img"
@@ -176,7 +176,7 @@
 		as large as Llama Sans's, so set llama.cpp at 90% of Llama's size and the two icons match.
 	</p>
 
-	<div class="typed">
+	<div class="typed" data-readme="lockup-typed">
 		<p class="big">{@render llama()}</p>
 
 		<p class="big cpp-size">{@render cpp()}</p>
@@ -205,7 +205,7 @@
 		From a banner down to 12 px, the smallest either is set at. Below that, use the icon alone.
 	</p>
 
-	<div class="sizes">
+	<div class="sizes" data-readme="lockup-sizes">
 		{#each sizes as size (size)}
 			<p>
 				<span class="label">{size} px</span>
@@ -227,7 +227,7 @@
 		and the night sky; llama.cpp stays on neutral grounds.
 	</p>
 
-	<div class="grounds">
+	<div class="grounds" data-readme="lockup-grounds">
 		{#each grounds as g (g.name)}
 			<figure style:background={g.field} style:color={g.ink} class="ground-card">
 				<span class="pair">
@@ -246,7 +246,7 @@
 <section class="block">
 	<h3>Never</h3>
 
-	<div class="donts">
+	<div class="donts" data-readme="lockup-never">
 		<figure>
 			<p><span class="mark mono">&#xE002;Llama</span></p>
 

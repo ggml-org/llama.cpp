@@ -26,6 +26,7 @@
 		"storybook": "storybook dev -p 6006",
 		"build-storybook": "storybook build",
 		"export:design-system": "node scripts/export-design-system.mjs",
+		"export:brand-readme": "node scripts/export-brand-readme.mjs",
 		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico"
 	},
 	"devDependencies": {
