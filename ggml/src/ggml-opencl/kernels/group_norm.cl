@@ -33,8 +33,8 @@ kernel void kernel_group_norm(
         int group_size,
         float eps
 ) {
-    src0 = (global float  *)((global char *)src0 + offset0);
-    dst  = (global float *)((global char *)dst  + offsetd);
+    src0 = (global float  *)((global char *)src0 + offset0) + (ulong)get_group_id(1)*ne;
+    dst  = (global float *)((global char *)dst  + offsetd) + (ulong)get_group_id(1)*ne;
 
     int start = get_group_id(0) * group_size;
     int end   = start + group_size;

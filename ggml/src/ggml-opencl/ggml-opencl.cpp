@@ -20202,7 +20202,7 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
     CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &group_size));
     CL_CHECK(clSetKernelArg(kernel, 6, sizeof(float),    &eps));
 
-    size_t global_work_size[] = {(size_t)n_groups*sgs, 1, 1};
+    size_t global_work_size[] = {(size_t)n_groups*sgs, (size_t)src0->ne[3], 1};
     size_t local_work_size[] = {(size_t)sgs, 1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
