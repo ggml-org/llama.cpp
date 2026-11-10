@@ -28,6 +28,7 @@
 #include <cstring>
 #include <climits>
 #include <map>
+#include <mutex>
 #include <type_traits>
 #include <vector>
 
@@ -593,6 +594,10 @@ static bool cbx_is_mtl(const mtmd_model & model) {
 struct mtmd_context {
     // must outlive the subcontexts below
     mtmd_models models;
+    std::unique_ptr<mtmd_backends> backends; // shared by the subcontexts
+
+    // held by every public function that runs a graph, the internals never lock
+    std::mutex compute_mutex;
 
     std::unique_ptr<mtmd_subcontext> ctx_v; // vision
     std::unique_ptr<mtmd_subcontext> ctx_a; // audio
@@ -709,23 +714,37 @@ struct mtmd_context {
             throw std::runtime_error(string_format("Failed to load mmproj model from %s\n", mmproj_fname));
         }
 
+        int max_nodes = 0;
+        for (const auto * m : { models.v.get(), models.a.get(), models.gen_a.get() }) {
+            if (m) {
+                max_nodes = std::max(max_nodes, m->max_nodes);
+            }
+        }
+
+        // no_alloc only measures memory, nothing is computed
+        backends = std::make_unique<mtmd_backends>(device, no_alloc ? 1 : ctx_params.n_threads, max_nodes,
+                                                   ctx_params.cb_eval, ctx_params.cb_eval_user_data);
+
+        // like llama_context::sched_reserve(), each warmup reserves its graph on the shared scheduler
         mtmd_subctx_params sctx_params {
-            /* device            */ device,
-            // no_alloc only measures memory, nothing is computed
-            /* threadpool        */ mtmd_threadpool_init(no_alloc ? 1 : ctx_params.n_threads),
             /* flash_attn_type   */ mtmd_to_flash_attn_type(ctx_params.flash_attn_type),
             /* warmup            */ ctx_params.warmup,
-            /* cb_eval           */ ctx_params.cb_eval,
-            /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
         };
         if (models.v) {
-            ctx_v = std::make_unique<mtmd_subcontext>(*models.v, sctx_params);
+            ctx_v = std::make_unique<mtmd_subcontext>(*models.v, *backends, sctx_params);
         }
         if (models.a) {
-            ctx_a = std::make_unique<mtmd_subcontext>(*models.a, sctx_params);
+            ctx_a = std::make_unique<mtmd_subcontext>(*models.a, *backends, sctx_params);
         }
         if (models.gen_a) {
-            ctx_gen_a = std::make_unique<mtmd_subcontext>(*models.gen_a, sctx_params);
+            ctx_gen_a = std::make_unique<mtmd_subcontext>(*models.gen_a, *backends, sctx_params);
+        }
+        for (size_t i = 0; i < backends->ptrs.size(); ++i) {
+            const size_t size = ggml_backend_sched_get_buffer_size(backends->sched.get(), backends->ptrs[i]);
+            if (size > 1) {
+                LOG_INF("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+                        ggml_backend_buft_name(backends->bufts[i]), size / 1024.0 / 1024.0);
+            }
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
@@ -1261,7 +1280,7 @@ struct mtmd_context {
         // initialize audio preprocessor
         if (audio_preproc) {
             audio_preproc->mel_config.n_threads = n_threads;
-            audio_preproc->mel_config.sched     = ctx_a->sched.get();
+            audio_preproc->mel_config.sched     = backends->sched.get();
             audio_preproc->initialize();
         }
     }
@@ -2361,6 +2380,7 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     // this is the non-batching version
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
         return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
     } catch (const std::exception & e) {
@@ -2370,6 +2390,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
 }
 
 int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
         return mtmd_encode_impl(ctx, image_tokens, ctx->out_embd);
     } catch (const std::exception & e) {
@@ -3140,6 +3161,7 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
 }
 
 int32_t mtmd_gen_audio_process(mtmd_context * ctx, mtmd_gen_state * state, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
         return mtmd_gen_audio_process_impl(ctx, state, inp, out);
     } catch (const std::exception & e) {
@@ -3248,6 +3270,7 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
 }
 
 int32_t mtmd_batch_encode(mtmd_batch * batch) {
+    std::lock_guard<std::mutex> lock(batch->ctx->compute_mutex);
     try {
         return mtmd_batch_encode_impl(batch);
     } catch (const std::exception & e) {
@@ -3861,6 +3884,7 @@ static void mtmd_debug_encode_impl(mtmd_context * ctx, mtmd_subcontext * sctx, m
 }
 
 void mtmd_debug_encode_image(mtmd_context * ctx, const std::vector<std::vector<float>> & image) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     if (!ctx->ctx_v) {
         LOG_ERR("%s: model does not support vision input\n", __func__);
         return;
@@ -3879,6 +3903,7 @@ void mtmd_debug_encode_image(mtmd_context * ctx, const std::vector<std::vector<f
 }
 
 void mtmd_debug_encode_audio(mtmd_context * ctx, const std::vector<float> & input) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     if (!ctx->ctx_a) {
         LOG_ERR("%s: model does not support audio input\n", __func__);
         return;
@@ -3923,6 +3948,7 @@ void mtmd_debug_preprocess_image(mtmd_context * ctx, const std::vector<uint8_t> 
 }
 
 void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & samples) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     if (!ctx->ctx_a || !ctx->audio_preproc) {
         LOG_ERR("%s: model does not support audio input\n", __func__);
         return;
@@ -3963,20 +3989,14 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         mtmd_log_set(stub_log_callback, nullptr); // suppress logging
         ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
         mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
-        std::map<ggml_backend_dev_t, size_t> total_mem;
-        auto merge = [&](const struct mtmd_subcontext * c) {
-            for (auto & [dev, size] : c->get_mem_usage()) {
-                total_mem[dev] += size;
+        // compute buffers are shared, weights are per model
+        std::map<ggml_backend_dev_t, size_t> total_mem = ctx->backends->get_mem_compute();
+        for (const auto * m : { ctx->models.v.get(), ctx->models.a.get(), ctx->models.gen_a.get() }) {
+            if (m) {
+                for (auto & [dev, size] : m->mem_weights) {
+                    total_mem[dev] += size;
+                }
             }
-        };
-        if (ctx->ctx_v) {
-            merge(ctx->ctx_v.get());
-        }
-        if (ctx->ctx_a) {
-            merge(ctx->ctx_a.get());
-        }
-        if (ctx->ctx_gen_a) {
-            merge(ctx->ctx_gen_a.get());
         }
         mtmd_memory_usage res;
         res.backend_mem_usage = std::move(total_mem);
@@ -4200,10 +4220,12 @@ int32_t mtmd_audio_stream_flush(mtmd_audio_stream * s, bool end) {
     if (s->ended) {
         return 1;
     }
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return s->flush(end);
 }
 
 int32_t mtmd_audio_stream_step(mtmd_audio_stream * s, llama_token last_token) {
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return s->step(last_token);
 }
 
