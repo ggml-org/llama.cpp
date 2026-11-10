@@ -207,17 +207,15 @@ void ggml_openvino_model_cache_init() {
     }
 }
 
-uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::vector<ggml_openvino_source_mapping> & mappings) {
+const ggml_openvino_source_mapping * ggml_openvino_find_source_mapping(const void * data, size_t size,
+                                                                     std::vector<ggml_openvino_source_mapping> & mappings) {
     const uintptr_t address = reinterpret_cast<uintptr_t>(data);
     auto contains = [&](const ggml_openvino_source_mapping & m) {
         return address >= m.begin && address < m.end && size <= m.end - address;
     };
-    auto fingerprint = [&](const ggml_openvino_source_mapping & m) {
-        return fnv1a_u64(m.identity, m.offset + address - m.begin);
-    };
     for (const auto & m : mappings) {
         if (contains(m)) {
-            return fingerprint(m);
+            return &m;
         }
     }
 #ifdef __linux__
@@ -232,7 +230,7 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
                    &offset, &dev_major, &dev_minor, &inode, &path_start) != 7 || inode == 0) {
             continue;
         }
-        ggml_openvino_source_mapping m{uintptr_t(begin), uintptr_t(end), offset, FNV_OFFSET};
+        ggml_openvino_source_mapping m{uintptr_t(begin), uintptr_t(end), offset, FNV_OFFSET, permissions[1] != 'w'};
         if (!contains(m)) {
             continue;
         }
@@ -250,7 +248,7 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
         m.identity = fnv1a_u64(m.identity, st.st_ctim.tv_sec);
         m.identity = fnv1a_u64(m.identity, st.st_ctim.tv_nsec);
         mappings.push_back(m);
-        return fingerprint(m);
+        return &mappings.back();
     }
 #elif defined(_WIN32)
     MEMORY_BASIC_INFORMATION memory;
@@ -280,8 +278,10 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
                     const uint64_t file_size = (uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
                     const uintptr_t begin = reinterpret_cast<uintptr_t>(memory.AllocationBase);
                     if (file_size <= std::numeric_limits<uintptr_t>::max() - begin) {
+                        // A view created read-only can never be made writable.
+                        const bool read_only = (memory.AllocationProtect & (PAGE_READONLY | PAGE_EXECUTE_READ)) != 0;
                         ggml_openvino_source_mapping m{begin, begin + static_cast<uintptr_t>(file_size), 0,
-                                                       fnv1a(FNV_OFFSET, "win32", 5)};
+                                                       fnv1a(FNV_OFFSET, "win32", 5), read_only};
                         if (contains(m)) {
                             m.identity = fnv1a_u64(m.identity, info.dwVolumeSerialNumber);
                             m.identity = fnv1a_u64(m.identity, (uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow);
@@ -290,7 +290,7 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
                                                                  info.ftLastWriteTime.dwLowDateTime);
                             m.identity = fnv1a_u64(m.identity, static_cast<uint64_t>(basic.ChangeTime.QuadPart));
                             mappings.push_back(m);
-                            return fingerprint(m);
+                            return &mappings.back();
                         }
                     }
                 }
@@ -298,6 +298,13 @@ uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::v
         }
     }
 #endif
+    return nullptr;
+}
+
+uint64_t ggml_openvino_source_fingerprint(const void * data, size_t size, std::vector<ggml_openvino_source_mapping> & mappings) {
+    if (const auto * m = ggml_openvino_find_source_mapping(data, size, mappings)) {
+        return fnv1a_u64(m->identity, m->offset + reinterpret_cast<uintptr_t>(data) - m->begin);
+    }
     if (ggml_openvino_model_cache_only()) {
         GGML_ABORT("ggml-openvino: could not identify mapped GGUF weight; use --load-mode mmap");
     }

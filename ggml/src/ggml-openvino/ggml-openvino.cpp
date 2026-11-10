@@ -40,6 +40,7 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
+#    include <psapi.h>
 #else
 #    include <sys/mman.h>
 #    include <unistd.h>
@@ -514,6 +515,61 @@ static bool ggml_openvino_extra_unchanged(const ggml_backend_openvino_buffer_con
     return true;
 }
 
+#ifdef _WIN32
+// QueryWorkingSetEx reports Locked only for pages in the working set; a locked page always is.
+static bool ggml_openvino_range_has_locked_pages(uintptr_t first, uintptr_t last, uintptr_t page) {
+    std::vector<PSAPI_WORKING_SET_EX_INFORMATION> pages(std::min<size_t>((last - first) / page, 4096));
+    for (uintptr_t addr = first; addr < last;) {
+        const size_t n = std::min<size_t>(pages.size(), (last - addr) / page);
+        for (size_t i = 0; i < n; i++) {
+            pages[i].VirtualAddress = reinterpret_cast<void *>(addr + i * page);
+        }
+        if (!QueryWorkingSetEx(GetCurrentProcess(), pages.data(), DWORD(n * sizeof(pages[0])))) {
+            return true;  // unknown, so keep the pages
+        }
+        for (size_t i = 0; i < n; i++) {
+            if (pages[i].VirtualAttributes.Valid && pages[i].VirtualAttributes.Locked) {
+                return true;
+            }
+        }
+        addr += n * page;
+    }
+    return false;
+}
+#endif
+
+// A weight's GGUF bytes have been converted into its OpenVINO buffer. Pages of a read-only file mapping are clean and
+// come back from the file if they are read again, so release them instead of letting them compete with the buffer for
+// RAM while the model loads. Only whole pages are released, and locked pages (--load-mode mlock) are kept.
+static void ggml_openvino_release_source_pages(ggml_backend_openvino_buffer_context * ctx, const void * data, size_t size) {
+    const ggml_openvino_source_mapping * mapping = ggml_openvino_find_source_mapping(data, size, ctx->source_mappings);
+    if (mapping == nullptr || !mapping->read_only) {
+        return;
+    }
+#ifdef _WIN32
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    const uintptr_t page = info.dwPageSize;
+#else
+    const uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
+#endif
+    const uintptr_t first = ((uintptr_t) data + page - 1) & ~(page - 1);
+    const uintptr_t last = ((uintptr_t) data + size) & ~(page - 1);
+    if (last <= first) {
+        return;
+    }
+#ifdef _WIN32
+    // VirtualUnlock removes pages that are not locked from the working set, which moves clean file pages to the standby
+    // list, and then reports ERROR_NOT_LOCKED. On locked pages it would unlock them instead, so skip such a range.
+    if (!ggml_openvino_range_has_locked_pages(first, last, page)) {
+        VirtualUnlock(reinterpret_cast<void *>(first), last - first);
+    }
+#elif defined(__linux__)
+    // MADV_DONTNEED fails on locked (mlock) memory and leaves it resident
+    madvise(reinterpret_cast<void *>(first), last - first, MADV_DONTNEED);
+#endif
+}
+
 static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                     ggml_tensor * tensor,
                                                     const void * data,
@@ -602,6 +658,9 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 ggml_openvino_register_weight_buffer(ctx->data, ctx->size);
             }
 
+            if (!ctx->external_memory) {
+                ggml_openvino_release_source_pages(ctx, data, size);
+            }
         } catch (const std::exception & e) {
             GGML_LOG_ERROR("%s: failed to process weight tensor for %s: %s\n", __func__, tensor->name, e.what());
             memcpy((char *) tensor->data + offset, data, size);
