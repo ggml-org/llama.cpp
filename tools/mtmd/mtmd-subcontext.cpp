@@ -82,7 +82,7 @@ mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_n
         backend = ggml_backend_dev_init(device, nullptr);
         if (!backend) {
             ggml_backend_free(backend_cpu);
-            throw std::runtime_error(string_format("%s: failed to initialize \"%s\" backend\n",
+            throw std::runtime_error(mtmd_format("%s: failed to initialize \"%s\" backend\n",
                                                    __func__, ggml_backend_dev_name(device)));
         }
     }
@@ -164,7 +164,7 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
         // so the [1, 256] bound only applies to FFT-based models.
         const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
         if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
-            throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
+            throw std::runtime_error(mtmd_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
         }
         img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
@@ -271,46 +271,6 @@ mtmd_subcontext::support_info_graph mtmd_subcontext::reserve_compute_meta(const 
     return res;
 }
 
-// TODO: remove this and use ggml_mul_mat with GGML_PREC_F32 once all backends honor it for F32 x F32
-// ggml_mul_mat for 2D F32 tensors, always in F32 on CPU: some GPU backends round the inputs to F16 or TF32, which loses the quiet bins of a spectrum
-static void mtmd_mul_mat_prec_op(ggml_tensor * dst, int ith, int nth, void * /*userdata*/) {
-    const ggml_tensor * a = dst->src[0];
-    const ggml_tensor * b = dst->src[1];
-    const int64_t n_k = a->ne[0];
-
-    for (int64_t n = ith; n < b->ne[1]; n += nth) {
-        const float * b_row = (const float *) ((const char *) b->data + n * b->nb[1]);
-        float * dst_row = (float *) ((char *) dst->data + n * dst->nb[1]);
-        for (int64_t m = 0; m < a->ne[1]; m++) {
-            const float * a_row = (const float *) ((const char *) a->data + m * a->nb[1]);
-            // independent partial sums, so that the compiler can vectorize the loop
-            float acc[16] = {};
-            int64_t k = 0;
-            for (; k + 16 <= n_k; k += 16) {
-                for (int l = 0; l < 16; l++) {
-                    acc[l] += a_row[k + l] * b_row[k + l];
-                }
-            }
-            float sum = 0.0f;
-            for (; k < n_k; k++) {
-                sum += a_row[k] * b_row[k];
-            }
-            for (int l = 0; l < 16; l++) {
-                sum += acc[l];
-            }
-            dst_row[m] = sum;
-        }
-    }
-}
-
-static ggml_tensor * mtmd_mul_mat_prec(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_n_dims(a) <= 2 && ggml_n_dims(b) <= 2 && a->ne[0] == b->ne[0]);
-    GGML_ASSERT(a->nb[0] == sizeof(float) && b->nb[0] == sizeof(float));
-    ggml_tensor * args[] = { a, b };
-    return ggml_custom_4d(ctx, GGML_TYPE_F32, a->ne[1], b->ne[1], 1, 1, args, 2, mtmd_mul_mat_prec_op, GGML_N_TASKS_MAX, nullptr);
-}
-
 bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
     ggml_backend_sched_t sched = config.sched;
     ggml_backend_t backend_cpu = ggml_backend_sched_get_backend(sched, ggml_backend_sched_get_n_backends(sched) - 1);
@@ -356,7 +316,8 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         ggml_set_input(inp_filters);
 
         ggml_tensor * cur = ggml_cont(ctx0, ggml_view_2d(ctx0, inp_samples, frame_size, n_cur, config.hop_length * ggml_element_size(inp_samples), 0));
-        cur = mtmd_mul_mat_prec(ctx0, inp_dft, cur); // [2 * n_fft_bins, n_cur]
+        cur = ggml_mul_mat(ctx0, inp_dft, cur); // [2 * n_fft_bins, n_cur]
+        ggml_prec_set_src(cur, GGML_PREC_F32, 1);
 
         cur = ggml_sqr(ctx0, cur);
         cur = ggml_add(ctx0,
@@ -366,7 +327,8 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
             cur = ggml_sqrt(ctx0, cur);
         }
 
-        cur = mtmd_mul_mat_prec(ctx0, cur, inp_filters); // [n_cur, n_mel]
+        cur = ggml_mul_mat(ctx0, cur, inp_filters); // [n_cur, n_mel]
+        ggml_prec_set_src(cur, GGML_PREC_F32, 1);
         cur = config.mel_floor_add
             ? ggml_scale_bias(ctx0, cur, 1.0f, config.mel_floor)
             : ggml_clamp(ctx0, cur, config.mel_floor, FLT_MAX);

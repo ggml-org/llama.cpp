@@ -6,8 +6,12 @@
 		type MarkdownLivePreviewOptions,
 		markdownPlainText
 	} from './markdown-live-preview';
-	import { isInCodeBlock } from './markdown-syntax';
-	import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+	import {
+		defaultKeymap,
+		history,
+		historyKeymap,
+		insertNewlineAndIndent
+	} from '@codemirror/commands';
 	import {
 		insertNewlineContinueMarkup,
 		markdownKeymap,
@@ -89,7 +93,8 @@
 	const valueSync = Annotation.define<boolean>();
 
 	let host: HTMLDivElement | undefined = $state();
-	let view: EditorView | undefined;
+	// reactive, so what follows the editor's DOM (see getContentDOM) starts once it exists
+	let view = $state.raw<EditorView>();
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 	let previewOpen = $state(false);
@@ -139,8 +144,14 @@
 				extensions: [
 					customCompartment.of(extensions),
 					history(),
-					// Shift+Enter is a plain line break that still continues lists and quotes
-					keymap.of([{ key: 'Shift-Enter', run: insertNewlineContinueMarkup }]),
+					// Shift+Enter and Ctrl/Cmd+Enter add a line, continuing lists and quotes. Mod is
+					// Ctrl off macOS, where the chat form still takes Meta+Enter as Ctrl+Enter
+					keymap.of(
+						['Shift-Enter', 'Mod-Enter', 'Ctrl-Enter', 'Meta-Enter'].map((key) => ({
+							key,
+							run: (target) => insertNewlineContinueMarkup(target) || insertNewlineAndIndent(target)
+						}))
+					),
 					keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
 					markdownSupport,
 					previewCompartment.of(previewExtension()),
@@ -243,14 +254,19 @@
 		loadHighlightTheme(mode.current === ColorMode.DARK);
 	});
 
+	/** The editor's content element, once mounted (e.g. to follow its height). */
+	export function getContentDOM(): HTMLElement | undefined {
+		return view?.contentDOM;
+	}
+
+	/** Where the cursor is on screen, e.g. to place a popover by it. */
+	export function getCaretRect() {
+		return view?.coordsAtPos(view.state.selection.main.head) ?? null;
+	}
+
 	/** Cursor offset in the markdown source. */
 	export function getCaretOffset(): number {
 		return view?.state.selection.main.head ?? 0;
-	}
-
-	/** Is the cursor in a code block (fenced, closed or still open, or indented)? */
-	export function isCaretInCodeBlock(): boolean {
-		return view ? isInCodeBlock(view.state, view.state.selection.main.head) : false;
 	}
 
 	/** Focus the editor with the cursor at `offset` (default: the end of the text). */

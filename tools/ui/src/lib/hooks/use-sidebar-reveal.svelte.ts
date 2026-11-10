@@ -143,17 +143,35 @@ export function useSidebarReveal() {
 		syncThemeColor(value);
 	});
 
+	// Set once the page's slide back has ended, which the tween above can trail by a frame: the
+	// page then has no transform, so its fixed bars must drop their pins on that same frame
+	let isSlideBackDone = $state(true);
+
+	$effect(() => {
+		if (uiStore.isSidebarExpanded || dragOffset !== null) isSlideBackDone = false;
+	});
+
+	/** On the page: its slide back has ended, before the tween settles. */
+	function handleTransitionEnd(event: TransitionEvent) {
+		if (event.target !== event.currentTarget || event.propertyName !== 'transform') return;
+
+		if (!uiStore.isSidebarExpanded && dragOffset === null) isSlideBackDone = true;
+	}
+
 	// the page stays locked from the moment it starts sliding aside until it is fully back
 	const isRevealed = $derived(
 		deviceStore.isMobile &&
-			(uiStore.isSidebarExpanded || dragOffset !== null || progress.current > 0)
+			(uiStore.isSidebarExpanded ||
+				dragOffset !== null ||
+				(progress.current > 0 && !isSlideBackDone))
 	);
 
 	// The slid page's transform makes it the box its fixed bars are placed in, rather than the
 	// screen, which leaves them at the far ends of a scrolled page. The scroll is locked while it
 	// is slid, so they are shifted back by how far the page reaches past the screen at its two
 	// ends. Measured again when the viewport changes, as the installed iOS app shortens it once a
-	// short page is locked
+	// short page is locked, and when the page itself changes under the lock: a tap in the sidebar
+	// opens its page while this one is still aside (see SidebarNavigation's navigateBehind)
 	$effect(() => {
 		const root = document.documentElement;
 
@@ -175,8 +193,17 @@ export function useSidebarReveal() {
 		pin();
 		root.style.overflow = 'hidden';
 		window.addEventListener('resize', pin);
+		window.addEventListener('scroll', pin, { passive: true });
 
-		return () => window.removeEventListener('resize', pin);
+		const observer = new ResizeObserver(pin);
+
+		observer.observe(document.body);
+
+		return () => {
+			window.removeEventListener('resize', pin);
+			window.removeEventListener('scroll', pin);
+			observer.disconnect();
+		};
 	});
 
 	// A pointer cannot stop a scroll, and a browser that has started one ignores any later
@@ -214,6 +241,10 @@ export function useSidebarReveal() {
 		if (!deviceStore.isMobile || !event.isPrimary) return;
 
 		const wasExpanded = uiStore.isSidebarExpanded;
+
+		// the expanded chat form covers the screen: a drag over it is not for the sidebar
+		if (uiStore.isComposerExpanded && !wasExpanded) return;
+
 		const isAnywhere = !wasExpanded && event.clientX > SIDEBAR_REVEAL_EDGE_PX;
 
 		if (isAnywhere && ownsHorizontalDrag(event.target, event.currentTarget as Element)) return;
@@ -333,6 +364,7 @@ export function useSidebarReveal() {
 		handlePointerDown,
 		handlePointerMove,
 		handlePointerUp: (event: PointerEvent) => handlePointerEnd(event),
+		handleTransitionEnd,
 		/** The page is slid aside, even partly: its contents take no scrolling or taps. */
 		get isRevealed() {
 			return isRevealed;

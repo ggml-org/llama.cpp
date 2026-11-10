@@ -22,8 +22,22 @@ import {
 } from '$lib/constants';
 import { deviceStore } from '$lib/stores/device.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import type { Group } from '$lib/types/groups';
 import { remToPx } from '$lib/utils/css';
 import { SvelteSet } from 'svelte/reactivity';
+
+interface GroupDialogOptions {
+	/** Group to rename; without it the dialog creates a new one. */
+	groupId?: string;
+	/** Called with the new group after the dialog creates one. */
+	onCreate?: (group: Group) => void;
+}
+
+interface GroupPickerOptions {
+	/** Group ticked in the list: the one the chat is in. */
+	currentGroupId?: string | null;
+	onSelect: (groupId: string) => void;
+}
 
 /** Sidebar sections the user folded, read once on load. */
 function loadCollapsedSidebarSections(): SvelteSet<string> {
@@ -65,8 +79,19 @@ class UiStore {
 
 	/** Open state of the Discover dialog. */
 	discoverModelsOpen = $state(false);
+
 	/** Sidebar sections showing all their chats past the preview, for this session. */
 	expandedSidebarSections = new SvelteSet<string>();
+
+	/** Open state of the group dialog, `null` while closed. */
+	groupDialog = $state<GroupDialogOptions | null>(null);
+
+	/** Open state of the group picker, a phone's stand-in for the group submenus. */
+	groupPicker = $state<GroupPickerOptions | null>(null);
+
+	/** Whether the main chat form is expanded into its large editor. */
+	isComposerExpanded = $state(false);
+
 	/** Set while the user drags the sidebar edge, so width transitions can step aside. */
 	isSidebarResizing = $state(false);
 
@@ -130,12 +155,33 @@ class UiStore {
 		this.modelsSelectorCloseSignal++;
 	}
 
+	/** Drop a removed section, e.g. a deleted group's, from the remembered order and folds. */
+	forgetSidebarSection(id: string): void {
+		this.expandedSidebarSections.delete(id);
+
+		if (this.sidebarSectionOrder.includes(id)) {
+			this.setSidebarSectionOrder(this.sidebarSectionOrder.filter((sectionId) => sectionId !== id));
+		}
+
+		if (this.collapsedSidebarSections.has(id)) this.toggleSidebarSection(id);
+	}
+
 	isSidebarSectionExpanded(id: string): boolean {
 		return this.expandedSidebarSections.has(id);
 	}
 
 	isSidebarSectionOpen(id: string): boolean {
 		return !this.collapsedSidebarSections.has(id);
+	}
+
+	/** Open the group dialog to create a group, or to rename `groupId`. */
+	openGroupDialog(options: GroupDialogOptions = {}): void {
+		this.groupDialog = options;
+	}
+
+	/** Open the group picker, which calls `onSelect` with the picked group. */
+	openGroupPicker(options: GroupPickerOptions): void {
+		this.groupPicker = options;
 	}
 
 	/** Open the model details drawer over the current page, without leaving it. */

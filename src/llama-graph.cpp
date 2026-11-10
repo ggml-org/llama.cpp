@@ -1428,6 +1428,7 @@ void llm_graph_result::reset() {
     t_sampled_probs.clear();
     t_sampled_logits.clear();
     t_candidates.clear();
+    t_sampling_all.clear();
 
     params = {};
 
@@ -1476,22 +1477,8 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
             }
         }
     }
-    for (auto * tensor : t_sampled) {
-        if (tensor != nullptr) {
-            ggml_set_output(tensor);
-        }
-    }
-    for (auto * tensor : t_sampled_probs) {
-        if (tensor != nullptr) {
-            ggml_set_output(tensor);
-        }
-    }
-    for (auto * tensor : t_sampled_logits) {
-        if (tensor != nullptr) {
-            ggml_set_output(tensor);
-        }
-    }
-    for (auto * tensor : t_candidates) {
+    // the chains are read on the host after compute, so keep every one alive
+    for (auto * tensor : t_sampling_all) {
         if (tensor != nullptr) {
             ggml_set_output(tensor);
         }
@@ -3328,6 +3315,43 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
+static void build_attn_scale_kv_inputs(
+        ggml_context * ctx,
+        const llama_kv_cache_context * mctx,
+        ggml_tensor * & q,
+        ggml_tensor * & k,
+        ggml_tensor * & v,
+        int32_t il) {
+    if (ggml_tensor * scale = mctx->get_k_scale(il)) {
+        // Store K/s and move its dequant scale to Q: (Q*s) dot (K/s) = Q dot K.
+        q = ggml_mul(ctx, q, scale);
+        if (k) {
+            k = ggml_div(ctx, k, scale);
+        }
+    }
+
+    if (v) {
+        // Store V/s here and restore its dequant scale after the weighted sum.
+        ggml_tensor * scale = mctx->get_v_scale(il);
+        if (scale) {
+            v = ggml_div(ctx, v, scale);
+        }
+    }
+}
+
+static ggml_tensor * build_attn_scale_kv_output(
+        ggml_context * ctx,
+        const llama_kv_cache_context * mctx,
+        ggml_tensor * cur,
+        int32_t il) {
+    if (ggml_tensor * scale = mctx->get_v_scale(il)) {
+        // P*(V/s)*s = P*V.
+        cur = ggml_mul(ctx, cur, scale);
+    }
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor * wo,
@@ -3354,14 +3378,16 @@ ggml_tensor * llm_graph_context::build_attn(
         v_cur = llama_mul_mat_hadamard(ctx0, v_cur, inp->self_v_rot[il]);
     }
 
+    const auto * mctx_cur = inp->mctx;
+
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
     ggml_build_forward_expand(gf, k_cur);
-
-    const auto * mctx_cur = inp->mctx;
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k;
@@ -3389,6 +3415,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto & kv_rows = inp->self_attn_mask.rows;
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot[il]) {
@@ -3648,6 +3675,11 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+    const auto * mctx_iswa = inp->mctx;
+    const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
+
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     ggml_build_forward_expand(gf, q_cur);
@@ -3659,10 +3691,6 @@ ggml_tensor * llm_graph_context::build_attn(
     if (v_cur) {
         ggml_build_forward_expand(gf, v_cur);
     }
-
-    const auto * mctx_iswa = inp->mctx;
-
-    const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
     // whole seq fits into batch in training mode
     const bool use_kv_cur = cparams.training && k_cur && v_cur;
@@ -3693,6 +3721,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
@@ -4506,6 +4535,11 @@ void llm_graph_context::build_sampling() const {
 
             assert(sampler->iface->backend_apply);
             sampler->iface->backend_apply(sampler, ctx0, gf, &data);
+
+            if (data.sampled     != nullptr) { res->t_sampling_all.push_back(data.sampled);     }
+            if (data.probs       != nullptr) { res->t_sampling_all.push_back(data.probs);       }
+            if (data.logits      != nullptr) { res->t_sampling_all.push_back(data.logits);      }
+            if (data.candidates  != nullptr) { res->t_sampling_all.push_back(data.candidates);  }
 
             if (data.sampled != nullptr) {
                 if (active) {
