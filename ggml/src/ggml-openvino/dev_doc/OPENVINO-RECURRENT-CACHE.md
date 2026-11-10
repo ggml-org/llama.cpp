@@ -33,7 +33,7 @@ The backend recognizes this structure and refreshes source starts, cache heads, 
 
 Writable cache inputs must be GPU RemoteTensors with exclusive graph readers, optionally through Reshape aliases. The GPU plugin rejects shared cache readers and computed cache banks. Other inputs and the computation output must not overlap the cache. The frontend skips fusion for unmatched cache reads and retains functional cache writeback. Restore or clear state after a failed inference before retrying.
 
-`GGML_OPENVINO_DISABLE_FUSED_RECURRENCE=1` retains ordinary cache decomposition. Naive graphs skip full-model recurrence fusion. Unmatched snapshot GDN uses ordinary GDN token prefixes to preserve state outputs. The fused path requires the matching native runtime; dynamic GPU fallback can use ordinary GDN. Stateful and NPU MTP are outside this change.
+`GGML_OPENVINO_DISABLE_FUSED_RECURRENCE=1` retains ordinary cache decomposition. Naive graphs skip full-model recurrence fusion. Unmatched snapshot GDN uses ordinary GDN token prefixes to preserve state outputs. The fused path requires the matching native runtime; otherwise dynamic CPU and GPU execution uses ordinary GDN. Stateful and NPU MTP are outside this change.
 
 ## Attention KV layout
 
