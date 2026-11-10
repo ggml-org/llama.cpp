@@ -1228,15 +1228,15 @@ class ggml_webgpu_shader_lib {
     wgpu::Device           device;
     pre_wgsl::Preprocessor preprocessor;
 
-    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;       // key is fixed, no variants yet
-    std::unordered_map<int, webgpu_pipeline> argmax_pipelines;         // key is vec4
-    std::unordered_map<int, webgpu_pipeline> argsort_pipelines;        // key is order
-    std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
-    std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
-    std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines; // key is fixed, no variants yet
-    std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;            // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> argmax_pipelines;              // key is vec4
+    std::unordered_map<int, webgpu_pipeline> argsort_pipelines;             // key is order
+    std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;       // key is order
+    std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;              // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> timestep_embedding_pipelines;  // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> arange_pipelines;              // key is fixed, no variants yet
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
-        row_norm_pipelines;                                            // op/inplace
+        row_norm_pipelines;                                                 // op/inplace
 
     std::unordered_map<ggml_webgpu_get_rows_pipeline_key, webgpu_pipeline, ggml_webgpu_get_rows_pipeline_key_hash>
         get_rows_pipelines;   // src_type, vectorized
@@ -1553,10 +1553,9 @@ class ggml_webgpu_shader_lib {
         std::vector<std::string> defines;
         defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
-        auto processed = preprocessor.preprocess(wgsl_timestep_embedding, defines);
+        auto processed                  = preprocessor.preprocess(wgsl_timestep_embedding, defines);
         timestep_embedding_pipelines[1] = ggml_webgpu_create_pipeline(device, processed, "timestep_embedding");
         return timestep_embedding_pipelines[1];
-
     }
 
     webgpu_pipeline get_argsort_pipeline(const ggml_webgpu_shader_lib_context & context) {
