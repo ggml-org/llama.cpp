@@ -293,6 +293,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: true,
+				help: 'On desktop, keep a one-line message on the same row as the + button, the model selector and the send button. A second line, or a line too long for the row, brings back the two-row form.',
+				key: SETTINGS_KEYS.SINGLE_ROW_CHAT_FORM,
+				label: 'Single-row chat form for short messages',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: false,
 				help: 'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 				key: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,

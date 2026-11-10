@@ -2,8 +2,9 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { deviceStore } from '$lib/stores';
+	import { deviceStore, settingsStore } from '$lib/stores';
 	import { hapticTap } from '$lib/utils';
 	import { onMount, tick } from 'svelte';
 
@@ -161,6 +162,6 @@
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
-		singleRow
+		singleRow={settingsStore.config[SETTINGS_KEYS.SINGLE_ROW_CHAT_FORM] !== false}
 	/>
 </div>
