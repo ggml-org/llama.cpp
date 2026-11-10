@@ -53,6 +53,7 @@ layout (constant_id = 5) const uint Br = 1;
 layout (constant_id = 6) const uint pmat_count = 4;
 layout (constant_id = 7) const uint TM = 8;
 layout (constant_id = 8) const uint TN = 16;
+layout (constant_id = 9) const uint shmem_size = 49152;
 
 const uint TK = 16;
 const uint sg_count = WorkGroupSize / SubGroupSize;
@@ -71,7 +72,7 @@ const uint warp_o_row = (gqa_ratio + sg_count - 1) / sg_count;
 #define SLM_PV_SIZE (p_reduce * pmat_row * TN)
 #define SLM_MASK_SIZE (Br * p_reduce)
 
-const bool k_in_shmem = k_loops * k_per_loop <= 24 * 1024;
+const bool k_in_shmem = k_loops * k_per_loop <= shmem_size / 2;
 const uint ksh_size = k_in_shmem ? (k_loops * k_per_loop) : (sg_count * TM * TK);
 
 shared sh_block {
