@@ -85,7 +85,8 @@ class GptOssModel(TextModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        # Normalize alternate GPT-OSS MXFP4 tensor naming.
+        # Normalize erroneous GPT-OSS MXFP4 tensor naming.
+        # https://github.com/p-e-w/heretic/pull/211#issuecomment-5094370390
         if "mlp.experts." in name:
             for proj in ("down_proj", "gate_up_proj"):
                 name = name.replace(
