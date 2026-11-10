@@ -127,6 +127,19 @@ describe('ChatForm expansion', () => {
 		expect(container.textContent).toContain('Cmd/Ctrl+Enter to send');
 	});
 
+	it('scrolls a long message inside the editor', async () => {
+		const draft = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n');
+		const { container } = await renderForm(draft);
+		const input = container.querySelector<HTMLElement>('.chat-form-input')!;
+		const scroller = container.querySelector<HTMLElement>('.cm-scroller')!;
+
+		// stands in for the stylesheet's --max-message-height, which the tests do not load
+		input.style.maxHeight = '200px';
+
+		await expect.poll(() => scroller.clientHeight).toBeLessThanOrEqual(200);
+		expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+	});
+
 	it('mirrors the height of the text onto the input', async () => {
 		const { container, editor, write } = await renderForm();
 		const input = container.querySelector<HTMLElement>('.chat-form-input')!;

@@ -174,6 +174,10 @@
 		},
 		onCompact: () => chatStore.compactConversation(),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
+		// TODO: on a phone, typing `/` or `@` opens no picker for now. Each mobile browser moves
+		// the page its own way as the keyboard opens, so a list by the form can not stay clear
+		// of the text; a drawer with its own search field (as the directory picker is) could
+		opensOnInput: () => !deviceStore.isMobile,
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
 			value = v;

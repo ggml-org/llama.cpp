@@ -141,6 +141,7 @@
 >
 	<MarkdownEditor
 		bind:this={editor}
+		class="chat-form-editor"
 		{disabled}
 		editingWidgets={fileMentionWidgets}
 		{extensions}
@@ -177,8 +178,8 @@
 		}
 	}
 
-	/* The editor takes the wrapper's height and scrolls inside it */
-	.chat-form-input :global(.markdown-content) {
+	/* Every box down to the editor takes the wrapper's height, so the editor scrolls inside it */
+	.chat-form-input :global(:is(.chat-form-editor, .markdown-content)) {
 		display: flex;
 		flex: 1;
 		flex-direction: column;
