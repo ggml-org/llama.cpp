@@ -7107,6 +7107,7 @@ class VisionProjectorType:
     CHATTERBOX = "chatterbox" # audio generation: s3gen flow matching + HiFT vocoder
     SOPRANO = "soprano" # audio generation: Vocos decoder
     DRAMA3_GEN = "drama3_gen" # audio generation: codebook tower + Fish DAC decoder
+    ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"

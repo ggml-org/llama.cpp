@@ -4,14 +4,21 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, LazyTorchTensor, gguf, logger
+from .base import ModelBase, TextModel, MmprojModel, LazyTorchTensor, gguf, logger
 
 LM_DIR = Path("lm") / "zonos3_mini"
+
+# codec decoder: quantizers and semantic head from the generator, the rest from the head checkpoint
+CODEC_GENERATOR = Path("autoencoder") / "generator.pt"
+CODEC_VARIANT   = "keep2_plain"
+CODEC_HEAD      = Path("autoencoder") / "heads" / CODEC_VARIANT / "step_0050000.pt"
+CODEC_STAGES    = [0, 2, 4, 6, 8]  # transformer stages of the decoder
 
 # GDN geometry, hard-coded in the reference (zonos3.reference.lm)
 GDN_HEADS, GDN_HEAD_DIM, GDN_KERNEL = 4, 128, 4
@@ -48,7 +55,22 @@ def _load_zonos3_hparams(dir_model: Path) -> dict[str, Any]:
                       ("moe_end_from_layer", 0), ("speaker_enabled", True)):
         if params.get(key) != want:
             raise NotImplementedError(f"ZONOS3: unsupported {key} = {params.get(key)!r}, expected {want!r}")
-    return {"architectures": ["Zonos3Model"], "text_config": dict(params)}
+    text_config = dict(params, hidden_size=params["dim"])
+    return {"architectures": ["Zonos3Model"], "text_config": text_config, "audio_config": {"num_hidden_layers": 0}}
+
+
+def _index_lm_tensors(model: ModelBase) -> dict[str, Callable[[], Tensor]]:
+    path = model.dir_model / LM_DIR / "model.pth"
+    logger.info(f"gguf: indexing model part '{LM_DIR / 'model.pth'}'")
+    state = torch.load(str(path), map_location="cpu", mmap=True, weights_only=True)
+    tensors: dict[str, Callable[[], Tensor]] = {}
+    for name, data in state.items():
+        gen = (lambda data=data: LazyTorchTensor.from_eager(data)) if model.lazy else (lambda data=data: data)
+        titem = model.filter_tensors((name, gen))
+        model._source_tensor_names[name] = titem[0] if titem else None
+        if titem:
+            tensors[titem[0]] = titem[1]
+    return tensors
 
 
 @ModelBase.register("Zonos3Model")
@@ -72,17 +94,7 @@ class Zonos3TextModel(TextModel):
         self._router: dict[int, dict[str, Tensor]] = {}
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        path = self.dir_model / LM_DIR / "model.pth"
-        logger.info(f"gguf: indexing model part '{LM_DIR / 'model.pth'}'")
-        state = torch.load(str(path), map_location="cpu", mmap=True, weights_only=True)
-        tensors: dict[str, Callable[[], Tensor]] = {}
-        for name, data in state.items():
-            gen = (lambda data=data: LazyTorchTensor.from_eager(data)) if self.lazy else (lambda data=data: data)
-            titem = self.filter_tensors((name, gen))
-            self._source_tensor_names[name] = titem[0] if titem else None
-            if titem:
-                tensors[titem[0]] = titem[1]
-        return tensors
+        return _index_lm_tensors(self)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -306,3 +318,148 @@ class Zonos3TextModel(TextModel):
             return
 
         raise ValueError(f"ZONOS3: unexpected tensor {name}")
+
+
+@ModelBase.register("Zonos3Model")
+class Zonos3MmprojModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hp = self.global_config["text_config"]
+        self.n_codebooks = hp["n_codebooks"]
+        self.text_vocab  = hp["text_vocab"]
+        self._embd: dict[str, Tensor] = {}
+        self._spk: dict[str, Tensor] = {}
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        return _index_lm_tensors(self)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if name.startswith(("multi_output.", "multi_embedder.", "speaker_projection.")):
+            return item
+        return None
+
+    def set_gguf_parameters(self):
+        self.gguf_writer.add_file_type(self.ftype)
+        self.gguf_writer.add_clip_has_gen_audio_encoder(True)
+        self.gguf_writer.add_clip_gen_audio_projector_type(gguf.VisionProjectorType.ZONOS3_GEN)
+        self.gguf_writer.add_gen_audio_projection_dim(self.n_embd_text)
+        self.gguf_writer.add_gen_audio_embedding_length(self.n_embd_text)
+        self.gguf_writer.add_gen_audio_feed_forward_length(0)
+        self.gguf_writer.add_gen_audio_block_count(0)
+        self.gguf_writer.add_gen_audio_head_count(0)
+        self.gguf_writer.add_gen_audio_attention_layernorm_eps(self.global_config["text_config"]["norm_eps"])
+        self.gguf_writer.add_gen_audio_model_variant(CODEC_VARIANT)
+        # softcap and the codec hparams are hard-coded in tools/mtmd
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # read on the host, or used by get_rows / ggml_ssm_conv
+        if new_name.startswith("voice.") or new_name.endswith((".table", ".dw.weight", ".mixer.weight", ".resample.weight")):
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @staticmethod
+    def _wn(sd: dict[str, Tensor], prefix: str) -> Tensor:
+        # torch weight norm, over every dim but 0
+        g, v = sd[prefix + ".weight_g"].float(), sd[prefix + ".weight_v"].float()
+        return (g * v / v.flatten(1).norm(dim=1).view(-1, *[1] * (v.dim() - 1))).squeeze(-1)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        logger.info(f"gguf: loading codec decoder from '{CODEC_GENERATOR}' and '{CODEC_HEAD}'")
+        gen  = torch.load(self.dir_model / CODEC_GENERATOR, map_location="cpu", mmap=True, weights_only=True)["generator"]
+        head = torch.load(self.dir_model / CODEC_HEAD,      map_location="cpu", mmap=True, weights_only=True)["trainable"]
+        p = "a.gen.wav"
+
+        def convnext(dst: str, src: dict[str, Tensor], prefix: str) -> Iterable[tuple[str, Tensor]]:
+            yield (f"{dst}.dw.weight",   src[f"{prefix}.dwconv.weight"].squeeze(1))
+            yield (f"{dst}.dw.bias",     src[f"{prefix}.dwconv.bias"])
+            yield (f"{dst}.norm.weight", src[f"{prefix}.norm.weight"])
+            yield (f"{dst}.norm.bias",   src[f"{prefix}.norm.bias"])
+            yield (f"{dst}.pw1.weight",  src[f"{prefix}.pwconv1.weight"])
+            yield (f"{dst}.pw1.bias",    src[f"{prefix}.pwconv1.bias"])
+            yield (f"{dst}.pw2.weight",  src[f"{prefix}.pwconv2.weight"])
+            yield (f"{dst}.pw2.bias",    src[f"{prefix}.pwconv2.bias"])
+
+        # RVQ codebooks folded through their out_proj, the biases are added once
+        def rvq(prefix: str) -> tuple[Tensor, Tensor]:
+            return gen[prefix + ".codebook.weight"].float() @ self._wn(gen, prefix + ".out_proj").T, gen[prefix + ".out_proj.bias"].float()
+
+        t, b = rvq("quantizer.semantic_quantizer.quantizers.0")
+        yield (f"{p}.sem.table", t)
+        yield (f"{p}.sem.bias",  b)
+        res = [rvq(f"quantizer.quantizer.quantizers.{i}") for i in range(self.n_codebooks - 1)]
+        yield (f"{p}.res.table", torch.cat([t for t, _ in res], dim=0))
+        yield (f"{p}.res.bias",  torch.stack([b for _, b in res]).sum(0))
+
+        n_sem = sum(1 for k in gen if k.startswith("semantic_head.") and k.endswith(".dwconv.weight"))
+        for i in range(n_sem):
+            yield from convnext(f"{p}.sem.{i}", gen, f"semantic_head.{i}")
+        yield (f"{p}.sem.out.weight", self._wn(gen, f"semantic_head.{n_sem}"))
+        yield (f"{p}.sem.out.bias",   gen[f"semantic_head.{n_sem}.bias"])
+
+        names = {"norm1.weight": "norm1.weight", "norm1.bias": "norm1.bias", "qkv.weight": "qkv.weight",
+                 "attention_out.weight": "wo.weight", "attention_scale": "attn_scale", "norm2.weight": "norm2.weight",
+                 "norm2.bias": "norm2.bias", "ffn.0.weight": "ffn1.weight", "ffn.3.weight": "ffn2.weight", "ffn_scale": "ffn_scale"}
+        for si, s in enumerate(CODEC_STAGES):
+            yield (f"{p}.stage.{si}.in.weight", head[f"stages.{s}.input_proj.weight"])
+            if f"stages.{s}.output_proj.weight" in head:
+                yield (f"{p}.stage.{si}.out.weight", head[f"stages.{s}.output_proj.weight"])
+            n_layer = sum(1 for k in head if k.startswith(f"stages.{s}.layers.") and k.endswith(".qkv.weight"))
+            for il in range(n_layer):
+                for src, dst in names.items():
+                    yield (f"{p}.stage.{si}.blk.{il}.{dst}", head[f"stages.{s}.layers.{il}.{src}"])
+
+        n_head = sum(1 for k in head if k.startswith("head.blocks.") and k.endswith(".dwconv.weight"))
+        for i in range(n_head):
+            yield from convnext(f"{p}.head.{i}", head, f"head.blocks.{i}")
+        yield (f"{p}.head.norm.weight", head["head.norm.weight"])
+        yield (f"{p}.head.norm.bias",   head["head.norm.bias"])
+        # both iSTFT branches in one projection
+        yield (f"{p}.head.out.weight", torch.cat([head["head.outs.0.weight"], head["head.outs.1.weight"]], dim=0))
+        yield (f"{p}.head.out.bias",   torch.cat([head["head.outs.0.bias"],   head["head.outs.1.bias"]],   dim=0))
+        # read on the host
+        yield (f"{p}.mixer.weight",   head["head.mixer.weight"].squeeze(0))
+        yield (f"{p}.resample.weight", gen["to_external.kernel"].squeeze(1))
+
+    def _voices(self) -> Iterable[tuple[str, Tensor]]:
+        w = LazyTorchTensor.to_eager(self._spk["speaker_projection.weight"]).float()
+        b = LazyTorchTensor.to_eager(self._spk["speaker_projection.bias"]).float()
+        for path in sorted((self.dir_model / "gguf" / "voices").glob("*/*.embedding.npy")):
+            vec = torch.from_numpy(np.load(path, allow_pickle=False)).float().reshape(-1)
+            if vec.shape[0] != w.shape[1]:
+                logger.warning(f"voice {path.name}: skipped, expected a {w.shape[1]}-d embedding")
+                continue
+            name = path.name[:-len(".embedding.npy")]
+            # the speaker row of the prompt
+            yield (f"voice.{name}", (w @ vec + b).reshape(1, -1))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        T = gguf.MODEL_TENSOR
+
+        if name.startswith("a.gen.wav."):
+            yield (name, data_torch)
+            return
+
+        if name == "multi_output.weight":
+            yield (self.format_tensor_name(T.A_GEN_CODE_HEAD), data_torch)
+            return
+
+        if name.startswith("speaker_projection."):
+            self._spk[name] = data_torch
+            if len(self._spk) == 2:
+                yield from self._voices()
+            return
+
+        assert name.startswith("multi_embedder.")
+        self._embd[name] = data_torch
+        if len(self._embd) < self.n_codebooks + 1:
+            return
+        # every row built by the mmproj has text id = text_vocab, so that row is folded into codebook 0
+        tables = [self._embd[f"multi_embedder.embedders.{cb}.weight"].float() for cb in range(self.n_codebooks)]
+        tables[0] = tables[0] + self._embd[f"multi_embedder.embedders.{self.n_codebooks}.weight"][self.text_vocab].float()
+        yield (self.format_tensor_name(T.A_GEN_CODE_OUT_EMBD), torch.cat(tables, dim=0))
+        self._embd.clear()

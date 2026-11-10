@@ -1,8 +1,7 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
 
-// backbone of the ZONOS3 TTS pipeline: hybrid GDN / global attention, latent MoE, Full AttnRes residual
-// it has no lm_head, the 10 audio heads are inside the mmproj
+// ZONOS3 TTS backbone, the 10 audio heads are in the mmproj
 
 void llama_model_zonos3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -78,7 +77,7 @@ void llama_model_zonos3::load_arch_tensors(llama_model_loader &) {
             layer.wo          = create_tensor(tn(LLM_TENSOR_ATTN_OUT,    "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
             // per-head scale of the normalized Q, the QK norm itself has no weight
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head}, 0);
-            // per-head sigmoid gate of the attention output, same name as the GDN z gate but a different shape
+            // per-head output gate, same name as the GDN z gate
             layer.wqkv_gate   = create_tensor(tn(LLM_TENSOR_ATTN_GATE,   "weight", i), {n_embd, n_head}, 0);
         }
 
@@ -325,7 +324,7 @@ ggml_tensor * llama_model_zonos3::graph::build_layer_ffn(ggml_tensor * cur, int 
         return cur;
     }
 
-    // the router scores the full-width input (its norm weight is folded into ffn_gate_inp), the experts take the latent one
+    // the router reads the full-width input, the experts the latent one
     ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps));
     cb(logits, "ffn_moe_logits", il);
 

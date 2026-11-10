@@ -1882,6 +1882,176 @@ bool mtmd_audio_preprocessor_gemma4ua::process(const float *                 sam
 }
 
 //
+// mtmd_audio_zonos3_synth implementation
+//
+
+mtmd_audio_zonos3_synth::mtmd_audio_zonos3_synth(const std::vector<float> & mixer, const std::vector<float> & resample,
+                                                 int n_fft0, int n_fft1, int hop, int rs_orig, int rs_new)
+    : mixer(mixer), fir_kernel((int) (mixer.size() / 2)), hop(hop), rs_kernel(resample), rs_orig(rs_orig), rs_new(rs_new) {
+    GGML_ASSERT(mixer.size() % 2 == 0 && fir_kernel % 2 == 1);
+    GGML_ASSERT(resample.size() % (size_t) rs_new == 0);
+    const int rs_len = (int) (resample.size() / rs_new);
+    GGML_ASSERT(rs_len >= rs_orig && (rs_len - rs_orig) % 2 == 0);
+    rs_width = (rs_len - rs_orig) / 2;
+
+    const int n_fft[2] = { n_fft0, n_fft1 };
+    const int h = (fir_kernel - 1) / 2;
+    for (int i = 0; i < 2; i++) {
+        branch & b = br[i];
+        b.n_fft = n_fft[i];
+        b.cache.fill_sin_cos_table(b.n_fft);
+        b.cache.fill_hann_window(b.n_fft, true);
+        b.ifft_in.assign((size_t) b.n_fft * 2 * 4, 0.0f);
+        b.ifft_out.assign((size_t) b.n_fft * 2 * 4, 0.0f);
+        b.mix_in.assign((size_t) h, 0.0f);
+        b.mix_avail = h;
+    }
+}
+
+// the first n_fft / 2 samples are the centering pad
+void mtmd_audio_zonos3_synth::ola_finalize(branch & b, int64_t pf) {
+    const int64_t pad = b.n_fft / 2;
+    const int64_t n   = std::min<int64_t>(pf - b.ola_base, (int64_t) b.ola.size());
+    if (n <= 0) {
+        return;
+    }
+    for (int64_t j = 0; j < n; j++) {
+        if (b.ola_base + j < pad) {
+            continue;
+        }
+        b.mix_in.push_back(b.env[(size_t) j] > 1e-11f ? b.ola[(size_t) j] / b.env[(size_t) j] : 0.0f);
+        b.mix_avail++;
+    }
+    b.ola.erase(b.ola.begin(), b.ola.begin() + n);
+    b.env.erase(b.env.begin(), b.env.begin() + n);
+    b.ola_base += n;
+}
+
+void mtmd_audio_zonos3_synth::mix_emit(std::vector<float> & out) {
+    const int64_t avail = std::min(br[0].mix_avail, br[1].mix_avail);
+    const int64_t m1    = avail - fir_kernel + 1;
+    if (m1 <= mix_next) {
+        return;
+    }
+    const size_t n  = (size_t) (m1 - mix_next);
+    std::vector<float> y(n, 0.0f);
+    for (int c = 0; c < 2; c++) {
+        const float * w = mixer.data() + (size_t) c * fir_kernel;
+        const float * s = br[c].mix_in.data() + (mix_next - mix_base);
+        for (int k = 0; k < fir_kernel; k++) {
+            for (size_t i = 0; i < n; i++) {
+                y[i] += w[k] * s[i + k];
+            }
+        }
+    }
+    mix_next = m1;
+    for (int c = 0; c < 2; c++) {
+        br[c].mix_in.erase(br[c].mix_in.begin(), br[c].mix_in.begin() + (mix_next - mix_base));
+    }
+    mix_base = mix_next;
+
+    rs_buf.insert(rs_buf.end(), y.begin(), y.end());
+    rs_in += (int64_t) n;
+    resample(false, out);
+}
+
+// on flush, the input is zero-extended and the output is ceil(new * rs_in / orig) samples
+void mtmd_audio_zonos3_synth::resample(bool flush, std::vector<float> & out) {
+    const int     KL    = 2 * rs_width + rs_orig;
+    const int64_t total = flush ? ((int64_t) rs_new * rs_in + rs_orig - 1) / rs_orig : -1;
+    std::vector<float> xw(KL);
+    for (;; rs_block++) {
+        const int64_t x0 = rs_block * rs_orig - rs_width;
+        if (flush ? rs_block * rs_new >= total : x0 + KL > rs_in) {
+            break;
+        }
+        for (int k = 0; k < KL; k++) {
+            const int64_t j = x0 + k;
+            xw[k] = (j < 0 || j >= rs_in) ? 0.0f : rs_buf[(size_t) (j - rs_base)];
+        }
+        const int64_t n_emit = flush ? std::min<int64_t>(rs_new, total - rs_block * rs_new) : rs_new;
+        for (int64_t i = 0; i < n_emit; i++) {
+            const float * ki = rs_kernel.data() + (size_t) i * KL;
+            float acc = 0.0f;
+            for (int k = 0; k < KL; k++) {
+                acc += ki[k] * xw[k];
+            }
+            out.push_back(acc);
+        }
+    }
+    // drop the samples no later block reads
+    const int64_t keep_from = std::min(rs_in, std::max<int64_t>(0, rs_block * rs_orig - rs_width));
+    if (keep_from > rs_base) {
+        rs_buf.erase(rs_buf.begin(), rs_buf.begin() + (keep_from - rs_base));
+        rs_base = keep_from;
+    }
+}
+
+void mtmd_audio_zonos3_synth::push(const float * spec, int64_t n_cols, std::vector<float> & out) {
+    const int64_t n_rows = (br[0].n_fft + 2) + (br[1].n_fft + 2);
+    const float max_log_mag = logf(100.0f);
+    for (int i = 0; i < 2; i++) {
+        branch & b = br[i];
+        const int n    = b.n_fft;
+        const int bins = n / 2 + 1;
+        const int64_t row0 = i == 0 ? 0 : br[0].n_fft + 2;
+        for (int64_t c = 0; c < n_cols; c++) {
+            const float * logmag = spec + c * n_rows + row0;
+            const float * phase  = logmag + bins;
+            // irfft ignores the imaginary parts of DC and Nyquist
+            for (int k = 0; k < bins; k++) {
+                const float a = expf(std::min(logmag[k], max_log_mag));
+                b.ifft_in[2 * k + 0] = a * cosf(phase[k]);
+                b.ifft_in[2 * k + 1] = (k == 0 || k == n / 2) ? 0.0f : a * sinf(phase[k]);
+            }
+            for (int k = 1; k < n - bins + 1; k++) {
+                b.ifft_in[2 * (n - k) + 0] =  b.ifft_in[2 * k + 0];
+                b.ifft_in[2 * (n - k) + 1] = -b.ifft_in[2 * k + 1];
+            }
+            ifft(b.cache, b.ifft_in.data(), n, b.ifft_out.data());
+
+            const int64_t t = n_frames + c;
+            const size_t need = (size_t) (t * hop + n - b.ola_base);
+            if (b.ola.size() < need) {
+                b.ola.resize(need, 0.0f);
+                b.env.resize(need, 0.0f);
+            }
+            float * ola = b.ola.data() + (t * hop - b.ola_base);
+            float * env = b.env.data() + (t * hop - b.ola_base);
+            const float * win = b.cache.hann_window.data();
+            for (int j = 0; j < n; j++) {
+                ola[j] += win[j] * b.ifft_out[2 * j];
+                env[j] += win[j] * win[j];
+            }
+        }
+    }
+    n_frames += n_cols;
+    for (auto & b : br) {
+        ola_finalize(b, n_frames * hop);
+    }
+    mix_emit(out);
+}
+
+void mtmd_audio_zonos3_synth::flush(std::vector<float> & out) {
+    if (done || n_frames == 0) {
+        return;
+    }
+    done = true;
+    // the mixer has h zeros of right padding
+    const int h = (fir_kernel - 1) / 2;
+    const int64_t L = n_frames * hop;
+    for (auto & b : br) {
+        ola_finalize(b, b.ola_base + (int64_t) b.ola.size());
+        const int64_t keep = h + L - mix_base;
+        b.mix_in.resize((size_t) keep, 0.0f);
+        b.mix_in.resize((size_t) (keep + h), 0.0f);
+        b.mix_avail = mix_base + keep + h;
+    }
+    mix_emit(out);
+    resample(true, out);
+}
+
+//
 // mtmd_audio_streaming_istft implementation
 //
 

@@ -869,6 +869,60 @@ struct mtmd_drama3_layer {
     ggml_tensor * out_norm_w = nullptr;
 };
 
+// zonos3 ZAC codec decoder (a.gen.wav.*)
+struct mtmd_zonos3_wav {
+    struct convnext {
+        ggml_tensor * dw_w   = nullptr; // [K, C]
+        ggml_tensor * dw_b   = nullptr;
+        ggml_tensor * norm_w = nullptr;
+        ggml_tensor * norm_b = nullptr;
+        ggml_tensor * pw1_w  = nullptr;
+        ggml_tensor * pw1_b  = nullptr;
+        ggml_tensor * pw2_w  = nullptr;
+        ggml_tensor * pw2_b  = nullptr;
+    };
+    struct layer {
+        ggml_tensor * norm1_w    = nullptr;
+        ggml_tensor * norm1_b    = nullptr;
+        ggml_tensor * qkv_w      = nullptr;
+        ggml_tensor * wo_w       = nullptr;
+        ggml_tensor * attn_scale = nullptr;
+        ggml_tensor * norm2_w    = nullptr;
+        ggml_tensor * norm2_b    = nullptr;
+        ggml_tensor * ffn1_w     = nullptr;
+        ggml_tensor * ffn2_w     = nullptr;
+        ggml_tensor * ffn_scale  = nullptr;
+    };
+    struct stage {
+        ggml_tensor * in_w  = nullptr;
+        ggml_tensor * out_w = nullptr; // nullptr in the last stage
+        std::vector<layer> layers;
+    };
+
+    ggml_tensor * sem_table = nullptr; // folded through its out_proj
+    ggml_tensor * sem_bias  = nullptr;
+    std::vector<convnext> sem;
+    ggml_tensor * sem_out_w = nullptr;
+    ggml_tensor * sem_out_b = nullptr;
+    ggml_tensor * res_table = nullptr; // merged
+    ggml_tensor * res_bias  = nullptr; // summed
+
+    std::vector<stage> stages;
+
+    std::vector<convnext> head;
+    ggml_tensor * head_norm_w = nullptr;
+    ggml_tensor * head_norm_b = nullptr;
+    ggml_tensor * head_out_w  = nullptr; // both iSTFT branches
+    ggml_tensor * head_out_b  = nullptr;
+
+    // read on the host
+    std::vector<float> mixer;    // [2, fir_kernel]
+    std::vector<float> resample; // [rs_new, rs_kernel_len]
+    int64_t fir_kernel    = 0;
+    int64_t rs_new        = 0;
+    int64_t rs_kernel_len = 0;
+};
+
 struct mtmd_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -1147,6 +1201,7 @@ struct mtmd_model {
     // qwen3tts code2wav: RVQ codes -> raw PCM
     mtmd_code2wav c2w;
     std::vector<mtmd_drama3_layer> drama3_layers;
+    mtmd_zonos3_wav zonos3;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     mtmd_seanet seanet;

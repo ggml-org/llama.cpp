@@ -2441,6 +2441,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_DRAMA3;
             info.sample_rate = 44100;
             break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_ZONOS3;
+            info.sample_rate = 44100;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -2850,6 +2854,14 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_p = 0.9f;
             inp.temp  = 1.0f;
             break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            // sampled in the helper, defaults of registries/generation.json
+            inp.top_k          = 80;
+            inp.top_p          = 0.69f;
+            inp.temp           = 0.75f;
+            inp.penalty_repeat = 2.4f;
+            inp.penalty_last_n = 96;
+            break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {
                 // MaskGIT sampling runs in the helper, with the settings of the checkpoint
@@ -2880,6 +2892,9 @@ struct mtmd_gen_state {
 
     // lfm3a: the codec graph yields STFT frames, the ISTFT runs on the host
     std::unique_ptr<mtmd_audio_streaming_istft> istft;
+
+    // zonos3: the iSTFT head runs on the host
+    std::unique_ptr<mtmd_audio_zonos3_synth> zonos3_synth;
 
     ~mtmd_gen_state() {
         delete gen_state;
@@ -2920,6 +2935,60 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
         const auto * hparams = &state->sctx->model.hparams;
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
     }
+    state->zonos3_synth.reset();
+}
+
+// zonos3 GEN_WAV: n_codes == 0 flushes and resets the state
+static int32_t mtmd_gen_wav_zonos3(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    mtmd_subcontext * sctx = ctx->ctx_gen_a.get();
+    const auto & z = sctx->model.zonos3;
+    using g = mtmd_graph_zonos3_gen;
+
+    if (!state->zonos3_synth) {
+        state->zonos3_synth = std::make_unique<mtmd_audio_zonos3_synth>(z.mixer, z.resample, g::n_fft[0], g::n_fft[1], g::hop, g::rs_orig, g::rs_new);
+    }
+    auto & audio = state->out_audio;
+    audio.clear();
+
+    if (!inp->codes || inp->n_codes == 0) {
+        state->zonos3_synth->flush(audio);
+        mtmd_gen_state_reset(state);
+    } else {
+        if (inp->n_codes % g::n_codebooks != 0) {
+            LOG_ERR("%s: expected whole frames of %d codes\n", __func__, g::n_codebooks);
+            return 1;
+        }
+        std::vector<int32_t> in_codes(inp->codes, inp->codes + inp->n_codes);
+        std::vector<float>   spec;
+
+        // no hidden-state input, the batch entry is an unused placeholder
+        mtmd_image_f32 dummy;
+        dummy.set_size({1, 1}, false, true);
+        dummy.cpy_buf(std::vector<float>(1, 0.0f));
+
+        mtmd_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(dummy));
+
+        mtmd_subctx_encode_params params;
+        params.imgs        = &batch;
+        params.n_threads   = ctx->n_threads;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
+        params.codes       = &in_codes;
+        params.out_feats   = &spec;
+        params.gen_state   = state->gen_state;
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: encode failed (codec)\n", __func__);
+            return 1;
+        }
+        const int64_t n_rows = (g::n_fft[0] + 2) + (g::n_fft[1] + 2);
+        GGML_ASSERT(spec.size() % (size_t) n_rows == 0);
+        state->zonos3_synth->push(spec.data(), (int64_t) (spec.size() / n_rows), audio);
+    }
+
+    out->audio     = audio.data();
+    out->n_samples = audio.size();
+    return 0;
 }
 
 // lfm3a GEN_WAV: ISTFT of the codec output, n_codes == 0 flushes and resets the state
@@ -3020,6 +3089,9 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV && sctx->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN) {
         return mtmd_gen_wav_lfm3a(ctx, state, inp, out);
+    }
+    if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV && sctx->model.proj_type == PROJECTOR_TYPE_ZONOS3_GEN) {
+        return mtmd_gen_wav_zonos3(ctx, state, inp, out);
     }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {

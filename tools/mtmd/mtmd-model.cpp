@@ -1019,6 +1019,10 @@ struct mtmd_model_loader {
                         // matches the reference decoder's sliding_window (speech_tokenizer/config.json)
                         hparams.wav_tfm_swa = 72;
                     } break;
+                case PROJECTOR_TYPE_ZONOS3_GEN:
+                    {
+                        hparams.audio_sample_rate = 44100;
+                    } break;
                 case PROJECTOR_TYPE_DRAMA3_GEN:
                     {
                         // Fish DAC decoder, codec.pth has no config
@@ -2543,6 +2547,118 @@ struct mtmd_model_loader {
 
                     // code2wav: RVQ codes -> raw PCM, lives in the same ctx as code_predictor
                     load_code2wav(true);
+                } break;
+            case PROJECTOR_TYPE_ZONOS3_GEN:
+                {
+                    model.gen_code_head_w     = get_tensor(string_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(string_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    if (model.gen_code_out_embd_w->ne[1] % mtmd_graph_zonos3_gen::n_codebooks != 0 ||
+                            model.gen_code_head_w->ne[1] != model.gen_code_out_embd_w->ne[1]) {
+                        throw std::runtime_error(string_format("%s: zonos3: unexpected codebook table shape\n", __func__));
+                    }
+
+                    // voice.<name>: the speaker row of the prompt
+                    for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
+                        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+                        if (strncmp(name, "voice.", 6) != 0) {
+                            continue;
+                        }
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name);
+                        if (t->type != GGML_TYPE_F32 || ggml_n_dims(t) > 2 || t->ne[0] != model.gen_code_out_embd_w->ne[0]) {
+                            throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name));
+                        }
+                        auto & embd = model.gen_voices[name + 6].rows;
+                        embd.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(embd.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name));
+                        }
+                    }
+                    LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
+
+                    // ZAC codec decoder
+                    auto & z = model.zonos3;
+                    const std::string p = "a.gen.wav";
+                    auto has = [&](const std::string & name) {
+                        return gguf_find_tensor(ctx_gguf.get(), name.c_str()) >= 0;
+                    };
+                    auto load_convnext = [&](const std::string & q) {
+                        mtmd_zonos3_wav::convnext b;
+                        b.dw_w   = get_tensor(q + ".dw.weight");
+                        b.dw_b   = get_tensor(q + ".dw.bias");
+                        b.norm_w = get_tensor(q + ".norm.weight");
+                        b.norm_b = get_tensor(q + ".norm.bias");
+                        b.pw1_w  = get_tensor(q + ".pw1.weight");
+                        b.pw1_b  = get_tensor(q + ".pw1.bias");
+                        b.pw2_w  = get_tensor(q + ".pw2.weight");
+                        b.pw2_b  = get_tensor(q + ".pw2.bias");
+                        return b;
+                    };
+                    z.sem_table = get_tensor(p + ".sem.table");
+                    z.sem_bias  = get_tensor(p + ".sem.bias");
+                    for (int i = 0; has(string_format("%s.sem.%d.dw.weight", p.c_str(), i)); i++) {
+                        z.sem.push_back(load_convnext(p + ".sem." + std::to_string(i)));
+                    }
+                    z.sem_out_w = get_tensor(p + ".sem.out.weight");
+                    z.sem_out_b = get_tensor(p + ".sem.out.bias");
+                    z.res_table = get_tensor(p + ".res.table");
+                    z.res_bias  = get_tensor(p + ".res.bias");
+                    for (int s = 0; has(string_format("%s.stage.%d.in.weight", p.c_str(), s)); s++) {
+                        const std::string q = p + ".stage." + std::to_string(s);
+                        mtmd_zonos3_wav::stage st;
+                        st.in_w  = get_tensor(q + ".in.weight");
+                        st.out_w = get_tensor(q + ".out.weight", false);
+                        for (int il = 0; has(string_format("%s.blk.%d.qkv.weight", q.c_str(), il)); il++) {
+                            const std::string b = q + ".blk." + std::to_string(il);
+                            mtmd_zonos3_wav::layer l;
+                            l.norm1_w    = get_tensor(b + ".norm1.weight");
+                            l.norm1_b    = get_tensor(b + ".norm1.bias");
+                            l.qkv_w      = get_tensor(b + ".qkv.weight");
+                            l.wo_w       = get_tensor(b + ".wo.weight");
+                            l.attn_scale = get_tensor(b + ".attn_scale");
+                            l.norm2_w    = get_tensor(b + ".norm2.weight");
+                            l.norm2_b    = get_tensor(b + ".norm2.bias");
+                            l.ffn1_w     = get_tensor(b + ".ffn1.weight");
+                            l.ffn2_w     = get_tensor(b + ".ffn2.weight");
+                            l.ffn_scale  = get_tensor(b + ".ffn_scale");
+                            st.layers.push_back(l);
+                        }
+                        z.stages.push_back(std::move(st));
+                    }
+                    for (int i = 0; has(string_format("%s.head.%d.dw.weight", p.c_str(), i)); i++) {
+                        z.head.push_back(load_convnext(p + ".head." + std::to_string(i)));
+                    }
+                    z.head_norm_w = get_tensor(p + ".head.norm.weight");
+                    z.head_norm_b = get_tensor(p + ".head.norm.bias");
+                    z.head_out_w  = get_tensor(p + ".head.out.weight");
+                    z.head_out_b  = get_tensor(p + ".head.out.bias");
+                    if (z.stages.size() != mtmd_graph_zonos3_gen::n_stages || z.sem.empty() || z.head.empty() ||
+                            z.head_out_w->ne[1] != mtmd_graph_zonos3_gen::n_fft[0] + mtmd_graph_zonos3_gen::n_fft[1] + 4) {
+                        throw std::runtime_error(string_format("%s: zonos3: unexpected codec decoder layout\n", __func__));
+                    }
+
+                    // read on the host
+                    auto read_host = [&](const std::string & name, std::vector<float> & dst) -> const ggml_tensor * {
+                        const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name.c_str());
+                        if (!t || t->type != GGML_TYPE_F32 || ggml_n_dims(t) != 2) {
+                            throw std::runtime_error(string_format("%s: invalid or missing tensor %s\n", __func__, name.c_str()));
+                        }
+                        dst.resize(ggml_nelements(t));
+                        fin.seekg(tensor_offset.at(name), std::ios::beg);
+                        if (!fin.read(reinterpret_cast<char *>(dst.data()), ggml_nbytes(t))) {
+                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name.c_str()));
+                        }
+                        return t;
+                    };
+                    const ggml_tensor * mixer = read_host(p + ".mixer.weight", z.mixer);
+                    const ggml_tensor * rs    = read_host(p + ".resample.weight", z.resample);
+                    if (mixer->ne[1] != 2 || rs->ne[1] != mtmd_graph_zonos3_gen::rs_new ||
+                            rs->ne[0] < mtmd_graph_zonos3_gen::rs_orig || (rs->ne[0] - mtmd_graph_zonos3_gen::rs_orig) % 2 != 0) {
+                        throw std::runtime_error(string_format("%s: zonos3: unexpected mixer or resampler shape\n", __func__));
+                    }
+                    z.fir_kernel    = mixer->ne[0];
+                    z.rs_new        = rs->ne[1];
+                    z.rs_kernel_len = rs->ne[0];
                 } break;
             case PROJECTOR_TYPE_DRAMA3_GEN:
                 {
@@ -4138,6 +4254,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_ZONOS3_GEN:
             {
                 // one hidden-state vector fed back to the talker per call
                 n_patches = 1;
@@ -4321,6 +4438,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_ZONOS3_GEN:
             return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             return spk_proj_w->ne[1];

@@ -536,6 +536,47 @@ struct mtmd_graph_drama3_gen : mtmd_graph {
                               ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
 };
 
+//
+// zonos3 generation:
+// GEN_CODE = 10 codebook heads, or the backbone row of a sampled frame
+// GEN_WAV  = ZAC codec decoder up to the iSTFT spectra
+//
+struct mtmd_graph_zonos3_gen : mtmd_graph {
+    mtmd_graph_zonos3_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, bool all_known, int n_frames)
+        : mtmd_graph(ctx, img), gen_process(gen_process), all_known(all_known), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_codebooks = 10;
+    static constexpr int   n_cb_vocab  = 4096;
+    static constexpr float softcap     = 15.0f;
+
+    // ZAC decoder, fixed by the codec config
+    static constexpr int   n_stages              = 5;
+    static constexpr int   stage_ctx[n_stages]   = { 150, 300, 480, 480, 480 }; // attention window
+    static constexpr int   head_dim              = 64;
+    static constexpr float ln_eps                = 1e-5f;
+    static constexpr float convnext_eps          = 1e-6f;
+    static constexpr int   hop                   = 184;  // at 44160 Hz
+    static constexpr int   n_fft[2]              = { 736, 2208 };
+    static constexpr int   rs_orig               = 736;  // 44160 -> 44100 Hz
+    static constexpr int   rs_new                = 735;
+    static constexpr int   samples_per_frame     = 2940;
+
+    mtmd_subctx_gen_process gen_process;
+    bool all_known; // GEN_CODE: only the backbone row
+    int  n_frames;  // GEN_WAV
+
+    std::map<std::string, ggml_tensor *> state_in;
+    std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    ggml_cgraph * build_gen_code();
+    ggml_cgraph * build_gen_wav();
+    ggml_tensor * convnext(ggml_tensor * x, const mtmd_zonos3_wav::convnext & b, const std::string & state_name);
+    ggml_tensor * moss_layer(ggml_tensor * x, const mtmd_zonos3_wav::layer & l, int s, int il, ggml_tensor * base);
+};
+
+std::vector<c2w_state_slot> list_zonos3_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
 struct mtmd_graph_soprano : mtmd_graph {
     mtmd_graph_soprano(mtmd_subcontext * ctx, const mtmd_image_f32 & img, int n_frames) : mtmd_graph(ctx, img), n_frames(n_frames) {}
     ggml_cgraph * build() override;

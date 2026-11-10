@@ -353,6 +353,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "EmbeddingGemma2Model": "gemma",
     "Exaone4_5_ForConditionalGeneration": "exaone",
     "FishOmniModel": "drama3",
+    "Zonos3Model": "zonos3",
     "Gemma3ForConditionalGeneration": "gemma",
     "Gemma3nForConditionalGeneration": "gemma",
     "Gemma4ForConditionalGeneration": "gemma",
