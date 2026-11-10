@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
 	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
-	import { FolderOpen } from '@lucide/svelte';
+	import { FolderOpen, X } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as Popover from '$lib/components/ui/popover';
@@ -21,7 +21,7 @@
 		class?: string;
 		disabled?: boolean;
 		directory?: string | null;
-		/** Controlled open state; the host owns it so the chip click and the
+		/** Controlled open state; the host owns it so the chip, the + menu and the
 		 * `/cwd` slash command open the picker through the same path. */
 		isOpen: boolean;
 		/** Two-way bound query, kept in sync with the text after `/cwd `. */
@@ -362,6 +362,23 @@
 				<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
 
 				<span>Browse</span>
+			</button>
+		{/if}
+
+		{#if directory}
+			<button
+				class={[
+					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
+					inDrawer
+						? 'gap-2 rounded-lg px-2 py-2.5 text-[15px]'
+						: 'gap-2 rounded-sm px-2 py-1.5 text-sm'
+				]}
+				onclick={clearDirectory}
+				type="button"
+			>
+				<X class="size-4 shrink-0 text-muted-foreground" />
+
+				<span>Clear working directory</span>
 			</button>
 		{/if}
 

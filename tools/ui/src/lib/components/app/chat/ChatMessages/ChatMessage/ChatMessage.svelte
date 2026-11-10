@@ -342,7 +342,7 @@
 	function focusMainChatForm() {
 		if (deviceStore.isMobile) return;
 
-		document.querySelector<HTMLTextAreaElement>('.chat-screen-form-wrapper textarea')?.focus();
+		document.querySelector<HTMLElement>('.chat-screen-form-wrapper .cm-content')?.focus();
 	}
 
 	async function handleSaveEdit() {

@@ -9,19 +9,21 @@
 		ModelsSelector
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory } from '$lib/enums';
 	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
 	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import { ChatService } from '$lib/services';
-	import { conversationsStore, deviceStore, settingsStore } from '$lib/stores';
-	import { getFileTypeCategory } from '$lib/utils';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
+	import { abbreviateWorkingDir, getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
 		canSend?: boolean;
 		class?: string;
 		disabled?: boolean;
+		/** Lay the actions out in the row around them, the add button first, the rest last. */
+		inline?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
@@ -30,6 +32,8 @@
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
+		/** The chat's working directory, which the + menu names. */
+		workingDirectory?: string | null;
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
@@ -41,6 +45,7 @@
 		canSend = false,
 		class: className = '',
 		disabled = false,
+		inline = false,
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
@@ -52,7 +57,8 @@
 		onWorkingDirectoryClick,
 		showAddButton = true,
 		showModelSelector = true,
-		uploadedFiles = []
+		uploadedFiles = [],
+		workingDirectory = null
 	}: Props = $props();
 
 	let currentConfig = $derived(settingsStore.config);
@@ -113,16 +119,25 @@
 		},
 		get onWorkingDirectoryClick() {
 			return onWorkingDirectoryClick;
+		},
+		get workingDirectoryLabel() {
+			return workingDirectory
+				? abbreviateWorkingDir(workingDirectory, toolsStore.serverHome)
+				: SET_WORKING_DIRECTORY_LABEL;
 		}
 	});
 </script>
 
 <div
-	class="flex w-full items-center gap-3 {className} {showAddButton ? '' : 'justify-end'}"
-	style="container-type: inline-size"
+	style:container-type={inline ? undefined : 'inline-size'}
+	class={[
+		inline ? 'contents' : 'flex w-full items-center gap-3',
+		className,
+		!showAddButton && 'justify-end'
+	]}
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-2">
+		<div class={['flex items-center gap-2', inline ? 'order-first' : 'mr-auto']}>
 			<ChatFormActionsAdd />
 		</div>
 	{/if}

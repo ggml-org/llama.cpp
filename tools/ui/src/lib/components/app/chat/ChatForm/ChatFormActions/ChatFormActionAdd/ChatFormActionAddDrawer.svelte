@@ -18,8 +18,7 @@
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
-		ICON_CLASS_DEFAULT,
-		SET_WORKING_DIRECTORY_LABEL
+		ICON_CLASS_DEFAULT
 	} from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums/attachment.enums';
@@ -148,7 +147,7 @@
 					>
 						<Folder class="{ICON_CLASS_DEFAULT} shrink-0" />
 
-						<span>{SET_WORKING_DIRECTORY_LABEL}</span>
+						<span class="truncate">{chatFormActions.workingDirectoryLabel}</span>
 					</button>
 				{/if}
 
