@@ -1,9 +1,6 @@
 #include "parsers.h"
 
-// Apertus 1.5 uses content.blocks for reasoning history, while the OpenAI-compatible API exposes
-// reasoning as a separate reasoning_content field. Convert all assistant turns to the official
-// block representation so that a conversation can preserve reasoning without mixing the string
-// and mapping formats rejected by the template.
+// Normalize assistant history to content.blocks: the template rejects mixed string and block formats.
 static json apertus_1_5_adjust_messages(const json & messages) {
     json adjusted = json::array();
 

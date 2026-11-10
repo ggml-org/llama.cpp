@@ -756,12 +756,12 @@ struct mtmd_context {
             if (!sctx || sctx->model.outputs_tokens()) {
                 return;
             }
-            const int n_embd_clip = sctx->model.n_mmproj_embd();
-            if (n_embd_text > 0 && n_embd_text != n_embd_clip) {
+            const int n_embd_mmproj = sctx->model.n_mmproj_embd();
+            if (n_embd_text > 0 && n_embd_text != n_embd_mmproj) {
                 throw std::runtime_error(string_format(
                     "mismatch between text model (n_embd = %d) and %s mmproj (n_embd = %d)\n"
                     "hint: you may be using wrong mmproj\n",
-                    n_embd_text, modality, n_embd_clip));
+                    n_embd_text, modality, n_embd_mmproj));
             }
         };
         validate_embedding_width(ctx_v.get(), "vision");

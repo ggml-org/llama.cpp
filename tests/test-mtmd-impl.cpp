@@ -6,16 +6,13 @@
 #include "mtmd-subcontext.h"
 #include "mtmd-helper.h"
 #include "mtmd-image.h"
-#include "mtmd-audio.h"
 #include "mtmd-internal.h"
-#include "mtmd-helper.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include <cmath>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
