@@ -161,7 +161,7 @@ std::optional<ov::Tensor> try_make_kv_sliced_tensor(const std::shared_ptr<GgmlOv
     }
     return ggml_decoder->cached_kv_tensor(ggml_tensor, type, sliced_shape, [&]() -> ov::Tensor {
         if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
-            auto remote_context = ggml_openvino_get_remote_context();
+            auto remote_context = ggml_openvino_get_remote_context(ggml_decoder->device);
             auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
             return gpu_context.create_tensor(type, sliced_shape, ggml_tensor->data);
         }
@@ -183,7 +183,7 @@ std::optional<ov::Tensor> try_make_kv_4d_tensor(const std::shared_ptr<GgmlOvDeco
     const auto type = GgmlOvDecoder::get_ov_type(ggml_tensor);
     return ggml_decoder->cached_kv_tensor(ggml_tensor, type, shape, [&]() -> ov::Tensor {
         if (ggml_openvino_buffer_is_remote(ggml_tensor)) {
-            auto remote_context = ggml_openvino_get_remote_context();
+            auto remote_context = ggml_openvino_get_remote_context(ggml_decoder->device);
             auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
             return gpu_context.create_tensor(type, shape, ggml_tensor->data);
         }
@@ -543,7 +543,7 @@ ov::Tensor create_ov_output_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_d
                 }
             }
         }
-        auto context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+        auto context = ggml_openvino_get_remote_context(ggml_decoder->device)->as<ov::intel_gpu::ocl::ClContext>();
         return context.create_tensor(output_type, output_shape, resolved);
     }
 
@@ -687,7 +687,8 @@ ov::Tensor get_ov_input_tensor(const std::shared_ptr<GgmlOvDecoder> & ggml_decod
         if (!cached || cached.get_element_type() != extra_input->second.type ||
             cached.get_shape() != extra_input->second.shape) {
             if (ggml_openvino_is_gpu() && !ggml_decoder->is_static() && !ggml_decoder->is_stateful()) {
-                auto context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+                auto context =
+                    ggml_openvino_get_remote_context(ggml_decoder->device)->as<ov::intel_gpu::ocl::ClContext>();
                 auto storage = context.create_usm_host_tensor(extra_input->second.type, extra_input->second.shape);
                 cached = ov::Tensor(extra_input->second.type, extra_input->second.shape, storage.get());
                 ggml_decoder->runtime_input_storage[param_name] = storage;
@@ -1012,6 +1013,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     bool naive = true;
     auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, naive);
     auto decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights);
+    decoder->device = device;
     auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(decoder);
     auto model = ov::frontend::ggml::FrontEnd::convert(input_model, naive);
     if (ggml_openvino_getenv_int("GGML_OPENVINO_DUMP_IR")) {
@@ -1019,7 +1021,7 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     }
 
     std::shared_ptr<ov::InferRequest> infer_request;
-    auto remote_context = ggml_openvino_get_remote_context();
+    auto remote_context = ggml_openvino_get_remote_context(device);
     ov::AnyMap compile_config = config;
     if (cgraph->nodes[0]->op == GGML_OP_MUL_MAT) {
         // TODO ACCURACY hint triggers a bug in GPU plugin/driver on Lunar Lake. Remove once CVS-182166 is resolved
@@ -1085,7 +1087,8 @@ namespace {
 constexpr size_t k_io_staging_max_bytes = 4u << 20;
 
 bool io_staging_enabled() {
-    static const bool enabled = ggml_openvino_is_gpu() && ggml_openvino_get_remote_context().has_value();
+    static const bool enabled =
+        ggml_openvino_is_gpu() && ggml_openvino_get_remote_context(ggml_openvino_get_device_name()).has_value();
     return enabled;
 }
 
@@ -1109,7 +1112,7 @@ bool stageable_size(const ov::Tensor & t) {
 ov::Tensor & staging_for(const GgmlOvDecoder & decoder, GgmlOvDecoder::ov_port_binding & b, const ov::Tensor & like) {
     const size_t bytes = like.get_byte_size();
     if (!b.staging || b.staging_bytes < bytes || b.staging.get_element_type() != like.get_element_type()) {
-        auto gpu_context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+        auto gpu_context = ggml_openvino_get_remote_context(decoder.device)->as<ov::intel_gpu::ocl::ClContext>();
         auto usm = gpu_context.create_usm_host_tensor(like.get_element_type(), like.get_shape());
         b.staging_ptr = usm.get();
         b.staging = usm;
@@ -1366,6 +1369,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
             auto weight_names = get_weight_names(cgraph);
             ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, weight_names,
                                                           is_static, r_ctx->stateful, model_is_splitted);
+            ggml_decoder->device = device;
             const std::string model_cache_dir = ggml_openvino_model_cache_dir();
             const std::string exact_key = cache_enabled ? compiled_graph_key(cgraph, *ggml_decoder, device) : "";
             uint64_t model_fp = 0;
@@ -1445,7 +1449,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                     const int64_t import_start = ggml_time_us();
                     try {
                         ov::CompiledModel cm;
-                        auto remote_context = ggml_openvino_get_remote_context();
+                        auto remote_context = ggml_openvino_get_remote_context(device);
                         if (remote_context.has_value()) {
                             cm = core.import_model(blob_in, remote_context.value(), mc_config);
                         } else {
@@ -1523,6 +1527,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
                 ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static,
                                                                r_ctx->stateful, model_is_splitted);
+                ggml_decoder->device = device;
                 decoder_end_time = ggml_time_us();
 
                 auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
@@ -1541,7 +1546,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                 // the resulting CompiledModel can be exported and later re-imported.
                 const ov::AnyMap & compile_config = model_cache_dir.empty() ? config : mc_config;
                 ov::CompiledModel compiled_model;
-                auto remote_context = ggml_openvino_get_remote_context();
+                auto remote_context = ggml_openvino_get_remote_context(device);
                 if (remote_context.has_value()) {
                     compiled_model = core.compile_model(model, remote_context.value(), compile_config);
                 } else {
@@ -1702,7 +1707,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                 const auto shape = GgmlOvDecoder::get_shape(ggml_tensor);
                 if (!scratch || scratch.get_element_type() != type || scratch.get_shape() != shape) {
                     if (ggml_openvino_is_gpu() && ggml_nbytes(ggml_tensor) > 0) {
-                        auto context = ggml_openvino_get_remote_context()->as<ov::intel_gpu::ocl::ClContext>();
+                        auto context = ggml_openvino_get_remote_context(device)->as<ov::intel_gpu::ocl::ClContext>();
                         scratch = context.create_usm_device_tensor(type, shape);
                     } else {
                         scratch = ov::Tensor(type, shape);
@@ -2050,7 +2055,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
 
     // Normally NPU, but honors GGML_OPENVINO_DEVICE so GGML_OPENVINO_FORCE_STATIC can run the
     // static-shape path on CPU/GPU to isolate translation bugs from NPUW/NPU-driver issues.
-    static std::string device = ggml_openvino_get_device_name();
+    const auto & device = r_ctx->device;
     static auto is_static = true;
     static auto stateful = false;
 
@@ -2207,6 +2212,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         auto weight_names = get_weight_names(cgraph);
         auto local_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, weight_names, is_static,
                                                              stateful, false, is_prefill, prefill_chunk_size);
+        local_decoder->device = device;
         const std::string shared_key =
             cache_enabled ? compiled_graph_key(cgraph, *local_decoder, device, prefill_chunk_size) : "";
         auto shared_it = shared_cache->graphs.find(shared_key);
@@ -2427,6 +2433,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 no_kv_cache ? ggml_decoder_prefill :
                               std::make_shared<GgmlOvDecoder>(cgraph, m_params, decode_c_params, model_weights,
                                                               is_static, stateful, false, false, prefill_chunk_size);
+            ggml_decoder_prefill->device = device;
+            ggml_decoder_decode->device = device;
             decoder_end_time = ggml_time_us();
 
             const bool dump_ir = ggml_openvino_getenv_int("GGML_OPENVINO_DUMP_IR");
@@ -2660,6 +2668,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         }
         auto window_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, window_c_params, model_weights,
                                                               is_static, stateful, false, false, prefill_chunk_size);
+        window_decoder->device = device;
         static_build_args args{&core,  device,       false, 0, model_cache_dir, cgraph, graph.self_contained,
                                skip_weights, graph.weightless_bank, {}};
         ov::CompiledModel compiled;

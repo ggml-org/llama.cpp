@@ -7,6 +7,7 @@
 #include <CL/cl.h>
 
 #include <cstdlib>
+#include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/runtime/remote_context.hpp>
@@ -22,14 +23,14 @@ enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q4_0_64, Q8_0_C, Q8_0
 
 ov::Core & ov_singleton_core();
 
-// Get the remote context for the current device (returns empty optional for CPU)
-std::optional<ov::RemoteContext> ggml_openvino_get_remote_context();
+// Get the remote context for the device (returns empty optional for CPU)
+std::optional<ov::RemoteContext> ggml_openvino_get_remote_context(const std::string & device);
 
 // Get the compile config for the current device
 const ov::AnyMap & ggml_openvino_get_compile_config();
 
-// Get the OpenCL command queue for GPU operations (returns nullptr for CPU/NPU)
-cl_command_queue ggml_openvino_get_cl_queue();
+// Get the OpenCL command queue of the device for GPU operations (returns nullptr for CPU/NPU)
+cl_command_queue ggml_openvino_get_cl_queue(const std::string & device);
 
 // Intel USM extension function type
 typedef cl_int(CL_API_CALL * clEnqueueMemFillINTEL_fn)(cl_command_queue queue,
@@ -61,16 +62,21 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL();
 // =====================================================
 // Initialized once during backend init from GGML_OPENVINO_DEVICE env var
 
+struct ggml_openvino_gpu_context {
+    ov::RemoteContext remote_context;
+    cl_command_queue cl_queue = nullptr;
+    size_t max_alloc_size = SIZE_MAX;
+};
+
 struct ggml_openvino_device_config {
     std::string device_name = "CPU";
     std::vector<std::string> available_devices;
+    std::vector<std::string> selected_devices;
     bool is_npu = false;
     bool initialized = false;
-    std::optional<ov::RemoteContext> remote_context;
-    size_t max_alloc_size = SIZE_MAX;
+    std::map<std::string, ggml_openvino_gpu_context> gpu_contexts;
     ov::AnyMap compile_config;
     std::unordered_map<std::string, std::string> environment_variables;
-    cl_command_queue cl_queue = nullptr;
     clEnqueueMemFillINTEL_fn cl_mem_fill_fn = nullptr;
     clEnqueueMemcpyINTEL_fn cl_mem_cpy_fn = nullptr;
 
@@ -88,7 +94,10 @@ void ggml_openvino_init_device_config();
 const std::string & ggml_openvino_get_device_name();
 
 // Get all available physical OpenVINO devices
-std::vector<std::string> ggml_openvino_get_available_devices();
+const std::vector<std::string> & ggml_openvino_get_available_devices();
+
+// Check if the device is in GGML_OPENVINO_DEVICE
+bool ggml_openvino_is_selected_device(const std::string & device);
 
 // Human-readable device name, e.g. "Intel(R) AI Boost (NPU 4000)"; the device id if unavailable
 std::string ggml_openvino_get_device_description(const std::string & device_name);
@@ -216,7 +225,7 @@ bool ggml_openvino_gdn_decompose_enabled();
 int ggml_openvino_gdn_decompose_chunk();
 
 // Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
-size_t ggml_openvino_max_alloc_size();
+size_t ggml_openvino_max_alloc_size(const std::string & device);
 
 // Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only).
 // register: record a host weight buffer (idempotent per data pointer).
@@ -314,7 +323,9 @@ struct ggml_openvino_extracted_layout {
 // Calculate the buffer layout for extracted quantized data
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor, bool use_bias = false);
 
-ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor,
+                                                               bool is_remote,
+                                                               const std::string & device);
 
 // Check if a tensor's buffer uses remote (device) memory (e.g. GPU USM)
 bool ggml_openvino_buffer_is_remote(const ggml_tensor * tensor);

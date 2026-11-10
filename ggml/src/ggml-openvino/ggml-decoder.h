@@ -439,6 +439,9 @@ public:
     std::map<std::string, ov::Tensor> runtime_input_tensors;
     std::map<std::string, ov::Tensor> runtime_output_scratch;
 
+    // OpenVINO device that runs the graph, e.g. GPU.1
+    std::string device;
+
     bool m_is_static = false;
     bool m_is_stateful = false;
     bool m_is_prefill = false;

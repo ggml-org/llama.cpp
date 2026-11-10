@@ -18,6 +18,7 @@
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <optional>
+#include <sstream>
 
 ov::Core & ov_singleton_core() {
     static ov::Core core;
@@ -196,7 +197,21 @@ void ggml_openvino_device_config::init() {
     }
 
     available_devices = ov_enumerate_devices();
-    device_name = resolve_openvino_device_name(available_devices, ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE"));
+    if (const char * requested = ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE")) {
+        std::stringstream ss(requested);
+        std::string name;
+        while (std::getline(ss, name, ',')) {
+            selected_devices.push_back(resolve_openvino_device_name(available_devices, name.c_str()));
+        }
+        for (const auto & selected : selected_devices) {
+            if (selected_devices.size() > 1 && !has_prefix(selected, "GPU")) {
+                GGML_ABORT("GGML OpenVINO Backend: GGML_OPENVINO_DEVICE=%s: only GPUs can be combined", requested);
+            }
+        }
+    } else {
+        selected_devices.push_back(resolve_openvino_device_name(available_devices, nullptr));
+    }
+    device_name = selected_devices.front();
     is_npu = has_prefix(device_name, "NPU");
 
     ggml_openvino_model_cache_init();
@@ -213,71 +228,76 @@ void ggml_openvino_device_config::init() {
         compile_config.insert(ov::enable_profiling(true));
     }
 
-    // Initialize remote context with queue sharing for GPU
-    if (has_prefix(device_name, "GPU")) {
-        // Use the OpenCL context OpenVINO created for this device, so GPU.N gets its own device
-        cl_context cl_ctx;
-        try {
-            auto ov_ctx = ov_singleton_core().get_default_context(device_name).as<ov::intel_gpu::ocl::ClContext>();
-            cl_ctx = ov_ctx.get();
-        } catch (const std::exception & e) {
-            // The consumers of the remote context have no host fallback, and OpenVINO
-            // already reported the device as present.
-            GGML_ABORT("ggml-openvino: failed to get the OpenCL context for %s: %s", device_name.c_str(), e.what());
+    for (const auto & name : selected_devices) {
+        // Initialize remote context with queue sharing for GPU
+        if (has_prefix(name, "GPU")) {
+            auto & gpu = gpu_contexts[name];
+            // Use the OpenCL context OpenVINO created for this device, so GPU.N gets its own device
+            cl_context cl_ctx;
+            try {
+                auto ov_ctx = ov_singleton_core().get_default_context(name).as<ov::intel_gpu::ocl::ClContext>();
+                cl_ctx = ov_ctx.get();
+            } catch (const std::exception & e) {
+                // The consumers of the remote context have no host fallback, and OpenVINO
+                // already reported the device as present.
+                GGML_ABORT("ggml-openvino: failed to get the OpenCL context for %s: %s", name.c_str(), e.what());
+            }
+
+            cl_int err;
+            cl_device_id cl_device;
+            err = clGetContextInfo(cl_ctx, CL_CONTEXT_DEVICES, sizeof(cl_device), &cl_device, nullptr);
+            if (err != CL_SUCCESS) {
+                GGML_ABORT("ggml-openvino: failed to get the OpenCL device for %s: %d", name.c_str(), err);
+            }
+
+            cl_platform_id cl_platform;
+            err = clGetDeviceInfo(cl_device, CL_DEVICE_PLATFORM, sizeof(cl_platform), &cl_platform, nullptr);
+            if (err != CL_SUCCESS) {
+                GGML_ABORT("ggml-openvino: failed to get the OpenCL platform for %s: %d", name.c_str(), err);
+            }
+
+            cl_mem_fill_fn = (clEnqueueMemFillINTEL_fn) clGetExtensionFunctionAddressForPlatform(
+                cl_platform, "clEnqueueMemFillINTEL");
+            cl_mem_cpy_fn =
+                (clEnqueueMemcpyINTEL_fn) clGetExtensionFunctionAddressForPlatform(cl_platform, "clEnqueueMemcpyINTEL");
+
+            cl_ulong device_max_alloc = 0;
+            err = clGetDeviceInfo(cl_device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(device_max_alloc), &device_max_alloc,
+                                  nullptr);
+            if (err == CL_SUCCESS) {
+                gpu.max_alloc_size = device_max_alloc;
+            } else {
+                // not fatal, ggml then allocates one buffer
+                GGML_LOG_WARN("Failed to get OpenCL max allocation size: %d\n", err);
+            }
+
+            const cl_queue_properties profiling_properties[] = {
+                CL_QUEUE_PROPERTIES,
+                CL_QUEUE_PROFILING_ENABLE,
+                0,
+            };
+            const cl_queue_properties * queue_properties =
+                ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? profiling_properties : nullptr;
+            gpu.cl_queue = clCreateCommandQueueWithProperties(cl_ctx, cl_device, queue_properties, &err);
+            if (err != CL_SUCCESS) {
+                GGML_ABORT("ggml-openvino: failed to create the OpenCL queue for %s: %d", name.c_str(), err);
+            }
+
+            // Create OpenVINO remote context with queue sharing
+            gpu.remote_context = ov::intel_gpu::ocl::ClContext(ov_singleton_core(), gpu.cl_queue);
+        } else if (has_prefix(name, "NPU")) {
+            // remote tensor is not used for NPU yet
+            // remote_context = ov_singleton_core().get_default_context(name);
         }
-
-        cl_int err;
-        cl_device_id cl_device;
-        err = clGetContextInfo(cl_ctx, CL_CONTEXT_DEVICES, sizeof(cl_device), &cl_device, nullptr);
-        if (err != CL_SUCCESS) {
-            GGML_ABORT("ggml-openvino: failed to get the OpenCL device for %s: %d", device_name.c_str(), err);
-        }
-
-        cl_platform_id cl_platform;
-        err = clGetDeviceInfo(cl_device, CL_DEVICE_PLATFORM, sizeof(cl_platform), &cl_platform, nullptr);
-        if (err != CL_SUCCESS) {
-            GGML_ABORT("ggml-openvino: failed to get the OpenCL platform for %s: %d", device_name.c_str(), err);
-        }
-
-        cl_mem_fill_fn =
-            (clEnqueueMemFillINTEL_fn) clGetExtensionFunctionAddressForPlatform(cl_platform, "clEnqueueMemFillINTEL");
-        cl_mem_cpy_fn =
-            (clEnqueueMemcpyINTEL_fn) clGetExtensionFunctionAddressForPlatform(cl_platform, "clEnqueueMemcpyINTEL");
-
-        cl_ulong device_max_alloc = 0;
-        err = clGetDeviceInfo(cl_device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(device_max_alloc), &device_max_alloc,
-                              nullptr);
-        if (err == CL_SUCCESS) {
-            max_alloc_size = device_max_alloc;
-        } else {
-            // not fatal, ggml then allocates one buffer
-            GGML_LOG_WARN("Failed to get OpenCL max allocation size: %d\n", err);
-        }
-
-        const cl_queue_properties profiling_properties[] = {
-            CL_QUEUE_PROPERTIES,
-            CL_QUEUE_PROFILING_ENABLE,
-            0,
-        };
-        const cl_queue_properties * queue_properties =
-            ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? profiling_properties : nullptr;
-        cl_queue = clCreateCommandQueueWithProperties(cl_ctx, cl_device, queue_properties, &err);
-        if (err != CL_SUCCESS) {
-            GGML_ABORT("ggml-openvino: failed to create the OpenCL queue for %s: %d", device_name.c_str(), err);
-        }
-
-        // Create OpenVINO remote context with queue sharing
-        remote_context = ov::intel_gpu::ocl::ClContext(ov_singleton_core(), cl_queue);
-    } else if (has_prefix(device_name, "NPU")) {
-        // remote tensor is not used for NPU yet
-        // remote_context = ov_singleton_core().get_default_context(device_name);
     }
 }
 
 ggml_openvino_device_config::~ggml_openvino_device_config() {
-    if (cl_queue != nullptr) {
-        clReleaseCommandQueue(cl_queue);
-        cl_queue = nullptr;
+    for (auto & [name, gpu] : gpu_contexts) {
+        if (gpu.cl_queue != nullptr) {
+            clReleaseCommandQueue(gpu.cl_queue);
+            gpu.cl_queue = nullptr;
+        }
     }
 }
 
@@ -297,10 +317,15 @@ const std::string & ggml_openvino_get_device_name() {
     return ggml_openvino_get_device_config().device_name;
 }
 
-std::vector<std::string> ggml_openvino_get_available_devices() {
+const std::vector<std::string> & ggml_openvino_get_available_devices() {
     auto & config = ggml_openvino_get_device_config();
     config.init();
     return config.available_devices;
+}
+
+bool ggml_openvino_is_selected_device(const std::string & device) {
+    const auto & selected = ggml_openvino_get_device_config().selected_devices;
+    return std::find(selected.begin(), selected.end(), device) != selected.end();
 }
 
 // Get the value of a GGML_OPENVINO_* env var as a string. Returns
@@ -701,13 +726,20 @@ bool ggml_openvino_shape_from_mask_enabled() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK") == 0;
 }
 
-size_t ggml_openvino_max_alloc_size() {
-    return ggml_openvino_get_device_config().max_alloc_size;
+size_t ggml_openvino_max_alloc_size(const std::string & device) {
+    const auto & gpu_contexts = ggml_openvino_get_device_config().gpu_contexts;
+    auto it = gpu_contexts.find(device);
+    return it == gpu_contexts.end() ? SIZE_MAX : it->second.max_alloc_size;
 }
 
-// Get the remote context for the current device (returns empty optional for CPU)
-std::optional<ov::RemoteContext> ggml_openvino_get_remote_context() {
-    return ggml_openvino_get_device_config().remote_context;
+// Get the remote context for the device (returns empty optional for CPU)
+std::optional<ov::RemoteContext> ggml_openvino_get_remote_context(const std::string & device) {
+    const auto & gpu_contexts = ggml_openvino_get_device_config().gpu_contexts;
+    auto it = gpu_contexts.find(device);
+    if (it == gpu_contexts.end()) {
+        return std::nullopt;
+    }
+    return it->second.remote_context;
 }
 
 // Get the compile config for the current device
@@ -715,9 +747,11 @@ const ov::AnyMap & ggml_openvino_get_compile_config() {
     return ggml_openvino_get_device_config().compile_config;
 }
 
-// Get the OpenCL command queue for GPU operations
-cl_command_queue ggml_openvino_get_cl_queue() {
-    return ggml_openvino_get_device_config().cl_queue;
+// Get the OpenCL command queue of the device for GPU operations
+cl_command_queue ggml_openvino_get_cl_queue(const std::string & device) {
+    const auto & gpu_contexts = ggml_openvino_get_device_config().gpu_contexts;
+    auto it = gpu_contexts.find(device);
+    return it == gpu_contexts.end() ? nullptr : it->second.cl_queue;
 }
 
 // Get the clEnqueueMemFillINTEL function pointer
@@ -1029,7 +1063,9 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     return layout;
 }
 
-ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote) {
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor,
+                                                               bool is_remote,
+                                                               const std::string & device) {
     ov::Shape shape;
     for (int i = GGML_MAX_DIMS - 1; i >= 0; --i) {
         shape.push_back(static_cast<size_t>(tensor->ne[i]));
@@ -1057,7 +1093,7 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
         return nullptr;
     }
 
-    auto remote_context = ggml_openvino_get_remote_context();
+    auto remote_context = ggml_openvino_get_remote_context(device);
 
     std::shared_ptr<ov::Tensor> ov_tensor;
     if (is_remote) {
