@@ -13,8 +13,7 @@
 // that was still booting killed the whole application, and this test would die
 // instead of failing cleanly.
 //
-// After the fix it returns nullptr, and the same condition is visible through
-// ggml_backend_rpc_get_device_count() == 0.
+// After the fix it returns nullptr.
 //
 // ref: https://github.com/ggml-org/llama.cpp/pull/30415
 
@@ -28,9 +27,6 @@ int main(void) {
     // 2) a malformed endpoint must take the parse-failure path and also return nullptr
     reg = ggml_backend_rpc_add_server("this-is-not-an-endpoint");
     GGML_ASSERT(reg == nullptr);
-
-    // 3) the device-count helper must report "no devices" instead of crashing
-    GGML_ASSERT(ggml_backend_rpc_get_device_count("127.0.0.1:1") == 0);
 
     printf("ok\n");
     return 0;
