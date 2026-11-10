@@ -11160,11 +11160,12 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     // per-seq stride in floats (seq s starts at state + s * seq_stride)
     const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
 
-    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+    const int64_t per_thread = 2 * S_v + (K > 1 ? S_v * S_v : 0);
     const int ith = params->ith;
 
     float * delta       = (float *)params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
-    float * state_work  = K > 1 ? (delta + S_v) : nullptr;
+    float * expv        = delta + S_v;
+    float * state_work  = K > 1 ? (delta + 2 * S_v) : nullptr;
 
     // output layout: [attn_scores | new_states]
     // attn_scores: S_v * H * n_tokens * n_seqs    floats
@@ -11202,10 +11203,19 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             ? state_work
             : state_out_base + (iv3 * H + iv1) * S_v * S_v;
 
-        // copy input state into the working buffer and operate in-place
+        // The copy of the input state into the working buffer is fused into
+        // the (fused) first update pass below, except for the generic path.
         // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
         const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
-        memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+#if defined(__AVX2__) && defined(__FMA__)
+        const bool fast_kda = (S_v % 8 == 0);
+#else
+        const bool fast_kda = false;
+#endif
+        if (!fast_kda) {
+            memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+        }
 
         // attn output pointer for first token of this (head, seq)
         float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
@@ -11221,36 +11231,103 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             // state is stored transposed: s_out[j*S_v + i] = S[i][j]
             // so row j of s_out = column j of S (contiguous access)
 
+#if defined(__AVX2__) && defined(__FMA__)
+            if (fast_kda) {
+                // fused AVX2 path: 2 state passes instead of 4 (see below).
+                if (kda) {
+                    // precompute exp(g)
+                    for (int64_t i = 0; i < S_v; ++i) {
+                        expv[i] = expf(g_d[i]);
+                    }
+                }
+
+                // pass 1: scale rows from the input state into s_out and
+                // accumulate dots against k. The state copy is fused: for t=0
+                // rows are read from s_in, afterwards from s_out.
+                const float * src_state = (t == 0) ? s_in : s_out;
+                const __m256 eg = kda ? _mm256_setzero_ps() : _mm256_set1_ps(expf(g_d[0]));
+                for (int64_t j0 = 0; j0 < S_v; j0 += 4) {
+                    __m256 acc[4] = { _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps() };
+                    for (int64_t ib = 0; ib < S_v; ib += 8) {
+                        __m256 ek = _mm256_loadu_ps(k_d + ib);
+                        __m256 ee = kda ? _mm256_loadu_ps(expv + ib) : eg;
+                        for (int r = 0; r < 4; ++r) {
+                            float * row_dst = &s_out[(j0 + r) * S_v + ib];
+                            __m256 v = _mm256_loadu_ps(&src_state[(j0 + r) * S_v + ib]);
+                            v = _mm256_mul_ps(v, ee);
+                            _mm256_storeu_ps(row_dst, v);
+                            acc[r] = _mm256_fmadd_ps(v, ek, acc[r]);
+                        }
+                    }
+                    for (int r = 0; r < 4; ++r) {
+                        __m256 a = acc[r];
+                        a = _mm256_add_ps(a, _mm256_permute2f128_ps(a, a, 1));
+                        a = _mm256_hadd_ps(a, a);
+                        a = _mm256_hadd_ps(a, a);
+                        delta[j0 + r] = (v_d[j0 + r] - _mm_cvtss_f32(_mm256_castps256_ps128(a))) * beta_val;
+                    }
+                }
+
+                // pass 2: outer-product update and dot against q.
+                for (int64_t j0 = 0; j0 < S_v; j0 += 4) {
+                    __m256 acc[4] = { _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps(), _mm256_setzero_ps() };
+                    for (int64_t ib = 0; ib < S_v; ib += 8) {
+                        __m256 fk = _mm256_loadu_ps(k_d + ib);
+                        __m256 fq = _mm256_loadu_ps(q_d + ib);
+                        for (int r = 0; r < 4; ++r) {
+                            float * row_ptr = &s_out[(j0 + r) * S_v + ib];
+                            __m256 v = _mm256_loadu_ps(row_ptr);
+                            v = _mm256_fmadd_ps(_mm256_set1_ps(delta[j0 + r]), fk, v);
+                            _mm256_storeu_ps(row_ptr, v);
+                            acc[r] = _mm256_fmadd_ps(v, fq, acc[r]);
+                        }
+                    }
+                    for (int r = 0; r < 4; ++r) {
+                        __m256 a = acc[r];
+                        a = _mm256_add_ps(a, _mm256_permute2f128_ps(a, a, 1));
+                        a = _mm256_hadd_ps(a, a);
+                        a = _mm256_hadd_ps(a, a);
+                        attn_data[j0 + r] = _mm_cvtss_f32(_mm256_castps256_ps128(a)) * scale;
+                    }
+                }
+            } else
+#endif
             if (kda) {
-                // precompute exp(g) into delta scratch (reused below)
+                // generic fallback (same as before)
                 for (int64_t i = 0; i < S_v; ++i) {
                     delta[i] = expf(g_d[i]);
                 }
-                // S[i][:] *= exp(g[i]) => for each row j of M: M[j][i] *= exp(g[i])
                 for (int64_t j = 0; j < S_v; ++j) {
                     ggml_vec_mul_f32(S_v, &s_out[j * S_v], &s_out[j * S_v], delta);
                 }
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
+                    delta[j] = (v_d[j] - sum) * beta_val;
+                }
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
+                }
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
+                    attn_data[j] = sum * scale;
+                }
             } else {
                 ggml_vec_scale_f32(S_v * S_v, s_out, expf(g_d[0]));
-            }
-
-            // delta[j] = sum_i S[i][j] * k[i] = dot(row j of M, k)
-            for (int64_t j = 0; j < S_v; ++j) {
-                float sum = 0.0f;
-                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
-                delta[j] = (v_d[j] - sum) * beta_val;
-            }
-
-            // outer product: S[i][j] += k[i] * delta[j] => M[j][i] += delta[j] * k[i]
-            for (int64_t j = 0; j < S_v; ++j) {
-                ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
-            }
-
-            // attn_out[j] = sum_i S[i][j] * q[i] = dot(row j of M, q)
-            for (int64_t j = 0; j < S_v; ++j) {
-                float sum = 0.0f;
-                ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
-                attn_data[j] = sum * scale;
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, k_d, 0, 1);
+                    delta[j] = (v_d[j] - sum) * beta_val;
+                }
+                for (int64_t j = 0; j < S_v; ++j) {
+                    ggml_vec_mad_f32(S_v, &s_out[j * S_v], k_d, delta[j]);
+                }
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float sum = 0.0f;
+                    ggml_vec_dot_f32(S_v, &sum, 0, &s_out[j * S_v], 0, q_d, 0, 1);
+                    attn_data[j] = sum * scale;
+                }
             }
 
             attn_data += S_v * H; // advance to next token
