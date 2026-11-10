@@ -233,11 +233,15 @@ static int64_t concat_view_first_col(const ggml_tensor * c, const ggml_tensor * 
     return col;
 }
 
+// SSM_CONV op param set by graph_optimize when the concat inputs are kept allocated until the ssm_conv
+static constexpr int SSM_CONV_PARAM_INPUTS_KEPT = GGML_MAX_OP_PARAMS / sizeof(int32_t) - 1;
+
 // concat -> ssm_conv fusion analysis: SSM_CONV reads the two concat inputs directly and CONCAT only
 // writes the trailing columns that are read back through views (the conv state update). Returns the
 // single ssm_conv consumer (with its graph index) and the first column any view reads back. Fails if
 // the concat has any other consumer (or a second ssm_conv) that needs the full concat output.
-static bool ssm_conv_concat_fusable(const ggml_cgraph * graph, int ci,
+// With need_kept, also fails unless graph_optimize kept the concat inputs allocated for the ssm_conv.
+static bool ssm_conv_concat_fusable(const ggml_cgraph * graph, int ci, bool need_kept,
                                     ggml_tensor ** ssm_out, int * ssm_idx_out, int64_t * col0_out) {
     ggml_tensor * c = graph->nodes[ci];
     if (!is_transposed_concat_f32(c) || c->src[0]->ne[0] != 3) {
@@ -266,8 +270,7 @@ static bool ssm_conv_concat_fusable(const ggml_cgraph * graph, int ci,
             }
             if (s == c) {
                 if (t->op == GGML_OP_SSM_CONV && j == 0 && t->src[1] && t->src[1]->ne[0] == 4 &&
-                    t->src[2] == c->src[1] && t->src[3] == c->src[0]) {
-                    // the graph keeps the concat inputs alive until this node (build_ssm_conv)
+                    (!need_kept || ggml_get_op_params_i32(t, SSM_CONV_PARAM_INPUTS_KEPT) == 1)) {
                     if (ssm != nullptr) {
                         return false;  // more than one ssm_conv consumer
                     }
@@ -355,7 +358,7 @@ static bool try_fuse_node(const ggml_cgraph * graph, int & i, std::vector<spacem
         ggml_tensor * ssm     = nullptr;
         int           ssm_idx = -1;
         int64_t       col0    = 0;
-        if (ssm_conv_concat_fusable(graph, i, &ssm, &ssm_idx, &col0)) {
+        if (ssm_conv_concat_fusable(graph, i, true, &ssm, &ssm_idx, &col0)) {
             spacemit_opnode cat(n, {}, SPACEMIT_OP_CONCAT_STATE);
             cat.kernel_params[0] = (int32_t) col0;
             nodes.push_back(std::move(cat));
@@ -686,6 +689,33 @@ static void ggml_backend_spacemit_synchronize(ggml_backend_t backend) {
     GGML_UNUSED(backend);
 }
 
+// Pattern 2 (CONCAT + SSM_CONV) makes the ssm_conv read the concat inputs, so they must stay allocated until
+// the ssm_conv has run. The fusion is only taken for ssm_convs marked here, i.e. graphs allocated by the scheduler.
+static void ggml_backend_spacemit_graph_optimize(ggml_backend_t backend, ggml_cgraph * graph,
+                                                 ggml_backend_graph_optimize_params * params) {
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        if (graph->nodes[i]->op == GGML_OP_SSM_CONV) {
+            ggml_set_op_params_i32(graph->nodes[i], SSM_CONV_PARAM_INPUTS_KEPT, 0);
+        }
+    }
+    if (params == nullptr || params->add_alloc_dep == nullptr) {
+        return;
+    }
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        ggml_tensor * c = graph->nodes[i];
+        ggml_tensor * ssm     = nullptr;
+        int           ssm_idx = -1;
+        int64_t       col0    = 0;
+        if (c->op == GGML_OP_CONCAT && ssm_conv_concat_fusable(graph, i, false, &ssm, &ssm_idx, &col0)) {
+            params->add_alloc_dep(params->user_data, c->src[0], ssm);
+            params->add_alloc_dep(params->user_data, c->src[1], ssm);
+            ggml_set_op_params_i32(ssm, SSM_CONV_PARAM_INPUTS_KEPT, 1);
+        }
+    }
+
+    GGML_UNUSED(backend);
+}
+
 static struct ggml_backend_i spacemit_backend_i = {
     /* .get_name                = */ ggml_backend_spacemit_name,
     /* .free                    = */ ggml_backend_spacemit_free,
@@ -702,7 +732,7 @@ static struct ggml_backend_i spacemit_backend_i = {
     /* .graph_compute           = */ ggml_backend_spacemit_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
-    /* .graph_optimize          = */ NULL,
+    /* .graph_optimize          = */ ggml_backend_spacemit_graph_optimize,
 };
 
 static ggml_guid_t ggml_backend_spacemit_guid() {

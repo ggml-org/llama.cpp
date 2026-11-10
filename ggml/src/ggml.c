@@ -5699,12 +5699,6 @@ struct ggml_tensor * ggml_ssm_conv(
     result->op     = GGML_OP_SSM_CONV;
     result->src[0] = sx;
     result->src[1] = c;
-#ifdef GGML_USE_SPACEMIT
-    if (sx->op == GGML_OP_CONCAT) {
-        result->src[2] = sx->src[1];
-        result->src[3] = sx->src[0];
-    }
-#endif
 
     return result;
 }
