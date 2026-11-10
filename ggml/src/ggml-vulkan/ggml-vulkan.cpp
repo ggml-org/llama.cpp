@@ -2483,20 +2483,25 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             return;
         }
 
-        // Four 16x16 subgroup tiles cover a 32x32 output tile.
         constexpr uint32_t bm = 32, bn = 32, bk = 32;
-        constexpr uint32_t wm = 16, wn = 16;
-        constexpr uint32_t subgroup_count = (bm / wm) * (bn / wn);
         const uint32_t tm = device->coopmat_m, tn = device->coopmat_n, tk = device->coopmat_k;
+
+        const uint32_t subgroup_size = std::max(mul_mat_subgroup_size, tm);
+
+        const uint32_t wm = subgroup_size > 32 ? 32 : 16;
+        const uint32_t wn = subgroup_size > 64 ? 32 : 16;
+        const uint32_t subgroup_count = (bm / wm) * (bn / wn);
+        const uint32_t workgroup_size = subgroup_count * subgroup_size;
+
+        // Two-element loads need at least BK/2 invocations; eight-element loads must fit both tiles.
+        if (workgroup_size < bk / 2 || workgroup_size > std::min(bm, bn) * bk / 8) {
+            return;
+        }
 
         // Native matrices must tile each subgroup's output region and the K tile.
         if (tm == 0 || tn == 0 || tk == 0 || wm % tm != 0 || wn % tn != 0 || bk % tk != 0) {
             return;
         }
-
-        // The two-element input loads need at least BK/2 invocations per workgroup.
-        const uint32_t min_subgroup_size = CEIL_DIV(bk / 2, subgroup_count);
-        const uint32_t subgroup_size = std::max(mul_mat_subgroup_size, std::max(tm, min_subgroup_size));
         const bool subgroup_size_supported = device->subgroup_size_control ?
             subgroup_size >= device->subgroup_min_size && subgroup_size <= device->subgroup_max_size :
             subgroup_size == device->subgroup_size;
@@ -2510,7 +2515,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             return;
         }
 
-        const std::vector<uint32_t> wt = {subgroup_count * subgroup_size, bm, bn, bk, wm, wn, 2, tm, tn, tk, subgroup_size};
+        const std::vector<uint32_t> wt = {workgroup_size, bm, bn, bk, wm, wn, 2, tm, tn, tk, subgroup_size};
         if (ggml_vk_matmul_shmem_support(device, wt, false, type)) {
             configs.push_back({wt, {bm, bn, 1}, bk, bn});
         }
