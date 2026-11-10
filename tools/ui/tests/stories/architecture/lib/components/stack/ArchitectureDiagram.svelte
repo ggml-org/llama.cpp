@@ -9,7 +9,7 @@
 </script>
 
 <Figure
-	label="Architecture: ui/lib (@ggml/llama-ui), including shared model UI, is imported by the llama.app website (llama-pages) and by apps in ui/apps: Llama Chat and other apps, plus platform examples and third-party apps. Llama Chat ships to chat.llama.app, npx llama-chat, and the build bundled in llama-server. The macOS and Windows apps ship the llama binary, whose llama serve command is llama-server with this UI built in. Apps reach llama-server by URL or through Llama Connect, paired by code or QR. The library is documented at ui.llama.app. Brand and design language is shared across apps, docs, web and promotional content."
+	label="Architecture: ui/lib (@ggml/llama-ui), including shared model UI, is imported by the llama.app website (llama-pages) and by apps in ui/apps: Llama Chat and other apps, plus platform examples and third-party apps. Llama Chat ships to chat.llama.app, npx llama-chat, and the build bundled in llama-server. The macOS and Windows apps ship the llama binary, whose llama serve command is llama-server with this UI built in. Apps reach llama-server by URL or through Llama Connect, paired by code or QR. The library is documented at ui.llama.app, and the brand alone at brand.llama.app. Brand and design language is shared across apps, docs, web and promotional content."
 	minWidth={900}
 >
 	<svg class="arch" viewBox="0 0 1114 800" xmlns="http://www.w3.org/2000/svg">

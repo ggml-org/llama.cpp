@@ -79,6 +79,15 @@ The library draws the parts and handles interaction. The app owns the state and 
 </Card>
 </Cards>
 
+## Where the docs live
+
+Two hosted Storybooks, one for each audience:
+
+- **ui.llama.app** documents the `@ggml/llama-ui` package for the people building on it: components, tokens, patterns and usage, built from `ui/lib` and versioned with llama.cpp's releases.
+- **brand.llama.app** is the brand alone: the philosophy, the logo, the type, the colours and communications, built from `ggml-org/llama-brand`. It pulls in ui.llama.app through Storybook's composition, so one sidebar shows both, while the package's docs stay lean.
+
+Until the UI moves to `ui/`, both live in this one Storybook in `tools/ui`.
+
 ## Llama Harness
 
 The agentic loop moves out of Chat into its own package, `@ggml/llama-harness`: headless TypeScript, no UI and no DOM. It needs an OpenAI-compatible endpoint, not llama-server specifically; model loading, `/props` and server tools are capabilities it detects and works without. The same loop runs in the browser, in Node and in the native apps.

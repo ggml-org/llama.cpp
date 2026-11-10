@@ -1,4 +1,4 @@
-<!-- Architecture diagram, right column: the key, the inference backend and the docs site -->
+<!-- Architecture diagram, right column: the key, the inference backend and the two docs sites -->
 <svelte:options namespace="svg" />
 
 <text class="lbl" x="860" y="40">KEY</text>
@@ -34,6 +34,6 @@
 <text class="s" x="876" y="568">Storybook for the library:</text>
 <text class="s" x="876" y="586">every component and state,</text>
 <text class="s" x="876" y="604">usage docs, visual tests.</text>
-<text class="s" x="876" y="628">Agents can prototype UI</text>
-<text class="s" x="876" y="646">variants and screenshot them.</text>
+<text class="t" x="876" y="634">brand.llama.app</text>
+<text class="s" x="876" y="654">The brand alone, from llama-brand.</text>
 <path class="wire" d="M828,580 H857" marker-end="url(#stack-ah)" />
