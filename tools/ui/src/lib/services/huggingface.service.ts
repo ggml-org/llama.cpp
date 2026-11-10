@@ -29,6 +29,7 @@ import {
 	HF_GATED_TAG,
 	HF_GGUF_FILTER,
 	HF_GGUF_TAG,
+	HF_HTTP_NO_ACCESS_STATUSES,
 	HF_HTTP_NOT_FOUND,
 	HF_HTTP_PARTIAL_CONTENT,
 	HF_HTTP_SERVER_ERROR_MIN,
@@ -586,6 +587,15 @@ export class HuggingFaceService {
 			// anything but a partial response would stream the whole file, which can be gigabytes
 			if (response.status !== HF_HTTP_PARTIAL_CONTENT) {
 				void response.body?.cancel();
+
+				// a gated, private or missing file answers the same on every read: keep what the repo says
+				if (HF_HTTP_NO_ACCESS_STATUSES.includes(response.status)) {
+					const unknown: HfMmprojEncoders = { audio: false, vision: null };
+
+					HuggingFaceService.mmprojEncodersCache.set(modelId, unknown);
+
+					return unknown;
+				}
 
 				throw new Error(`Failed to read ${mmprojPath}: ${response.status}`);
 			}

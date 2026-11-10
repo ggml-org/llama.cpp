@@ -58,6 +58,8 @@ export const HF_RETRY_ATTEMPTS = 3;
 export const HF_RETRY_DELAY_MS = 1000;
 export const HF_HTTP_PARTIAL_CONTENT = 206;
 export const HF_HTTP_NOT_FOUND = 404;
+/** Unauthorized, forbidden, not found: a gated, private or missing file, which a retry won't change. */
+export const HF_HTTP_NO_ACCESS_STATUSES: readonly number[] = [401, 403, HF_HTTP_NOT_FOUND];
 export const HF_HTTP_SERVER_ERROR_MIN = 500;
 
 // Search limits

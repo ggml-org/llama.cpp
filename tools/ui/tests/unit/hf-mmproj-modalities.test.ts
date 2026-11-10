@@ -113,6 +113,23 @@ describe('HuggingFaceService mmproj modalities', () => {
 		});
 	});
 
+	it('keeps what the repo says for a gated mmproj, without reading it again', async () => {
+		const fetchMock = respond(new ArrayBuffer(0), 401);
+
+		expect(await HuggingFaceService.getMmprojEncoders('org/gated', 'mmproj.gguf')).toEqual({
+			audio: false,
+			vision: null
+		});
+		await HuggingFaceService.getMmprojEncoders('org/gated', 'mmproj.gguf');
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(HuggingFaceService.getModalities('org/gated', undefined, 'mmproj.gguf')).toEqual({
+			audio: false,
+			video: false,
+			vision: true
+		});
+	});
+
 	it('rejects a full response that ignored the range, and retries on the next call', async () => {
 		respond(mmprojHeader({ 'clip.has_audio_encoder': true }), 200);
 
