@@ -100,6 +100,10 @@
 		editor?.focus();
 	}
 
+	export function getCaretRect() {
+		return editor?.getCaretRect() ?? null;
+	}
+
 	/** Cursor offset in the markdown source. */
 	export function getCaretOffset(): number {
 		return editor?.getCaretOffset() ?? 0;

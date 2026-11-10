@@ -249,6 +249,11 @@
 		return view?.contentDOM;
 	}
 
+	/** Where the cursor is on screen, e.g. to place a popover by it. */
+	export function getCaretRect() {
+		return view?.coordsAtPos(view.state.selection.main.head) ?? null;
+	}
+
 	/** Cursor offset in the markdown source. */
 	export function getCaretOffset(): number {
 		return view?.state.selection.main.head ?? 0;

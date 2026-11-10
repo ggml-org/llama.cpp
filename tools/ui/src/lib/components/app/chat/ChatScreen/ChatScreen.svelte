@@ -355,7 +355,7 @@
 					? 'md:bottom-[calc(var(--chat-form-drop)+1rem)]'
 					: 'md:bottom-4',
 				!isFormMoving &&
-					'transition-[left,right,bottom] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] max-md:transition-none'
+					'transition-[left,right,bottom] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] max-md:transition-none motion-reduce:transition-none'
 			]}
 		>
 			<ChatScreenGreeting faded={uiStore.isComposerExpanded} isEmpty={isFormLifted} />

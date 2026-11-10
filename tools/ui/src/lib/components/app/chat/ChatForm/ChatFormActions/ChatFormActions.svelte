@@ -148,10 +148,6 @@
 		{/if}
 	</div>
 
-	{#if submitHint}
-		<span class="text-xs whitespace-nowrap text-muted-foreground max-md:hidden">{submitHint}</span>
-	{/if}
-
 	{#if isReasoning && !canSend}
 		<Button
 			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9"
@@ -192,6 +188,13 @@
 			{onMicClick}
 		/>
 	{:else}
+		<!-- only where the row has the room, and never on a phone, which has no such keys -->
+		{#if submitHint}
+			<span class="hidden text-xs whitespace-nowrap text-muted-foreground @xl:md:inline">
+				{submitHint}
+			</span>
+		{/if}
+
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}

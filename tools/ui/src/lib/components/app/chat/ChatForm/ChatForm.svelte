@@ -134,9 +134,10 @@
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
 	let micError = $state<string | null>(null);
 
-	// Invisible anchor at the form's top edge so the mention/WD popovers
-	// float above the box.
-	let mentionAnchor: HTMLDivElement | null = $state(null);
+	// Invisible anchor the pickers' popovers float above (or, short of room, below): the
+	// form's top edge, or in the expanded editor the line being written
+	let pickerAnchor: HTMLDivElement | null = $state(null);
+	let pickerAnchorBox = $state({ height: 1, top: 0 });
 
 	let cwd = $derived(
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
@@ -238,10 +239,32 @@
 		focusInput: () => inputRef?.focus(),
 		getActions: () => actionsEl,
 		getCard: () => cardEl,
+		// the conversation the message is for: its draft arrives without a remount
+		getResetKey: () => conversationsStore.activeConversation?.id,
 		getValue: () => value,
 		isEnabled: () => expandable
 	});
 	let isExpanded = $derived(expansion.isExpanded);
+	let isPickerOpen = $derived(
+		pickers.isCommandPickerOpen ||
+			pickers.isMentionPickerOpen ||
+			pickers.isPromptPickerOpen ||
+			pickers.isWorkingDirectoryPickerOpen
+	);
+
+	// before the popover is drawn, and again as the query is typed and the line moves
+	$effect.pre(() => {
+		if (!isPickerOpen) return;
+
+		void value;
+
+		const line = isExpanded ? inputRef?.getCaretRect() : null;
+		const formTop = pickerAnchor?.parentElement?.getBoundingClientRect().top ?? 0;
+
+		pickerAnchorBox = line
+			? { height: line.bottom - line.top, top: line.top - formTop }
+			: { height: 1, top: 0 };
+	});
 	// shown on hover (always on touch screens) while collapsed, always while expanded: on
 	// the phone sheet it keeps the collapsed card's place, below the status bar
 	let expandToggleClass = $derived(
@@ -572,39 +595,41 @@
 		onSubmit?.();
 	}}
 >
-	<ChatFormPickers
-		bind:this={pickersRef}
-		commandQuery={pickers.commandQuery}
-		commands={pickers.availableCommands}
-		isCommandPickerOpen={pickers.isCommandPickerOpen}
-		isMentionPickerOpen={pickers.isMentionPickerOpen}
-		isPromptPickerOpen={pickers.isPromptPickerOpen}
-		{mentionAnchor}
-		mentionQuery={pickers.mentionQuery}
-		onCommandPickerClose={pickers.handleCommandPickerClose}
-		onCommandSelect={pickers.handleCommandSelect}
-		onMentionOpened={() => inputRef?.focus()}
-		onMentionPickerClose={pickers.handleMentionPickerClose}
-		onMentionSelect={handleMentionSelect}
-		onPromptLoadComplete={handlePromptLoadComplete}
-		onPromptLoadError={handlePromptLoadError}
-		onPromptLoadStart={handlePromptLoadStart}
-		onPromptPickerClose={pickers.handlePromptPickerClose}
-		promptSearchQuery={pickers.promptSearchQuery}
-		scopePath={pickers.mentionScopePath}
-	/>
-
+	<!-- the pickers' own triggers fill this box, so all of them share the anchor -->
 	<div
-		bind:this={mentionAnchor}
-		aria-hidden="true"
-		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
-	></div>
+		bind:this={pickerAnchor}
+		style:height="{pickerAnchorBox.height}px"
+		style:top="{pickerAnchorBox.top}px"
+		class="pointer-events-none absolute right-0 left-0"
+	>
+		<ChatFormPickers
+			bind:this={pickersRef}
+			commandQuery={pickers.commandQuery}
+			commands={pickers.availableCommands}
+			isCommandPickerOpen={pickers.isCommandPickerOpen}
+			isMentionPickerOpen={pickers.isMentionPickerOpen}
+			isPromptPickerOpen={pickers.isPromptPickerOpen}
+			mentionAnchor={pickerAnchor}
+			mentionQuery={pickers.mentionQuery}
+			onCommandPickerClose={pickers.handleCommandPickerClose}
+			onCommandSelect={pickers.handleCommandSelect}
+			onMentionOpened={() => inputRef?.focus()}
+			onMentionPickerClose={pickers.handleMentionPickerClose}
+			onMentionSelect={handleMentionSelect}
+			onPromptLoadComplete={handlePromptLoadComplete}
+			onPromptLoadError={handlePromptLoadError}
+			onPromptLoadStart={handlePromptLoadStart}
+			onPromptPickerClose={pickers.handlePromptPickerClose}
+			promptSearchQuery={pickers.promptSearchQuery}
+			scopePath={pickers.mentionScopePath}
+		/>
+	</div>
 
 	<div
 		bind:this={cardEl}
 		class={[
 			INPUT_CLASSES,
-			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl md:rounded-3xl transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))]',
+			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl md:rounded-3xl transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',
@@ -656,11 +681,12 @@
 
 		<div
 			class={[
-				'relative flex min-h-12 flex-1 flex-col rounded-4xl md:rounded-3xl py-2 pb-2.25 md:py-3!',
+				'relative flex min-h-12 flex-1 flex-col rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-shadow focus-within:shadow-md md:py-3!',
 				// the phone sheet is wider than the collapsed card by the page's side inset: its
 				// content is inset by as much, so nothing reflows while it moves
 				isExpanded && 'max-md:px-(--chat-form-side-inset)',
-				isExpanded && 'max-md:rounded-none'
+				// the sheet meets the screen's edges: no corners, and no shadow along them
+				isExpanded && 'max-md:rounded-none max-md:shadow-none max-md:focus-within:shadow-none'
 			]}
 		>
 			<ChatFormInput
@@ -670,6 +696,7 @@
 				{disabled}
 				expanded={isExpanded}
 				onInput={() => {
+					expansion.handleInput();
 					pickers.handleInput();
 					onValueChange?.(value);
 				}}
@@ -735,7 +762,7 @@
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
 			class="self-start"
-			customAnchor={mentionAnchor}
+			customAnchor={pickerAnchor}
 			directory={cwd}
 			{disabled}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}

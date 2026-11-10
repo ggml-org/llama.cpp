@@ -20,6 +20,8 @@ export interface UseChatFormExpansionOptions {
 	/** Whether this form expands at all. */
 	isEnabled: () => boolean;
 	getValue: () => string;
+	/** What the message belongs to (the conversation): another one starts collapsed. */
+	getResetKey: () => unknown;
 	/** The form's card, and the box around its actions. */
 	getCard: () => HTMLElement | undefined;
 	getActions: () => HTMLElement | undefined;
@@ -27,9 +29,9 @@ export interface UseChatFormExpansionOptions {
 }
 
 /**
- * The chat form's expanded editor: entered once the message asks for it (see
- * shouldExpandChatForm) or by hand, kept while the message has text, and left once it
- * is cleared or sent. Collapsing by hand holds until then too.
+ * The chat form's expanded editor: entered by hand, or once the message being written
+ * asks for it (see shouldExpandChatForm), kept while the message has text, and left
+ * once it is cleared or sent. Collapsing by hand holds until then too.
  *
  * On a phone the expanded form is a full-screen sheet: expanding switches to the
  * sheet's layout at once and eases it from the collapsed card's place, collapsing
@@ -56,14 +58,8 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 
 		untrack(() => {
 			if (!text.trim()) {
-				// cleared or sent: straight back to the small form, without the sheet's slide
-				if (hadText) {
-					isCollapsedByUser = false;
-
-					if (isSheetMoving) clearSheetAnimations();
-
-					isExpanded = false;
-				}
+				// cleared or sent
+				if (hadText) reset();
 
 				hadText = false;
 
@@ -71,10 +67,38 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 			}
 
 			hadText = true;
-
-			if (!isExpanded && !isCollapsedByUser) isExpanded = shouldExpandChatForm(text);
 		});
 	});
+
+	let resetKey = untrack(options.getResetKey);
+
+	$effect(() => {
+		const key = options.getResetKey();
+
+		if (key === resetKey) return;
+
+		resetKey = key;
+		untrack(reset);
+	});
+
+	/** Straight back to the small form, without the sheet's slide, free to expand again. */
+	function reset() {
+		isCollapsedByUser = false;
+
+		if (isSheetMoving) clearSheetAnimations();
+
+		isExpanded = false;
+	}
+
+	/**
+	 * Expands for what the user writes or pastes. A message put there for them (a draft
+	 * restored on opening a chat) stays in the small form.
+	 */
+	function handleInput() {
+		if (!options.isEnabled() || isExpanded || isCollapsedByUser) return;
+
+		isExpanded = shouldExpandChatForm(options.getValue() ?? '');
+	}
 
 	$effect(() => {
 		if (options.isEnabled()) uiStore.isComposerExpanded = isExpanded;
@@ -127,13 +151,19 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 		duration = CHAT_FORM_SHEET_MS,
 		onEnd?: () => void
 	): Promise<unknown> {
+		const card = options.getCard();
+		const actions = options.getActions();
+
+		// the form went away mid-move
+		if (!card || !actions) return Promise.resolve();
+
 		const keyframeOptions = { duration, easing: CHAT_FORM_EASE_OUT };
 		const animations = [
-			options.getCard()!.animate(
+			card.animate(
 				frames.map((frame) => frame.card),
 				keyframeOptions
 			),
-			options.getActions()!.animate(
+			actions.animate(
 				frames.map((frame) => frame.actions),
 				keyframeOptions
 			)
@@ -160,7 +190,9 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 		sheetBottomAtOpen = sheetBottom();
 
 		try {
-			await animateSheet([sheetFrameAt(measure()!, from), SHEET_AT_REST]);
+			const sheet = measure();
+
+			if (sheet) await animateSheet([sheetFrameAt(sheet, from), SHEET_AT_REST]);
 		} catch {
 			// cancelled: the form went away or collapsed
 		}
@@ -348,6 +380,7 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 	}
 
 	return {
+		handleInput,
 		get isBlurHeld() {
 			return isBlurHeld;
 		},

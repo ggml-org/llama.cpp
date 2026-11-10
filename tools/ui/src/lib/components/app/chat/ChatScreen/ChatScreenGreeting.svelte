@@ -44,9 +44,14 @@
 		'pointer-events-none mb-4 hidden px-4 text-center text-balance',
 		isEmpty && 'md:mb-8 block!',
 		isEmpty && !faded && 'pointer-events-auto',
-		// pinned just above the middle of a phone screen, so the form growing into its
-		// expanded editor never pushes it: it only fades
-		isEmpty && 'max-md:fixed max-md:inset-x-0 max-md:bottom-[calc(50dvh+1rem)] max-md:mb-0',
+		// held just above the middle of a phone screen, so the form growing into its
+		// expanded editor never pushes it: it only fades. Its place is counted from the
+		// form's wrapper, which floats above the screen's bottom until it is a sheet
+		isEmpty && 'max-md:fixed max-md:inset-x-0 max-md:mb-0',
+		isEmpty &&
+			(faded
+				? 'max-md:bottom-[calc(50dvh+1rem)]'
+				: 'max-md:bottom-[calc(50dvh+1rem-var(--chat-form-bottom-position,0px))]'),
 		// out of the page flow on desktop, just above the form: inside the form
 		// wrapper's top padding, so showing it never changes the wrapper's height
 		isEmpty && 'md:absolute md:inset-x-0 md:bottom-[calc(100%-var(--chat-form-padding-top))]'

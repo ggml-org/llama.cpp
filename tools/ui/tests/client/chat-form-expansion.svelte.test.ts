@@ -3,13 +3,14 @@
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
+import { conversationsStore } from '$lib/stores';
 import { tick } from 'svelte';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 
-async function renderForm() {
-	const { container } = render(ChatFormTestWrapper, { expandable: true });
+async function renderForm(initialValue = '') {
+	const { container } = render(ChatFormTestWrapper, { expandable: true, initialValue });
 
 	await tick();
 
@@ -23,17 +24,30 @@ async function renderForm() {
 		await tick();
 	};
 	const isExpanded = () => !!container.querySelector('.chat-form-input.expanded');
-	const toggle = () =>
-		userEvent.click(
+	// on a phone-sized screen the sheet ignores the key while it moves
+	const sheetMoves = () =>
+		container
+			.querySelector('[data-slot="input-area"]')!
+			.getAnimations()
+			.filter((animation) => !(animation instanceof CSSTransition)).length;
+	const toggle = async () => {
+		await expect.poll(sheetMoves).toBe(0);
+		await userEvent.click(
 			container.querySelector<HTMLElement>(
 				`button[aria-label="${isExpanded() ? 'Collapse' : 'Expand'} editor"]`
 			)!
 		);
+		await expect.poll(sheetMoves).toBe(0);
+	};
 
 	return { container, editor, isExpanded, toggle, write };
 }
 
 describe('ChatForm expansion', () => {
+	afterEach(() => {
+		conversationsStore.activeConversation = null;
+	});
+
 	it('stays small for a line that only starts like markdown', async () => {
 		const { isExpanded, write } = await renderForm();
 
@@ -79,6 +93,27 @@ describe('ChatForm expansion', () => {
 		await write('');
 		await write('# Title\n');
 		expect(isExpanded()).toBe(true);
+	});
+
+	it('leaves a restored draft in the small form until it is written in', async () => {
+		const { isExpanded, write } = await renderForm('# Title\n\n- item\n');
+
+		expect(isExpanded()).toBe(false);
+
+		await write('# Title\n\n- item\n- another\n');
+		expect(isExpanded()).toBe(true);
+	});
+
+	it('starts collapsed in another conversation', async () => {
+		const { isExpanded, write } = await renderForm();
+
+		await write('# Title\n');
+		expect(isExpanded()).toBe(true);
+
+		conversationsStore.activeConversation = { id: 'other' } as DatabaseConversation;
+		await tick();
+
+		expect(isExpanded()).toBe(false);
 	});
 
 	it('says how to send while expanded', async () => {
