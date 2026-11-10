@@ -567,10 +567,8 @@ kernel void kernel_topk_moe_f32(
     }
 }
 
-// fused sigmoid + bias + grouped top-k + GET_ROWS + norm + scale for MoE routing
-// (DeepSeek-V3 style grouped selection). One SIMDgroup handles one token row.
-// The routing weights come from the unbiased sigmoid probs, the selection scores
-// are probs + bias, and only the top n_grp_used groups can be selected.
+// fused sigmoid + bias + grouped top-k + GET_ROWS + norm + scale for MoE routing (DeepSeek-V3 style grouped selection). One SIMDgroup handles one token row.
+// The routing weights come from the unbiased sigmoid probs, the selection scores are probs + bias, and only the top n_grp_used groups can be selected.
 kernel void kernel_topk_moe_grouped_f32(
         constant   ggml_metal_kargs_topk_moe_grouped & args,
         device const float * src0,
@@ -743,109 +741,4 @@ kernel void kernel_moe_reduce_f32(
         sum += experts[base + e * args.ne00] * weights[token * n_expert_used + e];
     }
     dst[token * args.ne00 + col] = sum;
-}
-
-// fused mHC residual-stream routing (sensenova_loop): per token and stream it
-// builds an RMS-normalised 8-way gate over the two residual streams, runs the
-// 20-step alternating log-softmax (Sinkhorn) on the 2x2 assignment, and emits the
-// pre-mix vector plus the six scalars the merge op consumes. One SIMDgroup per
-// (token, stream); the scalars are computed redundantly by every lane, which is
-// cheaper than broadcasting them.
-kernel void kernel_mhc_route(
-        constant ggml_metal_kargs_mhc & args,
-        device const float * a,
-        device const float * b,
-        device const float * w,
-        device const float * bias,
-        device       float * o,
-        uint3   tgpig[[threadgroup_position_in_grid]],
-        ushort  tiisg[[thread_index_in_simdgroup]]) {
-    const int t = (int) tgpig.x;
-    const int s = (int) tgpig.y;
-    const int d = args.d;
-    const int lane = (int) tiisg;
-
-    device const float * va = (device const float *) ((device const char *) a + t*args.nb_a1 + s*args.nb_a2);
-    device const float * vb = (device const float *) ((device const char *) b + t*args.nb_b1 + s*args.nb_b2);
-    device       float * vo = o + t*(d + 6) + (int64_t) s*args.n_tok*(d + 6);
-
-    float ss = 0.0f;
-    for (int i = lane; i < d; i += 32) {
-        ss += va[i]*va[i] + vb[i]*vb[i];
-    }
-    ss = simd_sum(ss);
-    const float rms = 1.0f/sqrt(ss/(2.0f*d) + 1e-6f);
-
-    float lg[8];
-    for (int k = 0; k < 8; ++k) {
-        device const float * wk = w + k*2*d;
-        float acc = 0.0f;
-        for (int i = lane; i < d; i += 32) {
-            acc += wk[i]*va[i] + wk[d + i]*vb[i];
-        }
-        lg[k] = simd_sum(acc)*rms + bias[k];
-    }
-
-    const float pre0  = 1.0f/(1.0f + exp(-lg[0]));
-    const float pre1  = 1.0f/(1.0f + exp(-lg[1]));
-    const float post0 = 2.0f/(1.0f + exp(-lg[2]));
-    const float post1 = 2.0f/(1.0f + exp(-lg[3]));
-
-    float m00 = lg[4], m01 = lg[5], m10 = lg[6], m11 = lg[7];
-    for (int it = 0; it < 20; ++it) {
-        float mx = max(m00, m01); float lse = mx + log(exp(m00 - mx) + exp(m01 - mx)); m00 -= lse; m01 -= lse;
-        mx = max(m10, m11);       lse = mx + log(exp(m10 - mx) + exp(m11 - mx));       m10 -= lse; m11 -= lse;
-        mx = max(m00, m10);       lse = mx + log(exp(m00 - mx) + exp(m10 - mx));       m00 -= lse; m10 -= lse;
-        mx = max(m01, m11);       lse = mx + log(exp(m01 - mx) + exp(m11 - mx));       m01 -= lse; m11 -= lse;
-    }
-
-    for (int i = lane; i < d; i += 32) {
-        vo[i] = pre0*va[i] + pre1*vb[i];
-    }
-
-    if (lane == 0) {
-        vo[d + 0] = post0;
-        vo[d + 1] = post1;
-        vo[d + 2] = exp(m00);
-        vo[d + 3] = exp(m01);
-        vo[d + 4] = exp(m10);
-        vo[d + 5] = exp(m11);
-    }
-}
-
-// fused mHC merge: recombine the two residual streams and the block output with
-// the six scalars produced by kernel_mhc_route.
-kernel void kernel_mhc_merge(
-        constant ggml_metal_kargs_mhc & args,
-        device const float * a,
-        device const float * b,
-        device const float * x,
-        device const float * p,
-        device       float * o,
-        uint3   tgpig[[threadgroup_position_in_grid]],
-        ushort  tiitg[[thread_index_in_threadgroup]]) {
-    const int t = (int) tgpig.x;
-    const int s = (int) tgpig.y;
-    const int d = args.d;
-
-    device const float * va = (device const float *) ((device const char *) a + t*args.nb_a1 + s*args.nb_a2);
-    device const float * vb = (device const float *) ((device const char *) b + t*args.nb_b1 + s*args.nb_b2);
-    device const float * vx = (device const float *) ((device const char *) x + t*args.nb_x1 + s*args.nb_x2);
-    device const float * vp = (device const float *) ((device const char *) p + t*args.nb_p1 + s*args.nb_p2);
-    device       float * vo = o + t*2*d + (int64_t) s*args.n_tok*2*d;
-
-    const float post0 = vp[d + 0];
-    const float post1 = vp[d + 1];
-    const float m00   = vp[d + 2];
-    const float m01   = vp[d + 3];
-    const float m10   = vp[d + 4];
-    const float m11   = vp[d + 5];
-
-    for (int i = tiitg; i < d; i += 128) {
-        const float av = va[i];
-        const float bv = vb[i];
-        const float xv = vx[i];
-        vo[i]     = m00*av + m01*bv + post0*xv;
-        vo[d + i] = m10*av + m11*bv + post1*xv;
-    }
 }

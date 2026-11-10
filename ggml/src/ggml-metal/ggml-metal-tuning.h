@@ -18,15 +18,12 @@ int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
 // NE baked into each (dk,dv) baseline instantiation in kernels/fa_vec_*.metal.
-// Hand-maintained mirror; keep in sync with those instantiations. The value depends on the
-// simdgroup width: NL = nw/NE must divide dk/4 and dv/4, so a 64-lane device needs a different
-// NE per pair than a 32-lane one.
+// Hand-maintained mirror; keep in sync with those instantiations. The value depends on the simdgroup width: NL = nw/NE must divide dk/4 and dv/4, so a 64-lane device needs a different NE per pair than a 32-lane one.
 // The Metal test slice covers every legal config for dk=128 and dk=576.
 int fa_vec_baseline_ne(int dk, int dv, int nw = 32);
 
 // (dk,dv) pairs are validated by the caller against the instantiated set.
-// highest NE instantiated per simd width: the tuned variants are 32-lane only, other widths
-// instantiate the baseline config for every pair
+// highest NE instantiated per simd width: the tuned variants are 32-lane only, other widths instantiate the baseline config for every pair
 inline int fa_vec_max_ne(int nw) { return nw == 32 ? 4 : 16; }
 
 // Tuned table has two row kinds. Exact rows key a (ne11_b, ne01_b) bucket. Default rows

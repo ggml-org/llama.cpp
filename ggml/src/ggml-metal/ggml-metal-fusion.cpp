@@ -414,9 +414,7 @@ static const std::vector<ggml_op> ops_topk_moe_sig_norm_scale_bias = {
     GGML_OP_RESHAPE, GGML_OP_SUM_ROWS, GGML_OP_SCALE, GGML_OP_DIV, GGML_OP_RESHAPE, GGML_OP_SCALE
 };
 
-// grouped routing as built by build_moe_ffn for DeepSeek-V3 style models with
-// sigmoid gating: sigmoid + bias, group top-2 scores, top-k groups, mask, final
-// top-k, then the routing weights (unbiased probs) with norm and scale.
+// grouped routing as built by build_moe_ffn for DeepSeek-V3 style models with sigmoid gating: sigmoid + bias, group top-2 scores, top-k groups, mask, final top-k, then the routing weights (unbiased probs) with norm and scale.
 static const std::vector<ggml_op> ops_topk_moe_grouped = {
     GGML_OP_UNARY,    GGML_OP_RESHAPE,  GGML_OP_ADD,      GGML_OP_RESHAPE, GGML_OP_RESHAPE,
     GGML_OP_ARGSORT,  GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE, GGML_OP_SUM_ROWS,
@@ -435,13 +433,7 @@ static bool ggml_metal_fusion_check_topk_moe_grouped(
               ggml_metal_fusion_mode    mode) {
     GGML_UNUSED(mode);
 
-    // A/B switch for measuring the fusion in isolation
-    if (getenv("GGML_METAL_NO_ROUTE_FUSION") != nullptr) {
-        return false;
-    }
-
-    // the filtered chain: UNARY ADD ARGSORT GET_ROWS SUM_ROWS ARGSORT GET_ROWS FILL
-    // SET_ROWS ARGSORT GET_ROWS SUM_ROWS CLAMP DIV SCALE
+    // the filtered chain: UNARY ADD ARGSORT GET_ROWS SUM_ROWS ARGSORT GET_ROWS FILL SET_ROWS ARGSORT GET_ROWS SUM_ROWS CLAMP DIV SCALE
     GGML_ASSERT(fusion->ops.size() == 15);
 
     // the raw span must match the builder's chain exactly, views included

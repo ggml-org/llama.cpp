@@ -372,8 +372,7 @@ kernel void kernel_flash_attn_ext_vec_reduce(
 
     const uint64_t rid = tgpig;
 
-    // one lane per workgroup partial: the simdgroup may be wider than NWG, so lanes past NWG
-    // carry a neutral value instead of reading the next row
+    // one lane per workgroup partial: the simdgroup may be wider than NWG, so lanes past NWG carry a neutral value instead of reading the next row
     const short iwg    = tiisg;
     const bool  active = iwg < NWG;
 

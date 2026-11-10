@@ -1019,15 +1019,11 @@ template [[host_name("kernel_mul_mm_id_tq2_0_f16")]]   kernel mul_mm_id kernel_m
 #include "common.h"
 #include "dequantize.h"
 
-// Tiled matrix-multiply for devices that have no simdgroup matrix (has_simdgroup_mm
-// false, e.g. AMD/Intel Macs). One threadgroup computes a TM x TN tile of the output,
-// staging a Q6_K row block of the weights in threadgroup memory so each weight is
-// dequantized once instead of once per output column.
+// Tiled matrix-multiply for devices that have no simdgroup matrix (has_simdgroup_mm false, e.g. AMD/Intel Macs). One threadgroup computes a TM x TN tile of the output, staging a Q6_K row block of the weights in threadgroup memory so each weight is dequantized once instead of once per output column.
 //
-//   dst[m, n] = sum_k src0[k, m] * src1[k, n]
+// dst[m, n] = sum_k src0[k, m] * src1[k, n]
 //
-// layout matches MUL_MAT: dst[m + n*ne0], src0 rows stride nb01 (Q6_K blocks of QK_K),
-// src1 rows stride nb11 (contiguous F32).
+// layout matches MUL_MAT: dst[m + n*ne0], src0 rows stride nb01 (Q6_K blocks of QK_K), src1 rows stride nb11 (contiguous F32).
 
 #define TILED_TM 16
 #define TILED_TN 64
@@ -1084,8 +1080,7 @@ static inline float q6_K_at(device const block_q6_K * blk, int k) {
 
     return (float) blk->d * (float) sc[is + 2*group] * (float) q;
 }
-// tiled GEMM, q6_K weights. Same 64x64 padded design as q4_K; the per-element accessor keeps
-// the block decode in one place.
+// tiled GEMM, q6_K weights. Same 64x64 padded design as q4_K; the per-element accessor keeps the block decode in one place.
 kernel void kernel_mul_mat_q6_K_tiled(
         constant ggml_metal_kargs_mul_mm & args,
         device const char * src0,
@@ -1257,8 +1252,7 @@ kernel void kernel_mul_mat_q8_0_tiled(
     }
 }
 
-// tiled GEMM, q4_K weights. 64x64 output tile, BK=32 == one q4_K sub-block, so each staged
-// slice has a single (scale, min) pair. 256 threads, 4x4 outputs each.
+// tiled GEMM, q4_K weights. 64x64 output tile, BK=32 == one q4_K sub-block, so each staged slice has a single (scale, min) pair. 256 threads, 4x4 outputs each.
 
 kernel void kernel_mul_mat_q4_K_tiled(
         constant ggml_metal_kargs_mul_mm & args,

@@ -15,10 +15,7 @@ constant int32_t FC_flash_attn_ext_vec_nwg  [[function_constant(FC_FLASH_ATTN_EX
 constant bool    FC_flash_attn_ext_vec_has_sparse [[function_constant(FC_FLASH_ATTN_EXT_VEC + 5)]];
 constant bool    FC_flash_attn_ext_vec_has_rows   [[function_constant(FC_FLASH_ATTN_EXT_VEC + 6)]];
 
-// NE (head elements per thread) for the baseline instantiation, derived from the simdgroup
-// width so that one instantiation list serves every width: NL = N_SIMDWIDTH/NE lanes split the
-// row over head blocks, so NL must divide both dk/4 and dv/4. Take the largest power-of-two NL
-// that divides them, capped at the width. ggml_metal_tuning::fa_vec_baseline_ne mirrors this.
+// NE (head elements per thread) for the baseline instantiation, derived from the simdgroup width so that one instantiation list serves every width: NL = N_SIMDWIDTH/NE lanes split the row over head blocks, so NL must divide both dk/4 and dv/4. Take the largest power-of-two NL that divides them, capped at the width. ggml_metal_tuning::fa_vec_baseline_ne mirrors this.
 #define FA_VEC_NL(DK, DV) (                                                              \
     (N_SIMDWIDTH >= 64 && ((DK)/4) % 64 == 0 && ((DV)/4) % 64 == 0) ? 64 :                \
     (N_SIMDWIDTH >= 32 && ((DK)/4) % 32 == 0 && ((DV)/4) % 32 == 0) ? 32 :                \
@@ -381,8 +378,7 @@ kernel void kernel_flash_attn_ext_vec(
                         if (NE == 1) {
                             mqk[qq][cc] = simd_sum(mqk[qq][cc]);
                         } else {
-                            // reduce over the NL lanes holding the partial dot products: the
-                            // distances are 1 .. NL/2, so they follow the simdgroup width
+                            // reduce over the NL lanes holding the partial dot products: the distances are 1 .. NL/2, so they follow the simdgroup width
                             if (NL >= 2) {
                                 mqk[qq][cc] += simd_shuffle_down(mqk[qq][cc], 1);
                             }
@@ -534,8 +530,7 @@ kernel void kernel_flash_attn_ext_vec(
 
                 FOR_UNROLL (short qq = 0; qq < Q; ++qq) {
                     FOR_UNROLL (short ii = 0; ii < DV4/NL; ++ii) {
-                        // fold the NE lane groups that hold the same head elements: the distances
-                        // are NL*2^k up to NW/2, so they scale with the simdgroup width
+                        // fold the NE lane groups that hold the same head elements: the distances are NL*2^k up to NW/2, so they scale with the simdgroup width
                         if (NW/2 >= NL) {
                             lo[qq][ii][0] += simd_shuffle_down(lo[qq][ii][0], NW/2);
                             lo[qq][ii][1] += simd_shuffle_down(lo[qq][ii][1], NW/2);
