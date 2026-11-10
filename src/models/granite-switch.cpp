@@ -138,6 +138,26 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
+    // graph topology depends on whether any token in the batch carries an adapter:
+    // without one, all adapter deltas are zero and are skipped at build time
+    bool used_adapter_path = false;
+
+    bool any_adapter_tokens(const llama_ubatch & ubatch) const {
+        if (!ubatch.token) {
+            return false;
+        }
+        for (int64_t i = 0; i < ubatch.n_tokens; ++i) {
+            if (smodel.adapter_token_to_slot.count(ubatch.token[i])) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        return used_adapter_path == any_adapter_tokens(params.ubatch);
+    }
+
     ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] adapter-substituted token ids
     ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (+/-gain)
     ggml_tensor * router_vval = nullptr; // F32 [n_tokens] router V value (adapter slot / 0)
@@ -150,7 +170,7 @@ public:
 // lets a single visible adapter token dominate so the readback recovers its slot.
 void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     ASSERT_EMBD_OR_TOKEN(*ubatch);
-    if (!ubatch->token) {
+    if (!ubatch->token || !sub_tokens) {
         return;
     }
 
@@ -180,9 +200,11 @@ void llm_graph_input_switch::set_input(const llama_ubatch * ubatch) {
     }
 
     ggml_backend_tensor_set(sub_tokens,  sub.data(),  0, n_tokens*ggml_element_size(sub_tokens));
-    ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
-    ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
-    ggml_backend_tensor_set(router_q,    q.data(),    0, n_tokens*ggml_element_size(router_q));
+    if (router_ksig) {
+        ggml_backend_tensor_set(router_ksig, ksig.data(), 0, n_tokens*ggml_element_size(router_ksig));
+        ggml_backend_tensor_set(router_vval, vval.data(), 0, n_tokens*ggml_element_size(router_vval));
+        ggml_backend_tensor_set(router_q,    q.data(),    0, n_tokens*ggml_element_size(router_q));
+    }
 }
 
 std::unique_ptr<llm_graph_context> llama_model_granite_switch::build_arch_graph(const llm_graph_params & params) const {
@@ -196,6 +218,9 @@ ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_delta(
           ggml_tensor * lora_b,
           ggml_tensor * cur,
           ggml_tensor * ids) {
+    if (!ids) {
+        return nullptr; // batch has no adapter tokens: every delta is zero
+    }
     const int64_t n_in     = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
 
@@ -216,7 +241,7 @@ ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_mm(
           ggml_tensor * ids) {
     ggml_tensor * base  = ggml_mul_mat(ctx0, w, cur);
     ggml_tensor * delta = build_switched_lora_delta(lora_a, lora_b, cur, ids);
-    return ggml_add(ctx0, base, delta);
+    return delta ? ggml_add(ctx0, base, delta) : base;
 }
 
 llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
@@ -232,14 +257,17 @@ llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_
     GGML_ASSERT(n_embd_head == n_rot);
 
     auto inp_switch = std::make_unique<llm_graph_input_switch>(smodel);
-    inp_switch->sub_tokens  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-    inp_switch->router_ksig = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
-    inp_switch->router_vval = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
-    inp_switch->router_q    = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+    inp_switch->used_adapter_path = inp_switch->any_adapter_tokens(ubatch);
+    inp_switch->sub_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp_switch->sub_tokens);
-    ggml_set_input(inp_switch->router_ksig);
-    ggml_set_input(inp_switch->router_vval);
-    ggml_set_input(inp_switch->router_q);
+    if (inp_switch->used_adapter_path) {
+        inp_switch->router_ksig = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+        inp_switch->router_vval = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+        inp_switch->router_q    = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_tokens);
+        ggml_set_input(inp_switch->router_ksig);
+        ggml_set_input(inp_switch->router_vval);
+        ggml_set_input(inp_switch->router_q);
+    }
     ggml_tensor * sub_tokens  = inp_switch->sub_tokens;
     ggml_tensor * router_ksig = inp_switch->router_ksig;
     ggml_tensor * router_vval = inp_switch->router_vval;
@@ -261,29 +289,33 @@ llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_
 
     // single causal head at layer R recovers the adapter index in-graph: only dim 0
     // carries signal (Q[0]=1, K[0]=+/-gain, V[0]=slot/0), the rest is zero-padded.
-    const int R = hparams.router_layer;
-    GGML_ASSERT(R >= 0);
-    auto router_lane = [&](ggml_tensor * sig1d) {
-        ggml_tensor * t = ggml_reshape_3d(ctx0, sig1d, 1, 1, n_tokens);
-        return ggml_pad(ctx0, t, (int) n_embd_head - 1, 0, 0, 0);
-    };
-    ggml_tensor * Qr = router_lane(router_q);
-    ggml_tensor * Kr = router_lane(router_ksig);
-    ggml_tensor * Vr = router_lane(router_vval);
+    // skipped entirely when the batch has no adapter tokens: every delta is zero
+    ggml_tensor * adapter_ids = nullptr;
+    if (router_ksig) {
+        const int R = hparams.router_layer;
+        GGML_ASSERT(R >= 0);
+        auto router_lane = [&](ggml_tensor * sig1d) {
+            ggml_tensor * t = ggml_reshape_3d(ctx0, sig1d, 1, 1, n_tokens);
+            return ggml_pad(ctx0, t, (int) n_embd_head - 1, 0, 0, 0);
+        };
+        ggml_tensor * Qr = router_lane(router_q);
+        ggml_tensor * Kr = router_lane(router_ksig);
+        ggml_tensor * Vr = router_lane(router_vval);
 
-    ggml_tensor * router_out = build_attn(inp_attn,
-            nullptr, nullptr, nullptr,
-            Qr, Kr, Vr, nullptr, nullptr, nullptr, /*kq_scale=*/1.0f, /*il=*/R);
-    cb(router_out, "router_out", R);
+        ggml_tensor * router_out = build_attn(inp_attn,
+                nullptr, nullptr, nullptr,
+                Qr, Kr, Vr, nullptr, nullptr, nullptr, /*kq_scale=*/1.0f, /*il=*/R);
+        cb(router_out, "router_out", R);
 
-    // row 0 of router_out is the attended slot; clamp+round to an I32 index
-    ggml_tensor * slot_f = ggml_cont(ctx0,
-        ggml_view_2d(ctx0, router_out, 1, n_tokens, router_out->nb[1], 0));
-    slot_f = ggml_reshape_1d(ctx0, slot_f, n_tokens);
-    slot_f = ggml_clamp(ctx0, slot_f, 0.0f, (float) smodel.n_adapters);
-    slot_f = ggml_round(ctx0, slot_f);
-    ggml_tensor * adapter_ids = ggml_cast(ctx0, slot_f, GGML_TYPE_I32);
-    cb(adapter_ids, "adapter_ids", -1);
+        // row 0 of router_out is the attended slot; clamp+round to an I32 index
+        ggml_tensor * slot_f = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, router_out, 1, n_tokens, router_out->nb[1], 0));
+        slot_f = ggml_reshape_1d(ctx0, slot_f, n_tokens);
+        slot_f = ggml_clamp(ctx0, slot_f, 0.0f, (float) smodel.n_adapters);
+        slot_f = ggml_round(ctx0, slot_f);
+        adapter_ids = ggml_cast(ctx0, slot_f, GGML_TYPE_I32);
+        cb(adapter_ids, "adapter_ids", -1);
+    }
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -347,21 +379,37 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
     const int64_t n_embd_q  = n_embd_head * n_head;
     const int64_t n_embd_kv = n_embd_head * n_head_kv;
 
-    // slice fused qkv into Q/K/V, made contiguous so LoRA deltas can be added
-    ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0));
-    ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv)));
-    ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv)));
+    ggml_tensor * Qcur;
+    ggml_tensor * Kcur;
+    ggml_tensor * Vcur;
+    if (adapter_ids) {
+        // slice fused qkv into Q/K/V, made contiguous so LoRA deltas can be added
+        Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0));
+        Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv)));
+        Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv)));
 
-    Qcur = ggml_add(ctx0, Qcur, build_switched_lora_delta(sl.a_q, sl.b_q, cur, adapter_ids));
-    Kcur = ggml_add(ctx0, Kcur, build_switched_lora_delta(sl.a_k, sl.b_k, cur, adapter_ids));
-    Vcur = ggml_add(ctx0, Vcur, build_switched_lora_delta(sl.a_v, sl.b_v, cur, adapter_ids));
+        Qcur = ggml_add(ctx0, Qcur, build_switched_lora_delta(sl.a_q, sl.b_q, cur, adapter_ids));
+        Kcur = ggml_add(ctx0, Kcur, build_switched_lora_delta(sl.a_k, sl.b_k, cur, adapter_ids));
+        Vcur = ggml_add(ctx0, Vcur, build_switched_lora_delta(sl.a_v, sl.b_v, cur, adapter_ids));
+    } else {
+        Qcur = ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0);
+        Kcur = ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv));
+        Vcur = ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv));
+    }
 
     Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
     Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = build_rope(Qcur, inp_pos, il);
-    Kcur = build_rope(Kcur, inp_pos, il);
+    if (hparams.has_rope(il)) {
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
+                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
+                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                ext_factor, attn_factor, beta_fast, beta_slow);
+    }
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
     cb(Vcur, "Vcur", il);
