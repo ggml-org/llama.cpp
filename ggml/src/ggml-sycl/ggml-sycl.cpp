@@ -4923,15 +4923,6 @@ static bool reorder_qw_q3_k(uint8_t * data_device, size_t size, size_t offset, d
         }, stream);
 }
 
-// Reorder each Q3_K expert slice on its own.
-static bool reorder_qw_q3_k_moe(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, dpct::queue_ptr stream) {
-    for (int64_t e = 0; e < n_expert; ++e) {
-        if (!reorder_qw_q3_k(data_device + e * expert_bytes, expert_bytes, 0, stream)) {
-            return false;
-        }
-    }
-    return true;
-}
 
 static bool reorder_qw_q5_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(offset == 0);
@@ -4991,6 +4982,18 @@ static bool reorder_qw_iq3_xxs(uint8_t * data_device, size_t size, dpct::queue_p
         }, stream);
 }
 
+// Reorder each expert slice on its own with the type's dense reorder: its layout is the one the dense
+// kernels, the MoE mat-vec and the grouped GEMM (ggml_sycl_layout) read.
+template <typename F>
+static bool reorder_qw_each_expert(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, F && reorder) {
+    for (int64_t e = 0; e < n_expert; ++e) {
+        if (!reorder(data_device + e * expert_bytes, expert_bytes)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
@@ -5004,8 +5007,18 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
         switch (src0->type) {
             case GGML_TYPE_Q8_0:
                 return reorder_qw_q8_0_moe(data_device, src0->nb[2], src0->ne[2], stream);
+            case GGML_TYPE_Q2_K:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_q2_k(x, n, 0, stream); });
             case GGML_TYPE_Q3_K:
-                return reorder_qw_q3_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_q3_k(x, n, 0, stream); });
+            case GGML_TYPE_IQ3_XXS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_iq3_xxs(x, n, stream); });
+            case GGML_TYPE_IQ3_S:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_iq3_s(x, n, stream); });
             case GGML_TYPE_Q4_K:
                 return reorder_qw_q4_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
             case GGML_TYPE_Q5_K:
@@ -5091,9 +5104,22 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
     if (!g_ggml_sycl_enable_optimize || !ctx->opt_feature.reorder) {
         return;
     }
-    if (src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q3_K && src0->type != GGML_TYPE_Q4_K &&
-        src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_MXFP4) {
-        return;
+    // Only the formats whose grouped GEMM gains from the reorder are reordered for MoE. Q4_0, Q4_1, Q5_0,
+    // Q5_1, NVFP4 and IQ1_M lose 3-37% in the ESIMD grouped GEMM with it, and Q1_0, Q2_0, IQ1_S and IQ4_NL
+    // gain nothing there; a weight has one layout for all its kernels.
+    switch (src0->type) {
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_MXFP4:
+            break;
+        default:
+            return;
     }
     // The MXFP4 reorder kernels use 8-byte vector loads, so every expert slice must stay aligned.
     if (src0->type == GGML_TYPE_MXFP4 && (src0->nb[2] % 16 != 0 || (uintptr_t) src0->data % 16 != 0)) {

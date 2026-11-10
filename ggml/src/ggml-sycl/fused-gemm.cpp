@@ -994,7 +994,7 @@ template <typename T> static constexpr bool fg_plain_type() {
 template <typename T> static constexpr bool fg_reorder_layout() {
     return std::is_same_v<T, block_q8_0> || std::is_same_v<T, block_q2_K> || std::is_same_v<T, block_q3_K> ||
            std::is_same_v<T, block_q4_K> || std::is_same_v<T, block_q5_K> || std::is_same_v<T, block_q6_K> ||
-           std::is_same_v<T, block_mxfp4>;
+           std::is_same_v<T, block_iq3_xxs> || std::is_same_v<T, block_iq3_s> || std::is_same_v<T, block_mxfp4>;
 }
 
 // one SG_ROWS x BN output tile: B columns [b0, b0 + BN) of packed_b go to dst columns [n0, n1),

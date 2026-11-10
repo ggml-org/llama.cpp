@@ -2739,7 +2739,10 @@ bool ggml_sycl_mul_mat_vec_q_id_supports_type(enum ggml_type src0_type) {
 bool ggml_sycl_mul_mat_vec_q_id_reorder_supports_type(enum ggml_type src0_type) {
     switch (src0_type) {
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
         case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
@@ -3009,6 +3012,21 @@ bool ggml_sycl_mul_mat_vec_q_id_reorder(
             return true;
         case GGML_TYPE_Q3_K:
             launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q3_K>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_Q2_K:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q2_K>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_IQ3_XXS:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ3_XXS>>(
+                vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
+                expert_weight_stride, dst_row_stride, src1_row_stride, stream);
+            return true;
+        case GGML_TYPE_IQ3_S:
+            launch_mul_mat_vec_q_moe_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_IQ3_S>>(
                 vx_base, vy, ids_dev, dst_base, ncols, nrows, n_experts_used,
                 expert_weight_stride, dst_row_stride, src1_row_stride, stream);
             return true;
