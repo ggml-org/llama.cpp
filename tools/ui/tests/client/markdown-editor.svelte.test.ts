@@ -3,7 +3,7 @@
 // keeps raw or joins, the gap after a raw block, and selecting text in rendered blocks.
 
 import { undo } from '@codemirror/commands';
-import { EditorView } from '@codemirror/view';
+import { EditorView, type WidgetType } from '@codemirror/view';
 import MarkdownEditor from '$lib/components/app/content/MarkdownEditor/MarkdownEditor.svelte';
 import { SVG } from '$lib/constants';
 import { tick } from 'svelte';
@@ -74,6 +74,74 @@ describe('MarkdownEditor', () => {
 		expect(editor.contentDOM.getAttribute('aria-label')).toBe('Second');
 	});
 
+	it('reconfigures only when a prop changes, not when it mounts', async () => {
+		const reconfigured = vi.fn();
+		const extensions = [
+			EditorView.updateListener.of((update) => {
+				if (update.transactions.some((tr) => tr.reconfigured)) reconfigured();
+			})
+		];
+		const screen = render(MarkdownEditor, { extensions, placeholder: 'First', value: '' });
+
+		await settle();
+
+		expect(reconfigured).not.toHaveBeenCalled();
+
+		await screen.rerender({ value: 'typed' });
+		await settle();
+
+		expect(reconfigured).not.toHaveBeenCalled();
+
+		await screen.rerender({ placeholder: 'Second' });
+		await settle();
+
+		expect(reconfigured).toHaveBeenCalledTimes(1);
+	});
+
+	it('leaves the other rendered blocks untouched while a block is typed in', async () => {
+		const screen = render(MarkdownEditor, { value: '# One\n\ntwo\n\n- three\n\nfour' });
+		const editor = editorIn(screen.container);
+		const blocks = () => [...screen.container.querySelectorAll<HTMLElement>('.cm-md-block')];
+
+		await vi.waitFor(() =>
+			expect(blocks().map((block) => block.textContent?.trim())).toEqual([
+				'One',
+				'two',
+				'three',
+				'four'
+			])
+		);
+
+		editor.focus();
+		editor.dispatch({ selection: { anchor: '# One\n\nt'.length } });
+
+		await vi.waitFor(() => expect(blocks()).toHaveLength(3));
+
+		const others = blocks();
+		const mutations: MutationRecord[] = [];
+		const observer = new MutationObserver((records) => mutations.push(...records));
+
+		for (const block of others) {
+			observer.observe(block, {
+				attributes: true,
+				characterData: true,
+				childList: true,
+				subtree: true
+			});
+		}
+
+		for (const char of 'yped') {
+			editor.dispatch(editor.state.replaceSelection(char), { userEvent: 'input.type' });
+			await settle();
+		}
+
+		observer.disconnect();
+
+		expect(editor.state.doc.toString()).toBe('# One\n\ntypedwo\n\n- three\n\nfour');
+		expect(blocks()).toEqual(others);
+		expect(mutations).toEqual([]);
+	});
+
 	it('keeps a link reference definition raw', async () => {
 		const screen = render(MarkdownEditor, { value: 'see [docs][d]\n\n[d]: https://example.com' });
 
@@ -120,6 +188,27 @@ describe('MarkdownEditor', () => {
 
 		expect(screen.container.querySelectorAll('.cm-md-block')).toHaveLength(1);
 		expect(second()?.style.paddingTop).toBe('0rem');
+	});
+
+	it('estimates a rendered block by its measured height', async () => {
+		const screen = render(MarkdownEditor, { value: 'A paragraph\nover two lines' });
+		const editor = editorIn(screen.container);
+		const widget = () => {
+			for (const source of editor.state.facet(EditorView.decorations)) {
+				if (typeof source === 'function') continue;
+
+				const cursor = source.iter();
+
+				if (cursor.value?.spec.widget) return cursor.value.spec.widget as WidgetType;
+			}
+		};
+
+		await vi.waitFor(() => {
+			const block = screen.container.querySelector<HTMLElement>('.cm-md-block');
+
+			expect(block?.querySelector('p')).not.toBeNull();
+			expect(widget()?.estimatedHeight).toBe(block!.offsetHeight);
+		});
 	});
 
 	it('copies a selection across rendered blocks', async () => {

@@ -93,6 +93,16 @@
 	let previewOpen = $state(false);
 	let diagramSvg = $state('');
 	let diagramOpen = $state(false);
+	// The document's text as of the last edit or sync, so syncing an unchanged `value`
+	// (each keystroke comes back through onChange) costs no serialization
+	let docText = '';
+	// The props the editor is configured with: an effect reconfigures it only on a change
+	let applied:
+		| Pick<
+				Props,
+				'ariaLabel' | 'disabled' | 'editingWidgets' | 'extensions' | 'placeholder' | 'renderKey'
+		  >
+		| undefined;
 
 	function labels(): Extension {
 		return [
@@ -121,6 +131,8 @@
 	onMount(() => {
 		if (!host) return;
 
+		docText = value;
+		applied = { ariaLabel, disabled, editingWidgets, extensions, placeholder, renderKey };
 		view = new EditorView({
 			parent: host,
 			state: EditorState.create({
@@ -144,7 +156,10 @@
 							(tr) => tr.docChanged && !tr.annotation(valueSync)
 						);
 
-						if (edited) onChange?.(update.state.doc.toString());
+						if (!edited) return;
+
+						docText = update.state.doc.toString();
+						onChange?.(docText);
 					})
 				]
 			})
@@ -180,12 +195,11 @@
 	 * survive; these edits stay out of the undo history and out of onChange.
 	 */
 	function syncValue(next: string) {
-		if (!view) return;
+		if (!view || next === docText) return;
 
-		const current = view.state.doc.toString();
+		const current = docText;
 
-		if (next === current) return;
-
+		docText = next;
 		view.dispatch({
 			annotations: [Transaction.addToHistory.of(false), valueSync.of(true)],
 			changes: changeBetween(current, next)
@@ -196,26 +210,55 @@
 		syncValue(value);
 	});
 
+	// Each effect reads its props first, so it runs again when they change, and does
+	// nothing until they differ from what the editor was created or last configured with
 	$effect(() => {
-		if (view) reconfigure(editableCompartment, EditorView.editable.of(!disabled));
+		const next = disabled;
+
+		if (!applied || next === applied.disabled) return;
+
+		applied.disabled = next;
+		reconfigure(editableCompartment, EditorView.editable.of(!next));
 	});
 
 	$effect(() => {
-		if (view) reconfigure(labelsCompartment, labels());
+		const next = { ariaLabel, placeholder };
+
+		if (
+			!applied ||
+			(next.ariaLabel === applied.ariaLabel && next.placeholder === applied.placeholder)
+		)
+			return;
+
+		Object.assign(applied, next);
+		reconfigure(labelsCompartment, labels());
 	});
 
 	$effect(() => {
-		if (view) reconfigure(customCompartment, extensions);
+		const next = extensions;
+
+		if (!applied || next === applied.extensions) return;
+
+		applied.extensions = next;
+		reconfigure(customCompartment, next);
 	});
 
 	$effect(() => {
-		if (view) reconfigure(previewCompartment, livePreview());
+		const next = editingWidgets;
+
+		if (!applied || next === applied.editingWidgets) return;
+
+		applied.editingWidgets = next;
+		reconfigure(previewCompartment, livePreview());
 	});
 
 	$effect(() => {
-		const key = renderKey;
+		const next = renderKey;
 
-		if (view) untrack(() => view?.dispatch({ effects: setRenderKey(key) }));
+		if (!applied || next === applied.renderKey) return;
+
+		applied.renderKey = next;
+		untrack(() => view?.dispatch({ effects: setRenderKey(next) }));
 	});
 
 	$effect(() => {
@@ -257,10 +300,8 @@
 	export function replaceText(next: string, caret = next.length) {
 		if (!view) return;
 
-		const current = view.state.doc.toString();
-
 		view.dispatch({
-			changes: next === current ? undefined : changeBetween(current, next),
+			changes: next === docText ? undefined : changeBetween(docText, next),
 			selection: { anchor: Math.min(caret, next.length) },
 			userEvent: 'input.complete'
 		});
