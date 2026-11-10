@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
-#include <mutex>
 
 #if defined(GGML_USE_HIP)
 #define GGML_COMMON_DECL_HIP
@@ -1271,186 +1270,9 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
-struct ggml_cuda_graph {
-#ifdef USE_CUDA_GRAPH
-    ~ggml_cuda_graph() {
-        for (cudaGraphExec_t instance : instances) {
-            CUDA_CHECK(cudaGraphExecDestroy(instance));
-        }
-    }
-    // the ggml graph is captured as a series of CUDA graphs, so the GPU can run one chunk while the next is enqueued
-    std::vector<cudaGraphExec_t> instances;
-    size_t num_nodes = 0;
-    std::vector<cudaGraphNode_t> nodes;
-    bool disable_due_to_gpu_arch = false;
-    bool warmup_complete = false;
-    uint64_t uid = 0;
-    int64_t last_used_time = 0;
-    struct node_properties {
-        ggml_tensor node;
-        void *   node_src_data_ptrs[GGML_MAX_SRC];
-        int64_t  node_src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
-        size_t   node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
-    };
-    std::vector<node_properties> node_props;
-
-    bool is_enabled() const {
-        static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
-        return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env);
-    }
-#endif
-};
-
-struct ggml_cuda_concurrent_event {
-    std::vector<cudaEvent_t> join_events;
-    cudaEvent_t              fork_event = nullptr;
-
-    int                                          n_streams = 0;
-    std::unordered_map<const ggml_tensor *, int> stream_mapping;
-
-    // Original order of nodes in this concurrent region (before interleaving)
-    // Used to restore grouping for fusion within streams
-    std::vector<const ggml_tensor *> original_order;
-
-    const ggml_tensor * join_node;
-
-    ggml_cuda_concurrent_event() = default;
-
-    ggml_cuda_concurrent_event(const ggml_cuda_concurrent_event &) = delete;
-    ggml_cuda_concurrent_event & operator=(const ggml_cuda_concurrent_event &) = delete;
-
-    explicit ggml_cuda_concurrent_event(int n_streams) : n_streams(n_streams) {
-        join_events.resize(n_streams);
-
-        for (size_t i = 0; i < join_events.size(); ++i) {
-            CUDA_CHECK(cudaEventCreateWithFlags(&join_events[i], cudaEventDisableTiming));
-        }
-
-        CUDA_CHECK(cudaEventCreateWithFlags(&fork_event, cudaEventDisableTiming));
-    }
-
-    ggml_cuda_concurrent_event(ggml_cuda_concurrent_event && other) noexcept
-    : join_events(std::move(other.join_events))
-    , fork_event(other.fork_event)
-    , n_streams(other.n_streams)
-    , stream_mapping(std::move(other.stream_mapping))
-    , original_order(std::move(other.original_order))
-    , join_node(other.join_node) {
-        other.fork_event = nullptr;
-    }
-
-    // 1. check if any branches write to overlapping memory ranges (except the join node)
-    // 2. check whether all srcs are either within the branch or outside the nodes covered by ggml_cuda_concurrent_event
-    // we assume all nodes have the same buffer
-    bool is_valid() const {
-        std::vector<std::vector<std::pair<int64_t, int64_t>>> write_ranges;
-        write_ranges.resize(n_streams);
-
-        // get join_node's memory range to exclude from overlap checking.
-        // multiple nodes can use join_node's buffer; we synchronize on the join node.
-        const ggml_tensor * join_t     = join_node->view_src ? join_node->view_src : join_node;
-        const int64_t       join_start = (int64_t) join_t->data;
-        const int64_t       join_end   = join_start + ggml_nbytes(join_t);
-
-        for (const auto & [tensor, stream] : stream_mapping) {
-            const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
-            const int64_t       t_start = (int64_t) t->data;
-            const int64_t       t_end   = t_start + ggml_nbytes(t);
-
-            // skip tensors that overlap with join_node's buffer.
-            if ((t_start <= join_start && join_start < t_end) || (join_start <= t_start && t_start < join_end)) {
-                continue;
-            }
-
-            // concurrent streams begin from 1
-            write_ranges[stream - 1].emplace_back(t_start, t_end);
-        }
-
-        for (int i = 0; i < n_streams; ++i) {
-            // sorts first by start then by end of write range
-            std::sort(write_ranges[i].begin(), write_ranges[i].end());
-        }
-
-        bool writes_overlap = false;
-        bool dependent_srcs = false;
-        for (const auto & [tensor, stream] : stream_mapping) {
-            const ggml_tensor * t = tensor->view_src ? tensor->view_src : tensor;
-            const int64_t       t_start = (int64_t) t->data;
-            const int64_t       t_end   = t_start + ggml_nbytes(t);
-
-            // skip tensors that overlap with join_node's buffer
-            if ((t_start <= join_start && join_start < t_end) || (join_start <= t_start && t_start < join_end)) {
-                continue;
-            }
-
-            // check if this buffer's write data overlaps with another stream's
-            std::pair<int64_t, int64_t> data_range = std::make_pair(t_start, t_end);
-            for (int i = 0; i < n_streams; ++i) {
-                if (i == stream - 1) {
-                    continue;
-                }
-                auto it = std::lower_bound(write_ranges[i].begin(), write_ranges[i].end(), data_range);
-
-                if (it != write_ranges[i].end()) {
-                    const std::pair<int64_t, int64_t> & other = *it;
-
-                    // std::lower_bound returns the first element where other >= data_range (lexicographically).
-                    // This guarantees other.first >= data_range.first.
-                    // Therefore, overlap occurs iff other.first < data_range.second
-                    // (i.e., the other range starts before this range ends).
-                    if (other.first < data_range.second) {
-                        GGML_LOG_DEBUG("Writes overlap for %s", tensor->name);
-                        writes_overlap = true;
-                        break;
-                    }
-                }
-            }
-
-            //check if all srcs are either in branch or don't have a branch
-            for (int i = 0; i < GGML_MAX_SRC; ++i) {
-                if (!tensor->src[i]) {
-                    continue;
-                }
-
-                auto it = stream_mapping.find(tensor->src[i]);
-
-                if (it == stream_mapping.end()) {
-                    continue;
-                }
-
-                if (it->second != stream) {
-                    dependent_srcs = true;
-                    break;
-                }
-            }
-
-            if (dependent_srcs || writes_overlap) {
-                break;
-            }
-        }
-
-        return !writes_overlap && !dependent_srcs;
-    }
-
-    ~ggml_cuda_concurrent_event() {
-        if (fork_event != nullptr) {
-            CUDA_CHECK(cudaEventDestroy(fork_event));
-        }
-        for (cudaEvent_t e : join_events) {
-            if (e != nullptr) {
-                CUDA_CHECK(cudaEventDestroy(e));
-            }
-        }
-    }
-};
-
-struct ggml_cuda_stream_context {
-    std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> concurrent_events;
-
-    void reset() {
-        concurrent_events.clear();
-    }
-};
+// defined in graph.cuh
+struct ggml_cuda_graph;
+struct ggml_cuda_stream_context;
 
 struct ggml_backend_cuda_context {
     int device;
@@ -1472,61 +1294,20 @@ struct ggml_backend_cuda_context {
     int64_t next_graph_eviction_time = 0;
     int64_t last_graph_use_time = 0;
 
-    ggml_cuda_graph * cuda_graph(const void * first_node_ptr, int64_t time_now = ggml_time_us()) {
-        // Give all cached graphs 10s to be reused after an idle period, without updating each graph.
-        if (!cuda_graphs.empty() && time_now - last_graph_use_time >= 10'000'000) {
-            next_graph_eviction_time = time_now + 10'000'000;
-        }
-        last_graph_use_time = time_now;
-
-        // Sweep every 5s during active use, evicting graphs unused for at least 10s.
-        if (time_now >= next_graph_eviction_time) {
-            next_graph_eviction_time = time_now + 5'000'000;
-            for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
-                if (it->first != first_node_ptr && time_now - it->second->last_used_time >= 10'000'000) {
-                    it = cuda_graphs.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        }
-
-        auto it = cuda_graphs.find(first_node_ptr);
-        if (it == cuda_graphs.end()) {
-            it = cuda_graphs.emplace(first_node_ptr, std::make_unique<ggml_cuda_graph>()).first;
-        }
-        it->second->last_used_time = time_now;
-        return it->second.get();
-    }
+    // defined in ggml-cuda.cu, which includes graph.cuh
+    ggml_cuda_graph * cuda_graph(const void * first_node_ptr, int64_t time_now = ggml_time_us());
 
     // Check if any CUDA graph is enabled for this context (used by kernels that need to know
     // if graphs are in use without having access to the specific graph key)
-    bool any_cuda_graph_enabled() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && graph->is_enabled()) {
-                return true;
-            }
-        }
-        return false;
-    }
+    bool any_cuda_graph_enabled() const;
 
     // Check if any CUDA graph has an instance for this context
-    bool any_cuda_graph_has_instance() const {
-        for (const auto & [key, graph] : cuda_graphs) {
-            if (graph && !graph->instances.empty()) {
-                return true;
-            }
-        }
-        return false;
-    }
+    bool any_cuda_graph_has_instance() const;
 #endif // USE_CUDA_GRAPH
 
-    explicit ggml_backend_cuda_context(int device) :
-        device(device),
-        name(GGML_CUDA_NAME + std::to_string(device)) {
-    }
+    explicit ggml_backend_cuda_context(int device);
 
-    ggml_cuda_stream_context concurrent_stream_context;
+    std::unique_ptr<ggml_cuda_stream_context> concurrent_stream_context;
 
     ~ggml_backend_cuda_context();
 
@@ -1540,7 +1321,7 @@ struct ggml_backend_cuda_context {
 
     cudaStream_t stream() { return stream(device, curr_stream_no); }
 
-    ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
+    ggml_cuda_stream_context & stream_context() { return *concurrent_stream_context; }
 
     cublasHandle_t cublas_handle() {
         if (cublas_handles[device][curr_stream_no] == nullptr) {
@@ -1644,60 +1425,8 @@ struct ggml_cuda_pdl_config {
 
 };
 
-static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
-    const int device = ggml_cuda_get_device();
-
-    struct cache_key {
-        int          device;
-        const void * kernel;
-
-        bool operator==(const cache_key & other) const { return device == other.device && kernel == other.kernel; }
-    };
-
-    struct cache_key_hash {
-        // MurmurHash3 mixing function for better hash distribution (vs. just std::hash which in some implementations simply returns the identity)
-        static size_t hash_mix(size_t x) {
-            std::uint64_t       y = x;
-            const std::uint64_t m = 0xe9846af9b1a615d;
-
-            y ^= y >> 32;
-            y *= m;
-            y ^= y >> 32;
-            y *= m;
-            y ^= y >> 28;
-
-            return static_cast<size_t>(y);
-        }
-
-        size_t operator()(const cache_key & key) const {
-            // Use a nonzero seed to avoid mapping all-zero keys to zero
-            size_t h = 42;
-            h        = hash_mix(h + key.device);
-            h        = hash_mix(h + reinterpret_cast<size_t>(key.kernel));
-            return h;
-        }
-    };
-
-    static std::mutex                                          cache_mutex;
-    static std::unordered_map<cache_key, bool, cache_key_hash> cache;
-
-    const cache_key             key = { device, kernel };
-    std::lock_guard<std::mutex> lock(cache_mutex);
-    const auto                  it = cache.find(key);
-    if (it != cache.end()) {
-        return it->second;
-    }
-
-    cudaFuncAttributes attr = {};
-    CUDA_CHECK(cudaFuncGetAttributes(&attr, kernel));
-
-    // PDL device-side primitives are emitted only for PTX versions >= 90.
-    // We have to guard on a loaded kernel's PTX version so a kernel forward-JIT'ed
-    // from pre-Hopper PTX to a Hopper-or-newer GPU does not opt into PDL.
-    const bool can_use_pdl = attr.ptxVersion >= 90;
-    cache.emplace(key, can_use_pdl);
-    return can_use_pdl;
-}
+// whether kernel can be launched with PDL on the current device (also honors GGML_CUDA_PDL=0), defined in ggml-cuda.cu
+bool ggml_cuda_kernel_can_use_pdl(const void * kernel);
 
 #endif //defined(GGML_CUDA_USE_PDL)
 
@@ -1711,13 +1440,7 @@ static bool ggml_cuda_kernel_can_use_pdl(const void * kernel) {
 template<typename Kernel, typename... Args>
 static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_kernel_launch_params & launch_params, Args&&... args) {
 #if defined(GGML_CUDA_USE_PDL)
-
-    static const bool env_pdl_enabled = []() {
-        const char * env = getenv("GGML_CUDA_PDL");
-        return env == nullptr || std::atoi(env) != 0;
-    }();
-
-    if (env_pdl_enabled && ggml_cuda_kernel_can_use_pdl(reinterpret_cast<const void *>(kernel))) {
+    if (ggml_cuda_kernel_can_use_pdl(reinterpret_cast<const void *>(kernel))) {
         auto pdl_cfg = ggml_cuda_pdl_config(launch_params);
 
         CUDA_CHECK(cudaLaunchKernelEx(&pdl_cfg.cfg, kernel, std::forward<Args>(args)... ));
