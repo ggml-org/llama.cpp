@@ -125,7 +125,7 @@ void main() {
     }
 
     if (REPLAY != 0) {
-        const uint n_r = uint(data_n_rep[seq_id]);
+        const uint n_r = uint(clamp(data_n_rep[seq_id], 0, int(n_pend)));
 
         for (uint t = 0; t < n_r; t++) {
             const uint k_off = seq_id * spk3 + t * spk2 + iq1 * spk1;
