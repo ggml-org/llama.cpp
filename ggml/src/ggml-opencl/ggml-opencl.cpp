@@ -23284,15 +23284,9 @@ static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const 
     const int64_t n_head    = q->ne[2];
     const int64_t n_head_kv = k->ne[2];
 
-    // Only on by default where it was measured, and only for head size >= 256.
-    // The extra KQ traffic costs ~1/(dk+dv) of the attention compute, and the
-    // fused tile is only weak at large head sizes.
     const bool measured_gen = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
                               backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X ||
                               backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E;
-    if (env != 1 && !(measured_gen && dk >= 256)) {
-        return false;
-    }
 
     if (n_q < 2) {
         return false;
@@ -23350,14 +23344,24 @@ static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const 
         (mask->nb[1] % sizeof(ggml_fp16_t)) == 0 &&
         k->nb[1] * n_kv / 16 <= backend_ctx->image_max_buffer_size;
 
+    // Keep DK64 with attention sinks opt-in until its accuracy is validated.
+    const bool dk64_ok = kq_p8 && dst->src[4] == nullptr && n_head / n_head_kv >= 2 &&
+        n_kv >= 1024 && n_q <= n_kv / 2;
+    const int min_dk = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? (dk64_ok ? 64 : 128) : 256;
+    if (env != 1 && !(measured_gen && dk >= min_dk)) {
+        return false;
+    }
+
     static const char * direct_env = getenv("GGML_OPENCL_FA_KQV_DIRECT");
     const bool kqv_direct = (!direct_env || direct_env[0] != '0') && kq_p8 &&
         backend_ctx->kernel_fa_kqv_direct_f16 != nullptr && backend_ctx->kernel_fa_kqv_direct_reduce != nullptr &&
         v->ne[1] == n_kv && v->ne[2] == n_head_kv &&
         n_q <= 32 / (n_head / n_head_kv) && dv >= 128 && dv <= INT_MAX && (dv % 128) == 0 &&
         n_head <= INT_MAX / (n_q * dv) && (v->nb[1] % 4) == 0 && (v->nb[2] % 4) == 0;
-    // Small batches must avoid rebuilding V^T. The other paths need at least 32 queries.
-    if (n_q < 32 && !kqv_direct) {
+    const bool small_p8 = backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E &&
+        kq_p8 && dk >= 128 && n_kv >= 1024;
+    // Small batches without direct PV need P8 and a long KV cache on X2E.
+    if (n_q < 32 && !kqv_direct && !small_p8) {
         return false;
     }
 
