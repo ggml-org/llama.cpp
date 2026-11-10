@@ -4,13 +4,14 @@
 #  SPDX-License-Identifier: MIT
 
 print_usage() {
-    echo "Usage: ./build.sh [fp32|fp16] [ssl|nossl] [--aot aot_flags] [--help]"
+    echo "Usage: ./build.sh [fp32|fp16] [ssl|no-ssl] [no-xmx] [--aot aot_flags] [--help]"
     echo ""
     echo "Options:"
     echo "  fp32    Build with FP32 precision (default)"
     echo "  fp16    Build with FP16 precision (faster for long-prompt inference)"
     echo "  ssl     Build with OpenSSL (default)"
-    echo "  nossl   Build without OpenSSL"
+    echo "  no-ssl  Build without OpenSSL"
+    echo "  no-xmx  Disable XMX (DPAS) support"
     echo "  --aot   Set SYCL AOT device architecture, e.g. arl-h,acm-g10,bmg-g21 or bmg-g21"
     echo "  --help  Print this help message"
 }
@@ -18,6 +19,7 @@ print_usage() {
 PRECISION=fp32
 SSL=ON
 AOT_FLAGS=""
+SYCL_SUPPORT_XMX=ON
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -33,8 +35,12 @@ while [[ $# -gt 0 ]]; do
             SSL=ON
             shift
             ;;
-        nossl)
+        no-ssl)
             SSL=OFF
+            shift
+            ;;
+        no-xmx)
+            SYCL_SUPPORT_XMX=OFF
             shift
             ;;
         --aot)
@@ -65,20 +71,20 @@ source /opt/intel/oneapi/setvars.sh
 
 if [ "$PRECISION" = "fp16" ]; then
     #for FP16
-    printf 'cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON -DLLAMA_OPENSSL=%s' "$SSL"
+    printf 'cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON -DGGML_SYCL_SUPPORT_XMX=%s -DLLAMA_OPENSSL=%s' "$SYCL_SUPPORT_XMX" "$SSL"
     if [[ ${#AOT_OPTION[@]} -gt 0 ]]; then
         printf ' %s' "${AOT_OPTION[@]}"
     fi
     echo " # faster for long-prompt inference"
-    cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON -DLLAMA_OPENSSL="$SSL" "${AOT_OPTION[@]}" # faster for long-prompt inference
+    cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_F16=ON -DGGML_SYCL_SUPPORT_XMX="$SYCL_SUPPORT_XMX" -DLLAMA_OPENSSL="$SSL" "${AOT_OPTION[@]}" # faster for long-prompt inference
 else
     #for FP32
-    printf 'cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DLLAMA_OPENSSL=%s' "$SSL"
+    printf 'cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_SUPPORT_XMX=%s -DLLAMA_OPENSSL=%s' "$SYCL_SUPPORT_XMX" "$SSL"
     if [[ ${#AOT_OPTION[@]} -gt 0 ]]; then
         printf ' %s' "${AOT_OPTION[@]}"
     fi
     echo
-    cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_SUPPORT_XMX=OFF -DLLAMA_OPENSSL="$SSL" "${AOT_OPTION[@]}"
+    cmake .. -DGGML_SYCL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DGGML_SYCL_SUPPORT_XMX="$SYCL_SUPPORT_XMX" -DLLAMA_OPENSSL="$SSL" "${AOT_OPTION[@]}"
 fi
 
 #build example/main
