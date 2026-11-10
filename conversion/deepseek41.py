@@ -80,7 +80,8 @@ def engram_compressed_token_map(tokenizer_dir: Path) -> tuple[list[int], int]:
     for token_id in range(len(tokenizer)):
         text = backend.decode([token_id], skip_special_tokens=False)
         if "\ufffd" in text:
-            key = str(backend.id_to_token(token_id))
+            key = backend.id_to_token(token_id)
+            assert key is not None
         else:
             normalized = normalizer.normalize_str(text)
             key = normalized if normalized else text
