@@ -1052,7 +1052,9 @@ static std::ifstream open_ifstream_binary(const std::string & fname) {
 // in test-mtmd-impl, we include woth common.h and this file, and these functions are duplicated
 // this is a quick fix to avoid compilation errors
 #ifndef DIRECTORY_SEPARATOR
-static std::string string_format(const char * fmt, ...) {
+
+// same string_format as libcommon; not static because gcc -Wformat-truncation false-positives on internal-linkage copies
+inline std::string string_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
     va_start(ap, fmt);

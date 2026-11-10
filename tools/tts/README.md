@@ -196,6 +196,7 @@ Available params:
 - Note: there is no text normalization (the reference uses NeMo text normalization), numbers, dates and abbreviations are read as written; supply normalized text, e.g. "twenty twenty-four" instead of "2024"
 - `--tts-speaker-file` clones the voice of a clip (the first 60 s are used) with the speaker encoder of the release, the "embedding" speaker mode of the reference
 - `llama-server` also takes `speed` (relative to 15 UTF-8 bytes per second) and `loudness` (LUFS), see the `/tts` endpoint; they pick the speaking-rate and loudness condition buckets of the checkpoint, the defaults leave them unknown
+- Note: `loudness` has a strong effect with a cloned voice; a predefined voice mostly keeps the loudness of its reference clip
 - Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference: temperature 0.75 (`--temp` changes it), top-k 80, top-p 0.69, repetition penalty 2.4 over the last 96 frames of codebooks 0 to 5
 - Each frame is 2940 samples (about 67 ms), generation stops at the end-of-audio code
 
