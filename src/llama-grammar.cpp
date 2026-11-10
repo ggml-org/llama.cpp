@@ -944,7 +944,7 @@ static std::vector<std::pair<uint32_t, uint32_t>> llama_grammar_opaque_tokens(co
     std::sort(ranges.begin(), ranges.end());
     std::vector<std::pair<uint32_t, uint32_t>> merged;
     for (const auto & r : ranges) {
-        if (!merged.empty() && r.first <= merged.back().second + 1) {
+        if (!merged.empty() && r.first <= (uint64_t) merged.back().second + 1) {
             merged.back().second = std::max(merged.back().second, r.second);
         } else {
             merged.push_back(r);
