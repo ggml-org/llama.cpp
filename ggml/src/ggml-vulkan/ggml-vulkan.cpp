@@ -3791,26 +3791,34 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
+        // shader needs >= 16 lanes and 16 subgroups per WG; prefer wave64
+        auto gdn_sg_ok = [&](uint32_t sg) {
+            const bool reachable = device->subgroup_size_control ? device->subgroup_min_size <= sg && sg <= device->subgroup_max_size
+                                                                 : device->subgroup_size == sg;
+            return reachable && 16u * sg <= device->properties.limits.maxComputeWorkGroupInvocations;
+        };
+        const uint32_t gdn_sg = gdn_sg_ok(64) ? 64u : device->subgroup_size;
         if (gdn_chunked && device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
-            device->subgroup_size == 64) {
+            gdn_sg >= 16 && gdn_sg_ok(gdn_sg)) {
             const bool bf16acc = device->coopmat_bf16_acc_support;
+            const std::vector<uint32_t> gdn_spec = { 16u * gdn_sg };
             // V=64: state mirror in shared, 7 bindings
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
-                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64" : "gated_delta_net_f32_cm1_wave64",
-                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_len : gated_delta_net_f32_cm1_wave64_len,
-                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_data : (const void *)gated_delta_net_f32_cm1_wave64_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc" : "gated_delta_net_f32_cm1",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_len : gated_delta_net_f32_cm1_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_data : (const void *)gated_delta_net_f32_cm1_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
-                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64_v32" : "gated_delta_net_f32_cm1_wave64_v32",
-                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_v32_len : gated_delta_net_f32_cm1_wave64_v32_len,
-                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v32_data : (const void *)gated_delta_net_f32_cm1_wave64_v32_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_v32" : "gated_delta_net_f32_cm1_v32",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_v32_len : gated_delta_net_f32_cm1_v32_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_v32_data : (const void *)gated_delta_net_f32_cm1_v32_data,
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
             // V=128: state mirror in a gmem scratch buffer, 8 bindings
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
-                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_wave64_v128" : "gated_delta_net_f32_cm1_wave64_v128",
-                bf16acc ? gated_delta_net_f32_cm1_bf16acc_wave64_v128_len : gated_delta_net_f32_cm1_wave64_v128_len,
-                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_wave64_v128_data : (const void *)gated_delta_net_f32_cm1_wave64_v128_data,
-                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 64);
+                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_v128" : "gated_delta_net_f32_cm1_v128",
+                bf16acc ? gated_delta_net_f32_cm1_bf16acc_v128_len : gated_delta_net_f32_cm1_v128_len,
+                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_v128_data : (const void *)gated_delta_net_f32_cm1_v128_data,
+                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
         }
 #endif
         GGML_UNUSED(gdn_chunked);
