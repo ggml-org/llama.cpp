@@ -1,6 +1,7 @@
 #include "mmq-few.cuh"
 #include "cp-async.cuh"
 #include "mma.cuh"
+#include "mmvq.cuh"
 #include "quantize.cuh"
 #include "vecdotq.cuh"
 
@@ -934,10 +935,9 @@ static bool mmq_few_supported(const ggml_type type, const int cc) {
     return mmq_few_unit_size(type) != 0;
 }
 
-// Min. number of src1 columns for the few-row MMQ, 0 if it is not used for this type, GPU and row length.
-static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const int64_t ne00) {
-    // with fewer than 8 units of 256 values per row the warps idle, MMVQ and MMQ are better there
-    if (!mmq_few_supported(type, cc) || ne00 < 8*QK_K) {
+// Min. number of src1 columns for the few-row MMQ, 0 if it is not used for this type and GPU.
+static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc) {
+    if (!mmq_few_supported(type, cc)) {
         return 0;
     }
     if (cc == GGML_CUDA_CC_DGX_SPARK) { // tuned on DGX Spark GB10
@@ -959,13 +959,16 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
 bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, const int cc) {
     int nunits_stage;
     if (ids) {
-        // after MMVQ up to 24 tokens, the pairs are built in up to 48 KB of shared memory
-        if (!mmq_few_supported(src0->type, cc) || ids->ne[1] > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS || (2*src0->ne[2] + 1)*int64_t(sizeof(int)) > 48*1024) {
+        // DGX Spark: from the min. tokens of MUL_MAT, the other GPUs: after MMVQ
+        const int min_ntokens = cc == GGML_CUDA_CC_DGX_SPARK ? ggml_cuda_mmq_few_min_ncols(src0->type, cc) : get_mmvq_mmid_max_batch(src0->type, cc) + 1;
+        // up to 24 tokens, the pairs are built in up to 48 KB of shared memory
+        if (!mmq_few_supported(src0->type, cc) || ids->ne[1] < min_ntokens || ids->ne[1] > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS || (2*src0->ne[2] + 1)*int64_t(sizeof(int)) > 48*1024) {
             return false;
         }
         nunits_stage = mmq_few_nunits_stage(src0->type, 1, 1);
     } else {
-        const int min_ncols = ggml_cuda_mmq_few_min_ncols(src0->type, cc, src0->ne[0]);
+        // with fewer than 8 units of 256 values per row the warps idle, MMVQ and MMQ are better there
+        const int min_ncols = src0->ne[0] >= 8*QK_K ? ggml_cuda_mmq_few_min_ncols(src0->type, cc) : 0;
         if (min_ncols == 0 || src1->ne[1] < min_ncols || src1->ne[1] > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS) {
             return false;
         }
