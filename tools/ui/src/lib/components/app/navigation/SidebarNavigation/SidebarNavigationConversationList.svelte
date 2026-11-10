@@ -94,13 +94,14 @@
 	let recentLabel = $derived(groupsStore.groups.length > 0 ? 'Ungrouped' : 'Recent conversations');
 
 	// Every group is a section of its own, between Pinned and Recent. A pinned
-	// chat stays in Pinned; any other chat in a group shows in its section only.
+	// chat stays in Pinned; any other chat in a group shows in its section only,
+	// with its forks nested under it as in Recent.
 	let groupSections = $derived(
 		groupsStore.groups.map((group) => ({
-			conversations: conversations
-				.filter((conversation) => conversation.groupId === group.id && !conversation.pinned)
-				.sort((a, b) => b.lastModified - a.lastModified),
-			group
+			group,
+			items: conversationTree.filter(
+				({ conversation }) => conversation.groupId === group.id && !conversation.pinned
+			)
 		}))
 	);
 
@@ -216,8 +217,8 @@
 					<SidebarNavigationGroupSection
 						class={className}
 						conversationRow={conversationItem}
-						conversations={section.conversations}
 						group={section.group}
+						items={section.items}
 					/>
 				{:else}
 					{@render recentSection()}

@@ -24,18 +24,20 @@
 		uiStore
 	} from '$lib/stores';
 	import type { DatabaseConversation, Group, MenuAction } from '$lib/types';
+	import type { ConversationTreeItem } from '$lib/utils';
 	import type { Snippet } from 'svelte';
 	import { slide } from 'svelte/transition';
 
 	interface Props {
 		class?: string;
-		conversations: DatabaseConversation[];
 		group: Group;
+		/** The group's chats, forks nested under their parents. */
+		items: ConversationTreeItem[];
 		/** Row renderer from the list, which owns the per-chat actions. */
-		conversationRow: Snippet<[DatabaseConversation]>;
+		conversationRow: Snippet<[DatabaseConversation, number]>;
 	}
 
-	let { class: className = '', conversationRow, conversations, group }: Props = $props();
+	let { class: className = '', conversationRow, group, items }: Props = $props();
 
 	let contextMenuOpen = $state(false);
 	let dropdownOpen = $state(false);
@@ -44,11 +46,9 @@
 	let sectionId = $derived(`${SIDEBAR_SECTION_IDS.GROUP_PREFIX}${group.id}`);
 	let open = $derived(uiStore.isSidebarSectionOpen(sectionId));
 	let expanded = $derived(uiStore.isSidebarSectionExpanded(sectionId));
-	let shownConversations = $derived.by(() => {
+	let shownItems = $derived.by(() => {
 		// a dragged chat leaves its section until it is dropped somewhere
-		const shown = conversations.filter(
-			(conversation) => conversation.id !== sidebarDragStore.convId
-		);
+		const shown = items.filter(({ conversation }) => conversation.id !== sidebarDragStore.convId);
 
 		return expanded ? shown : shown.slice(0, SIDEBAR_SECTION_PREVIEW_COUNT);
 	});
@@ -91,7 +91,7 @@
      and a chat dropped anywhere on it joins the group -->
 <SidebarNavigationDropZone
 	class="flex min-w-0 flex-col"
-	holds={(convId) => conversations.some((conversation) => conversation.id === convId)}
+	holds={(convId) => items.some(({ conversation }) => conversation.id === convId)}
 	onDrop={handleDrop}
 	{sectionId}
 >
@@ -136,9 +136,9 @@
 
 	<CollapsibleRegion {open}>
 		<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0.5 {className}">
-			{#each shownConversations as conversation (conversation.id)}
+			{#each shownItems as { conversation, depth } (conversation.id)}
 				<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
-					{@render conversationRow(conversation)}
+					{@render conversationRow(conversation, depth)}
 				</li>
 			{:else}
 				<li>
@@ -152,7 +152,7 @@
 				</li>
 			{/each}
 
-			{#if conversations.length > SIDEBAR_SECTION_PREVIEW_COUNT}
+			{#if items.length > SIDEBAR_SECTION_PREVIEW_COUNT}
 				<!-- only an opened section is long enough for its row to need to stick -->
 				<li class={expanded ? SIDEBAR_SHOW_MORE_ROW_CLASS : 'p-0'}>
 					<SidebarNavigationShowMore

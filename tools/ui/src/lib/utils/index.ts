@@ -67,6 +67,7 @@ export {
 	getMessageCount,
 	getConversationModel,
 	buildConversationTree,
+	collectForkFamily,
 	type ConversationTreeItem
 } from './conversation-utils';
 

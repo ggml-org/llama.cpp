@@ -23,7 +23,12 @@ import {
 } from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tabsStore } from '$lib/stores/tabs.svelte';
-import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
+import {
+	collectForkFamily,
+	filterByLeafNodeId,
+	findLeafNode,
+	generateConversationTitle
+} from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -693,24 +698,27 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 * Moves a conversation into a group, or out of one when `groupId` is null.
-	 * A pinned chat that joins a group leaves Pinned, since group sections do
-	 * not show pinned chats.
+	 * Moves a conversation with its whole fork family into a group, or out of one
+	 * when `groupId` is null: a family never splits across sections. A pinned chat
+	 * that joins a group leaves Pinned, since group sections do not show pinned chats.
 	 *
 	 * @param convId - Conversation to move
-	 * @param groupId - Target group, null to take the conversation out of its group
+	 * @param groupId - Target group, null to take the conversations out of their group
 	 */
 	async setConversationGroup(convId: string, groupId: string | null): Promise<void> {
-		const pinned = this.conversations.find((conversation) => conversation.id === convId)?.pinned;
-		const updates: Partial<DatabaseConversation> = {
-			groupId: groupId ?? undefined,
-			...(groupId && pinned ? { pinned: false } : {})
-		};
+		const ids = new Set(collectForkFamily(this.conversations, convId));
 
 		try {
-			await DatabaseService.updateConversation(convId, updates);
+			await DatabaseService.setConversationsGroup([...ids], groupId);
 
-			this.applyConversationUpdate(convId, updates);
+			for (const conversation of this.conversations) {
+				if (!ids.has(conversation.id)) continue;
+
+				this.applyConversationUpdate(conversation.id, {
+					groupId: groupId ?? undefined,
+					...(groupId && conversation.pinned ? { pinned: false } : {})
+				});
+			}
 		} catch (error) {
 			console.error('Failed to move conversation to group:', error);
 		}

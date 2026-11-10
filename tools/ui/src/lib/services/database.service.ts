@@ -615,6 +615,28 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Puts conversations into a group, or out of any group when `groupId` is null.
+	 * A conversation that joins a group is unpinned.
+	 *
+	 * @param ids - Conversation IDs
+	 * @param groupId - Target group, null to take them out of their group
+	 */
+	static async setConversationsGroup(ids: string[], groupId: string | null): Promise<void> {
+		await db[IDXDB_TABLES.conversations]
+			.where('id')
+			.anyOf(ids)
+			.modify((conversation) => {
+				if (groupId) {
+					conversation.groupId = groupId;
+
+					if (conversation.pinned) conversation.pinned = false;
+				} else {
+					delete conversation.groupId;
+				}
+			});
+	}
+
+	/**
 	 * Toggles the pinned status of a conversation.
 	 *
 	 * @param id - Conversation ID
