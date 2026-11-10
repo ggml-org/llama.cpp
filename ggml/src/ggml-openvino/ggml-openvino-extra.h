@@ -137,10 +137,10 @@ bool ggml_openvino_npu_hfa_prefill_enabled();
 bool ggml_openvino_npu_decode_unfold_enabled();
 bool ggml_openvino_npu_parallel_compile_enabled();
 
-// GGML_OPENVINO_NPU_BLOB_PREBUILD=1: static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
+// GGML_OPENVINO_NPU_BLOB_PREBUILD (default 1): static NPU graphs attend a KV window of 1024*2^k rows (clamped to ctx)
 // instead of the whole ctx, with one decode model per window, all built/imported with the prefill/decode pair;
 // with head-major KV the prefill models of every window are also exported and preloaded.
-// Returns the window base (1024), 0 = off.
+// Returns the window base (1024), 0 = off (GGML_OPENVINO_NPU_BLOB_PREBUILD=0).
 int ggml_openvino_npu_decode_bucket();
 
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the

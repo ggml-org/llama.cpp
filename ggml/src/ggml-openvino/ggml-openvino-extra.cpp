@@ -389,7 +389,7 @@ int ggml_openvino_npu_decode_bucket() {
     if (!ggml_openvino_is_npu()) {
         return 0;
     }
-    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD") != 0 ? 1024 : 0;
+    return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD", 1) != 0 ? 1024 : 0;
 }
 
 bool ggml_openvino_npu_kv_on_demand_enabled() {
