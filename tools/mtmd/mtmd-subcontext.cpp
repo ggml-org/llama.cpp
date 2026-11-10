@@ -82,7 +82,7 @@ mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_n
         backend = ggml_backend_dev_init(device, nullptr);
         if (!backend) {
             ggml_backend_free(backend_cpu);
-            throw std::runtime_error(string_format("%s: failed to initialize \"%s\" backend\n",
+            throw std::runtime_error(mtmd_format("%s: failed to initialize \"%s\" backend\n",
                                                    __func__, ggml_backend_dev_name(device)));
         }
     }
@@ -164,7 +164,7 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
         // so the [1, 256] bound only applies to FFT-based models.
         const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
         if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
-            throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
+            throw std::runtime_error(mtmd_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
         }
         img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
