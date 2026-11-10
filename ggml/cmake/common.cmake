@@ -43,6 +43,9 @@ function(ggml_get_system_arch)
             (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
             CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|i686|AMD64|amd64)$"))
         set(GGML_SYSTEM_ARCH "x86" PARENT_SCOPE)
+    elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "e2k")
+        # lcc translates x86 SSE2/AVX2 intrinsics to native e2k-v6 vector ops
+        set(GGML_SYSTEM_ARCH "x86" PARENT_SCOPE)
     elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc|power")
         set(GGML_SYSTEM_ARCH "PowerPC" PARENT_SCOPE)
     elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
