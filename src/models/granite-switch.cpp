@@ -336,9 +336,11 @@ llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             // keep adapter_ids aligned to the kept rows (2D round-trip for get_rows)
             const int64_t n_out = inp_out_ids->ne[0];
-            adapter_ids = ggml_get_rows(ctx0,
-                ggml_reshape_2d(ctx0, adapter_ids, 1, adapter_ids->ne[0]), inp_out_ids);
-            adapter_ids = ggml_reshape_1d(ctx0, adapter_ids, n_out);
+            if (adapter_ids) {
+                adapter_ids = ggml_get_rows(ctx0,
+                    ggml_reshape_2d(ctx0, adapter_ids, 1, adapter_ids->ne[0]), inp_out_ids);
+                adapter_ids = ggml_reshape_1d(ctx0, adapter_ids, n_out);
+            }
         }
 
         cur = build_layer_ffn(cur, inpSA, adapter_ids, il);
@@ -392,9 +394,10 @@ ggml_tensor * llama_model_granite_switch::graph::build_attention_layer(
         Kcur = ggml_add(ctx0, Kcur, build_switched_lora_delta(sl.a_k, sl.b_k, cur, adapter_ids));
         Vcur = ggml_add(ctx0, Vcur, build_switched_lora_delta(sl.a_v, sl.b_v, cur, adapter_ids));
     } else {
-        Qcur = ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0);
-        Kcur = ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv));
-        Vcur = ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv));
+        // ggml_cont: reshape_3d below requires contiguous inputs; views of fused qkv are not
+        Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_q,  qkv->ne[1], qkv->nb[1], 0));
+        Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], n_embd_q*ggml_element_size(qkv)));
+        Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd_kv, qkv->ne[1], qkv->nb[1], (n_embd_q + n_embd_kv)*ggml_element_size(qkv)));
     }
 
     Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
