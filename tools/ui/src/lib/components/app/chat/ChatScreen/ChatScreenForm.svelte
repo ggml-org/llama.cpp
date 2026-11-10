@@ -161,5 +161,6 @@
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
+		singleRow
 	/>
 </div>

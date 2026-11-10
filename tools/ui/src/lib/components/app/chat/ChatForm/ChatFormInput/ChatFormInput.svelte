@@ -11,6 +11,10 @@
 
 	interface Props {
 		class?: ClassValue;
+		/** One line tall, beside the actions instead of above them. */
+		compact?: boolean;
+		/** The height of the text, which the form reads to know when it fills a line. */
+		contentHeight?: number | null;
 		disabled?: boolean;
 		/** Fill the expanded chat form: the editor takes all its height and scrolls inside. */
 		expanded?: boolean;
@@ -23,6 +27,8 @@
 
 	let {
 		class: className = '',
+		compact = false,
+		contentHeight = $bindable(null),
 		disabled = false,
 		expanded = false,
 		onInput,
@@ -44,8 +50,6 @@
 
 	// CSS can not transition a height that follows its content, so the editor's content
 	// height is mirrored onto this wrapper as a length the stylesheet transitions
-	let contentHeight = $state<number | null>(null);
-
 	$effect(() => {
 		const content = editor?.getContentDOM();
 
@@ -149,7 +153,8 @@
 	bind:this={box}
 	style:height={contentHeight === null ? undefined : `${contentHeight}px`}
 	class={[
-		'chat-form-input mb-0.5',
+		'chat-form-input',
+		compact ? 'compact' : 'mb-0.5',
 		expanded && 'expanded',
 		disabled && 'cursor-not-allowed',
 		className
@@ -188,6 +193,10 @@
 
 	.chat-form-input.expanded {
 		max-height: none;
+	}
+
+	.chat-form-input.compact {
+		min-height: 1.5rem;
 	}
 
 	@media (prefers-reduced-motion: reduce) {

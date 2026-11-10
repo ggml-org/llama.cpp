@@ -13,6 +13,7 @@
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
+		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
@@ -65,7 +66,7 @@
 		isAudioRecordingSupported,
 		microphoneUnavailableReason
 	} from '$lib/utils/browser-only';
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';
 
@@ -80,6 +81,8 @@
 		disabled?: boolean;
 		/** Grow into a large editor once the message holds markdown or several lines. */
 		expandable?: boolean;
+		/** On a desktop, keep a message of one line on the actions' row, in a pill. */
+		singleRow?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
 		showAddButton?: boolean;
@@ -113,6 +116,7 @@
 		placeholder = 'Type a message...',
 		showAddButton = true,
 		showModelSelector = true,
+		singleRow = false,
 		uploadedFiles = $bindable([]),
 		value = $bindable('')
 	}: Props = $props();
@@ -249,6 +253,42 @@
 		isEnabled: () => expandable
 	});
 	let isExpanded = $derived(expansion.isExpanded);
+
+	// One line of text shares the actions' row; a second line, or one that wraps beside the
+	// actions, takes the two rows. It stays there until the text is shorter than where it
+	// wrapped, as the wider row of its own would fit it again and flip it straight back
+	let textHeight = $state<number | null>(null);
+	let wrappedAtLength = Infinity;
+	let isSingleRow = $state(untrack(() => singleRow));
+	let canBeSingleRow = $derived(
+		singleRow &&
+			!deviceStore.isMobile &&
+			!isExpanded &&
+			!hasAttachments &&
+			!mcpStore.resources.hasAttachments &&
+			!value.includes('\n')
+	);
+
+	// Re-runs after its own switch too, and measures the text as it is laid out then: the
+	// height the input last reported can be the other layout's
+	$effect(() => {
+		void textHeight;
+
+		const height = inputRef?.getContentDOM()?.offsetHeight ?? 0;
+		const fitsOneLine = height < CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX;
+		const length = value.length;
+
+		if (!length) wrappedAtLength = Infinity;
+
+		if (!canBeSingleRow) {
+			isSingleRow = false;
+		} else if (isSingleRow && !fitsOneLine) {
+			isSingleRow = false;
+			wrappedAtLength = length;
+		} else if (!isSingleRow && length < wrappedAtLength) {
+			isSingleRow = true;
+		}
+	});
 	let isPickerOpen = $derived(
 		pickers.isCommandPickerOpen ||
 			pickers.isMentionPickerOpen ||
@@ -643,7 +683,8 @@
 		bind:this={cardEl}
 		class={[
 			INPUT_CLASSES,
-			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden rounded-4xl md:rounded-3xl transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
+			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
+			isSingleRow ? 'rounded-(--chat-form-single-row-radius)' : 'rounded-4xl md:rounded-3xl',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',
@@ -653,7 +694,7 @@
 			'[--chat-form-expanded-min-height:calc(var(--chat-form-drop)+var(--chat-form-collapsed-height))]',
 			isExpanded
 				? 'min-h-[min(var(--chat-form-expanded-min-height,50dvh),calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-5rem))]'
-				: ['min-h-0', expandable && 'md:min-h-(--chat-form-collapsed-height)'],
+				: ['min-h-0', expandable && !isSingleRow && 'md:min-h-(--chat-form-collapsed-height)'],
 			// the phone sheet's fill is opaque, so Safari's toolbar strip can match it and it
 			// needs no backdrop blur, the costliest thing to repaint
 			(isExpanded || expansion.isBlurHeld) && 'max-md:backdrop-blur-none',
@@ -671,9 +712,11 @@
 			],
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
+		data-single-row={isSingleRow || undefined}
 		data-slot="input-area"
 	>
-		{#if expandable}
+		<!-- a single row has no room for it: a message expands once it has a second line -->
+		{#if expandable && !isSingleRow}
 			<ActionIcon
 				class={expandToggleClass}
 				icon={isExpanded ? Minimize : Maximize}
@@ -695,7 +738,11 @@
 
 		<div
 			class={[
-				'relative flex min-h-12 flex-1 flex-col rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-shadow focus-within:shadow-md md:py-3!',
+				'relative flex flex-1 shadow-sm transition-shadow focus-within:shadow-md',
+				// the add button, the text and the rest of the actions, or the text above them
+				isSingleRow
+					? 'items-center gap-2 rounded-(--chat-form-single-row-radius) px-3 py-2.5'
+					: 'min-h-12 flex-col rounded-4xl py-2 pb-2.25 md:rounded-3xl md:py-3!',
 				// the phone sheet is wider than the collapsed card by the page's side inset: its
 				// content is inset by as much, so nothing reflows while it moves
 				isExpanded && 'max-md:px-(--chat-form-side-inset)',
@@ -704,9 +751,11 @@
 			]}
 		>
 			<ChatFormInput
+				bind:contentHeight={textHeight}
 				bind:this={inputRef}
 				bind:value
-				class={['px-5 py-1.5 md:pt-0', expandable && 'pr-12']}
+				class={isSingleRow ? 'pr-1' : ['px-5 py-1.5 md:pt-0', expandable && 'pr-12']}
+				compact={isSingleRow}
 				{disabled}
 				expanded={isExpanded}
 				onInput={() => {
@@ -730,12 +779,13 @@
 			{/if}
 
 			<!-- its own box, so the phone sheet can hold it by the bottom edge while it moves -->
-			<div bind:this={actionsEl} class="relative mt-auto">
+			<div bind:this={actionsEl} class={isSingleRow ? 'contents' : 'relative mt-auto'}>
 				<ChatFormActions
 					bind:this={chatFormActionsRef}
 					canSend={canSubmit}
-					class="px-3"
+					class={isSingleRow ? undefined : 'px-3'}
 					{disabled}
+					inline={isSingleRow}
 					{isLoading}
 					isReasoning={chatStore.isReasoning}
 					{isRecording}

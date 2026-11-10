@@ -8,9 +8,10 @@
 		/** The message the form starts with, as a restored draft would be. */
 		initialValue?: string;
 		onSubmit?: () => void;
+		singleRow?: boolean;
 	}
 
-	let { expandable = false, initialValue = '', onSubmit }: Props = $props();
+	let { expandable = false, initialValue = '', onSubmit, singleRow = false }: Props = $props();
 
 	let value = $state(untrack(() => initialValue));
 	let form: ChatForm | undefined = $state();
@@ -21,5 +22,5 @@
 </script>
 
 <Tooltip.Provider>
-	<ChatForm bind:this={form} bind:value {expandable} {onSubmit} />
+	<ChatForm bind:this={form} bind:value {expandable} {onSubmit} {singleRow} />
 </Tooltip.Provider>

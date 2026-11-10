@@ -22,6 +22,8 @@
 		canSend?: boolean;
 		class?: string;
 		disabled?: boolean;
+		/** Lay the actions out in the row around them, the add button first, the rest last. */
+		inline?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
@@ -43,6 +45,7 @@
 		canSend = false,
 		class: className = '',
 		disabled = false,
+		inline = false,
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
@@ -121,11 +124,15 @@
 </script>
 
 <div
-	class="flex w-full items-center gap-3 {className} {showAddButton ? '' : 'justify-end'}"
-	style="container-type: inline-size"
+	style:container-type={inline ? undefined : 'inline-size'}
+	class={[
+		inline ? 'contents' : 'flex w-full items-center gap-3',
+		className,
+		!showAddButton && 'justify-end'
+	]}
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-2">
+		<div class={['flex items-center gap-2', inline ? 'order-first' : 'mr-auto']}>
 			<ChatFormActionsAdd />
 		</div>
 	{/if}

@@ -5,6 +5,8 @@ export const PROMPT_TRIGGER_PREFIX = '/';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
 /** Lines of text from which the main chat form expands into its large editor. */
 export const CHAT_FORM_EXPAND_MIN_LINES = 4;
+/** Below this text height (a 24px line and change) the main chat form keeps to one row. */
+export const CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX = 36;
 
 /**
  * How far the chat form floats above the bottom of the screen: a phone browser's toolbar is
