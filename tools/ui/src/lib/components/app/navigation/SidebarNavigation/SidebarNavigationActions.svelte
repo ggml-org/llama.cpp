@@ -20,17 +20,22 @@
 
 	interface Props {
 		class: string;
+		/** The items to show: the sidebar's top actions unless given, e.g. its footer's. */
+		items?: DesktopIconStripItem[];
 		onAction?: (action: SidebarAction) => void;
-		/** Called before following a route item, so a phone can collapse the sidebar. */
-		onNavigate?: () => void;
+		/** Follows a route item, so a phone can open its page behind the sidebar and then close it. */
+		onNavigate?: (go: () => Promise<unknown>) => void;
 	}
 
-	let { class: className, onAction, onNavigate }: Props = $props();
+	let { class: className, items = SIDEBAR_ACTIONS_ITEMS, onAction, onNavigate }: Props = $props();
 
-	// the models manager stays desktop-only: a phone picks its models in the selector
+	// the models manager stays desktop-only: a phone picks its models in the selector; a phone
+	// reaches search from the round key at the top of the sidebar instead
 	const actions = $derived(
-		SIDEBAR_ACTIONS_ITEMS.filter(
-			(item) => item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile
+		items.filter(
+			(item) =>
+				!deviceStore.isMobile ||
+				(item.action !== SidebarAction.MANAGE_MODELS && item.action !== SidebarAction.SEARCH)
 		)
 	);
 	let initialized = $state(false);
@@ -53,10 +58,7 @@
 		}
 
 		if (route) {
-			return () => {
-				onNavigate?.();
-				goto(route);
-			};
+			return () => (onNavigate ? onNavigate(() => goto(route)) : void goto(route));
 		}
 
 		return undefined;
@@ -84,10 +86,11 @@
 </script>
 
 {#snippet itemIcon(IconComponent: Component)}
-	<IconComponent class={ICON_CLASS_DEFAULT} />
+	<IconComponent class="{ICON_CLASS_DEFAULT} max-md:size-5.5" />
 {/snippet}
 
-<div class="{className} flex flex-col gap-5 md:gap-1 mt-2 md:mt-0">
+<!-- a phone sizes its rows for a thumb, flush one under the other like a list's -->
+<div class="{className} flex flex-col md:gap-1">
 	{#each actions as item, i (item.tooltip)}
 		{@const isActive = isItemActive(item)}
 		{@const itemOnClick = itemClickHandler(item)}
@@ -100,8 +103,10 @@
 		{#if showIcons}
 			<div transition:fade={itemTransition}>
 				<Button
-					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 {isActive
-						? 'bg-accent text-accent-foreground'
+					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 rounded-(--surface-row-radius) max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
+						? // raised and edged, where a hover only tints: bg-accent matched the hover in light
+							// and sank below an inset group's fill in dark
+							'bg-background text-accent-foreground shadow-sm ring-1 ring-border/50 hover:bg-background dark:bg-foreground/15 dark:hover:bg-foreground/15'
 						: ''}"
 					href={item.route}
 					onclick={() => {
@@ -113,7 +118,7 @@
 					size="default"
 					variant="ghost"
 				>
-					<span class="flex min-w-0 items-center px-0.5 gap-2">
+					<span class="flex min-w-0 items-center gap-2 px-0.5 max-md:gap-3.5">
 						{@render itemIcon(item.icon)}
 
 						{#if showIcons}

@@ -135,7 +135,7 @@
 	{/snippet}
 
 	<CollapsibleRegion {open}>
-		<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0.5 {className}">
+		<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
 			{#each shownItems as { conversation, depth } (conversation.id)}
 				<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
 					{@render conversationRow(conversation, depth)}

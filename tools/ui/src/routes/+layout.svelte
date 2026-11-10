@@ -4,7 +4,7 @@
 	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { ActionIcon, MenuIcon, SidebarNavigation } from '$lib/components/app';
+	import { GlassKey, MenuIcon, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -358,6 +358,7 @@
 			onpointerdown={sidebarReveal.handlePointerDown}
 			onpointermove={sidebarReveal.handlePointerMove}
 			onpointerup={sidebarReveal.handlePointerUp}
+			ontransitionend={sidebarReveal.handleTransitionEnd}
 		>
 			<!-- the installed app's status bar sits over the page: what scrolls under it fades out;
 			     the expanded chat form keeps clear of the bar itself -->
@@ -392,13 +393,11 @@
 			     aside while the expanded chat form covers the screen -->
 			{#if deviceStore.isMobile && !page.url.hash.includes(ROUTES.SEARCH) && !uiStore.isComposerExpanded}
 				<div transition:fade={{ duration: CHAT_FORM_CHROME_FADE_MS }}>
-					<ActionIcon
-						ariaLabel={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
-						class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-20 transition-colors h-10 w-10 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground"
+					<GlassKey
+						class="sidebar-reveal-pin-top fixed top-(--corner-control-top) left-4 z-30"
 						icon={MenuIcon}
-						iconSize="size-6"
+						label={uiStore.isSidebarExpanded ? 'Collapse navigation' : 'Expand navigation'}
 						onclick={toggleSidebar}
-						size="lg"
 					/>
 				</div>
 			{/if}
