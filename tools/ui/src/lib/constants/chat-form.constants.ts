@@ -8,6 +8,18 @@ export const PROMPT_TRIGGER_PREFIX = '/';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
 
 /**
+ * How far the chat form floats above the bottom of the screen: a phone browser's toolbar is
+ * already a margin below it (iOS Safari's most of all), and the installed app keeps it clear
+ * of the home indicator, in line with the bottom corner action.
+ */
+export const CHAT_FORM_BOTTOM_OFFSET = {
+	desktop: '1rem',
+	installedApp: '1.5rem',
+	iosSafari: '0.5rem',
+	phoneBrowser: '0.75rem'
+} as const;
+
+/**
  * The chat form moving between its centered (new chat) and bottom positions:
  * it fades out drifting toward where it goes, then fades back in where it
  * lands, instead of sliding across the column. The exit uses a gentler curve

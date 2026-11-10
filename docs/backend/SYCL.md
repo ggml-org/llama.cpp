@@ -52,6 +52,9 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
+- 2026.11
+  - Update the CI and release build for oneAPI 2026.2 and Level Zero SDK 1.34.0. oneDNN is updated to the 2026.1 stand-alone package.
+
 - 2026.09
   - Update the CI build environment for oneAPI 2026.1 (unified oneAPI Toolkit). oneDNN is removed from the Deep Learning Essentials package in 2026.0, so the CI now uses the oneAPI Toolkit installer which still includes oneDNN.
   - oneAPI 2026.1 improves the SYCL build performance: measured with the same code on Arc B570, prompt processing 1331 vs 434 t/s (3.1x) vs the 2025.3-based release build.
@@ -285,6 +288,7 @@ Upon a successful installation, SYCL is enabled for the available Intel devices,
 
 |Verified release|
 |-|
+|2026.2 |
 |2026.1 |
 |2025.3.3 |
 |2025.2.1|

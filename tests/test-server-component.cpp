@@ -1,5 +1,6 @@
 #include "testing.h"
 
+#include "../tools/server/server-chat.h"
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <regex>
 #include <string>
 #include <thread>
@@ -665,6 +667,79 @@ static void test_glob_match(testing & t) {
     });
 }
 
+//
+// OpenAI speech API
+//
+
+static void test_speech_convert(testing & t) {
+    const json base = {{"model", "tts"}, {"input", "Hello"}, {"voice", "alba"}};
+
+    auto with = [&](const char * key, const json & value) {
+        json body = base;
+        body[key] = value;
+        return body;
+    };
+    auto rejected = [&](const char * key, const json & value) {
+        try {
+            convert_speech_to_tts(with(key, value));
+        } catch (const std::invalid_argument &) {
+            return true;
+        }
+        return false;
+    };
+
+    // defaults
+    json out = convert_speech_to_tts(base);
+    t.assert_equal("input kept",        std::string("Hello"), out.at("input").get<std::string>());
+    t.assert_equal("voice kept",        std::string("alba"),  out.at("voice").get<std::string>());
+    t.assert_equal("default format",    std::string("wav"),   out.at("response_format").get<std::string>());
+    t.assert_true ("no stream",         !out.contains("stream"));
+
+    // response_format
+    out = convert_speech_to_tts(with("response_format", "wav"));
+    t.assert_equal("wav",               std::string("wav"),   out.at("response_format").get<std::string>());
+    out = convert_speech_to_tts(with("response_format", "pcm"));
+    t.assert_equal("pcm is 16-bit",     std::string("pcm16"), out.at("response_format").get<std::string>());
+    for (const char * format : {"mp3", "opus", "aac", "flac", "pcm16"}) {
+        t.assert_true(std::string("rejects ") + format, rejected("response_format", format));
+    }
+
+    // custom voice
+    out = convert_speech_to_tts(with("voice", json{{"id", "voice_1234"}}));
+    t.assert_equal("voice object",      std::string("voice_1234"), out.at("voice").get<std::string>());
+
+    // stream_format
+    out = convert_speech_to_tts(with("stream_format", "audio"));
+    t.assert_true ("audio streams",     out.at("stream").get<bool>());
+    t.assert_true ("rejects sse",       rejected("stream_format", "sse"));
+
+    // speed
+    t.assert_true ("speed 1.0",         !rejected("speed", 1.0));
+    t.assert_true ("rejects speed 1.5", rejected("speed", 1.5));
+
+    // instructions are ignored
+    t.assert_true ("instructions",      !rejected("instructions", "whisper"));
+}
+
+static void test_pcm_f32_to_s16(testing & t) {
+    auto sample = [](const std::string & bytes, size_t i) {
+        int16_t v;
+        memcpy(&v, bytes.data() + i * sizeof(v), sizeof(v));
+        return (int) v;
+    };
+
+    const std::vector<float> samples = {0.0f, 1.0f, -1.0f, 0.5f, 2.0f, -2.0f};
+    const std::string bytes = pcm_f32_to_s16(samples.data(), samples.size());
+    t.assert_equal("size",           (size_t) 12, bytes.size());
+    t.assert_equal("zero",           0,      sample(bytes, 0));
+    t.assert_equal("max",            32767,  sample(bytes, 1));
+    t.assert_equal("min",            -32767, sample(bytes, 2));
+    t.assert_equal("rounds",         16384,  sample(bytes, 3));
+    t.assert_equal("clamps above",   32767,  sample(bytes, 4));
+    t.assert_equal("clamps below",   -32767, sample(bytes, 5));
+    t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -690,6 +765,8 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("speech_convert",  test_speech_convert);
+    t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
 
     return t.summary();
 }

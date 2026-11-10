@@ -360,6 +360,74 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
+struct mtmd_helper_resampler {
+    ma_resampler       rs;
+    bool               passthrough = false;
+    std::vector<float> out;
+};
+
+mtmd_helper_resampler * mtmd_helper_resampler_init(int32_t rate_in, int32_t rate_out) {
+    if (rate_in <= 0 || rate_out <= 0) {
+        LOG_ERR("%s: invalid sample rate %d -> %d\n", __func__, rate_in, rate_out);
+        return nullptr;
+    }
+    auto * ctx = new mtmd_helper_resampler;
+    if (rate_in == rate_out) {
+        ctx->passthrough = true;
+        return ctx;
+    }
+    ma_resampler_config config = ma_resampler_config_init(ma_format_f32, 1, (ma_uint32) rate_in, (ma_uint32) rate_out,
+                                                          ma_resample_algorithm_linear);
+    config.linear.lpfOrder = MA_MAX_FILTER_ORDER;
+    if (ma_resampler_init(&config, nullptr, &ctx->rs) != MA_SUCCESS) {
+        LOG_ERR("%s: failed to initialize the resampler %d -> %d\n", __func__, rate_in, rate_out);
+        delete ctx;
+        return nullptr;
+    }
+    return ctx;
+}
+
+void mtmd_helper_resampler_free(mtmd_helper_resampler * ctx) {
+    if (!ctx) {
+        return;
+    }
+    if (!ctx->passthrough) {
+        ma_resampler_uninit(&ctx->rs, nullptr);
+    }
+    delete ctx;
+}
+
+int64_t mtmd_helper_resampler_process(mtmd_helper_resampler * ctx, const float * in, size_t n_in, const float ** out) {
+    if (ctx->passthrough) {
+        *out = in;
+        return (int64_t) n_in;
+    }
+    ma_uint64 n_expected = 0;
+    if (ma_resampler_get_expected_output_frame_count(&ctx->rs, n_in, &n_expected) != MA_SUCCESS) {
+        return -1;
+    }
+    ctx->out.resize(n_expected + 16);
+    size_t n_done_in  = 0;
+    size_t n_done_out = 0;
+    while (n_done_in < n_in) {
+        if (n_done_out == ctx->out.size()) {
+            ctx->out.resize(ctx->out.size() * 2);
+        }
+        ma_uint64 cnt_in  = n_in - n_done_in;
+        ma_uint64 cnt_out = ctx->out.size() - n_done_out;
+        if (ma_resampler_process_pcm_frames(&ctx->rs, in + n_done_in, &cnt_in, ctx->out.data() + n_done_out, &cnt_out) != MA_SUCCESS) {
+            return -1;
+        }
+        if (cnt_in == 0 && cnt_out == 0) {
+            break;
+        }
+        n_done_in  += cnt_in;
+        n_done_out += cnt_out;
+    }
+    *out = ctx->out.data();
+    return (int64_t) n_done_out;
+}
+
 static bool is_webp_file(const unsigned char * buf, size_t len) {
     // WEBP ref: https://developers.google.com/speed/webp/docs/riff_container
     return len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;

@@ -103,6 +103,7 @@ class ServerProcess:
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
     spec_draft_n_ubatch: int | None = None
+    spec_draft_n_gpu_layer: int | None = None
     spec_synth_len: float | None = None
     spec_synth_rates: List[float] | None = None
     no_ui: bool | None = None
@@ -262,6 +263,8 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
         if self.spec_draft_n_ubatch:
             server_args.extend(["--spec-draft-n-ubatch", self.spec_draft_n_ubatch])
+        if self.spec_draft_n_gpu_layer:
+            server_args.extend(["--spec-draft-ngl", self.spec_draft_n_gpu_layer])
         if self.spec_synth_len is not None:
             server_args.extend(["--spec-synth-len", self.spec_synth_len])
         if self.spec_synth_rates is not None:
@@ -689,6 +692,20 @@ class ServerPreset:
         server.n_batch = 512
         server.n_slots = 2
         server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
+    def tinylfm3omni() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/tinyLFM3-Omni-for-testing-gguf:Q2_K"
+        server.model_alias = "tinylfm3omni"
+        server.n_ctx = 1024
+        server.n_batch = 512
+        server.n_slots = 1
         server.seed = 42
         return server
 

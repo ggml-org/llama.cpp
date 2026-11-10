@@ -12,6 +12,7 @@
 	import { SidebarAction } from '$lib/enums';
 	import { deviceStore } from '$lib/stores';
 	import type { DesktopIconStripItem } from '$lib/types';
+	import { hapticTap } from '$lib/utils';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -103,7 +104,12 @@
 						? 'bg-accent text-accent-foreground'
 						: ''}"
 					href={item.route}
-					onclick={itemOnClick}
+					onclick={() => {
+						// a phone confirms the tap by feel, as a native list does
+						if (deviceStore.isMobile) hapticTap();
+
+						itemOnClick?.();
+					}}
 					size="default"
 					variant="ghost"
 				>

@@ -356,4 +356,6 @@ export interface ChatFormActionsContext {
 	readonly hasVisionModality: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
+	/** Opens the working directory picker; set where the + menu offers it (a phone's new chat). */
+	onWorkingDirectoryClick?: () => void;
 }

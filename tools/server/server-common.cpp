@@ -9,6 +9,8 @@
 
 #include "server-common.h"
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -198,6 +200,19 @@ const char * get_media_marker() {
         return std::string("<__media_") + random_string() + "__>";
     }();
     return marker.c_str();
+}
+
+//
+// audio utils
+//
+
+std::string pcm_f32_to_s16(const float * samples, size_t n) {
+    std::string bytes(n * sizeof(int16_t), '\0');
+    for (size_t i = 0; i < n; i++) {
+        const int16_t v = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767.0f);
+        memcpy(&bytes[2 * i], &v, sizeof(v));
+    }
+    return bytes;
 }
 
 //

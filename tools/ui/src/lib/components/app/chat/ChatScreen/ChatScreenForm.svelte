@@ -4,6 +4,7 @@
 	import { ChatForm } from '$lib/components/app';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 	import { deviceStore } from '$lib/stores';
+	import { hapticTap } from '$lib/utils';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -81,6 +82,10 @@
 
 		if (!chatFormRef?.checkModelSelected()) return;
 
+		// the message goes: a phone confirms it by feel. Before any await, so it still runs inside
+		// the tap or keypress that sent it, which iOS needs to play the tick
+		hapticTap();
+
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
 
@@ -104,6 +109,10 @@
 
 	function handleUploadedFileRemove(fileId: string) {
 		onFileRemove?.(fileId);
+	}
+
+	export function openWorkingDirectoryPicker() {
+		chatFormRef?.openWorkingDirectoryPicker();
 	}
 
 	// Auto-focus must not steal focus already claimed elsewhere (e.g. the system
