@@ -112,16 +112,18 @@ void main() {
     [[unroll]] for (uint32_t idx = 0; idx < Br * HSK / 4; idx += gl_WorkGroupSize.x) {
         uint32_t d = (idx + tid) % (HSK / 4);
         uint32_t r = (idx + tid) / (HSK / 4);
-        const bool is_in_bounds = r < Br && d < HSK / 4 && i * Br + r < N;
+        const bool is_in_bounds = r < Br && d < HSK / 4 && (GQA_TOK > 1 ? row_valid(r) : i * Br + r < N);
+        const uint32_t q_idx = GQA_TOK > 1 ? (row_tok(r) * p.nb01 + (row_head(r) * p.nb02 + iq3 * p.nb03) / 4) / 4 + d
+                                           : q_offset / 4 + (i * Br + r) * q_stride / 4 + d;
 #ifndef MMQ
         if (is_in_bounds) {
-            Qf[r * qf_stride + d] = FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale);
+            Qf[r * qf_stride + d] = FLOAT_TYPEV4(data_qv4[q_idx] * p.scale);
         }
 #else
         const uint buf_ib = r * qf_stride + d / 8;
         const uint buf_iqs = d % 8;
 
-        vec4 vals = is_in_bounds ? data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale : vec4(0.0f);
+        vec4 vals = is_in_bounds ? data_qv4[q_idx] * p.scale : vec4(0.0f);
         const vec4 abs_vals = abs(vals);
 
         const float thread_max = max(max(abs_vals.x, abs_vals.y), max(abs_vals.z, abs_vals.w));
@@ -181,7 +183,7 @@ void main() {
     // FaBlockBytesK/V == 2 for f16, 16 for f32, ggml block byte size for quants.
     uint32_t k_offset = (ik2*p.nb12 + ik3*p.nb13) / FaBlockBytesK;
     uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / FaBlockBytesV;
-    uint32_t m_offset = gqa_iq1*KV;
+    uint32_t m_offset = (GQA_TOK > 1 ? 0u : gqa_iq1)*KV;
     if (p.nem2 != 1 || p.nem3 != 1) {
         m_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
         mo_offset += ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * CEIL_DIV(p.nem1, Br) * mo_stride;
@@ -216,7 +218,8 @@ void main() {
                         uint32_t kcol;
                         bool kv_active = fa_kv_index(j * Bc + c, kcol);
                         if (kv_active && (!nem1_bounds_check || i * Br + r < p.nem1)) {
-                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
+                            const uint32_t m_row = GQA_TOK > 1 ? min(row_tok(r), p.nem1 - 1) * KV : (i * Br + r) * m_stride;
+                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + m_row + kcol]);
                             masksh[c * masksh_stride + r] = m;
                             max_mask = max(max_mask, float(m));
                         } else {
@@ -664,7 +667,7 @@ void main() {
     // If there is split_k, then the split_k resolve shader does the final
     // division by L. Store the intermediate O value and per-row m and L values.
     if (p.k_num > 1) {
-        if (p.gqa_ratio > 1) {
+        if (p.gqa_ratio > 1 && GQA_TOK == 1) {
             // note: O and Q have swapped coord 1,2.
             uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (gqa_iq1 + p.ne2 * iq3)) / 4;
 
@@ -688,20 +691,22 @@ void main() {
         } else {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                 const uint row = tile_row(r);
-                const uint global_row = i * Br + row;
+                const uint global_row = GQA_TOK > 1 ? row_tok(row) : i * Br + row;
+                const uint head = GQA_TOK > 1 ? row_head(row) : iq2;
+                const bool row_ok = GQA_TOK > 1 ? row_valid(row) : global_row < N;
 
-                if (global_row < N) {
+                if (row_ok) {
                     uint32_t o_offset = HSV * p.ne1 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3)) / 4;
 
                     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-                        data_ov4[o_offset + iq2 * HSV/4 + d * D_split + d_tid] = D_TYPEV4(Of[r][d]);
+                        data_ov4[o_offset + head * HSV/4 + d * D_split + d_tid] = D_TYPEV4(Of[r][d]);
                     }
                 }
 
-                if (global_row < N && d_tid == 0 && col_tid == 0) {
+                if (row_ok && d_tid == 0 && col_tid == 0) {
                     uint32_t lm_offset = HSV * p.ne1 * p.k_num * p.ne2 * p.ne3 + p.ne1 * 2 * (split_k_index + p.k_num * (global_row + p.ne2 * iq3));
-                    data_o[lm_offset + iq2] = D_TYPE(Lf[r]);
-                    data_o[lm_offset + p.ne1 + iq2] = D_TYPE(Mf[r]);
+                    data_o[lm_offset + head] = D_TYPE(Lf[r]);
+                    data_o[lm_offset + p.ne1 + head] = D_TYPE(Mf[r]);
                 }
             }
         }
@@ -743,9 +748,9 @@ void main() {
         }
     }
 
-    uint32_t o_offset = (gqa_iq1*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV) / 4;
+    uint32_t o_offset = ((GQA_TOK > 1 ? 0u : gqa_iq1)*p.ne1*HSV + iq3*p.ne2*p.ne1*HSV) / 4;
 
-    if (p.gqa_ratio > 1) {
+    if (p.gqa_ratio > 1 && GQA_TOK == 1) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
             const uint row = tile_row(r);
             if (row < N) {
@@ -757,9 +762,11 @@ void main() {
     } else {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
             const uint row = tile_row(r);
-            if (i * Br + row < N) {
+            const uint global_row = GQA_TOK > 1 ? row_tok(row) : i * Br + row;
+            const uint head = GQA_TOK > 1 ? row_head(row) : iq2;
+            if (GQA_TOK > 1 ? row_valid(row) : global_row < N) {
                 [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
-                    data_ov4[o_offset + (iq2 * HSV + (i * Br + row) * p.ne1 * HSV) / 4 + d * D_split + d_tid] = D_TYPEV4(Of[r][d]);
+                    data_ov4[o_offset + (head * HSV + global_row * p.ne1 * HSV) / 4 + d * D_split + d_tid] = D_TYPEV4(Of[r][d]);
                 }
             }
         }

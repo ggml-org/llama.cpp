@@ -19,6 +19,8 @@ layout (constant_id = 13) const uint32_t FaTypeV = 0;
 // sizeof(decode buffer): quants -> ggml block size; F32 -> 16 (decodeBufF32 vec4).
 layout (constant_id = 14) const uint32_t FaBlockBytesK = 2;
 layout (constant_id = 15) const uint32_t FaBlockBytesV = 2;
+// GQA path: query tokens per row tile; 1 = one token per tile
+layout (constant_id = 16) const uint32_t GQA_TOK = 1;
 
 const bool USE_MASK_OPT    = (Flags & 1) != 0;
 const bool MASK_ENABLE     = (Flags & 2) != 0;
@@ -224,6 +226,17 @@ void init_indices()
         start_j = min(split_k_index * per_blocks, total_blocks);
         end_j   = min((split_k_index + 1) * per_blocks, total_blocks);
     }
+}
+
+// GQA_TOK > 1: tile row r holds token gqa_iq1 * GQA_TOK + r / gqa_ratio and head iq2 + r % gqa_ratio
+uint32_t row_tok(const in uint32_t r) {
+    return gqa_iq1 * GQA_TOK + r / p.gqa_ratio;
+}
+uint32_t row_head(const in uint32_t r) {
+    return iq2 + r % p.gqa_ratio;
+}
+bool row_valid(const in uint32_t r) {
+    return r < N && row_tok(r) < p.ne2;
 }
 
 // Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).

@@ -8359,14 +8359,37 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                             (int64_t)KV >= std::max<int64_t>(4096, min_ratio * (int64_t)n_kv_max) &&
                             (gqa_ratio > 1 || (tuning_params.path == FA_SCALAR && N == 1));
 
-    // GGML_VK_FA_QTOK_FOLD (opt-in): fold several query tokens into one coopmat1 GQA row tile, so each K/V block is loaded once per gqa_tok tokens
+    // Intel Alchemist prefers more workgroups
+    const uint32_t shader_core_count_multiplier = (ctx->device->vendor_id == VK_VENDOR_ID_INTEL && ctx->device->architecture != INTEL_XE2) ? 2 : 1;
+
+    // Use a placeholder core count if one isn't available. split_k is a big help for perf.
+    const uint32_t shader_core_count = ctx->device->shader_core_count ? ctx->device->shader_core_count * shader_core_count_multiplier : 16;
+
+    // Fold several query tokens into one GQA row tile, so each K/V block is loaded once per gqa_tok tokens
     uint32_t gqa_tok = 1;
-    static const bool fa_qtok_fold = getenv("GGML_VK_FA_QTOK_FOLD") != nullptr;
-    if (fa_qtok_fold && gqa_ratio > 1 && neq1 > 1 && !use_sparse &&
-        tuning_params.path == FA_COOPMAT1 && tuning_params.block_rows >= 2 * gqa_ratio) {
-        gqa_tok = tuning_params.block_rows / gqa_ratio;
-        N = gqa_tok * gqa_ratio;
-        workgroups_x = (uint32_t)CEIL_DIV(neq1, gqa_tok);
+    static const bool disable_qtok_fold = getenv("GGML_VK_FA_QTOK_FOLD_DISABLE") != nullptr;
+    if (!disable_qtok_fold && gqa_ratio > 1 && neq1 > 1 && !use_sparse &&
+        (tuning_params.path == FA_COOPMAT1 || tuning_params.path == FA_SCALAR)) {
+        vk_fa_tuning_params fold_params = tuning_params;
+        bool fold_pays = true;
+        if (tuning_params.path == FA_SCALAR) {
+            // the scalar tile size depends on the row count, so size it for all folded rows
+            fold_params = get_fa_tuning_params(ctx->device, HSK, HSV, gqa_ratio * neq1, KV, k_type_eff, v_type_eff, f32acc);
+            // scalar: fold if the unfolded dispatch gets no split_k (more tokens than rows), or if the fold adds no padded rows and each KV split keeps at least 16 blocks
+            const uint32_t fold_tok = std::max(1u, fold_params.block_rows / gqa_ratio);
+            const uint32_t fold_wgs = CEIL_DIV(neq1, fold_tok) * workgroups_y * workgroups_z;
+            const uint32_t fold_split = std::max(1u, shader_core_count * 2 / fold_wgs);
+            const uint32_t split_blocks = ROUNDUP_POW2(std::max(1u, KV / fold_split), fold_params.block_cols) / fold_params.block_cols;
+            fold_pays = neq1 > tuning_params.block_rows ||
+                        (CEIL_DIV(neq1, fold_tok) * fold_params.block_rows <= neq1 * tuning_params.block_rows && split_blocks >= 16);
+        }
+        // the mask opt bits are read for row block 0, so it has to hold every token
+        if (fold_pays && fold_params.path == tuning_params.path && fold_params.block_rows >= 2 * gqa_ratio && fold_params.block_rows >= neq1) {
+            tuning_params = fold_params;
+            gqa_tok = tuning_params.block_rows / gqa_ratio;
+            N = gqa_tok * gqa_ratio;
+            workgroups_x = (uint32_t)CEIL_DIV(neq1, gqa_tok);
+        }
     }
 
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
@@ -8443,12 +8466,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     uint32_t split_kv = KV;
     uint32_t split_k = 1;
-
-    // Intel Alchemist prefers more workgroups
-    const uint32_t shader_core_count_multiplier = (ctx->device->vendor_id == VK_VENDOR_ID_INTEL && ctx->device->architecture != INTEL_XE2) ? 2 : 1;
-
-    // Use a placeholder core count if one isn't available. split_k is a big help for perf.
-    const uint32_t shader_core_count = ctx->device->shader_core_count ? ctx->device->shader_core_count * shader_core_count_multiplier : 16;
 
     const uint32_t Br = fa_pipeline_state.Br;
     const uint32_t Bc = fa_pipeline_state.Bc;
