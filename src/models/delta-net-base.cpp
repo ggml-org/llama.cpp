@@ -121,8 +121,8 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
     hist = ggml_reshape_3d(ctx0, hist, channels, n_hist, n_seqs);
     cb(hist, "conv_hist", il);
 
-    // the column table is sized for the widest window of the model
-    ggml_tensor * win_cols = ggml_view_2d(ctx0, inp->rep_cols, n_conv, n_seqs, inp->rep_cols->nb[1], 0);
+    ggml_tensor * win_cols = n_conv == inp->rep_cols_r->ne[0] ? inp->rep_cols_r : inp->rep_cols_p;
+    GGML_ASSERT(win_cols && win_cols->ne[0] == n_conv);
 
     // [channels, n_conv + n_seq_tokens]: the window after the kept pending tokens, then the new tokens
     // (built channels first, a transposed concat is much slower than a concat and a transpose)

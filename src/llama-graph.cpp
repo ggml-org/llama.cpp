@@ -4140,15 +4140,22 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
     inp->has_rep = mctx_cur->get_rs_replay();
     if (inp->has_rep) {
         // the widest conv window of the model: the delta-net conv, or the PLE n-gram conv (qwen4exp)
-        inp->n_conv = hparams.ssm_d_conv - 1;
-        if (hparams.ple_conv_state() > 0) {
-            inp->n_conv = std::max<int64_t>(inp->n_conv, (int64_t) (hparams.ple_conv_kernel - 1)*hparams.ple_ngram_size);
-        }
+        const int64_t n_conv_r = hparams.ssm_d_conv - 1;
+        const int64_t n_conv_p = hparams.ple_conv_state() > 0 ? (int64_t) (hparams.ple_conv_kernel - 1)*hparams.ple_ngram_size : 0;
+
+        inp->n_conv = std::max(n_conv_r, n_conv_p);
         inp->n_pend = cparams.n_rs_seq + 1;
 
         inp->rep_cols = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, inp->n_conv, n_seqs);
         ggml_set_input(inp->rep_cols);
         ggml_set_name(inp->rep_cols, "rs_rep_cols");
+
+        const auto win = [&](int64_t n) {
+            return n == inp->n_conv ? inp->rep_cols : ggml_view_2d(ctx0, inp->rep_cols, n, n_seqs, inp->rep_cols->nb[1], 0);
+        };
+
+        inp->rep_cols_r = win(n_conv_r);
+        inp->rep_cols_p = n_conv_p > 0 ? win(n_conv_p) : nullptr;
 
         inp->rep_n = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
         ggml_set_input(inp->rep_n);
