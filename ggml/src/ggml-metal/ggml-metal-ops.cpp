@@ -4335,7 +4335,10 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 }
             }
         } else {
-            nwg = 32;
+            // 16 workgroups with more simdgroups each measured faster than 32x1 on the 64-lane
+            // RX 580: decode 67 -> 75 GFLOPS, prefill 305 -> 393 GFLOPS at head 128. Only claimed
+            // for 64-lane devices; 32-lane keeps the upstream value, which was never measured here.
+            nwg = (nw == 64) ? 16 : 32;
             nsg = 1;
             while (2*nwg*nsg*ncpsg < ne11_attn && nsg < 4) {
                 nsg *= 2;
