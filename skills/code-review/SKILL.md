@@ -22,7 +22,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
-- `tools/ui/` (or the legacy `tools/server/webui/`) -> **WebUI**
+- `ui/apps/chat/` (or the legacy `tools/server/webui/`) -> **WebUI**
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
 - anything else, plus all of the above -> **General** (always runs)
 
@@ -119,9 +119,9 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Security: don't trust client-supplied headers (e.g. `X-Forwarded-For`) or add footguns; things like IP allowlisting belong at a reverse proxy unless there's a trusted-proxy design.
 - Wire new behavior into the existing request/response and checkpoint paths correctly; watch for resource leaks across requests.
 
-## WebUI (`tools/ui/`)
+## WebUI (`ui/apps/chat/`)
 
-These apply only to changes under `tools/ui/` (formerly `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
+These apply only to changes under `ui/apps/chat/` (formerly `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
 
 The dominant review theme in this area is placement: most accepted nits are about putting a value, function, or piece of logic in the layer where it belongs.
 
@@ -192,7 +192,7 @@ Adjacent data-shape rule: empty string is not a valid "unset" initial state - us
 - Sanitize anything rendered from model or remote data: the rehype/`{@html}` pipeline, SVG content, and URLs (use the `$lib/utils` URL sanitizer rather than ad-hoc checks or a third-party lib for trivial cases).
 - Proxy headers and agent/tool filesystem access are security boundaries - scope enforcement (e.g. browse-root sandboxing) must be validated end-to-end, not just in the UI; loop in server reviewers for the C++ side.
 
-### PR hygiene specific to `tools/ui`
+### PR hygiene specific to `ui/apps/chat`
 
 - Build artifacts are not committed - the UI is built by CI (`.github/workflows/ui-build.yml`) and downloaded/bundled at release time. `npm run build` must still succeed locally; a red UI build job is blocking.
 - `npm run lint && npm run check` (and `npm run format`) must pass; a failing Storybook test is blocking.

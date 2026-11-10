@@ -10,8 +10,8 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 /**
  * Demo video recordings.
  *
- * Env (also read from tools/ui/.env):
- *   DEMO_UI_DIR         tools/ui checkout to record (default: this one), e.g. a PR worktree
+ * Env (also read from ui/apps/chat/.env):
+ *   DEMO_UI_DIR         ui/apps/chat checkout to record (default: this one), e.g. a PR worktree
  *   DEMO_UI_PORT        port for that checkout's vite dev server (default: 5180)
  *   DEMO_SERVER_ORIGIN  llama-server the UI proxies to (default: http://localhost:9931)
  *   DEMO_LLAMA_SERVER   llama-server binary started when none runs there (default: build/bin)
@@ -27,7 +27,8 @@ const UI_PORT = Number(process.env.DEMO_UI_PORT ?? 5180);
 const SERVER_ORIGIN = process.env.DEMO_SERVER_ORIGIN ?? 'http://localhost:9931';
 const SERVER_PORT = Number(new URL(SERVER_ORIGIN).port || 80);
 const LLAMA_SERVER =
-	process.env.DEMO_LLAMA_SERVER ?? resolve(import.meta.dirname, '../../../build/bin/llama-server');
+	process.env.DEMO_LLAMA_SERVER ??
+	resolve(import.meta.dirname, '../../../../build/bin/llama-server');
 
 export const VIEWPORT = { height: 900, width: 1440 };
 /** Device pixel ratio the demos render and record at. */

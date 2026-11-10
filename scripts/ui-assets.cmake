@@ -144,7 +144,7 @@ endfunction()
 # Generate ui.cpp/ui.h embedding every file of ${dist_dir} (empty table when
 # it has no index.html), gzip-compressed when LLAMA_UI_GZIP is enabled.
 function(emit_files dist_dir)
-    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/tools/ui")
+    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/ui/apps/chat")
 
     # Collect the asset list once and reuse it for the fingerprint,
     # validation, compression and embedding.
@@ -518,7 +518,7 @@ function(hf_download version out_var out_resolved)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 1. Priority 1: pre-built assets supplied in tools/ui/dist
+# 1. Priority 1: pre-built assets supplied in ui/apps/chat/dist
 # ---------------------------------------------------------------------------
 if(EXISTS "${SRC_DIST_DIR}/index.html")
     message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
@@ -585,7 +585,7 @@ if(NOT provisioned)
                         "In a disconnected environment, download the pre-built UI "
                         "from a llama.cpp release at "
                         "https://github.com/ggml-org/llama.cpp/releases and "
-                        "extract to tools/ui/dist.")
+                        "extract to ui/apps/chat/dist.")
     endif()
 endif()
 
