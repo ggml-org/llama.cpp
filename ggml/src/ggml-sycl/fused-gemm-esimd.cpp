@@ -7,7 +7,7 @@
 // One thread owns MR rows of one expert's weight and one BN-wide tile of the schedule, over the
 // whole K. Per k step (32 values) it loads the rows' stored bits, dequantizes them in registers to
 // the f16 A operand of dpas (RC = 8 rows x 16 k, row major) and multiplies it with the packed B,
-// which is already the dpas VNNI operand: [K/2][Npad][2] halves, 16 columns a row.
+// which is already the dpas VNNI operand: [K/2][Npad][2] halves, NW columns a dpas.
 //
 // The joint_matrix kernel dequantizes into SLM and reads it back in the same sub-group, which is
 // staging, not sharing; dpas takes registers, so that round trip and its barriers are gone here.
@@ -15,15 +15,42 @@
 // the same ascending order as its tile_c reduction, and every format below rounds A exactly as its
 // joint_matrix A stage does, so the output is the same bits.
 //
-// A weight format is a grouped_gemm_esimd_a<block> with: raw, the stored bits of the MR rows for one k step;
-// load(), which fetches them from the expert's slice in either layout (grouped_gemm_esimd::slice); and
+// A weight format is a grouped_gemm_esimd_a<block, MR> with: raw, the stored bits of the MR rows for one k
+// step; load(), which fetches them from the expert's slice in either layout (grouped_gemm_esimd::slice); and
 // decode(), the f16 A of one row group.
 // It reads the same fields as the joint_matrix A stage of its format.
+//
+// The kernel is built for one grouped_gemm_arch: the dpas width NW (the columns of B one dpas takes, the
+// sub-group size of the joint_matrix combination it stands in for), the rows of one thread, and
+// whether 2D block loads exist. Xe2 and Xe-HPC: 16 wide, 32 rows, 2D loads. Xe-HPG (Arc A, ARL-H):
+// 8 wide, no 2D block messages, and 256 registers of 32 bytes, half of Xe2's file, so 16 rows: its
+// 32-row accumulators alone would take half the registers.
 static constexpr int GGML_SYCL_GROUPED_GEMM_KSPLIT = 4;   // FG_KSPLIT of the joint_matrix kernel
 static constexpr int GGML_SYCL_GROUPED_GEMM_BN     = GGML_SYCL_FG_BN;
-static constexpr int GROUPED_GEMM_MR               = 32;  // rows of one thread: one 2D load covers them
+static constexpr int GROUPED_GEMM_MR               = 32;  // rows of one thread on Xe2: one 2D load covers them
 static constexpr int GROUPED_GEMM_RC               = 8;   // rows of one dpas
 static constexpr int GROUPED_GEMM_QK               = 32;  // values of one k step
+
+template <int NW_, int MR_, bool L2D_> struct grouped_gemm_arch {
+    static constexpr int  NW  = NW_;
+    static constexpr int  MR  = MR_;
+    static constexpr bool L2D = L2D_;
+};
+
+using grouped_gemm_xe2   = grouped_gemm_arch<16, GROUPED_GEMM_MR, true>;
+using grouped_gemm_xehpg = grouped_gemm_arch<8, 16, false>;
+
+// An AOT build compiles each kernel only for the targets of its dpas width: GGML_SYCL_XMX_AOT_SG for
+// spir64_gen, FG_AOT_SG (fused-gemm.hpp) for intel_gpu_* targets
+template <typename A> static constexpr bool grouped_gemm_built() {
+#if defined(GGML_SYCL_XMX_AOT_SG)
+    return A::NW == GGML_SYCL_XMX_AOT_SG;
+#elif defined(FG_AOT_SG)
+    return A::NW == FG_AOT_SG;
+#else
+    return true;
+#endif
+}
 
 namespace grouped_gemm_esimd {
 using namespace sycl::ext::intel::esimd;
@@ -50,7 +77,7 @@ struct field {
 
 // Where one thread's rows sit in an expert's slice, in either layout. nblocks counts the stored blocks
 // of the slice, bpr those of one row, bs is the size of one block.
-struct slice {
+template <int MR, bool L2D> struct slice {
     const uint8_t * x;
     int             M;
     int             bpr;
@@ -60,9 +87,9 @@ struct slice {
     int             bs;
 
     // per row, the byte offset from x of byte `inner` of field f of block ib
-    ESIMD_INLINE simd<uint32_t, GROUPED_GEMM_MR> at(const field & f, const int ib, const int inner) const {
+    ESIMD_INLINE simd<uint32_t, MR> at(const field & f, const int ib, const int inner) const {
         const int             stride = aos ? bs : f.size;
-        simd<uint32_t, GROUPED_GEMM_MR> o(0, (uint32_t) (bpr * stride));
+        simd<uint32_t, MR> o(0, (uint32_t) (bpr * stride));
         return o + (uint32_t) ((aos ? f.aos : nblocks * f.pre) + (m0 * bpr + ib) * stride + inner);
     }
 
@@ -72,65 +99,66 @@ struct slice {
         return !aos || (bs % 4 == 0 && (f.aos + inner) % 4 == 0);
     }
 
-    ESIMD_INLINE simd<uint16_t, GROUPED_GEMM_MR> u16(const field & f, const int ib, const int inner) const {
-        return gather<uint16_t, GROUPED_GEMM_MR>((const uint16_t *) x, at(f, ib, inner));
+    ESIMD_INLINE simd<uint16_t, MR> u16(const field & f, const int ib, const int inner) const {
+        return gather<uint16_t, MR>((const uint16_t *) x, at(f, ib, inner));
     }
 
-    ESIMD_INLINE simd<uint32_t, GROUPED_GEMM_MR> u32(const field & f, const int ib, const int inner) const {
+    ESIMD_INLINE simd<uint32_t, MR> u32(const field & f, const int ib, const int inner) const {
         if (dword_aligned(f, inner)) {
-            return gather<uint32_t, GROUPED_GEMM_MR>((const uint32_t *) x, at(f, ib, inner));
+            return gather<uint32_t, MR>((const uint32_t *) x, at(f, ib, inner));
         }
         return rows<1>(f, ib, inner);
     }
 
     // W dwords of each of the MR rows from byte `inner` (a multiple of 4) of field f of block ib, as
-    // [row][W]. SoA: one 2D block message over the stream. AoS: the rows' dwords are gathered, as
-    // [W][row], at offsets rounded down to a dword (every field starts on an even byte), shifted by
-    // 16 bits where a row's block starts on 2 mod 4, and transposed with strided reads.
-    template <int W>
-    ESIMD_INLINE simd<uint32_t, GROUPED_GEMM_MR * W> rows(const field & f, const int ib, const int inner) const {
-        if (!aos) {
-            const unsigned pitch = (unsigned) (bpr * f.size);
-            return load_2d<uint32_t, W, GROUPED_GEMM_MR>((const uint32_t *) (x + (size_t) nblocks * f.pre), pitch - 1,
-                                                         M - 1, pitch - 1, (ib * f.size + inner) / 4, m0);
+    // [row][W]. SoA with 2D block loads (L2D): one message over the stream. Otherwise the rows' dwords
+    // are gathered, as [W][row], at offsets rounded down to a dword (every field starts on an even
+    // byte; the SoA streams are dword aligned), shifted by 16 bits where an AoS row's block starts on
+    // 2 mod 4, and transposed with strided reads.
+    template <int W> ESIMD_INLINE simd<uint32_t, MR * W> rows(const field & f, const int ib, const int inner) const {
+        if constexpr (L2D) {
+            if (!aos) {
+                const unsigned pitch = (unsigned) (bpr * f.size);
+                return load_2d<uint32_t, W, MR>((const uint32_t *) (x + (size_t) nblocks * f.pre), pitch - 1, M - 1,
+                                                pitch - 1, (ib * f.size + inner) / 4, m0);
+            }
         }
-        const simd<uint32_t, GROUPED_GEMM_MR> o = at(f, ib, inner);
-        simd<uint32_t, GROUPED_GEMM_MR * W>   g;
+        const simd<uint32_t, MR> o = at(f, ib, inner);
+        simd<uint32_t, MR * W>   g;
         if (dword_aligned(f, inner)) {
-            g = gather<uint32_t, GROUPED_GEMM_MR * W, W>((const uint32_t *) x, o);
+            g = gather<uint32_t, MR * W, W>((const uint32_t *) x, o);
         } else {
             // per row: sh is 16 where the run starts on 2 mod 4, else 0; hm keeps the next dword's low
             // half only where it is needed
-            const simd<uint32_t, GROUPED_GEMM_MR> oa = o & ~3u;
-            const simd<uint32_t, GROUPED_GEMM_MR> sh = (o & 2u) << 3;
-            const simd<uint32_t, GROUPED_GEMM_MR> hm = 0u - (sh >> 4);
-            simd<uint32_t, GROUPED_GEMM_MR * W> lo = gather<uint32_t, GROUPED_GEMM_MR * W, W>((const uint32_t *) x, oa);
+            const simd<uint32_t, MR> oa = o & ~3u;
+            const simd<uint32_t, MR> sh = (o & 2u) << 3;
+            const simd<uint32_t, MR> hm = 0u - (sh >> 4);
+            simd<uint32_t, MR * W>   lo = gather<uint32_t, MR * W, W>((const uint32_t *) x, oa);
             // the dword after the run holds its last 2 bytes where a row needs it; a row that does not
             // reads its first dword again rather than past the field
-            const simd<uint32_t, GROUPED_GEMM_MR> tail =
-                gather<uint32_t, GROUPED_GEMM_MR>((const uint32_t *) x, oa + ((4u * W) & hm));
+            const simd<uint32_t, MR> tail = gather<uint32_t, MR>((const uint32_t *) x, oa + ((4u * W) & hm));
             auto shift = [&](auto vc) SYCL_ESIMD_FUNCTION {
                 constexpr int         v = decltype(vc)::value;
-                simd<uint32_t, GROUPED_GEMM_MR> a = lo.template select<GROUPED_GEMM_MR, 1>(v * GROUPED_GEMM_MR);
-                simd<uint32_t, GROUPED_GEMM_MR> b;
+                simd<uint32_t, MR> a = lo.template select<MR, 1>(v * MR);
+                simd<uint32_t, MR> b;
                 if constexpr (v + 1 < W) {
-                    b = lo.template select<GROUPED_GEMM_MR, 1>((v + 1) * GROUPED_GEMM_MR);
+                    b = lo.template select<MR, 1>((v + 1) * MR);
                 } else {
                     b = tail;
                 }
-                g.template select<GROUPED_GEMM_MR, 1>(v * GROUPED_GEMM_MR) = (a >> sh) | ((b << 16) & hm);
+                g.template select<MR, 1>(v * MR) = (a >> sh) | ((b << 16) & hm);
             };
             static_for<0, W>::run(shift);
         }
         if constexpr (W == 1) {
             return g;
         } else {
-            simd<uint32_t, GROUPED_GEMM_MR * W> t;
+            simd<uint32_t, MR * W> t;
             auto row = [&](auto rc) SYCL_ESIMD_FUNCTION {
                 constexpr int r = decltype(rc)::value;
-                t.template select<W, 1>(r * W) = g.template select<W, GROUPED_GEMM_MR>(r);
+                t.template select<W, 1>(r * W) = g.template select<W, MR>(r);
             };
-            static_for<0, GROUPED_GEMM_MR>::run(row);
+            static_for<0, MR>::run(row);
             return t;
         }
     }
@@ -185,13 +213,13 @@ constexpr bool surface_ok(const int pitch) {
 }
 
 // byte i of each lane's dword, i a runtime index: a shift by a scalar, not a register pick
-ESIMD_INLINE simd<uint32_t, GROUPED_GEMM_MR> byte_of(simd<uint32_t, GROUPED_GEMM_MR> w, const int i) {
+template <int MR> ESIMD_INLINE simd<uint32_t, MR> byte_of(simd<uint32_t, MR> w, const int i) {
     return (w >> (8 * i)) & 0xffu;
 }
 
 // one of four per-lane dwords by a runtime index, as uniform branches rather than a register pick
-ESIMD_INLINE simd<uint32_t, GROUPED_GEMM_MR> dword_of(simd<uint32_t, GROUPED_GEMM_MR> * w, const int i) {
-    simd<uint32_t, GROUPED_GEMM_MR> r = w[0];
+template <int MR> ESIMD_INLINE simd<uint32_t, MR> dword_of(simd<uint32_t, MR> * w, const int i) {
+    simd<uint32_t, MR> r = w[0];
     if (i == 1) {
         r = w[1];
     } else if (i == 2) {
@@ -262,46 +290,44 @@ ESIMD_INLINE a_halves grid_signed(simd<uint32_t, GROUPED_GEMM_RC * 8> ge,
 }
 }  // namespace grouped_gemm_esimd
 
-template <typename block_q_t> struct grouped_gemm_esimd_a {
+template <typename block_q_t, int MR = GROUPED_GEMM_MR> struct grouped_gemm_esimd_a {
     static constexpr bool supported = false;
 };
 
 // [qs 32][d], one block a k step
-template <> struct grouped_gemm_esimd_a<block_q8_0> {
+template <int MR> struct grouped_gemm_esimd_a<block_q8_0, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK8_0;
     static constexpr bool whole     = true;  // decode_all() for the whole tile
     static constexpr int  slm_bytes = 0;
     static ESIMD_INLINE void init_slm() {}
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 8> q;
-        grouped_gemm_esimd::simd<uint16_t, GROUPED_GEMM_MR>     d;
+        grouped_gemm_esimd::simd<uint32_t, MR * 8> q;
+        grouped_gemm_esimd::simd<uint16_t, MR>     d;
     };
 
     static constexpr grouped_gemm_esimd::field QS = { 0, QK8_0, 2 }, D = { QK8_0, 2, 0 };
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || K >= 64); }
     struct sb_t {};
-
-    static ESIMD_INLINE void load_sb(sb_t &, const grouped_gemm_esimd::slice &, const int) {}
-
-    static ESIMD_INLINE void load(raw & r, sb_t &, const grouped_gemm_esimd::slice & s, const int kb, const int) {
-        r.q = s.rows<8>(QS, kb, 0);
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t &, const Sl &, const int) {}
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t &, const Sl & s, const int kb, const int) {
+        r.q = s.template rows<8>(QS, kb, 0);
         r.d = s.u16(D, kb, 0);
     }
     // all MR x 32 quants at once: int8 -> half, times the row's scale. q * d needs at most 19
     // significant bits, so the f32 product the joint_matrix stage rounds to half is exact and one
     // correctly rounded half multiply gives the same bits.
-    static ESIMD_INLINE grouped_gemm_esimd::simd<sycl::half, GROUPED_GEMM_MR * GROUPED_GEMM_QK> decode_all(raw & r) {
+    static ESIMD_INLINE grouped_gemm_esimd::simd<sycl::half, MR * GROUPED_GEMM_QK> decode_all(raw & r) {
         using namespace grouped_gemm_esimd;
-        simd<sycl::half, GROUPED_GEMM_MR * GROUPED_GEMM_QK> av = r.q.template bit_cast_view<int8_t>();
-        simd<sycl::half, GROUPED_GEMM_MR>                   dh = r.d.template bit_cast_view<sycl::half>();
-        av *= dh.template replicate_vs_w_hs<GROUPED_GEMM_MR, 1, GROUPED_GEMM_QK, 0>(0);
+        simd<sycl::half, MR * GROUPED_GEMM_QK> av = r.q.template bit_cast_view<int8_t>();
+        simd<sycl::half, MR>         dh = r.d.template bit_cast_view<sycl::half>();
+        av *= dh.template replicate_vs_w_hs<MR, 1, GROUPED_GEMM_QK, 0>(0);
         return av;
     }
 };
 
 // [qs 16][d], one block a k step
-template <> struct grouped_gemm_esimd_a<block_iq4_nl> {
+template <int MR> struct grouped_gemm_esimd_a<block_iq4_nl, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK4_NL;
     static constexpr bool whole     = false;
@@ -309,20 +335,18 @@ template <> struct grouped_gemm_esimd_a<block_iq4_nl> {
 
     static ESIMD_INLINE void init_slm() { grouped_gemm_esimd::iq4_pair_table_to_slm<sycl::half>(); }
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 4> q;
-        grouped_gemm_esimd::simd<sycl::half, GROUPED_GEMM_MR>   d;
+        grouped_gemm_esimd::simd<uint32_t, MR * 4> q;
+        grouped_gemm_esimd::simd<sycl::half, MR>   d;
     };
 
     static constexpr grouped_gemm_esimd::field QS = { 0, QK4_NL / 2, 2 }, D = { QK4_NL / 2, 2, 0 };
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || K / 2 >= 64); }
     struct sb_t {};
-
-    static ESIMD_INLINE void load_sb(sb_t &, const grouped_gemm_esimd::slice &, const int) {}
-
-    static ESIMD_INLINE void load(raw & r, sb_t &, const grouped_gemm_esimd::slice & s, const int kb, const int) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t &, const Sl &, const int) {}
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t &, const Sl & s, const int kb, const int) {
         using namespace grouped_gemm_esimd;
-        r.q                     = s.rows<4>(QS, kb, 0);
-        simd<uint16_t, GROUPED_GEMM_MR> d = s.u16(D, kb, 0);
+        r.q                     = s.template rows<4>(QS, kb, 0);
+        simd<uint16_t, MR> d = s.u16(D, kb, 0);
         r.d                     = d.template bit_cast_view<sycl::half>();
     }
     // the codebook values are integers below 128, exact in half, and d * value has at most 18
@@ -339,7 +363,7 @@ template <> struct grouped_gemm_esimd_a<block_iq4_nl> {
 };
 
 // [qs 128][d 2][scales_h 2][scales_l 4] per 256 values; k step ib8 of a superblock is sub-block ib8
-template <> struct grouped_gemm_esimd_a<block_iq4_xs> {
+template <int MR> struct grouped_gemm_esimd_a<block_iq4_xs, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
@@ -349,34 +373,31 @@ template <> struct grouped_gemm_esimd_a<block_iq4_xs> {
 
     static ESIMD_INLINE void init_slm() { grouped_gemm_esimd::iq4_pair_table_to_slm<int16_t>(); }
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 4> q;
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d;
+        grouped_gemm_esimd::simd<uint32_t, MR * 4> q;
+        grouped_gemm_esimd::simd<float, MR>        d;
     };
     struct sb_t {
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>    d;
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sh;  // scales_h
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sl;  // scales_l, 4 bytes
+        grouped_gemm_esimd::simd<float, MR>    d;
+        grouped_gemm_esimd::simd<uint32_t, MR> sh;  // scales_h
+        grouped_gemm_esimd::simd<uint32_t, MR> sl;  // scales_l, 4 bytes
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 2, 8 }, D = { QK_K / 2, 2, 0 },
-                                               SH = { QK_K / 2 + 2, 2, 2 }, SL = { QK_K / 2 + 4, 4, 4 };
-    static bool                                ok(const int K, const bool) { return K % qk == 0; }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
+    static constexpr grouped_gemm_esimd::field      QS = { 0, QK_K / 2, 8 }, D = { QK_K / 2, 2, 0 },
+                                                    SH = { QK_K / 2 + 2, 2, 2 }, SL = { QK_K / 2 + 4, 4, 4 };
+    static bool ok(const int K, const bool) { return K % qk == 0; }
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
-        simd<uint16_t, GROUPED_GEMM_MR> dh = s.u16(D, ib, 0);
-        sb.d                               = simd<sycl::half, GROUPED_GEMM_MR>(dh.template bit_cast_view<sycl::half>());
+        simd<uint16_t, MR> dh = s.u16(D, ib, 0);
+        sb.d  = simd<sycl::half, MR>(dh.template bit_cast_view<sycl::half>());
         sb.sh = s.u16(SH, ib, 0);
         sb.sl = s.u32(SL, ib, 0);
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
-        r.q = s.rows<4>(QS, kb / 8, 16 * j);
+        r.q = s.template rows<4>(QS, kb / 8, 16 * j);
         // d * (6-bit scale - 32), in f32 as the stage computes it
-        simd<int32_t, GROUPED_GEMM_MR> sc =
-            simd<int32_t, GROUPED_GEMM_MR>(((sb.sl >> (4 * j)) & 0xf) | (((sb.sh >> (2 * j)) & 3) << 4)) - 32;
-        r.d = sb.d * simd<float, GROUPED_GEMM_MR>(sc);
+        simd<int32_t, MR> sc = simd<int32_t, MR>(((sb.sl >> (4 * j)) & 0xf) | (((sb.sh >> (2 * j)) & 3) << 4)) - 32;
+        r.d = sb.d * simd<float, MR>(sc);
     }
 
     template <int g> static ESIMD_INLINE grouped_gemm_esimd::a_halves decode(raw & r) {
@@ -395,7 +416,7 @@ template <> struct grouped_gemm_esimd_a<block_iq4_xs> {
 // [qs 64][qh 8][signs 32][d 2, scales 4] per 256 values. Value k of sub-block ib8 is byte k % 4 of
 // grid entry k / 4, the entry index being qs[k / 4] with bit 8 from qh bit k / 4, negated where bit
 // k of the sub-block's sign dword is set; times d * (1 + 2 * 4-bit scale)
-template <> struct grouped_gemm_esimd_a<block_iq3_s> {
+template <int MR> struct grouped_gemm_esimd_a<block_iq3_s, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
@@ -409,16 +430,16 @@ template <> struct grouped_gemm_esimd_a<block_iq3_s> {
         }
     }
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 2> q;      // [row][8 qs bytes]
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR>     qh;     // the sub-block's qh byte
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR>     signs;  // the sub-block's 32 sign bits
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d;
+        grouped_gemm_esimd::simd<uint32_t, MR * 2> q;      // [row][8 qs bytes]
+        grouped_gemm_esimd::simd<uint32_t, MR>     qh;     // the sub-block's qh byte
+        grouped_gemm_esimd::simd<uint32_t, MR>     signs;  // the sub-block's 32 sign bits
+        grouped_gemm_esimd::simd<float, MR>        d;
     };
     // d and the scale bytes are a block's, kept over its k steps; the sign dword and the qh byte of
     // a k step are a 2D load each at that step's column, so no register is picked by a runtime index
     struct sb_t {
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>    d;
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sc;  // the 4 scale bytes
+        grouped_gemm_esimd::simd<float, MR>    d;
+        grouped_gemm_esimd::simd<uint32_t, MR> sc;  // the 4 scale bytes
     };
     // the SoA stream {d, scales} is d and scales of the block in AoS, which are not adjacent there: MS
     // reads the scales at their SoA offset 2 in the stream, which is AoS offset 2 past 104
@@ -431,23 +452,21 @@ template <> struct grouped_gemm_esimd_a<block_iq3_s> {
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || ((K / QK_K * 8) % 16 == 0 && K / QK_K * 8 >= 64));
     }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
-        simd<uint16_t, GROUPED_GEMM_MR> dh = s.u16(MD, ib, 0);
-        simd<uint32_t, GROUPED_GEMM_MR> s0 = s.u16(MS, ib, 2);
-        simd<uint32_t, GROUPED_GEMM_MR> s1 = s.u16(MS, ib, 4);
-        sb.d                               = simd<sycl::half, GROUPED_GEMM_MR>(dh.template bit_cast_view<sycl::half>());
+        simd<uint16_t, MR> dh = s.u16(MD, ib, 0);
+        simd<uint32_t, MR> s0 = s.u16(MS, ib, 2);
+        simd<uint32_t, MR> s1 = s.u16(MS, ib, 4);
+        sb.d  = simd<sycl::half, MR>(dh.template bit_cast_view<sycl::half>());
         sb.sc = s0 | (s1 << 16);
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
         const int ib = kb / 8;
-        r.q     = s.rows<2>(QS, ib, 8 * j);
-        r.qh    = (s.rows<1>(QH, ib, 4 * (j / 4)) >> (8 * (j % 4))) & 0xffu;
-        r.signs = s.rows<1>(SG, ib, 4 * j);
-        r.d = sb.d * simd<float, GROUPED_GEMM_MR>(simd<int32_t, GROUPED_GEMM_MR>(1 + 2 * ((sb.sc >> (4 * j)) & 0xf)));
+        r.q     = s.template rows<2>(QS, ib, 8 * j);
+        r.qh    = (s.template rows<1>(QH, ib, 4 * (j / 4)) >> (8 * (j % 4))) & 0xffu;
+        r.signs = s.template rows<1>(SG, ib, 4 * j);
+        r.d     = sb.d * simd<float, MR>(simd<int32_t, MR>(1 + 2 * ((sb.sc >> (4 * j)) & 0xf)));
     }
 
     template <int g> static ESIMD_INLINE grouped_gemm_esimd::a_halves decode(raw & r) {
@@ -472,19 +491,19 @@ template <> struct grouped_gemm_esimd_a<block_iq3_s> {
 
 // [qs 128][scales 12][dm]: value l of sub-block j is nibble j & 1 of byte 32 (j / 2) + l, times
 // dall * scale_j, minus dmin * min_j (6-bit scale and min, get_scale_min_k4)
-template <> struct grouped_gemm_esimd_a<block_q4_K> {
+template <int MR> struct grouped_gemm_esimd_a<block_q4_K, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
     static constexpr int  slm_bytes = 0;
     static ESIMD_INLINE void init_slm() {}
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 8> q;
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d, m;
+        grouped_gemm_esimd::simd<uint32_t, MR * 8> q;
+        grouped_gemm_esimd::simd<float, MR>        d, m;
     };
     struct sb_t {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sc[3];  // the 12 scale bytes
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>    dall, dmin;
+        grouped_gemm_esimd::simd<uint32_t, MR> sc[3];  // the 12 scale bytes
+        grouped_gemm_esimd::simd<float, MR>    dall, dmin;
     };
 
     static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 2, 16 }, SC = { QK_K / 2, K_SCALE_SIZE, 4 },
@@ -494,8 +513,9 @@ template <> struct grouped_gemm_esimd_a<block_q4_K> {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 2));
     }
 
+    template <typename Sl>
     static ESIMD_INLINE void load_sb(sb_t &                            sb,
-                                     const grouped_gemm_esimd::slice & s,
+                                     const Sl &                        s,
                                      const int                         ib,
                                      const grouped_gemm_esimd::field & sc  = SC,
                                      const grouped_gemm_esimd::field & dmf = DM) {
@@ -504,18 +524,18 @@ template <> struct grouped_gemm_esimd_a<block_q4_K> {
         for (int w = 0; w < 3; ++w) {
             sb.sc[w] = s.u32(sc, ib, 4 * w);
         }
-        simd<uint32_t, GROUPED_GEMM_MR> dm = s.u32(dmf, ib, 0);
+        simd<uint32_t, MR> dm = s.u32(dmf, ib, 0);
         auto                  dh = dm.template bit_cast_view<sycl::half>();
-        sb.dall = simd<sycl::half, GROUPED_GEMM_MR>(dh.template select<GROUPED_GEMM_MR, 2>(0));
-        sb.dmin = simd<sycl::half, GROUPED_GEMM_MR>(dh.template select<GROUPED_GEMM_MR, 2>(1));
+        sb.dall                  = simd<sycl::half, MR>(dh.template select<MR, 2>(0));
+        sb.dmin                  = simd<sycl::half, MR>(dh.template select<MR, 2>(1));
     }
     // get_scale_min_k4 for sub-block j over the lanes
-    static ESIMD_INLINE void scale_min(sb_t &                                             sb,
-                                       const int                                          j,
-                                       grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR> & d,
-                                       grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR> & m) {
+    static ESIMD_INLINE void scale_min(sb_t &                                sb,
+                                       const int                             j,
+                                       grouped_gemm_esimd::simd<float, MR> & d,
+                                       grouped_gemm_esimd::simd<float, MR> & m) {
         using namespace grouped_gemm_esimd;
-        simd<uint32_t, GROUPED_GEMM_MR> sc, mb;
+        simd<uint32_t, MR> sc, mb;
         if (j < 4) {
             sc = byte_of(sb.sc[0], j) & 63;
             mb = byte_of(sb.sc[1], j) & 63;
@@ -523,13 +543,12 @@ template <> struct grouped_gemm_esimd_a<block_q4_K> {
             sc = (byte_of(sb.sc[2], j - 4) & 0xf) | ((byte_of(sb.sc[0], j - 4) >> 6) << 4);
             mb = (byte_of(sb.sc[2], j - 4) >> 4) | ((byte_of(sb.sc[1], j - 4) >> 6) << 4);
         }
-        d = sb.dall * simd<float, GROUPED_GEMM_MR>(sc);
-        m = sb.dmin * simd<float, GROUPED_GEMM_MR>(mb);
+        d = sb.dall * simd<float, MR>(sc);
+        m = sb.dmin * simd<float, MR>(mb);
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
-        r.q = (s.rows<8>(QS, kb / 8, 32 * (j / 2)) >> (4 * (j & 1))) & 0x0F0F0F0Fu;
+        r.q = (s.template rows<8>(QS, kb / 8, 32 * (j / 2)) >> (4 * (j & 1))) & 0x0F0F0F0Fu;
         scale_min(sb, j, r.d, r.m);
     }
 
@@ -542,31 +561,27 @@ template <> struct grouped_gemm_esimd_a<block_q4_K> {
 };
 
 // [qs 128][qh 32][scales 12][dm]: q4_K plus bit j of qh byte l as 16
-template <> struct grouped_gemm_esimd_a<block_q5_K> {
-    using q4                           = grouped_gemm_esimd_a<block_q4_K>;
+template <int MR> struct grouped_gemm_esimd_a<block_q5_K, MR> {
+    using q4                           = grouped_gemm_esimd_a<block_q4_K, MR>;
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
     static constexpr int  slm_bytes = 0;
     static ESIMD_INLINE void init_slm() {}
-    using raw  = q4::raw;
-    using sb_t = q4::sb_t;
+    using raw  = typename q4::raw;
+    using sb_t = typename q4::sb_t;
     static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 2, 48 }, QH = { QK_K / 2, QK_K / 8, 16 },
                                                SC = { QK_K / 2 + QK_K / 8, K_SCALE_SIZE, 4 },
                                                DM = { QK_K / 2 + QK_K / 8 + K_SCALE_SIZE, 4, 0 };
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || (grouped_gemm_esimd::surface_ok(K / 2) && grouped_gemm_esimd::surface_ok(K / 8)));
     }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
-        q4::load_sb(sb, s, ib, SC, DM);
-    }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) { q4::load_sb(sb, s, ib, SC, DM); }
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
         const int                 ib = kb / 8;
-        simd<uint32_t, GROUPED_GEMM_MR * 8> qh = s.rows<8>(QH, ib, 0);
-        r.q = ((s.rows<8>(QS, ib, 32 * (j / 2)) >> (4 * (j & 1))) & 0x0F0F0F0Fu) |
+        simd<uint32_t, MR * 8> qh = s.template rows<8>(QH, ib, 0);
+        r.q = ((s.template rows<8>(QS, ib, 32 * (j / 2)) >> (4 * (j & 1))) & 0x0F0F0F0Fu) |
               (((qh >> j) & 0x01010101u) << 4);
         q4::scale_min(sb, j, r.d, r.m);
     }
@@ -579,19 +594,19 @@ template <> struct grouped_gemm_esimd_a<block_q5_K> {
 // [ql 128][qh 64][scales 16][d]: sub-block j is quarter r = j % 4 of half h = j / 4; value l is
 // nibble r >> 1 of ql byte 64h + 32 (r & 1) + l with bits 2r, 2r+1 of qh byte 32h + l above it,
 // minus 32, times d * the int8 scale 2j + l / 16
-template <> struct grouped_gemm_esimd_a<block_q6_K> {
+template <int MR> struct grouped_gemm_esimd_a<block_q6_K, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
     static constexpr int  slm_bytes = 0;
     static ESIMD_INLINE void init_slm() {}
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 8> q;
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d0, d1;  // per k half
+        grouped_gemm_esimd::simd<uint32_t, MR * 8> q;
+        grouped_gemm_esimd::simd<float, MR>        d0, d1;  // per k half
     };
     struct sb_t {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sc[4];  // the 16 int8 scales
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>    d;
+        grouped_gemm_esimd::simd<uint32_t, MR> sc[4];  // the 16 int8 scales
+        grouped_gemm_esimd::simd<float, MR>    d;
     };
 
     static constexpr grouped_gemm_esimd::field QL = { 0, QK_K / 2, 0 }, QH = { QK_K / 2, QK_K / 4, QK_K / 2 },
@@ -601,29 +616,27 @@ template <> struct grouped_gemm_esimd_a<block_q6_K> {
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || (grouped_gemm_esimd::surface_ok(K / 2) && grouped_gemm_esimd::surface_ok(K / 4)));
     }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
 #pragma unroll
         for (int w = 0; w < 4; ++w) {
             sb.sc[w] = s.u32(SC, ib, 4 * w);
         }
-        simd<uint16_t, GROUPED_GEMM_MR> dh = s.u16(D, ib, 0);
-        sb.d                               = simd<sycl::half, GROUPED_GEMM_MR>(dh.template bit_cast_view<sycl::half>());
+        simd<uint16_t, MR> dh = s.u16(D, ib, 0);
+        sb.d = simd<sycl::half, MR>(dh.template bit_cast_view<sycl::half>());
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
         const int ib = kb / 8, h = j / 4, q = j % 4;
-        simd<uint32_t, GROUPED_GEMM_MR * 8> ql = s.rows<8>(QL, ib, 64 * h + 32 * (q & 1));
-        simd<uint32_t, GROUPED_GEMM_MR * 8> qh = s.rows<8>(QH, ib, 32 * h);
+        simd<uint32_t, MR * 8> ql = s.template rows<8>(QL, ib, 64 * h + 32 * (q & 1));
+        simd<uint32_t, MR * 8> qh = s.template rows<8>(QH, ib, 32 * h);
         r.q = ((ql >> (4 * (q >> 1))) & 0x0F0F0F0Fu) | (((qh >> (2 * q)) & 0x03030303u) << 4);
         // scales 2j and 2j + 1: bytes 2 (j % 2) and 2 (j % 2) + 1 of dword j / 2, sign extended
-        simd<uint32_t, GROUPED_GEMM_MR> w      = dword_of(sb.sc, j / 2);
-        simd<int32_t, GROUPED_GEMM_MR>  s0     = simd<int32_t, GROUPED_GEMM_MR>(w << (24 - 16 * (j % 2))) >> 24;
-        simd<int32_t, GROUPED_GEMM_MR>  s1     = simd<int32_t, GROUPED_GEMM_MR>(w << (16 - 16 * (j % 2))) >> 24;
-        r.d0                                   = sb.d * simd<float, GROUPED_GEMM_MR>(s0);
-        r.d1                                   = sb.d * simd<float, GROUPED_GEMM_MR>(s1);
+        simd<uint32_t, MR> w  = dword_of(sb.sc, j / 2);
+        simd<int32_t, MR>  s0 = simd<int32_t, MR>(w << (24 - 16 * (j % 2))) >> 24;
+        simd<int32_t, MR>  s1 = simd<int32_t, MR>(w << (16 - 16 * (j % 2))) >> 24;
+        r.d0 = sb.d * simd<float, MR>(s0);
+        r.d1 = sb.d * simd<float, MR>(s1);
     }
 
     template <int g> static ESIMD_INLINE grouped_gemm_esimd::a_halves decode(raw & r) {
@@ -637,19 +650,19 @@ template <> struct grouped_gemm_esimd_a<block_q6_K> {
 
 // [qs 64][scales 16][dm]: value l of sub-block j is bits 2 (j % 4) of byte 32 (j / 4) + l, times
 // d * (scale & 15), minus dmin * (scale >> 4), scale byte 2j + l / 16
-template <> struct grouped_gemm_esimd_a<block_q2_K> {
+template <int MR> struct grouped_gemm_esimd_a<block_q2_K, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
     static constexpr int  slm_bytes = 0;
     static ESIMD_INLINE void init_slm() {}
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 8> q;
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d0, m0, d1, m1;
+        grouped_gemm_esimd::simd<uint32_t, MR * 8> q;
+        grouped_gemm_esimd::simd<float, MR>        d0, m0, d1, m1;
     };
     struct sb_t {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sc[4];
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>    d, dmin;
+        grouped_gemm_esimd::simd<uint32_t, MR> sc[4];
+        grouped_gemm_esimd::simd<float, MR>    d, dmin;
     };
 
     static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, QK_K / 16 }, SC = { QK_K / 4, QK_K / 16, 0 },
@@ -658,28 +671,26 @@ template <> struct grouped_gemm_esimd_a<block_q2_K> {
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 4));
     }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
 #pragma unroll
         for (int w = 0; w < 4; ++w) {
             sb.sc[w] = s.u32(SC, ib, 4 * w);
         }
-        simd<uint32_t, GROUPED_GEMM_MR> dm = s.u32(DM, ib, 0);
+        simd<uint32_t, MR> dm = s.u32(DM, ib, 0);
         auto                  dh = dm.template bit_cast_view<sycl::half>();
-        sb.d    = simd<sycl::half, GROUPED_GEMM_MR>(dh.template select<GROUPED_GEMM_MR, 2>(0));
-        sb.dmin = simd<sycl::half, GROUPED_GEMM_MR>(dh.template select<GROUPED_GEMM_MR, 2>(1));
+        sb.d                     = simd<sycl::half, MR>(dh.template select<MR, 2>(0));
+        sb.dmin                  = simd<sycl::half, MR>(dh.template select<MR, 2>(1));
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
-        r.q = (s.rows<8>(QS, kb / 8, 32 * (j / 4)) >> (2 * (j % 4))) & 0x03030303u;
-        simd<uint32_t, GROUPED_GEMM_MR> w  = dword_of(sb.sc, j / 2);
-        simd<uint32_t, GROUPED_GEMM_MR> s0 = byte_of(w, 2 * (j % 2)), s1 = byte_of(w, 2 * (j % 2) + 1);
-        r.d0 = sb.d * simd<float, GROUPED_GEMM_MR>(s0 & 0xf);
-        r.m0 = sb.dmin * simd<float, GROUPED_GEMM_MR>(s0 >> 4);
-        r.d1 = sb.d * simd<float, GROUPED_GEMM_MR>(s1 & 0xf);
-        r.m1 = sb.dmin * simd<float, GROUPED_GEMM_MR>(s1 >> 4);
+        r.q = (s.template rows<8>(QS, kb / 8, 32 * (j / 4)) >> (2 * (j % 4))) & 0x03030303u;
+        simd<uint32_t, MR> w  = dword_of(sb.sc, j / 2);
+        simd<uint32_t, MR> s0 = byte_of(w, 2 * (j % 2)), s1 = byte_of(w, 2 * (j % 2) + 1);
+        r.d0 = sb.d * simd<float, MR>(s0 & 0xf);
+        r.m0 = sb.dmin * simd<float, MR>(s0 >> 4);
+        r.d1 = sb.d * simd<float, MR>(s1 & 0xf);
+        r.m1 = sb.dmin * simd<float, MR>(s1 >> 4);
     }
 
     template <int g> static ESIMD_INLINE grouped_gemm_esimd::a_halves decode(raw & r) {
@@ -694,19 +705,19 @@ template <> struct grouped_gemm_esimd_a<block_q2_K> {
 
 // [qs 64][hmask 32][scales 12][d]: q2_K's 2 bits, minus 4 where bit j of hmask byte l is clear,
 // times d * (6-bit scale - 32), scale s = 2j + l / 16 split over bytes s % 8 and 8 + s % 4
-template <> struct grouped_gemm_esimd_a<block_q3_K> {
+template <int MR> struct grouped_gemm_esimd_a<block_q3_K, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
     static constexpr int  slm_bytes = 0;
     static ESIMD_INLINE void init_slm() {}
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 8> q;
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d0, d1;
+        grouped_gemm_esimd::simd<uint32_t, MR * 8> q;
+        grouped_gemm_esimd::simd<float, MR>        d0, d1;
     };
     struct sb_t {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR> sc[4];  // 12 scale bytes, sc[3] unused
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>    d;
+        grouped_gemm_esimd::simd<uint32_t, MR> sc[4];  // 12 scale bytes, sc[3] unused
+        grouped_gemm_esimd::simd<float, MR>    d;
     };
 
     static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, QK_K / 8 }, HM = { QK_K / 4, QK_K / 8, 0 },
@@ -715,31 +726,28 @@ template <> struct grouped_gemm_esimd_a<block_q3_K> {
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || (grouped_gemm_esimd::surface_ok(K / 4) && grouped_gemm_esimd::surface_ok(K / 8)));
     }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
 #pragma unroll
         for (int w = 0; w < 3; ++w) {
             sb.sc[w] = s.u32(SC, ib, 4 * w);
         }
         sb.sc[3] = 0;
-        simd<uint16_t, GROUPED_GEMM_MR> dh = s.u16(D, ib, 0);
-        sb.d                               = simd<sycl::half, GROUPED_GEMM_MR>(dh.template bit_cast_view<sycl::half>());
+        simd<uint16_t, MR> dh = s.u16(D, ib, 0);
+        sb.d = simd<sycl::half, MR>(dh.template bit_cast_view<sycl::half>());
     }
 
-    static ESIMD_INLINE grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR> scale(sb_t & sb, const int sidx) {
+    static ESIMD_INLINE grouped_gemm_esimd::simd<float, MR> scale(sb_t & sb, const int sidx) {
         using namespace grouped_gemm_esimd;
-        simd<uint32_t, GROUPED_GEMM_MR> lo =
-            (byte_of(dword_of(sb.sc, (sidx % 8) / 4), sidx % 4) >> (4 * (sidx / 8))) & 0xf;
-        simd<uint32_t, GROUPED_GEMM_MR> hi = (byte_of(sb.sc[2], sidx % 4) >> (2 * (sidx / 4))) & 3;
-        return sb.d * simd<float, GROUPED_GEMM_MR>(simd<int32_t, GROUPED_GEMM_MR>(lo | (hi << 4)) - 32);
+        simd<uint32_t, MR> lo = (byte_of(dword_of(sb.sc, (sidx % 8) / 4), sidx % 4) >> (4 * (sidx / 8))) & 0xf;
+        simd<uint32_t, MR> hi = (byte_of(sb.sc[2], sidx % 4) >> (2 * (sidx / 4))) & 3;
+        return sb.d * simd<float, MR>(simd<int32_t, MR>(lo | (hi << 4)) - 32);
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
         const int                 ib = kb / 8;
-        simd<uint32_t, GROUPED_GEMM_MR * 8> hm = s.rows<8>(HM, ib, 0);
-        r.q = ((s.rows<8>(QS, ib, 32 * (j / 4)) >> (2 * (j % 4))) & 0x03030303u) |
+        simd<uint32_t, MR * 8> hm = s.template rows<8>(HM, ib, 0);
+        r.q = ((s.template rows<8>(QS, ib, 32 * (j / 4)) >> (2 * (j % 4))) & 0x03030303u) |
               (((hm >> j) & 0x01010101u) << 2);
         r.d0 = scale(sb, 2 * j);
         r.d1 = scale(sb, 2 * j + 1);
@@ -757,7 +765,7 @@ template <> struct grouped_gemm_esimd_a<block_q3_K> {
 // [qs 96][d]: per sub-block j, 8 grid indices at 8j and an aux dword at 64 + 4j whose 4 x 7 bits
 // are sign bytes of ksigns_iq2xs and whose top 4 bits scale d * (0.5 + s) * 0.5. ksigns_iq2xs[i] is
 // i with the parity of its 7 bits as bit 7, so the sign bytes are computed, not looked up.
-template <> struct grouped_gemm_esimd_a<block_iq3_xxs> {
+template <int MR> struct grouped_gemm_esimd_a<block_iq3_xxs, MR> {
     static constexpr bool supported = true;
     static constexpr int  qk        = QK_K;
     static constexpr bool whole     = false;
@@ -771,12 +779,12 @@ template <> struct grouped_gemm_esimd_a<block_iq3_xxs> {
         }
     }
     struct raw {
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR * 2> q;  // [row][8 grid indices]
-        grouped_gemm_esimd::simd<uint32_t, GROUPED_GEMM_MR>     aux;
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR>        d;
+        grouped_gemm_esimd::simd<uint32_t, MR * 2> q;  // [row][8 grid indices]
+        grouped_gemm_esimd::simd<uint32_t, MR>     aux;
+        grouped_gemm_esimd::simd<float, MR>        d;
     };
     struct sb_t {
-        grouped_gemm_esimd::simd<float, GROUPED_GEMM_MR> d;
+        grouped_gemm_esimd::simd<float, MR> d;
     };
 
     static constexpr grouped_gemm_esimd::field QS = { 0, 3 * QK_K / 8, 2 }, D = { 3 * QK_K / 8, 2, 0 };
@@ -784,19 +792,17 @@ template <> struct grouped_gemm_esimd_a<block_iq3_xxs> {
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * 96));
     }
-
-    static ESIMD_INLINE void load_sb(sb_t & sb, const grouped_gemm_esimd::slice & s, const int ib) {
+    template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
-        simd<uint16_t, GROUPED_GEMM_MR> dh = s.u16(D, ib, 0);
-        sb.d                               = simd<sycl::half, GROUPED_GEMM_MR>(dh.template bit_cast_view<sycl::half>());
+        simd<uint16_t, MR> dh = s.u16(D, ib, 0);
+        sb.d = simd<sycl::half, MR>(dh.template bit_cast_view<sycl::half>());
     }
-
-    static ESIMD_INLINE void load(raw & r, sb_t & sb, const grouped_gemm_esimd::slice & s, const int kb, const int j) {
+    template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
         using namespace grouped_gemm_esimd;
         const int ib = kb / 8;
-        r.q   = s.rows<2>(QS, ib, 8 * j);
-        r.aux = s.rows<1>(QS, ib, 64 + 4 * j);
-        r.d          = sb.d * (0.5f + simd<float, GROUPED_GEMM_MR>(r.aux >> 28)) * 0.5f;
+        r.q   = s.template rows<2>(QS, ib, 8 * j);
+        r.aux = s.template rows<1>(QS, ib, 64 + 4 * j);
+        r.d   = sb.d * (0.5f + simd<float, MR>(r.aux >> 28)) * 0.5f;
     }
 
     template <int g> static ESIMD_INLINE grouped_gemm_esimd::a_halves decode(raw & r) {
@@ -817,9 +823,9 @@ template <> struct grouped_gemm_esimd_a<block_iq3_xxs> {
 
 // T is the dpas operand type, sycl::half or bfloat16: the type B is packed in. A is decoded in half
 // either way and converted for bf16 (see the double rounding note at the conversion). AOS: the weight
-// is in the canonical block layout rather than the reorder (SoA) one.
-template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_esimd_kernel {
-    using F = grouped_gemm_esimd_a<block_q_t>;
+// is in the canonical block layout rather than the reorder (SoA) one. A: the grouped_gemm_arch built for.
+template <typename block_q_t, int KS, typename T, bool AOS, typename A> struct grouped_gemm_esimd_kernel {
+    using F = grouped_gemm_esimd_a<block_q_t, A::MR>;
 
     const char *              src0_dd;
     size_t                    expert_stride;
@@ -832,13 +838,20 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
     ggml_sycl_grouped_gemm_rows         dst_rows;
 
     void operator()(sycl::nd_item<1> it) const SYCL_ESIMD_KERNEL {
+        if constexpr (grouped_gemm_built<A>()) {
+            run(it);
+        }
+    }
+
+    ESIMD_INLINE void run(sycl::nd_item<1> it) const {
         using namespace sycl::ext::intel::esimd;
         namespace xmx = sycl::ext::intel::esimd::xmx;
-        constexpr int MR = GROUPED_GEMM_MR;
+        constexpr int MR = A::MR;
+        constexpr int NW = A::NW;
         constexpr int RC = GROUPED_GEMM_RC;
         constexpr int RG = MR / RC; // dpas row groups of this thread
         constexpr int BN = GGML_SYCL_GROUPED_GEMM_BN;
-        constexpr int NT = BN / 16;
+        constexpr int NT = BN / NW;
 
         if constexpr (F::slm_bytes > 0) {
             // the format's lookup table; a work-group is one thread, so nothing else writes it
@@ -859,19 +872,21 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
 
         // the slice of this expert
         const int             bpr = K / F::qk;
-        const grouped_gemm_esimd::slice sl    = { (const uint8_t *) src0_dd + (size_t) tile.expert * expert_stride,
-                                                  M,
-                                                  bpr,
-                                                  M * bpr,
-                                                  m0,
-                                                  AOS,
-                                                  (int) sizeof(block_q_t) };
+        const grouped_gemm_esimd::slice<MR, A::L2D> sl  = {
+            (const uint8_t *) src0_dd + (size_t) tile.expert * expert_stride,
+            M,
+            bpr,
+            M * bpr,
+            m0,
+            AOS,
+            (int) sizeof(block_q_t)
+        };
         const uint32_t *      bp  = (const uint32_t *) packed;
         const unsigned        bw  = (unsigned) Npad * 4; // bytes of one packed B row
-        const int                       nstep = K / GROUPED_GEMM_QK;
+        const int             nstep = K / GROUPED_GEMM_QK;
 
-        simd<float, RC * 16> acc[RG][NT];
-        simd<float, RC * 16> total[KS > 1 ? RG : 1][KS > 1 ? NT : 1];
+        simd<float, RC * NW> acc[RG][NT];
+        simd<float, RC * NW> total[KS > 1 ? RG : 1][KS > 1 ? NT : 1];
 #pragma unroll
         for (int g = 0; g < RG; ++g) {
 #pragma unroll
@@ -898,8 +913,9 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
             r1 = i1 % simd<int32_t, BN>((int32_t) dst_rows.ne1);
         }
 
-        // One k step at a time: the format's stored bits for the MR rows, and the 16 k pairs x 16
-        // columns of packed B per dpas column tile, one 2D block message each. A second stage in
+        // One k step at a time: the format's stored bits for the MR rows, and the 16 k pairs x NW
+        // columns of packed B per dpas column tile, one 2D block message each (without 2D loads, one
+        // block load per packed row, cut into the tiles in registers). A second stage in
         // flight spilled 7 KB of the 256 registers and ran 1.6x slower; the other threads of the
         // XVE hide the load latency instead.
         // A stored block's metadata (its sub-block scales) is loaded once per block. With KS > 1 the
@@ -917,10 +933,24 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
             }
             typename F::raw r;
             F::load(r, sb, sl, kb, j);
-            simd<uint32_t, 16 * 16> b[NT];
+            simd<uint32_t, 16 * NW> b[NT]; // [16 k pairs][NW columns] each
+            if constexpr (A::L2D) {
 #pragma unroll
-            for (int nt = 0; nt < NT; ++nt) {
-                b[nt] = load_2d<uint32_t, 16, 16>(bp, bw - 1, K / 2 - 1, bw - 1, b0 + nt * 16, kb * 16);
+                for (int nt = 0; nt < NT; ++nt) {
+                    b[nt] = load_2d<uint32_t, NW, 16>(bp, bw - 1, K / 2 - 1, bw - 1, b0 + nt * NW, kb * 16);
+                }
+            } else {
+                simd<uint32_t, 16 * BN> bm;
+#pragma unroll
+                for (int r = 0; r < 16; ++r) {
+                    bm.template select<BN, 1>(r * BN) =
+                        block_load<uint32_t, BN>(bp + (size_t) (kb * 16 + r) * Npad + b0, overaligned_tag<16>{});
+                }
+                auto bv = bm.template bit_cast_view<uint32_t, 16, BN>();
+#pragma unroll
+                for (int nt = 0; nt < NT; ++nt) {
+                    b[nt] = bv.template select<16, 1, NW, 1>(0, nt * NW);
+                }
             }
             simd<sycl::half, MR * GROUPED_GEMM_QK> all;
             if constexpr (F::whole) {
@@ -953,8 +983,8 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
                     }
 #pragma unroll
                     for (int nt = 0; nt < NT; ++nt) {
-                        simd<uint32_t, 8 * 16> bh32 = b[nt].template select<8 * 16, 1>(h * 8 * 16);
-                        simd<T, 16 * 16>       bh   = bh32.template bit_cast_view<T>();
+                        simd<uint32_t, 8 * NW> bh32 = b[nt].template select<8 * NW, 1>(h * 8 * NW);
+                        simd<T, 16 * NW>       bh   = bh32.template bit_cast_view<T>();
                         acc[g][nt] = xmx::dpas<8, RC, float, float>(acc[g][nt], bh, at);
                     }
                 }
@@ -990,9 +1020,9 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
 #pragma unroll
             for (int g = 0; g < RG; ++g) {
                 if constexpr (KS > 1) {
-                    col.template select<RC, 1>(g * RC) = total[g][c / 16].template select<RC, 16>(c % 16);
+                    col.template select<RC, 1>(g * RC) = total[g][c / NW].template select<RC, NW>(c % NW);
                 } else {
-                    col.template select<RC, 1>(g * RC) = acc[g][c / 16].template select<RC, 16>(c % 16);
+                    col.template select<RC, 1>(g * RC) = acc[g][c / NW].template select<RC, NW>(c % NW);
                 }
             }
             const int n = tile.n0 + c;
@@ -1008,9 +1038,9 @@ template <typename block_q_t, int KS, typename T, bool AOS> struct grouped_gemm_
     auto get(syclexp::properties_tag) const { return syclexp::properties{ sycl::ext::intel::experimental::grf_size<256> }; }
 };
 
-// the weights' surfaces: 2D block loads (SoA) want 64-byte aligned bases, the AoS dword gathers 4
-static bool grouped_gemm_esimd_weights_ok(const char * w, const size_t expert_stride, const bool reordered) {
-    const size_t a = reordered ? 64 : 4;
+// the weights' surfaces: 2D block loads (SoA with L2D) want 64-byte aligned bases, the dword gathers 4
+static bool grouped_gemm_esimd_weights_ok(const char * w, const size_t expert_stride, const bool l2d) {
+    const size_t a = l2d ? 64 : 4;
     return (uintptr_t) w % a == 0 && expert_stride % a == 0;
 }
 
@@ -1024,53 +1054,94 @@ bool ggml_sycl_grouped_gemm_esimd_enabled() {
     return ggml_sycl_grouped_gemm_esimd_mode() != 0;
 }
 
-template <typename block_q_t, typename T, bool AOS>
-static void grouped_gemm_esimd_launch(const char * src0_dd, size_t expert_stride, const ggml_sycl_grouped_gemm_tile * tiles,
-                                      const T * packed, float * dst, int M, int Npad, int K,
-                                      const ggml_sycl_grouped_gemm_rows & dst_rows, int64_t n_tiles, dpct::queue_ptr stream) {
-    const sycl::nd_range<1> range((size_t) n_tiles * (M / GROUPED_GEMM_MR), 1);
+template <typename block_q_t, typename T, bool AOS, typename A>
+static void grouped_gemm_esimd_launch(const char *                        src0_dd,
+                                      size_t                              expert_stride,
+                                      const ggml_sycl_grouped_gemm_tile * tiles,
+                                      const T *                           packed,
+                                      float *                             dst,
+                                      int                                 M,
+                                      int                                 Npad,
+                                      int                                 K,
+                                      const ggml_sycl_grouped_gemm_rows & dst_rows,
+                                      int64_t                             n_tiles,
+                                      dpct::queue_ptr                     stream) {
+    const sycl::nd_range<1> range((size_t) n_tiles * (M / A::MR), 1);
     if (ggml_sycl_grouped_gemm_esimd_mode() == 2) {
-        stream->parallel_for(range, grouped_gemm_esimd_kernel<block_q_t, GGML_SYCL_GROUPED_GEMM_KSPLIT, T, AOS>{
+        stream->parallel_for(range, grouped_gemm_esimd_kernel<block_q_t, GGML_SYCL_GROUPED_GEMM_KSPLIT, T, AOS, A>{
                                         src0_dd, expert_stride, tiles, packed, dst, M, Npad, K, dst_rows });
     } else {
-        stream->parallel_for(range, grouped_gemm_esimd_kernel<block_q_t, 1, T, AOS>{
+        stream->parallel_for(range, grouped_gemm_esimd_kernel<block_q_t, 1, T, AOS, A>{
                                         src0_dd, expert_stride, tiles, packed, dst, M, Npad, K, dst_rows });
     }
 }
 
-template <typename block_q_t, typename T>
-bool ggml_sycl_grouped_gemm_esimd(const char * src0_dd, size_t expert_stride, const ggml_sycl_grouped_gemm_tile * tiles,
-                                  const T * packed, float * dst, int M, int Npad, int K,
-                                  const ggml_sycl_grouped_gemm_rows & dst_rows, bool reordered, int64_t n_tiles,
-                                  dpct::queue_ptr stream) {
-    static_assert(grouped_gemm_esimd_a<block_q_t>::supported == ggml_sycl_grouped_gemm_esimd_has<block_q_t>,
-                  "the header's format list and the formats implemented here must agree");
-    using F = grouped_gemm_esimd_a<block_q_t>;
+template <typename block_q_t, typename T, typename A>
+static bool grouped_gemm_esimd_run(const char *                        src0_dd,
+                                   size_t                              expert_stride,
+                                   const ggml_sycl_grouped_gemm_tile * tiles,
+                                   const T *                           packed,
+                                   float *                             dst,
+                                   int                                 M,
+                                   int                                 Npad,
+                                   int                                 K,
+                                   const ggml_sycl_grouped_gemm_rows & dst_rows,
+                                   bool                                reordered,
+                                   int64_t                             n_tiles,
+                                   dpct::queue_ptr                     stream) {
+    using F = grouped_gemm_esimd_a<block_q_t, A::MR>;
     // whole row groups and stored blocks, every K-split range non-empty (also in mode 1, so both
     // modes take the same shapes); B is read with 2D block loads, which want 64-byte aligned
-    // surfaces and pitches
-    if (M % GROUPED_GEMM_MR != 0 || !F::ok(K, !reordered) || K < GROUPED_GEMM_QK * GGML_SYCL_GROUPED_GEMM_KSPLIT ||
-        !grouped_gemm_esimd_weights_ok(src0_dd, expert_stride, reordered) || ((uintptr_t) packed % 64) != 0 ||
+    // surfaces and pitches, or with 16-byte aligned block loads of whole tiles
+    if (M % A::MR != 0 || !F::ok(K, !reordered) || K < GROUPED_GEMM_QK * GGML_SYCL_GROUPED_GEMM_KSPLIT ||
+        !grouped_gemm_esimd_weights_ok(src0_dd, expert_stride, reordered && A::L2D) || ((uintptr_t) packed % 64) != 0 ||
         Npad % 16 != 0) {
         return false;
     }
     if (reordered) {
-        grouped_gemm_esimd_launch<block_q_t, T, false>(src0_dd, expert_stride, tiles, packed, dst, M, Npad, K, dst_rows,
-                                                       n_tiles, stream);
+        grouped_gemm_esimd_launch<block_q_t, T, false, A>(src0_dd, expert_stride, tiles, packed, dst, M, Npad, K,
+                                                          dst_rows, n_tiles, stream);
     } else {
-        grouped_gemm_esimd_launch<block_q_t, T, true>(src0_dd, expert_stride, tiles, packed, dst, M, Npad, K, dst_rows,
-                                                      n_tiles, stream);
+        grouped_gemm_esimd_launch<block_q_t, T, true, A>(src0_dd, expert_stride, tiles, packed, dst, M, Npad, K,
+                                                         dst_rows, n_tiles, stream);
     }
     return true;
 }
 
-#define GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, T)                                                   \
-    template bool ggml_sycl_grouped_gemm_esimd<block_q_t, T>(                                         \
+template <typename block_q_t, typename T, int NW>
+bool ggml_sycl_grouped_gemm_esimd(const char *                        src0_dd,
+                                  size_t                              expert_stride,
+                                  const ggml_sycl_grouped_gemm_tile * tiles,
+                                  const T *                           packed,
+                                  float *                             dst,
+                                  int                                 M,
+                                  int                                 Npad,
+                                  int                                 K,
+                                  const ggml_sycl_grouped_gemm_rows & dst_rows,
+                                  bool                                reordered,
+                                  int64_t                             n_tiles,
+                                  dpct::queue_ptr                     stream) {
+    static_assert(grouped_gemm_esimd_a<block_q_t>::supported == ggml_sycl_grouped_gemm_esimd_has<block_q_t>,
+                  "the header's format list and the formats implemented here must agree");
+    static_assert(NW == 8 || NW == 16, "the dpas widths of Xe-HPG and of Xe2 / Xe-HPC");
+    if constexpr (NW == 16) {
+        return grouped_gemm_esimd_run<block_q_t, T, grouped_gemm_xe2>(src0_dd, expert_stride, tiles, packed, dst, M,
+                                                                      Npad, K, dst_rows, reordered, n_tiles, stream);
+    } else {
+        return grouped_gemm_esimd_run<block_q_t, T, grouped_gemm_xehpg>(src0_dd, expert_stride, tiles, packed, dst, M,
+                                                                        Npad, K, dst_rows, reordered, n_tiles, stream);
+    }
+}
+
+#define GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, T, NW)                                               \
+    template bool ggml_sycl_grouped_gemm_esimd<block_q_t, T, NW>(                                     \
         const char *, size_t, const ggml_sycl_grouped_gemm_tile *, const T *, float *, int, int, int, \
         const ggml_sycl_grouped_gemm_rows &, bool, int64_t, dpct::queue_ptr);
-#define GROUPED_GEMM_ESIMD_INSTANCE(block_q_t)           \
-    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half) \
-    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::ext::oneapi::bfloat16)
+#define GROUPED_GEMM_ESIMD_INSTANCE(block_q_t)                                \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half, 16)                  \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::ext::oneapi::bfloat16, 16) \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half, 8)                   \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::ext::oneapi::bfloat16, 8)
 GROUPED_GEMM_ESIMD_INSTANCE(block_q8_0)
 GROUPED_GEMM_ESIMD_INSTANCE(block_iq4_nl)
 GROUPED_GEMM_ESIMD_INSTANCE(block_iq4_xs)

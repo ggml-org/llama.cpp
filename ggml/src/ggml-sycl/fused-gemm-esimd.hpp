@@ -5,10 +5,10 @@
 
 // The grouped (MUL_MAT_ID) dequant GEMM, written with ESIMD so the dequantized weights go from
 // registers straight into the dpas A operand: no SLM, no barrier. Same inputs and outputs as the
-// joint_matrix grouped kernel of the 8x16x16 sub-group-16 combination of T (sycl::half or bfloat16):
-// the schedule's tiles, B packed as [K/2][Npad][2] T, and dst through dst_rows. The weight is in the
-// reorder (SoA) layout if `reordered`, else in the canonical block layout. Returns false when the
-// shape is not covered.
+// joint_matrix grouped kernel of the 8 x NW x 16 sub-group-NW combination of T (sycl::half or
+// bfloat16): NW = 16 on Xe2 and Xe-HPC, 8 on Xe-HPG (Arc A, ARL-H). The schedule's tiles, B packed as
+// [K/2][Npad][2] T, and dst through dst_rows. The weight is in the reorder (SoA) layout if
+// `reordered`, else in the canonical block layout. Returns false when the shape is not covered.
 template <typename block_q_t>
 constexpr bool ggml_sycl_grouped_gemm_esimd_has = std::is_same_v<block_q_t, block_q8_0> ||
                                                   std::is_same_v<block_q_t, block_iq4_nl> ||
@@ -21,7 +21,7 @@ constexpr bool ggml_sycl_grouped_gemm_esimd_has = std::is_same_v<block_q_t, bloc
                                                   std::is_same_v<block_q_t, block_q5_K> ||
                                                   std::is_same_v<block_q_t, block_q6_K>;
 
-template <typename block_q_t, typename T>
+template <typename block_q_t, typename T, int NW>
 bool ggml_sycl_grouped_gemm_esimd(const char * src0_dd, size_t expert_stride, const ggml_sycl_grouped_gemm_tile * tiles,
                                   const T * packed, float * dst, int M, int Npad, int K,
                                   const ggml_sycl_grouped_gemm_rows & dst_rows, bool reordered, int64_t n_tiles,
