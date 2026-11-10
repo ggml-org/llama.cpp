@@ -199,6 +199,19 @@ float ggml_openvino_gdn_q_scale();
 // Only the OpenVINO backend may then read the state. NPU only, enabled when GGML_OPENVINO_GDN_NATIVE_STATE is a positive integer.
 bool ggml_openvino_gdn_native_state_enabled();
 
+// True when the device is an NPU with DEVICE_ARCHITECTURE 4000 (Lunar Lake).
+bool ggml_openvino_npu_is_4000();
+
+// Translate multi-token GATED_DELTA_NET into a chunked MatMul decomposition instead of the GatedDeltaNet op.
+// The NPU4000 GDN prefill kernel drives the DPU from SHAVE, which the LNL firmware does not support.
+// Default: on for NPU4000 only. GGML_OPENVINO_GDN_DECOMPOSE=0 turns it off, a positive integer forces it on.
+// Snapshot (MTP) graphs still use the op.
+bool ggml_openvino_gdn_decompose_enabled();
+
+// Tokens per chunk of the decomposed GATED_DELTA_NET: GGML_OPENVINO_GDN_DECOMPOSE_CHUNK,
+// a power of 2 in [2, 128], default 16.
+int ggml_openvino_gdn_decompose_chunk();
+
 // Largest single memory object the device can allocate, SIZE_MAX when there is no known limit
 size_t ggml_openvino_max_alloc_size();
 
