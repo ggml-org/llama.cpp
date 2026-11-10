@@ -2815,7 +2815,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {    ggml_tensor * op = 
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
-    if (props_dev->simd_width == 32 && op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
+    if (op->src[1]->type == GGML_TYPE_F32 && (ne00%128 == 0) &&
         (
          (
           (
