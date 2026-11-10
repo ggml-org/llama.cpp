@@ -31,10 +31,7 @@
 #define VH V           // value columns per pass
 #endif
 #define NSUB 16        // subgroups per workgroup
-#ifndef SUBGROUP_SIZE
-#define SUBGROUP_SIZE 32   // lanes per subgroup (32 = NVIDIA/wave32; 64 = RDNA wave64)
-#endif
-#define WGS (NSUB * SUBGROUP_SIZE)
+layout(constant_id = 0) const uint WGS = NSUB * 32;   // NSUB * subgroup size
 #define KT 16          // K-tile width for deep (K=D) matmuls (bf16 cm: m16n16k16 only)
 #define PAD 8          // shared padding to break COL-load bank conflicts (keep LDP*2 a multiple of 16B)
 #define LDP (D + PAD)
@@ -53,12 +50,12 @@
 #define CT          (C / TN)   // C-column tiles (gram/pmat halves)
 #define NH          (V / VH)   // value passes per chunk
 #define VTH         (VH / TN)  // value tiles per pass
-#define NQK         (C * D / WGS)
+const uint NQK = C * D / WGS;
 
 #define TILE_R(ti) (((ti) / VT) * TM)
 #define TILE_C(ti) (((ti) % VT) * TN)
 
-layout(local_size_x = WGS, local_size_y = 1, local_size_z = 1) in;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout(push_constant) uniform Parameters {
     uint H;
