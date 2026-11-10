@@ -819,21 +819,29 @@ static bool is_lfm3_template(const std::string & src) {
     return src.find("<additional_tools>") != std::string::npos;
 }
 
-// LFM3-Audio: a known language code maps to its name, no language lets the model detect it
-static std::string lfm3_asr_system_prompt(const std::string & language) {
+static std::string string_lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
+    return s;
+}
+
+// LFM3-Audio: language code -> name
+static std::string lfm3_language_name(const std::string & language) {
     static const std::map<std::string, std::string> names = {
         { "ar", "Arabic" }, { "da", "Danish" }, { "de", "German" }, { "el", "Greek" }, { "en", "English" },
         { "es", "Spanish" }, { "fi", "Finnish" }, { "fr", "French" }, { "he", "Hebrew" }, { "it", "Italian" },
         { "ja", "Japanese" }, { "ko", "Korean" }, { "nl", "Dutch" }, { "pl", "Polish" }, { "pt", "Portuguese" },
         { "sv", "Swedish" }, { "tr", "Turkish" }, { "zh", "Chinese" },
     };
+    const auto it = names.find(string_lower(language));
+    return it != names.end() ? it->second : language;
+}
+
+// LFM3-Audio: no language = auto detect
+static std::string lfm3_asr_system_prompt(const std::string & language) {
     if (language.empty()) {
         return "Perform ASR.";
     }
-    std::string code = language;
-    std::transform(code.begin(), code.end(), code.begin(), [](unsigned char c) { return (char) std::tolower(c); });
-    const auto it = names.find(code);
-    return "Perform ASR in " + (it != names.end() ? it->second : language) + ".";
+    return "Perform ASR in " + lfm3_language_name(language) + ".";
 }
 
 common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
@@ -866,6 +874,27 @@ std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templa
         {"language", language},
         {"voice",    voice},
     });
+}
+
+std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,
+                                                 const std::string & language, const std::string & voice) {
+    if (!chat_templates || !chat_templates->template_default || !is_lfm3_template(chat_templates->template_default->source())) {
+        return "";
+    }
+    // same voices as the "tts" template
+    const std::string v = string_lower(voice);
+    const bool has_voice = v == "female" || v == "male";
+    if (language.empty() && !has_voice) {
+        return "";
+    }
+    std::string out = "Speak";
+    if (!language.empty()) {
+        out += " in " + lfm3_language_name(language);
+    }
+    if (has_voice) {
+        out += " using a " + v + " voice";
+    }
+    return out + ".";
 }
 
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant) {

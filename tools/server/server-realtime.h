@@ -15,7 +15,7 @@
 #include <vector>
 
 struct server_context_meta;
-struct common_params_sampling;
+struct common_params;
 struct mtmd_context;
 struct mtmd_helper_cap;
 struct llama_vocab;
@@ -24,7 +24,7 @@ struct server_realtime_deps {
     server_queue &                 queue_tasks;
     server_response &              queue_results;
     const server_context_meta &    meta;
-    const common_params_sampling & sampling;
+    const common_params &          params;
     mtmd_context *                 mctx;
     const mtmd_helper_cap &        cap;
     const llama_vocab *            vocab;
