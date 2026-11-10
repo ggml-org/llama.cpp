@@ -89,7 +89,7 @@ value statement::execute(context & ctx) const {
 }
 
 value identifier::execute_impl(context & ctx) const {
-    auto it = ctx.find_val(key);
+    auto it = ctx.find_val(val);
     if (it && !it->is_undefined()) {
         if (ctx.is_get_stats) {
             value_t::stats_t::mark_used(it);
@@ -787,13 +787,11 @@ value call_statement::execute_impl(context & ctx) const {
     }
     auto * callee_func = cast_val<value_func>(callee_val);
 
-    context caller_ctx(ctx); // new scope for caller execution
-
-    const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+    const func_handler func = [this, caller_ctx = ctx.snapshot()](const func_args & args) -> value {
         if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
             throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
         }
-        context block_ctx(caller_ctx); // new scope for block execution
+        context block_ctx(caller_ctx);
         block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);
