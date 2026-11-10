@@ -347,10 +347,10 @@
 						: deviceStore.isIOSSafari
 							? 'bottom-2 left-2 right-2'
 							: 'bottom-3 right-2 left-2',
-				// Lifted to the center on a new chat, by its sticky bottom offset and not a
-				// translate, which a quick reversal starts a frame ahead of the card's height
-				isFormLifted &&
-					'md:[--chat-form-drop:calc(50dvh-7rem)] 2xl:[--chat-form-drop:calc(50dvh-4rem)]',
+				// Lifted on a new chat until the resting card's top edge is on the screen's middle,
+				// by its sticky bottom offset and not a translate, which a quick reversal starts a
+				// frame ahead of the card's height
+				isFormLifted && 'md:[--chat-form-drop:calc(50dvh-1rem-var(--chat-form-resting-height))]',
 				isFormLifted && !uiStore.isComposerExpanded
 					? 'md:bottom-[calc(var(--chat-form-drop)+1rem)]'
 					: 'md:bottom-4',

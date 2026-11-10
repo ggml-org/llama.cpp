@@ -106,6 +106,8 @@
 	--chat-form-padding-top: 6rem;
 	/* the chat form card holding one line of text, as it rests on a new chat */
 	--chat-form-collapsed-height: 6.375rem;
+	/* the empty chat form card, its text and actions in one row: a new chat centers its top edge */
+	--chat-form-resting-height: 3.375rem;
 	/* the chat form's corners while its text and actions share one row */
 	--chat-form-single-row-radius: 1.25rem;
 	/* the card's translucent fill over the page, made opaque: the phone sheet, and the page and Safari's bars around it */
