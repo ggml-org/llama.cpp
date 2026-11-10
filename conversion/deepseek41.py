@@ -73,7 +73,7 @@ def engram_compressed_token_map(tokenizer_dir: Path) -> tuple[list[int], int]:
         normalizers.Strip(),
         normalizers.Replace(sentinel, " "),
     ])
-    backend = tokenizer.backend_tokenizer
+    backend = tokenizer.backend_tokenizer  # ty: ignore[missing-union-attribute]
     key_to_new: dict[str, int] = {}
     lookup = [0] * len(tokenizer)
     for token_id in range(len(tokenizer)):

@@ -22,12 +22,12 @@ class ChatGLMModel(TextModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
-        vocab_size = hparams.get("padded_vocab_size", len(tokenizer.get_vocab()))  # ty: ignore[unresolved-attribute]
-        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        vocab_size = hparams.get("padded_vocab_size", len(tokenizer.get_vocab()))  # ty: ignore[missing-union-attribute]
+        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[missing-union-attribute]
         role_special_tokens = ["<|system|>", "<|user|>", "<|assistant|>", "<|observation|>"]
         special_tokens = ["[MASK]", "[gMASK]", "[sMASK]", "sop", "eop"] + role_special_tokens
         for token_id in range(vocab_size):
-            piece = tokenizer._convert_id_to_token(token_id)  # ty: ignore[unresolved-attribute]
+            piece = tokenizer._convert_id_to_token(token_id)  # ty: ignore[missing-union-attribute]
             if token_id == 0:
                 piece = "<unk>"
             elif token_id == 1:
@@ -35,14 +35,14 @@ class ChatGLMModel(TextModel):
             elif token_id == 2:
                 piece = "<eos>"
 
-            text = piece.encode("utf-8")  # ty: ignore[unresolved-attribute]
+            text = piece.encode("utf-8")  # ty: ignore[missing-union-attribute]
             score = 0.0
             # Referencing the tokenizer Python implementation(https://huggingface.co/THUDM/chatglm3-6b/blob/main/tokenization_chatglm.py),
             # it is only valid if it is less than tokenizer.tokenizer.sp_model.vocab_size()
-            if len(piece) != 0 and token_id < tokenizer.tokenizer.sp_model.vocab_size():  # ty: ignore[unresolved-attribute, invalid-argument-type]
-                score = tokenizer.tokenizer.sp_model.get_score(token_id)  # ty: ignore[unresolved-attribute]
+            if len(piece) != 0 and token_id < tokenizer.tokenizer.sp_model.vocab_size():  # ty: ignore[missing-union-attribute, invalid-argument-type]
+                score = tokenizer.tokenizer.sp_model.get_score(token_id)  # ty: ignore[missing-union-attribute]
 
-            if token_id >= tokenizer.tokenizer.sp_model.vocab_size():  # ty: ignore[unresolved-attribute]
+            if token_id >= tokenizer.tokenizer.sp_model.vocab_size():  # ty: ignore[missing-union-attribute]
                 if piece in special_tokens:
                     toktype = SentencePieceTokenTypes.CONTROL
                 elif len(piece) == 0:  # ty: ignore[invalid-argument-type]
@@ -56,13 +56,13 @@ class ChatGLMModel(TextModel):
                 continue
 
             toktype = SentencePieceTokenTypes.NORMAL
-            if tokenizer.tokenizer.sp_model.is_unknown(token_id):  # ty: ignore[unresolved-attribute]
+            if tokenizer.tokenizer.sp_model.is_unknown(token_id):  # ty: ignore[missing-union-attribute]
                 toktype = SentencePieceTokenTypes.UNKNOWN
-            elif tokenizer.tokenizer.sp_model.is_control(token_id):  # ty: ignore[unresolved-attribute]
+            elif tokenizer.tokenizer.sp_model.is_control(token_id):  # ty: ignore[missing-union-attribute]
                 toktype = SentencePieceTokenTypes.CONTROL
-            elif tokenizer.tokenizer.sp_model.is_unused(token_id):  # ty: ignore[unresolved-attribute]
+            elif tokenizer.tokenizer.sp_model.is_unused(token_id):  # ty: ignore[missing-union-attribute]
                 toktype = SentencePieceTokenTypes.UNUSED
-            elif tokenizer.tokenizer.sp_model.is_byte(token_id):  # ty: ignore[unresolved-attribute]
+            elif tokenizer.tokenizer.sp_model.is_byte(token_id):  # ty: ignore[missing-union-attribute]
                 toktype = SentencePieceTokenTypes.BYTE
 
             tokens.append(text)
@@ -116,7 +116,7 @@ class ChatGLMModel(TextModel):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
         vocab_size = hparams.get("padded_vocab_size",hparams["vocab_size"])
-        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[missing-union-attribute]
 
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
@@ -125,10 +125,10 @@ class ChatGLMModel(TextModel):
         self.gguf_writer.add_token_types(toktypes)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         # only add special tokens when they were not already loaded from config.json
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[missing-union-attribute]
         # this one is usually not in config.json anyway
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):

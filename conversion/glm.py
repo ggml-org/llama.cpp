@@ -38,10 +38,10 @@ class Glm4Model(TextModel):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -397,10 +397,10 @@ class SolarOpenModel(Glm4MoeModel):
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])  # ty: ignore[missing-union-attribute]
         special_vocab.add_to_gguf(self.gguf_writer)
 
 
