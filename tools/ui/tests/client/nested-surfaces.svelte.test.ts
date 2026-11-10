@@ -6,6 +6,7 @@
 import '../../src/app.css';
 import SidebarNavigationActions from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationActions.svelte';
 import SidebarNavigationFooter from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationFooter.svelte';
+import { SIDEBAR_ACTIONS_ITEMS, SIDEBAR_FOOTER_ITEMS } from '$lib/constants';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
@@ -18,7 +19,7 @@ async function renderFooter() {
 	const screen = render(SidebarNavigationFooter, {});
 	const rows = () => [...screen.container.querySelectorAll<HTMLElement>('[data-slot="button"]')];
 
-	await vi.waitFor(() => expect(rows()).toHaveLength(3));
+	await vi.waitFor(() => expect(rows()).toHaveLength(SIDEBAR_FOOTER_ITEMS.length));
 
 	const group = rows()[0].parentElement?.parentElement;
 
@@ -75,8 +76,7 @@ describe('nested surfaces', () => {
 		const top = render(SidebarNavigationActions, { class: '' });
 		const rows = () => [...top.container.querySelectorAll<HTMLElement>('[data-slot="button"]')];
 
-		// New chat and Search
-		await vi.waitFor(() => expect(rows()).toHaveLength(2));
+		await vi.waitFor(() => expect(rows()).toHaveLength(SIDEBAR_ACTIONS_ITEMS.length));
 
 		for (const row of rows()) {
 			expect(getComputedStyle(row).borderTopLeftRadius, row.textContent ?? '').toBe(expected);
