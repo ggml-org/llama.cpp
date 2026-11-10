@@ -2463,6 +2463,27 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
 
+    if (ctx.batch_invariant && ggml_cuda_should_use_mmq(src0->type, cc, /*ne11 =*/ 1, /*n_experts =*/ 0)) {
+        // Force mmq with a pinned tile width and one tile per block (see
+        // ggml_cuda_mul_mat_q and launch_mul_mat_q).
+        ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst, nullptr);
+        return;
+    }
+
+    if (ctx.batch_invariant && !ggml_is_quantized(src0->type) &&
+            ggml_cuda_should_use_mmvf(src0, cc, warp_size, /*ne11 =*/ 1)) {
+        // The MMVF reduction does not depend on the number of columns, so we process src1 in chunks.
+        for (int64_t i11 = 0; i11 < ne11; i11 += MMVF_MAX_BATCH_SIZE) {
+            ggml_tensor src1_c = *src1;
+            ggml_tensor dst_c  = *dst;
+            src1_c.ne[1] = dst_c.ne[1] = std::min<int64_t>(MMVF_MAX_BATCH_SIZE, ne11 - i11);
+            src1_c.data  = (char *) src1->data + i11*src1->nb[1];
+            dst_c.data   = (char *)  dst->data + i11* dst->nb[1];
+            ggml_cuda_mul_mat_vec_f(ctx, src0, &src1_c, nullptr, &dst_c);
+        }
+        return;
+    }
+
     if (ggml_cuda_should_use_mmvf(src0, cc, warp_size, ne11)) {
         // The custom vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
@@ -2557,6 +2578,13 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        // mmq with a pinned tile width and one tile per block, see the batch
+        // invariant path in ggml_cuda_mul_mat.
+        if (ctx.batch_invariant && ggml_cuda_should_use_mmq(src0->type, cc, /*ne11 =*/ 1, /*n_experts =*/ ne02)) {
+            ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
+            return;
+        }
+
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
@@ -4343,6 +4371,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
+    // Fused mul_mat kernels are launched directly and would bypass the batch invariant mul_mat paths
+    if (cuda_ctx->batch_invariant && (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID)) {
+        return 0;
+    }
+
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
             ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {
@@ -5929,6 +5962,14 @@ bool ggml_backend_is_cuda(ggml_backend_t backend) {
     return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_cuda_guid());
 }
 
+void ggml_backend_cuda_set_batch_invariant(ggml_backend_t backend, bool batch_invariant) {
+    GGML_ASSERT(ggml_backend_is_cuda(backend));
+
+    ggml_backend_cuda_context * ctx = (ggml_backend_cuda_context *) backend->context;
+
+    ctx->batch_invariant = batch_invariant;
+}
+
 int ggml_backend_cuda_get_device_count() {
     return ggml_cuda_info().device_count;
 }
@@ -6872,6 +6913,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_set_batch_invariant") == 0) {
+        return (void *)ggml_backend_cuda_set_batch_invariant;
     }
     return nullptr;
 }

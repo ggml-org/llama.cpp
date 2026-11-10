@@ -256,6 +256,12 @@ void ggml_cuda_mul_mat_q(
             ncols_opt = (ne12*n_expert_used + ne02 - 1) / ne02;
         }
 
+        if (ctx.batch_invariant) {
+            // Pin the smallest valid tile width regardless of the actual batch size so the
+            // same template instantiation (and thus the same reduction order).
+            ncols_opt = 1;
+        }
+
         J_best = ggml_cuda_mmq_get_J_best(src0->type, ncols_opt, fallback, cc, smpbo, prec_src1, &nthreads_best);
     }
     GGML_ASSERT(J_best > 0);

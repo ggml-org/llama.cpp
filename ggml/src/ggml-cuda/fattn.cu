@@ -584,9 +584,10 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
     }
 }
 
-static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst,
+                const bool batch_invariant = false) {
 #ifndef FLASH_ATTN_AVAILABLE
-    GGML_UNUSED(device); GGML_UNUSED(dst);
+    GGML_UNUSED_VARS(device, dst, batch_invariant);
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
 
@@ -689,6 +690,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+    // the vector kernel handles one query per block, so each query is computed the same way for any batch size
+    if (batch_invariant && can_use_vector_kernel) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc)) {
@@ -818,7 +824,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
+    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst, ctx.batch_invariant)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
         case BEST_FATTN_KERNEL_TILE:
