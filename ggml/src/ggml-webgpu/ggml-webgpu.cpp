@@ -3288,14 +3288,13 @@ static webgpu_encoded_op ggml_webgpu_timestep_embedding(webgpu_context & ctx, gg
 
     // Each thread calculates both sin and cos for a given frequency,
     // so divide params.dim by 2.
-    const uint64_t invocation_count =
-        (uint64_t) src->ne[0] * (dim == 1 ? 1 : dim / 2);
-    const uint64_t workgroups =
+    const uint32_t invocation_count =
+        (uint32_t) src->ne[0] * (dim == 1 ? 1 : dim / 2);
+    const uint32_t workgroups =
         CEIL_DIV(invocation_count, shader_lib_ctx.max_wg_size);
 
-    GGML_ASSERT(workgroups <= UINT32_MAX);
     uint32_t wg_x, wg_y;
-    compute_2d_workgroups((uint32_t) workgroups,
+    compute_2d_workgroups(workgroups,
                          ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
@@ -4881,19 +4880,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type;
             break;
         case GGML_OP_TIMESTEP_EMBEDDING:
-            {
-                const int dim = ggml_get_op_params_i32(op, 0);
-                if (src0->type != GGML_TYPE_F32 || !ggml_is_contiguous(src0)) {
-                    break;
-                }
-
-                const auto & limits = ctx->webgpu_global_ctx->capabilities.limits;
-                const uint64_t invocations = (uint64_t) src0->ne[0] * (dim == 1 ? 1 : dim / 2);
-                const uint64_t workgroups = CEIL_DIV(invocations, limits.maxComputeInvocationsPerWorkgroup);
-                const uint64_t max_per_dim = limits.maxComputeWorkgroupsPerDimension;
-                supports_op = workgroups <= max_per_dim * max_per_dim;
-                break;
-            }
+            supports_op = src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0);
+            break;
         case GGML_OP_SUM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguously_allocated(src0);
             break;
