@@ -6478,33 +6478,6 @@ struct test_trunc : public test_case {
     }
 };
 
-// GGML_OP_DIAG_MASK_INF
-struct test_diag_mask_inf : public test_case {
-    const ggml_type type;
-    const std::array<int64_t, 4> ne;
-    const int n_past;
-
-    std::string vars() override {
-        return VARS_TO_STR3(type, ne, n_past);
-    }
-
-    test_diag_mask_inf(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 10, 3, 2},
-            int n_past = 5)
-        : type(type), ne(ne), n_past(n_past) {}
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_param(a);
-        ggml_set_name(a, "a");
-
-        ggml_tensor * out = ggml_diag_mask_inf(ctx, a, n_past);
-        ggml_set_name(out, "out");
-
-        return out;
-    }
-};
-
 // GGML_OP_SOFT_MAX
 struct test_soft_max : public test_case {
     const ggml_type type;
@@ -12372,10 +12345,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_trunc     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_trunc     (type, {1024, 1024, 1, 1}));
     }
-
-    test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 1, 1}, 5));
-    test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 1}, 5));
-    test_cases.emplace_back(new test_diag_mask_inf(GGML_TYPE_F32, {10, 10, 3, 2}, 5));
 
 #if 0
     std::uniform_int_distribution<> dist_ne1(1, 50);

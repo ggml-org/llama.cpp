@@ -1922,14 +1922,6 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_diag(params, tensor);
             } break;
-        case GGML_OP_DIAG_MASK_INF:
-            {
-                ggml_compute_forward_diag_mask_inf(params, tensor);
-            } break;
-        case GGML_OP_DIAG_MASK_ZERO:
-            {
-                ggml_compute_forward_diag_mask_zero(params, tensor);
-            } break;
         case GGML_OP_SOFT_MAX:
             {
                 ggml_compute_forward_soft_max(params, tensor);
@@ -2402,8 +2394,6 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             {
                 n_tasks = 1;
             } break;
-        case GGML_OP_DIAG_MASK_ZERO:
-        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX_BACK:
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:

@@ -1019,9 +1019,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_SET_ROWS: {
                 split_state = handle_set_rows(src_ss);
             } break;
-            case GGML_OP_DIAG:
-            case GGML_OP_DIAG_MASK_INF:
-            case GGML_OP_DIAG_MASK_ZERO: {
+            case GGML_OP_DIAG: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
             case GGML_OP_SOFT_MAX:
