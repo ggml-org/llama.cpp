@@ -262,7 +262,6 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
 
 }
 
-
 #if defined(__AVX512F__)
 static inline __m512 ggml_bf16x16_to_f32(const ggml_bf16_t * p) {
     return _mm512_castsi512_ps(_mm512_slli_epi32(_mm512_cvtepu16_epi32(_mm256_loadu_si256((const __m256i *) p)), 16));
