@@ -600,6 +600,40 @@ void quantize_mmq_q8_1_cuda(
     }
 }
 
+// Stores the 4 values xi of a thread, values [iu, iu + 4) of column g in a unit of 256 values, in the column group yg of the unit, see quantize.cuh for the layout.
+template <mmq_q8_1_ds_layout ds_layout>
+static __device__ __forceinline__ void quantize_mmq_few_store(const float4 xi, int4 * yg, const int iu, const int g) {
+    // the 32 values of a sub-block are held by 8 threads
+    float amax = fmaxf(fmaxf(fabsf(xi.x), fabsf(xi.y)), fmaxf(fabsf(xi.z), fabsf(xi.w)));
+    amax = warp_reduce_max<8>(amax);
+
+    const float d_inv = 127.0f / amax;
+    char4 q;
+    q.x = roundf(xi.x*d_inv);
+    q.y = roundf(xi.y*d_inv);
+    q.z = roundf(xi.z*d_inv);
+    q.w = roundf(xi.w*d_inv);
+    const float d = 1.0f / d_inv;
+
+    // as in quantize_mmq_q8_1: the sum of the quantized values; the int warp_reduce_sum reduces the whole warp on Ampere+
+    [[maybe_unused]] float sum = 0.0f;
+    if constexpr (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
+        sum = d*warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
+    }
+
+    const int s = iu / QK8_1; // sub-block
+    const int k = iu % QK8_1; // first value in sub-block
+    ((int *) (yg + (s/2)*WARP_SIZE + 4*g + (k % 16)/4))[2*(s % 2) + k/16] = *(const int *) &q;
+    if (k == 0) {
+        int4 * ds = yg + 4*WARP_SIZE + 4*(g/2) + s/2;
+        if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
+            ((float *) ds)[2*(s % 2) + g % 2] = d;
+        } else {
+            ((half2 *) ds)[2*(s % 2) + g % 2] = make_half2(d, sum);
+        }
+    }
+}
+
 // Each thread quantizes 4 values of one column, see quantize.cuh for the layout.
 template <mmq_q8_1_ds_layout ds_layout>
 static __global__ void quantize_mmq_few_q8_1(
@@ -619,37 +653,99 @@ static __global__ void quantize_mmq_few_q8_1(
     const int64_t i3 = blockIdx.z / ne2;
     const float4  xi = (int) blockIdx.x < ne1 ? *(const float4 *) (x + i3*s03 + i2*s02 + blockIdx.x*s01 + i0) : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    // the 32 values of a sub-block are held by 8 threads
-    float amax = fmaxf(fmaxf(fabsf(xi.x), fabsf(xi.y)), fmaxf(fabsf(xi.z), fabsf(xi.w)));
-    amax = warp_reduce_max<8>(amax);
-
-    const float d_inv = 127.0f / amax;
-    char4 q;
-    q.x = roundf(xi.x*d_inv);
-    q.y = roundf(xi.y*d_inv);
-    q.z = roundf(xi.z*d_inv);
-    q.w = roundf(xi.w*d_inv);
-    const float d = 1.0f / d_inv;
-
-    // as in quantize_mmq_q8_1: the sum of the quantized values; the int warp_reduce_sum reduces the whole warp on Ampere+
-    [[maybe_unused]] float sum = 0.0f;
-    if constexpr (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
-        sum = d*warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
-    }
-
-    const int s = i0 % QK_K / QK8_1;          // sub-block
-    const int k = i0 % QK8_1;                 // first value in sub-block
     const int g = blockIdx.x % MMQ_FEW_NCOLS; // column in group
     int4 * yg = vy + ((blockIdx.z*(ne00/QK_K) + i0/QK_K)*(gridDim.x/MMQ_FEW_NCOLS) + blockIdx.x/MMQ_FEW_NCOLS)*MMQ_FEW_Q8_1_INT4;
-    ((int *) (yg + (s/2)*WARP_SIZE + 4*g + (k % 16)/4))[2*(s % 2) + k/16] = *(const int *) &q;
-    if (k == 0) {
-        int4 * ds = yg + 4*WARP_SIZE + 4*(g/2) + s/2;
-        if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
-            ((float *) ds)[2*(s % 2) + g % 2] = d;
-        } else {
-            ((half2 *) ds)[2*(s % 2) + g % 2] = make_half2(d, sum);
+    quantize_mmq_few_store<ds_layout>(xi, yg, i0 % QK_K, g);
+}
+
+// MUL_MAT_ID: block x is the (token, slot) entry, ids are as in mm_ids_helper. Each block finds the pair of its entry in shared memory, block 0 also writes all pairs.
+// Entry rank r = number of earlier tokens with the same expert, pair = first pair of the expert + r/MMQ_FEW_NCOLS, column = r % MMQ_FEW_NCOLS.
+template <mmq_q8_1_ds_layout ds_layout>
+static __global__ void quantize_mmq_few_id_q8_1(
+        const float * x_ptr, const int32_t * ids, void * vy_ptr, int * pairs, const int64_t ne00, const int64_t s11, const int64_t s12,
+        const int ne11, const int n_experts, const int n_expert_used, const int64_t si1, const int npairs_max) {
+    // per expert: bit t set if token t uses it, then the index of its first pair, then the number of pairs
+    extern __shared__ unsigned int data_mmq_few_id[];
+    unsigned int * tokens = data_mmq_few_id;
+    int          * pair0  = (int *) (tokens + n_experts);
+    int          & npairs = pair0[n_experts];
+
+    ggml_cuda_pdl_lc();
+    const float * GGML_CUDA_RESTRICT x  = x_ptr;
+    int4        * GGML_CUDA_RESTRICT vy = (int4 *) vy_ptr;
+    ggml_cuda_pdl_sync();
+
+    const int nentries = gridDim.x;
+    auto expert_of = [&](const int i) {
+        const int e = ids[(i / n_expert_used)*si1 + i % n_expert_used];
+        return e >= 0 && e < n_experts ? e : -1; // other ids skip the slot
+    };
+
+    for (int e = threadIdx.x; e < n_experts; e += blockDim.x) {
+        tokens[e] = 0;
+    }
+    __syncthreads();
+    for (int i = threadIdx.x; i < nentries; i += blockDim.x) {
+        const int e = expert_of(i);
+        if (e >= 0) {
+            atomicOr(&tokens[e], 1u << (i / n_expert_used));
         }
     }
+    __syncthreads();
+    if (threadIdx.x < WARP_SIZE) {
+        const int per_lane = (n_experts + WARP_SIZE - 1) / WARP_SIZE;
+        const int e0 = min(int(threadIdx.x)*per_lane, n_experts);
+        const int e1 = min(e0 + per_lane, n_experts);
+        int n = 0;
+        for (int e = e0; e < e1; ++e) {
+            n += (__popc(tokens[e]) + MMQ_FEW_NCOLS - 1) / MMQ_FEW_NCOLS;
+        }
+        int p = warp_prefix_inclusive_sum<int>(n) - n;
+        for (int e = e0; e < e1; ++e) {
+            pair0[e] = p;
+            p += (__popc(tokens[e]) + MMQ_FEW_NCOLS - 1) / MMQ_FEW_NCOLS;
+        }
+        if (threadIdx.x == WARP_SIZE - 1) {
+            npairs = p;
+        }
+    }
+    __syncthreads();
+
+    auto rank = [&](const int i, const int e) {
+        return __popc(tokens[e] & ((1u << (i / n_expert_used)) - 1u));
+    };
+
+    if (blockIdx.x == 0 && blockIdx.y == 0) {
+        for (int i = threadIdx.x; i < nentries; i += blockDim.x) {
+            const int e = expert_of(i);
+            if (e < 0) {
+                continue;
+            }
+            const int r = rank(i, e);
+            int * pair = pairs + (pair0[e] + r/MMQ_FEW_NCOLS)*MMQ_FEW_PAIR_INTS;
+            pair[2 + r % MMQ_FEW_NCOLS] = i;
+            if (r % MMQ_FEW_NCOLS == 0) {
+                pair[0] = e;
+                pair[1] = min(__popc(tokens[e]) - r, MMQ_FEW_NCOLS);
+            }
+        }
+        for (int p = npairs + threadIdx.x; p < npairs_max; p += blockDim.x) {
+            pairs[p*MMQ_FEW_PAIR_INTS + 1] = 0;
+        }
+    }
+
+    const int     e  = expert_of(blockIdx.x);
+    const int64_t i0 = ((int64_t)blockDim.x*blockIdx.y + threadIdx.x)*4;
+    if (e < 0 || i0 >= ne00) {
+        return;
+    }
+    const int    it = blockIdx.x / n_expert_used;
+    const int    is = blockIdx.x % n_expert_used;
+    const float4 xi = *(const float4 *) (x + it*s12 + (is % ne11)*s11 + i0);
+
+    const int r = rank(blockIdx.x, e);
+    int4 * yg = vy + (int64_t(pair0[e] + r/MMQ_FEW_NCOLS)*(ne00/QK_K) + i0/QK_K)*MMQ_FEW_Q8_1_INT4;
+    quantize_mmq_few_store<ds_layout>(xi, yg, i0 % QK_K, r % MMQ_FEW_NCOLS);
 }
 
 void quantize_mmq_few_q8_1_cuda(
@@ -669,6 +765,31 @@ void quantize_mmq_few_q8_1_cuda(
         case MMQ_Q8_1_DS_LAYOUT_DS4:
             ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+    }
+}
+
+void quantize_mmq_few_id_q8_1_cuda(
+        const float * x, const int32_t * ids, void * vy, int * pairs, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s11, const int64_t s12,
+        const int64_t ne11, const int64_t n_experts, const int64_t n_expert_used, const int64_t n_tokens, const int64_t si1, const int64_t npairs_max, cudaStream_t stream) {
+    GGML_ASSERT(ne00 % QK_K == 0);
+    GGML_ASSERT(n_tokens <= 32); // one bit per token
+
+    const int64_t block_num_y   = (ne00 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
+    const size_t  nbytes_shared = (2*n_experts + 1)*sizeof(int);
+    const dim3 num_blocks(n_tokens*n_expert_used, block_num_y, 1);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, nbytes_shared, stream);
+    switch (ds_layout) {
+        case MMQ_Q8_1_DS_LAYOUT_D4:
+            ggml_cuda_kernel_launch(quantize_mmq_few_id_q8_1<MMQ_Q8_1_DS_LAYOUT_D4>, launch_params,
+                x, ids, vy, pairs, ne00, s11, s12, (int) ne11, (int) n_experts, (int) n_expert_used, si1, (int) npairs_max);
+            break;
+        case MMQ_Q8_1_DS_LAYOUT_DS4:
+            ggml_cuda_kernel_launch(quantize_mmq_few_id_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>, launch_params,
+                x, ids, vy, pairs, ne00, s11, s12, (int) ne11, (int) n_experts, (int) n_expert_used, si1, (int) npairs_max);
             break;
         default:
             GGML_ABORT("fatal error");
