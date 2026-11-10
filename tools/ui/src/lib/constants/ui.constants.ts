@@ -5,8 +5,8 @@ import {
 	SHORTCUT_SEARCH,
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
-import { MODELS_ROUTE_ID } from './routes.constants';
-import { Search, Settings, SquarePen } from '@lucide/svelte';
+import { MODELS_ROUTE_ID, PERFORMANCE_ROUTE_ID } from './routes.constants';
+import { Gauge, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
@@ -120,6 +120,12 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		action: SidebarAction.MCP,
 		icon: McpLogo,
 		tooltip: 'MCP'
+	},
+	{
+		action: SidebarAction.PERFORMANCE,
+		activeRouteId: PERFORMANCE_ROUTE_ID,
+		icon: Gauge,
+		tooltip: 'Performance'
 	},
 	{
 		action: SidebarAction.SETTINGS,

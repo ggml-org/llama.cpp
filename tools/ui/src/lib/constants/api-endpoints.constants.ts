@@ -19,6 +19,16 @@ export const API_SLOTS = {
 	LIST: './slots'
 };
 
+// Prometheus-format performance data, requires the --metrics flag on the server
+export const API_METRICS = {
+	LIST: './metrics'
+};
+
+// liveness probe, never requires an API key
+export const API_HEALTH = {
+	LIST: './health'
+};
+
 export const API_TOOLS = {
 	EXECUTE: '/tools',
 	LIST: '/tools'

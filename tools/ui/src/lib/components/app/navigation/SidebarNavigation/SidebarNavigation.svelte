@@ -537,6 +537,14 @@
 				openDialog(() => (mcpDialogOpen = true));
 
 				break;
+			case SidebarAction.PERFORMANCE:
+				if (deviceStore.isMobile) {
+					scheduleMobileCollapse();
+				}
+
+				void goto(ROUTES.PERFORMANCE);
+
+				break;
 			case SidebarAction.SETTINGS:
 				openDialog(() => (settingsDialogOpen = true));
 
