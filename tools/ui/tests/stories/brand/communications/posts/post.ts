@@ -310,31 +310,25 @@ export const agentsPost: AgentsCopy = {
 };
 
 export interface VirtualModelsCopy {
-	footer: [string, string];
-	headline: string;
-	lede: string;
-	model: string;
-	note: string;
-	routes: { label: string; name: string; note: string }[];
-	url: string;
+	/** the harness the model is picked in, and the model's id */
+	from: { model: string; name: string };
+	/** each model it can send a query to: where it runs, its name, and what runs it */
+	routes: { label: string; name: string; runner: 'Hugging Face' | 'llama.cpp' }[];
+	title: string;
 }
 
 /**
  * Pi's Virtual Models, after Julien's post: one model picked in Pi that sends a simple question to a model in
- * llama.cpp on your computer and a hard one, or one asked while the computer is busy, to a hosted model. His words
- * and his two models, the local one first since it is the one we make; the makers are named in words, not logos
+ * llama.cpp on your computer and a hard one to a hosted model on Hugging Face. His title and his two models, the
+ * local one first
  */
 export const virtualModels: VirtualModelsCopy = {
-	footer: ['Virtual Models, a Pi extension', 'Local first · Hosted when it helps'],
-	headline: 'One model.\nTwo backends.',
-	lede: 'Simple question? It stays on your computer. A tricky one, or a busy Mac, goes to a hosted model.',
-	model: 'hybrid/auto',
-	note: 'A virtual model in Pi',
+	from: { model: 'hybrid/auto', name: 'Pi' },
 	routes: [
-		{ label: 'Local', name: 'Qwen3.8 27B', note: 'In llama.cpp, which also sorts each query' },
-		{ label: 'Remote', name: 'GLM-5.3', note: 'Hosted on Hugging Face' }
+		{ label: 'Local', name: 'Qwen3.8 27B', runner: 'llama.cpp' },
+		{ label: 'Remote', name: 'GLM-5.3', runner: 'Hugging Face' }
 	],
-	url: 'github.com/ggml-org/llama.cpp'
+	title: 'Virtual Models'
 };
 
 export interface StoreLine {
