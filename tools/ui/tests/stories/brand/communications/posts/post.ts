@@ -309,6 +309,34 @@ export const agentsPost: AgentsCopy = {
 	url: 'llama.app/docs/agents'
 };
 
+export interface VirtualModelsCopy {
+	footer: [string, string];
+	headline: string;
+	lede: string;
+	model: string;
+	note: string;
+	routes: { label: string; name: string; note: string }[];
+	url: string;
+}
+
+/**
+ * Pi's Virtual Models, after Julien's post: one model picked in Pi that sends a simple question to a model in
+ * llama.cpp on your computer and a hard one, or one asked while the computer is busy, to a hosted model. His words
+ * and his two models, the local one first since it is the one we make; the makers are named in words, not logos
+ */
+export const virtualModels: VirtualModelsCopy = {
+	footer: ['Virtual Models, a Pi extension', 'Local first · Hosted when it helps'],
+	headline: 'One model.\nTwo backends.',
+	lede: 'Simple question? It stays on your computer. A tricky one, or a busy Mac, goes to a hosted model.',
+	model: 'hybrid/auto',
+	note: 'A virtual model in Pi',
+	routes: [
+		{ label: 'Local', name: 'Qwen3.8 27B', note: 'In llama.cpp, which also sorts each query' },
+		{ label: 'Remote', name: 'GLM-5.3', note: 'Hosted on Hugging Face' }
+	],
+	url: 'github.com/ggml-org/llama.cpp'
+};
+
 export interface StoreLine {
 	headline: string;
 	lede?: string;
