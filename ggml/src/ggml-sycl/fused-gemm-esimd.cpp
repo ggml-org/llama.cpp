@@ -81,7 +81,14 @@ struct field {
     int pre;
     int size;
     int aos;
+    int off = 0; // the field's offset in a block of its stream, when it shares one (iq3_s d and scales)
 };
+
+// field F of format T's layout table (ggml_sycl_layout in fused-gemm.hpp)
+template <typename T, int F> constexpr field field_of() {
+    using L = ggml_sycl_layout<T>;
+    return { ggml_sycl_layout_pre<L>(F), ggml_sycl_layout_stride<L>(F), L::seg[F].aos, ggml_sycl_layout_off<L>(F) };
+}
 
 // Where one thread's rows sit in an expert's slice, in either layout. nblocks counts the stored blocks
 // of the slice, bpr those of one row, bs is the size of one block.
@@ -98,13 +105,13 @@ template <int MR, typename HW> struct slice {
     ESIMD_INLINE simd<uint32_t, MR> at(const field & f, const int ib, const int inner) const {
         const int             stride = aos ? bs : f.size;
         simd<uint32_t, MR> o(0, (uint32_t) (bpr * stride));
-        return o + (uint32_t) ((aos ? f.aos : nblocks * f.pre) + (m0 * bpr + ib) * stride + inner);
+        return o + (uint32_t) ((aos ? f.aos : nblocks * f.pre + f.off) + (m0 * bpr + ib) * stride + inner);
     }
 
     // a field's bytes at offset `inner` start on a dword in every block (the AoS block and offset
     // are multiples of 4); the SoA streams always do
     ESIMD_INLINE bool dword_aligned(const field & f, const int inner) const {
-        return !aos || (bs % 4 == 0 && (f.aos + inner) % 4 == 0);
+        return aos ? bs % 4 == 0 && (f.aos + inner) % 4 == 0 : f.size % 4 == 0 && (f.off + inner) % 4 == 0;
     }
 
     ESIMD_INLINE simd<uint32_t, MR> u8(const field & f, const int ib, const int inner) const {
@@ -149,7 +156,7 @@ template <int MR, typename HW> struct slice {
             if (!aos) {
                 const unsigned pitch = (unsigned) (bpr * f.size);
                 return xmx::load_2d<HW, uint32_t, W, MR>((const uint32_t *) (x + (size_t) nblocks * f.pre), pitch - 1,
-                                                         M - 1, pitch - 1, (ib * f.size + inner) / 4, m0);
+                                                         M - 1, pitch - 1, (ib * f.size + f.off + inner) / 4, m0);
             }
         }
         const simd<uint32_t, MR> o = at(f, ib, inner);
@@ -427,6 +434,8 @@ ESIMD_INLINE a_halves grid_signed(simd<uint32_t, GROUPED_GEMM_RC * 8> ge,
 // group at a time, and a canonical and a reorder layout that differ (plain: the same bytes, one field
 // over the whole block, so either is a 2D surface). bytes: the size of the format's block.
 template <typename block_q_t> struct format {
+    using L                                           = ggml_sycl_layout<block_q_t>;
+    template <int F> static constexpr field fld       = field_of<block_q_t, F>();  // field F of the layout table
     static constexpr bool supported = true;
     static constexpr bool whole     = false;
     static constexpr bool plain     = false;
@@ -451,7 +460,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_q8_0, MR> : grouped_gemm_esi
         grouped_gemm_esimd::simd<uint16_t, MR>     d;
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK8_0, 2 }, D = { QK8_0, 2, 0 };
+    static constexpr grouped_gemm_esimd::field      QS = fld<L::QS>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || K >= 64); }
     template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t &, const Sl & s, const int kb, const int) {
         r.q = s.template rows<8>(QS, kb, 0);
@@ -480,7 +489,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq4_nl, MR> : grouped_gemm_e
         grouped_gemm_esimd::simd<sycl::half, MR>   d;
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK4_NL / 2, 2 }, D = { QK4_NL / 2, 2, 0 };
+    static constexpr grouped_gemm_esimd::field      QS = fld<L::QS>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || K / 2 >= 64); }
     template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t &, const Sl & s, const int kb, const int) {
         using namespace grouped_gemm_esimd;
@@ -519,8 +528,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq4_xs, MR> : grouped_gemm_e
         grouped_gemm_esimd::simd<uint32_t, MR> sl;  // scales_l, 4 bytes
     };
 
-    static constexpr grouped_gemm_esimd::field      QS = { 0, QK_K / 2, 8 }, D = { QK_K / 2, 2, 0 },
-                                                    SH = { QK_K / 2 + 2, 2, 2 }, SL = { QK_K / 2 + 4, 4, 4 };
+    static constexpr grouped_gemm_esimd::field      QS = fld<L::QS>, D = fld<L::D>, SH = fld<L::SH>, SL = fld<L::SL>;
     static bool ok(const int K, const bool) { return K % qk == 0; }
     template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
@@ -550,7 +558,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq4_xs, MR> : grouped_gemm_e
     }
 };
 
-// [qs 64][qh 8][signs 32][d 2, scales 4] per 256 values. Value k of sub-block ib8 is byte k % 4 of
+// [qs 64][qh 8][signs 32][d 2][scales 4] per 256 values. Value k of sub-block ib8 is byte k % 4 of
 // grid entry k / 4, the entry index being qs[k / 4] with bit 8 from qh bit k / 4, negated where bit
 // k of the sub-block's sign dword is set; times d * (1 + 2 * 4-bit scale)
 template <int MR> struct grouped_gemm_esimd_a<block_iq3_s, MR> : grouped_gemm_esimd::format<block_iq3_s> {
@@ -576,22 +584,18 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq3_s, MR> : grouped_gemm_es
         grouped_gemm_esimd::simd<float, MR>    d;
         grouped_gemm_esimd::simd<uint32_t, MR> sc;  // the 4 scale bytes
     };
-    // the SoA stream {d, scales} is d and scales of the block in AoS, which are not adjacent there: MS
-    // reads the scales at their SoA offset 2 in the stream, which is AoS offset 2 past 104
-    static constexpr int             META = QK_K / 4 + QK_K / 32 + QK_K / 8;
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, 2 }, QH = { QK_K / 4, QK_K / 32, 2 + QK_K / 4 },
-                                               SG = { QK_K / 4 + QK_K / 32, QK_K / 8, 2 + QK_K / 4 + QK_K / 32 },
-                                               MD = { META, 2 + IQ3S_N_SCALE, 0 },
-                                               MS = { META, 2 + IQ3S_N_SCALE, META };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, QH = fld<L::QH>, SG = fld<L::SG>, D = fld<L::D>,
+                                               SC = fld<L::SC>;
     // the SoA qh and signs streams are 2D surfaces: their row pitches must be 16-byte aligned
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || ((K / QK_K * 8) % 16 == 0 && K / QK_K * 8 >= 64));
     }
     template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
-        simd<uint16_t, MR> dh = s.u16(MD, ib, 0);
-        simd<uint32_t, MR> s0 = s.u16(MS, ib, 2);
-        simd<uint32_t, MR> s1 = s.u16(MS, ib, 4);
+        simd<uint16_t, MR> dh = s.u16(D, ib, 0);
+        simd<uint32_t, MR> s0 = s.u16(SC, ib, 0);
+        simd<uint32_t, MR> s1 = s.u16(SC, ib, 2);
         sb.d  = simd<sycl::half, MR>(dh.template bit_cast_view<sycl::half>());
         sb.sc = s0 | (s1 << 16);
     }
@@ -637,8 +641,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_q4_K, MR> : grouped_gemm_esi
         grouped_gemm_esimd::simd<float, MR>    dall, dmin;
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 2, 16 }, SC = { QK_K / 2, K_SCALE_SIZE, 4 },
-                                               DM = { QK_K / 2 + K_SCALE_SIZE, 4, 0 };
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, SC = fld<L::SC>, DM = fld<L::DM>;
 
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 2));
@@ -697,9 +700,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_q5_K, MR> : grouped_gemm_esi
     static constexpr int  qk        = QK_K;
     using raw  = typename q4::raw;
     using sb_t = typename q4::sb_t;
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 2, 48 }, QH = { QK_K / 2, QK_K / 8, 16 },
-                                               SC = { QK_K / 2 + QK_K / 8, K_SCALE_SIZE, 4 },
-                                               DM = { QK_K / 2 + QK_K / 8 + K_SCALE_SIZE, 4, 0 };
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, QH = fld<L::QH>, SC = fld<L::SC>, DM = fld<L::DM>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || (grouped_gemm_esimd::surface_ok(K / 2) && grouped_gemm_esimd::surface_ok(K / 8)));
     }
@@ -732,10 +733,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_q6_K, MR> : grouped_gemm_esi
         grouped_gemm_esimd::simd<float, MR>    d;
     };
 
-    static constexpr grouped_gemm_esimd::field QL = { 0, QK_K / 2, 0 }, QH = { QK_K / 2, QK_K / 4, QK_K / 2 },
-                                               SC = { QK_K / 2 + QK_K / 4, QK_K / 16, QK_K / 2 + QK_K / 4 },
-                                               D  = { QK_K / 2 + QK_K / 4 + QK_K / 16, 2,
-                                                      QK_K / 2 + QK_K / 4 + QK_K / 16 };
+    static constexpr grouped_gemm_esimd::field QL = fld<L::QL>, QH = fld<L::QH>, SC = fld<L::SC>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || (grouped_gemm_esimd::surface_ok(K / 2) && grouped_gemm_esimd::surface_ok(K / 4)));
     }
@@ -784,8 +782,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_q2_K, MR> : grouped_gemm_esi
         grouped_gemm_esimd::simd<float, MR>    d, dmin;
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, QK_K / 16 }, SC = { QK_K / 4, QK_K / 16, 0 },
-                                               DM = { QK_K / 4 + QK_K / 16, 4, QK_K / 4 + QK_K / 16 };
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, SC = fld<L::SC>, DM = fld<L::DM>;
 
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 4));
@@ -835,9 +832,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_q3_K, MR> : grouped_gemm_esi
         grouped_gemm_esimd::simd<float, MR>    d;
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, QK_K / 8 }, HM = { QK_K / 4, QK_K / 8, 0 },
-                                               SC = { QK_K / 4 + QK_K / 8, 12, QK_K / 4 + QK_K / 8 },
-                                               D  = { QK_K / 4 + QK_K / 8 + 12, 2, QK_K / 4 + QK_K / 8 + 12 };
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, HM = fld<L::HM>, SC = fld<L::SC>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || (grouped_gemm_esimd::surface_ok(K / 4) && grouped_gemm_esimd::surface_ok(K / 8)));
     }
@@ -900,7 +895,7 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq3_xxs, MR> : grouped_gemm_
         grouped_gemm_esimd::simd<float, MR> d;
     };
 
-    static constexpr grouped_gemm_esimd::field QS = { 0, 3 * QK_K / 8, 2 }, D = { 3 * QK_K / 8, 2, 0 };
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, D = fld<L::D>;
 
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * 96));
@@ -936,11 +931,12 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq3_xxs, MR> : grouped_gemm_
 
 // q4_0, q4_1, q5_0, q5_1: [qs 16][qh 4 (q5)][d or dm], one block a k step. Byte j of qs holds k = j (low nibble)
 // and k = 16 + j (high nibble), bit k of qh the fifth bit of k; the value is (code - 2^(bits - 1)) * d, or with a
-// min code * d + m. QS_AOS and QH_AOS (-1: none) are the fields' offsets in the canonical block.
-template <typename block_q_t, int MR, int QS_AOS, int QH_AOS, bool MIN>
+// min code * d + m. The q5 formats are the ones with a qh field in their layout table.
+template <typename block_q_t, int MR, bool MIN>
 struct grouped_gemm_esimd_nibbles : grouped_gemm_esimd::format<block_q_t> {
+    using L                    = ggml_sycl_layout<block_q_t>;
     static constexpr int  qk   = 32;
-    static constexpr bool QH   = QH_AOS >= 0;
+    static constexpr bool QH   = L::N == 3;
     static constexpr int  BIAS = QH ? 16 : 8;
     struct raw {
         grouped_gemm_esimd::simd<uint32_t, MR * 4> q;
@@ -948,8 +944,10 @@ struct grouped_gemm_esimd_nibbles : grouped_gemm_esimd::format<block_q_t> {
         grouped_gemm_esimd::simd<float, MR>        d;
         grouped_gemm_esimd::simd<float, MR>        m;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, 16, QS_AOS }, QHF = { 16, 4, QH ? QH_AOS : 0 },
-                                               D = { QH ? 20 : 16, MIN ? 4 : 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS  = grouped_gemm_esimd::field_of<block_q_t, 0>(),
+                                               QHF = grouped_gemm_esimd::field_of<block_q_t, QH ? 1 : 0>(),
+                                               D   = grouped_gemm_esimd::field_of<block_q_t, L::N - 1>();
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 2)); }
     template <typename Sl> static ESIMD_INLINE void load(raw & r, typename grouped_gemm_esimd_nibbles::sb_t &, const Sl & s,
                                                          const int kb, const int) {
@@ -988,13 +986,13 @@ struct grouped_gemm_esimd_nibbles : grouped_gemm_esimd::format<block_q_t> {
     }
 };
 
-static_assert(offsetof(block_q4_0, qs) == 2 && offsetof(block_q4_1, qs) == 4, "q4 AoS offsets");
-static_assert(offsetof(block_q5_0, qh) == 2 && offsetof(block_q5_0, qs) == 6, "q5_0 AoS offsets");
-static_assert(offsetof(block_q5_1, qh) == 4 && offsetof(block_q5_1, qs) == 8, "q5_1 AoS offsets");
-template <int MR> struct grouped_gemm_esimd_a<block_q4_0, MR> : grouped_gemm_esimd_nibbles<block_q4_0, MR, 2, -1, false> {};
-template <int MR> struct grouped_gemm_esimd_a<block_q4_1, MR> : grouped_gemm_esimd_nibbles<block_q4_1, MR, 4, -1, true> {};
-template <int MR> struct grouped_gemm_esimd_a<block_q5_0, MR> : grouped_gemm_esimd_nibbles<block_q5_0, MR, 6, 2, false> {};
-template <int MR> struct grouped_gemm_esimd_a<block_q5_1, MR> : grouped_gemm_esimd_nibbles<block_q5_1, MR, 8, 4, true> {};
+template <int MR> struct grouped_gemm_esimd_a<block_q4_0, MR> : grouped_gemm_esimd_nibbles<block_q4_0, MR, false> {};
+
+template <int MR> struct grouped_gemm_esimd_a<block_q4_1, MR> : grouped_gemm_esimd_nibbles<block_q4_1, MR, true> {};
+
+template <int MR> struct grouped_gemm_esimd_a<block_q5_0, MR> : grouped_gemm_esimd_nibbles<block_q5_0, MR, false> {};
+
+template <int MR> struct grouped_gemm_esimd_a<block_q5_1, MR> : grouped_gemm_esimd_nibbles<block_q5_1, MR, true> {};
 
 // [qs 16][d] per 128 values, four k steps: bit k of the step's dword picks +d or -d
 template <int MR> struct grouped_gemm_esimd_a<block_q1_0, MR> : grouped_gemm_esimd::format<block_q1_0> {
@@ -1006,7 +1004,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_q1_0, MR> : grouped_gemm_esi
     struct sb_t {
         grouped_gemm_esimd::simd<float, MR> d;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK1_0 / 8, 2 }, D = { QK1_0 / 8, 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 8)); }
     template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
@@ -1037,7 +1036,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_q2_0, MR> : grouped_gemm_esi
     struct sb_t {
         grouped_gemm_esimd::simd<float, MR> d;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK2_0 / 4, 2 }, D = { QK2_0 / 4, 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 4)); }
     template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) {
         using namespace grouped_gemm_esimd;
@@ -1076,7 +1076,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_mxfp4, MR> : grouped_gemm_es
         grouped_gemm_esimd::simd<uint32_t, MR * 4> q;
         grouped_gemm_esimd::simd<float, MR>        d;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_MXFP4 / 2, 1 }, E = { QK_MXFP4 / 2, 1, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, E = fld<L::E>;
     static bool ok(const int K, const bool aos) { return !aos && K % qk == 0 && grouped_gemm_esimd::surface_ok(K / 2); }
     template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t &, const Sl & s, const int kb, const int) {
         r.q = s.template rows<4>(QS, kb, 0);
@@ -1105,8 +1106,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_nvfp4, MR> : grouped_gemm_es
     struct sb_t {
         grouped_gemm_esimd::simd<uint32_t, MR> d;
     };
-    static_assert(offsetof(block_nvfp4, qs) == 4, "nvfp4 AoS offsets");
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_NVFP4 / 2, 4 }, D = { QK_NVFP4 / 2, 4, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) { return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / 2)); }
     template <typename Sl> static ESIMD_INLINE void load_sb(sb_t & sb, const Sl & s, const int ib) { sb.d = s.u32(D, ib, 0); }
     template <typename Sl> static ESIMD_INLINE void load(raw & r, sb_t & sb, const Sl & s, const int kb, const int j) {
@@ -1168,7 +1169,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq2_xxs, MR> : grouped_gemm_
     struct sb_t {
         grouped_gemm_esimd::simd<float, MR> d;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, 2 }, D = { QK_K / 4, 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * (QK_K / 4)));
     }
@@ -1212,8 +1214,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq2_xs, MR> : grouped_gemm_e
         grouped_gemm_esimd::simd<uint32_t, MR> sc0;
         grouped_gemm_esimd::simd<uint32_t, MR> sc1;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, 2 }, SC = { QK_K / 4, QK_K / 32, 2 + QK_K / 4 },
-                                               D = { QK_K / 4 + QK_K / 32, 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, SC = fld<L::SC>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * (QK_K / 4)));
     }
@@ -1262,9 +1264,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq2_s, MR> : grouped_gemm_es
         grouped_gemm_esimd::simd<uint32_t, MR> qh0;
         grouped_gemm_esimd::simd<uint32_t, MR> qh1;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 4, 2 }, QH = { QK_K / 4, QK_K / 32, 2 + QK_K / 4 },
-                                               SC = { QK_K / 4 + QK_K / 32, QK_K / 32, 2 + QK_K / 4 + QK_K / 32 },
-                                               D  = { QK_K / 4 + QK_K / 16, 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, QH = fld<L::QH>, SC = fld<L::SC>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * (QK_K / 4)));
     }
@@ -1320,8 +1321,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq1_s, MR> : grouped_gemm_es
     struct sb_t {
         grouped_gemm_esimd::simd<float, MR> d;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 8, 2 }, QH = { QK_K / 8, QK_K / 16, 2 + QK_K / 8 },
-                                               D  = { QK_K / 8 + QK_K / 16, 2, 0 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, QH = fld<L::QH>, D = fld<L::D>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * (QK_K / 8)));
     }
@@ -1370,8 +1371,8 @@ template <int MR> struct grouped_gemm_esimd_a<block_iq1_m, MR> : grouped_gemm_es
         grouped_gemm_esimd::simd<uint32_t, MR> sc0;
         grouped_gemm_esimd::simd<uint32_t, MR> sc1;
     };
-    static constexpr grouped_gemm_esimd::field QS = { 0, QK_K / 8, 0 }, QH = { QK_K / 8, QK_K / 16, QK_K / 8 },
-                                               SC = { QK_K / 8 + QK_K / 16, QK_K / 32, QK_K / 8 + QK_K / 16 };
+
+    static constexpr grouped_gemm_esimd::field QS = fld<L::QS>, QH = fld<L::QH>, SC = fld<L::SC>;
     static bool ok(const int K, const bool aos) {
         return K % qk == 0 && (aos || grouped_gemm_esimd::surface_ok(K / QK_K * (QK_K / 8)));
     }
