@@ -4538,7 +4538,7 @@ llama_context * llama_init_from_model(
                 continue;
             }
 
-            for (ggml_tensor * scale : { model->layers[il].k_cache_scale, model->layers[il].v_cache_scale }) {
+            for (ggml_tensor * scale : { model->layers[il].k_cache_s, model->layers[il].v_cache_s }) {
                 if (!scale || !scale->data) {
                     continue;
                 }

@@ -67,16 +67,16 @@ int main() {
         init_model(*assistant, 2);
 
         ggml_context_ptr ctx(ggml_init({ 4096, nullptr, false }));
-        target->layers[2].k_cache_scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
-        target->layers[2].v_cache_scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
-        assistant->layers[0].k_cache_scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
-        assistant->layers[0].v_cache_scale = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
-        assistant->layers[1].k_cache_scale = assistant->layers[0].k_cache_scale;
-        assistant->layers[1].v_cache_scale = assistant->layers[0].v_cache_scale;
-        ggml_set_f32(target->layers[2].k_cache_scale, 0.5f);
-        ggml_set_f32(target->layers[2].v_cache_scale, 0.25f);
-        ggml_set_f32(assistant->layers[0].k_cache_scale, 2.0f);
-        ggml_set_f32(assistant->layers[0].v_cache_scale, 4.0f);
+        target->layers[2].k_cache_s = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+        target->layers[2].v_cache_s = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+        assistant->layers[0].k_cache_s = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+        assistant->layers[0].v_cache_s = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+        assistant->layers[1].k_cache_s = assistant->layers[0].k_cache_s;
+        assistant->layers[1].v_cache_s = assistant->layers[0].v_cache_s;
+        ggml_set_f32(target->layers[2].k_cache_s, 0.5f);
+        ggml_set_f32(target->layers[2].v_cache_s, 0.25f);
+        ggml_set_f32(assistant->layers[0].k_cache_s, 2.0f);
+        ggml_set_f32(assistant->layers[0].v_cache_s, 4.0f);
 
         llama_kv_cache source(*target, false, target->hparams, GGML_TYPE_F8_E4M3, GGML_TYPE_F8_E4M3,
                 false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
@@ -85,8 +85,8 @@ int main() {
                 false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
                 [](int32_t il) { return il == 0 ? 2 : 1; });
 
-        GGML_ASSERT(source.get_k_scale(2) == target->layers[2].k_cache_scale);
-        GGML_ASSERT(source.get_v_scale(2) == target->layers[2].v_cache_scale);
+        GGML_ASSERT(source.get_k_scale(2) == target->layers[2].k_cache_s);
+        GGML_ASSERT(source.get_v_scale(2) == target->layers[2].v_cache_s);
         GGML_ASSERT(source.get_k_scale(0) == source.get_k_scale(2));
         GGML_ASSERT(source.get_v_scale(0) == source.get_v_scale(2));
         GGML_ASSERT(shared.get_k_storage(0) == source.get_k_storage(2));

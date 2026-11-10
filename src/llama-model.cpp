@@ -1814,11 +1814,11 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             auto & layer = layers[i];
 
             if (hparams.has_kv(i)) {
-                layer.k_cache_scale = create_tensor(tn(LLM_TENSOR_ATTN_K, "k_scale", i), {1}, TENSOR_NOT_REQUIRED);
-                layer.v_cache_scale = create_tensor(tn(LLM_TENSOR_ATTN_V, "v_scale", i), {1}, TENSOR_NOT_REQUIRED);
+                layer.k_cache_s = create_tensor(tn(LLM_TENSOR_ATTN_K, "k_scale", i), {1}, TENSOR_NOT_REQUIRED);
+                layer.v_cache_s = create_tensor(tn(LLM_TENSOR_ATTN_V, "v_scale", i), {1}, TENSOR_NOT_REQUIRED);
 
-                if ((layer.k_cache_scale && layer.k_cache_scale->type != GGML_TYPE_F32) ||
-                    (layer.v_cache_scale && layer.v_cache_scale->type != GGML_TYPE_F32)) {
+                if ((layer.k_cache_s && layer.k_cache_s->type != GGML_TYPE_F32) ||
+                    (layer.v_cache_s && layer.v_cache_s->type != GGML_TYPE_F32)) {
                     throw std::runtime_error(format("KV cache scales for layer %d must be F32", i));
                 }
             }

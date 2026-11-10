@@ -303,8 +303,8 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
     ggml_set_name(k_scale, "blk.0.attn_k.k_scale");
     ggml_set_name(v_scale, "blk.0.attn_v.v_scale");
     ggml_backend_buffer_ptr scale_buf(ggml_backend_alloc_ctx_tensors_from_buft(scale_ctx.get(), ggml_backend_dev_buffer_type(model->dev_layer(0))));
-    ggml_tensor * old_k_scale = model->layers[0].k_cache_scale;
-    ggml_tensor * old_v_scale = model->layers[0].v_cache_scale;
+    ggml_tensor * old_k_scale = model->layers[0].k_cache_s;
+    ggml_tensor * old_v_scale = model->layers[0].v_cache_s;
 
     const int64_t head_size = model->hparams.n_embd_head_k();
     const int64_t n_head = model->hparams.n_head();
@@ -322,8 +322,8 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             const float sv = scaled & 2 ? 0.125f : 1.0f;
             ggml_backend_tensor_set(k_scale, &sk, 0, sizeof(sk));
             ggml_backend_tensor_set(v_scale, &sv, 0, sizeof(sv));
-            model->layers[0].k_cache_scale = scaled & 1 ? k_scale : nullptr;
-            model->layers[0].v_cache_scale = scaled & 2 ? v_scale : nullptr;
+            model->layers[0].k_cache_s = scaled & 1 ? k_scale : nullptr;
+            model->layers[0].v_cache_s = scaled & 2 ? v_scale : nullptr;
 
             std::vector<float> tensors[4];
             auto params = llama_context_default_params();
@@ -460,19 +460,19 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             GGML_ASSERT(std::isfinite(error) && error < 1e-5);
         }
     }
-    model->layers[0].k_cache_scale = old_k_scale;
-    model->layers[0].v_cache_scale = old_v_scale;
+    model->layers[0].k_cache_s = old_k_scale;
+    model->layers[0].v_cache_s = old_v_scale;
 }
 
 static void check_fp8_context_shift(llama_model * model) {
     ggml_context_ptr scale_ctx(ggml_init({ 4096, nullptr, true }));
     ggml_tensor * scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, 1);
     ggml_backend_buffer_ptr scale_buf(ggml_backend_alloc_ctx_tensors_from_buft(scale_ctx.get(), ggml_backend_cpu_buffer_type()));
-    ggml_tensor * old_scale = model->layers[0].k_cache_scale;
+    ggml_tensor * old_scale = model->layers[0].k_cache_s;
 
     for (float scale_value : { 1.0f, 0.5f }) {
         ggml_backend_tensor_set(scale, &scale_value, 0, sizeof(scale_value));
-        model->layers[0].k_cache_scale = scale;
+        model->layers[0].k_cache_s = scale;
 
         auto params = llama_context_default_params();
         params.n_ctx = 256;
@@ -527,7 +527,7 @@ static void check_fp8_context_shift(llama_model * model) {
         lctx.reset();
     }
 
-    model->layers[0].k_cache_scale = old_scale;
+    model->layers[0].k_cache_s = old_scale;
 }
 
 enum class test_status {
