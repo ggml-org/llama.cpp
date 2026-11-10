@@ -3781,13 +3781,13 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         if (gdn_chunked && device->coopmat2 && device->coopmat2_bf16_support) {
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {16u * 32u}, 1, true, true, 32);
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
                 "gated_delta_net_f32_cm2_v32", gated_delta_net_f32_cm2_v32_len, gated_delta_net_f32_cm2_v32_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {16u * 32u}, 1, true, true, 32);
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
                 "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {16u * 32u}, 1, true, true, 32);
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
