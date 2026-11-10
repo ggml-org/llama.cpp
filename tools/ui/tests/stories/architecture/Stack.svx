@@ -92,4 +92,4 @@ interface Harness {
 text · reasoning · tool_call · tool_result · done · error
 ```
 
-The loop is swappable: an app can put its own behind the same contract. The tools and the approval gate sit above it, so every loop gets the same ones: built-in tools in the app, `server.*` tools listed by llama-server, `mcp.<name>.*` tools from the MCP servers you add, and tools declared in JSON. One loop owns approvals, cancellation and history; llama-server offers tools but never runs a loop of its own.
+The loop is swappable: an app can put its own behind the same contract, so Llama Chat can run another harness such as `pi` while Llama Harness stays the minimal default. The tools and the approval gate sit above it, so every loop gets the same ones: built-in tools in the app, `server.*` tools listed by llama-server, `mcp.<name>.*` tools from the MCP servers you add, and tools declared in JSON. One loop owns approvals, cancellation and history; llama-server offers tools but never runs a loop of its own.
