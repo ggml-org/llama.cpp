@@ -2715,6 +2715,9 @@ static __global__ void mul_mat_scale_id(float * dst, const float * scale, const 
     const int64_t i1 = (i / ne0) % ne1;
     const int64_t i2 = i / (ne0*ne1);
     const int64_t expert = ids[i1*ids_s0 + i2*ids_s1];
+    if (expert < 0) {
+        return;
+    }
     dst[i] *= *(const float *) ((const char *) scale + i0*channel_stride + expert*expert_stride);
 }
 

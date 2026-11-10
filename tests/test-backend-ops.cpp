@@ -5907,6 +5907,13 @@ struct test_mul_mat_id : public test_case {
         } else if (scale_gran == 1 || ggml_needs_scale(type_a)) {
             s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
         }
+        if (s && skip && !scale_view) {
+            const int64_t n_channels = scale_gran == 2 ? m : 1;
+            ggml_tensor * storage = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_channels, n_mats + 1);
+            ggml_set_name(storage, "scale_storage");
+            s = scale_gran == 2 ? ggml_view_2d(ctx, storage, m, n_mats, storage->nb[1], storage->nb[1]) :
+                ggml_view_1d(ctx, storage, n_mats, sizeof(float));
+        }
         if (s && scale_view) {
             s = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 2, s->ne[0], s->ne[1]);
             s = ggml_view_3d(ctx, s, 1, s->ne[1], s->ne[2], s->nb[1], s->nb[2], sizeof(float));
@@ -5924,6 +5931,11 @@ struct test_mul_mat_id : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats, skip);
+        if (ggml_tensor * storage = ggml_get_tensor(ctx, "scale_storage")) {
+            // A skipped expert must not read the scale row before the view.
+            std::vector<float> prefix(storage->ne[0], NAN);
+            ggml_backend_tensor_set(storage, prefix.data(), 0, prefix.size()*sizeof(float));
+        }
     }
 
     void reinit_perf_iter(ggml_context * ctx) override {
@@ -11804,6 +11816,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (int scale_gran : {1, 2}) {
         for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F8_E4M3}) {
             test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 1, 1, false, 32, 4, 32, 0, false, false, scale_gran));
+            for (int64_t n : {1, 4}) {
+                test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 4, false, 64, n, 256, 0, false, true, scale_gran));
+            }
             test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 32, 4, 32, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 0, 0, 0, scale_gran, true));
             test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 4, 2, false, 32, 4, 32, 0, false, false, scale_gran, true));
         }
