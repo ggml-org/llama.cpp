@@ -679,6 +679,7 @@ struct common_params {
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
+    bool chat_input_special = true; // if false, special tokens in user input are tokenized as plain text
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
 
     std::vector<std::string> api_keys;

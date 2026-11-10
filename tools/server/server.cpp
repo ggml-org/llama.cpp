@@ -256,6 +256,10 @@ static bool server_setup_features(
         SRV_WRN("%s", "security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)\n");
     }
 
+    if (!params.chat_input_special) {
+        SRV_WRN("%s", "--no-chat-input-special is experimental and not a security feature, do not rely on it to prevent prompt injection\n");
+    }
+
     std::vector<std::string> warn_names;
     if (role_type == SERVER_ROLE_ROUTER) {
         warn_names.push_back("router mode");

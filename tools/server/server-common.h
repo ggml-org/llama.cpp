@@ -317,6 +317,17 @@ server_tokens process_mtmd_prompt(
 // decode one media url (http/file/data-uri) into out_files; throws on failure
 void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path);
 
+// tokenize a rendered chat prompt, user input parts are tokenized without special tokens unless chat_input_special is set
+// see process_mtmd_prompt() for is_placeholder
+server_tokens tokenize_chat_prompt(
+                                        const llama_vocab * vocab,
+                                        mtmd_context * mctx,
+                                        const common_chat_prompt & prompt,
+                                        const std::vector<raw_buffer> & files,
+                                        bool chat_input_special,
+                                        const mtmd_helper_init_opt & init_opt,
+                                        bool is_placeholder = false);
+
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
  * this supports these cases:

@@ -99,6 +99,30 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
         assert res.status_code != 200
 
 
+@pytest.mark.parametrize("chat_input_special", [True, False])
+def test_vision_chat_completion_input_special(chat_input_special):
+    global server
+    server.chat_input_special = chat_input_special
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "What is this:\n"},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url("IMG_URL_0"),
+                }},
+            ]},
+        ],
+    })
+    assert res.status_code == 200
+    choice = res.body["choices"][0]
+    assert match_regex("(cat)+", choice["message"]["content"])
+    # the prompt has no special tokens in user input, both paths must give the same tokens
+    assert res.body["usage"]["prompt_tokens"] == 272
+
+
 def test_vision_chat_completion_token_count():
     global server
     server.start()
