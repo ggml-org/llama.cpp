@@ -17,10 +17,11 @@ COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
 RUN npm ci
 
 COPY ui/apps/chat/ ./
-# the app compiles Llama UI and Llama Voice from their sources next to it
+# the app compiles Llama UI, Llama Voice and the harness from their sources next to it
 COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
 COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
 COPY ui/lib/voice/src/ /app/ui/lib/voice/src/
+COPY ui/lib/harness/src/ /app/ui/lib/harness/src/
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build

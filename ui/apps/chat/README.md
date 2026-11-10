@@ -84,16 +84,17 @@ Llama Chat is the first app on Llama UI, and the reference for the line between 
 
 The app imports the library as `@ggml-org/llama-ui/ui/<name>` and compiles its sources in its own build, with no install of the library (see `scripts/vite-plugin-llama-ui.ts`). Data flows one way, through these layers:
 
-| Layer          | Lives in                  | What it holds                                                                                       |
-| -------------- | ------------------------- | --------------------------------------------------------------------------------------------------- |
-| Routes         | `src/routes`              | `/`, `/chat/[id]`, `/models`, `/mcp-servers`, `/settings`, `/search`                                |
-| App components | `src/lib/components/app`  | Chat, navigation, models, MCP, settings and dialogs, grouped by area                                |
-| UI components  | `ui/lib/ui`               | shadcn-svelte on bits-ui, from Llama UI                                                             |
-| Voice          | `ui/lib/voice`            | Microphone capture, transcription and dictation, from Llama Voice (`@ggml-org/llama-voice`)         |
-| Hooks          | `src/lib/hooks`           | View logic between components and stores: scroll, drag and drop, pickers, keyboard                  |
-| Stores         | `src/lib/stores`          | Application state as Svelte 5 runes: chat, conversations, the agentic loop, tools, models, settings |
-| Services       | `src/lib/services`        | Stateless I/O: the llama-server API, IndexedDB, MCP, the Hugging Face Hub, the tool sandbox         |
-| Storage + API  | the browser, llama-server | IndexedDB and localStorage; llama-server's `/v1`, `/props`, `/models`, `/tools`, `/slots`           |
+| Layer          | Lives in                  | What it holds                                                                                        |
+| -------------- | ------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Routes         | `src/routes`              | `/`, `/chat/[id]`, `/models`, `/mcp-servers`, `/settings`, `/search`                                 |
+| App components | `src/lib/components/app`  | Chat, navigation, models, MCP, settings and dialogs, grouped by area                                 |
+| UI components  | `ui/lib/ui`               | shadcn-svelte on bits-ui, from Llama UI                                                              |
+| Voice          | `ui/lib/voice`            | Microphone capture, transcription and dictation, from Llama Voice (`@ggml-org/llama-voice`)          |
+| Hooks          | `src/lib/hooks`           | View logic between components and stores: scroll, drag and drop, pickers, keyboard                   |
+| Stores         | `src/lib/stores`          | Application state as Svelte 5 runes: chat, conversations, the agentic loop, tools, models, settings  |
+| Agentic loop   | `ui/lib/harness`          | Llama Harness: streams a turn, runs the tools the model called, repeats until it answers without one |
+| Services       | `src/lib/services`        | Stateless I/O: the llama-server API, IndexedDB, MCP, the Hugging Face Hub, the tool sandbox          |
+| Storage + API  | the browser, llama-server | IndexedDB and localStorage; llama-server's `/v1`, `/props`, `/models`, `/tools`, `/slots`            |
 
 ```mermaid
 flowchart LR

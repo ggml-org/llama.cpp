@@ -10,6 +10,8 @@ export {
 	AgenticSectionType,
 	ContinueIntentKind,
 	DiffLineKind,
+	HarnessEventType,
+	InferenceEventType,
 	ToolResultKind,
 	ToolCallType
 } from './agentic.enums';

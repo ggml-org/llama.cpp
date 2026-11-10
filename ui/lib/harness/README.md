@@ -61,4 +61,4 @@ npm test          # unit tests
 npm run prepack   # build dist/ and lint the package
 ```
 
-Llama Chat does not need a build of this package: it compiles `src/` directly, through the `@ggml-org/llama-harness` alias in its `svelte.config.js`.
+Llama Chat does not need a build of this package: it compiles `src/` directly, through the `@ggml-org/llama-harness` alias in its `vite.config.ts`.
