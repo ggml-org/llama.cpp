@@ -1892,8 +1892,8 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
             reason = "GATED_DELTA_NET with kda (per-key-dimension gating) is not supported";
         }
         else if (op->op_params[0] > 1) {
-            if (!ggml_openvino_is_gpu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
-                reason = "GATED_DELTA_NET snapshots require dynamic GPU execution";
+            if (ggml_openvino_is_npu() || ggml_openvino_getenv_int("GGML_OPENVINO_FORCE_STATIC")) {
+                reason = "GATED_DELTA_NET snapshots require dynamic execution";
             }
         }
         if (reason != nullptr) {
