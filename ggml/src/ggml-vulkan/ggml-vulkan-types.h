@@ -237,6 +237,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
 
 #define GGML_VK_GDN_CM_V 64u
+#define GGML_VK_GDN_CM2_V 32u
 #define GGML_VK_GDN_CM_D 128u
 #define GGML_VK_GDN_CM_PAD 8u
 #define GGML_VK_GDN_CM_LDP (GGML_VK_GDN_CM_D + GGML_VK_GDN_CM_PAD)
@@ -784,6 +785,7 @@ struct vk_device_struct {
 
     bool coopmat2;
     bool coopmat2_bf16_support {};
+    bool coopmat2_gdn_support {};
     bool coopmat2_decode_vector;
 
     bool dot2_f16 {};

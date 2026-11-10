@@ -1426,6 +1426,22 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
     };
 }
 
+static uint32_t ggml_vk_gated_delta_net_shmem_size(uint32_t v, bool coopmat2) {
+    const uint32_t C = 16;
+    const uint32_t LDP = GGML_VK_GDN_CM_LDP;
+    const uint32_t bf16_size = sizeof(ggml_bf16_t);
+    const bool gmem_mirror = !coopmat2 && v == 128;
+
+    const uint32_t qk = 4 * C * LDP * bf16_size;
+    const uint32_t state = gmem_mirror ? 0 : 2 * v * LDP * bf16_size;
+    const uint32_t p_inv = 4 * C * C * bf16_size;
+    const uint32_t delta_solved = coopmat2 ? 2 * C * (v + GGML_VK_GDN_CM_PAD) * bf16_size : 4 * C * v * bf16_size;
+    const uint32_t lower = (coopmat2 ? C * (C - 1) / 2 : C * C) * sizeof(float);
+    const uint32_t scan = 4 * C * sizeof(float);
+
+    return qk + state + p_inv + delta_solved + lower + scan;
+}
+
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     uint32_t lut_size = 0;
@@ -3718,13 +3734,14 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 device->subgroup_min_size <= 16u && device->subgroup_max_size >= 16u) {
                 gdn_subgroup_size = 16u;
             }
+            const bool gdn_packed_rows = S_V == 128u && device->vendor_id == VK_VENDOR_ID_NVIDIA &&
+                gdn_subgroup_size == 32u && device->subgroup_arithmetic && device->subgroup_clustered;
             uint32_t lanes_per_column;
             if (device->vendor_id == VK_VENDOR_ID_INTEL) {
                 // Intel Xe: full-width reduction (min rows/lane) ~10x over the COLS_PER_WG=8 rule.
                 lanes_per_column = std::min(gdn_subgroup_size, S_V);
             } else if (S_V >= 128u && device->subgroup_clustered) {
-                // COLS_PER_WG=8: measured optimum (Ampere sg32->4, Vega20 sg64->8).
-                lanes_per_column = std::max(1u, gdn_subgroup_size / 8u);
+                lanes_per_column = gdn_packed_rows ? 8u : std::max(1u, gdn_subgroup_size / 8u);
             } else {
                 // Use largest power-of-two that divides both S_V and subgroup_size so that
                 // (1) S_V % lanes_per_column == 0 and (2) S_V % (subgroup_size / lanes_per_column) == 0.
@@ -3771,23 +3788,18 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             for (uint32_t kda = 0; kda < 2; kda++) {
                 ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net[si][kda],
                     gdn_names[si][kda], gdn_len, gdn_data, "main", 7, sizeof(vk_op_gated_delta_net_push_constants),
-                    wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column}, 1, true, use_subgroup_ops, gdn_subgroup_size);
+                    wg_denoms, {S_V, kda, gdn_subgroup_size, lanes_per_column, uint32_t(gdn_packed_rows)}, 1, true, use_subgroup_ops, gdn_subgroup_size);
             }
         }
 
-        // chunked coopmat GDN prefill: coopmat2 on NVIDIA, coopmat1 on AMD
+        // Chunked GDN prefill uses workgroup matrices on CM2 and subgroup matrices on CM1.
         const bool gdn_chunked = getenv("GGML_VK_DISABLE_GDN_CHUNKED") == nullptr;
+        const uint32_t gdn_shmem = device->properties.limits.maxComputeSharedMemorySize;
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
-        if (gdn_chunked && device->coopmat2 && device->coopmat2_bf16_support) {
+        if (gdn_chunked && device->coopmat2 && device->coopmat2_gdn_support) {
             ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
                 "gated_delta_net_f32_cm2", gated_delta_net_f32_cm2_len, gated_delta_net_f32_cm2_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {16u * 32u}, 1, true, true, 32);
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
-                "gated_delta_net_f32_cm2_v32", gated_delta_net_f32_cm2_v32_len, gated_delta_net_f32_cm2_v32_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {16u * 32u}, 1, true, true, 32);
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
-                "gated_delta_net_f32_cm2_v128", gated_delta_net_f32_cm2_v128_len, gated_delta_net_f32_cm2_v128_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {16u * 32u}, 1, true, true, 32);
+                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, {}, 1, true, true, 32);
         }
 #endif
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
@@ -3795,33 +3807,41 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         auto gdn_sg_ok = [&](uint32_t sg) {
             const bool reachable = device->subgroup_size_control ? device->subgroup_min_size <= sg && sg <= device->subgroup_max_size
                                                                  : device->subgroup_size == sg;
-            return reachable && 16u * sg <= device->properties.limits.maxComputeWorkGroupInvocations;
+            return reachable && 16u * sg <= device->properties.limits.maxComputeWorkGroupInvocations &&
+                   16u * sg <= device->properties.limits.maxComputeWorkGroupSize[0];
         };
         const uint32_t gdn_sg = gdn_sg_ok(64) ? 64u : device->subgroup_size;
-        if (gdn_chunked && device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
+        if (gdn_chunked && !device->coopmat2 && device->coopmat_support && device->coopmat_bf16_support && device->coopmat_m1_per_element_ops &&
             gdn_sg >= 16 && gdn_sg_ok(gdn_sg)) {
             const bool bf16acc = device->coopmat_bf16_acc_support;
             const std::vector<uint32_t> gdn_spec = { 16u * gdn_sg };
             // V=64: state mirror in shared, 7 bindings
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
-                bf16acc ? "gated_delta_net_f32_cm1_bf16acc" : "gated_delta_net_f32_cm1",
-                bf16acc ? gated_delta_net_f32_cm1_bf16acc_len : gated_delta_net_f32_cm1_len,
-                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_data : (const void *)gated_delta_net_f32_cm1_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
-                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_v32" : "gated_delta_net_f32_cm1_v32",
-                bf16acc ? gated_delta_net_f32_cm1_bf16acc_v32_len : gated_delta_net_f32_cm1_v32_len,
-                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_v32_data : (const void *)gated_delta_net_f32_cm1_v32_data,
-                "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
+            if (gdn_shmem >= ggml_vk_gated_delta_net_shmem_size(GGML_VK_GDN_CM_V, false)) {
+                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm,
+                    bf16acc ? "gated_delta_net_f32_cm1_bf16acc" : "gated_delta_net_f32_cm1",
+                    bf16acc ? gated_delta_net_f32_cm1_bf16acc_len : gated_delta_net_f32_cm1_len,
+                    bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_data : (const void *)gated_delta_net_f32_cm1_data,
+                    "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
+            }
+            if (gdn_shmem >= ggml_vk_gated_delta_net_shmem_size(32u, false)) {
+                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v32,
+                    bf16acc ? "gated_delta_net_f32_cm1_bf16acc_v32" : "gated_delta_net_f32_cm1_v32",
+                    bf16acc ? gated_delta_net_f32_cm1_bf16acc_v32_len : gated_delta_net_f32_cm1_v32_len,
+                    bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_v32_data : (const void *)gated_delta_net_f32_cm1_v32_data,
+                    "main", 7, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
+            }
             // V=128: state mirror in a gmem scratch buffer, 8 bindings
-            ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
-                bf16acc ? "gated_delta_net_f32_cm1_bf16acc_v128" : "gated_delta_net_f32_cm1_v128",
-                bf16acc ? gated_delta_net_f32_cm1_bf16acc_v128_len : gated_delta_net_f32_cm1_v128_len,
-                bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_v128_data : (const void *)gated_delta_net_f32_cm1_v128_data,
-                "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
+            if (gdn_shmem >= ggml_vk_gated_delta_net_shmem_size(128u, false)) {
+                ggml_vk_create_pipeline(device, device->pipeline_gated_delta_net_cm_v128,
+                    bf16acc ? "gated_delta_net_f32_cm1_bf16acc_v128" : "gated_delta_net_f32_cm1_v128",
+                    bf16acc ? gated_delta_net_f32_cm1_bf16acc_v128_len : gated_delta_net_f32_cm1_v128_len,
+                    bf16acc ? (const void *)gated_delta_net_f32_cm1_bf16acc_v128_data : (const void *)gated_delta_net_f32_cm1_v128_data,
+                    "main", 8, sizeof(vk_op_gated_delta_net_push_constants), {1, 1, 1}, gdn_spec, 1, true, true, gdn_sg);
+            }
         }
 #endif
         GGML_UNUSED(gdn_chunked);
+        GGML_UNUSED(gdn_shmem);
     }
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
@@ -4765,6 +4785,13 @@ vk_device ggml_vk_get_device(size_t idx) {
                                 prop.KGranularity <= 16) {
                                 found_bf16_128 = true;
                             }
+                            // GDN uses M=32, with N/K dimensions that are multiples of 16.
+                            if (prop.workgroupInvocations == 128 &&
+                                prop.MGranularity != 0 && 32 % prop.MGranularity == 0 &&
+                                prop.NGranularity != 0 && 16 % prop.NGranularity == 0 &&
+                                prop.KGranularity != 0 && 16 % prop.KGranularity == 0) {
+                                device->coopmat2_gdn_support = true;
+                            }
                             if (prop.workgroupInvocations == 256 &&
                                 prop.MGranularity <= 32 &&
                                 prop.NGranularity <= 32 &&
@@ -4775,6 +4802,12 @@ vk_device ggml_vk_get_device(size_t idx) {
 #endif
                     }
                 }
+                device->coopmat2_gdn_support = device->coopmat2_gdn_support &&
+                    coopmat2_props.cooperativeMatrixWorkgroupScopeMaxWorkgroupSize >= 128 &&
+                    device->properties.limits.maxComputeWorkGroupInvocations >= 128 &&
+                    device->properties.limits.maxComputeWorkGroupSize[0] >= 128 &&
+                    uint64_t(ggml_vk_gated_delta_net_shmem_size(GGML_VK_GDN_CM2_V, true)) + coopmat2_props.cooperativeMatrixWorkgroupScopeReservedSharedMemory <=
+                        device->properties.limits.maxComputeSharedMemorySize;
                 if (found_fp16_128 && found_fp16_256 &&
                     found_fp32_128 && found_fp32_256 &&
                     coopmat2_props.cooperativeMatrixFlexibleDimensionsMaxDimension >= 512) {
@@ -10563,6 +10596,7 @@ void ggml_vk_lightning_indexer(ggml_backend_vk_context * ctx, vk_context& subctx
 
 void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
     const ggml_tensor * src_q     = dst->src[0];
+    const ggml_tensor * src_k     = dst->src[1];
     const ggml_tensor * src_v     = dst->src[2];
     const ggml_tensor * src_beta  = dst->src[4];
 
@@ -10581,13 +10615,17 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const ggml_tensor * src_g = dst->src[3];
     // RDNA3: the scan is faster below ~4k tokens
     const uint32_t cm_min_tokens = ctx->device->architecture == AMD_RDNA3 ? 4096u : 64u;
-    const bool use_cm = ctx->device->pipeline_gated_delta_net_cm != nullptr &&
+    const bool use_cm = (ctx->device->pipeline_gated_delta_net_cm != nullptr ||
+                         ctx->device->pipeline_gated_delta_net_cm_v32 != nullptr ||
+                         ctx->device->pipeline_gated_delta_net_cm_v128 != nullptr) &&
         src_g->ne[0] == 1 && S_v == 128 && dst->src[0]->ne[0] == 128 && K == 1 && n_tokens >= cm_min_tokens;
 
-    bool use_v32  = false;
-    bool use_v128 = false;
+    const bool use_cm2 = use_cm && ctx->device->coopmat2;
+    const bool have_v64 = ctx->device->pipeline_gated_delta_net_cm != nullptr;
+    bool use_v32  = use_cm && !use_cm2 && !have_v64 && ctx->device->pipeline_gated_delta_net_cm_v32 != nullptr;
+    bool use_v128 = use_cm && !use_cm2 && !have_v64 && !use_v32;
     const uint32_t nsm = ctx->device->shader_core_count;
-    if (use_cm && nsm != 0) {
+    if (use_cm && !use_cm2 && have_v64 && nsm != 0) {
         const uint32_t wg64 = 2u * H * n_seqs;
         // V=32 only pays off while V=64 leaves at least half the cores idle
         use_v32 = ctx->device->pipeline_gated_delta_net_cm_v32 != nullptr && 2u * wg64 <= nsm;
@@ -10600,7 +10638,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
         }
     }
 
-    const uint32_t cm_V     = use_v128 ? 128u : (use_v32 ? 32u : GGML_VK_GDN_CM_V);
+    const uint32_t cm_V     = use_cm2 ? GGML_VK_GDN_CM2_V : (use_v128 ? 128u : (use_v32 ? 32u : GGML_VK_GDN_CM_V));
     const bool     cm_gmem  = use_v128 && !ctx->device->coopmat2;
 
     vk_pipeline pipeline = use_v128
@@ -10636,6 +10674,9 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const uint32_t sq1 = (uint32_t)(src_q->nb[1] / sizeof(float));
     const uint32_t sq2 = (uint32_t)(src_q->nb[2] / sizeof(float));
     const uint32_t sq3 = (uint32_t)(src_q->nb[3] / sizeof(float));
+    const uint32_t sk1 = (uint32_t)(src_k->nb[1] / sizeof(float));
+    const uint32_t sk2 = (uint32_t)(src_k->nb[2] / sizeof(float));
+    const uint32_t sk3 = (uint32_t)(src_k->nb[3] / sizeof(float));
     const uint32_t sv1 = (uint32_t)(src_v->nb[1] / sizeof(float));
     const uint32_t sv2 = (uint32_t)(src_v->nb[2] / sizeof(float));
     const uint32_t sv3 = (uint32_t)(src_v->nb[3] / sizeof(float));
@@ -10650,6 +10691,7 @@ void ggml_vk_gated_delta_net(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const vk_op_gated_delta_net_push_constants pc = {
         H, n_tokens, n_seqs, s_off,
         sq1, sq2, sq3,
+        sk1, sk2, sk3,
         sv1, sv2, sv3,
         sb1, sb2, sb3,
         neq1, rq3,

@@ -1170,10 +1170,7 @@ void process_shaders() {
     string_to_spv("gated_delta_net_f32_shmem", "gated_delta_net.comp", merge_maps(base_dict, {{"FLOAT_TYPE", "float"}, {"USE_SUBGROUP_ADD", "0"}, {"USE_SUBGROUP_CLUSTERED", "0"}}));
 
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
-    // VH=32: fits NVIDIA's 48 KiB shared limit
-    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"VH", "32"}}), true, false, true);
-    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"V", "32"}}), true, false, true, false, "_v32");
-    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"COOPMAT2", "1"}, {"V", "128"}, {"VH", "32"}}), true, false, true, false, "_v128");
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm2.comp", base_dict, true, false, true);
 #endif
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
     string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(base_dict, {{"BF16ACC", "1"}}), true, true, false, false, "_bf16acc");
