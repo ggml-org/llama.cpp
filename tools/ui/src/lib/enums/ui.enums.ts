@@ -26,6 +26,7 @@ export enum SidebarAction {
 	MANAGE_MODELS = 'manage-models',
 	MCP = 'mcp',
 	NEW_CHAT = 'new-chat',
+	PERFORMANCE = 'performance',
 	SEARCH = 'search',
 	SETTINGS = 'settings'
 }

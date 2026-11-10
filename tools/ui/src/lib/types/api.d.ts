@@ -300,6 +300,14 @@ export interface ApiLlamaCppServerProps {
 	webui_settings?: Record<string, string | number | boolean>;
 	ui_settings?: Record<string, string | number | boolean>;
 	cors_proxy_enabled?: boolean;
+	/** Model alias (`--alias`), when the server was started with one. */
+	model_alias?: string;
+	/** Human-readable model file type (e.g. `Q4_K_M`). */
+	model_ftype?: string;
+	/** Which read endpoints this server exposes. */
+	endpoint_slots?: boolean;
+	endpoint_props?: boolean;
+	endpoint_metrics?: boolean;
 }
 
 export interface ApiChatCompletionRequest {
@@ -408,11 +416,15 @@ export interface ApiChatCompletionResponse {
 
 export interface ApiSlotData {
 	id: number;
-	id_task: number;
+	/** Task fields below appear only while a task is assigned (current or previous). */
+	id_task?: number;
 	n_ctx: number;
 	speculative: boolean;
 	is_processing: boolean;
-	params: {
+	n_prompt_tokens?: number;
+	n_prompt_tokens_processed?: number;
+	n_prompt_tokens_cache?: number;
+	params?: {
 		n_predict: number;
 		seed: number;
 		temperature: number;
@@ -456,12 +468,13 @@ export interface ApiSlotData {
 		post_sampling_probs: boolean;
 		lora: Array<{ name: string; scale: number }>;
 	};
-	next_token: {
+	/** One-element array while a task owns the slot; absent otherwise. */
+	next_token?: Array<{
 		has_next_token: boolean;
 		has_new_line: boolean;
 		n_remain: number;
 		n_decoded: number;
-	};
+	}>;
 }
 
 export interface ApiProcessingState {

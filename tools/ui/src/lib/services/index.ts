@@ -187,6 +187,19 @@ export { HuggingFaceService } from './huggingface.service';
  * @see modelsStore in stores/models/index.svelte.ts — consumes per-model props for modalities
  * @see settingsStore in stores/settings/index.svelte.ts — syncs default generation params from props
  */
+/**
+ * **PerformanceService** - Live server performance (/metrics + /slots)
+ *
+ * Reads the Prometheus text of `/metrics` (requires the server's `--metrics`
+ * flag) and the per-slot task counters of `/slots`, deriving throughput as
+ * counter deltas across refreshes — `/slots` carries no timing fields of its
+ * own. Reports `no-metrics` instead of failing when the flag is off, so the
+ * slot table keeps working.
+ *
+ * **Consumers:** PerformancePanel on the `#/performance` route.
+ */
+export { PerformanceService } from './performance.service';
+
 export { PropsService } from './props.service';
 
 /**
