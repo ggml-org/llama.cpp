@@ -531,6 +531,7 @@ enum test_mode {
     MODE_PERF,
     MODE_GRAD,
     MODE_SUPPORT,
+    MODE_BATCH,
 };
 
 // Output format support similar to llama-bench
@@ -1448,7 +1449,7 @@ struct test_case {
         mode = MODE_TEST;
 
         ggml_init_params params = {
-            /* .mem_size = */ ggml_tensor_overhead()*128 + ggml_graph_overhead(),
+            /* .mem_size = */ ggml_tensor_overhead()*256 + ggml_graph_overhead(),
             /* .mem_base = */ NULL,
             /* .no_alloc = */ true,
         };
@@ -9126,6 +9127,373 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
+struct test_batch_invariance : public test_case {
+    bool run_whole_graph() override {
+        // The err function is expected to be called with the final output of
+        // the graph and not individual operations in the graph.
+        return true;
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        // We don't use the CPU(ref) backend output in this test case, instead
+        // we are comparing batch computations with single token computations
+        // on the same backend.
+        GGML_UNUSED(b);
+
+        // For each computation we have a batch of n tokens, and also n single
+        // token computations. So the first half contains the results of the
+        // batch computation and the second half contains the result but just for
+        // a single token.
+        const size_t half     = n/2;
+        size_t       n_diff   = 0;
+        double       max_diff = 0.0;
+        for (size_t i = 0; i < half; i++) {
+            // compare batch and single token computations
+            if (a[i] != a[half+i]) {
+                n_diff++;
+                max_diff = std::max(max_diff, (double) std::fabs(a[i] - a[half+i]));
+            }
+        }
+
+        if (n_diff > 0) {
+            printf("[%zu/%zu differ, max diff %g] ", n_diff, half, max_diff);
+        }
+        return n_diff;
+    }
+
+    double max_nmse_err() override {
+        // The err function returns n_diff, the number of the non-matching float
+        // values, if any. If n_diff is > 0 the we should fail the test.
+        return 0.0;
+    }
+};
+
+struct test_mul_mat_batch_inv : public test_batch_invariance {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t k;
+    const int64_t n;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, m, k, n);
+    }
+
+    test_mul_mat_batch_inv(ggml_type type_a = GGML_TYPE_Q4_K,
+            int64_t m = 4096, int64_t k = 4096, int64_t n = 8)
+        : type_a(type_a), m(m), k(k), n(n) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+
+        // batch computation operation
+        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+
+        for (int64_t j = 0; j < n; j++) {
+            // create a view into b (the input tensor with tokens), but only for
+            // for a single token.
+            ggml_tensor * b_j = ggml_view_2d(ctx, b, k, 1, b->nb[1], j * b->nb[1]);
+            // Add the output of the single-token computation so that we can
+            // later compare them. For a batch computation of 2 tokens and the
+            // dimension being 4096, we will have 8192 for those 2 tokens and
+            // then another 8192 for the single token computations. This allows
+            // us to compare the values of the batched computations with the same
+            // input but for single token computations.
+            out = ggml_concat(ctx, out, ggml_mul_mat(ctx, a, b_j), 1);
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
+struct test_flash_attn_ext_batch_inv : public test_batch_invariance {
+    const int64_t hs;  // head size
+    const int64_t nh;  // K/V heads
+    const int64_t gqa; // Q heads per K/V head
+    const int64_t kv;  // kv size
+    const int64_t nb;  // batch size
+    const ggml_type type_KV;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "FLASH_ATTN_EXT";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(hs, nh, gqa, kv, nb, type_KV);
+    }
+
+    test_flash_attn_ext_batch_inv(int64_t hs = 128, int64_t nh = 8,
+            int64_t gqa = 4, int64_t kv = 1024, int64_t nb = 8,
+            ggml_type type_KV = GGML_TYPE_F16)
+        : hs(hs), nh(nh), gqa(gqa), kv(kv), nb(nb), type_KV(type_KV) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // Q is [hs, heads, tokens] and permuted to [hs, tokens, heads], as in llama-graph
+        ggml_tensor * q0 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hs, nh*gqa, nb);
+        ggml_set_name(q0, "q");
+
+        ggml_tensor * k = ggml_new_tensor_3d(ctx, type_KV, hs, kv, nh);
+        ggml_set_name(k, "k");
+
+        ggml_tensor * v = ggml_new_tensor_3d(ctx, type_KV, hs, kv, nh);
+        ggml_set_name(v, "v");
+
+        ggml_tensor * m = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, kv, nb);
+        ggml_set_name(m, "m");
+
+        const auto fa = [&](ggml_tensor * q, ggml_tensor * mask) {
+            ggml_tensor * res = ggml_flash_attn_ext(ctx,
+                    ggml_permute(ctx, q, 0, 2, 1, 3), k, v, mask, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+
+            // Same as llama-graph does.
+            ggml_prec_set_acc(res, GGML_PREC_F32);
+            return res;
+        };
+
+        // the result is [hs, heads, tokens]
+        ggml_tensor * out = fa(q0, m);
+        for (int64_t j = 0; j < nb; j++) {
+            // Single token view similar to what we do in test_mul_mat_batch_inv.
+            // So first half of the output will containt the result of the batch
+            // and the other half will contain the result of the single tokens.
+            ggml_tensor * q_j = ggml_view_3d(ctx, q0, hs, nh*gqa, 1, q0->nb[1], q0->nb[2], j*q0->nb[2]);
+            ggml_tensor * m_j = ggml_view_2d(ctx, m, kv, 1, m->nb[1], j*m->nb[1]);
+            out = ggml_concat(ctx, out, fa(q_j, m_j), 2);
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // fill the mask with non-random data
+            if (strcmp(t->name, "m") == 0) {
+                std::vector<ggml_fp16_t> data(kv*nb);
+                for (int64_t j = 0; j < nb; j++) {
+                    for (int64_t i = 0; i < kv; i++) {
+                        data[j*kv + i] = ggml_fp32_to_fp16(i <= kv - nb + j ? 0.0f : -INFINITY);
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(ggml_fp16_t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+struct test_mul_mat_glu_batch_inv : public test_batch_invariance {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t k;
+    const int64_t n;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_GLU";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, m, k, n);
+    }
+
+    test_mul_mat_glu_batch_inv(ggml_type type_a = GGML_TYPE_Q4_K,
+            int64_t m = 12288, int64_t k = 4096, int64_t n = 8)
+        : type_a(type_a), m(m), k(k), n(n) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * up = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_set_name(up, "up");
+
+        ggml_tensor * gate = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_set_name(gate, "gate");
+
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+
+        const auto ffn = [&](ggml_tensor * x) {
+            return ggml_swiglu_split(ctx, ggml_mul_mat(ctx, gate, x), ggml_mul_mat(ctx, up, x));
+        };
+
+        ggml_tensor * out = ffn(b);
+        for (int64_t j = 0; j < n; j++) {
+            // Single token view similar to what we do in test_mul_mat_batch_inv.
+            ggml_tensor * b_j = ggml_view_2d(ctx, b, k, 1, b->nb[1], j*b->nb[1]);
+            out = ggml_concat(ctx, out, ffn(b_j), 1);
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
+struct test_mul_mat_id_batch_inv : public test_batch_invariance {
+    const ggml_type type_a;
+    const int n_mats;
+    const int n_used;
+    const int64_t m;
+    const int64_t k;
+    const int64_t n;
+    const bool glu;
+    const bool shared; // add a shared expert (requires glu)
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ID";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR8(type_a, n_mats, n_used, m, k, n, glu, shared);
+    }
+
+    test_mul_mat_id_batch_inv(ggml_type type_a = GGML_TYPE_Q4_K,
+            int n_mats = 128, int n_used = 8, int64_t m = 768, int64_t k = 2048,
+            int64_t n = 8, bool glu = true, bool shared = false)
+        : type_a(type_a), n_mats(n_mats), n_used(n_used), m(m), k(k), n(n), glu(glu), shared(shared) {
+        GGML_ASSERT(glu || !shared);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
+        ggml_set_name(ids, "ids");
+        ids = ggml_view_2d(ctx, ids, n_used, n, ids->nb[1], 0);
+
+        ggml_tensor * ups = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+        ggml_set_name(ups, "ups");
+
+        ggml_tensor * gates      = nullptr;
+        ggml_tensor * shared_up   = nullptr;
+        ggml_tensor * shared_gate = nullptr;
+        if (glu) {
+            gates = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+            ggml_set_name(gates, "gates");
+        }
+        if (shared) {
+            shared_up   = ggml_new_tensor_2d(ctx, type_a, k, m);
+            shared_gate = ggml_new_tensor_2d(ctx, type_a, k, m);
+            ggml_set_name(shared_up, "shared_up");
+            ggml_set_name(shared_gate, "shared_gate");
+        }
+
+        ggml_tensor * b = glu ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n) :
+            ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, n);
+        ggml_set_name(b, "b");
+
+        const auto moe = [&](ggml_tensor * x, ggml_tensor * ids_x, int64_t ntok) {
+            if (!glu) {
+                return ggml_mul_mat_id(ctx, ups, x, ids_x);
+            }
+
+            ggml_tensor * x_3d   = ggml_reshape_3d(ctx, x, k, 1, ntok);
+            ggml_tensor * routed = ggml_swiglu_split(ctx,
+                    ggml_mul_mat_id(ctx, gates, x_3d, ids_x),
+                    ggml_mul_mat_id(ctx, ups, x_3d, ids_x));
+
+            if (!shared) {
+                return routed;
+            }
+
+            ggml_tensor * res = ggml_swiglu_split(ctx,
+                    ggml_mul_mat(ctx, shared_gate, x),
+                    ggml_mul_mat(ctx, shared_up, x));
+            return ggml_add(ctx, routed, ggml_reshape_3d(ctx, res, m, 1, ntok));
+        };
+
+        ggml_tensor * out = moe(b, ids, n);
+        for (int64_t j = 0; j < n; j++) {
+            ggml_tensor * b_j = glu ? ggml_view_2d(ctx, b, k, 1, b->nb[1], j*b->nb[1])
+                                    : ggml_view_3d(ctx, b, k, n_used, 1, b->nb[1], b->nb[2], j*b->nb[2]);
+            ggml_tensor * ids_j = ggml_view_2d(ctx, ids, n_used, 1, ids->nb[1], j*ids->nb[1]);
+            out = ggml_concat(ctx, out, moe(b_j, ids_j, 1), 2);
+        }
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats);
+    }
+};
+
+// attention without flash attention.
+struct test_mul_mat_attn_batch_inv : public test_batch_invariance {
+    const bool    kqv; // false: KQ, true: KQV
+    const int64_t hs;
+    const int64_t nh;
+    const int64_t gqa;
+    const int64_t kv;
+    const int64_t nb;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ATTN";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(kqv, hs, nh, gqa, kv, nb);
+    }
+
+    test_mul_mat_attn_batch_inv(bool kqv = false, int64_t hs = 128,
+            int64_t nh = 8, int64_t gqa = 4, int64_t kv = 1024, int64_t nb = 8)
+        : kqv(kqv), hs(hs), nh(nh), gqa(gqa), kv(kv), nb(nb) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * batch = nullptr;
+        std::vector<ggml_tensor *> single_tokens;
+
+        if (!kqv) {
+            // Compute K * Q
+            ggml_tensor * k = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, hs, kv, nh);
+            ggml_set_name(k, "k");
+
+            ggml_tensor * q0 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hs, nh*gqa, nb);
+            ggml_set_name(q0, "q");
+
+            batch = ggml_mul_mat(ctx, k, ggml_permute(ctx, q0, 0, 2, 1, 3));
+            for (int64_t j = 0; j < nb; j++) {
+                ggml_tensor * q_j = ggml_view_3d(ctx, q0, hs, nh*gqa, 1, q0->nb[1], q0->nb[2], j*q0->nb[2]);
+                single_tokens.push_back(ggml_mul_mat(ctx, k, ggml_permute(ctx, q_j, 0, 2, 1, 3)));
+            }
+        } else {
+            // Compute KQ * V
+            ggml_tensor * v = ggml_new_tensor_3d(ctx, GGML_TYPE_F16, kv, hs, nh);
+            ggml_set_name(v, "v");
+
+            ggml_tensor * kq = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, kv, nb, nh*gqa);
+            ggml_set_name(kq, "kq");
+
+            batch = ggml_mul_mat(ctx, v, kq);
+            for (int64_t j = 0; j < nb; j++) {
+                ggml_tensor * kq_j = ggml_cont(ctx,
+                        ggml_view_3d(ctx, kq, kv, 1, nh*gqa, kq->nb[1], kq->nb[2], j*kq->nb[1]));
+                single_tokens.push_back(ggml_mul_mat(ctx, v, kq_j));
+            }
+        }
+
+        ggml_tensor * single = single_tokens[0];
+        for (size_t j = 1; j < single_tokens.size(); j++) {
+            single = ggml_concat(ctx, single, single_tokens[j], 1);
+        }
+
+        ggml_tensor * out = ggml_concat(ctx, batch, single, 3);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_FLASH_ATTN_EXT with kv_rows: each q slice attends to its own list of K/V cache rows
 struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t hs;
@@ -14027,6 +14395,61 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     return test_cases;
 }
 
+static std::vector<std::unique_ptr<test_case>> make_test_cases_batch() {
+    std::vector<std::unique_ptr<test_case>> test_cases;
+
+    const std::array<int64_t, 2> mk_shapes[] = { { 4096, 4096 }, { 4096, 12288 } };
+    for (ggml_type type_a : { GGML_TYPE_F32,
+                              GGML_TYPE_F16,
+                              GGML_TYPE_BF16,
+                              GGML_TYPE_Q4_0,
+                              GGML_TYPE_Q8_0,
+                              GGML_TYPE_Q4_K,
+                              GGML_TYPE_Q5_K,
+                              GGML_TYPE_Q6_K }) {
+        for (const auto & [m, k] : mk_shapes) {
+            for (int n : { 2, 3, 4, 5, 8, 16, 32 }) {
+                test_cases.emplace_back(new test_mul_mat_batch_inv(type_a, m, k, n));
+            }
+        }
+    }
+
+    // FFN gate/up (m = 12288, k = 4096)
+    for (ggml_type type_a : { GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        for (int n : { 2, 4, 8, 16 }) {
+            test_cases.emplace_back(new test_mul_mat_glu_batch_inv(type_a, 12288, 4096, n));
+        }
+    }
+
+    // MoE with Qwen3-30B-A3B shapes: 128 experts, 8 used, gate/up 2048 -> 768, down 768 -> 2048
+    for (ggml_type type_a : { GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K }) {
+        for (int n : { 2, 4, 8 }) {
+            test_cases.emplace_back(new test_mul_mat_id_batch_inv(type_a, 128, 8, 2048, 768,  n, false, false));
+            test_cases.emplace_back(new test_mul_mat_id_batch_inv(type_a, 128, 8, 768,  2048, n, true,  false));
+            test_cases.emplace_back(new test_mul_mat_id_batch_inv(type_a, 128, 8, 768,  2048, n, true,  true));
+        }
+    }
+
+    for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
+        for (int kv : { 1024, 16384 }) {
+            for (int nb : { 2, 4, 8, 16 }) {
+                test_cases.emplace_back(new test_flash_attn_ext_batch_inv(128, 8, 4, kv, nb, type_KV));
+            }
+        }
+    }
+
+    // attention without flash attention (-fa off)
+    for (bool kqv : { false, true }) {
+        for (int kv : { 1024, 16384 }) {
+            for (int nb : { 2, 4, 8, 16 }) {
+                test_cases.emplace_back(new test_mul_mat_attn_batch_inv(kqv, 128, 8, 4, kv, nb));
+            }
+        }
+    }
+
+    return test_cases;
+}
+
 static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const char * path) {
     std::ifstream f(path);
 
@@ -14120,6 +14543,19 @@ static bool op_names_filter_selects(const char * op_names_filter, const char * o
         }
     }
     return false;
+}
+
+// LLAMA_TEST_BATCH_INVARIANT_DISABLE=1 runs batch mode without batch invariance enabled.
+static void set_batch_invariant(ggml_backend_t backend, test_mode mode) {
+    if (mode != MODE_BATCH || getenv("LLAMA_TEST_BATCH_INVARIANT_DISABLE")) {
+        return;
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+
+    if (auto fn = (ggml_backend_set_batch_invariant_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_batch_invariant")) {
+        fn(backend, true);
+    }
 }
 
 // Covers padded rows, sinks, kvpad, multi-SIMDgroup reduction, quantized K/V, and MLA views.
@@ -14216,6 +14652,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         case MODE_PERF:
             test_cases = make_test_cases_perf();
             break;
+        case MODE_BATCH:
+            test_cases = make_test_cases_batch();
+            break;
         }
     } else {
         test_cases = make_test_cases_from_file(test_file_path);
@@ -14223,7 +14662,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
 
     filter_test_cases(test_cases, params_filter);
 
-    if (mode == MODE_TEST) {
+    if (mode == MODE_TEST || mode == MODE_BATCH) {
+        set_batch_invariant(backend, mode);
+
         ggml_backend_ptr backend_cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL));
         if (backend_cpu == NULL) {
             test_operation_info info("", "", "CPU");
@@ -14292,6 +14733,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
                 if (b == NULL) {
                     return;
                 }
+                set_batch_invariant(b.get(), mode);
 
                 ggml_backend_ptr b_cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL));
                 if (b_cpu == NULL) {
@@ -14322,7 +14764,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+        const bool slice_ok = mode != MODE_TEST || run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
 
         return n_ok == tests_run && slice_ok;
     }
@@ -14476,7 +14918,8 @@ static void usage(char ** argv) {
     printf("  test     (default) compare with CPU backend for correctness\n");
     printf("  grad     compare gradients from backpropagation with method of finite differences\n");
     printf("  perf     performance evaluation\n");
-    printf("  support  probe backend operation support\n\n");
+    printf("  support  probe backend operation support\n");
+    printf("  batch    check that ops on a batch of tokens match the same ops on each token alone (bitwise)\n\n");
     printf("Options:\n");
     printf("  -o <op|regex,..>            comma separated list of exact op names (as given by ggml_op_desc()),\n");
     printf("                              full test case strings, and/or regexes matched against the op name\n");
@@ -14514,6 +14957,8 @@ int main(int argc, char ** argv) {
             mode = MODE_GRAD;
         } else if (strcmp(argv[i], "support") == 0) {
             mode = MODE_SUPPORT;
+        } else if (strcmp(argv[i], "batch") == 0) {
+            mode = MODE_BATCH;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
                 op_names_filter = argv[++i];
