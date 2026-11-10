@@ -67,6 +67,8 @@ For a more complete example, see `test_example_native()` in
 - **`end()`** - Matches the end of input (anchor `$`)
 - **`literal(string)`** - Matches an exact literal string
 - **`any()`** - Matches any single character (`.`)
+- **`token(piece)`** - Matches a special token, or the literal `piece` if it is not registered with the builder (see [Special Tokens](#special-tokens))
+- **`token(pieces, negate)`** - Matches one of the tokens, or with `negate` one token that is not one of them
 
 ### Combinators
 
@@ -89,6 +91,7 @@ For a more complete example, see `test_example_native()` in
 - **`space()`** - Matches zero or more whitespace characters (space, tab, newline)
 - **`until(delimiter)`** - Matches characters until delimiter is found (delimiter not consumed)
 - **`until_one_of(delimiters)`** - Matches characters until any delimiter in the list is found
+- **`until(parser)`** - Matches characters until a delimiter built from literals and tokens is found (delimiter not consumed, see [until(parser)](#untilparser))
 - **`through(content, branches, optional)`** - Matches content, then the first delimiter found and the rest of its branch (delimiter consumed). The grammar scans for the delimiters instead of following content
 - **`rest()`** - Matches everything remaining (`.*`)
 
@@ -117,6 +120,110 @@ For a more complete example, see `test_example_native()` in
 
 - **`atomic(p)`** - Prevents AST node creation for partial parses
 - **`tag(tag, p)`** - Creates AST nodes with semantic tags (multiple nodes can share tags)
+
+## Special Tokens
+
+Matching a special token by its text alone is ambiguous: a model may emit
+`<|end|>` as a single control token, or spell it out as plain text, such as
+when quoting a chat template. The parser can tell them apart when the builder
+knows the special tokens of the vocabulary, and the input carries the ids of
+the tokens that produced it.
+
+A `common_peg_tokens` table constructed from a `llama_vocab` registers every
+control and user-defined token. Pass it to the builder:
+
+```cpp
+common_peg_tokens specials(vocab);
+
+auto parser = build_chat_peg_parser(specials, [&](common_chat_peg_builder & p) {
+    return p.content(p.until(p.token("<|end|>"))) + p.token("<|end|>");
+});
+```
+
+Chat templates initialized with a model build this table from its vocabulary,
+and format handlers receive it as `inputs.specials`.
+
+### token()
+
+`token(piece)` matches only where the input holds the id of that token, and
+consumes the whole piece. The same characters without the id do not match.
+If `piece` is not registered with the builder, it falls back to
+`literal(piece)`.
+
+`token(pieces)` matches any of the tokens, and `token(pieces, true)` matches one
+token that is not in the set. Every piece of a negated set must be registered,
+otherwise it throws `std::invalid_argument`.
+
+In the grammar, a token emits `<[id]>` and a negated set emits `!<[...]>`:
+
+```cpp
+p.token({ "<a>", "<b>" }) + p.token({ "<a>", "<b>" }, true)
+```
+
+```
+root ::= (<[1]> | <[2]>) !<[1-2]>
+```
+
+### until(parser)
+
+`until(delimiter)` with a parser instead of a string stops at a delimiter that
+may contain tokens, or several literals joined in a sequence:
+
+```cpp
+auto end   = p.token("<|end|>");
+auto final = p.token("<|channel|>") + p.literal("final");
+
+p.reasoning(p.until(end | final))
+```
+
+The delimiter may only be built from:
+
+- `literal()` and `token()`
+- `sequence()` and `choice()` of the above
+- `tag()` and `atomic()` wrapping any of the above
+
+Any other parser throws `std::invalid_argument`. A choice inside a sequence
+expands to every combination, so `"a" + ("b" | "d")` stops at both `ab` and
+`ad`.
+
+The grammar scans for the delimiters the same way as `until_one_of()`:
+
+```cpp
+p.until((p.literal("a") + p.literal("b")) | p.literal("cd"))
+```
+
+```
+root ::= until-5
+until-5 ::= | [a] until-5-01 | [c] until-5-03 | [^ac] until-5
+until-5-01 ::= | [a] until-5-01 | [c] until-5-03 | [^abc] until-5
+until-5-03 ::= | [a] until-5-01 | [c] until-5-03 | [^acd] until-5
+```
+
+A token never matches a character rule such as `.` or `[^a]`, so the scan lets
+the other tokens named elsewhere in the grammar through by name. Here `<b>` is
+token 2:
+
+```cpp
+p.until(p.token("<a>") + p.literal("x")) + p.token("<a>") + p.literal("x") + p.token("<b>")
+```
+
+```
+root ::= until-3 <[1]> "x" <[2]>
+until-3 ::= | <[1]> until-3-01 | (. | <[2]>) until-3
+until-3-01 ::= | <[1]> until-3-01 | ([^x] | <[2]>) until-3
+```
+
+When the delimiters are made of tokens alone, the scan consumes whole tokens
+with a negated token set instead:
+
+```cpp
+p.until(p.token("<a>")) + p.token("<a>")
+```
+
+```
+root ::= until-1 <[1]>
+until-1 ::= | !<[1]> until-1
+```
 
 ## GBNF Grammar Generation
 
