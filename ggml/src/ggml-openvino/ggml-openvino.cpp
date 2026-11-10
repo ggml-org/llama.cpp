@@ -990,6 +990,11 @@ bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft) {
     return buft->iface.get_name == ggml_backend_openvino_host_buffer_type_get_name;
 }
 
+// Fingerprints of weights outside OpenVINO buffers (e.g. a CPU-buffer token_embd), keyed by address, size and name. A
+// later model can reuse an address, so the map is cleared with the shared compiled-model cache.
+static std::mutex g_fallback_fingerprints_mutex;
+static std::map<std::tuple<const void *, size_t, std::string>, uint64_t> g_fallback_fingerprints;
+
 uint64_t ggml_backend_openvino_weight_fingerprint(const ggml_tensor * tensor) {
     if (ggml_backend_buffer_is_openvino(tensor->buffer)) {
         auto * ctx = static_cast<ggml_backend_openvino_buffer_context *>(tensor->buffer->context);
@@ -1006,18 +1011,15 @@ uint64_t ggml_backend_openvino_weight_fingerprint(const ggml_tensor * tensor) {
         }
         GGML_ABORT("ggml-openvino: missing source identity for weight %s", tensor->name);
     }
-    // Weights outside OpenVINO buffers (e.g. a CPU-buffer token_embd) live as long as the model.
-    static std::mutex fallback_mutex;
-    static std::map<std::tuple<const void *, size_t, std::string>, uint64_t> fallback_fingerprints;
-    const auto key = std::make_tuple(static_cast<const void *>(tensor->data), ggml_nbytes(tensor), std::string(tensor->name));
-    std::lock_guard<std::mutex> lock(fallback_mutex);
-    auto it = fallback_fingerprints.find(key);
-    if (it != fallback_fingerprints.end()) {
+    const auto key =
+        std::make_tuple(static_cast<const void *>(tensor->data), ggml_nbytes(tensor), std::string(tensor->name));
+    std::lock_guard<std::mutex> lock(g_fallback_fingerprints_mutex);
+    auto it = g_fallback_fingerprints.find(key);
+    if (it != g_fallback_fingerprints.end()) {
         return it->second;
     }
     std::vector<ggml_openvino_source_mapping> mappings;
-    return fallback_fingerprints[key] =
-               ggml_openvino_source_fingerprint(tensor->data, ggml_nbytes(tensor), mappings);
+    return g_fallback_fingerprints[key] = ggml_openvino_source_fingerprint(tensor->data, ggml_nbytes(tensor), mappings);
 }
 
 static void ggml_backend_openvino_free(ggml_backend_t backend) {
@@ -1035,6 +1037,9 @@ static void ggml_backend_openvino_free(ggml_backend_t backend) {
             // reuses it instead of recompiling against zeroed weights.
             if (!ggml_openvino_weight_buffers_released()) {
                 cache->graphs.clear();
+                ov_clear_imported_blobs();
+                std::lock_guard<std::mutex> fingerprints_lock(g_fallback_fingerprints_mutex);
+                g_fallback_fingerprints.clear();
             }
         }
     }
