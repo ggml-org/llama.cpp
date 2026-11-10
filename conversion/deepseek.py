@@ -277,6 +277,7 @@ class DeepseekV2Model(TextModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        assert tokenizer is not None
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         if tokpre == "kimi-k2":
@@ -294,7 +295,7 @@ class DeepseekV2Model(TextModel):
 
             # Build token list
             vocab_size = self.hparams["vocab_size"]
-            special_tokens = tokenizer.special_tokens  # ty: ignore[missing-union-attribute]
+            special_tokens = tokenizer.special_tokens
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []

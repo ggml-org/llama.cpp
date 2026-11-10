@@ -225,12 +225,13 @@ class Qwen3Model(Qwen2Model):
     def _find_rerank_config(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
 
         self.is_rerank = True
         self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
-        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[missing-union-attribute, invalid-assignment]
-        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[missing-union-attribute, invalid-assignment]
-        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")  # ty: ignore[missing-union-attribute]
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[invalid-assignment]
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[invalid-assignment]
+        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")
 
         assert self.token_false_id is not None and self.token_true_id is not None
 

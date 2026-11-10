@@ -37,7 +37,8 @@ class MuseGlimmerModel(TextModel):
 
         from transformers import AutoTokenizer
         tok = AutoTokenizer.from_pretrained(self.dir_model)
-        eot_id = tok.convert_tokens_to_ids("<|eot|>")  # ty: ignore[missing-union-attribute]
+        assert tok is not None
+        eot_id = tok.convert_tokens_to_ids("<|eot|>")
         if isinstance(eot_id, int) and eot_id >= 0:
             self.gguf_writer.add_eot_token_id(eot_id)
 

@@ -31,3 +31,4 @@ include = [
 [overrides.rules]
 unsupported-operator = "ignore"
 not-subscriptable = "ignore"
+invalid-type-form = "ignore"

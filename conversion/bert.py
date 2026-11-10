@@ -132,6 +132,7 @@ class BertModel(TextModel):
             from base64 import b64decode
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            assert tokenizer is not None
 
             with open(tokenizer_path, "r", encoding="utf-8") as fp:
                 tokenizer_json = json.load(fp)
@@ -140,11 +141,11 @@ class BertModel(TextModel):
                 with open(tokenizer_config_path, "r", encoding="utf-8") as fp:
                     tokenizer_config_json = json.load(fp)
 
-            add_prefix = tokenizer.add_prefix_space  # ty: ignore[missing-union-attribute]
-            remove_whitespaces = tokenizer.clean_up_tokenization_spaces  # ty: ignore[missing-union-attribute]
+            add_prefix = tokenizer.add_prefix_space
+            remove_whitespaces = tokenizer.clean_up_tokenization_spaces
             precompiled_charsmap = b64decode(tokenizer_json["normalizer"]["precompiled_charsmap"])
 
-            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)  # ty: ignore[missing-union-attribute]
+            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
         else:
             sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
@@ -183,20 +184,20 @@ class BertModel(TextModel):
                 scores[token_id] = score
                 toktypes[token_id] = toktype
         else:
-            added_vocab = tokenizer.get_added_vocab()  # ty: ignore[missing-union-attribute]
+            added_vocab = tokenizer.get_added_vocab()
             unk_token = tokenizer_config_json.get("unk_token")
-            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))  # ty: ignore[no-matching-overload]
+            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))
 
-            for token_id in range(tokenizer.vocab_size):  # ty: ignore[missing-union-attribute]
-                piece = tokenizer._convert_id_to_token(token_id)  # ty: ignore[missing-union-attribute]
-                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:  # ty: ignore[missing-union-attribute]
+            for token_id in range(tokenizer.vocab_size):
+                piece = tokenizer._convert_id_to_token(token_id)
+                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:
                     text = piece.encode("utf-8")
                     score = tokenizer_json["model"]["vocab"][token_id][1]
 
                     toktype = SentencePieceTokenTypes.NORMAL
                     if token_id == unk_token_id:
                         toktype = SentencePieceTokenTypes.UNKNOWN
-                    elif token_id in tokenizer.all_special_ids:  # ty: ignore[missing-union-attribute]
+                    elif token_id in tokenizer.all_special_ids:
                         toktype = SentencePieceTokenTypes.CONTROL
                     elif token_id in added_vocab.values():
                         toktype = SentencePieceTokenTypes.USER_DEFINED

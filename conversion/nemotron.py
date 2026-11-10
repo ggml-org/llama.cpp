@@ -609,6 +609,7 @@ class NemotronHModel(GraniteHybridModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        assert tokenizer is not None
 
         # Pad vocab size (from Mamba2Model/GraniteHybridModel)
         self.hparams["pad_vocab_size_multiple"] = 8 # Setting this here since GraniteHybridModel.set_vocab() isn't being invoked now.
@@ -623,14 +624,14 @@ class NemotronHModel(GraniteHybridModel):
         vocab_skip = getattr(self, "_vocab_skip", ())
         user_defined_tokens = getattr(self, "_user_defined_tokens", None)
 
-        assert max(id_ for tok, id_ in tokenizer.vocab.items() if tok not in vocab_skip) < vocab_size  # ty: ignore[missing-union-attribute]
+        assert max(id_ for tok, id_ in tokenizer.vocab.items() if tok not in vocab_skip) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[missing-union-attribute]
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[missing-union-attribute]
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[missing-union-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -641,7 +642,7 @@ class NemotronHModel(GraniteHybridModel):
                 if token in added_vocab:
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[missing-union-attribute, invalid-assignment]
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 

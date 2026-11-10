@@ -272,7 +272,7 @@ class ModelBase:
                     if weight_map is None or not isinstance(weight_map, dict):
                         raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
                     tensor_names_from_index.update(weight_map.keys())
-                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None) # ty: ignore[invalid-assignment]
+                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None)
                     part_names = sorted(part_dict.keys())
             else:
                 weight_map = {}
@@ -2022,15 +2022,16 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[missing-union-attribute]
-        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[missing-union-attribute]
+        assert tokenizer is not None
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+        assert max(tokenizer.vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[missing-union-attribute]
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[missing-union-attribute]
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[missing-union-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -2043,7 +2044,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[missing-union-attribute, invalid-assignment]
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
@@ -2453,7 +2454,8 @@ class TextModel(ModelBase):
     def _set_vocab_hybriddna(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab = tokenizer.get_vocab()  # ty: ignore[missing-union-attribute]
+        assert tokenizer is not None
+        vocab = tokenizer.get_vocab()
         vocab_size = self.hparams.get("vocab_size", len(vocab))
         assert max(vocab.values()) < vocab_size
 
@@ -2463,14 +2465,14 @@ class TextModel(ModelBase):
         # tail="pad_n" (Carbon-14B) adds N-padded tail tokens ("CT" -> "CTNNNN") that get the same marker
         # llama.cpp detects them to pad with N and strips the padding on detokenization, tail="char" is unsupported
         tail = getattr(tokenizer, "tail", "pad_a")
-        if tokenizer.k != 6 or tail not in ("pad_a", "pad_n"):  # ty: ignore[missing-union-attribute]
-            raise NotImplementedError(f"HybridDNATokenizer with k={tokenizer.k}, tail={tail!r}")  # ty: ignore[missing-union-attribute]
-        for kmer in [*tokenizer.kmers, *getattr(tokenizer, "npad_tokens", [])]:  # ty: ignore[missing-union-attribute]
-            reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"  # ty: ignore[missing-union-attribute]
+        if tokenizer.k != 6 or tail not in ("pad_a", "pad_n"):
+            raise NotImplementedError(f"HybridDNATokenizer with k={tokenizer.k}, tail={tail!r}")
+        for kmer in [*tokenizer.kmers, *getattr(tokenizer, "npad_tokens", [])]:
+            reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"
         # older HybridDNATokenizer versions (Carbon-500M/3B/8B) do not register the base tokenizer's added tokens (<|im_start|>, <think>, ...) as their own
         # but they are still encoded as special tokens: take their types from the base tokenizer
         base_tokenizer = getattr(tokenizer, "_base_tokenizer", tokenizer)
-        added_tokens_decoder = {**base_tokenizer.added_tokens_decoder, **tokenizer.added_tokens_decoder}  # ty: ignore[missing-union-attribute]
+        added_tokens_decoder = {**base_tokenizer.added_tokens_decoder, **tokenizer.added_tokens_decoder}
 
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -2501,7 +2503,7 @@ class TextModel(ModelBase):
             # Carbon-500M/3B/8B ship only tokenizer.py, no tokenizer.json
             # take the merges and special token ids from the base BPE tokenizer, keeping the model's own chat template (if any)
             with tempfile.TemporaryDirectory() as tmp:
-                base_tokenizer.save_pretrained(tmp)  # ty: ignore[missing-union-attribute]
+                base_tokenizer.save_pretrained(tmp)
                 base_special_vocab = gguf.SpecialVocab(Path(tmp), load_merges=True)
             base_special_vocab.chat_template = special_vocab.chat_template
             special_vocab = base_special_vocab
@@ -2517,24 +2519,25 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
+        assert tokenizer is not None
         vocab_size = hparams["vocab_size"]
-        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[missing-union-attribute]
+        assert max(tokenizer.get_vocab().values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         merges = []
         vocab = {}
-        mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[missing-union-attribute]
+        mergeable_ranks = tokenizer.mergeable_ranks
         for token, rank in mergeable_ranks.items():
             vocab[QwenModel.token_bytes_to_string(token)] = rank
             if len(token) == 1:
                 continue
             merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
             assert len(merged) == 2
-            merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
+            merges.append(str(' '.join(map(QwenModel.token_bytes_to_string, merged))))
 
         # for this kind of tokenizer, added_vocab is not a subset of vocab, so they need to be combined
-        added_vocab = tokenizer.special_tokens  # ty: ignore[missing-union-attribute]
+        added_vocab = tokenizer.special_tokens
         reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **added_vocab}.items()}
 
         for i in range(vocab_size):
@@ -2557,10 +2560,10 @@ class TextModel(ModelBase):
         special_vocab.merges = merges
         # only add special tokens when they were not already loaded from config.json
         if len(special_vocab.special_token_ids) == 0:
-            special_vocab._set_special_token("bos", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
-            special_vocab._set_special_token("eos", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+            special_vocab._set_special_token("bos", tokenizer.special_tokens["<|endoftext|>"])
+            special_vocab._set_special_token("eos", tokenizer.special_tokens["<|endoftext|>"])
         # this one is usually not in config.json anyway
-        special_vocab._set_special_token("unk", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("unk", tokenizer.special_tokens["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_sentencepiece(self, add_to_gguf=True):
@@ -2834,21 +2837,23 @@ class TextModel(ModelBase):
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[missing-union-attribute]
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_glm(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
@@ -2857,10 +2862,10 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_types(toktypes)
         # Special tokens
         # Note: Using <|endoftext|> (151329) for eot causes endless generation
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # ty: ignore[missing-union-attribute]  # 151331
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[missing-union-attribute]  # 151336
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[missing-union-attribute]  # 151329
-        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # ty: ignore[missing-union-attribute]  # 151338
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # 151331
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # 151336
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # 151329
+        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_interns1(self):
@@ -2869,16 +2874,17 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())  # ty: ignore[missing-union-attribute]
+        assert tokenizer is not None
+        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
         vocab_size = self.hparams.get("vocab_size", len(vocab))
         assert max(vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[missing-union-attribute]
+        added_vocab = tokenizer.get_added_vocab()
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[missing-union-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -2891,7 +2897,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[missing-union-attribute, invalid-assignment]
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
