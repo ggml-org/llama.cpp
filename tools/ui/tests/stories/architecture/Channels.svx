@@ -5,6 +5,8 @@
 
 <script>
 	import Callout from './lib/components/ui/Callout.svelte';
+	import ConnectFigure from './lib/components/channels/ConnectFigure.svelte';
+	import LocalhostFigure from './lib/components/channels/LocalhostFigure.svelte';
 	import ReleaseDiagram from './lib/components/channels/ReleaseDiagram.svelte';
 </script>
 
@@ -41,9 +43,13 @@ Llama Connect pairs an app with a llama-server it cannot reach by URL: one start
 
 Conversations come with it. Chats stored on the device that runs the server, a laptop say, can be shared through Llama Connect and continued on a phone, then picked up again on the laptop.
 
-Why npx still matters next to the hosted site: an `https://` page cannot call a plain `http://` server on the LAN (browsers block it as mixed content). A page served from `http://localhost` can.
+<ConnectFigure />
 
 ## The npx command
+
+Why npx still matters next to the hosted site: a llama-server on the LAN usually answers on plain `http://`, and an `https://` page cannot call it (browsers block it as mixed content). The same UI served from `http://localhost` can.
+
+<LocalhostFigure />
 
 Bare `npx llama-chat` starts it. One job, no verb, like `npx serve` or `npx http-server`; a required `start` would turn many first runs into a help screen.
 
