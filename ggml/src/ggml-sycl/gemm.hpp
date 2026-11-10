@@ -17,6 +17,9 @@
 
 #if GGML_SYCL_DNNL
 
+#include <string>
+#include <unordered_map>
+
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
 
@@ -81,6 +84,60 @@ public:
         matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
 
         matmul_prim.execute(stream, matmul_args);
+    }
+
+    // dst[n][m] = act[n][k] * w[m][k]^T, w = reordered Q4_0 read as u4 (zero point 8, f16 scale per 32 values, scales is [k/32][m])
+    // Q4_0 nibble order in a block is 0,16,1,17,...,15,31: the caller permutes act the same way
+    static void gemm_q4_0_u4(ggml_backend_sycl_context & ctx, int m, int n, int k, const sycl::half * act,
+                             const void * w, const sycl::half * scales, float * dst, const queue_ptr & q) {
+        auto stream = ctx.stream_dnnl(q);
+        auto eng    = ctx.engine_dnnl(q);
+        const int device = ggml_sycl_get_device();
+
+        const auto act_md = dnnl::memory::desc({ n, k }, dt::f16, tag::ab);
+        const auto w_md   = dnnl::memory::desc({ k, m }, dt::u4, tag::ba);
+        const auto dst_md = dnnl::memory::desc({ n, m }, dt::f32, tag::ab);
+        const auto sc_md  = dnnl::memory::desc({ k / QK4_0, m }, dt::f16, tag::ab);
+        const auto zp_md  = dnnl::memory::desc({ 1 }, dt::u8, tag::a);
+
+        // the zero point never changes: one byte per device, set once
+        static uint8_t * zp8[GGML_SYCL_MAX_DEVICES] = {};
+        if (!zp8[device]) {
+            zp8[device] = sycl::malloc_device<uint8_t>(1, *q);
+            q->memset(zp8[device], 8, 1).wait();
+        }
+
+        // build once per (engine, shape); a new llama context has a new engine, so the entry keeps its engine alive
+        struct u4_gemm { dnnl::engine eng; dnnl::matmul::primitive_desc pd; dnnl::matmul prim; };
+        static std::unordered_map<std::string, u4_gemm> cache;
+        char key[96];
+        snprintf(key, sizeof(key), "%p:%d:%d:%d", (void *) eng.get(), m, n, k);
+        auto it = cache.find(key);
+        if (it == cache.end()) {
+            dnnl::primitive_attr attr;
+            attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+            attr.set_scales(DNNL_ARG_WEIGHTS, (1 << 0) | (1 << 1), { QK4_0, 1 }, dt::f16);
+            attr.set_zero_points(DNNL_ARG_WEIGHTS, 0, {}, dt::u8);
+            attr.set_fpmath_mode(dnnl::fpmath_mode::f16, true);
+            auto pd = dnnl::matmul::primitive_desc(eng, act_md, w_md, dst_md, attr);
+            it = cache.emplace(key, u4_gemm{ eng, pd, dnnl::matmul(pd) }).first;
+        }
+        const auto & pd   = it->second.pd;
+        const auto & prim = it->second.prim;
+
+        const auto scratchpad_md = pd.scratchpad_desc();
+        ggml_sycl_pool_alloc<uint8_t> scratchpad(ctx.pool());
+        void * scratchpad_ptr = scratchpad_md.get_size() > 0 ? scratchpad.alloc(scratchpad_md.get_size()) : nullptr;
+
+        std::unordered_map<int, dnnl::memory> args;
+        args.insert({ DNNL_ARG_SRC, dnnl::memory(act_md, eng, const_cast<sycl::half *>(act)) });
+        args.insert({ DNNL_ARG_WEIGHTS, dnnl::memory(w_md, eng, const_cast<void *>(w)) });
+        args.insert({ DNNL_ARG_DST, dnnl::memory(pd.dst_desc(), eng, dst) });
+        args.insert({ DNNL_ARG_ATTR_SCALES | DNNL_ARG_WEIGHTS, dnnl::memory(sc_md, eng, const_cast<sycl::half *>(scales)) });
+        args.insert({ DNNL_ARG_ATTR_ZERO_POINTS | DNNL_ARG_WEIGHTS, dnnl::memory(zp_md, eng, zp8[device]) });
+        args.insert({ DNNL_ARG_SCRATCHPAD, dnnl::memory(scratchpad_md, eng, scratchpad_ptr) });
+
+        prim.execute(stream, args);
     }
 
     static void row_gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,

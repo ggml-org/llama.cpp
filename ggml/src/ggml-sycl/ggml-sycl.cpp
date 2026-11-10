@@ -102,6 +102,7 @@ int g_ggml_sycl_dev_debug = 0;
 int g_ggml_sycl_enable_optimize = 1;
 int g_ggml_sycl_enable_graph = 0;
 int g_ggml_sycl_enable_dnn = 1;
+int g_ggml_sycl_q4_0_u4_gemm = 1;
 int g_ggml_sycl_fa_onednn = 1;
 int g_ggml_sycl_fa_onednn_max_kv = 0;
 int g_ggml_sycl_enable_mkl_fa = 1;
@@ -189,6 +190,42 @@ static bool ggml_sycl_dnnl_detect_optimized_gemm(int device) {
 
     return false;
 }
+
+// ask oneDNN which matmul it picks for the u4 Q4_0 GEMM (u4 weights, u8 zero point, f16 scales per 32 values along k)
+static bool ggml_sycl_dnnl_detect_q4_0_u4_gemm(int device) {
+    using dt  = dnnl::memory::data_type;
+    using tag = dnnl::memory::format_tag;
+
+    try {
+        const dnnl::memory::dim m = 64, n = 64, k = 128;
+
+        dnnl::primitive_attr attr;
+        attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+        attr.set_scales(DNNL_ARG_WEIGHTS, (1 << 0) | (1 << 1), { QK4_0, 1 }, dt::f16);
+        attr.set_zero_points(DNNL_ARG_WEIGHTS, 0, {}, dt::u8);
+        attr.set_fpmath_mode(dnnl::fpmath_mode::f16, true);
+
+        const auto & q   = dpct::dev_mgr::instance().get_device(device).default_queue();
+        const auto   eng = dnnl::sycl_interop::make_engine(q.get_device(), q.get_context());
+        const auto   pd  = dnnl::matmul::primitive_desc(eng,
+                                                        dnnl::memory::desc({ n, k }, dt::f16, tag::ab),
+                                                        dnnl::memory::desc({ k, m }, dt::u4, tag::ba),
+                                                        dnnl::memory::desc({ n, m }, dt::f32, tag::ab), attr);
+
+        const std::string impl = pd.impl_info_str();
+        if (impl.find("ref") == std::string::npos) {
+            return true;
+        }
+
+        GGML_LOG_INFO("%s: oneDNN has no optimized u4 matmul for device %d (picks %s), Q4_0 keeps the f16 path\n",
+                      __func__, device, impl.c_str());
+    } catch (const std::exception & e) {
+        GGML_LOG_INFO("%s: oneDNN u4 matmul probe failed on device %d (%s), Q4_0 keeps the f16 path\n",
+                      __func__, device, e.what());
+    }
+
+    return false;
+}
 #endif
 
 static ggml_sycl_device_info ggml_sycl_init() {
@@ -251,6 +288,8 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
 #if GGML_SYCL_DNNL
         info.devices[i].opt_feature.onednn_optimized_gemm = ggml_sycl_dnnl_detect_optimized_gemm(i);
+        info.devices[i].opt_feature.onednn_q4_0_u4_gemm =
+            info.devices[i].opt_feature.onednn_optimized_gemm && ggml_sycl_dnnl_detect_q4_0_u4_gemm(i);
 #endif
         info.devices[i].smpbo = prop.get_local_mem_size();
         info.devices[i].warp_size = WARP_SIZE;
@@ -434,6 +473,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_enable_optimize = ggml_sycl_get_env("GGML_SYCL_ENABLE_OPT", 1);
         g_ggml_sycl_enable_graph = ggml_sycl_get_env("GGML_SYCL_ENABLE_GRAPH", 0);
         g_ggml_sycl_enable_dnn = ggml_sycl_get_env("GGML_SYCL_ENABLE_DNN", 1);
+        g_ggml_sycl_q4_0_u4_gemm = ggml_sycl_get_env("GGML_SYCL_Q4_0_U4_GEMM", 1);
         g_ggml_sycl_fa_onednn = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN", 1);
         g_ggml_sycl_fa_onednn_max_kv = ggml_sycl_get_env("GGML_SYCL_FA_ONEDNN_MAX_KV", 0);
         g_ggml_sycl_enable_mkl_fa = ggml_sycl_get_env("GGML_SYCL_ENABLE_MKL_FA", 1);
@@ -549,6 +589,7 @@ static void ggml_check_sycl() try {
 
 #if defined(GGML_SYCL_DNNL)
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: %d\n", g_ggml_sycl_enable_dnn);
+        GGML_LOG_INFO("  GGML_SYCL_Q4_0_U4_GEMM: %d\n", g_ggml_sycl_q4_0_u4_gemm);
         GGML_LOG_INFO("  GGML_SYCL_FA_ONEDNN: %d\n", g_ggml_sycl_fa_onednn);
 #else
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_DNN: DNN disabled by compile flag\n");
@@ -3234,6 +3275,11 @@ catch (sycl::exception const &exc) {
 static constexpr int64_t SYCL_F32_DNNL_MIN_GEMM_FLOPS = 256 * 256 * 256;
 #endif
 
+#if GGML_SYCL_DNNL
+// below this many weights the f16 route is as fast or faster (measured on B580)
+static constexpr int64_t GGML_SYCL_Q4_0_U4_GEMM_MIN_WEIGHTS = 1 << 19;
+#endif
+
 inline void ggml_sycl_op_mul_mat_sycl(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -3309,6 +3355,43 @@ inline void ggml_sycl_op_mul_mat_sycl(
 
     // the f16 route converts src1 to f16 [TAG_GGML_PREC]
     use_fp16 = use_fp16 && ggml_sycl_src1_f16_ok(dst);
+#if GGML_SYCL_DNNL
+    // reordered Q4_0: oneDNN reads the weights in place as u4, no f16 copy of src0
+    // reordered layout = qs nibbles of all rows, then all f16 scales
+    if (use_fp16 && src0->type == GGML_TYPE_Q4_0 && src0_reordered && src1->type == GGML_TYPE_F32 && src1_ncols > 32 &&
+        g_ggml_sycl_enable_dnn && g_ggml_sycl_q4_0_u4_gemm && ggml_sycl_dnnl_has_q4_0_u4_gemm(ggml_sycl_get_device()) &&
+        ggml_is_contiguous(src0) && row_low == 0 && row_diff == src0->ne[1] && ldc == row_diff && ne00 % QK4_0 == 0 &&
+        ne00 * src0->ne[1] >= GGML_SYCL_Q4_0_U4_GEMM_MIN_WEIGHTS &&
+        dst->op_params[0] == GGML_PREC_DEFAULT) {
+        const int nrows = (int) row_diff;
+        const int nb    = (int) (ne00 / QK4_0);
+        const int K     = (int) ne00;
+        const sycl::half * d = (const sycl::half *) ((const char *) src0_dd_i + (size_t) row_diff * ne00 / 2);
+
+        ggml_sycl_pool_alloc<sycl::half> scales(ctx.pool(), (size_t) nb * nrows);
+        ggml_sycl_pool_alloc<sycl::half> act(ctx.pool(), (size_t) src1_ncols * ne10);
+        sycl::half * scales_p = scales.get();
+        sycl::half * act_p    = act.get();
+
+        // scales [row][block] -> [block][row]
+        stream->parallel_for(sycl::range<2>(nb, nrows), [=](sycl::item<2> it) {
+            const int b = it.get_id(0);
+            const int r = it.get_id(1);
+            scales_p[(size_t) b * nrows + r] = d[(size_t) r * nb + b];
+        });
+        // f32 -> f16, column j of a block to position 2j (j < 16) or 2(j-16)+1, matching the nibble order
+        stream->parallel_for(sycl::range<3>(src1_ncols, nb, QK4_0 / 2), [=](sycl::item<3> it) {
+            const size_t i = (size_t) it.get_id(0) * K + it.get_id(1) * QK4_0;
+            const int    j = it.get_id(2);
+            act_p[i + 2 * j]     = sycl::half(src1_ddf_i[i + j]);
+            act_p[i + 2 * j + 1] = sycl::half(src1_ddf_i[i + j + QK4_0 / 2]);
+        });
+
+        DnnlGemmWrapper::gemm_q4_0_u4(ctx, nrows, (int) src1_ncols, K, act_p, src0_dd_i, scales_p, dst_dd_i, stream);
+        return;
+    }
+#endif
+
     if ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && use_fp16 && ggml_is_contiguous(src0) &&
         row_diff == src0->ne[1] && dst->op_params[0] == GGML_PREC_DEFAULT) {
         ggml_sycl_pool_alloc<sycl::half> src1_as_f16(ctx.pool());
@@ -5197,6 +5280,19 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 
+#if GGML_SYCL_DNNL && defined(GGML_SYCL_F16)
+// the u4 Q4_0 GEMM needs the reordered layout; without this it is only installed by the first decode (ne[1] <= 8)
+static bool ggml_sycl_reorder_for_q4_0_u4_gemm(ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
+                                                const ggml_tensor * src1, const ggml_tensor * dst) {
+    return g_ggml_sycl_enable_optimize && ctx.opt_feature.reorder && g_ggml_sycl_enable_dnn && g_ggml_sycl_q4_0_u4_gemm &&
+           ggml_sycl_dnnl_has_q4_0_u4_gemm(ctx.device) && dst->op == GGML_OP_MUL_MAT &&
+           src0->type == GGML_TYPE_Q4_0 && ggml_is_contiguous(src0) && src0->ne[0] % QK4_0 == 0 &&
+           src0->ne[0] * src0->ne[1] >= GGML_SYCL_Q4_0_U4_GEMM_MIN_WEIGHTS &&
+           src1->type == GGML_TYPE_F32 && src1->ne[1] > 32 && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+           ggml_sycl_src1_f16_ok(dst) && dst->op_params[0] == GGML_PREC_DEFAULT;
+}
+#endif
+
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
 
@@ -5294,6 +5390,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     } else if (use_mul_mat_q) {
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
     } else {
+#if GGML_SYCL_DNNL && defined(GGML_SYCL_F16)
+        if (!split && ggml_sycl_reorder_for_q4_0_u4_gemm(ctx, src0, src1, dst)) {
+            ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+            if (extra && !extra->optimized_feature.reorder && reorder_qw(src0, ctx.stream())) {
+                extra->optimized_feature.reorder = true;
+            }
+        }
+#endif
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
     }
 }
