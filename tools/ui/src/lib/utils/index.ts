@@ -139,6 +139,7 @@ export { hapticTap } from './haptics';
 export { normalizeFloatingPoint, normalizeNumber } from './precision';
 
 // Syntax highlighting utilities
+export { loadHighlightTheme } from './highlight-theme';
 export { getLanguageFromFilename } from './syntax-highlight-language';
 
 // Text file utilities
@@ -238,26 +239,7 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Tokenization for the ChatFormInputRich (mention links + code spans <-> chip DOM)
-export {
-	tokenizeContent,
-	containsCodeSpan,
-	isOffsetInCodeBlock,
-	domMatchesTokens,
-	syncCodeBlockHatches,
-	stripBlockBoundaryLineBreaks,
-	serializeContent,
-	buildFragment,
-	rangeToTextOffset,
-	textOffsetToRange,
-	badgeAwareWordJump,
-	leadingBadgeEdgeOffset
-} from './chat-form-input-rich-tokenizer';
-
-// Source-space undo/redo history for the ChatFormInputRich
-export { SourceHistory, type SourceHistoryEntry } from './source-history';
-
-// Mention-badge visual contract (used by the ChatFormInputRich / rehype
+// Mention-badge visual contract (used by the chat form input / rehype
 // DOM paths that build the same chip without a Svelte mount)
 export {
 	containsFileMentionLink,

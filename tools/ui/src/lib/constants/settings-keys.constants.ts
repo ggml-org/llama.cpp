@@ -34,6 +34,7 @@ export const SETTINGS_KEYS = {
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	GROUP_MODELS_BY_FAMILY: 'groupModelsByFamily',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
+	LIVE_MARKDOWN_PREVIEW: 'liveMarkdownPreview',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	MAX_TOKENS: 'max_tokens',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',

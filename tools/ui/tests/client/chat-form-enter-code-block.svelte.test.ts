@@ -1,11 +1,11 @@
 // Guards the Enter-key contract of the chat form against the
-// fenced-code-block flow: while the caret sits inside a fenced
-// block region - closed, or still OPEN while the user is typing
-// one - plain Enter adds a line instead of submitting the message.
-// The textarea path is covered here end-to-end (the ChatFormInputRich
-// consumes the same case locally; see chat-form-input-rich).
+// code-block flow: while the caret sits inside a code block - ```
+// or ~~~ fenced, closed or still OPEN while the user is typing one -
+// plain Enter adds a line instead of submitting the message.
+// The form gates submit; the editor then adds the line itself.
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
+import { EditorView } from '@codemirror/view';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tick } from 'svelte';
@@ -13,12 +13,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 
-function textareaIn(container: HTMLElement): HTMLTextAreaElement {
-	const el = container.querySelector('textarea');
+function editorIn(container: HTMLElement): EditorView {
+	const el = container.querySelector<HTMLElement>('.cm-content');
+	const view = el && EditorView.findFromDOM(el);
 
-	if (!(el instanceof HTMLTextAreaElement)) throw new Error('textarea not rendered');
+	if (!view) throw new Error('editor not rendered');
 
-	return el;
+	return view;
 }
 
 describe('ChatForm Enter in code blocks', () => {
@@ -32,9 +33,9 @@ describe('ChatForm Enter in code blocks', () => {
 
 		await tick();
 
-		const textarea = textareaIn(container);
+		const editor = editorIn(container);
 
-		await userEvent.click(textarea);
+		await userEvent.click(editor.contentDOM);
 		await userEvent.keyboard('```');
 		await tick();
 
@@ -42,7 +43,7 @@ describe('ChatForm Enter in code blocks', () => {
 		await tick();
 
 		expect(onSubmit).not.toHaveBeenCalled();
-		expect(textarea.value).toBe('```\n');
+		expect(editor.state.doc.toString()).toBe('```\n');
 	});
 
 	it('keeps adding lines while the block stays open', async () => {
@@ -51,9 +52,9 @@ describe('ChatForm Enter in code blocks', () => {
 
 		await tick();
 
-		const textarea = textareaIn(container);
+		const editor = editorIn(container);
 
-		await userEvent.click(textarea);
+		await userEvent.click(editor.contentDOM);
 		await userEvent.keyboard('```js');
 		await tick();
 
@@ -63,7 +64,47 @@ describe('ChatForm Enter in code blocks', () => {
 		await tick();
 
 		expect(onSubmit).not.toHaveBeenCalled();
-		expect(textarea.value).toBe('```js\nconst a = 1;\n');
+		expect(editor.state.doc.toString()).toBe('```js\nconst a = 1;\n');
+	});
+
+	it('adds a line in a tilde-fenced block', async () => {
+		const onSubmit = vi.fn();
+		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
+		await tick();
+
+		const editor = editorIn(container);
+
+		await userEvent.click(editor.contentDOM);
+		await userEvent.keyboard('~~~');
+		await tick();
+
+		await userEvent.keyboard('{Enter}');
+		await tick();
+
+		expect(onSubmit).not.toHaveBeenCalled();
+		expect(editor.state.doc.toString()).toBe('~~~\n');
+	});
+
+	it('submits right after a closing fence', async () => {
+		const onSubmit = vi.fn();
+		const { container } = render(ChatFormTestWrapper, { onSubmit });
+
+		await tick();
+
+		const editor = editorIn(container);
+
+		await userEvent.click(editor.contentDOM);
+		editor.dispatch({
+			changes: { from: 0, insert: '```\ncode\n```' },
+			selection: { anchor: '```\ncode\n```'.length }
+		});
+		await tick();
+
+		await userEvent.keyboard('{Enter}');
+		await tick();
+
+		expect(onSubmit).toHaveBeenCalledTimes(1);
 	});
 
 	it('submits when the caret is before the opening fence', async () => {
@@ -72,13 +113,13 @@ describe('ChatForm Enter in code blocks', () => {
 
 		await tick();
 
-		const textarea = textareaIn(container);
+		const editor = editorIn(container);
 
-		await userEvent.click(textarea);
+		await userEvent.click(editor.contentDOM);
 		await userEvent.keyboard('```');
 		await tick();
 
-		textarea.setSelectionRange(0, 0);
+		editor.dispatch({ selection: { anchor: 0 } });
 
 		await userEvent.keyboard('{Enter}');
 		await tick();
@@ -92,9 +133,9 @@ describe('ChatForm Enter in code blocks', () => {
 
 		await tick();
 
-		const textarea = textareaIn(container);
+		const editor = editorIn(container);
 
-		await userEvent.click(textarea);
+		await userEvent.click(editor.contentDOM);
 		await userEvent.keyboard('hello');
 		await tick();
 
@@ -110,9 +151,9 @@ describe('ChatForm Enter in code blocks', () => {
 
 		await tick();
 
-		const textarea = textareaIn(container);
+		const editor = editorIn(container);
 
-		await userEvent.click(textarea);
+		await userEvent.click(editor.contentDOM);
 		await userEvent.keyboard('```');
 		await tick();
 
