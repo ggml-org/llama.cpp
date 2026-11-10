@@ -191,7 +191,7 @@ python convert_hf_to_gguf.py path/to/drama-3 --mmproj --outtype bf16 --outfile m
 [Zyphra ZONOS3 Mini](https://huggingface.co/Zyphra/ZONOS3-Mini): a hybrid Gated DeltaNet / attention MoE backbone (800M, 100M active) predicts the 10 codebooks of each frame with an inter-codebook delay, and the ZAC codec decodes them to 44.1 kHz audio.
 
 Available params:
-- `--tts-voice` picks one of the predefined voices of the release, the first one is used by default; `llama-server` lists them in `GET /props`
+- `--tts-voice` picks one of the predefined voices of the release (`Savannah_en-American_F_1` by default); `llama-server` lists them in `GET /props`. A voice is the prompt prefix of its reference codes, the default speaker mode of the reference
 - The language is the one of the text, `--tts-lang` is not used. Supply normalized text: numbers, dates and abbreviations are read as written
 - Note: `--tts-speaker-file` is not supported yet (voice cloning)
 - Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference: temperature 0.75 (`--temp` changes it), top-k 80, top-p 0.69, repetition penalty 2.4 over the last 96 frames of codebooks 0 to 5

@@ -2558,7 +2558,7 @@ struct mtmd_model_loader {
                         throw std::runtime_error(string_format("%s: zonos3: unexpected codebook table shape\n", __func__));
                     }
 
-                    // voice.<name>: the speaker row of the prompt
+                    // voice.<name>: the voice rows of the prompt
                     for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
                         const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
                         if (strncmp(name, "voice.", 6) != 0) {

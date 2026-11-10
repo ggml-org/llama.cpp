@@ -21,6 +21,7 @@ CODEC_HEAD      = Path("autoencoder") / "heads" / CODEC_VARIANT / "step_0050000.
 CODEC_STAGES    = [0, 2, 4, 6, 8]  # transformer stages of the decoder
 
 DEFAULT_VOICE = "Savannah_en-American_F_1"
+VOICE_MAX_FRAMES = 900  # reference_max_frames of the reference
 
 # GDN geometry, hard-coded in the reference (zonos3.reference.lm)
 GDN_HEADS, GDN_HEAD_DIM, GDN_KERNEL = 4, 128, 4
@@ -333,7 +334,6 @@ class Zonos3MmprojModel(MmprojModel):
         self.n_codebooks = hp["n_codebooks"]
         self.text_vocab  = hp["text_vocab"]
         self._embd: dict[str, Tensor] = {}
-        self._spk: dict[str, Tensor] = {}
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         return _index_lm_tensors(self)
@@ -341,7 +341,7 @@ class Zonos3MmprojModel(MmprojModel):
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, _ = item
-        if name.startswith(("multi_output.", "multi_embedder.", "speaker_projection.")):
+        if name.startswith(("multi_output.", "multi_embedder.")):
             return item
         return None
 
@@ -356,7 +356,7 @@ class Zonos3MmprojModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(0)
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(self.global_config["text_config"]["norm_eps"])
         self.gguf_writer.add_gen_audio_model_variant(CODEC_VARIANT)
-        if any(self.dir_model.glob(f"gguf/voices/*/{DEFAULT_VOICE}.embedding.npy")):
+        if any(self.dir_model.glob(f"gguf/voices/*/{DEFAULT_VOICE}.codes.npy")):
             self.gguf_writer.add_gen_audio_default_voice(DEFAULT_VOICE)
         # softcap and the codec hparams are hard-coded in tools/mtmd
 
@@ -429,17 +429,22 @@ class Zonos3MmprojModel(MmprojModel):
         yield (f"{p}.mixer.weight",   head["head.mixer.weight"].squeeze(0))
         yield (f"{p}.resample.weight", gen["to_external.kernel"].squeeze(1))
 
-    def _voices(self) -> Iterable[tuple[str, Tensor]]:
-        w = LazyTorchTensor.to_eager(self._spk["speaker_projection.weight"]).float()
-        b = LazyTorchTensor.to_eager(self._spk["speaker_projection.bias"]).float()
-        for path in sorted((self.dir_model / "gguf" / "voices").glob("*/*.embedding.npy")):
-            vec = torch.from_numpy(np.load(path, allow_pickle=False)).float().reshape(-1)
-            if vec.shape[0] != w.shape[1]:
-                logger.warning(f"voice {path.name}: skipped, expected a {w.shape[1]}-d embedding")
+    # "reference" speaker mode, the default of the reference: the voice is a prefix of delayed code rows
+    def _voices(self, tables: list[Tensor]) -> Iterable[tuple[str, Tensor]]:
+        n_cb, pad = self.n_codebooks, self.global_config["text_config"]["audio_pad_id"]
+        for path in sorted((self.dir_model / "gguf" / "voices").glob("*/*.codes.npy")):
+            codes = torch.from_numpy(np.load(path, allow_pickle=False).astype(np.int64))
+            if codes.ndim != 2 or codes.shape[1] != n_cb or codes.min() < 0 or codes.max() >= pad - 1:
+                logger.warning(f"voice {path.name}: skipped, expected [frames, {n_cb}] codes")
                 continue
-            name = path.name[:-len(".embedding.npy")]
-            # the speaker row of the prompt
-            yield (f"voice.{name}", (w @ vec + b).reshape(1, -1))
+            codes = codes[:VOICE_MAX_FRAMES]
+            n_frames = codes.shape[0]
+            # codebook cb of frame t is in row t + cb, the other cells are pad
+            rows = torch.full((n_frames + n_cb - 1, n_cb), pad, dtype=torch.int64)
+            for cb in range(n_cb):
+                rows[cb:cb + n_frames, cb] = codes[:, cb]
+            embd = sum(tables[cb][rows[:, cb]] for cb in range(n_cb))
+            yield (f"voice.{path.name[:-len('.codes.npy')]}", embd)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
@@ -452,12 +457,6 @@ class Zonos3MmprojModel(MmprojModel):
             yield (self.format_tensor_name(T.A_GEN_CODE_HEAD), data_torch)
             return
 
-        if name.startswith("speaker_projection."):
-            self._spk[name] = data_torch
-            if len(self._spk) == 2:
-                yield from self._voices()
-            return
-
         assert name.startswith("multi_embedder.")
         self._embd[name] = data_torch
         if len(self._embd) < self.n_codebooks + 1:
@@ -466,4 +465,5 @@ class Zonos3MmprojModel(MmprojModel):
         tables = [self._embd[f"multi_embedder.embedders.{cb}.weight"].float() for cb in range(self.n_codebooks)]
         tables[0] = tables[0] + self._embd[f"multi_embedder.embedders.{self.n_codebooks}.weight"][self.text_vocab].float()
         yield (self.format_tensor_name(T.A_GEN_CODE_OUT_EMBD), torch.cat(tables, dim=0))
+        yield from self._voices([LazyTorchTensor.to_eager(t) for t in tables])
         self._embd.clear()

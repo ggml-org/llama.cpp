@@ -2464,7 +2464,7 @@ public:
             return 1;
         }
 
-        // prompt: [speaker row] [condition rows] BOS text EOS [silence rows]
+        // prompt: [voice rows] [condition rows] BOS text EOS [silence rows]
         if (inp->speaker_ref) {
             segment seg;
             if (!encode_speaker(inp->speaker_ref, seg.embd)) {
