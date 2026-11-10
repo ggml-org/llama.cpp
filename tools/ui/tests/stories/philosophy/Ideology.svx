@@ -81,7 +81,7 @@ It is the difference between steel and a car, as [Clément Delangue put it](http
 
 So the application is the layer that most needs to be built in the open: its code public, its behaviour tested and judged by the people who use it, and anyone free to change it. That is why Llama Chat and Llama UI are open source.
 
-The **harness**, the agentic loop and the tools it can call, bridges the application and inference: the loop runs in the app, and its tools run in the app or in llama-server.
+The **harness**, the agentic loop and the tools it can call, bridges the application and inference: the loop runs in the app, as its own package, Llama Harness, and its tools run in the app or in llama-server.
 
 <Figure n={6} caption="The three layers, from the one people use down to the weights, with the Llama part on each.">
 	<Layers />

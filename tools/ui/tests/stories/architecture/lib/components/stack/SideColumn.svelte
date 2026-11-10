@@ -24,8 +24,8 @@
 <text class="t" x="890" y="284">llama-server</text>
 <text class="s" x="890" y="306">by URL: https:// or localhost</text>
 <rect class="box" height="70" rx="8" width="204" x="876" y="340" />
-<text class="t" x="890" y="368">llama-server --connect</text>
-<text class="s" x="890" y="390">paired by code/QR, WebRTC</text>
+<text class="t" x="890" y="368">Llama Connect</text>
+<text class="s" x="890" y="390">paired by code or QR</text>
 <path class="wire" d="M828,324 H857" marker-end="url(#stack-ah)" />
 
 <rect class="b-be band" height="176" rx="14" width="236" x="860" y="492" />

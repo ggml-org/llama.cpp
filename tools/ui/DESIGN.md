@@ -715,7 +715,8 @@ warning, error and info), destructive actions, and the content itself.
 
 There are three layers between a person and a model: the **model** (the weights, a GGUF
 file), the **service** (the server that runs inference: llama.cpp and llama-server) and the
-**application** (the harness, the UI and UX). Llama UI and Llama Chat are the application
+**application** (the harness, the UI and UX). The harness, the agentic loop, is its own headless
+package, Llama Harness (`@ggml/llama-harness`), next to Llama UI (`@ggml/llama-ui`). Llama UI and Llama Chat are the application
 layer. Running all three locally is the point: people choose their model and keep their
 conversations and traces, so the UI never assumes a cloud account or hides which model runs.
 The service need not be on the same machine: a server can be run by one person and shared by

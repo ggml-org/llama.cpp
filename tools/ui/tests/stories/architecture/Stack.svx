@@ -17,7 +17,7 @@
 
 # One library, many apps
 
-Llama UI is the design system and component library: UI and UX, no business logic. [Llama Chat](/chat/) is one application built on it, the WebUI we ship today. Other apps can follow on the same parts. The llama.app website uses the same library, so models look and behave the same everywhere. Splitting library from apps lets anyone build their own app on the Llama stack, and lets Chat ship in more places.
+Llama UI is the design system and component library: UI and UX, no business logic. [Llama Chat](/chat/) is one application built on it, the WebUI we ship today. Other apps can follow on the same parts. The llama.app website uses the same library, so models look and behave the same everywhere. The agentic loop is a package of its own, Llama Harness (`@ggml/llama-harness`), so an app can run it or bring its own. Splitting library, harness and apps lets anyone build their own app on the Llama stack, and lets Chat ship in more places.
 
 <Legend />
 
@@ -25,7 +25,7 @@ Llama UI is the design system and component library: UI and UX, no business logi
 
 <Rule title="Llama UI draws and handles interaction. Apps decide what happens.">
 <RuleSide side="lib" title="In Llama UI">Components, design tokens and the logic inside them: multi-step flows, drag to reorder, keyboard navigation, validation as you type, formatting a file size, checking whether a model fits in memory.</RuleSide>
-<RuleSide side="app" title="In the apps">Talking to llama-server, storing conversations and notes, the agentic loop and tool permissions, managing models and servers. Components get data in and report what the user did out.</RuleSide>
+<RuleSide side="app" title="In the apps">Talking to llama-server, storing conversations and notes, running the agentic loop through Llama Harness and gating its tools, managing models and servers. Components get data in and report what the user did out.</RuleSide>
 </Rule>
 
 <Cards cols={2}>
@@ -41,6 +41,7 @@ proposed
 ui/
 ├── lib/             @ggml/llama-ui
 │                    → ui.llama.app
+├── harness/         @ggml/llama-harness
 └── apps/
     ├── chat/        @ggml/llama-chat
     │                + npx llama-chat
@@ -77,3 +78,18 @@ The library draws the parts and handles interaction. The app owns the state and 
 
 </Card>
 </Cards>
+
+## Llama Harness
+
+The agentic loop moves out of Chat into its own package, `@ggml/llama-harness`: headless TypeScript, no UI and no DOM. It needs an OpenAI-compatible endpoint, not llama-server specifically; model loading, `/props` and server tools are capabilities it detects and works without. The same loop runs in the browser, in Node and in the native apps.
+
+```ts
+interface Harness {
+  run(messages, tools, signal): AsyncIterable<HarnessEvent>
+}
+
+// HarnessEvent
+text · reasoning · tool_call · tool_result · done · error
+```
+
+The loop is swappable: an app can put its own behind the same contract. The tools and the approval gate sit above it, so every loop gets the same ones: built-in tools in the app, `server.*` tools listed by llama-server, `mcp.<name>.*` tools from the MCP servers you add, and tools declared in JSON. One loop owns approvals, cancellation and history; llama-server offers tools but never runs a loop of its own.

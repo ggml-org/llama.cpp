@@ -52,7 +52,7 @@ Manager, Discover from Hugging Face, downloads, configuration pane.
 
 `/servers`
 
-llama.cpp servers by URL or paired by code/QR.
+llama.cpp servers by URL or through Llama Connect, paired by code or QR.
 
 </Card>
 <Card title="MCP · Settings · Search">
@@ -66,7 +66,7 @@ MCP servers and resources, settings sections, conversation search.
 
 ## How a message travels
 
-The agentic loop lives in the browser. It streams from the active server and runs any tool the model calls: in the browser, on llama-server, or on an MCP server.
+The agentic loop lives in the browser, and moves into [Llama Harness](/stack/) (`@ggml/llama-harness`). It streams from the active server and runs any tool the model calls: in the browser, on llama-server, or on an MCP server.
 
 <MessageFlow />
 
@@ -87,8 +87,9 @@ The agentic loop lives in the browser. It streams from the active server and run
 
 ## What Chat keeps, what it hands off
 
-<Cards cols={2}>
-<Card title="Keeps">All business logic: conversations, tabs, groups, search, the agentic loop with tools, MCP and permission gates, projects, the models manager, Discover, downloads, model configuration and Servers.</Card>
+<Cards>
+<Card title="Keeps">All business logic: conversations, tabs, groups, search, tools, MCP and permission gates, projects, the models manager, Discover, downloads, model configuration and Servers.</Card>
+<Card title="Gives the harness">The agentic loop, as `@ggml/llama-harness`: headless, no UI. Chat keeps the tools and the approval gate above it.</Card>
 <Card title="Gives the library">Presentation only: thread, composer, tool-call blocks, permission prompt, model selector, model card, capability badges. They take data in and report what the user did out.</Card>
 </Cards>
 

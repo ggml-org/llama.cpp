@@ -15,14 +15,14 @@
 Llama Chat is a SvelteKit app built with `adapter-static`: plain HTML, JS and CSS in one `dist` folder. Each release builds it once and ships the same folder three ways. Only the thing serving it changes.
 
 <Callout title="npx llama-chat and chat.llama.app are the client only">
-They carry the UI and nothing else: no llama-server, no models, no inference. On first open they are connected to nothing; you add a llama-server by URL, or pair one, before you can chat. Only the bundled channel comes with its own server.
+They carry the UI and nothing else: no llama-server, no models, no inference. On first open they are connected to nothing; you add a llama-server by URL, or pair one through Llama Connect, before you can chat. Only the bundled channel comes with its own server.
 </Callout>
 
 <ReleaseDiagram />
 
 ## How the channels differ
 
-The app works out its mode at runtime: if same-origin `/props` answers as llama.cpp it runs bundled; otherwise it runs hosted and opens on "add or pair a server". No build flags.
+The app works out its mode at runtime: if same-origin `/props` answers as llama.cpp it runs bundled; otherwise it runs hosted and opens on "add a server or pair one through Llama Connect". No build flags.
 
 |  | Bundled in llama-server | npx llama-chat | chat.llama.app |
 | --- | --- | --- | --- |
@@ -30,10 +30,16 @@ The app works out its mode at runtime: if same-origin `/props` answers as llama.
 | Origin | the server's own address | `http://localhost:<port>` | `https://chat.llama.app` |
 | Comes with a server | yes, it is the server | no: UI only, add a llama-server | no: UI only, add a llama-server |
 | Needs | llama-server, or a native app | Node | a browser |
-| Reaches servers | its own, same origin; others via Providers | localhost and plain `http://` LAN servers by URL | `https://` and localhost by URL; anything else by pairing |
+| Reaches servers | its own, same origin; others via Providers | localhost and plain `http://` LAN servers by URL | `https://` and localhost by URL; anything else through Llama Connect |
 | Response headers | set in `server-http.cpp` | set by the CLI | what the host allows |
 | Chats stored | per server address | per localhost port | at chat.llama.app |
-| Best for | "I run llama-server" or a native app | a server elsewhere on my network, offline use | trying it with no install, phones, pairing |
+| Best for | "I run llama-server" or a native app | a server elsewhere on my network, offline use | trying it with no install, phones, Llama Connect |
+
+## Llama Connect
+
+Llama Connect pairs an app with a llama-server it cannot reach by URL: one started with `--connect` shows a code or QR, the app scans or types it, and the two talk directly over WebRTC. It is how chat.llama.app reaches a server behind a home router, and how a phone reaches the laptop next to it.
+
+Conversations come with it. Chats stored on the device that runs the server, a laptop say, can be shared through Llama Connect and continued on a phone, then picked up again on the laptop.
 
 Why npx still matters next to the hosted site: an `https://` page cannot call a plain `http://` server on the LAN (browsers block it as mixed content). A page served from `http://localhost` can.
 

@@ -18,7 +18,7 @@
 	// the harness, laid across the line between the application and inference: each part on the side it runs on
 	const loop: Part = {
 		name: 'Agentic loop',
-		note: 'In Llama Chat: calls tools and feeds back their results'
+		note: 'Llama Harness, its own package: calls tools and feeds back their results'
 	};
 	const browser: Part = { name: 'Browser tools', note: 'Run in the page, on your device' };
 	const server: Part = { name: 'Server tools', note: 'Run by llama-server, next to the model' };
