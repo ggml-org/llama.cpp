@@ -6305,11 +6305,10 @@ void server_routes::init_routes() {
                         send_error_event("invalid base64 audio", "invalid_request_error");
                         continue;
                     }
-                    std::vector<float> samples(pcm.size() / 2);
-                    for (size_t i = 0; i < samples.size(); i++) {
-                        int16_t v;
-                        memcpy(&v, pcm.data() + 2 * i, sizeof(v));
-                        samples[i] = v / 32768.0f;
+                    std::vector<float> samples;
+                    if (!pcm_s16_to_f32(pcm, samples)) {
+                        send_error_event("audio must hold whole PCM16 samples, got an odd number of bytes", "invalid_request_error");
+                        continue;
                     }
                     if (!resampler) {
                         resampler.reset(mtmd_helper_resampler_init(input_rate, model_rate));

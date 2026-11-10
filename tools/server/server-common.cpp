@@ -215,6 +215,19 @@ std::string pcm_f32_to_s16(const float * samples, size_t n) {
     return bytes;
 }
 
+bool pcm_s16_to_f32(const std::string & bytes, std::vector<float> & samples) {
+    if (bytes.size() % 2 != 0) {
+        return false;
+    }
+    samples.resize(bytes.size() / 2);
+    for (size_t i = 0; i < samples.size(); i++) {
+        int16_t v;
+        memcpy(&v, bytes.data() + 2 * i, sizeof(v));
+        samples[i] = v / 32768.0f;
+    }
+    return true;
+}
+
 //
 // model output modalities
 //
