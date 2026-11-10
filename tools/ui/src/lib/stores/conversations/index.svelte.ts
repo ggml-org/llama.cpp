@@ -9,7 +9,7 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { ROUTES } from '$lib/constants';
+import { NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
 import { DatabaseService } from '$lib/services/database.service';
@@ -636,10 +636,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. The
-	 * chat layout opens a new-chat tab for it when Conversation tabs are on.
+	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. With
+	 * Conversation tabs on, it opens in a tab of its own, like the tab bar's
+	 * "+", and the open chat keeps its tab.
 	 */
 	async openNewChat(): Promise<void> {
+		if (settingsStore.config.conversationTabs) await tabsStore.openInNewTab(NEW_CHAT_TAB_ID);
+
 		this.clearActiveConversation();
 		await goto(ROUTES.START);
 	}
