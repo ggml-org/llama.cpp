@@ -5,11 +5,11 @@
 #include "mmf.cuh"
 #include "convert.cuh"
 
-static __device__ __forceinline__ float2 mmvf_load_fp8x2(const ggml_fp8_e4m3_t * x) {
+static __device__ __forceinline__ float2 mmvf_load_fp8x2(const ggml_fp8_e4m3_t * x, const int col2) {
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-    return ggml_cuda_cast<float2>(*reinterpret_cast<const __nv_fp8x2_e4m3 *>(x));
+    return ggml_cuda_cast<float2>(reinterpret_cast<const __nv_fp8x2_e4m3 *>(x)[col2]);
 #else
-    return make_float2(ggml_cuda_cast<float>(x[0]), ggml_cuda_cast<float>(x[1]));
+    return make_float2(ggml_cuda_cast<float>(x[2*col2]), ggml_cuda_cast<float>(x[2*col2 + 1]));
 #endif
 }
 
@@ -327,11 +327,11 @@ static __global__ void mul_mat_vec_f(
     } else if constexpr (std::is_same_v<T, ggml_fp8_e4m3_t>) {
         const float2 * y2 = (const float2 *) y;
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
-            const float2 tmpx = mmvf_load_fp8x2(x + 2*col2);
+            const float2 tmpx = mmvf_load_fp8x2(x, col2);
             float2 tmpx_gate = {};
             if constexpr (has_fusion) {
                 if (use_gate) {
-                    tmpx_gate = mmvf_load_fp8x2(gate_x + 2*col2);
+                    tmpx_gate = mmvf_load_fp8x2(gate_x, col2);
                 }
             }
 #pragma unroll
