@@ -117,7 +117,7 @@ const char * get_media_marker();
 // float samples to signed 16-bit PCM bytes, clamped to [-1, 1]
 std::string pcm_f32_to_s16(const float * samples, size_t n);
 
-// signed 16-bit PCM bytes to float samples, false if the bytes don't hold whole samples
+// signed 16-bit PCM bytes to float samples, false if the byte count is odd
 bool pcm_s16_to_f32(const std::string & bytes, std::vector<float> & samples);
 
 //

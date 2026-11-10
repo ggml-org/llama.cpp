@@ -6307,7 +6307,7 @@ void server_routes::init_routes() {
                     }
                     std::vector<float> samples;
                     if (!pcm_s16_to_f32(pcm, samples)) {
-                        send_error_event("audio must hold whole PCM16 samples, got an odd number of bytes", "invalid_request_error");
+                        send_error_event("invalid PCM16 audio: odd number of bytes", "invalid_request_error");
                         continue;
                     }
                     if (!resampler) {

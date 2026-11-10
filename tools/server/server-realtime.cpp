@@ -359,7 +359,7 @@ struct realtime_conversation {
         }
         std::vector<float> samples;
         if (!pcm_s16_to_f32(pcm, samples)) {
-            send_error("audio must hold whole PCM16 samples, got an odd number of bytes");
+            send_error("invalid PCM16 audio: odd number of bytes");
             return;
         }
         if (samples.empty()) {

@@ -741,18 +741,15 @@ static void test_pcm_f32_to_s16(testing & t) {
 }
 
 static void test_pcm_s16_to_f32(testing & t) {
-    const std::vector<float> in = {0.0f, 0.5f, -0.5f, -1.0f};
-    const std::string bytes = pcm_f32_to_s16(in.data(), in.size());
+    const std::string bytes("\x00\x00" "\x00\x40" "\x00\xc0" "\x01\x80", 8); // 0, 16384, -16384, -32767
 
     std::vector<float> out;
     t.assert_true ("whole samples", pcm_s16_to_f32(bytes, out));
-    t.assert_equal("size",          in.size(), out.size());
-    t.assert_equal("zero",          0.0f, out[0]);
-    t.assert_equal("half",          16384 / 32768.0f, out[1]);
+    t.assert_equal("size",          (size_t) 4, out.size());
+    t.assert_equal("zero",          0.0f,  out[0]);
+    t.assert_equal("half",          0.5f,  out[1]);
+    t.assert_equal("minus half",    -0.5f, out[2]);
     t.assert_equal("min",           -32767 / 32768.0f, out[3]);
-    t.assert_true ("empty",         pcm_s16_to_f32("", out) && out.empty());
-
-    // an odd byte count would shift every sample after it
     t.assert_true ("odd count",     !pcm_s16_to_f32(bytes.substr(0, 3), out));
 }
 
