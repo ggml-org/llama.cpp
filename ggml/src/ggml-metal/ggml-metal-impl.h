@@ -1026,6 +1026,17 @@ typedef struct {
     uint64_t nb2;
     uint64_t nb3;
     uint64_t nb_out; // 0 => snapshots are appended after the attn scores (unfused)
+    int32_t  n_pend; // replay: pending tokens per seq in pend_k, pend_v and pend_gb
+    int32_t  keep;   // replay: write the state after the replay, not the final one
+    uint64_t nb61;   // pend_k
+    uint64_t nb62;
+    uint64_t nb63;
+    uint64_t nb71;   // pend_v
+    uint64_t nb72;
+    uint64_t nb73;
+    uint64_t nb81;   // pend_gb
+    uint64_t nb82;
+    uint64_t nb83;
 } ggml_metal_kargs_gated_delta_net;
 
 typedef struct {
