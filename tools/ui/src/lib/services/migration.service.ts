@@ -19,6 +19,7 @@ import {
 	LEGACY_AGENTIC_REGEX,
 	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
+	SEARCH_CHATS_TOOL_KEY,
 	SETTINGS_KEYS,
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
@@ -829,6 +830,46 @@ const mcpServerOverridesToToolPolicyMigration: Migration = {
 			);
 	}
 };
+const SEARCH_CHATS_DEFAULT_DISABLED_MIGRATION_ID = 'search-chats-default-disabled-v1';
+const searchChatsDefaultDisabledMigration: Migration = {
+	description: 'Disable the search_chats tool by default, globally and in existing conversations',
+	id: SEARCH_CHATS_DEFAULT_DISABLED_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		// tool policy is a deny-list, so a new tool is enabled everywhere unless its key is added to the defaults and to each conversation
+		let defaults: string[] = [];
+
+		try {
+			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+			const parsed: unknown = raw ? JSON.parse(raw) : [];
+
+			if (Array.isArray(parsed))
+				defaults = parsed.filter((k): k is string => typeof k === 'string');
+		} catch {
+			// unreadable defaults are replaced below
+		}
+
+		if (!defaults.includes(SEARCH_CHATS_TOOL_KEY)) {
+			localStorage.setItem(
+				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+				JSON.stringify([...defaults, SEARCH_CHATS_TOOL_KEY])
+			);
+		}
+
+		const db = await getDatabaseService();
+		const conversations = await db.getAllConversations();
+
+		for (const conv of conversations) {
+			const disabledTools = conv.disabledTools ?? [];
+
+			if (disabledTools.includes(SEARCH_CHATS_TOOL_KEY)) continue;
+
+			await db.updateConversation(conv.id, {
+				disabledTools: [...disabledTools, SEARCH_CHATS_TOOL_KEY]
+			});
+		}
+	}
+};
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -840,7 +881,8 @@ const migrations: Migration[] = [
 	configTypesMigration,
 	renderKeysMigration,
 	modelOrgNameKeyMigration,
-	mcpServerOverridesToToolPolicyMigration
+	mcpServerOverridesToToolPolicyMigration,
+	searchChatsDefaultDisabledMigration
 ];
 
 export const MigrationService = {

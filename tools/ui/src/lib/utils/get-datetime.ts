@@ -13,7 +13,7 @@ function pad(value: number): string {
 }
 
 /** ISO 8601 in local time, e.g. `2026-08-17T14:05:09+02:00` */
-function localIsoString(date: Date): string {
+export function localIsoString(date: Date): string {
 	// getTimezoneOffset() counts minutes behind UTC, ISO 8601 counts them ahead
 	const offset = -date.getTimezoneOffset();
 	const sign = offset < 0 ? '-' : '+';

@@ -45,6 +45,7 @@ export enum BuiltInTool {
 	BROWSER_GET_DATETIME = 'get_datetime',
 	BROWSER_READ_MEDIA = 'read_media',
 	BROWSER_RUN_JAVASCRIPT = 'run_javascript',
+	BROWSER_SEARCH_CHATS = 'search_chats',
 	SERVER_EDIT_FILE = 'edit_file',
 	SERVER_EXEC_SHELL_COMMAND = 'exec_shell_command',
 	SERVER_FILE_GLOB_SEARCH = 'file_glob_search',
@@ -52,4 +53,17 @@ export enum BuiltInTool {
 	SERVER_GREP_SEARCH = 'grep_search',
 	SERVER_READ_FILE = 'read_file',
 	SERVER_WRITE_FILE = 'write_file'
+}
+
+/** Wire values of the `search_chats` `message_selection` parameter */
+export enum SearchChatsMessageSelection {
+	EARLIEST = 'earliest',
+	LATEST = 'latest',
+	MATCHING = 'matching'
+}
+
+/** Wire values of the `search_chats` `order_timestamp` parameter */
+export enum SearchChatsOrder {
+	ASC = 'asc',
+	DESC = 'desc'
 }
