@@ -46,6 +46,11 @@ GGML_BACKEND_API bool ggml_backend_is_metal(ggml_backend_t backend);
 
 GGML_BACKEND_API void ggml_backend_metal_set_abort_callback(ggml_backend_t backend, ggml_abort_callback abort_callback, void * user_data);
 
+// force a single, fixed kernel path for ops whose reduction order would otherwise depend on
+// batch size (like MUL_MAT), so that the output for a given row is bit-identical regardless of
+// what else is batched alongside it. needed to verify batch invariance for speculative decoding.
+GGML_BACKEND_API void ggml_backend_metal_set_batch_invariant(ggml_backend_t backend, bool batch_invariant);
+
 // helper to check if the device supports a specific family
 // ideally, the user code should be doing these checks
 // ref: https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf

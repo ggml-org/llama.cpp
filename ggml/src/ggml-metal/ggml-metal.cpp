@@ -717,6 +717,14 @@ void ggml_backend_metal_set_abort_callback(ggml_backend_t backend, ggml_abort_ca
     ggml_metal_set_abort_callback(ctx, abort_callback, user_data);
 }
 
+void ggml_backend_metal_set_batch_invariant(ggml_backend_t backend, bool batch_invariant) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+
+    ggml_metal_t ctx = (ggml_metal_t)backend->context;
+
+    ggml_metal_set_batch_invariant(ctx, batch_invariant);
+}
+
 bool ggml_backend_metal_supports_family(ggml_backend_t backend, int family) {
     GGML_ASSERT(ggml_backend_is_metal(backend));
 
@@ -1015,6 +1023,9 @@ static void ggml_backend_metal_fusion_set_enabled(ggml_backend_fusion_t finfo, b
 static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_metal_get_features;
+    }
+    if (strcmp(name, "ggml_backend_set_batch_invariant") == 0) {
+        return (void *)ggml_backend_metal_set_batch_invariant;
     }
     if (strcmp(name, "ggml_backend_metal_tuning_set_fa_vec_override") == 0) {
         return (void *)ggml_backend_metal_tuning_set_fa_vec_override;
