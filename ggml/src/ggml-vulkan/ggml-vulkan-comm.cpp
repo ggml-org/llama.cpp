@@ -18,7 +18,7 @@ static bool ggml_vk_comm_needs_f32(const ggml_tensor * t, int depth = 0) {
     switch (t->op) {
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
-            return ggml_get_op_params_i32(t, 0) == GGML_PREC_BF16 || ggml_get_op_params_i32(t, 0) == GGML_PREC_F32;
+            return ggml_prec_get_acc(t) == GGML_PREC_BF16 || ggml_prec_get_acc(t) == GGML_PREC_F32;
         case GGML_OP_ADD:
             return ggml_vk_comm_needs_f32(t->src[0], depth + 1) || ggml_vk_comm_needs_f32(t->src[1], depth + 1);
         case GGML_OP_MUL:
