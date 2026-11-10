@@ -2769,13 +2769,12 @@ static bool ggml_metal_op_mul_mat_tiled_ok(const ggml_tensor * op) {
         return false;
     }
 
-    // q8_0 tiling stays OFF. The kernel is verified bit-exact standalone at the model's own shape
-    // (M=2048, N=256/512, K=2048, rel ~2e-6) and test-backend-ops passes with the guards below,
-    // yet enabling it in the real graph turns an English prompt into Chinese garbage in one 19 s
-    // repro. Something in the integrated path (buffer aliasing, fusion, or an op shape not yet
-    // identified) disagrees; do not re-enable until that is isolated.
-    if (tsrc0 == GGML_TYPE_Q8_0 && getenv("GGML_METAL_Q8_TILED") == nullptr) {
-        return false;
+    // q8_0 shares the q4_K tile geometry; GGML_METAL_Q8_TILED=0 disables the path.
+    {
+        const char * q8_env = getenv("GGML_METAL_Q8_TILED");
+        if (tsrc0 == GGML_TYPE_Q8_0 && q8_env != nullptr && q8_env[0] == '0') {
+            return false;
+        }
     }
 
     if (op->src[2] != nullptr ||
@@ -6331,7 +6330,9 @@ int ggml_metal_op_mul_mat_tiled(ggml_metal_op_t ctx, int idx) {
         /*.r3   =*/ (int16_t) 1,
     };
 
-    const bool  is_q4  = op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q6_K;
+    // q8_0 uses the same 64x64 tile and 256 threads as q4_K
+    const bool  is_q4  = op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q6_K ||
+                         op->src[0]->type == GGML_TYPE_Q8_0;
     auto pipeline = ggml_metal_library_get_pipeline_mul_mat_tiled(lib, op->src[0]->type);
 
     // q4_K: 64x64 tile with BK=32 (one sub-block) and 256 threads.
