@@ -103,8 +103,10 @@
 		{#if showIcons}
 			<div transition:fade={itemTransition}>
 				<Button
-					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
-						? 'bg-accent text-accent-foreground'
+					class="w-full min-w-9 justify-between px-2 backdrop-blur-none! hover:[&>kbd]:opacity-100 rounded-(--surface-row-radius) max-md:h-12 max-md:rounded-2xl max-md:px-3 max-md:text-[17px] {isActive
+						? // raised and edged, where a hover only tints: bg-accent matched the hover in light
+							// and sank below an inset group's fill in dark
+							'bg-background text-accent-foreground shadow-sm ring-1 ring-border/50 hover:bg-background dark:bg-foreground/15 dark:hover:bg-foreground/15'
 						: ''}"
 					href={item.route}
 					onclick={() => {

@@ -15,7 +15,8 @@
 		Logo,
 		ModelsManagerModelDrawer,
 		SidebarNavigationActions,
-		SidebarNavigationConversationList
+		SidebarNavigationConversationList,
+		SidebarNavigationFooter
 	} from '$lib/components/app';
 	import {
 		ROUTES,
@@ -694,15 +695,10 @@
 					/>
 				</div>
 
-				<!-- the footer: managing the app around the chats, grouped in an inset surface at
-				     the bottom of the sidebar and of its collapsed strip alike (a phone lists its
-				     items with the actions above) -->
+				<!-- the footer, at the bottom of the sidebar and of its collapsed strip alike (a
+				     phone lists its items with the actions above) -->
 				{#if !isOnMobile}
-					<SidebarNavigationActions
-						class="rounded-xl border border-border/20 bg-background/55 shadow-sm dark:bg-foreground/5 mx-2 mb-2 p-1"
-						items={SIDEBAR_FOOTER_ITEMS}
-						onAction={handleSidebarAction}
-					/>
+					<SidebarNavigationFooter onAction={handleSidebarAction} />
 				{/if}
 			</div>
 		</div>
