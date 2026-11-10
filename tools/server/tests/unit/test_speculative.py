@@ -265,3 +265,22 @@ def test_draft_token_probs():
         assert abs(tok_draft["logprob"] - tok_no_draft["logprob"]) < 0.25
     # real logprobs are not all exactly 0.0 (prob 1.0)
     assert any(tok["logprob"] < -1e-4 for tok in probs_draft)
+
+
+def test_draft_larger_than_batch():
+    # the draft must be capped to the batch space left after the sampled token, otherwise the batch overflows
+    global server
+    server.spec_draft_n_max = 16
+    server.spec_draft_n_min = 0
+    server.n_batch = 8
+    server.n_ubatch = 8
+    server.n_ctx = 1024
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "top_k": 1,
+        "n_predict": 16,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
