@@ -84,9 +84,13 @@ struct context {
         // inherit variables (for example, when entering a new scope)
         env(mk_val<value_object>(*parent.env)) {}
 
+    value find_val(const std::string & name) {
+        return env->find(mk_val<value_string>(name));
+    }
+
     value get_val(const std::string & name) {
-        value default_val = mk_val<value_undefined>(name);
-        return env->at(name, default_val);
+        auto result = find_val(name);
+        return result ? result : mk_val<value_undefined>(name);
     }
 
     void set_val(const std::string & name, const value & val) {
@@ -328,11 +332,8 @@ struct member_expression : public expression {
     statement_ptr property;
     bool computed; // true if obj[expr] and false if obj.prop
 
-    member_expression(statement_ptr && object, statement_ptr && property, bool computed)
-        : object(std::move(object)), property(std::move(property)), computed(computed) {
-        chk_type<expression>(this->object);
-        chk_type<expression>(this->property);
-    }
+    value static_property;
+    member_expression(statement_ptr && object, statement_ptr && property, bool computed);
     std::string type() const override { return "MemberExpression"; }
     value execute_impl(context & ctx) const override;
     void visit(context & ctx) const override {
@@ -376,29 +377,32 @@ struct identifier : public expression {
 
 struct integer_literal : public expression {
     int64_t val;
-    explicit integer_literal(int64_t val) : val(val) {}
+    const value constant;
+
+    explicit integer_literal(int64_t val) : val(val), constant(mk_val<value_int>(val)) {}
     std::string type() const override { return "IntegerLiteral"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_int>(val);
-    }
+
+    value execute_impl(context & ctx) const override { return ctx.is_get_stats ? mk_val<value_int>(val) : constant; }
 };
 
 struct float_literal : public expression {
     double val;
-    explicit float_literal(double val) : val(val) {}
+    const value constant;
+
+    explicit float_literal(double val) : val(val), constant(mk_val<value_float>(val)) {}
     std::string type() const override { return "FloatLiteral"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_float>(val);
-    }
+
+    value execute_impl(context & ctx) const override { return ctx.is_get_stats ? mk_val<value_float>(val) : constant; }
 };
 
 struct string_literal : public expression {
     std::string val;
-    explicit string_literal(const std::string & val) : val(val) {}
+    const value constant;
+
+    explicit string_literal(const std::string & val) : val(val), constant(mk_val<value_string>(val)) {}
     std::string type() const override { return "StringLiteral"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_string>(val);
-    }
+
+    value execute_impl(context & ctx) const override { return ctx.is_get_stats ? mk_val<value_string>(val) : constant; }
 };
 
 struct array_literal : public expression {
@@ -748,7 +752,7 @@ static void gather_string_parts_recursive(const value & val, value_string & part
     } else if (is_val<value_array>(val) && depth >= JINJA_RECURSIVE_LIMIT) {
         throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
-        auto items = cast_val<value_array>(val)->as_array();
+        const auto & items = cast_val<value_array>(val)->as_array();
         for (const auto & item : items) {
             gather_string_parts_recursive(item, parts, depth + 1);
         }

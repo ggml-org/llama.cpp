@@ -1,19 +1,18 @@
-#include <string>
-#include <iostream>
-#include <random>
-#include <cstdlib>
-
 #include "chat-tts-norm.h"
+#include "jinja/caps.h"
+#include "jinja/lexer.h"
+#include "jinja/parser.h"
+#include "jinja/runtime.h"
+#include "jinja/utils.h"
 #include "json.h"
 #include "subproc.h"
-
-#include "jinja/runtime.h"
-#include "jinja/parser.h"
-#include "jinja/lexer.h"
-#include "jinja/utils.h"
-#include "jinja/caps.h"
-
 #include "testing.h"
+
+#include <cstdlib>
+#include <future>
+#include <iostream>
+#include <random>
+#include <string>
 
 using json = common_json;
 
@@ -41,6 +40,8 @@ static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 static void test_tts_norm_patterns(testing & t);
+
+static void test_shared_render(testing & t);
 
 static bool g_python_mode = false;
 
@@ -79,6 +80,7 @@ int main(int argc, char *argv[]) {
     t.test("object methods", test_object_methods);
     t.test("tts norm patterns", test_tts_norm_patterns);
     if (!g_python_mode) {
+        t.test("shared render", test_shared_render);
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
         t.test("caps", test_caps);
@@ -87,6 +89,47 @@ int main(int argc, char *argv[]) {
     }
 
     return t.summary();
+}
+
+static void test_shared_render(testing & t) {
+    t.test("shared AST with stats and input marking", [](testing & t) {
+        const std::string source =
+            "{% macro emit(x) %}{{ x }}{% endmacro %}{% for i in range(2) %}{{ emit(prefix) }}{{ i }}{% endfor %}{% "
+            "filter upper %}{{ body }}{% endfilter %}|{{ 'literal' is string }}|{{ obj.value }}";
+        const auto                     program = jinja::parse_from_tokens(jinja::lexer().tokenize(source));
+        std::vector<std::future<bool>> workers;
+        for (int worker = 0; worker < 8; ++worker) {
+            workers.push_back(std::async(std::launch::async, [&, worker] {
+                const auto prefix = "p" + std::to_string(worker);
+                for (int i = 0; i < 25; ++i) {
+                    jinja::context ctx(source);
+                    ctx.is_get_stats = i % 2 != 0;
+                    const json input = {
+                        { "prefix", prefix },
+                        { "body", "hi" },
+                        { "obj", { { "value", "V" } } }
+                    };
+                    jinja::global_from_json(ctx, input, true);
+                    const auto result = jinja::runtime::gather_string_parts(jinja::runtime(ctx).execute(program));
+                    if (result->as_string().str() != prefix + "0" + prefix + "1HI|True|V") {
+                        return false;
+                    }
+                    if (ctx.get_val("obj")->at("value")->stats.used != ctx.is_get_stats) {
+                        return false;
+                    }
+                    if (result->val_str.parts.empty() || !result->val_str.parts.front().is_input ||
+                        !result->val_str.parts.back().is_input) {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+        }
+        for (auto & worker : workers) {
+            t.assert_true("request-local state", worker.get());
+        }
+    });
+
 }
 
 static void test_whitespace_control(testing & t) {
