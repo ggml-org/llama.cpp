@@ -84,6 +84,9 @@ RUN apt-get update \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
 
+# Some hosts (e.g. GKE) only mount the driver here, and CUDA 12.8.1-12.9.1 base images don't set these paths
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH}
+
 COPY --from=build /app/lib/ /app
 
 ### Full

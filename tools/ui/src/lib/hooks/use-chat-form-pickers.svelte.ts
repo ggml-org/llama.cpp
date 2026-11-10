@@ -20,6 +20,8 @@ export interface UseChatFormPickersOptions {
 	getCaretOffset: () => number | undefined;
 	setCaretOffset: (offset: number) => void;
 	focusInput: () => void;
+	/** Whether typing `/` or `@` opens a picker at all. */
+	opensOnInput: () => boolean;
 	/** Gates `/model`. */
 	getShowModelSelector: () => boolean;
 	/** Gates `/prompt`. */
@@ -118,6 +120,8 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	}
 
 	function handleInput() {
+		if (!opts.opensOnInput()) return;
+
 		const value = opts.getValue();
 		const cursor = opts.getCaretOffset() ?? value.length;
 

@@ -6,7 +6,7 @@
 		ModelsTableGroup
 	} from '$lib/components/app/models/ModelsManager/utils';
 	import { MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
-	import { ModelGroupKind, ModelsTableGroupKind } from '$lib/enums';
+	import { ModelGroupKind, ModelsTableGroupKind, ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores/models/index.svelte';
 	import type { ModelOption } from '$lib/types/models';
 
@@ -60,7 +60,7 @@
 			object: 'model',
 			owned_by: 'llamacpp',
 			path: `/models/${qwen.model}`,
-			status: { value: 'loaded' }
+			status: { value: ServerModelStatus.LOADED }
 		}
 	];
 </script>

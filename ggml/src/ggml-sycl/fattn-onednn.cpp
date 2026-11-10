@@ -69,17 +69,6 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
             }
         }
     }
-    // This is the improved SPDA gate. Rather than gating Alchemist GPUs from all SPDA features, we instead target only the failing shapes.
-    // If the GPU being assessed isn't in the grouping below, it has full access to all SPDA shapes. Otherwise, if it's an Alchemist GPU, we block only the shapes with head sizes that fail.
-    // It is much easier to compare the device to a small list of failing cases than to define all the passing ones.
-    const gpu_arch arch = ggml_sycl_info().devices[ggml_sycl_get_device()].hw_info.arch;
-    bool support_spda = !(arch == gpu_arch::intel_gpu_dg2_g10 ||
-                         arch == gpu_arch::intel_gpu_dg2_g11 ||
-                         arch == gpu_arch::intel_gpu_dg2_g12);
-
-    if (!support_spda && K->ne[0] == 64) {
-        return false;
-    }
     // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
     // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
     // some stacks; past the cap we fall back to the native FA kernel instead.
@@ -306,29 +295,15 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         {
             const char * K_data = (const char *)K->data;
             const bool k_non_dense = ((int64_t)K->ne[1] * K->nb[1] != K->nb[2]) && K->ne[2] > 1;
-            const bool k_gemma = k_non_dense &&
-                ((int64_t)K->nb[2] < (int64_t)K->ne[1] * (int64_t)K->nb[1]);
             if (ggml_is_contiguously_allocated(K) && !k_non_dense) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
                 to_fp16(K_data, K_ptr, ggml_nelements(K), stream);
             } else {
-                const size_t bs = ggml_blck_size(K->type);
                 const size_t ts = ggml_type_size(K->type);
                 to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
-                int64_t s01, s02, s03;
-                if (k_gemma) {
-                    const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
-                    s01 = (int64_t)Hkv * blk_per_row;
-                    s02 = blk_per_row;
-                    s03 = (int64_t)K->ne[1] * s01;
-                } else {
-                    s01 = (int64_t)K->nb[1] / ts;
-                    s02 = (int64_t)K->nb[2] / ts;
-                    s03 = (int64_t)K->nb[3] / ts;
-                }
                 to_fp16(K_data, K_ptr,
                         K->ne[0], K->ne[1], K->ne[2], K->ne[3],
-                        s01, s02, s03, stream);
+                        (int64_t)K->nb[1] / ts, (int64_t)K->nb[2] / ts, (int64_t)K->nb[3] / ts, stream);
             }
         }
         // Quantized V: always dequant separately. Even when K and V share
@@ -340,29 +315,15 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         {
             const char * V_data = (const char *)V->data;
             const bool v_non_dense = ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
-            const bool v_gemma = v_non_dense &&
-                ((int64_t)V->nb[2] < (int64_t)V->ne[1] * (int64_t)V->nb[1]);
             if (ggml_is_contiguously_allocated(V) && !v_non_dense) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
                 to_fp16(V_data, V_ptr, ggml_nelements(V), stream);
             } else {
-                const size_t bs = ggml_blck_size(V->type);
                 const size_t ts = ggml_type_size(V->type);
                 to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
-                int64_t s01, s02, s03;
-                if (v_gemma) {
-                    const int64_t blk_per_row = (int64_t)V->ne[0] / bs;
-                    s01 = (int64_t)V->ne[2] * blk_per_row;
-                    s02 = blk_per_row;
-                    s03 = (int64_t)V->ne[1] * s01;
-                } else {
-                    s01 = (int64_t)V->nb[1] / ts;
-                    s02 = (int64_t)V->nb[2] / ts;
-                    s03 = (int64_t)V->nb[3] / ts;
-                }
                 to_fp16(V_data, V_ptr,
                         V->ne[0], V->ne[1], V->ne[2], V->ne[3],
-                        s01, s02, s03, stream);
+                        (int64_t)V->nb[1] / ts, (int64_t)V->nb[2] / ts, (int64_t)V->nb[3] / ts, stream);
             }
         }
     } else {

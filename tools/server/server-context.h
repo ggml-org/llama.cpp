@@ -27,6 +27,7 @@ struct server_context_meta {
     bool has_cap_chat;
     bool has_cap_tts;
     bool has_audio_stream; // realtime transcription, see mtmd_support_audio_stream()
+    std::vector<std::string> tts_voices; // predefined voices of the audio generation model
     json json_ui_settings;
     int slot_n_ctx;
     enum llama_pooling_type pooling_type;
@@ -133,6 +134,7 @@ struct server_routes {
     server_http_context::handler_t post_embeddings_oai;
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t post_tts;
+    server_http_context::handler_t post_speech_oai;
     server_http_context::handler_t post_systemone;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
@@ -153,6 +155,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
     std::unique_ptr<server_res_generator> handle_rerank_impl(const server_http_req & req);
+    std::unique_ptr<server_res_generator> handle_tts_impl(const server_http_req & req, json body);
     std::unique_ptr<server_res_generator> handle_count_tokens(const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const

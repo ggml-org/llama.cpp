@@ -29,7 +29,7 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
     block_q8_0x4 * GGML_RESTRICT y = (block_q8_0x4 *) vy;
     const size_t vl_calc = __riscv_vsetvl_e32m8(QK8_0);
     const size_t vl_save = __riscv_vsetvl_e64m2(4);

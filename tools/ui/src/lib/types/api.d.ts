@@ -3,6 +3,7 @@ import type { ModelSidecar } from '$lib/constants';
 import type {
 	ContentPartType,
 	FileTypeAudio,
+	ServerModelSource,
 	ServerModelsSseEventType,
 	ServerModelStatus,
 	ServerRole
@@ -95,6 +96,10 @@ export interface ApiModelDataEntry {
 	path: string;
 	/** Current status of the model */
 	status: ApiModelStatus;
+	/** Where the router found the model: the HF cache, --models-dir or a preset */
+	source?: ServerModelSource;
+	/** Whether the router can delete the model's files (only cached models) */
+	can_remove?: boolean;
 	/** Alternative names that resolve to this model */
 	aliases?: string[];
 	/** Informational tags for this model */

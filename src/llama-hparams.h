@@ -85,6 +85,9 @@ struct llama_hparams {
     // TODO: this needs to be reworked
     int32_t  n_layer_kv_from_start = -1; // if non-negative, the first n_layer_kv_from_start layers have KV cache
 
+    // layer il reads the KV cache of layer kv_source_impl[il] (own cache if equal to il)
+    std::array<uint32_t, LLAMA_MAX_LAYERS> kv_source_impl;
+
     // different head size for full_attention and SWA layers
     uint32_t n_embd_head_k_full; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v_full; // dimension of values (d_v) aka n_embd_head
@@ -206,6 +209,7 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
+    float    ssm_norm_eps = 0.0f; // 0 = use f_norm_rms_eps
 
     // for MiniMax-Text-01 linear attention
     uint32_t n_embd_head_la = 0;
@@ -226,6 +230,20 @@ struct llama_hparams {
     uint32_t n_hrm_h_cycles = 0;
     uint32_t n_hrm_l_cycles = 0;
     bool     hrm_prefix_lm = false;
+
+    // metis16 (passes over shared layers, depth memory)
+    uint32_t metis_n_pass         = 0;
+    uint32_t metis_n_mem          = 0;
+    uint32_t metis_n_route        = 0;
+    uint32_t metis_pass_lora_rank = 0;
+    float    metis_cont_limit     = 0.0f;
+
+    // limite
+    float    f_xsa_eps = 0.0f;
+    std::array<float, 3> final_logit_sigmoid_capping = {}; // scale, shift, temperature
+    uint32_t n_mudd_ff   = 0;
+    uint32_t n_mudd_taps = 0;
+    std::array<int32_t, LLAMA_MAX_LAYERS> mudd_tap_idx; // [n_layer][n_mudd_taps], -1 = no mixing
 
     bool ssm_dt_b_c_rms = false;
 
@@ -285,6 +303,9 @@ struct llama_hparams {
 
     // realtime models: number of tokens the output lags behind the audio input
     uint32_t n_tokens_delay          = 0;
+
+    // each sequence is paired with an unconditional one
+    bool     classifier_free_guidance = false;
 
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
@@ -413,6 +434,7 @@ struct llama_hparams {
     // Step35: optional per-layer clamps for (Swi)GLU
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_exp; // clamping for expert FFN
     std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp_shexp; // shared expert
+    std::array<float, LLAMA_MAX_LAYERS> swiglu_clamp;       // dense FFN
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // dense_first means whether the pattern is start with a dense layer
@@ -507,6 +529,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
+
+    uint32_t kv_source(uint32_t il) const;
 
     bool has_rope(uint32_t il) const;
 

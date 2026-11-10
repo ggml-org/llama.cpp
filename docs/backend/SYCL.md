@@ -52,6 +52,9 @@ The packages for FP32 and FP16 would have different accuracy and performance on 
 
 ## News
 
+- 2026.11
+  - Update the CI and release build for oneAPI 2026.2 and Level Zero SDK 1.34.0. oneDNN is updated to the 2026.1 stand-alone package.
+
 - 2026.09
   - Update the CI build environment for oneAPI 2026.1 (unified oneAPI Toolkit). oneDNN is removed from the Deep Learning Essentials package in 2026.0, so the CI now uses the oneAPI Toolkit installer which still includes oneDNN.
   - oneAPI 2026.1 improves the SYCL build performance: measured with the same code on Arc B570, prompt processing 1331 vs 434 t/s (3.1x) vs the 2025.3-based release build.
@@ -285,6 +288,7 @@ Upon a successful installation, SYCL is enabled for the available Intel devices,
 
 |Verified release|
 |-|
+|2026.2 |
 |2026.1 |
 |2025.3.3 |
 |2025.2.1|
@@ -784,6 +788,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_TARGET   | INTEL *(default)*                     | Set the SYCL target device type.            |
 | GGML_SYCL_DEVICE_ARCH | Optional                           | Set the SYCL device architecture. Setting the device architecture can improve the performance. See the table [--offload-arch](https://github.com/intel/llvm/blob/sycl/sycl/doc/design/OffloadDesign.md#--offload-arch) for a list of valid architectures. |
 | GGML_SYCL_F16      | OFF *(default)* \|ON *(optional)*     | Enable FP16 build with SYCL code path. [1.](#sycl-f16-footnote) |
+| GGML_SYCL_SUPPORT_XMX | ON *(default)* \|OFF *(Optional)* | Build the code paths that use XMX (DPAS) instructions. Set OFF for AOT builds targeting iGPUs without XMX, which otherwise fail to compile. |
 | GGML_SYCL_GRAPH    | ON *(default)* \|OFF *(Optional)*     | Enable build with [SYCL Graph extension](https://github.com/intel/llvm/blob/sycl/sycl/doc/extensions/experimental/sycl_ext_oneapi_graph.asciidoc). |
 | GGML_SYCL_DNN      | ON *(default)* \|OFF *(Optional)*     | Enable build with oneDNN.                   |
 | GGML_SYCL_HOST_MEM_FALLBACK | ON *(default)* \|OFF *(Optional)* | Allow host memory fallback when device memory is full during quantized weight reorder. Enables inference to continue at reduced speed (reading over PCIe) instead of failing. Requires Linux kernel 6.8+. |
@@ -812,10 +817,11 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_ENABLE_DNN | 0 or 1 (default)| Enable running computations through oneDNN and always use oneMKL. |
 | GGML_SYCL_FA_ONEDNN | 1 (default) or 0 | Enable the oneDNN fused SDPA (flash-attention) path on supported GPUs. Set to 0 to always use the native SYCL flash-attention kernel. |
 | GGML_SYCL_FA_ONEDNN_MAX_KV | 0 (default, disabled) or positive integer | By default (0), all sequences are handled by the oneDNN fused SDPA path, regardless of KV length; a positive value caps that length, past which sequences fall back to the native kernel. If GPU driver watchdog resets (DEVICE_LOST) occur during long-context inference, set this near the context depth where they start, e.g. 24576. |
+| GGML_SYCL_FA_DPAS | 1 (default) or 0 | Enable the XMX flash-attention kernel for a q4_0 or q8_0 KV cache (`-ctk q4_0 -ctv q4_0` or `-ctk q8_0 -ctv q8_0`) on Xe2 or newer GPUs (Arc B-series, Lunar Lake, Panther Lake, Wildcat Lake). It reads the quantized cache directly for decode and batches of up to 31 tokens, head sizes 64, 96, 128, 256 and 512, up to 32 query heads per KV head. Set to 0 to use the native SYCL flash-attention kernels. |
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | GGML_SYCL_ENABLE_MKL_FA | 1 (default) or 0 | Enable oneMKL GEMM flash attention for XMX-accelerated prompt processing with quantized KV cache. Automatically activates during prefill (prompt processing) when all conditions are met: (1) flash-attn enabled (`-fa` or `--flash-attn on`), (2) KV cache quantized (`--cache-type-k q8_0 --cache-type-v q8_0` or other `*_0/*_1` types), (3) batch size ≥ 1024 (`--batch-size 1024`), (4) prompt length ≥ 1024 tokens. Set to 0 to force the TILE kernel for A/B testing. Example minimum command: `llama-cli -m model.gguf -fa -ngl 99 --cache-type-k q8_0 --cache-type-v q8_0 --batch-size 1024 -p "your prompt"` |
 | GGML_SYCL_MKL_FA_DEBUG | 0 (default) or 1 | Enable per-call diagnostic logging for MKL flash attention: GEMM/softmax timings, interleaved-head detection, and buffer memory usage. |
-| GGML_SYCL_MEMTRACE | 0 (default), 1, 2 | Enable record and output memory allocation diagnostics. Requires `-lv 4`. <br>0 -  Disable<br>1 - Basic memory info, including current and peak allocations, as well allocations from other sources, around 50 lines per model load.<br>2 - More verbose, logging around 900 specific allocations and deallocations. |
+| GGML_SYCL_MEMTRACE | 0 (default), 1, 2 | Enable record and output memory allocation diagnostics. Requires `-lv 4`. <br>0 -  Disable<br>1 - Basic memory info, including current and peak allocations, as well allocations from other sources, and the device free memory before each model buffer allocation, around 50 lines per model load.<br>2 - More verbose, logging around 900 specific allocations and deallocations. |
 | GGML_SYCL_MEMTRACE_STEP | 64 (default) or positive integer | With GGML_SYCL_MEMTRACE=1, the minimum growth in memory usage to trigger another log record. |
 | GGML_SYCL_MKL_FA_DIAG | 0 (default) or 1 | Enable output fingerprinting for MKL flash attention. Dumps the first 64 float output values for the first 6 FA calls with n_kv ≥ 1024, labeled with kernel type (MKL/TILE/VEC) for cross-kernel comparison. |
 | GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch in graph compute. Unsupported types and layouts fall back to the standalone op kernels. See `ggml_sycl_can_fuse()`. |
@@ -823,7 +829,8 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_ENABLE_XMX_ESIMD | 0 or 1 (default) | Use the XMX (DPAS) multi-column mat-vec kernels for reordered Q2_K to Q6_K and Q8_0 weights on Xe2 GPUs. Speeds up speculative decoding and short prompt batches. |
 | GGML_SYCL_XMX_MAX_COLS | non-negative integer, 80 (default) | Most activation columns (batch size) the `GGML_SYCL_ENABLE_XMX_ESIMD` kernels take; wider batches use the other mat-mul kernels. A larger value keeps XMX for bigger batches (as repeated launches), `0` never uses it. |
 | GGML_SYCL_XMX_GLU_MAX_COLS | 0 to 16, 16 (default) | Most columns the fused gate and up XMX kernel takes; wider batches run gate and up as separate mat-vecs. 16 is the most the kernel is built for, larger values are clamped to 16 and `0` turns the fused kernel off. |
-| GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Weight formats that may use the XMX dequant-GEMM paths, which dequantize weights straight into the XMX tiles. This speeds up prompt processing of MoE models on GPUs with XMX units (Arc A- and B-series, Arc Pro, Data Center GPU Max), for example pp512 of Qwen3-30B-A3B UD-IQ3_XXS by about 50% on an Arc Pro B60. Bits:<br>* 1: IQ4_NL, 2: IQ3_S, 4: IQ4_XS, 8: IQ3_XXS, 16: IQ2_XXS, 32: IQ2_XS, 64: IQ2_S, 128: IQ1_S, 256: IQ1_M<br>* 512: Q8_0, 1024: Q4_K, 2048: Q5_K, 4096: Q6_K (MoE `MUL_MAT_ID` only)<br>Add values to combine them, for example `3` for IQ4_NL and IQ3_S; `0` disables the paths. A set bit does not force the path: batches of more than 64 tokens per expert or row lengths that are not a multiple of 256 (32 for IQ4_NL and Q8_0) use the library GEMM. |
+| GGML_SYCL_XMX_GATHER_TYPES | decimal bitmask, all bits set (default) | Weight formats that may use the XMX dequant-GEMM paths, which dequantize weights straight into the XMX tiles. This speeds up prompt processing of MoE models on GPUs with XMX units (Arc A- and B-series, Arc Pro, Data Center GPU Max), for example pp512 of Qwen3-30B-A3B UD-IQ3_XXS by about 50% on an Arc Pro B60. Bits:<br>* 1: IQ4_NL, 2: IQ3_S, 4: IQ4_XS, 8: IQ3_XXS, 16: IQ2_XXS, 32: IQ2_XS, 64: IQ2_S, 128: IQ1_S, 256: IQ1_M<br>* 512: Q8_0, 1024: Q4_K, 2048: Q5_K, 4096: Q6_K, 8192: Q2_K, 16384: Q3_K (MoE `MUL_MAT_ID` only)<br>Add values to combine them, for example `3` for IQ4_NL and IQ3_S; `0` disables the paths. A set bit does not force the path: batches of more than 64 tokens per expert use the library GEMM unless the device schedule width heuristic is overridden with `GGML_SYCL_MMID_SCHED=3`. Row lengths must be a multiple of 256 (32 for IQ4_NL and Q8_0). |
+| GGML_SYCL_MMID_SCHED | decimal bitmask, 1 (default) | Build the grouped MoE routing and tile schedule on the GPU, avoiding the expert-ID host readback and CPU sort.<br>* 1: enable the device schedule.<br>* 2: override the fallback for models with few routed experts by disabling the performance heuristic that rejects batches averaging more than 64 routed rows per expert. This may reduce performance; type, shape, precision and device capability checks still apply.<br>Use `3` to enable the device schedule and override this heuristic, or `0` to use the host schedule. Bit 2 alone does not enable the device schedule. Higher bits are ignored. |
 | GGML_SYCL_XMX_GATHER_SHAPES | decimal bitmask, 255 (default) | XMX `joint_matrix` combinations the paths of `GGML_SYCL_XMX_GATHER_TYPES` may use; the operand type comes from `GGML_SYCL_DYNAMIC_PRECISION` and the best supported combination is picked automatically (logged as `fg_pick_combo`). Bits:<br>* Xe2, Xe3, Xe-HPC: 1: f16 8x16x16, 2: f16 16x16x16, 4: f16 32x64x16, 8: f16 32x64x32, 32: tf32 8x16x8, 64: bf16 8x16x16<br>* Xe-HPG (Arc A770, ARL-H): 16: f16 8x8x16, 128: bf16 8x8x16<br>Clear a bit to exclude a combination, or set a single bit to force one for testing. |
 | GGML_SYCL_DYNAMIC_PRECISION | `F16` (default with `GGML_SYCL_F16=ON`), `BF16`, `TF32` or `F32` (default otherwise) | Operand type of the XMX dequant-GEMM paths (`GGML_SYCL_XMX_GATHER_TYPES`); accumulation is always f32. `F16` is the fastest, but activations above 65504 overflow. `BF16` keeps the f32 range at a 7-bit mantissa, `TF32` keeps the range and the f16 mantissa but is about 30% slower and needs Xe2, Xe3 or Xe-HPC, and `F32` turns the XMX paths off. Ops that request a higher src1 precision ([TAG_GGML_PREC]) get it regardless of this setting. |
 | GGML_SYCL_DYNAMIC_REQUIRED_PRECISION | `F32` (default), `TF32`, `BF16` or `F16` | Lowest type the XMX paths may use for an op that requests an F32 src1, such as Mistral 4 `ffn_down_exps`. The default runs such ops on the library f32 GEMM; `TF32` or `BF16` trade mantissa for speed while keeping the f32 range. `F16` ignores the request and can overflow; it is meant for testing only. |
@@ -834,6 +841,7 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Allow SYCL/Unified Runtime Level Zero device allocations larger than 4 GiB. llama.cpp's direct Level Zero allocation path requests the relaxed maximum-size limit itself when GGML_SYCL_ENABLE_LEVEL_ZERO=1. |
 | GGML_SYCL_USM_SYSTEM | 0 (default) or 1 | Enable experimental support for [USM system allocations](https://github.khronos.org/SYCL_Reference/iface/usm_basic_concept.html#system-allocations) for large GPU buffers. This requires enough host memory for model weights and caches, an Intel Xe2+ GPU such as BMG or newer and supported on Linux only, with CONFIG_DRM_XE_GPUSVM enabled. |
+| GGML_SYCL_BMG_VRAM_CHECK | 1 (default) or 0 | Workaround for BMG (Arc B-series) GPUs, where the Level Zero driver accepts device allocations beyond VRAM and moves the overflow to system RAM, which can exhaust host memory when a model does not fit (e.g. `-ngl 999`, see https://github.com/intel/compute-runtime/issues/1047). When enabled, a model or split buffer that does not fit in the device's free memory is refused and the model load fails with an error. Set to 0 to disable. |
 
 1. <a id="sycl-graph-footnote"></a>SYCL Graph support (`GGML_SYCL_ENABLE_GRAPH=1`) is limited to single-GPU workloads and may also depend on the model architecture and kernels in use.
    Performance depends on how often a recorded graph can be reused, which will vary by workload.
@@ -845,6 +853,18 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 
    Then benchmark with your preferred tool, such as `llama-bench`.
    For graph activity details (including reuse), set `GGML_SYCL_DEBUG=1` and look for `[SYCL-GRAPH]` messages.
+
+### Flash-attention kernels
+
+Attention dispatches on shape and hardware.
+
+DPAS is the quantized path. q4_0 or q8_0 KV cache, decode and batches up to 31 tokens, Xe2 and newer only. It issues dpas straight on the quantized blocks and never materialises an f16 copy. vISA gets used here because joint_matrix has no s4 type.
+
+oneDNN does XMX through SDPA but converts KV to f16 first, so it ends up on prefill: 32+ tokens and 1K+ keys. MKL is the prompt processing equivalent through oneMKL GEMM, also f16.
+
+VEC/TILE are plain kernels with no XMX in them. They run when DPAS is off or the hardware doesn't support it.
+
+joint_matrix belongs to the matmul GEMMs. Attention doesn't use it.
 
 ## Compile-time Flags
 

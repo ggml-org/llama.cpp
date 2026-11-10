@@ -4,7 +4,7 @@
 #include <string.h>
 
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -18,7 +18,7 @@
 struct htp_solve_tri_context {
     struct htp_ops_context *               octx;
     const struct htp_solve_tri_kernel_params * kparams;
-    uint32_t                               jobs_per_thread;
+    uint32_t                               jobs_per_hvx;
     uint32_t                               total_jobs;
     uint32_t                               job_start;
     uint32_t                               k_chunks;
@@ -79,7 +79,7 @@ static inline void solve_tri_row_hvx(const float * A_row,
 }
 
 // Batch-level thread: each job is one full batch.
-static void solve_tri_batch_thread_f32(unsigned int nth, unsigned int ith, void * data) {
+static void solve_tri_batch_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_solve_tri_context * sctx = (struct htp_solve_tri_context *) data;
     struct htp_ops_context *       octx = sctx->octx;
     const struct htp_solve_tri_kernel_params * kparams = sctx->kparams;
@@ -96,10 +96,10 @@ static void solve_tri_batch_thread_f32(unsigned int nth, unsigned int ith, void 
     const uint32_t col_block = VLEN_FP32;
     const uint32_t k_full    = k & ~(col_block - 1);
 
-    const uint32_t start_batch = sctx->job_start + sctx->jobs_per_thread * ith;
-    const uint32_t end_batch   = MIN(start_batch + sctx->jobs_per_thread, sctx->job_start + sctx->total_jobs);
+    const uint32_t start_batch = sctx->job_start + sctx->jobs_per_hvx * ith;
+    const uint32_t end_batch   = MIN(start_batch + sctx->jobs_per_hvx, sctx->job_start + sctx->total_jobs);
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_batch);
 
     for (uint32_t batch = start_batch; batch < end_batch; ++batch) {
@@ -141,7 +141,7 @@ static void solve_tri_batch_thread_f32(unsigned int nth, unsigned int ith, void 
 }
 
 // Chunk-level thread: each job is one (batch, col_chunk) pair.
-static void solve_tri_chunk_thread_f32(unsigned int nth, unsigned int ith, void * data) {
+static void solve_tri_chunk_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_solve_tri_context * sctx = (struct htp_solve_tri_context *) data;
     struct htp_ops_context *       octx = sctx->octx;
     const struct htp_solve_tri_kernel_params * kparams = sctx->kparams;
@@ -155,10 +155,10 @@ static void solve_tri_chunk_thread_f32(unsigned int nth, unsigned int ith, void 
 
     const uint32_t ne02 = src0->ne[2];
 
-    const uint32_t start_job = sctx->job_start + sctx->jobs_per_thread * ith;
-    const uint32_t end_job   = MIN(start_job + sctx->jobs_per_thread, sctx->job_start + sctx->total_jobs);
+    const uint32_t start_job = sctx->job_start + sctx->jobs_per_hvx * ith;
+    const uint32_t end_job   = MIN(start_job + sctx->jobs_per_hvx, sctx->job_start + sctx->total_jobs);
 
-    struct htp_thread_trace * tr = &octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_job);
 
     for (uint32_t job = start_job; job < end_job; ++job) {
@@ -233,23 +233,23 @@ int op_solve_tri(struct htp_ops_context * octx) {
             return HTP_STATUS_OK;
         }
 
-        if (!htp_ops_context_set_n_threads(octx, MIN(kparams->n_threads, njobs))) {
+        if (!htp_ops_context_set_n_hvx(octx, MIN(kparams->n_hvx, njobs))) {
             return HTP_STATUS_INVAL_PARAMS;
         }
 
-        const uint32_t n_threads = octx->n_threads;
+        const uint32_t n_hvx = octx->n_hvx;
 
         struct htp_solve_tri_context sctx = {
             .octx            = octx,
             .kparams         = kparams,
-            .jobs_per_thread = fastdiv(njobs + n_threads - 1, &octx->n_threads_div),
+            .jobs_per_hvx    = fastdiv(njobs + n_hvx - 1, &octx->n_hvx_div),
             .total_jobs      = njobs,
             .job_start       = job_start,
             .k_chunks        = k_chunks,
             .col_block       = col_block,
         };
 
-        work_queue_run(octx->ctx->work_queue, solve_tri_batch_thread_f32, &sctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, solve_tri_batch_thread_f32, &sctx, n_hvx);
     } else {
         const uint32_t total_jobs = kparams->total_jobs;
 
@@ -267,23 +267,23 @@ int op_solve_tri(struct htp_ops_context * octx) {
             return HTP_STATUS_OK;
         }
 
-        if (!htp_ops_context_set_n_threads(octx, MIN(kparams->n_threads, njobs))) {
+        if (!htp_ops_context_set_n_hvx(octx, MIN(kparams->n_hvx, njobs))) {
             return HTP_STATUS_INVAL_PARAMS;
         }
 
-        const uint32_t n_threads = octx->n_threads;
+        const uint32_t n_hvx = octx->n_hvx;
 
         struct htp_solve_tri_context sctx = {
             .octx            = octx,
             .kparams         = kparams,
-            .jobs_per_thread = fastdiv(njobs + n_threads - 1, &octx->n_threads_div),
+            .jobs_per_hvx    = fastdiv(njobs + n_hvx - 1, &octx->n_hvx_div),
             .total_jobs      = njobs,
             .job_start       = job_start,
             .k_chunks        = k_chunks,
             .col_block       = col_block,
         };
 
-        work_queue_run(octx->ctx->work_queue, solve_tri_chunk_thread_f32, &sctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, solve_tri_chunk_thread_f32, &sctx, n_hvx);
     }
 
     return HTP_STATUS_OK;

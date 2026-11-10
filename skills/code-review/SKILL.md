@@ -81,9 +81,11 @@ See the `add-new-model` skill and `docs/development/HOWTO-add-model.md` for the 
 - New tensor names go through `tensor_mapping.py`, not ad-hoc name matching.
 - For QKV, split the *activation* with `ggml_view`, not the *weight* tensor; rely on ggml broadcasting instead of manually duplicating tensors.
 - New graph inputs are declared at the top of the graph-build function, not inline where first used.
+- Don't end a text model graph with `ggml_build_forward_expand(gf, cur)` on `t_logits`/`t_embd` - it's redundant, since `llama_model::build_graph()` expands them via `build_logits()` and `build_pooling()` (and skips the LM head for pooled embeddings).
 - Hparams that the model can't run correctly without must be mandatory (hard-error if missing), not read with a silent default fallback. Only genuinely-optional-across-configs values get a fallback accessor.
 - New/optional weight tensors (scales, etc.) must route through `build_lora_mm` and the existing helpers, matching convention - don't leave raw matmuls copied from another arch.
 - Don't hack RoPE with a custom sin/cos implementation. If `ggml_rope_ext` genuinely can't express it, that's an issue for discussion, not a PR.
+- In `src/models/`, apply RoPE with `build_rope(cur, pos, il)`, not a direct `ggml_rope_ext`/`ggml_rope_multi` call (see #31683). Per-layer differences go in a `get_rope_params` override: the KV-cache K-shift reads the same params, so a direct call lets the graph and the shift drift apart. The remaining direct calls (deepseek4/41, dflash, sensenova-u1) are not a pattern to copy.
 - Test the quantized-KV path (`-ctk`/`-ctv q8_0`), not just default f16 - new speculative/attention features silently break there.
 - Preserve existing explanatory comments about model-specific quirks when copying code; note the provenance ("copied from X, with Y added").
 - Remove dead code/branches left over from adapting a reference implementation.

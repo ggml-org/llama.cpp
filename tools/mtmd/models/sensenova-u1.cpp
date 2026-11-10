@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_sensenova_u1::build() {
+ggml_cgraph * mtmd_graph_sensenova_u1::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.patch_bias != nullptr);
     GGML_ASSERT(model.mm_0_w != nullptr);
