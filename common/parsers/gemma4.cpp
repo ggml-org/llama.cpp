@@ -284,7 +284,7 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
             auto scan_to_toolcall = p.rule("scan-to-toolcall", p.until(tool_call_start));
             auto content = p.rule("content", p.content(p.until(channel_start | channel_end | tool_call_start)));
             auto message = p.rule("message", thought + content);
-            return start + p.zero_or_more(message) + scan_to_toolcall + tool_calls;
+            return start + p.zero_or_more(message) + scan_to_toolcall + p.optional(tool_calls);
         }
 
         // Gemma 4 may emit an extra <|channel>thought\n<channel|> at the end of the content. It may
