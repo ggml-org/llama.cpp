@@ -5,12 +5,15 @@ import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
 import { conversationsStore } from '$lib/stores';
 import { tick } from 'svelte';
-import { afterEach, describe, expect, it } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 
+const PHONE = { height: 844, width: 390 };
+const DESKTOP = { height: 900, width: 1280 };
+
 async function renderForm(initialValue = '') {
-	const { container } = render(ChatFormTestWrapper, { expandable: true, initialValue });
+	const { component, container } = render(ChatFormTestWrapper, { expandable: true, initialValue });
 
 	await tick();
 
@@ -40,10 +43,14 @@ async function renderForm(initialValue = '') {
 		await expect.poll(sheetMoves).toBe(0);
 	};
 
-	return { container, editor, isExpanded, toggle, write };
+	return { component, container, editor, isExpanded, toggle, write };
 }
 
 describe('ChatForm expansion', () => {
+	beforeEach(async () => {
+		await page.viewport(DESKTOP.width, DESKTOP.height);
+	});
+
 	afterEach(() => {
 		conversationsStore.activeConversation = null;
 	});
@@ -101,6 +108,29 @@ describe('ChatForm expansion', () => {
 		expect(isExpanded()).toBe(false);
 
 		await write('# Title\n\n- item\n- another\n');
+		expect(isExpanded()).toBe(true);
+	});
+
+	it('expands a message put back after a failed send', async () => {
+		const { component, isExpanded } = await renderForm('one\ntwo\nthree\nfour');
+
+		expect(isExpanded()).toBe(false);
+
+		component.expandForMessage();
+		await tick();
+
+		expect(isExpanded()).toBe(true);
+	});
+
+	it('expands on a phone only by hand', async () => {
+		await page.viewport(PHONE.width, PHONE.height);
+
+		const { isExpanded, toggle, write } = await renderForm();
+
+		await write('# Title\n\n- item\n- another\n');
+		expect(isExpanded()).toBe(false);
+
+		await toggle();
 		expect(isExpanded()).toBe(true);
 	});
 

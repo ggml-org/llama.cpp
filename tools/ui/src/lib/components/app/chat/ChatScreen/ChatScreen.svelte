@@ -56,9 +56,8 @@
 	);
 	// where the form is drawn: follows `isEmpty` once the form has faded out
 	let isFormCentered = $state(untrack(() => isEmpty));
-	// While the form moves between its centered and bottom positions it fades (see
-	// moveForm); otherwise its position eases, in step with the form expanding and
-	// collapsing, which settles it at the bottom while expanded
+	// it fades while it moves between the centered and bottom positions (see moveForm);
+	// otherwise its position eases with the form expanding and collapsing
 	let isFormMoving = $state(false);
 	let isFormHeldAtBottom = $state(false);
 	let isFormLifted = $derived(isFormCentered && !isFormHeldAtBottom);
@@ -117,8 +116,7 @@
 	}
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		// called before the cleared form collapses: a send from the expanded form keeps it
-		// at the bottom, where it fades into the conversation instead of heading back up
+		// before the cleared form collapses: it fades into the conversation from the bottom
 		isFormHeldAtBottom = isEmpty && uiStore.isComposerExpanded;
 
 		try {
@@ -225,9 +223,7 @@
 
 			isFormCentered = toCenter;
 			await tick();
-			// lays the new position out now, while the bottom transition is off: once the move
-			// ends it comes back on in the same task, and the browser would slide the form
-			// from where it last drew it
+			// lay the new position out while the bottom transition is off, so it does not slide
 			formWrapper?.getBoundingClientRect();
 
 			// cancelled in the same frame the entry starts, so it never flashes
@@ -330,10 +326,8 @@
 			style:--chat-form-resize-ease={isFormLifted ? CHAT_FORM_EASE_OUT : undefined}
 			style:padding-top="var(--chat-form-padding-top)"
 			class={[
-				// moves between the centered (empty chat) and bottomed positions with
-				// a fade, see moveForm. Its height in the page is the same in both
-				// (the padding stays, the desktop greeting floats above the form),
-				// so the messages never shift while it moves
+				// moves between the centered and bottom positions with a fade (see moveForm), at
+				// the same height in the page, so the messages never shift
 				'pointer-events-none md:sticky fixed mt-auto max-md:z-10',
 				// a phone holds it in place on screen while the page is slid aside
 				deviceStore.isMobile && 'sidebar-reveal-pin-bottom',
@@ -345,10 +339,8 @@
 						: deviceStore.isIOSSafari
 							? 'bottom-2 left-2 right-2'
 							: 'bottom-3 right-2 left-2',
-				// Lifted to the center on a new chat. Expanded, the form drops to the bottom and
-				// its card grows by exactly that drop (see ChatForm), so its top edge stays put.
-				// The lift is its sticky bottom offset, not a translate: a composited translate
-				// starts a frame ahead of the card's height on a quick reversal
+				// Lifted to the center on a new chat, by its sticky bottom offset and not a
+				// translate, which a quick reversal starts a frame ahead of the card's height
 				isFormLifted &&
 					'md:[--chat-form-drop:calc(50dvh-7rem)] 2xl:[--chat-form-drop:calc(50dvh-4rem)]',
 				isFormLifted && !uiStore.isComposerExpanded

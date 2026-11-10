@@ -13,8 +13,13 @@
 	let { expandable = false, initialValue = '', onSubmit }: Props = $props();
 
 	let value = $state(untrack(() => initialValue));
+	let form: ChatForm | undefined = $state();
+
+	export function expandForMessage() {
+		form?.expandForMessage();
+	}
 </script>
 
 <Tooltip.Provider>
-	<ChatForm bind:value {expandable} {onSubmit} />
+	<ChatForm bind:this={form} bind:value {expandable} {onSubmit} />
 </Tooltip.Provider>

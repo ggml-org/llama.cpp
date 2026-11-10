@@ -1,5 +1,9 @@
 import { useKeyboardInset } from './use-keyboard-inset.svelte';
 import {
+	type CollapsedHeightHoldOptions,
+	createCollapsedHeightHold
+} from '$lib/components/app/chat/ChatForm/chat-form-collapsed-height';
+import {
 	SHEET_AT_REST,
 	type SheetFrame,
 	sheetFrameAt,
@@ -7,35 +11,25 @@ import {
 	shiftSheetRects,
 	shouldExpandChatForm
 } from '$lib/components/app/chat/ChatForm/chat-form-expand';
-import {
-	CHAT_FORM_EASE_OUT,
-	CHAT_FORM_RESIZE_MS,
-	CHAT_FORM_SHEET_MS,
-	UI_DATA_ATTRS
-} from '$lib/constants';
+import { CHAT_FORM_EASE_OUT, CHAT_FORM_SHEET_MS, UI_DATA_ATTRS } from '$lib/constants';
 import { deviceStore, uiStore } from '$lib/stores';
 import { flushSync, onDestroy, tick, untrack } from 'svelte';
 
-export interface UseChatFormExpansionOptions {
+export interface UseChatFormExpansionOptions extends CollapsedHeightHoldOptions {
 	/** Whether this form expands at all. */
 	isEnabled: () => boolean;
-	getValue: () => string;
 	/** What the message belongs to (the conversation): another one starts collapsed. */
 	getResetKey: () => unknown;
-	/** The form's card, and the box around its actions. */
-	getCard: () => HTMLElement | undefined;
+	/** The box around the form's actions. */
 	getActions: () => HTMLElement | undefined;
 	focusInput: () => void;
 }
 
 /**
- * The chat form's expanded editor: entered by hand, or once the message being written
- * asks for it (see shouldExpandChatForm), kept while the message has text, and left
- * once it is cleared or sent. Collapsing by hand holds until then too.
- *
- * On a phone the expanded form is a full-screen sheet: expanding switches to the
- * sheet's layout at once and eases it from the collapsed card's place, collapsing
- * slides it back and only then switches the layout (see sheetFrameAt).
+ * The chat form's expanded editor: entered by hand, or on a desktop once the message being
+ * written asks for it (see shouldExpandChatForm), kept while it has text, left once it is
+ * cleared or sent. Collapsing by hand holds until then too. On a phone it is a full-screen
+ * sheet that slides from and back to the card (see sheetFrameAt).
  */
 export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 	let isExpanded = $state(false);
@@ -91,11 +85,12 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 	}
 
 	/**
-	 * Expands for what the user writes or pastes. A message put there for them (a draft
-	 * restored on opening a chat) stays in the small form.
+	 * Expands for what the user writes or pastes, not for a draft restored on opening a
+	 * chat. A phone only expands by hand: the sheet switching in mid-typing moves the text
+	 * under the keyboard.
 	 */
 	function handleInput() {
-		if (!options.isEnabled() || isExpanded || isCollapsedByUser) return;
+		if (!options.isEnabled() || isExpanded || isCollapsedByUser || deviceStore.isMobile) return;
 
 		isExpanded = shouldExpandChatForm(options.getValue() ?? '');
 	}
@@ -141,10 +136,9 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 	}
 
 	/**
-	 * Plays the frames on the card and its actions. Nothing holds the last frame, as
-	 * WebKit can keep drawing a held frame's clip after the layout changed: a move that
-	 * ends where the layout does not (collapsing) switches the layout in `onEnd`, as the
-	 * animation ends and before that frame is painted.
+	 * Plays the frames on the card and its actions, none held (WebKit keeps drawing a held
+	 * clip after the layout changed). `onEnd` switches the layout as a collapse ends, before
+	 * that frame is painted.
 	 */
 	function animateSheet(
 		frames: SheetFrame[],
@@ -184,8 +178,7 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 
 	async function expandSheet(from: SheetRects) {
 		isSheetMoving = true;
-		// the page lays the form out flush with the screen in the same update: measure
-		// once all of it has landed, before a paint
+		// measure once the page has laid the form out flush with the screen, before a paint
 		await tick();
 		sheetBottomAtOpen = sheetBottom();
 
@@ -226,8 +219,7 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 		isExpanded = false;
 		await tick();
 
-		// the text may have changed while expanded, and with it the collapsed height:
-		// close the small remaining gap the same way
+		// the text may have changed while expanded, and with it the collapsed height
 		const settled = measure();
 
 		if (settled && Math.abs(settled.card.top - target.card.top) > 1) {
@@ -249,77 +241,7 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 		isBlurHeld = false;
 	}
 
-	// The expanded size is built on the collapsed card's height, and the height
-	// transition starts from it. The real height is held in a variable on the card from
-	// expanding until the collapse has settled, so a quick toggle back and forth never
-	// measures a card that is halfway through a transition.
-	let collapsedHold: {
-		card: number;
-		content: number;
-		editorMax: number;
-		editorMin: number;
-		text: string;
-	} | null = null;
-	let collapsedReleaseTimer: ReturnType<typeof setTimeout> | undefined;
-
-	function editorContentHeight(): number {
-		return options.getCard()?.querySelector<HTMLElement>('.cm-content')?.offsetHeight ?? 0;
-	}
-
-	function setCollapsedHeight(px: number | null) {
-		const style = options.getCard()?.style;
-
-		if (px === null) style?.removeProperty('--chat-form-collapsed-height');
-		else style?.setProperty('--chat-form-collapsed-height', `${px}px`);
-	}
-
-	function holdCollapsedHeight() {
-		const card = options.getCard();
-
-		clearTimeout(collapsedReleaseTimer);
-
-		if (collapsedHold || !card) return;
-
-		const editor = getComputedStyle(card.querySelector<HTMLElement>('.chat-form-input')!);
-
-		collapsedHold = {
-			card: card.getBoundingClientRect().height,
-			content: editorContentHeight(),
-			editorMax: parseFloat(editor.maxHeight) || Infinity,
-			editorMin: parseFloat(editor.minHeight) || 0,
-			text: options.getValue() ?? ''
-		};
-
-		// in place before the switch, with no transition of its own, so the height
-		// transition the switch starts begins at the card's real height
-		card.style.transition = 'none';
-		setCollapsedHeight(collapsedHold.card);
-		void getComputedStyle(card).minHeight;
-		card.style.transition = '';
-	}
-
-	function settleCollapsedHeight() {
-		if (!collapsedHold) return;
-
-		// Back to the held height, unless the text changed while expanded: then to the
-		// height the card will have with it, its editor clamped as when collapsed. The
-		// editor is only measured then, as mid-move its height is not the text's
-		const hold = collapsedHold;
-		const editorBox = (content: number) =>
-			Math.max(hold.editorMin, Math.min(content, hold.editorMax));
-
-		setCollapsedHeight(
-			(options.getValue() ?? '') === hold.text
-				? hold.card
-				: hold.card - editorBox(hold.content) + editorBox(editorContentHeight())
-		);
-
-		clearTimeout(collapsedReleaseTimer);
-		collapsedReleaseTimer = setTimeout(() => {
-			collapsedHold = null;
-			setCollapsedHeight(null);
-		}, CHAT_FORM_RESIZE_MS);
-	}
+	const collapsedHeight = createCollapsedHeightHold(options);
 
 	// before the DOM switches: where the collapsed card is, and how tall
 	$effect.pre(() => {
@@ -329,14 +251,14 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 			if (expanded === wasExpanded) return;
 
 			if (!expanded) {
-				settleCollapsedHeight();
+				collapsedHeight.settle();
 
 				return;
 			}
 
 			if (!isSheetMoving && animatesSheet()) collapsedRects = measure();
 
-			holdCollapsedHeight();
+			collapsedHeight.start();
 		});
 	});
 
@@ -356,7 +278,7 @@ export function useChatFormExpansion(options: UseChatFormExpansionOptions) {
 	});
 
 	onDestroy(() => {
-		clearTimeout(collapsedReleaseTimer);
+		collapsedHeight.destroy();
 
 		if (options.isEnabled()) uiStore.isComposerExpanded = false;
 	});

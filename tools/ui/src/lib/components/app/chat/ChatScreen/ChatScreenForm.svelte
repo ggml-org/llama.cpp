@@ -5,7 +5,7 @@
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 	import { deviceStore } from '$lib/stores';
 	import { hapticTap } from '$lib/utils';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -99,6 +99,8 @@
 		if (!success) {
 			message = messageToSend;
 			uploadedFiles = filesToSend;
+			await tick();
+			chatFormRef?.expandForMessage();
 		}
 	}
 

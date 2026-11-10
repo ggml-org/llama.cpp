@@ -33,6 +33,7 @@
 	}: Props = $props();
 
 	let editor: MarkdownEditor | undefined = $state();
+	let box: HTMLDivElement | undefined = $state();
 
 	let livePreview = $derived(settingsStore.config[SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW] !== false);
 
@@ -84,7 +85,14 @@
 	function handleMouseDown(event: MouseEvent) {
 		const content = editor?.getContentDOM();
 
-		if (!expanded || !content || event.clientY <= content.getBoundingClientRect().bottom) return;
+		if (
+			event.button !== 0 ||
+			!expanded ||
+			!content ||
+			event.clientY <= content.getBoundingClientRect().bottom
+		) {
+			return;
+		}
 
 		event.preventDefault();
 		editor?.focusAt();
@@ -98,6 +106,15 @@
 		if (deviceStore.isMobile) return;
 
 		editor?.focus();
+	}
+
+	/** The element that sets the editor's height. */
+	export function getBox() {
+		return box;
+	}
+
+	export function getContentDOM() {
+		return editor?.getContentDOM();
 	}
 
 	export function getCaretRect() {
@@ -129,6 +146,7 @@
 </script>
 
 <div
+	bind:this={box}
 	style:height={contentHeight === null ? undefined : `${contentHeight}px`}
 	class={[
 		'chat-form-input mb-0.5',

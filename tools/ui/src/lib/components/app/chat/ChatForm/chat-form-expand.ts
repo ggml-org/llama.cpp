@@ -29,12 +29,9 @@ export const SHEET_AT_REST: SheetFrame = {
 };
 
 /**
- * The laid-out `sheet` drawn as the collapsed card at `card`: moved there, clipped to
- * its edges, its actions held at their collapsed place. Top padding the sheet has on
- * top of the card's (the status bar's) is clipped off and the sheet raised by it.
- *
- * Offsets rather than transforms: WebKit composites transforms apart from the clip,
- * and the clipped edges drift from the content they frame.
+ * The laid-out `sheet` drawn as the collapsed card at `card`: moved there, clipped to its
+ * edges, its actions held at their place. Offsets, not transforms: WebKit composites
+ * transforms apart from the clip, and the two drift.
  */
 export function sheetFrameAt(sheet: SheetRects, card: SheetRects): SheetFrame {
 	const rise = Math.max(0, sheet.padTop - card.padTop);

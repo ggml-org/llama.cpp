@@ -134,8 +134,8 @@
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
 	let micError = $state<string | null>(null);
 
-	// Invisible anchor the pickers' popovers float above (or, short of room, below): the
-	// form's top edge, or in the expanded editor the line being written
+	// Invisible anchor the pickers' popovers float above: the form's top edge, or in the
+	// expanded editor the line being written
 	let pickerAnchor: HTMLDivElement | null = $state(null);
 	let pickerAnchorBox = $state({ height: 1, top: 0 });
 
@@ -174,10 +174,10 @@
 		},
 		onCompact: () => chatStore.compactConversation(),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
-		// TODO: on a phone, typing `/` or `@` opens no picker for now. Each mobile browser moves
-		// the page its own way as the keyboard opens, so a list by the form can not stay clear
-		// of the text; a drawer with its own search field (as the directory picker is) could
-		opensOnInput: () => !deviceStore.isMobile,
+		// TODO: no typed pickers with an on-screen keyboard for now: each mobile browser moves
+		// the page its own way as it opens, so a list by the form can not stay clear of the
+		// text. A drawer with its own search field (as the directory picker is) could.
+		opensOnInput: () => !deviceStore.isTouch,
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
 			value = v;
@@ -231,9 +231,7 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
-	// the card's translucent fill as it looks over the page background, made solid
-	const EXPANDED_SHEET_FILL =
-		'max-md:bg-[color-mix(in_oklab,var(--muted)_60%,var(--background))] max-md:dark:bg-[color-mix(in_oklab,var(--muted)_75%,var(--background))]';
+	const EXPANDED_SHEET_FILL = 'max-md:bg-(--chat-form-sheet-fill)';
 
 	let cardEl: HTMLDivElement | undefined = $state();
 	let actionsEl: HTMLDivElement | undefined = $state();
@@ -243,6 +241,8 @@
 		focusInput: () => inputRef?.focus(),
 		getActions: () => actionsEl,
 		getCard: () => cardEl,
+		getContent: () => inputRef?.getContentDOM(),
+		getEditorBox: () => inputRef?.getBox(),
 		// the conversation the message is for: its draft arrives without a remount
 		getResetKey: () => conversationsStore.activeConversation?.id,
 		getValue: () => value,
@@ -256,13 +256,18 @@
 			pickers.isWorkingDirectoryPickerOpen
 	);
 
+	// On a phone the sheet's pickers float by its actions, which ride above the keyboard
+	let activePickerAnchor = $derived(
+		isExpanded && deviceStore.isMobile ? (actionsEl ?? null) : pickerAnchor
+	);
+
 	// before the popover is drawn, and again as the query is typed and the line moves
 	$effect.pre(() => {
 		if (!isPickerOpen) return;
 
 		void value;
 
-		const line = isExpanded ? inputRef?.getCaretRect() : null;
+		const line = isExpanded && !deviceStore.isMobile ? inputRef?.getCaretRect() : null;
 		const formTop = pickerAnchor?.parentElement?.getBoundingClientRect().top ?? 0;
 
 		pickerAnchorBox = line
@@ -285,6 +290,11 @@
 		micUnavailableReason = microphoneUnavailableReason();
 		audioRecorder = new AudioRecorder();
 	});
+
+	/** Expands for the message as it stands, e.g. one put back after a send failed. */
+	export function expandForMessage() {
+		expansion.handleInput();
+	}
 
 	export function focus() {
 		inputRef?.focus();
@@ -608,12 +618,12 @@
 	>
 		<ChatFormPickers
 			bind:this={pickersRef}
+			anchor={activePickerAnchor}
 			commandQuery={pickers.commandQuery}
 			commands={pickers.availableCommands}
 			isCommandPickerOpen={pickers.isCommandPickerOpen}
 			isMentionPickerOpen={pickers.isMentionPickerOpen}
 			isPromptPickerOpen={pickers.isPromptPickerOpen}
-			mentionAnchor={pickerAnchor}
 			mentionQuery={pickers.mentionQuery}
 			onCommandPickerClose={pickers.handleCommandPickerClose}
 			onCommandSelect={pickers.handleCommandSelect}
@@ -766,7 +776,7 @@
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
 			class="self-start"
-			customAnchor={pickerAnchor}
+			customAnchor={activePickerAnchor}
 			directory={cwd}
 			{disabled}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}

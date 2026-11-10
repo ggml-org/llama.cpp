@@ -1,16 +1,13 @@
-// Guards that typing `/` in the chat form opens the command picker on a desktop and
-// nothing on a phone, where the pickers are off until they can be placed reliably
+// Guards that typing `/` in the chat form opens the command picker with a mouse and
+// nothing with a finger, where the pickers are off until they can be placed reliably
 // around the on-screen keyboard.
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
+import { deviceStore } from '$lib/stores';
 import { tick } from 'svelte';
-import { afterEach, describe, expect, it } from 'vitest';
-import { page } from 'vitest/browser';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-
-const PHONE = { height: 844, width: 390 };
-const DESKTOP = { height: 900, width: 1280 };
 
 async function typeSlash() {
 	const { container } = render(ChatFormTestWrapper);
@@ -28,23 +25,23 @@ async function typeSlash() {
 
 const commandPicker = () => document.querySelector('[data-slot="popover-content"]');
 
-describe('ChatForm pickers on a phone', () => {
-	afterEach(async () => {
-		await page.viewport(DESKTOP.width, DESKTOP.height);
+describe('ChatForm typed pickers', () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
 	});
 
-	it('opens the command picker on a desktop', async () => {
-		await page.viewport(DESKTOP.width, DESKTOP.height);
+	it('open the command picker with a mouse', async () => {
+		vi.spyOn(deviceStore, 'isTouch', 'get').mockReturnValue(false);
 		await typeSlash();
 
 		await expect.poll(commandPicker).not.toBeNull();
 	});
 
-	it('opens no picker on a phone', async () => {
-		await page.viewport(PHONE.width, PHONE.height);
+	it('open nothing with a finger', async () => {
+		vi.spyOn(deviceStore, 'isTouch', 'get').mockReturnValue(true);
 		await typeSlash();
 
-		// long enough for the popover to have mounted, as it does on a desktop
+		// long enough for the popover to have mounted, as it does with a mouse
 		await new Promise((resolve) => setTimeout(resolve, 300));
 		expect(commandPicker()).toBeNull();
 	});
