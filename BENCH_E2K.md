@@ -54,18 +54,16 @@ with llama-server or OMP_NUM_THREADS=1.
 ## Limitations
 - PGO unusable: `ecf_opt64` hangs with `-fprofile-generate` on `arch/x86/repack.cpp`.
 - LTO: no significant gain.
-- Multi-threaded `llama-cli` hits SIGILL inside libomp (`__omp_parallel_start`,
-  nested parallel region; reproduces without these patches). Use `llama-server`,
-  or `OMP_NUM_THREADS=1` for cli.
 
-## Recommended run
+## Recommended run (noomp build, Qwen3.8-27B)
 ```
-llama-server -m Qwen3-8B-Q4_K_M.gguf -ngl 0 -t 8 --repack 0
+llama-server -m Qwen3.8-27B-Q4_K_M.gguf -t 8 -nr          # chat: tg 1.12 t/s
+llama-server -m Qwen3.8-27B-Q4_K_M.gguf -t 8              # long prompts: pp 4.07 t/s
 ```
 
 ## Build
 ```
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF -DGGML_OPENMP=OFF
 cmake --build build -j8 --target llama-server llama-cli llama-bench
 ```
 
@@ -78,16 +76,30 @@ lcc/e2k show sleep-based barriers (~90-167 us each, thread-pool has one per
 graph node). With `OMP_WAIT_POLICY=active` (+ OMP_PROC_BIND=spread,
 OMP_PLACES=cores):
 
-| config                | tg64  | pp512 |
-|-----------------------|-------|-------|
-| default               | 0.73  | 3.54  |
-| WAIT_POLICY=active    | 1.09  | 3.54  |
-| active + bind         | 1.11  | -     |
+| config                          | tg64  | pp512 |
+|---------------------------------|-------|-------|
+| libomp default                  | 0.73  | 3.54  |
+| libomp WAIT_POLICY=active       | 1.09  | 3.54  |
+| libomp active + bind            | 1.11  | 3.54  |
+| noomp build (GGML_OPENMP=OFF)   | 1.12  | 3.47  |
 
-**+52% tg, pp unchanged.** This is a pure runtime fix; `~/bin/llama-e2k`
-wrapper and `~/.bashrc` export these vars. A noomp build (GGML_OPENMP=OFF,
-ggml's own spin-barrier pool) is being validated as a compile-time equivalent.
+**+52% tg, pp unchanged.** Root cause: lcc's libomp ports a blocking (condvar)
+barrier; on Elbrus the futex wake latency dominates since every node sync
+costs ~2x a core's work slice at 8 threads.
 
-Root cause: lcc's libomp ports a blocking (condvar) barrier; on Elbrus the
-futex wake latency dominates since every node sync costs ~2x a core's work
-slice at 8 threads.
+## Final build: GGML_OPENMP=OFF (installed)
+
+The compile-time fix matches the runtime env fix, with no env dependencies:
+
+```
+cmake -B build-noomp -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF -DGGML_OPENMP=OFF
+```
+
+With repack on, noomp also lifts tg64 from 0.68 to 0.96 t/s (+41%).
+
+Bonus: it also fixes the multi-threaded `llama-cli` SIGILL. That crash was
+inside lcc's libomp (`__omp_parallel_start`); with noomp there is no libomp in
+the dependency graph at all and `llama-cli -t 8 --single-turn` runs clean
+(RC=0, Qwen3.8-27B, verified on E16C). The clang-19 workaround is no longer
+needed. `~/bin/*` binaries now come from build-noomp; `~/lib` holds the noomp
+libraries. `llama-e2k` wrapper execs build-noomp/llama-server directly.
