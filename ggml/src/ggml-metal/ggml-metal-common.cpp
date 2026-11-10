@@ -41,6 +41,15 @@ bool ggml_metal_op_mul_mat_use_mm(const struct ggml_tensor * op, bool has_simdgr
            has_simdgroup_mm && ne11 > 8 && ne00 >= 32;
 }
 
+bool ggml_metal_op_mul_mat_src1_prec_f32(const struct ggml_tensor * op) {
+    const enum ggml_type type0 = op->src[0]->type;
+    const enum ggml_prec prec  = ggml_prec_get_src(op, 1);
+
+    // F16 ranks below BF16, so a BF16 request can not use the F16 tiles either
+    return (type0 == GGML_TYPE_F32 || type0 == GGML_TYPE_F16) && op->src[1]->type == GGML_TYPE_F32 &&
+           (prec == GGML_PREC_F32 || prec == GGML_PREC_BF16);
+}
+
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm) {
     const int64_t ne00 = op->src[0]->ne[0];
     const int64_t ne02 = op->src[0]->ne[2];

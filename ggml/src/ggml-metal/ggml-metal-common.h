@@ -55,6 +55,9 @@ bool ggml_metal_op_mul_mat_use_fwht (const struct ggml_tensor * op, size_t max_t
 bool ggml_metal_op_mul_mat_use_mm   (const struct ggml_tensor * op, bool has_simdgroup_mm);
 bool ggml_metal_op_mul_mat_id_use_mm(const struct ggml_tensor * op, bool has_simdgroup_mm);
 
+// true if the requested src1 precision requires the kernel_mul_mm_*_prec_f32 kernels, which do not convert src1 to F16
+bool ggml_metal_op_mul_mat_src1_prec_f32(const struct ggml_tensor * op);
+
 bool ggml_metal_op_mul_mat_use_mma    (const struct ggml_tensor * op);
 bool ggml_metal_op_mul_mat_may_use_mma(const struct ggml_tensor * op); // graph structure only
 
