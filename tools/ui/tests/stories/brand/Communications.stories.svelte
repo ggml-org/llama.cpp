@@ -171,13 +171,15 @@
 	{#snippet template(args)}
 		{@const copy = args as VirtualModelsCopy & { overlay: boolean }}
 		<StateGallery minItemWidth="28rem">
-			{#each tones as tone (tone)}
-				<StateGalleryItem
-					label="Landscape 16:9, {tone}"
-					note="After Julien's post · {size('landscape')}"
-				>
-					<VirtualModelsPost {copy} overlay={copy.overlay} {tone} />
-				</StateGalleryItem>
+			{#each [{ mark: 'llama.cpp', name: 'llama.cpp lockup' }, { mark: 'Llama', name: 'Llama lockup' }, { mark: 'icon', name: 'Icon' }] as const as v (v.mark)}
+				{#each tones as tone (tone)}
+					<StateGalleryItem
+						label="{v.name}, {tone}"
+						note="After Julien's post · {size('landscape')}"
+					>
+						<VirtualModelsPost {copy} mark={v.mark} overlay={copy.overlay} {tone} />
+					</StateGalleryItem>
+				{/each}
 			{/each}
 		</StateGallery>
 	{/snippet}

@@ -2,22 +2,25 @@
 	Pi's Virtual Models, after Julien's post and in its layout: the title centred at the top, Pi on the left with the
 	model picked in it, a line from it to each model it can send a query to (where it runs in a Mono label, its name as
 	a headline) and, at the right, what runs that model. Pi's and Hugging Face's marks are their own files (from
-	pi.dev/press-kit and huggingface.co/brand), never recoloured; llama.cpp's is its lockup, typed in the ground's ink.
+	pi.dev/press-kit and huggingface.co/brand), never recoloured; llama.cpp's is its lockup (or Llama's, or the icon
+	alone), typed in the ground's ink.
 	Each mark keeps half its height clear all round. The local route is the cinder detail.
 -->
 <script lang="ts">
 	import hfMark from './logos/hugging-face.svg?url';
 	import piMark from './logos/pi.svg?url';
-	import { FORMATS, LOCKUP, type VirtualModelsCopy } from './post';
+	import { FORMATS, ICON, LOCKUP, type VirtualModelsCopy } from './post';
 	import PostFrame from './PostFrame.svelte';
 
 	interface Props {
 		copy: VirtualModelsCopy;
+		/** how the local route's runner is shown: llama.cpp's lockup, Llama's, or the icon alone at the marks' size */
+		mark?: 'icon' | 'Llama' | 'llama.cpp';
 		overlay?: boolean;
 		tone: 'dark' | 'light';
 	}
 
-	let { copy, overlay = false, tone }: Props = $props();
+	let { copy, mark = 'llama.cpp', overlay = false, tone }: Props = $props();
 
 	const rows = $derived(copy.routes.length);
 </script>
@@ -68,7 +71,13 @@
 
 						<div class="runner">
 							{#if route.runner === 'llama.cpp'}
-								<span class="lockup">{LOCKUP}llama<span class="cpp">.cpp</span></span>
+								{#if mark === 'icon'}
+									<span aria-label="llama.cpp" class="icon" role="img">{ICON}</span>
+								{:else if mark === 'Llama'}
+									<span class="lockup">{LOCKUP}Llama</span>
+								{:else}
+									<span class="lockup mono">{LOCKUP}llama<span class="cpp">.cpp</span></span>
+								{/if}
 							{:else}
 								<img alt="" class="mark" src={hfMark} />
 
@@ -220,8 +229,18 @@
 	/* the lockup as BRAND.md types it: U+E002 and the name in Llama Mono at 90% of the size, so its icon matches
 	   Llama's */
 	.lockup {
-		font: 700 calc(var(--u) * 1.3 * 0.9) / 1 var(--mono);
+		font: 700 calc(var(--u) * 1.3) / 1 var(--sans);
+		letter-spacing: -0.01em;
 		white-space: nowrap;
+	}
+	.lockup.mono {
+		font-family: var(--mono);
+		font-size: calc(var(--u) * 1.3 * 0.9);
+		letter-spacing: 0;
+	}
+	/* the icon alone, at the height of Hugging Face's mark */
+	.icon {
+		font: 700 calc(var(--u) * 2.8) / 1 var(--sans);
 	}
 	.mark {
 		display: block;
