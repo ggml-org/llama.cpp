@@ -3261,15 +3261,13 @@ static webgpu_encoded_op ggml_webgpu_timestep_embedding(webgpu_context & ctx, gg
     const int max_period = ggml_get_op_params_i32(dst, 1);
     GGML_ASSERT(dim >= 1);
     GGML_ASSERT(max_period > 0);
-    
+
     std::vector<uint32_t> params = {
         (uint32_t) dim,
         ggml_webgpu_u32_from_f32((float) max_period),
         (uint32_t) src->ne[0],
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) /
-                    ggml_type_size(src->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) /
-                    ggml_type_size(dst->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -3278,24 +3276,20 @@ static webgpu_encoded_op ggml_webgpu_timestep_embedding(webgpu_context & ctx, gg
     };
 
     ggml_webgpu_shader_lib_context shader_lib_ctx = {};
-    shader_lib_ctx.src0 = src;
-    shader_lib_ctx.dst  = dst;
-    shader_lib_ctx.max_wg_size =
-        ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+    shader_lib_ctx.src0                           = src;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
-    webgpu_pipeline pipeline =
-        ctx->shader_lib->get_timestep_embedding_pipeline(shader_lib_ctx);
+    webgpu_pipeline pipeline = ctx->shader_lib->get_timestep_embedding_pipeline(shader_lib_ctx);
 
     // Each thread calculates both sin and cos for a given frequency,
     // so divide params.dim by 2.
-    const uint32_t invocation_count =
-        (uint32_t) src->ne[0] * (dim == 1 ? 1 : dim / 2);
-    const uint32_t workgroups =
-        CEIL_DIV(invocation_count, shader_lib_ctx.max_wg_size);
+    const uint32_t invocation_count = (uint32_t) src->ne[0] * (dim == 1 ? 1 : dim / 2);
+    const uint32_t workgroups       = CEIL_DIV(invocation_count, shader_lib_ctx.max_wg_size);
 
     uint32_t wg_x, wg_y;
-    compute_2d_workgroups(workgroups,
-                         ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x, wg_y);
+    compute_2d_workgroups(workgroups, ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x,
+                          wg_y);
 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
