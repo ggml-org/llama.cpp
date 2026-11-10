@@ -23,20 +23,20 @@ jobs:
         with:
           node-version: "24"
           # cache: "npm"
-          # cache-dependency-path: "tools/ui/package-lock.json"
+          # cache-dependency-path: "ui/apps/chat/package-lock.json"
           package-manager-cache: false
 
       - name: Install dependencies
         run: npm ci
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Build application
         run: npm run build
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Upload built UI
         uses: actions/upload-artifact@v6
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
           retention-days: 1

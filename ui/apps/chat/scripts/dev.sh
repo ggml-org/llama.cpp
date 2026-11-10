@@ -9,12 +9,12 @@
 #   bash scripts/dev.sh
 #   npm run dev
 
-cd ../../
+cd ../../../
 
 # Ensure node_modules are installed
-if [ ! -d "tools/ui/node_modules" ]; then
+if [ ! -d "ui/apps/chat/node_modules" ]; then
     echo "📦 Installing npm dependencies..."
-    cd tools/ui && npm ci && cd ../../
+    cd ui/apps/chat && npm ci && cd ../../../
 fi
 
 # Check and install git hooks if missing
@@ -52,7 +52,7 @@ trap cleanup SIGINT SIGTERM
 
 echo "🚀 Starting development servers..."
 echo "📝 Note: Make sure to start llama-server separately if needed"
-cd tools/ui
+cd ui/apps/chat
 # Use --insecure-http-parser to handle malformed HTTP responses from llama-server
 # (some responses have both Content-Length and Transfer-Encoding headers)
 storybook dev -p 6006 --ci & NODE_OPTIONS="--insecure-http-parser" vite dev --host 0.0.0.0 &

@@ -376,7 +376,7 @@ Routes → Components → Hooks → Stores → Services → Storage/API
 -   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
 -   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
 
-For detailed architecture diagrams, see [`tools/ui/docs/`](../ui/docs/):
+For detailed architecture diagrams, see [`ui/apps/chat/docs/`](../../ui/apps/chat/docs/):
 
 -   `high-level-architecture.mmd` - full architecture with all modules
 -   `high-level-architecture-simplified.mmd` - simplified overview
@@ -388,7 +388,7 @@ For detailed architecture diagrams, see [`tools/ui/docs/`](../ui/docs/):
 
 ```sh
 # make sure you have Node.js installed
-cd tools/ui
+cd ui/apps/chat
 npm i
 
 # run dev server (with hot reload)

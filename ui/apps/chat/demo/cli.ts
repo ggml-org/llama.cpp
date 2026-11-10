@@ -6,7 +6,7 @@
  *   node demo/cli.ts docs          record every docs/*.demo.ts script in DEMO_STORAGE
  *   node demo/cli.ts traces        write the built-in traces, and push them to DEMO_TRACES_DATASET
  *
- * Settings come from tools/ui/.env (see .env.example).
+ * Settings come from ui/apps/chat/.env (see .env.example).
  */
 
 import { DEMO_TRACES, generateTrace } from './fixtures/traces.ts';
@@ -271,13 +271,13 @@ async function recordPr(number: string, trustedSha?: string): Promise<void> {
 	rmSync(worktree, { force: true, recursive: true });
 	run('git', ['worktree', 'prune']);
 	run('git', ['worktree', 'add', '--detach', worktree, sha]);
-	symlinkSync(join(UI_DIR, 'node_modules'), join(worktree, 'tools/ui/node_modules'));
+	symlinkSync(join(UI_DIR, 'node_modules'), join(worktree, 'ui/apps/chat/node_modules'));
 
 	const name = `pr-${number}`;
 	const script = writeDemoScript(name, source);
 
 	try {
-		const videos = (await record([script], join(worktree, 'tools/ui'))).map((video) => ({
+		const videos = (await record([script], join(worktree, 'ui/apps/chat'))).map((video) => ({
 			...video,
 			gif: makePreview(video.mp4)
 		}));

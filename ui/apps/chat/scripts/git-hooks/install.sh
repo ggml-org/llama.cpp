@@ -4,12 +4,12 @@
 # Copies pre-commit and pre-push hooks into the repo's .git/hooks directory.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../../.." && pwd)"
 HOOKS_DIR="$REPO_ROOT/$(cd "$REPO_ROOT" && git rev-parse --git-path hooks)"
 
 # Verify package.json exists
-if [ ! -f "$REPO_ROOT/tools/ui/package.json" ]; then
-    echo "❌ package.json not found in tools/ui"
+if [ ! -f "$REPO_ROOT/ui/apps/chat/package.json" ]; then
+    echo "❌ package.json not found in ui/apps/chat"
     exit 1
 fi
 

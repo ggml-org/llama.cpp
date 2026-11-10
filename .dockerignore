@@ -10,7 +10,7 @@
 
 build*/
 
-tools/ui/node_modules/
+ui/apps/chat/node_modules/
 
 models/*
 

@@ -91,7 +91,7 @@ Llama UI supports two server operation modes:
 ### 1. Install Dependencies
 
 ```bash
-cd tools/ui
+cd ui/apps/chat
 npm ci
 ```
 
@@ -192,7 +192,7 @@ npm run build
 The build process:
 
 1. **Vite Build** - Bundles all TypeScript, Svelte, and CSS
-2. **Static Adapter** - Outputs to `../../build/tools/ui/dist` (llama-server's static file directory)
+2. **Static Adapter** - Outputs to `../../../build/ui/apps/chat/dist` (llama-server's static file directory)
 3. **Post-Build Script** - Cleans up intermediate files
 4. **Custom Plugin** - Creates `index.html` with:
    - Inlined favicon as base64
@@ -200,7 +200,7 @@ The build process:
    - Deterministic output (zeroed timestamps)
 
 ```text
-tools/ui/        →  build  →  build/tools/ui/dist/
+ui/apps/chat/        →  build  →  build/ui/apps/chat/dist/
 ├── src/                                 ├── index.html  (served by llama-server)
 ├── static/                              └── (favicon inlined)
 └── ...
@@ -211,8 +211,8 @@ tools/ui/        →  build  →  build/tools/ui/dist/
 ```javascript
 // svelte.config.js
 adapter: adapter({
-  pages: '../../build/tools/ui/dist',      // Output directory
-  assets: '../../build/tools/ui/dist',     // Static assets
+  pages: '../../../build/ui/apps/chat/dist',      // Output directory
+  assets: '../../../build/ui/apps/chat/dist',     // Static assets
   fallback: 'index.html',  // SPA fallback
   strict: true
 }),
@@ -225,7 +225,7 @@ output: {
 
 llama-ui is embedded directly into the llama-server binary:
 
-1. `npm run build` outputs `index.html` to `build/tools/ui/dist/`
+1. `npm run build` outputs `index.html` to `build/ui/apps/chat/dist/`
 2. llama-server compiles this into the binary at build time
 3. When accessing `/`, llama-server serves the bundled HTML
 
@@ -745,7 +745,7 @@ npm run check         # TypeScript type checking
 ## Project Structure
 
 ```text
-tools/ui/
+ui/apps/chat/
 ├── src/
 │   ├── lib/
 │   │   ├── components/   # UI components (app/, ui/)
@@ -765,6 +765,6 @@ tools/ui/
 
 ## Related Documentation
 
-- [llama.cpp Server README](../server/README.md) - Full server documentation
-- [Multimodal Documentation](../../docs/multimodal.md) - Image and audio support
-- [Function Calling](../../docs/function-calling.md) - Tool use capabilities
+- [llama.cpp Server README](../../../tools/server/README.md) - Full server documentation
+- [Multimodal Documentation](../../../docs/multimodal.md) - Image and audio support
+- [Function Calling](../../../docs/function-calling.md) - Tool use capabilities
