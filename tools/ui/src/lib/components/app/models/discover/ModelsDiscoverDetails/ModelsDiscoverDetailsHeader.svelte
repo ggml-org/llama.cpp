@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { HuggingFaceService } from '$lib/services';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
+	import type { ModelModalities } from '$lib/types/models';
 	import { orgOf } from '$lib/utils';
 
 	interface Props {
@@ -16,8 +17,7 @@
 		gguf?: HfModelGguf;
 		baseModels: string[];
 		licenseTag: string | null;
-		hasAudio: boolean;
-		hasVision: boolean;
+		modalities: ModelModalities;
 		hasTools: boolean;
 		hasReasoning: boolean;
 	}
@@ -26,11 +26,10 @@
 		baseModels,
 		details,
 		gguf,
-		hasAudio,
 		hasReasoning,
 		hasTools,
-		hasVision,
 		licenseTag,
+		modalities,
 		modelId
 	}: Props = $props();
 
@@ -60,7 +59,7 @@
 					<ModelCapabilityIcons
 						gapClass="gap-2"
 						iconSize="h-4 w-4"
-						modalities={{ audio: hasAudio, video: false, vision: hasVision }}
+						{modalities}
 						supportsThinking={hasReasoning}
 						supportsToolUse={hasTools}
 					/>

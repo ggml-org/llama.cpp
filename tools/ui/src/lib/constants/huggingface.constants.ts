@@ -56,6 +56,7 @@ export const HF_LINK_HEADER = 'Link';
 
 export const HF_RETRY_ATTEMPTS = 3;
 export const HF_RETRY_DELAY_MS = 1000;
+export const HF_HTTP_PARTIAL_CONTENT = 206;
 export const HF_HTTP_NOT_FOUND = 404;
 export const HF_HTTP_SERVER_ERROR_MIN = 500;
 
@@ -133,7 +134,7 @@ export const HF_MMPROJ_FILENAME_TOKEN = 'mmproj';
 /** Bytes read from the start of an mmproj to reach its metadata, which comes before the tensors. */
 export const HF_MMPROJ_HEADER_BYTES = 65_536;
 
-/** mmproj metadata keys saying which encoders it carries (tools/mtmd/clip-impl.h). */
+/** mmproj metadata keys saying which encoders it carries (tools/mtmd/mtmd-impl.h). */
 export const GGUF_KEY_HAS_VISION_ENCODER = 'clip.has_vision_encoder';
 export const GGUF_KEY_HAS_AUDIO_ENCODER = 'clip.has_audio_encoder';
 

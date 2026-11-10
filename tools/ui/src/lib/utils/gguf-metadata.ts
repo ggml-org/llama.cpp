@@ -37,11 +37,17 @@ const SCALAR_SIZE: Partial<Record<GgufType, number>> = {
 
 export type GgufValue = boolean | number | bigint | string;
 
+export interface GgufMetadata {
+	/** True when every pair was read; false when the buffer ended first or is not GGUF. */
+	complete: boolean;
+	metadata: Map<string, GgufValue>;
+}
+
 /**
  * The scalar and string metadata of a GGUF file (arrays are skipped). A buffer cut short returns the pairs read
  * before the cut; a buffer that is not GGUF returns an empty map.
  */
-export function readGgufMetadata(buffer: ArrayBuffer): Map<string, GgufValue> {
+export function readGgufMetadata(buffer: ArrayBuffer): GgufMetadata {
 	const view = new DataView(buffer);
 	const decoder = new TextDecoder();
 	const metadata = new Map<string, GgufValue>();
@@ -115,7 +121,7 @@ export function readGgufMetadata(buffer: ArrayBuffer): Map<string, GgufValue> {
 	};
 
 	// magic, version, tensor count, metadata count
-	if (!fits(24) || view.getUint32(0, true) !== GGUF_MAGIC) return metadata;
+	if (!fits(24) || view.getUint32(0, true) !== GGUF_MAGIC) return { complete: false, metadata };
 
 	const count = Number(view.getBigUint64(16, true));
 
@@ -124,24 +130,24 @@ export function readGgufMetadata(buffer: ArrayBuffer): Map<string, GgufValue> {
 	for (let i = 0; i < count; i++) {
 		const key = readString();
 
-		if (key === null || !fits(4)) break;
+		if (key === null || !fits(4)) return { complete: false, metadata };
 
 		const type = view.getUint32(offset, true) as GgufType;
 
 		offset += 4;
 
 		if (type === GgufType.ARRAY) {
-			if (!skipArray()) break;
+			if (!skipArray()) return { complete: false, metadata };
 
 			continue;
 		}
 
 		const value = type === GgufType.STRING ? readString() : readScalar(type);
 
-		if (value === null) break;
+		if (value === null) return { complete: false, metadata };
 
 		metadata.set(key, value);
 	}
 
-	return metadata;
+	return { complete: true, metadata };
 }

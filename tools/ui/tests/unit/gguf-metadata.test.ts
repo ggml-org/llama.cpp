@@ -65,7 +65,9 @@ const MMPROJ: Entry[] = [
 
 describe('readGgufMetadata', () => {
 	it('reads scalars and strings, skipping arrays', () => {
-		const metadata = readGgufMetadata(gguf(MMPROJ));
+		const { complete, metadata } = readGgufMetadata(gguf(MMPROJ));
+
+		expect(complete).toBe(true);
 
 		expect(metadata.get('general.architecture')).toBe('clip');
 		expect(metadata.get('clip.has_vision_encoder')).toBe(true);
@@ -76,7 +78,9 @@ describe('readGgufMetadata', () => {
 
 	it('returns what it read before a buffer cut short', () => {
 		const full = gguf(MMPROJ);
-		const metadata = readGgufMetadata(full.slice(0, full.byteLength - 20));
+		const { complete, metadata } = readGgufMetadata(full.slice(0, full.byteLength - 20));
+
+		expect(complete).toBe(false);
 
 		expect(metadata.get('clip.has_vision_encoder')).toBe(true);
 		expect(metadata.has('clip.audio.num_mel_bins')).toBe(false);
@@ -84,8 +88,11 @@ describe('readGgufMetadata', () => {
 
 	it('returns nothing for a file that is not GGUF', () => {
 		expect(
-			readGgufMetadata(new TextEncoder().encode('not a gguf file at all...').buffer).size
-		).toBe(0);
-		expect(readGgufMetadata(new ArrayBuffer(0)).size).toBe(0);
+			readGgufMetadata(new TextEncoder().encode('not a gguf file at all...').buffer)
+		).toStrictEqual({ complete: false, metadata: new Map() });
+		expect(readGgufMetadata(new ArrayBuffer(0))).toStrictEqual({
+			complete: false,
+			metadata: new Map()
+		});
 	});
 });

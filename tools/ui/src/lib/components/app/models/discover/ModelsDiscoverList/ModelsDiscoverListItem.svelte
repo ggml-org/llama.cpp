@@ -5,7 +5,7 @@
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import { Pause, Play, X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
-	import { HF_MMPROJ_FILENAME_TOKEN, HF_MODALITY_PIPELINE_TAGS, MODEL_ID } from '$lib/constants';
+	import { HF_MMPROJ_FILENAME_TOKEN, MODEL_ID } from '$lib/constants';
 	import { ModelDraftSidecar, ModelRowDownloadState } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsDiscoverStore, modelsStore } from '$lib/stores';
@@ -101,19 +101,10 @@
 			?.rfilename
 	);
 
-	// Modalities derived from HF metadata: vision from an mmproj sidecar or a
-	// multimodal pipeline tag, audio from its pipeline tags or an audio encoder in
-	// the mmproj, video from its pipeline tags.
-	let modalities = $derived.by<ModelModalities>(() => {
-		const tag = model.pipeline_tag ?? '';
-		const vision = HF_MODALITY_PIPELINE_TAGS.vision.includes(tag) || Boolean(mmprojPath);
-		const audio =
-			HF_MODALITY_PIPELINE_TAGS.audio.includes(tag) ||
-			HuggingFaceService.cachedMmprojEncoders(model.id)?.audio === true;
-		const video = HF_MODALITY_PIPELINE_TAGS.video.includes(tag);
-
-		return { audio, video, vision };
-	});
+	// Modalities derived from HF metadata: the pipeline tag and the mmproj.
+	let modalities = $derived<ModelModalities>(
+		HuggingFaceService.getModalities(model.id, model.pipeline_tag, mmprojPath)
+	);
 
 	// the mmproj's header says whether it also hears; read once per repo
 	$effect(() => {
