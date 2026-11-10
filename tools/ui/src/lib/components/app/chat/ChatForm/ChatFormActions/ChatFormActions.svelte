@@ -31,8 +31,6 @@
 		micWarning?: string | null;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
-		/** How to send from the keyboard, shown by the send button when it is not plain Enter. */
-		submitHint?: string;
 		uploadedFiles?: ChatUploadedFile[];
 		/** The chat's working directory, which the + menu names. */
 		workingDirectory?: string | null;
@@ -59,7 +57,6 @@
 		onWorkingDirectoryClick,
 		showAddButton = true,
 		showModelSelector = true,
-		submitHint,
 		uploadedFiles = [],
 		workingDirectory = null
 	}: Props = $props();
@@ -203,13 +200,6 @@
 			{onMicClick}
 		/>
 	{:else}
-		<!-- only where the row has the room, and never on a phone, which has no such keys -->
-		{#if submitHint}
-			<span class="hidden text-xs whitespace-nowrap text-muted-foreground @xl:md:inline">
-				{submitHint}
-			</span>
-		{/if}
-
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}

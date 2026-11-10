@@ -134,11 +134,6 @@
 		editor?.focusAt(offset);
 	}
 
-	/** Is the cursor in a code block, where Enter adds a line? */
-	export function isCaretInCodeBlock(): boolean {
-		return editor?.isCaretInCodeBlock() ?? false;
-	}
-
 	/** Replace the text as one undoable edit with the cursor at `caret` (e.g. a picked mention). */
 	export function replaceText(next: string, caret: number) {
 		if (editor) {

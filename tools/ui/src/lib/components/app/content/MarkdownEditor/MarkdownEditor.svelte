@@ -6,8 +6,12 @@
 		type MarkdownLivePreviewOptions,
 		markdownPlainText
 	} from './markdown-live-preview';
-	import { isInCodeBlock } from './markdown-syntax';
-	import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
+	import {
+		defaultKeymap,
+		history,
+		historyKeymap,
+		insertNewlineAndIndent
+	} from '@codemirror/commands';
 	import {
 		insertNewlineContinueMarkup,
 		markdownKeymap,
@@ -140,8 +144,13 @@
 				extensions: [
 					customCompartment.of(extensions),
 					history(),
-					// Shift+Enter is a plain line break that still continues lists and quotes
-					keymap.of([{ key: 'Shift-Enter', run: insertNewlineContinueMarkup }]),
+					// Shift+Enter and Ctrl/Cmd+Enter add a line, continuing lists and quotes
+					keymap.of(
+						['Shift-Enter', 'Mod-Enter', 'Ctrl-Enter'].map((key) => ({
+							key,
+							run: (target) => insertNewlineContinueMarkup(target) || insertNewlineAndIndent(target)
+						}))
+					),
 					keymap.of([...markdownKeymap, ...defaultKeymap, ...historyKeymap]),
 					markdownSupport,
 					previewCompartment.of(previewExtension()),
@@ -257,11 +266,6 @@
 	/** Cursor offset in the markdown source. */
 	export function getCaretOffset(): number {
 		return view?.state.selection.main.head ?? 0;
-	}
-
-	/** Is the cursor in a code block (fenced, closed or still open, or indented)? */
-	export function isCaretInCodeBlock(): boolean {
-		return view ? isInCodeBlock(view.state, view.state.selection.main.head) : false;
 	}
 
 	/** Focus the editor with the cursor at `offset` (default: the end of the text). */

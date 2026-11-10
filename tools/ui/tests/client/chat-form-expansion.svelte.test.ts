@@ -146,17 +146,6 @@ describe('ChatForm expansion', () => {
 		expect(isExpanded()).toBe(false);
 	});
 
-	it('says how to send while expanded', async () => {
-		const { container, toggle } = await renderForm();
-
-		expect(container.textContent).not.toContain('Enter to send');
-
-		await toggle();
-		await tick();
-
-		expect(container.textContent).toContain('Cmd/Ctrl+Enter to send');
-	});
-
 	it('scrolls a long message inside the editor', async () => {
 		const draft = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join('\n');
 		const { container } = await renderForm(draft);

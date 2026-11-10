@@ -388,24 +388,17 @@
 
 		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
 			const isModifier = event.ctrlKey || event.metaKey;
-			const sendOnEnter = currentConfig.sendOnEnter !== false;
 
-			// In the expanded editor (which says so by its send button), or with the
-			// caret inside a code block (``` or ~~~ fenced, closed or still open
-			// while being typed, or indented): Enter adds a line and only
-			// Cmd/Ctrl+Enter submits - skipping submit lets the editor's own
-			// newline through.
-			if (!isModifier && (isExpanded || inputRef?.isCaretInCodeBlock())) {
-				return;
-			}
+			// Enter sends and Ctrl/Cmd+Enter adds a line, the other way round when sending
+			// on Enter is off; Shift+Enter always adds one. Skipping submit lets the editor's
+			// own newline through
+			if (isModifier === (currentConfig.sendOnEnter !== false)) return;
 
-			if (sendOnEnter || isModifier) {
-				event.preventDefault();
+			event.preventDefault();
 
-				if (!canSubmit || disabled || hasLoadingAttachments) return;
+			if (!canSubmit || disabled || hasLoadingAttachments) return;
 
-				onSubmit?.();
-			}
+			onSubmit?.();
 		}
 	}
 
@@ -799,7 +792,6 @@
 						: undefined}
 					{showAddButton}
 					{showModelSelector}
-					submitHint={isExpanded ? 'Cmd/Ctrl+Enter to send' : undefined}
 					{uploadedFiles}
 					workingDirectory={cwd}
 				/>
