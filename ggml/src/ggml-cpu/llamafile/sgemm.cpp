@@ -69,10 +69,6 @@
 #define VECTOR_REGISTERS 16
 #endif
 
-#if defined(__riscv_v)
-#define LMUL 4
-#endif
-
 #define MM256_SET_M128I(a, b) _mm256_insertf128_si256(_mm256_castsi128_si256(b), (a), 1)
 
 namespace {
@@ -754,55 +750,57 @@ class tinyBLAS_RVV {
             return false;
         }
 
-#if LMUL == 1
-        if (m % 16 == 0 && (m/16 >= params->nth)) {
-            const int64_t SIZE_N = BLOCK_SIZE<6>(n);
-            mnpack<4, 6, 4>(m, n, SIZE_N, 12);
-            return true;
+        // Tile follows the accumulator LMUL: m1 is 4x6, m2 is 4x3, m4 is 2x2.
+        if constexpr (std::is_same_v<D, vfloat32m1_t>) {
+            if (m % 16 == 0 && (m/16 >= params->nth)) {
+                const int64_t SIZE_N = BLOCK_SIZE<6>(n);
+                mnpack<4, 6, 4>(m, n, SIZE_N, 12);
+                return true;
+            }
+            if (m % 8 == 0 ) {
+                const int64_t SIZE_N = BLOCK_SIZE<6>(n);
+                mnpack<4, 6, 2>(m, n, SIZE_N, 12);
+                return true;
+            }
+            if (m % 4 == 0) {
+                const int64_t SIZE_N = BLOCK_SIZE<6>(n);
+                mnpack<4, 6, 1>(m, n, SIZE_N, 12);
+                return true;
+            }
+        } else if constexpr (std::is_same_v<D, vfloat32m2_t>) {
+            if (m % 16 == 0 && (m/16 >= params->nth)) {
+                const int64_t SIZE_N = BLOCK_SIZE<3>(n);
+                mnpack<4, 3, 4>(m, n, SIZE_N, 24);
+                return true;
+            }
+            if (m % 8 == 0 ) {
+                const int64_t SIZE_N = BLOCK_SIZE<3>(n);
+                mnpack<4, 3, 2>(m, n, SIZE_N, 24);
+                return true;
+            }
+            if (m % 4 == 0) {
+                const int64_t SIZE_N = BLOCK_SIZE<3>(n);
+                mnpack<4, 3, 1>(m, n, SIZE_N, 24);
+                return true;
+            }
+        } else {
+            static_assert(std::is_same_v<D, vfloat32m4_t>, "unsupported tinyBLAS_RVV accumulator");
+            if (m % 16 == 0 && (m/16 >= params->nth)) {
+                const int64_t SIZE_N = BLOCK_SIZE<2>(n);
+                mnpack<2, 2, 8>(m, n, SIZE_N, 36);
+                return true;
+            }
+            if (m % 8 == 0 ) {
+                const int64_t SIZE_N = BLOCK_SIZE<2>(n);
+                mnpack<2, 2, 4>(m, n, SIZE_N, 36);
+                return true;
+            }
+            if (m % 4 == 0) {
+                const int64_t SIZE_N = BLOCK_SIZE<2>(n);
+                mnpack<2, 2, 2>(m, n, SIZE_N, 36);
+                return true;
+            }
         }
-        if (m % 8 == 0 ) {
-            const int64_t SIZE_N = BLOCK_SIZE<6>(n);
-            mnpack<4, 6, 2>(m, n, SIZE_N, 12);
-            return true;
-        }
-        if (m % 4 == 0) {
-            const int64_t SIZE_N = BLOCK_SIZE<6>(n);
-            mnpack<4, 6, 1>(m, n, SIZE_N, 12);
-            return true;
-        }
-#elif LMUL == 2
-        if (m % 16 == 0 && (m/16 >= params->nth)) {
-            const int64_t SIZE_N = BLOCK_SIZE<3>(n);
-            mnpack<4, 3, 4>(m, n, SIZE_N, 24);
-            return true;
-        }
-        if (m % 8 == 0 ) {
-            const int64_t SIZE_N = BLOCK_SIZE<3>(n);
-            mnpack<4, 3, 2>(m, n, SIZE_N, 24);
-            return true;
-        }
-        if (m % 4 == 0) {
-            const int64_t SIZE_N = BLOCK_SIZE<3>(n);
-            mnpack<4, 3, 1>(m, n, SIZE_N, 24);
-            return true;
-        }
-#else // LMUL = 4
-        if (m % 16 == 0 && (m/16 >= params->nth)) {
-            const int64_t SIZE_N = BLOCK_SIZE<2>(n);
-            mnpack<2, 2, 8>(m, n, SIZE_N, 36);
-            return true;
-        }
-        if (m % 8 == 0 ) {
-            const int64_t SIZE_N = BLOCK_SIZE<2>(n);
-            mnpack<2, 2, 4>(m, n, SIZE_N, 36);
-            return true;
-        }
-        if (m % 4 == 0) {
-            const int64_t SIZE_N = BLOCK_SIZE<2>(n);
-            mnpack<2, 2, 2>(m, n, SIZE_N, 36);
-            return true;
-        }
-#endif
         return false;
     }
 
@@ -4047,22 +4045,18 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         tb.matmul(m, n);
         return true;
 #elif defined(__riscv_v)
-    #if LMUL == 1
-        tinyBLAS_RVV<vfloat32m1_t, vfloat32m1_t, float, float, float> tb{ params,
-            k, (const float *)A, lda,
-            (const float *)B, ldb,
-            (float *)C, ldc};
-    #elif LMUL == 2
-        tinyBLAS_RVV<vfloat32m2_t, vfloat32m2_t, float, float, float> tb{ params,
-            k, (const float *)A, lda,
-            (const float *)B, ldb,
-            (float *)C, ldc};
-    #else // LMUL = 4
+        // vlenb >= 128 is VLEN >= 1024. f32 uses LMUL=1 there.
+        if (__riscv_vlenb() >= 128) {
+            tinyBLAS_RVV<vfloat32m1_t, vfloat32m1_t, float, float, float> tb{ params,
+                k, (const float *)A, lda,
+                (const float *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
         tinyBLAS_RVV<vfloat32m4_t, vfloat32m4_t, float, float, float> tb{ params,
             k, (const float *)A, lda,
             (const float *)B, ldb,
             (float *)C, ldc};
-    #endif
         return tb.matmul(m, n);
 #else
         return false;
@@ -4119,23 +4113,19 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         }
 #elif defined(__riscv_zvfbfwma)
         if (Btype == GGML_TYPE_BF16) {
-            #if LMUL == 1
-                tinyBLAS_RVV<vfloat32m1_t, vbfloat16mf2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
-                    k, (const ggml_bf16_t *)A, lda,
-                    (const ggml_bf16_t *)B, ldb,
-                    (float *)C, ldc};
-            #elif LMUL == 2
+            // vlenb >= 128 is VLEN >= 1024. bf16 uses LMUL=2 there.
+            if (__riscv_vlenb() >= 128) {
                 tinyBLAS_RVV<vfloat32m2_t, vbfloat16m1_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
                     k, (const ggml_bf16_t *)A, lda,
                     (const ggml_bf16_t *)B, ldb,
                     (float *)C, ldc};
-            #else // LMUL = 4
-                tinyBLAS_RVV<vfloat32m4_t, vbfloat16m2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
-                    k, (const ggml_bf16_t *)A, lda,
-                    (const ggml_bf16_t *)B, ldb,
-                    (float *)C, ldc};
-            #endif
                 return tb.matmul(m, n);
+            }
+            tinyBLAS_RVV<vfloat32m4_t, vbfloat16m2_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params,
+                k, (const ggml_bf16_t *)A, lda,
+                (const ggml_bf16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
         }
 #endif
         return false;
@@ -4202,22 +4192,18 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         }
 #elif defined(__riscv_zvfh)
         if (Btype == GGML_TYPE_F16) {
-        #if LMUL == 1
-            tinyBLAS_RVV<vfloat32m1_t, vfloat16mf2_t, ggml_fp16_t, ggml_fp16_t, float> tb{ params,
-                k, (const ggml_fp16_t *)A, lda,
-                (const ggml_fp16_t *)B, ldb,
-                (float *)C, ldc};
-        #elif LMUL == 2
-            tinyBLAS_RVV<vfloat32m2_t, vfloat16m1_t, ggml_fp16_t, ggml_fp16_t, float> tb{ params,
-                k, (const ggml_fp16_t *)A, lda,
-                (const ggml_fp16_t *)B, ldb,
-                (float *)C, ldc};
-        #else // LMUL = 4
+            // vlenb >= 128 is VLEN >= 1024. f16 uses LMUL=2 there.
+            if (__riscv_vlenb() >= 128) {
+                tinyBLAS_RVV<vfloat32m2_t, vfloat16m1_t, ggml_fp16_t, ggml_fp16_t, float> tb{ params,
+                    k, (const ggml_fp16_t *)A, lda,
+                    (const ggml_fp16_t *)B, ldb,
+                    (float *)C, ldc};
+                return tb.matmul(m, n);
+            }
             tinyBLAS_RVV<vfloat32m4_t, vfloat16m2_t, ggml_fp16_t, ggml_fp16_t, float> tb{ params,
                 k, (const ggml_fp16_t *)A, lda,
                 (const ggml_fp16_t *)B, ldb,
                 (float *)C, ldc};
-        #endif
             return tb.matmul(m, n);
         }
 #elif defined(__MMA__)
