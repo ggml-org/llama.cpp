@@ -75,7 +75,6 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             reasoning = reasoning_extracted;
         }
 
-
         // Response format parser
         if (has_response_format) {
             // The answer must be bare JSON, so the think block is consumed even when it is not extracted
