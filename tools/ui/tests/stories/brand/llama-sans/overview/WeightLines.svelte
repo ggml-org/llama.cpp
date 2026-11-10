@@ -12,7 +12,7 @@
 	};
 </script>
 
-<section style:--face={face} aria-label="Weights" class="weights">
+<section style:--face={face} aria-label="Weights" class="weights" data-readme="font-weights">
 	{#each specimen.styles as s (s.weight)}
 		<div class="row">
 			<p class="meta"><span>{s.name}</span><span>{s.weight}</span></p>

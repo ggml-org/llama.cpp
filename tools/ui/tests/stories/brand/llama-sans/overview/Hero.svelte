@@ -11,7 +11,7 @@
 	}: { face?: string; kicker: string; tagline: string[]; title: string[] } = $props();
 </script>
 
-<header style:--face={face} class="hero">
+<header style:--face={face} class="hero" data-readme="font-hero">
 	<p class="kicker">{kicker}</p>
 
 	<p aria-hidden="true" class="icon"></p>

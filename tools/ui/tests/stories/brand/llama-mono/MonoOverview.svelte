@@ -64,7 +64,7 @@ int main(int argc, char ** argv) {
 </Section>
 
 <Section label="In code">
-	<pre class="code">{code}</pre>
+	<pre class="code" data-readme="font-in-code">{code}</pre>
 </Section>
 
 <Section label="Kept apart">

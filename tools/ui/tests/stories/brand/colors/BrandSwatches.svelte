@@ -61,6 +61,9 @@
 		}
 	];
 
+	// the README's colour table names Ink and Light by the brand's own tokens
+	const BRAND_TOKENS: Record<string, string> = { Ink: 'brand-ink', Light: 'brand-light' };
+
 	// each primitive's declared value, to print under its swatch
 	const declared = new Map(primitiveGroups.flatMap((g) => g.tokens.map((t) => [t.name, t.light])));
 	const isGradient = (s: Swatch) => !s.token && s.value?.includes('gradient');
@@ -77,7 +80,7 @@
 	</header>
 
 	{#each groups as group (group.title)}
-		<section class="grid gap-4">
+		<section class="grid gap-4" data-readme="colours">
 			<div class="grid gap-1">
 				<h2 class="text-lg font-semibold">{group.title}</h2>
 
@@ -93,6 +96,7 @@
 								'flex aspect-[4/3] items-end rounded-card border border-border/60 p-3 text-label-sm',
 								s.dark ? 'text-white' : 'text-[#111111]'
 							]}
+							data-swatch={s.token ?? BRAND_TOKENS[s.name]}
 						>
 							{s.name}
 						</div>

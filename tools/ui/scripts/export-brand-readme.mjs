@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Renders the logo's usage for ggml-org/llama-brand's README from this Storybook, so the README shows the design
- * system's own stories rather than a drawing of them:
+ * Renders the artwork of ggml-org/llama-brand's README from this Storybook, so the README shows the design system's
+ * own stories rather than a drawing of them: the fonts, the colours and the logo in use.
  *
  *   npm run export:brand-readme -- --out ../../../llama-brand
  *   npm run export:brand-readme -- --out ../../../llama-brand --url http://localhost:6006
  *   npm run export:brand-readme -- --out ../../../llama-brand --storybook storybook-static
  *
- * Each piece is an element (or a group of them) the stories mark with `data-readme="<name>"`, captured at twice its
- * size on a transparent ground, in light and dark: <out>/readme/logo/<name>-light.png and -dark.png. The banners keep
- * their own colours in either mode, so they are captured once, as <name>.png. Without --url it serves a static build,
- * building it first if there is none.
+ * Each piece is an element (or a group of them) the stories mark with `data-readme="<mark>"`, captured at twice its
+ * size on a transparent ground, in light and dark: <out>/readme/<file>-light.png and -dark.png. Pieces that keep
+ * their own colours in either mode (the banners, the desktop mockups) are captured once, as <file>.png. The colour
+ * table's swatches are written as SVGs from the palette's own swatches (`data-swatch="<token>"`), in sRGB. Without
+ * --url it serves a static build, building it first if there is none.
  */
 
 import { execSync } from 'node:child_process';
@@ -35,27 +36,54 @@ if (!flag('out')) {
 	process.exit(1);
 }
 
-const OUT = path.resolve(process.cwd(), flag('out'), 'readme/logo');
-// the stories and the pieces each marks; `fixed` pieces look the same in light and dark
+const OUT = path.resolve(process.cwd(), flag('out'), 'readme');
+// the stories and the pieces each marks, as the mark and the file under readme/ it is written to; `fixed` pieces
+// look the same in light and dark
+const piece = (mark, file = `logo/${mark}`, fixed = false) => ({ file, fixed, mark });
 const STORIES = [
 	{
-		fixed: ['banner-llama-cpp', 'banner-llama'],
-		id: 'brand-logo-lockup--lockup',
+		id: 'brand-typography-llama-sans--overview',
 		pieces: [
-			'lockup-construction',
-			'lockup-typed',
-			'lockup-sizes',
-			'lockup-grounds',
-			'lockup-never',
-			'lockup-in-context'
+			piece('font-hero', 'fonts/llama-sans'),
+			piece('font-weights', 'fonts/llama-sans-weights')
 		]
 	},
-	{ id: 'brand-logo-usage--glyphs', pieces: ['icon-glyphs'] },
-	{ id: 'brand-logo-usage--buttons', pieces: ['icon-buttons'] },
-	{ id: 'brand-logo-usage--download-badge', pieces: ['icon-badges'] },
-	{ id: 'brand-logo-usage--running-text', pieces: ['icon-inline'] },
-	{ fixed: ['icon-in-place'], id: 'brand-logo-usage--app-icons-and-avatars', pieces: [] },
-	{ id: 'ui-foundations-brand--splash-screens', pieces: ['icon-splash'] }
+	{
+		id: 'brand-typography-llama-mono--overview',
+		pieces: [
+			piece('font-hero', 'fonts/llama-mono'),
+			piece('font-in-code', 'fonts/llama-mono-in-code')
+		]
+	},
+	{
+		id: 'brand-colors-palette--palette',
+		pieces: [piece('colours', 'colours/palette')],
+		swatches: true,
+		// the palette's own column, so its tiles sit four to a row
+		width: 1240
+	},
+	{
+		id: 'brand-logo-lockup--lockup',
+		pieces: [
+			piece('lockup-construction'),
+			piece('lockup-typed'),
+			piece('lockup-sizes'),
+			piece('lockup-grounds'),
+			piece('lockup-never'),
+			piece('lockup-in-context'),
+			piece('banner-llama-cpp', undefined, true),
+			piece('banner-llama', undefined, true)
+		]
+	},
+	{ id: 'brand-logo-usage--glyphs', pieces: [piece('icon-glyphs')] },
+	{ id: 'brand-logo-usage--buttons', pieces: [piece('icon-buttons')] },
+	{ id: 'brand-logo-usage--download-badge', pieces: [piece('icon-badges')] },
+	{ id: 'brand-logo-usage--running-text', pieces: [piece('icon-inline')] },
+	{
+		id: 'brand-logo-usage--app-icons-and-avatars',
+		pieces: [piece('icon-in-place', undefined, true)]
+	},
+	{ id: 'ui-foundations-brand--splash-screens', pieces: [piece('icon-splash')] }
 ];
 // wide enough for both lockups side by side at 64 px
 const VIEWPORT = { height: 1000, width: 1000 };
@@ -95,11 +123,39 @@ function serve(dir) {
 	});
 }
 
+// each flat swatch of the palette as the colour it renders, in sRGB hex: a canvas converts whatever the CSS declares
+async function swatches(page) {
+	const found = await page.evaluate(() => {
+		const ctx = document.createElement('canvas').getContext('2d');
+
+		return [...document.querySelectorAll('[data-swatch]')].map((el) => {
+			ctx.fillStyle = getComputedStyle(el).backgroundColor;
+			ctx.fillRect(0, 0, 1, 1);
+
+			const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
+
+			return {
+				hex: `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`,
+				token: el.dataset.swatch
+			};
+		});
+	});
+
+	for (const { hex, token } of found) {
+		const out = path.join(OUT, `swatches/${token}.svg`);
+
+		fs.mkdirSync(path.dirname(out), { recursive: true });
+		fs.writeFileSync(
+			out,
+			`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 40 40"><rect x="0.5" y="0.5" width="39" height="39" rx="8" fill="${hex}" stroke="rgb(128 128 128 / 0.4)"/></svg>\n`
+		);
+		console.log(`${path.relative(process.cwd(), out)} ${hex}`);
+	}
+}
+
 async function capture(base) {
 	const { chromium } = await import('playwright');
 	const browser = await chromium.launch();
-
-	fs.mkdirSync(OUT, { recursive: true });
 
 	for (const tone of ['light', 'dark']) {
 		const page = await browser.newPage({
@@ -115,20 +171,21 @@ async function capture(base) {
 
 				// the desktop mockups show light and dark side by side, so their captions, which follow the mode, go
 				style.textContent =
-					'html,body,.logo{background:transparent!important}[data-readme="icon-in-place"] figcaption{display:none!important}';
+					'html,body,.logo,.specimen{background:transparent!important}[data-readme="font-in-code"]{width:max-content!important;overflow:visible!important}[data-readme="icon-in-place"] figcaption{display:none!important}';
 				document.head.append(style);
 			});
 		});
 
 		for (const story of STORIES) {
+			await page.setViewportSize({ ...VIEWPORT, width: story.width ?? VIEWPORT.width });
 			await page.goto(`${base}/iframe.html?id=${story.id}&viewMode=story`);
 			await page.waitForSelector('[data-readme]');
 			await page.evaluate(() => document.fonts.ready);
 			await page.waitForTimeout(400);
 
-			const pieces = [...story.pieces, ...(tone === 'light' ? (story.fixed ?? []) : [])];
+			for (const { file, fixed, mark: name } of story.pieces) {
+				if (fixed && tone === 'dark') continue;
 
-			for (const name of pieces) {
 				// a piece marked on more than one element is captured as the box round all of them
 				const clip = await page.evaluate((name) => {
 					const boxes = [...document.querySelectorAll(`[data-readme="${name}"]`)].map((el) =>
@@ -150,16 +207,14 @@ async function capture(base) {
 
 				if (!clip) throw new Error(`${story.id}: nothing marked data-readme="${name}"`);
 
-				const file = story.fixed?.includes(name) ? `${name}.png` : `${name}-${tone}.png`;
+				const out = path.join(OUT, fixed ? `${file}.png` : `${file}-${tone}.png`);
 
-				await page.screenshot({
-					clip,
-					fullPage: true,
-					omitBackground: true,
-					path: path.join(OUT, file)
-				});
-				console.log(path.relative(process.cwd(), path.join(OUT, file)));
+				fs.mkdirSync(path.dirname(out), { recursive: true });
+				await page.screenshot({ clip, fullPage: true, omitBackground: true, path: out });
+				console.log(path.relative(process.cwd(), out));
 			}
+
+			if (story.swatches && tone === 'light') await swatches(page);
 		}
 
 		await page.close();
