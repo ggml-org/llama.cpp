@@ -5,6 +5,7 @@
 
 import { syntaxTree, syntaxTreeAvailable } from '@codemirror/language';
 import {
+	type ChangeDesc,
 	type EditorState,
 	type Extension,
 	type Range,
@@ -60,6 +61,14 @@ interface MarkdownBlock {
 	to: number;
 	name: string;
 	gapRem: number;
+	/** The block's own text, from..sourceTo. */
+	source: string;
+}
+
+/** How a block shows: raw or rendered, and the gap above it in rem. */
+interface BlockLook {
+	gapRem: number;
+	raw: boolean;
 }
 
 // [top, bottom] margins in rem of each block kind as a chat message renders it (each
@@ -91,7 +100,13 @@ const ALWAYS_RAW_NAMES = new Set(['LinkReference']);
 const MATH_FENCE = '$$';
 const DRAG_THRESHOLD_PX = 4;
 const RENDER_CACHE_LIMIT = 500;
+// Height guesses for rendered blocks CodeMirror hasn't measured yet (off screen in a
+// long document), which keep its scrollbar and scroll position steady
+const ESTIMATED_ROW_PX = 24;
+const ESTIMATED_ROW_CHARS = 80;
 const renderCache = new Map<string, string>();
+/** The measured height of a rendered block's content, by its cache key. */
+const measuredHeight = new Map<string, number>();
 const renderedKey = new WeakMap<HTMLElement, string>();
 const widgetOfDom = new WeakMap<HTMLElement, MarkdownBlockWidget>();
 
@@ -109,13 +124,32 @@ async function renderMarkdownBlock(source: string, renderKey: string): Promise<s
 	const markdown = preprocessLaTeX(splitGluedClosingCodeFences(source));
 	const html = processor.stringify(await processor.run(processor.parse(markdown)));
 
-	if (renderCache.size >= RENDER_CACHE_LIMIT) {
-		renderCache.delete(renderCache.keys().next().value as string);
-	}
-
-	renderCache.set(key, html);
+	remember(renderCache, key, html);
 
 	return html;
+}
+
+/** Sets `key` in a bounded cache, dropping its oldest entry when full. */
+function remember<T>(cache: Map<string, T>, key: string, value: T) {
+	if (!cache.has(key) && cache.size >= RENDER_CACHE_LIMIT) {
+		cache.delete(cache.keys().next().value as string);
+	}
+
+	cache.set(key, value);
+}
+
+function rangeKey(from: number, to: number): string {
+	return `${from}:${to}`;
+}
+
+/** Rows `source` wraps to at a typical width: a cheap stand-in for its height. */
+function estimatedRows(source: string): number {
+	let rows = 0;
+
+	for (const line of source.split('\n'))
+		rows += Math.max(1, Math.ceil(line.length / ESTIMATED_ROW_CHARS));
+
+	return rows;
 }
 
 function blockMargins(name: string): [number, number] {
@@ -142,19 +176,21 @@ function mathFenceCount(text: string): number {
 }
 
 interface TopNode {
+	/** Start of the node's first line. */
 	from: number;
 	name: string;
-	to: number;
+	/** End of the node's last line. */
+	sourceTo: number;
+	text?: string;
 }
 
 /**
  * A `$$` math block may hold blank lines, which split it into several top-level nodes
  * for the markdown parser; join them back into one block, as the renderer sees it.
  */
-function joinMathBlocks(state: EditorState, nodes: TopNode[]): TopNode[] {
+function joinMathBlocks(nodes: TopNode[], textOf: (node: TopNode) => string): TopNode[] {
 	const opens = (node: TopNode) =>
-		!CODE_BLOCK_NAMES.has(node.name) &&
-		mathFenceCount(state.doc.sliceString(node.from, node.to)) % 2 === 1;
+		!CODE_BLOCK_NAMES.has(node.name) && mathFenceCount(textOf(node)) % 2 === 1;
 	const joined: TopNode[] = [];
 
 	for (let index = 0; index < nodes.length; index++) {
@@ -177,41 +213,79 @@ function joinMathBlocks(state: EditorState, nodes: TopNode[]): TopNode[] {
 			continue;
 		}
 
-		joined.push({ from: node.from, name: node.name, to: nodes[close].to });
+		joined.push({ from: node.from, name: node.name, sourceTo: nodes[close].sourceTo });
 		index = close;
 	}
 
 	return joined;
 }
 
-function collectBlocks(state: EditorState): MarkdownBlock[] {
+/**
+ * The texts of `blocks` that `changes` left alone, by their range after the changes,
+ * so collecting the blocks again slices only what an edit touched.
+ */
+function untouchedTexts(blocks: MarkdownBlock[], changes: ChangeDesc | null): Map<string, string> {
+	const texts = new Map<string, string>();
+
+	for (const block of blocks) {
+		if (!changes) {
+			texts.set(rangeKey(block.from, block.sourceTo), block.source);
+		} else if (!changes.touchesRange(block.from, block.sourceTo)) {
+			texts.set(rangeKey(changes.mapPos(block.from), changes.mapPos(block.sourceTo)), block.source);
+		}
+	}
+
+	return texts;
+}
+
+function collectBlocks(state: EditorState, texts?: Map<string, string>): MarkdownBlock[] {
 	const { doc } = state;
 	const tree = syntaxTree(state);
 	// A long document may not be parsed to its end yet: its last parsed node may be cut
 	// short, so it and the rest stay raw until the parser catches up (the tree change
 	// rebuilds the preview)
 	const complete = syntaxTreeAvailable(state, doc.length);
+	const textOf = (node: TopNode) =>
+		(node.text ??=
+			texts?.get(rangeKey(node.from, node.sourceTo)) ?? doc.sliceString(node.from, node.sourceTo));
 
 	let nodes: TopNode[] = [];
 
 	for (let node = tree.topNode.firstChild; node; node = node.nextSibling) {
-		nodes.push({ from: node.from, name: node.name, to: node.to });
+		nodes.push({
+			from: doc.lineAt(node.from).from,
+			name: node.name,
+			sourceTo: doc.lineAt(node.to).to
+		});
 	}
 
 	if (!complete) nodes.pop();
 
-	nodes = joinMathBlocks(state, nodes);
+	nodes = joinMathBlocks(nodes, textOf);
 
 	return nodes.map((node, index) => {
 		const next = nodes[index + 1];
 		const prev = nodes[index - 1];
-		const from = doc.lineAt(node.from).from;
-		const sourceTo = doc.lineAt(node.to).to;
-		const to = next ? doc.lineAt(next.from).from - 1 : complete ? doc.length : sourceTo;
+		const to = next ? next.from - 1 : complete ? doc.length : node.sourceTo;
 		const gapRem = prev ? Math.max(blockMargins(prev.name)[1], blockMargins(node.name)[0]) : 0;
 
-		return { from, gapRem, name: node.name, sourceTo, to };
+		return {
+			from: node.from,
+			gapRem,
+			name: node.name,
+			source: textOf(node),
+			sourceTo: node.sourceTo,
+			to
+		};
 	});
+}
+
+let rootFontSize: number | undefined;
+
+function rootFontSizePx(): number {
+	rootFontSize ??= parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+
+	return rootFontSize;
 }
 
 function caretAt(x: number, y: number): { node: Node; offset: number } | null {
@@ -259,6 +333,16 @@ class SpacerWidget extends WidgetType {
 }
 
 class MarkdownBlockWidget extends WidgetType {
+	// For blocks off screen: the height this block had when last on screen, or a guess
+	// from its text before it ever was
+	get estimatedHeight(): number {
+		const content =
+			measuredHeight.get(cacheKeyOf(this.source, this.renderKey)) ??
+			estimatedRows(this.source) * ESTIMATED_ROW_PX;
+
+		return content + this.gapRem * rootFontSizePx();
+	}
+
 	constructor(
 		readonly source: string,
 		readonly gapRem: number,
@@ -333,7 +417,21 @@ class MarkdownBlockWidget extends WidgetType {
 			if (!current || cacheKeyOf(current.source, current.renderKey) !== key) return;
 
 			this.show(dom, view, html, key);
-			view.requestMeasure();
+		});
+	}
+
+	// Measures the rendered content in the editor's measure cycle (no forced layout) for
+	// estimatedHeight; the measure also makes the editor take in the new height
+	private measure(dom: HTMLElement, view: EditorView, key: string) {
+		view.requestMeasure({
+			key: dom,
+			read: () =>
+				dom.isConnected
+					? dom.offsetHeight - parseFloat(dom.style.paddingTop) * rootFontSizePx()
+					: 0,
+			write: (height) => {
+				if (height > 0) remember(measuredHeight, key, height);
+			}
 		});
 	}
 
@@ -447,11 +545,12 @@ class MarkdownBlockWidget extends WidgetType {
 		dom.innerHTML = html;
 		renderedKey.set(dom, key);
 		renderSvgDiagrams(dom);
+		this.measure(dom, view, key);
 
 		// mermaid draws asynchronously and changes the block's height when done
 		if (dom.querySelector(`pre.${MERMAID_BLOCK_CLASS}`)) {
 			void renderMermaidDiagrams(dom, mode.current === ColorMode.DARK).then(() =>
-				view.requestMeasure()
+				this.measure(dom, view, key)
 			);
 		}
 	}
@@ -465,6 +564,8 @@ interface LivePreview {
 	/** Which blocks show raw text, e.g. `"2,3"`; a cursor move within them changes nothing. */
 	editingKey: string;
 	focused: boolean;
+	/** How each block shows in `decorations`. */
+	looks: BlockLook[];
 	renderKey: string;
 }
 
@@ -480,85 +581,202 @@ function keyOf(flags: boolean[]): string {
 	return flags.flatMap((editing, index) => (editing ? [index] : [])).join(',');
 }
 
+function looksOf(blocks: MarkdownBlock[], flags: boolean[]): BlockLook[] {
+	const isRaw = (index: number) => flags[index] || ALWAYS_RAW_NAMES.has(blocks[index].name);
+
+	return blocks.map((block, index) => {
+		const prev = blocks[index - 1];
+		// the blank lines after a raw block show as text already, so they are the gap
+		const gapRem = prev && isRaw(index - 1) && prev.to > prev.sourceTo ? 0 : block.gapRem;
+
+		return { gapRem, raw: isRaw(index) };
+	});
+}
+
+/** The decorations that show one block: a rendered widget, or its raw text's spacing and line styles. */
+function blockDecorations(
+	state: EditorState,
+	block: MarkdownBlock,
+	look: BlockLook,
+	renderKey: string,
+	options: MarkdownLivePreviewOptions
+): Range<Decoration>[] {
+	if (!look.raw) {
+		const widget = new MarkdownBlockWidget(block.source, look.gapRem, renderKey, options);
+
+		return [Decoration.replace({ block: true, widget }).range(block.from, block.to)];
+	}
+
+	const { doc } = state;
+	const decorations: Range<Decoration>[] = [];
+
+	if (look.gapRem > 0) {
+		decorations.push(
+			Decoration.widget({ block: true, side: -1, widget: new SpacerWidget(look.gapRem) }).range(
+				block.from
+			)
+		);
+	}
+
+	const lineClass = CODE_BLOCK_NAMES.has(block.name)
+		? 'cm-md-raw-code'
+		: ALWAYS_RAW_NAMES.has(block.name)
+			? 'cm-md-raw-definition'
+			: null;
+
+	if (!lineClass) return decorations;
+
+	const first = doc.lineAt(block.from).number;
+	const last = doc.lineAt(block.sourceTo).number;
+
+	for (let number = first; number <= last; number++) {
+		const classes = [lineClass];
+
+		if (number === first) classes.push(`${lineClass}-first`);
+
+		if (number === last) classes.push(`${lineClass}-last`);
+
+		decorations.push(Decoration.line({ class: classes.join(' ') }).range(doc.line(number).from));
+	}
+
+	return decorations;
+}
+
+/** Is `pos` in one of the sorted, disjoint [from, to] `ranges`? */
+function inRanges(ranges: [number, number][], pos: number): boolean {
+	let low = 0;
+	let high = ranges.length - 1;
+
+	while (low <= high) {
+		const mid = (low + high) >> 1;
+
+		if (pos < ranges[mid][0]) high = mid - 1;
+		else if (pos > ranges[mid][1]) low = mid + 1;
+		else return true;
+	}
+
+	return false;
+}
+
+/** The atomic inline widgets (e.g. mention badges) of a block showing raw text. */
+function blockAtomic(
+	state: EditorState,
+	block: MarkdownBlock,
+	look: BlockLook,
+	options: MarkdownLivePreviewOptions
+): Range<Decoration>[] {
+	return look.raw && options.editingWidgets
+		? options.editingWidgets(state, block.from, block.sourceTo)
+		: [];
+}
+
+/** Moves `set` through `changes` and swaps its decorations in the `dirty` ranges for `added`. */
+function patch(
+	set: DecorationSet,
+	changes: ChangeDesc | null,
+	dirty: [number, number][],
+	added: Range<Decoration>[]
+): DecorationSet {
+	const mapped = changes ? set.map(changes) : set;
+
+	if (dirty.length === 0) return mapped;
+
+	return mapped.update({
+		add: added,
+		filter: (from) => !inRanges(dirty, from),
+		filterFrom: dirty[0][0],
+		filterTo: dirty[dirty.length - 1][1],
+		sort: true
+	});
+}
+
+/**
+ * The previous decorations, moved through `changes`, with new ones only for the blocks
+ * that differ from before (their range, text, raw or rendered, or gap). Unchanged
+ * blocks keep their decorations and widgets, so the editor neither compares nor
+ * redraws them.
+ */
+function updateDecorations(
+	previous: LivePreview,
+	changes: ChangeDesc | null,
+	state: EditorState,
+	blocks: MarkdownBlock[],
+	looks: BlockLook[],
+	options: MarkdownLivePreviewOptions
+): Pick<LivePreview, 'atomic' | 'decorations'> {
+	// the previous blocks an edit left alone, by their range after it
+	const kept = new Map<string, number>();
+
+	previous.blocks.forEach((block, index) => {
+		if (!changes) {
+			kept.set(rangeKey(block.from, block.to), index);
+		} else if (!changes.touchesRange(block.from, block.to)) {
+			kept.set(rangeKey(changes.mapPos(block.from), changes.mapPos(block.to)), index);
+		}
+	});
+
+	const dirty: [number, number][] = [];
+	const added: Range<Decoration>[] = [];
+	const addedAtomic: Range<Decoration>[] = [];
+	const { length } = state.doc;
+
+	// no block covers the start before the first one or a tail not parsed yet
+	if (blocks.length === 0 || blocks[0].from > 0) {
+		dirty.push([0, blocks.length === 0 ? length : blocks[0].from - 1]);
+	}
+
+	blocks.forEach((block, index) => {
+		const was = kept.get(rangeKey(block.from, block.to));
+		const same =
+			was !== undefined &&
+			previous.blocks[was].name === block.name &&
+			previous.blocks[was].source === block.source &&
+			previous.looks[was].raw === looks[index].raw &&
+			previous.looks[was].gapRem === looks[index].gapRem;
+
+		if (same) return;
+
+		dirty.push([block.from, block.to]);
+		added.push(...blockDecorations(state, block, looks[index], previous.renderKey, options));
+		addedAtomic.push(...blockAtomic(state, block, looks[index], options));
+	});
+
+	const last = blocks.at(-1);
+
+	if (last && last.to < length) dirty.push([last.to + 1, length]);
+
+	return {
+		atomic: patch(previous.atomic, changes, dirty, addedAtomic),
+		decorations: patch(previous.decorations, changes, dirty, added)
+	};
+}
+
 function buildPreview(
 	state: EditorState,
 	focused: boolean,
 	renderKey: string,
 	options: MarkdownLivePreviewOptions,
-	blocks: MarkdownBlock[] = collectBlocks(state)
+	blocks: MarkdownBlock[] = collectBlocks(state),
+	previous?: { changes: ChangeDesc | null; preview: LivePreview }
 ): LivePreview {
 	const flags = editingFlags(blocks, state, focused);
-
-	return {
-		...buildDecorations(state, blocks, flags, renderKey, options),
-		blocks,
-		editingKey: keyOf(flags),
-		focused,
-		renderKey
-	};
-}
-
-function buildDecorations(
-	state: EditorState,
-	blocks: MarkdownBlock[],
-	flags: boolean[],
-	renderKey: string,
-	options: MarkdownLivePreviewOptions
-): Pick<LivePreview, 'atomic' | 'decorations'> {
-	const decorations: Range<Decoration>[] = [];
-	const atomic: Range<Decoration>[] = [];
-	const { doc } = state;
-	const isRaw = (index: number) => flags[index] || ALWAYS_RAW_NAMES.has(blocks[index].name);
-
-	for (const [index, block] of blocks.entries()) {
-		const prev = blocks[index - 1];
-		// the blank lines after a raw block show as text already, so they are the gap
-		const gapRem = prev && isRaw(index - 1) && prev.to > prev.sourceTo ? 0 : block.gapRem;
-
-		if (!isRaw(index)) {
-			const source = doc.sliceString(block.from, block.sourceTo);
-			const widget = new MarkdownBlockWidget(source, gapRem, renderKey, options);
-
-			decorations.push(Decoration.replace({ block: true, widget }).range(block.from, block.to));
-
-			continue;
-		}
-
-		if (options.editingWidgets) {
-			atomic.push(...options.editingWidgets(state, block.from, block.sourceTo));
-		}
-
-		if (gapRem > 0) {
-			decorations.push(
-				Decoration.widget({ block: true, side: -1, widget: new SpacerWidget(gapRem) }).range(
-					block.from
+	const looks = looksOf(blocks, flags);
+	const sets = previous
+		? updateDecorations(previous.preview, previous.changes, state, blocks, looks, options)
+		: {
+				atomic: Decoration.set(
+					blocks.flatMap((block, index) => blockAtomic(state, block, looks[index], options)),
+					true
+				),
+				decorations: Decoration.set(
+					blocks.flatMap((block, index) =>
+						blockDecorations(state, block, looks[index], renderKey, options)
+					),
+					true
 				)
-			);
-		}
+			};
 
-		const lineClass = CODE_BLOCK_NAMES.has(block.name)
-			? 'cm-md-raw-code'
-			: ALWAYS_RAW_NAMES.has(block.name)
-				? 'cm-md-raw-definition'
-				: null;
-
-		if (!lineClass) continue;
-
-		const first = doc.lineAt(block.from).number;
-		const last = doc.lineAt(block.sourceTo).number;
-
-		for (let number = first; number <= last; number++) {
-			const classes = [lineClass];
-
-			if (number === first) classes.push(`${lineClass}-first`);
-
-			if (number === last) classes.push(`${lineClass}-last`);
-
-			decorations.push(Decoration.line({ class: classes.join(' ') }).range(doc.line(number).from));
-		}
-	}
-
-	return { atomic: Decoration.set(atomic, true), decorations: Decoration.set(decorations, true) };
+	return { ...sets, blocks, editingKey: keyOf(flags), focused, looks, renderKey };
 }
 
 const setFocused = StateEffect.define<boolean>();
@@ -610,6 +828,11 @@ const copyRenderedSelection = ViewPlugin.define((view) => {
 	};
 });
 
+/** Tells the preview whether the editor has focus; the editor does this on its own. */
+export function setPreviewFocus(focused: boolean): StateEffect<boolean> {
+	return setFocused.of(focused);
+}
+
 /** Renders the blocks again for a new render key, see MarkdownLivePreviewOptions. */
 export function setRenderKey(renderKey: string): StateEffect<string> {
 	return setRenderKeyEffect.of(renderKey);
@@ -638,29 +861,31 @@ export function markdownLivePreview(options: MarkdownLivePreviewOptions = {}): E
 				if (effect.is(setRenderKeyEffect)) renderKey = effect.value;
 			}
 
-			const treeChanged = syntaxTree(tr.state) !== syntaxTree(tr.startState);
+			// every block renders differently
+			if (renderKey !== value.renderKey) return buildPreview(tr.state, focused, renderKey, options);
 
-			if (tr.docChanged || treeChanged || renderKey !== value.renderKey) {
-				return buildPreview(tr.state, focused, renderKey, options);
+			const treeChanged = syntaxTree(tr.state) !== syntaxTree(tr.startState);
+			const changes = tr.docChanged ? tr.changes : null;
+
+			if (!changes && !treeChanged) {
+				if (!tr.selection && focused === value.focused) return value;
+
+				// a cursor move or a focus change within the blocks showing raw text changes nothing
+				const editingKey = keyOf(editingFlags(value.blocks, tr.state, focused));
+
+				if (editingKey === value.editingKey)
+					return focused === value.focused ? value : { ...value, focused };
 			}
 
-			if (!tr.selection && focused === value.focused) return value;
+			const blocks =
+				changes || treeChanged
+					? collectBlocks(tr.state, untouchedTexts(value.blocks, changes))
+					: value.blocks;
 
-			// a cursor move or a focus change: the blocks are the same, so only a change in
-			// which of them shows raw text needs new decorations
-			const flags = editingFlags(value.blocks, tr.state, focused);
-			const editingKey = keyOf(flags);
-
-			if (editingKey === value.editingKey)
-				return focused === value.focused ? value : { ...value, focused };
-
-			return {
-				...buildDecorations(tr.state, value.blocks, flags, renderKey, options),
-				blocks: value.blocks,
-				editingKey,
-				focused,
-				renderKey
-			};
+			return buildPreview(tr.state, focused, renderKey, options, blocks, {
+				changes,
+				preview: value
+			});
 		}
 	});
 
