@@ -544,7 +544,7 @@ llama_model_glm5_next::graph_mtp::graph_mtp(const llm_graph_params & params) :
     GGML_ASSERT(layer.nextn.eh_proj && layer.nextn.enorm && layer.nextn.hnorm &&
                 "GLM5-Next MTP block is missing - load the model with MTP enabled");
 
-    GGML_ASSERT(hparams.n_embd_out() == (uint32_t) n_embd && "GLM5-Next MTP hidden width mismatch");
+    GGML_ASSERT(hparams.n_embd_nextn() == (uint32_t) n_embd && "GLM5-Next MTP hidden width mismatch");
 
     const auto * mctx_hyb = static_cast<const llama_memory_hybrid_idx_context *>(mctx);
 
