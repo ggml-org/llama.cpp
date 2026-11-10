@@ -728,7 +728,10 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 };
 #endif // defined(GGML_USE_VMM)
 
-// Buffer pool for debugging
+// Debug pool for NVIDIA compute-sanitizer, e.g.
+// `GGML_CUDA_POOL_DEBUG=1 compute-sanitizer --tool memcheck ./build/bin/test-backend-ops -b CUDA0`
+// Allocations are exact-size and freed on release,
+// allowing memcheck to catch out-of-bounds and use-after-free.
 struct ggml_cuda_pool_debug : public ggml_cuda_pool {
     int device;
     size_t pool_size = 0;       // leak check (error if not zero at destruction)
