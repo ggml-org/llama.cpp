@@ -298,10 +298,10 @@ void ggml_vec_dot_bf16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml
     __m256 c3 = _mm256_setzero_ps();
     __m256 c4 = _mm256_setzero_ps();
     for (; i + 32 <= n; i += 32) {
-        c1 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i),      _mm256_loadu_ps(y + i),      c1);
-        c2 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i +  8), _mm256_loadu_ps(y + i +  8), c2);
-        c3 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i + 16), _mm256_loadu_ps(y + i + 16), c3);
-        c4 = _mm256_fmadd_ps(ggml_bf16x8_to_f32(x + i + 24), _mm256_loadu_ps(y + i + 24), c4);
+        c1 = GGML_F32x8_FMA(c1, ggml_bf16x8_to_f32(x + i),      _mm256_loadu_ps(y + i));
+        c2 = GGML_F32x8_FMA(c2, ggml_bf16x8_to_f32(x + i +  8), _mm256_loadu_ps(y + i +  8));
+        c3 = GGML_F32x8_FMA(c3, ggml_bf16x8_to_f32(x + i + 16), _mm256_loadu_ps(y + i + 16));
+        c4 = GGML_F32x8_FMA(c4, ggml_bf16x8_to_f32(x + i + 24), _mm256_loadu_ps(y + i + 24));
     }
     __m256 c  = _mm256_add_ps(_mm256_add_ps(c1, c2), _mm256_add_ps(c3, c4));
     __m128 lo = _mm_add_ps(_mm256_castps256_ps128(c), _mm256_extractf128_ps(c, 1));
