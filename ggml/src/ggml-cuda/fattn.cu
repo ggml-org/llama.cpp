@@ -559,6 +559,20 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
     }
 }
 
+// Opt-in row-faithful small-batch FlashAttention: when enabled, batches of up to
+// 8 query rows are routed to the vector kernel (the same kernel family used for
+// single-row decode) so that batched attention matches single-row execution.
+// Motivated by small-M row/batch invariance: even one ULP of difference between
+// the M=1 and M>1 attention paths can flip near-tie greedy tokens and change
+// generated text (speculative-decoding verification is a motivating workload).
+static bool ggml_cuda_fattn_row_faithful() {
+    static const bool enabled = []() {
+        const char * env = getenv("GGML_CUDA_FATTN_ROW_FAITHFUL");
+        return env != nullptr && std::atoi(env) != 0;
+    }();
+    return enabled;
+}
+
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
 #ifndef FLASH_ATTN_AVAILABLE
     GGML_UNUSED(device); GGML_UNUSED(dst);
@@ -673,7 +687,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 const bool sparse_decode = gqa_opt_applies && gqa_ratio > 4 &&
                     ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(K->ne[0], V->ne[0], 1, 8) &&
                     ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, 8);
-                if (!sparse_decode && cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 &&
+                if (!sparse_decode && cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[3] == 1 &&
+                        ((Q->ne[1] == 1) || (ggml_cuda_fattn_row_faithful() && Q->ne[1] <= 8)) &&
                         !(gqa_ratio > 4 && (Q->ne[0] >= 256 || K->ne[1] >= 8192))) {
                     return BEST_FATTN_KERNEL_VEC;
                 }

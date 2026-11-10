@@ -357,6 +357,8 @@ llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)
 
+llama_build_and_test(test-fattn-row-faithful.cpp LABEL "main behavior backend" LINK ggml)
+
 if (BUILD_SHARED_LIBS)
     llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp LABEL behavior)
     target_compile_definitions(test-llama-mmap PRIVATE LLAMA_BUILD)
