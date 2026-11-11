@@ -2429,6 +2429,22 @@ struct llama_model_lfm3 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_zaya1 : public llama_model_base {
+    llama_model_zaya1(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        ggml_tensor * build_cca_block(const llama_model & model, ggml_tensor * cur, ggml_tensor * inp_pos,
+                llm_graph_input_mem_hybrid * inp, int il);
+        ggml_tensor * build_router_moe(const llama_model & model, ggml_tensor * cur, ggml_tensor *& router_state, int il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_smallthinker : public llama_model_base {
     llama_model_smallthinker(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

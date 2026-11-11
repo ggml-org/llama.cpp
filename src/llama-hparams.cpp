@@ -216,6 +216,11 @@ uint32_t llama_hparams::n_embd_r() const {
         return n_embd * (n_shortconv_l_cache - 1);
     }
 
+    if (n_cca_qk != 0) {
+        // for ZAYA1 CCA layers: depthwise + grouped conv, each with d_conv - 1 columns of history
+        return 2 * (ssm_d_conv - 1) * n_cca_qk;
+    }
+
     if (n_embd_head_kda != 0) {
         // for Kimi KDA layers
         // Conv state for Q, K, V: 3 * (d_conv - 1) * n_head * head_dim
@@ -237,6 +242,11 @@ uint32_t llama_hparams::n_embd_s() const {
     if (wkv_head_size != 0) {
         // corresponds to RWKV's wkv_states size
         return n_embd * wkv_head_size;
+    }
+
+    if (n_cca_qk != 0) {
+        // for ZAYA CCA layers: the delayed value of the previous token
+        return n_embd_v_gqa() / 2;
     }
 
     if (n_embd_head_kda != 0) {

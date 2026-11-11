@@ -340,6 +340,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("mudd_")               == std::string::npos;
     }
 
+    // zaya1: the top-1 router and the grouped conv kernels stay F32
+    if (arch == LLM_ARCH_ZAYA1) {
+        quantize &= name.find("ffn_router_")  == std::string::npos;
+        quantize &= name.find("cca_conv_grp") == std::string::npos;
+    }
+
     // do not quantize positional embeddings and token types (BERT)
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
