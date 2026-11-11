@@ -2766,11 +2766,12 @@ struct llama_model_qwen4exp : public llama_model_base {
             ggml_tensor * pooled;
         };
 
-        // dense self-attention over the cells the QSA mask keeps, one query chunk at a time
+        // dense self-attention of the query chunk ic over the cells the QSA mask keeps
         ggml_tensor * build_attn_qsa(
         llm_graph_input_attn_kv * inp,
           llm_graph_input_kpool * inp_kpool,
                   const qsa_idx & idx,
+                         size_t   ic,
                     ggml_tensor * q_cur,
                     ggml_tensor * k_cur,
                     ggml_tensor * v_cur,

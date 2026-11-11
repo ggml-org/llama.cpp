@@ -342,6 +342,10 @@ struct llm_attn_mask {
 
     // fill every token of a sequence with the mask row of its first token (dspark draft blocks)
     bool block_uniform = false;
+
+    // layer-major prefill: the masks of consecutive token chunks of the ubatch, empty if the ubatch is not chunked
+    // raw and rows are then not used: a chunk has its own inputs, or its raw is a view of the staircase mask (see llama_kv_cache::get_staircase)
+    std::vector<llm_attn_mask> chunks;
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -1304,6 +1308,12 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    // layer-major prefill: a tensor with the shape of `like`, [n_embd, n_tokens], for the results of the token chunks of the ubatch
+    ggml_tensor * build_chunk_dst(ggml_tensor * like) const;
+
+    // store cur, the result of the chunk that starts at token t, in dst; returns dst with the chunk
+    ggml_tensor * build_chunk_store(ggml_tensor * dst, ggml_tensor * cur, int64_t t) const;
+
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
     ggml_tensor * build_attn(
@@ -1385,7 +1395,12 @@ struct llm_graph_context {
             ggml_tensor * top_k,   // [n_top, n_tokens]
                     int   il) const;
 
-    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
+    // chunks: the masks can have token chunks (see llm_attn_mask::chunks), the graph must then attend with build_attn_inp_chunks
+    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa(bool chunks = false) const;
+
+    // layer-major prefill: the attention inputs of each token chunk of the ubatch, in token order
+    // empty if the masks of inp have no chunks
+    std::vector<llm_graph_input_attn_kv_iswa> build_attn_inp_chunks(const llm_graph_input_attn_kv_iswa * inp) const;
 
     llm_graph_input_dsv4 * build_inp_dsv4() const;
 

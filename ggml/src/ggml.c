@@ -5600,7 +5600,8 @@ static struct ggml_tensor * ggml_flash_attn_ext_impl(
 
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16);
-        GGML_ASSERT(ggml_is_contiguous(mask));
+        // the mask can be a view of the first cells of each row of a larger mask
+        GGML_ASSERT(mask->nb[0] == sizeof(ggml_fp16_t) && mask->nb[1] >= mask->ne[0]*mask->nb[0]);
         //GGML_ASSERT(ggml_can_repeat_rows(mask, qk));
 
         GGML_ASSERT(q->ne[2] % mask->ne[2] == 0);

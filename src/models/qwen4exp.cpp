@@ -712,7 +712,11 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
 
 // query tokens per QSA chunk, LLAMA_QSA_CHUNK overrides it for tests, 0 disables the split
 // read at each graph build, so that one process can compare contexts with different chunk sizes
-static int64_t qwen4exp_qsa_chunk_n() {
+// layer-major prefill (LLAMA_LAYER_MAJOR) sets one chunk size for the attention block and the expert FFN
+static int64_t qwen4exp_qsa_chunk_n(const llama_cparams & cparams) {
+    if (cparams.n_chunk > 0) {
+        return cparams.n_chunk;
+    }
     const char * env = getenv("LLAMA_QSA_CHUNK");
     return env ? std::max<int64_t>(0, atoll(env)) : 2048;
 }
@@ -720,7 +724,7 @@ static int64_t qwen4exp_qsa_chunk_n() {
 // the query chunks {t0, n} of the QSA: the selection mask of a chunk is [n_kv, n], so split large ubatches
 // the mask streams are not split: a split cache with several sequences keeps one chunk, as its reserve does
 static std::vector<std::pair<int64_t, int64_t>> qwen4exp_qsa_chunks(const llama_cparams & cparams, int64_t n_tokens) {
-    const int64_t n_chunk = qwen4exp_qsa_chunk_n();
+    const int64_t n_chunk = qwen4exp_qsa_chunk_n(cparams);
     if (n_chunk == 0 || cparams.n_ubatch <= n_chunk || !(cparams.kv_unified || cparams.n_seq_max == 1)) {
         return { { 0, n_tokens } };
     }
@@ -761,6 +765,11 @@ public:
             return false;
         }
 
+        // the pool masks of get_kpool_mask depend on the cells of the cache
+        if (pool_mask == nullptr) {
+            return false;
+        }
+
         bool res = true;
 
         res &= k_idxs->ne[0]     == params.ubatch.n_tokens;
@@ -788,8 +797,13 @@ public:
     struct chunk {
         int64_t       t0;
         int64_t       n;
-        ggml_tensor * pool_mask;
+        ggml_tensor * pool_mask; // nullptr for an empty chunk without the pool_mask input
         ggml_tensor * tail_idxs;
+
+        // the attention inputs of the chunk, made by the first QSA layer: each view of a host input is a separate upload
+        ggml_tensor * k_idxs = nullptr; // I64 [n]
+        ggml_tensor * v_idxs = nullptr; // I64 [n] or [n*n_embd_v_gqa]
+        ggml_tensor * pos    = nullptr; // I32 [n*n_pos_per_embd]
     };
     std::vector<chunk> chunks;
 
@@ -809,21 +823,40 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     auto inp = std::make_unique<llm_graph_input_kpool>(mctx_hyb, kpool);
 
+    const auto chunks = qwen4exp_qsa_chunks(cparams, n_tokens);
+
+    // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the ubatch allows it
+    // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
+    std::vector<ggml_tensor *> pool_masks;
+    if (cparams.n_chunk > 0 && chunks.size() > 1 && chunks[1].second > 0) {
+        for (const auto & qc : chunks) {
+            pool_masks.push_back(qc.second > 0 ? mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_chunk, qc.first, qc.second) : nullptr);
+            if (qc.second > 0 && pool_masks.back() == nullptr) {
+                LLAMA_LOG_DEBUG("%s: the pool mask of this ubatch is not a staircase, the pool_mask input has %u tokens\n", __func__, ubatch.n_tokens);
+                pool_masks.clear();
+                break;
+            }
+        }
+    }
+
     inp->k_idxs     = mctx_idx->build_input_k_idxs(ctx0, ubatch);
     inp->pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
     inp->pool_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
-    inp->pool_mask  = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_pool, n_tokens);
     inp->tail_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool - 1, n_tokens);
     ggml_set_input(inp->pool_cells);
     ggml_set_input(inp->pool_idxs);
-    ggml_set_input(inp->pool_mask);
     ggml_set_input(inp->tail_idxs);
 
     // set_input fills them all, so keep them allocated even when no op reads them
     ggml_build_forward_expand(gf, inp->pool_cells);
     ggml_build_forward_expand(gf, inp->pool_idxs);
-    ggml_build_forward_expand(gf, inp->pool_mask);
     ggml_build_forward_expand(gf, inp->tail_idxs);
+
+    if (pool_masks.empty()) {
+        inp->pool_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F16, n_pool, n_tokens);
+        ggml_set_input(inp->pool_mask);
+        ggml_build_forward_expand(gf, inp->pool_mask);
+    }
 
     inp->n_kv  = mctx_idx->get_n_kv();
     inp->n_new = mctx_hyb->get_n_kpool_new();
@@ -840,9 +873,10 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
     inp->new_pool_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*inp->n_new);
     ggml_set_input(inp->new_pool_pos);
 
-    for (const auto & qc : qwen4exp_qsa_chunks(cparams, n_tokens)) {
+    for (size_t ic = 0; ic < chunks.size(); ++ic) {
+        const auto & qc = chunks[ic];
         inp->chunks.push_back({ qc.first, qc.second,
-                qwen4exp_view_rows(ctx0, inp->pool_mask, qc.first, qc.second),
+                inp->pool_mask ? qwen4exp_view_rows(ctx0, inp->pool_mask, qc.first, qc.second) : pool_masks[ic],
                 qwen4exp_view_rows(ctx0, inp->tail_idxs, qc.first, qc.second) });
     }
 
@@ -1007,11 +1041,14 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
     return sel;
 }
 
-// Dense GQA self-attention over the cells that the QSA mask keeps.
+// Dense GQA self-attention of the query chunk ic over the cells that its QSA mask keeps.
+// q_cur, k_cur and v_cur are the rows of the chunk: a chunk stores its K and V before it attends, the mask keeps
+// only cells at or before a query, so the cells of the later chunks are not read before they are written
 ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
         llm_graph_input_attn_kv * inp,
         llm_graph_input_kpool *   inp_kpool,
         const qsa_idx &           idx,
+        size_t                    ic,
         ggml_tensor *             q_cur,
         ggml_tensor *             k_cur,
         ggml_tensor *             v_cur,
@@ -1037,10 +1074,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
 
     const auto * mctx_cur = inp->mctx;
 
+    const auto & chunk = inp_kpool->chunks[ic];
+
     // store to KV cache
     {
-        const auto & k_idxs = inp->get_k_idxs();
-        const auto & v_idxs = inp->get_v_idxs();
+        ggml_tensor * k_idxs = chunk.k_idxs ? chunk.k_idxs : inp->get_k_idxs();
+        ggml_tensor * v_idxs = chunk.v_idxs ? chunk.v_idxs : inp->get_v_idxs();
 
         ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
@@ -1049,24 +1088,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    // build_attn_mha expands each chunk, so the next chunk can reuse the memory of the selection mask
-    ggml_tensor * cur = nullptr;
-    for (size_t ic = 0; ic < inp_kpool->chunks.size(); ++ic) {
-        const auto & chunk = inp_kpool->chunks[ic];
+    ggml_tensor * sel = build_qsa_sel(inp_kpool, idx, ic, il);
 
-        ggml_tensor * sel = build_qsa_sel(inp_kpool, idx, ic, il);
+    // the selection replaces the kq_mask: split it into the streams of the K view
+    const int64_t n_stream = k->ne[3];
+    GGML_ASSERT(sel->ne[0] == k->ne[2] && sel->ne[1] % n_stream == 0);
+    sel = ggml_reshape_4d(ctx0, sel, sel->ne[0], sel->ne[1]/n_stream, 1, n_stream);
+    cb(sel, "kq_mask_qsa", il);
 
-        // the selection replaces the kq_mask: split it into the streams of the K view
-        const int64_t n_stream = k->ne[3];
-        GGML_ASSERT(sel->ne[0] == k->ne[2] && sel->ne[1] % n_stream == 0);
-        sel = ggml_reshape_4d(ctx0, sel, sel->ne[0], sel->ne[1]/n_stream, 1, n_stream);
-        cb(sel, "kq_mask_qsa", il);
-
-        ggml_tensor * q = ggml_view_3d(ctx0, q_cur, q_cur->ne[0], q_cur->ne[1], chunk.n, q_cur->nb[1], q_cur->nb[2], chunk.t0*q_cur->nb[2]);
-
-        ggml_tensor * out = build_attn_mha(q, k, v, nullptr, sel, nullptr, nullptr, nullptr, inp_kpool->n_sel, kq_scale, il);
-        cur = cur ? ggml_concat(ctx0, cur, out, 1) : out;
-    }
+    ggml_tensor * cur = build_attn_mha(q_cur, k, v, nullptr, sel, nullptr, nullptr, nullptr, inp_kpool->n_sel, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     // the rotation is its own inverse, so undo it on the value side of the output
@@ -1092,66 +1122,114 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
 
     const qsa_idx idx = qsa ? build_qsa_idx(mctx_hyb, inp_kpool, cur, inp_pos, il) : qsa_idx{};
 
-    // Qwen3Next uses a single Q projection that outputs query + gate
-    ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
-    cb(Qcur_full, "Qcur_full", il);
+    // the attention block for the rows of cur, the query chunk ic of the QSA
+    const auto build_block = [&](ggml_tensor * cur, ggml_tensor * inp_pos, int64_t n_tokens, size_t ic) {
+        // Qwen3Next uses a single Q projection that outputs query + gate
+        ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
+        cb(Qcur_full, "Qcur_full", il);
 
-    ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
-        ggml_element_size(Qcur_full) * n_embd_head * 2,
-        ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head, 0);
-    cb(Qcur, "Qcur_reshaped", il);
+        ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
+            ggml_element_size(Qcur_full) * n_embd_head * 2,
+            ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head, 0);
+        cb(Qcur, "Qcur_reshaped", il);
 
-    Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
-    cb(Qcur, "Qcur_normed", il);
+        Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Qcur, "Qcur_normed", il);
 
-    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-    cb(Kcur, "Kcur", il);
+        ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+        cb(Kcur, "Kcur", il);
 
-    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
-    cb(Vcur, "Vcur", il);
+        ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
+        cb(Vcur, "Vcur", il);
 
-    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-    Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
-    cb(Kcur, "Kcur_normed", il);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+        Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
+        cb(Kcur, "Kcur_normed", il);
 
-    ggml_tensor * gate = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
-        ggml_element_size(Qcur_full) * n_embd_head * 2,
-        ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
-        ggml_element_size(Qcur_full) * n_embd_head);
-    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
-    cb(gate, "gate_reshaped", il);
+        ggml_tensor * gate = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
+            ggml_element_size(Qcur_full) * n_embd_head * 2,
+            ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
+            ggml_element_size(Qcur_full) * n_embd_head);
+        gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+        cb(gate, "gate_reshaped", il);
 
-    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    // Apply IMRoPE
-    Qcur = build_rope(Qcur, inp_pos, il);
-    Kcur = build_rope(Kcur, inp_pos, il);
+        // Apply IMRoPE
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
 
-    cb(Qcur, "Qcur", il);
-    cb(Kcur, "Kcur", il);
-    cb(Vcur, "Vcur", il);
+        cb(Qcur, "Qcur", il);
+        cb(Kcur, "Kcur", il);
+        cb(Vcur, "Vcur", il);
 
-    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+        const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
+        if (qsa) {
+            cur = build_attn_qsa(inp, inp_kpool, idx, ic, Qcur, Kcur, Vcur, kq_scale, il);
+        } else {
+            cur = build_attn(inp,
+                        nullptr, nullptr, nullptr,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+        }
+        cb(cur, "attn_pregate", il);
+
+        ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
+        cb(gate_sigmoid, "gate_sigmoid", il);
+
+        cur = ggml_mul(ctx0, cur, gate_sigmoid);
+        cb(cur, "attn_gated", il);
+
+        cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+        cb(cur, "attn_output", il);
+
+        return cur;
+    };
+
+    // the number of chunks that are not empty
+    int64_t n_chunked = 0;
     if (qsa) {
-        cur = build_attn_qsa(inp, inp_kpool, idx, Qcur, Kcur, Vcur, kq_scale, il);
-    } else {
-        cur = build_attn(inp,
-                    nullptr, nullptr, nullptr,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+        for (const auto & chunk : inp_kpool->chunks) {
+            n_chunked += chunk.n > 0;
+        }
     }
-    cb(cur, "attn_pregate", il);
 
-    ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
-    cb(gate_sigmoid, "gate_sigmoid", il);
+    if (n_chunked <= 1) {
+        return build_block(cur, inp_pos, n_tokens, 0);
+    }
 
-    cur = ggml_mul(ctx0, cur, gate_sigmoid);
-    cb(cur, "attn_gated", il);
+    // the whole block runs per query chunk, so that its tensors have the size of a chunk and not of the ubatch
+    const int64_t n_pos = inp_pos->ne[0]/n_tokens;
 
-    cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
-    cb(cur, "attn_output", il);
+    ggml_tensor * out = build_chunk_dst(cur);
+    for (size_t ic = 0; ic < inp_kpool->chunks.size(); ++ic) {
+        auto & chunk = inp_kpool->chunks[ic];
+        if (chunk.n == 0) {
+            continue;
+        }
 
-    return cur;
+        if (chunk.pos == nullptr) {
+            ggml_tensor * k_idxs = inp->get_k_idxs();
+            ggml_tensor * v_idxs = inp->get_v_idxs();
+
+            // a transposed V cache has one index per value of a token
+            const int64_t n_v = v_idxs->ne[0]/n_tokens;
+
+            chunk.k_idxs = ggml_view_1d(ctx0, k_idxs, chunk.n,     chunk.t0*k_idxs->nb[0]);
+            chunk.v_idxs = ggml_view_1d(ctx0, v_idxs, chunk.n*n_v, chunk.t0*n_v*v_idxs->nb[0]);
+
+            // the positions have one section of n_tokens values per position input
+            ggml_tensor * pos = ggml_reshape_2d(ctx0, inp_pos, n_tokens, n_pos);
+            pos = ggml_view_2d(ctx0, pos, chunk.n, n_pos, pos->nb[1], chunk.t0*pos->nb[0]);
+            chunk.pos = ggml_reshape_1d(ctx0, ggml_cont(ctx0, pos), chunk.n*n_pos);
+        }
+
+        ggml_tensor * cur_chunk = ggml_view_2d(ctx0, cur, cur->ne[0], chunk.n, cur->nb[1], chunk.t0*cur->nb[1]);
+
+        out = build_chunk_store(out, build_block(cur_chunk, chunk.pos, chunk.n, ic), chunk.t0);
+    }
+
+    return out;
 }
 
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(

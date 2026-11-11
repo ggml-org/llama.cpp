@@ -308,6 +308,14 @@ llama_test(
     ARGS -a "qwen4exp" --qsa-chunk 24 -d 0.3
 )
 
+# layer-major prefill: the chunks of the attention block and of the expert FFN match the unsplit graph on the CPU
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-layer-major-match
+    LABEL main
+    ARGS -a "qwen4exp" --layer-major 24 -d 0.3
+)
+
 llama_test(
     test-llama-context
     NAME test-llama-context-qsa-chunk

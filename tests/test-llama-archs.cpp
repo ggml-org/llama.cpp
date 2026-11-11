@@ -179,6 +179,7 @@ static void usage(char ** argv) {
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
     LOG("  --qsa-chunk <n>          Check that QSA query chunks of n tokens match the unsplit attention (CPU only)\n");
+    LOG("  --layer-major <n>        Check that layer-major chunks of n tokens (LLAMA_LAYER_MAJOR) match the unsplit graph (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -1793,8 +1794,8 @@ static void set_env(const char * name, const char * value) {
 // a fresh context for each chunk size, as the chunk count is fixed when the context reserves its graphs
 // ubatches of n_ubatch/2, n_ubatch and n_ubatch/2 tokens give full, partial and empty chunks
 static std::vector<float> get_logits_qsa_chunk(
-        llama_model * model, const llama_context_params & ctx_params, const std::vector<llama_token> & tokens, const char * n_chunk) {
-    set_env("LLAMA_QSA_CHUNK", n_chunk);
+        llama_model * model, const llama_context_params & ctx_params, const std::vector<llama_token> & tokens, const char * env, const char * n_chunk) {
+    set_env(env, n_chunk);
     llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
@@ -1821,7 +1822,8 @@ static std::vector<float> get_logits_qsa_chunk(
 // the attention of a query row does not depend on the other rows, so the chunks match the unsplit attention
 // flash attention is off: the CPU tiles it for larger batches, and the different rounding of the unsplit reference reaches 5e-10
 // a misplaced chunk is above 1e-7 with stdev 0.3, the rounding of the kernels that the CPU picks by batch size below 1e-13
-static int test_qsa_chunk(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * n_chunk) {
+// env is the variable that sets the chunk size: LLAMA_QSA_CHUNK, or LLAMA_LAYER_MAJOR for the chunks of the attention block and the expert FFN
+static int test_qsa_chunk(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * env, const char * n_chunk) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -1869,8 +1871,8 @@ static int test_qsa_chunk(const std::string & arch_filter, const size_t seed, co
             ctx_params.n_ubatch        = n_ubatch;
             ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
-            const std::vector<float> logits_ref   = get_logits_qsa_chunk(model.get(), ctx_params, tokens, "0");
-            const std::vector<float> logits_chunk = get_logits_qsa_chunk(model.get(), ctx_params, tokens, n_chunk);
+            const std::vector<float> logits_ref   = get_logits_qsa_chunk(model.get(), ctx_params, tokens, env, "0");
+            const std::vector<float> logits_chunk = get_logits_qsa_chunk(model.get(), ctx_params, tokens, env, n_chunk);
 
             const double nmse_val = nmse(logits_ref, logits_chunk);
             const bool   ok       = nmse_val <= 1e-10;
@@ -1907,7 +1909,8 @@ int main(int argc, char ** argv) {
     std::string out;
     const char * target_backend = nullptr;
     bool kv_shift = false;
-    const char * qsa_chunk = nullptr;
+    const char * qsa_chunk   = nullptr;
+    const char * layer_major = nullptr;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1984,6 +1987,13 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--layer-major") == 0) {
+            if (i + 1 < argc) {
+                layer_major = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else {
             LOG_ERR("%s: unknown argument: %s\n", __func__, argv[i]);
             usage(argv);
@@ -2006,7 +2016,10 @@ int main(int argc, char ** argv) {
             return test_kv_shift(arch_filter, seed, stdev, verbosity);
         }
         if (qsa_chunk) {
-            return test_qsa_chunk(arch_filter, seed, stdev, verbosity, qsa_chunk);
+            return test_qsa_chunk(arch_filter, seed, stdev, verbosity, "LLAMA_QSA_CHUNK", qsa_chunk);
+        }
+        if (layer_major) {
+            return test_qsa_chunk(arch_filter, seed, stdev, verbosity, "LLAMA_LAYER_MAJOR", layer_major);
         }
         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
     } catch (const std::exception & err) {
