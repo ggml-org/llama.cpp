@@ -1107,9 +1107,9 @@ bool llama_context::memory_update(bool optimize) {
         auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_max, mctx.get());
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
+        } else {
+            gf_chunked = true;
         }
-
-        gf_chunked = true;
     }
 
     return true;
@@ -3155,9 +3155,13 @@ bool llama_context::graph_reserve_chunked(bool chunked) {
     const uint32_t n_seqs   = chunked ? cparams.n_seq_max : std::min(cparams.n_seq_max, cparams.n_chunk);
     const uint32_t n_tokens = chunked ? std::min(cparams.n_ctx, cparams.n_ubatch) : cparams.n_chunk/n_seqs*n_seqs;
 
+    if (!graph_reserve(n_tokens, n_seqs, std::min(n_tokens, cparams.n_outputs_max), mctx.get())) {
+        return false;
+    }
+
     gf_chunked = chunked;
 
-    return graph_reserve(n_tokens, n_seqs, std::min(n_tokens, cparams.n_outputs_max), mctx.get()) != nullptr;
+    return true;
 }
 
 llm_graph_params llama_context::graph_params(
