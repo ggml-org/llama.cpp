@@ -9,10 +9,13 @@ type Turn = [role: 'user' | 'assistant' | 'tool', content: string];
 
 const conversations: DatabaseConversation[] = [];
 const messages: DatabaseMessage[] = [];
-const at = (ms: number) => localIsoString(new Date(ms));
+// fixture times are in minutes, ISO timestamps only carry seconds
+const MINUTE = 60_000;
+const at = (minute: number) => localIsoString(new Date(minute * MINUTE));
 
-/** Add a linear chat whose messages are timestamped lastModified + i */
-function addChat(id: string, name: string, lastModified: number, turns: Turn[]): string[] {
+/** Add a linear chat whose messages are one minute apart from `startMinute` */
+function addChat(id: string, name: string, startMinute: number, turns: Turn[]): string[] {
+	const start = startMinute * MINUTE;
 	const root = `${id}-root`;
 	const ids = turns.map((_, i) => `${id}-${i + 1}`);
 
@@ -23,7 +26,7 @@ function addChat(id: string, name: string, lastModified: number, turns: Turn[]):
 		id: root,
 		parent: null,
 		role: MessageRole.SYSTEM,
-		timestamp: lastModified - 100,
+		timestamp: start - MINUTE,
 		type: MessageType.ROOT
 	} as DatabaseMessage);
 
@@ -35,10 +38,12 @@ function addChat(id: string, name: string, lastModified: number, turns: Turn[]):
 			id: ids[i],
 			parent: i === 0 ? root : ids[i - 1],
 			role: role as MessageRole,
-			timestamp: lastModified + i,
+			timestamp: start + i * MINUTE,
 			type: MessageType.TEXT
 		} as DatabaseMessage);
 	});
+
+	const lastModified = start + (turns.length - 1) * MINUTE;
 
 	conversations.push({ currNode: ids.at(-1)!, id, lastModified, name } as DatabaseConversation);
 
@@ -62,7 +67,7 @@ messages.push({
 	id: 'paris-edit',
 	parent: parisIds[1],
 	role: MessageRole.USER,
-	timestamp: 2955,
+	timestamp: 3001 * MINUTE + 30_000,
 	type: MessageType.TEXT
 } as DatabaseMessage);
 
@@ -81,20 +86,28 @@ addChat('bulgaria', 'what time is it in bulgaria', 2000, [
 addChat('current', 'this chat', 5000, [['user', 'find the chat where I talk about paris']]);
 
 const loads: (string[] | null)[] = [];
+const loader = {
+	async conversationIdsInRange(from?: number, to?: number) {
+		const inRange = messages.filter(
+			(m) => (from === undefined || m.timestamp >= from) && (to === undefined || m.timestamp < to)
+		);
 
-async function loadMessages(ids: string[] | null) {
-	loads.push(ids);
+		return new Set(inRange.map((m) => m.convId));
+	},
+	async messages(ids: string[] | null) {
+		loads.push(ids);
 
-	return ids ? messages.filter((m) => ids.includes(m.convId)) : messages;
-}
+		return ids ? messages.filter((m) => ids.includes(m.convId)) : messages;
+	}
+};
 
 async function search(args: Record<string, unknown>, current = 'current') {
 	const params = parseSearchChatsParams(args);
-	const candidates = params.byIds
-		? conversations.filter((c) => params.byIds!.includes(c.id))
+	const candidates = params.byConvIds
+		? conversations.filter((c) => params.byConvIds!.includes(c.id))
 		: conversations;
 
-	return searchChats(candidates, params, loadMessages, current);
+	return searchChats(candidates, params, loader, current);
 }
 
 describe('search_chats: finding chats', () => {
@@ -117,8 +130,8 @@ describe('search_chats: finding chats', () => {
 
 		// the search session mentions bulgaria in tool output only
 		expect(out).toContain('1 chat(s) matching');
-		expect(out).toContain('id: bulgaria');
-		expect(out).not.toContain('id: search');
+		expect(out).toContain('conv_id: bulgaria');
+		expect(out).not.toContain('conv_id: search');
 	});
 
 	it('shows the matching messages by default', async () => {
@@ -142,8 +155,8 @@ describe('search_chats: finding chats', () => {
 	});
 
 	it('supports _ wildcards and plain words as "contains"', async () => {
-		expect(await search({ by_matches: ['m_tro'] })).toContain('id: paris');
-		expect(await search({ by_matches: 'SOFIA' })).toContain('id: bulgaria');
+		expect(await search({ by_matches: ['m_tro'] })).toContain('conv_id: paris');
+		expect(await search({ by_matches: 'SOFIA' })).toContain('conv_id: bulgaria');
 	});
 
 	it('moves the excerpt of a long message to the match', async () => {
@@ -152,7 +165,7 @@ describe('search_chats: finding chats', () => {
 		addChat('long', 'long chat', 1000, [['user', long]]);
 
 		const out = await search({
-			by_ids: ['long'],
+			by_conv_ids: ['long'],
 			by_matches: ['secret word'],
 			max_message_chars: 100
 		});
@@ -173,9 +186,9 @@ describe('search_chats: listing and reading', () => {
 		expect(out.split('\n')).toEqual([
 			'3 chat(s) (newest first, showing 1-3 of 3)',
 			'',
-			`- "list my chats" | id: search | updated ${at(4000)}`,
-			`- "let's think about paris" | id: paris | updated ${at(3000)}`,
-			`- "what time is it in bulgaria" | id: bulgaria | updated ${at(2000)}`
+			`- "list my chats" | conv_id: search | updated ${at(4002)}`,
+			`- "let's think about paris" | conv_id: paris | updated ${at(3005)}`,
+			`- "what time is it in bulgaria" | conv_id: bulgaria | updated ${at(2001)}`
 		]);
 		expect(loads).toEqual([]);
 	});
@@ -195,12 +208,12 @@ describe('search_chats: listing and reading', () => {
 		});
 
 		expect(out).toContain('(oldest first, showing 2-2 of 3)');
-		expect(out).toContain('id: paris');
+		expect(out).toContain('conv_id: paris');
 	});
 
 	it('reads a chat by id from the start', async () => {
 		const out = await search({
-			by_ids: ['paris'],
+			by_conv_ids: ['paris'],
 			limit_messages: 2,
 			message_selection: 'earliest'
 		});
@@ -211,13 +224,13 @@ describe('search_chats: listing and reading', () => {
 	});
 
 	it('reports unknown ids and hides the current chat unless asked', async () => {
-		const hidden = await search({ by_ids: ['current', 'nope'] });
+		const hidden = await search({ by_conv_ids: ['current', 'nope'] });
 
 		expect(hidden).toContain('not found: nope');
 		expect(hidden).toContain('the current chat is hidden');
-		expect(hidden).toContain('0 chat(s) by id');
+		expect(hidden).toContain('0 chat(s) by conv_id');
 
-		const shown = await search({ by_ids: ['current'], include_current: true });
+		const shown = await search({ by_conv_ids: ['current'], include_current: true });
 
 		expect(shown).toContain(`#1 user | ${at(5000)}: find the chat where I talk about paris`);
 	});
@@ -237,6 +250,52 @@ describe('search_chats: listing and reading', () => {
 	});
 });
 
+describe('search_chats: time range', () => {
+	it('returns the messages from a timestamp, across chats', async () => {
+		const out = await search({ from_timestamp: at(3004), limit_messages: 2 });
+
+		expect(out).toContain(`2 chat(s) from ${at(3004)} (newest first, showing 1-2 of 2)`);
+		expect(out).toContain('6 messages, 2 in the time range');
+		expect(out).toContain(`#5 user | ${at(3004)}: how much is a metro ticket?`);
+		expect(out).not.toContain('#4 assistant');
+		expect(out).toContain('conv_id: search');
+		expect(out).not.toContain('conv_id: bulgaria');
+	});
+
+	it('excludes the end of the range', async () => {
+		const out = await search({ from_timestamp: at(3004), to_timestamp: at(4000) });
+
+		expect(out).toContain('1 chat(s)');
+		expect(out).toContain('conv_id: paris');
+	});
+
+	it('limits matches to the range, and a title match needs messages in it', async () => {
+		const ranged = await search({ by_matches: ['metro', 'eiffel'], from_timestamp: at(3003) });
+
+		expect(ranged).toContain('matched in: 1 message(s)');
+		expect(ranged).not.toContain('#3 user');
+
+		const titleOnly = await search({ by_matches: ['%think about%'], from_timestamp: at(4000) });
+
+		expect(titleOnly).toContain('0 chat(s)');
+	});
+
+	it('reads ISO dates as local time', () => {
+		const parse = (from_timestamp: string) =>
+			parseSearchChatsParams({ from_timestamp }).fromTimestamp;
+
+		expect(parse('2026-11-10')).toBe(new Date(2026, 10, 10).getTime());
+		expect(parse('2026-11-10T14:30')).toBe(new Date(2026, 10, 10, 14, 30).getTime());
+		expect(parse('2026-11-10T14:30Z')).toBe(Date.UTC(2026, 10, 10, 14, 30));
+	});
+
+	it('defaults to the earliest messages from the timestamp', () => {
+		const params = parseSearchChatsParams({ from_timestamp: '2026-11-10' });
+
+		expect(params.messageSelection).toBe('earliest');
+	});
+});
+
 describe('search_chats: parameters', () => {
 	it.each([
 		[{ message_selection: 'matching' }, 'needs by_matches'],
@@ -248,7 +307,14 @@ describe('search_chats: parameters', () => {
 			{ by_matches: ['x'.repeat(SEARCH_CHATS_PATTERN_MAX_CHARS + 1)] },
 			`by_matches entries must be at most ${SEARCH_CHATS_PATTERN_MAX_CHARS} characters`
 		],
-		[{ message_selection: 'all' }, 'message_selection must be one of']
+		[{ message_selection: 'all' }, 'message_selection must be one of'],
+		[{ from_timestamp: 'yesterday' }, 'from_timestamp must be an ISO 8601 date'],
+		[{ from_timestamp: 1786962645195 }, 'from_timestamp must be an ISO 8601 date'],
+		[{ to_timestamp: '2026-02-30' }, 'to_timestamp must be an ISO 8601 date'],
+		[
+			{ from_timestamp: '2026-11-10', to_timestamp: '2026-11-09' },
+			'to_timestamp must be after from_timestamp'
+		]
 	])('rejects %j', (args, message) => {
 		expect(() => parseSearchChatsParams(args)).toThrow(SearchChatsError);
 		expect(() => parseSearchChatsParams(args)).toThrow(message);

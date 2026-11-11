@@ -1,5 +1,5 @@
 /**
- * search_chats core: parameter parsing, matching and formatting. Messages come through a loader, so this has no IndexedDB access.
+ * search_chats core: parameter parsing, matching and formatting. Data comes through a loader, so this has no IndexedDB access.
  * Only user and assistant text on the visible branch is searched and shown, so tool output (e.g. older search results) cannot match.
  */
 
@@ -7,6 +7,8 @@ import { filterByLeafNodeId } from './branching';
 import { localIsoString } from './get-datetime';
 import {
 	SEARCH_CHATS_CUT_NOTICE,
+	SEARCH_CHATS_DATE_REGEX,
+	SEARCH_CHATS_DATE_TIME_REGEX,
 	SEARCH_CHATS_ELLIPSIS,
 	SEARCH_CHATS_EXCERPT_LEAD_RATIO,
 	SEARCH_CHATS_EXCERPT_RECENTER_RATIO,
@@ -35,8 +37,12 @@ export class SearchChatsError extends Error {
 }
 
 export interface SearchChatsParams {
-	byIds?: string[];
+	byConvIds?: string[];
 	byMatches?: string[];
+	/** Inclusive, ms since epoch */
+	fromTimestamp?: number;
+	/** Exclusive, ms since epoch */
+	toTimestamp?: number;
 	order: SearchChatsOrder;
 	limitChats: number;
 	offsetChats: number;
@@ -46,8 +52,12 @@ export interface SearchChatsParams {
 	includeCurrent: boolean;
 }
 
-/** Loads messages of the given conversations, or of all conversations for `null` */
-export type SearchChatsMessageLoader = (convIds: string[] | null) => Promise<DatabaseMessage[]>;
+export interface SearchChatsLoader {
+	/** Messages of the given conversations, or of all conversations for `null` */
+	messages(convIds: string[] | null): Promise<DatabaseMessage[]>;
+	/** Ids of conversations with any message in [from, to) */
+	conversationIdsInRange(from?: number, to?: number): Promise<Set<string>>;
+}
 
 function stringList(
 	raw: unknown,
@@ -100,20 +110,66 @@ function oneOf<T extends string>(raw: unknown, name: string, options: T[], fallb
 	return value;
 }
 
+/** ISO 8601 date or date-time; without an offset it is the user's local time */
+function timestamp(raw: unknown, name: string): number | undefined {
+	if (raw === undefined || raw === null || raw === '') return undefined;
+
+	const error = new SearchChatsError(
+		`${name} must be an ISO 8601 date or date-time, e.g. 2026-11-10 or 2026-11-10T14:30 (local time unless an offset is given)`
+	);
+
+	if (typeof raw !== 'string') throw error;
+
+	const value = raw.trim().replace(' ', 'T');
+
+	let ms = NaN;
+
+	if (SEARCH_CHATS_DATE_REGEX.test(value)) {
+		// Date.parse reads a date-only string as UTC midnight, the user means local midnight
+		const [year, month, day] = value.split('-').map(Number);
+		const date = new Date(year, month - 1, day);
+
+		if (date.getMonth() === month - 1 && date.getDate() === day) ms = date.getTime();
+	} else if (SEARCH_CHATS_DATE_TIME_REGEX.test(value)) {
+		ms = Date.parse(value);
+	}
+
+	if (Number.isNaN(ms)) throw error;
+
+	return ms;
+}
+
 /** Throws SearchChatsError with a message for the model */
 export function parseSearchChatsParams(raw: Record<string, unknown>): SearchChatsParams {
-	const byIds = stringList(raw.by_ids, 'by_ids', SEARCH_CHATS_MAX_IDS, SEARCH_CHATS_ID_MAX_CHARS);
+	const byConvIds = stringList(
+		raw.by_conv_ids,
+		'by_conv_ids',
+		SEARCH_CHATS_MAX_IDS,
+		SEARCH_CHATS_ID_MAX_CHARS
+	);
 	const byMatches = stringList(
 		raw.by_matches,
 		'by_matches',
 		SEARCH_CHATS_MAX_PATTERNS,
 		SEARCH_CHATS_PATTERN_MAX_CHARS
 	);
+	const fromTimestamp = timestamp(raw.from_timestamp, 'from_timestamp');
+	const toTimestamp = timestamp(raw.to_timestamp, 'to_timestamp');
+
+	if (fromTimestamp !== undefined && toTimestamp !== undefined && toTimestamp <= fromTimestamp) {
+		throw new SearchChatsError('to_timestamp must be after from_timestamp');
+	}
+
+	const defaultSelection = byMatches
+		? SearchChatsMessageSelection.MATCHING
+		: fromTimestamp !== undefined
+			? SearchChatsMessageSelection.EARLIEST
+			: SearchChatsMessageSelection.LATEST;
 	const messageSelection = oneOf(
 		raw.message_selection,
 		'message_selection',
 		Object.values(SearchChatsMessageSelection),
-		byMatches ? SearchChatsMessageSelection.MATCHING : SearchChatsMessageSelection.LATEST
+		defaultSelection
 	);
 
 	if (messageSelection === SearchChatsMessageSelection.MATCHING && !byMatches) {
@@ -123,8 +179,9 @@ export function parseSearchChatsParams(raw: Record<string, unknown>): SearchChat
 	}
 
 	return {
-		byIds,
+		byConvIds,
 		byMatches,
+		fromTimestamp,
 		includeCurrent: raw.include_current === true || raw.include_current === 'true',
 		limitChats: integer(
 			raw.limit_chats,
@@ -154,7 +211,8 @@ export function parseSearchChatsParams(raw: Record<string, unknown>): SearchChat
 			'order_timestamp',
 			Object.values(SearchChatsOrder),
 			SearchChatsOrder.DESC
-		)
+		),
+		toTimestamp
 	};
 }
 
@@ -267,7 +325,10 @@ function excerpt(text: string, maxChars: number, matchAt: number): string {
 
 interface ChatHit {
 	conv: DatabaseConversation;
+	/** Visible messages of the whole chat, positions are counted on these */
 	messages: DatabaseMessage[];
+	/** Visible messages inside the time window (all of them without one) */
+	inRange: DatabaseMessage[];
 	titleMatched: boolean;
 	matched: DatabaseMessage[];
 }
@@ -291,18 +352,22 @@ function formatChat(
 	hit: ChatHit,
 	index: number,
 	params: SearchChatsParams,
-	matcher: Matcher | null
+	matcher: Matcher | null,
+	timed: boolean
 ): string {
-	const { conv, matched, messages, titleMatched } = hit;
-	const summary = [`id: ${conv.id}`, `updated ${formatDate(conv.lastModified)}`];
+	const { conv, inRange, matched, messages, titleMatched } = hit;
+	const summary = [`conv_id: ${conv.id}`, `updated ${formatDate(conv.lastModified)}`];
 
 	if (params.limitMessages === 0) {
 		return `- "${conv.name}"${SEARCH_CHATS_FIELD_SEPARATOR}${summary.join(SEARCH_CHATS_FIELD_SEPARATOR)}`;
 	}
 
+	const counts = timed
+		? `${messages.length} messages, ${inRange.length} in the time range`
+		: `${messages.length} messages`;
 	const lines = [
 		`## Chat ${index}: "${conv.name}"`,
-		[...summary, `${messages.length} messages`].join(SEARCH_CHATS_FIELD_SEPARATOR)
+		[...summary, counts].join(SEARCH_CHATS_FIELD_SEPARATOR)
 	];
 	const n = params.limitMessages;
 
@@ -322,8 +387,8 @@ function formatChat(
 
 		picked =
 			params.messageSelection === SearchChatsMessageSelection.EARLIEST
-				? messages.slice(0, n)
-				: messages.slice(-n);
+				? inRange.slice(0, n)
+				: inRange.slice(-n);
 	}
 
 	if (messages.length === 0) lines.push('(no messages)');
@@ -348,31 +413,47 @@ function groupByConversation(messages: DatabaseMessage[]): Map<string, DatabaseM
 	return groups;
 }
 
+function describeQuery(params: SearchChatsParams): string {
+	const parts: string[] = [];
+
+	if (params.byMatches) parts.push(`matching ${JSON.stringify(params.byMatches)}`);
+
+	if (params.byConvIds) parts.push('by conv_id');
+
+	if (params.fromTimestamp !== undefined) parts.push(`from ${formatDate(params.fromTimestamp)}`);
+
+	if (params.toTimestamp !== undefined) parts.push(`before ${formatDate(params.toTimestamp)}`);
+
+	return parts.join(' ');
+}
+
 /**
  * Run a search and render the result as text for the model.
- * `conversations` holds the candidates: all conversations, or only those of by_ids.
+ * `conversations` holds the candidates: all conversations, or only those of by_conv_ids.
  */
 export async function searchChats(
 	conversations: DatabaseConversation[],
 	params: SearchChatsParams,
-	loadMessages: SearchChatsMessageLoader,
+	loader: SearchChatsLoader,
 	currentConversationId?: string
 ): Promise<string> {
+	const { byConvIds, fromTimestamp, toTimestamp } = params;
+	const timed = fromTimestamp !== undefined || toTimestamp !== undefined;
 	const notes: string[] = [];
 
 	let candidates = conversations;
 
-	if (params.byIds) {
+	if (byConvIds) {
 		const found = new Set(candidates.map((c) => c.id));
-		const missing = params.byIds.filter((id) => !found.has(id));
+		const missing = byConvIds.filter((id) => !found.has(id));
 
 		if (missing.length > 0) notes.push(`not found: ${missing.join(', ')}`);
 
-		candidates = candidates.filter((c) => params.byIds!.includes(c.id));
+		candidates = candidates.filter((c) => byConvIds.includes(c.id));
 	}
 
 	if (currentConversationId && !params.includeCurrent) {
-		if (params.byIds?.includes(currentConversationId)) {
+		if (byConvIds?.includes(currentConversationId)) {
 			notes.push(
 				'the current chat is hidden (you already see it); set include_current=true to read it'
 			);
@@ -381,35 +462,56 @@ export async function searchChats(
 		candidates = candidates.filter((c) => c.id !== currentConversationId);
 	}
 
+	if (timed) {
+		const active = await loader.conversationIdsInRange(fromTimestamp, toTimestamp);
+
+		candidates = candidates.filter((c) => active.has(c.id));
+	}
+
 	const matcher = params.byMatches ? buildMatcher(params.byMatches) : null;
+	const isInRange = (m: DatabaseMessage) =>
+		(fromTimestamp === undefined || m.timestamp >= fromTimestamp) &&
+		(toTimestamp === undefined || m.timestamp < toTimestamp);
+	const toHit = (conv: DatabaseConversation, raw: DatabaseMessage[]): ChatHit => {
+		const messages = visibleMessages(conv, raw);
+		const inRange = timed ? messages.filter(isInRange) : messages;
+		const matched = matcher ? inRange.filter((m) => matcher.test(m.content)) : [];
+
+		return { conv, inRange, matched, messages, titleMatched: !!matcher?.test(conv.name ?? '') };
+	};
 
 	let hits: ChatHit[];
 
-	if (matcher) {
-		const ids = candidates.map((c) => c.id);
-		const byConv = groupByConversation(await loadMessages(params.byIds ? ids : null));
+	if (matcher || timed) {
+		// which chats qualify depends on their messages, so read them before paging
+		const ids = byConvIds || timed ? candidates.map((c) => c.id) : null;
+		const byConv = groupByConversation(await loader.messages(ids));
 
 		hits = [];
 
 		for (const conv of candidates) {
 			const raw = byConv.get(conv.id) ?? [];
-			const titleMatched = matcher.test(conv.name ?? '');
 
 			// cheap check on all messages before building the visible branch
 			if (
-				!titleMatched &&
+				matcher &&
+				!matcher.test(conv.name ?? '') &&
 				!raw.some((m) => typeof m.content === 'string' && matcher.test(m.content))
 			) {
 				continue;
 			}
 
-			const messages = visibleMessages(conv, raw);
-			const matched = messages.filter((m) => matcher.test(m.content));
+			const hit = toHit(conv, raw);
 
-			if (titleMatched || matched.length > 0) hits.push({ conv, matched, messages, titleMatched });
+			// with a time window, a chat needs visible messages inside it, a title match is not enough
+			if (timed && hit.inRange.length === 0) continue;
+
+			if (matcher && !hit.titleMatched && hit.matched.length === 0) continue;
+
+			hits.push(hit);
 		}
 	} else {
-		hits = candidates.map((conv) => ({ conv, matched: [], messages: [], titleMatched: false }));
+		hits = candidates.map((conv) => toHit(conv, []));
 	}
 
 	const sign = params.order === SearchChatsOrder.ASC ? 1 : -1;
@@ -419,26 +521,22 @@ export async function searchChats(
 	const total = hits.length;
 	const page = hits.slice(params.offsetChats, params.offsetChats + params.limitChats);
 
-	// without by_matches, only the chats on this page need their messages (none for a plain listing)
-	if (!matcher && params.limitMessages > 0 && page.length > 0) {
-		const byConv = groupByConversation(await loadMessages(page.map((h) => h.conv.id)));
+	// plain listing or reading: only the chats on this page need their messages
+	if (!matcher && !timed && params.limitMessages > 0 && page.length > 0) {
+		const byConv = groupByConversation(await loader.messages(page.map((h) => h.conv.id)));
 
-		for (const hit of page) hit.messages = visibleMessages(hit.conv, byConv.get(hit.conv.id) ?? []);
+		page.forEach((hit, i) => (page[i] = toHit(hit.conv, byConv.get(hit.conv.id) ?? [])));
 	}
 
-	const what = matcher
-		? `matching ${JSON.stringify(params.byMatches)}`
-		: params.byIds
-			? 'by id'
-			: '';
 	const orderLabel = params.order === SearchChatsOrder.ASC ? 'oldest first' : 'newest first';
 	const range =
 		page.length === 0
 			? `showing none of ${total}`
 			: `showing ${params.offsetChats + 1}-${params.offsetChats + page.length} of ${total}`;
-	const header = [`${`${total} chat(s) ${what}`.trim()} (${orderLabel}, ${range})`, ...notes].join(
-		'\n'
-	);
+	const header = [
+		`${`${total} chat(s) ${describeQuery(params)}`.trim()} (${orderLabel}, ${range})`,
+		...notes
+	].join('\n');
 	const separator = params.limitMessages === 0 ? '\n' : '\n\n';
 	const moreNote = (shown: number) =>
 		`[${page.length - shown} more chat(s) on this page not shown: use offset_chats=${params.offsetChats + shown}, or lower limit_messages]`;
@@ -449,7 +547,7 @@ export async function searchChats(
 	let size = header.length;
 
 	for (const [i, hit] of page.entries()) {
-		const block = formatChat(hit, params.offsetChats + i + 1, params, matcher);
+		const block = formatChat(hit, params.offsetChats + i + 1, params, matcher, timed);
 		const isLast = i === page.length - 1;
 		const limit = isLast ? SEARCH_CHATS_OUTPUT_MAX_CHARS : budget;
 

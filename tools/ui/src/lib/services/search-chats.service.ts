@@ -33,6 +33,26 @@ function loadMessages(convIds: string[] | null): Promise<DatabaseMessage[]> {
 	});
 }
 
+/** Uses the timestamp index, so only messages inside the range are read */
+function conversationIdsInRange(from?: number, to?: number): Promise<Set<string>> {
+	return DatabaseService.readOnly(async (table) => {
+		const index = table(IDXDB_TABLES.messages).where('timestamp');
+		const range =
+			from !== undefined && to !== undefined
+				? index.between(from, to, true, false)
+				: from !== undefined
+					? index.aboveOrEqual(from)
+					: index.below(to);
+		const ids = new Set<string>();
+
+		await range.each((m: DatabaseMessage) => ids.add(m.convId));
+
+		return ids;
+	});
+}
+
+const loader = { conversationIdsInRange, messages: loadMessages };
+
 export class SearchChatsService {
 	/** `currentConversationId` is hidden from results unless the model sets include_current */
 	static async executeTool(
@@ -41,8 +61,8 @@ export class SearchChatsService {
 	): Promise<ToolExecutionResult> {
 		try {
 			const params = parseSearchChatsParams(args);
-			const conversations = await loadConversations(params.byIds);
-			const content = await searchChats(conversations, params, loadMessages, currentConversationId);
+			const conversations = await loadConversations(params.byConvIds);
+			const content = await searchChats(conversations, params, loader, currentConversationId);
 
 			return { content, isError: false };
 		} catch (err) {

@@ -5,6 +5,7 @@ import { MessageRole, MessageType } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
 import { SearchChatsService } from '$lib/services/search-chats.service';
 import type { ExportedConversation } from '$lib/types/database';
+import { localIsoString } from '$lib/utils/get-datetime';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 function makeConversation(
@@ -77,12 +78,23 @@ describe('search_chats service', () => {
 
 	it('loads chats by id and reports missing ones', async () => {
 		const reply = await SearchChatsService.executeTool(
-			{ by_ids: ['paris', 'missing'], limit_messages: 1, message_selection: 'earliest' },
+			{ by_conv_ids: ['paris', 'missing'], limit_messages: 1, message_selection: 'earliest' },
 			'search'
 		);
 
 		expect(reply.content).toContain('not found: missing');
 		expect(reply.content).toContain('plan a weekend in Paris');
+	});
+
+	it('finds chats with messages in a time range through the timestamp index', async () => {
+		const reply = await SearchChatsService.executeTool(
+			{ from_timestamp: localIsoString(new Date(2000)), limit_messages: 1 },
+			'other'
+		);
+
+		expect(reply.content).toContain('1 chat(s) from');
+		expect(reply.content).toContain('conv_id: search');
+		expect(reply.content).toContain('#1 user');
 	});
 
 	it('returns parameter errors to the model', async () => {

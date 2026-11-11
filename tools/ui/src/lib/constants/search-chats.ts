@@ -44,12 +44,21 @@ export const SEARCH_CHATS_FIELD_SEPARATOR = ' | ';
 
 export const SEARCH_CHATS_CUT_NOTICE = '...[cut: lower limit_messages or max_message_chars]';
 
+/** `2026-11-10`, read as local midnight */
+export const SEARCH_CHATS_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+/** `2026-11-10T14:30`, optional seconds, fraction and offset; local time without an offset */
+export const SEARCH_CHATS_DATE_TIME_REGEX =
+	/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})?$/;
+
 const DESCRIPTION = `Find and read the user's other saved chats (read-only). The current chat is hidden, you already see it.
 Returns chats, each with messages from what the user saw: user and assistant text only (tool output is skipped), numbered #1..#N in chat order. Dates are in the user's local time.
-- List chats: limit_messages=0 gives one line per chat (title, id, date); raise limit_chats and page with offset_chats.
-- Find chats: by_matches=["%paris%", "%eiffel%"] matches the title or any message (case-insensitive, % = any text, _ = one char, no % means "contains"). A chat matches if any pattern does.
-- Read chats: by_ids=["<id>"] with message_selection "latest" (default without by_matches) or "earliest".
-Example, "what was my last question in the chat about paris?": by_matches=["%paris%"], message_selection="latest", limit_messages=4, then answer from the last user message.`;
+- List chats: limit_messages=0 gives one line per chat (title, conv_id, date); raise limit_chats and page with offset_chats.
+- Find chats: by_matches=["%paris%", "%eiffel%"] matches the title or any message (case-insensitive, % = any text, _ = one char, no % means "contains"). A chat matches if any pattern does. For AND within a message use "%a%b%" (order matters, add "%b%a%" for either order).
+- Read chats: by_conv_ids=["<conv_id>"] with message_selection "latest" (default) or "earliest".
+- Time range: from_timestamp (inclusive) and to_timestamp (exclusive), ISO 8601 like 2026-11-10 or 2026-11-10T14:30, local time. Only messages in the range are searched and shown, and only chats with messages in it are returned. With from_timestamp, message_selection defaults to "earliest".
+Example, "what was my last question in the chat about paris?": by_matches=["%paris%"], message_selection="latest", limit_messages=4, then answer from the last user message.
+Example, "what did we talk about yesterday?": from_timestamp=<yesterday's date>, to_timestamp=<today's date>, limit_messages=2.`;
 
 export function buildSearchChatsToolDefinition(): OpenAIToolDefinition {
 	return {
@@ -58,8 +67,8 @@ export function buildSearchChatsToolDefinition(): OpenAIToolDefinition {
 			name: SEARCH_CHATS_TOOL_NAME,
 			parameters: {
 				properties: {
-					by_ids: {
-						description: 'Only these chat ids',
+					by_conv_ids: {
+						description: 'Only these chats, by conv_id',
 						items: { type: JsonSchemaType.STRING },
 						type: JsonSchemaType.ARRAY
 					},
@@ -67,6 +76,11 @@ export function buildSearchChatsToolDefinition(): OpenAIToolDefinition {
 						description: `LIKE patterns matched against titles and message text, any of them, max ${SEARCH_CHATS_PATTERN_MAX_CHARS} chars each`,
 						items: { type: JsonSchemaType.STRING },
 						type: JsonSchemaType.ARRAY
+					},
+					from_timestamp: {
+						description:
+							'Only messages at or after this time, ISO 8601, local time unless an offset is given',
+						type: JsonSchemaType.STRING
 					},
 					include_current: {
 						description: 'Also include the current chat, default false',
@@ -85,7 +99,7 @@ export function buildSearchChatsToolDefinition(): OpenAIToolDefinition {
 						type: JsonSchemaType.NUMBER
 					},
 					message_selection: {
-						description: `Which messages per chat, "${SearchChatsMessageSelection.MATCHING}" is the default with by_matches`,
+						description: `Which messages per chat; default "${SearchChatsMessageSelection.MATCHING}" with by_matches, else "${SearchChatsMessageSelection.EARLIEST}" with from_timestamp, else "${SearchChatsMessageSelection.LATEST}"`,
 						enum: Object.values(SearchChatsMessageSelection),
 						type: JsonSchemaType.STRING
 					},
@@ -96,6 +110,11 @@ export function buildSearchChatsToolDefinition(): OpenAIToolDefinition {
 					order_timestamp: {
 						description: `Chat order by last activity, default "${SearchChatsOrder.DESC}" (newest first)`,
 						enum: Object.values(SearchChatsOrder),
+						type: JsonSchemaType.STRING
+					},
+					to_timestamp: {
+						description:
+							'Only messages before this time (exclusive), same format as from_timestamp',
 						type: JsonSchemaType.STRING
 					}
 				},
