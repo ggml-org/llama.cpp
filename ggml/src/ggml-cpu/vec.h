@@ -437,24 +437,24 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
 }
 
 // y (F32) += x (F16)*v
+// on AVX512, AVX with F16C, NEON and RVV, x is widened to F32 in-register and fused into the multiply-add
 inline static void ggml_vec_mad_f16_f32(const int n, float * GGML_RESTRICT y, const ggml_fp16_t * GGML_RESTRICT x, const float v) {
     int i = 0;
-#if defined(__F16C__) && defined(__FMA__)
 #if defined(__AVX512F__)
-    const __m512 vx16 = _mm512_set1_ps(v);
-    for (; i + 15 < n; i += 16) {
+    const __m512 vx = _mm512_set1_ps(v);
+    for (; i + 16 <= n; i += 16) {
         const __m512 ax = _mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x + i)));
-        _mm512_storeu_ps(y + i, _mm512_fmadd_ps(ax, vx16, _mm512_loadu_ps(y + i)));
+        _mm512_storeu_ps(y + i, _mm512_fmadd_ps(ax, vx, _mm512_loadu_ps(y + i)));
     }
-#endif
-    const __m256 vx8 = _mm256_set1_ps(v);
-    for (; i + 7 < n; i += 8) {
+#elif defined(__AVX__) && defined(__F16C__)
+    const __m256 vx = _mm256_set1_ps(v);
+    for (; i + 8 <= n; i += 8) {
         const __m256 ax = _mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x + i)));
-        _mm256_storeu_ps(y + i, _mm256_fmadd_ps(ax, vx8, _mm256_loadu_ps(y + i)));
+        _mm256_storeu_ps(y + i, GGML_F32x8_FMA(_mm256_loadu_ps(y + i), ax, vx));
     }
 #elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA) && defined(__ARM_FP16_FORMAT_IEEE)
     const float32x4_t vx = vdupq_n_f32(v);
-    for (; i + 7 < n; i += 8) {
+    for (; i + 8 <= n; i += 8) {
         const float16x8_t ax = vld1q_f16((const __fp16 *)(x + i));
         vst1q_f32(y + i + 0, vfmaq_f32(vld1q_f32(y + i + 0), vcvt_f32_f16(vget_low_f16 (ax)), vx));
         vst1q_f32(y + i + 4, vfmaq_f32(vld1q_f32(y + i + 4), vcvt_f32_f16(vget_high_f16(ax)), vx));
