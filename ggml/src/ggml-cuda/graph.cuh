@@ -11,6 +11,8 @@
 
 #ifdef USE_CUDA_GRAPH
 // cudaGraphExecUpdate keeps stale kernel cluster dims (cuBLAS sm90), re-instantiate when they change
+// TODO: add a test, fails on H100 (driver 590.48.01, CUDA runtime 12.9.79, cuBLAS 12.9.1.4) for F16 MUL_MAT with
+//       ne01 1200 <-> 1040 (k=768, n=1024) between graph updates, see https://github.com/ggml-org/llama.cpp/pull/31284
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
 #define USE_CUDA_GRAPH_CLUSTER_CHECK
 #endif
