@@ -1363,6 +1363,13 @@ class GGUFWriter:
     def add_eos_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.EOS_ID, id)
 
+    def add_eog_token_ids(self, ids: Sequence[int]) -> None:
+        if not ids:
+            raise ValueError("EOG token IDs must not be empty")
+        if any(type(id) is not int or not 0 <= id <= 0xFFFFFFFF for id in ids):
+            raise ValueError("EOG token IDs must be unsigned 32-bit integers")
+        self.add_key_value(Keys.Tokenizer.EOG_IDS, list(ids), GGUFValueType.ARRAY, GGUFValueType.UINT32)
+
     def add_unk_token_id(self, id: int) -> None:
         self.add_uint32(Keys.Tokenizer.UNK_ID, id)
 

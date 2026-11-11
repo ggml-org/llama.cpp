@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from gguf.gguf_reader import GGUFReader
+from gguf import GGUFWriter, GGUFEndian, GGUFValueType, Keys
 
 
 def _write_gguf(path, n_dims_field, dims):
@@ -35,3 +36,20 @@ def test_dims_product_no_uint64_wraparound(tmp_path):
     _write_gguf(p, len(dims), dims)
     with pytest.raises(ValueError):
         GGUFReader(p)
+
+
+@pytest.mark.parametrize("endian", [GGUFEndian.LITTLE, GGUFEndian.BIG])
+@pytest.mark.parametrize("ids", [[7], [7, 2, 7], [0, 0xFFFFFFFF]])
+def test_eog_ids_round_trip(tmp_path, endian, ids):
+    path = tmp_path / "eog.gguf"
+    writer = GGUFWriter(path, "llama", endianess=endian)
+    writer.add_eog_token_ids(ids)
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.close()
+
+    reader = GGUFReader(path)
+    field = reader.get_field(Keys.Tokenizer.EOG_IDS)
+    assert field is not None
+    assert field.types == [GGUFValueType.ARRAY, GGUFValueType.UINT32]
+    assert field.contents() == ids

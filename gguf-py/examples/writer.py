@@ -17,6 +17,7 @@ def writer_example() -> None:
 
     gguf_writer.add_block_count(12)
     gguf_writer.add_uint32("answer", 42)  # Write a 32-bit integer
+    gguf_writer.add_eog_token_ids([1, 2])  # Publish end-of-generation token IDs
     gguf_writer.add_float32("answer_in_float", 42.0)  # Write a 32-bit float
     gguf_writer.add_custom_alignment(64)
 
