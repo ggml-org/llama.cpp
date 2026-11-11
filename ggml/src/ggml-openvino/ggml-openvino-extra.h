@@ -107,6 +107,7 @@ std::string ggml_openvino_get_device_description(const std::string & device_name
 // boolean use, `if (ggml_openvino_getenv_int(name))` is true iff the value
 // is a non-zero integer (so "0" disables, "1" enables).
 const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
+// Returns default_value when the variable is unset, not a whole integer (e.g. "1x"), or out of int range.
 int ggml_openvino_getenv_int(const char * var, int default_value = 0);
 
 // Memory optimization toggles. GGML_OPENVINO_MEMORY_OPTIMIZE is an umbrella

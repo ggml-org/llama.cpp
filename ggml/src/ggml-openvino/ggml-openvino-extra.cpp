@@ -7,6 +7,9 @@
 #include "model-cache.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cerrno>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -314,11 +317,27 @@ const char * ggml_openvino_getenv_str(const char * var, const char * default_val
 // toggles: "0" disables, any non-zero integer enables.
 int ggml_openvino_getenv_int(const char * var, int default_value) {
     const char * v = ggml_openvino_getenv_str(var, nullptr);
-    return v ? std::atoi(v) : default_value;
+    if (v == nullptr) {
+        return default_value;
+    }
+    // Strict parse: digits with optional sign and surrounding spaces, in int range.
+    // "set X=1 && ..." in cmd keeps a trailing space, so trailing spaces are allowed.
+    char * end = nullptr;
+    errno = 0;
+    const long value = std::strtol(v, &end, 10);
+    if (end == v || errno == ERANGE || value < INT_MIN || value > INT_MAX) {
+        return default_value;
+    }
+    while (std::isspace(static_cast<unsigned char>(*end))) {
+        end++;
+    }
+    return *end == '\0' ? static_cast<int>(value) : default_value;
 }
 
 bool ggml_openvino_gdn_prescale_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_Q_SCALE", 1) > 0;
+    // float value, so not getenv_int: "64.0" must enable it
+    const char * v = ggml_openvino_getenv_str("GGML_OPENVINO_GDN_Q_SCALE", nullptr);
+    return v != nullptr && std::strtof(v, nullptr) > 0.0f;
 }
 
 bool ggml_openvino_gdn_native_state_enabled() {
