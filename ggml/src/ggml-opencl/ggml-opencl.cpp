@@ -1,6 +1,8 @@
 #include "cl-common.h"
 #include "ops.h"
 
+#include <climits>
+
 static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev);
 static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev);
 
@@ -1290,6 +1292,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
+        case GGML_OP_ARANGE:
+            return op->type == GGML_TYPE_F32;
         case GGML_OP_CLAMP:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SOFT_MAX:
@@ -1300,7 +1304,16 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_L2_NORM:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_REPEAT:
-            return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32; // Assuming F32 for now, can be expanded
+            switch (op->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                case GGML_TYPE_I32:
+                case GGML_TYPE_I16:
+                case GGML_TYPE_BF16:
+                    return op->src[0]->type == op->type;
+                default:
+                    return false;
+            }
         case GGML_OP_PAD:
             // TODO: add circular padding support for opencl, see https://github.com/ggml-org/llama.cpp/pull/16985
             if (ggml_get_op_params_i32(op, 8) != 0) {
@@ -1357,6 +1370,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_MUL_MAT:
+            if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                return false;
+            }
             if (ggml_cl_mul_mat_can_use_fwht(backend_ctx, op)) {
                 return true;
             }
@@ -1468,8 +1484,14 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
             return false;
         case GGML_OP_MUL_MAT_ID:
+            if (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16) {
+                return op->src[1]->type == GGML_TYPE_F32 && op->src[2]->type == GGML_TYPE_I32 && op->type == GGML_TYPE_F32 &&
+                       op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) && op->src[1]->nb[0] == sizeof(float) &&
+                       op->nb[0] == sizeof(float) && op->src[0]->ne[0] <= INT_MAX - 256 && op->ne[0] <= INT_MAX - 64 &&
+                       op->src[1]->ne[1] <= INT_MAX && op->ne[1] <= INT_MAX && op->ne[2] <= INT_MAX - 64;
+            }
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_F32 &&
+            if ((ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) &&
                 use_adreno_moe_kernels(backend_ctx, op->src[0])) {
                 return false;
             }
@@ -2534,6 +2556,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_fill;
+            break;
+        case GGML_OP_ARANGE:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_arange;
             break;
         case GGML_OP_CLAMP:
             if (!any_on_device) {

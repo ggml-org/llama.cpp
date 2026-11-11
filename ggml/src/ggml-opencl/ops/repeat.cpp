@@ -16,6 +16,8 @@ void ggml_cl_load_kernels_repeat(ggml_backend_opencl_context * backend_ctx) {
         cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->repeat.kernel_repeat_f32 = clCreateKernel(prog, "kernel_repeat_f32", &err), err));
+        CL_CHECK((backend_ctx->repeat.kernel_repeat_f16 = clCreateKernel(prog, "kernel_repeat_f16", &err), err));
+        CL_CHECK((backend_ctx->repeat.kernel_repeat_i32 = clCreateKernel(prog, "kernel_repeat_i32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -58,7 +60,22 @@ void ggml_cl_repeat(ggml_backend_t backend, const ggml_tensor * src0, const ggml
     const cl_ulong nb2 = dst->nb[2];
     const cl_ulong nb3 = dst->nb[3];
 
-    cl_kernel kernel = backend_ctx->repeat.kernel_repeat_f32;
+    cl_kernel kernel;
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            kernel = backend_ctx->repeat.kernel_repeat_f32;
+            break;
+        case GGML_TYPE_F16:
+        case GGML_TYPE_I16:
+        case GGML_TYPE_BF16:
+            kernel = backend_ctx->repeat.kernel_repeat_f16;
+            break;
+        case GGML_TYPE_I32:
+            kernel = backend_ctx->repeat.kernel_repeat_i32;
+            break;
+        default:
+            GGML_ABORT("unsupported type");
+    }
 
     CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));

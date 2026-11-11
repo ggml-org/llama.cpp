@@ -95,6 +95,10 @@ struct ggml_opencl_fill_kernels {
     cl_kernel kernel_fill;
 };
 
+struct ggml_opencl_arange_kernels {
+    cl_kernel kernel_arange;
+};
+
 struct ggml_opencl_clamp_kernels {
     cl_kernel kernel_clamp;
     cl_kernel kernel_clamp_nc;
@@ -252,6 +256,8 @@ struct ggml_opencl_cumsum_kernels {
 
 struct ggml_opencl_repeat_kernels {
     cl_kernel kernel_repeat_f32;
+    cl_kernel kernel_repeat_f16;
+    cl_kernel kernel_repeat_i32;
 };
 
 struct ggml_opencl_pad_kernels {
@@ -647,6 +653,7 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a_ila_a8_bin;
     cl_kernel kernel_gemv_noshuffle_q8_0_f32;
     cl_kernel kernel_gemv_noshuffle_q8_0_f32_splitk;
+    cl_kernel kernel_gemv_noshuffle_q8_0_f32_mc;
     cl_kernel kernel_gemm_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q1_0_f32_nsg1;
@@ -834,6 +841,8 @@ struct ggml_opencl_mul_mat_id_kernels {
     cl_kernel kernel_moe_scatter_stable;
     cl_kernel kernel_moe_combine_f32;
     cl_kernel kernel_moe_combine_bias_f32;
+    cl_kernel kernel_mul_mv_id_f32_f32;
+    cl_kernel kernel_mul_mm_id_f32_f32;
     cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
     cl_kernel kernel_mul_mv_id_q8_0_f32;
     cl_kernel kernel_mul_mv_id_q8_0_f32_flat;
@@ -870,6 +879,7 @@ void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
 void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_tri(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_fill(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+void ggml_cl_arange(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -989,6 +999,7 @@ void ggml_cl_load_kernels_relu(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_sigmoid(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_tri(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_fill(ggml_backend_opencl_context * backend_ctx);
+void ggml_cl_load_kernels_arange(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_clamp(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_norm(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_rms_norm(ggml_backend_opencl_context * backend_ctx);

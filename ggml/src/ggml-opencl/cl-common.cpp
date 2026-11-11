@@ -309,6 +309,13 @@ bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const gg
         threshold_ne0 = 128;
         threshold_ne1 = 128;
     }
+    // K floor 256 on X2E: the gemma-4 E2B/E4B MTP drafters' weights are all K = 256.
+    // Default on for X2E, GGML_OPENCL_K_FLOOR_256=0/1 forces it.
+    static const char * k_floor_256_env = getenv("GGML_OPENCL_K_FLOOR_256");
+    const bool k_floor_256 = k_floor_256_env ? atoi(k_floor_256_env) != 0 : backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E;
+    if (k_floor_256 && threshold_ne0 > 256) {
+        threshold_ne0 = 256;
+    }
     bool threashold_ok = tensor->ne[0] >= threshold_ne0 && tensor->ne[1] >= threshold_ne1 &&
             tensor->ne[2] == 1 && tensor->ne[3] == 1;
 
@@ -809,6 +816,7 @@ void load_cl_kernels(ggml_backend_opencl_context * backend_ctx) {
     ggml_cl_load_kernels_add_id(backend_ctx);
     ggml_cl_load_kernels_tri(backend_ctx);
     ggml_cl_load_kernels_fill(backend_ctx);
+    ggml_cl_load_kernels_arange(backend_ctx);
     ggml_cl_load_kernels_clamp(backend_ctx);
     ggml_cl_load_kernels_cpy(backend_ctx);
     ggml_cl_load_kernels_repack(backend_ctx);
