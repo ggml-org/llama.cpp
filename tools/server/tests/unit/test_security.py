@@ -171,6 +171,92 @@ def test_cors_origins_defaults_to_localhost_with_tools_enabled():
     assert "Access-Control-Allow-Origin" not in res.headers
 
 
+def _raw_post(path: str, body: str, headers: dict) -> requests.Response:
+    # text/plain: "simple" request, no CORS preflight
+    return requests.post(server.make_url(path), data=body, headers={"Content-Type": "text/plain", **headers})
+
+
+@pytest.mark.parametrize("headers,expected_status", [
+    ({}, 200),                                                    # non-browser client
+    ({"Origin": "http://localhost:3000"}, 200),                   # allowed localhost origin
+    ({"Origin": "http://evil.com"}, 403),                         # cross-origin simple request
+    ({"Origin": "http://localhost.evil.com"}, 403),
+    ({"Origin": "null"}, 403),                                    # sandboxed iframe / file://
+    ({"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"}, 403),
+])
+def test_cors_origins_localhost_blocks_simple_requests(headers: dict, expected_status: int):
+    global server
+    server.api_key = None
+    server.cors_origins = "localhost"
+    server.start()
+    res = _raw_post("/tokenize", '{"content": "hello"}', headers)
+    assert res.status_code == expected_status
+
+
+def test_cors_origins_localhost_allows_same_origin():
+    global server
+    server.api_key = None
+    server.cors_origins = "localhost"
+    server.server_host = "127.0.0.1"
+    server.start()
+    # UI opened via LAN address: Origin matches Host
+    origin_host = f"192.168.1.10:{server.server_port}"
+    res = _raw_post("/tokenize", '{"content": "hello"}', {
+        "Host": origin_host,
+        "Origin": f"http://{origin_host}",
+    })
+    assert res.status_code == 200
+
+
+def test_cors_origins_explicit_list_blocks_simple_requests():
+    global server
+    server.api_key = None
+    server.cors_origins = "https://a.example, https://b.example"
+    server.start()
+    for origin, expected_status in [
+        ("https://a.example", 200),
+        ("https://b.example", 200),
+        ("https://c.example", 403),
+    ]:
+        res = _raw_post("/tokenize", '{"content": "hello"}', {"Origin": origin})
+        assert res.status_code == expected_status, origin
+
+
+def test_cors_origins_wildcard_keeps_allowing_all():
+    global server
+    server.api_key = None
+    server.cors_origins = "*"
+    server.start()
+    res = _raw_post("/tokenize", '{"content": "hello"}', {"Origin": "http://evil.com"})
+    assert res.status_code == 200
+
+
+def test_cors_cross_site_navigation_to_ui_allowed():
+    global server
+    server.api_key = None
+    server.cors_origins = "localhost"
+    server.start()
+    nav = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}
+    # UI may not be built in tests, only check it is not refused
+    assert requests.get(server.make_url("/"), headers=nav).status_code != 403
+    assert requests.get(server.make_url("/props"), headers=nav).status_code == 403
+
+
+def test_tools_drive_by_exec_is_blocked():
+    global server
+    server.api_key = None
+    server.server_tools = "exec_shell_command" # implies --cors-origins localhost
+    server.start()
+    body = '{"tool": "exec_shell_command", "params": {"command": "echo csrf-guard-test"}}'
+    res = _raw_post("/tools", body, {"Origin": "http://evil.com"})
+    assert res.status_code == 403
+    assert "csrf-guard-test" not in res.text
+
+    res = _raw_post("/tools", body, {"Origin": "http://localhost:5173"})
+    assert res.status_code == 200
+    assert "csrf-guard-test" in res.text
+
+
 def test_cors_proxy_only_forwards_explicit_proxy_headers():
     class CaptureHeadersHandler(BaseHTTPRequestHandler):
         def do_GET(self):

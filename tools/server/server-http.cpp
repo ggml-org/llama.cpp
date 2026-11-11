@@ -6,6 +6,8 @@
 
 #include <cpp-httplib/httplib.h>
 
+#include <algorithm>
+#include <cctype>
 #include <functional>
 #include <future>
 #include <memory>
@@ -79,6 +81,45 @@ static bool origin_is_localhost(const std::string & origin) {
     } catch (const std::exception &) {
         return false;
     }
+}
+
+static std::string ascii_lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+    return s;
+}
+
+// CSRF guard when CORS is not "*"
+// no ACAO header only hides the response, browsers still send simple requests (text/plain POST, no-cors GET), so reject them here
+static bool request_origin_is_allowed(const std::string & cors_origins, const httplib::Request & req, bool is_frontend_path) {
+    if (cors_origins == "*") {
+        return true;
+    }
+
+    const std::string origin = req.get_header_value("Origin");
+    if (!origin.empty()) {
+        // same-origin, e.g. UI opened via LAN address
+        const std::string host = req.get_header_value("Host");
+        const size_t sep = origin.find("://");
+        if (!host.empty() && sep != std::string::npos && ascii_lower(origin.substr(sep + 3)) == ascii_lower(host)) {
+            return true;
+        }
+        if (cors_origins == "localhost") {
+            return origin_is_localhost(origin);
+        }
+        for (const auto & allowed : string_split<std::string>(cors_origins, ',')) {
+            if (string_strip(allowed) == origin) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // no Origin: non-browser client or browser no-cors GET; if cross-site, only allow navigation to the UI
+    const std::string site = req.get_header_value("Sec-Fetch-Site");
+    if (site == "cross-site" || site == "same-site") {
+        return req.method == "GET" && req.get_header_value("Sec-Fetch-Mode") == "navigate" && is_frontend_path;
+    }
+    return true;
 }
 
 // For Google Cloud Platform deployment compatibility
@@ -351,6 +392,23 @@ bool server_http_context::init_listener(const common_params & params) {
             res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
+        }
+        if (!request_origin_is_allowed(params.cors_origins, req, frontend_paths.count(req.path) > 0)) {
+            SRV_WRN("(CORS) rejected cross-origin request: %s %s, origin = '%s', sec-fetch-site = '%s'\n",
+                    req.method.c_str(), req.path.c_str(),
+                    req.get_header_value("Origin").c_str(), req.get_header_value("Sec-Fetch-Site").c_str());
+            res.status = 403;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Cross-origin request not allowed (see --cors-origins)"},
+                        {"type", "permission_error"},
+                        {"code", 403}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
+            return httplib::Server::HandlerResponse::Handled;
         }
         if (!middleware_server_state(req, res)) {
             return httplib::Server::HandlerResponse::Handled;
