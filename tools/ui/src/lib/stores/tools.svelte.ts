@@ -112,12 +112,10 @@ class ToolsStore {
 	}
 
 	get browserTools(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [buildGetDatetimeToolDefinition()];
-
-		if (settingsStore.config.jsSandboxEnabled) {
-			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
-		}
-
+		const tools: OpenAIToolDefinition[] = [
+			buildGetDatetimeToolDefinition(),
+			buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled)
+		];
 		const readMedia = this.readMediaTool();
 
 		if (readMedia) tools.push(readMedia);
