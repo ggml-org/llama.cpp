@@ -32,6 +32,21 @@
 #include <type_traits>
 #include <vector>
 
+std::string mtmd_format(const char * fmt, ...) {
+    va_list ap;
+    va_list ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int size = vsnprintf(NULL, 0, fmt, ap);
+    GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
+    std::vector<char> buf(size + 1);
+    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
+    GGML_ASSERT(size2 == size);
+    va_end(ap2);
+    va_end(ap);
+    return std::string(buf.data(), size);
+}
+
 // remember to bump this if the serialization format changes
 #define MTMD_SERIALIZATION_VERSION 4
 
@@ -691,7 +706,7 @@ struct mtmd_context {
                         pos_type = MTMD_POS_TYPE_MROPE;
                     } break;
                 default:
-                    throw std::runtime_error(string_format("unsupported decoder rope type: %d\n", decoder_rope_type));
+                    throw std::runtime_error(mtmd_format("unsupported decoder rope type: %d\n", decoder_rope_type));
             }
         }
 
@@ -711,7 +726,7 @@ struct mtmd_context {
 
         // soprano and pocket-tts without voice cloning have no encoder
         if (!models.v && !models.a && !models.gen_a) {
-            throw std::runtime_error(string_format("Failed to load mmproj model from %s\n", mmproj_fname));
+            throw std::runtime_error(mtmd_format("Failed to load mmproj model from %s\n", mmproj_fname));
         }
 
         int max_nodes = 0;
@@ -752,7 +767,7 @@ struct mtmd_context {
             int n_embd_v = ctx_v->model.n_mmproj_embd();
             int n_embd_a = ctx_a->model.n_mmproj_embd();
             if (n_embd_v != n_embd_a) {
-                throw std::runtime_error(string_format(
+                throw std::runtime_error(mtmd_format(
                     "mismatch between vision and audio mmproj (n_embd_v = %d, n_embd_a = %d)\n",
                     n_embd_v, n_embd_a));
             }
@@ -763,7 +778,7 @@ struct mtmd_context {
         // a gen-only mmproj is validated below
         int n_embd_mmproj = ctx_v || ctx_a ? (ctx_v ? ctx_v : ctx_a)->model.n_mmproj_embd() : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_mmproj) {
-            throw std::runtime_error(string_format(
+            throw std::runtime_error(mtmd_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
                 "hint: you may be using wrong mmproj\n",
                 n_embd_text, n_embd_mmproj));
@@ -771,7 +786,7 @@ struct mtmd_context {
         if (ctx_gen_a) {
             int n_embd_gen = ctx_gen_a->model.n_mmproj_embd();
             if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
-                throw std::runtime_error(string_format(
+                throw std::runtime_error(mtmd_format(
                     "mismatch between text model (n_embd = %d) and gen-audio mmproj (n_embd = %d)\n"
                     "hint: you may be using wrong mmproj\n",
                     n_embd_text, n_embd_gen));
@@ -836,7 +851,7 @@ struct mtmd_context {
                         ov_img_first      = true;
 
                     } else if (minicpmv_version != 0) {
-                        throw std::runtime_error(string_format("unsupported minicpmv version: %d\n", minicpmv_version));
+                        throw std::runtime_error(mtmd_format("unsupported minicpmv version: %d\n", minicpmv_version));
                     }
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(models.v.get());
                 } break;
@@ -1148,7 +1163,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_granite>(models.v.get());
                 } break;
             default:
-                throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
+                throw std::runtime_error(mtmd_format("%s: unexpected vision projector type %d\n", __func__, proj));
         }
 
         GGML_ASSERT(image_preproc != nullptr);
@@ -1274,7 +1289,7 @@ struct mtmd_context {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));
                 } break;
             default:
-                throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
+                throw std::runtime_error(mtmd_format("%s: unexpected audio projector type %d\n", __func__, proj));
         }
 
         // initialize audio preprocessor
@@ -1436,7 +1451,7 @@ struct mtmd_tokenizer {
         for (const auto & part : parts_str) {
             if (part == ctx->media_marker) {
                 if (i_bm >= bitmaps.size()) {
-                    throw std::runtime_error(string_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
+                    throw std::runtime_error(mtmd_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
                 }
                 parts.push_back({"", bitmaps[i_bm++]});
             } else {
@@ -1451,7 +1466,7 @@ struct mtmd_tokenizer {
             }
         }
         if (n_markers != bitmaps.size()) {
-            throw std::runtime_error(string_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
+            throw std::runtime_error(mtmd_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
         }
 
         expand_lazy_bitmaps();
@@ -1496,7 +1511,7 @@ struct mtmd_tokenizer {
                                     &out_bm,
                                     &out_str);
                     if (out_bm && out_str) {
-                        throw std::runtime_error(string_format("lazy callback cannot return both bitmap and text"));
+                        throw std::runtime_error(mtmd_format("lazy callback cannot return both bitmap and text"));
                     }
                     if (res == 0) {
                         // OK, append the returned chunk; lazy part is not yet added
@@ -1520,7 +1535,7 @@ struct mtmd_tokenizer {
                         break;
                     } else if (res == -2) {
                         // error
-                        throw std::runtime_error(string_format("lazy callback returned error"));
+                        throw std::runtime_error(mtmd_format("lazy callback returned error"));
                     }
                 }
                 if (!st.pieces.empty()) {
@@ -1654,7 +1669,7 @@ struct mtmd_tokenizer {
                 add_text(ctx->img_beg, true); // add image begin token
             }
             if (ctx->has_prompt_img_size) {
-                add_text(string_format("image %ux%u<|media_content|>", bitmaps[0]->nx, bitmaps[0]->ny), true);
+                add_text(mtmd_format("image %ux%u<|media_content|>", bitmaps[0]->nx, bitmaps[0]->ny), true);
             }
 
             // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)
@@ -1764,7 +1779,7 @@ struct mtmd_tokenizer {
                             auto & curr_chunk = chunks[y * n_col + x];
                             auto & curr_batch = curr_chunk.tokens_image->batch_f32;
                             if (curr_batch.entries.size() != 1) {
-                                throw std::runtime_error(string_format("%s: expect 1 image in batch_f32", __func__));
+                                throw std::runtime_error(mtmd_format("%s: expect 1 image in batch_f32", __func__));
                             }
 
                             LOG_DBG("%s: adding slice image at row %d col %d\n", __func__, y, x);
@@ -2158,14 +2173,14 @@ struct mtmd_tokenizer {
         // overview image first
         auto & overview = preproc_out.overview;
         if (overview.nx() == 0 || overview.ny() == 0) {
-            throw std::runtime_error(string_format("%s: invalid overview image for llava-uhd style preprocessing\n", __func__));
+            throw std::runtime_error(mtmd_format("%s: invalid overview image for llava-uhd style preprocessing\n", __func__));
         }
         process_chunk(std::move(preproc_out.overview));
 
         // then, process slices
         for (auto & entry : preproc_out.entries) {
             if (entry.nx() == 0 || entry.ny() == 0) {
-                throw std::runtime_error(string_format("%s: invalid image slice for llava-uhd style preprocessing\n", __func__));
+                throw std::runtime_error(mtmd_format("%s: invalid image slice for llava-uhd style preprocessing\n", __func__));
             }
             process_chunk(std::move(entry));
         }

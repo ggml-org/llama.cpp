@@ -47,6 +47,7 @@ export type {
 	HfModelGguf,
 	HfModelInfo,
 	HfModelSearchParams,
+	HfMmprojEncoders,
 	HfModelSibling,
 	HfModelSiblingRef
 } from './huggingface';
