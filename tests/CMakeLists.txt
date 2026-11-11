@@ -161,7 +161,7 @@ if (NOT WIN32)
         NAME test-tokenizers-ggml-vocabs
         LABEL behavior
         WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-        ARGS https://huggingface.co/ggml-org/vocabs ${PROJECT_SOURCE_DIR}/models/ggml-vocabs
+        ARGS https://huggingface.co/ggml-org-dev/vocabs ${PROJECT_SOURCE_DIR}/models/ggml-vocabs
     )
 endif()
 
@@ -325,15 +325,16 @@ llama_build_and_test(
 )
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-    set(MODEL_NAME "tinyllamas/stories15M-q4_0.gguf")
+    set(MODEL_NAME "stories15M-q4_0.gguf")
     set(MODEL_HASH "SHA256=66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739")
 else()
-    set(MODEL_NAME "tinyllamas/stories15M-be.Q4_0.gguf")
+    set(MODEL_NAME "stories15M-be.Q4_0.gguf")
     set(MODEL_HASH "SHA256=9aec857937849d976f30397e97eb1cabb53eb9dcb1ce4611ba8247fb5f44c65d")
 endif()
 set(MODEL_DEST "${CMAKE_BINARY_DIR}/${MODEL_NAME}")
 
 add_test(NAME test-download-model COMMAND ${CMAKE_COMMAND}
+    -DREPO=ggml-org-dev/stories15M
     -DDEST=${MODEL_DEST}
     -DNAME=${MODEL_NAME}
     -DHASH=${MODEL_HASH}
