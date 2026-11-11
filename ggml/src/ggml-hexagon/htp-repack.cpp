@@ -15,7 +15,7 @@
 #    include <arm_neon.h>
 #endif
 
-// --- 4-bit block-32 nibble helpers (shared by Q4_0, IQ4_NL, Q4_1, MXFP4) ---
+// --- 4-bit block-32 nibble helpers (shared by Q4_0, IQ4_NL, Q4_1, Q5_0, Q5_1, MXFP4) ---
 
 static inline void unpack_nibbles_32(uint8_t * dst, const uint8_t * qs) {
     for (unsigned int i = 0; i < 16; ++i) {
@@ -46,6 +46,28 @@ static inline void transpose_tile_to_nibbles(uint8_t tile_quants[32][32], const 
             tile_quants[row][2 * cp + 1] = val >> 4;
         }
     }
+}
+
+// 5th-bit plane of one row (qh bit k = quant k), same bit layout as the Q5_K plane
+static inline void pack_q5_plane(uint8_t * plane, int row, uint32_t qh) {
+    for (int c = 0; c < 4; c++) {
+        uint32_t v = 0;
+        for (int i = 0; i < 4; i++) {
+            v |= ((qh >> (8 * i + 2 * c)) & 3) << (2 * i);
+        }
+        plane[c * 32 + row] = (uint8_t) v;
+    }
+}
+
+static inline uint32_t unpack_q5_plane(const uint8_t * plane, int row) {
+    uint32_t qh = 0;
+    for (int c = 0; c < 4; c++) {
+        const uint32_t v = plane[c * 32 + row];
+        for (int i = 0; i < 4; i++) {
+            qh |= ((v >> (2 * i)) & 3) << (8 * i + 2 * c);
+        }
+    }
+    return qh;
 }
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
@@ -546,49 +568,11 @@ static void repack_tiled_q4_1(void * data, const ggml_tensor * t, size_t offset,
         });
 }
 
-// Q5_0 / Q5_1 reuse the Q5_K tile; Q5_0 stores m = -16 * d
-
-// 5th-bit plane byte c (0..3) of a row: bits 2i, 2i+1 hold the high bits of k = 2*(4i+c), 2*(4i+c)+1
-static inline uint8_t q5_hbit_plane_byte(uint32_t qh, int c) {
-    uint32_t v = 0;
-    for (int i = 0; i < 4; i++) {
-        v |= ((qh >> (8 * i + 2 * c)) & 3) << (2 * i);
-    }
-    return (uint8_t) v;
-}
-
-static inline uint32_t q5_hbit_plane_to_qh(const uint8_t * plane, int row) {
-    uint32_t qh = 0;
-    for (int c = 0; c < 4; c++) {
-        const uint32_t v = plane[c * 32 + row];
-        for (int i = 0; i < 4; i++) {
-            qh |= ((v >> (2 * i)) & 3) << (8 * i + 2 * c);
-        }
-    }
-    return qh;
-}
-
-template <typename BlockT, bool HAS_MIN>
-static void repack_q5_01_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
-    repack_to_tiled_grid_32<BlockT, 1>(t, data, offset, size, HTP_TENSOR_TILE_SIZE_Q5_K,
-        [](uint8_t * tile_dst, const BlockT * src_slice, int64_t ne0, int64_t ne1, int64_t row_stride, int ct, int kt) {
-            ggml_half * scale_dst = (ggml_half *) (tile_dst + 512);
-            uint8_t *   plane_dst = tile_dst + 640;
-
-            const auto store_row = [&](int row, const BlockT & b) {
-                uint32_t qh;
-                memcpy(&qh, b.qh, sizeof(qh));
-                for (int c = 0; c < 4; c++) {
-                    plane_dst[c * 32 + row] = q5_hbit_plane_byte(qh, c);
-                }
-                scale_dst[2 * row + 0] = b.d;
-                if constexpr (HAS_MIN) {
-                    scale_dst[2 * row + 1] = b.m;
-                } else {
-                    scale_dst[2 * row + 1] = GGML_FP32_TO_FP16(-16.0f * GGML_FP16_TO_FP32(b.d));
-                }
-            };
-
+static void repack_q5_0_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
+    repack_to_tiled_grid_32<block_q5_0, 1>(t, data, offset, size, HTP_TENSOR_TILE_SIZE_Q5_0,
+        [](uint8_t * tile_dst, const block_q5_0 * src_slice, int64_t ne0, int64_t ne1, int64_t row_stride, int ct, int kt) {
+            uint8_t *   plane_dst = tile_dst + 512;
+            ggml_half * scale_dst = (ggml_half *) (tile_dst + 640);
 #if defined(__ARM_NEON) || defined(__aarch64__)
             if (ct * 32 + 32 <= ne1 && kt < ne0 / 32) {
                 for (int row0 = 0; row0 < 32; row0 += 8) {
@@ -598,8 +582,13 @@ static void repack_q5_01_tiled(ggml_tensor * t, const void * data, size_t offset
                     }
                     repack_neon_4bit_rows(qs, tile_dst, row0);
                 }
+
                 for (int row = 0; row < 32; ++row) {
-                    store_row(row, src_slice[(ct * 32 + row) * row_stride + kt]);
+                    const block_q5_0 & src_block = src_slice[(ct * 32 + row) * row_stride + kt];
+                    uint32_t qh;
+                    memcpy(&qh, src_block.qh, sizeof(qh));
+                    pack_q5_plane(plane_dst, row, ~qh);
+                    scale_dst[row] = src_block.d;
                 }
                 return;
             }
@@ -608,14 +597,83 @@ static void repack_q5_01_tiled(ggml_tensor * t, const void * data, size_t offset
             for (int row = 0; row < 32; row++) {
                 const int64_t r = ct * 32 + row;
                 if (r < ne1 && kt < ne0 / 32) {
-                    const BlockT & b = src_slice[r * row_stride + kt];
+                    const block_q5_0 & b = src_slice[r * row_stride + kt];
                     unpack_nibbles_32(tile_quants[row], b.qs);
-                    store_row(row, b);
+                    uint32_t qh;
+                    memcpy(&qh, b.qh, sizeof(qh));
+                    pack_q5_plane(plane_dst, row, ~qh);
+                    scale_dst[row] = b.d;
                 } else {
                     memset(tile_quants[row], 0, 32);
-                    for (int c = 0; c < 4; c++) {
-                        plane_dst[c * 32 + row] = 0;
+                    pack_q5_plane(plane_dst, row, 0);
+                    scale_dst[row] = 0;
+                }
+            }
+            transpose_nibbles_to_tile(tile_dst, tile_quants);
+        });
+}
+
+static void repack_tiled_q5_0(void * data, const ggml_tensor * t, size_t offset, size_t size) {
+    unpack_from_tiled_grid_32<block_q5_0, 1>(data, t, offset, size, HTP_TENSOR_TILE_SIZE_Q5_0,
+        [](block_q5_0 * dst_slice, const uint8_t * tile_src, int64_t ne0, int64_t start_row, int64_t end_row, int64_t row_stride, int ct, int kt) {
+            uint8_t tile_quants[32][32];
+            transpose_tile_to_nibbles(tile_quants, tile_src);
+            const uint8_t *   plane_src = tile_src + 512;
+            const ggml_half * scale_src = (const ggml_half *) (tile_src + 640);
+            for (int row = 0; row < 32; row++) {
+                const int64_t r = ct * 32 + row;
+                if (r >= start_row && r < end_row && kt < ne0 / 32) {
+                    block_q5_0 & b = dst_slice[(r - start_row) * row_stride + kt];
+                    pack_nibbles_32(b.qs, tile_quants[row]);
+                    const uint32_t qh = ~unpack_q5_plane(plane_src, row);
+                    memcpy(b.qh, &qh, sizeof(qh));
+                    b.d = scale_src[row];
+                }
+            }
+        });
+}
+
+// Q5_1 uses the Q5_K tile layout
+static void repack_q5_1_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
+    repack_to_tiled_grid_32<block_q5_1, 1>(t, data, offset, size, HTP_TENSOR_TILE_SIZE_Q5_1,
+        [](uint8_t * tile_dst, const block_q5_1 * src_slice, int64_t ne0, int64_t ne1, int64_t row_stride, int ct, int kt) {
+            ggml_half * scale_dst = (ggml_half *) (tile_dst + 512);
+            uint8_t *   plane_dst = tile_dst + 640;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            if (ct * 32 + 32 <= ne1 && kt < ne0 / 32) {
+                for (int row0 = 0; row0 < 32; row0 += 8) {
+                    const uint8_t * qs[8];
+                    for (int rr = 0; rr < 8; ++rr) {
+                        qs[rr] = src_slice[(ct * 32 + row0 + rr) * row_stride + kt].qs;
                     }
+                    repack_neon_4bit_rows(qs, tile_dst, row0);
+                }
+
+                for (int row = 0; row < 32; ++row) {
+                    const block_q5_1 & src_block = src_slice[(ct * 32 + row) * row_stride + kt];
+                    uint32_t qh;
+                    memcpy(&qh, src_block.qh, sizeof(qh));
+                    pack_q5_plane(plane_dst, row, qh);
+                    scale_dst[2 * row + 0] = src_block.d;
+                    scale_dst[2 * row + 1] = src_block.m;
+                }
+                return;
+            }
+#endif
+            uint8_t tile_quants[32][32];
+            for (int row = 0; row < 32; row++) {
+                const int64_t r = ct * 32 + row;
+                if (r < ne1 && kt < ne0 / 32) {
+                    const block_q5_1 & b = src_slice[r * row_stride + kt];
+                    unpack_nibbles_32(tile_quants[row], b.qs);
+                    uint32_t qh;
+                    memcpy(&qh, b.qh, sizeof(qh));
+                    pack_q5_plane(plane_dst, row, qh);
+                    scale_dst[2 * row + 0] = b.d;
+                    scale_dst[2 * row + 1] = b.m;
+                } else {
+                    memset(tile_quants[row], 0, 32);
+                    pack_q5_plane(plane_dst, row, 0);
                     scale_dst[2 * row + 0] = 0;
                     scale_dst[2 * row + 1] = 0;
                 }
@@ -624,10 +682,9 @@ static void repack_q5_01_tiled(ggml_tensor * t, const void * data, size_t offset
         });
 }
 
-template <typename BlockT, bool HAS_MIN>
-static void repack_tiled_q5_01(void * data, const ggml_tensor * t, size_t offset, size_t size) {
-    unpack_from_tiled_grid_32<BlockT, 1>(data, t, offset, size, HTP_TENSOR_TILE_SIZE_Q5_K,
-        [](BlockT * dst_slice, const uint8_t * tile_src, int64_t ne0, int64_t start_row, int64_t end_row, int64_t row_stride, int ct, int kt) {
+static void repack_tiled_q5_1(void * data, const ggml_tensor * t, size_t offset, size_t size) {
+    unpack_from_tiled_grid_32<block_q5_1, 1>(data, t, offset, size, HTP_TENSOR_TILE_SIZE_Q5_1,
+        [](block_q5_1 * dst_slice, const uint8_t * tile_src, int64_t ne0, int64_t start_row, int64_t end_row, int64_t row_stride, int ct, int kt) {
             uint8_t tile_quants[32][32];
             transpose_tile_to_nibbles(tile_quants, tile_src);
             const ggml_half * scale_src = (const ggml_half *) (tile_src + 512);
@@ -635,14 +692,12 @@ static void repack_tiled_q5_01(void * data, const ggml_tensor * t, size_t offset
             for (int row = 0; row < 32; row++) {
                 const int64_t r = ct * 32 + row;
                 if (r >= start_row && r < end_row && kt < ne0 / 32) {
-                    BlockT & b = dst_slice[(r - start_row) * row_stride + kt];
+                    block_q5_1 & b = dst_slice[(r - start_row) * row_stride + kt];
                     pack_nibbles_32(b.qs, tile_quants[row]);
-                    const uint32_t qh = q5_hbit_plane_to_qh(plane_src, row);
+                    const uint32_t qh = unpack_q5_plane(plane_src, row);
                     memcpy(b.qh, &qh, sizeof(qh));
                     b.d = scale_src[2 * row + 0];
-                    if constexpr (HAS_MIN) {
-                        b.m = scale_src[2 * row + 1];
-                    }
+                    b.m = scale_src[2 * row + 1];
                 }
             }
         });
@@ -1640,6 +1695,12 @@ void htp_repack_tensor_tiled(ggml_tensor * tensor, const void * data, size_t siz
         case GGML_TYPE_Q4_1:
             repack_q4_1_tiled(tensor, data, 0, size);
             break;
+        case GGML_TYPE_Q5_0:
+            repack_q5_0_tiled(tensor, data, 0, size);
+            break;
+        case GGML_TYPE_Q5_1:
+            repack_q5_1_tiled(tensor, data, 0, size);
+            break;
         case GGML_TYPE_Q8_0:
             repack_q8_0_tiled(tensor, data, 0, size);
             break;
@@ -1694,6 +1755,12 @@ void htp_unpack_tensor_tiled(void * data, const ggml_tensor * tensor, size_t off
             break;
         case GGML_TYPE_Q4_1:
             repack_tiled_q4_1(data, tensor, offset, size);
+            break;
+        case GGML_TYPE_Q5_0:
+            repack_tiled_q5_0(data, tensor, offset, size);
+            break;
+        case GGML_TYPE_Q5_1:
+            repack_tiled_q5_1(data, tensor, offset, size);
             break;
         case GGML_TYPE_Q8_0:
             repack_tiled_q8_0(data, tensor, offset, size);
