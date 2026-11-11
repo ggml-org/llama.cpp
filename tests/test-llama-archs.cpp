@@ -932,6 +932,18 @@ static void write_moe_scales(const std::string & source_path, const std::string 
         }
         scale->data = scale_data.back().data();
         gguf_add_tensor(scaled.get(), scale);
+
+        ggml_tensor * scale_in = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, granularity == 0 ? 1 : w->ne[2]);
+        const std::string scale_in_name = std::string(name, strlen(name) - strlen("weight")) + "input_scale";
+        ggml_set_name(scale_in, scale_in_name.c_str());
+        scale_data.emplace_back(ggml_nelements(scale_in), 1.0f);
+        if (!unit_scales) {
+            for (size_t j = 0; j < scale_data.back().size(); ++j) {
+                scale_data.back()[j] += 0.25f*j;
+            }
+        }
+        scale_in->data = scale_data.back().data();
+        gguf_add_tensor(scaled.get(), scale_in);
     }
     if (scale_data.empty()) {
         throw std::runtime_error("MoE scale test fixture has no expert down weights");

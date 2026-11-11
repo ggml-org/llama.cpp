@@ -1780,19 +1780,14 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
                  bool   cached) const {
     ggml_tensor * w_s = get_weight_scale(w);
     ggml_tensor * x_s = get_input_scale(w);
-    if (x_s && !ggml_is_scalar(x_s)) {
-        // select by the original expert IDs, also when weights use cache slots
-        ggml_tensor * flat_ids = ggml_reshape_1d(ctx0, ggml_cont(ctx0, ids), ggml_nelements(ids));
-        x_s = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, x_s, 1, ggml_nelements(x_s)), flat_ids);
-        x_s = ggml_reshape_3d(ctx0, x_s, 1, ids->ne[0], ids->ne[1]);
-    }
     // as in build_lora_mm: the folded weight reads the transformed input, the LoRA delta reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     // the experts in the MoE cache are selected by their slots
     ggml_tensor * res = slots == nullptr ?
         ggml_mul_mat_id_ext(ctx0, w, cur_mm, ids, w_s, x_s) :
         ggml_mul_mat_id_ext(ctx0, cached ? moe_cache->get_experts(w) : w, cur_mm, slots,
-            w_s ? (cached ? moe_cache->get_scales(w) : w_s) : nullptr, x_s);
+            w_s ? (cached ? moe_cache->get_scales(w, LLAMA_MOE_CACHE_SCALE_WEIGHT) : w_s) : nullptr,
+            x_s ? (cached ? moe_cache->get_scales(w, LLAMA_MOE_CACHE_SCALE_INPUT)  : x_s) : nullptr);
 
     if (prec_policy) {
         prec_policy->apply(res);
