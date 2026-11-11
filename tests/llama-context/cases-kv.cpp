@@ -837,10 +837,14 @@ struct case_partial : ctx_test {
             }
         }
 
+        // with the MoE cache, the ubatches of the reference read the experts from the cache on the GPU, while the chunks
+        //   of a few tokens compute the experts in host memory on the CPU: the backends round differently
+        const double threshold = mr.params.moe_cache_size > 0 ? 1e-4 : NMSE_THRESHOLD;
+
         for (llama_pos i = 0; i < n_tokens; ++i) {
             const logits_diff diff = compare_logits(llama_get_logits_ith(ctx_ref.get(), i), llama_get_logits_ith(ctx.get(), i), n_vocab);
 
-            CTX_REQUIRE(diff.nmse() <= NMSE_THRESHOLD,
+            CTX_REQUIRE(diff.nmse() <= threshold,
                     "the logits of token " + std::to_string(i) + " differ from the reference: nmse " + std::to_string(diff.nmse()));
         }
 
