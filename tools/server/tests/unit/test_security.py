@@ -197,7 +197,7 @@ def test_cors_origins_localhost_allows_same_origin():
     global server
     lan_ip = get_lan_ip()
     if lan_ip is None:
-        pytest.skip("no non-loopback interface")
+        pytest.skip("no non-loopback interface")  # ty: ignore[too-many-positional-arguments]
     server.api_key = None
     server.cors_origins = "localhost"
     server.server_host = "0.0.0.0"

@@ -936,7 +936,7 @@ def test_router_restricted_cors_same_origin_reaches_child():
     global server
     lan_ip = get_lan_ip()
     if lan_ip is None:
-        pytest.skip("no non-loopback interface")
+        pytest.skip("no non-loopback interface")  # ty: ignore[too-many-positional-arguments]
     server.cors_origins = "localhost"
     server.server_host = "0.0.0.0"
     server.start()
