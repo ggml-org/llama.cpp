@@ -1234,6 +1234,10 @@ static bool backend_lacks_skipped_ids(ggml_backend_t backend, ggml_cgraph * gf) 
         if (node->op != GGML_OP_MUL_MAT_ID && node->op != GGML_OP_ADD_ID) {
             continue;
         }
+        // MMVQ zeroes the rows of negative ids, every architecture uses it for MUL_MAT_ID of quantized types with up to 4 tokens
+        if (node->op == GGML_OP_MUL_MAT_ID && ggml_is_quantized(node->src[0]->type) && node->src[2]->ne[1] <= 4) {
+            continue;
+        }
         const ggml_tensor * ids = node->src[2];
         std::vector<int32_t> row(ids->ne[0]);
         for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
@@ -13187,8 +13191,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 }
                                 // the lane scale does a GET_ROWS on the ids, which does not accept -1
                                 if (use_id && !with_lane_scale) {
-                                    test_cases.emplace_back(new test_mul_mat_fusion(type, glu_op, 8, 32, 256,
-                                        use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}, true));
+                                    for (int64_t m_batch : { 1, 4, 8 }) {
+                                        test_cases.emplace_back(new test_mul_mat_fusion(type, glu_op, m_batch, 32, 256,
+                                            use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}, true));
+                                    }
                                 }
                             }
                         }

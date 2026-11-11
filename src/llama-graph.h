@@ -4,6 +4,7 @@
 #include "llama-batch.h"
 #include "llama-hparams.h"
 #include "llama-adapter.h"
+#include "llama-moe-cache.h"
 
 #include <cstdint>
 #include <cstdlib>
@@ -988,6 +989,7 @@ public:
 
     std::vector<llm_graph_input_ptr> inputs;
     std::vector<llm_graph_fused_node> fused_nodes;
+    llama_moe_cache_graph moe_cache; // see llama_moe_cache::build_experts
 
     std::map<std::pair<const ggml_tensor *, const ggml_tensor *>, ggml_tensor *> hdmd_inputs;
 

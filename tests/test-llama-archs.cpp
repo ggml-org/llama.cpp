@@ -341,6 +341,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_layer   = 4;
     }
     n_layer = std::max(n_layer, n_layer_min);
+    if (moe && host_experts_test(arch)) {
+        // the router picks the same experts for every token (see fill_exp_probs_b), so the layers share the MoE cache:
+        // with 3 MoE layers the experts do not fit, the cache fills and evicts, and a CPU share applies
+        n_layer = std::max(n_layer, uint32_t(4));
+    }
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
@@ -827,6 +832,11 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    if (file != nullptr && tensor_buft_overrides != nullptr) {
+        // read the overridden tensors into their buffer types, as when the model was created, instead of mapping the file:
+        // the MoE cache works differently on experts the device cannot read
+        model_params.load_mode = LLAMA_LOAD_MODE_NONE;
+    }
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -842,7 +852,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0, const float moe_cache_cpu_share = 0.0f) {
     llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
 
     llama_context_params ctx_params = llama_context_default_params();
@@ -855,6 +865,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (moe_cache_size > 0) {
         // the MoE cache is only used for small ubatches
         ctx_params.moe_cache_size = moe_cache_size;
+        ctx_params.moe_cache_cpu_share = moe_cache_cpu_share;
         ctx_params.n_ubatch = 2;
     }
 
@@ -1223,13 +1234,22 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         llama_split_mode                split_mode;
         bool                            host_experts; // keep the experts in host memory, see host_experts_test
         size_t                          moe_cache_size;
+        float                           moe_cache_cpu_share;
+        bool                            pinned_experts; // the host experts are in the host buffer type of the first device
 
-        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0)
-            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size) {}
+        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0,
+                float moe_cache_cpu_share = 0.0f, bool pinned_experts = false)
+            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size),
+              moe_cache_cpu_share(moe_cache_cpu_share), pinned_experts(pinned_experts) {}
     };
 
     const llama_model_tensor_buft_override host_experts_overrides[] = {
         { LLM_FFN_EXPS_REGEX, ggml_backend_cpu_buffer_type() },
+        { nullptr, nullptr },
+    };
+    // the buffer type is set below, to the host buffer type of the first device
+    llama_model_tensor_buft_override pinned_experts_overrides[] = {
+        { LLM_FFN_EXPS_REGEX, nullptr },
         { nullptr, nullptr },
     };
 
@@ -1271,6 +1291,17 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
                 dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
                 max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // the CPU computes a share of the misses, the zero slots take room from the cache
+                dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, CPU share", LLAMA_SPLIT_MODE_LAYER, true, 2304*1024, 0.5f);
+                max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                // the device can read the host experts, so it can cache the misses itself within the graph (CUDA)
+                pinned_experts_overrides[0].buft = ggml_backend_dev_host_buffer_type(devices_meta[0]);
+                if (pinned_experts_overrides[0].buft != nullptr) {
+                    dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, pinned", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024, 0.0f, true);
+                    max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                    dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, pinned, CPU share", LLAMA_SPLIT_MODE_LAYER, true, 2304*1024, 0.5f, true);
+                    max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                }
                 // each GPU caches the layers assigned to it
                 if (devices_meta.size() > 1) {
                     dev_configs.emplace_back(devices_meta, "MoE cache, layer split", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
@@ -1333,7 +1364,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 if (dc.host_experts && (!moe || !host_experts_test(arch))) {
                     continue;
                 }
-                const llama_model_tensor_buft_override * overrides = dc.host_experts ? host_experts_overrides : nullptr;
+                const llama_model_tensor_buft_override * overrides = !dc.host_experts ? nullptr : dc.pinned_experts ? pinned_experts_overrides : host_experts_overrides;
 
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
                 LOG(template_row_cfg.c_str(), llama_arch_name(arch), dc.label.c_str(), config_name.c_str());
@@ -1357,7 +1388,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size,
+                            dc.moe_cache_cpu_share);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -1422,7 +1454,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         GGML_ASSERT(file != nullptr);
 
                         {
-                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                            auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size,
+                                dc.moe_cache_cpu_share);
                             const std::vector<float> logits_roundtrip = get_logits(
                                 model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
                             status_roundtrip = "\033[1;32mOK\033[0m";
