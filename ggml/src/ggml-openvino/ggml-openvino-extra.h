@@ -202,8 +202,10 @@ bool ggml_openvino_gdn_native_state_enabled();
 // True when the device is an NPU with DEVICE_ARCHITECTURE 4000 (Lunar Lake).
 bool ggml_openvino_npu_is_4000();
 
-// Translate multi-token GATED_DELTA_NET into a chunked MatMul decomposition instead of the GatedDeltaNet op.
-// The NPU4000 GDN prefill kernel drives the DPU from SHAVE, which the LNL firmware does not support.
+// Translate GATED_DELTA_NET into a MatMul decomposition instead of the GatedDeltaNet op: chunked for multi-token
+// graphs (prefill), one step for single-token graphs (decode).
+// The NPU4000 GDN prefill kernel drives the DPU from SHAVE, which the LNL firmware does not support. On Linux the
+// decode kernel loses the device too (ZE_RESULT_ERROR_DEVICE_LOST).
 // Default: on for NPU4000 only. GGML_OPENVINO_GDN_DECOMPOSE=0 turns it off, a positive integer forces it on.
 // Snapshot (MTP) graphs still use the op.
 bool ggml_openvino_gdn_decompose_enabled();
