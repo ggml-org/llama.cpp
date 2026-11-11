@@ -2440,10 +2440,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     // layer-major prefill: the experts of each token chunk are computed apart, all the chunks read the same expert tensors
     // the experts of all tokens are selected first, so that the copy callback uploads the experts of all the chunks at the first chunk
-    // LLAMA_LAYER_MAJOR_NO_FFN: debug, to compare the attention chunks with a graph without chunks
     // the chunks call build_moe_ffn again with the experts of their tokens, which must not split them again
-    static const bool no_ffn_chunks = getenv("LLAMA_LAYER_MAJOR_NO_FFN") != nullptr;
-    if (!chunks.empty() && !moe_chunk && !no_ffn_chunks) {
+    if (!chunks.empty() && !moe_chunk) {
         ggml_tensor * ids = selected_experts->view_src ? ggml_cont(ctx0, selected_experts) : selected_experts;
         ggml_build_forward_expand(gf, ids);
 
