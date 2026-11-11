@@ -18,6 +18,7 @@ struct vk_mat_mat_push_constants {
 struct vk_op_mul_mat_scale_push_constants {
     uint32_t ne0; uint32_t ne1; uint32_t ne2; uint32_t ne3;
     uint32_t sne0; uint32_t sne1; uint32_t sne2; uint32_t sne3;
+    uint32_t snb0; uint32_t snb1; uint32_t snb2; uint32_t snb3;
     uint32_t per_expert;
     uint32_t ids_s0; uint32_t ids_s1;
 };

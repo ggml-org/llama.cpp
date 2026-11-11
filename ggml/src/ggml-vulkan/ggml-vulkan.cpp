@@ -6870,6 +6870,10 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     GGML_UNUSED(m);
 }
 
+static bool ggml_vk_mat_vec_folds_weight_scale(const ggml_tensor * scale, bool swap_inputs = false) {
+    return scale != nullptr && !swap_inputs && ggml_is_contiguous(scale);
+}
+
 static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx, bool swap_inputs = false) {
     ggml_tensor * dst = cgraph->nodes[node_idx];
     const ggml_tensor * src0 = dst->src[swap_inputs ? 1 : 0];
@@ -7086,7 +7090,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     }
 
     // fold weight scale (src[2]) via the F0 slot, free since scaled matmuls don't fuse
-    if (dst->src[2] != nullptr) {
+    if (ggml_vk_mat_vec_folds_weight_scale(dst->src[2], swap_inputs)) {
         d_F0 = ggml_vk_tensor_subbuffer(ctx, dst->src[2]);
         fusion_flags |= MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE;
         if (ggml_nelements(dst->src[2]) > 1) {
@@ -7385,12 +7389,16 @@ void ggml_vk_fwht(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src_buf, dst_buf }, pc, { workgroups_x, 1, 1 });
 }
 
+static uint32_t ggml_vk_nb_elem(const ggml_tensor * t, int i) {
+    return (uint32_t)(t->nb[i] / ggml_type_size(t->type));
+}
+
 static void ggml_vk_mul_mat_scale(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
     const bool is_id = dst->op == GGML_OP_MUL_MAT_ID;
     const ggml_tensor * scale = is_id ? dst->src[3] : dst->src[2];
     const ggml_tensor * ids   = is_id ? dst->src[2] : nullptr;
 
-    GGML_ASSERT(scale != nullptr && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale));
+    GGML_ASSERT(scale != nullptr && scale->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32 && ggml_is_contiguous(dst));
 
     const bool per_channel_expert = is_id && scale->ne[0] == dst->ne[0] && scale->ne[1] == dst->src[0]->ne[2];
@@ -7408,6 +7416,7 @@ static void ggml_vk_mul_mat_scale(ggml_backend_vk_context * ctx, vk_context& sub
     const vk_op_mul_mat_scale_push_constants pc = {
         (uint32_t)dst->ne[0], (uint32_t)dst->ne[1], (uint32_t)dst->ne[2], (uint32_t)dst->ne[3],
         (uint32_t)scale->ne[0], (uint32_t)scale->ne[1], (uint32_t)scale->ne[2], (uint32_t)scale->ne[3],
+        ggml_vk_nb_elem(scale, 0), ggml_vk_nb_elem(scale, 1), ggml_vk_nb_elem(scale, 2), ggml_vk_nb_elem(scale, 3),
         per_channel_expert ? 2u : per_expert ? 1u : 0u,
         per_expert ? (uint32_t)(ids->nb[0] / sizeof(int32_t)) : 0u,
         per_expert ? (uint32_t)(ids->nb[1] / sizeof(int32_t)) : 0u,
@@ -7418,10 +7427,6 @@ static void ggml_vk_mul_mat_scale(ggml_backend_vk_context * ctx, vk_context& sub
     const uint32_t elements0 = (uint32_t)std::min(total, max_elems);
 
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { d_D, d_S, d_I }, pc, { elements0, 1, 1 });
-}
-
-static uint32_t ggml_vk_nb_elem(const ggml_tensor * t, int i) {
-    return (uint32_t)(t->nb[i] / ggml_type_size(t->type));
 }
 
 void ggml_vk_dsv4_hc_comb(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * mixes, const ggml_tensor * scale, const ggml_tensor * base, ggml_tensor * dst) {
@@ -7592,7 +7597,7 @@ void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const st
     } else if ((dst->ne[1] == 1 || (dst->ne[1] <= mul_mat_vec_max_cols && src1->ne[2] * src1->ne[3] == 1)) &&
                (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F8_E4M3 || ggml_is_quantized(src0->type))) {
         ggml_vk_mul_mat_vec_q_f16(ctx, subctx, cgraph, node_idx);
-        folded = true;
+        folded = ggml_vk_mat_vec_folds_weight_scale(dst->src[2]);
     } else {
         ggml_vk_mul_mat_q_f16(ctx, subctx, src0, src1, dst, false);
     }
@@ -8165,7 +8170,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     }
 
     // fold weight scale (src[3]) via the F0 slot, free since scaled matmuls don't fuse
-    if (dst->src[3] != nullptr) {
+    if (ggml_vk_mat_vec_folds_weight_scale(dst->src[3])) {
         d_F0 = ggml_vk_tensor_subbuffer(ctx, dst->src[3]);
         fusion_flags |= MAT_VEC_FUSION_FLAGS_WEIGHT_SCALE;
         if (ggml_nelements(dst->src[3]) > 1) {
@@ -8223,7 +8228,7 @@ void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const
     bool folded = false;
     if (ggml_vk_use_mul_mat_vec_id(cgraph, node_idx)) {
         ggml_vk_mul_mat_vec_id_q_f16(ctx, subctx, cgraph, node_idx);
-        folded = true;
+        folded = ggml_vk_mat_vec_folds_weight_scale(dst->src[3]);
     } else {
         ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, src1, src2, dst);
     }
