@@ -265,7 +265,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     } else if (arch == LLM_ARCH_GEMMA4) {
         // TODO: expand coverage to both GQA and MQA (see https://github.com/ggml-org/llama.cpp/pull/31401#pullrequestreview-5710165130)
         n_head = 4;
-        n_layer = 10; // last 5 layers reuse KV, both SWA and full attention
+        n_layer = moe ? 5 : 10; // dense: the last 5 layers reuse KV, both SWA and full attention; MoE: no KV-shared layers
     } else if (arch == LLM_ARCH_GEMMA3N) {
         n_embd = 64;
         n_head = 1;
