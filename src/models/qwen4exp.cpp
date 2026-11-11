@@ -721,6 +721,11 @@ static int64_t qwen4exp_qsa_chunk_n() {
     return env ? std::max<int64_t>(0, atoll(env)) : 2048;
 }
 
+// layer-major prefill chunks the context only if LLAMA_LAYER_MAJOR is below n_ubatch, else the QSA chunks apply
+static bool qwen4exp_layer_major(const llama_cparams & cparams) {
+    return cparams.n_chunk > 0 && cparams.n_ubatch > cparams.n_chunk;
+}
+
 // the query chunks of the QSA: the selection mask of a chunk is [n_kv, n], so split large ubatches
 // the mask streams are not split: a split cache with several sequences keeps one chunk, as its reserve does
 // layer-major prefill (LLAMA_LAYER_MAJOR) has one chunk list for the attention block and the expert FFN, the chunks of the graph
@@ -731,7 +736,7 @@ static std::vector<llm_graph_chunk> qwen4exp_qsa_chunks(const llama_cparams & cp
 
     // every ubatch has the chunk count of the reserve, so the graph keeps the planned shape
     // the chunks past the last token are empty, and the backends skip empty nodes
-    const auto res = cparams.n_chunk > 0 ? chunks : llm_graph_get_chunks(qwen4exp_qsa_chunk_n(), cparams.n_ubatch, n_tokens);
+    const auto res = qwen4exp_layer_major(cparams) ? chunks : llm_graph_get_chunks(qwen4exp_qsa_chunk_n(), cparams.n_ubatch, n_tokens);
     if (res.empty()) {
         return { { 0, n_tokens } };
     }
@@ -831,7 +836,7 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
     // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
     // the context decides it, not the cells of the ubatch, so that the graph keeps the shape of the reserve
     std::vector<ggml_tensor *> pool_masks;
-    if (cparams.n_chunk > 0 && qsa_chunks.size() > 1 && cparams.n_seq_max == 1) {
+    if (qwen4exp_layer_major(cparams) && qsa_chunks.size() > 1 && cparams.n_seq_max == 1) {
         for (const auto & qc : qsa_chunks) {
             pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_ubatch, cparams.n_chunk, qc.t0, qc.n));
             if (pool_masks.back() == nullptr) {
