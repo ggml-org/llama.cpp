@@ -348,23 +348,22 @@ struct server_mcp_stdio::process_handle {
     FILE * err = nullptr; // child stderr
 };
 
-#if defined(_WIN32)
-// config strings are UTF-8 (from JSON) and subprocess.h converts them with CP_UTF8, so inputs must be UTF-8, not the active code page
-static std::string wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
-    return wstring_to_utf8(len == -1 ? std::wstring(s) : std::wstring(s, s + len));
-}
-#endif
-
 static std::string mcp_resolve_command(const std::string & command) {
 #if defined(_WIN32)
-    // For Windows: make sure we handle ".exe" correctly, as well as UTF-8
-    std::wstring wcmd = utf8_to_wstring(command);
-    wchar_t      buf[MAX_PATH * 4];
-    const DWORD  cap = (DWORD) (sizeof(buf) / sizeof(buf[0]));
-
-    auto search = [&](const wchar_t * ext) -> std::string {
-        DWORD n = SearchPathW(NULL, wcmd.c_str(), ext, cap, buf, NULL);
-        return (n > 0 && n < cap) ? wide_to_utf8(buf, (int) n) : std::string();
+    // the application manifest makes SearchPathA use UTF-8
+    auto search = [&](const char * ext) -> std::string {
+        std::string result;
+        for (;;) {
+            DWORD n = SearchPathA(NULL, command.c_str(), ext, result.size(), result.data(), NULL);
+            if (n == 0) {
+                return {};
+            }
+            if (n < result.size()) {
+                result.resize(n);
+                return result;
+            }
+            result.resize((size_t) n + 1);
+        }
     };
 
     std::string found = search(NULL); // exact path / already-extensioned / .exe on PATH
@@ -372,26 +371,20 @@ static std::string mcp_resolve_command(const std::string & command) {
         return found;
     }
 
-    std::wstring pathext;
-    DWORD        need = GetEnvironmentVariableW(L"PATHEXT", NULL, 0);
-    if (need > 0) {
-        pathext.resize(need);
-        DWORD got = GetEnvironmentVariableW(L"PATHEXT", &pathext[0], need);
-        pathext.resize(got);
-    }
+    std::string pathext = common_get_env("PATHEXT");
     if (pathext.empty()) {
-        pathext = L".COM;.EXE;.BAT;.CMD";
+        pathext = ".COM;.EXE;.BAT;.CMD";
     }
     for (size_t start = 0; start <= pathext.size();) {
-        size_t       sep = pathext.find(L';', start);
-        std::wstring ext = pathext.substr(start, sep == std::wstring::npos ? std::wstring::npos : sep - start);
+        size_t      sep = pathext.find(';', start);
+        std::string ext = pathext.substr(start, sep == std::string::npos ? std::string::npos : sep - start);
         if (!ext.empty()) {
             found = search(ext.c_str());
             if (!found.empty()) {
                 return found;
             }
         }
-        if (sep == std::wstring::npos) {
+        if (sep == std::string::npos) {
             break;
         }
         start = sep + 1;
@@ -408,7 +401,7 @@ static std::vector<std::string> mcp_parent_env() {
     LPWCH block = GetEnvironmentStringsW();
     if (block) {
         for (LPWCH e = block; *e; e += wcslen(e) + 1) {
-            env.emplace_back(wide_to_utf8(e, -1));
+            env.emplace_back(wstring_to_utf8(e));
         }
         FreeEnvironmentStringsW(block);
     }

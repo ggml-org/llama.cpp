@@ -34,6 +34,7 @@ export const SETTINGS_KEYS = {
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	GROUP_MODELS_BY_FAMILY: 'groupModelsByFamily',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
+	LIVE_MARKDOWN_PREVIEW: 'liveMarkdownPreview',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	MAX_TOKENS: 'max_tokens',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
@@ -61,6 +62,7 @@ export const SETTINGS_KEYS = {
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
 	SHOW_MODEL_ORG_NAME: 'showModelOrgName',
+	SHOW_MODEL_ORG_NAME_ON_MOBILE: 'showModelOrgNameOnMobile',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
@@ -68,6 +70,7 @@ export const SETTINGS_KEYS = {
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	SINGLE_ROW_CHAT_FORM: 'singleRowChatForm',
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	SYSTEM_MESSAGE: 'systemMessage',
 	// Sampling

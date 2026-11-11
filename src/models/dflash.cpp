@@ -419,7 +419,7 @@ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
 
 // DFlash Encoder: processes target model features through feature fusion layer
 template <>
-llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_inp_embd_enc();
 
     cur = build_lora_mm(model.fc, cur, model.fc_s);
@@ -919,7 +919,7 @@ static void build_lilicorr_scores(llm_graph_context & g, const llama_model & mod
 //   * embd batch  -> fused target features: project + inject K/V into the cache.
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
 template <>
-llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_dflash::graph<false>::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -1220,8 +1220,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 // DSV4 DSpark decoder, dual-mode by batch type (see the DFlash decoder above):
 //   * embd batch  -> project main_x through each stage's wkv and inject K into the ring cache
 //   * token batch -> noise block through 3 full DSV4 stages (hc + MLA + MoE), markov + confidence heads
-llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_graph_params & params) :
-    llama_model_deepseek4::graph(params) {
+llama_model_dflash::graph_dsv4::graph_dsv4(const llm_graph_params & params) :
+    llama_model_deepseek4::graph(params, no_build{}) {
     const int64_t n_embd_inp       = hparams.n_embd_inp_enc();
     const int64_t n_embd_head      = hparams.n_embd_head_k();
     const int64_t n_embd_head_rope = hparams.n_rot();
@@ -1314,7 +1314,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        cur = build_attention(model, inp_attn, cur, inp_pos, il);
+        cur = build_attention(inp_attn, cur, inp_pos, il);
 
         inpL = build_hc_post(cur, residual, attn_hc.post, attn_hc.comb, il);
         cb(inpL, "hc_attn_post", il);
@@ -1392,8 +1392,8 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 //   * token batch -> [anchor, noise...] block through the stages, single-pass mHC, no per-head q norm
 // window of a block = window of its first query, see n_swa
 
-llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const llm_graph_params & params) :
-    llama_model_deepseek41::graph(params) {
+llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
+    llama_model_deepseek41::graph(params, no_build{}) {
     const int64_t n_embd_inp       = hparams.n_embd_inp_enc();
     const int64_t n_embd_head      = hparams.n_embd_head_k();
     const int64_t n_embd_head_rope = hparams.n_rot();
@@ -1619,7 +1619,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llama_model & model, const ll
 // Mistral Large 4 DSpark, dual-mode like graph_dsv41:
 // - embd batch: write latent K of target_norm(fc(features)) to the cache, no attn norm
 // - token batch: decode [anchor, mask_1, ...] block, non-causal
-llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_inp        = hparams.n_embd_inp_enc();
     const int64_t kv_lora_rank      = hparams.n_lora_kv;
     const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla();
@@ -1832,19 +1832,19 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llama_model
 std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const llm_graph_params & params) const {
     switch (params.gtype) {
         case LLM_GRAPH_TYPE_ENCODER:
-            return std::make_unique<graph<true>>(*this, params);
+            return std::make_unique<graph<true>>(params);
         case LLM_GRAPH_TYPE_DEFAULT:
         case LLM_GRAPH_TYPE_DECODER:
             if (hparams.n_lora_kv > 0) {
-                return std::make_unique<graph_mistral_large4>(*this, params);
+                return std::make_unique<graph_mistral_large4>(params);
             }
             if (hparams.dsv4_hc_mult > 0 && hparams.dsv4_hc_single_pass) {
-                return std::make_unique<graph_dsv41>(*this, params);
+                return std::make_unique<graph_dsv41>(params);
             }
             if (hparams.dsv4_hc_mult > 0) {
-                return std::make_unique<graph_dsv4>(*this, params);
+                return std::make_unique<graph_dsv4>(params);
             }
-            return std::make_unique<graph<false>>(*this, params);
+            return std::make_unique<graph<false>>(params);
         default:
             GGML_ABORT("invalid graph type");
     };

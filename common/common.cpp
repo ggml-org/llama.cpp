@@ -895,27 +895,7 @@ bool fs_validate_filename(const std::string & filename, bool allow_subdirs) {
     return true;
 }
 
-#include <iostream>
-
-
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str) {
-    if (str.empty()) {
-        return std::wstring();
-    }
-
-    int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), NULL, 0);
-
-    if (size <= 0) {
-        return std::wstring();
-    }
-
-    std::wstring wstr(size, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), (int)str.size(), &wstr[0], size);
-
-    return wstr;
-}
-
 std::string wstring_to_utf8(const std::wstring & str) {
     if (str.empty()) {
         return std::string();
@@ -1278,13 +1258,13 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
     cparams_dft.n_rs_seq = 0;
 
     const common_fit_extra_model extra = {
-        /*.path_model   =*/ params_dft.model.path.c_str(),
+        /*.paths_model  =*/ params_dft.model.get_paths(),
         /*.mparams      =*/ &mparams_dft,
         /*.cparams      =*/ &cparams_dft,
         /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
     };
 
-    common_fit_params(params.model.path.c_str(), &mparams, &cparams,
+    common_fit_params(params.model.get_paths(), &mparams, &cparams,
         params.tensor_split,
         params.tensor_buft_overrides.data(),
         params.fit_params_target.data(),
@@ -1300,7 +1280,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     common_fit_apply(params, mparams, cparams);
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+    llama_model * model = common_model_load(params.model.get_paths(), mparams);
     if (model == NULL) {
         return;
     }
@@ -1331,6 +1311,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         cparams.n_outputs_max_per_seq = 1;
 
         LOG_INF("%s", "decision model reads the embeddings output, enabling embedding mode\n");
+    }
+
+    if (llama_model_classifier_free_guidance(model)) {
+        params.kv_unified   = true;
+        cparams.kv_unified  = true;
+        cparams.n_seq_max  *= 2;
     }
 
     // embeddings need the whole batch in one ubatch, so n_batch must not be larger than n_ubatch
@@ -1736,6 +1722,19 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     return mparams;
 }
 
+struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams) {
+    if (paths.size() == 1) {
+        return llama_model_load_from_file(paths[0].c_str(), mparams);
+    }
+
+    std::vector<const char *> c_paths;
+    c_paths.reserve(paths.size());
+    for (const auto & path : paths) {
+        c_paths.push_back(path.c_str());
+    }
+    return llama_model_load_from_splits(c_paths.data(), c_paths.size(), mparams);
+}
+
 struct llama_context_params common_context_params_to_llama(const common_params & params) {
     auto cparams = llama_context_default_params();
 
@@ -1772,7 +1771,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
 
-    cparams.moe_cache_size = params.moe_cache_size;
+    cparams.moe_cache_size      = params.moe_cache_size;
+    cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
     return cparams;
 }
@@ -2255,6 +2255,14 @@ bool common_batch::set_embd_state(int32_t idx, llama_embd state) {
     return true;
 }
 
+bool common_batch::set_embd_state_row(int32_t idx, int32_t row) {
+    if (idx < 0 || idx >= size() || row < 0 || tokens[idx].state.data != nullptr || tokens[idx].state_row >= 0) {
+        return false;
+    }
+    tokens[idx].state_row = row;
+    return true;
+}
+
 int32_t common_batch::add_embd(llama_embd embd, const llama_pos * pos, llama_seq_id seq_id, bool output) {
     token t = { LLAMA_TOKEN_NULL, { 0, 0, 0, 0 }, seq_id, output, embd, { nullptr, 0, 0 }, {} };
     for (int32_t j = 0; j < n_pos; ++j) {
@@ -2319,6 +2327,9 @@ llama_batch_ext * common_batch::get_sub_batch(int32_t off, int32_t n) {
         }
         if (t.state.data) {
             llama_batch_ext_set_embd_state(res, idx, t.state); // contexts without a state input ignore it
+        }
+        if (t.state_row >= 0 && !llama_batch_ext_set_embd_state_row(res, idx, t.state_row)) {
+            GGML_ABORT("%s: failed to set the state row of the entry at index %d\n", __func__, i);
         }
         if (t.decision_order != 0) {
             llama_batch_ext_set_decision_order(res, idx, (llama_decision_order) t.decision_order);

@@ -279,6 +279,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_CONNECT_CODE");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
+        preset.unset_option("LLAMA_ARG_SHARD");
         preset.unset_option("LLAMA_ARG_MMPROJ");
         preset.unset_option("LLAMA_ARG_ALIAS");
         preset.unset_option("LLAMA_ARG_HF_REPO");
@@ -1702,7 +1703,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
         // sleep after req_count++, so the model counts as busy while we wait here
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
-    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_TRC("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
@@ -1757,7 +1758,7 @@ void server_models::proxy_ws(const server_http_req & req, server_http_context::w
         mapping[name].meta.last_used = ggml_time_ms();
         mapping[name].req_count++;
     }
-    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_TRC("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
 
     std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
     if (!req.query_string.empty()) {

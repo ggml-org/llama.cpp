@@ -53,7 +53,7 @@ static inline uint64_t htp_top_k_mask_rowin_off_score(uint32_t n_top, uint32_t n
 
 // the caller compares total_bytes against the VTCM size
 static inline void htp_top_k_mask_vtcm_layout_build(struct htp_top_k_mask_vtcm_layout * L,
-        const struct htp_top_k_mask_shape * S, uint32_t kernel_type, uint32_t n_threads, uint32_t tile_cols) {
+        const struct htp_top_k_mask_shape * S, uint32_t kernel_type, uint32_t n_hvx, uint32_t tile_cols) {
     memset(L, 0, sizeof(*L));
 
     // PICKS streams the mask straight into its row tile
@@ -67,10 +67,10 @@ static inline void htp_top_k_mask_vtcm_layout_build(struct htp_top_k_mask_vtcm_l
     const uint64_t tile_bytes   = htp_top_k_mask_align128((uint64_t) tile_cols * S->elem_size);
 
     // ROWS streams row inputs into 2 slots per thread. PICKS: one row, a row tile and a flag tile.
-    const uint64_t rowin_total  = (picks ? 1 : 2 * (uint64_t) n_threads) * rowin_bytes;
-    const uint64_t tiles_total  = picks ? 2 * tile_bytes : 2 * (uint64_t) n_threads * tile_bytes;
+    const uint64_t rowin_total  = (picks ? 1 : 2 * (uint64_t) n_hvx) * rowin_bytes;
+    const uint64_t tiles_total  = picks ? 2 * tile_bytes : 2 * (uint64_t) n_hvx * tile_bytes;
     const uint64_t mtiles_total = S->mask_resident ? 0 : tiles_total;
-    const uint64_t scratch      = (uint64_t) n_threads * HTP_TOP_K_MASK_SCRATCH_BYTES;
+    const uint64_t scratch      = (uint64_t) n_hvx * HTP_TOP_K_MASK_SCRATCH_BYTES;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_blocks, (size_t) blocks_bytes, blocks_bytes > 0);
@@ -90,9 +90,9 @@ static inline void htp_top_k_mask_vtcm_layout_build(struct htp_top_k_mask_vtcm_l
 // Set by the host, used as is by the NPU: no tensor shape, stride or layout is derived on the NPU.
 // Sizes of one slot or tile, the slot parts and the VTCM offsets are in HTP_TOP_K_MASK_UNIT bytes as u16.
 // Row strides: byte offset of flat row r of top_k, extra, score and dst is r * stride (the host requires row flattenable inputs).
-// PICKS splits the work in n_threads virtual workers; fewer real workers loop over them.
+// PICKS splits the work in n_hvx virtual workers; fewer real workers loop over them.
 struct htp_top_k_mask_kernel_params {
-    uint8_t  n_threads, kernel_type, flags, elem_size;
+    uint8_t  n_hvx, kernel_type, flags, elem_size;
     uint32_t vtcm_size;
     uint32_t n_kv, n_top, n_pick, n_extra;
     uint32_t ninf;                       // -inf cell pattern of elem_size
@@ -116,7 +116,7 @@ struct htp_top_k_mask_kernel_params {
             } m;
         } rows;
         struct {
-            uint32_t picks_per_thread;                   // per virtual worker, multiple of the lanes of one vector
+            uint32_t picks_per_hvx;                      // per virtual worker, multiple of the lanes of one vector
             uint16_t blocks_slice_u, top_slice_u, extra_slice_u, score_slice_u, flags_slice_u; // per virtual worker slices
         } picks;
     } u;

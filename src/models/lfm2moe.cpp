@@ -77,9 +77,9 @@ void llama_model_lfm2moe::load_arch_tensors(llama_model_loader &) {
 
 std::unique_ptr<llm_graph_context> llama_model_lfm2moe::build_arch_graph(const llm_graph_params & params) const {
     if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
-        return std::make_unique<graph<true>>(*this, params);
+        return std::make_unique<graph<true>>(params);
     } else {
-        return std::make_unique<graph<false>>(*this, params);
+        return std::make_unique<graph<false>>(params);
     }
 }
 

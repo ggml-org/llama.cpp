@@ -362,24 +362,9 @@ static void unary_op_sqr_kernel(const T * x, T * dst, const int k, const sycl::n
 }
 
 template<typename T>
-static void unary_op_clamp_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1, float min_val, float max_val) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = op_clamp(x[i], min_val, max_val);
-    }
-}
-
-template<typename T>
 static void unary_op_ceil_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_ceil(x[i]);
-    }
-}
-
-template<typename T>
-static void clamp(const T * x, T * dst, const float min, const float max, const int k,
-                      const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        dst[i] = x[i] < static_cast<T>(min) ? static_cast<T>(min) : (x[i] > static_cast<T>(max) ? static_cast<T>(max) : x[i]);
     }
 }
 
@@ -929,20 +914,11 @@ static inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    float min_val;
-    float max_val;
-    memcpy(&min_val, dst->op_params, sizeof(float));
-    memcpy(&max_val, (float *) dst->op_params + 1, sizeof(float));
-    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
-        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float min_arg, float max_arg) {
-            const int num_blocks = ceil_div(k_elements, SYCL_CLAMP_BLOCK_SIZE);
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE),
-                                  sycl::range<1>(SYCL_CLAMP_BLOCK_SIZE)),
-                [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    clamp(src, dst_ptr, min_arg, max_arg, k_elements, item_ct1);
-                });
-        }, min_val, max_val);
+    const float min_val = ggml_get_op_params_f32(dst, 0);
+    const float max_val = ggml_get_op_params_f32(dst, 1);
+    ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [min_val, max_val](auto x) {
+        return op_clamp(x, min_val, max_val);
+    });
 }
 
 static inline void ggml_sycl_op_xielu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -1183,9 +1159,7 @@ static void ggml_sycl_op_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));
     GGML_ASSERT(ggml_is_contiguous(dst));
-
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT(src0->type == dst->type);
     GGML_ASSERT(dst->ne[0] == nc);
     GGML_ASSERT(ggml_nrows(dst) == ggml_nrows(src0));
@@ -1197,20 +1171,33 @@ static void ggml_sycl_op_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor
         GGML_ASSERT(src0->type == src1->type);
     }
 
-    //const int32_t swapped = ((const int32_t *) dst->op_params)[1];
     const int32_t swapped = ggml_get_op_params_i32(dst, 1);
-    const float alpha = ggml_get_op_params_f32(dst, 2);
-    const float limit = ggml_get_op_params_f32(dst, 3);
+    const float   alpha   = ggml_get_op_params_f32(dst, 2);
+    const float   limit   = ggml_get_op_params_f32(dst, 3);
 
-    float * src0_p = (float *) src0_d;
-    float * src1_p = (float *) src1_d;
+    if (src0->type == GGML_TYPE_F16) {
+        sycl::half * src0_p = (sycl::half *) src0_d;
+        sycl::half * src1_p = (sycl::half *) src1_d;
 
-    if (!src1) {
-        src0_p += swapped ? nc : 0;
-        src1_p += swapped ? 0 : nc;
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        swiglu_oai_sycl(src0_p, src1_p, (sycl::half *) dst_d, ggml_nelements(dst), nc, src0_o / sizeof(sycl::half),
+                        src1_o / sizeof(sycl::half), alpha, limit, stream);
+    } else {
+        float * src0_p = (float *) src0_d;
+        float * src1_p = (float *) src1_d;
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        swiglu_oai_sycl(src0_p, src1_p, (float *) dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float),
+                        src1_o / sizeof(float), alpha, limit, stream);
     }
-
-    swiglu_oai_sycl(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
 }
 
 template <typename T>

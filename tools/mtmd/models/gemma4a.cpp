@@ -1,5 +1,5 @@
 /**
- * Gemma 4 Audio Conformer Encoder (clip_graph_gemma4a)
+ * Gemma 4 Audio Conformer Encoder (mtmd_graph_gemma4a)
  *
  * Architecture: Conformer with dual half-step FFN, full self-attention
  * with sinusoidal RPE, depthwise light conv, and output projection.
@@ -7,19 +7,60 @@
 
 #include "models.h"
 #include <cmath>
+#include <map>
 
-ggml_cgraph * clip_graph_gemma4a::build() {
+// state of the streaming encoder, a zero state is a cold start
+std::vector<c2w_state_slot> list_gemma4a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
+    std::vector<c2w_state_slot> slots;
+
+    const int64_t n_mel = hparams.n_mel_bins;
+    const int64_t n_ch  = model.sscp_conv_w[0]->ne[3];
+
+    slots.push_back({"pos", 1, 1});
+    slots.push_back({"sscp_0", n_mel, 1});
+    slots.push_back({"sscp_1", (n_mel - 1) / 2 + 1, n_ch});
+    for (size_t il = 0; il < model.layers.size(); il++) {
+        const auto & layer = model.layers[il];
+        if (layer.q_w && layer.k_w && layer.v_w && layer.o_w) {
+            slots.push_back({"k_" + std::to_string(il), layer.k_w->ne[1], mtmd_graph_gemma4a::max_past});
+            slots.push_back({"v_" + std::to_string(il), layer.v_w->ne[1], mtmd_graph_gemma4a::max_past});
+        }
+        if (layer.norm_conv_w && layer.conv_pw1_w && layer.conv_dw_w && layer.conv_pw2_w) {
+            slots.push_back({"conv_" + std::to_string(il), layer.conv_dw_w->ne[0] - 1, layer.conv_dw_w->ne[1]});
+        }
+    }
+
+    return slots;
+}
+
+ggml_cgraph * mtmd_graph_gemma4a::build() {
     const float res_weight = 0.5f;
     const float norm_eps   = 1e-6f;
+
+    std::map<std::string, ggml_tensor *> state_in;
+    std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+    for (const auto & slot : list_gemma4a_state_slots(hparams, model)) {
+        ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
+        ggml_set_name(t, ("state_in_" + slot.name).c_str());
+        ggml_set_input(t);
+        state_in[slot.name] = t;
+    }
 
     // 1. Input
     ggml_tensor * inp = build_inp_raw(1);
     auto * cur = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 
-    // 2. Subsampling Conv2D (symmetric padding=1, matching PyTorch)
+    // 2. Subsampling Conv2D (padding=1, matching PyTorch)
+    // in time, the left pad comes from the state
     {
         for (int i = 0; i < 2; i++) {
-            cur = ggml_conv_2d(ctx0, model.sscp_conv_w[i], cur, 2, 2, 1, 1, 1, 1);
+            const std::string name = "sscp_" + std::to_string(i);
+            ggml_tensor * left = ggml_reshape_3d(ctx0, state_in.at(name), cur->ne[0], 1, cur->ne[2]);
+            cur = ggml_concat(ctx0, left, cur, 1);
+            ggml_tensor * last = ggml_view_3d(ctx0, cur, cur->ne[0], 1, cur->ne[2], cur->nb[1], cur->nb[2], (cur->ne[1] - 1) * cur->nb[1]);
+            state_out.push_back({name, ggml_reshape_2d(ctx0, ggml_cont(ctx0, last), cur->ne[0], cur->ne[2])});
+            cur = ggml_pad_ext(ctx0, cur, 0, 0, 0, 1, 0, 0, 0, 0);
+            cur = ggml_conv_2d(ctx0, model.sscp_conv_w[i], cur, 2, 2, 1, 0, 1, 1);
             if (model.sscp_conv_b[i]) {
                 cur = ggml_add(ctx0, cur, model.sscp_conv_b[i]);
             }
@@ -44,10 +85,11 @@ ggml_cgraph * clip_graph_gemma4a::build() {
     }
 
     const int64_t n_pos = cur->ne[1];
+    state_out.push_back({"pos", ggml_scale_bias(ctx0, state_in.at("pos"), 1.0f, (float) n_pos)});
 
     // Chunked local attention parameters
-    const int64_t C  = 12;                              // chunk_size
-    const int64_t P  = 12;                              // max_past_horizon (context_left - 1)
+    const int64_t C  = chunk_size;
+    const int64_t P  = max_past;
     const int64_t S  = C + P;                           // context_size = 24
     const int64_t R  = P + 1;                           // RPE positions = 13
     const int64_t B  = (n_pos + C - 1) / C;            // num_blocks
@@ -117,12 +159,12 @@ ggml_cgraph * clip_graph_gemma4a::build() {
             Qcur = ggml_cont(ctx0, ggml_permute(ctx0, Qcur, 0, 3, 1, 2)); // [D, C, B, H]
 
             // K/V block context extraction via overlapping view:
-            // Left pad by P and right pad to S*B elements,
-            // then view with stride C in the block dimension (overlapping windows).
-            auto extract_blocks = [&](ggml_tensor * t) -> ggml_tensor * {
-                // [D, H, N] -> left pad by P, right pad to S*B
-                const int64_t pad_kv = S * B - n_pos;
-                t = ggml_pad_ext(ctx0, t, 0, 0, 0, 0, P, pad_kv - P, 0, 0); // [D, H, S*B]
+            // put the P cached positions in front, right pad to S*B, then view with stride C in the block dimension
+            auto extract_blocks = [&](ggml_tensor * t, const std::string & name) -> ggml_tensor * {
+                t = ggml_concat(ctx0, ggml_reshape_3d(ctx0, state_in.at(name), d_head, n_head, P), t, 2);
+                ggml_tensor * tail = ggml_view_3d(ctx0, t, d_head, n_head, P, t->nb[1], t->nb[2], n_pos * t->nb[2]);
+                state_out.push_back({name, ggml_reshape_2d(ctx0, ggml_cont(ctx0, tail), d_head * n_head, P)});
+                t = ggml_pad_ext(ctx0, t, 0, 0, 0, 0, 0, S * B - P - n_pos, 0, 0); // [D, H, S*B]
                 // Overlapping view: stride for B dim is C positions, not S
                 // ne = [D, H, S, B], data_size = D*H*S*B*sizeof = source_nbytes (exact fit)
                 // nb1=D*sizeof, nb2=D*H*sizeof, nb3=C*D*H*sizeof (overlap: C < S)
@@ -132,11 +174,11 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 return t;
             };
 
-            ggml_tensor * Kblk = extract_blocks(Kcur);
+            ggml_tensor * Kblk = extract_blocks(Kcur, "k_" + std::to_string(il));
             // [D, H, S, B] -> [D, S, B, H] via permute(0,3,1,2)
             Kblk = ggml_cont(ctx0, ggml_permute(ctx0, Kblk, 0, 3, 1, 2));
 
-            ggml_tensor * Vblk = extract_blocks(Vcur);
+            ggml_tensor * Vblk = extract_blocks(Vcur, "v_" + std::to_string(il));
             // [D, H, S, B] -> [S, D, B, H] via permute(1,3,0,2)
             Vblk = ggml_cont(ctx0, ggml_permute(ctx0, Vblk, 1, 3, 0, 2));
 
@@ -217,8 +259,13 @@ ggml_cgraph * clip_graph_gemma4a::build() {
                 x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
             }
 
-            // Causal depthwise Conv1D via ggml_ssm_conv, left padded only.
-            x = ggml_pad_ext(ctx0, x, 4, 0, 0, 0, 0, 0, 0, 0);
+            // Causal depthwise Conv1D via ggml_ssm_conv, the left context comes from the state
+            {
+                const int64_t d_conv = layer.conv_dw_w->ne[0] - 1;
+                const std::string name = "conv_" + std::to_string(il);
+                x = ggml_concat(ctx0, state_in.at(name), x, 0);
+                state_out.push_back({name, ggml_cont(ctx0, ggml_view_2d(ctx0, x, d_conv, x->ne[1], x->nb[1], n_pos * x->nb[0]))});
+            }
             x = ggml_ssm_conv(ctx0, x, layer.conv_dw_w);
             if (layer.conv_dw_b) {
                 x = ggml_add(ctx0, x, layer.conv_dw_b);
@@ -269,11 +316,18 @@ ggml_cgraph * clip_graph_gemma4a::build() {
         cur = build_mm(model.mm_input_proj_w, cur);
     }
 
+    // the embeddings must stay the last node
+    for (const auto & s : state_out) {
+        ggml_set_name(s.second, ("state_out_" + s.first).c_str());
+        ggml_set_output(s.second);
+        ggml_build_forward_expand(gf, s.second);
+    }
+
     ggml_build_forward_expand(gf, cur);
     return gf;
 }
 
-ggml_tensor * clip_graph_gemma4a::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_gemma4a::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     auto it = model.clamp_info_map.find(w->name);
     if (it == model.clamp_info_map.end()) {
         return ggml_mul_mat(ctx0, w, x);

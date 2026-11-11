@@ -24,6 +24,9 @@ json convert_transcriptions_to_chatcmpl(
     const std::map<std::string, uploaded_file> & in_files,
     std::vector<raw_buffer> & out_files);
 
+// convert OpenAI speech API format to the /tts format
+json convert_speech_to_tts(const json & body);
+
 // prompt of the "asr" chat template, live ASR models (e.g. LFM3-Audio live ASR) transcribe with it
 // empty if the model has no such template, throws on a template error
 llama_tokens server_chat_get_asr_prompt(const llama_model * model);

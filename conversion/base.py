@@ -7,6 +7,7 @@ import ast
 import logging
 import contextlib
 import json
+import math
 import os
 import re
 import sys
@@ -31,10 +32,10 @@ import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
 
 try:
-    from mistral_common.tokens.tokenizers.base import TokenizerVersion # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.base import TokenizerVersion # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN as _MISTRAL_COMMON_DATASET_MEAN, DATASET_STD as _MISTRAL_COMMON_DATASET_STD # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # ty: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 
@@ -133,7 +134,8 @@ class ModelBase:
                  target_model_dir: Path | None = None,
                  fuse_gate_up_exps: bool = False,
                  fp8_as_q8: bool = False,
-                 fuse_qkv: bool = False):
+                 fuse_qkv: bool = False,
+                 ple_only: bool = False, no_ple: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -142,6 +144,11 @@ class ModelBase:
         if self.is_mistral_format and not _mistral_common_installed:
             raise ImportError(_mistral_import_error_msg)
 
+        if ple_only and no_ple:
+            raise ValueError("ple_only and no_ple are mutually exclusive")
+        self.ple_only = ple_only
+        self.no_ple = no_ple
+        self._has_ple = False
         self.dir_model = dir_model
         self.ftype = ftype
         self.fname_out = fname_out
@@ -204,7 +211,8 @@ class ModelBase:
 
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
-                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+                                           split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard,
+                                           tensor_filter=self._include_ple_tensor if ple_only or no_ple else None)
 
         # Mistral specific
         self.disable_mistral_community_chat_template = disable_mistral_community_chat_template
@@ -265,7 +273,7 @@ class ModelBase:
                     if weight_map is None or not isinstance(weight_map, dict):
                         raise ValueError(f"Can't load 'weight_map' from {index_name!r}")
                     tensor_names_from_index.update(weight_map.keys())
-                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None) # ty: ignore[invalid-assignment]
+                    part_dict: dict[str, None] = dict.fromkeys(weight_map.values(), None)
                     part_names = sorted(part_dict.keys())
             else:
                 weight_map = {}
@@ -335,6 +343,36 @@ class ModelBase:
             scale_vals = np.array(scales, dtype=np.float32)
             logger.info(f"  + {scale_name} (per-expert scale, shape [{len(scales)}])")
             self.gguf_writer.add_tensor(scale_name, scale_vals)
+
+    def _prepare_kv_cache_scales(self):
+        for name in list(self.model_tensors.keys()):
+            if not name.endswith((".k_scale", ".v_scale")):
+                continue
+
+            mapped = self.tensor_map.get_type_and_name(key=name, try_suffixes=(".k_scale", ".v_scale"))
+            if mapped is None:
+                continue
+
+            tensor_type, new_name = mapped
+            if tensor_type not in (gguf.MODEL_TENSOR.ATTN_K, gguf.MODEL_TENSOR.ATTN_V, gguf.MODEL_TENSOR.ATTN_QKV):
+                continue
+
+            bid = int(new_name.split(".")[1])
+            scale_type = gguf.MODEL_TENSOR.ATTN_K if name.endswith(".k_scale") else gguf.MODEL_TENSOR.ATTN_V
+            suffix = ".k_scale" if name.endswith(".k_scale") else ".v_scale"
+            new_name = gguf.TENSOR_NAMES[scale_type].format(bid=bid) + suffix
+
+            scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)())
+            if scale.dtype not in (torch.bfloat16, torch.float32) or scale.numel() != 1:
+                raise ValueError(f"KV cache scale {name!r} must be a scalar BF16 or FP32 tensor")
+
+            scale = scale.float()
+            value = float(scale.item())
+            if not math.isfinite(value) or value == 0.0:
+                raise ValueError(f"KV cache scale {name!r} must be finite and nonzero")
+
+            logger.info(f"  + {new_name} (KV cache scale, shape [1])")
+            self.gguf_writer.add_tensor(new_name, scale.flatten().numpy())
 
     def dequant_model(self):
         # If all quantized tensors were already handled (e.g. pure NVFP4), skip
@@ -1382,6 +1420,11 @@ class ModelBase:
 
         del experts, merged
 
+    def _include_ple_tensor(self, name: str) -> bool:
+        is_ple = name == gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"
+        self._has_ple |= is_ple
+        return is_ple if self.ple_only else not is_ple
+
     def prepare_tensors(self):
         # detect NVFP4 quantization (ModelOpt and Compressed-tensors formats)
         quantization_config = self.hparams.get("quantization_config") or {}
@@ -1442,6 +1485,8 @@ class ModelBase:
 
             unmatched = layer_algo.keys() - matched
             assert not unmatched, f"quantized_layers entries not in the model tensors: {sorted(unmatched)}"
+
+        self._prepare_kv_cache_scales()
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -1513,6 +1558,8 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+                if (self.ple_only or self.no_ple) and not self._include_ple_tensor(new_name):
+                    continue
                 n_dims = len(data_torch.shape)
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
@@ -1645,6 +1692,8 @@ class ModelBase:
 
     def write(self):
         self.prepare_tensors()
+        if (self.ple_only or self.no_ple) and not self._has_ple:
+            raise ValueError("model has no per-layer embedding table to export separately")
         self.prepare_metadata(vocab_only=False)
         self.gguf_writer.write_header_to_file(path=self.fname_out)
         self.gguf_writer.write_kv_data_to_file()
@@ -1837,7 +1886,8 @@ class TextModel(ModelBase):
                 fname_default: str = gguf.naming_convention(self.metadata.name, self.metadata.basename, self.metadata.finetune, self.metadata.version, size_label=None, output_type=None, model_type="vocab")
 
             # Use the default filename
-            self.fname_out = self.fname_out / f"{fname_default}.gguf"
+            prefix = "ple-" if self.ple_only else "no-ple-" if self.no_ple else ""
+            self.fname_out = self.fname_out / f"{prefix}{fname_default}.gguf"
         else:
             # Output path is a custom defined templated filename
             # Note: `not is_dir()` is used because `.is_file()` will not detect
@@ -1846,8 +1896,9 @@ class TextModel(ModelBase):
             # Process templated file name with the output ftype, useful with the "auto" ftype
             self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
 
-        logger.info("Set model tokenizer")
-        self.set_vocab()
+        if not self.ple_only:
+            logger.info("Set model tokenizer")
+            self.set_vocab()
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
@@ -2004,15 +2055,16 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))  # ty: ignore[unresolved-attribute]
-        assert max(tokenizer.vocab.values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        assert tokenizer is not None
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+        assert max(tokenizer.vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}  # ty: ignore[unresolved-attribute]
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -2025,7 +2077,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment]
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
@@ -2435,6 +2487,7 @@ class TextModel(ModelBase):
     def _set_vocab_hybriddna(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        assert tokenizer is not None
         vocab = tokenizer.get_vocab()
         vocab_size = self.hparams.get("vocab_size", len(vocab))
         assert max(vocab.values()) < vocab_size
@@ -2448,11 +2501,11 @@ class TextModel(ModelBase):
         if tokenizer.k != 6 or tail not in ("pad_a", "pad_n"):
             raise NotImplementedError(f"HybridDNATokenizer with k={tokenizer.k}, tail={tail!r}")
         for kmer in [*tokenizer.kmers, *getattr(tokenizer, "npad_tokens", [])]:
-            reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"  # ty: ignore[unresolved-attribute]
+            reverse_vocab[tokenizer.dna_token_to_id[kmer]] = kmer + "\ue000"
         # older HybridDNATokenizer versions (Carbon-500M/3B/8B) do not register the base tokenizer's added tokens (<|im_start|>, <think>, ...) as their own
         # but they are still encoded as special tokens: take their types from the base tokenizer
         base_tokenizer = getattr(tokenizer, "_base_tokenizer", tokenizer)
-        added_tokens_decoder = {**base_tokenizer.added_tokens_decoder, **tokenizer.added_tokens_decoder}  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = {**base_tokenizer.added_tokens_decoder, **tokenizer.added_tokens_decoder}
 
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -2499,24 +2552,25 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
+        assert tokenizer is not None
         vocab_size = hparams["vocab_size"]
-        assert max(tokenizer.get_vocab().values()) < vocab_size  # ty: ignore[unresolved-attribute]
+        assert max(tokenizer.get_vocab().values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         merges = []
         vocab = {}
-        mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[unresolved-attribute]
+        mergeable_ranks = tokenizer.mergeable_ranks
         for token, rank in mergeable_ranks.items():
             vocab[QwenModel.token_bytes_to_string(token)] = rank
             if len(token) == 1:
                 continue
             merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
             assert len(merged) == 2
-            merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
+            merges.append(str(' '.join(map(QwenModel.token_bytes_to_string, merged))))
 
         # for this kind of tokenizer, added_vocab is not a subset of vocab, so they need to be combined
-        added_vocab = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.special_tokens
         reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **added_vocab}.items()}
 
         for i in range(vocab_size):
@@ -2539,10 +2593,10 @@ class TextModel(ModelBase):
         special_vocab.merges = merges
         # only add special tokens when they were not already loaded from config.json
         if len(special_vocab.special_token_ids) == 0:
-            special_vocab._set_special_token("bos", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-            special_vocab._set_special_token("eos", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+            special_vocab._set_special_token("bos", tokenizer.special_tokens["<|endoftext|>"])
+            special_vocab._set_special_token("eos", tokenizer.special_tokens["<|endoftext|>"])
         # this one is usually not in config.json anyway
-        special_vocab._set_special_token("unk", tokenizer.special_tokens["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("unk", tokenizer.special_tokens["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_sentencepiece(self, add_to_gguf=True):
@@ -2816,21 +2870,23 @@ class TextModel(ModelBase):
     def _set_vocab_glmedge(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_glm(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
@@ -2839,10 +2895,10 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_types(toktypes)
         # Special tokens
         # Note: Using <|endoftext|> (151329) for eot causes endless generation
-        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # ty: ignore[unresolved-attribute]  # 151331
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # ty: ignore[unresolved-attribute]  # 151336
-        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # ty: ignore[unresolved-attribute]  # 151329
-        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # ty: ignore[unresolved-attribute]  # 151338
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["[gMASK]"])  # 151331
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])  # 151336
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<|endoftext|>"])  # 151329
+        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_interns1(self):
@@ -2851,16 +2907,17 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())  # ty: ignore[unresolved-attribute]
+        assert tokenizer is not None
+        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
         vocab_size = self.hparams.get("vocab_size", len(vocab))
         assert max(vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()
 
-        added_tokens_decoder = tokenizer.added_tokens_decoder  # ty: ignore[unresolved-attribute]
+        added_tokens_decoder = tokenizer.added_tokens_decoder
 
         for i in range(vocab_size):
             if i not in reverse_vocab:
@@ -2873,7 +2930,7 @@ class TextModel(ModelBase):
                     # To avoid unexpected issues - we make sure to normalize non-normalized tokens
                     if not added_tokens_decoder[i].normalized:
                         previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[unresolved-attribute, invalid-assignment]
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))  # ty: ignore[invalid-assignment]
                         if previous_token != token:
                             logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
 
@@ -3404,7 +3461,7 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
     # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
     # latent MoE, situ, ...). Route on the top-level architecture instead.
-    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
+    if model_type == ModelType.TEXT and arch in ("NEOChatModel", "StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration", "KimiK31ForConditionalGeneration", "Nemotron3_5TranscribeForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead
@@ -3412,6 +3469,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
         arch = text_config["architectures"][0]
     elif model_type == ModelType.MMPROJ and vision_config.get("architectures") is not None:
         arch = vision_config["architectures"][0]
+    # some models (llava_onevision2) only declare the architecture inside text_config
+    if arch is None and text_config.get("architectures") is not None:
+        arch = text_config["architectures"][0]
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch

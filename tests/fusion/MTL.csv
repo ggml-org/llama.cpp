@@ -168,6 +168,12 @@ kimi-k3             ,0   ,any     ,MUL+ADD                     ,      2
 kimi-k3             ,0   ,any     ,RMS_NORM+MUL                ,     17
 kimi-k3             ,0   ,any     ,RMS_NORM+SCALE              ,      2
 kimi-k3             ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
+kimi-k31            ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
+kimi-k31            ,0   ,any     ,MUL+ADD                     ,      2
+kimi-k31            ,0   ,any     ,NORM+MUL+ADD                ,      1
+kimi-k31            ,0   ,any     ,RMS_NORM+MUL                ,     17
+kimi-k31            ,0   ,any     ,RMS_NORM+SCALE              ,      2
+kimi-k31            ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
 kimi-linear         ,0   ,any     ,ADD+ADD                     ,      1
 kimi-linear         ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
 kimi-linear         ,0   ,any     ,MUL+ADD                     ,      2
@@ -318,6 +324,8 @@ qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,
 qwen4exp            ,0   ,any     ,SSM_CONV+UNARY              ,      1
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
+ricursive           ,0   ,any     ,RMS_NORM+MUL                ,      9
+ricursive           ,0   ,any     ,RMS_NORM+MUL+ADD            ,      4
 rnd1                ,0   ,any     ,MUL+ADD                     ,      4
 rnd1                ,0   ,any     ,RMS_NORM+MUL                ,      9
 rnd1                ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
@@ -331,4 +339,8 @@ stablelm            ,0   ,any     ,NORM+MUL+ADD                ,      5
 starcoder           ,0   ,any     ,NORM+MUL+ADD                ,      5
 starcoder2          ,0   ,any     ,NORM+MUL+ADD                ,      5
 talkie              ,0   ,any     ,ADD+ADD                     ,      2
+xing4_0             ,0   ,any     ,ADD+ADD+ADD                 ,      1
+xing4_0             ,0   ,any     ,MUL+ADD                     ,      2
+xing4_0             ,0   ,any     ,RMS_NORM+MUL                ,      9
+xing4_0             ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
 xverse              ,0   ,any     ,RMS_NORM+MUL                ,      5

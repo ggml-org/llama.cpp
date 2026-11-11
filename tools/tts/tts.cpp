@@ -69,11 +69,6 @@ int main(int argc, char ** argv) {
     // always enable embd, so that we can pass hidden states to the audio generation helper
     params.embedding = true;
 
-    // for chatterbox multilingual: its cfg pairs slot i with sequence n_parallel + i in a unified kv cache
-    // TODO: this applies to every model, find a better way for a pipeline to request extra sequences
-    params.n_parallel *= 2;
-    params.kv_unified  = true;
-
     llama_backend_init();
     llama_numa_init(params.numa);
 
@@ -156,6 +151,10 @@ int main(int argc, char ** argv) {
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.seed        = params.sampling.seed;
+    // without --temp the audio frames keep the model default, not the CLI default
+    if (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP) {
+        inp.temp    = params.sampling.temp;
+    }
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation

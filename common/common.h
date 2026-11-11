@@ -311,6 +311,18 @@ struct common_params_model {
     std::string hf_file     = ""; // HF file
     std::string docker_repo = ""; // Docker repo
 
+    std::vector<std::string> shards;
+
+    std::vector<std::string> get_paths() const {
+        std::vector<std::string> paths = { path };
+        for (const auto & shard : shards) {
+            if (std::find(paths.begin(), paths.end(), shard) == paths.end()) {
+                paths.push_back(shard);
+            }
+        }
+        return paths;
+    }
+
     std::string get_name() const {
         if (!hf_repo.empty()) {
             return hf_repo;
@@ -597,7 +609,8 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
-    size_t moe_cache_size = 0; // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    size_t moe_cache_size      = 0;    // GPU cache size in bytes for the MoE experts kept in the CPU, split among the GPUs like the layers
+    float  moe_cache_cpu_share = 0.0f; // share of the MoE cache misses computed on the CPU instead of uploaded
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
@@ -906,8 +919,7 @@ bool glob_match(const std::string & pattern, const std::string & str);
 //
 
 #ifdef _WIN32
-std::wstring utf8_to_wstring(const std::string & str);
-std::string  wstring_to_utf8(const std::wstring & str);
+std::string wstring_to_utf8(const std::wstring & str);
 #endif
 
 //
@@ -1019,6 +1031,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 // apply --fit to mparams and cparams, no-op if params.fit_params is false
 void common_fit_apply(common_params & params, struct llama_model_params & mparams, struct llama_context_params & cparams);
 
+struct llama_model * common_model_load(const std::vector<std::string> & paths, const struct llama_model_params & mparams);
+
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
@@ -1094,6 +1108,7 @@ struct common_batch {
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
         int32_t      embd_row = -1; // see add_embd_row(), -1 if none
+        int32_t      state_row = -1; // see set_embd_state_row(), -1 if none
     };
 
     std::vector<token> tokens; // mirror of the entries, tokens[i] describes batch index i
@@ -1131,6 +1146,9 @@ struct common_batch {
 
     // attach a state embedding (e.g. the target hidden state for MTP) to the entry at idx, can only be set once per entry
     bool set_embd_state(int32_t idx, llama_embd state);
+
+    // the state of entry idx is row `row` of the h_nextn device buffer of the state source context, see llama_set_embd_state_src()
+    bool set_embd_state_row(int32_t idx, int32_t row);
 
     // add an embedding-only entry (no token id)
     // pos points to n_pos positions

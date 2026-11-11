@@ -166,7 +166,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_kimi_k3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * linear_beta*tanh(up/linear_beta)
@@ -232,8 +232,8 @@ ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor
     return out;
 }
 
-llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_kimi_k3::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
