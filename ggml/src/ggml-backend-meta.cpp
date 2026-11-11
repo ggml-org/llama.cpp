@@ -548,7 +548,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     auto handle_generic = [&](const std::vector<ggml_backend_meta_split_state> & src_ss, bool scalar_only) -> ggml_backend_meta_split_state {
         ggml_backend_meta_split_state ret = {GGML_BACKEND_SPLIT_AXIS_NONE, {0}, {1}, 1};
         for (size_t i = 0; i < GGML_MAX_SRC; i++) {
-            if (tensor->src[i] == nullptr || tensor->src[i] == tensor) {
+            // an empty source has no split state, as in handle_concat
+            if (tensor->src[i] == nullptr || tensor->src[i] == tensor || ggml_nelements(tensor->src[i]) == 0) {
                 continue;
             }
             if (ret.axis == GGML_BACKEND_SPLIT_AXIS_NONE) {

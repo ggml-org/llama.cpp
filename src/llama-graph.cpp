@@ -3310,8 +3310,11 @@ ggml_tensor * llm_graph_context::build_chunk_dst(ggml_tensor * like) const {
 ggml_tensor * llm_graph_context::build_chunk_store(ggml_tensor * dst, ggml_tensor * cur, int64_t t) const {
     GGML_ASSERT(cur->ne[0] == dst->ne[0]);
 
+    // an empty chunk stores nothing: offset 0 keeps the store within dst (the CPU backend checks the bounds of the first row)
+    const size_t offs = ggml_is_empty(cur) ? 0 : t*dst->nb[1];
+
     // each store reads the previous one: a view that no node reads keeps its source allocated until the end of the graph
-    dst = ggml_set_2d_inplace(ctx0, dst, cur, dst->nb[1], t*dst->nb[1]);
+    dst = ggml_set_2d_inplace(ctx0, dst, cur, dst->nb[1], offs);
     ggml_build_forward_expand(gf, dst);
 
     return dst;
