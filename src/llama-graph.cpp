@@ -136,17 +136,21 @@ static llm_attn_mask build_attn_inp_attn_mask(
     return build_attn_inp_attn_mask(ctx, mctx, ubatch, cparams, cparams.fused_kv_rows ? mctx->get_n_kv_rows() : 0);
 }
 
-// layer-major prefill: the token counts of the chunks of a ubatch, n_chunk tokens each and the remainder in the last chunk
+// layer-major prefill: the token counts of the chunks of n_rows rows of the ubatch, n_chunk rows each and the remainder in the last chunk
+// a ubatch of more than n_chunk tokens has the chunk count of n_ubatch, so that the graph keeps the shape of its reserve:
+// the chunks past the last row are empty (see llama_context::process_ubatch)
 // empty if the ubatch is not chunked
-static std::vector<uint32_t> get_chunk_sizes(uint32_t n_tokens, uint32_t n_chunk) {
+static std::vector<uint32_t> get_chunk_sizes(const llama_cparams & cparams, const llama_ubatch & ubatch, uint32_t n_rows) {
     std::vector<uint32_t> res;
 
-    if (n_chunk == 0 || n_tokens <= n_chunk) {
+    const uint32_t n_chunk = cparams.n_chunk;
+    if (n_chunk == 0 || cparams.n_ubatch <= n_chunk || ubatch.n_tokens <= n_chunk) {
         return res;
     }
 
-    res.assign((n_tokens + n_chunk - 1)/n_chunk, n_chunk);
-    res.back() = n_tokens - (res.size() - 1)*n_chunk;
+    for (uint32_t t = 0; t < cparams.n_ubatch; t += n_chunk) {
+        res.push_back(t < n_rows ? std::min(n_chunk, n_rows - t) : 0);
+    }
 
     return res;
 }
@@ -157,8 +161,9 @@ static bool can_chunk_attn_mask(
         const llama_ubatch & ubatch,
         const llama_cparams & cparams) {
     // a chunk is a slice of the ubatch, see llama_ubatch::slice
-    const bool can_chunk = ubatch.n_tokens > cparams.n_chunk && cparams.n_chunk > 0 &&
-        cparams.flash_attn && cparams.causal_attn && ubatch.n_seqs_unq == 1 && ubatch.n_pos == 1;
+    // apart from the ubatch size, the context decides it, so that the graph keeps the shape of its reserve
+    const bool can_chunk = !get_chunk_sizes(cparams, ubatch, ubatch.n_tokens).empty() &&
+        cparams.flash_attn && cparams.causal_attn && cparams.n_seq_max == 1 && ubatch.n_pos == 1;
 
     // a cache without SWA attends to all its cells: too large for a mask per chunk, it needs the staircase
     return can_chunk && (!mctx->can_staircase() || mctx->is_staircase(ubatch));
@@ -170,7 +175,7 @@ static llm_attn_mask build_attn_inp_attn_mask_chunks(
         const llama_kv_cache_context * mctx,
         const llama_ubatch & ubatch,
         const llama_cparams & cparams) {
-    const auto sizes = get_chunk_sizes(ubatch.n_tokens, cparams.n_chunk);
+    const auto sizes = get_chunk_sizes(cparams, ubatch, ubatch.n_tokens);
 
     llm_attn_mask attn_mask;
 
@@ -182,7 +187,7 @@ static llm_attn_mask build_attn_inp_attn_mask_chunks(
             llm_attn_mask chunk;
 
             chunk.n_kv = attn_mask.n_kv;
-            chunk.raw  = mctx->get_staircase(ctx, ubatch, cparams.n_chunk, t, n);
+            chunk.raw  = mctx->get_staircase(ctx, cparams.n_ubatch, cparams.n_chunk, t, n);
 
             attn_mask.chunks.push_back(chunk);
         } else {
@@ -2439,7 +2444,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // layer-major prefill: the experts of each token chunk are computed apart, all the chunks read the same expert tensors
     // the experts of all tokens are selected first, so that the copy callback uploads the experts of all the chunks at the first chunk
     // LLAMA_LAYER_MAJOR_NO_FFN: debug, to compare the attention chunks with a graph without chunks
-    if (const auto sizes = get_chunk_sizes(n_tokens, cparams.n_chunk); !sizes.empty() && !getenv("LLAMA_LAYER_MAJOR_NO_FFN")) {
+    // a chunk has the experts of its tokens (selected_experts_in), so it is not split again
+    if (const auto sizes = get_chunk_sizes(cparams, ubatch, n_tokens); !sizes.empty() && selected_experts_in == nullptr && !getenv("LLAMA_LAYER_MAJOR_NO_FFN")) {
         ggml_tensor * ids = selected_experts->view_src ? ggml_cont(ctx0, selected_experts) : selected_experts;
         ggml_build_forward_expand(gf, ids);
 

@@ -454,7 +454,8 @@ public:
     bool can_staircase() const;
 
     // the view of the staircase mask for the n tokens of the current ubatch that start at token t
-    ggml_tensor * get_staircase(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const;
+    // the staircase is sized for the largest ubatch, n_ubatch tokens
+    ggml_tensor * get_staircase(ggml_context * ctx, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;

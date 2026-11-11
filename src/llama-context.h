@@ -284,6 +284,9 @@ public:
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
 
+    // layer-major prefill: reserve the graph of the largest ubatch with chunks, or of the largest ubatch without chunks
+    bool graph_reserve_chunked(bool chunked);
+
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
@@ -456,6 +459,9 @@ private:
     llm_graph_result_ptr gf_res_reserve;
 
     llm_graph_result * gf_res_prev_active = nullptr;
+
+    // layer-major prefill: true if the scheduler plans for the reserve graph with chunks (see process_ubatch)
+    bool gf_chunked = true;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

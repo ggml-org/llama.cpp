@@ -725,7 +725,9 @@ static int64_t qwen4exp_qsa_chunk_n(const llama_cparams & cparams) {
 // the mask streams are not split: a split cache with several sequences keeps one chunk, as its reserve does
 static std::vector<std::pair<int64_t, int64_t>> qwen4exp_qsa_chunks(const llama_cparams & cparams, int64_t n_tokens) {
     const int64_t n_chunk = qwen4exp_qsa_chunk_n(cparams);
-    if (n_chunk == 0 || cparams.n_ubatch <= n_chunk || !(cparams.kv_unified || cparams.n_seq_max == 1)) {
+    // layer-major prefill: a ubatch of at most n_chunk tokens has its own reserve (see llama_context::process_ubatch)
+    const bool one_chunk = cparams.n_chunk > 0 && n_tokens <= n_chunk;
+    if (n_chunk == 0 || cparams.n_ubatch <= n_chunk || !(cparams.kv_unified || cparams.n_seq_max == 1) || one_chunk) {
         return { { 0, n_tokens } };
     }
 
@@ -827,10 +829,11 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the ubatch allows it
     // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
+    // the context decides it, not the ubatch, so that the graph keeps the shape of the reserve
     std::vector<ggml_tensor *> pool_masks;
-    if (cparams.n_chunk > 0 && chunks.size() > 1 && chunks[1].second > 0) {
+    if (cparams.n_chunk > 0 && chunks.size() > 1 && cparams.n_seq_max == 1) {
         for (const auto & qc : chunks) {
-            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_chunk, qc.first, qc.second));
+            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_ubatch, cparams.n_chunk, qc.first, qc.second));
             if (pool_masks.back() == nullptr) {
                 LLAMA_LOG_DEBUG("%s: the pool mask of this ubatch is not a staircase, the pool_mask input has %u tokens\n", __func__, ubatch.n_tokens);
                 pool_masks.clear();

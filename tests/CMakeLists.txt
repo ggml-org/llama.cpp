@@ -327,6 +327,18 @@ set_tests_properties(test-llama-context-qsa-chunk PROPERTIES
     ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_QSA_CHUNK=24"
 )
 
+# layer-major prefill: every ubatch has the graph shape of the reserve
+llama_test(
+    test-llama-context
+    NAME test-llama-context-layer-major
+    LABEL main
+    ARGS -m "${MODEL_DIR}/qwen4exp-moe.gguf"
+)
+set_tests_properties(test-llama-context-layer-major PROPERTIES
+    FIXTURES_REQUIRED generate-models
+    ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_LAYER_MAJOR=24"
+)
+
 llama_build(test-fusion.cpp)
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)
