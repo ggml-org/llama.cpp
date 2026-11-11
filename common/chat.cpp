@@ -3,6 +3,7 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
+#include "chat-tts-norm.h"
 #include "common.h"
 #include "ggml.h"
 #include "json-schema-to-grammar.h"
@@ -807,6 +808,8 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 // renders a task template (e.g. "tts") with the given variables
 static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
     jinja::context ctx(tmpl.source());
+    // text normalization helpers: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
