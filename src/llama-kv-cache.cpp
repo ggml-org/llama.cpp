@@ -2054,8 +2054,8 @@ bool llama_kv_cache::is_staircase(const llama_ubatch & ubatch, const slot_info &
 }
 
 ggml_tensor * llama_kv_cache::get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const {
-    if (staircases.count(step) > 0) {
-        ggml_tensor * staircase = staircases.at(step);
+    if (staircases.count({ step, anchor }) > 0) {
+        ggml_tensor * staircase = staircases.at({ step, anchor });
         GGML_ASSERT(staircase->ne[0] >= n_rows && staircase->ne[1] >= n_cols);
         return staircase;
     }
@@ -2091,7 +2091,7 @@ ggml_tensor * llama_kv_cache::get_staircase(uint32_t step, int64_t anchor, int64
         ggml_backend_tensor_set(staircase, data.data(), 0, ggml_nbytes(staircase));
     }
 
-    staircases[step] = staircase;
+    staircases[{ step, anchor }] = staircase;
 
     return staircase;
 }

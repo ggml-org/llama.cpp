@@ -265,7 +265,7 @@ public:
 
     // a staircase mask in device memory: F16 [n_rows, n_cols], row j of column i is 0 if j < anchor + i/step, -inf otherwise
     // a mask that keeps the first rows of each column, one more row every `step` columns, is a view of it (see get_staircase_offs)
-    // it is a constant, one per step: created on the first call, a view of a larger mask does not work as a graph input (the scheduler copies each view)
+    // it is a constant, one per step and anchor: created on the first call, a view of a larger mask does not work as a graph input (the scheduler copies each view)
     // step 1: the KQ mask of the token chunks, see is_staircase; step kpool: the pool mask of the k-pool indexer
     ggml_tensor * get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const;
 
@@ -336,7 +336,7 @@ private:
 
     // see get_staircase()
     mutable llama_memory_bufs staircase_bufs;
-    mutable std::map<uint32_t, ggml_tensor *> staircases; // by step
+    mutable std::map<std::pair<uint32_t, int64_t>, ggml_tensor *> staircases; // by step and anchor
 
     void init_rotation(const char * name_tag);
 
