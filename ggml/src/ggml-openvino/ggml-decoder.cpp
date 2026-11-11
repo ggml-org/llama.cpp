@@ -1391,6 +1391,14 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
     if (is_static && compute_params.output_len == 0) {
         compute_params.output_len = 1;
     }
+    // A sliced static prefill attends a power-of-two number of KV rows: every attended size needs its own compiled
+    // prefill model, so a growing sequence compiles one when the attended length doubles, not for each ubatch.
+    // Rounding up adds masked rows, which cost prefill time, so it stops at the next power of two.
+    if (is_static && ggml_openvino_kv_slice_enabled() && compute_params.input_len > 1 &&
+        !model_params.is_cacheless_attn && compute_params.attention_size > 0 && model_params.ctx_per_seq > 0) {
+        compute_params.attention_size =
+            ggml_openvino_static_kv_window(compute_params.attention_size, model_params.ctx_per_seq);
+    }
     model_params.ctx = model_params.ctx_per_seq * model_params.n_seq;
     return {model_params, compute_params};
 }

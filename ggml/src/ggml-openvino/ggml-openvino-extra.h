@@ -143,6 +143,10 @@ bool ggml_openvino_npu_parallel_compile_enabled();
 // Returns the window base (1024), 0 = off (GGML_OPENVINO_NPU_BLOB_PREBUILD=0).
 int ggml_openvino_npu_decode_bucket();
 
+// Rows a static prefill attends with GGML_OPENVINO_KV_SLICE: the attended length rounded up to a power of two,
+// clamped to ctx.
+int ggml_openvino_static_kv_window(int rows, int ctx);
+
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
 // NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
 bool ggml_openvino_npu_kv_on_demand_enabled();

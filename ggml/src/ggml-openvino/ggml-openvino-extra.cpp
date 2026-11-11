@@ -399,6 +399,14 @@ int ggml_openvino_npu_decode_bucket() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD", 1) != 0 ? 1024 : 0;
 }
 
+int ggml_openvino_static_kv_window(int rows, int ctx) {
+    int window = 1;
+    while (window < rows && window < ctx) {
+        window *= 2;
+    }
+    return std::min(window, ctx);
+}
+
 bool ggml_openvino_npu_kv_on_demand_enabled() {
     return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_ON_DEMAND") != 0;
 }

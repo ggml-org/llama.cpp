@@ -2144,6 +2144,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                     r_ctx->infer_request_cache_prefill.count(key) != 0;
     }
 
+    // Same model, only the prefill attention size differs from the entry's pair.
+    bool prefill_size_changed = false;
     if (cache_hit) {
         ggml_decoder = entry->ptr;
         old_m_params = ggml_decoder->get_model_params();
@@ -2151,6 +2153,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         if (cache_hit && is_prefill && ggml_openvino_kv_slice_enabled()) {
             cache_hit = entry->prefill_attention_size == c_params.attention_size &&
                         entry->prefill_attention_size_swa == c_params.attention_size_swa;
+            prefill_size_changed = !cache_hit;
         }
     }
 
@@ -2248,6 +2251,34 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             // compile without, so those keep the embedded-weight blob.
             const bool weightless_bank =
                 self_contained && !no_kv_cache && ggml_openvino_npu_weightless_bank_enabled();
+            // Another prefill attention size of the entry's model. The decode models (base and KV windows) do not
+            // depend on it, so the new pair takes them over from the entry's current pair, and that pair is dropped
+            // before the new prefill model compiles: each loaded prefill model keeps NPU memory for its inferences, and
+            // next to a second one the NPU can run out (pfnAppendGraphExecute: ZE_RESULT_ERROR_UNINITIALIZED). A pair
+            // another backend may use stays cached. Self-contained pairs are exported together, so they keep their own
+            // decode.
+            std::optional<ov_compiled_graph> decode_source;
+            if (prefill_size_changed && !self_contained && !no_kv_cache) {
+                auto source_it = shared_cache->graphs.find(entry->shared_key);
+                if (source_it != shared_cache->graphs.end()) {
+                    decode_source = source_it->second;
+                    decode_source->prefill = {};
+                    decode_c_params = decode_source->decode_c_params;
+                    // Make the KV window of the next decode step the base decode model, as a newly built pair has
+                    // it, so that step does not switch to a window request it has to create first.
+                    auto window_it = decode_source->decode_windows.find(decode_window);
+                    if (decode_bucket > 0 && window_it != decode_source->decode_windows.end()) {
+                        ov::CompiledModel window_model = window_it->second;
+                        decode_source->decode_windows.erase(window_it);
+                        decode_source->decode_windows.emplace(decode_c_params.attention_size, decode_source->decode);
+                        decode_source->decode = window_model;
+                        decode_c_params.attention_size = decode_window;
+                    }
+                    if (shared_cache->backend_count == 1) {
+                        shared_cache->graphs.erase(source_it);
+                    }
+                }
+            }
             ov::AnyMap mc_config = prefill_config;
             ov::AnyMap mc_decode_config = decode_config;
             if (!model_cache_dir.empty()) {
@@ -2437,10 +2468,11 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             // Convert decode before compiling prefill: a decode model converted after the prefill compile gives
             // wrong output on some NPU models (Bonsai-8B). Compiling both in parallel raises the host memory peak,
             // so it is opt-in.
-            const bool parallel_compile = !self_contained && !no_kv_cache && ggml_openvino_npu_parallel_compile_enabled();
+            const bool parallel_compile =
+                !self_contained && !no_kv_cache && !decode_source && ggml_openvino_npu_parallel_compile_enabled();
             auto model_prefill = convert_static_model(ggml_decoder_prefill, "prefill", prefill_conversion_end_time);
             std::shared_ptr<ov::Model> model_decode;
-            if (!no_kv_cache) {
+            if (!no_kv_cache && !decode_source) {
                 model_decode = convert_static_model(ggml_decoder_decode, "decode", decode_conversion_end_time);
             }
             std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
@@ -2500,6 +2532,14 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                     names_out_decode = names_out_prefill;
                     decode_conversion_end_time = prefill_conversion_end_time;
                     decode_compile_end_time = prefill_compile_end_time;
+                } else if (decode_source) {
+                    compiled_model_decode = decode_source->decode;
+                    infer_request_decode =
+                        std::make_shared<ov::InferRequest>(compiled_model_decode.create_infer_request());
+                    names_in_decode = decode_source->input_names;
+                    names_out_decode = decode_source->output_names;
+                    decode_conversion_end_time = prefill_conversion_end_time;
+                    decode_compile_end_time = prefill_compile_end_time;
                 } else {
                     build_static_model(ggml_decoder_decode, "decode", std::move(model_decode), mc_decode_config,
                                        decode_fp, compiled_model_decode, infer_request_decode, names_in_decode,
@@ -2529,6 +2569,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 graph.prefill_input_names = names_in_prefill;
                 graph.prefill_output_names = names_out_prefill;
                 graph.decode_attention_size = decode_c_params.attention_size;
+                if (decode_source) {
+                    graph.decode_windows = decode_source->decode_windows;
+                }
                 graph.decode_config = mc_decode_config;
                 graph.cache_base_extra = base_extra;
                 graph.self_contained = self_contained;
@@ -2538,7 +2581,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                 graph.weights_layout = decode_bucket > 0 ? std::move(weights_layout) : nullptr;
                 graph.decode_c_params = decode_c_params;
                 shared_cache->graphs.emplace(shared_key, std::move(graph));
-                pair_built = true;
+                pair_built = !decode_source;
             }
 
             if (cache_enabled) {
