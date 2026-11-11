@@ -6,6 +6,7 @@
 import { APP_NAME } from './app.constants';
 
 export const MEDIA_QUERIES = {
+	COARSE_POINTER: '(pointer: coarse)',
 	DISPLAY_MODE_STANDALONE: '(display-mode: standalone)',
 	PREFERS_DARK: '(prefers-color-scheme: dark)',
 	PREFERS_LIGHT: '(prefers-color-scheme: light)'

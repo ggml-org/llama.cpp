@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/database.service', () => ({
-	DatabaseService: { getConversationsWithMessages: vi.fn() }
+	DatabaseService: { getAllGroups: vi.fn(async () => []), getConversationsWithMessages: vi.fn() }
 }));
 
 import { MessageRole, MessageType } from '$lib/enums';

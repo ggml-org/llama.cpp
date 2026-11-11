@@ -1,4 +1,5 @@
 #include "mtmd-subcontext.h"
+#include "models/models.h"
 #include "mtmd-impl.h"
 #include "mtmd.h"
 #include "mtmd-internal.h"
@@ -27,8 +28,24 @@
 #include <cstring>
 #include <climits>
 #include <map>
+#include <mutex>
 #include <type_traits>
 #include <vector>
+
+std::string mtmd_format(const char * fmt, ...) {
+    va_list ap;
+    va_list ap2;
+    va_start(ap, fmt);
+    va_copy(ap2, ap);
+    int size = vsnprintf(NULL, 0, fmt, ap);
+    GGML_ASSERT(size >= 0 && size < INT_MAX); // NOLINT
+    std::vector<char> buf(size + 1);
+    int size2 = vsnprintf(buf.data(), size + 1, fmt, ap2);
+    GGML_ASSERT(size2 == size);
+    va_end(ap2);
+    va_end(ap);
+    return std::string(buf.data(), size);
+}
 
 // remember to bump this if the serialization format changes
 #define MTMD_SERIALIZATION_VERSION 4
@@ -592,6 +609,10 @@ static bool cbx_is_mtl(const mtmd_model & model) {
 struct mtmd_context {
     // must outlive the subcontexts below
     mtmd_models models;
+    std::unique_ptr<mtmd_backends> backends; // shared by the subcontexts
+
+    // held by every public function that runs a graph, the internals never lock
+    std::mutex compute_mutex;
 
     std::unique_ptr<mtmd_subcontext> ctx_v; // vision
     std::unique_ptr<mtmd_subcontext> ctx_a; // audio
@@ -634,7 +655,10 @@ struct mtmd_context {
     bool ov_img_first      = false;
 
     // MiniCPM-V 4.6/4.7 prepends an <image_id>N</image_id> tag before <image>
-    bool use_image_id = false;
+    bool has_prompt_img_id = false;
+
+    // Kimi-K3.1 writes the original image size after img_beg
+    bool has_prompt_img_size = false;
 
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
@@ -682,7 +706,7 @@ struct mtmd_context {
                         pos_type = MTMD_POS_TYPE_MROPE;
                     } break;
                 default:
-                    throw std::runtime_error(string_format("unsupported decoder rope type: %d\n", decoder_rope_type));
+                    throw std::runtime_error(mtmd_format("unsupported decoder rope type: %d\n", decoder_rope_type));
             }
         }
 
@@ -702,26 +726,40 @@ struct mtmd_context {
 
         // soprano and pocket-tts without voice cloning have no encoder
         if (!models.v && !models.a && !models.gen_a) {
-            throw std::runtime_error(string_format("Failed to load mmproj model from %s\n", mmproj_fname));
+            throw std::runtime_error(mtmd_format("Failed to load mmproj model from %s\n", mmproj_fname));
         }
 
+        int max_nodes = 0;
+        for (const auto * m : { models.v.get(), models.a.get(), models.gen_a.get() }) {
+            if (m) {
+                max_nodes = std::max(max_nodes, m->max_nodes);
+            }
+        }
+
+        // no_alloc only measures memory, nothing is computed
+        backends = std::make_unique<mtmd_backends>(device, no_alloc ? 1 : ctx_params.n_threads, max_nodes,
+                                                   ctx_params.cb_eval, ctx_params.cb_eval_user_data);
+
+        // like llama_context::sched_reserve(), each warmup reserves its graph on the shared scheduler
         mtmd_subctx_params sctx_params {
-            /* device            */ device,
-            // no_alloc only measures memory, nothing is computed
-            /* threadpool        */ mtmd_threadpool_init(no_alloc ? 1 : ctx_params.n_threads),
             /* flash_attn_type   */ mtmd_to_flash_attn_type(ctx_params.flash_attn_type),
             /* warmup            */ ctx_params.warmup,
-            /* cb_eval           */ ctx_params.cb_eval,
-            /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
         };
         if (models.v) {
-            ctx_v = std::make_unique<mtmd_subcontext>(*models.v, sctx_params);
+            ctx_v = std::make_unique<mtmd_subcontext>(*models.v, *backends, sctx_params);
         }
         if (models.a) {
-            ctx_a = std::make_unique<mtmd_subcontext>(*models.a, sctx_params);
+            ctx_a = std::make_unique<mtmd_subcontext>(*models.a, *backends, sctx_params);
         }
         if (models.gen_a) {
-            ctx_gen_a = std::make_unique<mtmd_subcontext>(*models.gen_a, sctx_params);
+            ctx_gen_a = std::make_unique<mtmd_subcontext>(*models.gen_a, *backends, sctx_params);
+        }
+        for (size_t i = 0; i < backends->ptrs.size(); ++i) {
+            const size_t size = ggml_backend_sched_get_buffer_size(backends->sched.get(), backends->ptrs[i]);
+            if (size > 1) {
+                LOG_INF("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+                        ggml_backend_buft_name(backends->bufts[i]), size / 1024.0 / 1024.0);
+            }
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
@@ -729,7 +767,7 @@ struct mtmd_context {
             int n_embd_v = ctx_v->model.n_mmproj_embd();
             int n_embd_a = ctx_a->model.n_mmproj_embd();
             if (n_embd_v != n_embd_a) {
-                throw std::runtime_error(string_format(
+                throw std::runtime_error(mtmd_format(
                     "mismatch between vision and audio mmproj (n_embd_v = %d, n_embd_a = %d)\n",
                     n_embd_v, n_embd_a));
             }
@@ -740,7 +778,7 @@ struct mtmd_context {
         // a gen-only mmproj is validated below
         int n_embd_mmproj = ctx_v || ctx_a ? (ctx_v ? ctx_v : ctx_a)->model.n_mmproj_embd() : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_mmproj) {
-            throw std::runtime_error(string_format(
+            throw std::runtime_error(mtmd_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
                 "hint: you may be using wrong mmproj\n",
                 n_embd_text, n_embd_mmproj));
@@ -748,7 +786,7 @@ struct mtmd_context {
         if (ctx_gen_a) {
             int n_embd_gen = ctx_gen_a->model.n_mmproj_embd();
             if (n_embd_text > 0 && n_embd_text != n_embd_gen) {
-                throw std::runtime_error(string_format(
+                throw std::runtime_error(mtmd_format(
                     "mismatch between text model (n_embd = %d) and gen-audio mmproj (n_embd = %d)\n"
                     "hint: you may be using wrong mmproj\n",
                     n_embd_text, n_embd_gen));
@@ -813,7 +851,7 @@ struct mtmd_context {
                         ov_img_first      = true;
 
                     } else if (minicpmv_version != 0) {
-                        throw std::runtime_error(string_format("unsupported minicpmv version: %d\n", minicpmv_version));
+                        throw std::runtime_error(mtmd_format("unsupported minicpmv version: %d\n", minicpmv_version));
                     }
                     image_preproc = std::make_unique<mtmd_image_preprocessor_llava_uhd>(models.v.get());
                 } break;
@@ -829,7 +867,7 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
-                    use_image_id      = true;
+                    has_prompt_img_id = true;
                     if (ctx_v->model.proj_type == PROJECTOR_TYPE_MINICPM_OCR_1_0) {
                         image_preproc = std::make_unique<mtmd_image_preprocessor_minicpm_ocr_1_0>(models.v.get());
                     } else {
@@ -994,12 +1032,21 @@ struct mtmd_context {
                         // <|begin_of_image|> ... (image embeddings) ... <|end_of_image|>
                         img_beg = "<|begin_of_image|>";
                         img_end = "<|end_of_image|>";
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                     } else {
                         // <|media_begin|> ... (image embeddings) ... <|media_end|>
                         img_beg = "<|media_begin|>";
                         img_end = "<|media_end|>";
+                        image_preproc = std::make_unique<mtmd_image_preprocessor_kimik25>(models.v.get());
                     }
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
+                } break;
+            case PROJECTOR_TYPE_KIMIK31:
+                {
+                    // <|media_begin|>image WxH<|media_content|> ... (image embeddings) ... <|media_end|>
+                    img_beg = "<|media_begin|>";
+                    img_end = "<|media_end|>";
+                    has_prompt_img_size = true;
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_kimik25>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
                 {
@@ -1116,7 +1163,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_granite>(models.v.get());
                 } break;
             default:
-                throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));
+                throw std::runtime_error(mtmd_format("%s: unexpected vision projector type %d\n", __func__, proj));
         }
 
         GGML_ASSERT(image_preproc != nullptr);
@@ -1242,13 +1289,13 @@ struct mtmd_context {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));
                 } break;
             default:
-                throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));
+                throw std::runtime_error(mtmd_format("%s: unexpected audio projector type %d\n", __func__, proj));
         }
 
         // initialize audio preprocessor
         if (audio_preproc) {
             audio_preproc->mel_config.n_threads = n_threads;
-            audio_preproc->mel_config.sched     = ctx_a->sched.get();
+            audio_preproc->mel_config.sched     = backends->sched.get();
             audio_preproc->initialize();
         }
     }
@@ -1404,7 +1451,7 @@ struct mtmd_tokenizer {
         for (const auto & part : parts_str) {
             if (part == ctx->media_marker) {
                 if (i_bm >= bitmaps.size()) {
-                    throw std::runtime_error(string_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
+                    throw std::runtime_error(mtmd_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
                 }
                 parts.push_back({"", bitmaps[i_bm++]});
             } else {
@@ -1419,7 +1466,7 @@ struct mtmd_tokenizer {
             }
         }
         if (n_markers != bitmaps.size()) {
-            throw std::runtime_error(string_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
+            throw std::runtime_error(mtmd_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
         }
 
         expand_lazy_bitmaps();
@@ -1464,7 +1511,7 @@ struct mtmd_tokenizer {
                                     &out_bm,
                                     &out_str);
                     if (out_bm && out_str) {
-                        throw std::runtime_error(string_format("lazy callback cannot return both bitmap and text"));
+                        throw std::runtime_error(mtmd_format("lazy callback cannot return both bitmap and text"));
                     }
                     if (res == 0) {
                         // OK, append the returned chunk; lazy part is not yet added
@@ -1488,7 +1535,7 @@ struct mtmd_tokenizer {
                         break;
                     } else if (res == -2) {
                         // error
-                        throw std::runtime_error(string_format("lazy callback returned error"));
+                        throw std::runtime_error(mtmd_format("lazy callback returned error"));
                     }
                 }
                 if (!st.pieces.empty()) {
@@ -1621,6 +1668,9 @@ struct mtmd_tokenizer {
             if (!ctx->img_beg.empty()) {
                 add_text(ctx->img_beg, true); // add image begin token
             }
+            if (ctx->has_prompt_img_size) {
+                add_text(mtmd_format("image %ux%u<|media_content|>", bitmaps[0]->nx, bitmaps[0]->ny), true);
+            }
 
             // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)
 
@@ -1675,7 +1725,7 @@ struct mtmd_tokenizer {
 
             if (has_tiling_grid && ctx->proj_type_v() == PROJECTOR_TYPE_MINICPMV4_7) {
                 GGML_ASSERT(bitmaps.size() == 1);
-                if (ctx->use_image_id) {
+                if (ctx->has_prompt_img_id) {
                     add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
                 }
                 add_text(ctx->tok_ov_img_start);
@@ -1700,7 +1750,7 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
-                    if (ctx->use_image_id) {
+                    if (ctx->has_prompt_img_id) {
                         add_text("<image_id>" + std::to_string(n_images_added) + "</image_id>", true);
                     }
                     add_text(ctx->tok_ov_img_start);
@@ -1729,7 +1779,7 @@ struct mtmd_tokenizer {
                             auto & curr_chunk = chunks[y * n_col + x];
                             auto & curr_batch = curr_chunk.tokens_image->batch_f32;
                             if (curr_batch.entries.size() != 1) {
-                                throw std::runtime_error(string_format("%s: expect 1 image in batch_f32", __func__));
+                                throw std::runtime_error(mtmd_format("%s: expect 1 image in batch_f32", __func__));
                             }
 
                             LOG_DBG("%s: adding slice image at row %d col %d\n", __func__, y, x);
@@ -2123,14 +2173,14 @@ struct mtmd_tokenizer {
         // overview image first
         auto & overview = preproc_out.overview;
         if (overview.nx() == 0 || overview.ny() == 0) {
-            throw std::runtime_error(string_format("%s: invalid overview image for llava-uhd style preprocessing\n", __func__));
+            throw std::runtime_error(mtmd_format("%s: invalid overview image for llava-uhd style preprocessing\n", __func__));
         }
         process_chunk(std::move(preproc_out.overview));
 
         // then, process slices
         for (auto & entry : preproc_out.entries) {
             if (entry.nx() == 0 || entry.ny() == 0) {
-                throw std::runtime_error(string_format("%s: invalid image slice for llava-uhd style preprocessing\n", __func__));
+                throw std::runtime_error(mtmd_format("%s: invalid image slice for llava-uhd style preprocessing\n", __func__));
             }
             process_chunk(std::move(entry));
         }
@@ -2345,6 +2395,7 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     // this is the non-batching version
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
         return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
     } catch (const std::exception & e) {
@@ -2354,6 +2405,7 @@ int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
 }
 
 int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
         return mtmd_encode_impl(ctx, image_tokens, ctx->out_embd);
     } catch (const std::exception & e) {
@@ -3124,6 +3176,7 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
 }
 
 int32_t mtmd_gen_audio_process(mtmd_context * ctx, mtmd_gen_state * state, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
         return mtmd_gen_audio_process_impl(ctx, state, inp, out);
     } catch (const std::exception & e) {
@@ -3232,6 +3285,7 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
 }
 
 int32_t mtmd_batch_encode(mtmd_batch * batch) {
+    std::lock_guard<std::mutex> lock(batch->ctx->compute_mutex);
     try {
         return mtmd_batch_encode_impl(batch);
     } catch (const std::exception & e) {
@@ -3845,6 +3899,7 @@ static void mtmd_debug_encode_impl(mtmd_context * ctx, mtmd_subcontext * sctx, m
 }
 
 void mtmd_debug_encode_image(mtmd_context * ctx, const std::vector<std::vector<float>> & image) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     if (!ctx->ctx_v) {
         LOG_ERR("%s: model does not support vision input\n", __func__);
         return;
@@ -3863,6 +3918,7 @@ void mtmd_debug_encode_image(mtmd_context * ctx, const std::vector<std::vector<f
 }
 
 void mtmd_debug_encode_audio(mtmd_context * ctx, const std::vector<float> & input) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     if (!ctx->ctx_a) {
         LOG_ERR("%s: model does not support audio input\n", __func__);
         return;
@@ -3907,6 +3963,7 @@ void mtmd_debug_preprocess_image(mtmd_context * ctx, const std::vector<uint8_t> 
 }
 
 void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & samples) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     if (!ctx->ctx_a || !ctx->audio_preproc) {
         LOG_ERR("%s: model does not support audio input\n", __func__);
         return;
@@ -3947,20 +4004,14 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname,
         mtmd_log_set(stub_log_callback, nullptr); // suppress logging
         ctx.reset(new mtmd_context(mmproj_fname, nullptr, ctx_params, true));
         mtmd_log_set(saved_log_callback, saved_log_user_data); // restore log callback
-        std::map<ggml_backend_dev_t, size_t> total_mem;
-        auto merge = [&](const struct mtmd_subcontext * c) {
-            for (auto & [dev, size] : c->get_mem_usage()) {
-                total_mem[dev] += size;
+        // compute buffers are shared, weights are per model
+        std::map<ggml_backend_dev_t, size_t> total_mem = ctx->backends->get_mem_compute();
+        for (const auto * m : { ctx->models.v.get(), ctx->models.a.get(), ctx->models.gen_a.get() }) {
+            if (m) {
+                for (auto & [dev, size] : m->mem_weights) {
+                    total_mem[dev] += size;
+                }
             }
-        };
-        if (ctx->ctx_v) {
-            merge(ctx->ctx_v.get());
-        }
-        if (ctx->ctx_a) {
-            merge(ctx->ctx_a.get());
-        }
-        if (ctx->ctx_gen_a) {
-            merge(ctx->ctx_gen_a.get());
         }
         mtmd_memory_usage res;
         res.backend_mem_usage = std::move(total_mem);
@@ -4094,12 +4145,40 @@ struct mtmd_audio_stream_lfm3a : mtmd_audio_stream {
     int32_t step_live(llama_token last_token);
 };
 
+// Gemma 4: the encoder is causal
+struct mtmd_audio_stream_gemma4a : mtmd_audio_stream {
+    mtmd_subctx_enc_state * enc_state = nullptr;
+
+    int n_fft;
+    int win;
+    int pad_left;
+    int64_t seg_len;
+    int64_t seg_start = 0; // first sample of the current segment, n_frames counts its frames
+
+    std::vector<float> beg_rows;
+    std::vector<float> end_rows;
+    bool beg_done = false;
+    bool end_done = false;
+
+    ~mtmd_audio_stream_gemma4a() override {
+        delete enc_state;
+    }
+
+    bool    init(const mtmd_audio_stream_params & params) override;
+    int32_t flush(bool end) override;
+    int32_t step(llama_token last_token) override;
+
+    int64_t n_seg_frames(int64_t n, bool complete) const;
+    bool    compute_mel(int64_t n_seg, bool complete);
+    bool    encode(int n);
+};
+
 bool mtmd_support_audio_stream(const mtmd_context * ctx) {
     if (!ctx->ctx_a || !ctx->text_model) {
         return false;
     }
     const projector_type proj = ctx->ctx_a->model.proj_type;
-    return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A;
+    return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A || proj == PROJECTOR_TYPE_GEMMA4A;
 }
 
 mtmd_audio_stream_params mtmd_audio_stream_params_default(void) {
@@ -4121,6 +4200,7 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
     switch (ctx->ctx_a->model.proj_type) {
         case PROJECTOR_TYPE_VOXTRAL_RT: s = std::make_unique<mtmd_audio_stream_voxtral_rt>(); break;
         case PROJECTOR_TYPE_LFM3A:      s = std::make_unique<mtmd_audio_stream_lfm3a>();      break;
+        case PROJECTOR_TYPE_GEMMA4A:    s = std::make_unique<mtmd_audio_stream_gemma4a>();    break;
         default:                        GGML_ABORT("unsupported projector");
     }
     s->ctx      = ctx;
@@ -4155,10 +4235,12 @@ int32_t mtmd_audio_stream_flush(mtmd_audio_stream * s, bool end) {
     if (s->ended) {
         return 1;
     }
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return s->flush(end);
 }
 
 int32_t mtmd_audio_stream_step(mtmd_audio_stream * s, llama_token last_token) {
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return s->step(last_token);
 }
 
@@ -4170,6 +4252,23 @@ bool mtmd_audio_stream_is_seq_start(const mtmd_audio_stream * s) {
     return s->seq_start;
 }
 
+
+// token embeddings of aud_beg / aud_end
+static bool mtmd_audio_stream_marker_rows(const mtmd_context * ctx, const std::string & text, std::vector<float> & rows) {
+    rows.clear();
+    if (text.empty()) {
+        return true;
+    }
+    const llama_vocab * vocab = llama_model_get_vocab(ctx->text_model);
+    std::vector<llama_token> tokens(text.size() + 4);
+    const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), tokens.data(), (int32_t) tokens.size(), false, true);
+    if (n <= 0) {
+        LOG_ERR("%s: cannot tokenize the audio marker %s\n", __func__, text.c_str());
+        return false;
+    }
+    rows.resize((size_t) n * ctx->n_embd_text);
+    return llama_model_get_tok_embd_rows(ctx->text_model, tokens.data(), n, rows.data()) != 0;
+}
 
 //
 // Voxtral Realtime
@@ -4432,20 +4531,7 @@ bool mtmd_audio_stream_lfm3a::init(const mtmd_audio_stream_params & params) {
     }
 
     // the markers the tokenizer puts around an audio clip go around the stream as well
-    const llama_vocab * vocab = llama_model_get_vocab(ctx->text_model);
-    auto marker_rows = [&](const std::string & text, std::vector<float> & rows) {
-        if (text.empty()) {
-            return true;
-        }
-        std::vector<llama_token> tokens(text.size() + 4);
-        const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), tokens.data(), (int32_t) tokens.size(), false, true);
-        if (n <= 0) {
-            return false;
-        }
-        rows.resize((size_t) n * n_embd);
-        return llama_model_get_tok_embd_rows(ctx->text_model, tokens.data(), n, rows.data()) != 0;
-    };
-    return marker_rows(ctx->aud_beg, beg_rows) && marker_rows(ctx->aud_end, end_rows);
+    return mtmd_audio_stream_marker_rows(ctx, ctx->aud_beg, beg_rows) && mtmd_audio_stream_marker_rows(ctx, ctx->aud_end, end_rows);
 }
 
 // end: pad the tail like mtmd_audio_preprocessor_lfm3a, so the rows match encoding the clip at once
@@ -4665,6 +4751,192 @@ int32_t mtmd_audio_stream_lfm3a::step_live(llama_token last_token) {
     n_seq_rows    += n_feed;
     n_rows        += n_feed;
     return (int32_t) (out.size() / n_embd);
+}
+
+//
+// Gemma 4
+//
+
+bool mtmd_audio_stream_gemma4a::init(const mtmd_audio_stream_params & params) {
+    const mtmd_hparams * hparams = &sctx->model.hparams;
+
+    if (params.n_prompt > 0) {
+        LOG_ERR("%s: Gemma 4 takes no prompt, its audio is a chat turn\n", __func__);
+        return false;
+    }
+    if (!ctx->audio_preproc || !ctx->audio_preproc->mel_config.cache) {
+        LOG_ERR("%s: the audio preprocessor is not initialized\n", __func__);
+        return false;
+    }
+
+    // one row per 4 mel frames (two stride-2 convs)
+    n_fft           = hparams->audio_n_fft;
+    win             = hparams->audio_window_len;
+    pad_left        = win / 2;
+    seg_len         = (int64_t) mtmd_audio_preprocessor_gemma4a::segment_seconds * hparams->audio_sample_rate;
+    frames_per_tok  = 4;
+    samples_per_tok = frames_per_tok * hop;
+
+    // whole attention blocks, so the rows match the offline path
+    const int n_step = (int) ((int64_t) params.step_ms * hparams->audio_sample_rate / 1000 / hop);
+    n_step_mel = MTMD_ALIGN(std::max(n_step, frames_per_tok), (int) mtmd_graph_gemma4a::chunk_size * frames_per_tok);
+
+    enc_state = sctx->enc_state_init(n_step_mel);
+    if (!enc_state) {
+        return false;
+    }
+
+    return mtmd_audio_stream_marker_rows(ctx, ctx->aud_beg, beg_rows) && mtmd_audio_stream_marker_rows(ctx, ctx->aud_end, end_rows);
+}
+
+// mel frames of a segment with n samples
+// complete: same count as mtmd_audio_preprocessor_gemma4a, otherwise: only frames with a full window
+int64_t mtmd_audio_stream_gemma4a::n_seg_frames(int64_t n, bool complete) const {
+    if (complete) {
+        return std::max<int64_t>(0, (n + pad_left - (win + 1)) / hop + 1);
+    }
+    return n + pad_left >= win + 1 ? (n + pad_left - (win + 1)) / hop + 1 : 0;
+}
+
+// frame k reads samples [k * hop - pad_left, k * hop - pad_left + n_fft) of the segment, zero outside of it
+// the window is zero past win, so the samples after the segment end do not count
+bool mtmd_audio_stream_gemma4a::compute_mel(int64_t n_seg, bool complete) {
+    const int64_t n_total = n_seg_frames(n_seg, complete);
+    const int64_t n_new   = n_total - n_frames;
+    if (n_new <= 0) {
+        return true;
+    }
+
+    const int64_t first = seg_start + n_frames * hop - pad_left;
+    std::vector<float> samples((size_t) ((n_new - 1) * hop + n_fft), 0.0f);
+    for (size_t j = 0; j < samples.size(); j++) {
+        const int64_t idx = first + (int64_t) j;
+        if (idx >= seg_start && idx < seg_start + n_seg) {
+            GGML_ASSERT(idx >= buf_pos && idx - buf_pos < (int64_t) buf.size());
+            samples[j] = buf[idx - buf_pos];
+        }
+    }
+
+    const mtmd_audio_mel_config & cfg = ctx->audio_preproc->mel_config;
+    std::vector<float> frames((size_t) n_new * n_mel);
+    if (!mtmd_audio_log_mel(cfg, samples.data(), cfg.cache->hann_window.data(), n_new, frames.data())) {
+        LOG_ERR("%s: unable to compute the mel spectrogram\n", __func__);
+        return false;
+    }
+    for (int64_t t = 0; t < n_new; t++) {
+        for (int m = 0; m < n_mel; m++) {
+            mel.push_back(frames[(size_t) m * n_new + t]);
+        }
+    }
+    n_frames = n_total;
+
+    // drop the samples no frame will need again
+    const int64_t keep_from = std::max(seg_start, seg_start + n_frames * hop - pad_left);
+    if (keep_from > buf_pos) {
+        buf.erase(buf.begin(), buf.begin() + (keep_from - buf_pos));
+        buf_pos = keep_from;
+    }
+    return true;
+}
+
+bool mtmd_audio_stream_gemma4a::encode(int n) {
+    std::vector<float> data((size_t) n_mel * n);
+    for (int m = 0; m < n_mel; m++) {
+        for (int t = 0; t < n; t++) {
+            data[(size_t) m * n + t] = mel[(size_t) t * n_mel + m];
+        }
+    }
+    mtmd_image_f32 img;
+    img.set_size({n, n_mel}, false, /* is_audio */ true);
+    img.cpy_buf(data);
+    const int n_out = sctx->model.n_output_tokens(&img);
+
+    mtmd_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(img));
+
+    std::vector<float> res((size_t) n_embd * n_out);
+    mtmd_subctx_encode_params params;
+    params.n_threads = ctx->n_threads;
+    params.imgs      = &batch;
+    params.out_embd  = &res;
+    params.enc_state = enc_state;
+    if (!sctx->encode(&params)) {
+        LOG_ERR("%s: failed to encode audio\n", __func__);
+        return false;
+    }
+    embd.insert(embd.end(), res.begin(), res.end());
+    mel.erase(mel.begin(), mel.begin() + (size_t) n * n_mel);
+    return true;
+}
+
+// no padding here, step() pads a segment once it is complete
+int32_t mtmd_audio_stream_gemma4a::flush(bool end) {
+    const int64_t n_full = n_samples / seg_len;
+    const int64_t n_rest = n_samples % seg_len;
+    const int64_t rows_full = (n_seg_frames(seg_len, true) + frames_per_tok - 1) / frames_per_tok;
+    const int64_t rows_rest = end ? (n_seg_frames(n_rest, true) + frames_per_tok - 1) / frames_per_tok
+                                  : n_seg_frames(n_rest, false) / frames_per_tok;
+    n_rows_flushed = n_full * rows_full + rows_rest;
+    pending_flush = true;
+    ended = end;
+    return 0;
+}
+
+int32_t mtmd_audio_stream_gemma4a::step(llama_token /* last_token */) {
+    const bool flush = pending_flush;
+    pending_flush = false;
+
+    // whole rows only, except at the end of a segment: a partial row puts its zero padding into the state
+    while (true) {
+        const int64_t seg_end  = seg_start + seg_len;
+        const int64_t n_seg    = std::min(n_samples, seg_end) - seg_start;
+        const bool    complete = n_samples >= seg_end || ended;
+        if (!compute_mel(n_seg, complete)) {
+            return -2;
+        }
+        const int n_avail = (int) (mel.size() / n_mel);
+        int n = n_avail;
+        if (!complete) {
+            n -= n % frames_per_tok;
+            if (!flush) {
+                n -= n % n_step_mel;
+            }
+        }
+        if (n > 0 && !encode(n)) {
+            return -2;
+        }
+        if (n_samples < seg_end) {
+            break;
+        }
+        // next segment starts from a zero state
+        seg_start = seg_end;
+        n_frames  = 0;
+        ggml_backend_buffer_clear(enc_state->buf.get(), 0);
+    }
+
+    // rows carry no text, all of them go out at once and last_token is not used
+    const int64_t n_avail = (int64_t) (embd.size() / n_embd);
+    out.clear();
+    if (n_avail > 0 || ended) {
+        if (!beg_done) {
+            beg_done = true;
+            out = beg_rows;
+        }
+        out.insert(out.end(), embd.begin(), embd.end());
+        embd.clear();
+        if (ended && !end_done) {
+            end_done = true;
+            out.insert(out.end(), end_rows.begin(), end_rows.end());
+        }
+    }
+    const int64_t n_out = (int64_t) (out.size() / n_embd);
+    if (n_out == 0) {
+        return ended ? -1 : 0;
+    }
+    n_rows      += n_out;
+    n_rows_done += n_avail; // the markers are not audio rows
+    return (int32_t) n_out;
 }
 
 int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {

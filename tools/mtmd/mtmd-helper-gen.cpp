@@ -72,7 +72,7 @@ static void write_wav16_header(std::vector<char> & buf, uint32_t data_sz, int32_
 
 static void append_wav16_pcm(std::vector<char> & buf, const float * pcm, size_t n) {
     for (size_t i = 0; i < n; i++) {
-        int16_t s = (int16_t) (std::max(-1.0f, std::min(1.0f, pcm[i])) * 32767.0f);
+        int16_t s = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, pcm[i])) * 32767.0f);
         put_bytes(buf, &s, 2);
     }
 }
