@@ -929,3 +929,27 @@ def test_router_download_drops_stale_partials():
 
     _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
     server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+
+def test_router_restricted_cors_same_origin_reaches_child():
+    # same-origin request via LAN address must not be refused by the child
+    global server
+    lan_ip = get_lan_ip()
+    if lan_ip is None:
+        pytest.skip("no non-loopback interface")  # ty: ignore[too-many-positional-arguments]
+    server.cors_origins = "localhost"
+    server.server_host = "0.0.0.0"
+    server.start()
+    body = {
+        "model": "ggml-org/tinygemma3-GGUF:Q8_0",
+        "max_tokens": 4,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    res = requests.post(server.make_url("/chat/completions", host=lan_ip), json=body, headers={
+        "Origin": f"http://{lan_ip}:{server.server_port}",
+        "Sec-Fetch-Site": "same-origin",
+    })
+    assert res.status_code == 200, res.text
+
+    res = requests.post(server.make_url("/chat/completions", host="127.0.0.1"), json=body, headers={"Origin": "http://evil.com"})
+    assert res.status_code == 403

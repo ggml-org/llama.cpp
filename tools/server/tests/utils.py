@@ -794,5 +794,17 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     return output_file
 
 
+def get_lan_ip() -> str | None:
+    # address of the interface that routes outside, no packet is sent
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("192.0.2.1", 9))
+            ip = s.getsockname()[0]
+    except OSError:
+        return None
+    return None if ip.startswith("127.") else ip
+
+
 def is_slow_test_allowed():
     return os.environ.get("SLOW_TESTS") == "1" or os.environ.get("SLOW_TESTS") == "ON"

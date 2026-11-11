@@ -265,6 +265,23 @@ private:
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
 
+// router already checked the origin; child sees a loopback Host, so do not forward origin headers
+static bool is_browser_origin_header(const std::string & key) {
+    std::string lower = key;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+    return lower == "origin" || lower.compare(0, 10, "sec-fetch-") == 0;
+}
+
+static std::map<std::string, std::string> child_request_headers(const std::map<std::string, std::string> & headers) {
+    std::map<std::string, std::string> out;
+    for (const auto & [key, value] : headers) {
+        if (!is_browser_origin_header(key)) {
+            out.emplace(key, value);
+        }
+    }
+    return out;
+}
+
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
@@ -1714,7 +1731,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             CHILD_ADDR,
             meta->port,
             proxy_path,
-            req.headers,
+            child_request_headers(req.headers),
             req.body,
             req.files,
             // a detached request belongs to a replay session
@@ -1769,7 +1786,8 @@ void server_models::proxy_ws(const server_http_req & req, server_http_context::w
     for (const auto & [key, value] : req.headers) {
         std::string lower = key;
         std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
-        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0) {
+        if (lower == "host" || lower == "connection" || lower == "upgrade" || lower.compare(0, 14, "sec-websocket-") == 0
+                || is_browser_origin_header(key)) {
             continue;
         }
         headers.emplace(key, value);
@@ -2410,7 +2428,7 @@ void server_models_routes::init_routes() {
                 CHILD_ADDR,
                 owner->port,
                 child_path,
-                req.headers,
+                child_request_headers(req.headers),
                 req.body,
                 req.files,
                 req.should_stop,
