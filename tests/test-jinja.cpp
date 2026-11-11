@@ -172,6 +172,18 @@ static void test_conditionals(testing & t) {
         "big"
     );
 
+    test_template(t, "chained comparison",
+        "{{ 1 <= x <= 100 }},{{ 1 <= y <= 100 }},{{ 1 < 2 < 3 < 2 }},{{ 1 == 1 != 2 }},{{ 'a' in 'apple' == 'apple' }}",
+        {{"x", 42}, {"y", 500}},
+        "True,False,False,True,True"
+    );
+
+    test_template(t, "chained comparison short circuit",
+        "{{ 2 < 1 < y }}",
+        json::object(),
+        "False"
+    );
+
     test_template(t, "object comparison",
         "{% if {0: 1, none: 2, 1.0: 3, '0': 4, true: 5} == {false: 1, none: 2, 1: 5, '0': 4} %}equal{% endif %}",
         json::object(),
@@ -1321,6 +1333,18 @@ static void test_macros(testing & t) {
         "Hello, John Smith,Hi, Jane Doe"
     );
 
+    test_template(t, "macro with unpacked args",
+        "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(*[1, 2]) }},{{ add(1, **{'b': 2, 'c': 3}) }},{{ add(*xs, **kw) }}",
+        {{"xs", json::array({1, 2})}, {"kw", {{"c", 5}}}},
+        "3,6,8"
+    );
+
+    test_template(t, "filter with unpacked args",
+        "{{ 'a-b' | replace(*['-', '+']) }}",
+        json::object(),
+        "a+b"
+    );
+
     test_template(t, "macro with caller",
         "\
 {%- macro nest_dict(o, i, ff='') %}\n\
@@ -2427,6 +2451,12 @@ static void test_object_methods(testing & t) {
     test_template(t, "dict from tuples and kwargs",
         "{% set o = dict((obj | items | list), c=2) %}{{ o|tojson }}",
         {{"obj", {{"a", 3}, {"b", 1}}}},
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
+
+    test_template(t, "dict from dict and unpacked kwargs",
+        "{% set o = dict(obj, **{k: 2}) %}{{ o|tojson }}",
+        {{"obj", {{"a", 3}, {"b", 1}}}, {"k", "c"}},
         "{\"a\": 3, \"b\": 1, \"c\": 2}"
     );
 }
