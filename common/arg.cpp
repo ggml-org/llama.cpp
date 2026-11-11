@@ -1738,6 +1738,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                    string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
+    add_opt(common_arg({ "-cfk", "--cuda-fa-kernel" }, "<none|vec|tile|mma_f16|mma>",
+                       "force CUDA FlashAttention kernel instead of automatic selection (default: auto)",
+                       [](common_params & params, const std::string & value) {
+                            if (value == "none") {
+                               params.cuda_fa_kernel = 0;
+                           } else if (value == "vec") {
+                               params.cuda_fa_kernel = 100;
+                           } else if (value == "tile") {
+                               params.cuda_fa_kernel = 200;
+                           } else if (value == "mma_f16" || value == "mma") {
+                               params.cuda_fa_kernel = 400;
+                           } else {
+                               throw std::runtime_error(
+                                   string_format("error: unknown value for --cuda-fa-kernel: '%s'\n", value.c_str()));
+                           }
+                       }));
+
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",

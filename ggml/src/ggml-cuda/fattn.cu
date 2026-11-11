@@ -1,4 +1,6 @@
 #include "common.cuh"
+#include <cstdlib>
+#include <cstring>
 #include "fattn-common.cuh"
 #include "fattn-mma-f16.cuh"
 #include "fattn-tile.cuh"
@@ -535,6 +537,21 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
 }
 
 // Best FlashAttention kernel for a specific GPU:
+static int g_cuda_fa_kernel_override = -1;
+static int g_cuda_fa_kernel_last = -1;
+
+void ggml_cuda_set_fa_kernel_override(int kernel) {
+    g_cuda_fa_kernel_override = kernel;
+}
+
+int ggml_cuda_get_fa_kernel_override(void) {
+    return g_cuda_fa_kernel_override;
+}
+
+int ggml_cuda_get_last_fa_kernel(void) {
+    return g_cuda_fa_kernel_last;
+}
+
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE    =   0,
     BEST_FATTN_KERNEL_TILE    = 200,
@@ -559,11 +576,40 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
     }
 }
 
-static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+static best_fattn_kernel ggml_cuda_get_best_fattn_kernel_auto(const int device, const ggml_tensor * dst) {
 #ifndef FLASH_ATTN_AVAILABLE
     GGML_UNUSED(device); GGML_UNUSED(dst);
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
+
+    if (g_cuda_fa_kernel_override == 0) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
+    if (g_cuda_fa_kernel_override == 100) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
+    if (g_cuda_fa_kernel_override == 200) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+    if (g_cuda_fa_kernel_override == 400) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
+    const char *env = getenv("CUDA_FA_KERNEL");
+    if (!env || env[0] == '\0') {
+        env = getenv("GGML_CUDA_FA_KERNEL");
+    }
+    if (env && env[0] != '\0') {
+        if (strcmp(env, "none") == 0) {
+            return BEST_FATTN_KERNEL_NONE;
+        } else if (strcmp(env, "vec") == 0) {
+            return BEST_FATTN_KERNEL_VEC;
+        } else if (strcmp(env, "tile") == 0) {
+            return BEST_FATTN_KERNEL_TILE;
+        } else if (strcmp(env, "mma_f16") == 0 || strcmp(env, "mma") == 0) {
+            return BEST_FATTN_KERNEL_MMA_F16;
+        }
+    }
 
     const ggml_tensor * KQV   = dst;
     const ggml_tensor * Q     = dst->src[0];
@@ -753,6 +799,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
     return BEST_FATTN_KERNEL_TILE;
+}
+
+static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+    const best_fattn_kernel k = ggml_cuda_get_best_fattn_kernel_auto(device, dst);
+    g_cuda_fa_kernel_last = (int) k;
+    return k;
 }
 
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
