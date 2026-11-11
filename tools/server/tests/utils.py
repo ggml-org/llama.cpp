@@ -713,9 +713,10 @@ class ServerPreset:
     def small_test() -> ServerProcess:
         # ~95M Qwen3.5 based VLM with MTP head: chat, tool calling, OCR and draft-mtp in one fixture
         server = ServerProcess()
-        server.model_hf_repo = "Serveurperso/small-test"
-        server.model_hf_file = "small-test-f16.gguf"
-        server.mmproj_url = "https://huggingface.co/Serveurperso/small-test/resolve/main/small-test-mmproj-f16.gguf"
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "Serveurperso/small-test:F16"
         server.model_alias = "small-test"
         server.jinja = True
         server.n_ctx = 8192
