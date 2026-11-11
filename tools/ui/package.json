@@ -78,6 +78,7 @@
 		"globals": "16.5.0",
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
+		"llama-brand": "github:ggml-org/llama-brand#master",
 		"mdast": "3.0.0",
 		"mdsvex": "0.12.7",
 		"mermaid": "11.17.2",
