@@ -150,8 +150,10 @@
 		:global(.loading-icon) {
 			display: block;
 		}
+	}
 
-		&:is(:hover) {
+	@media (hover: hover) and (pointer: fine) {
+		.stop-button:hover {
 			:global(.stop-icon) {
 				display: block;
 			}

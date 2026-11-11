@@ -161,7 +161,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
             # In MiniCPM-V 4.6 `vision_config.image_size` (980) describes the SigLIP
             # positional embedding bucket grid (70 x 70), while the per-slice processing
             # resolution is the preprocessor's `scale_resolution` (typically 448).
-            # The CLIP loader in tools/mtmd/clip.cpp consumes `clip.vision.image_size`
+            # The mmproj loader in tools/mtmd/mtmd-model.cpp consumes `clip.vision.image_size`
             # as the slice size and warmup resolution, so report `scale_resolution` there
             # to match the upstream MiniCPMV4_6ImageProcessorPil slicing rules.
             scale_resolution = self.preprocessor_config.get(
@@ -173,7 +173,7 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
 
-        # projector type string is consumed by clip_projector_type_from_string() in clip.cpp
+        # projector type string is consumed by projector_type_from_string() in tools/mtmd/mtmd-impl.h
         self.gguf_writer.add_clip_projector_type(self.projector_type)
 
         self.gguf_writer.add_vision_projector_scale_factor(
@@ -243,7 +243,7 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
     projector_type = gguf.VisionProjectorType.MINICPMV4_7
     # MiniCPMV4_7ImageProcessorPil default
     default_scale_resolution = 448
-    # rows of v.tok_embd_sep, the order must match clip_suffix_rows() in clip-impl.h
+    # rows of v.tok_embd_sep, the order must match mtmd_suffix_rows() in tools/mtmd/mtmd-impl.h
     tok_embd_sep = ["</image>", "<slice>", "</slice>", "\n"]
 
     def get_downsample_mode(self) -> str:
@@ -263,6 +263,7 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
             # the tile separators are text tokens; clip appends their embeddings so that one chunk holds the whole image
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            assert tokenizer is not None
             ids = []
             for text in self.tok_embd_sep:
                 tok = tokenizer.encode(text, add_special_tokens=False)

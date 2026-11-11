@@ -111,6 +111,13 @@ std::string gen_tool_call_id();
 const char * get_media_marker();
 
 //
+// audio utils
+//
+
+// float samples to signed 16-bit PCM bytes, clamped to [-1, 1]
+std::string pcm_f32_to_s16(const float * samples, size_t n);
+
+//
 // model output modalities
 //
 

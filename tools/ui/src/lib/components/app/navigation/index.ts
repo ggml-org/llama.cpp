@@ -49,6 +49,7 @@ export { default as DropdownMenuSearchable } from './DropdownMenuSearchable.svel
  * - Destructive variant styling
  * - Keyboard shortcut display
  * - Separator support between groups
+ * - A drawer on a phone, unless `anchor` pins the menu to an element (a held row)
  *
  * @example
  * ```svelte
@@ -124,7 +125,8 @@ export { default as SidebarNavigation } from './SidebarNavigation/SidebarNavigat
  * Single conversation item in sidebar. Displays conversation title (truncated),
  * last message preview, and timestamp. Shows context menu on right-click with
  * rename and delete options. Highlights when active (matches current route).
- * Handles click to navigate and keyboard accessibility.
+ * Handles click to navigate and keyboard accessibility. On a phone, holding the
+ * row opens its actions menu anchored below it, in place of the three-dot trigger.
  */
 export { default as SidebarNavigationConversationItem } from './SidebarNavigation/SidebarNavigationConversationItem.svelte';
 
@@ -180,13 +182,16 @@ export { default as SidebarNavigationSelectionBar } from './SidebarNavigation/Si
 export { default as SidebarNavigationConversationList } from './SidebarNavigation/SidebarNavigationConversationList.svelte';
 export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
 
+/** The sidebar's footer: Models, MCP and Settings in a group inset in the sidebar. */
+export { default as SidebarNavigationFooter } from './SidebarNavigation/SidebarNavigationFooter.svelte';
+
 /**
  * **SidebarNavigationSearchResults** - Filtered conversation list for search.
  *
  * Pure-presentational rendering of the search-mode subtree: "Search results"
  * header, the matching items rendered through {@link SidebarNavigationConversationItem},
  * and contextual empty-state messages. Used as the body of the mobile `/search`
- * route; desktop search goes through {@link DialogSearch}.
+ * route; the sidebar's search opens {@link DialogSearch}.
  *
  * The caller is expected to provide an already-filtered list via
  * `filteredConversations` and a `searchQuery` for the empty-state messages.
