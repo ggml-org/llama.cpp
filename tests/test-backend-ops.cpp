@@ -1223,29 +1223,6 @@ static bool op_filter_entry_matches(std::string_view entry, std::string_view op_
     return std::regex_search(op_name.data(), op_name.data() + op_name.size(), re);
 }
 
-// TODO: [TAG_MUL_MAT_ID_SKIP] see https://github.com/ggml-org/llama.cpp/pull/26631
-static bool backend_lacks_skipped_ids(ggml_backend_t backend, ggml_cgraph * gf) {
-    const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
-    if (strcmp(name, "CUDA") != 0 && strcmp(name, "ROCm") != 0 && strcmp(name, "MUSA") != 0) {
-        return false;
-    }
-    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
-        const ggml_tensor * node = ggml_graph_node(gf, i);
-        if (node->op != GGML_OP_MUL_MAT_ID && node->op != GGML_OP_ADD_ID) {
-            continue;
-        }
-        const ggml_tensor * ids = node->src[2];
-        std::vector<int32_t> row(ids->ne[0]);
-        for (int64_t i1 = 0; i1 < ids->ne[1]; i1++) {
-            ggml_backend_tensor_get(ids, row.data(), i1*ids->nb[1], ids->ne[0]*sizeof(int32_t));
-            if (std::find(row.begin(), row.end(), -1) != row.end()) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
 struct test_case {
     virtual ~test_case() {}
 
@@ -1537,13 +1514,6 @@ struct test_case {
         initialize_tensors(ctx.get());
         if (ctx_weights) {
             initialize_tensors(ctx_weights.get());
-        }
-
-        // TODO: [TAG_MUL_MAT_ID_SKIP] @ngxson : remove this once CUDA implements mul_mat_id with -1 = skipped
-        if (backend_lacks_skipped_ids(backend1, gf)) {
-            test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", false, false, "not supported");
-            print_test_result_locked(output_printer, result);
-            return test_status_t::NOT_SUPPORTED;
         }
 
         // compare

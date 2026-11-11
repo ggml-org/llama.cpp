@@ -661,9 +661,19 @@ static __global__ void mul_mat_vec_q(
     uint32_t sample_dst;
 
     ggml_cuda_pdl_sync();
-    channel_x  = shared_expert ? 0 : ncols_dst == 1 && ids ? ids[channel_dst] : fastdiv(channel_dst, channel_ratio);
+    const int32_t id = shared_expert || ncols_dst != 1 || !ids ? 0 : ids[channel_dst];
+    channel_x  = shared_expert ? 0 : ncols_dst == 1 && ids ? id : fastdiv(channel_dst, channel_ratio);
     channel_y  = ncols_dst == 1 && ids ? fastmodulo(channel_dst, nchannels_y) : channel_dst;
     sample_dst = blockIdx.z;
+
+    // id -1 skips the slot: its dst row is zero
+    if (id < 0) {
+        if (threadIdx.y == 0 && threadIdx.x < rows_per_cuda_block &&
+            (rows_per_cuda_block == 1 || uint32_t(row0 + threadIdx.x) < stride_col_dst)) {
+            dst[sample_dst*stride_sample_dst + channel_dst*stride_channel_dst + row0 + threadIdx.x] = 0.0f;
+        }
+        return;
+    }
 
     const uint32_t sample_x    = fastdiv(sample_dst, sample_ratio);
     const uint32_t sample_y    = sample_dst;
@@ -941,8 +951,17 @@ static __global__ void mul_mat_vec_q_moe(
     }
 
     ggml_cuda_pdl_sync();
-    const uint32_t channel_x = shared_expert ? 0 : ids[channel_dst + token_idx * ids_stride];
+    const int32_t  id        = shared_expert ? 0 : ids[channel_dst + token_idx * ids_stride];
     const uint32_t channel_y = fastmodulo(channel_dst, nchannels_y);
+
+    // id -1 skips the slot: its dst row is zero
+    if (id < 0) {
+        if (threadIdx.x < c_rows_per_block && (c_rows_per_block == 1 || uint32_t(row0 + threadIdx.x) < nrows_x)) {
+            dst[channel_dst*stride_channel_dst + token_idx*stride_col_dst + row0 + threadIdx.x] = 0.0f;
+        }
+        return;
+    }
+    const uint32_t channel_x = id;
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
     const int kbx_offset  = channel_x*stride_channel_x + row0*stride_row_x;
