@@ -389,6 +389,13 @@ int ggml_openvino_npu_decode_bucket() {
     if (!ggml_openvino_is_npu()) {
         return 0;
     }
+    // A self-contained blob embeds its weights bank, and NPUW cannot load a blob into a bank that already holds
+    // weights, so a decode model per KV window cannot be imported next to the decode model of the pair.
+    if (ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR") &&
+        ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_BLOB") != 0 &&
+        !ggml_openvino_npu_weightless_bank_enabled()) {
+        return 0;
+    }
     return ggml_openvino_getenv_int("GGML_OPENVINO_NPU_BLOB_PREBUILD", 1) != 0 ? 1024 : 0;
 }
 

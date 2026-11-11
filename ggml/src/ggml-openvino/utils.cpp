@@ -1816,8 +1816,9 @@ struct static_build_args {
     std::string   weights_path;
 };
 
-// Cached blobs imported in this process, keyed by fingerprint, so a pair or window switch reuses them. Cleared with
-// the shared compiled-model cache when the last backend is freed.
+// Cached blobs imported in this process, keyed by fingerprint, so a pair or window switch reuses them. Self-contained
+// models compiled in this process are kept here too. Cleared with the shared compiled-model cache when the last
+// backend is freed.
 static std::mutex g_imported_blobs_mutex;
 static std::unordered_map<uint64_t, ov::CompiledModel> g_imported_blobs;
 
@@ -1938,9 +1939,21 @@ static void build_static_model(const static_build_args & a,
     }
 
     bool imported = false;
+    // A self-contained blob embeds its weights bank, and NPUW cannot load a blob into a bank that already holds
+    // weights. Pairs that differ only in the prefill model share the decode model and its bank, so build each model
+    // once per process.
+    const bool keep_in_process = a.self_contained && !a.weightless_bank && model_fp != 0;
+    if (keep_in_process) {
+        std::lock_guard<std::mutex> lock(g_imported_blobs_mutex);
+        auto it = g_imported_blobs.find(model_fp);
+        if (it != g_imported_blobs.end()) {
+            compiled_model = it->second;
+            imported = true;
+        }
+    }
     // A weightless-bank blob is only valid with the weights file it was exported with, which is rewritten whenever
     // the blob is rebuilt, so never import a leftover blob here.
-    if (!model_cache_dir.empty() && model_fp != 0 && !a.weightless_bank) {
+    if (!imported && !model_cache_dir.empty() && model_fp != 0 && !a.weightless_bank) {
         std::ifstream blob_in(blob_path, std::ios::binary);
         std::vector<std::string> cached_inputs, cached_outputs;
         if (blob_in.is_open() &&
@@ -1972,6 +1985,10 @@ static void build_static_model(const static_build_args & a,
             compile_config[ov::enable_weightless.name()] = a.weightless_bank;
         }
         compiled_model = core.compile_model(model, device, compile_config);
+    }
+    if (keep_in_process) {
+        std::lock_guard<std::mutex> lock(g_imported_blobs_mutex);
+        g_imported_blobs.emplace(model_fp, compiled_model);
     }
     infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
     local_compile_end_time = ggml_time_us();
