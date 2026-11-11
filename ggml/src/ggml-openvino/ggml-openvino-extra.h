@@ -103,7 +103,7 @@ std::string ggml_openvino_get_device_description(const std::string & device_name
 // default_value is returned when the var is unset or empty.
 //
 // Use ggml_openvino_getenv_int() for boolean toggles and integer settings.
-// It returns std::atoi(value) when set, otherwise default_value. For
+// It returns the value when it is a whole integer, otherwise default_value. For
 // boolean use, `if (ggml_openvino_getenv_int(name))` is true iff the value
 // is a non-zero integer (so "0" disables, "1" enables).
 const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
