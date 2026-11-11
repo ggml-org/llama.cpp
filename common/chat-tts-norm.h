@@ -12,7 +12,7 @@
 // implementation and the python reference (scripts/chat_tts_norm.py) give the same result for every input
 //
 // two functions are exposed to task templates (e.g. "tts") via common_chat_tts_norm_add_builtins():
-//   tts_norm_scan(text, rules)        -> list of segments {rule, text, groups, <named groups>...}
+//   tts_norm_scan(text, rules)        -> list of segments {rule, text, groups}
 //   tts_norm_sub(text, pattern, repl) -> string
 
 namespace jinja {
@@ -34,12 +34,10 @@ public:
     bool match_at(const std::vector<uint32_t> & cpts, size_t pos, size_t & end, std::vector<std::pair<int64_t, int64_t>> & groups) const;
 
     size_t n_groups() const;
-    // name of each capture group, in order; empty string for unnamed groups
-    const std::vector<std::string> & group_names() const;
 
 private:
     std::unique_ptr<tts_norm_pattern_node> root;
-    std::vector<std::string> names;
+    size_t n_caps = 0;
     bool icase = false;
 };
 
@@ -56,7 +54,7 @@ struct common_tts_norm_segment {
 std::vector<common_tts_norm_segment> common_tts_norm_scan(const std::string & text, const std::vector<const common_tts_norm_pattern *> & rules);
 
 // replace every non-overlapping match of pattern with repl
-// repl references: %0 (whole match), %1..%9 (numbered groups), %<name> (named group), %% (literal percent)
+// repl references: %0 (whole match), %1..%9 (groups), %% (literal percent)
 std::string common_tts_norm_sub(const std::string & text, const common_tts_norm_pattern & pattern, const std::string & repl);
 
 // add tts_norm_scan() and tts_norm_sub() to the context of a task template

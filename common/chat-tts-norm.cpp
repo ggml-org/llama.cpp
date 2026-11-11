@@ -200,23 +200,6 @@ static bool tts_norm_is_zero_width(tts_norm_op op) {
         || op == tts_norm_op::LOOKAHEAD || op == tts_norm_op::LOOKBEHIND;
 }
 
-// names that cannot be used for named groups, as they would collide with segment keys or dict methods
-static bool tts_norm_is_reserved_name(const std::string & name) {
-    static const char * reserved[] = {
-        "rule", "text", "groups",
-        // python dict methods
-        "get", "items", "keys", "values", "pop", "popitem", "update", "copy", "clear", "setdefault", "fromkeys",
-        // jinja object builtins
-        "default", "list", "tojson", "string", "length", "dictsort", "join",
-    };
-    for (const char * r : reserved) {
-        if (name == r) {
-            return true;
-        }
-    }
-    return false;
-}
-
 //
 // parser
 //
@@ -224,9 +207,9 @@ static bool tts_norm_is_reserved_name(const std::string & name) {
 struct tts_norm_parser {
     std::vector<uint32_t> s;
     size_t p = 0;
-    std::vector<std::string> & names;
+    size_t & n_caps;
 
-    tts_norm_parser(std::vector<uint32_t> src, std::vector<std::string> & names) : s(std::move(src)), names(names) {}
+    tts_norm_parser(std::vector<uint32_t> src, size_t & n_caps) : s(std::move(src)), n_caps(n_caps) {}
 
     [[noreturn]] void fail(const std::string & msg) const {
         throw std::runtime_error("invalid TTS norm pattern: " + msg + " at position " + std::to_string(p));
@@ -314,30 +297,6 @@ struct tts_norm_parser {
         }
     }
 
-    std::string parse_name() {
-        std::string name;
-        while (!eof() && peek() != '>') {
-            const uint32_t c = peek();
-            const bool ok = c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (!name.empty() && c >= '0' && c <= '9');
-            if (!ok) {
-                fail("invalid character in group name");
-            }
-            name += static_cast<char>(c);
-            p++;
-        }
-        expect('>', "'>' to close group name");
-        if (name.empty()) {
-            fail("empty group name");
-        }
-        if (tts_norm_is_reserved_name(name)) {
-            fail("group name '" + name + "' is reserved");
-        }
-        if (std::find(names.begin(), names.end(), name) != names.end()) {
-            fail("duplicate group name '" + name + "'");
-        }
-        return name;
-    }
-
     tts_norm_pattern_node parse_group() {
         // '(' already consumed
         tts_norm_pattern_node node;
@@ -373,19 +332,13 @@ struct tts_norm_parser {
                 node.alts.push_back(tts_norm_seq{});
                 node.alts[0].push_back(std::move(item));
                 return node;
-            } else if (c == '<') {
-                p++;
-                std::string name = parse_name();
-                node.capture = static_cast<int>(names.size());
-                names.push_back(name);
             } else if (c == 'i') {
                 fail("(?i) is only allowed at the start of the pattern");
             } else {
                 fail("unknown group type");
             }
         } else {
-            node.capture = static_cast<int>(names.size());
-            names.push_back("");
+            node.capture = static_cast<int>(n_caps++);
         }
         node.alts = parse_alts();
         expect(')', "')' to close group");
@@ -678,7 +631,7 @@ common_tts_norm_pattern::common_tts_norm_pattern(const std::string & src) {
     std::vector<size_t> offs;
     tts_norm_decode_utf8(src, cpts, offs);
 
-    tts_norm_parser parser(std::move(cpts), names);
+    tts_norm_parser parser(std::move(cpts), n_caps);
     static const std::vector<uint32_t> icase_prefix = {'(', '?', 'i', ')'};
     if (parser.s.size() >= 4 && std::equal(icase_prefix.begin(), icase_prefix.end(), parser.s.begin())) {
         icase = true;
@@ -698,7 +651,7 @@ common_tts_norm_pattern::common_tts_norm_pattern(common_tts_norm_pattern &&) noe
 common_tts_norm_pattern & common_tts_norm_pattern::operator=(common_tts_norm_pattern &&) noexcept = default;
 
 bool common_tts_norm_pattern::match_at(const std::vector<uint32_t> & cpts, size_t pos, size_t & end, std::vector<std::pair<int64_t, int64_t>> & groups) const {
-    tts_norm_matcher m{cpts, icase, std::vector<std::pair<int64_t, int64_t>>(names.size(), {-1, -1})};
+    tts_norm_matcher m{cpts, icase, std::vector<std::pair<int64_t, int64_t>>(n_caps, {-1, -1})};
     size_t e = pos;
     if (!m.match_alts(root->alts, pos, e)) {
         return false;
@@ -709,11 +662,7 @@ bool common_tts_norm_pattern::match_at(const std::vector<uint32_t> & cpts, size_
 }
 
 size_t common_tts_norm_pattern::n_groups() const {
-    return names.size();
-}
-
-const std::vector<std::string> & common_tts_norm_pattern::group_names() const {
-    return names;
+    return n_caps;
 }
 
 //
@@ -781,7 +730,6 @@ static std::vector<tts_norm_repl_piece> tts_norm_parse_repl(const std::string & 
             lit.clear();
         }
     };
-    const auto & names = pattern.group_names();
     for (size_t i = 0; i < repl.size(); i++) {
         if (repl[i] != '%') {
             lit += repl[i];
@@ -800,19 +748,6 @@ static std::vector<tts_norm_repl_piece> tts_norm_parse_repl(const std::string & 
             }
             flush();
             pieces.push_back({"", g});
-        } else if (c == '<') {
-            const size_t close = repl.find('>', i);
-            if (close == std::string::npos) {
-                throw std::runtime_error("invalid TTS norm replacement: unterminated group name");
-            }
-            const std::string name = repl.substr(i + 1, close - i - 1);
-            const auto it = name.empty() ? names.end() : std::find(names.begin(), names.end(), name);
-            if (it == names.end()) {
-                throw std::runtime_error("invalid TTS norm replacement: group '" + name + "' does not exist");
-            }
-            flush();
-            pieces.push_back({"", static_cast<int>(it - names.begin()) + 1});
-            i = close;
         } else {
             throw std::runtime_error("invalid TTS norm replacement: unknown escape '%" + std::string(1, c) + "'");
         }
@@ -899,29 +834,15 @@ static value tts_norm_builtin_scan(const func_args & args) {
 
     auto out = mk_val<value_array>();
     for (const auto & seg : common_tts_norm_scan(text, ptrs)) {
-        auto obj = mk_val<value_object>();
         auto groups = mk_val<value_array>();
-        if (seg.rule < 0) {
-            obj->insert("rule", mk_val<value_none>());
-            obj->insert("text", mk_str(seg.start, seg.end));
-            obj->insert("groups", groups);
-        } else {
-            obj->insert("rule", mk_val<value_string>(rule_srcs[seg.rule].first));
-            obj->insert("text", mk_str(seg.start, seg.end));
-            const auto & names = patterns[seg.rule].group_names();
-            std::vector<value> group_vals;
-            for (const auto & g : seg.groups) {
-                // groups that did not participate are empty strings, so they render as nothing and are falsy
-                group_vals.push_back(g.first == std::string::npos ? mk_str(0, 0) : mk_str(g.first, g.second));
-                groups->push_back(group_vals.back());
-            }
-            obj->insert("groups", groups);
-            for (size_t k = 0; k < names.size(); k++) {
-                if (!names[k].empty()) {
-                    obj->insert(names[k], group_vals[k]);
-                }
-            }
+        for (const auto & g : seg.groups) {
+            // groups that did not participate are empty strings, so they render as nothing and are falsy
+            groups->push_back(g.first == std::string::npos ? mk_str(0, 0) : mk_str(g.first, g.second));
         }
+        auto obj = mk_val<value_object>();
+        obj->insert("rule", seg.rule < 0 ? value(mk_val<value_none>()) : value(mk_val<value_string>(rule_srcs[seg.rule].first)));
+        obj->insert("text", mk_str(seg.start, seg.end));
+        obj->insert("groups", groups);
         out->push_back(obj);
     }
     return out;

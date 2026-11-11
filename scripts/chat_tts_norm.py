@@ -46,14 +46,6 @@ INF = 1 << 31
 MAX_REPEAT = 1000
 MAX_PATTERN_LEN = 4096
 
-RESERVED_NAMES = {
-    "rule", "text", "groups",
-    # python dict methods
-    "get", "items", "keys", "values", "pop", "popitem", "update", "copy", "clear", "setdefault", "fromkeys",
-    # jinja object builtins
-    "default", "list", "tojson", "string", "length", "dictsort", "join",
-}
-
 
 def _in(ranges: list[tuple[int, int]], c: int) -> bool:
     return any(lo <= c <= hi for lo, hi in ranges)
@@ -140,10 +132,10 @@ class PatternError(ValueError):
 
 
 class _Parser:
-    def __init__(self, s: list[int], names: list[str]):
+    def __init__(self, s: list[int]):
         self.s = s
         self.p = 0
-        self.names = names
+        self.n_caps = 0
 
     def fail(self, msg: str):
         raise PatternError(f"invalid TTS norm pattern: {msg} at position {self.p}")
@@ -212,24 +204,6 @@ class _Parser:
         if not self.eof() and chr(self.s[self.p]) in "?*+{":
             self.fail("multiple quantifiers")
 
-    def parse_name(self) -> str:
-        name = ""
-        while not self.eof() and self.s[self.p] != ord(">"):
-            c = self.s[self.p]
-            ok = c == ord("_") or ord("a") <= c <= ord("z") or ord("A") <= c <= ord("Z") or (name != "" and ord("0") <= c <= ord("9"))
-            if not ok:
-                self.fail("invalid character in group name")
-            name += chr(c)
-            self.p += 1
-        self.expect(">", "'>' to close group name")
-        if name == "":
-            self.fail("empty group name")
-        if name in RESERVED_NAMES:
-            self.fail(f"group name '{name}' is reserved")
-        if name in self.names:
-            self.fail(f"duplicate group name '{name}'")
-        return name
-
     def parse_group(self) -> _Node:
         node = _Node(op=GROUP)
         if self.peek_is("?"):
@@ -257,18 +231,13 @@ class _Parser:
                 self.p += 1
                 node.alts = [[_Item(atom)]]
                 return node
-            elif c == "<":
-                self.p += 1
-                name = self.parse_name()
-                node.capture = len(self.names)
-                self.names.append(name)
             elif c == "i":
                 self.fail("(?i) is only allowed at the start of the pattern")
             else:
                 self.fail("unknown group type")
         else:
-            node.capture = len(self.names)
-            self.names.append("")
+            node.capture = self.n_caps
+            self.n_caps += 1
         node.alts = self.parse_alts()
         self.expect(")", "')' to close group")
         return node
@@ -456,18 +425,18 @@ class Pattern:
     def __init__(self, src: str):
         if len(src.encode("utf-8")) > MAX_PATTERN_LEN:
             raise PatternError(f"invalid TTS norm pattern: pattern is longer than {MAX_PATTERN_LEN} bytes")
-        self.names: list[str] = []
         self.icase = False
-        parser = _Parser([ord(c) for c in src], self.names)
+        parser = _Parser([ord(c) for c in src])
         if src.startswith("(?i)"):
             self.icase = True
             parser.p = 4
         self.root = _Node(op=GROUP, alts=parser.parse_alts())
         if not parser.eof():
             parser.fail("unbalanced ')'")
+        self.n_caps = parser.n_caps
 
     def match_at(self, t: list[int], pos: int) -> tuple[int, list[tuple[int, int]]] | None:
-        m = _Matcher(t, self.icase, len(self.names))
+        m = _Matcher(t, self.icase, self.n_caps)
         end = m.match_alts(self.root.alts, pos)
         if end < 0:
             return None
@@ -529,17 +498,9 @@ def tts_norm_scan(text: str, rules: Any) -> list[dict[str, Any]]:
     patterns = [Pattern(src) for _, src in rule_srcs]
     out: list[dict[str, Any]] = []
     for r, start, end, groups in scan_segments(text, patterns):
-        if r < 0:
-            out.append({"rule": None, "text": text[start:end], "groups": []})
-            continue
-        seg: dict[str, Any] = {"rule": rule_srcs[r][0], "text": text[start:end]}
         # groups that did not participate are empty strings, so they render as nothing and are falsy
         vals = ["" if gs < 0 else text[gs:ge] for gs, ge in groups]
-        seg["groups"] = vals
-        for name, val in zip(patterns[r].names, vals):
-            if name:
-                seg[name] = val
-        out.append(seg)
+        out.append({"rule": rule_srcs[r][0] if r >= 0 else None, "text": text[start:end], "groups": vals})
     return out
 
 
@@ -561,24 +522,12 @@ def _parse_repl(repl: str, pattern: Pattern) -> list[str | int]:
             lit += "%"
         elif "0" <= c <= "9":
             g = ord(c) - ord("0")
-            if g > len(pattern.names):
+            if g > pattern.n_caps:
                 raise PatternError(f"invalid TTS norm replacement: group %{c} does not exist")
             if lit:
                 pieces.append(lit)
                 lit = ""
             pieces.append(g)
-        elif c == "<":
-            close = repl.find(">", i)
-            if close < 0:
-                raise PatternError("invalid TTS norm replacement: unterminated group name")
-            name = repl[i + 1:close]
-            if name == "" or name not in pattern.names:
-                raise PatternError(f"invalid TTS norm replacement: group '{name}' does not exist")
-            if lit:
-                pieces.append(lit)
-                lit = ""
-            pieces.append(pattern.names.index(name) + 1)
-            i = close
         else:
             raise PatternError(f"invalid TTS norm replacement: unknown escape '%{c}'")
         i += 1

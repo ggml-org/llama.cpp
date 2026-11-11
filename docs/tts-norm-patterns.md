@@ -16,16 +16,16 @@ Implementations:
 
 ```jinja
 {%- for s in tts_norm_scan(text, [
-    ['money',   '%$(?<int>%d+)(?:%.(?<cents>%d%d))?'],
-    ['percent', '(?<n>%d+)%%'],
-    ['time',    '(?<h>%d%d?):(?<m>%d%d)(?!%d)'],
-    ['neg',     '(?<!%w)-(?<n>%d+)'],
+    ['money',   '%$(%d+)(?:%.(%d%d))?'],
+    ['percent', '(%d+)%%'],
+    ['time',    '(%d%d?):(%d%d)(?!%d)'],
+    ['neg',     '(?<!%w)-(%d+)'],
     ['number',  '%d+'],
 ]) -%}
-  {%- if   s.rule == 'money'   -%}{{ num(s.int) }} dollars{{ ' and ' ~ num(s.cents) ~ ' cents' if s.cents else '' }}
-  {%- elif s.rule == 'percent' -%}{{ num(s.n) }} percent
-  {%- elif s.rule == 'time'    -%}{{ num(s.h) }} {{ num(s.m) }}
-  {%- elif s.rule == 'neg'     -%}minus {{ num(s.n) }}
+  {%- if   s.rule == 'money'   -%}{%- set whole, cents = s.groups -%}{{ num(whole) }} dollars{{ ' and ' ~ num(cents) ~ ' cents' if cents else '' }}
+  {%- elif s.rule == 'percent' -%}{{ num(s.groups[0]) }} percent
+  {%- elif s.rule == 'time'    -%}{%- set h, m = s.groups -%}{{ num(h) }} {{ num(m) }}
+  {%- elif s.rule == 'neg'     -%}minus {{ num(s.groups[0]) }}
   {%- elif s.rule == 'number'  -%}{{ num(s.text) }}
   {%- else -%}{{ s.text }}
   {%- endif -%}
@@ -52,7 +52,8 @@ The result is a list of segments covering the whole text, in order. Consecutive 
 | `rule` | rule name | `none` |
 | `text` | matched text | unmatched text |
 | `groups` | list of capture groups, in order of their `(` | `[]` |
-| `<name>` | value of each named group | - |
+
+There are no named groups, unpack `groups` instead: `{% set whole, cents = s.groups %}`.
 
 A group that did not participate in the match (e.g. inside a `?` that matched nothing) is an empty string, so it renders as nothing and is falsy.
 
@@ -63,8 +64,7 @@ Replaces every match of `pattern`, with the same scanning rules as `tts_norm_sca
 | reference | value |
 |---|---|
 | `%0` | whole match |
-| `%1` .. `%9` | numbered group |
-| `%<name>` | named group |
+| `%1` .. `%9` | group |
 | `%%` | a literal `%` |
 
 Any other `%` sequence in `repl`, or a reference to a group that does not exist, is an error.
@@ -82,7 +82,6 @@ Patterns operate on Unicode codepoints. Invalid UTF-8 bytes (C++ only) are seen 
 | `[...]` | set: literal codepoints, ranges `a-z`, classes `%d`; `[^...]` is the negation |
 | `(...)` | capture group |
 | `(?:...)` | group without capture |
-| `(?<name>...)` | named capture group, also numbered |
 | `a\|b` | ordered alternation |
 | `?` `*` `+` `{m}` `{m,}` `{m,n}` | quantifiers, greedy and possessive; `m`, `n` up to 1000 |
 | `^` `$` | start / end of the whole text |
@@ -123,4 +122,4 @@ Classes may overlap (e.g. U+0085 is both `%s` and `%c`). `%a` intentionally incl
 
 ## Errors
 
-Invalid patterns are rejected when the function is called, with a message and a position, for example: unbalanced parentheses, a quantifier with nothing to repeat, multiple quantifiers (`a+?`), repeating a zero-width assertion (`%b+`), unknown escapes (`%q`), unescaped `]` or `}`, an empty set, a lookbehind wider than one codepoint, `(?i)` not at the start, and duplicate or reserved group names. Reserved names are `rule`, `text`, `groups`, and the names of dict methods (`get`, `items`, `keys`, `values`, `pop`, `popitem`, `update`, `copy`, `clear`, `setdefault`, `fromkeys`, `default`, `list`, `tojson`, `string`, `length`, `dictsort`, `join`), which would be ambiguous in `s.<name>`.
+Invalid patterns are rejected when the function is called, with a message and a position, for example: unbalanced parentheses, a quantifier with nothing to repeat, multiple quantifiers (`a+?`), repeating a zero-width assertion (`%b+`), unknown escapes (`%q`), unescaped `]` or `}`, an empty set, a lookbehind wider than one codepoint and `(?i)` not at the start.

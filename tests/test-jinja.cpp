@@ -2729,9 +2729,9 @@ static void test_tts_norm_patterns(testing & t) {
         {{"text", "abc 123, x9"}},
         "[word:abc][-: ][num:123][-:, ][word:x][num:9]", true);
 
-    test_template(t, "tts_norm_scan named groups, optional group that did not match is empty",
-        "{%- for s in tts_norm_scan(text, [['money', '%$(?<int>%d+)(?:%.(?<cents>%d%d))?']]) -%}"
-        "{%- if s.rule -%}{{ s.int }}|{{ s.cents }}|{{ s.groups | length }};{%- endif -%}"
+    test_template(t, "tts_norm_scan groups, optional group that did not match is empty",
+        "{%- for s in tts_norm_scan(text, [['money', '%$(%d+)(?:%.(%d%d))?']]) -%}"
+        "{%- if s.rule -%}{%- set whole, cents = s.groups -%}{{ whole }}|{{ cents }}|{{ s.groups | length }};{%- endif -%}"
         "{%- endfor -%}",
         {{"text", "$3.50 and $7"}},
         "3|50|2;7||2;", true);
@@ -2770,8 +2770,8 @@ static void test_tts_norm_patterns(testing & t) {
         {{"text", "at 10:30 or 1:234"}},
         "at 10h30 or 1:234", true);
 
-    test_template(t, "tts_norm_sub references: numbered, named, whole match and literal percent",
-        "{{ tts_norm_sub(text, '(?<n>%d+)%%', '%<n> percent (%0) 100%%') }}",
+    test_template(t, "tts_norm_sub references: group, whole match and literal percent",
+        "{{ tts_norm_sub(text, '(%d+)%%', '%1 percent (%0) 100%%') }}",
         {{"text", "up 50%"}},
         "up 50 percent (50%) 100%", true);
 
@@ -2801,16 +2801,16 @@ static void test_tts_norm_patterns(testing & t) {
         "{%- set tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'] -%}\n"
         "{%- macro num(n) -%}{{ ones[n] if n < 20 else tens[(n / 10) | int] ~ ('-' ~ ones[n % 10] if n % 10 else '') }}{%- endmacro -%}\n"
         "{%- for s in tts_norm_scan(text, [\n"
-        "    ['money',   '%$(?<int>%d+)(?:%.(?<cents>%d%d))?'],\n"
-        "    ['percent', '(?<n>%d+)%%'],\n"
-        "    ['time',    '(?<h>%d%d?):(?<m>%d%d)(?!%d)'],\n"
-        "    ['neg',     '(?<!%w)-(?<n>%d+)'],\n"
+        "    ['money',   '%$(%d+)(?:%.(%d%d))?'],\n"
+        "    ['percent', '(%d+)%%'],\n"
+        "    ['time',    '(%d%d?):(%d%d)(?!%d)'],\n"
+        "    ['neg',     '(?<!%w)-(%d+)'],\n"
         "    ['number',  '%d+'],\n"
         "]) -%}\n"
-        "{%- if s.rule == 'money' -%}{{ num(s.int | int) }} dollars{{ ' and ' ~ num(s.cents | int) ~ ' cents' if s.cents else '' }}\n"
-        "{%- elif s.rule == 'percent' -%}{{ num(s.n | int) }} percent\n"
-        "{%- elif s.rule == 'time' -%}{{ num(s.h | int) }} {{ num(s.m | int) }}\n"
-        "{%- elif s.rule == 'neg' -%}minus {{ num(s.n | int) }}\n"
+        "{%- if s.rule == 'money' -%}{%- set whole, cents = s.groups -%}{{ num(whole | int) }} dollars{{ ' and ' ~ num(cents | int) ~ ' cents' if cents else '' }}\n"
+        "{%- elif s.rule == 'percent' -%}{{ num(s.groups[0] | int) }} percent\n"
+        "{%- elif s.rule == 'time' -%}{%- set h, m = s.groups -%}{{ num(h | int) }} {{ num(m | int) }}\n"
+        "{%- elif s.rule == 'neg' -%}minus {{ num(s.groups[0] | int) }}\n"
         "{%- elif s.rule == 'number' -%}{{ num(s.text | int) }}\n"
         "{%- else -%}{{ s.text }}\n"
         "{%- endif -%}\n"
@@ -2827,7 +2827,7 @@ static void test_tts_norm_patterns(testing & t) {
         test_template_error(t, "error: repeated assertion",           "{{ tts_norm_scan('x', '%b+') }}",       "zero-width assertion cannot be repeated", true);
         test_template_error(t, "error: unknown class",                "{{ tts_norm_scan('x', '%q') }}",        "unknown escape '%q'", true);
         test_template_error(t, "error: unescaped bracket",            "{{ tts_norm_scan('x', 'a]') }}",        "unescaped ']'", true);
-        test_template_error(t, "error: reserved group name",          "{{ tts_norm_scan('x', '(?<text>a)') }}", "group name 'text' is reserved", true);
+        test_template_error(t, "error: no named groups",              "{{ tts_norm_scan('x', '(?<n>a)') }}",   "unknown group type", true);
         test_template_error(t, "error: wide lookbehind",              "{{ tts_norm_scan('x', '(?<=ab)c') }}",  "lookbehind must contain exactly one codepoint matcher", true);
         test_template_error(t, "error: missing group in replacement", "{{ tts_norm_sub('x', '(a)', '%2') }}",  "group %2 does not exist", true);
         test_template_error(t, "error: bad rules",                    "{{ tts_norm_scan('x', 1) }}",           "rules must be a string, a dict or a list", true);
