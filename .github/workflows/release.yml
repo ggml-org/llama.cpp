@@ -1375,7 +1375,6 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_avx2.3.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_tbb_thread.3.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_intel_thread.3.dll" ./build/bin
-          cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/mkl_intel_thread.3.dll" ./build/bin
           cp "${{ env.ONEAPI_ROOT }}/mkl/latest/bin/libimalloc.dll" ./build/bin
 
           cp "${{ env.ONEAPI_ROOT }}/compiler/latest/bin/ur_adapter_level_zero.dll" ./build/bin
@@ -1404,18 +1403,18 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
 
           echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
+          7z a -snl llama-bin-win-sycl-${{ matrix.build }}-x64.zip ./build/bin/*
 
       - name: Upload the release package
         uses: actions/upload-artifact@v7
         with:
-          path: llama-bin-win-sycl-x64.zip
+          path: llama-bin-win-sycl-${{ matrix.build }}-x64.zip
           archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2022-x64-sycl
+          key: release-windows-2022-x64-sycl-${{ matrix.build }}
 
   ubuntu-24-sycl:
     needs: [check-release, ui-build]
