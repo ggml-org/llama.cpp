@@ -316,7 +316,7 @@ int ggml_openvino_getenv_int(const char * var, int default_value) {
 }
 
 bool ggml_openvino_gdn_prescale_enabled() {
-    return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_Q_SCALE") > 0;
+    return ggml_openvino_getenv_int("GGML_OPENVINO_GDN_Q_SCALE", 1) > 0;
 }
 
 bool ggml_openvino_gdn_native_state_enabled() {

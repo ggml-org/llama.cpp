@@ -375,10 +375,17 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Topology: node count + each node's op and name (cheap, and distinguishes
     // graphs that share weights but differ structurally).
     h = fnv1a_u64(h, static_cast<uint64_t>(cgraph->n_nodes));
+    bool has_gdn = false;
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         const ggml_tensor * node = cgraph->nodes[i];
         h = fnv1a_u64(h, static_cast<uint64_t>(node->op));
         h = fnv1a(h, node->name, strlen(node->name));
+        has_gdn = has_gdn || node->op == GGML_OP_GATED_DELTA_NET;
+    }
+    if (has_gdn && ggml_openvino_is_npu()) {
+        // The GDN q pre-scale factor is a constant in the graph (0: no pre-scale).
+        const float q_scale = ggml_openvino_gdn_prescale_enabled() ? ggml_openvino_gdn_q_scale() : 0.0f;
+        h = fnv1a(h, &q_scale, sizeof(q_scale));
     }
 
     // Weights: the model identity.

@@ -726,8 +726,9 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             if (is_same_shape(node->src[0]->src[0], node->src[0])) {
                 op_case = 1;
             } else if (is_direct_gdn_view(node->src[0])) {
-                // GDN attention is routed directly to this VIEW by get_output_names().
-                op_case = 3;
+                // GDN attention is routed directly to this VIEW by get_output_names(). 3: the GDN q input may be
+                // pre-scaled, and the norm then scales its eps to match; 4: it is not.
+                op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 4;
             } else if (node->src[0]->src[0]->op == GGML_OP_GATED_DELTA_NET) {
                 op_case = is_gdn_out_prescaled(node->src[0]->src[0]) ? 3 : 2;
             }

@@ -30,7 +30,7 @@ OutputVector translate_rms_norm(const NodeContext & context) {
     auto op_case = context.get_op_case();
 
     ov::Output<ov::Node> input_node;
-    if (op_case == 3) {
+    if (op_case == 3 || op_case == 4) {
         input_node = context.get_input(0);
     } else if (op_case == 1) {
         input_node = process_view_input_new(context, 0);
