@@ -998,8 +998,10 @@ llama_moe_cache_lookup llama_moe_cache::build_lookup(const llm_graph_context & g
             return {};
         }
         // the device of the cache must compute the matmul, else the scheduler copies the cache to another backend
-        ggml_tensor * b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, experts->ne[0], w == layer.down_exps ? selected_experts->ne[0] : 1, selected_experts->ne[1]);
-        if (!ggml_backend_supports_op(pimpl->backend(il), ggml_mul_mat_id(ctx0, experts, b, selected_experts))) {
+        ggml_tensor * w_s = g.get_weight_scale(w) ? pimpl->get_scales(w, LLAMA_MOE_CACHE_SCALE_WEIGHT) : nullptr;
+        ggml_tensor * x_s = g.get_input_scale(w)  ? pimpl->get_scales(w, LLAMA_MOE_CACHE_SCALE_INPUT)  : nullptr;
+        ggml_tensor * b   = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, experts->ne[0], w == layer.down_exps ? selected_experts->ne[0] : 1, selected_experts->ne[1]);
+        if (!ggml_backend_supports_op(pimpl->backend(il), ggml_mul_mat_id_ext(ctx0, experts, b, selected_experts, w_s, x_s))) {
             return {};
         }
     }
