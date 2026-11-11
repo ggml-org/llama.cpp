@@ -797,6 +797,7 @@ struct ggml_backend_opencl_context {
     ggml_opencl_sigmoid_kernels sigmoid = {};
     ggml_opencl_tri_kernels tri = {};
     ggml_opencl_fill_kernels fill = {};
+    ggml_opencl_arange_kernels arange = {};
     ggml_opencl_clamp_kernels clamp = {};
     ggml_opencl_glu_kernels glu = {};
     ggml_opencl_norm_kernels norm = {};

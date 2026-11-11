@@ -30,6 +30,7 @@ ggml_add_backend_library(${TARGET_NAME}
                          ops/sigmoid.cpp
                          ops/tri.cpp
                          ops/fill.cpp
+                         ops/arange.cpp
                          ops/clamp.cpp
                          ops/norm.cpp
                          ops/rms_norm.cpp
