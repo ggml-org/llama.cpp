@@ -46,6 +46,8 @@ void llama_model_ouro::load_arch_hparams(llama_model_loader & ml) {
             }
         }
         hparams.n_layer_all = (uint32_t) ((size_t) n_layer_phys * (size_t) n_loops);
+        // -ngl counts the physical layers, the loops share their weights
+        hparams.n_layer_shared = (uint32_t) n_layer_phys;
     }
 
     switch (n_layer_phys) {
