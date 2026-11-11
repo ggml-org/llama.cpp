@@ -9592,8 +9592,9 @@ struct test_solve_tri : public test_case {
     const ggml_type              type;
     const std::array<int64_t, 4> ne_lhs;
     const std::array<int64_t, 4> ne_rhs;
+    const bool                   nan_out; // fill the output with NaN before the op runs
 
-    std::string vars() override { return VARS_TO_STR3(type, ne_lhs, ne_rhs); }
+    std::string vars() override { return VARS_TO_STR4(type, ne_lhs, ne_rhs, nan_out); }
 
     uint64_t op_flops(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -9606,9 +9607,10 @@ struct test_solve_tri : public test_case {
 
     test_solve_tri(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_lhs = { 10, 10, 4, 3 },
-            std::array<int64_t, 4> ne_rhs = { 3, 10, 4, 3 }
+            std::array<int64_t, 4> ne_rhs = { 3, 10, 4, 3 },
+            bool nan_out = false
         )
-        : type(type), ne_lhs(ne_lhs), ne_rhs(ne_rhs) {}
+        : type(type), ne_lhs(ne_lhs), ne_rhs(ne_rhs), nan_out(nan_out) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne_lhs[0], ne_lhs[1], ne_lhs[2], ne_lhs[3]);
@@ -9630,6 +9632,9 @@ struct test_solve_tri : public test_case {
             if (strcmp(t->name, "a") == 0) {
                 // note: avoid zeros in the diagonal
                 init_tensor_tril(t, 0.1, 1.0f);
+            } else if (nan_out && strcmp(t->name, "out") == 0) {
+                std::vector<float> data(ggml_nelements(t), NAN);
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
             } else {
                 init_tensor_uniform(t, -1.0f, 1.0f);
             }
@@ -12854,6 +12859,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 128, 128, 4, 1 }, { 32, 128, 4, 1 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 200, 64, 4, 4 }));
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 64, 64, 4, 4 }, { 384, 64, 4, 4 }));
+    // n % 32 != 0, output prefilled with NaN
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 34, 34, 1, 1 }, { 256, 34, 1, 1 }, true));
+    test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 79, 79, 5, 3 }, { 417, 79, 5, 3 }, true));
 
     for (int tfrm : {0, 1, 2}) {
         for (bool circular : {false, true}) {
