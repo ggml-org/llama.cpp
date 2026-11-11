@@ -481,6 +481,7 @@ struct comparison_chain_expression : public expression {
 
     comparison_chain_expression(statements && operands, std::vector<token> && ops)
         : operands(std::move(operands)), ops(std::move(ops)) {
+        assert(this->operands.size() == this->ops.size() + 1);
         for (const auto & operand : this->operands) chk_type<expression>(operand);
     }
     std::string type() const override { return "ComparisonChainExpression"; }

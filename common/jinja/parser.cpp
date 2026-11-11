@@ -178,7 +178,7 @@ private:
             // bool has_caller_args = false;
             if (is(token::open_paren)) {
                 // Optional caller arguments, e.g. {% call(user) dump_users(...) %}
-                caller_args = parse_args();
+                caller_args = parse_args(false);
                 // has_caller_args = true;
             }
             auto callee = parse_primary_expression();
@@ -283,7 +283,7 @@ private:
 
     statement_ptr parse_macro_statement(size_t start_pos) {
         auto name = parse_primary_expression();
-        auto args = parse_args();
+        auto args = parse_args(false);
         expect(token::close_statement, "Expected %}");
         statements body;
         // Keep going until we hit {% endmacro
@@ -510,7 +510,7 @@ private:
         return parse_call_expression(std::move(member)); // foo.x()()
     }
 
-    statements parse_args() {
+    statements parse_args(bool allow_spread = true) {
         // comma-separated arguments list
         expect(token::open_paren, "Expected (");
         statements args;
@@ -519,6 +519,9 @@ private:
             // unpacking: *expr or **expr
             const auto & t = peek();
             if (t.t == token::power_operator || (t.t == token::multiplicative_binary_operator && t.value == "*")) {
+                if (!allow_spread) {
+                    throw std::runtime_error("Unexpected token: " + t.value + " of type " + std::to_string(t.t));
+                }
                 size_t start_pos = current;
                 ++current; // consume * or **
                 bool is_kwargs = t.t == token::power_operator;
