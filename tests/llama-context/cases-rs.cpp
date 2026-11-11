@@ -487,6 +487,54 @@ struct case_shared_seq_reserve : ctx_test {
     }
 };
 
+// decode, clear the memory without wiping it and decode again: the first ubatch after the clear reads zeroed states, the
+// next ones read the states in place. Compared token by token against a fresh context.
+struct case_clear : ctx_test {
+    test_group group() const override { return TEST_GROUP_RS; }
+
+    const char * name() const override { return "clear"; }
+
+    const char * description() const override {
+        return "decoding after a memory clear matches a fresh context";
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        ctx_opts opts;
+        opts.n_ctx     = 64;
+        opts.n_batch   = 32;
+        opts.n_seq_max = 1;
+
+        llama_context_ptr ctx     = mr.ctx(opts);
+        llama_context_ptr ctx_ref = mr.ctx(opts);
+        if (!ctx || !ctx_ref) {
+            return case_result::fail();
+        }
+
+        CTX_REQUIRE(decode_gen(ctx.get(), n_vocab, 0, 0, 16), "the prompt decode failed");
+
+        llama_memory_clear(llama_get_memory(ctx.get()), false);
+
+        for (llama_pos pos = 0; pos < 4; ++pos) {
+            const llama_token tok = gen_token(n_vocab, 0, pos);
+
+            std::vector<float> logits;
+            std::vector<float> logits_ref;
+            CTX_REQUIRE(decode_one(ctx.get(), tok, pos) && decode_one(ctx_ref.get(), tok, pos) &&
+                        get_current_logits(ctx.get(), logits) && get_current_logits(ctx_ref.get(), logits_ref),
+                    "the replay decode failed at pos " + std::to_string(pos));
+
+            const logits_diff diff = compare_logits(logits.data(), logits_ref.data(), logits.size());
+            CTX_REQUIRE(diff.nmse() <= NMSE_THRESHOLD,
+                    "decoding after a clear differs from a fresh context at pos " + std::to_string(pos) +
+                    " (nmse " + std::to_string(diff.nmse()) + ")");
+        }
+
+        return case_result::pass();
+    }
+};
+
 std::vector<ctx_test_ptr> make_rs_cases() {
     std::vector<ctx_test_ptr> cases;
 
@@ -494,6 +542,7 @@ std::vector<ctx_test_ptr> make_rs_cases() {
     cases.push_back(std::make_unique<case_rollback_bound>());
     cases.push_back(std::make_unique<case_multi_seq_split_replay>());
     cases.push_back(std::make_unique<case_shared_seq_reserve>());
+    cases.push_back(std::make_unique<case_clear>());
 
     return cases;
 }
