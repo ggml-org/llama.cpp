@@ -618,6 +618,10 @@ llama_context::llama_context(
             moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share);
         }
 
+        if (getenv("LLAMA_MOE_STAGE") != nullptr && !model.no_alloc()) {
+            moe_stage = std::make_unique<llama_moe_stage>(model, backend_ptrs, moe_cache.get());
+        }
+
         sched_reserve();
 
         if (!cparams.flash_attn) {
@@ -3226,6 +3230,8 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         st.ids = ids;
     }
 
+    const bool staged = lctx->moe_stage && lctx->moe_stage->wait(backend, src);
+
     // group consecutive experts and copy them together
     for (int64_t first = 0; first < n_expert; ) {
         if (!st.used[first]) {
@@ -3237,10 +3243,13 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
             last++;
         }
 
-        // the experts in the MoE cache are copied from device memory, the others are uploaded
+        // the experts in the MoE stage and in the MoE cache are copied from device memory, the others are uploaded
         int64_t next = first;
-        for (int64_t e = first; e <= last && lctx->moe_cache; ) {
-            const int64_t n = lctx->moe_cache->copy_experts(backend, src, dst, e, last);
+        for (int64_t e = first; e <= last && (staged || lctx->moe_cache); ) {
+            int64_t n = staged ? lctx->moe_stage->copy_experts(backend, src, dst, e, last) : 0;
+            if (n == 0 && lctx->moe_cache) {
+                n = lctx->moe_cache->copy_experts(backend, src, dst, e, last);
+            }
             if (n == 0) {
                 e++;
                 continue;
@@ -3253,14 +3262,21 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         }
 
         // copy a bit extra to ensure there are no NaNs in the padding of the last expert, this is necessary for MMQ in the CUDA backend
-        const size_t offset  = next*expert_size;
-        const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
-        const size_t size    = (last + 1 - next)*expert_size + padding;
-        if (size > 0) {
+        // the copies from device memory include it
+        if (next <= last) {
+            const size_t offset  = next*expert_size;
+            const size_t padding = last < n_expert - 1 ? std::min<size_t>(expert_size, 512) : 0;
+            const size_t size    = (last + 1 - next)*expert_size + padding;
             ggml_backend_tensor_set_async(backend, dst, (const uint8_t *) src->data + offset, offset, size);
         }
 
         first = last + 1;
+    }
+
+    // a batch that uses most experts of this layer is expected to use most experts of the next one
+    // a staged expert that is not used costs its upload, a used expert that is not staged waits for the upload in progress
+    if (lctx->moe_stage && 4*std::count(st.used.begin(), st.used.end(), true) >= 3*n_expert) {
+        lctx->moe_stage->upload_next(backend, src);
     }
 
     return true;

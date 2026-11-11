@@ -38,6 +38,9 @@ public:
     // returns the number of experts copied, 0 if expert e is not in the cache
     int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
 
+    // true if expert e of w is in the cache
+    bool has_expert(const ggml_tensor * w, int64_t e) const;
+
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
 private:
@@ -46,3 +49,28 @@ private:
 };
 
 using llama_moe_cache_ptr = std::unique_ptr<llama_moe_cache>;
+
+// for large batches: uploads the host experts of the next MoE layer to a device buffer while the device computes the current layer
+// the upload runs on a second backend of the device, so it does not wait for the compute
+class llama_moe_stage {
+public:
+    // cache is optional, the experts in the cache are not staged
+    llama_moe_stage(const llama_model & model, const std::vector<ggml_backend_t> & backends, const llama_moe_cache * cache);
+    ~llama_moe_stage();
+
+    // make backend wait for the upload of the staged experts of w, returns false if w is not staged
+    bool wait(ggml_backend_t backend, const ggml_tensor * w);
+
+    // copy the staged experts of w, starting at expert e and up to expert last, to the copy dst of w
+    // returns the number of experts copied, 0 if expert e is not staged
+    int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last);
+
+    // start the upload of all experts of the next layer that are not in the cache, to the buffer that staged w
+    void upload_next(ggml_backend_t backend, const ggml_tensor * w);
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
+};
+
+using llama_moe_stage_ptr = std::unique_ptr<llama_moe_stage>;

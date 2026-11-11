@@ -309,6 +309,27 @@ static bool llama_moe_cache_same_layout(const std::vector<ggml_tensor *> & a, co
     return true;
 }
 
+// blocks after the last expert of a copy: MMQ in the CUDA backend reads past the experts that it uses, so these must not be NaN
+static int64_t llama_moe_cache_pad_blocks(const ggml_tensor * t) {
+    return (512 + ggml_type_size(t->type) - 1)/ggml_type_size(t->type);
+}
+
+// copy n experts from expert e_src of src to expert e_dst of dst on the device, and the padding if dst has more experts
+// returns the bytes of the experts
+static size_t llama_moe_cache_copy_run(ggml_context * ctx_views, ggml_backend_t backend, ggml_tensor * src, int64_t e_src, ggml_tensor * dst, int64_t e_dst, int64_t n) {
+    const int64_t n_pad = e_dst + n < dst->ne[2] ? llama_moe_cache_pad_blocks(dst)*ggml_blck_size(dst->type) : 0;
+    const int64_t ne    = n*dst->ne[0]*dst->ne[1] + n_pad;
+
+    ggml_reset(ctx_views);
+    ggml_tensor * src_view = ggml_view_1d(ctx_views, src, ne, e_src*src->nb[2]);
+    ggml_tensor * dst_view = ggml_view_1d(ctx_views, dst, ne, e_dst*dst->nb[2]);
+    ggml_backend_view_init(src_view);
+    ggml_backend_view_init(dst_view);
+    ggml_backend_tensor_copy_async(backend, backend, src_view, dst_view);
+
+    return n*dst->nb[2];
+}
+
 static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
     return t->buffer != nullptr &&
         ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
@@ -744,16 +765,8 @@ struct llama_moe_cache::impl {
             n++;
         }
 
-        ggml_tensor * bank = g.banks[b.ip];
-        ggml_reset(ctx_views.get());
-        ggml_tensor * src_view = ggml_view_3d(ctx_views.get(), bank, bank->ne[0], bank->ne[1], n, bank->nb[1], bank->nb[2], slots[e]*bank->nb[2]);
-        ggml_tensor * dst_view = ggml_view_3d(ctx_views.get(), dst,  dst->ne[0],  dst->ne[1],  n, dst->nb[1],  dst->nb[2],  e*dst->nb[2]);
-        ggml_backend_view_init(src_view);
-        ggml_backend_view_init(dst_view);
-        ggml_backend_tensor_copy_async(backend, backend, src_view, dst_view);
-
         stats_copy.hits  += n;
-        stats_copy.bytes += ggml_nbytes(src_view);
+        stats_copy.bytes += llama_moe_cache_copy_run(ctx_views.get(), backend, g.banks[b.ip], slots[e], dst, e, n);
 
         return n;
     }
@@ -902,6 +915,16 @@ int64_t llama_moe_cache::copy_experts(ggml_backend_t backend, const ggml_tensor 
     return pimpl->copy_experts(backend, w, dst, e, last);
 }
 
+bool llama_moe_cache::has_expert(const ggml_tensor * w, int64_t e) const {
+    const auto it = pimpl->bindings.find(w);
+    if (it == pimpl->bindings.end()) {
+        return false;
+    }
+    const impl::group & g = pimpl->groups[pimpl->layers[it->second.il].ig];
+    const int32_t * slots = g.lru.slot_map[it->second.il];
+    return slots != nullptr && slots[e] < g.n_slots;
+}
+
 std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, size_t> res;
     for (const auto & d : pimpl->devices) {
@@ -913,4 +936,203 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
         res[ggml_backend_buffer_get_type(pimpl->buf_host.get())] += pimpl->buf_host_size;
     }
     return res;
+}
+
+struct llama_moe_stage::impl {
+    // the expert tensors with the same index in their layer share the memory of a slot
+    struct slot {
+        std::vector<const ggml_tensor *> order; // host experts, by layer
+        size_t offset = 0;
+        size_t size   = 0;
+
+        const ggml_tensor * w = nullptr; // host experts with an upload queued or complete
+        std::vector<bool>   have;        // experts of w in the slot
+        ggml_backend_event_t event = nullptr;
+    };
+
+    struct binding {
+        size_t is;
+        size_t io;            // index in the order of the slot
+        ggml_tensor * staged; // same layout as the host experts, in the memory of the slot
+    };
+
+    const llama_moe_cache * cache;
+    ggml_backend_t     backend = nullptr; // computes the layers
+    ggml_backend_ptr   uploader;          // second backend of the same device
+    ggml_context_ptr   ctx;
+    ggml_context_ptr   ctx_views;
+    ggml_backend_buffer_ptr buf;
+
+    std::vector<slot> slots;
+    std::unordered_map<const ggml_tensor *, binding> bindings;
+
+    size_t n_uploads     = 0;
+    size_t n_used        = 0; // uploads that a split waited for
+    size_t bytes_staged  = 0;
+    size_t bytes_copied  = 0;
+
+    impl(const llama_model & model, const std::vector<ggml_backend_t> & backends, const llama_moe_cache * cache) : cache(cache) {
+        ggml_backend_dev_t dev = nullptr;
+        for (size_t il = 0; il < model.layers.size(); ++il) {
+            const auto experts = llama_moe_cache_layer_experts(model.layers[il]);
+            if (experts.empty() || !std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
+                continue;
+            }
+            if (dev == nullptr) {
+                dev = model.dev_layer(il);
+            }
+            if (model.dev_layer(il) != dev) {
+                continue; // one device only
+            }
+            slots.resize(std::max(slots.size(), experts.size()));
+            for (size_t is = 0; is < experts.size(); ++is) {
+                bindings[experts[is]] = { is, slots[is].order.size(), nullptr };
+                slots[is].order.push_back(experts[is]);
+            }
+        }
+        for (ggml_backend_t b : backends) {
+            if (dev != nullptr && ggml_backend_get_device(b) == dev) {
+                backend = b;
+            }
+        }
+        if (backend == nullptr || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            throw std::runtime_error("MoE stage requires host experts in the layers of a GPU");
+        }
+
+        uploader.reset(ggml_backend_dev_init(dev, nullptr));
+        if (!uploader) {
+            throw std::runtime_error("failed to create the MoE stage backend");
+        }
+
+        ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+        const size_t alignment = ggml_backend_buft_get_alignment(buft);
+        for (const auto & [w, b] : bindings) {
+            slots[b.is].size = std::max(slots[b.is].size, ggml_backend_buft_get_alloc_size(buft, w));
+        }
+        size_t size = 0;
+        for (slot & s : slots) {
+            s.offset = size;
+            size    += GGML_PAD(s.size, alignment);
+            s.event  = ggml_backend_event_new(dev);
+            if (s.event == nullptr) {
+                throw std::runtime_error("MoE stage requires a device with events");
+            }
+        }
+
+        auto init_ctx = [](size_t n_tensors) {
+            ggml_init_params params = {
+                /*.mem_size   =*/ n_tensors*ggml_tensor_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            return ggml_context_ptr(ggml_init(params));
+        };
+        ctx       = init_ctx(bindings.size());
+        ctx_views = init_ctx(2);
+        buf.reset(ggml_backend_buft_alloc_buffer(buft, size));
+        if (!ctx || !ctx_views || !buf) {
+            throw std::runtime_error("failed to allocate the MoE stage");
+        }
+        void * base = ggml_backend_buffer_get_base(buf.get());
+        for (auto & [w, b] : bindings) {
+            b.staged = ggml_new_tensor_3d(ctx.get(), w->type, w->ne[0], w->ne[1], w->ne[2]);
+            if (ggml_backend_tensor_alloc(buf.get(), b.staged, (char *) base + slots[b.is].offset) != GGML_STATUS_SUCCESS) {
+                throw std::runtime_error("failed to allocate the MoE stage");
+            }
+        }
+
+        LLAMA_LOG_INFO("%s: %10s MoE stage size = %8.2f MiB\n", __func__, ggml_backend_buft_name(buft), size/1024.0/1024.0);
+    }
+
+    ~impl() {
+        ggml_backend_synchronize(uploader.get());
+        for (slot & s : slots) {
+            ggml_backend_event_free(s.event);
+        }
+        LLAMA_LOG_INFO("llama_moe_stage: %zu uploads (%zu used), %.2f MiB staged, %.2f MiB copied from the stage\n",
+            n_uploads, n_used, bytes_staged/1024.0/1024.0, bytes_copied/1024.0/1024.0);
+    }
+
+    bool wait(ggml_backend_t backend, const ggml_tensor * w) {
+        const auto it = bindings.find(w);
+        if (it == bindings.end() || backend != this->backend || slots[it->second.is].w != w) {
+            return false;
+        }
+        ggml_backend_event_wait(backend, slots[it->second.is].event);
+        n_used++;
+        return true;
+    }
+
+    int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last) {
+        const binding & b = bindings.at(w);
+        const slot    & s = slots[b.is];
+        if (!s.have[e]) {
+            return 0;
+        }
+        int64_t n = 1;
+        while (e + n <= last && s.have[e + n]) {
+            n++;
+        }
+
+        bytes_copied += llama_moe_cache_copy_run(ctx_views.get(), backend, b.staged, e, dst, e, n);
+
+        return n;
+    }
+
+    void upload_next(ggml_backend_t backend, const ggml_tensor * w) {
+        const auto it = bindings.find(w);
+        if (it == bindings.end() || backend != this->backend) {
+            return;
+        }
+        slot & s = slots[it->second.is];
+        const ggml_tensor * next = s.order[(it->second.io + 1) % s.order.size()];
+        ggml_tensor * staged = bindings.at(next).staged;
+
+        auto skip = [&](int64_t e) {
+            return cache != nullptr && cache->has_expert(next, e);
+        };
+
+        // the copies of the experts of w read the slot
+        ggml_backend_synchronize(backend);
+
+        const int64_t n_expert    = next->ne[2];
+        const size_t  expert_size = next->nb[2];
+        s.w = next;
+        s.have.assign(n_expert, false);
+        for (int64_t first = 0; first < n_expert; ) {
+            if (skip(first)) {
+                first++;
+                continue;
+            }
+            int64_t n = 1;
+            while (first + n < n_expert && !skip(first + n)) {
+                n++;
+            }
+            const size_t padding = first + n < n_expert ? llama_moe_cache_pad_blocks(next)*ggml_type_size(next->type) : 0;
+            ggml_backend_tensor_set_async(uploader.get(), staged, (const uint8_t *) next->data + first*expert_size, first*expert_size, n*expert_size + padding);
+            std::fill(s.have.begin() + first, s.have.begin() + first + n, true);
+            bytes_staged += n*expert_size;
+            first += n;
+        }
+        ggml_backend_event_record(s.event, uploader.get());
+        n_uploads++;
+    }
+};
+
+llama_moe_stage::llama_moe_stage(const llama_model & model, const std::vector<ggml_backend_t> & backends, const llama_moe_cache * cache) :
+    pimpl(new impl(model, backends, cache)) {
+}
+
+llama_moe_stage::~llama_moe_stage() = default;
+
+bool llama_moe_stage::wait(ggml_backend_t backend, const ggml_tensor * w) {
+    return pimpl->wait(backend, w);
+}
+
+int64_t llama_moe_stage::copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last) {
+    return pimpl->copy_experts(backend, w, dst, e, last);
+}
+
+void llama_moe_stage::upload_next(ggml_backend_t backend, const ggml_tensor * w) {
+    pimpl->upload_next(backend, w);
 }
