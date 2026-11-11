@@ -11,7 +11,9 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <numeric>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
@@ -104,7 +106,23 @@ static bool match_gdn_l2_norm(const Output<Node> & normalized, Output<Node> & in
     return true;
 }
 
-// Chunked GatedDeltaNet built from MatMuls, for devices where the GatedDeltaNet op cannot run (NPU4000 prefill).
+// A [CS, CS] mask of the chunked GatedDeltaNet, one instance per content for the whole process. The NPUW weights
+// bank, which all compiled models share (NPUW_WEIGHTS_BANK=shared), identifies a constant by its data pointer and
+// keeps its tensor after the model that owned it is gone. A mask of a later model that got the address of a freed
+// mask would then be read as that other mask, so a mask is never freed. Not needed once NPUW stops matching a new
+// constant to a detached one by pointer (OpenVINO 2026.4 does).
+static std::shared_ptr<ov::op::v0::Constant> gdn_chunk_mask(int64_t CS, const std::vector<float> & values) {
+    static std::mutex mutex;
+    static std::map<std::vector<float>, std::shared_ptr<ov::op::v0::Constant>> cache;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto & mask = cache[values];
+    if (!mask) {
+        mask = ov::op::v0::Constant::create(ov::element::f32, {(size_t) CS, (size_t) CS}, values);
+    }
+    return mask;
+}
+
+// Chunked GatedDeltaNet built from MatMuls, for devices where the GatedDeltaNet op cannot run (NPU4000).
 // Same contract as the op with equal q/k/v heads and no fused l2 norm:
 //   q, k [B, T, H, Dk], v [B, T, H, Dv], g, beta [B, T, H], state [B, H, Dk, Dv]
 //   returns attn [B, T, H, Dv] and the new state [B, H, Dk, Dv].
@@ -118,6 +136,10 @@ static bool match_gdn_l2_norm(const Output<Node> & normalized, Output<Node> & in
 // P is built block-recursively, [[A, 0], [C, D]]^-1 = [[A^-1, 0], [-D^-1 C A^-1, D^-1]], for block sizes
 // 1, 2, 4, ..., CS / 2. Every intermediate is a part of the true inverse, so values stay small in f16. A Neumann
 // product (I - L)(I + L^2)... is exact too, but powers of L grow large and cancel, which f16 cannot hold.
+// A single token (decode) is a chunk of one token, where P = 1 and decay = 1:
+//   v'   = beta (v - exp(g) k S)
+//   S    = S exp(g) + k^T v'
+//   out  = q S
 // No Loop op is used, so the GatedDeltaNet loop fusion does not turn this back into the op.
 static std::pair<Output<Node>, Output<Node>> make_gated_delta_net_chunked(Output<Node> q, Output<Node> k,
                                                                           Output<Node> v, Output<Node> g,
@@ -126,8 +148,8 @@ static std::pair<Output<Node>, Output<Node>> make_gated_delta_net_chunked(Output
                                                                           int64_t Dv) {
     const int64_t CS = ggml_openvino_gdn_decompose_chunk();
     const int64_t max_dim = std::numeric_limits<int64_t>::max();
-    FRONT_END_OP_CONVERSION_CHECK(B > 0 && T > 1 && H > 0 && Dk > 0 && Dv > 0,
-                                  "GATED_DELTA_NET decomposition requires positive dimensions and multiple tokens");
+    FRONT_END_OP_CONVERSION_CHECK(B > 0 && T > 0 && H > 0 && Dk > 0 && Dv > 0,
+                                  "GATED_DELTA_NET decomposition requires positive dimensions");
     const int64_t pad = (CS - T % CS) % CS;
     FRONT_END_OP_CONVERSION_CHECK(T <= max_dim - pad && B <= max_dim / H,
                                   "GATED_DELTA_NET decomposition dimensions overflow");
@@ -160,6 +182,19 @@ static std::pair<Output<Node>, Output<Node>> make_gated_delta_net_chunked(Output
         return std::make_shared<ov::op::v1::Subtract>(a, b);
     };
     auto exp_op = [](const Output<Node> & x) -> Output<Node> { return std::make_shared<ov::op::v0::Exp>(x); };
+
+    if (T == 1) {
+        // [B, 1, H, D] -> [1, X, 1, D], batch 1 as below
+        q = mul(reshape(q, {1, X, 1, Dk}), f32(1.0f / std::sqrt((float) Dk)));
+        k = reshape(k, {1, X, 1, Dk});
+        v = reshape(v, {1, X, 1, Dv});
+        auto state_decay = exp_op(reshape(g, {1, X, 1, 1}));
+        beta = reshape(beta, {1, X, 1, 1});
+        Output<Node> s = reshape(state, {1, X, Dk, Dv});
+        auto v_new = mul(sub(v, matmul(mul(k, state_decay), s)), beta);  // [1, X, 1, Dv]
+        s = add(mul(s, state_decay), matmul(k, v_new, true, false));     // [1, X, Dk, Dv]
+        return {reshape(matmul(q, s), {B, 1, H, Dv}), reshape(s, {B, H, Dk, Dv})};
+    }
 
     // Pad T to a multiple of CS. A padded token has g = 0 and beta = k = 0, so it leaves the state unchanged.
     if (pad > 0) {
@@ -194,9 +229,9 @@ static std::pair<Output<Node>, Output<Node>> make_gated_delta_net_chunked(Output
             identity[i * CS + j] = i == j ? 1.0f : 0.0f;
         }
     }
-    auto lower_incl_mask = ov::op::v0::Constant::create(ov::element::f32, {(size_t) CS, (size_t) CS}, lower_incl);
-    auto lower_strict_mask = ov::op::v0::Constant::create(ov::element::f32, {(size_t) CS, (size_t) CS}, lower_strict);
-    auto eye = ov::op::v0::Constant::create(ov::element::f32, {(size_t) CS, (size_t) CS}, identity);
+    auto lower_incl_mask = gdn_chunk_mask(CS, lower_incl);
+    auto lower_strict_mask = gdn_chunk_mask(CS, lower_strict);
+    auto eye = gdn_chunk_mask(CS, identity);
 
     // cumsum of g inside a chunk as a MatMul with the lower triangle of ones: gc [1, X * N, CS, 1]
     auto gc_col = matmul(lower_incl_mask, g);
@@ -219,7 +254,7 @@ static std::pair<Output<Node>, Output<Node>> make_gated_delta_net_chunked(Output
                 m[i * CS + j] = (i / (2 * b) == j / (2 * b) && i / b > j / b) ? 1.0f : 0.0f;
             }
         }
-        return ov::op::v0::Constant::create(ov::element::f32, {(size_t) CS, (size_t) CS}, m);
+        return gdn_chunk_mask(CS, m);
     };
     Output<Node> p = add(eye, mul(neg_l, block_mask(1)));
     for (int64_t b = 2; b < CS; b *= 2) {
@@ -280,8 +315,7 @@ static OutputVector make_gated_delta_net(const Output<Node> & q,
                                         float k_eps) {
     const auto & q_shape = q.get_partial_shape();
     const auto & v_shape = v.get_partial_shape();
-    if (ggml_openvino_gdn_decompose_enabled() && !norm && q_shape.is_static() && v_shape.is_static() &&
-        q_shape[1].get_length() > 1) {
+    if (ggml_openvino_gdn_decompose_enabled() && !norm && q_shape.is_static() && v_shape.is_static()) {
         auto outputs = make_gated_delta_net_chunked(q, k, v, g, beta, state,
                                                    q_shape[0].get_length(), q_shape[1].get_length(),
                                                    v_shape[2].get_length(), q_shape[3].get_length(),
