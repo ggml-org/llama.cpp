@@ -353,6 +353,18 @@ set_tests_properties(test-llama-context-layer-major-hole PROPERTIES
     ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=2;LLAMA_LAYER_MAJOR=24"
 )
 
+# layer-major prefill with the experts in host memory: the chunks of a ubatch can compute the experts on different backends
+llama_test(
+    test-llama-context
+    NAME test-llama-context-layer-major-host-experts
+    LABEL main
+    ARGS -m "${MODEL_DIR}/gemma4-moe.gguf" --test partial -cmoe
+)
+set_tests_properties(test-llama-context-layer-major-host-experts PROPERTIES
+    FIXTURES_REQUIRED generate-models
+    ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=2;LLAMA_LAYER_MAJOR=24"
+)
+
 llama_build(test-fusion.cpp)
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)

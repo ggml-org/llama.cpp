@@ -787,6 +787,67 @@ struct case_hole : ctx_test {
     }
 };
 
+// - decode a batch of fewer tokens than n_ubatch in one ubatch, with the logits of all tokens
+// - its logits must match a context that decodes the same in ubatches of the layer-major chunk size
+// with LLAMA_LAYER_MAJOR, the ubatch has an empty chunk, and the reserve has none:
+//   GGML_SCHED_DEBUG_REALLOC=2 aborts if the empty chunk builds other nodes (e.g. with the MoE cache)
+// all tokens are outputs: a ubatch without outputs has a last layer without tokens, which changes the graph of the MoE cache
+struct case_partial : ctx_test {
+    const char * name() const override { return "partial"; }
+
+    const char * description() const override {
+        return "a ubatch of fewer tokens than n_ubatch keeps the graph of the reserve";
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        constexpr uint32_t n_ubatch = 64;
+        constexpr llama_pos n_tokens = 48;
+
+        const char *   lm      = getenv("LLAMA_LAYER_MAJOR");
+        const uint32_t n_chunk = lm ? (uint32_t) atoi(lm) : 0;
+
+        ctx_opts opts;
+        opts.n_ctx     = 256;
+        opts.n_seq_max = 1;
+        opts.n_batch   = n_ubatch;
+        opts.n_ubatch  = n_ubatch;
+
+        ctx_opts opts_ref = opts;
+        if (n_chunk > 0 && n_chunk < n_ubatch) {
+            opts_ref.n_ubatch = n_chunk;
+        }
+
+        auto ctx     = mr.ctx(opts);
+        auto ctx_ref = mr.ctx(opts_ref);
+        if (!ctx || !ctx_ref) {
+            return case_result::fail();
+        }
+
+        for (llama_context * cur : { ctx.get(), ctx_ref.get() }) {
+            common_batch batch(cur);
+            for (llama_pos pos = 0; pos < n_tokens; ++pos) {
+                batch.add(gen_token(n_vocab, 0, pos), pos, 0, true);
+            }
+
+            if (llama_process(cur, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+                TLOG_ERR("%s: failed to decode the batch\n", __func__);
+                return case_result::fail();
+            }
+        }
+
+        for (llama_pos i = 0; i < n_tokens; ++i) {
+            const logits_diff diff = compare_logits(llama_get_logits_ith(ctx_ref.get(), i), llama_get_logits_ith(ctx.get(), i), n_vocab);
+
+            CTX_REQUIRE(diff.nmse() <= NMSE_THRESHOLD,
+                    "the logits of token " + std::to_string(i) + " differ from the reference: nmse " + std::to_string(diff.nmse()));
+        }
+
+        return case_result::pass();
+    }
+};
+
 //
 // no_alloc
 //
@@ -909,6 +970,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_hole>());
+    cases.push_back(std::make_unique<case_partial>());
     cases.push_back(std::make_unique<case_noalloc>());
     cases.push_back(std::make_unique<case_comp_padding>());
 

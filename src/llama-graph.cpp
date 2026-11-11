@@ -2449,6 +2449,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
         moe_chunk = true;
 
+        // a chunk with few tokens can compute the experts in host memory on the CPU, the stores stay on the device of the layer
         ggml_tensor * moe_out = build_chunked(cur, chunks, [&](ggml_tensor * cur_chunk, size_t, const llm_graph_chunk & rows) {
             const auto view_rows = [&](ggml_tensor * t) {
                 return ggml_view_2d(ctx0, t, t->ne[0], rows.n, t->nb[1], rows.t0*t->nb[1]);
@@ -2463,7 +2464,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                     probs_in ? view_rows(probs_in) : nullptr, gate_up_exps, gate_up_exps_b,
                     up_exps_s, gate_exps_s, down_exps_s,
                     view_rows(ids), post_exp_norm, post_exp_norm_eps);
-        });
+        }, backend_layer(il));
 
         moe_chunk = false;
 
@@ -3302,11 +3303,18 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const {
+ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn, ggml_backend_t backend) const {
     const int64_t n_rows = cur->ne[1];
+
+    const auto set_backend = [&](ggml_tensor * t) {
+        if (backend != nullptr && ggml_backend_supports_op(backend, t)) {
+            ggml_backend_sched_set_tensor_backend(sched, t, backend);
+        }
+    };
 
     // not a new leaf: ggml-alloc allocates all the leafs of a graph before its first node
     ggml_tensor * dst = ggml_fill(ctx0, cur, 0.0f);
+    set_backend(dst);
     ggml_build_forward_expand(gf, dst);
 
     for (size_t ic = 0; ic < chunks.size(); ++ic) {
@@ -3320,10 +3328,22 @@ ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vec
         // an empty chunk stores nothing: offset 0 keeps the store within dst (the CPU backend checks the bounds of the first row)
         // each store reads the previous one: a view that no node reads keeps its source allocated until the end of the graph
         dst = ggml_set_2d_inplace(ctx0, dst, res, dst->nb[1], n == 0 ? 0 : t0*dst->nb[1]);
+        set_backend(dst);
         ggml_build_forward_expand(gf, dst);
     }
 
     return dst;
+}
+
+ggml_backend_t llm_graph_context::backend_layer(int il) const {
+    const ggml_backend_dev_t dev = model.dev_layer(il);
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+        if (ggml_backend_get_device(backend) == dev) {
+            return backend;
+        }
+    }
+    return nullptr;
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_chunk(ggml_tensor * inp_pos, const llm_graph_chunk & chunk) const {

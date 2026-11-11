@@ -1331,8 +1331,13 @@ struct llm_graph_context {
 
     // layer-major prefill: fn(rows, ic, chunk) for the rows of cur of each chunk ic, rows clamped to the rows of cur
     // the results [ne0 of cur, chunk.n] are stored in one tensor with the shape of cur, in chunk order
+    // backend: if set, the stores run on it; set it when the chunks can run on different backends,
+    //   the stores write a view of one tensor, so they must run on the backend of that tensor
     using llm_chunk_fn = std::function<ggml_tensor * (ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk)>;
-    ggml_tensor * build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const;
+    ggml_tensor * build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn, ggml_backend_t backend = nullptr) const;
+
+    // the backend of the device of layer il, nullptr if the scheduler has none
+    ggml_backend_t backend_layer(int il) const;
 
     // the positions of the tokens of a chunk, for the inputs of its attention block: one section per position input
     ggml_tensor * build_inp_pos_chunk(ggml_tensor * inp_pos, const llm_graph_chunk & chunk) const;
