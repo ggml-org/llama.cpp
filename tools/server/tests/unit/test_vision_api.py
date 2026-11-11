@@ -204,3 +204,25 @@ def test_vision_embeddings_oai_content():
     # same prompt and image in both formats
     assert data[0]["embedding"] == data[1]["embedding"]
     assert data[0]["embedding"] != data[2]["embedding"]
+
+
+@pytest.mark.parametrize("name,text", [("hello_world", "HELLO WORLD"), ("invoice_2026", "Invoice 2026")])
+def test_vision_ocr(name: str, text: str):
+    # small-test reads black text on white in a common truetype font, the kind of image it is trained on
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    response = requests.get(f"https://huggingface.co/Serveurperso/small-test/resolve/main/test/{name}.png")
+    response.raise_for_status()
+    body = server.make_any_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(response.content).decode("utf-8")}},
+            {"type": "text", "text": "What is written in this image?"},
+        ]}],
+        "temperature": 0.0,
+        "top_k": 1,
+        "top_p": 1.0,
+    })
+    content = body["choices"][0]["message"]["content"]
+    assert text.lower() in content.lower(), f"expected {text!r} in {content!r}"

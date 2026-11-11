@@ -125,27 +125,14 @@ def do_test_completion_with_required_tool_tiny(server: ServerProcess, tool: dict
             actual_arguments = json.loads(actual_arguments)
         assert argument_key in actual_arguments, f"tool arguments: {actual_arguments}, expected: {argument_key}"
 
-# PR #22654: commented out since we're now allowing content before tool calls in tool_call: required, so we can't force this
-# in the tiny model just by using the grammar
-#
-# @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
-# @pytest.mark.parametrize("template_name,tool,argument_key", [
-#     ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
-#     ("Qwen3-Coder",                                   TEST_TOOL,            "success"),
-#     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
-#     ("meta-llama-Llama-3.3-70B-Instruct",             TEST_TOOL,            "success"),
-#     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
-#     ("meta-llama-Llama-3.3-70B-Instruct",             PYTHON_TOOL,          "code"),
-# ])
-# def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict, argument_key: str | None, stream: CompletionMode):
-#     global server
-#     n_predict = 1024
-#     # server = ServerPreset.stories15m_moe()
-#     server.jinja = True
-#     server.n_predict = n_predict
-#     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-#     server.start()
-#     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
+# the grammar of tool_choice: required allows content before the call, so this needs a model trained on tool calls like small-test
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+@pytest.mark.parametrize("tool,argument_key", [(TEST_TOOL, "success"), (PYTHON_TOOL, "code")])
+def test_completion_with_required_tool_fast(tool: dict, argument_key: str, stream: CompletionMode):
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    do_test_completion_with_required_tool_tiny(server, tool, argument_key, 256, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
 # @pytest.mark.slow
 # @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
@@ -423,6 +410,14 @@ def do_test_weather(server: ServerProcess, **kwargs):
     assert re.match('^Istanbul(( |, ?)(TR|Turkey|Türkiye))?$', location), f'Expected Istanbul for location, got {location}'
 
 
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+def test_weather_fast(stream: CompletionMode):
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    do_test_weather(server, stream=stream == CompletionMode.STREAMED, max_tokens=256, temperature=0.0, top_k=1, top_p=1.0)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
 @pytest.mark.parametrize("result_override,n_predict,hf_repo,template_override", [
@@ -517,6 +512,14 @@ def do_test_calc_result(server: ServerProcess, result_override: str | None, n_pr
     else:
         assert re.match('^[\\s\\S]*?((That\'s|\\bis) (approximately )?)?\\b0\\.(5\\b|56\\b|556)', content), \
             f'Expected something like "The y coordinate is 0.56.", got {content}'
+
+
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+def test_calc_result_fast(stream: CompletionMode):
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    do_test_calc_result(server, None, 256, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
 
 @pytest.mark.slow
@@ -642,6 +645,14 @@ def do_test_hello_world(server: ServerProcess, **kwargs):
     code = actual_arguments["code"]
     assert isinstance(code, str), f"Expected code to be a string, got {type(code)}: {json.dumps(code)}"
     assert re.match(r'''print\(("[Hh]ello,? [Ww]orld!?"|'[Hh]ello,? [Ww]orld!?')\)''', re.sub(r'#.*\n?', '', code)), f'Expected hello world, got {code}'
+
+
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+def test_hello_world_fast(stream: CompletionMode):
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    do_test_hello_world(server, stream=stream == CompletionMode.STREAMED, max_tokens=256, temperature=0.0, top_k=1, top_p=1.0)
 
 
 SEARCH_TOOL = {
