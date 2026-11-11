@@ -2618,7 +2618,18 @@ llm_graph_moe_cache_slots llm_graph_context::build_moe_cache_slots(
         return { nullptr, nullptr };
     }
     for (ggml_tensor * w : { up_exps, gate_exps, down_exps, gate_up_exps }) {
-        if (w != nullptr && moe_cache->get_experts(w) == nullptr) {
+        if (w == nullptr) {
+            continue;
+        }
+        ggml_tensor * cached = moe_cache->get_experts(w);
+        if (cached == nullptr) {
+            return { nullptr, nullptr };
+        }
+        // the device must compute the cached matmul, else the scheduler copies the cache to the host
+        ggml_tensor * w_s = get_weight_scale(w) ? moe_cache->get_scales(w, LLAMA_MOE_CACHE_SCALE_WEIGHT) : nullptr;
+        ggml_tensor * x_s = get_input_scale(w)  ? moe_cache->get_scales(w, LLAMA_MOE_CACHE_SCALE_INPUT)  : nullptr;
+        ggml_tensor * b   = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, w->ne[0], selected_experts->ne[0], selected_experts->ne[1]);
+        if (!ggml_backend_supports_op(moe_cache->backend(il), ggml_mul_mat_id_ext(ctx0, cached, b, selected_experts, w_s, x_s))) {
             return { nullptr, nullptr };
         }
     }
