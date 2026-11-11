@@ -21,8 +21,9 @@ ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
         {"NPU_COMPILER_TYPE",                 "DRIVER"},
     };
     if (cache_dir && strlen(cache_dir) > 0) {
+        // Keep the default cache mode: CACHE_MODE=OPTIMIZE_SIZE makes the NPU plugin compile the NPUW submodels with
+        // weights separation, which fails for them.
         compile_config["NPUW_CACHE_DIR"] = cache_dir;
-        compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
     }
     // Copy an optional string env var into the compile config only when it is set and non-empty.
     auto set_compile_option_from_env = [&](const char * env_var, const char * config_key) {
