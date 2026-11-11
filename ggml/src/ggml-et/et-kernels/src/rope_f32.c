@@ -30,7 +30,7 @@ typedef struct {
     int32_t n_past;
     int32_t n_dims;  // Number of dimensions to apply ROPE to (must be even)
     int32_t mode;    // ROPE mode (0=normal, 2=neox)
-    int32_t n_ctx;
+    int32_t no_trunc;
     int32_t n_ctx_orig;
     float   freq_base;    // Base frequency (usually 10000.0f)
     float   freq_scale;   // Frequency scaling factor
@@ -111,10 +111,15 @@ static inline void rope_yarn_corr_dims(int   n_dims,
                                        float freq_base,
                                        float beta_fast,
                                        float beta_slow,
+                                       int   truncate,
                                        float dims[2]) {
-    // Match CPU: floor on start, ceil on end, then clamp to [0, n_dims-1].
-    float start = rope_floorf(rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
-    float end   = rope_ceilf(rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
+    float start = rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base);
+    float end   = rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base);
+
+    if (truncate) {
+        start = rope_floorf(start);
+        end   = rope_ceilf(end);
+    }
 
     dims[0] = start > 0.0f ? start : 0.0f;
     dims[1] = end < (float) (n_dims - 1) ? end : (float) (n_dims - 1);
@@ -546,7 +551,7 @@ int entry_point(struct ggml_et_rope_params * params, void * env) {
 
     float corr_dims[2];
     rope_yarn_corr_dims(n_dims, rope_params->n_ctx_orig, freq_base, rope_params->beta_fast, rope_params->beta_slow,
-                        corr_dims);
+                        !rope_params->no_trunc, corr_dims);
     et_barrier(ET_BARRIER_GLOBAL);
 
     // Distribute by individual heads: total = batch * seq_len * heads.

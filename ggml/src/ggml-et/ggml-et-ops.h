@@ -79,7 +79,7 @@ struct ggml_et_rope_settings {
     int32_t n_past;
     int32_t n_dims;  // Number of dimensions to apply ROPE to (must be even)
     int32_t mode;    // ROPE mode, GGML_ROPE_TYPE_*
-    int32_t n_ctx;
+    int32_t no_trunc;
     int32_t n_ctx_orig;
     float   freq_base;    // Base frequency (usually 10000.0f)
     float   freq_scale;   // Frequency scaling factor
