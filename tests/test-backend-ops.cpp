@@ -8843,18 +8843,28 @@ struct test_pad_reflect_1d : public test_case {
     const std::array<int64_t, 4> ne_a;
     const int pad_0;
     const int pad_1;
+    const bool view;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, pad_0, pad_1);
+        return VARS_TO_STR5(type, ne_a, pad_0, pad_1, view);
     }
 
     test_pad_reflect_1d(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {512, 34, 2, 1},
-            int pad_0 = 10, int pad_1 = 9)
-        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1)  {}
+            int pad_0 = 10, int pad_1 = 9, bool view = false)
+        : type(type), ne_a(ne_a), pad_0(pad_0), pad_1(pad_1), view(view) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor(ctx, type, 2, ne_a.data());
+        ggml_tensor * a;
+        if (view) {
+            const size_t nb1 = ggml_row_size(type, ne_a[0]);
+            const size_t nb2 = nb1 * ne_a[1];
+            const size_t nb3 = nb2 * ne_a[2];
+            ggml_tensor * base = ggml_new_tensor_1d(ctx, type, ne_a[0] * ne_a[1] * ne_a[2] * ne_a[3] + 1);
+            a = ggml_view_4d(ctx, base, ne_a[0], ne_a[1], ne_a[2], ne_a[3], nb1, nb2, nb3, ggml_type_size(type));
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+        }
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_pad_reflect_1d(ctx, a, pad_0, pad_1);
@@ -12758,6 +12768,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {4, 2, 300, 300}, 1, 1, 0, 0, 0, 0, 0, 0, 0, false));
 
     test_cases.emplace_back(new test_pad_reflect_1d());
+    test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {1, 3, 2, 2}, 0, 0));
+    test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {5, 3, 2, 2}, 4, 1, true));
+    test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {281, 128, 1, 1}, 2, 2));
+    test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {257, 7, 1, 1}, 0, 256));
+    test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {2, 16777217, 1, 1}, 1, 1));
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
