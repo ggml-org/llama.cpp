@@ -7,6 +7,7 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -286,14 +287,16 @@ struct moe_cache_lru {
     }
 };
 
+using llama_moe_cache_scales = std::array<ggml_tensor *, LLAMA_MOE_CACHE_SCALE_COUNT>;
+
 // gate, up, down or gate_up, down
-static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer, const llama_weight_scales * ws = nullptr, std::vector<ggml_tensor *> * scales = nullptr) {
+static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer, const llama_weight_scales * ws = nullptr, std::vector<llama_moe_cache_scales> * scales = nullptr) {
     std::vector<ggml_tensor *> res;
     for (ggml_tensor * t : { layer.ffn_gate_up_exps, layer.ffn_gate_exps, layer.ffn_up_exps, layer.ffn_down_exps }) {
         if (t != nullptr) {
             res.push_back(t);
             if (scales != nullptr) {
-                scales->push_back(ws->get(t));
+                scales->push_back({ ws->get(t), ws->get_input(t) });
             }
         }
     }
@@ -340,8 +343,8 @@ struct llama_moe_cache::impl {
         std::vector<ggml_tensor *> ref;   // expert tensors of the first layer
         std::vector<int32_t> layers;
         std::vector<ggml_tensor *> banks; // device storage of all slots, one per expert tensor
-        std::vector<int64_t> scale_rows;
-        std::vector<ggml_tensor *> scale_banks;
+        std::vector<std::array<int64_t, LLAMA_MOE_CACHE_SCALE_COUNT>> scale_rows;
+        std::vector<llama_moe_cache_scales> scale_banks;
         size_t host_bytes = 0;
         int32_t n_slots = 0;
         moe_cache_lru lru;
@@ -355,14 +358,14 @@ struct llama_moe_cache::impl {
         std::vector<int32_t> cpu_experts;   // experts set in cpu_map
         uint32_t cpu_acc = 0;               // fraction of a miss carried over to the next plan, in 1/65536
         std::vector<ggml_tensor *> experts; // host expert tensors, in the order of the banks
-        std::vector<std::vector<float>> scales;
+        std::vector<std::array<std::vector<float>, LLAMA_MOE_CACHE_SCALE_COUNT>> scales;
     };
 
     struct binding {
         int32_t il;
         int32_t ip;           // index of the bank
         ggml_tensor * cached; // view of the bank used in place of the host experts
-        ggml_tensor * scale;
+        llama_moe_cache_scales scales;
     };
 
     struct stats {
@@ -427,20 +430,22 @@ struct llama_moe_cache::impl {
 
         // only cache layers that keep all of their experts in host memory, on the device the layer is assigned to
         for (size_t il = 0; il < model.layers.size(); ++il) {
-            std::vector<ggml_tensor *> scales;
+            std::vector<llama_moe_cache_scales> scales;
             auto experts = llama_moe_cache_layer_experts(model.layers[il], &model.w_scales, &scales);
             if (experts.empty() || !std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
                 continue;
             }
-            std::vector<int64_t> scale_rows(experts.size(), 0);
+            std::vector<std::array<int64_t, LLAMA_MOE_CACHE_SCALE_COUNT>> scale_rows(experts.size(), { 0, 0 });
             for (size_t ip = 0; ip < experts.size(); ++ip) {
-                const ggml_tensor * s = scales[ip];
-                if (s != nullptr) {
-                    GGML_ASSERT(s->type == GGML_TYPE_F32 && ggml_is_contiguous(s));
-                    if (ggml_nelements(s) > 1) {
-                        GGML_ASSERT((s->ne[0] == experts[ip]->ne[2] && s->ne[1] == 1) ||
-                                    (s->ne[0] == experts[ip]->ne[1] && s->ne[1] == experts[ip]->ne[2]));
-                        scale_rows[ip] = ggml_nelements(s)/experts[ip]->ne[2];
+                for (int k = 0; k < LLAMA_MOE_CACHE_SCALE_COUNT; ++k) {
+                    const ggml_tensor * s = scales[ip][k];
+                    if (s != nullptr) {
+                        GGML_ASSERT(s->type == GGML_TYPE_F32 && ggml_is_contiguous(s));
+                        if (ggml_nelements(s) > 1) {
+                            GGML_ASSERT((s->ne[0] == experts[ip]->ne[2] && s->ne[1] == 1) ||
+                                        (s->ne[0] == experts[ip]->ne[1] && s->ne[1] == experts[ip]->ne[2]));
+                            scale_rows[ip][k] = ggml_nelements(s)/experts[ip]->ne[2];
+                        }
                     }
                 }
             }
@@ -459,7 +464,7 @@ struct llama_moe_cache::impl {
             }
             it->layers.push_back(il);
             for (size_t ip = 0; ip < experts.size(); ++ip) {
-                const size_t bytes = ggml_nbytes(experts[ip]) + scale_rows[ip]*experts[ip]->ne[2]*sizeof(float);
+                const size_t bytes = ggml_nbytes(experts[ip]) + (scale_rows[ip][0] + scale_rows[ip][1])*experts[ip]->ne[2]*sizeof(float);
                 it->host_bytes         += bytes;
                 devices[id].host_bytes += bytes;
             }
@@ -477,8 +482,10 @@ struct llama_moe_cache::impl {
             size_t res = 0;
             for (size_t ip = 0; ip < g.ref.size(); ++ip) {
                 res += GGML_PAD(g.ref[ip]->nb[2]*(n_slots + n_zero + 1), alignment);
-                if (g.scale_rows[ip] > 0) {
-                    res += GGML_PAD(g.scale_rows[ip]*sizeof(float)*(n_slots + n_zero + 1), alignment);
+                for (int64_t rows : g.scale_rows[ip]) {
+                    if (rows > 0) {
+                        res += GGML_PAD(rows*sizeof(float)*(n_slots + n_zero + 1), alignment);
+                    }
                 }
             }
             return res;
@@ -539,7 +546,10 @@ struct llama_moe_cache::impl {
                 continue;
             }
             g.lru.init(model.layers.size(), n_expert, g.n_slots);
-            const size_t n_scales = std::count_if(g.scale_rows.begin(), g.scale_rows.end(), [](int64_t rows) { return rows > 0; });
+            size_t n_scales = 0;
+            for (const auto & rows : g.scale_rows) {
+                n_scales += std::count_if(rows.begin(), rows.end(), [](int64_t r) { return r > 0; });
+            }
             n_tensors[g.id] += (g.ref.size() + n_scales)*(1 + g.layers.size());
             n_tensors_host  += g.layers.size()*(n_zero > 0 ? 3 : 1); // slot maps and CPU map
         }
@@ -582,34 +592,42 @@ struct llama_moe_cache::impl {
                 GGML_ASSERT(bank->nb[2] == t->nb[2]);
                 ggml_format_name(bank, "moe_cache.%zu.%s", ig, t->name);
                 g.banks.push_back(bank);
-                ggml_tensor * scale_bank = nullptr;
-                if (g.scale_rows[ip] > 0) {
-                    scale_bank = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, g.scale_rows[ip], g.n_slots + n_zero + 1);
-                    ggml_format_name(scale_bank, "moe_cache.%zu.%s.scale", ig, t->name);
+                llama_moe_cache_scales scale_banks = {};
+                for (int k = 0; k < LLAMA_MOE_CACHE_SCALE_COUNT; ++k) {
+                    if (g.scale_rows[ip][k] > 0) {
+                        scale_banks[k] = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, g.scale_rows[ip][k], g.n_slots + n_zero + 1);
+                        ggml_format_name(scale_banks[k], "moe_cache.%zu.%s.%s", ig, t->name, k == LLAMA_MOE_CACHE_SCALE_WEIGHT ? "scale" : "input_scale");
+                    }
                 }
-                g.scale_banks.push_back(scale_bank);
+                g.scale_banks.push_back(scale_banks);
             }
             for (int32_t il : g.layers) {
                 layer & l = layers[il];
                 l.ig      = (int32_t) ig;
-                std::vector<ggml_tensor *> scales;
+                std::vector<llama_moe_cache_scales> scales;
                 l.experts = llama_moe_cache_layer_experts(model.layers[il], &model.w_scales, &scales);
                 l.scales.resize(l.experts.size());
                 for (size_t ip = 0; ip < l.experts.size(); ++ip) {
                     ggml_tensor * bank   = g.banks[ip];
                     ggml_tensor * cached = ggml_view_3d(ctx, bank, bank->ne[0], bank->ne[1], g.n_slots + n_zero, bank->nb[1], bank->nb[2], 0);
                     ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
-                    ggml_tensor * scale = scales[ip];
-                    if (ggml_tensor * scale_bank = g.scale_banks[ip]) {
-                        if (!no_alloc) {
-                            l.scales[ip].resize(ggml_nelements(scale));
-                            ggml_backend_tensor_get(scale, l.scales[ip].data(), 0, ggml_nbytes(scale));
+                    llama_moe_cache_scales bound = scales[ip];
+                    for (int k = 0; k < LLAMA_MOE_CACHE_SCALE_COUNT; ++k) {
+                        ggml_tensor * scale      = scales[ip][k];
+                        ggml_tensor * scale_bank = g.scale_banks[ip][k];
+                        if (scale_bank == nullptr) {
+                            continue;
                         }
-                        scale = g.scale_rows[ip] == 1 ? ggml_view_1d(ctx, scale_bank, g.n_slots + n_zero, 0) :
-                            ggml_view_2d(ctx, scale_bank, g.scale_rows[ip], g.n_slots + n_zero, scale_bank->nb[1], 0);
-                        ggml_format_name(scale, "moe_cache.%s", scales[ip]->name);
+                        if (!no_alloc) {
+                            l.scales[ip][k].resize(ggml_nelements(scale));
+                            ggml_backend_tensor_get(scale, l.scales[ip][k].data(), 0, ggml_nbytes(scale));
+                        }
+                        const int64_t rows = g.scale_rows[ip][k];
+                        bound[k] = rows == 1 ? ggml_view_1d(ctx, scale_bank, g.n_slots + n_zero, 0) :
+                            ggml_view_2d(ctx, scale_bank, rows, g.n_slots + n_zero, scale_bank->nb[1], 0);
+                        ggml_format_name(bound[k], "moe_cache.%s", scale->name);
                     }
-                    bindings[l.experts[ip]] = { il, (int32_t) ip, cached, scale };
+                    bindings[l.experts[ip]] = { il, (int32_t) ip, cached, bound };
                 }
                 l.slot_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
                 ggml_format_name(l.slot_map, "moe_cache.slot_map-%d", il);
@@ -643,6 +661,16 @@ struct llama_moe_cache::impl {
         if (!no_alloc) {
             ggml_backend_buffer_clear(buf_host.get(), 0xff); // the CPU maps are -1
             buf_host_size = ggml_backend_buffer_get_size(buf_host.get());
+
+            // zero and unfilled slots keep a unit input scale: activations are divided by it
+            for (group & g : groups) {
+                for (const auto & banks : g.scale_banks) {
+                    if (ggml_tensor * bank = banks[LLAMA_MOE_CACHE_SCALE_INPUT]) {
+                        const std::vector<float> ones(ggml_nelements(bank), 1.0f);
+                        ggml_backend_tensor_set(bank, ones.data(), 0, ggml_nbytes(bank));
+                    }
+                }
+            }
 
             for (group & g : groups) {
                 for (int32_t il : g.layers) {
@@ -768,9 +796,9 @@ struct llama_moe_cache::impl {
         return it != bindings.end() ? it->second.cached : nullptr;
     }
 
-    ggml_tensor * get_scales(const ggml_tensor * w) const {
+    ggml_tensor * get_scales(const ggml_tensor * w, llama_moe_cache_scale kind) const {
         const auto it = bindings.find(w);
-        return it != bindings.end() ? it->second.scale : nullptr;
+        return it != bindings.end() ? it->second.scales[kind] : nullptr;
     }
 
     int64_t copy_experts(ggml_backend_t backend, const ggml_tensor * w, ggml_tensor * dst, int64_t e, int64_t last) {
@@ -889,10 +917,13 @@ struct llama_moe_cache::impl {
                 }
                 ggml_backend_tensor_set_async(backend, bank, (const uint8_t *) w->data + fills[i].expert*expert_size, fills[i].slot*expert_size, n*expert_size);
                 bytes += n*expert_size;
-                if (ggml_tensor * scale_bank = g.scale_banks[ip]) {
-                    const size_t scale_size = g.scale_rows[ip]*sizeof(float);
-                    ggml_backend_tensor_set_async(backend, scale_bank, l.scales[ip].data() + fills[i].expert*g.scale_rows[ip], fills[i].slot*scale_size, n*scale_size);
-                    bytes += n*scale_size;
+                for (int k = 0; k < LLAMA_MOE_CACHE_SCALE_COUNT; ++k) {
+                    if (ggml_tensor * scale_bank = g.scale_banks[ip][k]) {
+                        const int64_t rows = g.scale_rows[ip][k];
+                        const size_t scale_size = rows*sizeof(float);
+                        ggml_backend_tensor_set_async(backend, scale_bank, l.scales[ip][k].data() + fills[i].expert*rows, fills[i].slot*scale_size, n*scale_size);
+                        bytes += n*scale_size;
+                    }
                 }
                 i += n;
             }
@@ -949,8 +980,8 @@ ggml_tensor * llama_moe_cache::get_cpu_map(int32_t il, int64_t n_tokens) const {
     return pimpl->get_cpu_map(il, n_tokens);
 }
 
-ggml_tensor * llama_moe_cache::get_scales(const ggml_tensor * w) const {
-    return pimpl->get_scales(w);
+ggml_tensor * llama_moe_cache::get_scales(const ggml_tensor * w, llama_moe_cache_scale kind) const {
+    return pimpl->get_scales(w, kind);
 }
 
 bool llama_moe_cache::copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {

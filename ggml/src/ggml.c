@@ -3546,8 +3546,10 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
     }
 
     if (scale_activations) {
-        GGML_ASSERT(scale_activations->ne[0] == 1);
-        GGML_ASSERT(ggml_can_repeat(scale_activations, result));
+        const struct ggml_tensor * s = scale_activations;
+        const bool per_tensor = ggml_nelements(s) == 1;
+        const bool per_expert = s->ne[0] == as->ne[2] && s->ne[1] == 1 && s->ne[2] == 1 && s->ne[3] == 1;
+        GGML_ASSERT(per_tensor || per_expert);
         result->src[4] = scale_activations;
     }
 

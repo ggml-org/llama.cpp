@@ -1536,7 +1536,8 @@ extern "C" {
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
 
-    // scale_activations follows ggml_mul_mat_ext, but broadcasts over the result: [1, ids->ne[0], b->ne[2], 1].
+    // scale_weight:      [1], [n_as] or [n_out, n_as], selected by ids
+    // scale_activations: [1] or [n_as], selected by ids
     GGML_API struct ggml_tensor * ggml_mul_mat_id_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,

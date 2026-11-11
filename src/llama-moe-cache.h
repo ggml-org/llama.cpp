@@ -8,6 +8,12 @@
 
 struct llama_model;
 
+enum llama_moe_cache_scale {
+    LLAMA_MOE_CACHE_SCALE_WEIGHT,
+    LLAMA_MOE_CACHE_SCALE_INPUT,
+    LLAMA_MOE_CACHE_SCALE_COUNT,
+};
+
 // keeps recently and repeatedly used experts of host-resident MoE layers in a device buffer
 // each layer has a slot map in host memory: when the scheduler copies it to the device, the copy callback uploads the missing experts
 class llama_moe_cache {
@@ -31,8 +37,8 @@ public:
     // nullptr if no misses of layer il are computed on the CPU for ubatches of n_tokens tokens
     ggml_tensor * get_cpu_map(int32_t il, int64_t n_tokens) const;
 
-    // weight scales in cache-slot order, or the original per-tensor scale
-    ggml_tensor * get_scales(const ggml_tensor * w) const;
+    // weight or input scales of w in cache-slot order, or the original per-tensor scale
+    ggml_tensor * get_scales(const ggml_tensor * w, llama_moe_cache_scale kind) const;
 
     // ggml_backend_sched copy callback, returns false if src is not a slot map
     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph);
