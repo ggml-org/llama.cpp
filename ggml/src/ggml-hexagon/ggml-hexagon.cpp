@@ -316,6 +316,7 @@ struct ggml_hexagon_session {
     ggml_hexagon_opbatch* op_batch;
     ggml_hexagon_opqueue* op_queue;
 
+    std::unordered_set<ggml_hexagon_shared_buffer *>                     buffers;
     std::unordered_map<int, std::unique_ptr<ggml_hexagon_shared_buffer>> cloned_buffers;
     std::unordered_set<ggml_hexagon_session *>                           virt_peers;
     std::unordered_set<ggml_hexagon_session *>                           phys_peers;
@@ -374,8 +375,8 @@ struct ggml_hexagon_session {
     void flush_peers();
     void flush_pending(bool all = true);
 
-    ggml_hexagon_shared_buffer * mmap_tensor(const ggml_tensor * t);
-    bool clone_buffer(const ggml_hexagon_shared_buffer*);
+    void mmap_buffers();
+    void clone_buffer(const ggml_hexagon_shared_buffer*);
     void release_buffer(const ggml_hexagon_shared_buffer*);
     void unclone_buffer(const ggml_hexagon_shared_buffer*);
 
@@ -435,7 +436,7 @@ struct ggml_hexagon_rpcmem_block {
     int       fd   = -1;
     size_t    size = 0;
 
-    std::unordered_set<ggml_hexagon_session *> mapped_clones;
+    std::unordered_set<ggml_hexagon_session *> clones;
 
     ggml_hexagon_rpcmem_block(size_t size) {
         base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, size);
@@ -469,14 +470,13 @@ struct ggml_hexagon_shared_buffer {
     size_t       size()   const { return mem ? mem->size : 0;  }
     int          fd()     const { return mem ? mem->fd   : -1; }
 
-    void mmap(bool extended = false) {
+    void mmap() {
         if (!this->mem)   return;
         if (this->mapped) return;
 
-        GGML_ASSERT(!this->pinned || !extended);
+        GGML_ASSERT(!this->pinned || !this->extended);
 
-        this->extended = extended;
-        fastrpc_map_flags flags = this->pinned ? FASTRPC_MAP_FD : (extended ? FASTRPC_MAP_FD_DELAYED_EXTENDED : FASTRPC_MAP_FD_DELAYED);
+        fastrpc_map_flags flags = this->pinned ? FASTRPC_MAP_FD : (this->extended ? FASTRPC_MAP_FD_DELAYED_EXTENDED : FASTRPC_MAP_FD_DELAYED);
 
         int err = fastrpc_mmap(sess->domain_id, fd(), (void *) base(), 0, size(), flags);
         if (err != 0) {
@@ -648,6 +648,7 @@ inline ggml_tensor ggml_hexagon_session::make_fence_tensor(const volatile void *
 
 static void ggml_backend_hexagon_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(buffer->context);
+    sbuf->sess->buffers.erase(sbuf);
     sbuf->sess->unclone_buffer(sbuf);
     delete sbuf;
 }
@@ -987,30 +988,43 @@ static bool ggml_backend_hexagon_host_buffer_type_is_host(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
-struct ggml_backend_hexagon_alloc_buffer_n_plan_item {
-    size_t size;
-    int    first;
-    int    last;
-};
-
-using ggml_backend_hexagon_alloc_buffer_n_plan_t = std::vector<ggml_backend_hexagon_alloc_buffer_n_plan_item>;
-
-static const char * ggml_hexagon_kv_layer_suffix(const struct ggml_tensor * t) {
-    if (strncmp(t->name, "cache_", 6) != 0) {
-        return NULL;
-    }
-    const char * p = strstr(t->name, "_l");
-    if (!p || !isdigit((unsigned char)p[2])) {
-        return NULL;
-    }
-    return p;
-}
-
 struct ggml_backend_hexagon_alloc_unit {
     size_t size;
     int    first;
     int    last;
 };
+
+struct ggml_backend_hexagon_alloc_buffer_n_plan_item {
+    size_t size;
+    std::vector<ggml_backend_hexagon_alloc_unit> units;
+};
+
+using ggml_backend_hexagon_alloc_buffer_n_plan_t = std::vector<ggml_backend_hexagon_alloc_buffer_n_plan_item>;
+
+static bool ggml_hexagon_tensor_layer(const struct ggml_tensor * t, int & kind, int & layer) {
+    if (strncmp(t->name, "blk.", 4) == 0 && isdigit((unsigned char) t->name[4])) {
+        char * end = NULL;
+        long l = strtol(t->name + 4, &end, 10);
+        if (end && *end == '.') {
+            kind  = 0;
+            layer = (int) l;
+            return true;
+        }
+    }
+    if (strncmp(t->name, "cache_", 6) == 0) {
+        const char * p = strstr(t->name, "_l");
+        if (p && isdigit((unsigned char) p[2])) {
+            char * end = NULL;
+            long l = strtol(p + 2, &end, 10);
+            if (end && *end == '\0') {
+                kind  = 1;
+                layer = (int) l;
+                return true;
+            }
+        }
+    }
+    return false;
+}
 
 static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buffer_n_plan(
         ggml_backend_buffer_type_t buft, struct ggml_tensor ** tensors, int n_tensors) {
@@ -1024,61 +1038,72 @@ static ggml_backend_hexagon_alloc_buffer_n_plan_t ggml_backend_hexagon_alloc_buf
     int i = 0;
     while (i < n_tensors) {
         struct ggml_tensor * t = tensors[i];
-        size_t unit_size = 0;
-        int unit_first = i;
-        int unit_last = i + 1;
-
-        if (t->data == NULL && t->view_src == NULL) {
-            unit_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+        if (t->data != NULL || t->view_src != NULL) {
+            i++;
+            continue;
         }
 
-        const char * layer_suffix = ggml_hexagon_kv_layer_suffix(t);
+        size_t unit_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, t), alignment);
+        int unit_first = i;
+        int unit_last  = i + 1;
 
-        while (unit_last < n_tensors) {
+        int kind = -1, layer = -1;
+        const bool has_layer = ggml_hexagon_tensor_layer(t, kind, layer);
+
+        while (has_layer && unit_last < n_tensors) {
             struct ggml_tensor * next = tensors[unit_last];
-
-            if (next->view_src != NULL) {
+            if (next->data != NULL || next->view_src != NULL) {
                 unit_last++;
                 continue;
             }
 
-            if (layer_suffix != NULL) {
-                const char * next_suffix = ggml_hexagon_kv_layer_suffix(next);
-                if (next_suffix != NULL && strcmp(layer_suffix, next_suffix) == 0) {
-                    if (next->data == NULL) {
-                        unit_size += GGML_PAD(ggml_backend_buft_get_alloc_size(buft, next), alignment);
-                    }
-                    unit_last++;
-                    continue;
-                }
+            int next_kind = -1, next_layer = -1;
+            if (!ggml_hexagon_tensor_layer(next, next_kind, next_layer) ||
+                next_kind != kind || next_layer != layer) {
+                break;
             }
 
-            break;
+            size_t next_size = GGML_PAD(ggml_backend_buft_get_alloc_size(buft, next), alignment);
+            if (unit_size + next_size > max_size) {
+                break;
+            }
+
+            unit_size += next_size;
+            unit_last++;
         }
 
         units.push_back({ unit_size, unit_first, unit_last });
         i = unit_last;
     }
 
-    size_t cur_buf_size  = 0;
-    int    cur_buf_first = 0;
-
     for (const auto & unit : units) {
         if (unit.size == 0) {
             continue;
         }
-
-        if (cur_buf_size > 0 && (cur_buf_size + unit.size) > max_size) {
-            plan.push_back({ cur_buf_size, cur_buf_first, unit.first });
-            cur_buf_size  = 0;
-            cur_buf_first = unit.first;
+        bool placed = false;
+        for (auto & item : plan) {
+            if (item.size + unit.size <= max_size) {
+                item.size += unit.size;
+                item.units.push_back(unit);
+                placed = true;
+                break;
+            }
         }
-
-        cur_buf_size += unit.size;
+        if (!placed) {
+            plan.push_back({ unit.size, { unit } });
+        }
     }
 
-    if (cur_buf_size > 0) {
-        plan.push_back({ cur_buf_size, cur_buf_first, n_tensors });
+    std::stable_sort(plan.begin(), plan.end(), [](const auto & a, const auto & b) {
+        return a.size > b.size;
+    });
+
+    if (!plan.empty()) {
+        for (const auto & unit : units) {
+            if (unit.size == 0) {
+                plan[0].units.push_back(unit);
+            }
+        }
     }
 
     return plan;
@@ -1104,27 +1129,18 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer_n(
         struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
 
         struct ggml_tensor * t_failed = NULL;
-        for (int j = item.first; j < item.last; j++) {
-            struct ggml_tensor * t = tensors[j];
-            if (t->data == NULL) {
-                if (t->view_src == NULL) {
+        for (const auto & unit : item.units) {
+            for (int j = unit.first; j < unit.last; j++) {
+                struct ggml_tensor * t = tensors[j];
+                if (t->data == NULL && t->view_src == NULL) {
                     if (ggml_tallocr_alloc(&tallocr, t) != GGML_STATUS_SUCCESS) {
                         t_failed = t;
                         break;
                     }
-                } else if (t->buffer == NULL) {
-                    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
-                        t_failed = t;
-                        break;
-                    }
                 }
-            } else {
-                if (t->view_src != NULL && t->buffer == NULL) {
-                    if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
-                        t_failed = t;
-                        break;
-                    }
-                }
+            }
+            if (t_failed != NULL) {
+                break;
             }
         }
         if (t_failed != NULL) {
@@ -1141,6 +1157,19 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer_n(
 
     if (buffers.empty()) {
         return NULL;
+    }
+
+    for (int j = 0; j < n_tensors; j++) {
+        struct ggml_tensor * t = tensors[j];
+        if (t->view_src != NULL && t->buffer == NULL) {
+            if (ggml_backend_view_init(t) != GGML_STATUS_SUCCESS) {
+                GGML_LOG_ERROR("%s: failed to initialize tensor %s\n", __func__, t->name);
+                for (ggml_backend_buffer_t b : buffers) {
+                    ggml_backend_buffer_free(b);
+                }
+                return NULL;
+            }
+        }
     }
 
     if (buffers.size() == 1) {
@@ -1212,7 +1241,6 @@ struct ggml_hexagon_opbatch {
     ggml_hexagon_session*            sess;
 
     std::vector<htp_opnode>          ops;       // htp_opnode of ops
-
     std::vector<htp_buf_desc>        h_bufs;    // htp buffer descriptors
     std::vector<htp_tensor>          h_tens;    // htp tensor descriptors
     std::vector<htp_op_desc>         h_ops;     // htp op descriptors
@@ -1787,6 +1815,7 @@ void ggml_hexagon_session::flush_batch(size_t min_ops) {
     if (op_batch->n_ops < min_ops) { return; }
 
     op_batch->sort_buffers();
+    this->mmap_buffers();
 
     htp_opbatch_req req {};
     dspqueue_buffer dbuf{};
@@ -1831,10 +1860,17 @@ void ggml_hexagon_session::flush_batch(size_t min_ops) {
 }
 
 void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
-    auto clone_tensor_buffer = [this](const ggml_tensor * t) {
-        auto sbuf = this->mmap_tensor(t);
-        if (!sbuf) return;
-        if (sbuf->sess != this) {
+    auto register_tensor = [&](const ggml_tensor * t) {
+        if (!t) return;
+        auto * sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
+        if (ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            sbuf->extended = opt_dma64;
+        }
+        if (sbuf->sess == this) {
+            if (!sbuf->mapped) {
+                this->buffers.insert(sbuf);
+            }
+        } else {
             this->clone_buffer(sbuf);
         }
         for (auto & sub : this->mdev.sessions) {
@@ -1842,11 +1878,11 @@ void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
         }
     };
 
-    for (auto t : node.get_inputs()) {
-        clone_tensor_buffer(t);
+    for (const auto * src : node.get_inputs()) {
+        register_tensor(src);
     }
-    for (auto t : node.get_outputs()) {
-        clone_tensor_buffer(t);
+    for (const auto * dst : node.get_outputs()) {
+        register_tensor(dst);
     }
 
     const bool fits_tensors = op_batch->fit_tensors(node);
@@ -1957,46 +1993,61 @@ void ggml_hexagon_session::enqueue_allreduce(
     this->enqueue_op(ar_node);
 }
 
-ggml_hexagon_shared_buffer * ggml_hexagon_session::mmap_tensor(const ggml_tensor * t) {
-    if (!t) return nullptr;
+void ggml_hexagon_session::mmap_buffers() {
+    auto collect_session = [](ggml_hexagon_session * sess, std::unordered_set<ggml_hexagon_shared_buffer *> & unmapped) {
+        for (auto * sbuf : sess->buffers) {
+            if (!sbuf->mapped) {
+                unmapped.insert(sbuf);
+            }
+        }
+        for (auto & [fd, clone] : sess->cloned_buffers) {
+            if (!clone->mapped) {
+                unmapped.insert(clone.get());
+            }
+        }
+    };
 
-    auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
-    if (!sbuf->mapped) {
-        const bool is_weight = ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
-        const bool extended  = opt_dma64 && is_weight;
-        sbuf->mmap(extended);
+    std::unordered_set<ggml_hexagon_shared_buffer *> unmapped;
+    collect_session(this, unmapped);
+    for (auto & sub : this->mdev.sessions) {
+        collect_session(sub.get(), unmapped);
     }
-    return sbuf;
+
+    if (!unmapped.empty()) {
+        std::vector<ggml_hexagon_shared_buffer *> sorted(unmapped.begin(), unmapped.end());
+        std::sort(sorted.begin(), sorted.end(), [](const auto * a, const auto * b) {
+            if (a->size() != b->size()) {
+                return a->size() > b->size();
+            }
+            if (a->fd() != b->fd()) {
+                return a->fd() < b->fd();
+            }
+            return a->sess->domain_id < b->sess->domain_id;
+        });
+        for (auto * sbuf : sorted) {
+            sbuf->mmap();
+        }
+    }
 }
 
-bool ggml_hexagon_session::clone_buffer(const ggml_hexagon_shared_buffer * sbuf)
+void ggml_hexagon_session::clone_buffer(const ggml_hexagon_shared_buffer * sbuf)
 {
     GGML_ASSERT(sbuf && sbuf->mem);
-    if (sbuf->sess == this) return true;
+    if (sbuf->sess == this) return;
 
     auto mem = sbuf->mem;
     int   fd = mem->fd;
 
     GGML_ASSERT(fd >= 0);
 
-    if (this->cloned_buffers.find(fd) != this->cloned_buffers.end()) return true;
-
-    GGML_ASSERT(sbuf->mapped);
+    if (this->cloned_buffers.find(fd) != this->cloned_buffers.end()) return;
 
     HEX_VERBOSE("ggml-hex: %s clone-buffer: %s base %p size %zu fd %d\n", this->name.c_str(),
                 sbuf->c_name(), sbuf->base(), sbuf->size(), fd);
 
     auto clone = std::make_unique<ggml_hexagon_shared_buffer>(this, *sbuf);
-    try {
-        clone->mmap(sbuf->extended);
-    } catch (const std::exception & exc) {
-        GGML_LOG_ERROR("ggml-hex: %s lazy mapping of buffer context failed: %s\n", this->c_name(), exc.what());
-        return false;
-    }
-
     this->cloned_buffers[fd] = std::move(clone);
-    mem->mapped_clones.insert(this);
-    return true;
+    mem->clones.insert(this);
 }
 
 void ggml_hexagon_session::release_buffer(const ggml_hexagon_shared_buffer * sbuf) {
@@ -2012,14 +2063,14 @@ void ggml_hexagon_session::release_buffer(const ggml_hexagon_shared_buffer * sbu
         auto clone = std::move(it->second);
         this->cloned_buffers.erase(it);
     }
-    mem->mapped_clones.erase(this);
+    mem->clones.erase(this);
 }
 
 void ggml_hexagon_session::unclone_buffer(const ggml_hexagon_shared_buffer * sbuf) {
     GGML_ASSERT(sbuf && sbuf->mem);
 
     auto mem = sbuf->mem;
-    std::vector<ggml_hexagon_session *> sessions(mem->mapped_clones.begin(), mem->mapped_clones.end());
+    std::vector<ggml_hexagon_session *> sessions(mem->clones.begin(), mem->clones.end());
 
     for (auto * sess : sessions) {
         sess->release_buffer(sbuf);
@@ -2757,18 +2808,11 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     auto sess_src = static_cast<ggml_hexagon_session *>(backend_src->context);
     auto sess_dst = static_cast<ggml_hexagon_session *>(backend_dst->context);
 
-    sess_src->mmap_tensor(src);
-    auto sbuf_dst = sess_dst->mmap_tensor(dst);
-
-    if (!sess_src->clone_buffer(sbuf_dst)) { return false; }
-
     const uint64_t src_key = ggml_hexagon_session_key(sess_src);
     auto & fence_slot = sess_dst->cpy_fence_slots[src_key];
     if (!fence_slot) {
         fence_slot = (volatile uint32_t *) sess_dst->alloc_fence(1);
     }
-
-    if (!sess_src->clone_buffer(sess_dst->fence_buf)) { return false; }
 
     uint32_t fence_seq = sess_dst->next_fence_seq();
 
@@ -2788,11 +2832,6 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
 static bool ggml_hexagon_cpy_tensor_async_virt(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
     auto sess_src = static_cast<ggml_hexagon_session *>(backend_src->context);
     auto sess_dst = static_cast<ggml_hexagon_session *>(backend_dst->context);
-
-    auto sbuf_src = sess_src->mmap_tensor(src);
-    sess_dst->mmap_tensor(dst);
-
-    if (!sess_dst->clone_buffer(sbuf_src)) { return false; }
 
     HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu\n",
                 sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src));
@@ -2916,7 +2955,6 @@ static void ggml_backend_hexagon_event_wait(ggml_backend_t backend, ggml_backend
         return;
     }
 
-    sess->clone_buffer(hex_event->fence_sess->fence_buf);
     sess->add_peer(hex_event->sess);
     sess->enqueue_fence(&hex_event->fence_tensor, hex_event->seq, /* wait = */ true);
 }
