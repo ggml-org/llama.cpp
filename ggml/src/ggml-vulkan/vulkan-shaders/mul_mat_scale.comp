@@ -11,6 +11,7 @@ layout(binding = 2) readonly buffer I { int32_t data_ids[]; };
 layout(push_constant) uniform parameter {
     uint ne0; uint ne1; uint ne2; uint ne3;
     uint sne0; uint sne1; uint sne2; uint sne3;
+    uint snb0; uint snb1; uint snb2; uint snb3;
     uint per_expert;
     uint ids_s0; uint ids_s1;
 } p;
@@ -27,13 +28,16 @@ void main() {
 
         uint si;
         if (p.per_expert != 0) {
-            const uint expert = uint(data_ids[i1 * p.ids_s0 + i2 * p.ids_s1]);
-            si = (p.per_expert == 2) ? (i0 % p.sne0) + expert * p.sne0 : expert;
+            const int32_t expert = data_ids[i1 * p.ids_s0 + i2 * p.ids_s1];
+            if (expert < 0) {
+                continue;
+            }
+            si = (p.per_expert == 2) ? i0 * p.snb0 + uint(expert) * p.snb1 : uint(expert) * p.snb0;
         } else {
-            si = (i0 % p.sne0)
-               + (i1 % p.sne1) * p.sne0
-               + (i2 % p.sne2) * p.sne0 * p.sne1
-               + (i3 % p.sne3) * p.sne0 * p.sne1 * p.sne2;
+            si = (i0 % p.sne0) * p.snb0
+               + (i1 % p.sne1) * p.snb1
+               + (i2 % p.sne2) * p.snb2
+               + (i3 % p.sne3) * p.snb3;
         }
 
         data_d[i] *= data_s[si];
