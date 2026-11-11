@@ -829,7 +829,7 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the ubatch allows it
     // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
-    // the context decides it, not the ubatch, so that the graph keeps the shape of the reserve
+    // the context decides it, not the cells of the ubatch, so that the graph keeps the shape of the reserve
     std::vector<ggml_tensor *> pool_masks;
     if (cparams.n_chunk > 0 && chunks.size() > 1 && cparams.n_seq_max == 1) {
         for (const auto & qc : chunks) {
