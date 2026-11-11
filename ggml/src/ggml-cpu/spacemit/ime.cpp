@@ -198,7 +198,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q5_K:
-                        //case GGML_TYPE_MXFP4:
+                    case GGML_TYPE_MXFP4:
                         forward_mul_mat(params, op);
                         return true;
                     default:
@@ -1180,7 +1180,7 @@ class tensor_traits_common : public tensor_traits_base {
         const int64_t DK = nek0;
         const int64_t DV = nev0;
 
-        const bool supported_prec  = (dst->op_params[3] == GGML_PREC_F32 || dst->op_params[3] == GGML_PREC_DEFAULT);
+        const bool supported_prec  = (ggml_prec_get_acc(dst) == GGML_PREC_F32 || ggml_prec_get_acc(dst) == GGML_PREC_BF16 || ggml_prec_get_acc(dst) == GGML_PREC_UNDEFINED);
         const bool supported_types = (q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16);
         const bool supported_shape = (DK > 0 && DK <= 128 && DV > 0 && DV <= 128);
         const bool supported_vlen  = (__riscv_vlenb() == 128);
@@ -1375,10 +1375,10 @@ static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack
         case GGML_TYPE_MXFP4:
             {
 #if defined(RISCV64_SPACEMIT_IME2)
-                // TODO
-                // if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-                //     return &ggml::cpu::riscv64_spacemit::mxfp4_32x32_q8_0;
-                // }
+                if (ggml_n_dims(cur) == 2 && cur->ne[0] % 32 == 0 && cur->ne[1] % 32 == 0 &&
+                    (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::mxfp4_32x32_q8_0;
+                }
 #endif
             }
             break;
@@ -1611,6 +1611,9 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
                     op->src[0]->buffer->buft == ggml_backend_cpu_riscv64_spacemit_buffer_type() &&
                     ggml_riscv64_spacemit_get_optimal_repack_type(op->src[0])) {
                     if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
+                        return false;
+                    }
+                    if (op->src[0]->type == GGML_TYPE_MXFP4 && !ggml_is_contiguous(op->src[1])) {
                         return false;
                     }
                     if (op->src[1]->type == GGML_TYPE_F32) {

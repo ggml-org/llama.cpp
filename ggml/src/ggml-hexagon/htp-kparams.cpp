@@ -939,12 +939,13 @@ static bool htp_matmul_check_types(
         return false;
     }
 
+    if (ggml_prec_get_src(dst, 1) == GGML_PREC_BF16 || ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
+        return false;
+    }
+
     if (is_matmul_id) {
         const struct ggml_tensor * src2 = dst->src[2];
         if (src1->type != GGML_TYPE_F32 || !src2 || src2->type != GGML_TYPE_I32) {
-            return false;
-        }
-        if (ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32) {
             return false;
         }
         switch (src0->type) {

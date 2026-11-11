@@ -7,11 +7,12 @@
 		ICON_CLASS_DEFAULT,
 		ICON_CLASS_SM,
 		ICON_CLASS_XS,
-		SIDEBAR_ACTIONS_ITEMS
+		SIDEBAR_ACTIONS_ITEMS,
+		SIDEBAR_FOOTER_ITEMS
 	} from '$lib/constants';
 	import { KeyboardKey, SidebarAction } from '$lib/enums';
 	import { RouterService } from '$lib/services/router.service';
-	import { conversationsStore } from '$lib/stores';
+	import { conversationsStore, deviceStore } from '$lib/stores';
 	import { formatRelativeTime, isIMEComposing } from '$lib/utils';
 	import type { Component } from 'svelte';
 
@@ -70,8 +71,15 @@
 	);
 
 	const actionEntries = $derived.by((): SearchEntry[] =>
-		// every sidebar action but Search itself, which is what opened this dialog
-		SIDEBAR_ACTIONS_ITEMS.filter((item) => item.action && item.action !== SidebarAction.SEARCH)
+		// every sidebar action but Search itself, which is what opened this dialog, and the models
+		// manager on a phone, which picks its models in the selector
+		[...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS]
+			.filter(
+				(item) =>
+					item.action &&
+					item.action !== SidebarAction.SEARCH &&
+					(item.action !== SidebarAction.MANAGE_MODELS || !deviceStore.isMobile)
+			)
 			.map((item) => ({
 				icon: item.icon,
 				id: `action-${item.action}`,
@@ -153,9 +161,108 @@
 	</span>
 {/snippet}
 
+{#snippet search()}
+	<div class="border-b border-border/30 px-4 py-3 dark:border-border/20">
+		<div class="flex items-center gap-2">
+			<input
+				bind:this={inputRef}
+				bind:value={query}
+				aria-activedescendant={entries.length > 0 ? `search-result-${activeIndex}` : undefined}
+				aria-controls="search-results"
+				aria-expanded="true"
+				autocomplete="off"
+				class="h-10 min-w-0 flex-1 border-0 bg-transparent px-1 text-lg outline-none placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0"
+				oninput={() => (highlighted = 0)}
+				onkeydown={handleKeydown}
+				placeholder="Search"
+				role="combobox"
+				spellcheck={false}
+			/>
+
+			<ActionIcon
+				ariaLabel="Close search"
+				class="size-8 shrink-0 text-muted-foreground"
+				icon={X}
+				iconSize={ICON_CLASS_DEFAULT}
+				onclick={() => handleOpenChange(false)}
+			/>
+		</div>
+	</div>
+
+	<div class="min-h-0 flex-1 overflow-y-auto p-2" id="search-results" role="listbox">
+		{#each sections as section, sectionIndex (section.title)}
+			{@const offset = sections
+				.slice(0, sectionIndex)
+				.reduce((total, previous) => total + previous.entries.length, 0)}
+
+			<div class="flex flex-col gap-0.5 {sectionIndex > 0 ? 'mt-3' : ''}" role="group">
+				<p class="px-2.5 pt-1 pb-1.5 text-xs font-medium text-muted-foreground">
+					{section.title}
+				</p>
+
+				{#each section.entries as entry, entryIndex (entry.id)}
+					{@const index = offset + entryIndex}
+					{@const isActive = index === activeIndex && !deviceStore.isMobile}
+
+					<!-- a phone has no keyboard to move a highlight with: no row is lit there -->
+					<button
+						aria-selected={isActive}
+						class="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors max-md:rounded-xl max-md:py-3 max-md:text-base {isActive
+							? 'bg-accent text-accent-foreground'
+							: ''}"
+						id="search-result-{index}"
+						onclick={entry.run}
+						onmousemove={() => (highlighted = index)}
+						role="option"
+						tabindex={-1}
+						type="button"
+					>
+						<entry.icon class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+
+						<span class="min-w-0 flex-1 truncate">{entry.label}</span>
+
+						{#if entry.pinned}
+							<Pin aria-label="Pinned" class="{ICON_CLASS_SM} shrink-0 text-muted-foreground" />
+						{/if}
+
+						{#if entry.meta}
+							<span class="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground">
+								{entry.meta}
+							</span>
+						{/if}
+
+						{#if entry.keys && !deviceStore.isMobile}
+							<KeyboardShortcutInfo class="opacity-100" keys={entry.keys} />
+						{/if}
+
+						<CornerDownLeft
+							class="{ICON_CLASS_SM} shrink-0 max-md:hidden text-muted-foreground {isActive
+								? 'opacity-100'
+								: 'opacity-0'}"
+						/>
+					</button>
+				{/each}
+			</div>
+		{:else}
+			<p class="px-3 py-12 text-center text-sm text-muted-foreground">{emptyMessage}</p>
+		{/each}
+	</div>
+
+	<div
+		class="flex items-center gap-5 border-t border-border/30 px-4 py-2.5 text-xs text-muted-foreground max-md:hidden dark:border-border/20"
+	>
+		{@render hint('Close', ['Esc'])}
+
+		{@render hint('Navigate', [ArrowUp, ArrowDown])}
+
+		<span class="ml-auto">{@render hint('Open', [CornerDownLeft])}</span>
+	</div>
+{/snippet}
+
+<!-- like every dialog, a phone shows it full screen -->
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0 max-md:top-4 md:w-full md:max-w-2xl!"
+		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			inputRef?.focus();
@@ -163,99 +270,6 @@
 	>
 		<Dialog.Title class="sr-only">Search</Dialog.Title>
 
-		<div class="border-b border-border/30 px-4 py-3 dark:border-border/20">
-			<div class="flex items-center gap-2">
-				<input
-					bind:this={inputRef}
-					bind:value={query}
-					aria-activedescendant={entries.length > 0 ? `search-result-${activeIndex}` : undefined}
-					aria-controls="search-results"
-					aria-expanded="true"
-					autocomplete="off"
-					class="h-10 min-w-0 flex-1 border-0 bg-transparent px-1 text-lg outline-none placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0"
-					oninput={() => (highlighted = 0)}
-					onkeydown={handleKeydown}
-					placeholder="Search"
-					role="combobox"
-					spellcheck={false}
-				/>
-
-				<ActionIcon
-					ariaLabel="Close search"
-					class="h-8 w-8 shrink-0 text-muted-foreground"
-					icon={X}
-					iconSize={ICON_CLASS_DEFAULT}
-					onclick={() => handleOpenChange(false)}
-				/>
-			</div>
-		</div>
-
-		<div class="min-h-0 flex-1 overflow-y-auto p-2" id="search-results" role="listbox">
-			{#each sections as section, sectionIndex (section.title)}
-				{@const offset = sections
-					.slice(0, sectionIndex)
-					.reduce((total, previous) => total + previous.entries.length, 0)}
-
-				<div class="flex flex-col gap-0.5 {sectionIndex > 0 ? 'mt-3' : ''}" role="group">
-					<p class="px-2.5 pt-1 pb-1.5 text-xs font-medium text-muted-foreground">
-						{section.title}
-					</p>
-
-					{#each section.entries as entry, entryIndex (entry.id)}
-						{@const index = offset + entryIndex}
-						{@const isActive = index === activeIndex}
-
-						<button
-							aria-selected={isActive}
-							class="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors {isActive
-								? 'bg-accent text-accent-foreground'
-								: ''}"
-							id="search-result-{index}"
-							onclick={entry.run}
-							onmousemove={() => (highlighted = index)}
-							role="option"
-							tabindex={-1}
-							type="button"
-						>
-							<entry.icon class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
-
-							<span class="min-w-0 flex-1 truncate">{entry.label}</span>
-
-							{#if entry.pinned}
-								<Pin aria-label="Pinned" class="{ICON_CLASS_SM} shrink-0 text-muted-foreground" />
-							{/if}
-
-							{#if entry.meta}
-								<span class="max-w-[40%] shrink-0 truncate text-xs text-muted-foreground">
-									{entry.meta}
-								</span>
-							{/if}
-
-							{#if entry.keys}
-								<KeyboardShortcutInfo class="opacity-100" keys={entry.keys} />
-							{/if}
-
-							<CornerDownLeft
-								class="{ICON_CLASS_SM} shrink-0 text-muted-foreground {isActive
-									? 'opacity-100'
-									: 'opacity-0'}"
-							/>
-						</button>
-					{/each}
-				</div>
-			{:else}
-				<p class="px-3 py-12 text-center text-sm text-muted-foreground">{emptyMessage}</p>
-			{/each}
-		</div>
-
-		<div
-			class="flex items-center gap-5 border-t border-border/30 px-4 py-2.5 text-xs text-muted-foreground max-md:hidden dark:border-border/20"
-		>
-			{@render hint('Close', ['Esc'])}
-
-			{@render hint('Navigate', [ArrowUp, ArrowDown])}
-
-			<span class="ml-auto">{@render hint('Open', [CornerDownLeft])}</span>
-		</div>
+		{@render search()}
 	</Dialog.Content>
 </Dialog.Root>

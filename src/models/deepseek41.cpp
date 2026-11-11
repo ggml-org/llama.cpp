@@ -875,7 +875,7 @@ llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        // F32 router accumulation: expert selection is near-tie sensitive
+        // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/1bae0e1088993b9b82de08f59de5be5a34e42170/inference/model.py#L813
         ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
         ggml_prec_set_acc(logits, GGML_PREC_F32);
         cb(logits, "ffn_moe_logits", il);

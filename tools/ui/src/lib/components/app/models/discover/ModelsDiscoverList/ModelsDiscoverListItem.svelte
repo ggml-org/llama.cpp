@@ -5,7 +5,7 @@
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import { Pause, Play, X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
-	import { HF_MMPROJ_FILENAME_TOKEN, HF_MODALITY_PIPELINE_TAGS, MODEL_ID } from '$lib/constants';
+	import { HF_MMPROJ_FILENAME_TOKEN, MODEL_ID } from '$lib/constants';
 	import { ModelDraftSidecar, ModelRowDownloadState } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsDiscoverStore, modelsStore } from '$lib/stores';
@@ -96,19 +96,19 @@
 
 	let supportsToolUse = $derived(detectToolUseSupport(model.gguf?.chat_template ?? ''));
 
-	// Modalities derived from HF metadata: vision from an mmproj sidecar or a
-	// multimodal pipeline tag, audio/video from their pipeline tags.
-	let modalities = $derived.by<ModelModalities>(() => {
-		const tag = model.pipeline_tag ?? '';
-		const vision =
-			HF_MODALITY_PIPELINE_TAGS.vision.includes(tag) ||
-			Boolean(
-				model.siblings?.some((s) => s.rfilename.toLowerCase().includes(HF_MMPROJ_FILENAME_TOKEN))
-			);
-		const audio = HF_MODALITY_PIPELINE_TAGS.audio.includes(tag);
-		const video = HF_MODALITY_PIPELINE_TAGS.video.includes(tag);
+	let mmprojPath = $derived(
+		model.siblings?.find((s) => s.rfilename.toLowerCase().includes(HF_MMPROJ_FILENAME_TOKEN))
+			?.rfilename
+	);
 
-		return { audio, video, vision };
+	// Modalities derived from HF metadata: the pipeline tag and the mmproj.
+	let modalities = $derived<ModelModalities>(
+		HuggingFaceService.getModalities(model.id, model.pipeline_tag, mmprojPath)
+	);
+
+	// the mmproj's header says whether it also hears; read once per repo
+	$effect(() => {
+		if (mmprojPath) void HuggingFaceService.getMmprojEncoders(model.id, mmprojPath);
 	});
 
 	// Draft sidecars (mtp, dflash, dspark, eagle3) the repo offers, badged with no

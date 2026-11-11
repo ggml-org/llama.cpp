@@ -72,7 +72,7 @@ static void write_wav16_header(std::vector<char> & buf, uint32_t data_sz, int32_
 
 static void append_wav16_pcm(std::vector<char> & buf, const float * pcm, size_t n) {
     for (size_t i = 0; i < n; i++) {
-        int16_t s = (int16_t) (std::max(-1.0f, std::min(1.0f, pcm[i])) * 32767.0f);
+        int16_t s = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, pcm[i])) * 32767.0f);
         put_bytes(buf, &s, 2);
     }
 }
@@ -494,7 +494,7 @@ private:
     llama_token tts_eos    = LLAMA_TOKEN_NULL;
     std::vector<float> tok_embd; // whole token embedding matrix, n_vocab * n_embd
 
-    // must match hparams.wav_tfm_swa hardcoded in clip.cpp
+    // must match hparams.wav_tfm_swa hardcoded in mtmd-model.cpp
     size_t window_frames = 72;
 
     // per-generation state, cleared by reset()
@@ -521,19 +521,19 @@ private:
 
 // settings that only live in the reference's per-pack yaml, not in the checkpoint
 // the english packs share the same shapes and tokenizer, but disagree on these
-// all three are 0 / false when the pack does not tune them, the model default is then used
+// both are 0 / false when the pack does not tune them, the model default is then used
 struct pockettts_pack_settings {
-    float temp             = 0.0f;
-    int   frames_after_eos = 0;
-    bool  pad_short_text   = false;
+    int  frames_after_eos = 0;
+    bool pad_short_text   = false;
 };
 
 static pockettts_pack_settings pockettts_pack(const char * variant) {
     static const std::unordered_map<std::string, pockettts_pack_settings> packs = {
-        { "english",         { 0.3f, 0, false } },
-        { "english_2026-01", { 0.7f, 0, true  } },
-        { "english_2026-04", { 0.3f, 0, false } },
-        { "french_24l",      { 0.7f, 8, false } },
+        { "english",         { 0, false } },
+        { "english_2026-01", { 0, true  } },
+        { "english_2026-04", { 0, false } },
+        { "french_24l",      { 8, false } },
+        { "italian",         { 0, false } },
     };
     auto it = packs.find(variant ? variant : "");
     if (it == packs.end()) {
@@ -638,6 +638,7 @@ public:
         prompt_batch->set_position_normal(0, seq_id);
         prompt_pos = 0;
 
+        temp     = inp->temp;
         out_type = inp->out_type;
         stream   = inp->stream;
         if (!init_gen_state(inp->seed)) {
@@ -680,8 +681,8 @@ public:
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
         inp.embd = const_cast<float *>(h_state_in);
-        if (pack.temp > 0.0f) {
-            inp.temp = pack.temp;
+        if (temp >= 0.0f) {
+            inp.temp = temp;
         }
         mtmd_gen_out out{};
         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
@@ -1016,6 +1017,7 @@ private:
     }
 
     pockettts_pack_settings pack;
+    float temp = -1.0f; // the caller's flow noise scale, < 0 for the model default
     bool specials_ok = false;
     llama_token bos_before_voice = LLAMA_TOKEN_NULL;
     llama_token audio_bos        = LLAMA_TOKEN_NULL;
@@ -1306,9 +1308,9 @@ public:
             return 1;
         }
 
-        // the sampling defaults of the model, the caller's top-k/top-p are not used
+        // the sampling defaults of the model, the caller can only override the temperature
         const mtmd_gen_inp def = mtmd_gen_inp_default(mctx);
-        temp        = def.temp;
+        temp        = inp->temp >= 0.0f ? inp->temp : def.temp;
         top_k       = def.top_k;
         rep_penalty = def.penalty_repeat;
         rep_window  = def.penalty_last_n;
@@ -2291,7 +2293,7 @@ private:
     // repetition-aware sampling: if a semantic draw repeats one of the last ras_window main tokens, draw again with fixed settings
     static constexpr size_t ras_window = 16;
     static constexpr size_t n_cb       = 10;
-    // codebook tower KV rows (clip_graph_drama3_gen::n_pos_max): one per prompt row but the last, one per frame
+    // codebook tower KV rows (mtmd_graph_drama3_gen::n_pos_max): one per prompt row but the last, one per frame
     static constexpr size_t n_tower_rows = 4096;
     // frames per codec call when streaming (0.33 s)
     static constexpr size_t stream_frames = 7;
@@ -2459,6 +2461,7 @@ struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
     mtmd_helper_gen_audio_inp inp{};
     inp.top_k    = 50;
     inp.top_p    = 1.0f;
+    inp.temp     = -1.0f; // model default
     inp.seed     = UINT32_MAX; // random
     inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     return inp;

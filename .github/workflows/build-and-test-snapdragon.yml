@@ -33,7 +33,7 @@ concurrency:
 
 jobs:
   android-ndk-snapdragon:
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.8'
     defaults:
@@ -67,7 +67,7 @@ jobs:
           path: pkg-snapdragon/llama.cpp
 
   linux-iot-snapdragon:
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-linux:v0.8'
     defaults:
@@ -103,7 +103,7 @@ jobs:
   test-snapdragon-qdc:
     name: Test on QDC Device (${{ matrix.device }})
     needs: [android-ndk-snapdragon, linux-iot-snapdragon]
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 180
     strategy:
       fail-fast: false
