@@ -192,9 +192,18 @@ option(GGML_SCHED_NO_REALLOC                "ggml: disallow reallocations in ggm
 # 3rd party libs / backends
 option(GGML_ACCELERATE                      "ggml: enable Accelerate framework"               ON)
 option(GGML_BLAS                            "ggml: use BLAS"                                  ${GGML_BLAS_DEFAULT})
-# Optional CPU-path override for packed 2D F16 matrix multiplications.
-option(GGML_MKL_FP16 "ggml: convert CPU FP16 matmul inputs and use oneMKL SGEMM" OFF)
+set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
+                                            "ggml: BLAS library vendor")
+# GGML_BLAS is the master switch. CMake preserves a cached opt-in while BLAS
+# is disabled, but its effective value is OFF and no MKL lookup/linking occurs.
+include(CMakeDependentOption)
+cmake_dependent_option(GGML_MKL_FP16
+    "ggml: convert CPU FP16 matmul inputs and use oneMKL SGEMM"
+    OFF "GGML_BLAS" OFF)
 if (GGML_MKL_FP16)
+    if (NOT GGML_BLAS_VENDOR MATCHES "^Intel")
+        message(FATAL_ERROR "GGML_MKL_FP16 requires an Intel MKL GGML_BLAS_VENDOR (for example Intel10_64_dyn)")
+    endif()
     if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
         message(FATAL_ERROR "GGML_MKL_FP16 requires Linux x86-64")
     endif()
@@ -209,8 +218,6 @@ if (GGML_MKL_FP16)
     message(STATUS "GGML FP16 MKL: ${GGML_MKL_FP16_LIBRARY}; runtime opt-in: GGML_FP16_MKL_MODE=auto")
 endif()
 
-set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
-                                            "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
