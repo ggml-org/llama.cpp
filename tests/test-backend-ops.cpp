@@ -5915,6 +5915,47 @@ struct test_mul_mat_id_dup : public test_mul_mat_id {
     }
 };
 
+// MUL_MAT_ID where only the first n_mats/2 experts are ever selected: the trailing experts have zero rows,
+// so the compacted column range ends at the last used expert and the per-expert tiles behind it are empty.
+struct test_mul_mat_id_unused_tail : public test_mul_mat_id {
+    using test_mul_mat_id::test_mul_mat_id;
+    std::string vars() override { return test_mul_mat_id::vars() + ",unused_tail=1"; }
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type != GGML_TYPE_I32) {
+                init_tensor_uniform(t);
+            }
+        }
+        init_ids(ctx);
+    }
+    void reinit_perf_iter(ggml_context * ctx) override {
+        init_ids(ctx);
+    }
+    void init_ids(ggml_context * ctx) {
+        const int n_mats_used = n_mats / 2;
+        GGML_ASSERT(n_used + int(ids_offset) <= n_mats_used);
+        std::default_random_engine rng(1234);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type != GGML_TYPE_I32 || ggml_is_view_op(t->op)) {
+                continue;
+            }
+            for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                // distinct ids in [0, n_mats_used) for the slots read through the view, the rest is never selected
+                std::vector<int32_t> perm(n_mats_used);
+                for (int i = 0; i < n_mats_used; i++) {
+                    perm[i] = i;
+                }
+                std::shuffle(perm.begin(), perm.end(), rng);
+                std::vector<int32_t> data(t->ne[0]);
+                for (int i = 0; i < t->ne[0]; i++) {
+                    data[i] = perm[i % n_mats_used];
+                }
+                ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+            }
+        }
+    }
+};
+
 // FP4 W4A8 path on the MoE path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
 struct test_mul_mat_id_w4a8 : public test_mul_mat_id {
     test_mul_mat_id_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
@@ -12168,6 +12209,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // per-expert base offset, which k == 256 alone leaves untested
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 28, 10, false, 1024, 1, 4096));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 128, 8, false, 1024, 1, 2048));
+
+    // trailing experts without any rows (empty MoE tiles at the end of the compacted ids)
+    for (ggml_type type_a : {GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K}) {
+        for (int n : {64, 65}) {
+            test_cases.emplace_back(new test_mul_mat_id_unused_tail(type_a, GGML_TYPE_F32, 16, 2, false, 33, n, 512));
+        }
+    }
 
     // TODO: disabled until CUDA backend support is added [TAG_MUL_MAT_ID_DUPLICATE_ID]
 #if 0
