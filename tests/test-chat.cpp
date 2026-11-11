@@ -8,6 +8,7 @@
 #include "../src/llama-grammar.h"
 #include "../src/unicode.h"
 #include "../tools/server/server-chat.h"
+#include "../tools/server/server-task.h"
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "json-schema-to-grammar.h"
@@ -22,6 +23,9 @@
 #include <functional>
 #include <iostream>
 #include "json.h"
+#ifdef LLAMA_USE_LLGUIDANCE
+#include "flint-golden.h"
+#endif
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -8229,6 +8233,311 @@ static void test_prompt_parts() {
     assert_equals(false, prompt.parts[0].is_input);
 }
 
+static void test_flint_chat_session() {
+#ifdef LLAMA_USE_LLGUIDANCE
+    auto tmpls = read_templates("models/templates/RecursiveSI-flint.jinja");
+    common_chat_templates_inputs inputs;
+    inputs.messages = { message_user };
+    inputs.tools = common_chat_tools_parse_oaicompat(json::parse(R"([
+        {"type":"function","function":{"name":"view","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+        {"type":"function","function":{"name":"read_bash","parameters":{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}}},
+        {"type":"function","function":{"name":"create","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}}}
+    ])"));
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    const std::string thought = "<think>inspect</think>";
+    const std::string read = "<tool_call>read<arg_key>path</arg_key><arg_value> a\n\"b\" </arg_value></tool_call>";
+    const std::string shell = "<tool_call>read_bash<arg_key>id</arg_key><arg_value>3</arg_value></tool_call>";
+    const std::string write = "<tool_call>write<arg_key>content</arg_key><arg_value></arg_value></tool_call>";
+    for (const auto & output : {thought + read, thought + shell, thought + write}) {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        common_chat_msg previous;
+        for (char c : output) {
+            auto msg = session.feed(common_chat_input(std::string(1, c)));
+            common_chat_msg_diff::compute_diffs(previous, msg);
+            previous = msg;
+        }
+        auto msg = session.finish();
+        assert_equals(std::string("inspect"), msg.reasoning_content);
+        assert_equals(size_t(1), msg.tool_calls.size());
+        const auto & call = msg.tool_calls[0];
+        auto args = json::parse(call.arguments);
+        if (output == thought + read) {
+            assert_equals(std::string("view"), call.name);
+            assert_equals(std::string(" a\n\"b\" "), args.at("path").get<std::string>());
+        } else if (output == thought + shell) {
+            assert_equals(std::string("read_bash"), call.name);
+            assert_equals(3, args.at("id").get<int>());
+        } else {
+            assert_equals(std::string("create"), call.name);
+            assert_equals(std::string(""), args.at("content").get<std::string>());
+        }
+    }
+    auto shell_inputs = inputs;
+    for (const auto & name : {"write_bash", "stop_bash", "list_bash"}) {
+        shell_inputs.tools.push_back({name, "", "{}"});
+    }
+    shell_inputs.chat_template_kwargs["flint_noshell"] = "true";
+    auto bash = [](const std::string & args, const std::string & result) {
+        common_chat_msg response;
+        response.role = "tool";
+        response.content = result;
+        return std::vector<common_chat_msg>{simple_assist_msg("", "", "bash", args), response};
+    };
+    const auto finished = bash(R"({"command":"ls"})", "a.py\n<shellId: 0 completed with exit code 0>");
+    const auto async = bash(R"({"command":"x","mode":"async"})", "<shellId: 1>");
+    const auto running = bash(R"({"command":"pytest","shellId":"tests"})",
+        "<command with shellId: tests is still running after 30 seconds. The command is still running>");
+    auto completed = running;
+    completed.push_back(bash("{}", "ok\n<shellId: tests completed with exit code 0>").back());
+    auto two_running = running;
+    two_running.push_back(bash("{}", "<command with shellId: other is still running after 30 seconds>").back());
+    two_running.push_back(completed.back());
+    auto all_completed = two_running;
+    all_completed.push_back(bash("{}", "<shellId: other completed with exit code 0>").back());
+    auto async_completed = async;
+    async_completed.push_back(bash("{}", "<shellId: 1 completed with exit code 0>").back());
+    auto check_shells = [&](const std::vector<common_chat_msg> & history, bool available) {
+        shell_inputs.messages = history;
+        shell_inputs.messages.push_back(message_user);
+        auto data = common_chat_templates_apply(tmpls.get(), shell_inputs);
+        for (const auto & name : {"read_bash", "write_bash", "stop_bash", "list_bash"}) {
+            assert_equals(available, data.prompt.str().find(name) != std::string::npos);
+            assert_equals(available, data.grammar.find("\"" + std::string(name) + "\"") != std::string::npos);
+        }
+    };
+    check_shells({}, false);
+    check_shells(finished, false);
+    check_shells(async, true);
+    check_shells(running, true);
+    check_shells(completed, false);
+    check_shells(two_running, true);
+    check_shells(all_completed, false);
+    check_shells(async_completed, true);
+    shell_inputs.chat_template_kwargs["flint_noshell"] = "false";
+    check_shells({}, true);
+
+    inputs.tool_choice_name = "missing";
+    bool rejected = false;
+    try {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert_equals(true, rejected);
+    inputs.tool_choice_name.clear();
+    inputs.json_schema = R"({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]})";
+    rejected = false;
+    try {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert_equals(true, rejected);
+#endif
+}
+
+static void test_flint_python_stream_golden() {
+#ifdef LLAMA_USE_LLGUIDANCE
+    const auto golden = json::parse(flint_python_golden);
+    auto tmpls = read_templates("models/templates/RecursiveSI-flint.jinja");
+    common_chat_templates_inputs inputs;
+    inputs.messages = {message_user};
+    inputs.tools = common_chat_tools_parse_oaicompat(golden.at("stream_tools"));
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    const auto output = golden.at("stream_output").get<std::string>();
+    common_chat_msg expected;
+    expected.role = "assistant";
+    expected.content = golden.at("stream_expected").at("content").get<std::string>();
+    expected.reasoning_content = golden.at("stream_expected").at("reasoning_content").get<std::string>();
+    for (const auto & call : golden.at("stream_expected").at("tool_calls")) {
+        expected.tool_calls.push_back({call.at("name"), call.at("arguments").dump(), ""});
+    }
+    common_chat_session nonstream(tmpls.get(), nullptr, inputs);
+    const auto whole = nonstream.finish(common_chat_input(output));
+    // The proxy strips outer content whitespace; the native parser preserves it.
+    assert_msg_equals(expected, whole, true);
+    for (const auto & sizes : std::vector<std::vector<size_t>>{{1}, {3}, {2, 5, 7}, {output.size()}}) {
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        common_chat_msg previous, accumulated;
+        auto append = [&](const common_chat_msg & msg) {
+            accumulated.role = msg.role;
+            for (const auto & diff : common_chat_msg_diff::compute_diffs(previous, msg)) {
+                for (const auto & marker : golden.at("markers")) {
+                    const auto text = marker.get<std::string>();
+                    assert_equals(std::string::npos, diff.content_delta.find(text));
+                    assert_equals(std::string::npos, diff.reasoning_content_delta.find(text));
+                    assert_equals(std::string::npos, diff.tool_call_delta.name.find(text));
+                    assert_equals(std::string::npos, diff.tool_call_delta.arguments.find(text));
+                }
+                accumulated.content += diff.content_delta;
+                accumulated.reasoning_content += diff.reasoning_content_delta;
+                if (diff.tool_call_index != std::string::npos) {
+                    while (accumulated.tool_calls.size() <= diff.tool_call_index) {
+                        accumulated.tool_calls.push_back({"", "", ""});
+                    }
+                    auto & call = accumulated.tool_calls[diff.tool_call_index];
+                    if (!diff.tool_call_delta.name.empty()) {
+                        call.name = diff.tool_call_delta.name;
+                    }
+                    if (!diff.tool_call_delta.id.empty()) {
+                        call.id = diff.tool_call_delta.id;
+                    }
+                    call.arguments += diff.tool_call_delta.arguments;
+                }
+            }
+            assert_msg_equals(msg, accumulated, false);
+            for (size_t i = 0; i < msg.tool_calls.size(); ++i) {
+                assert_equals(msg.tool_calls[i].arguments, accumulated.tool_calls[i].arguments);
+            }
+            previous = msg;
+        };
+        size_t offset = 0, index = 0;
+        while (offset < output.size()) {
+            const auto length = std::min(sizes[index++ % sizes.size()], output.size() - offset);
+            append(session.feed(common_chat_input(output.substr(offset, length))));
+            offset += length;
+        }
+        append(session.finish());
+        assert_msg_equals(whole, accumulated, false);
+        assert_msg_equals(expected, session.msg(), true);
+    }
+#endif
+}
+
+static void test_flint_python_server_golden() {
+#ifdef LLAMA_USE_LLGUIDANCE
+    const auto golden = json::parse(flint_python_golden);
+    auto tmpls = read_templates("models/templates/RecursiveSI-flint.jinja");
+    common_chat_templates_inputs inputs;
+    inputs.messages = {message_user};
+    inputs.tools = common_chat_tools_parse_oaicompat(golden.at("stream_tools"));
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    auto run = [&](const std::string & output, const std::vector<size_t> & sizes, stop_type stop, bool include_usage) {
+        task_result_state nonstream_state(common_chat_session(tmpls.get(), nullptr, inputs));
+        server_task_result_cmpl_final whole{};
+        whole.content = common_chat_input(output);
+        whole.stop = stop;
+        whole.n_prompt_tokens = 120;
+        whole.n_decoded = 57;
+        whole.oaicompat_cmpl_id = "chatcmpl-flint-golden";
+        whole.update(nonstream_state);
+        const auto response = whole.to_json_oaicompat_chat();
+        const auto finish = response.at("choices").at(0).at("finish_reason");
+        assert_equals(std::string(stop == STOP_TYPE_LIMIT ? "length" : "tool_calls"), finish.get<std::string>());
+        task_result_state state(common_chat_session(tmpls.get(), nullptr, inputs));
+        std::vector<json> events;
+        size_t offset = 0, index = 0;
+        while (offset < output.size()) {
+            const auto length = std::min(sizes[index % sizes.size()], output.size() - offset);
+            server_task_result_cmpl_partial part{};
+            part.content = common_chat_input(output.substr(offset, length));
+            part.n_decoded = ++index;
+            part.oaicompat_cmpl_id = whole.oaicompat_cmpl_id;
+            part.update(state);
+            for (const auto & event : part.to_json_oaicompat_chat()) {
+                events.push_back(event);
+            }
+            offset += length;
+        }
+        server_task_result_cmpl_final final{};
+        final.stop = stop;
+        final.stream = true;
+        final.include_usage = include_usage;
+        final.n_prompt_tokens = 120;
+        final.n_decoded = 57;
+        final.oaicompat_cmpl_id = whole.oaicompat_cmpl_id;
+        final.update(state);
+        for (const auto & event : final.to_json_oaicompat_chat_stream()) {
+            events.push_back(event);
+        }
+        if (include_usage) {
+            assert_equals(true, events.back().at("choices").empty());
+            assert_equals(120, events.back().at("usage").at("prompt_tokens").get<int>());
+            assert_equals(57, events.back().at("usage").at("completion_tokens").get<int>());
+            assert_equals(177, events.back().at("usage").at("total_tokens").get<int>());
+            events.pop_back();
+        } else {
+            assert_equals(false, events.back().contains("usage"));
+        }
+        assert_equals(std::string("assistant"), events.front().at("choices").at(0).at("delta").at("role").get<std::string>());
+        common_chat_msg reconstructed;
+        reconstructed.role = "assistant";
+        for (size_t i = 0; i < events.size(); ++i) {
+            const auto & event = events[i];
+            assert_equals(std::string("chat.completion.chunk"), event.at("object").get<std::string>());
+            assert_equals(whole.oaicompat_cmpl_id, event.at("id").get<std::string>());
+            const auto & choice = event.at("choices").at(0);
+            if (i + 1 == events.size()) {
+                assert_equals(finish.get<std::string>(), choice.at("finish_reason").get<std::string>());
+            } else {
+                assert_equals(true, choice.at("finish_reason").is_null());
+            }
+            const auto & delta = choice.at("delta");
+            for (const auto & marker : golden.at("markers")) {
+                assert_equals(std::string::npos, delta.dump().find(marker.get<std::string>()));
+            }
+            if (delta.contains("content") && delta.at("content").is_string()) {
+                reconstructed.content += delta.at("content").get<std::string>();
+            }
+            if (delta.contains("reasoning_content")) {
+                reconstructed.reasoning_content += delta.at("reasoning_content").get<std::string>();
+            }
+            for (const auto & call : delta.value("tool_calls", json::array())) {
+                const auto call_index = call.at("index").get<size_t>();
+                assert_equals(true, call_index <= reconstructed.tool_calls.size());
+                if (call_index == reconstructed.tool_calls.size()) {
+                    reconstructed.tool_calls.push_back({"", "", ""});
+                }
+                auto & target = reconstructed.tool_calls[call_index];
+                if (call.contains("id")) {
+                    const auto id = call.at("id").get<std::string>();
+                    assert_equals(true, target.id.empty() || target.id == id);
+                    target.id = id;
+                }
+                const auto & function = call.at("function");
+                target.name += function.value("name", "");
+                target.arguments += function.value("arguments", "");
+            }
+        }
+        auto expected = whole.oaicompat_msg;
+        for (auto & call : expected.tool_calls) {
+            call.id.clear();
+        }
+        for (auto & call : reconstructed.tool_calls) {
+            assert_equals(false, call.id.empty());
+            call.id.clear();
+        }
+        assert_msg_equals(expected, reconstructed, false);
+        for (size_t i = 0; i < expected.tool_calls.size(); ++i) {
+            assert_equals(expected.tool_calls[i].arguments, reconstructed.tool_calls[i].arguments);
+        }
+        return whole.oaicompat_msg;
+    };
+    const auto output = golden.at("stream_output").get<std::string>();
+    for (const auto & sizes : std::vector<std::vector<size_t>>{{1}, {3}, {2, 5, 7}, {output.size()}}) {
+        run(output, sizes, STOP_TYPE_EOS, false);
+        run(output, sizes, STOP_TYPE_EOS, true);
+    }
+    for (const auto & example : golden.at("truncated")) {
+        fprintf(stderr, "Flint Python server golden: %s\n", example.at("id").get<std::string>().c_str());
+        const auto msg = run(example.at("output").get<std::string>(), {4}, STOP_TYPE_LIMIT, false);
+        assert_equals(example.at("content").get<std::string>(), string_strip(msg.content));
+        assert_equals(example.at("reasoning_content").get<std::string>(), msg.reasoning_content);
+        // Native streaming can expose partial calls on a length finish; the Python proxy buffers them.
+        assert_equals(true, msg.tool_calls.size() <= 1);
+        for (const auto & call : msg.tool_calls) {
+            assert_equals(true, call.name == "view" || call.name == "bash");
+        }
+    }
+    inputs.parallel_tool_calls = false;
+    const auto single = common_chat_templates_apply(tmpls.get(), inputs).grammar;
+    run("<tool_call>bash<arg_key>command</arg_key><arg_value>ls</arg_value></tool_call>", {3}, STOP_TYPE_EOS, false);
+    assert_equals(single, common_chat_templates_apply(tmpls.get(), inputs).grammar);
+    inputs.parallel_tool_calls = true;
+    assert_equals(false, single == common_chat_templates_apply(tmpls.get(), inputs).grammar);
+#endif
+}
+
 static void test_chat_session() {
     LOG_DBG("%s\n", __func__);
     auto tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
@@ -8325,7 +8634,7 @@ static void test_chat_json_depth() {
     // the schema builder stops at 128 levels, the root schema is one of them
     assert_equals(false, rejected([&] { common_chat_schema_from_json(json::parse(schema(127))); }));
     assert_equals(true, rejected([&] { common_chat_schema_from_json(json::parse(schema(128))); }));
-    assert_equals(true, rejected([&] { json_schema_to_grammar(json::parse(schema(1000))); }));
+    assert_equals(true, rejected([&] { json_schema_to_grammar(json::parse(schema(1000)), /* force_gbnf = */ true); }));
 
     // the jinja engine and the schema builder reject the inputs before they recurse too deep
     auto         tmpls = read_templates("models/templates/Qwen3.5-4B.jinja");
@@ -8619,6 +8928,9 @@ int main(int argc, char ** argv) {
         test_reasoning_effort_caps();
         test_prompt_parts();
         test_chat_session();
+        test_flint_chat_session();
+        test_flint_python_stream_golden();
+        test_flint_python_server_golden();
         test_chat_json_depth();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();

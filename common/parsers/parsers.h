@@ -40,6 +40,8 @@ std::string common_chat_template_generation_prompt_impl(
     const std::optional<json> & additional_context = std::nullopt);
 
 bool is_lfm2_template(const std::string & src);
+bool is_flint_template(const std::string & src);
+common_chat_params common_chat_params_init_flint(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 namespace workaround {
 

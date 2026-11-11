@@ -1402,6 +1402,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_minicpm5;
     }
 
+#ifdef LLAMA_USE_LLGUIDANCE
+    if (is_flint_template(src)) {
+        return common_chat_params_init_flint;
+    }
+#endif
+
     // TranslateGemma - user content must follow a custom schema with language codes
     if (src.find("[source_lang_code]") != std::string::npos &&
         src.find("[target_lang_code]") != std::string::npos) {
@@ -1464,7 +1470,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 }
 
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
-                                                            const struct common_chat_templates_inputs & inputs) {
+                                                            const struct common_chat_templates_inputs & inputs,
+                                                            const llama_vocab * vocab) {
     autoparser::generation_params params;
     params.tools = common_chat_tools_to_json_oaicompat(inputs.tools);
     const auto & tmpl =
@@ -1483,6 +1490,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.messages              = src.find("｜DSML｜ calls>") != std::string::npos ?
                                        render_message_to_json_deepseek_v4_1(*messages_to_render, tmpl.original_caps()) :
                                        render_message_to_json(*messages_to_render, tmpl.original_caps());
+    params.vocab                 = vocab;
+    params.tool_choice_name      = inputs.tool_choice_name;
     params.tool_choice           = inputs.tool_choice;
     params.reasoning_format      = inputs.reasoning_format;
     params.enable_thinking       = inputs.enable_thinking;
@@ -1568,6 +1577,21 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             return p.literal(data.generation_prompt) << p.content(p.rest());
         });
         return data;
+    }
+
+    if (!params.tool_choice_name.empty() && tmpl.params_init != common_chat_params_init_flint) {
+        json selected = json::array();
+        for (const auto & tool : params.tools) {
+            if (tool.at("function").at("name").get<std::string>() == params.tool_choice_name) {
+                selected.push_back(tool);
+            }
+        }
+        if (selected.empty()) {
+            throw std::invalid_argument("Named tool_choice is not an offered tool");
+        }
+        params.tools = std::move(selected);
+        params.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        params.parallel_tool_calls = false;
     }
 
     if (auto result = common_chat_try_specialized_template(tmpl, params)) {
@@ -1676,9 +1700,10 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
 }
 
 common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
-                                               const struct common_chat_templates_inputs & inputs) {
+                                               const struct common_chat_templates_inputs & inputs,
+                                               const llama_vocab * vocab) {
     GGML_ASSERT(tmpls != nullptr);
-    return inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs) :
+    return inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs, vocab) :
                               common_chat_templates_apply_legacy(tmpls, inputs);
 }
 
@@ -1781,7 +1806,14 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
 common_chat_msg common_chat_parse(const common_chat_input &         input,
                                   bool                              is_partial,
                                   const common_chat_parser_params & params) {
-    return common_chat_peg_parse(params.parser, input, is_partial, params);
+    auto msg = common_chat_peg_parse(params.parser, input, is_partial, params);
+    for (auto & call : msg.tool_calls) {
+        auto alias = params.tool_aliases.find(call.name);
+        if (alias != params.tool_aliases.end()) {
+            call.name = alias->second;
+        }
+    }
+    return msg;
 }
 
 common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_parser,
@@ -1869,7 +1901,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
                                          const llama_vocab *                  vocab,
                                          const common_chat_templates_inputs & inputs,
                                          const common_chat_session_params &   params) {
-    auto applied = common_chat_templates_apply(tmpls, inputs);
+    auto applied = common_chat_templates_apply(tmpls, inputs, vocab);
 
     templated    = true;
     prompt_parts = std::move(applied.prompt);
@@ -1882,6 +1914,7 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
     thinking_start         = std::move(applied.thinking_start_tag);
     thinking_ends          = std::move(applied.thinking_end_tags);
 
+    parser_params.tool_aliases      = std::move(applied.tool_aliases);
     parser_params.format            = applied.format;
     parser_params.generation_prompt = vocab ? common_chat_input_tokenize(vocab, applied.generation_prompt)
                                             : common_chat_input(applied.generation_prompt);
