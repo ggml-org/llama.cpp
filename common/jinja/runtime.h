@@ -52,6 +52,16 @@ void enable_debug(bool enable);
 using visitor_pair = std::pair<std::string, std::vector<const statement *>>;
 using visitor_fn = std::function<void(bool, const statement *, std::vector<visitor_pair>)>;
 
+enum class loop_flow { NONE, BREAK, CONTINUE };
+struct render_captures;
+
+struct context_capture {
+    std::shared_ptr<context> bindings;
+    std::weak_ptr<render_captures> lifetime;
+
+    context & get() const;
+};
+
 struct context {
     std::shared_ptr<std::string> src; // for debugging; use shared_ptr to avoid copying on scope creation
     std::time_t current_time; // for functions that need current time
@@ -61,6 +71,7 @@ struct context {
     int macro_depth = 0;
 
     visitor_fn visitor;
+    render_captures * captures = nullptr;
 
     // src is optional, used for error reporting
     context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
@@ -81,6 +92,7 @@ struct context {
         current_time(parent.current_time),
         is_get_stats(parent.is_get_stats),
         macro_depth(parent.macro_depth),
+        captures(parent.captures),
         // child scope: own variables only, lookups fall back to the parent (which must outlive this scope)
         parent(&parent),
         env(mk_val<value_object>()) {
@@ -132,9 +144,19 @@ struct context {
         printf("Context Variables:\n%s\n", value_to_json(env, 2).c_str());
     }
 
+    loop_flow & flow() { return control; }
+
+    // Keep live bindings for a deferred filter, without borrowing stack contexts.
+    context_capture capture() const;
+
 private:
+    friend struct render_captures;
+    context(const context & source, std::shared_ptr<context> captured_parent);
+
     const context * parent = nullptr;
     value_object env;
+    std::shared_ptr<context> captured_parent;
+    loop_flow control = loop_flow::NONE;
 };
 
 // values cached in the AST are shared across renders, but stats mutate values, so stats mode gets a fresh copy
@@ -166,6 +188,8 @@ struct statement {
     virtual value execute_impl(context &) const { throw_exec_error(); }
     // execute is the public method to execute a statement with error handling
     value execute(context &) const;
+    void render(context &, string &) const;
+    virtual void render_impl(context &, string &) const;
 
 private:
     [[noreturn]] void throw_exec_error() const {
@@ -221,6 +245,7 @@ struct if_statement : public statement {
 
     std::string type() const override { return "If"; }
     value execute_impl(context & ctx) const override;
+    void render_impl(context &, string &) const override;
     void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"test", {test.get()}},
@@ -252,6 +277,7 @@ struct for_statement : public statement {
 
     std::string type() const override { return "For"; }
     value execute_impl(context & ctx) const override;
+    void render_impl(context &, string &) const override;
     void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"loopvar", {loopvar.get()}},
@@ -265,37 +291,26 @@ struct for_statement : public statement {
 struct break_statement : public statement {
     std::string type() const override { return "Break"; }
 
-    struct signal : public std::exception {
-        const char* what() const noexcept override {
-            return "Break statement executed";
-        }
-    };
-
-    [[noreturn]] value execute_impl(context &) const override {
-        throw break_statement::signal();
+    value execute_impl(context & ctx) const override {
+        ctx.flow() = loop_flow::BREAK;
+        return {};
     }
 };
 
 struct continue_statement : public statement {
     std::string type() const override { return "Continue"; }
 
-    struct signal : public std::exception {
-        const char* what() const noexcept override {
-            return "Continue statement executed";
-        }
-    };
-
-    [[noreturn]] value execute_impl(context &) const override {
-        throw continue_statement::signal();
+    value execute_impl(context & ctx) const override {
+        ctx.flow() = loop_flow::CONTINUE;
+        return {};
     }
 };
 
 // do nothing
 struct noop_statement : public statement {
     std::string type() const override { return "Noop"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_undefined>();
-    }
+
+    value execute_impl(context &) const override { return {}; }
 };
 
 struct set_statement : public statement {
@@ -346,9 +361,8 @@ struct comment_statement : public statement {
     std::string val;
     explicit comment_statement(const std::string & v) : val(v) {}
     std::string type() const override { return "Comment"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_undefined>();
-    }
+
+    value execute_impl(context &) const override { return {}; }
 };
 
 // Expressions
@@ -806,14 +820,7 @@ struct runtime {
     context & ctx;
     explicit runtime(context & ctx) : ctx(ctx) {}
 
-    value_array execute(const program & prog) {
-        value_array results = mk_val<value_array>();
-        for (const auto & stmt : prog.body) {
-            value res = stmt->execute(ctx);
-            results->push_back(std::move(res));
-        }
-        return results;
-    }
+    value_string execute(const program & prog);
 
     static value_string gather_string_parts(const value & val) {
         value_string parts = mk_val<value_string>();

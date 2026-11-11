@@ -308,6 +308,20 @@ private:
     statement_ptr parse_for_statement(size_t start_pos) {
         // e.g., `message` in `for message in messages`
         auto loop_var = parse_expression_sequence(true); // should be an identifier/tuple
+        const auto check_target = [&](const statement_ptr & target) {
+            const auto * id = cast_stmt<identifier>(target);
+            if (!id || id->val == "loop") {
+                throw parser_exception("Invalid for-loop target: expected an identifier other than loop", source,
+                                       target->pos);
+            }
+        };
+        if (const auto * tuple = cast_stmt<tuple_literal>(loop_var)) {
+            for (const auto & target : tuple->val) {
+                check_target(target);
+            }
+        } else {
+            check_target(loop_var);
+        }
         if (!is_identifier("in")) throw std::runtime_error("Expected 'in'");
         ++current; // consume 'in'
 

@@ -41,6 +41,7 @@ struct string {
     size_t length() const;
     bool empty() const;
     bool equals(const string & other) const;
+    bool equals(std::string_view other) const;
     std::optional<char> byte_at(size_t index) const;
     void hash_update(hasher & hash) const noexcept;
     bool all_parts_are_input() const;
