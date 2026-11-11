@@ -397,11 +397,13 @@ private:
 
     statement_ptr parse_comparison_expression() {
         // NOTE: membership has same precedence as comparison
-        // e.g., ('a' in 'apple' == 'b' in 'banana') evaluates as ('a' in ('apple' == ('b' in 'banana')))
-        auto left = parse_additive_expression();
+        // e.g., ('a' in 'apple' == 'b' in 'banana') evaluates as ('a' in 'apple' and 'apple' == 'b' and 'b' in 'banana')
+        statements operands;
+        std::vector<token> ops;
+        operands.push_back(parse_additive_expression());
+        size_t pos = current;
         while (true) {
             token op;
-            size_t start_pos = current;
             if (is_identifier("not") && peek(1).t == token::identifier && peek(1).value == "in") {
                 op = {token::identifier, "not in", tokens[current].pos};
                 ++current; // consume 'not'
@@ -411,9 +413,17 @@ private:
             } else if (is(token::comparison_binary_operator)) {
                 op = next();
             } else break;
-            left = mk_stmt<binary_expression>(start_pos, op, std::move(left), parse_additive_expression());
+            ops.push_back(std::move(op));
+            operands.push_back(parse_additive_expression());
         }
-        return left;
+        if (ops.empty()) {
+            return std::move(operands[0]);
+        }
+        if (ops.size() == 1) {
+            return mk_stmt<binary_expression>(pos, ops[0], std::move(operands[0]), std::move(operands[1]));
+        }
+        // chained comparison, e.g. 1 <= x <= 100
+        return mk_stmt<comparison_chain_expression>(pos, std::move(operands), std::move(ops));
     }
 
     statement_ptr parse_additive_expression() {

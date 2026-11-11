@@ -169,6 +169,18 @@ static void test_conditionals(testing & t) {
         "big"
     );
 
+    test_template(t, "chained comparison",
+        "{{ 1 <= x <= 100 }},{{ 1 <= y <= 100 }},{{ 1 < 2 < 3 < 2 }},{{ 1 == 1 != 2 }},{{ 'a' in 'apple' == 'apple' }}",
+        {{"x", 42}, {"y", 500}},
+        "True,False,False,True,True"
+    );
+
+    test_template(t, "chained comparison short circuit",
+        "{{ 2 < 1 < y }}",
+        json::object(),
+        "False"
+    );
+
     test_template(t, "object comparison",
         "{% if {0: 1, none: 2, 1.0: 3, '0': 4, true: 5} == {false: 1, none: 2, 1: 5, '0': 4} %}equal{% endif %}",
         json::object(),

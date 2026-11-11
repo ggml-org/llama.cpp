@@ -472,6 +472,27 @@ struct binary_expression : public expression {
 };
 
 /**
+ * Two or more comparisons in a row, e.g. `a < b <= c`
+ * It is the same as `a < b and b <= c`, but each operand is executed only one time.
+ */
+struct comparison_chain_expression : public expression {
+    statements operands;
+    std::vector<token> ops;
+
+    comparison_chain_expression(statements && operands, std::vector<token> && ops)
+        : operands(std::move(operands)), ops(std::move(ops)) {
+        for (const auto & operand : this->operands) chk_type<expression>(operand);
+    }
+    std::string type() const override { return "ComparisonChainExpression"; }
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"operands", stmts_to_ptr(operands)}
+        });
+    }
+};
+
+/**
  * An operation with two sides, separated by the | operator.
  * Operator precedence: https://github.com/pallets/jinja/issues/379#issuecomment-168076202
  */

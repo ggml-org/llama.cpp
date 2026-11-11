@@ -117,20 +117,8 @@ value object_literal::execute_impl(context & ctx) const {
     return obj;
 }
 
-value binary_expression::execute_impl(context & ctx) const {
-    value left_val = left->execute(ctx);
-
-    // Logical operators
-    if (op.value == "and") {
-        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
-        return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
-    } else if (op.value == "or") {
-        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
-        return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
-    }
-
+static value exec_binary_op(context & ctx, const token & op, value left_val, value right_val) {
     // Equality operators
-    value right_val = right->execute(ctx);
     JJ_DEBUG("Executing binary expression %s '%s' %s", left_val->type().c_str(), op.value.c_str(), right_val->type().c_str());
     if (op.value == "==") {
         return mk_val<value_bool>(*left_val == *right_val);
@@ -305,6 +293,35 @@ value binary_expression::execute_impl(context & ctx) const {
     }
 
     throw std::runtime_error("Unknown operator \"" + op.value + "\" between " + left_val->type() + " and " + right_val->type());
+}
+
+value binary_expression::execute_impl(context & ctx) const {
+    value left_val = left->execute(ctx);
+
+    // Logical operators
+    if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
+        return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
+    } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
+        return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
+    }
+
+    return exec_binary_op(ctx, op, std::move(left_val), right->execute(ctx));
+}
+
+value comparison_chain_expression::execute_impl(context & ctx) const {
+    value left_val = operands[0]->execute(ctx);
+    value res;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        value right_val = operands[i + 1]->execute(ctx);
+        res = exec_binary_op(ctx, ops[i], left_val, right_val);
+        if (!res->as_bool()) {
+            break; // same as "and", the next operands are not executed
+        }
+        left_val = std::move(right_val);
+    }
+    return res;
 }
 
 static value apply_filter(context & ctx, const statement_ptr & filter, value input) {
