@@ -161,11 +161,13 @@ void ggml_vk_print_device_fault_info(const vk_device& device) {
 
     std::vector<VkDeviceFaultAddressInfoEXT> address_infos(fault_counts.addressInfoCount);
     std::vector<VkDeviceFaultVendorInfoEXT> vendor_infos(fault_counts.vendorInfoCount);
+    std::vector<uint8_t> vendor_binary(fault_counts.vendorBinarySize);
 
     VkDeviceFaultInfoEXT fault_info {};
     fault_info.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_INFO_EXT;
     fault_info.pAddressInfos = address_infos.data();
     fault_info.pVendorInfos = vendor_infos.data();
+    fault_info.pVendorBinaryData = vendor_binary.empty() ? nullptr : vendor_binary.data();
 
     res = device->pfn_vkGetDeviceFaultInfoEXT(device->device, &fault_counts, &fault_info);
     if (res != VK_SUCCESS) {
