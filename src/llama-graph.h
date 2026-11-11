@@ -331,6 +331,17 @@ public:
     const llama_cross * cross;
 };
 
+// layer-major prefill: the tokens [t0, t0 + n) of a ubatch
+struct llm_graph_chunk {
+    int64_t t0;
+    int64_t n;
+};
+
+// the chunks of n_chunk tokens of a ubatch of n_tokens tokens, with the chunk count of a ubatch of n_ubatch tokens:
+// the chunks past the last token are empty, so that the graph keeps the shape of its reserve
+// empty if n_chunk is 0 or not below n_ubatch
+std::vector<llm_graph_chunk> llm_graph_get_chunks(uint32_t n_chunk, uint32_t n_ubatch, uint32_t n_tokens);
+
 // KQ mask and the optional per-sequence cell rows of a unified cache (see ggml_flash_attn_ext_rows)
 // the mask has two shapes depending on whether `rows` is used:
 //   rows != nullptr: [n_kv_rows, n_batch/n_slices, 1, n_slices]
@@ -343,9 +354,12 @@ struct llm_attn_mask {
     // fill every token of a sequence with the mask row of its first token (dspark draft blocks)
     bool block_uniform = false;
 
-    // layer-major prefill: the masks of consecutive token chunks of the ubatch, empty if the ubatch is not chunked
+    // layer-major prefill: the masks of the token chunks of the ubatch (llm_graph_context::chunks), empty if the ubatch is not chunked
     // raw and rows are then not used: a chunk has its own inputs, or its raw is a view of the staircase mask (see llama_kv_cache::get_staircase)
     std::vector<llm_attn_mask> chunks;
+
+    // the tokens of a chunk mask
+    llm_graph_chunk tokens = { 0, 0 };
 };
 
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
@@ -1073,6 +1087,13 @@ struct llm_graph_context {
     const int64_t n_outputs;
     const int32_t n_ctx_orig; // yarn
 
+    // layer-major prefill: the token chunks of the attention block and the expert FFN, empty if the ubatch is not chunked
+    // a ubatch of more than cparams.n_chunk tokens has chunks, a smaller one has its own reserve (see llama_context::process_ubatch)
+    const std::vector<llm_graph_chunk> chunks;
+
+    // true while build_moe_ffn builds the experts of one chunk
+    mutable bool moe_chunk = false;
+
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
 
@@ -1308,11 +1329,13 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    // layer-major prefill: a tensor with the shape of `like`, [n_embd, n_tokens], for the results of the token chunks of the ubatch
-    ggml_tensor * build_chunk_dst(ggml_tensor * like) const;
+    // layer-major prefill: fn(rows, ic, chunk) for the rows of cur of each chunk ic, rows clamped to the rows of cur
+    // the results [ne0 of cur, chunk.n] are stored in one tensor with the shape of cur, in chunk order
+    using llm_chunk_fn = std::function<ggml_tensor * (ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk)>;
+    ggml_tensor * build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const;
 
-    // store cur, the result of the chunk that starts at token t, in dst; returns dst with the chunk
-    ggml_tensor * build_chunk_store(ggml_tensor * dst, ggml_tensor * cur, int64_t t) const;
+    // the positions of the tokens of a chunk, for the inputs of its attention block: one section per position input
+    ggml_tensor * build_inp_pos_chunk(ggml_tensor * inp_pos, const llm_graph_chunk & chunk) const;
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
@@ -1395,8 +1418,8 @@ struct llm_graph_context {
             ggml_tensor * top_k,   // [n_top, n_tokens]
                     int   il) const;
 
-    // chunks: the masks can have token chunks (see llm_attn_mask::chunks), the graph must then attend with build_attn_inp_chunks
-    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa(bool chunks = false) const;
+    // with_chunks: the masks can have token chunks (see llm_attn_mask::chunks), the graph must then attend with build_attn_inp_chunks
+    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa(bool with_chunks = false) const;
 
     // layer-major prefill: the attention inputs of each token chunk of the ubatch, in token order
     // empty if the masks of inp have no chunks

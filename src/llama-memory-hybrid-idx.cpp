@@ -767,7 +767,7 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
     ggml_tensor * staircase = idx->get_staircase(kpool, anchor, anchor + n_ubatch/kpool + 64 + 16, n_chunk + 8*kpool);
 
     // graph reservation (there are no cells) or an empty chunk: only the shape of the view is used
-    if (sinfos_kpool.empty() || n == 0) {
+    if (get_idx()->is_reserve() || n == 0) {
         return ggml_view_2d(ctx, staircase, n_pool, n, staircase->nb[1], 0);
     }
 

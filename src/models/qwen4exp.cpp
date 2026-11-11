@@ -483,6 +483,8 @@ llama_model_qwen4exp::graph::graph(const llm_graph_params & params) :
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    build_inp_kpool_chunks(inp_kpool, inp->get_attn(), inp_pos);
+
     // the wide residual starts as hc identical copies of the embedding
     ggml_tensor * res_hc = ggml_repeat_4d(ctx0,
             ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens),
@@ -626,6 +628,8 @@ llama_model_qwen4exp::graph_mtp::graph_mtp(const llm_graph_params & params) :
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    build_inp_kpool_chunks(inp_kpool, inp_hyb->get_attn(), inp_pos);
+
     ggml_tensor * h_norm = build_norm(ggml_reshape_3d(ctx0, h, n_embd, hc, n_tokens), layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);
 
@@ -712,33 +716,26 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
 
 // query tokens per QSA chunk, LLAMA_QSA_CHUNK overrides it for tests, 0 disables the split
 // read at each graph build, so that one process can compare contexts with different chunk sizes
-// layer-major prefill (LLAMA_LAYER_MAJOR) sets one chunk size for the attention block and the expert FFN
-static int64_t qwen4exp_qsa_chunk_n(const llama_cparams & cparams) {
-    if (cparams.n_chunk > 0) {
-        return cparams.n_chunk;
-    }
+static int64_t qwen4exp_qsa_chunk_n() {
     const char * env = getenv("LLAMA_QSA_CHUNK");
     return env ? std::max<int64_t>(0, atoll(env)) : 2048;
 }
 
-// the query chunks {t0, n} of the QSA: the selection mask of a chunk is [n_kv, n], so split large ubatches
+// the query chunks of the QSA: the selection mask of a chunk is [n_kv, n], so split large ubatches
 // the mask streams are not split: a split cache with several sequences keeps one chunk, as its reserve does
-static std::vector<std::pair<int64_t, int64_t>> qwen4exp_qsa_chunks(const llama_cparams & cparams, int64_t n_tokens) {
-    const int64_t n_chunk = qwen4exp_qsa_chunk_n(cparams);
-    // layer-major prefill: a ubatch of at most n_chunk tokens has its own reserve (see llama_context::process_ubatch)
-    const bool one_chunk = cparams.n_chunk > 0 && n_tokens <= n_chunk;
-    if (n_chunk == 0 || cparams.n_ubatch <= n_chunk || !(cparams.kv_unified || cparams.n_seq_max == 1) || one_chunk) {
+// layer-major prefill (LLAMA_LAYER_MAJOR) has one chunk list for the attention block and the expert FFN, the chunks of the graph
+static std::vector<llm_graph_chunk> qwen4exp_qsa_chunks(const llama_cparams & cparams, const std::vector<llm_graph_chunk> & chunks, int64_t n_tokens) {
+    if (!(cparams.kv_unified || cparams.n_seq_max == 1)) {
         return { { 0, n_tokens } };
     }
 
     // every ubatch has the chunk count of the reserve, so the graph keeps the planned shape
     // the chunks past the last token are empty, and the backends skip empty nodes
-    std::vector<std::pair<int64_t, int64_t>> res;
-    const int64_t n_split = (cparams.n_ubatch + n_chunk - 1)/n_chunk;
-    for (int64_t i = 0; i < n_split; ++i) {
-        const int64_t t0 = std::min(i*n_chunk, n_tokens);
-        res.push_back({ t0, std::min(n_chunk, n_tokens - t0) });
+    const auto res = cparams.n_chunk > 0 ? chunks : llm_graph_get_chunks(qwen4exp_qsa_chunk_n(), cparams.n_ubatch, n_tokens);
+    if (res.empty()) {
+        return { { 0, n_tokens } };
     }
+
     return res;
 }
 
@@ -802,12 +799,13 @@ public:
         ggml_tensor * pool_mask;
         ggml_tensor * tail_idxs;
 
-        // the attention inputs of the chunk, made by the first QSA layer: each view of a host input is a separate upload
+        // the attention inputs of the chunk, made once per graph (see build_inp_kpool_chunks): each view of a host input is a separate upload
         ggml_tensor * k_idxs = nullptr; // I64 [n]
         ggml_tensor * v_idxs = nullptr; // I64 [n] or [n*n_embd_v_gqa]
         ggml_tensor * pos    = nullptr; // I32 [n*n_pos_per_embd]
     };
     std::vector<chunk> chunks;
+    std::vector<llm_graph_chunk> tokens; // the tokens of the chunks
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t kpool;
@@ -825,15 +823,17 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     auto inp = std::make_unique<llm_graph_input_kpool>(mctx_hyb, kpool);
 
-    const auto chunks = qwen4exp_qsa_chunks(cparams, n_tokens);
+    inp->tokens = qwen4exp_qsa_chunks(cparams, chunks, n_tokens);
+
+    const auto & qsa_chunks = inp->tokens;
 
     // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the cache has them
     // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
     // the context decides it, not the cells of the ubatch, so that the graph keeps the shape of the reserve
     std::vector<ggml_tensor *> pool_masks;
-    if (cparams.n_chunk > 0 && chunks.size() > 1 && cparams.n_seq_max == 1) {
-        for (const auto & qc : chunks) {
-            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_ubatch, cparams.n_chunk, qc.first, qc.second));
+    if (cparams.n_chunk > 0 && qsa_chunks.size() > 1 && cparams.n_seq_max == 1) {
+        for (const auto & qc : qsa_chunks) {
+            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_ubatch, cparams.n_chunk, qc.t0, qc.n));
             if (pool_masks.back() == nullptr) {
                 pool_masks.clear();
                 break;
@@ -875,14 +875,32 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
     inp->new_pool_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*inp->n_new);
     ggml_set_input(inp->new_pool_pos);
 
-    for (size_t ic = 0; ic < chunks.size(); ++ic) {
-        const auto & qc = chunks[ic];
-        inp->chunks.push_back({ qc.first, qc.second,
-                inp->pool_mask ? qwen4exp_view_rows(ctx0, inp->pool_mask, qc.first, qc.second) : pool_masks[ic],
-                qwen4exp_view_rows(ctx0, inp->tail_idxs, qc.first, qc.second) });
+    for (size_t ic = 0; ic < qsa_chunks.size(); ++ic) {
+        const auto & qc = qsa_chunks[ic];
+        inp->chunks.push_back({ qc.t0, qc.n,
+                inp->pool_mask ? qwen4exp_view_rows(ctx0, inp->pool_mask, qc.t0, qc.n) : pool_masks[ic],
+                qwen4exp_view_rows(ctx0, inp->tail_idxs, qc.t0, qc.n) });
     }
 
     return (llm_graph_input_kpool *) res->add_input(std::move(inp));
+}
+
+void llama_model_qwen4exp::graph::build_inp_kpool_chunks(llm_graph_input_kpool * inp_kpool, llm_graph_input_attn_kv * inp_attn, ggml_tensor * inp_pos) {
+    if (inp_kpool == nullptr || inp_kpool->chunks.size() == 1) {
+        return;
+    }
+
+    ggml_tensor * k_idxs = inp_attn->get_k_idxs();
+    ggml_tensor * v_idxs = inp_attn->get_v_idxs();
+
+    // a transposed V cache has one index per value of a token
+    const int64_t n_v = v_idxs->ne[0]/n_tokens;
+
+    for (auto & chunk : inp_kpool->chunks) {
+        chunk.k_idxs = ggml_view_1d(ctx0, k_idxs, chunk.n,     chunk.t0*k_idxs->nb[0]);
+        chunk.v_idxs = ggml_view_1d(ctx0, v_idxs, chunk.n*n_v, chunk.t0*n_v*v_idxs->nb[0]);
+        chunk.pos    = build_inp_pos_chunk(inp_pos, { chunk.t0, chunk.n });
+    }
 }
 
 // QSA attends to the top blocks of compress_ratio cells plus the incomplete tail, like the glm5-next k-pool indexer
@@ -1116,112 +1134,98 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int                       il) {
+    const bool qsa = inp_kpool != nullptr && hparams.dsv4_compress_ratios[il] > 0;
+
+    // the indexer runs for all the tokens: it stores the indexer keys of the ubatch before the chunks read them
+    const qsa_idx idx = qsa ? build_qsa_idx(mctx_hyb, inp_kpool, cur, inp_pos, il) : qsa_idx{};
+
+    // every ubatch has the chunks of the reserve, empty ones included, so that the graph keeps its shape
+    if (!qsa || inp_kpool->chunks.size() == 1) {
+        return build_layer_attn_block(inp, inp_kpool, idx, 0, cur, inp_pos, n_tokens, il);
+    }
+
+    // the whole block runs per query chunk, so that its tensors have the size of a chunk and not of the ubatch
+    return build_chunked(cur, inp_kpool->tokens, [&](ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk) {
+        return build_layer_attn_block(inp, inp_kpool, idx, ic, rows, inp_kpool->chunks[ic].pos, chunk.n, il);
+    });
+}
+
+// the attention block of the query chunk ic of the QSA for the rows of cur, n_tokens rows
+ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_block(
+        llm_graph_input_attn_kv * inp,
+        llm_graph_input_kpool *   inp_kpool,
+        const qsa_idx &           idx,
+        size_t                    ic,
+        ggml_tensor *             cur,
+        ggml_tensor *             inp_pos,
+        int64_t                   n_tokens,
+        int                       il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
     const bool qsa = inp_kpool != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
-    const qsa_idx idx = qsa ? build_qsa_idx(mctx_hyb, inp_kpool, cur, inp_pos, il) : qsa_idx{};
+    // Qwen3Next uses a single Q projection that outputs query + gate
+    ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
+    cb(Qcur_full, "Qcur_full", il);
 
-    // the attention block for the rows of cur, the query chunk ic of the QSA
-    const auto build_block = [&](ggml_tensor * cur, ggml_tensor * inp_pos, int64_t n_tokens, size_t ic) {
-        // Qwen3Next uses a single Q projection that outputs query + gate
-        ggml_tensor * Qcur_full = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s); // [ (n_embd_head * 2) * n_head, n_tokens ]
-        cb(Qcur_full, "Qcur_full", il);
+    ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
+        ggml_element_size(Qcur_full) * n_embd_head * 2,
+        ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head, 0);
+    cb(Qcur, "Qcur_reshaped", il);
 
-        ggml_tensor * Qcur = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
-            ggml_element_size(Qcur_full) * n_embd_head * 2,
-            ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head, 0);
-        cb(Qcur, "Qcur_reshaped", il);
+    Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+    cb(Qcur, "Qcur_normed", il);
 
-        Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
-        cb(Qcur, "Qcur_normed", il);
+    ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+    cb(Kcur, "Kcur", il);
 
-        ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-        cb(Kcur, "Kcur", il);
+    ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
+    cb(Vcur, "Vcur", il);
 
-        ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s);
-        cb(Vcur, "Vcur", il);
+    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+    Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
+    cb(Kcur, "Kcur_normed", il);
 
-        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-        Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
-        cb(Kcur, "Kcur_normed", il);
+    ggml_tensor * gate = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
+        ggml_element_size(Qcur_full) * n_embd_head * 2,
+        ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
+        ggml_element_size(Qcur_full) * n_embd_head);
+    gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
+    cb(gate, "gate_reshaped", il);
 
-        ggml_tensor * gate = ggml_view_3d(ctx0, Qcur_full, n_embd_head, n_head, n_tokens,
-            ggml_element_size(Qcur_full) * n_embd_head * 2,
-            ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
-            ggml_element_size(Qcur_full) * n_embd_head);
-        gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
-        cb(gate, "gate_reshaped", il);
+    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+    // Apply IMRoPE
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
-        // Apply IMRoPE
-        Qcur = build_rope(Qcur, inp_pos, il);
-        Kcur = build_rope(Kcur, inp_pos, il);
+    cb(Qcur, "Qcur", il);
+    cb(Kcur, "Kcur", il);
+    cb(Vcur, "Vcur", il);
 
-        cb(Qcur, "Qcur", il);
-        cb(Kcur, "Kcur", il);
-        cb(Vcur, "Vcur", il);
+    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-
-        if (qsa) {
-            cur = build_attn_qsa(inp, inp_kpool, idx, ic, Qcur, Kcur, Vcur, kq_scale, il);
-        } else {
-            cur = build_attn(inp,
-                        nullptr, nullptr, nullptr,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-        }
-        cb(cur, "attn_pregate", il);
-
-        ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
-        cb(gate_sigmoid, "gate_sigmoid", il);
-
-        cur = ggml_mul(ctx0, cur, gate_sigmoid);
-        cb(cur, "attn_gated", il);
-
-        cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
-        cb(cur, "attn_output", il);
-
-        return cur;
-    };
-
-    // every ubatch has the chunks of the reserve, empty ones included, so that the graph keeps its shape
-    if (!qsa || inp_kpool->chunks.size() == 1) {
-        return build_block(cur, inp_pos, n_tokens, 0);
+    if (qsa) {
+        cur = build_attn_qsa(inp, inp_kpool, idx, ic, Qcur, Kcur, Vcur, kq_scale, il);
+    } else {
+        cur = build_attn(inp,
+                    nullptr, nullptr, nullptr,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     }
+    cb(cur, "attn_pregate", il);
 
-    // the whole block runs per query chunk, so that its tensors have the size of a chunk and not of the ubatch
-    const int64_t n_pos = inp_pos->ne[0]/n_tokens;
+    ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
+    cb(gate_sigmoid, "gate_sigmoid", il);
 
-    ggml_tensor * out = build_chunk_dst(cur);
-    for (size_t ic = 0; ic < inp_kpool->chunks.size(); ++ic) {
-        auto & chunk = inp_kpool->chunks[ic];
+    cur = ggml_mul(ctx0, cur, gate_sigmoid);
+    cb(cur, "attn_gated", il);
 
-        if (chunk.pos == nullptr) {
-            ggml_tensor * k_idxs = inp->get_k_idxs();
-            ggml_tensor * v_idxs = inp->get_v_idxs();
+    cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+    cb(cur, "attn_output", il);
 
-            // a transposed V cache has one index per value of a token
-            const int64_t n_v = v_idxs->ne[0]/n_tokens;
-
-            chunk.k_idxs = ggml_view_1d(ctx0, k_idxs, chunk.n,     chunk.t0*k_idxs->nb[0]);
-            chunk.v_idxs = ggml_view_1d(ctx0, v_idxs, chunk.n*n_v, chunk.t0*n_v*v_idxs->nb[0]);
-
-            // the positions have one section of n_tokens values per position input
-            ggml_tensor * pos = ggml_reshape_2d(ctx0, inp_pos, n_tokens, n_pos);
-            pos = ggml_view_2d(ctx0, pos, chunk.n, n_pos, pos->nb[1], chunk.t0*pos->nb[0]);
-            chunk.pos = ggml_reshape_1d(ctx0, ggml_cont(ctx0, pos), chunk.n*n_pos);
-        }
-
-        ggml_tensor * cur_chunk = ggml_view_2d(ctx0, cur, cur->ne[0], chunk.n, cur->nb[1], chunk.t0*cur->nb[1]);
-
-        out = build_chunk_store(out, build_block(cur_chunk, chunk.pos, chunk.n, ic), chunk.t0);
-    }
-
-    return out;
+    return cur;
 }
 
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(

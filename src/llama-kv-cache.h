@@ -452,6 +452,9 @@ public:
     // see llama_kv_cache::get_n_kv_rows, for a slice of the current ubatch
     uint32_t get_n_kv_rows(const llama_ubatch & slice) const;
 
+    // a context without ubatches: the graph of the reservation, there are no cells
+    bool is_reserve() const;
+
     // see llama_kv_cache::is_staircase, for the current ubatch
     bool is_staircase() const;
 

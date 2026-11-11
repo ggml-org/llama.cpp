@@ -2109,17 +2109,12 @@ size_t llama_kv_cache::get_staircase_offs(const ggml_tensor * staircase, uint32_
 }
 
 void llama_kv_cache::set_input_attn_mask_chunks(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
-    uint32_t t = 0;
     for (const auto & chunk : attn_mask.chunks) {
-        const uint32_t n = chunk.raw->ne[1];
-
         // the staircase is a constant
         if (chunk.raw->view_src == nullptr) {
-            const llama_ubatch slice = ubatch->slice(t, n);
+            const llama_ubatch slice = ubatch->slice(chunk.tokens.t0, chunk.tokens.n);
             set_input_attn_mask(chunk, &slice, causal_attn);
         }
-
-        t += n;
     }
 }
 
@@ -3190,7 +3185,7 @@ uint32_t llama_kv_cache_context::get_n_kv_rows() const {
 
 uint32_t llama_kv_cache_context::get_n_kv_rows(const llama_ubatch & slice) const {
     // worst case for graph reservation
-    if (ubatches.empty()) {
+    if (is_reserve()) {
         return std::min(n_kv_rows, kv->get_n_kv_rows_max(slice.n_tokens));
     }
 
@@ -3204,9 +3199,13 @@ ggml_tensor * llama_kv_cache_context::get_staircase(ggml_context * ctx, uint32_t
     ggml_tensor * staircase = kv->get_staircase(1, anchor, kv->get_size() + n_ubatch + 256 + 8, n_chunk + 8);
 
     // graph reservation: there are no cells, only the shape of the view is used
-    const size_t offs = ubatches.empty() ? 0 : llama_kv_cache::get_staircase_offs(staircase, 1, anchor, sinfos[i_cur].idxs[0][0] + t + 1, 0);
+    const size_t offs = is_reserve() ? 0 : llama_kv_cache::get_staircase_offs(staircase, 1, anchor, sinfos[i_cur].idxs[0][0] + t + 1, 0);
 
     return ggml_view_2d(ctx, staircase, n_kv, n, staircase->nb[1], offs);
+}
+
+bool llama_kv_cache_context::is_reserve() const {
+    return ubatches.empty();
 }
 
 bool llama_kv_cache_context::can_staircase() const {
@@ -3215,7 +3214,7 @@ bool llama_kv_cache_context::can_staircase() const {
 
 bool llama_kv_cache_context::is_staircase() const {
     // graph reservation: there are no cells, reserve for the chunked graph
-    if (ubatches.empty()) {
+    if (is_reserve()) {
         return kv->can_staircase();
     }
 
