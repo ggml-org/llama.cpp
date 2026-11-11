@@ -86,9 +86,12 @@ void func_args::ensure_kwargs(std::initializer_list<const char *> names) const {
 /**
  * Function that mimics Python's array slicing.
  */
-template<typename T>
-static T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {
-    int64_t len = static_cast<int64_t>(array.size());
+template <typename T, typename Element>
+static T slice(uint64_t count, Element element, int64_t start, int64_t stop, int64_t step = 1) {
+    if (count > INT64_MAX) {
+        throw std::length_error("slice length exceeds int64");
+    }
+    const int64_t len       = static_cast<int64_t>(count);
     int64_t direction = (step > 0) ? 1 : ((step < 0) ? -1 : 0);
     int64_t start_val = 0;
     int64_t stop_val = 0;
@@ -125,10 +128,16 @@ static T slice(const T & array, int64_t start, int64_t stop, int64_t step = 1) {
     if (direction == 0) {
         return result;
     }
-    for (int64_t i = start_val; direction * i < direction * stop_val; i += step) {
+    for (int64_t i = start_val; direction * i < direction * stop_val;) {
         if (i >= 0 && i < len) {
-            result.push_back(array[static_cast<size_t>(i)]);
+            result.push_back(element(static_cast<uint64_t>(i)));
         }
+        const uint64_t remaining = direction > 0 ? uint64_t(stop_val) - uint64_t(i) : uint64_t(i) - uint64_t(stop_val);
+        const uint64_t stride    = step > 0 ? uint64_t(step) : uint64_t(0) - uint64_t(step);
+        if (stride >= remaining) {
+            break;
+        }
+        i += step;
     }
     return result;
 }
@@ -465,20 +474,7 @@ const func_builtins & global_builtins() {
                 step = arg2->as_int();
             }
 
-            auto out = mk_val<value_array>();
-            if (step == 0) {
-                throw raised_exception("range() step argument must not be zero");
-            }
-            if (step > 0) {
-                for (int64_t i = start; i < stop; i += step) {
-                    out->push_back(mk_val<value_int>(i));
-                }
-            } else {
-                for (int64_t i = start; i > stop; i += step) {
-                    out->push_back(mk_val<value_int>(i));
-                }
-            }
-            return out;
+            return mk_val<value_range>(start, stop, step);
         }},
         {"tojson", tojson},
 
@@ -1018,7 +1014,8 @@ const func_builtins & value_string_t::get_builtins() const {
                 throw raised_exception("slice step cannot be zero");
             }
             auto input = args.get_pos(0);
-            auto sliced = slice(input->as_string().str(), start, stop, step);
+            const auto text   = input->as_string().str();
+            auto       sliced = slice<std::string>(text.size(), [&](uint64_t i) { return text[i]; }, start, stop, step);
             auto res = mk_val<value_string>(sliced);
             res->val_str.mark_input_based_on(input->as_string());
             return res;
@@ -1105,6 +1102,64 @@ const func_builtins & value_bool_t::get_builtins() const {
     throw not_implemented_exception("Array sum builtin not implemented");
 }
 
+value_range_t::value_range_t(int64_t start, int64_t stop, int64_t step) :
+    value_array_t(kind_id),
+    start(start),
+    step(step),
+    count(0) {
+    if (!step) {
+        throw raised_exception("range() step argument must not be zero");
+    }
+    if ((step > 0 && start < stop) || (step < 0 && start > stop)) {
+        const uint64_t distance = step > 0 ? uint64_t(stop) - uint64_t(start) : uint64_t(start) - uint64_t(stop);
+        const uint64_t stride   = step > 0 ? uint64_t(step) : uint64_t(0) - uint64_t(step);
+        count                   = 1 + (distance - 1) / stride;
+    }
+}
+
+int64_t value_range_t::number(uint64_t index) const {
+    const uint64_t bits = uint64_t(start) + index * uint64_t(step);
+    return bits <= INT64_MAX ? int64_t(bits) : -1 - int64_t(UINT64_MAX - bits);
+}
+
+value value_range_t::element(uint64_t index) const {
+    if (index >= size()) {
+        throw std::out_of_range("range index out of bounds");
+    }
+    if (ready) {
+        return val_arr.at(static_cast<size_t>(index));
+    }
+    return mk_val<value_int>(number(index));
+}
+
+void value_range_t::materialize() const {
+    if (ready) {
+        return;
+    }
+    std::vector<value> elements;
+    if (count > elements.max_size()) {
+        throw std::length_error("range exceeds array capacity");
+    }
+    elements.reserve(static_cast<size_t>(count));
+    for (uint64_t i = 0; i < count; ++i) {
+        elements.push_back(mk_val<value_int>(number(i)));
+    }
+    val_arr = std::move(elements);
+    ready   = true;
+}
+
+hasher value_range_t::unique_hash() const noexcept {
+    if (ready) {
+        return value_array_t::unique_hash();
+    }
+    auto hash = hasher(typeid(value_array_t));
+    for (uint64_t i = 0; i < count; ++i) {
+        const auto digest = value_int_t(number(i)).unique_hash().digest();
+        hash.update(&digest, sizeof(digest));
+    }
+    return hash;
+}
+
 const func_builtins & value_array_t::get_builtins() const {
     static const func_builtins builtins = {
         {"default", default_value},
@@ -1119,24 +1174,27 @@ const func_builtins & value_array_t::get_builtins() const {
         }},
         {"first", [](const func_args & args) -> value {
             args.ensure_vals<value_array>();
-            const auto & arr = args.get_pos(0)->as_array();
-            if (arr.empty()) {
+            const auto * arr = cast_val<value_array>(args.get_pos(0));
+            if (!arr->size()) {
                 return mk_val<value_undefined>();
             }
-            return arr[0];
+            return arr->element(0);
         }},
         {"last", [](const func_args & args) -> value {
             args.ensure_vals<value_array>();
-            const auto & arr = args.get_pos(0)->as_array();
-            if (arr.empty()) {
+            const auto * arr = cast_val<value_array>(args.get_pos(0));
+            if (!arr->size()) {
                 return mk_val<value_undefined>();
             }
-            return arr[arr.size() - 1];
+            return arr->element(arr->size() - 1);
         }},
         {"length", [](const func_args & args) -> value {
             args.ensure_vals<value_array>();
-            const auto & arr = args.get_pos(0)->as_array();
-            return mk_val<value_int>(static_cast<int64_t>(arr.size()));
+            const auto count = cast_val<value_array>(args.get_pos(0))->size();
+            if (count > INT64_MAX) {
+                throw raised_exception("array length exceeds int64");
+            }
+            return mk_val<value_int>(static_cast<int64_t>(count));
         }},
         {"slice", [](const func_args & args) -> value {
             args.ensure_count(1, 4);
@@ -1164,7 +1222,9 @@ const func_builtins & value_array_t::get_builtins() const {
             if (step == 0) {
                 throw raised_exception("slice step cannot be zero");
             }
-            auto arr = slice(val->as_array(), start, stop, step);
+            const auto * source = cast_val<value_array>(val);
+            auto         arr    = slice<std::vector<value>>(
+                source->size(), [&](uint64_t i) { return source->element(i); }, start, stop, step);
             return is_val<value_tuple>(val) ? mk_val<value_tuple>(std::move(arr)) : mk_val<value_array>(std::move(arr));
         }},
         {"selectattr", select_or_reject<false, true>},

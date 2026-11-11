@@ -62,6 +62,8 @@ struct scope {
     std::size_t                            references = 0;
 };
 
+enum class loop_flow { NONE, BREAK, CONTINUE };
+
 class render_scopes {
   public:
     scope * acquire(scope * parent) {
@@ -124,6 +126,8 @@ class render_scopes {
             throw std::runtime_error("Template render has ended");
         }
     }
+
+    loop_flow flow = loop_flow::NONE;
 
   private:
     std::deque<scope> frames_;
@@ -213,6 +217,8 @@ struct context {
         }
     }
 
+    loop_flow & flow() { return scopes->flow; }
+
   private:
     context(const context & parent, scope * frame) :
         src(parent.src),
@@ -256,8 +262,10 @@ struct statement {
     virtual value execute_impl(context &) const { throw_exec_error(); }
     // execute is the public method to execute a statement with error handling
     value execute(context &) const;
+    void          render(context &, string &) const;
+    virtual void  render_impl(context &, string &) const;
 
-private:
+  private:
     [[noreturn]] void throw_exec_error() const {
         throw std::runtime_error("cannot exec " + type());
     }
@@ -311,6 +319,7 @@ struct if_statement : public statement {
 
     std::string type() const override { return "If"; }
     value execute_impl(context & ctx) const override;
+    void        render_impl(context &, string &) const override;
     void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"test", {test.get()}},
@@ -342,6 +351,7 @@ struct for_statement : public statement {
 
     std::string type() const override { return "For"; }
     value execute_impl(context & ctx) const override;
+    void        render_impl(context &, string &) const override;
     void visit(context & ctx) const override {
         ctx.visitor(false, this, {
             {"loopvar", {loopvar.get()}},
@@ -355,37 +365,26 @@ struct for_statement : public statement {
 struct break_statement : public statement {
     std::string type() const override { return "Break"; }
 
-    struct signal : public std::exception {
-        const char* what() const noexcept override {
-            return "Break statement executed";
-        }
-    };
-
-    [[noreturn]] value execute_impl(context &) const override {
-        throw break_statement::signal();
+    value execute_impl(context & ctx) const override {
+        ctx.flow() = loop_flow::BREAK;
+        return {};
     }
 };
 
 struct continue_statement : public statement {
     std::string type() const override { return "Continue"; }
 
-    struct signal : public std::exception {
-        const char* what() const noexcept override {
-            return "Continue statement executed";
-        }
-    };
-
-    [[noreturn]] value execute_impl(context &) const override {
-        throw continue_statement::signal();
+    value execute_impl(context & ctx) const override {
+        ctx.flow() = loop_flow::CONTINUE;
+        return {};
     }
 };
 
 // do nothing
 struct noop_statement : public statement {
     std::string type() const override { return "Noop"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_undefined>();
-    }
+
+    value execute_impl(context &) const override { return {}; }
 };
 
 struct set_statement : public statement {
@@ -436,9 +435,8 @@ struct comment_statement : public statement {
     std::string val;
     explicit comment_statement(const std::string & v) : val(v) {}
     std::string type() const override { return "Comment"; }
-    value execute_impl(context &) const override {
-        return mk_val<value_undefined>();
-    }
+
+    value execute_impl(context &) const override { return {}; }
 };
 
 // Expressions
@@ -896,14 +894,7 @@ struct runtime {
     context & ctx;
     explicit runtime(context & ctx) : ctx(ctx) {}
 
-    value_array execute(const program & prog) {
-        value_array results = mk_val<value_array>();
-        for (const auto & stmt : prog.body) {
-            value res = stmt->execute(ctx);
-            results->push_back(std::move(res));
-        }
-        return results;
-    }
+    value_string execute(const program & prog);
 
     static value_string gather_string_parts(const value & val) {
         value_string parts = mk_val<value_string>();

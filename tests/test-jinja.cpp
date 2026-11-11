@@ -1,5 +1,6 @@
 #include <string>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <cstdlib>
 #include <future>
@@ -43,6 +44,7 @@ static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 static void test_tts_norm_patterns(testing & t);
 
+static void test_lazy_execution(testing & t);
 static void test_shared_render(testing & t);
 
 static bool g_python_mode = false;
@@ -68,6 +70,7 @@ int main(int argc, char *argv[]) {
     t.test("whitespace control", test_whitespace_control);
     t.test("conditionals", test_conditionals);
     t.test("loops", test_loops);
+    t.test("lazy execution", test_lazy_execution);
     t.test("expressions", test_expressions);
     t.test("set statement", test_set_statement);
     t.test("filters", test_filters);
@@ -93,7 +96,61 @@ int main(int argc, char *argv[]) {
     return t.summary();
 }
 
+static void test_lazy_execution(testing & t) {
+    test_template(t, "large range early exit", "{% for i in range(100000) %}{{ i }}{% break %}{% endfor %}",
+                  json::object(), "0");
+    test_template(t, "range slice without full materialization",
+                  "{{ range(100000)[:3]|list|tojson }}|{{ range(5,-2,-2)[-1] }}|{{ range(100000)|last }}",
+                  json::object(), "[0, 1, 2]|-1|99999");
+    test_template(t, "unreached unpack", "{% for a,b in [[1,2],[3]] %}{{ a }}{% break %}{% endfor %}", json::object(),
+                  "1");
+    test_template(t, "filter evaluated on consumption",
+                  "{% set ns=namespace(n=0) %}{% for i in [1,2,3] if i>ns.n %}{{ i }}{% set ns.n=3 %}{% endfor %}",
+                  json::object(), "1");
+    test_template(t, "filtered length consumes remainder",
+                  "{% set ns=namespace(n=0) %}{% for i in [1,2,3] if i>ns.n %}{{ i }}/{{ loop.length }}{% set ns.n=3 "
+                  "%}{% endfor %}",
+                  json::object(), "1/32/33/3");
+    const json list_input = {
+        { "a", json::array({ 1, 2 }) }
+    };
+    test_template(t, "filtered length keeps exhausted source closed",
+                  "{% for i in a if i>0 %}{{ i }}/{{ loop.length }};{% if i==1 %}{% set _=a.append(3) %}{% endif %}"
+                  "{% endfor %}",
+                  list_input, "1/2;2/2;");
+    test_template(t, "lookahead keeps exhausted source closed",
+                  "{% for i in a %}{{ i }}:{{ loop.last }};{% if i==2 %}{% set _=a.append(3) %}{% endif %}{% endfor %}",
+                  list_input, "1:False;2:True;");
+    test_template(
+        t, "list length does not exhaust source",
+        "{% for i in a %}{{ i }}/{{ loop.length }};{% if i==2 %}{% set _=a.append(3) %}{% endif %}{% endfor %}",
+        list_input, "1/2;2/2;3/2;");
+    test_template(t, "lazy loop lookahead",
+                  "{% for i in range(5) if i%2==0 %}{{ loop.index }}:{{ i }}:{{ loop.previtem|default('-') }}:{{ "
+                  "loop.nextitem|default('-') }}:{{ loop.first }}:{{ loop.last }}:{{ loop.revindex }};{% endfor %}",
+                  json::object(), "1:0:-:2:True:False:3;2:2:0:4:False:False:2;3:4:2:-:False:True:1;");
+    test_template(t, "nested break preserves output",
+                  "{% for i in [1,2] %}A{% if true %}B{% break %}C{% endif %}D{% else %}E{% endfor %}", json::object(),
+                  "ABE");
+    test_template(t, "nested continue preserves output",
+                  "{% for i in [1,2] %}A{% if true %}B{% continue %}C{% endif %}D{% else %}E{% endfor %}",
+                  json::object(), "ABABE");
+    test_template(t, "interrupted captured blocks",
+                  "{% for i in [1] %}{% set x %}A{% break %}{% endset %}B{% else %}E{% endfor %}|{% for i in [1] %}{% "
+                  "filter upper %}a{% break %}{% endfilter %}B{% else %}E{% endfor %}",
+                  json::object(), "E|E");
+    test_template(t, "escaped loop metadata",
+                  "{% set ns=namespace(l=none) %}{% for x in [1,2,3] if x>1 %}{% set ns.l=loop %}{% break %}{% endfor "
+                  "%}{{ ns.l.index }}|{{ ns.l.length }}|{{ ns.l.nextitem }}",
+                  json::object(), "1|2|3");
+}
+
 static void test_shared_render(testing & t) {
+    test_template(t, "loop object access",
+                  "{% for i in [1,2] %}{{ 'index' in loop }}:{{ loop.index }}:{{ loop['length'] }};{% endfor %}",
+                  json::object(), "True:1:2;True:2:2;");
+    test_template(t, "loop object assignment",
+                  "{% for i in [1,2] %}{% set loop.index=9 %}{{ loop.index }};{% endfor %}", json::object(), "9;9;");
     test_template(
         t, "macro inherits call-site bindings",
         "{% set x='outer' %}{% macro m() %}{{ x }}{% endmacro %}{% for x in ['inner'] %}{{ m() }}{% endfor %}",
@@ -180,6 +237,39 @@ static void test_shared_render(testing & t) {
         }
         t.assert_true("failed call releases its local value before render ends", failed && token.expired());
     });
+    t.test("reserved loop target", [](testing & t) {
+        for (const auto * source :
+             { "{% for loop in [1,2] %}{{ loop }}{% endfor %}", "{% for loop,x in [[1,2]] %}{{ x }}{% endfor %}" }) {
+            bool rejected = false;
+            try {
+                jinja::parse_from_tokens(jinja::lexer().tokenize(source));
+            } catch (const jinja::parser_exception &) {
+                rejected = true;
+            }
+            t.assert_true("special loop name cannot be assigned by a for target", rejected);
+        }
+    });
+    t.test("loop metadata after render teardown", [](testing & t) {
+        using namespace jinja;
+        const std::string source =
+            "{% set ns=namespace(l=none) %}{% for x in [1,2,3] if x>1 %}"
+            "{% set ns.l=loop %}{% break %}{% endfor %}";
+        const auto program = parse_from_tokens(lexer().tokenize(source));
+        value      saved;
+        {
+            context ctx(source);
+            runtime(ctx).execute(program);
+            saved = ctx.get_val("ns")->at("l");
+        }
+        bool ended = false;
+        try {
+            saved->find(mk_val<value_string>("length"));
+        } catch (const std::runtime_error &) {
+            ended = true;
+        }
+        t.assert_true("loop cannot consume an ended render", ended);
+        saved.reset();
+    });
     t.test("shared AST with stats and input marking", [](testing & t) {
         const std::string source = "{% macro emit(x) %}{{ x }}{% endmacro %}{% for i in range(2) %}{{ emit(prefix) }}{{ i }}{% endfor %}{% filter upper %}{{ body }}{% endfilter %}|{{ 'literal' is string }}|{{ obj.value }}";
         const auto program = jinja::parse_from_tokens(jinja::lexer().tokenize(source));
@@ -215,7 +305,22 @@ static void test_shared_render(testing & t) {
             t.assert_true("request-local state", worker.get());
         }
     });
-
+    t.test("lazy range preserves array operations", [](testing & t) {
+        using namespace jinja;
+        auto  range = mk_val<value_range>(0, 3, 1);
+        value array =
+            mk_val<value_array>(std::vector<value>{ mk_val<value_int>(0), mk_val<value_int>(1), mk_val<value_int>(2) });
+        t.assert_true("equivalent array and hash",
+                      *range == *array && range->unique_hash().digest() == array->unique_hash().digest());
+        range->push_back(mk_val<value_int>(9));
+        range->reverse();
+        t.assert_true("materialized mutations", range->size() == 4 && range->element(0)->as_int() == 9);
+        auto descending = mk_val<value_range>(INT64_MAX, INT64_MIN, INT64_MIN);
+        t.assert_true("large negative stride", descending->size() == 2 && descending->element(1)->as_int() == -1);
+        auto ascending = mk_val<value_range>(INT64_MIN, INT64_MAX, INT64_MAX);
+        t.assert_true("large positive stride",
+                      ascending->size() == 3 && ascending->element(2)->as_int() == INT64_MAX - 1);
+    });
 }
 
 static void test_whitespace_control(testing & t) {
@@ -2918,6 +3023,8 @@ static void test_string_parts(testing & t) {
 
         right.parts = {{false, ""}, {false, "ab"}, {true, ""}, {true, "c"}, {false, ""}};
         t.assert_true("empty parts do not change equality", left.equals(right) && right.equals(left));
+        t.assert_true("multipart text equals a string view", left.equals(std::string_view("abc")));
+        t.assert_true("string view prefixes are unequal", !left.equals(std::string_view("ab")) && !left.equals(std::string_view("abcd")));
         t.assert_true("different bytes are unequal", !left.equals(jinja::string("abd")));
         t.assert_true("prefixes are unequal", !left.equals(jinja::string("ab")) && !jinja::string("ab").equals(left));
 
