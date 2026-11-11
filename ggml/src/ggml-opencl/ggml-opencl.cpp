@@ -22812,7 +22812,6 @@ static void ggml_cl_fa_kq_p8_dispatch(
     auto * extra_q = (ggml_tensor_extra_cl *) q->extra;
     auto * extra_m = (ggml_tensor_extra_cl *) mask->extra;
 
-
     const int M = k->ne[1];
     const int K = k->ne[0];
     const int N = nqc;
@@ -22892,6 +22891,7 @@ static void ggml_cl_fa_kq_p8_dispatch(
     const int row_blk = p_pitch / 32;
 
     kernel = backend_ctx->kernel_fa_p8_fixup;
+
     a = 0;
     CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem), &backend_ctx->prealloc_fa_bmax.buffer));
     CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem), &backend_ctx->prealloc_fa_bsum.buffer));
@@ -22971,7 +22971,8 @@ static void ggml_cl_fa_decompose_write_chunk(
 }
 
 static void ggml_cl_flash_attn_decompose(
-    ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst,
+    ggml_backend_t backend,
+    const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst,
     int64_t n_q_chunk, float scale, float max_bias
 ) {
     auto * backend_ctx = (ggml_backend_opencl_context *) backend->context;
@@ -23038,6 +23039,7 @@ static void ggml_cl_flash_attn_decompose(
 
         // KQ: [dk, n_kv, n_head_kv] x [dk, nqc, n_head] -> [n_kv, nqc, n_head]
         ggml_cl_fa_decompose_scratch_tensor(kq, extra_kq, backend_ctx->prealloc_fa_kq.buffer, GGML_TYPE_F32, n_kv, nqc, n_head);
+
         {
             ggml_tensor q_chunk = *q;
             q_chunk.ne[1]     = nqc;
@@ -23212,13 +23214,15 @@ static void ggml_cl_flash_attn_decompose_kq_p8(
             GGML_ASSERT(q0 == 0 && nqc == n_q);
             ggml_cl_fa_pv_direct(backend, dst, kv_pitch);
         } else {
-            cl_kernel kernel = backend_ctx->kernel_mul_mm_q8_f32_kqv;
             const cl_ulong zero = 0;
             const int dv_i = dv;
             const int nkv_i = n_kv;
             const int nqc_i = nqc;
             const int nh_i = n_head;
             const int nhkv_i = n_head_kv;
+
+            cl_kernel kernel = backend_ctx->kernel_mul_mm_q8_f32_kqv;
+
             cl_uint a = 0;
             CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem), &backend_ctx->prealloc_fa_vtq.buffer));
             CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &zero));
@@ -23259,7 +23263,10 @@ static void ggml_cl_flash_attn_decompose_kq_p8(
 // head size. GGML_OPENCL_FA_DECOMPOSE_MB sets the KQ scratch budget (default 256).
 // GGML_OPENCL_FA_KQ_P8=0 disables U8 probabilities and int8 KQV.
 // GGML_OPENCL_FA_KQV_DIRECT=0 disables direct PV for small query batches.
-static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
+static bool ggml_cl_flash_attn_decompose_dispatch(
+    ggml_backend_t backend,
+    const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst
+) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
     const ggml_tensor * v     = dst->src[2];
@@ -23273,6 +23280,7 @@ static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const 
         const char * e = getenv("GGML_OPENCL_FA_DECOMPOSE");
         return (e && e[0]) ? (e[0] != '0' ? 1 : 0) : -1;
     }();
+
     if (env == 0) {
         return false;
     }
@@ -23372,15 +23380,18 @@ static bool ggml_cl_flash_attn_decompose_dispatch(ggml_backend_t backend, const 
         const int mb = (e && e[0]) ? atoi(e) : 256;
         return (size_t)(mb > 0 ? mb : 256) * 1024 * 1024;
     }();
+
     const size_t kq_row_bytes = (size_t) n_kv * n_head * sizeof(float);
     int64_t n_q_chunk = MIN((int64_t)(budget_bytes / kq_row_bytes), n_q);
     n_q_chunk = MAX(n_q_chunk, MIN((int64_t) 8 * 32, n_q));
+
     if (!kq_p8) {
         n_q_chunk = MIN(n_q_chunk, (int64_t)(backend_ctx->image_max_buffer_size / (n_kv * n_head)));
     }
     if (n_q_chunk < 32 && n_q_chunk < n_q) {
         return false;
     }
+
     // even out the chunks, then align to the 32-wide n-tile
     const int64_t n_chunks = (n_q + n_q_chunk - 1) / n_q_chunk;
     n_q_chunk = MIN(n_q_chunk, ((n_q + n_chunks - 1) / n_chunks + 31) & ~(int64_t) 31);
