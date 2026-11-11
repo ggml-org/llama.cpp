@@ -30,6 +30,12 @@ struct llama_moe_cache_lookup {
 // cur is the expert input and ids are the selected experts, for the biases and scales (see llm_graph_context::build_moe_ffn)
 using llama_moe_cache_build_experts_t = ggml_tensor * (*)(ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data);
 
+enum llama_moe_cache_scale {
+    LLAMA_MOE_CACHE_SCALE_WEIGHT,
+    LLAMA_MOE_CACHE_SCALE_INPUT,
+    LLAMA_MOE_CACHE_SCALE_COUNT,
+};
+
 // keeps recently and repeatedly used experts of host-resident MoE layers in a device buffer
 // each layer has a slot map in host memory: when the scheduler copies it to the device, the copy callback uploads the missing experts
 class llama_moe_cache {
@@ -53,8 +59,8 @@ public:
     ggml_tensor * build_experts(const llm_graph_context & g, const llama_moe_cache_lookup & lookup,
             ggml_tensor * cur, ggml_tensor * selected_experts, llama_moe_cache_build_experts_t build, void * user_data) const;
 
-    // weight scales in cache-slot order, or the original per-tensor scale
-    ggml_tensor * get_scales(const ggml_tensor * w) const;
+    // weight or input scales of w in cache-slot order, or the original per-tensor scale
+    ggml_tensor * get_scales(const ggml_tensor * w, llama_moe_cache_scale kind) const;
 
     // ggml_backend_sched copy callback, returns false if src is not a slot map
     bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph);
