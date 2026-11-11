@@ -62,6 +62,9 @@ struct llama_cparams {
     size_t moe_cache_size;
     float  moe_cache_cpu_share;
 
+    // layer-major prefill: a larger ubatch runs its attention and expert FFN in chunks of this many tokens, 0 to disable
+    uint32_t n_chunk;
+
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
     bool embeddings_layer_inp_dev; // write enabled layer inputs to a device buffer instead of host
     bool embeddings_nextn_dev;     // write the unmasked h_nextn rows to a device buffer instead of host, see llama_set_embeddings_nextn_dev()

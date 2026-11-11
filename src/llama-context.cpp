@@ -409,6 +409,15 @@ llama_context::llama_context(
         }
     }
 
+    {
+        const char * LLAMA_LAYER_MAJOR = getenv("LLAMA_LAYER_MAJOR");
+        cparams.n_chunk = LLAMA_LAYER_MAJOR ? std::max(0, atoi(LLAMA_LAYER_MAJOR)) : 0;
+
+        if (cparams.n_chunk > 0) {
+            LLAMA_LOG_INFO("%s: LLAMA_LAYER_MAJOR set, ubatches run in chunks of %u tokens\n", __func__, cparams.n_chunk);
+        }
+    }
+
     // initialized later
     cparams.pipeline_parallel = false;
     cparams.training = false;
@@ -2954,6 +2963,12 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         for (const auto & lora : model.loras) {
             res += lora->get_n_nodes();
         }
+
+        // layer-major prefill: each chunk has its own attention and expert nodes
+        // the budgets above grow with n_tokens and have room for the chunks
+        if (cparams.n_chunk > 0 && n_tokens > cparams.n_chunk) {
+            res *= 2 + n_tokens/cparams.n_chunk;
+        }
     }
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
@@ -3204,6 +3219,11 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
     const ggml_tensor * ids = node->src[2];
     if (ggml_nelements(ids) == 0) {
         return true;
+    }
+
+    // the ids of a token chunk: the other chunks read the same copy, so copy the experts of all the tokens (see build_moe_ffn)
+    if (ids->view_src != nullptr && ids->view_src->type == ids->type && ids->view_src->ne[0] == ids->ne[0]) {
+        ids = ids->view_src;
     }
 
     const int64_t n_expert    = src->ne[2];

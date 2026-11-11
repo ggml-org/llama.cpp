@@ -203,6 +203,9 @@ public:
     // padded length of the longest cell list of the slices; 0 if kv_rows are not used (multiple streams)
     uint32_t get_n_kv_rows(const llama_ubatch & ubatch) const;
 
+    // upper bound of get_n_kv_rows for a slice of n_tokens tokens of a single-sequence ubatch (see llama_ubatch::slice)
+    uint32_t get_n_kv_rows_max(uint32_t n_tokens) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
@@ -249,6 +252,26 @@ public:
 
     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    // true if the causal mask of the ubatch is a staircase: token i attends to the cells [0, sinfo.idxs[0][0] + i], and no cells follow the ubatch
+    // any chunk of consecutive tokens can then read its mask as a view of the staircase mask (see llm_attn_mask::chunks)
+    bool is_staircase(const llama_ubatch & ubatch, const slot_info & sinfo) const;
+
+    // false if no ubatch of this cache has a staircase mask
+    bool can_staircase() const;
+
+    // a staircase mask in device memory: F16 [n_rows, n_cols], row j of column i is 0 if j < anchor + i/step, -inf otherwise
+    // a mask that keeps the first rows of each column, one more row every `step` columns, is a view of it (see get_staircase_offs)
+    // it is a constant, one per step: created on the first call, a view of a larger mask does not work as a graph input (the scheduler copies each view)
+    // step 1: the KQ mask of the token chunks, see is_staircase; step kpool: the pool mask of the k-pool indexer
+    ggml_tensor * get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const;
+
+    // offset in the staircase of a mask whose column i keeps the rows j < (n_first*step + phase + i)/step, phase < step
+    // the view needs up to 8*step columns and 8 rows more than the mask
+    static size_t get_staircase_offs(const ggml_tensor * staircase, uint32_t step, int64_t anchor, int64_t n_first, int64_t phase);
+
+    // fill the masks of the token chunks of the ubatch
+    void set_input_attn_mask_chunks(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
 
     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
     bool has_cell_ext() const;
@@ -307,6 +330,10 @@ private:
 
     // keep constants separate from mutable KV buffers
     llama_memory_bufs attn_rot_bufs;
+
+    // see get_staircase()
+    mutable llama_memory_bufs staircase_bufs;
+    mutable std::map<uint32_t, ggml_tensor *> staircases; // by step
 
     void init_rotation(const char * name_tag);
 
@@ -418,6 +445,16 @@ public:
 
     uint32_t get_n_kv() const;
     uint32_t get_n_kv_rows() const;
+
+    // see llama_kv_cache::get_n_kv_rows, for a slice of the current ubatch
+    uint32_t get_n_kv_rows(const llama_ubatch & slice) const;
+
+    // see llama_kv_cache::is_staircase
+    bool is_staircase(const llama_ubatch & ubatch) const;
+    bool can_staircase() const;
+
+    // the view of the staircase mask for the n tokens of the current ubatch that start at token t
+    ggml_tensor * get_staircase(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;

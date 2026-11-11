@@ -61,6 +61,9 @@ struct llama_kv_rows_slice {
 
     // min position of the cells that are not masked by the SWA (-1 if all cells are kept)
     llama_pos p_min = -1;
+
+    // max position of the cells, for a ubatch slice: the cells of the later tokens are masked for all tokens of the slice
+    llama_pos p_max = std::numeric_limits<llama_pos>::max();
 };
 
 // meta information about KV cells that can be part of multiple sequences at the same time
@@ -413,19 +416,19 @@ public:
         return seq_pos[seq_id].size();
     }
 
-    // number of cells that contain seq_id at a position >= p_min
-    uint32_t seq_n_cells(llama_seq_id seq_id, llama_pos p_min) const {
+    // number of cells that contain seq_id at a position in [p_min, p_max]
+    uint32_t seq_n_cells(llama_seq_id seq_id, llama_pos p_min, llama_pos p_max = std::numeric_limits<llama_pos>::max()) const {
         assert(seq_id >= 0);
         assert(seq_id < LLAMA_MAX_SEQ);
 
         const auto & sp = seq_pos[seq_id];
 
-        return std::distance(sp.lower_bound({ p_min, 0 }), sp.end());
+        return std::distance(sp.lower_bound({ p_min, 0 }), sp.upper_bound({ p_max, std::numeric_limits<uint32_t>::max() }));
     }
 
     // get the lists of the cells that contain any of the sequences of each slice, in cell order
     // one list of max `n_per_seq` for each slice, padded with -1
-    // the cells of slice s at a position below slices[s].p_min are skipped
+    // the cells of slice s at a position below slices[s].p_min or above slices[s].p_max are skipped
     LLAMA_ATTRIBUTE_NOINLINE
     void get_seq_cells(const std::vector<llama_kv_rows_slice> & slices, int32_t * data, int64_t n_per_seq) const {
         assert(slices.size() >= 1);
@@ -451,7 +454,7 @@ public:
 
                 for (uint64_t b = word; b != 0; b &= b - 1) {
                     const int32_t i = 64*w + ctz64(b);
-                    if (pos[i] >= pm) {
+                    if (pos[i] >= pm && pos[i] <= slices[s].p_max) {
                         GGML_ASSERT(dst < end);
                         *dst++ = i;
                     }

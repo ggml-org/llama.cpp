@@ -192,6 +192,13 @@ public:
     uint32_t get_n_kpool    () const; // Padded pool count, where the last pool is always unused.
     uint32_t get_n_kpool_new() const; // Pools to re-pool this ubatch, padded to a stable bound, never below 1.
     kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
+    // layer-major prefill: the pool mask [n_pool, n] of the n tokens of the current ubatch from token t0,
+    // as a view of a constant staircase mask in device memory (see llama_kv_cache::get_staircase)
+    // nullptr if the mask of these tokens is not a staircase: several sequences, pools of an earlier sequence,
+    // or a count of visible pools that does not grow by one every kpool tokens
+    ggml_tensor * get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const;
+
+    // pool_mask can be null, if the graph reads the masks of get_kpool_mask
     // sel_mask (F32 [n_sel, 1, 1, n_tokens], can be null): 0 for the live selection slots, -inf for the dead ones
     // new_pool_pos (I32 [4*n_new]): M-RoPE position of each new pool's first member, for pooled keys rotated at pooling time
     void set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,

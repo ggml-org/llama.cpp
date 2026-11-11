@@ -289,6 +289,44 @@ set_tests_properties(test-llama-context PROPERTIES
     ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1"
 )
 
+# the sparse attention of large ubatches is split into query chunks, small chunks cover the split with the dummy models
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-qsa-chunk
+    LABEL main
+    ARGS -a "qwen4exp"
+)
+set_tests_properties(test-llama-archs-qsa-chunk PROPERTIES
+    ENVIRONMENT "LLAMA_QSA_CHUNK=24"
+)
+
+# the query chunks match the unsplit attention on the CPU
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-qsa-chunk-match
+    LABEL main
+    ARGS -a "qwen4exp" --qsa-chunk 24 -d 0.3
+)
+
+# layer-major prefill: the chunks of the attention block and of the expert FFN match the unsplit graph on the CPU
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-layer-major-match
+    LABEL main
+    ARGS -a "qwen4exp" --layer-major 24 -d 0.3
+)
+
+llama_test(
+    test-llama-context
+    NAME test-llama-context-qsa-chunk
+    LABEL main
+    ARGS -m "${MODEL_DIR}/qwen4exp-moe.gguf"
+)
+set_tests_properties(test-llama-context-qsa-chunk PROPERTIES
+    FIXTURES_REQUIRED generate-models
+    ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_QSA_CHUNK=24"
+)
+
 llama_build(test-fusion.cpp)
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)

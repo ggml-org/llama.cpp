@@ -4067,8 +4067,8 @@ struct ggml_tensor * ggml_set_rows(
     GGML_ASSERT(a->ne[2] == b->ne[2]);
     GGML_ASSERT(a->ne[3] == b->ne[3]);
     GGML_ASSERT(b->ne[1] == c->ne[0]);
-    GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
-    GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
+    GGML_ASSERT(c->ne[1] == 0 ? b->ne[2] == 0 : b->ne[2] % c->ne[1] == 0);
+    GGML_ASSERT(c->ne[2] == 0 ? b->ne[3] == 0 : b->ne[3] % c->ne[2] == 0);
     GGML_ASSERT(c->ne[3] == 1);
     GGML_ASSERT(b->type == GGML_TYPE_F32 || b->type == GGML_TYPE_F16);
     GGML_ASSERT(c->type == GGML_TYPE_I64 || c->type == GGML_TYPE_I32);
@@ -5600,7 +5600,8 @@ static struct ggml_tensor * ggml_flash_attn_ext_impl(
 
     if (mask) {
         GGML_ASSERT(mask->type == GGML_TYPE_F16);
-        GGML_ASSERT(ggml_is_contiguous(mask));
+        // the mask can be a view of the first cells of each row of a larger mask
+        GGML_ASSERT(mask->nb[0] == sizeof(ggml_fp16_t) && mask->nb[1] >= mask->ne[0]*mask->nb[0]);
         //GGML_ASSERT(ggml_can_repeat_rows(mask, qk));
 
         GGML_ASSERT(q->ne[2] % mask->ne[2] == 0);

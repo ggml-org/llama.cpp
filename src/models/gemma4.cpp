@@ -178,8 +178,12 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
+    // the pruned rows of the KV-shared layers read the masks directly
+    const bool has_kv_shared = hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer;
+
     // TODO: is causal == true correct? might need some changes
-    auto * inp_attn = build_attn_inp_kv_iswa();
+    auto * inp_attn = build_attn_inp_kv_iswa(!has_kv_shared);
+    auto inp_attn_chunks = build_attn_inp_chunks(inp_attn);
 
     auto inp_attn_full  = *inp_attn;
     auto inp_attn_prune = *inp_attn;
@@ -235,75 +239,101 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
 
         res->t_layer_inp[il] = inpL;
 
-        // norm
-        cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
-        cb(cur, "attn_norm", il);
+        // the attention block for the rows of inpL
+        const auto build_layer_attn = [&](llm_graph_input_attn_kv_iswa * inp_attn, ggml_tensor * inpL, ggml_tensor * inp_pos, int64_t n_rows, int64_t n_tokens) {
+            ggml_tensor * cur;
 
-        // Q projection (shared for both non-KV and KV layers)
-        // this is to mirror Gemma4Attention in pytorch code
-        ggml_tensor * qkv_fused = nullptr;
-        ggml_tensor * Qcur;
-        if (model.layers[il].wqkv) {
-            qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
-            cb(qkv_fused, "wqkv", il);
-            const int64_t q_dim = n_embd_head * n_head;
-            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_rows, qkv_fused->nb[1], 0));
-        } else {
-            Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
-        }
-        {
-            cb(Qcur, "Qcur", il);
+            // norm
+            cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_rows);
-
-            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
-            cb(Qcur, "Qcur_normed", il);
-
-            Qcur = build_rope(Qcur, inp_pos, il);
-            cb(Qcur, "Qcur_pos", il);
-        }
-
-        // self-attention
-        if (hparams.has_kv(il)) {
-            ggml_tensor * Kcur;
-            ggml_tensor * Vcur;
-            if (qkv_fused) {
+            // Q projection (shared for both non-KV and KV layers)
+            // this is to mirror Gemma4Attention in pytorch code
+            ggml_tensor * qkv_fused = nullptr;
+            ggml_tensor * Qcur;
+            if (model.layers[il].wqkv) {
+                qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
+                cb(qkv_fused, "wqkv", il);
                 const int64_t q_dim = n_embd_head * n_head;
-                const int64_t k_dim = n_embd_head * n_head_kv;
-                const int64_t v_dim = n_embd_head * n_head_kv;
-                const size_t  esize = ggml_element_size(qkv_fused);
-                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
-                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
+                Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_rows, qkv_fused->nb[1], 0));
             } else {
-                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
-                Vcur = model.layers[il].wv
-                       ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
-                       : Kcur; // if v_proj is not present, use Kcur as Vcur
+                Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
             }
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
+            {
+                cb(Qcur, "Qcur", il);
 
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_rows);
 
-            Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
-            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+                Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+                cb(Qcur, "Qcur_normed", il);
 
-            cb(Kcur, "Kcur_normed", il);
-            cb(Vcur, "Vcur_normed", il);
+                Qcur = build_rope(Qcur, inp_pos, il);
+                cb(Qcur, "Qcur_pos", il);
+            }
 
-            Kcur = build_rope(Kcur, inp_pos, il);
+            // self-attention
+            if (hparams.has_kv(il)) {
+                ggml_tensor * Kcur;
+                ggml_tensor * Vcur;
+                if (qkv_fused) {
+                    const int64_t q_dim = n_embd_head * n_head;
+                    const int64_t k_dim = n_embd_head * n_head_kv;
+                    const int64_t v_dim = n_embd_head * n_head_kv;
+                    const size_t  esize = ggml_element_size(qkv_fused);
+                    Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
+                    Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
+                } else {
+                    Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+                    Vcur = model.layers[il].wv
+                           ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                           : Kcur; // if v_proj is not present, use Kcur as Vcur
+                }
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
 
-            cb(Kcur, "Kcur_pos", il);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-            cur = build_attn(inp_attn, model.layers[il].wo,
-                    nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
-                    hparams.f_attention_scale, il);
+                Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
+                Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+
+                cb(Kcur, "Kcur_normed", il);
+                cb(Vcur, "Vcur_normed", il);
+
+                Kcur = build_rope(Kcur, inp_pos, il);
+
+                cb(Kcur, "Kcur_pos", il);
+
+                cur = build_attn(inp_attn, model.layers[il].wo,
+                        nullptr, model.layers[il].wo_s, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
+                        hparams.f_attention_scale, il);
+            } else {
+                // reuse KV cache of earlier layers
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                        Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+            }
+
+            return cur;
+        };
+
+        if (inp_attn_chunks.empty()) {
+            cur = build_layer_attn(inp_attn, inpL, inp_pos, n_rows, n_tokens);
         } else {
-            // reuse KV cache of earlier layers
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
-                    Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+            // layer-major prefill: the attention block of each token chunk is computed apart
+            cur = build_chunk_dst(inpL);
+
+            int64_t t = 0;
+            for (auto & chunk : inp_attn_chunks) {
+                const int64_t n = chunk.self_attn_mask.raw->ne[1];
+
+                cur = build_chunk_store(cur, build_layer_attn(&chunk,
+                            ggml_view_2d(ctx0, inpL, inpL->ne[0], n, inpL->nb[1], t*inpL->nb[1]),
+                            ggml_view_1d(ctx0, inp_pos, n, t*inp_pos->nb[0]),
+                            n, n), t);
+
+                t += n;
+            }
         }
 
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
