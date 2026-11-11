@@ -196,7 +196,8 @@ public:
     // as a view of a constant staircase mask in device memory (see llama_kv_cache::get_staircase)
     // nullptr if the mask of these tokens is not a staircase: several sequences, pools of an earlier sequence,
     // or a count of visible pools that does not grow by one every kpool tokens
-    ggml_tensor * get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const;
+    // the staircase is sized for the largest ubatch, n_ubatch tokens
+    ggml_tensor * get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const;
 
     // pool_mask can be null, if the graph reads the masks of get_kpool_mask
     // sel_mask (F32 [n_sel, 1, 1, n_tokens], can be null): 0 for the live selection slots, -inf for the dead ones

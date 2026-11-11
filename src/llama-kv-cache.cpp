@@ -3197,11 +3197,11 @@ uint32_t llama_kv_cache_context::get_n_kv_rows(const llama_ubatch & slice) const
     return kv->get_n_kv_rows(slice);
 }
 
-ggml_tensor * llama_kv_cache_context::get_staircase(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const {
+ggml_tensor * llama_kv_cache_context::get_staircase(ggml_context * ctx, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const {
     // token i of a chunk at cell idx attends to the cells j < idx + 1 + i, and n_kv <= idx + n_tokens + 256
     const int64_t anchor = kv->get_size() + 1;
 
-    ggml_tensor * staircase = kv->get_staircase(1, anchor, kv->get_size() + ubatch.n_tokens + 256 + 8, n_chunk + 8);
+    ggml_tensor * staircase = kv->get_staircase(1, anchor, kv->get_size() + n_ubatch + 256 + 8, n_chunk + 8);
 
     // graph reservation: there are no cells, only the shape of the view is used
     const size_t offs = ubatches.empty() ? 0 : llama_kv_cache::get_staircase_offs(staircase, 1, anchor, sinfos[i_cur].idxs[0][0] + t + 1, 0);

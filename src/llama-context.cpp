@@ -935,6 +935,8 @@ void llama_context::sched_reserve() {
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
         }
+
+        gf_chunked = true;
     }
 
     for (size_t i = 0; i < backend_ptrs.size(); ++i) {
@@ -1106,6 +1108,8 @@ bool llama_context::memory_update(bool optimize) {
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
+
+        gf_chunked = true;
     }
 
     return true;
@@ -1846,6 +1850,16 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    // layer-major prefill: a ubatch of more than n_chunk tokens has the chunks of n_ubatch, a smaller ubatch has no chunks
+    // each of the two shapes fits its own reserve graph, so reserve again when the shape changes
+    if (cparams.n_chunk > 0 && cparams.n_ubatch > cparams.n_chunk) {
+        const bool chunked = ubatch.n_tokens > cparams.n_chunk;
+        if (chunked != gf_chunked && !graph_reserve_chunked(chunked)) {
+            ret = GGML_STATUS_ALLOC_FAILED;
+            return nullptr;
+        }
+    }
+
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -3114,6 +3128,24 @@ ggml_cgraph * llama_context::graph_reserve(
     }
 
     return gf;
+}
+
+bool llama_context::graph_reserve_chunked(bool chunked) {
+    llama_memory_context_ptr mctx;
+    if (memory) {
+        mctx = memory->init_full();
+        if (!mctx) {
+            return false;
+        }
+    }
+
+    // without chunks, n_tokens is a multiple of n_seqs that does not exceed n_chunk (graph_reserve rounds it up)
+    const uint32_t n_seqs   = chunked ? cparams.n_seq_max : std::min(cparams.n_seq_max, cparams.n_chunk);
+    const uint32_t n_tokens = chunked ? std::min(cparams.n_ctx, cparams.n_ubatch) : cparams.n_chunk/n_seqs*n_seqs;
+
+    gf_chunked = chunked;
+
+    return graph_reserve(n_tokens, n_seqs, std::min(n_tokens, cparams.n_outputs_max), mctx.get()) != nullptr;
 }
 
 llm_graph_params llama_context::graph_params(

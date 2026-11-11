@@ -726,7 +726,7 @@ uint32_t llama_memory_hybrid_idx_context::get_n_kpool_new() const {
     return kpool_cur().n_new_g;
 }
 
-ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const {
+ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
 
     const auto * idx = mem->get_mem_idx();
@@ -740,7 +740,7 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
     // a token sees at most all the pools of a full cache, and the pools of one ubatch follow the first visible one
     const int64_t anchor = GGML_PAD(idx->get_size()/kpool, 8);
 
-    ggml_tensor * staircase = idx->get_staircase(kpool, anchor, anchor + ubatch.n_tokens/kpool + 64 + 16, n_chunk + 8*kpool);
+    ggml_tensor * staircase = idx->get_staircase(kpool, anchor, anchor + n_ubatch/kpool + 64 + 16, n_chunk + 8*kpool);
 
     // graph reservation (there are no cells) or an empty chunk: only the shape of the view is used
     if (sinfos_kpool.empty() || n == 0) {
