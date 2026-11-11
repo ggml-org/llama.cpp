@@ -311,8 +311,8 @@ const char * ggml_openvino_getenv_str(const char * var, const char * default_val
     return (it == env_map.end() || it->second.empty()) ? default_value : it->second.c_str();
 }
 
-// Get the value of a GGML_OPENVINO_* env var as an int (via std::atoi).
-// Returns default_value (0) when the var is unset or empty. Used for both
+// Get the value of a GGML_OPENVINO_* env var as an int. Returns default_value
+// (0) when the var is unset, empty, or not a whole integer. Used for both
 // integer settings (e.g. GGML_OPENVINO_PREFILL_CHUNK_SIZE) and boolean
 // toggles: "0" disables, any non-zero integer enables.
 int ggml_openvino_getenv_int(const char * var, int default_value) {
@@ -335,9 +335,9 @@ int ggml_openvino_getenv_int(const char * var, int default_value) {
 }
 
 bool ggml_openvino_gdn_prescale_enabled() {
-    // float value, so not getenv_int: "64.0" must enable it
+    // float value, so not getenv_int: "64.0" must enable it. Unset means on.
     const char * v = ggml_openvino_getenv_str("GGML_OPENVINO_GDN_Q_SCALE", nullptr);
-    return v != nullptr && std::strtof(v, nullptr) > 0.0f;
+    return v == nullptr || std::strtof(v, nullptr) > 0.0f;
 }
 
 bool ggml_openvino_gdn_native_state_enabled() {

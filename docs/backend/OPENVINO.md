@@ -701,7 +701,7 @@ curl -X POST "http://localhost:8080/v1/chat/completions" -H "Content-Type: appli
 ## GGML OpenVINO Backend Runtime Configurations
 
 The OpenVINO backend can be configured using the following environment variables at runtime to control device selection, caching, debugging, and profiling behavior.
-Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `1`) to enable; `0`, negative, or non-numeric values are treated as disabled; unset or empty means the default in the table.
+Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `1`) to enable; `0` or negative values are treated as disabled; unset or empty means the default in the table. Values that are not whole integers (e.g. `true`, `1x`) are not accepted: a flag with default `1` stays on, any other flag stays off.
 
 | Variable                          | Type      | Default    | Description                                                                                                 |
 |-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
