@@ -2,6 +2,7 @@
 
 constant bool FC_rope_is_imrope [[function_constant(FC_ROPE + 0)]];
 constant bool FC_rope_is_back   [[function_constant(FC_ROPE + 1)]];
+constant bool FC_rope_truncate  [[function_constant(FC_ROPE + 2)]];
 
 static float rope_yarn_ramp(const float low, const float high, const int i0) {
     const float y = (i0 / 2 - low) / max(0.001f, high - low);
@@ -36,8 +37,9 @@ static float rope_yarn_corr_factor(int n_dims, int n_ctx_orig, float n_rot, floa
     return n_dims * log(n_ctx_orig / (n_rot * 2 * M_PI_F)) / (2 * log(base));
 }
 
+template<bool truncate>
 static void rope_yarn_corr_dims(
-    int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, bool truncate, float dims[2]
+    int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, float dims[2]
 ) {
     // start and end correction dims
     float start = rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_fast, freq_base);
@@ -65,7 +67,13 @@ kernel void kernel_rope_norm(
     const int i1 = tgpig[0];
 
     float corr_dims[2];
-    rope_yarn_corr_dims(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, args.truncate, corr_dims);
+    if (FC_rope_truncate) {
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                  corr_dims);
+    } else {
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                   corr_dims);
+    }
 
     device const int32_t * pos = (device const int32_t *) src1;
 
@@ -123,7 +131,13 @@ kernel void kernel_rope_neox(
     const int i1 = tgpig[0];
 
     float corr_dims[2];
-    rope_yarn_corr_dims(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, args.truncate, corr_dims);
+    if (FC_rope_truncate) {
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                  corr_dims);
+    } else {
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                   corr_dims);
+    }
 
     device const int32_t * pos = (device const int32_t *) src1;
 
@@ -181,7 +195,13 @@ kernel void kernel_rope_multi(
     const int i1 = tgpig[0];
 
     float corr_dims[2];
-    rope_yarn_corr_dims(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, args.truncate, corr_dims);
+    if (FC_rope_truncate) {
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                  corr_dims);
+    } else {
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                   corr_dims);
+    }
 
     device const int32_t * pos = (device const int32_t *) src1;
 
@@ -269,7 +289,13 @@ kernel void kernel_rope_vision(
     const int i1 = tgpig[0];
 
     float corr_dims[2];
-    rope_yarn_corr_dims(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, args.truncate, corr_dims);
+    if (FC_rope_truncate) {
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                  corr_dims);
+    } else {
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
+                                   corr_dims);
+    }
 
     device const int32_t * pos = (device const int32_t *) src1;
 

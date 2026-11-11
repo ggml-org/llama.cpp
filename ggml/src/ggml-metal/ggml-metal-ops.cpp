@@ -4858,7 +4858,6 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
         /* sect_3      =*/ sect_3,
         /* src2        =*/ op->src[2] != nullptr,
         /* inplace     =*/ inplace,
-        /* truncate    =*/ ggml_rope_get_truncate(op),
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_rope(lib, op);
