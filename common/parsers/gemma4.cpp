@@ -257,12 +257,15 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
             foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
-                // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
-                // const auto & params   = function.at("parameters");
+                const auto params = common_chat_tool_parameters(function);
+                auto doc = std::make_shared<const common_chat_schema_document>(common_chat_schema_from_json(params));
+                if (!doc->root->value_types().is_only(common_chat_schema::TYPE_OBJECT)) {
+                    throw std::invalid_argument("Gemma 4 tool parameters must describe an object");
+                }
 
                 tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(p.sequence({
                     p.tool_open(p.tool_name(p.literal(name)) + p.peek(p.literal("{"))),
-                    p.tool_args(p.ref("gemma4-dict")),
+                    p.tool_args(p.schema(p.ref("gemma4-dict"), "tool-" + std::to_string(tool_index) + "-schema", doc, *doc->root)),
                 })));
             });
 
@@ -292,9 +295,17 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
 
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
-        data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+        common_grammar_options options;
+        if (!has_response_format) {
+            options.string_rule_name = "gemma4-string";
+            options.string_delimiter = "<|\"|>";
+            options.value_rule_name = "gemma4-value";
+            options.bare_keys = true;
+            options.unordered_properties = true;
+        }
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             data.parser.build_grammar(builder, data.grammar_lazy);
-        });
+        }, options);
 
         data.grammar_triggers = {
             { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|tool_call>" },
