@@ -1248,6 +1248,30 @@ struct llm_graph_context {
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
 
+    // the expert part of build_moe_ffn, for the rows of cur: build_moe_ffn calls it once, or once per token chunk of a large ubatch
+    // selected_experts [n_expert_used, n_tokens], weights [1, n_expert_used, n_tokens] and cache are the rows of the same tokens
+    ggml_tensor * build_moe_experts(
+             ggml_tensor * cur,
+             ggml_tensor * selected_experts,
+             ggml_tensor * weights,
+             const llm_graph_moe_cache_slots & cache,
+             ggml_tensor * up_exps,
+             ggml_tensor * up_exps_b,
+             ggml_tensor * gate_exps,
+             ggml_tensor * gate_exps_b,
+             ggml_tensor * down_exps,
+             ggml_tensor * down_exps_b,
+             ggml_tensor * gate_up_exps,
+             ggml_tensor * gate_up_exps_b,
+             ggml_tensor * up_exps_s,
+             ggml_tensor * gate_exps_s,
+             ggml_tensor * down_exps_s,
+                 int64_t   n_expert_used,
+         llm_ffn_op_type   type_op,
+                     int   il,
+             ggml_tensor * post_exp_norm,
+                   float   post_exp_norm_eps) const;
+
     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
     // with cpu_part, also the misses computed from the host experts, if the cache leaves any to the CPU
     llm_graph_moe_cache_slots build_moe_cache_slots(

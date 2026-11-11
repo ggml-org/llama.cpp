@@ -1749,6 +1749,20 @@ llm_graph_amax_src1 llm_graph_context::build_amax_src1_f16(
     return result;
 }
 
+// mul_mat_id for the experts of the tokens of ids
+// the scheduler copies host experts to a device once per graph, and the copy callback uploads the experts of the ids of the first node only
+// the ids of a token chunk are a view of the ids of all tokens (see build_moe_ffn): the callback reads the latter in src[3]
+static ggml_tensor * mul_mat_id_chunk(ggml_context * ctx, ggml_tensor * as, ggml_tensor * b, ggml_tensor * ids) {
+    ggml_tensor * res = ggml_mul_mat_id(ctx, as, b, ids);
+
+    const ggml_tensor * ids_all = ids->view_src;
+    if (ids_all != nullptr && ids_all->type == ids->type && ids_all->ne[0] == ids->ne[0]) {
+        res->src[3] = ids->view_src;
+    }
+
+    return res;
+}
+
 ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
@@ -1760,7 +1774,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
     // the experts in the MoE cache are selected by their slots
     ggml_tensor * res = slots == nullptr ?
-        ggml_mul_mat_id(ctx0, w, cur_mm, ids) :
+        mul_mat_id_chunk(ctx0, w, cur_mm, ids) :
         ggml_mul_mat_id(ctx0, cached ? moe_cache->get_experts(w) : w, cur_mm, slots);
 
     if (prec_policy) {
@@ -1789,9 +1803,9 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         const float rank  = (float) lw->b->ne[0];
         const float scale = alpha ? lora.second * alpha / rank : lora.second;
 
-        ggml_tensor * ab_cur = ggml_mul_mat_id(
+        ggml_tensor * ab_cur = mul_mat_id_chunk(
                 ctx0, lw->b,
-                ggml_mul_mat_id(ctx0, lw->a, cur, ids),
+                mul_mat_id_chunk(ctx0, lw->a, cur, ids),
                 ids
                 );
 
@@ -2268,7 +2282,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * post_exp_norm,
                float   post_exp_norm_eps) const {
     const llm_arch arch = model.arch;
-    const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
@@ -2422,6 +2435,78 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     const bool can_cpu_share = !weight_before_ffn && loras->empty() &&
         std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
     const llm_graph_moe_cache_slots cache = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, can_cpu_share, il);
+
+    // the experts of the tokens of the given rows
+    const auto build_experts = [&](ggml_tensor * rows, ggml_tensor * rows_ids, ggml_tensor * rows_weights, const llm_graph_moe_cache_slots & rows_cache) {
+        return build_moe_experts(rows, rows_ids, rows_weights, rows_cache,
+                up_exps, up_exps_b, gate_exps, gate_exps_b, down_exps, down_exps_b, gate_up_exps, gate_up_exps_b,
+                up_exps_s, gate_exps_s, down_exps_s,
+                n_expert_used, type_op, il, post_exp_norm, post_exp_norm_eps);
+    };
+
+    // the experts of a large ubatch are computed in chunks of tokens: the expert tensors have n_ff*n_expert_used values per token
+    // the chunks have the same size, so that no chunk is too small for a device
+    const int64_t n_chunks = cparams.n_moe_chunk > 0 ? (n_tokens + cparams.n_moe_chunk - 1)/cparams.n_moe_chunk : 1;
+    if (n_chunks <= 1) {
+        return build_experts(cur, selected_experts, weights, cache);
+    }
+
+    // the chunks read views of the experts selected for all tokens, see mul_mat_id_chunk
+    ggml_tensor * ids = selected_experts->view_src ? ggml_cont(ctx0, selected_experts) : selected_experts;
+    ggml_build_forward_expand(gf, ids);
+
+    weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
+
+    // not a new leaf: ggml-alloc allocates all the leafs of a graph before its first node
+    ggml_tensor * moe_out = ggml_fill(ctx0, cur, 0.0f);
+
+    for (int64_t ic = 0; ic < n_chunks; ++ic) {
+        const int64_t t0 = ic*n_tokens/n_chunks;
+        const int64_t n  = (ic + 1)*n_tokens/n_chunks - t0;
+
+        // the rows of the tokens of the chunk
+        const auto view = [&](ggml_tensor * t) {
+            return t ? ggml_view_2d(ctx0, t, t->ne[0], n, t->nb[1], t0*t->nb[1]) : nullptr;
+        };
+
+        ggml_tensor * out = build_experts(view(cur), view(ids), ggml_reshape_3d(ctx0, view(weights), 1, n_expert_used, n),
+                { view(cache.slots), view(cache.cpu_ids) });
+
+        // each store reads the previous one, so a chunk is computed after the tensors of the previous chunk are free
+        moe_out = ggml_set_2d_inplace(ctx0, moe_out, out, moe_out->nb[1], t0*moe_out->nb[1]);
+        ggml_build_forward_expand(gf, moe_out);
+    }
+
+    cb(moe_out, "ffn_moe_out", il);
+
+    return moe_out;
+}
+
+ggml_tensor * llm_graph_context::build_moe_experts(
+         ggml_tensor * cur,
+         ggml_tensor * selected_experts,
+         ggml_tensor * weights,
+         const llm_graph_moe_cache_slots & cache,
+         ggml_tensor * up_exps,
+         ggml_tensor * up_exps_b,
+         ggml_tensor * gate_exps,
+         ggml_tensor * gate_exps_b,
+         ggml_tensor * down_exps,
+         ggml_tensor * down_exps_b,
+         ggml_tensor * gate_up_exps,
+         ggml_tensor * gate_up_exps_b,
+         ggml_tensor * up_exps_s,
+         ggml_tensor * gate_exps_s,
+         ggml_tensor * down_exps_s,
+             int64_t   n_expert_used,
+     llm_ffn_op_type   type_op,
+                 int   il,
+         ggml_tensor * post_exp_norm,
+               float   post_exp_norm_eps) const {
+    const llm_arch arch = model.arch;
+    const int64_t n_embd   = cur->ne[0];
+    const int64_t n_tokens = cur->ne[1];
+    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 

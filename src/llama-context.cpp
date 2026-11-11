@@ -409,6 +409,15 @@ llama_context::llama_context(
         }
     }
 
+    {
+        const char * LLAMA_MOE_CHUNK = getenv("LLAMA_MOE_CHUNK");
+        cparams.n_moe_chunk = LLAMA_MOE_CHUNK ? std::max(0, atoi(LLAMA_MOE_CHUNK)) : 0;
+
+        if (cparams.n_moe_chunk > 0) {
+            LLAMA_LOG_INFO("%s: LLAMA_MOE_CHUNK set, the expert FFN runs in chunks of %u tokens\n", __func__, cparams.n_moe_chunk);
+        }
+    }
+
     // initialized later
     cparams.pipeline_parallel = false;
     cparams.training = false;
@@ -2956,6 +2965,11 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         }
     }
 
+    // each chunk of the expert FFN of a layer has its own nodes, see llm_graph_context::build_moe_ffn
+    if (cparams.n_moe_chunk > 0) {
+        res += model.layers.size()*(n_tokens/cparams.n_moe_chunk)*(128 + 2*model.hparams.n_expert_used_max());
+    }
+
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
     for (const auto & [seq_id, sampler] : sampling.samplers) {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
@@ -3201,7 +3215,9 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         return false;
     }
 
-    const ggml_tensor * ids = node->src[2];
+    // a chunk of the expert FFN has the ids of all tokens in src[3]: the scheduler copies the experts once per graph,
+    // so the other chunks read this copy (see llm_graph_context::build_moe_ffn)
+    const ggml_tensor * ids = node->src[3] ? node->src[3] : node->src[2];
     if (ggml_nelements(ids) == 0) {
         return true;
     }

@@ -257,6 +257,14 @@ set_tests_properties(test-generate-models PROPERTIES
     FIXTURES_SETUP generate-models
 )
 
+# the expert FFN of large ubatches runs in token chunks, small chunks cover it with the dummy models of all MoE archs
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-moe-chunk
+    LABEL main
+    ARGS --moe-chunk 24 -d 0.3
+)
+
 # Target model for test-speculative-rejection-sampling
 set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
 file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")
