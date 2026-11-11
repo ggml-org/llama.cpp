@@ -216,6 +216,8 @@ static void mkl_fa_normalize_head(
     float * __restrict dst_batch,
     const float * __restrict VKQ_accum,
     const float * __restrict KQ_sum,
+    const float * __restrict KQ_max,
+    const float * sinks,
     int iqh, int n_queries, int DV, int n_q_heads,
     int64_t src_offset, int64_t wg_size) {
 
@@ -228,7 +230,12 @@ static void mkl_fa_normalize_head(
                 if (jc >= n_queries) return;
 
                 int     ksum_idx = (int)(src_offset / DV) + jc;
-                float   inv_sum  = 1.0f / KQ_sum[ksum_idx];
+                // the sink is one more key with logit sinks[head] and no value: it adds to the denominator only
+                float   denom    = KQ_sum[ksum_idx];
+                if (sinks) {
+                    denom += sycl::native::exp(sinks[iqh] - KQ_max[ksum_idx]);
+                }
+                float   inv_sum  = 1.0f / denom;
                 const float * __restrict src = VKQ_accum
                     + src_offset + jc * (int64_t)DV;
                 // Interleaved dst layout (matching TILE):
@@ -361,7 +368,10 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
     ggml_tensor * KQV = dst;
+    GGML_ASSERT(!sinks || sinks->type == GGML_TYPE_F32);
+    const float * sinks_ptr = sinks ? (const float *) sinks->data : nullptr;
 
     GGML_ASSERT(Q->type == GGML_TYPE_F32);
     GGML_ASSERT(KQV->type == GGML_TYPE_F32);
@@ -646,7 +656,7 @@ void ggml_sycl_flash_attn_ext_mkl(ggml_backend_sycl_context & ctx, ggml_tensor *
                 int     iqh        = kvh_base_head + iqg;
                 int64_t src_offset = (int64_t)iqg * n_queries * DV;
                 mkl_fa_normalize_head(stream,
-                    dst_batch, VKQ_accum_ptr, KQ_sum_ptr,
+                    dst_batch, VKQ_accum_ptr, KQ_sum_ptr, KQ_max_ptr, sinks_ptr,
                     iqh, n_queries, DV, n_q_heads,
                     src_offset, wg_size);
             }
