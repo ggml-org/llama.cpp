@@ -1,5 +1,6 @@
 #include "model-cache.h"
 
+#include "device/npu_config.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -389,6 +390,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
         // The GDN q pre-scale factor is a constant in the graph (0: no pre-scale).
         const float q_scale = ggml_openvino_gdn_prescale_enabled() ? ggml_openvino_gdn_q_scale() : 0.0f;
         h = fnv1a(h, &q_scale, sizeof(q_scale));
+        // GDN graphs switch to the PLUGIN compiler unless the environment sets the compiler type.
+        h = fnv1a_u64(h, ggml_openvino_npu_gdn_uses_plugin_compiler() ? 1u : 0u);
     }
 
     // Weights: the model identity.
