@@ -2077,7 +2077,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         fprintf(stderr, "GGML OpenVINO profiling: static graph kind=%s, input_tokens=%lld, chunk_size=%d\n",
                 is_prefill ? "prefill" : "decode", static_cast<long long>(input_tokens), prefill_chunk_size);
     }
-    const ov::AnyMap compile_config = no_kv_cache ? ggml_openvino_npu_without_npuw(config) : config;
+    const ov::AnyMap compile_config = no_kv_cache              ? ggml_openvino_npu_without_npuw(config) :
+                                      m_params.state_size >= 0 ? ggml_openvino_npu_gdn_config(config) :
+                                                                 config;
     if (m_params.n_heads_kv == -1) {
         prefill_chunk_size = inp_pos->ne[0];
     }

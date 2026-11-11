@@ -7,6 +7,9 @@
 #include <cstring>
 #include <openvino/runtime/properties.hpp>
 
+// The environment does not set the NPU compiler type. Set by ggml_openvino_npu_build_compile_config().
+static bool npu_compiler_type_is_default = false;
+
 ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
     ov::AnyMap compile_config = {
         {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"   },
@@ -18,7 +21,6 @@ ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
         {"NPUW_FUNCALL_ASYNC",                "YES"   },
         {"NPUW_DQ",                           "YES"   },
         {"NPUW_DQ_FULL",                      "NO"    },
-        {"NPU_COMPILER_TYPE",                 "DRIVER"},
     };
     if (cache_dir && strlen(cache_dir) > 0) {
         // Keep the default cache mode: CACHE_MODE=OPTIMIZE_SIZE makes the NPU plugin compile the NPUW submodels with
@@ -37,7 +39,7 @@ ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
     // PLUGIN | DRIVER | PREFER_PLUGIN. The in-plugin compiler and the driver compiler
     // can differ substantially in generated code quality for the same op. On the Intel
     // NPU the driver compiler emits markedly faster prefill kernels (~1940 vs ~1540 t/s
-    // pp1024 on phi-4-mini), matching OpenVINO GenAI, so default to DRIVER above.
+    // pp1024 on phi-4-mini), matching OpenVINO GenAI, so default to DRIVER below.
     set_compile_option_from_env("GGML_OPENVINO_NPU_COMPILER_TYPE", "NPU_COMPILER_TYPE");
     // NPUW_FUNCALL_FOR_ALL=YES hangs the NPU (device lost via TDR) for context
     // lengths >= ~786 on the 2026.3 in-plugin compiler. Allow turning it off.
@@ -74,7 +76,23 @@ ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
             pos = comma + 1;
         }
     }
+    npu_compiler_type_is_default = compile_config.find("NPU_COMPILER_TYPE") == compile_config.end();
+    if (npu_compiler_type_is_default) {
+        compile_config["NPU_COMPILER_TYPE"] = "DRIVER";
+    }
     return compile_config;
+}
+
+bool ggml_openvino_npu_gdn_uses_plugin_compiler() {
+    return ggml_openvino_is_npu() && npu_compiler_type_is_default;
+}
+
+ov::AnyMap ggml_openvino_npu_gdn_config(const ov::AnyMap & base) {
+    ov::AnyMap gdn_config = base;
+    if (ggml_openvino_npu_gdn_uses_plugin_compiler()) {
+        gdn_config["NPU_COMPILER_TYPE"] = "PLUGIN";
+    }
+    return gdn_config;
 }
 
 ov::AnyMap ggml_openvino_npu_without_npuw(const ov::AnyMap & config) {
