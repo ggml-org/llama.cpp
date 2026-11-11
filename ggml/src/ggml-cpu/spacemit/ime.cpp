@@ -995,7 +995,8 @@ class tensor_traits_common : public tensor_traits_base {
                         spacemit_kernels::rvv::forward_rms_norm_f32(params, op);
                         return true;
                     default:
-                        GGML_ABORT("fatal error");
+                        ggml_compute_forward_rms_norm(params, op);
+                        return true;
                 }
             case GGML_OP_ADD:
                 switch (op->src[0]->type) {
