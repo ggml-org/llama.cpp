@@ -2030,7 +2030,8 @@ static inline HVX_Vector * iq2xxs_tile_scratch(const uint8_t * tile) {
 // IQ2_XXS: start the 2 halfword grid-code gathers of a tile into its scratch, returns the sign/scale words
 static inline HVX_Vector iq2xxs_gather_issue(const uint8_t * restrict tile) {
     HVX_Vector * restrict v_scr = iq2xxs_tile_scratch(tile);
-    const uint8_t * grid = iq2xxs_vtcm_lut + HTP_IQ2XXS_NIBBLE_BYTES;
+    const uint8_t *  grid   = iq2xxs_vtcm_lut + HTP_IQ2XXS_GRID_OFF;
+    const HVX_Vector v_lane = hvx_vmem(iq2xxs_vtcm_lut + HTP_IQ2XXS_NIBBLE_BYTES);
 
     // lo: 4 grid indices per row, hi: 4 sign indices + scale per row
     HVX_VectorPair p     = Q6_W_vdeal_VVR(hvx_vmem(tile + VLEN), hvx_vmem(tile), -IQ2XXS_WORD_BYTES);
@@ -2041,8 +2042,10 @@ static inline HVX_Vector iq2xxs_gather_issue(const uint8_t * restrict tile) {
                                     Q6_V_vand_VV(Q6_Vw_vasl_VwR(v_idx, IQ2XXS_CODE_SHIFT + IQ2XXS_IDX_BITS), Q6_V_vsplat_R(IQ2XXS_IDX_HI_MASK)));
     HVX_Vector v_off1 = Q6_V_vor_VV(Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_idx, 2 * IQ2XXS_IDX_BITS - IQ2XXS_CODE_SHIFT), Q6_V_vsplat_R(IQ2XXS_IDX_LO_MASK)),
                                     Q6_V_vand_VV(Q6_Vuw_vlsr_VuwR(v_idx, IQ2XXS_IDX_BITS - IQ2XXS_CODE_SHIFT), Q6_V_vsplat_R(IQ2XXS_IDX_HI_MASK)));
-    Q6_vgather_ARMVh(&v_scr[0], (size_t) grid, HTP_IQ2XXS_GRID_BYTES - 1, v_off0);
-    Q6_vgather_ARMVh(&v_scr[1], (size_t) grid, HTP_IQ2XXS_GRID_BYTES - 1, v_off1);
+    v_off0 = Q6_Vh_vadd_VhVh(v_off0, v_lane);
+    v_off1 = Q6_Vh_vadd_VhVh(v_off1, v_lane);
+    Q6_vgather_ARMVh(&v_scr[0], (size_t) grid, HTP_IQ2XXS_GRID_REGION - 1, v_off0);
+    Q6_vgather_ARMVh(&v_scr[1], (size_t) grid, HTP_IQ2XXS_GRID_REGION - 1, v_off1);
 
     return Q6_V_hi_W(p);
 }

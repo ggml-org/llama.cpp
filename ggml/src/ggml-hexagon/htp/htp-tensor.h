@@ -27,7 +27,14 @@
 #define HTP_TENSOR_TILE_SCRATCH_IQ2_XXS 256
 #define HTP_IQ2XXS_NIBBLE_BYTES         128   // 16 words for vlut16, padded to a vector
 #define HTP_IQ2XXS_GRID_BYTES           512   // 256 entries x 8 elements x 2-bit magnitude code
-#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_NIBBLE_BYTES + HTP_IQ2XXS_GRID_BYTES)
+#define HTP_IQ2XXS_TABLE_BYTES          (HTP_IQ2XXS_NIBBLE_BYTES + HTP_IQ2XXS_GRID_BYTES)
+#define HTP_IQ2XXS_LANE_OFF_BYTES       128   // per-lane copy offsets of the grid gathers, one vector
+#define HTP_IQ2XXS_GRID_COPIES          16    // max/default grid copies; gather lane h reads copy h % copies (spreads repeated indices)
+#define HTP_IQ2XXS_GRID_SKEW            4     // extra bytes between copies, so they start in different banks
+#define HTP_IQ2XXS_GRID_STRIDE          (HTP_IQ2XXS_GRID_BYTES + HTP_IQ2XXS_GRID_SKEW)
+#define HTP_IQ2XXS_GRID_REGION          (HTP_IQ2XXS_GRID_COPIES * HTP_IQ2XXS_GRID_STRIDE)
+#define HTP_IQ2XXS_GRID_OFF             (HTP_IQ2XXS_NIBBLE_BYTES + HTP_IQ2XXS_LANE_OFF_BYTES)
+#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_GRID_OFF + (HTP_IQ2XXS_GRID_REGION + HTP_IQ2XXS_LANE_OFF_BYTES - 1) / HTP_IQ2XXS_LANE_OFF_BYTES * HTP_IQ2XXS_LANE_OFF_BYTES)
 #define HTP_TENSOR_TILE_SIZE_Q4_K   640
 #define HTP_TENSOR_TILE_SIZE_Q5_K   768
 #define HTP_TENSOR_TILE_SIZE_Q6_K   896

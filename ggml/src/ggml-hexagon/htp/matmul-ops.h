@@ -71,7 +71,7 @@ enum htp_mm_kernel_type {
 struct htp_mm_kernel_params {
     uint8_t  kernel_type;        // enum htp_mm_kernel_type
     uint8_t  pipeline;           // 1 = pipelined execution, 0 = standard
-    uint8_t  unused;             // reserved
+    uint8_t  iq2xxs_grid_copies; // IQ2_XXS grid copies in VTCM (power of 2, 1..HTP_IQ2XXS_GRID_COPIES; 1 = single grid)
     uint8_t  n_hmx;              // 1 = use HMX, 0 = use HVX
 
     uint8_t  n_hvx;              // Number of threads to spawn

@@ -28,6 +28,7 @@ extern int    opt_gdn_select;
 extern int    opt_ssm_select;
 extern int    opt_ar_select;
 extern int    opt_ar_scatter;
+extern int    opt_iq2xxs_grid_copies;
 
 extern int    opt_opbatch;
 extern int    opt_opqueue;

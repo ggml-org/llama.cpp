@@ -154,6 +154,9 @@ struct htp_mm_context {
     uint32_t vtcm_dst_size_per_hvx;
 };
 
+// grid copies built by iq2xxs_lut_copy for the current op (set by htp_mm_init_context)
+static uint32_t iq2xxs_grid_copies = HTP_IQ2XXS_GRID_COPIES;
+
 static int htp_mm_init_context(
     struct htp_ops_context * octx,
     const struct htp_mm_kernel_params * kparams
@@ -167,6 +170,12 @@ static int htp_mm_init_context(
             return HTP_STATUS_INVAL_PARAMS;
         }
     }
+
+    const uint32_t copies = kparams->iq2xxs_grid_copies;
+    if (copies == 0 || copies > HTP_IQ2XXS_GRID_COPIES || (copies & (copies - 1)) != 0) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+    iq2xxs_grid_copies = copies;
 
     return HTP_STATUS_OK;
 }
@@ -205,9 +214,24 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
 // VTCM copy of htp_iq2xxs_lut for the current op (set by hvx_mm_iq2xxs_lut_init)
 static const uint8_t * iq2xxs_vtcm_lut;
 
+_Static_assert((HTP_IQ2XXS_GRID_COPIES & (HTP_IQ2XXS_GRID_COPIES - 1)) == 0, "grid copies must be a power of 2");
+
+// nibble table, per-lane grid copy offsets, then iq2xxs_grid_copies copies of the grid codes
+// (the VTCM slot is sized for HTP_IQ2XXS_GRID_COPIES; with 1 copy every lane reads the same grid)
 static inline void iq2xxs_lut_copy(uint8_t * restrict lut) {
-    for (uint32_t i = 0; i < HTP_IQ2XXS_LUT_BYTES / VLEN; i++) {
+    uint16_t __attribute__((aligned(VLEN))) lane_off[HTP_IQ2XXS_LANE_OFF_BYTES / sizeof(uint16_t)];
+    for (uint32_t h = 0; h < HTP_IQ2XXS_LANE_OFF_BYTES / sizeof(uint16_t); h++) {
+        lane_off[h] = (h & (iq2xxs_grid_copies - 1)) * HTP_IQ2XXS_GRID_STRIDE;
+    }
+    for (uint32_t i = 0; i < HTP_IQ2XXS_NIBBLE_BYTES / VLEN; i++) {
         hvx_vmem(lut + i * VLEN) = hvx_vmem(htp_iq2xxs_lut + i * VLEN);
+    }
+    hvx_vmem(lut + HTP_IQ2XXS_NIBBLE_BYTES) = hvx_vmem(lane_off);
+    for (uint32_t c = 0; c < iq2xxs_grid_copies; c++) {
+        for (uint32_t i = 0; i < HTP_IQ2XXS_GRID_BYTES / VLEN; i++) {
+            hvx_vmemu(lut + HTP_IQ2XXS_GRID_OFF + c * HTP_IQ2XXS_GRID_STRIDE + i * VLEN) =
+                hvx_vmem(htp_iq2xxs_lut + HTP_IQ2XXS_NIBBLE_BYTES + i * VLEN);
+        }
     }
     iq2xxs_vtcm_lut = lut;
 }
