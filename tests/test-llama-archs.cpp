@@ -341,11 +341,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_layer   = 4;
     }
     n_layer = std::max(n_layer, n_layer_min);
-    if (moe && host_experts_test(arch)) {
-        // the router picks the same experts for every token (see fill_exp_probs_b), so the layers share the MoE cache:
-        // with 3 MoE layers the experts do not fit, the cache fills and evicts, and a CPU share applies
-        n_layer = std::max(n_layer, uint32_t(4));
-    }
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
@@ -1302,9 +1297,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, pinned, CPU share", LLAMA_SPLIT_MODE_LAYER, true, 2304*1024, 0.5f, true);
                     max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
                 }
-                // each GPU caches the layers assigned to it
+                // each GPU caches the layers assigned to it, the budget is split between the GPUs
                 if (devices_meta.size() > 1) {
-                    dev_configs.emplace_back(devices_meta, "MoE cache, layer split", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
+                    dev_configs.emplace_back(devices_meta, "MoE cache, layer split", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024*devices_meta.size());
                     max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
                 }
             }
@@ -1354,7 +1349,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 continue;
             }
             const std::string config_name = moe ? "MoE" : "Dense";
-            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
+            // the router picks the same experts for every token (see fill_exp_probs_b), so the layers share the MoE cache:
+            // with 3 MoE layers the experts do not fit, the cache fills and evicts, and a CPU share applies
+            gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe, moe && host_experts_test(arch) ? 4 : 0);
             if (arch == LLM_ARCH_BAILINGMOE3) {
                 GGML_ASSERT(gguf_remove_key(gguf_ctx.get(), "bailingmoe3.kda.safe_gate") >= 0);
             }

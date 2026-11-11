@@ -1274,7 +1274,7 @@ struct llama_moe_cache::impl {
         GGML_ASSERT(slots->type == GGML_TYPE_I32 && ggml_is_contiguous(slots));
         ggml_tensor * args[] = { slots };
         return ggml_custom_4d(ctx, GGML_TYPE_I32, slots->ne[0], slots->ne[1], slots->ne[2], slots->ne[3], args, 1,
-            sg.api->join, 1, (void *) &sg.params[il]);
+            sg.api->join, 1, const_cast<ggml_moe_cpu_layer *>(&sg.params[il]));
     }
 
     // the slots of the experts selected in layer il, the misses of the CPU read zero slots
@@ -1289,7 +1289,7 @@ struct llama_moe_cache::impl {
         GGML_ASSERT(ids->type == GGML_TYPE_I32 && cur->type == GGML_TYPE_F32 && ggml_nrows(ids) == ggml_nrows(cur));
         ggml_tensor * args[] = { ids, cur, map, sg.state };
         return ggml_custom_4d(ctx, GGML_TYPE_I32, ids->ne[0], ids->ne[1], two_pass ? 2 : 1, 1, args, 4,
-            sg.api->publish, 1, (void *) &sg.params[il]);
+            sg.api->publish, 1, const_cast<ggml_moe_cpu_layer *>(&sg.params[il]));
     }
 
     // the result of the cached experts of layer il plus the result of the CPU part
@@ -1299,7 +1299,7 @@ struct llama_moe_cache::impl {
         GGML_ASSERT(ggml_nelements(slots) == ggml_nrows(experts));
         ggml_tensor * args[] = { experts, slots, sg.state };
         return ggml_custom_4d(ctx, GGML_TYPE_F32, experts->ne[0], experts->ne[1], experts->ne[2], experts->ne[3], args, 3,
-            sg.api->merge, 1, (void *) &sg.params[il]);
+            sg.api->merge, 1, const_cast<ggml_moe_cpu_layer *>(&sg.params[il]));
     }
 
     // the CPU part of layer il for n_tokens tokens: input F32 [n_embd, 1, n_tokens], selected experts and the experts of the CPU I32 [n_used, n_tokens],

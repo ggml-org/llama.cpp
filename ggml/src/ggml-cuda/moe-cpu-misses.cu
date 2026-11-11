@@ -231,22 +231,22 @@ static __device__ int32_t moe_cpu_misses_lru_victim(const moe_cpu_misses_lru & l
             }
         }
     }
-    const unsigned int m = __ballot_sync(0xffffffff, empty);
+    const unsigned int m = __ballot_sync(0xFFFFFFFFULL, empty);
     if (m != 0) {
-        return __shfl_sync(0xffffffff, s, __ffs(m) - 1);
+        return __shfl_sync(0xffffffff, s, __ffs(m) - 1, WARP_SIZE);
     }
     // the max score, the lower class on ties
     int src = lane;
 #pragma unroll
     for (int offset = 16; offset > 0; offset >>= 1) {
-        const int64_t score_o = __shfl_xor_sync(0xffffffff, score, offset);
-        const int     src_o   = __shfl_xor_sync(0xffffffff, src,   offset);
+        const int64_t score_o = __shfl_xor_sync(0xffffffff, score, offset, WARP_SIZE);
+        const int     src_o   = __shfl_xor_sync(0xffffffff, src,   offset, WARP_SIZE);
         if (score_o > score || (score_o == score && src_o < src)) {
             score = score_o;
             src   = src_o;
         }
     }
-    s = __shfl_sync(0xffffffff, s, src);
+    s = __shfl_sync(0xffffffff, s, src, WARP_SIZE);
     return score < 0 ? -1 : s;
 }
 
