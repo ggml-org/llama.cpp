@@ -84,16 +84,19 @@
 		onInput?.();
 	}
 
-	// The expanded editor is taller than its text: a click on the empty room below it
-	// continues writing at the end, as in a textarea
+	// The box is larger than its text (padding, and the room below it when expanded): a press
+	// on it outside the text continues writing at the end, as in a textarea. A press on a
+	// scrollbar, past the target's client width, still drags it
 	function handleMouseDown(event: MouseEvent) {
 		const content = editor?.getContentDOM();
+		const target = event.target as HTMLElement;
 
 		if (
 			event.button !== 0 ||
-			!expanded ||
+			disabled ||
 			!content ||
-			event.clientY <= content.getBoundingClientRect().bottom
+			content.contains(target) ||
+			event.offsetX >= target.clientWidth
 		) {
 			return;
 		}
