@@ -309,11 +309,12 @@ llama_test(
 )
 
 # layer-major prefill: the chunks of the attention block and of the expert FFN match the unsplit graph on the CPU
+# with flash attention, gemma4 covers the KQ masks of the chunks (iswa cache, staircase)
 llama_test(
     test-llama-archs
     NAME test-llama-archs-layer-major-match
     LABEL main
-    ARGS -a "qwen4exp" --layer-major 24 -d 0.3
+    ARGS -a "qwen4exp|^gemma4$" --layer-major 24 -d 0.3
 )
 
 llama_test(
@@ -337,6 +338,19 @@ llama_test(
 set_tests_properties(test-llama-context-layer-major PROPERTIES
     FIXTURES_REQUIRED generate-models
     ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_LAYER_MAJOR=24"
+)
+
+# layer-major prefill: a ubatch whose cells fill a hole keeps the graph of the reserve
+# GGML_SCHED_DEBUG_REALLOC=2 also aborts on the reallocations that change the graph size
+llama_test(
+    test-llama-context
+    NAME test-llama-context-layer-major-hole
+    LABEL main
+    ARGS -m "${MODEL_DIR}/gemma4-moe.gguf" --test hole
+)
+set_tests_properties(test-llama-context-layer-major-hole PROPERTIES
+    FIXTURES_REQUIRED generate-models
+    ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=2;LLAMA_LAYER_MAJOR=24"
 )
 
 llama_build(test-fusion.cpp)

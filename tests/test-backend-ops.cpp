@@ -9060,8 +9060,7 @@ struct test_flash_attn_ext : public test_case {
 
         ggml_tensor * m = nullptr;
         if (mask) {
-            m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, nr23[1]);
-            ggml_set_name(m, "m");
+            m = build_mask(ctx);
         }
 
         ggml_tensor * s = nullptr;
@@ -9077,6 +9076,13 @@ struct test_flash_attn_ext : public test_case {
         ggml_set_name(out, "out");
 
         return out;
+    }
+
+    virtual ggml_tensor * build_mask(ggml_context * ctx) {
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, nr23[1]);
+        ggml_set_name(m, "m");
+
+        return m;
     }
 
     void initialize_tensors(ggml_context * ctx) override {
@@ -9098,6 +9104,24 @@ struct test_flash_attn_ext : public test_case {
 
     bool grad_precise() override {
         return true;
+    }
+};
+
+// the mask is a view of the first cells of each row of a larger mask, as a view of the staircase mask of layer-major prefill
+// (see llama_kv_cache::get_staircase): the row stride is not kv, and the view starts at a 16-byte boundary inside a row
+struct test_flash_attn_ext_mask_view : public test_flash_attn_ext {
+    using test_flash_attn_ext::test_flash_attn_ext;
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",mask_view=1";
+    }
+
+    ggml_tensor * build_mask(ggml_context * ctx) override {
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv + 264, nb + 8, 1, nr23[1]);
+        ggml_set_name(m, "m");
+
+        // 8 rows in and 3 columns down
+        return ggml_view_4d(ctx, m, kv, nb, 1, nr23[1], m->nb[1], m->nb[2], m->nb[3], 8*m->nb[0] + 3*m->nb[1]);
     }
 };
 
@@ -13055,6 +13079,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 4, { 4, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16, {0, 1, 2, 3}, true, true));
 
     // FLASH_ATTN_EXT: large logits
+    // the mask is a strided view (layer-major prefill)
+    for (int64_t hs : { 128, 256 }) {
+        for (int64_t nb : { 1, 3, 32, 35 }) {
+            for (ggml_type type_KV : { GGML_TYPE_F16, GGML_TYPE_Q8_0 }) {
+                test_cases.emplace_back(new test_flash_attn_ext_mask_view(hs, hs, 4, {4, 1}, 512, nb, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+            }
+        }
+    }
+
     test_cases.emplace_back(new test_flash_attn_ext_large_logits( 64,  64, 16, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(128, 128,  8, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext_large_logits(256, 256,  4, {4, 1}, 1024, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));

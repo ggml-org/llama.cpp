@@ -713,6 +713,80 @@ struct case_state_restore_fragmented : ctx_test {
     }
 };
 
+// - decode a prompt in one ubatch, remove the cells of a range of positions
+// - decode the next tokens in one ubatch: they fill the hole first, so their cells are not
+//   consecutive
+// - its logits must match a context that decodes the same in ubatches of the layer-major chunk size
+// with LLAMA_LAYER_MAJOR, a ubatch of more than the chunk size has the graph of its reserve only if its
+//   cells are a staircase, GGML_SCHED_DEBUG_REALLOC=2 aborts on any other graph
+struct case_hole : ctx_test {
+    const char * name() const override { return "hole"; }
+
+    const char * description() const override {
+        return "a ubatch whose cells fill a hole in the cache keeps the graph of the reserve";
+    }
+
+    case_result run(model_run & mr) const override {
+        const int n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(mr.model));
+
+        constexpr llama_pos n_prompt = 64;
+        constexpr llama_pos p0       = 16;
+        constexpr llama_pos p1       = 32;
+        constexpr llama_pos n_next   = 48;
+
+        // the ubatches of the reference have the chunk size: the same graph as the chunks of a larger ubatch
+        const char *   lm      = getenv("LLAMA_LAYER_MAJOR");
+        const uint32_t n_chunk = lm ? (uint32_t) atoi(lm) : 0;
+
+        ctx_opts opts;
+        opts.n_ctx     = 256;
+        opts.n_seq_max = 1;
+        opts.n_batch   = n_prompt;
+        opts.n_ubatch  = n_prompt;
+
+        ctx_opts opts_ref = opts;
+        if (n_chunk > 0 && n_chunk < (uint32_t) n_prompt) {
+            opts_ref.n_ubatch = n_chunk;
+        }
+
+        auto ctx     = mr.ctx(opts);
+        auto ctx_ref = mr.ctx(opts_ref);
+        if (!ctx || !ctx_ref) {
+            return case_result::fail();
+        }
+
+        for (llama_context * cur : { ctx.get(), ctx_ref.get() }) {
+            if (!decode_gen(cur, n_vocab, 0, 0, n_prompt)) {
+                TLOG_ERR("%s: failed to decode the prompt\n", __func__);
+                return case_result::fail();
+            }
+
+            if (!llama_memory_seq_rm(llama_get_memory(cur), 0, p0, p1)) {
+                return case_result::skip("the memory cannot remove a range of positions");
+            }
+        }
+
+        for (llama_context * cur : { ctx.get(), ctx_ref.get() }) {
+            common_batch batch(cur);
+            for (llama_pos pos = n_prompt; pos < n_prompt + n_next; ++pos) {
+                batch.add(gen_token(n_vocab, 0, pos), pos, 0, pos + 1 == n_prompt + n_next);
+            }
+
+            if (llama_process(cur, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+                TLOG_ERR("%s: failed to decode into the cache with a hole\n", __func__);
+                return case_result::fail();
+            }
+        }
+
+        const logits_diff diff = compare_logits(llama_get_logits_ith(ctx_ref.get(), -1), llama_get_logits_ith(ctx.get(), -1), n_vocab);
+
+        CTX_REQUIRE(diff.nmse() <= NMSE_THRESHOLD,
+                "the logits differ from the reference: nmse " + std::to_string(diff.nmse()));
+
+        return case_result::pass();
+    }
+};
+
 //
 // no_alloc
 //
@@ -834,6 +908,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_restore_failure>());
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
+    cases.push_back(std::make_unique<case_hole>());
     cases.push_back(std::make_unique<case_noalloc>());
     cases.push_back(std::make_unique<case_comp_padding>());
 

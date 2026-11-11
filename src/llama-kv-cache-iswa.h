@@ -133,6 +133,9 @@ public:
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
 
+    // the chunks of the base cache need staircase cells, see llm_graph_context::build_attn_inp_kv_iswa
+    bool can_chunk(uint32_t n_tokens) const override;
+
     //
     // llama_kv_cache_iswa_context specific API
     //

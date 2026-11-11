@@ -42,6 +42,9 @@ public:
         std::vector<llama_seq_id> strm; // [ns]
         std::vector<idx_vec_t>    idxs; // [ns]
 
+        // layer-major prefill: the cells of the ubatch are a staircase when it is applied, see is_staircase (set by prepare)
+        bool staircase = false;
+
         uint32_t head() const {
             GGML_ASSERT(idxs.size() == 1);
             GGML_ASSERT(!idxs[0].empty());
@@ -262,7 +265,7 @@ public:
 
     // a staircase mask in device memory: F16 [n_rows, n_cols], row j of column i is 0 if j < anchor + i/step, -inf otherwise
     // a mask that keeps the first rows of each column, one more row every `step` columns, is a view of it (see get_staircase_offs)
-    // it is a constant, one per step: created on the first call, a view of a larger mask does not work as a graph input (the scheduler copies each view)
+    // it is a constant, one per step and anchor: created on the first call, a view of a larger mask does not work as a graph input (the scheduler copies each view)
     // step 1: the KQ mask of the token chunks, see is_staircase; step kpool: the pool mask of the k-pool indexer
     ggml_tensor * get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const;
 
@@ -333,7 +336,7 @@ private:
 
     // see get_staircase()
     mutable llama_memory_bufs staircase_bufs;
-    mutable std::map<uint32_t, ggml_tensor *> staircases; // by step
+    mutable std::map<std::pair<uint32_t, int64_t>, ggml_tensor *> staircases; // by step and anchor
 
     void init_rotation(const char * name_tag);
 
@@ -449,8 +452,14 @@ public:
     // see llama_kv_cache::get_n_kv_rows, for a slice of the current ubatch
     uint32_t get_n_kv_rows(const llama_ubatch & slice) const;
 
-    // see llama_kv_cache::is_staircase
-    bool is_staircase(const llama_ubatch & ubatch) const;
+    // a context without ubatches: the graph of the reservation, there are no cells
+    bool is_reserve() const;
+
+    // see llama_kv_cache::is_staircase, for the current ubatch
+    bool is_staircase() const;
+
+    // layer-major prefill: true if the cells of each ubatch of more than n_tokens tokens are a staircase, or if this cache has no staircase masks
+    bool is_staircase(uint32_t n_tokens) const;
     bool can_staircase() const;
 
     // the view of the staircase mask for the n tokens of the current ubatch that start at token t

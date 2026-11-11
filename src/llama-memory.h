@@ -95,6 +95,10 @@ struct llama_memory_context_i {
 
     // get the status of the memory context - used for error handling and checking if any updates would be applied
     virtual llama_memory_status get_status() const = 0;
+
+    // layer-major prefill: false if the cells of a ubatch of more than n_tokens tokens do not allow the token chunks of its graph
+    // the graph would need masks for all its tokens, so the batch is split into ubatches of n_tokens tokens instead
+    virtual bool can_chunk(uint32_t /*n_tokens*/) const { return true; }
 };
 
 using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;

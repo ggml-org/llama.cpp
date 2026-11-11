@@ -194,8 +194,7 @@ public:
     kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
     // layer-major prefill: the pool mask [n_pool, n] of the n tokens of the current ubatch from token t0,
     // as a view of a constant staircase mask in device memory (see llama_kv_cache::get_staircase)
-    // nullptr if the mask of these tokens is not a staircase: several sequences, pools of an earlier sequence,
-    // or a count of visible pools that does not grow by one every kpool tokens
+    // nullptr if the cache has no staircase masks; the caller checks n_seq_max == 1, the mask of one sequence is a staircase
     // the staircase is sized for the largest ubatch, n_ubatch tokens
     ggml_tensor * get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const;
 
@@ -222,6 +221,13 @@ private:
 
     // mirrors the base class's ubatch cursor, which is private there
     size_t i_cur = 0;
+
+    // in order mode, the rank of the cell of token i of the current ubatch among the cells of its sequence
+    int64_t kpool_token_rank(const llama_ubatch & ubatch, uint32_t i) const;
+
+    // the count of the pools that token i of the current ubatch sees: the first pools of its sequence,
+    // up to its rank in order mode, or up to its position
+    uint32_t kpool_n_visible(const llama_ubatch & ubatch, uint32_t i) const;
 
     // Which pools of the layout this ubatch must re-pool. The layout itself belongs to the memory.
     struct kpool_state;
