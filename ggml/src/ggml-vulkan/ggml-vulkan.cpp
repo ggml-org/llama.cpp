@@ -1,5 +1,3 @@
-#include <vector>
-
 #include "ggml-vulkan-common.h"
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
