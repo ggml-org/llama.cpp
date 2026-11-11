@@ -9,6 +9,7 @@
 #include "server-queue.h"
 
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <condition_variable>
@@ -47,6 +48,7 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_PRESET,
     SERVER_MODEL_SOURCE_MODELS_DIR,
     SERVER_MODEL_SOURCE_CACHE,
+    SERVER_MODEL_SOURCE_SPAWNED, // started through the service API with its own args, never evicted
 };
 
 static std::string server_model_status_to_string(server_model_status status) {
@@ -67,6 +69,7 @@ static std::string server_model_source_to_string(server_model_source source) {
         case SERVER_MODEL_SOURCE_PRESET:     return "preset";
         case SERVER_MODEL_SOURCE_MODELS_DIR: return "models_dir";
         case SERVER_MODEL_SOURCE_CACHE:      return "cache";
+        case SERVER_MODEL_SOURCE_SPAWNED:    return "spawned";
         default:                             return "unknown";
     }
 }
@@ -91,6 +94,15 @@ struct server_model_meta {
 
     // only populated with --models-memory-margin, see server_models_sched
     server_model_memory_info memory = {};
+
+    // a spawned model runs in the cwd and with the extra env of the request that started it
+    std::string              spawn_cwd = {};
+    std::vector<std::string> spawn_env = {}; // KEY=VALUE
+    uint64_t                 spawn_seq = 0; // order of the spawn requests, the newest is the default model
+
+    bool is_pinned() const {
+        return source == SERVER_MODEL_SOURCE_SPAWNED;
+    }
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -160,6 +172,47 @@ private:
 struct server_models_routes;
 struct server_monitor; // defined in server-models.cpp
 
+// the last lines a child wrote, for the service logs route; closed once the child exited
+struct server_log_ring {
+    static constexpr size_t max_lines = 2000;
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::deque<std::string> lines;
+    uint64_t first  = 0; // sequence number of lines.front()
+    bool     closed = false;
+
+    void push(const std::string & line) {
+        std::lock_guard<std::mutex> lk(mutex);
+        lines.push_back(line);
+        if (lines.size() > max_lines) {
+            lines.pop_front();
+            first++;
+        }
+        cv.notify_all();
+    }
+
+    void close() {
+        std::lock_guard<std::mutex> lk(mutex);
+        closed = true;
+        cv.notify_all();
+    }
+
+    // the lines from `seq` on, waiting up to timeout_ms for new ones; false once closed and drained
+    bool read(uint64_t & seq, std::vector<std::string> & out, int timeout_ms) {
+        std::unique_lock<std::mutex> lk(mutex);
+        cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&]() { return closed || first + lines.size() > seq; });
+        if (seq < first) {
+            seq = first; // the reader fell behind the ring
+        }
+        for (size_t i = seq - first; i < lines.size(); i++) {
+            out.push_back(lines[i]);
+        }
+        seq = first + lines.size();
+        return !(closed && out.empty());
+    }
+};
+
 struct server_models {
     friend struct server_models_routes;
     friend struct server_models_sched;
@@ -170,6 +223,12 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
+
+        // the entry a spawned model took the name of, put back when it exits
+        std::optional<server_model_meta> shadow = std::nullopt;
+
+        // the output of this child, also in log_rings under the model name
+        std::shared_ptr<server_log_ring> log = nullptr;
 
         // ask the child to exit (it handles the command on its stdin, see server_role::setup)
         void request_exit() const;
@@ -263,6 +322,12 @@ private:
     // if true, add some delay to simulate works (useful for testing)
     bool debug_fake_timing = false;
 
+    uint64_t spawn_counter = 0;
+
+    // the recent output of each child, by model name; guarded by logs_mutex
+    std::mutex logs_mutex;
+    std::map<std::string, std::shared_ptr<struct server_log_ring>> log_rings;
+
     void update_meta(const std::string & name, const server_model_meta & meta);
 
     // not thread-safe, caller must hold mutex
@@ -335,6 +400,28 @@ public:
     void load(const std::string & name, const load_options & opts);
     void unload(const std::string & name);
     void unload_all();
+
+    // a model started through the service API: the args of a `llama serve` invocation
+    struct spawn_options {
+        std::vector<std::string>           args; // server CLI args, without the program name
+        std::string                        cwd;
+        std::map<std::string, std::string> env; // only the variables of the arg table are forwarded
+        std::string                        name;  // defaults to the model name derived from the args
+        bool                               replace = false; // unload a running model of the same name first
+    };
+
+    // register the model and start it; returns its name
+    // throws std::invalid_argument on a bad request, std::runtime_error when it cannot start (thread-safe)
+    std::string spawn(const spawn_options & opts);
+
+    // the model a request without a model name goes to: the newest spawned model that is running, "" when none (thread-safe)
+    std::string get_default_model();
+
+    // the output of a model, nullptr when nothing was spawned under this name yet (thread-safe)
+    std::shared_ptr<server_log_ring> get_log_ring(const std::string & name);
+
+    // called by the monitor for every log line of a child
+    void on_child_log(const std::string & name, const std::string & line);
 
     struct update_status_args {
         server_model_status status;

@@ -109,6 +109,9 @@ struct server_models_sched {
     // true if loading name now exceeds models_max or the memory margin
     bool limits_exceeded(std::unique_lock<std::mutex> & lk, const std::string & name, bool verbose = true);
 
+    // true when no slot will ever free up for name: over the limits with only pinned models running
+    bool starved(std::unique_lock<std::mutex> & lk, const std::string & name);
+
     // wait for the measure of name, then unload idle LRU models until it fits; call without models.mutex
     void make_room(const std::string & name);
 
