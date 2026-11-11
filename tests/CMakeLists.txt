@@ -339,6 +339,19 @@ set_tests_properties(test-llama-context-layer-major PROPERTIES
     ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1;LLAMA_LAYER_MAJOR=24"
 )
 
+# layer-major prefill: a ubatch whose cells fill a hole keeps the graph of the reserve
+# GGML_SCHED_DEBUG_REALLOC=2 also aborts on the reallocations that change the graph size
+llama_test(
+    test-llama-context
+    NAME test-llama-context-layer-major-hole
+    LABEL main
+    ARGS -m "${MODEL_DIR}/gemma4-moe.gguf" --test hole
+)
+set_tests_properties(test-llama-context-layer-major-hole PROPERTIES
+    FIXTURES_REQUIRED generate-models
+    ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=2;LLAMA_LAYER_MAJOR=24"
+)
+
 llama_build(test-fusion.cpp)
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)
