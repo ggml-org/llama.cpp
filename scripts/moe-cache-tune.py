@@ -26,6 +26,9 @@ SHARES = [0.0, 0.5, 0.8, 0.9, 0.95, 0.98]
 CALIB_SHARES = [0.0, 0.5, 0.95]
 N_FIRST = 2048  # tokens per request, first run
 N_CALIB = 512   # tokens per request, other runs
+# Windows cannot send SIGINT to a child, llama-server stops cleanly on CTRL_BREAK_EVENT sent to its own process group
+STOP_SIGNAL = signal.CTRL_BREAK_EVENT if sys.platform == "win32" else signal.SIGINT
+NEW_GROUP = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
 PROMPT = ("The lighthouse keeper had kept a logbook for thirty-one years, and in all that time he had never once written down a lie. "
           "So when the ship appeared on the horizon on the first calm morning of October, with no flag, no lights and no one on deck, "
           "he sat at his small wooden table for a long while before he picked up the pen. Below him the sea was flat and grey, and the "
@@ -502,7 +505,8 @@ def run_server(cmd, out, mib, share, n_predict, seed, label, warm):
         timings: list = []
         for attempt in range(2):
             with open(base + ".log", "w") as log:
-                proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, LLAMA_MOE_CACHE_TRACE=base + ".trace"))
+                proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env=dict(os.environ, LLAMA_MOE_CACHE_TRACE=base + ".trace"),
+                                        creationflags=NEW_GROUP)
             try:
                 while True:
                     if proc.poll() is not None:
@@ -517,11 +521,13 @@ def run_server(cmd, out, mib, share, n_predict, seed, label, warm):
                 timings = [http(port, "/completion", {"prompt": PROMPT, "n_predict": n, "ignore_eos": True, "cache_prompt": False,
                                                       "temperature": 0.8, "top_p": 0.95, "seed": seed + k})["timings"] for k in (0, 1)]
             finally:
-                proc.send_signal(signal.SIGINT)
                 try:
+                    proc.send_signal(STOP_SIGNAL)
                     proc.wait(timeout=120)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
+                    pass
+                finally:
+                    proc.kill()  # no-op once it exited, else the clean stop failed
             # the second generation has a warmer cache, it is much slower only if the machine is busy
             if timings[1]["predicted_per_second"] > timings[0]["predicted_per_second"] / 1.5 or attempt == 1:
                 break
