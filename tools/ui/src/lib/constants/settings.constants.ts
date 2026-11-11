@@ -4,6 +4,7 @@ import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
+import { UI_PRESET_ORDER, UI_PRESETS } from './ui-presets.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import {
 	Code,
@@ -16,7 +17,7 @@ import {
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
-import { SyncableParameterType } from '$lib/enums';
+import { SyncableParameterType, UiPreset } from '$lib/enums';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { ColorMode } from '$lib/enums/ui.enums';
 import type {
@@ -76,6 +77,18 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.SELECT
 			},
 			{
+				defaultValue: undefined,
+				help: 'Group of features turned on by default. Changing it turns the features of the selected preset on or off. New features added later also follow it.',
+				key: SETTINGS_KEYS.UI_PRESET,
+				label: 'UI preset',
+				options: UI_PRESET_ORDER.map((preset) => ({
+					icon: UI_PRESETS[preset].icon,
+					label: UI_PRESETS[preset].label,
+					value: preset
+				})),
+				type: SettingsFieldType.SELECT
+			},
+			{
 				defaultValue: '',
 				help: `Set the API Key if you are using <code> ${CLI_FLAGS.API_KEY} </code> option for the server.`,
 				isPrivate: true,
@@ -132,6 +145,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				isExperimental: true,
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
+				presetDefaults: { [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -139,6 +153,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Show the Discover Models sidebar action to browse and download HuggingFace GGUF models. Turns the Hugging Face Hub API on while it is enabled. Only available in router mode.',
 				key: SETTINGS_KEYS.ENABLE_DISCOVER_MODELS,
 				label: 'Enable Discover Models',
+				presetDefaults: { [UiPreset.COMFORTABLE]: true, [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -146,6 +161,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Fetch model display data (avatars, context length, chat template) and everything in the Discover Models view from the Hugging Face Hub API. Locked on while Discover Models is enabled; can be turned on alone for just the display data.',
 				key: SETTINGS_KEYS.USE_HUGGING_FACE_HUB,
 				label: 'Use the Hugging Face Hub API',
+				presetDefaults: { [UiPreset.COMFORTABLE]: true, [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -153,6 +169,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Conversation title',
+				presetDefaults: { [UiPreset.COMFORTABLE]: false, [UiPreset.FULL]: false },
 				radioOptions: [
 					{
 						key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
@@ -181,6 +198,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Counterpart of the conversation title radio; stored and synced without a dedicated UI field.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 				label: 'Generate title with LLM',
+				presetDefaults: { [UiPreset.COMFORTABLE]: true, [UiPreset.FULL]: true },
 				standaloneField: false,
 				type: SettingsFieldType.CHECKBOX
 			},
@@ -241,6 +259,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Display per-turn statistics (tokens, duration) under each turn in agentic responses. Shown only when "Show message generation statistics" is enabled.',
 				key: SETTINGS_KEYS.SHOW_AGENTIC_TURN_STATS,
 				label: 'Show statistics for individual agentic turns',
+				presetDefaults: { [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -339,6 +358,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Show the modality and capability icons (vision, audio, reasoning, tools) on the models selector rows.',
 				key: SETTINGS_KEYS.SHOW_MODEL_CAPABILITIES_IN_SELECTOR,
 				label: 'Show model modalities & capabilities in models selector',
+				presetDefaults: { [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -674,6 +694,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Show toggle button to display messages as plain text instead of Markdown-formatted content',
 				key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
 				label: 'Enable raw output toggle',
+				presetDefaults: { [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -681,6 +702,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
 				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
 				label: 'JavaScript sandbox tool',
+				presetDefaults: { [UiPreset.COMFORTABLE]: true, [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -689,6 +711,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Pre-load nerdamer in the sandbox for symbolic computation: simplify, diff, integrate, solve, and more. Requires "JavaScript sandbox tool" to be enabled.',
 				key: SETTINGS_KEYS.SYMBOLIC_MATH_ENABLED,
 				label: 'Symbolic math (nerdamer)',
+				presetDefaults: { [UiPreset.FULL]: true },
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -725,6 +748,14 @@ function getAllSettings(): SettingsEntry[] {
 export const SETTING_CONFIG_DEFAULT: Record<string, SettingsConfigValue> = Object.fromEntries(
 	getAllSettings().map((s) => [s.key, s.defaultValue])
 ) as Record<string, SettingsConfigValue>;
+
+/** Per-preset defaults of preset-aware settings, keyed by setting. */
+export const SETTING_PRESET_DEFAULTS: Record<
+	string,
+	Partial<Record<UiPreset, SettingsConfigValue>>
+> = Object.fromEntries(
+	getAllSettings().flatMap((s) => (s.presetDefaults ? [[s.key, s.presetDefaults]] : []))
+);
 
 /** Help text for every setting (including non-UI). */
 export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(

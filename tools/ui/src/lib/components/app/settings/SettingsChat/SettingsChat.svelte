@@ -20,6 +20,7 @@
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { getUiPresetConfig, isUiPreset } from '$lib/utils';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {
@@ -93,6 +94,11 @@
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
 			localConfig[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] = value === true;
+		}
+
+		// a preset switch shows its features in the form, applied on save
+		if (key === SETTINGS_KEYS.UI_PRESET && isUiPreset(value)) {
+			Object.assign(localConfig, getUiPresetConfig(value, localConfig));
 		}
 	}
 

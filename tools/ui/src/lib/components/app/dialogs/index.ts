@@ -36,6 +36,14 @@ export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 export { default as DialogSettingsChat } from './DialogSettingsChat.svelte';
 
 /**
+ * **DialogWelcome** - First-run UI preset picker
+ *
+ * Asks for a UI preset (minimal, comfortable, full) when none is stored yet,
+ * then applies it via settingsStore.applyUiPreset.
+ */
+export { default as DialogWelcome } from './DialogWelcome.svelte';
+
+/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude

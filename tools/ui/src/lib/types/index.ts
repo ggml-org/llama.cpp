@@ -139,7 +139,8 @@ export type {
 	SettingsEntry,
 	SettingsSectionTitle,
 	SettingsSectionEntry,
-	SettingsSection
+	SettingsSection,
+	UiPresetInfo
 } from './settings';
 
 // Common types

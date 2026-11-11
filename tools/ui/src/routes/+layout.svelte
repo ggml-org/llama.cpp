@@ -4,7 +4,7 @@
 	import { afterNavigate, goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { GlassKey, MenuIcon, SidebarNavigation } from '$lib/components/app';
+	import { DialogWelcome, GlassKey, MenuIcon, SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -448,6 +448,8 @@
 	<ModeWatcher />
 
 	<Toaster closeButton richColors />
+
+	<DialogWelcome open={settingsStore.needsUiPreset} />
 
 	<!-- a debug tool, kept with the tests and loaded on demand, so it stays out of the production bundle -->
 	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}

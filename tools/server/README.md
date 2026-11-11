@@ -2645,6 +2645,8 @@ You can specify default preferences for the web UI using `--ui-config <JSON conf
 ./llama-server -m model.gguf --ui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'
 ```
 
+On first launch, the web UI asks the user to pick a preset (`minimal`, `comfortable` or `full`). Set `"uiPreset"` in the config to apply a preset for new users and skip this dialog; other keys in the config take priority over the preset.
+
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
 
 You may find available preferences in [settings-keys.ts](../ui/src/lib/constants/settings-keys.ts).

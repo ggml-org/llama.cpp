@@ -41,6 +41,9 @@ export {
 // Config helpers
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
 
+// UI preset helpers
+export { getSettingsDefaults, getUiPresetConfig, isUiPreset } from './ui-preset';
+
 // CORS Proxy
 export { buildProxiedIconUrl, buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 

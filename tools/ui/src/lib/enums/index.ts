@@ -92,7 +92,12 @@ export {
 	ServerModelsSseEventType
 } from './server.enums';
 
-export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
+export {
+	ParameterSource,
+	SyncableParameterType,
+	SettingsFieldType,
+	UiPreset
+} from './settings.enums';
 
 export {
 	ColorLevel,

@@ -8,7 +8,8 @@ import type {
 	ReasoningEffort,
 	SettingsFieldType,
 	StreamConnectionState,
-	SyncableParameterType
+	SyncableParameterType,
+	UiPreset
 } from '$lib/enums';
 import type { Component } from 'svelte';
 
@@ -38,10 +39,21 @@ export interface SettingsEntry {
 	min?: number;
 	max?: number;
 	dependsOn?: string;
+	/** Default per UI preset; a preset not listed here uses `defaultValue` */
+	presetDefaults?: Partial<Record<UiPreset, SettingsConfigValue>>;
 	sync?: {
 		serverKey: string;
 		paramType: SyncableParameterType;
 	};
+}
+
+export interface UiPresetInfo {
+	description: string;
+	features: string[];
+	icon: Component;
+	label: string;
+	/** Ids from RECOMMENDED_MCP_SERVERS added when the preset is applied */
+	mcpServerIds: string[];
 }
 
 /** A settings section with its icon, slug, title, and ordered settings. */
