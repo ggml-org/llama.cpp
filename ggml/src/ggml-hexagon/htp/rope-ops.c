@@ -384,9 +384,14 @@ static void rope_corr_dims(int     n_dims,
                            float   freq_base,
                            float   beta_fast,
                            float   beta_slow,
+                           bool    truncate,
                            float * dims) {
-    float start = floorf(n_dims * logf(n_ctx_orig / (beta_fast * 2 * (float) M_PI)) / (2 * logf(freq_base)));
-    float end   = ceilf(n_dims * logf(n_ctx_orig / (beta_slow * 2 * (float) M_PI)) / (2 * logf(freq_base)));
+    float start = n_dims * logf(n_ctx_orig / (beta_fast * 2 * (float) M_PI)) / (2 * logf(freq_base));
+    float end   = n_dims * logf(n_ctx_orig / (beta_slow * 2 * (float) M_PI)) / (2 * logf(freq_base));
+    if (truncate) {
+        start = floorf(start);
+        end   = ceilf(end);
+    }
     dims[0]     = MAX(0, start);
     dims[1]     = MIN(n_dims - 1, end);
 }
@@ -779,7 +784,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     }
     rctx.theta_scale_32 = rctx.theta_powers[31] * rctx.theta_scale;
 
-    rope_corr_dims(rctx.n_dims, rctx.n_ctx_orig, rctx.freq_base, rctx.beta_fast, rctx.beta_slow, rctx.corr_dims);
+    rope_corr_dims(rctx.n_dims, rctx.n_ctx_orig, rctx.freq_base, rctx.beta_fast, rctx.beta_slow, op_params[3] == 0, rctx.corr_dims);
 
     rctx.src0_row_size         = src0_row_size;
     rctx.src0_row_stride       = src0_row_stride;
