@@ -587,25 +587,6 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
     return 1;
 }
 
-// Jetson Orin, ncols_dst == 1: one row per warp (more rows per block, more loads in flight) for these types, measured
-// on Jetson Orin Nano. Other types are faster in isolated mat-vec too, but gained at most 2 % end to end.
-static constexpr __host__ __device__ bool mmvq_orin_rows_per_warp_ncols1(ggml_type type) {
-    switch (type) {
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q4_1:
-        case GGML_TYPE_Q5_0:
-        case GGML_TYPE_Q5_1:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_Q4_K:
-        case GGML_TYPE_Q5_K:
-        case GGML_TYPE_Q6_K:
-        case GGML_TYPE_IQ4_NL:
-            return true;
-        default:
-            return false;
-    }
-}
-
 // Low bit types load few weight bytes per thread, a second row per block shares the q8_1 loads and adds memory parallelism.
 static constexpr __host__ __device__ bool mmvq_two_rows_ncols1(ggml_type type) {
     switch (type) {
@@ -621,8 +602,7 @@ static constexpr __host__ __device__ bool mmvq_two_rows_ncols1(ggml_type type) {
 }
 
 static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int ncols_dst, int table_id, bool small_k = false, int nwarps = 1) {
-    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING ||
-            table_id == MMVQ_PARAMETERS_GB10 || table_id == MMVQ_PARAMETERS_ORIN) {
+    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING || table_id == MMVQ_PARAMETERS_GB10) {
         switch (ncols_dst) {
             case 1:
                 if (small_k) {
@@ -631,10 +611,42 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
                 if (table_id == MMVQ_PARAMETERS_GB10) {
                     return type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ3_S ? 2 : 1;
                 }
-                if (table_id == MMVQ_PARAMETERS_ORIN && mmvq_orin_rows_per_warp_ncols1(type)) {
+                return table_id == MMVQ_PARAMETERS_GENERIC && mmvq_two_rows_ncols1(type) ? 2 : 1;
+            case 2:
+            case 3:
+            case 4:
+            case 5:
+            case 6:
+            case 7:
+            case 8:
+                return 2;
+            default:
+                return 1;
+        }
+    }
+    if (table_id == MMVQ_PARAMETERS_ORIN) {
+        switch (ncols_dst) {
+            case 1:
+                if (small_k) {
                     return nwarps;
                 }
-                return (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_ORIN) && mmvq_two_rows_ncols1(type) ? 2 : 1;
+                // One row per warp (more rows per block, more loads in flight) for these types, measured on Jetson Orin Nano.
+                // Other types are faster in isolated mat-vec too, but gained at most 2 % end to end.
+                switch (type) {
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_Q4_K:
+                    case GGML_TYPE_Q5_K:
+                    case GGML_TYPE_Q6_K:
+                    case GGML_TYPE_IQ4_NL:
+                        return nwarps;
+                    default:
+                        break;
+                }
+                return mmvq_two_rows_ncols1(type) ? 2 : 1;
             case 2:
             case 3:
             case 4:
