@@ -265,3 +265,21 @@ def test_draft_token_probs():
         assert abs(tok_draft["logprob"] - tok_no_draft["logprob"]) < 0.25
     # real logprobs are not all exactly 0.0 (prob 1.0)
     assert any(tok["logprob"] < -1e-4 for tok in probs_draft)
+
+
+def test_mtp_draft_matches_target():
+    # greedy tokens are identical with and without the MTP head of small-test, and the draft is actually used
+    global server
+    server = ServerPreset.small_test()
+    server.start()
+    req = {"prompt": "<|im_start|>user\nList three colors.<|im_end|>\n<|im_start|>assistant\n", "n_predict": 48, "temperature": 0.0, "top_k": 1, "return_tokens": True}
+    res = server.make_request("POST", "/completion", data=req)
+    assert res.status_code == 200
+    tokens_no_draft = res.body["tokens"]
+    server.stop()
+    server.spec_type = "draft-mtp"
+    server.start()
+    res = server.make_request("POST", "/completion", data=req)
+    assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
+    assert res.body["tokens"] == tokens_no_draft
