@@ -504,11 +504,6 @@ static bool htp_kparams_solve_gated_delta_net(
         return false;
     }
 
-    // replay of pending tokens (op param 1) is not implemented
-    if (ggml_get_op_params_i32(op, 1) != 0) {
-        return false;
-    }
-
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * q     = op->src[0];
@@ -517,7 +512,12 @@ static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_tensor * g     = op->src[3];
     const struct ggml_tensor * beta  = op->src[4];
     const struct ggml_tensor * state = op->src[5];
+    const struct ggml_tensor * pend_k  = op->src[6];
+    const struct ggml_tensor * pend_v  = op->src[7];
+    const struct ggml_tensor * pend_gb = op->src[8];
+    const struct ggml_tensor * n_rep   = op->src[9];
     const struct ggml_tensor * dst   = op;
+    const bool replay = pend_k != nullptr;
 
     if (q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
         g->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || state->type != GGML_TYPE_F32 ||
@@ -554,6 +554,22 @@ static bool htp_kparams_solve_gated_delta_net(
     if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs * K ||
         dst->ne[2] != 1 || dst->ne[3] != 1) {
         return false;
+    }
+    if ((pend_v != nullptr) != replay || (pend_gb != nullptr) != replay || (n_rep != nullptr) != replay) {
+        return false;
+    }
+    if (replay) {
+        const int64_t n_pend = ggml_get_op_params_i32(op, 1);
+
+        if (K != 1 || n_pend < 0 || pend_k->type != GGML_TYPE_F32 || pend_v->type != GGML_TYPE_F32 ||
+            pend_gb->type != GGML_TYPE_F32 || n_rep->type != GGML_TYPE_I32 ||
+            pend_k->nb[0] != sizeof(float) || pend_v->nb[0] != sizeof(float) || pend_gb->nb[0] != sizeof(float) ||
+            pend_k->ne[0] != k->ne[0] || pend_k->ne[1] != k->ne[1] || pend_k->ne[2] != n_pend || pend_k->ne[3] != n_seqs ||
+            pend_v->ne[0] != S_v || pend_v->ne[1] != H || pend_v->ne[2] != n_pend || pend_v->ne[3] != n_seqs ||
+            pend_gb->ne[0] != g->ne[0] || pend_gb->ne[1] != H || pend_gb->ne[2] != 2*n_pend || pend_gb->ne[3] != n_seqs ||
+            !ggml_is_contiguous(n_rep) || ggml_nelements(n_rep) != n_seqs) {
+            return false;
+        }
     }
 
     const uint32_t rq3        = (uint32_t) (n_seqs / q->ne[3]);
