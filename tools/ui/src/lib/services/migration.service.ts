@@ -19,12 +19,11 @@ import {
 	LEGACY_AGENTIC_REGEX,
 	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
-	SANDBOX_TOOL_NAME,
 	SETTINGS_KEYS,
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
-import { BooleanString, MessageRole, ToolSource } from '$lib/enums';
+import { BooleanString, MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import Dexie from 'dexie';
 
@@ -830,58 +829,6 @@ const mcpServerOverridesToToolPolicyMigration: Migration = {
 			);
 	}
 };
-const LEGACY_JS_SANDBOX_ENABLED_KEY = 'jsSandboxEnabled';
-const SANDBOX_TOOL_DEFAULT_DISABLED_MIGRATION_ID = 'sandbox-tool-default-disabled-v1';
-/**
- * The sandbox tool used to be gated by a developer setting; it is now always listed but off by default.
- * Users who had the setting on keep the tool enabled.
- */
-const sandboxToolDefaultDisabledMigration: Migration = {
-	description:
-		'Disable the run_javascript tool in the global defaults and existing conversations unless the legacy setting enabled it',
-	id: SANDBOX_TOOL_DEFAULT_DISABLED_MIGRATION_ID,
-
-	async run(): Promise<void> {
-		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
-		const config = configRaw ? JSON.parse(configRaw) : {};
-
-		if (config[LEGACY_JS_SANDBOX_ENABLED_KEY] === true) return;
-
-		// same format as toolsStore.toolKey for browser tools
-		const sandboxKey = `${ToolSource.BROWSER}:${SANDBOX_TOOL_NAME}`;
-
-		let defaults: string[] = [];
-
-		try {
-			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
-			const parsed: unknown = raw ? JSON.parse(raw) : [];
-
-			if (Array.isArray(parsed)) {
-				defaults = parsed.filter((k): k is string => typeof k === 'string');
-			}
-		} catch {
-			// corrupted list is replaced
-		}
-
-		if (!defaults.includes(sandboxKey)) {
-			localStorage.setItem(
-				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-				JSON.stringify([...defaults, sandboxKey])
-			);
-		}
-
-		const db = await getDatabaseService();
-		const conversations = await db.getAllConversations();
-
-		for (const conv of conversations) {
-			const disabledTools = conv.disabledTools ?? [];
-
-			if (disabledTools.includes(sandboxKey)) continue;
-
-			await db.updateConversation(conv.id, { disabledTools: [...disabledTools, sandboxKey] });
-		}
-	}
-};
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -893,8 +840,7 @@ const migrations: Migration[] = [
 	configTypesMigration,
 	renderKeysMigration,
 	modelOrgNameKeyMigration,
-	mcpServerOverridesToToolPolicyMigration,
-	sandboxToolDefaultDisabledMigration
+	mcpServerOverridesToToolPolicyMigration
 ];
 
 export const MigrationService = {
