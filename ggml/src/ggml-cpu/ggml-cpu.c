@@ -15,6 +15,9 @@
 #include "ggml.h"
 #include "common.h"
 #include "tiled/tiled.h"
+#ifdef GGML_USE_MKL_FP16
+#include "fp16-mkl.h"
+#endif
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -1273,6 +1276,12 @@ void ggml_compute_forward_mul_mat(
         ggml_compute_forward_fwht(params, dst);
         return;
     }
+
+#ifdef GGML_USE_MKL_FP16
+    if (ggml_fp16_mkl_compute(params, dst)) {
+        return;
+    }
+#endif
 
     // If tiled is supported, it will execute the full op here and we return
     if (ggml_compute_forward_mul_mat_tiled(params, dst)) {
@@ -3069,6 +3078,9 @@ struct ggml_cplan ggml_graph_plan(
             }
         }
 
+#ifdef GGML_USE_MKL_FP16
+        cur = MAX(cur, ggml_fp16_mkl_workspace_size(node));
+#endif
         work_size = MAX(work_size, cur);
     }
 

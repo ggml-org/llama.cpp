@@ -192,6 +192,23 @@ option(GGML_SCHED_NO_REALLOC                "ggml: disallow reallocations in ggm
 # 3rd party libs / backends
 option(GGML_ACCELERATE                      "ggml: enable Accelerate framework"               ON)
 option(GGML_BLAS                            "ggml: use BLAS"                                  ${GGML_BLAS_DEFAULT})
+# Optional CPU-path override for packed 2D F16 matrix multiplications.
+option(GGML_MKL_FP16 "ggml: convert CPU FP16 matmul inputs and use oneMKL SGEMM" OFF)
+if (GGML_MKL_FP16)
+    if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+        message(FATAL_ERROR "GGML_MKL_FP16 requires Linux x86-64")
+    endif()
+    find_path(GGML_MKL_FP16_INCLUDE_DIR mkl.h
+        HINTS "${MKLROOT}" "$ENV{MKLROOT}" /opt/intel/oneapi/mkl/latest PATH_SUFFIXES include)
+    find_library(GGML_MKL_FP16_LIBRARY NAMES mkl_rt
+        HINTS "${MKLROOT}" "$ENV{MKLROOT}" /opt/intel/oneapi/mkl/latest PATH_SUFFIXES lib lib/intel64)
+    if (NOT GGML_MKL_FP16_INCLUDE_DIR OR NOT GGML_MKL_FP16_LIBRARY)
+        message(FATAL_ERROR "GGML_MKL_FP16 requires mkl.h and libmkl_rt; set MKLROOT or the GGML_MKL_FP16_* paths")
+    endif()
+    find_package(Threads REQUIRED)
+    message(STATUS "GGML FP16 MKL: ${GGML_MKL_FP16_LIBRARY}; runtime opt-in: GGML_FP16_MKL_MODE=auto")
+endif()
+
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
