@@ -458,9 +458,9 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             const auto & stop = data.at("stop");
             if (stop.is_array()) {
                 for (const auto & word : stop) {
-                    if (!word.empty()) ctx.params.antiprompt.push_back(word);
+                    if (!word.empty() && word != "") ctx.params.antiprompt.push_back(word);
                 }
-            } else if (stop.is_string()) {
+            } else if (stop.is_string() && stop != "") {
                 ctx.params.antiprompt.push_back(stop.get<std::string>());
             }
             // fall back to CLI defaults if the request provided no effective stop strings

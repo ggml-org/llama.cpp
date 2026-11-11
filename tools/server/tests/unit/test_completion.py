@@ -93,6 +93,20 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
+def test_completion_empty_reverse_prompt():
+    global server
+    server.reverse_prompt = ""
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "I believe the meaning of life is",
+    })
+    assert res.status_code == 200
+    assert res.body["stop_type"] == "limit"
+    assert res.body["timings"]["predicted_n"] == 8
+    assert match_regex("(going|bed)+", res.body["content"])
+
+
 def test_completion_with_openai_library():
     global server
     server.start()
