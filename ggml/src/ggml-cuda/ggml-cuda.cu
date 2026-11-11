@@ -2239,56 +2239,6 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
-// Whether ggml_cuda_mul_mat/ggml_cuda_mul_mat_id dispatch this node to MMQ. Used by both the dispatch and the fusion checks.
-static bool ggml_cuda_mul_mat_uses_mmq(const ggml_tensor * tensor) {
-    const ggml_tensor * src0 = tensor->src[0];
-    const ggml_tensor * src1 = tensor->src[1];
-
-    if (tensor->op != GGML_OP_MUL_MAT && tensor->op != GGML_OP_MUL_MAT_ID) {
-        return false;
-    }
-
-    // ggml_cuda_mul_mat_id has no padding check, only ggml_cuda_mul_mat falls back to cuBLAS for a bad padding clear.
-    const bool bad_padding_clear = tensor->op == GGML_OP_MUL_MAT &&
-                                   ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
-                                   ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
-                                   src0->view_src;
-    if (bad_padding_clear || src1->type != GGML_TYPE_F32 || tensor->type != GGML_TYPE_F32) {
-        return false;
-    }
-
-    const auto & dev = ggml_cuda_info().devices[ggml_cuda_get_device()];
-    const int cc = dev.cc;
-    if (tensor->op == GGML_OP_MUL_MAT_ID) {
-        if (src1->ne[2] <= MMVQ_MAX_BATCH_SIZE && ggml_is_quantized(src0->type) &&
-                src1->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
-            return false;
-        }
-        return ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], src0->ne[2]);
-    }
-
-    if (ggml_cuda_op_mul_mat_use_fwht(tensor)) {
-        return false;
-    }
-
-    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
-    if (ggml_cuda_should_use_mmvf(src0, cc, warp_size, src1->ne[1])) {
-        return false;
-    }
-    if (src0->ne[1] == 1 && src1->ne[1] > MMVF_MAX_BATCH_SIZE && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
-            src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(tensor) &&
-            ggml_cuda_should_use_mmvf(src1, cc, warp_size, 1)) {
-        return false;
-    }
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[1], false)) {
-        return false;
-    }
-    if (ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1])) {
-        return false;
-    }
-    return ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1], 0);
-}
-
 static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_idx, int shared_idx) {
     if (routed_idx + 2 >= graph->n_nodes || shared_idx + 2 >= graph->n_nodes || shared_idx < routed_idx + 3) {
         return false;
@@ -2422,23 +2372,29 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
         return false;
     }
 
+    // The padding of a compute-buffer weight that is a view cannot be cleared, see ggml_cuda_mul_mat.
+    const auto bad_padding_clear = [](const ggml_tensor * x) {
+        return ggml_backend_buffer_get_usage(x->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+            ggml_nbytes(x) != ggml_backend_buffer_get_alloc_size(x->buffer, x) && x->view_src;
+    };
     const int device = ggml_cuda_get_device();
-    if (!ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, device, up_scale, gate_scale)) {
+    if (!ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, device, up_scale, gate_scale) || bad_padding_clear(up->src[0]) || bad_padding_clear(gate->src[0])) {
         return false;
     }
 
-    // The buffer and batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches:
-    // both matmuls must take the MMQ path in ggml_cuda_mul_mat/ggml_cuda_mul_mat_id (this covers the weight padding too).
-    if (!ggml_cuda_mul_mat_uses_mmq(up) || !ggml_cuda_mul_mat_uses_mmq(gate)) {
+    // The batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches.
+    const ggml_tensor * x_up = up->src[0];
+    const ggml_tensor * y    = up->src[1];
+    const int           cc   = ggml_cuda_info().devices[device].cc;
+
+    // For MUL_MAT_ID: same kernel choice as ggml_cuda_mul_mat_id, with the nominal tiles of all experts (the per-expert token counts are only known on the GPU).
+    const bool    is_id     = up->op == GGML_OP_MUL_MAT_ID;
+    const int64_t ncols     = is_id ? y->ne[2]    : y->ne[1];
+    const int64_t nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
+    const bool    use_mmvq  = is_id ? ncols <= get_mmvq_mmid_max_batch(x_up->type, cc) : ggml_cuda_should_use_mmvq(x_up->type, cc, ncols);
+    if (use_mmvq || !ggml_cuda_should_use_mmq(x_up->type, cc, ncols, /*n_experts =*/ is_id ? x_up->ne[2] : 0)) {
         return false;
     }
-
-    // For MUL_MAT_ID the tiles are the nominal ones of all experts (the per-expert token counts are only known on the GPU).
-    const ggml_tensor * x_up      = up->src[0];
-    const ggml_tensor * y         = up->src[1];
-    const bool          is_id     = up->op == GGML_OP_MUL_MAT_ID;
-    const int64_t       ncols     = is_id ? y->ne[2]    : y->ne[1];
-    const int64_t       nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
 
     // The fused kernel needs one block per tile (no stream-k split), so only fuse if the tiling is efficient.
     return ggml_cuda_mmq_fusion_is_efficient(x_up->type, ggml_prec_get_src(up, 1), x_up->ne[1], ncols, nchannels, device);
@@ -2492,7 +2448,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_mul_mat_uses_mmq(dst)) {
+    if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
         return;
     }
@@ -2572,7 +2528,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
 
-        if (ggml_cuda_mul_mat_uses_mmq(dst)) {
+        if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
             ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
             return;
         }
@@ -5014,10 +4970,21 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 return 1;
             }
 
-            if (!with_bias && ggml_cuda_mul_mat_uses_mmq(mm_node)) {
-                fusion_data.prec_src1 = ggml_prec_get_src(mm_node, 1);
-                ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
-                return n_ops - 1;
+            if (!with_bias && src0->type == GGML_TYPE_NVFP4 && src1->type == GGML_TYPE_F32 && mm_node->type == GGML_TYPE_F32) {
+                const int cc = ggml_cuda_info().devices[cuda_ctx->device].cc;
+                const bool is_id = op == GGML_OP_MUL_MAT_ID;
+                const int64_t ncols = is_id ? src1->ne[2] : src1->ne[1];
+                const bool use_mmvq = is_id ? ncols <= get_mmvq_mmid_max_batch(src0->type, cc) :
+                                            ggml_cuda_should_use_mmvq(src0->type, cc, ncols);
+                const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+                                               ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
+                                               src0->view_src;
+                if (!use_mmvq && !bad_padding_clear &&
+                        ggml_cuda_should_use_mmq(src0->type, cc, ncols, /*n_experts =*/ is_id ? src0->ne[2] : 0)) {
+                    fusion_data.prec_src1 = ggml_prec_get_src(mm_node, 1);
+                    ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
+                    return n_ops - 1;
+                }
             }
 
             if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
