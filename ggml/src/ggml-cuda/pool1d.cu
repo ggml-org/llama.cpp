@@ -50,20 +50,22 @@ static __global__ void pool1d_nchw_kernel(
 }
 
 // a window covering the whole row gives one output per row: reduce it with a block instead of one thread
-template <bool is_max>
+template <ggml_op_pool op>
 static __global__ void pool1d_row_kernel(const int iw, const float * src, float * dst) {
+    static_assert(op == GGML_OP_POOL_MAX || op == GGML_OP_POOL_AVG, "unsupported pool op");
+
     const float * row = src + (int64_t) blockIdx.x*iw;
 
-    float res = is_max ? -FLT_MAX : 0.0f;
+    float res = op == GGML_OP_POOL_MAX ? -FLT_MAX : 0.0f;
     for (int i = threadIdx.x; i < iw; i += blockDim.x) {
-        res = is_max ? max(res, row[i]) : res + row[i];
+        res = op == GGML_OP_POOL_MAX ? max(res, row[i]) : res + row[i];
     }
 
     __shared__ float buf[WARP_SIZE];
-    res = block_reduce<is_max ? block_reduce_method::MAX : block_reduce_method::SUM>(res, buf);
+    res = block_reduce<op == GGML_OP_POOL_MAX ? block_reduce_method::MAX : block_reduce_method::SUM>(res, buf);
 
     if (threadIdx.x == 0) {
-        dst[blockIdx.x] = is_max ? res : res/iw;
+        dst[blockIdx.x] = op == GGML_OP_POOL_MAX ? res : res/iw;
     }
 }
 
@@ -71,9 +73,9 @@ static void pool1d_row_f32_cuda(const int iw, const int64_t nr, const float * sr
     const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
     const dim3 block_dims(nr/nsm < 2 ? 512 : (iw < 1024 ? 32 : 128));
     if (op == GGML_OP_POOL_MAX) {
-        pool1d_row_kernel<true><<<nr, block_dims, 0, stream>>>(iw, src, dst);
+        pool1d_row_kernel<GGML_OP_POOL_MAX><<<nr, block_dims, 0, stream>>>(iw, src, dst);
     } else {
-        pool1d_row_kernel<false><<<nr, block_dims, 0, stream>>>(iw, src, dst);
+        pool1d_row_kernel<GGML_OP_POOL_AVG><<<nr, block_dims, 0, stream>>>(iw, src, dst);
     }
 }
 
