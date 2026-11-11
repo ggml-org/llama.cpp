@@ -342,6 +342,10 @@ const llama_ubatch & llama_kv_cache_iswa_context::get_ubatch() const {
     return ubatches[i_next];
 }
 
+bool llama_kv_cache_iswa_context::can_chunk(uint32_t n_tokens) const {
+    return get_base()->is_staircase(n_tokens);
+}
+
 const llama_kv_cache_context * llama_kv_cache_iswa_context::get_base() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 

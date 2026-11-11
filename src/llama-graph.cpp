@@ -166,7 +166,8 @@ static bool can_chunk_attn_mask(
         cparams.flash_attn && cparams.causal_attn && cparams.n_seq_max == 1 && ubatch.n_pos == 1;
 
     // a cache without SWA attends to all its cells: too large for a mask per chunk, it needs the staircase
-    return can_chunk && (!mctx->can_staircase() || mctx->is_staircase(ubatch));
+    // llama_context::decode splits a batch whose cells are not a staircase into ubatches without chunks (see can_chunk)
+    return can_chunk && (!mctx->can_staircase() || mctx->is_staircase());
 }
 
 // like build_attn_inp_attn_mask, with a mask per token chunk, see can_chunk_attn_mask

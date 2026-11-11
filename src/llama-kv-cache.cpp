@@ -843,6 +843,8 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
 
         // now emplace the ubatch
         apply_ubatch(sinfo_new, ubatch);
+
+        res.back().staircase = is_staircase(ubatch, sinfo_new);
     }
 
     GGML_ASSERT(!states.empty() || !success);
@@ -2042,15 +2044,13 @@ bool llama_kv_cache::is_staircase(const llama_ubatch & ubatch, const slot_info &
         }
     }
 
-    // all the cells before the ubatch are in the past of the sequence
-    for (uint32_t j = 0; j < idxs[0]; ++j) {
-        if (cells.is_empty(j) || !cells.seq_has(j, seq_id) || cells.pos_get(j) >= ubatch.pos[0]) {
-            return false;
-        }
-    }
-
+    // all the cells before the ubatch are used and in the past of the sequence: the used cells are [0, n_used),
+    // all of them have the sequence, and only the cells of the ubatch are at a position >= pos[0]
     // no cells after the ubatch: n_kv is then within the rows of the staircase mask
-    return cells.used_max_p1() == idxs.back() + 1;
+    const uint32_t n_used = idxs.back() + 1;
+
+    return cells.used_max_p1() == n_used && cells.get_used() == n_used && cells.seq_n_cells(seq_id) == n_used &&
+        cells.seq_n_cells(seq_id, ubatch.pos[0]) == ubatch.n_tokens;
 }
 
 ggml_tensor * llama_kv_cache::get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const {
@@ -3213,13 +3213,27 @@ bool llama_kv_cache_context::can_staircase() const {
     return kv->can_staircase();
 }
 
-bool llama_kv_cache_context::is_staircase(const llama_ubatch & ubatch) const {
+bool llama_kv_cache_context::is_staircase() const {
     // graph reservation: there are no cells, reserve for the chunked graph
     if (ubatches.empty()) {
         return kv->can_staircase();
     }
 
-    return kv->is_staircase(ubatch, sinfos[i_cur]);
+    return sinfos[i_cur].staircase;
+}
+
+bool llama_kv_cache_context::is_staircase(uint32_t n_tokens) const {
+    if (!kv->can_staircase()) {
+        return true;
+    }
+
+    for (size_t i = 0; i < ubatches.size(); ++i) {
+        if (ubatches[i].n_tokens > n_tokens && !sinfos[i].staircase) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 ggml_type llama_kv_cache_context::type_k() const {

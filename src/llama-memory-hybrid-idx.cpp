@@ -747,18 +747,16 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
         return ggml_view_2d(ctx, staircase, n_pool, n, staircase->nb[1], 0);
     }
 
-    if (ubatch.n_seqs_unq != 1) {
-        return nullptr;
-    }
+    // the cells do not decide it, so that the graph keeps the shape of its reserve: with a single sequence (the caller
+    // checks n_seq_max == 1) the rank of a cell in its sequence grows by one per token, holes and positions do not matter
+    GGML_ASSERT(mem->get_kpool_by_order() && ubatch.n_seqs_unq == 1);
 
     const auto & lay = mem->kpool_layout_get();
 
     // the pools of the sequence must be the first rows, see seq_pool_start in set_input_kpool
     const llama_seq_id s = ubatch.seq_id[0][0];
     for (llama_seq_id s0 = 0; s0 < s; ++s0) {
-        if (!lay.seqs[s0].pools.empty()) {
-            return nullptr;
-        }
+        GGML_ASSERT(lay.seqs[s0].pools.empty());
     }
 
     const auto & sq = lay.seqs[s];
@@ -774,9 +772,7 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
 
     std::vector<int64_t> nv(n);
     for (uint32_t i = 0; i < n; ++i) {
-        if (ubatch.n_seq_id[t0 + i] != 1 || ubatch.seq_id[t0 + i][0] != s) {
-            return nullptr;
-        }
+        GGML_ASSERT(ubatch.n_seq_id[t0 + i] == 1 && ubatch.seq_id[t0 + i][0] == s);
 
         const llama_pos p = ubatch.pos[t0 + i];
 
@@ -804,17 +800,13 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
             phase = ph;
         }
     }
-    if (phase < 0 || nv[0] > anchor) {
-        return nullptr;
-    }
+    GGML_ASSERT(phase >= 0 && nv[0] <= anchor && "the pool mask of a single sequence is a staircase");
 
     const size_t offs = llama_kv_cache::get_staircase_offs(staircase, kpool, anchor, nv[0], phase);
 
     // the rows of the view are within the staircase
     const int64_t row = (offs%staircase->nb[1])/staircase->nb[0];
-    if (row + n_pool > staircase->ne[0]) {
-        return nullptr;
-    }
+    GGML_ASSERT(row + n_pool <= staircase->ne[0]);
 
     return ggml_view_2d(ctx, staircase, n_pool, n, staircase->nb[1], offs);
 }

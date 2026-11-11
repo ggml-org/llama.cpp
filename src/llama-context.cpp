@@ -2297,8 +2297,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     llama_memory_context_ptr mctx;
 
+    uint32_t n_ubatch = cparams.n_ubatch;
+
     while (true) {
-        mctx = memory->init_batch(*balloc, cparams.n_ubatch, embd_all);
+        mctx = memory->init_batch(*balloc, n_ubatch, embd_all);
         if (!mctx) {
             return -2;
         }
@@ -2306,6 +2308,14 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         switch (mctx->get_status()) {
             case LLAMA_MEMORY_STATUS_SUCCESS:
                 {
+                    // layer-major prefill: the cells decide if a large ubatch can have chunks, see process_ubatch
+                    if (cparams.n_chunk > 0 && n_ubatch > cparams.n_chunk && !mctx->can_chunk(cparams.n_chunk)) {
+                        LLAMA_LOG_DEBUG("%s: the cells of the batch do not allow chunks, retrying in ubatches of %u tokens\n", __func__, cparams.n_chunk);
+
+                        n_ubatch = cparams.n_chunk;
+
+                        continue;
+                    }
                 } break;
             case LLAMA_MEMORY_STATUS_NO_UPDATE:
                 {

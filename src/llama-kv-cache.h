@@ -42,6 +42,9 @@ public:
         std::vector<llama_seq_id> strm; // [ns]
         std::vector<idx_vec_t>    idxs; // [ns]
 
+        // layer-major prefill: the cells of the ubatch are a staircase when it is applied, see is_staircase (set by prepare)
+        bool staircase = false;
+
         uint32_t head() const {
             GGML_ASSERT(idxs.size() == 1);
             GGML_ASSERT(!idxs[0].empty());
@@ -449,8 +452,11 @@ public:
     // see llama_kv_cache::get_n_kv_rows, for a slice of the current ubatch
     uint32_t get_n_kv_rows(const llama_ubatch & slice) const;
 
-    // see llama_kv_cache::is_staircase
-    bool is_staircase(const llama_ubatch & ubatch) const;
+    // see llama_kv_cache::is_staircase, for the current ubatch
+    bool is_staircase() const;
+
+    // layer-major prefill: true if the cells of each ubatch of more than n_tokens tokens are a staircase, or if this cache has no staircase masks
+    bool is_staircase(uint32_t n_tokens) const;
     bool can_staircase() const;
 
     // the view of the staircase mask for the n tokens of the current ubatch that start at token t
