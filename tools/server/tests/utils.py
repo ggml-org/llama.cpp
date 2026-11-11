@@ -122,6 +122,7 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
+    allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
@@ -302,6 +303,8 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.allow_unauthenticated_tools:
+            server_args.append("--allow-unauthenticated-tools")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
         if self.server_tools_runtime:

@@ -74,16 +74,6 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     SRV_DBG("response: %s\n", res.body.c_str());
 }
 
-// returns true if the Origin header value's host is localhost / 127.0.0.1 / ::1 (any port)
-static bool origin_is_localhost(const std::string & origin) {
-    try {
-        const std::string host = common_http_parse_url(origin).host;
-        return host == "localhost" || host == "127.0.0.1" || host == "::1";
-    } catch (const std::exception &) {
-        return false;
-    }
-}
-
 static std::string ascii_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
     return s;
@@ -159,7 +149,7 @@ static bool request_origin_is_allowed(const std::string & cors_origins, const ht
             return true;
         }
         if (cors_origins == "localhost") {
-            return origin_is_localhost(origin);
+            return false; // same-origin only, other localhost ports can be untrusted apps
         }
         for (const auto & allowed : string_split<std::string>(cors_origins, ',')) {
             if (string_strip(allowed) == origin) {
@@ -430,13 +420,7 @@ bool server_http_context::init_listener(const common_params & params) {
             // special case: echo back the Origin header to allow any origin to access the server with credentials
             res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
         } else if (params.cors_origins == "localhost") {
-            // special case: only reflect the Origin header if it is a localhost origin
-            std::string origin = req.get_header_value("Origin");
-            if (!origin.empty() && origin_is_localhost(origin)) {
-                res.set_header("Access-Control-Allow-Origin", origin);
-            } else if (!origin.empty()) {
-                SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
-            }
+            // special case: same-origin only, no CORS header needed
         } else {
             res.set_header("Access-Control-Allow-Origin", params.cors_origins);
         }
