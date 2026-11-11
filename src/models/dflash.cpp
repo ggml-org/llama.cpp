@@ -77,6 +77,8 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     }
 
+    ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer(), false);
+
     type = LLM_TYPE_UNKNOWN;
 }
 
