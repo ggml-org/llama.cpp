@@ -195,17 +195,56 @@ def test_cors_origins_localhost_blocks_simple_requests(headers: dict, expected_s
 
 def test_cors_origins_localhost_allows_same_origin():
     global server
+    lan_ip = get_lan_ip()
+    if lan_ip is None:
+        pytest.skip("no non-loopback interface")
     server.api_key = None
     server.cors_origins = "localhost"
-    server.server_host = "127.0.0.1"
+    server.server_host = "0.0.0.0"
     server.start()
     # UI opened via LAN address: Origin matches Host
-    origin_host = f"192.168.1.10:{server.server_port}"
-    res = _raw_post("/tokenize", '{"content": "hello"}', {
-        "Host": origin_host,
-        "Origin": f"http://{origin_host}",
+    url = server.make_url("/tokenize", host=lan_ip)
+    res = requests.post(url, data='{"content": "hello"}', headers={
+        "Content-Type": "text/plain",
+        "Origin": f"http://{lan_ip}:{server.server_port}",
     })
     assert res.status_code == 200
+
+
+@pytest.mark.parametrize("host,headers,expected_status", [
+    ("localhost",       {}, 200),
+    ("127.0.0.1",       {}, 200),
+    ("127.0.0.2",       {}, 200),
+    ("[::1]",           {}, 200),
+    ("0.0.0.0",         {}, 200),
+    ("evil.com",        {"Origin": "http://evil.com:{port}"}, 403),     # rebinding, Origin matches Host
+    ("evil.com",        {"Sec-Fetch-Site": "same-origin"}, 403),        # rebinding, same-origin GET has no Origin
+    ("127.0.0.1.evil.com", {}, 403),
+    ("localhost.evil.com", {}, 403),
+])
+def test_cors_origins_localhost_blocks_dns_rebinding(host: str, headers: dict, expected_status: int):
+    global server
+    server.api_key = None
+    server.cors_origins = "localhost"
+    server.start()
+    port = server.server_port
+    headers = {k: v.format(port=port) for k, v in headers.items()}
+    res = _raw_post("/tokenize", '{"content": "hello"}', {"Host": f"{host}:{port}", **headers})
+    assert res.status_code == expected_status
+
+
+def test_cors_origins_explicit_list_allows_its_hosts():
+    global server
+    server.api_key = None
+    server.cors_origins = "https://ia.example.com"
+    server.start()
+    # reverse proxy that keeps the Host of the public name
+    for host, expected_status in [
+        ("ia.example.com", 200),
+        ("evil.com", 403),
+    ]:
+        res = _raw_post("/tokenize", '{"content": "hello"}', {"Host": host, "Origin": f"https://{host}"})
+        assert res.status_code == expected_status, host
 
 
 def test_cors_origins_explicit_list_blocks_simple_requests():
