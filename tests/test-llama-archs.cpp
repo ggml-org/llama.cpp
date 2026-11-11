@@ -1793,18 +1793,26 @@ static void set_env(const char * name, const char * value) {
 #endif
 }
 
+static void unset_env(const char * name) {
+#ifdef _WIN32
+    _putenv_s(name, "");
+#else
+    unsetenv(name);
+#endif
+}
+
 // a fresh context for each chunk size, as the chunk count is fixed when the context reserves its graphs
-// ubatches of n_ubatch/2, n_ubatch and n_ubatch/2 tokens give full, partial and empty chunks
-static std::vector<float> get_logits_qsa_chunk(
-        llama_model * model, const llama_context_params & ctx_params, const std::vector<llama_token> & tokens, const char * env, const char * n_chunk) {
+// batches of n_ubatch/2, n_ubatch and n_ubatch/2 tokens give full, partial and empty chunks
+// n_ubatch: the ubatch size of the chunked context, the context of ctx_params can have smaller ubatches
+static std::vector<float> get_logits_chunks(
+        llama_model * model, const llama_context_params & ctx_params, uint32_t n_ubatch, const std::vector<llama_token> & tokens, const char * env, const char * n_chunk) {
     set_env(env, n_chunk);
     llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
     }
 
-    const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    const uint32_t n_ubatch = ctx_params.n_ubatch;
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     GGML_ASSERT(tokens.size() == 2*n_ubatch);
     const uint32_t bounds[] = { 0, n_ubatch/2, n_ubatch/2 + n_ubatch, 2*n_ubatch };
 
@@ -1818,6 +1826,7 @@ static std::vector<float> get_logits_qsa_chunk(
             ret.insert(ret.end(), logits_ith, logits_ith + n_vocab);
         }
     }
+    unset_env(env);
     return ret;
 }
 
@@ -1825,7 +1834,7 @@ static std::vector<float> get_logits_qsa_chunk(
 // flash attention is off: the CPU tiles it for larger batches, and the different rounding of the unsplit reference reaches 5e-10
 // a misplaced chunk is above 1e-7 with stdev 0.3, the rounding of the kernels that the CPU picks by batch size below 1e-13
 // env is the variable that sets the chunk size: LLAMA_QSA_CHUNK, or LLAMA_LAYER_MAJOR for the chunks of the attention block and the expert FFN
-static int test_qsa_chunk(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * env, const char * n_chunk) {
+static int test_chunks_match(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * env, const char * n_chunk) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -1873,8 +1882,8 @@ static int test_qsa_chunk(const std::string & arch_filter, const size_t seed, co
             ctx_params.n_ubatch        = n_ubatch;
             ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
-            const std::vector<float> logits_ref   = get_logits_qsa_chunk(model.get(), ctx_params, tokens, env, "0");
-            const std::vector<float> logits_chunk = get_logits_qsa_chunk(model.get(), ctx_params, tokens, env, n_chunk);
+            const std::vector<float> logits_ref   = get_logits_chunks(model.get(), ctx_params, n_ubatch, tokens, env, "0");
+            const std::vector<float> logits_chunk = get_logits_chunks(model.get(), ctx_params, n_ubatch, tokens, env, n_chunk);
 
             const double nmse_val = nmse(logits_ref, logits_chunk);
             const bool   ok       = nmse_val <= 1e-10;
@@ -1882,6 +1891,28 @@ static int test_qsa_chunk(const std::string & arch_filter, const size_t seed, co
             n_failed += ok ? 0 : 1;
             LOG("|%s|%5s|%s (%.2e)\n", llama_arch_name(arch), moe ? "MoE" : "Dense",
                 ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m", nmse_val);
+
+            // layer-major with flash attention: the KQ masks of the chunks, views of the staircase with a cache without SWA
+            // the CPU tiles flash attention by batch size, so the reference has ubatches of the chunk size: the graph of a chunk
+            // only for the archs with attention chunks: qwen4exp, and gemma4 without KV-shared layers (the MoE model)
+            const bool attn_chunks = arch == LLM_ARCH_QWEN4EXP || (arch == LLM_ARCH_GEMMA4 && moe);
+            if (strcmp(env, "LLAMA_LAYER_MAJOR") == 0 && attn_chunks) {
+                llama_context_params ctx_params_fa = ctx_params;
+                ctx_params_fa.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+
+                llama_context_params ctx_params_ref = ctx_params_fa;
+                ctx_params_ref.n_ubatch = std::min<uint32_t>(n_ubatch, atoi(n_chunk));
+
+                const std::vector<float> logits_ref_fa   = get_logits_chunks(model.get(), ctx_params_ref, n_ubatch, tokens, env, "0");
+                const std::vector<float> logits_chunk_fa = get_logits_chunks(model.get(), ctx_params_fa,  n_ubatch, tokens, env, n_chunk);
+
+                const double nmse_fa = nmse(logits_ref_fa, logits_chunk_fa);
+                const bool   ok_fa   = nmse_fa <= 1e-10;
+                n_tests++;
+                n_failed += ok_fa ? 0 : 1;
+                LOG("|%s|%5s|%s (%.2e)\n", llama_arch_name(arch), moe ? "MoE FA" : "Dense FA",
+                    ok_fa ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m", nmse_fa);
+            }
         }
     }
 
@@ -2018,10 +2049,10 @@ int main(int argc, char ** argv) {
             return test_kv_shift(arch_filter, seed, stdev, verbosity);
         }
         if (qsa_chunk) {
-            return test_qsa_chunk(arch_filter, seed, stdev, verbosity, "LLAMA_QSA_CHUNK", qsa_chunk);
+            return test_chunks_match(arch_filter, seed, stdev, verbosity, "LLAMA_QSA_CHUNK", qsa_chunk);
         }
         if (layer_major) {
-            return test_qsa_chunk(arch_filter, seed, stdev, verbosity, "LLAMA_LAYER_MAJOR", layer_major);
+            return test_chunks_match(arch_filter, seed, stdev, verbosity, "LLAMA_LAYER_MAJOR", layer_major);
         }
         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
     } catch (const std::exception & err) {

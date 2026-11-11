@@ -309,11 +309,12 @@ llama_test(
 )
 
 # layer-major prefill: the chunks of the attention block and of the expert FFN match the unsplit graph on the CPU
+# with flash attention, gemma4 covers the KQ masks of the chunks (iswa cache, staircase)
 llama_test(
     test-llama-archs
     NAME test-llama-archs-layer-major-match
     LABEL main
-    ARGS -a "qwen4exp" --layer-major 24 -d 0.3
+    ARGS -a "qwen4exp|^gemma4$" --layer-major 24 -d 0.3
 )
 
 llama_test(
