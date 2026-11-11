@@ -1330,6 +1330,18 @@ static void test_macros(testing & t) {
         "Hello, John Smith,Hi, Jane Doe"
     );
 
+    test_template(t, "macro with unpacked args",
+        "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(*[1, 2]) }},{{ add(1, **{'b': 2, 'c': 3}) }},{{ add(*xs, **kw) }}",
+        {{"xs", json::array({1, 2})}, {"kw", {{"c", 5}}}},
+        "3,6,8"
+    );
+
+    test_template(t, "filter with unpacked args",
+        "{{ 'a-b' | replace(*['-', '+']) }}",
+        json::object(),
+        "a+b"
+    );
+
     test_template(t, "macro with caller",
         "\
 {%- macro nest_dict(o, i, ff='') %}\n\
@@ -2436,6 +2448,12 @@ static void test_object_methods(testing & t) {
     test_template(t, "dict from tuples and kwargs",
         "{% set o = dict((obj | items | list), c=2) %}{{ o|tojson }}",
         {{"obj", {{"a", 3}, {"b", 1}}}},
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
+
+    test_template(t, "dict from dict and unpacked kwargs",
+        "{% set o = dict(obj, **{k: 2}) %}{{ o|tojson }}",
+        {{"obj", {{"a", 3}, {"b", 1}}}, {"k", "c"}},
         "{\"a\": 3, \"b\": 1, \"c\": 2}"
     );
 }

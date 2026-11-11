@@ -516,11 +516,13 @@ private:
         statements args;
         while (!is(token::close_paren)) {
             statement_ptr arg;
-            // unpacking: *expr
-            if (peek().t == token::multiplicative_binary_operator && peek().value == "*") {
+            // unpacking: *expr or **expr
+            const auto & t = peek();
+            if (t.t == token::power_operator || (t.t == token::multiplicative_binary_operator && t.value == "*")) {
                 size_t start_pos = current;
-                ++current; // consume *
-                arg = mk_stmt<spread_expression>(start_pos, parse_expression());
+                ++current; // consume * or **
+                bool is_kwargs = t.t == token::power_operator;
+                arg = mk_stmt<spread_expression>(start_pos, parse_expression(), is_kwargs);
             } else {
                 arg = parse_expression();
                 if (is(token::equals)) {

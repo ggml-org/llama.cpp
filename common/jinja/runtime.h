@@ -654,7 +654,9 @@ struct keyword_argument_expression : public expression {
 
 struct spread_expression : public expression {
     statement_ptr argument;
-    explicit spread_expression(statement_ptr && argument) : argument(std::move(argument)) {
+    bool is_kwargs;
+    spread_expression(statement_ptr && argument, bool is_kwargs)
+        : argument(std::move(argument)), is_kwargs(is_kwargs) {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "SpreadExpression"; }
