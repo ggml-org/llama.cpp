@@ -33,6 +33,7 @@ print("EOS token id:     ", config.eos_token_id)
 
 print("Loading model and tokenizer using AutoTokenizer:", model_path)
 tokenizer = AutoTokenizer.from_pretrained(model_path)
+assert tokenizer is not None
 
 if unreleased_model_name:
     model_name_lower = unreleased_model_name.lower()
@@ -56,11 +57,11 @@ model_name = os.path.basename(model_path)
 print(f"Model name: {model_name}")
 
 prompt = "Hello world today"
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids  # ty: ignore[call-non-callable]
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids
 token_ids = input_ids[0].cpu().tolist()
 print(f"Input tokens: {input_ids}")
 print(f"Input text: {repr(prompt)}")
-print(f"Tokenized: {tokenizer.convert_ids_to_tokens(input_ids[0])}")  # ty: ignore[unresolved-attribute]
+print(f"Tokenized: {tokenizer.convert_ids_to_tokens(input_ids[0])}")
 
 with torch.no_grad():
     outputs = model(input_ids, output_hidden_states=True)
@@ -83,7 +84,7 @@ with torch.no_grad():
 
     # Print embeddings per token in the requested format
     print("\nToken embeddings:")
-    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])  # ty: ignore[unresolved-attribute]
+    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
     for i, embedding in enumerate(token_embeddings):
         # Format: show first few values, ..., then last few values
         if len(embedding) > 10:

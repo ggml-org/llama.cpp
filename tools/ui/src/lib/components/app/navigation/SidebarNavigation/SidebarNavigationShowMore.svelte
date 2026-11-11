@@ -11,7 +11,7 @@
      section's heading: "Show more" opens the
      whole section, "Show less" closes it back to its first rows -->
 <button
-	class="flex min-h-9 w-full cursor-pointer items-center rounded-lg px-2 py-1.5 text-left text-sm font-normal text-muted-foreground md:min-h-8 md:py-1 transition-colors hover:bg-foreground/10 hover:text-foreground"
+	class="flex min-h-9 w-full cursor-pointer items-center rounded-lg px-2 py-1.5 text-left text-sm font-normal text-muted-foreground max-md:min-h-12 max-md:rounded-2xl max-md:px-3.5 max-md:text-[17px] md:min-h-8 md:py-1 transition-colors hover:bg-foreground/10 hover:text-foreground"
 	onclick={onToggle}
 	type="button"
 >

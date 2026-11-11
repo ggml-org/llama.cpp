@@ -1285,7 +1285,7 @@ def convert_dictionary_to_pydantic_model(dictionary: dict[str, Any], model_name:
                     if items != {}:
                         array = {"properties": items}
                         array_type = convert_dictionary_to_pydantic_model(array, f"{model_name}_{field_name}_items")
-                        fields[field_name] = (list[array_type], ...)  # ty: ignore[invalid-type-form]
+                        fields[field_name] = (list[array_type], ...)
                     else:
                         fields[field_name] = (list, ...)
                 elif field_type == "object":

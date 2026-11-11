@@ -7018,6 +7018,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Thinking.")
             .expect_content("Working on it.Hello!")
             .run();
+
+        // Structured output, straight to the final answer
+        tst.test(" to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // Structured output after a reasoning message: reasoning stays free-form
+        tst.test(" to=self<|message|>I need to output the invoice details in JSON<|eom|>"
+                 "<|start|>assistant to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
     }
 
     // GPT-OSS format tests

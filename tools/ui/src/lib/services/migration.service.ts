@@ -13,7 +13,9 @@ import {
 	DB_APP_NAME_DEPRECATED,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	IDXDB_STORES,
+	IDXDB_STORES_V1,
 	IDXDB_TABLES,
+	IDXDB_VERSION,
 	LEGACY_AGENTIC_REGEX,
 	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
@@ -166,7 +168,7 @@ const idxdbMigration: Migration = {
 		// Check if new database already has data
 		const newDb = new Dexie(STORAGE_APP_NAME);
 
-		newDb.version(1).stores(IDXDB_STORES);
+		newDb.version(IDXDB_VERSION).stores(IDXDB_STORES);
 		const existingConvs = await newDb.table(IDXDB_TABLES.conversations).count();
 
 		if (existingConvs > 0) {
@@ -181,7 +183,7 @@ const idxdbMigration: Migration = {
 
 		const oldDb = new Dexie(DB_APP_NAME_DEPRECATED);
 
-		oldDb.version(1).stores(IDXDB_STORES);
+		oldDb.version(1).stores(IDXDB_STORES_V1);
 
 		const conversations = await oldDb.table(IDXDB_TABLES.conversations).toArray();
 		const messages = await oldDb.table(IDXDB_TABLES.messages).toArray();

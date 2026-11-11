@@ -9,7 +9,7 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { ROUTES } from '$lib/constants';
+import { NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
 import { DatabaseService } from '$lib/services/database.service';
@@ -23,7 +23,12 @@ import {
 } from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tabsStore } from '$lib/stores/tabs.svelte';
-import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
+import {
+	collectForkFamily,
+	filterByLeafNodeId,
+	findLeafNode,
+	generateConversationTitle
+} from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -116,6 +121,23 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			convId,
 			generateConversationTitle(content, Boolean(settingsStore.config.titleGenerationUseFirstLine))
 		);
+	}
+
+	/**
+	 * Puts the active conversation into a group, or out of one with null.
+	 * With no active conversation the pick is buffered and the next created
+	 * chat joins that group.
+	 *
+	 * @param groupId - Target group, null to leave the current one
+	 */
+	async assignActiveConversationGroup(groupId: string | null): Promise<void> {
+		const active = this.activeConversation;
+
+		if (active) {
+			await this.setConversationGroup(active.id, groupId);
+		} else {
+			this.preferences.pendingGroupId = groupId;
+		}
 	}
 
 	/**
@@ -276,11 +298,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		// new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
 			cwd: this.preferences.pendingCwd ?? undefined,
+			groupId: this.preferences.pendingGroupId ?? undefined,
 			reasoningEffort: this.preferences.pendingReasoningEffort,
 			...this.preferences.getToolPolicySnapshot()
 		});
 
 		this.preferences.pendingCwd = null;
+		this.preferences.pendingGroupId = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -481,11 +505,20 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * @returns List of conversations with messages, ordered by the input IDs
 	 */
 	async getConversationsForExport(convIds: string[]): Promise<ExportedConversation[]> {
-		const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+		const [fetched, groups] = await Promise.all([
+			DatabaseService.getConversationsWithMessages(convIds),
+			DatabaseService.getAllGroups()
+		]);
+		const groupsById = new Map(groups.map((group) => [group.id, group]));
 
 		return convIds
 			.map((id) => fetched.get(id))
-			.filter((entry): entry is ExportedConversation => entry !== undefined);
+			.filter((entry): entry is ExportedConversation => entry !== undefined)
+			.map((entry) => {
+				const group = entry.conv.groupId ? groupsById.get(entry.conv.groupId) : undefined;
+
+				return group ? { ...entry, group: { id: group.id, name: group.name } } : entry;
+			});
 	}
 
 	/**
@@ -617,11 +650,17 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. The
-	 * chat layout opens a new-chat tab for it when Conversation tabs are on.
+	 * Start a fresh chat by navigating to the bare `#/` new-chat screen.
+	 *
+	 * @param options.inNewTab - With Conversation tabs on, open it in a tab of
+	 *   its own, like the tab bar's "+", so the open chat keeps its tab
 	 */
-	async openNewChat(): Promise<void> {
+	async openNewChat({ inNewTab = false } = {}): Promise<void> {
+		if (inNewTab && settingsStore.config.conversationTabs)
+			await tabsStore.openInNewTab(NEW_CHAT_TAB_ID);
+
 		this.clearActiveConversation();
+		this.preferences.pendingGroupId = null;
 		await goto(ROUTES.START);
 	}
 
@@ -656,6 +695,33 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		}
 
 		return undefined;
+	}
+
+	/**
+	 * Moves a conversation with its whole fork family into a group, or out of one
+	 * when `groupId` is null: a family never splits across sections. A pinned chat
+	 * that joins a group leaves Pinned, since group sections do not show pinned chats.
+	 *
+	 * @param convId - Conversation to move
+	 * @param groupId - Target group, null to take the conversations out of their group
+	 */
+	async setConversationGroup(convId: string, groupId: string | null): Promise<void> {
+		const ids = new Set(collectForkFamily(this.conversations, convId));
+
+		try {
+			await DatabaseService.setConversationsGroup([...ids], groupId);
+
+			for (const conversation of this.conversations) {
+				if (!ids.has(conversation.id)) continue;
+
+				this.applyConversationUpdate(conversation.id, {
+					groupId: groupId ?? undefined,
+					...(groupId && conversation.pinned ? { pinned: false } : {})
+				});
+			}
+		} catch (error) {
+			console.error('Failed to move conversation to group:', error);
+		}
 	}
 
 	/**

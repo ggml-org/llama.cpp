@@ -35,16 +35,22 @@
 		return tags.find((t) => t.startsWith('license:'))?.replace('license:', '') ?? null;
 	});
 
-	// Capabilities derived from HF metadata. Vision comes from an mmproj sidecar
-	// or a multimodal pipeline tag; tool use / reasoning from the chat template.
-	let hasMmproj = $derived(
-		files.some(
+	// Capabilities derived from HF metadata. Vision and audio come from the
+	// pipeline tag and the mmproj; tool use / reasoning from the chat template.
+	let mmprojPath = $derived(
+		files.find(
 			(f) => HuggingFaceService.extractQuantMeta(f.path)?.sidecar === ModelAuxSidecar.MMPROJ
-		)
+		)?.path
 	);
-	let hasVision = $derived(hasMmproj || details?.pipeline_tag === 'image-text-to-text');
+	let modalities = $derived(
+		HuggingFaceService.getModalities(modelId, details?.pipeline_tag, mmprojPath)
+	);
 	let hasTools = $derived(detectToolUseSupport(gguf?.chat_template ?? ''));
 	let hasReasoning = $derived(detectThinkingSupport(gguf?.chat_template ?? ''));
+
+	$effect(() => {
+		if (mmprojPath) void HuggingFaceService.getMmprojEncoders(modelId, mmprojPath);
+	});
 
 	let bitDepthRows = $derived.by<ModelBitDepthRow[]>(() => {
 		const rows = new SvelteMap<number, HfModelSibling[]>();
@@ -84,8 +90,8 @@
 			{gguf}
 			{hasReasoning}
 			{hasTools}
-			{hasVision}
 			{licenseTag}
+			{modalities}
 			{modelId}
 		/>
 
