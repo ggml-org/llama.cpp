@@ -571,6 +571,11 @@ void main() {
             if (qk_sg != sg_count && lane_r == 0) {
                 F32Poolsh.F32sh[emfsh_base + sg * TN + lane_c] = eMf;
             }
+
+            if (SubGroupSize > TN) {
+                subgroupBarrier();
+            }
+
             [[unroll]] for (uint idx = 0; idx < softmax_loops; ++idx) {
                 F16Poolsh.F16sh[psh_store_offset + idx] = float16_t(Pf[idx]);
             }

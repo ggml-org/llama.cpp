@@ -126,6 +126,7 @@ void main() {
     const uint p_base = (batch_idx * p.neq1 * p.neq2 + head_v_idx * gqa_ratio + out_row_idx * Wr * p.neq2) * p_dim / 4;
     const uint max_base = (batch_idx * p.neq1 * p.neq2 + head_v_idx * gqa_ratio + out_row_idx * Wr * p.neq2) * max_dim;
     const uint v_base = batch_v_idx * p.nbv3 + head_v_idx * p.nbv2 + v_idx * Bc + sg * TK * v_dim;
+    const uint o_base = (batch_idx * p.nb3 + v_idx * Bc + head_v_idx * gqa_ratio * HSV + out_row_idx * o_dim * Wr) / 4;
     const uint psh_offset = psh_base + wg_lane * 4;
     const float NEG_FLT_MAX_OVER_2 = uintBitsToFloat(0xFEFFFFFF);
     const float POS_FLT_MAX_OVER_2 = uintBitsToFloat(0x7EFFFFFF);
@@ -155,6 +156,20 @@ void main() {
         if ((p.flag & SINK_ENABLE_BIT) != 0) {
             sink[r] = data_s[col_idx + head_v_idx * gqa_ratio];
         }
+    }
+
+    if (p.nek1 == 0) {
+        if (sg == 0) {
+            [[unroll]] for (uint c = 0; c < Bc / 4; ++c) {
+                [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
+                    if (o_mask[r]) {
+                        data_ov4[o_base + o_offset[r] + c] = vec4(0.0f, 0.0f, 0.0f, 0.0f);
+                    }
+                }
+            }
+        }
+
+        return;
     }
 
     [[unroll]] for (uint idx = 0; idx < global_max_loops; ++idx) {
@@ -291,9 +306,6 @@ void main() {
         }
 
         v_offset += p_per_loop * v_dim;
-        if (loop * p_per_loop + sg * TK >= p.nek1) {
-            v_offset = 0;
-        }
 
         if (seq_boundary_check || loop + 1 < loop_count) {
             [[unroll]] for (uint idx = 0; idx < p_loops; ++idx) {
@@ -386,6 +398,8 @@ void main() {
             }
         }
 
+        subgroupBarrier();
+
         if ((p.flag & SINK_ENABLE_BIT) != 0) {
             [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {
                 float Mf = F32Poolsh.F32sh[global_maxsh_offset + r * SubGroupSize + lane];
@@ -434,7 +448,6 @@ void main() {
         const uint sh_base0 = osh_offset + lane * Bc;
         const uint sh_base1 = sh_base0 + split_p_sg / 2 * omat_row * TN * omat_col * TM;
 
-        const uint o_base = (batch_idx * p.nb3 + v_idx * Bc + head_v_idx * gqa_ratio * HSV + out_row_idx * o_dim * Wr) / 4;
         float Lfrcp[o_scalar_row];
         float Of[o_scalar_row][4];
         [[unroll]] for (uint r = 0; r < o_scalar_row; ++r) {

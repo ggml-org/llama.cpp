@@ -1384,6 +1384,34 @@ struct vk_fa_tuning_params {
     }
 };
 
+struct vk_xe_fa_tuning_params {
+    size_t shmem_sz;
+    std::array<uint32_t, 2> workgroup_size;
+    std::array<uint32_t, 2> subgroup_size;
+    uint32_t tm;
+    uint32_t tn;
+    uint32_t tk;
+
+    struct {
+        uint32_t wg_row;
+        uint32_t gqa_fold;
+        uint32_t q_in_reg;
+        uint32_t p_per_iter;
+        uint32_t sg_col;
+        uint32_t acc_count;
+        uint32_t pipeline_flag;
+    } prefill_params;
+
+    struct {
+        uint32_t p_chunk_ph1;
+        uint32_t out_per_wg_ph1;
+        uint32_t split_p_per_iter_ph2;
+        uint32_t out_row_per_wg_ph2;
+        uint32_t out_col_per_wg_ph2;
+        uint32_t pipeline_flag_ph2;
+    } decode_params;
+};
+
 struct GpuPipelineConfig {
     // GPU architecture identifier.
     // Example: vk_device_architecture::AMD_GCN

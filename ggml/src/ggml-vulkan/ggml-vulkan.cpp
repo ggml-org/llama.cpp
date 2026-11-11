@@ -1419,19 +1419,18 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
     };
 }
 
-static size_t get_xe_fa_shmem_size(const vk_device_struct * device, const vk_xe_fa_pipeline_state& pipeline_state, bool use_prefill) {
+static vk_xe_fa_tuning_params get_xe_fa_tuning_params(const vk_device_struct * device, const vk_xe_fa_pipeline_state& pipeline_state, bool use_prefill) {
+    vk_xe_fa_tuning_params params {};
     size_t shmem_sz = 0;
     uint32_t sg_sz = 32u;
-    std::vector<uint32_t> matrix_mnk = { 16u, 16u, 16u };
+    std::array<uint32_t, 3> matrix_mnk = { 16u, 16u, 16u };
     bool intel_gpu = device->vendor_id == VK_VENDOR_ID_INTEL;
 
     if (device->architecture == INTEL_XE1) {
         sg_sz = 8u;
-        matrix_mnk.clear();
         matrix_mnk = { 8u, 8u, 16u };
     } else if (device->architecture == INTEL_XE2) {
         sg_sz = 16u;
-        matrix_mnk.clear();
         matrix_mnk = { 8u, 16u, 16u };
     }
 
@@ -1443,6 +1442,11 @@ static size_t get_xe_fa_shmem_size(const vk_device_struct * device, const vk_xe_
     uint32_t qk_ratio = pipeline_state.qk_ratio;
     uint32_t pv_ratio = pipeline_state.pv_ratio;
     uint32_t sg_per_gw;
+
+    params.tm = tm;
+    params.tn = tn;
+    params.tk = tk;
+    GGML_ASSERT(hsv % tm == 0);
 
     if (use_prefill) {
         sg_per_gw = sg_sz == 8 ? 32 : 16;
@@ -1486,6 +1490,37 @@ static size_t get_xe_fa_shmem_size(const vk_device_struct * device, const vk_xe_
         // 1. Prologue q staging shmem is released right after prologue, so it never overlaps other shmem sections
         // 2. Extreme large hsk one-time q staging is capped within shader (max_q_reg_staging = shmem_size / 2 / Wr)
         shmem_sz = shmem_q_sz + shmem_reuse_sz + shmem_v_sz + shmem_p_sz + shmem_emf_sz;
+
+        uint32_t sg_col = hsv / tm;
+        uint32_t pipeline_flag = 0;
+        sg_col = (sg_col + output_div - 1) / output_div;
+        sg_col = sg_col * tm;
+        if (pipeline_state.unaligned_seq_len) {
+            pipeline_flag |= 1 << 0;
+        }
+
+        if (pipeline_state.unaligned_q) {
+            pipeline_flag |= 1 << 1;
+        }
+
+        if (pipeline_state.partial_row_mask) {
+            pipeline_flag |= 1 << 2;
+        }
+
+        if (intel_gpu) {
+            pipeline_flag |= 1 << 3;
+        }
+
+        params.workgroup_size = { wg_sz };
+        params.subgroup_size = { sg_sz };
+        params.shmem_sz = shmem_sz;
+        params.prefill_params.pipeline_flag = pipeline_flag;
+        params.prefill_params.wg_row = wg_row;
+        params.prefill_params.gqa_fold = gqa_fold;
+        params.prefill_params.q_in_reg = q_in_reg;
+        params.prefill_params.p_per_iter = p_per_iter;
+        params.prefill_params.sg_col = sg_col;
+        params.prefill_params.acc_count = tm == 8 ? (sg_col % 16 == 0 ? 2 : 1) : 1;
     } else {
         auto upper_power_of_2 = [&](uint32_t in) {
             GGML_ASSERT(in != 0);
@@ -1502,33 +1537,33 @@ static size_t get_xe_fa_shmem_size(const vk_device_struct * device, const vk_xe_
         size_t shmem_ph1_sz = 0;
         size_t shmem_ph2_sz = 0;
 
-        // Phase1 shmem size calculation
-        const uint32_t ph1_p_chunk = 32;
-        // Phase1 k shmem staging for extreme large hsk is capped within shader, bypass that check
+        // Phase 1 shmem size calculation
+        const uint32_t p_chunk_ph1 = 32;
+        // Phase 1 k shmem staging for extreme large hsk is capped within shader, bypass that check
         uint32_t pmat_row = CEIL_DIV(qk_ratio, tn);
         uint32_t aligned_q_len = upper_power_of_2(pipeline_state.decode_n);
         uint32_t group_sz_ph1 = std::min(std::max(aligned_q_len * sg_sz, 64u), 256u);
         uint32_t out_per_wg_ph1 = std::min(pipeline_state.decode_n, 256u / sg_sz);
         size_t shmem_k_sz = group_sz_ph1 / sg_sz * tm * tk * sizeof(ggml_fp16_t);
-        size_t shmem_mask_sz = out_per_wg_ph1 * ph1_p_chunk * sizeof(float);
-        size_t shmem_p_sz = ph1_p_chunk * pmat_row * tn * sizeof(float);
+        size_t shmem_mask_sz = out_per_wg_ph1 * p_chunk_ph1 * sizeof(float);
+        size_t shmem_p_sz = p_chunk_ph1 * pmat_row * tn * sizeof(float);
         // K shmem is reused with mask/p, calculate the max size
         shmem_ph1_sz = std::max(shmem_k_sz, shmem_mask_sz + shmem_p_sz);
 
-        // Phase2 shmem size calculation
+        // Phase 2 shmem size calculation
         uint32_t aligned_pv_ratio = upper_power_of_2(pv_ratio);
         uint32_t split_p_per_iter_ph2 = (pv_ratio <= 32) ? 256 : 128;
-        uint32_t out_dim_per_wg = intel_gpu ? (pv_ratio > 16 ? 8 : 16) : 16;
+        uint32_t out_col_per_wg_ph2 = intel_gpu ? (pv_ratio > 16 ? 8 : 16) : 16;
         uint32_t split_p_per_warp = 16;
         uint32_t group_sz_ph2 = (split_p_per_iter_ph2 / split_p_per_warp) * sg_sz;
         sg_per_gw = group_sz_ph2 / sg_sz;
-        uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_pv_ratio, 1u), pipeline_state.decode_n);
-        uint32_t o_row = pv_ratio * out_per_wg_ph2;
+        uint32_t out_row_per_wg_ph2 = std::min(std::max(16u / aligned_pv_ratio, 1u), pipeline_state.decode_n);
+        uint32_t o_row = pv_ratio * out_row_per_wg_ph2;
         uint32_t omat_row = CEIL_DIV(o_row, tn) * tn;
         uint32_t global_max_loops = CEIL_DIV(o_row, sg_per_gw);
         size_t shmem_global_max_sz = CEIL_DIV(global_max_loops * sg_per_gw, sg_sz) * sg_sz * sizeof(float);
 
-        uint32_t size_max = o_row * split_p_per_iter_ph2 / ph1_p_chunk;
+        uint32_t size_max = o_row * split_p_per_iter_ph2 / p_chunk_ph1;
         size_t shmem_group_max_sz = CEIL_DIV(size_max, group_sz_ph2) * group_sz_ph2 * sizeof(float);
 
         uint32_t p_loop_col = group_sz_ph2 * 4;
@@ -1537,13 +1572,23 @@ static size_t get_xe_fa_shmem_size(const vk_device_struct * device, const vk_xe_
 
         size_t shmem_lf_sz = CEIL_DIV(sg_per_gw * p_loops, sg_sz) * sg_sz * sizeof(float);
         size_t shmem_oob_staging_sz = sg_per_gw * tm * tk * sizeof(ggml_fp16_t);
-        size_t shmem_o_sz = sg_per_gw * out_dim_per_wg * omat_row * sizeof(float);
+        size_t shmem_o_sz = sg_per_gw * out_col_per_wg_ph2 * omat_row * sizeof(float);
         size_t shmem_reuse_sz = 2 * shmem_group_max_sz + std::max(shmem_oob_staging_sz, 2 * shmem_p_sz);
 
         shmem_ph2_sz = shmem_lf_sz + shmem_global_max_sz;
         // Shmem of p/group max is reused with output accumulation, calculate the max size
         shmem_ph2_sz += std::max(shmem_reuse_sz, shmem_o_sz);
         shmem_sz = std::max(shmem_ph1_sz, shmem_ph2_sz);
+
+        params.workgroup_size = { group_sz_ph1, group_sz_ph2 };
+        params.subgroup_size = { sg_sz, sg_sz };
+        params.shmem_sz = shmem_sz;
+        params.decode_params.p_chunk_ph1 = p_chunk_ph1;
+        params.decode_params.out_per_wg_ph1 = out_per_wg_ph1;
+        params.decode_params.split_p_per_iter_ph2 = split_p_per_iter_ph2;
+        params.decode_params.out_row_per_wg_ph2 = out_row_per_wg_ph2;
+        params.decode_params.out_col_per_wg_ph2 = out_col_per_wg_ph2;
+        params.decode_params.pipeline_flag_ph2 = pipeline_state.unaligned_seq_len ? (1u << 0) : 0;
     }
 
     if (shmem_sz > device->properties.limits.maxComputeSharedMemorySize) {
@@ -1551,7 +1596,7 @@ static size_t get_xe_fa_shmem_size(const vk_device_struct * device, const vk_xe_
                      "shmem_sz = " << shmem_sz << ", exceeding max shmem size = " << device->properties.limits.maxComputeSharedMemorySize);
     }
 
-    return shmem_sz;
+    return params;
 }
 
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
@@ -3310,118 +3355,35 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     if (device->xe_fa_support) {
-        auto upper_power_of_2 = [&](uint32_t in) {
-            GGML_ASSERT(in != 0);
-            if (in <= 1) return 1u;
-            uint32_t ret = in - 1;
-            ret |= ret >> 1;
-            ret |= ret >> 2;
-            ret |= ret >> 4;
-            ret |= ret >> 8;
-            ret |= ret >> 16;
-            return ret + 1;
-            };
-
-        bool intel_gpu = device->vendor_id == VK_VENDOR_ID_INTEL;
-        uint32_t xe_native_sub_group_size = 16;
         uint32_t shmem_sz = (uint32_t)device->properties.limits.maxComputeSharedMemorySize;
-
-        if (device->architecture == INTEL_XE1) {
-            xe_native_sub_group_size = 8;
-        }
-
-        uint32_t sg_sz = intel_gpu ? xe_native_sub_group_size : 32;
-        std::vector<uint32_t> matrix_mnk;
-
-        switch (sg_sz) {
-        case 8:
-            matrix_mnk = { 8u, 8u, 16u };
-            break;
-        case 16:
-            matrix_mnk = { 8u, 16u, 16u };
-            break;
-        case 32:
-        default:
-            matrix_mnk = { 16u, 16u, 16u };
-            break;
-        }
+        vk_xe_fa_tuning_params xe_fa_params {};
 
         for (auto& it : device->pipeline_xe_fa_decode_dual_phases) {
-            const uint32_t split_p_chunk = 32;
-            const uint32_t p_mat_per_loop = split_p_chunk / matrix_mnk[0];
             auto pipeline_state = it.first;
             auto& pipelines = it.second;
-            uint32_t HSK = pipeline_state.HSK;
-            uint32_t HSV = pipeline_state.HSV;
-            uint32_t qk_ratio = pipeline_state.qk_ratio;
-            uint32_t pv_ratio = pipeline_state.pv_ratio;
-            uint32_t q_len = pipeline_state.decode_n;
-            uint32_t aligned_q_len = upper_power_of_2(q_len);
-            uint32_t group_sz_ph1 = std::min(std::max(aligned_q_len * sg_sz, 64u), 256u);
-            uint32_t out_per_wg_ph1 = std::min(q_len, 256u / sg_sz);
-            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 32, 1 }, { group_sz_ph1, qk_ratio, HSK, sg_sz, split_p_chunk, out_per_wg_ph1, p_mat_per_loop, matrix_mnk[0], matrix_mnk[1], shmem_sz }, 1, false, true, sg_sz);
-            const uint32_t out_dim_per_wg = intel_gpu ? (pv_ratio > 16 ? 8 : 16) : 16;
-            uint32_t ph2_flag = 0;
-            uint32_t aligned_pv_ratio = upper_power_of_2(pv_ratio);
-
-            // limiting the SLM usage within 48 KiB
-            uint32_t split_p_per_iter_ph2 = (pv_ratio <= 32) ? 256 : 128;
-            uint32_t split_p_per_warp = 16;
-            uint32_t group_sz_ph2 = (split_p_per_iter_ph2 / split_p_per_warp) * sg_sz;
-            uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_pv_ratio, 1u), q_len);
-
-            if (pipeline_state.unaligned_seq_len) {
-                ph2_flag |= 1 << 0;
-            }
-
-            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, { group_sz_ph2, pv_ratio, HSV, out_per_wg_ph2, sg_sz, split_p_per_iter_ph2, split_p_chunk, out_dim_per_wg, matrix_mnk[0], matrix_mnk[1], ph2_flag }, 1, false, true, sg_sz);
+            xe_fa_params = get_xe_fa_tuning_params(device.get(), pipeline_state, false);
+            std::vector<uint32_t> sc_ph1 = { xe_fa_params.workgroup_size[0], pipeline_state.qk_ratio, pipeline_state.HSK,
+                                             xe_fa_params.subgroup_size[0], xe_fa_params.decode_params.p_chunk_ph1,
+                                             xe_fa_params.decode_params.out_per_wg_ph1, xe_fa_params.decode_params.p_chunk_ph1 / xe_fa_params.tm,
+                                             xe_fa_params.tm, xe_fa_params.tn, shmem_sz };
+            std::vector<uint32_t> sc_ph2 = { xe_fa_params.workgroup_size[1], pipeline_state.pv_ratio, pipeline_state.HSV,
+                                             xe_fa_params.decode_params.out_row_per_wg_ph2, xe_fa_params.subgroup_size[1], xe_fa_params.decode_params.split_p_per_iter_ph2,
+                                             xe_fa_params.decode_params.p_chunk_ph1, xe_fa_params.decode_params.out_col_per_wg_ph2,
+                                             xe_fa_params.tm, xe_fa_params.tn, xe_fa_params.decode_params.pipeline_flag_ph2 };
+            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, xe_fa_params.decode_params.p_chunk_ph1, 1 }, sc_ph1, 1, false, true, xe_fa_params.subgroup_size[0]);
+            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, sc_ph2, 1, false, true, xe_fa_params.subgroup_size[0]);
         }
 
         for (auto& it : device->pipeline_xe_fa_prefill) {
             auto pipeline_state = it.first;
             auto& pipelines = it.second;
-            uint32_t sg_per_gw = (sg_sz == 8) ? 32 : 16;
-            uint32_t HSK = pipeline_state.HSK;
-            uint32_t HSV = pipeline_state.HSV;
-            uint32_t qk_ratio = pipeline_state.qk_ratio;
-            uint32_t pv_ratio = pipeline_state.pv_ratio;
-            GGML_ASSERT(HSV % matrix_mnk[0] == 0);
-            uint32_t group_sz = sg_per_gw * sg_sz;
-            uint32_t wg_row = 256;
-            uint32_t output_div = HSK > 256 ? 8 : HSK > 160 ? 4 : HSK > 64 ? 2 : 1;
-            uint32_t p_per_iter = intel_gpu ? (HSK > 256 ? 16 : 32) : 16;
-            uint32_t q_in_reg = HSK > 512 ? HSK - 384 : std::min(128u, HSK);
-            wg_row = wg_row / output_div;
-            uint32_t sg_col = HSV / matrix_mnk[0];
-            uint32_t acc_count = 1;
-            uint32_t pipeline_flag = 0;
-            uint32_t gqa_fold = (pipeline_state.multi_head_mask || qk_ratio != pv_ratio) ? 1 : 16;
-            uint32_t max_fold_rows = sg_sz <= 16 ? 16 : 8;
+            xe_fa_params = get_xe_fa_tuning_params(device.get(), pipeline_state, true);
 
-            while (gqa_fold > 1 && (qk_ratio % gqa_fold != 0 || gqa_fold * output_div > max_fold_rows)) {
-                gqa_fold = gqa_fold / 2;
-            }
-
-            if (pipeline_state.unaligned_seq_len) {
-                pipeline_flag |= 1 << 0;
-            }
-
-            if (pipeline_state.unaligned_q) {
-                pipeline_flag |= 1 << 1;
-            }
-
-            if (pipeline_state.partial_row_mask) {
-                pipeline_flag |= 1 << 2;
-            }
-
-            if (intel_gpu) {
-                pipeline_flag |= 1 << 3;
-            }
-
-            sg_col = (sg_col + output_div - 1) / output_div;
-            sg_col = sg_col * matrix_mnk[0];
-            acc_count = matrix_mnk[0] == 8 ? (sg_col % 16 == 0 ? 2 : 1) : 1;
-            ggml_vk_create_pipeline(device, pipelines, "xe_fa_prefill", fa_prefill_cm1_len, fa_prefill_cm1_data, "main", 6, sizeof(vk_xe_fa_push_constants), { gqa_fold, wg_row / gqa_fold, 1 }, { group_sz, wg_row, sg_col, HSK, HSV, qk_ratio, p_per_iter, matrix_mnk[0], matrix_mnk[1], q_in_reg, shmem_sz, acc_count, pipeline_flag, sg_sz, gqa_fold }, 1, false, true, sg_sz);
+            std::vector<uint32_t> sc = { xe_fa_params.workgroup_size[0], xe_fa_params.prefill_params.wg_row, xe_fa_params.prefill_params.sg_col,
+                                         pipeline_state.HSK, pipeline_state.HSV, pipeline_state.qk_ratio, xe_fa_params.prefill_params.p_per_iter,
+                                         xe_fa_params.tm, xe_fa_params.tn, xe_fa_params.prefill_params.q_in_reg, shmem_sz, xe_fa_params.prefill_params.acc_count,
+                                         xe_fa_params.prefill_params.pipeline_flag, xe_fa_params.subgroup_size[0], xe_fa_params.prefill_params.gqa_fold };
+            ggml_vk_create_pipeline(device, pipelines, "xe_fa_prefill", fa_prefill_cm1_len, fa_prefill_cm1_data, "main", 6, sizeof(vk_xe_fa_push_constants), { xe_fa_params.prefill_params.gqa_fold, xe_fa_params.prefill_params.wg_row / xe_fa_params.prefill_params.gqa_fold, 1 }, sc, 1, false, true, xe_fa_params.subgroup_size[0]);
         }
     }
 #endif
@@ -8456,7 +8418,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     };
     auto vk_dev = ctx->device.get();
     bool xe_fa_opt = false;
-    bool fa_copy_qstate = false;
     bool xe_fa_use_2phases = false;
     bool xe_fa_supported_platform = vk_dev->xe_fa_support && vk_dev->properties.deviceID != 0xFD80 && vk_dev->properties.deviceID != 0xFD81;
     bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && mask != nullptr && !use_sparse && max_bias == 0.0f && logit_softcap == 0.0f &&
@@ -8469,18 +8430,12 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     size_t size_q_staging = 0;
     size_t size_p = 0;
     size_t size_group_max = 0;
+    size_t size_decode_temp = 0;
     uint32_t pv_ratio = uint32_t(neq2 / nev2);
+    vk_xe_fa_tuning_params xe_fa_params {};
 
     {
         std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
-        auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
-        auto it = pipelines.find(fa_pipeline_state);
-        if (it != pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
-        }
-
         if (xe_fa_opt) {
             if (neq1 > 8 || pv_ratio > 64) {
                 uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
@@ -8490,8 +8445,8 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                 prefill_state.unaligned_q = head_stride_q % 8 != 0 || q_stride % 8 != 0 || batch_stride_q % 8 != 0;
                 prefill_state.partial_row_mask = neq1 > nem1;
                 prefill_state.multi_head_mask = nem2 > 1;
-                size_t shmem_sz = get_xe_fa_shmem_size(vk_dev, prefill_state, true);
-                if (shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize) {
+                xe_fa_params = get_xe_fa_tuning_params(vk_dev, prefill_state, true);
+                if (xe_fa_params.shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize) {
                     auto& xe_fa_pipelines = ctx->device->pipeline_xe_fa_prefill;
                     auto it = xe_fa_pipelines.find(prefill_state);
                     if (it != xe_fa_pipelines.end()) {
@@ -8504,13 +8459,20 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                 }
             } else {
                 vk_xe_fa_pipeline_state decode_state = { (uint32_t)neq0, (uint32_t)nev0, qk_ratio, pv_ratio, (uint32_t)neq1, false, false, false, false };
-                const uint32_t split_p_size = 32;
-                const size_t max_dim = (nek1 + split_p_size - 1) / split_p_size;
+                decode_state.unaligned_seq_len = nek1 % 256 != 0;
+                xe_fa_params = get_xe_fa_tuning_params(vk_dev, decode_state, false);
+                const uint32_t split_p_size = xe_fa_params.decode_params.p_chunk_ph1;
+                const size_t max_dim = std::max<size_t>(CEIL_DIV(nek1, split_p_size), 1);
                 const size_t p_dim = max_dim * split_p_size;
                 const size_t q_head_padding = 16;
-                decode_state.unaligned_seq_len = nek1 % 256 != 0;
-                size_t shmem_sz = get_xe_fa_shmem_size(vk_dev, decode_state, false);
-                if (shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize) {
+                size_q_staging = neq0 * neq1 * (neq2 * neq3 + q_head_padding) * sizeof(ggml_fp16_t);
+                size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
+                size_group_max = neq1 * neq2 * max_dim * neq3 * sizeof(float);
+                size_decode_temp = size_q_staging + size_p + size_group_max;
+                uint32_t ph1_wg1 = CEIL_DIV(nek1, xe_fa_params.decode_params.p_chunk_ph1);
+                if (xe_fa_params.shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize &&
+                    ph1_wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
+                    size_decode_temp <= ctx->device->properties.limits.maxStorageBufferRange) {
                     auto& pipelines = ctx->device->pipeline_xe_fa_decode_dual_phases;
                     auto it = pipelines.find(decode_state);
                     if (it != pipelines.end()) {
@@ -8519,31 +8481,29 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                         pipelines[decode_state] = xe_fa_pipeline_dual_phases =
                             std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
                     }
-
-                    size_q_staging = neq0 * neq1 * (neq2 * neq3 + q_head_padding) * sizeof(ggml_fp16_t);
-                    size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
-                    size_group_max = neq1 * neq2 * max_dim * neq3 * sizeof(float);
-                    size_t temp_size = size_q_staging + size_p + size_group_max;
-                    if (ctx->prealloc_size_x < temp_size) {
-                        ctx->prealloc_size_x = temp_size;
-                        ggml_vk_preallocate_buffers(ctx, subctx);
-                    }
-
-                    if (ctx->prealloc_x_need_sync) {
-                        ggml_vk_sync_buffers(ctx, subctx);
-                    }
                     xe_fa_use_2phases = true;
-                    fa_copy_qstate = true;
                 } else {
                     xe_fa_opt = false;
                 }
             }
         }
+
+        if (!xe_fa_opt) {
+            auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
+            auto it = pipelines.find(fa_pipeline_state);
+            if (it != pipelines.end()) {
+                pipeline = it->second;
+            } else {
+                pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+            }
+        }
     }
 
-    assert(pipeline);
-    // Compile early to initialize wg_denoms.
-    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    if (!xe_fa_opt) {
+        assert(pipeline);
+        // Compile early to initialize wg_denoms.
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    }
 
     uint32_t split_kv = KV;
     uint32_t split_k = 1;
@@ -8557,7 +8517,9 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const uint32_t Br = fa_pipeline_state.Br;
     const uint32_t Bc = fa_pipeline_state.Bc;
 
-    GGML_ASSERT(Br == pipeline->wg_denoms[0]);
+    if (!xe_fa_opt) {
+        GGML_ASSERT(Br == pipeline->wg_denoms[0]);
+    }
     const uint32_t Tr = CEIL_DIV(N, Br);
 
     // Try to use split_k when KV is large enough to be worth the overhead.
@@ -8589,8 +8551,20 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         split_k = CEIL_DIV(KV, split_kv);
     }
 
-    if (xe_fa_opt == true) {
+    if (xe_fa_opt) {
+        // Bypass mask_opt and split_k buffer grow when they are not in use
         use_mask_opt = false;
+        split_k = 1;
+        if (xe_fa_use_2phases) {
+            if (ctx->prealloc_size_x < size_decode_temp) {
+                ctx->prealloc_size_x = size_decode_temp;
+                ggml_vk_preallocate_buffers(ctx, subctx);
+            }
+
+            if (ctx->prealloc_x_need_sync) {
+                ggml_vk_sync_buffers(ctx, subctx);
+            }
+        }
     }
 
     // Reserve space for split_k temporaries. For each split x batch, we need to store the O matrix (D x ne1)
@@ -8752,18 +8726,6 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                               gqa_ratio, split_kv, split_k };
 
     if (xe_fa_opt) {
-        auto upper_power_of_2 = [&](uint32_t in) {
-            GGML_ASSERT(in != 0);
-            if (in <= 1) return 1u;
-            uint32_t ret = in - 1;
-            ret |= ret >> 1;
-            ret |= ret >> 2;
-            ret |= ret >> 4;
-            ret |= ret >> 8;
-            ret |= ret >> 16;
-            return ret + 1;
-        };
-
         uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
         uint32_t head_stride_k = uint32_t(nbk2 / ggml_type_size(k->type));
         uint32_t head_stride_v = uint32_t(nbv2 / ggml_type_size(v->type));
@@ -8780,33 +8742,24 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                              (sinks != nullptr) ? (1u << 16) : 0u, scale };
 
         if (xe_fa_use_2phases) {
-            bool intel_gpu = vk_dev->vendor_id == VK_VENDOR_ID_INTEL;
             auto to_fp16_vk_0 = ggml_vk_get_cpy_pipeline(ctx, q, nullptr, GGML_TYPE_F16);
-            const uint32_t out_dim_per_wg = intel_gpu ? (pv_ratio > 16 ? 8 : 16) : 16;
             size_t temp_buf_offset = 0;
-            vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset) : q_buf;
-            temp_buf_offset += fa_copy_qstate ? size_q_staging : 0;
+            vk_subbuffer q_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
+            temp_buf_offset += size_q_staging;
             vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
             temp_buf_offset += size_p;
             vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
             temp_buf_offset += size_group_max;
-            uint32_t sg_sz = intel_gpu ? (vk_dev->architecture == INTEL_XE1 ? 8 : 16) : 32;
-            uint32_t aligned_pv_ratio = upper_power_of_2(pv_ratio);
-            uint32_t out_per_wg_ph1 = std::min(256u / sg_sz, (uint32_t)neq1);
-            uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_pv_ratio, 1u), (uint32_t)neq1);
-            uint32_t ph1_wg = ((neq1 + out_per_wg_ph1 - 1) / out_per_wg_ph1) * nek2;
-            uint32_t ph2_wg = ((neq1 + out_per_wg_ph2 - 1) / out_per_wg_ph2) * ne0 / out_dim_per_wg;
+            uint32_t ph1_wg = CEIL_DIV(neq1, xe_fa_params.decode_params.out_per_wg_ph1) * nek2;
+            uint32_t ph2_wg = CEIL_DIV(neq1, xe_fa_params.decode_params.out_row_per_wg_ph2) * ne0 / xe_fa_params.decode_params.out_col_per_wg_ph2;
 
-            if (fa_copy_qstate) {
-                ggml_vk_sync_buffers(ctx, subctx);
-                ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
-                ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_0, q, q_buf, q_temp_buf);
-                pc_xe_fa.nbq1 = uint32_t(neq0);
-                pc_xe_fa.nbq2 = uint32_t(neq0 * neq1);
-                pc_xe_fa.nbq3 = uint32_t(neq0 * neq1 * neq2);
-            }
+            pc_xe_fa.nbq1 = uint32_t(neq0);
+            pc_xe_fa.nbq2 = uint32_t(neq0 * neq1);
+            pc_xe_fa.nbq3 = uint32_t(neq0 * neq1 * neq2);
 
-            ggml_vk_sync_buffers(ctx, subctx);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
+            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_0, q, q_buf, q_temp_buf);
+
             ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
                 { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
