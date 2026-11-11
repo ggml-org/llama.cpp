@@ -797,7 +797,7 @@ public:
     struct chunk {
         int64_t       t0;
         int64_t       n;
-        ggml_tensor * pool_mask; // nullptr for an empty chunk without the pool_mask input
+        ggml_tensor * pool_mask;
         ggml_tensor * tail_idxs;
 
         // the attention inputs of the chunk, made by the first QSA layer: each view of a host input is a separate upload
@@ -830,8 +830,8 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
     std::vector<ggml_tensor *> pool_masks;
     if (cparams.n_chunk > 0 && chunks.size() > 1 && chunks[1].second > 0) {
         for (const auto & qc : chunks) {
-            pool_masks.push_back(qc.second > 0 ? mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_chunk, qc.first, qc.second) : nullptr);
-            if (qc.second > 0 && pool_masks.back() == nullptr) {
+            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_chunk, qc.first, qc.second));
+            if (pool_masks.back() == nullptr) {
                 LLAMA_LOG_DEBUG("%s: the pool mask of this ubatch is not a staircase, the pool_mask input has %u tokens\n", __func__, ubatch.n_tokens);
                 pool_masks.clear();
                 break;
@@ -1186,15 +1186,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         return cur;
     };
 
-    // the number of chunks that are not empty
-    int64_t n_chunked = 0;
-    if (qsa) {
-        for (const auto & chunk : inp_kpool->chunks) {
-            n_chunked += chunk.n > 0;
-        }
-    }
-
-    if (n_chunked <= 1) {
+    // every ubatch has the chunks of the reserve, empty ones included, so that the graph keeps its shape
+    if (!qsa || inp_kpool->chunks.size() == 1) {
         return build_block(cur, inp_pos, n_tokens, 0);
     }
 
@@ -1204,9 +1197,6 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     ggml_tensor * out = build_chunk_dst(cur);
     for (size_t ic = 0; ic < inp_kpool->chunks.size(); ++ic) {
         auto & chunk = inp_kpool->chunks[ic];
-        if (chunk.n == 0) {
-            continue;
-        }
 
         if (chunk.pos == nullptr) {
             ggml_tensor * k_idxs = inp->get_k_idxs();
