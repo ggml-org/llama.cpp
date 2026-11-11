@@ -495,6 +495,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_CASE( 64, type_K_case, type_V_case)       \
     FATTN_VEC_CASE(128, type_K_case, type_V_case)       \
     FATTN_VEC_CASE(256, type_K_case, type_V_case)       \
+    FATTN_VEC_CASE(512, type_K_case, type_V_case)       \
 
 typedef void (* fattn_vec_case_t)(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
@@ -710,7 +711,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
-    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
@@ -813,7 +814,7 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_ten
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
-    if (Q->ne[0] != 256 || V->ne[0] != 256) {
+    if ((Q->ne[0] != 256 && Q->ne[0] != 512) || V->ne[0] != Q->ne[0]) {
         return false;
     }
 
@@ -825,14 +826,23 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_ten
         return false; // switch_ncols2 doesn't pick ncols2 == 8
     }
 
-    if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<256, 256, 8>(cc, dst)) {
-        return false; // the sparse kernel is selected instead, it has no fused dequant path
+    // The DKQ=512 fused route exists only in the single-stage pass (chunk-granular staging), the DKQ=256 one
+    // only in the multi-stage pass; the nstages requirement lives in fused_q_supported.
+    if (Q->ne[0] == 256) {
+        if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<256, 256, 8>(cc, dst)) {
+            return false; // the sparse kernel is selected instead, it has no fused dequant path
+        }
+        const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<256>(cc, Q->ne[1], 8);
+        const int nstages = ggml_cuda_fattn_mma_get_nstages(256, 256, ncols1, 8, cc);
+        return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, 256, 256, 8, nstages);
+    } else {
+        if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<512, 512, 8>(cc, dst)) {
+            return false; // the sparse kernel is selected instead, it has no fused dequant path
+        }
+        const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<512>(cc, Q->ne[1], 8);
+        const int nstages = ggml_cuda_fattn_mma_get_nstages(512, 512, ncols1, 8, cc);
+        return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, 512, 512, 8, nstages);
     }
-
-    const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<256>(cc, Q->ne[1], 8);
-    const int nstages = ggml_cuda_fattn_mma_get_nstages(256, 256, ncols1, 8, cc);
-
-    return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, 256, 256, 8, nstages);
 }
 
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
