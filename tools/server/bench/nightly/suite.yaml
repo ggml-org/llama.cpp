@@ -3,9 +3,10 @@
 
 build:
   repo: ggml-org/llama.cpp
+  # shell patterns: the release job moves to new CUDA minor versions (13.4 -> 13.5) without notice
   assets:
-    - llama-{tag}-bin-ubuntu-cuda-13.4-arm64.tar.gz
-    - cudart-llama-{tag}-bin-ubuntu-cuda-13.4-arm64.tar.gz
+    - llama-{tag}-bin-ubuntu-cuda-*-arm64.tar.gz
+    - cudart-llama-{tag}-bin-ubuntu-cuda-*-arm64.tar.gz
   keep: 3
 
 server:

@@ -4,7 +4,7 @@ One unattended run per night on a single DGX Spark (GB10, 128 GB unified LPDDR5X
 
 ## Build under test
 
-- The newest [llama.cpp pre-release](https://github.com/ggml-org/llama.cpp/releases) that has both `llama-<tag>-bin-ubuntu-cuda-13.4-arm64.tar.gz` and `cudart-llama-<tag>-bin-ubuntu-cuda-13.4-arm64.tar.gz`. Both tarballs are unpacked into one folder; the last 3 builds are kept.
+- The newest [llama.cpp pre-release](https://github.com/ggml-org/llama.cpp/releases) that has both `llama-<tag>-bin-ubuntu-cuda-13.x-arm64.tar.gz` and `cudart-llama-<tag>-bin-ubuntu-cuda-13.x-arm64.tar.gz` (any CUDA minor version; recorded per night). Both tarballs are unpacked into one folder; the last 3 builds are kept.
 - A tag can be pinned for a manual run. The summary links the commit range since the previous night.
 
 ## Models

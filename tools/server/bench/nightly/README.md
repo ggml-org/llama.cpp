@@ -1,6 +1,6 @@
 # Nightly perf benchmark on DGX Spark
 
-Runs the newest llama.cpp pre-release build (`llama-<tag>-bin-ubuntu-cuda-13.4-arm64`) on a DGX Spark and records one JSON manifest per night. Driven by [suite.yaml](suite.yaml) and the [bench-nightly-spark](../../../../.github/workflows/bench-nightly-spark.yml) workflow. Once a week, [weekly.yaml](weekly.yaml) and the [bench-weekly-vllm-spark](../../../../.github/workflows/bench-weekly-vllm-spark.yml) workflow run the same serving and agentic suites against vLLM (see [Weekly vLLM comparison](#weekly-vllm-comparison)).
+Runs the newest llama.cpp pre-release build (`llama-<tag>-bin-ubuntu-cuda-13.x-arm64`) on a DGX Spark and records one JSON manifest per night. Driven by [suite.yaml](suite.yaml) and the [bench-nightly-spark](../../../../.github/workflows/bench-nightly-spark.yml) workflow. Once a week, [weekly.yaml](weekly.yaml) and the [bench-weekly-vllm-spark](../../../../.github/workflows/bench-weekly-vllm-spark.yml) workflow run the same serving and agentic suites against vLLM (see [Weekly vLLM comparison](#weekly-vllm-comparison)).
 
 | ID | Model | Suites |
 | --- | --- | --- |

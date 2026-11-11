@@ -139,13 +139,22 @@ def github_get(url: str) -> Any:
     return resp.json()
 
 
+def match_assets(rel: dict[str, Any], assets: list[str]) -> list[str] | None:
+    # the asset name matching each pattern, or None if one is missing
+    names = sorted(a["name"] for a in rel.get("assets", []))
+    found = []
+    for pattern in assets:
+        hits = fnmatch.filter(names, pattern.format(tag=rel["tag_name"]))
+        if not hits:
+            return None
+        found.append(hits[-1])
+    return found
+
+
 def pick_release(releases: list[dict[str, Any]], assets: list[str]) -> dict[str, Any]:
     # newest first; the release job uploads assets over time, so skip tags that are still incomplete
     for rel in releases:
-        if rel.get("draft"):
-            continue
-        names = {a["name"] for a in rel.get("assets", [])}
-        if all(a.format(tag=rel["tag_name"]) in names for a in assets):
+        if not rel.get("draft") and match_assets(rel, assets):
             return rel
     raise BenchError(f"no release has all of {assets}")
 
@@ -169,11 +178,13 @@ def fetch_build(cfg: dict[str, Any], home: Path, tag: str | None) -> dict[str, A
         rel = pick_release(github_get(f"{api}?per_page=20"), bcfg["assets"])
     tag = str(rel["tag_name"])
     bin_dir = home / "builds" / tag
+    assets = match_assets(rel, bcfg["assets"]) or []
     info = {
         "tag": tag,
         "commit": rel.get("target_commitish", ""),
         "published_at": rel.get("published_at", ""),
         "url": rel.get("html_url", ""),
+        "assets": assets,
         "bin_dir": str(bin_dir),
     }
     if not all((bin_dir / b).exists() for b in BINARIES):
@@ -181,8 +192,7 @@ def fetch_build(cfg: dict[str, Any], home: Path, tag: str | None) -> dict[str, A
         shutil.rmtree(bin_dir, ignore_errors=True)
         bin_dir.mkdir(parents=True)
         urls = {a["name"]: a["browser_download_url"] for a in rel["assets"]}
-        for pattern in bcfg["assets"]:
-            name = pattern.format(tag=tag)
+        for name in assets:
             archive = home / "builds" / name
             download(urls[name], archive)
             # both tarballs have one top-level dir; flatten them together so $ORIGIN rpath finds cudart
