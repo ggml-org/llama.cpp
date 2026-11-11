@@ -4798,7 +4798,6 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
     const int n_past     = ((const int32_t *) op->op_params)[0];
     const int n_dims     = ((const int32_t *) op->op_params)[1];
   //const int mode       = ((const int32_t *) op->op_params)[2];
-    // skip 3, n_ctx, used in GLM RoPE, unimplemented in metal
     const int n_ctx_orig = ((const int32_t *) op->op_params)[4];
 
     float freq_base;
@@ -4859,6 +4858,7 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
         /* sect_3      =*/ sect_3,
         /* src2        =*/ op->src[2] != nullptr,
         /* inplace     =*/ inplace,
+        /* truncate    =*/ ggml_rope_get_truncate(op),
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_rope(lib, op);

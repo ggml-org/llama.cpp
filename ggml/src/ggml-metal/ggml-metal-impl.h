@@ -372,6 +372,7 @@ typedef struct {
     int32_t  sect_3;
     bool     src2;
     bool     inplace;
+    bool     truncate;
 } ggml_metal_kargs_rope;
 
 typedef struct {
