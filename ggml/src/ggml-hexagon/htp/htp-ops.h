@@ -21,6 +21,8 @@ enum htp_data_type {
     HTP_TYPE_F16    = 1,
     HTP_TYPE_Q4_0   = 2,
     HTP_TYPE_Q4_1   = 3,
+    HTP_TYPE_Q5_0   = 6,
+    HTP_TYPE_Q5_1   = 7,
     HTP_TYPE_Q8_0   = 8,
     HTP_TYPE_Q2_K   = 10,
     HTP_TYPE_Q3_K   = 11,

@@ -10,6 +10,7 @@
 static inline bool htp_is_tiled_weight_type(enum ggml_type type) {
     return type == GGML_TYPE_Q1_0  || type == GGML_TYPE_Q2_0   ||
            type == GGML_TYPE_Q4_0  || type == GGML_TYPE_Q4_1   ||
+           type == GGML_TYPE_Q5_0  || type == GGML_TYPE_Q5_1   ||
            type == GGML_TYPE_MXFP4 || type == GGML_TYPE_IQ4_NL ||
            type == GGML_TYPE_Q8_0  || type == GGML_TYPE_Q6_K   ||
            type == GGML_TYPE_Q2_K  || type == GGML_TYPE_Q3_K   ||
@@ -34,7 +35,7 @@ static inline bool htp_is_tiled_weight_tensor(const struct ggml_tensor * t) {
     return true;
 }
 
-// Size of one tiled row in the DSP tiled layout. The Q3_K..Q6_K tiles store uncompressed scales/mins,
+// Size of one tiled row in the DSP tiled layout. The Q5_0, Q5_1 and Q3_K..Q6_K tiles store uncompressed scales/mins,
 // so they are larger than the ggml blocks. For the other tiled types (Q2_K included) the tile has the same size.
 static inline size_t htp_tiled_row_size(enum ggml_type type, int64_t ne0) {
     if (type == GGML_TYPE_F16 || type == GGML_TYPE_F32 || type == GGML_TYPE_BF16) {
@@ -51,6 +52,12 @@ static inline size_t htp_tiled_row_size(enum ggml_type type, int64_t ne0) {
     }
     if (type == GGML_TYPE_Q5_K) {
         return (size_t) (ne0 / 32) * (HTP_TENSOR_TILE_SIZE_Q5_K / 32);
+    }
+    if (type == GGML_TYPE_Q5_0) {
+        return (size_t) (ne0 / 32) * (HTP_TENSOR_TILE_SIZE_Q5_0 / 32);
+    }
+    if (type == GGML_TYPE_Q5_1) {
+        return (size_t) (ne0 / 32) * (HTP_TENSOR_TILE_SIZE_Q5_1 / 32);
     }
     if (type == GGML_TYPE_Q3_K) {
         return (size_t) (ne0 / 32) * (HTP_TENSOR_TILE_SIZE_Q3_K / 32);
