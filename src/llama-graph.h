@@ -342,6 +342,22 @@ struct llm_graph_chunk {
 // empty if n_chunk is 0 or not below n_ubatch
 std::vector<llm_graph_chunk> llm_graph_get_chunks(uint32_t n_chunk, uint32_t n_ubatch, uint32_t n_tokens);
 
+// layer-major prefill: the chunks of a ubatch of n_tokens tokens, one decision for the graph, its reserve and llama_context::decode
+struct llm_graph_chunk_plan {
+    llm_graph_chunk_plan() = default;
+    llm_graph_chunk_plan(const llama_model & model, const llama_cparams & cparams, uint32_t n_tokens);
+
+    // the chunks of cparams.n_chunk tokens of the attention block and the expert FFN, empty if the ubatch has at most n_chunk tokens
+    // each of the two shapes has its own reserve graph (see llama_context::process_ubatch)
+    std::vector<llm_graph_chunk> chunks;
+
+    // the KQ masks have one mask per chunk (see llm_graph_input_attn_kv_iswa::chunks): the arch attends per chunk
+    // (llama_model::can_chunk_attn), with flash attention, a causal mask, one sequence and one position per token
+    // the mask of a chunk is a view of the staircase mask if the cache has one: the cells of the ubatch must then be a staircase
+    // (see llama_memory_context_i::can_chunk)
+    bool attn = false;
+};
+
 // KQ mask and the optional per-sequence cell rows of a unified cache (see ggml_flash_attn_ext_rows)
 // the mask has two shapes depending on whether `rows` is used:
 //   rows != nullptr: [n_kv_rows, n_batch/n_slices, 1, n_slices]
@@ -354,11 +370,7 @@ struct llm_attn_mask {
     // fill every token of a sequence with the mask row of its first token (dspark draft blocks)
     bool block_uniform = false;
 
-    // layer-major prefill: the masks of the token chunks of the ubatch (llm_graph_context::chunks), empty if the ubatch is not chunked
-    // raw and rows are then not used: a chunk has its own inputs, or its raw is a view of the staircase mask (see llama_kv_cache::get_staircase)
-    std::vector<llm_attn_mask> chunks;
-
-    // the tokens of a chunk mask
+    // layer-major prefill: the tokens of the mask of a chunk, see llm_graph_input_attn_kv_iswa::chunks
     llm_graph_chunk tokens = { 0, 0 };
 };
 
@@ -566,6 +578,11 @@ public:
 
     std::vector<ggml_tensor *> self_k_rot_swa;
     std::vector<ggml_tensor *> self_v_rot_swa;
+
+    // layer-major prefill: the inputs of each token chunk of the ubatch, empty if llm_graph_chunk_plan::attn is false
+    // the views of the idxs of the tokens of the chunk and the masks of the chunk; set_input fills the masks
+    // the masks of the ubatch are then not used
+    std::vector<llm_graph_input_attn_kv_iswa> chunks;
 
     const llama_hparams hparams;
     const llama_cparams cparams;
@@ -813,6 +830,8 @@ struct llm_graph_params {
     llama_cparams cparams;
 
     llama_ubatch ubatch; // note: intentionally make a copy
+
+    llm_graph_chunk_plan chunk_plan;
 
     llm_graph_type gtype;
 
@@ -1087,9 +1106,8 @@ struct llm_graph_context {
     const int64_t n_outputs;
     const int32_t n_ctx_orig; // yarn
 
-    // layer-major prefill: the token chunks of the attention block and the expert FFN, empty if the ubatch is not chunked
-    // a ubatch of more than cparams.n_chunk tokens has chunks, a smaller one has its own reserve (see llama_context::process_ubatch)
-    const std::vector<llm_graph_chunk> chunks;
+    // layer-major prefill: the token chunks of the ubatch
+    const llm_graph_chunk_plan chunk_plan;
 
     // true while build_moe_ffn builds the experts of one chunk
     mutable bool moe_chunk = false;
@@ -1336,6 +1354,10 @@ struct llm_graph_context {
     using llm_chunk_fn = std::function<ggml_tensor * (ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk)>;
     ggml_tensor * build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn, ggml_backend_t backend = nullptr) const;
 
+    // the rows of the tokens of a chunk, of a tensor with one row of ne[0] values per token
+    // n_per_token > 0: of a 1-d tensor with n_per_token values per token (f.ex. the cell indices of the tokens), the view is 1-d too
+    ggml_tensor * build_view_rows(ggml_tensor * t, const llm_graph_chunk & chunk, int64_t n_per_token = 0) const;
+
     // the backend of the device of layer il, nullptr if the scheduler has none
     ggml_backend_t backend_layer(int il) const;
 
@@ -1423,12 +1445,8 @@ struct llm_graph_context {
             ggml_tensor * top_k,   // [n_top, n_tokens]
                     int   il) const;
 
-    // with_chunks: the masks can have token chunks (see llm_attn_mask::chunks), the graph must then attend with build_attn_inp_chunks
-    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa(bool with_chunks = false) const;
-
-    // layer-major prefill: the attention inputs of each token chunk of the ubatch, in token order
-    // empty if the masks of inp have no chunks
-    std::vector<llm_graph_input_attn_kv_iswa> build_attn_inp_chunks(const llm_graph_input_attn_kv_iswa * inp) const;
+    // with llm_graph_chunk_plan::attn, the graph must attend with the inputs of the chunks (llm_graph_input_attn_kv_iswa::chunks)
+    llm_graph_input_attn_kv_iswa * build_attn_inp_kv_iswa() const;
 
     llm_graph_input_dsv4 * build_inp_dsv4() const;
 

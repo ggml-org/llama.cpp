@@ -996,6 +996,9 @@ struct llama_model {
     // same, for the keys of the lightning indexer
     virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;
 
+    // layer-major prefill: true if the graph attends per token chunk with the KQ masks of the chunks (see llm_graph_chunk_plan::attn)
+    virtual bool can_chunk_attn() const { return false; }
+
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
 

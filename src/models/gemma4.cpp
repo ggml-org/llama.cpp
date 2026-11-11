@@ -151,6 +151,10 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const ll
     return std::make_unique<graph>(params);
 }
 
+bool llama_model_gemma4::can_chunk_attn() const {
+    return !(hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < (int32_t) hparams.n_layer());
+}
+
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
 static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
@@ -178,17 +182,13 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
     // inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
-    // the pruned rows of the KV-shared layers read the masks directly
-    const bool has_kv_shared = hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer;
-
     // TODO: is causal == true correct? might need some changes
-    auto * inp_attn = build_attn_inp_kv_iswa(!has_kv_shared);
-    auto inp_attn_chunks = build_attn_inp_chunks(inp_attn);
+    auto * inp_attn = build_attn_inp_kv_iswa();
 
     // the positions of the chunks, once per graph: each view of a host input is a separate upload
     std::vector<ggml_tensor *> inp_pos_chunks;
-    for (size_t ic = 0; ic < inp_attn_chunks.size(); ++ic) {
-        inp_pos_chunks.push_back(build_inp_pos_chunk(inp_pos, chunks[ic]));
+    for (size_t ic = 0; ic < inp_attn->chunks.size(); ++ic) {
+        inp_pos_chunks.push_back(build_inp_pos_chunk(inp_pos, chunk_plan.chunks[ic]));
     }
 
     auto inp_attn_full  = *inp_attn;
@@ -239,12 +239,12 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
 
         res->t_layer_inp[il] = inpL;
 
-        if (inp_attn_chunks.empty()) {
+        if (inp_attn->chunks.empty()) {
             cur = build_layer_attn(inp_attn, inpL, inp_pos, n_rows, n_tokens, il);
         } else {
             // layer-major prefill: the attention block of each token chunk is computed apart
-            cur = build_chunked(inpL, chunks, [&](ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk) {
-                return build_layer_attn(&inp_attn_chunks[ic], rows, inp_pos_chunks[ic], chunk.n, chunk.n, il);
+            cur = build_chunked(inpL, chunk_plan.chunks, [&](ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk) {
+                return build_layer_attn(&inp_attn->chunks[ic], rows, inp_pos_chunks[ic], chunk.n, chunk.n, il);
             });
         }
 

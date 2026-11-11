@@ -721,11 +721,6 @@ static int64_t qwen4exp_qsa_chunk_n() {
     return env ? std::max<int64_t>(0, atoll(env)) : 2048;
 }
 
-// layer-major prefill chunks the context only if LLAMA_LAYER_MAJOR is below n_ubatch, else the QSA chunks apply
-static bool qwen4exp_layer_major(const llama_cparams & cparams) {
-    return cparams.n_chunk > 0 && cparams.n_ubatch > cparams.n_chunk;
-}
-
 // the query chunks of the QSA: the selection mask of a chunk is [n_kv, n], so split large ubatches
 // the mask streams are not split: a split cache with several sequences keeps one chunk, as its reserve does
 // layer-major prefill (LLAMA_LAYER_MAJOR) has one chunk list for the attention block and the expert FFN, the chunks of the graph
@@ -736,17 +731,12 @@ static std::vector<llm_graph_chunk> qwen4exp_qsa_chunks(const llama_cparams & cp
 
     // every ubatch has the chunk count of the reserve, so the graph keeps the planned shape
     // the chunks past the last token are empty, and the backends skip empty nodes
-    const auto res = qwen4exp_layer_major(cparams) ? chunks : llm_graph_get_chunks(qwen4exp_qsa_chunk_n(), cparams.n_ubatch, n_tokens);
+    const auto res = cparams.n_chunk > 0 ? chunks : llm_graph_get_chunks(qwen4exp_qsa_chunk_n(), cparams.n_ubatch, n_tokens);
     if (res.empty()) {
         return { { 0, n_tokens } };
     }
 
     return res;
-}
-
-// rows [t0, t0 + n) of a tensor with one row per token
-static ggml_tensor * qwen4exp_view_rows(ggml_context * ctx, ggml_tensor * t, int64_t t0, int64_t n) {
-    return ggml_view_2d(ctx, t, t->ne[0], n, t->nb[1], t0*t->nb[1]);
 }
 
 // QSA k-pool inputs, shared by the QSA layers: blocks of compress_ratio cells in sequence order, see llama_memory_hybrid_idx
@@ -797,10 +787,9 @@ public:
     ggml_tensor * new_pool_rep  = nullptr; // I64 [n_new]          cell to write each new pooled key into
     ggml_tensor * new_pool_pos  = nullptr; // I32 [4*n_new]        M-RoPE position of each new block's first member
 
-    // the query tokens [t0, t0 + n) with their rows of pool_mask and tail_idxs
+    // the query chunks of the QSA, and the rows of pool_mask and tail_idxs of each chunk
+    std::vector<llm_graph_chunk> tokens;
     struct chunk {
-        int64_t       t0;
-        int64_t       n;
         ggml_tensor * pool_mask;
         ggml_tensor * tail_idxs;
 
@@ -810,7 +799,6 @@ public:
         ggml_tensor * pos    = nullptr; // I32 [n*n_pos_per_embd]
     };
     std::vector<chunk> chunks;
-    std::vector<llm_graph_chunk> tokens; // the tokens of the chunks
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t kpool;
@@ -828,15 +816,15 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     auto inp = std::make_unique<llm_graph_input_kpool>(mctx_hyb, kpool);
 
-    inp->tokens = qwen4exp_qsa_chunks(cparams, chunks, n_tokens);
+    inp->tokens = qwen4exp_qsa_chunks(cparams, chunk_plan.chunks, n_tokens);
 
     const auto & qsa_chunks = inp->tokens;
 
     // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the cache has them
     // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
-    // the context decides it, not the cells of the ubatch, so that the graph keeps the shape of the reserve
+    // the pool mask of one sequence is a staircase whatever its cells, so that the graph keeps the shape of the reserve
     std::vector<ggml_tensor *> pool_masks;
-    if (qwen4exp_layer_major(cparams) && qsa_chunks.size() > 1 && cparams.n_seq_max == 1) {
+    if (!chunk_plan.chunks.empty() && cparams.n_seq_max == 1) {
         for (const auto & qc : qsa_chunks) {
             pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_ubatch, cparams.n_chunk, qc.t0, qc.n));
             if (pool_masks.back() == nullptr) {
@@ -882,9 +870,7 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     for (size_t ic = 0; ic < qsa_chunks.size(); ++ic) {
         const auto & qc = qsa_chunks[ic];
-        inp->chunks.push_back({ qc.t0, qc.n,
-                inp->pool_mask ? qwen4exp_view_rows(ctx0, inp->pool_mask, qc.t0, qc.n) : pool_masks[ic],
-                qwen4exp_view_rows(ctx0, inp->tail_idxs, qc.t0, qc.n) });
+        inp->chunks.push_back({ inp->pool_mask ? build_view_rows(inp->pool_mask, qc) : pool_masks[ic], build_view_rows(inp->tail_idxs, qc) });
     }
 
     return (llm_graph_input_kpool *) res->add_input(std::move(inp));
@@ -901,10 +887,13 @@ void llama_model_qwen4exp::graph::build_inp_kpool_chunks(llm_graph_input_kpool *
     // a transposed V cache has one index per value of a token
     const int64_t n_v = v_idxs->ne[0]/n_tokens;
 
-    for (auto & chunk : inp_kpool->chunks) {
-        chunk.k_idxs = ggml_view_1d(ctx0, k_idxs, chunk.n,     chunk.t0*k_idxs->nb[0]);
-        chunk.v_idxs = ggml_view_1d(ctx0, v_idxs, chunk.n*n_v, chunk.t0*n_v*v_idxs->nb[0]);
-        chunk.pos    = build_inp_pos_chunk(inp_pos, { chunk.t0, chunk.n });
+    for (size_t ic = 0; ic < inp_kpool->chunks.size(); ++ic) {
+        auto       & chunk  = inp_kpool->chunks[ic];
+        const auto & tokens = inp_kpool->tokens[ic];
+
+        chunk.k_idxs = build_view_rows(k_idxs, tokens, 1);
+        chunk.v_idxs = build_view_rows(v_idxs, tokens, n_v);
+        chunk.pos    = build_inp_pos_chunk(inp_pos, tokens);
     }
 }
 
@@ -976,15 +965,16 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
         const qsa_idx &         idx,
         size_t                  ic,
         int                     il) {
-    const auto & chunk = inp_kpool->chunks[ic];
+    const auto & chunk  = inp_kpool->chunks[ic];
+    const auto & tokens = inp_kpool->tokens[ic];
 
-    const int64_t n_tokens = chunk.n;
+    const int64_t n_tokens = tokens.n;
     const int64_t idx_dim  = hparams.indexer_head_size;
     const int64_t n_idx_h  = hparams.indexer_n_head;
     const int64_t kpool    = inp_kpool->kpool;
     const int64_t n_pool   = inp_kpool->pool_cells->ne[0];
 
-    ggml_tensor * q = ggml_view_3d(ctx0, idx.q, idx.q->ne[0], idx.q->ne[1], n_tokens, idx.q->nb[1], idx.q->nb[2], chunk.t0*idx.q->nb[2]);
+    ggml_tensor * q = ggml_view_3d(ctx0, idx.q, idx.q->ne[0], idx.q->ne[1], n_tokens, idx.q->nb[1], idx.q->nb[2], tokens.t0*idx.q->nb[2]);
 
     // the reference sums the rectified head scores unweighted, scaled by 1/sqrt(head_dim),
     // which is the lightning indexer with every head weight set to that scale

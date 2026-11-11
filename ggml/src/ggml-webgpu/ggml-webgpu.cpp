@@ -4965,7 +4965,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 // conservative support checks for whether the more resource-intensive shader paths
                 // can be used, to avoid cases where flash_attn is assigned to the CPU later on
                 // K/V row lists (ggml_flash_attn_ext_rows) are not supported
-                supports_op = op->src[5] == nullptr && src0->type == GGML_TYPE_F32 &&
+                // the shaders read the mask rows with a stride of KV, not with nb[1]
+                supports_op = op->src[5] == nullptr && (op->src[3] == nullptr || ggml_is_contiguous(op->src[3])) &&
+                              src0->type == GGML_TYPE_F32 &&
                               (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 ||
                                src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0) &&
                               (src2->type == GGML_TYPE_F32 || src2->type == GGML_TYPE_F16 ||

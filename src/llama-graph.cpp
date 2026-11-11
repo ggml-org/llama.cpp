@@ -151,49 +151,36 @@ std::vector<llm_graph_chunk> llm_graph_get_chunks(uint32_t n_chunk, uint32_t n_u
     return res;
 }
 
-// true if the mask of the ubatch can have a mask per token chunk (see llm_attn_mask::chunks)
-static bool can_chunk_attn_mask(
-        const llama_kv_cache_context * mctx,
-        const llama_ubatch & ubatch,
-        const llama_cparams & cparams,
-        const std::vector<llm_graph_chunk> & chunks) {
-    // a chunk is a slice of the ubatch, see llama_ubatch::slice
-    // apart from the ubatch size, the context decides it, so that the graph keeps the shape of its reserve
-    const bool can_chunk = !chunks.empty() &&
-        cparams.flash_attn && cparams.causal_attn && cparams.n_seq_max == 1 && ubatch.n_pos == 1;
+llm_graph_chunk_plan::llm_graph_chunk_plan(const llama_model & model, const llama_cparams & cparams, uint32_t n_tokens) {
+    if (cparams.n_chunk == 0 || n_tokens <= cparams.n_chunk) {
+        return;
+    }
 
-    // a cache without SWA attends to all its cells: too large for a mask per chunk, it needs the staircase
-    // llama_context::decode splits a batch whose cells are not a staircase into ubatches without chunks (see can_chunk)
-    return can_chunk && (!mctx->can_staircase() || mctx->is_staircase());
+    chunks = llm_graph_get_chunks(cparams.n_chunk, cparams.n_ubatch, n_tokens);
+
+    // the mask of a chunk is a view of a causal staircase, or the mask of a slice of the ubatch (see llama_ubatch::slice)
+    attn = model.can_chunk_attn() && cparams.flash_attn && cparams.causal_attn && cparams.n_seq_max == 1 && model.hparams.n_pos_per_embd() == 1;
 }
 
-// like build_attn_inp_attn_mask, with a mask per token chunk, see can_chunk_attn_mask
-static llm_attn_mask build_attn_inp_attn_mask_chunks(
+// the mask of the tokens of a chunk: a view of the staircase mask if the cache has one, else the mask of a slice of the ubatch
+static llm_attn_mask build_attn_inp_attn_mask_chunk(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
         const llama_ubatch & ubatch,
         const llama_cparams & cparams,
-        const std::vector<llm_graph_chunk> & chunks) {
+        const llm_graph_chunk & tokens) {
     llm_attn_mask attn_mask;
 
-    attn_mask.n_kv = mctx->get_n_kv();
+    if (mctx->can_staircase()) {
+        attn_mask.n_kv = mctx->get_n_kv();
+        attn_mask.raw  = mctx->get_staircase(ctx, cparams.n_ubatch, cparams.n_chunk, tokens.t0, tokens.n);
+    } else {
+        const llama_ubatch slice = ubatch.slice(tokens.t0, tokens.n);
 
-    for (const auto & tokens : chunks) {
-        llm_attn_mask chunk;
-
-        if (mctx->can_staircase()) {
-            chunk.n_kv = attn_mask.n_kv;
-            chunk.raw  = mctx->get_staircase(ctx, cparams.n_ubatch, cparams.n_chunk, tokens.t0, tokens.n);
-        } else {
-            const llama_ubatch slice = ubatch.slice(tokens.t0, tokens.n);
-
-            chunk = build_attn_inp_attn_mask(ctx, mctx, slice, cparams, cparams.fused_kv_rows ? mctx->get_n_kv_rows(slice) : 0);
-        }
-
-        chunk.tokens = tokens;
-
-        attn_mask.chunks.push_back(chunk);
+        attn_mask = build_attn_inp_attn_mask(ctx, mctx, slice, cparams, cparams.fused_kv_rows ? mctx->get_n_kv_rows(slice) : 0);
     }
+
+    attn_mask.tokens = tokens;
 
     return attn_mask;
 }
@@ -864,6 +851,11 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     }
 
     mctx->get_swa()->set_input_attn_mask(self_attn_mask_swa, ubatch, cparams.causal_attn);
+
+    for (const auto & chunk : chunks) {
+        mctx->get_base()->set_input_attn_mask_chunk(chunk.self_attn_mask,     ubatch, cparams.causal_attn);
+        mctx->get_swa() ->set_input_attn_mask_chunk(chunk.self_attn_mask_swa, ubatch, cparams.causal_attn);
+    }
 }
 
 bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
@@ -874,7 +866,7 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
     // the chunk masks depend on the cells of the cache
-    res &= self_attn_mask.chunks.empty() && self_attn_mask_swa.chunks.empty();
+    res &= chunks.empty();
 
     // base tensors may not be allocated if there are no non-SWA attention layers
     if (self_k_idxs && self_k_idxs->buffer) {
@@ -1644,7 +1636,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_tokens         (ubatch.n_tokens),
     n_outputs        (params.n_outputs),
     n_ctx_orig       (cparams.n_ctx_orig_yarn),
-    chunks           (cparams.n_chunk > 0 && ubatch.n_tokens > cparams.n_chunk ? llm_graph_get_chunks(cparams.n_chunk, cparams.n_ubatch, ubatch.n_tokens) : std::vector<llm_graph_chunk>()),
+    chunk_plan       (params.chunk_plan),
     pooling_type     (cparams.pooling_type),
     rope_type        (hparams.rope_type),
     sched            (params.sched),
@@ -2441,27 +2433,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // layer-major prefill: the experts of each token chunk are computed apart, all the chunks read the same expert tensors
     // the experts of all tokens are selected first, so that the copy callback uploads the experts of all the chunks at the first chunk
     // the chunks call build_moe_ffn again with the experts of their tokens, which must not split them again
-    if (!chunks.empty() && !moe_chunk) {
+    if (!chunk_plan.chunks.empty() && !moe_chunk) {
         ggml_tensor * ids = selected_experts->view_src ? ggml_cont(ctx0, selected_experts) : selected_experts;
         ggml_build_forward_expand(gf, ids);
 
         moe_chunk = true;
 
         // a chunk with few tokens can compute the experts in host memory on the CPU, the stores stay on the device of the layer
-        ggml_tensor * moe_out = build_chunked(cur, chunks, [&](ggml_tensor * cur_chunk, size_t, const llm_graph_chunk & rows) {
-            const auto view_rows = [&](ggml_tensor * t) {
-                return ggml_view_2d(ctx0, t, t->ne[0], rows.n, t->nb[1], rows.t0*t->nb[1]);
-            };
-
+        ggml_tensor * moe_out = build_chunked(cur, chunk_plan.chunks, [&](ggml_tensor * cur_chunk, size_t, const llm_graph_chunk & rows) {
             return build_moe_ffn(cur_chunk,
                     gate_inp, gate_inp_b,
                     up_exps, up_exps_b, gate_exps, gate_exps_b, down_exps, down_exps_b,
                     exp_probs_b,
                     n_expert, n_expert_used,
                     type_op, norm_w, w_scale, gating_op, il,
-                    probs_in ? view_rows(probs_in) : nullptr, gate_up_exps, gate_up_exps_b,
+                    probs_in ? build_view_rows(probs_in, rows) : nullptr, gate_up_exps, gate_up_exps_b,
                     up_exps_s, gate_exps_s, down_exps_s,
-                    view_rows(ids), post_exp_norm, post_exp_norm_eps);
+                    build_view_rows(ids, rows), post_exp_norm, post_exp_norm_eps);
         }, backend_layer(il));
 
         moe_chunk = false;
@@ -3327,7 +3315,7 @@ ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vec
         const int64_t t0 = std::min(chunks[ic].t0, n_rows);
         const int64_t n  = std::min(chunks[ic].t0 + chunks[ic].n, n_rows) - t0;
 
-        ggml_tensor * res = fn(ggml_view_2d(ctx0, cur, cur->ne[0], n, cur->nb[1], t0*cur->nb[1]), ic, { t0, n });
+        ggml_tensor * res = fn(build_view_rows(cur, { t0, n }), ic, { t0, n });
         GGML_ASSERT(res->ne[0] == dst->ne[0] && res->ne[1] == n);
 
         // an empty chunk stores nothing: offset 0 keeps the store within dst (the CPU backend checks the bounds of the first row)
@@ -3338,6 +3326,14 @@ ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vec
     }
 
     return dst;
+}
+
+ggml_tensor * llm_graph_context::build_view_rows(ggml_tensor * t, const llm_graph_chunk & chunk, int64_t n_per_token) const {
+    if (n_per_token > 0) {
+        return ggml_view_1d(ctx0, t, chunk.n*n_per_token, chunk.t0*n_per_token*t->nb[0]);
+    }
+
+    return ggml_view_2d(ctx0, t, t->ne[0], chunk.n, t->nb[1], chunk.t0*t->nb[1]);
 }
 
 ggml_backend_t llm_graph_context::backend_layer(int il) const {
@@ -4120,28 +4116,16 @@ llm_graph_input_attn_kv_msa * llm_graph_context::build_attn_inp_kv_msa(bool msa_
 // TODO: maybe separate the inner implementation into a separate function
 //       like with the non-sliding window equivalent
 //       once sliding-window hybrid caches are a thing.
-llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa(bool with_chunks) const {
+llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_iswa_context *>(mctx);
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
-
-    // all the masks have chunks, or none
-    if (with_chunks && !(can_chunk_attn_mask(mctx_cur->get_base(), ubatch, cparams, chunks) && can_chunk_attn_mask(mctx_cur->get_swa(), ubatch, cparams, chunks))) {
-        if (!chunks.empty()) {
-            LLAMA_LOG_WARN("%s: the attention of this ubatch has no chunks, it needs masks for %u tokens\n", __func__, ubatch.n_tokens);
-        }
-        with_chunks = false;
-    }
-
-    const auto build_mask = [&](const llama_kv_cache_context * mctx_kv) {
-        return with_chunks ? build_attn_inp_attn_mask_chunks(ctx0, mctx_kv, ubatch, cparams, chunks) : build_attn_inp_attn_mask(ctx0, mctx_kv, ubatch, cparams);
-    };
 
     {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->get_base()->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_attn_mask = build_mask(mctx_cur->get_base());
+        inp->self_attn_mask = build_attn_inp_attn_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
     }
 
     {
@@ -4150,7 +4134,7 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa(bool wi
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
 
-        inp->self_attn_mask_swa = build_mask(mctx_cur->get_swa());
+        inp->self_attn_mask_swa = build_attn_inp_attn_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
     }
 
     inp->self_k_rot = mctx_cur->get_base()->get_k_rot();
@@ -4159,37 +4143,31 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa(bool wi
     inp->self_k_rot_swa = mctx_cur->get_swa()->get_k_rot();
     inp->self_v_rot_swa = mctx_cur->get_swa()->get_v_rot();
 
-    return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
-}
+    // layer-major prefill: the views of the inputs of the ubatch for the tokens of each chunk, and the masks of the chunk
+    // the masks of the ubatch are not part of the graph then, they are not allocated
+    if (chunk_plan.attn) {
+        // llama_context::decode splits a batch whose cells are not a staircase into ubatches without chunks (see can_chunk)
+        GGML_ASSERT(!mctx_cur->get_base()->can_staircase() || mctx_cur->get_base()->is_staircase());
 
-std::vector<llm_graph_input_attn_kv_iswa> llm_graph_context::build_attn_inp_chunks(const llm_graph_input_attn_kv_iswa * inp) const {
-    std::vector<llm_graph_input_attn_kv_iswa> res;
+        std::vector<llm_graph_input_attn_kv_iswa> chunks;
+        for (const auto & tokens : chunk_plan.chunks) {
+            llm_graph_input_attn_kv_iswa chunk = *inp;
 
-    const auto & masks     = inp->self_attn_mask.chunks;
-    const auto & masks_swa = inp->self_attn_mask_swa.chunks;
-    GGML_ASSERT(masks.size() == masks_swa.size());
+            // one index per token: flash attention does not use a transposed V cache
+            chunk.self_k_idxs     = build_view_rows(inp->self_k_idxs,     tokens, 1);
+            chunk.self_v_idxs     = build_view_rows(inp->self_v_idxs,     tokens, 1);
+            chunk.self_k_idxs_swa = build_view_rows(inp->self_k_idxs_swa, tokens, 1);
+            chunk.self_v_idxs_swa = build_view_rows(inp->self_v_idxs_swa, tokens, 1);
 
-    // the cells of the tokens [t, t + n)
-    const auto view_idxs = [&](ggml_tensor * idxs, int64_t t, int64_t n) {
-        return idxs ? ggml_view_1d(ctx0, idxs, n, t*idxs->nb[0]) : nullptr;
-    };
+            chunk.self_attn_mask     = build_attn_inp_attn_mask_chunk(ctx0, mctx_cur->get_base(), ubatch, cparams, tokens);
+            chunk.self_attn_mask_swa = build_attn_inp_attn_mask_chunk(ctx0, mctx_cur->get_swa(),  ubatch, cparams, tokens);
 
-    for (size_t i = 0; i < masks.size(); ++i) {
-        const auto & tokens = masks[i].tokens;
-
-        res.push_back(*inp);
-        auto & chunk = res.back();
-
-        chunk.self_k_idxs     = view_idxs(inp->self_k_idxs,     tokens.t0, tokens.n);
-        chunk.self_v_idxs     = view_idxs(inp->self_v_idxs,     tokens.t0, tokens.n);
-        chunk.self_k_idxs_swa = view_idxs(inp->self_k_idxs_swa, tokens.t0, tokens.n);
-        chunk.self_v_idxs_swa = view_idxs(inp->self_v_idxs_swa, tokens.t0, tokens.n);
-
-        chunk.self_attn_mask     = masks[i];
-        chunk.self_attn_mask_swa = masks_swa[i];
+            chunks.push_back(chunk);
+        }
+        inp->chunks = std::move(chunks);
     }
 
-    return res;
+    return (llm_graph_input_attn_kv_iswa *) res->add_input(std::move(inp));
 }
 
 llm_graph_input_attn_k_iswa * llm_graph_context::build_attn_inp_k_iswa() const {

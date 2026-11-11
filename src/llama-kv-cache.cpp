@@ -62,6 +62,28 @@ static void ggml_gen_hadamard(ggml_tensor * tensor) {
 // llama_kv_cache
 //
 
+// true if the device of buft runs flash attention with a mask whose rows are farther apart than their length, as the views of a staircase mask
+// f.ex. the Vulkan shaders read the mask rows with a stride of n_kv
+static bool buft_supports_mask_view(ggml_backend_buffer_type_t buft) {
+    // the CPU buffer type has no device
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+    if (dev == nullptr) {
+        dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    }
+
+    ggml_init_params params = { 8*ggml_tensor_overhead(), nullptr, true };
+    ggml_context_ptr ctx { ggml_init(params) };
+
+    ggml_tensor * q    = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, 128,  32, 1);
+    ggml_tensor * k    = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F16, 128, 256, 1);
+    ggml_tensor * v    = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F16, 128, 256, 1);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, 512, 32);
+
+    mask = ggml_view_2d(ctx.get(), mask, 256, 32, mask->nb[1], 0);
+
+    return ggml_backend_dev_supports_op(dev, ggml_flash_attn_ext(ctx.get(), q, k, v, mask, 1.0f, 0.0f, 0.0f));
+}
+
 llama_kv_cache::llama_kv_cache(
         const llama_model & model,
                      bool   no_alloc,
@@ -279,6 +301,10 @@ llama_kv_cache::llama_kv_cache(
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
     }
+
+    // the staircase mask is on the device of the first layer, see get_staircase
+    staircase_supported = swa_type == LLAMA_SWA_TYPE_NONE && !hparams.use_alibi && !layers.empty() && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR &&
+        buft_supports_mask_view(ggml_backend_buffer_get_type(layers[0].k->buffer));
 
     {
         const size_t memory_size_k = size_k_bytes();
@@ -1361,8 +1387,12 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
 }
 
 // per slice: the sequences whose cells form the list of the slice and the min position of the cells that are not masked by the SWA
-static std::vector<llama_kv_rows_slice> get_kv_rows_slices(const llama_ubatch & ubatch, uint32_t n_slices, uint32_t n_swa, llama_swa_type swa_type) {
+static std::vector<llama_kv_rows_slice> get_kv_rows_slices(const llama_ubatch & ubatch, uint32_t n_slices, uint32_t n_swa, llama_swa_type swa_type, llama_pos p_max) {
     std::vector<llama_kv_rows_slice> res(n_slices);
+
+    for (auto & slice : res) {
+        slice.p_max = p_max;
+    }
 
     if (n_slices == 1) {
         res[0].seq_ids.assign(ubatch.seq_id_unq, ubatch.seq_id_unq + ubatch.n_seqs_unq);
@@ -1372,11 +1402,6 @@ static std::vector<llama_kv_rows_slice> get_kv_rows_slices(const llama_ubatch & 
         for (uint32_t s = 0; s < n_slices; ++s) {
             res[s].seq_ids = { ubatch.seq_id[s*n_tps][0] };
         }
-    }
-
-    if (ubatch.is_slice) {
-        GGML_ASSERT(n_slices == 1);
-        res[0].p_max = *std::max_element(ubatch.pos, ubatch.pos + ubatch.n_tokens);
     }
 
     // the cells below these positions are masked by the SWA for all tokens of the slice
@@ -1407,7 +1432,7 @@ uint32_t llama_kv_cache::get_n_kv_rows_max(uint32_t n_tokens) const {
     return std::min<uint32_t>(GGML_PAD(n_swa + n_tokens, 256), get_size());
 }
 
-uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
+uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch, llama_pos p_max) const {
     if (n_stream != 1) {
         return 0;
     }
@@ -1420,13 +1445,13 @@ uint32_t llama_kv_cache::get_n_kv_rows(const llama_ubatch & ubatch) const {
 
     uint32_t n_max = 0;
 
-    const auto slices = get_kv_rows_slices(ubatch, n_slices, n_swa, swa_type);
+    const auto slices = get_kv_rows_slices(ubatch, n_slices, n_swa, swa_type, p_max);
 
     for (uint32_t s = 0; s < n_slices; ++s) {
         // a cell shared by several sequences of the slice is counted once per sequence, an upper bound is enough
         uint32_t n = 0;
         for (const llama_seq_id seq_id : slices[s].seq_ids) {
-            n += slices[s].p_min < 0 && !ubatch.is_slice ? cells.seq_n_cells(seq_id) : cells.seq_n_cells(seq_id, slices[s].p_min, slices[s].p_max);
+            n += slices[s].p_min < 0 && p_max == std::numeric_limits<llama_pos>::max() ? cells.seq_n_cells(seq_id) : cells.seq_n_cells(seq_id, slices[s].p_min, p_max);
         }
 
         n_max = std::max(n_max, std::min(n, cells.used_max_p1()));
@@ -1938,7 +1963,7 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
     }
 }
 
-void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
+void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn, llama_pos p_max) const {
     // fill the cell rows of each slice
     if (attn_mask.rows && attn_mask.rows->buffer) {
         GGML_ASSERT(ggml_backend_buffer_is_host(attn_mask.rows->buffer));
@@ -1950,7 +1975,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
         const auto & cells = v_cells[0];
         int32_t * data = (int32_t *) attn_mask.rows->data;
 
-        cells.get_seq_cells(get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type), data, n_rows);
+        cells.get_seq_cells(get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type, p_max), data, n_rows);
     }
 
     // the mask is left unallocated when the graph only stores K/V without attending
@@ -2012,8 +2037,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
 }
 
 bool llama_kv_cache::can_staircase() const {
-    // the meta device has no split state for the staircase mask
-    return swa_type == LLAMA_SWA_TYPE_NONE && !hparams.use_alibi && !layers.empty() && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR;
+    return staircase_supported;
 }
 
 bool llama_kv_cache::is_staircase(const llama_ubatch & ubatch, const slot_info & sinfo) const {
@@ -2108,14 +2132,20 @@ size_t llama_kv_cache::get_staircase_offs(const ggml_tensor * staircase, uint32_
     return col*staircase->nb[1] + row*staircase->nb[0];
 }
 
-void llama_kv_cache::set_input_attn_mask_chunks(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
-    for (const auto & chunk : attn_mask.chunks) {
-        // the staircase is a constant
-        if (chunk.raw->view_src == nullptr) {
-            const llama_ubatch slice = ubatch->slice(chunk.tokens.t0, chunk.tokens.n);
-            set_input_attn_mask(chunk, &slice, causal_attn);
-        }
+// the cells of the later tokens of a ubatch are in the cache already: a slice of the ubatch attends to the cells up to its last position
+static llama_pos get_slice_pos_max(const llama_ubatch & slice) {
+    return *std::max_element(slice.pos, slice.pos + slice.n_tokens);
+}
+
+void llama_kv_cache::set_input_attn_mask_chunk(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
+    // the staircase is a constant, an empty chunk has no mask values
+    if (can_staircase() || attn_mask.tokens.n == 0) {
+        return;
     }
+
+    const llama_ubatch slice = ubatch->slice(attn_mask.tokens.t0, attn_mask.tokens.n);
+
+    set_input_attn_mask(attn_mask, &slice, causal_attn, get_slice_pos_max(slice));
 }
 
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
@@ -3101,7 +3131,7 @@ void llama_kv_cache::state_clear(llama_seq_id seq_id, uint32_t strm, const slot_
 llama_kv_cache_context::llama_kv_cache_context(llama_memory_status status) : status(status) {}
 
 llama_kv_cache_context::llama_kv_cache_context(
-        llama_kv_cache * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv) {
+        llama_kv_cache * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), reserve(true) {
     n_kv = kv->get_size();
 
     // worst case for graph reservation, only a unified cache splits into per-sequence lists
@@ -3184,12 +3214,12 @@ uint32_t llama_kv_cache_context::get_n_kv_rows() const {
 }
 
 uint32_t llama_kv_cache_context::get_n_kv_rows(const llama_ubatch & slice) const {
-    // worst case for graph reservation
-    if (is_reserve()) {
+    // worst case for graph reservation; an empty chunk has no cells to attend to
+    if (reserve || slice.n_tokens == 0) {
         return std::min(n_kv_rows, kv->get_n_kv_rows_max(slice.n_tokens));
     }
 
-    return kv->get_n_kv_rows(slice);
+    return kv->get_n_kv_rows(slice, get_slice_pos_max(slice));
 }
 
 ggml_tensor * llama_kv_cache_context::get_staircase(ggml_context * ctx, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const {
@@ -3199,13 +3229,13 @@ ggml_tensor * llama_kv_cache_context::get_staircase(ggml_context * ctx, uint32_t
     ggml_tensor * staircase = kv->get_staircase(1, anchor, kv->get_size() + n_ubatch + 256 + 8, n_chunk + 8);
 
     // graph reservation: there are no cells, only the shape of the view is used
-    const size_t offs = is_reserve() ? 0 : llama_kv_cache::get_staircase_offs(staircase, 1, anchor, sinfos[i_cur].idxs[0][0] + t + 1, 0);
+    const size_t offs = reserve ? 0 : llama_kv_cache::get_staircase_offs(staircase, 1, anchor, sinfos[i_cur].idxs[0][0] + t + 1, 0);
 
     return ggml_view_2d(ctx, staircase, n_kv, n, staircase->nb[1], offs);
 }
 
 bool llama_kv_cache_context::is_reserve() const {
-    return ubatches.empty();
+    return reserve;
 }
 
 bool llama_kv_cache_context::can_staircase() const {
@@ -3214,7 +3244,7 @@ bool llama_kv_cache_context::can_staircase() const {
 
 bool llama_kv_cache_context::is_staircase() const {
     // graph reservation: there are no cells, reserve for the chunked graph
-    if (is_reserve()) {
+    if (reserve) {
         return kv->can_staircase();
     }
 
@@ -3296,12 +3326,11 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
 }
 
 void llama_kv_cache_context::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
-    if (!attn_mask.chunks.empty()) {
-        kv->set_input_attn_mask_chunks(attn_mask, ubatch, causal_attn);
-        return;
-    }
-
     kv->set_input_attn_mask(attn_mask, ubatch, causal_attn);
+}
+
+void llama_kv_cache_context::set_input_attn_mask_chunk(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
+    kv->set_input_attn_mask_chunk(attn_mask, ubatch, causal_attn);
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

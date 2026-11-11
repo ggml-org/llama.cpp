@@ -460,8 +460,8 @@ private:
 
     llm_graph_result * gf_res_prev_active = nullptr;
 
-    // layer-major prefill: true if the scheduler plans for the reserve graph with chunks (see process_ubatch)
-    bool gf_chunked = true;
+    // layer-major prefill: true if the last reserve graph has chunks (see process_ubatch)
+    bool gf_chunked = false;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;

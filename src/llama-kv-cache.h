@@ -204,7 +204,8 @@ public:
     static uint32_t get_n_kv_slices(const llama_ubatch & ubatch);
 
     // padded length of the longest cell list of the slices; 0 if kv_rows are not used (multiple streams)
-    uint32_t get_n_kv_rows(const llama_ubatch & ubatch) const;
+    // p_max: the cells at a later position are not in the lists, for a slice of a ubatch (see llama_ubatch::slice)
+    uint32_t get_n_kv_rows(const llama_ubatch & ubatch, llama_pos p_max = std::numeric_limits<llama_pos>::max()) const;
 
     // upper bound of get_n_kv_rows for a slice of n_tokens tokens of a single-sequence ubatch (see llama_ubatch::slice)
     uint32_t get_n_kv_rows_max(uint32_t n_tokens) const;
@@ -253,14 +254,15 @@ public:
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
-    void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
+    // p_max: see get_n_kv_rows
+    void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn, llama_pos p_max = std::numeric_limits<llama_pos>::max()) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     // true if the causal mask of the ubatch is a staircase: token i attends to the cells [0, sinfo.idxs[0][0] + i], and no cells follow the ubatch
-    // any chunk of consecutive tokens can then read its mask as a view of the staircase mask (see llm_attn_mask::chunks)
+    // any chunk of consecutive tokens can then read its mask as a view of the staircase mask (see llm_graph_input_attn_kv_iswa::chunks)
     bool is_staircase(const llama_ubatch & ubatch, const slot_info & sinfo) const;
 
-    // false if no ubatch of this cache has a staircase mask
+    // false if no ubatch of this cache has a staircase mask, see staircase_supported
     bool can_staircase() const;
 
     // a staircase mask in device memory: F16 [n_rows, n_cols], row j of column i is 0 if j < anchor + i/step, -inf otherwise
@@ -273,8 +275,8 @@ public:
     // the view needs up to 8*step columns and 8 rows more than the mask
     static size_t get_staircase_offs(const ggml_tensor * staircase, uint32_t step, int64_t anchor, int64_t n_first, int64_t phase);
 
-    // fill the masks of the token chunks of the ubatch
-    void set_input_attn_mask_chunks(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
+    // fill the mask of a token chunk of the ubatch (see llm_attn_mask::tokens), if it is not a view of the staircase
+    void set_input_attn_mask_chunk(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
 
     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
     bool has_cell_ext() const;
@@ -333,6 +335,10 @@ private:
 
     // keep constants separate from mutable KV buffers
     llama_memory_bufs attn_rot_bufs;
+
+    // the cache has staircase masks: no SWA and no ALiBi, not on the meta device (it has no split state for the staircase),
+    // and the device of the cache runs flash attention with a mask view whose rows are farther apart than their length
+    bool staircase_supported = false;
 
     // see get_staircase()
     mutable llama_memory_bufs staircase_bufs;
@@ -452,7 +458,7 @@ public:
     // see llama_kv_cache::get_n_kv_rows, for a slice of the current ubatch
     uint32_t get_n_kv_rows(const llama_ubatch & slice) const;
 
-    // a context without ubatches: the graph of the reservation, there are no cells
+    // the context of the graph reservation (init_full): there are no cells
     bool is_reserve() const;
 
     // see llama_kv_cache::is_staircase, for the current ubatch
@@ -499,6 +505,7 @@ public:
 
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_attn_mask_chunk(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     // see llama_kv_cache::get_prev_tokens()
@@ -528,6 +535,9 @@ private:
     slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
+
+    // the context of the graph reservation (see is_reserve)
+    const bool reserve = false;
 
     //
     // data needed for building the compute graph for the current ubatch:

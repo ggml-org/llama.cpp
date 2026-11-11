@@ -934,6 +934,9 @@ struct llama_model_gemma4 : public llama_model_base {
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    // the pruned rows of the KV-shared layers read the masks of the ubatch
+    bool can_chunk_attn() const override;
 };
 
 struct llama_model_gemma4_assistant : public llama_model_base {

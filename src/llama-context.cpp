@@ -413,6 +413,11 @@ llama_context::llama_context(
         const char * LLAMA_LAYER_MAJOR = getenv("LLAMA_LAYER_MAJOR");
         cparams.n_chunk = LLAMA_LAYER_MAJOR ? std::max(0, atoi(LLAMA_LAYER_MAJOR)) : 0;
 
+        // a ubatch of at most n_ubatch tokens has no chunks
+        if (cparams.n_chunk >= cparams.n_ubatch) {
+            cparams.n_chunk = 0;
+        }
+
         if (cparams.n_chunk > 0) {
             LLAMA_LOG_INFO("%s: LLAMA_LAYER_MAJOR set, ubatches run in chunks of %u tokens\n", __func__, cparams.n_chunk);
         }
@@ -935,8 +940,6 @@ void llama_context::sched_reserve() {
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
         }
-
-        gf_chunked = true;
     }
 
     for (size_t i = 0; i < backend_ptrs.size(); ++i) {
@@ -1107,8 +1110,6 @@ bool llama_context::memory_update(bool optimize) {
         auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_max, mctx.get());
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
-        } else {
-            gf_chunked = true;
         }
     }
 
@@ -1850,14 +1851,18 @@ bool llama_context::set_adapter_cvec(
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
-    // layer-major prefill: a ubatch of more than n_chunk tokens has the chunks of n_ubatch, a smaller ubatch has no chunks
-    // each of the two shapes fits its own reserve graph, so reserve again when the shape changes
-    if (cparams.n_chunk > 0 && cparams.n_ubatch > cparams.n_chunk) {
-        const bool chunked = ubatch.n_tokens > cparams.n_chunk;
-        if (chunked != gf_chunked && !graph_reserve_chunked(chunked)) {
-            ret = GGML_STATUS_ALLOC_FAILED;
-            return nullptr;
-        }
+    auto * res = get_gf_res_prev();
+    auto * gf  = res->get_gf();
+
+    // the new graph parameters
+    // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+
+    // layer-major prefill: a ubatch with chunks and a ubatch without chunks fit different reserve graphs
+    const bool chunked = !gparams.chunk_plan.chunks.empty();
+    if (chunked != gf_chunked && !graph_reserve_chunked(chunked)) {
+        ret = GGML_STATUS_ALLOC_FAILED;
+        return nullptr;
     }
 
     if (mctx && !mctx->apply()) {
@@ -1865,13 +1870,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
-
-    auto * res = get_gf_res_prev();
-    auto * gf  = res->get_gf();
-
-    // the new graph parameters
-    // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
     if (!graph_reuse_disable && gf_res_prev_active == res && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -2308,10 +2306,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         switch (mctx->get_status()) {
             case LLAMA_MEMORY_STATUS_SUCCESS:
                 {
-                    // layer-major prefill: the cells decide if a large ubatch can have attention chunks, see process_ubatch
-                    // the attention has chunks only with one sequence, flash attention and a causal mask (see can_chunk_attn_mask in llama-graph.cpp)
-                    const bool attn_chunks = cparams.n_chunk > 0 && n_ubatch > cparams.n_chunk && cparams.n_seq_max == 1 && cparams.flash_attn && cparams.causal_attn;
-                    if (attn_chunks && !mctx->can_chunk(cparams.n_chunk)) {
+                    // layer-major prefill: the masks of the chunks of a large ubatch need the cells of a staircase
+                    if (llm_graph_chunk_plan(model, cparams, n_ubatch).attn && !mctx->can_chunk(cparams.n_chunk)) {
                         LLAMA_LOG_DEBUG("%s: the cells of the batch do not allow chunks, retrying in ubatches of %u tokens\n", __func__, cparams.n_chunk);
 
                         n_ubatch = cparams.n_chunk;
@@ -3137,6 +3133,8 @@ ggml_cgraph * llama_context::graph_reserve(
         GGML_ASSERT(!sizes);
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         return nullptr;
+    } else {
+        gf_chunked = !gparams.chunk_plan.chunks.empty();
     }
 
     return gf;
@@ -3155,13 +3153,7 @@ bool llama_context::graph_reserve_chunked(bool chunked) {
     const uint32_t n_seqs   = chunked ? cparams.n_seq_max : std::min(cparams.n_seq_max, cparams.n_chunk);
     const uint32_t n_tokens = chunked ? std::min(cparams.n_ctx, cparams.n_ubatch) : cparams.n_chunk/n_seqs*n_seqs;
 
-    if (!graph_reserve(n_tokens, n_seqs, std::min(n_tokens, cparams.n_outputs_max), mctx.get())) {
-        return false;
-    }
-
-    gf_chunked = chunked;
-
-    return true;
+    return graph_reserve(n_tokens, n_seqs, std::min(n_tokens, cparams.n_outputs_max), mctx.get()) != nullptr;
 }
 
 llm_graph_params llama_context::graph_params(
@@ -3174,6 +3166,7 @@ llm_graph_params llama_context::graph_params(
         /*.hparams     =*/ model.hparams,
         /*.cparams     =*/ cparams,
         /*.ubatch      =*/ ubatch,
+        /*.chunk_plan  =*/ llm_graph_chunk_plan(model, cparams, ubatch.n_tokens),
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,

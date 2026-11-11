@@ -37,13 +37,13 @@ struct llama_ubatch {
     // n tokens starting at token i0, for a ubatch with a single sequence and one position per token
     // only for the KV cache masks: embd, embd_state, embd_row, type and decision_order are not sliced
     // the slice does not own data, it is valid as long as this ubatch
+    // the cache can have the cells of the later tokens of the ubatch, see the p_max of llama_kv_cache::get_n_kv_rows
     llama_ubatch slice(uint32_t i0, uint32_t n) const {
         llama_ubatch res = *this;
 
         res.n_tokens     = n;
         res.n_seq_tokens = n;
         res.n_seqs       = 1;
-        res.is_slice     = true;
 
         res.token    = token    ? token    + i0 : nullptr;
         res.pos      = pos      ? pos      + i0 : nullptr;
@@ -103,9 +103,6 @@ struct llama_ubatch {
 
     // the llama_ubatch pointers above point to this data if set. otherwise - point to external non-owning data
     std::shared_ptr<data_t> data;
-
-    // set by slice(): the cache can have cells of later tokens of the sequence
-    bool is_slice = false;
 };
 
 // crash if a mixed ubatch reaches code that expects only tokens or only embd
