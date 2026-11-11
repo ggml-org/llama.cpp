@@ -819,6 +819,12 @@ static size_t ggml_vk_staging_size_n(const vk_device & device, const std::vector
     size_t total = 0;
     size_t max   = 0;
     for (const auto & r : regions) {
+        vk_buffer pinned;
+        size_t pinned_offset;
+        ggml_vk_host_get(device, r.host, pinned, pinned_offset);
+        if (pinned != nullptr) {
+            continue;
+        }
         total += r.size;
         max = std::max(max, r.size);
     }
@@ -918,7 +924,10 @@ void ggml_vk_buffer_write_n(const vk_buffer_region * regions, size_t n) {
 
     vk_device device = pending[0].buf->device;
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
-    ggml_vk_ensure_sync_staging_buffer(device, ggml_vk_staging_size_n(device, pending));
+    const size_t staging_size = ggml_vk_staging_size_n(device, pending);
+    if (staging_size > 0) {
+        ggml_vk_ensure_sync_staging_buffer(device, staging_size);
+    }
 
     for (size_t i = 0; i < pending.size();) {
         vk_context subctx = ggml_vk_begin_sync_ctx(device, device->transfer_queue->cmd_pool);
@@ -976,7 +985,10 @@ void ggml_vk_buffer_read_n(const vk_buffer_region * regions, size_t n) {
         return;
     }
 
-    ggml_vk_ensure_sync_staging_buffer(device, ggml_vk_staging_size_n(device, pending));
+    const size_t staging_size = ggml_vk_staging_size_n(device, pending);
+    if (staging_size > 0) {
+        ggml_vk_ensure_sync_staging_buffer(device, staging_size);
+    }
 
     for (size_t i = 0; i < pending.size();) {
         vk_context subctx = ggml_vk_begin_sync_ctx(device, device->transfer_queue->cmd_pool);
