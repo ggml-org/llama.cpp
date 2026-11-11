@@ -6,8 +6,8 @@ import requests
 server: ServerProcess
 
 def get_img_url(id: str) -> str:
-    IMG_URL_0 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
-    IMG_URL_1 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
+    IMG_URL_0 = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+    IMG_URL_1 = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/91_cat.png"
     if id == "IMG_URL_0":
         return IMG_URL_0
     elif id == "IMG_URL_1":
