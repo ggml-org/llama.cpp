@@ -26,6 +26,7 @@ import {
 } from '$lib/constants';
 import { BooleanString, MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
+import { withSearchChatsDisabled } from '$lib/utils/search-chats';
 import Dexie from 'dexie';
 
 // Types
@@ -849,23 +850,19 @@ const searchChatsDefaultDisabledMigration: Migration = {
 			// unreadable defaults are replaced below
 		}
 
-		if (!defaults.includes(SEARCH_CHATS_TOOL_KEY)) {
-			localStorage.setItem(
-				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-				JSON.stringify([...defaults, SEARCH_CHATS_TOOL_KEY])
-			);
-		}
+		localStorage.setItem(
+			DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+			JSON.stringify(withSearchChatsDisabled(defaults))
+		);
 
 		const db = await getDatabaseService();
 		const conversations = await db.getAllConversations();
 
 		for (const conv of conversations) {
-			const disabledTools = conv.disabledTools ?? [];
-
-			if (disabledTools.includes(SEARCH_CHATS_TOOL_KEY)) continue;
+			if (conv.disabledTools?.includes(SEARCH_CHATS_TOOL_KEY)) continue;
 
 			await db.updateConversation(conv.id, {
-				disabledTools: [...disabledTools, SEARCH_CHATS_TOOL_KEY]
+				disabledTools: withSearchChatsDisabled(conv.disabledTools)
 			});
 		}
 	}

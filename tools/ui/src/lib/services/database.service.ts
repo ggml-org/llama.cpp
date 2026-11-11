@@ -18,7 +18,7 @@ import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
 import type { Group } from '$lib/types/groups';
 import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
-import Dexie, { type EntityTable, type Table } from 'dexie';
+import Dexie, { type EntityTable } from 'dexie';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
@@ -463,6 +463,10 @@ export class DatabaseService {
 				const newConv: DatabaseConversation = {
 					currNode: lastClonedMessage.id,
 					cwd: sourceConv.cwd,
+					disabledToolCategories: sourceConv.disabledToolCategories
+						? [...sourceConv.disabledToolCategories]
+						: undefined,
+					disabledTools: sourceConv.disabledTools ? [...sourceConv.disabledTools] : undefined,
 					forkedFromConversationId: sourceConvId,
 					groupId: sourceConv.groupId,
 					id: newConvId,
@@ -615,8 +619,12 @@ export class DatabaseService {
 	}
 
 	/** Run `fn` in a readonly transaction over all tables. `fn` must await only Dexie calls, else the transaction commits early */
-	static async readOnly<T>(fn: (table: (name: string) => Table) => Promise<T>): Promise<T> {
-		return db.transaction('r', db.tables, () => fn((name) => db.table(name)));
+	static async readOnly<T>(
+		fn: (tables: Pick<LlamaUiDatabase, keyof typeof IDXDB_TABLES>) => Promise<T>
+	): Promise<T> {
+		return db.transaction('r', [db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]], () =>
+			fn(db)
+		);
 	}
 
 	/**

@@ -5,53 +5,67 @@
  */
 
 import { DatabaseService } from './database.service';
-import { IDXDB_TABLES } from '$lib/constants';
 import type { ToolExecutionResult } from '$lib/types';
 import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
-import { parseSearchChatsParams, searchChats, SearchChatsError } from '$lib/utils/search-chats';
+import {
+	parseSearchChatsParams,
+	searchChats,
+	SearchChatsError,
+	type SearchChatsTimeRange
+} from '$lib/utils/search-chats';
 
 function loadConversations(ids?: string[]): Promise<DatabaseConversation[]> {
-	return DatabaseService.readOnly(async (table) => {
-		const conversations = table(IDXDB_TABLES.conversations);
+	return DatabaseService.readOnly(async ({ conversations }) => {
+		if (!ids) return conversations.toArray();
 
-		if (!ids) return (await conversations.toArray()) as DatabaseConversation[];
-
-		const found = (await conversations.bulkGet(ids)) as (DatabaseConversation | undefined)[];
+		const found = await conversations.bulkGet(ids);
 
 		return found.filter((c): c is DatabaseConversation => !!c);
 	});
 }
 
-function loadMessages(convIds: string[] | null): Promise<DatabaseMessage[]> {
-	return DatabaseService.readOnly(async (table) => {
-		const messages = table(IDXDB_TABLES.messages);
-		const rows = convIds
-			? await messages.where('convId').anyOf(convIds).toArray()
-			: await messages.toArray();
+/** Attachment payloads (base64 media, file text) are dropped as rows stream in, only their names are kept */
+function withoutPayloads({ extra, ...message }: DatabaseMessage): DatabaseMessage {
+	return {
+		...message,
+		extra: extra?.map(({ name, type }) => ({ name, type })) as DatabaseMessage['extra']
+	};
+}
 
-		return rows as DatabaseMessage[];
+/** One transaction, so the range lookup and the read see the same data */
+function loadMessages(
+	convIds: string[] | null,
+	range?: SearchChatsTimeRange
+): Promise<DatabaseMessage[]> {
+	return DatabaseService.readOnly(async ({ messages }) => {
+		let ids = convIds;
+
+		if (range) {
+			const { from, to } = range;
+			const index = messages.where('timestamp');
+			const inRange =
+				from !== undefined && to !== undefined
+					? index.between(from, to, true, false)
+					: from !== undefined
+						? index.aboveOrEqual(from)
+						: index.below(to);
+			const active = new Set<string>();
+
+			await inRange.each((m) => active.add(m.convId));
+			ids = ids ? ids.filter((id) => active.has(id)) : [...active];
+		}
+
+		const rows: DatabaseMessage[] = [];
+
+		await (ids ? messages.where('convId').anyOf(ids) : messages.toCollection()).each((m) =>
+			rows.push(withoutPayloads(m))
+		);
+
+		return rows;
 	});
 }
 
-/** Uses the timestamp index, so only messages inside the range are read */
-function conversationIdsInRange(from?: number, to?: number): Promise<Set<string>> {
-	return DatabaseService.readOnly(async (table) => {
-		const index = table(IDXDB_TABLES.messages).where('timestamp');
-		const range =
-			from !== undefined && to !== undefined
-				? index.between(from, to, true, false)
-				: from !== undefined
-					? index.aboveOrEqual(from)
-					: index.below(to);
-		const ids = new Set<string>();
-
-		await range.each((m: DatabaseMessage) => ids.add(m.convId));
-
-		return ids;
-	});
-}
-
-const loader = { conversationIdsInRange, messages: loadMessages };
+const loader = { messages: loadMessages };
 
 export class SearchChatsService {
 	/** `currentConversationId` is hidden from results unless the model sets include_current */

@@ -119,7 +119,6 @@ class ToolsStore {
 			// disabled by default, see searchChatsDefaultDisabledMigration
 			buildSearchChatsToolDefinition()
 		];
-
 		const readMedia = this.readMediaTool();
 
 		if (readMedia) tools.push(readMedia);

@@ -5,7 +5,7 @@ import { MessageRole, MessageType } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
 import { SearchChatsService } from '$lib/services/search-chats.service';
 import type { ExportedConversation } from '$lib/types/database';
-import { localIsoString } from '$lib/utils/get-datetime';
+import { formatLocalIso } from '$lib/utils/formatters';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 function makeConversation(
@@ -88,7 +88,7 @@ describe('search_chats service', () => {
 
 	it('finds chats with messages in a time range through the timestamp index', async () => {
 		const reply = await SearchChatsService.executeTool(
-			{ from_timestamp: localIsoString(new Date(2000)), limit_messages: 1 },
+			{ from_timestamp: formatLocalIso(new Date(2000)), limit_messages: 1 },
 			'other'
 		);
 
@@ -106,7 +106,7 @@ describe('search_chats service', () => {
 
 	it('reads through a transaction that refuses writes', async () => {
 		await expect(
-			DatabaseService.readOnly((table) => table('messages').delete('paris-m0'))
+			DatabaseService.readOnly(({ messages }) => messages.delete('paris-m0'))
 		).rejects.toThrow();
 		expect(await DatabaseService.getConversationMessages('paris')).toHaveLength(4);
 	});

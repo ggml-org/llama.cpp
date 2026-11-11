@@ -4,7 +4,7 @@
  */
 
 import { filterByLeafNodeId } from './branching';
-import { localIsoString } from './get-datetime';
+import { formatLocalIso } from './formatters';
 import {
 	SEARCH_CHATS_CUT_NOTICE,
 	SEARCH_CHATS_DATE_REGEX,
@@ -24,7 +24,8 @@ import {
 	SEARCH_CHATS_MESSAGE_CHARS_MAX,
 	SEARCH_CHATS_MESSAGE_CHARS_MIN,
 	SEARCH_CHATS_OUTPUT_MAX_CHARS,
-	SEARCH_CHATS_PATTERN_MAX_CHARS
+	SEARCH_CHATS_PATTERN_MAX_CHARS,
+	SEARCH_CHATS_TOOL_KEY
 } from '$lib/constants';
 import { MessageRole, SearchChatsMessageSelection, SearchChatsOrder } from '$lib/enums';
 import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
@@ -52,11 +53,42 @@ export interface SearchChatsParams {
 	includeCurrent: boolean;
 }
 
+export interface SearchChatsTimeRange {
+	from?: number;
+	to?: number;
+}
+
 export interface SearchChatsLoader {
-	/** Messages of the given conversations, or of all conversations for `null` */
-	messages(convIds: string[] | null): Promise<DatabaseMessage[]>;
-	/** Ids of conversations with any message in [from, to) */
-	conversationIdsInRange(from?: number, to?: number): Promise<Set<string>>;
+	/** Messages of the given conversations (all for `null`); with `range`, only of conversations with a message in [from, to) */
+	messages(convIds: string[] | null, range?: SearchChatsTimeRange): Promise<DatabaseMessage[]>;
+}
+
+/** Tool policy with search_chats disabled, for rows that predate the tool */
+export function withSearchChatsDisabled(disabledTools: string[] = []): string[] {
+	return disabledTools.includes(SEARCH_CHATS_TOOL_KEY)
+		? disabledTools
+		: [...disabledTools, SEARCH_CHATS_TOOL_KEY];
+}
+
+/** `text.slice(start, end)` without cutting a surrogate pair in half */
+function sliceText(text: string, start: number, end: number = text.length): string {
+	const isHigh = (i: number) => {
+		const code = text.charCodeAt(i);
+
+		return code >= 0xd800 && code <= 0xdbff;
+	};
+
+	if (start > 0 && isHigh(start - 1)) start++;
+
+	if (end > start && end < text.length && isHigh(end - 1)) end--;
+
+	return text.slice(start, Math.max(start, end));
+}
+
+function isCalendarDate(year: number, month: number, day: number): boolean {
+	const date = new Date(Date.UTC(year, month - 1, day));
+
+	return date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function stringList(
@@ -121,16 +153,28 @@ function timestamp(raw: unknown, name: string): number | undefined {
 	if (typeof raw !== 'string') throw error;
 
 	const value = raw.trim().replace(' ', 'T');
+	const isDate = SEARCH_CHATS_DATE_REGEX.test(value);
 
-	let ms = NaN;
+	if (!isDate && !SEARCH_CHATS_DATE_TIME_REGEX.test(value)) throw error;
 
-	if (SEARCH_CHATS_DATE_REGEX.test(value)) {
+	const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+
+	// Date.parse rolls 2026-02-30T10:00 over to March, it does not reject it
+	if (!isCalendarDate(year, month, day)) throw error;
+
+	let ms: number;
+
+	if (isDate) {
 		// Date.parse reads a date-only string as UTC midnight, the user means local midnight
-		const [year, month, day] = value.split('-').map(Number);
-		const date = new Date(year, month - 1, day);
+		ms = new Date(year, month - 1, day).getTime();
+	} else {
+		const [hours, minutes, seconds = 0] = value
+			.slice(11, 19)
+			.split(/[:.Z+-]/)
+			.map(Number);
 
-		if (date.getMonth() === month - 1 && date.getDate() === day) ms = date.getTime();
-	} else if (SEARCH_CHATS_DATE_TIME_REGEX.test(value)) {
+		if (hours > 23 || minutes > 59 || seconds > 59) throw error;
+
 		ms = Date.parse(value);
 	}
 
@@ -304,7 +348,7 @@ function visibleMessages(
 function formatDate(ms: number): string {
 	const date = new Date(ms);
 
-	return Number.isNaN(date.getTime()) ? 'unknown' : localIsoString(date);
+	return Number.isNaN(date.getTime()) ? 'unknown' : formatLocalIso(date);
 }
 
 function excerpt(text: string, maxChars: number, matchAt: number): string {
@@ -317,10 +361,10 @@ function excerpt(text: string, maxChars: number, matchAt: number): string {
 		const before = start > 0 ? SEARCH_CHATS_ELLIPSIS : '';
 		const after = end < text.length ? `${SEARCH_CHATS_ELLIPSIS}[+${text.length - end} chars]` : '';
 
-		return `${before}${text.slice(start, end)}${after}`;
+		return `${before}${sliceText(text, start, end)}${after}`;
 	}
 
-	return `${text.slice(0, maxChars)}${SEARCH_CHATS_ELLIPSIS}[+${text.length - maxChars} chars]`;
+	return `${sliceText(text, 0, maxChars)}${SEARCH_CHATS_ELLIPSIS}[+${text.length - maxChars} chars]`;
 }
 
 interface ChatHit {
@@ -343,9 +387,51 @@ function formatMessage(
 	const matchAt = matcher ? matcher.locate(text) : -1;
 	const body = excerpt(text, params.maxMessageChars, matchAt).replace(/\n+/g, '\n  ');
 	const files = (message.extra ?? []).map((e) => e.name).filter(Boolean);
-	const attachments = files.length > 0 ? ` [attachments: ${files.join(', ')}]` : '';
+	// names are user data, quote them so they cannot pass as result structure
+	const attachments =
+		files.length > 0 ? ` [attachments: ${files.map((f) => JSON.stringify(f)).join(', ')}]` : '';
 
 	return `#${position} ${message.role}${SEARCH_CHATS_FIELD_SEPARATOR}${formatDate(message.timestamp)}: ${body}${attachments}`;
+}
+
+interface ChatBlock {
+	head: string[];
+	/** Formatted messages, in chat order */
+	messages: string[];
+	/** On a cut, keep the last messages (latest / matching) instead of the first */
+	keepTail: boolean;
+}
+
+const blockText = ({ head, messages }: ChatBlock) => [...head, ...messages].join('\n');
+
+/** Fit a chat block into `room` chars by dropping whole messages from the less wanted end */
+function cutChat(block: ChatBlock, room: number): string {
+	const ordered = block.keepTail ? [...block.messages].reverse() : block.messages;
+	const kept: string[] = [];
+	const head = block.head.join('\n');
+
+	let size = head.length + 1 + SEARCH_CHATS_CUT_NOTICE.length;
+
+	for (const line of ordered) {
+		if (size + 1 + line.length > room) break;
+
+		kept.push(line);
+		size += 1 + line.length;
+	}
+
+	if (block.keepTail) kept.reverse();
+
+	const lines = block.keepTail
+		? [head, SEARCH_CHATS_CUT_NOTICE, ...kept]
+		: [head, ...kept, SEARCH_CHATS_CUT_NOTICE];
+	const text = lines.join('\n');
+
+	// even the head does not fit (very long title)
+	if (text.length > room) {
+		return `${sliceText(text, 0, Math.max(0, room - SEARCH_CHATS_CUT_NOTICE.length))}${SEARCH_CHATS_CUT_NOTICE}`;
+	}
+
+	return text;
 }
 
 function formatChat(
@@ -354,19 +440,27 @@ function formatChat(
 	params: SearchChatsParams,
 	matcher: Matcher | null,
 	timed: boolean
-): string {
+): ChatBlock {
 	const { conv, inRange, matched, messages, titleMatched } = hit;
 	const summary = [`conv_id: ${conv.id}`, `updated ${formatDate(conv.lastModified)}`];
+	// titles are user data, JSON quoting escapes quotes and newlines
+	const title = JSON.stringify(conv.name ?? '');
 
 	if (params.limitMessages === 0) {
-		return `- "${conv.name}"${SEARCH_CHATS_FIELD_SEPARATOR}${summary.join(SEARCH_CHATS_FIELD_SEPARATOR)}`;
+		return {
+			head: [
+				`- ${title}${SEARCH_CHATS_FIELD_SEPARATOR}${summary.join(SEARCH_CHATS_FIELD_SEPARATOR)}`
+			],
+			keepTail: false,
+			messages: []
+		};
 	}
 
 	const counts = timed
 		? `${messages.length} messages, ${inRange.length} in the time range`
 		: `${messages.length} messages`;
 	const lines = [
-		`## Chat ${index}: "${conv.name}"`,
+		`## Chat ${index}: ${title}`,
 		[...summary, counts].join(SEARCH_CHATS_FIELD_SEPARATOR)
 	];
 	const n = params.limitMessages;
@@ -395,9 +489,11 @@ function formatChat(
 
 	const position = new Map(messages.map((m, i) => [m.id, i + 1]));
 
-	for (const m of picked) lines.push(formatMessage(m, position.get(m.id)!, params, matcher));
-
-	return lines.join('\n');
+	return {
+		head: lines,
+		keepTail: params.messageSelection !== SearchChatsMessageSelection.EARLIEST,
+		messages: picked.map((m) => formatMessage(m, position.get(m.id)!, params, matcher))
+	};
 }
 
 function groupByConversation(messages: DatabaseMessage[]): Map<string, DatabaseMessage[]> {
@@ -462,12 +558,6 @@ export async function searchChats(
 		candidates = candidates.filter((c) => c.id !== currentConversationId);
 	}
 
-	if (timed) {
-		const active = await loader.conversationIdsInRange(fromTimestamp, toTimestamp);
-
-		candidates = candidates.filter((c) => active.has(c.id));
-	}
-
 	const matcher = params.byMatches ? buildMatcher(params.byMatches) : null;
 	const isInRange = (m: DatabaseMessage) =>
 		(fromTimestamp === undefined || m.timestamp >= fromTimestamp) &&
@@ -484,8 +574,9 @@ export async function searchChats(
 
 	if (matcher || timed) {
 		// which chats qualify depends on their messages, so read them before paging
-		const ids = byConvIds || timed ? candidates.map((c) => c.id) : null;
-		const byConv = groupByConversation(await loader.messages(ids));
+		const ids = byConvIds ? candidates.map((c) => c.id) : null;
+		const range = timed ? { from: fromTimestamp, to: toTimestamp } : undefined;
+		const byConv = groupByConversation(await loader.messages(ids, range));
 
 		hits = [];
 
@@ -537,36 +628,38 @@ export async function searchChats(
 		`${`${total} chat(s) ${describeQuery(params)}`.trim()} (${orderLabel}, ${range})`,
 		...notes
 	].join('\n');
+	const headerSeparator = '\n\n';
 	const separator = params.limitMessages === 0 ? '\n' : '\n\n';
-	const moreNote = (shown: number) =>
-		`[${page.length - shown} more chat(s) on this page not shown: use offset_chats=${params.offsetChats + shown}, or lower limit_messages]`;
-	// room for the note in its longest form
-	const budget = SEARCH_CHATS_OUTPUT_MAX_CHARS - separator.length - moreNote(0).length;
+	const moreNote = (hidden: number, nextOffset: number) =>
+		`[${hidden} more chat(s) on this page not shown: use offset_chats=${nextOffset}, or lower limit_messages]`;
+	// room for the note in its longest form: both numbers at their largest
+	const noteRoom =
+		separator.length + moreNote(page.length, params.offsetChats + page.length).length;
 	const blocks: string[] = [];
 
 	let size = header.length;
 
 	for (const [i, hit] of page.entries()) {
 		const block = formatChat(hit, params.offsetChats + i + 1, params, matcher, timed);
+		const text = blockText(block);
+		const gap = blocks.length === 0 ? headerSeparator.length : separator.length;
 		const isLast = i === page.length - 1;
-		const limit = isLast ? SEARCH_CHATS_OUTPUT_MAX_CHARS : budget;
+		const limit = SEARCH_CHATS_OUTPUT_MAX_CHARS - (isLast ? 0 : noteRoom);
 
-		if (size + separator.length + block.length > limit) {
+		if (size + gap + text.length > limit) {
 			// always show at least part of the first chat
-			if (blocks.length === 0) {
-				const room = limit - size - separator.length - SEARCH_CHATS_CUT_NOTICE.length;
-
-				blocks.push(`${block.slice(0, Math.max(0, room))}${SEARCH_CHATS_CUT_NOTICE}`);
-			}
+			if (blocks.length === 0) blocks.push(cutChat(block, limit - size - gap));
 
 			break;
 		}
 
-		blocks.push(block);
-		size += separator.length + block.length;
+		blocks.push(text);
+		size += gap + text.length;
 	}
 
-	if (blocks.length < page.length) blocks.push(moreNote(blocks.length));
+	if (blocks.length < page.length) {
+		blocks.push(moreNote(page.length - blocks.length, params.offsetChats + blocks.length));
+	}
 
-	return blocks.length > 0 ? `${header}\n\n${blocks.join(separator)}` : header;
+	return blocks.length > 0 ? `${header}${headerSeparator}${blocks.join(separator)}` : header;
 }

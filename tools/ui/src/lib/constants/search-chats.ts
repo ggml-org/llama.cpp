@@ -42,7 +42,8 @@ export const SEARCH_CHATS_ELLIPSIS = '...';
 
 export const SEARCH_CHATS_FIELD_SEPARATOR = ' | ';
 
-export const SEARCH_CHATS_CUT_NOTICE = '...[cut: lower limit_messages or max_message_chars]';
+export const SEARCH_CHATS_CUT_NOTICE =
+	'[messages cut to fit: lower limit_messages or max_message_chars]';
 
 /** `2026-11-10`, read as local midnight */
 export const SEARCH_CHATS_DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
