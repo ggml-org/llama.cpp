@@ -222,6 +222,13 @@ private:
     // mirrors the base class's ubatch cursor, which is private there
     size_t i_cur = 0;
 
+    // in order mode, the rank of the cell of token i of the current ubatch among the cells of its sequence
+    int64_t kpool_token_rank(const llama_ubatch & ubatch, uint32_t i) const;
+
+    // the count of the pools that token i of the current ubatch sees: the first pools of its sequence,
+    // up to its rank in order mode, or up to its position
+    uint32_t kpool_n_visible(const llama_ubatch & ubatch, uint32_t i) const;
+
     // Which pools of the layout this ubatch must re-pool. The layout itself belongs to the memory.
     struct kpool_state;
     kpool_state kpool_build_sizes() const;

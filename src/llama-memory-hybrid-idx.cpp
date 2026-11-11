@@ -726,6 +726,30 @@ uint32_t llama_memory_hybrid_idx_context::get_n_kpool_new() const {
     return kpool_cur().n_new_g;
 }
 
+int64_t llama_memory_hybrid_idx_context::kpool_token_rank(const llama_ubatch & ubatch, uint32_t i) const {
+    const auto &   sinfo = sinfos_kpool[i_cur];
+    const uint32_t n_tps = (uint32_t) sinfo.size();
+
+    const int64_t rank = kpool_rank(mem->kpool_layout_get().seqs[ubatch.seq_id[i][0]].cells, ubatch.pos[i], sinfo.idxs[i / n_tps][i % n_tps]);
+    GGML_ASSERT(rank >= 0);
+
+    return rank;
+}
+
+uint32_t llama_memory_hybrid_idx_context::kpool_n_visible(const llama_ubatch & ubatch, uint32_t i) const {
+    const uint32_t kpool = mem->get_kpool();
+    const auto &   sq    = mem->kpool_layout_get().seqs[ubatch.seq_id[i][0]];
+
+    if (mem->get_kpool_by_order()) {
+        return std::min<uint32_t>(sq.pools.size(), (kpool_token_rank(ubatch, i) + 1)/kpool);
+    }
+
+    // the pools that end at or before the token, the pools of a sequence are in position order
+    const llama_pos p = ubatch.pos[i];
+
+    return std::partition_point(sq.pools.begin(), sq.pools.end(), [&](uint32_t j) { return sq.cells[j + kpool - 1].first <= p; }) - sq.pools.begin();
+}
+
 ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
 
@@ -759,34 +783,11 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
         GGML_ASSERT(lay.seqs[s0].pools.empty());
     }
 
-    const auto & sq = lay.seqs[s];
-
-    std::vector<llama_pos> pool_end;
-    pool_end.reserve(sq.pools.size());
-    for (const uint32_t j : sq.pools) {
-        pool_end.push_back(sq.cells[j + kpool - 1].first);
-    }
-
-    // the count of visible pools of each token, as in set_input_kpool
-    const bool by_order = mem->get_kpool_by_order();
-
     std::vector<int64_t> nv(n);
     for (uint32_t i = 0; i < n; ++i) {
         GGML_ASSERT(ubatch.n_seq_id[t0 + i] == 1 && ubatch.seq_id[t0 + i][0] == s);
 
-        const llama_pos p = ubatch.pos[t0 + i];
-
-        if (by_order) {
-            const auto &   sinfo = sinfos_kpool[i_cur];
-            const uint32_t n_tps = (uint32_t) sinfo.size();
-
-            const int64_t rank = kpool_rank(sq.cells, p, sinfo.idxs[(t0 + i)/n_tps][(t0 + i)%n_tps]);
-            GGML_ASSERT(rank >= 0);
-
-            nv[i] = std::min<int64_t>(sq.pools.size(), (rank + 1)/kpool);
-        } else {
-            nv[i] = std::upper_bound(pool_end.begin(), pool_end.end(), p) - pool_end.begin();
-        }
+        nv[i] = kpool_n_visible(ubatch, t0 + i);
     }
 
     // one more pool every kpool tokens, from some phase
@@ -877,13 +878,9 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
     // in order mode a token sees the pools and the tail up to its own rank in the sequence, which its cell pins down
     std::vector<int64_t> rank;
     if (by_order) {
-        const auto &   sinfo = sinfos_kpool[i_cur];
-        const uint32_t n_tps = (uint32_t) sinfo.size();
-
         rank.resize(n_tokens);
         for (uint32_t i = 0; i < n_tokens; ++i) {
-            rank[i] = kpool_rank(lay.seqs[ubatch->seq_id[i][0]].cells, ubatch->pos[i], sinfo.idxs[i / n_tps][i % n_tps]);
-            GGML_ASSERT(rank[i] >= 0);
+            rank[i] = kpool_token_rank(*ubatch, i);
         }
     }
 
@@ -997,15 +994,12 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
         for (uint32_t i = 0; i < n_tokens; ++i) {
             const llama_seq_id s = ubatch->seq_id[i][0];
-            const llama_pos    p = ubatch->pos[i];
 
             T * row = data + (size_t) i*n_pool;
             std::fill(row, row + n_pool, drop);
 
             const uint32_t p0 = seq_pool_start[s];
-            const uint32_t p1 = p0 + (uint32_t) lay.seqs[s].pools.size();
-            const uint32_t nv = by_order ? std::min(p1 - p0, (uint32_t) ((rank[i] + 1)/kpool)) :
-                (uint32_t) (std::upper_bound(pool_end.begin() + p0, pool_end.begin() + p1, p) - (pool_end.begin() + p0));
+            const uint32_t nv = kpool_n_visible(*ubatch, i);
             std::fill(row + p0, row + p0 + nv, keep);
 
             // Finite visible pools occupy the first min(nv, n_top) ranked slots.
