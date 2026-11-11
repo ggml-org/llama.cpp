@@ -2778,6 +2778,13 @@ llm_graph_moe_cache_slots llm_graph_context::build_moe_cache_slots(
         return { nullptr, nullptr };
     }
 
+    // layer-major prefill: the chunks do not read the experts from the cache, whatever their token count
+    // - the copy callback looks up the experts of the first lookup of a layer only, the other chunks read the same slot map
+    // - an empty or short chunk must build the same nodes as the chunks of the reserve
+    if (moe_chunk) {
+        return { nullptr, nullptr };
+    }
+
     ggml_tensor * cpu_map  = cpu_part ? moe_cache->get_cpu_map(il, selected_experts->ne[1]) : nullptr;
     ggml_tensor * slot_map = moe_cache->get_slot_map(il, selected_experts->ne[1], selected_experts->ne[0], cpu_map != nullptr);
     if (slot_map == nullptr) {

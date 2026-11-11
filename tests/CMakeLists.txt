@@ -365,6 +365,19 @@ set_tests_properties(test-llama-context-layer-major-host-experts PROPERTIES
     ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=2;LLAMA_LAYER_MAJOR=24"
 )
 
+# layer-major prefill with the MoE cache: the empty chunk of a partial ubatch keeps the graph of the reserve
+# the experts are in host memory, the cache is on the first GPU (without a GPU, the case is skipped)
+llama_test(
+    test-llama-context
+    NAME test-llama-context-layer-major-moe-cache
+    LABEL main
+    ARGS -m "${MODEL_DIR}/gemma4-moe.gguf" --test partial -cmoe --moe-cache-mib 64
+)
+set_tests_properties(test-llama-context-layer-major-moe-cache PROPERTIES
+    FIXTURES_REQUIRED generate-models
+    ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=2;LLAMA_LAYER_MAJOR=24"
+)
+
 llama_build(test-fusion.cpp)
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)

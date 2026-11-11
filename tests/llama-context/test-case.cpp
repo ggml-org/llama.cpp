@@ -44,10 +44,24 @@ case_result case_result::skip(const std::string & why) {
     return { test_status::SKIP, why };
 }
 
+static bool has_gpu() {
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        const enum ggml_backend_dev_type type = ggml_backend_dev_type(ggml_backend_dev_get(i));
+        if (type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string ctx_test::skip_reason(model_run & mr) const {
     // the recurrent cases need a recurrent cache, the KV cases work with any model
     if (group() == TEST_GROUP_RS && !mr.is_recurrent()) {
         return "not a recurrent model";
+    }
+
+    if (mr.params.moe_cache_size > 0 && !has_gpu()) {
+        return "the MoE cache needs a GPU";
     }
 
     return {};
