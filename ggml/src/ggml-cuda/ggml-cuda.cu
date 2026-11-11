@@ -2239,7 +2239,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
-// Whether ggml_cuda_mul_mat/ggml_cuda_mul_mat_id would dispatch this node to MMQ. Used for fusion only.
+// Whether ggml_cuda_mul_mat/ggml_cuda_mul_mat_id dispatch this node to MMQ. Used by both the dispatch and the fusion checks.
 static bool ggml_cuda_mul_mat_uses_mmq(const ggml_tensor * tensor) {
     const ggml_tensor * src0 = tensor->src[0];
     const ggml_tensor * src1 = tensor->src[1];
@@ -2422,29 +2422,23 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
         return false;
     }
 
-    // The padding of a compute-buffer weight that is a view cannot be cleared, see ggml_cuda_mul_mat.
-    const auto bad_padding_clear = [](const ggml_tensor * x) {
-        return ggml_backend_buffer_get_usage(x->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
-            ggml_nbytes(x) != ggml_backend_buffer_get_alloc_size(x->buffer, x) && x->view_src;
-    };
     const int device = ggml_cuda_get_device();
-    if (!ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, device, up_scale, gate_scale) || bad_padding_clear(up->src[0]) || bad_padding_clear(gate->src[0])) {
+    if (!ggml_cuda_mul_mat_q_fusion_matches(up, gate, glu, device, up_scale, gate_scale)) {
         return false;
     }
 
-    // The batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches.
-    const ggml_tensor * x_up = up->src[0];
-    const ggml_tensor * y    = up->src[1];
-    const int           cc   = ggml_cuda_info().devices[device].cc;
-
-    // For MUL_MAT_ID: same kernel choice as ggml_cuda_mul_mat_id, with the nominal tiles of all experts (the per-expert token counts are only known on the GPU).
-    const bool    is_id     = up->op == GGML_OP_MUL_MAT_ID;
-    const int64_t ncols     = is_id ? y->ne[2]    : y->ne[1];
-    const int64_t nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
-    const bool    use_mmvq  = is_id ? ncols <= get_mmvq_mmid_max_batch(x_up->type, cc) : ggml_cuda_should_use_mmvq(x_up->type, cc, ncols);
-    if (use_mmvq || !ggml_cuda_should_use_mmq(x_up->type, cc, ncols, /*n_experts =*/ is_id ? x_up->ne[2] : 0)) {
+    // The buffer and batch size checks are done here, not in ggml_cuda_mul_mat_q_fusion_matches:
+    // both matmuls must take the MMQ path in ggml_cuda_mul_mat/ggml_cuda_mul_mat_id (this covers the weight padding too).
+    if (!ggml_cuda_mul_mat_uses_mmq(up) || !ggml_cuda_mul_mat_uses_mmq(gate)) {
         return false;
     }
+
+    // For MUL_MAT_ID the tiles are the nominal ones of all experts (the per-expert token counts are only known on the GPU).
+    const ggml_tensor * x_up      = up->src[0];
+    const ggml_tensor * y         = up->src[1];
+    const bool          is_id     = up->op == GGML_OP_MUL_MAT_ID;
+    const int64_t       ncols     = is_id ? y->ne[2]    : y->ne[1];
+    const int64_t       nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
 
     // The fused kernel needs one block per tile (no stream-k split), so only fuse if the tiling is efficient.
     return ggml_cuda_mmq_fusion_is_efficient(x_up->type, ggml_prec_get_src(up, 1), x_up->ne[1], ncols, nchannels, device);
