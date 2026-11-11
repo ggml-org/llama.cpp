@@ -68,6 +68,7 @@ export * from './supported-file-types.constants';
 export * from './table-html-restorer.constants';
 export * from './title-generation.constants';
 export * from './ui.constants';
+export * from './ui-presets.constants';
 export * from './uri-template.constants';
 export * from './url.constants';
 export * from './working-directory.constants';

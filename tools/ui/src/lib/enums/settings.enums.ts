@@ -25,3 +25,12 @@ export enum SettingsFieldType {
 	SELECT = 'select',
 	TEXTAREA = 'textarea'
 }
+
+/**
+ * UI preset picked in the welcome dialog; preset-aware settings use it to pick their default
+ */
+export enum UiPreset {
+	COMFORTABLE = 'comfortable',
+	FULL = 'full',
+	MINIMAL = 'minimal'
+}

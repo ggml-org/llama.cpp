@@ -9,7 +9,7 @@
 
 import { browser } from '$app/environment';
 import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '$lib/constants';
-import { ColorMode } from '$lib/enums';
+import { ColorMode, UiPreset } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { SettingsService } from '$lib/services/settings.service';
 import { deviceStore } from '$lib/stores/device.svelte';
@@ -19,6 +19,9 @@ import type { SettingsExportType } from '$lib/types';
 import {
 	configToParameterRecord,
 	getConfigValue,
+	getSettingsDefaults,
+	getUiPresetConfig,
+	isUiPreset,
 	normalizeFloatingPoint,
 	setConfigValue
 } from '$lib/utils';
@@ -61,6 +64,25 @@ class SettingsStore {
 		}
 
 		return false;
+	}
+
+	/**
+	 * True when the welcome dialog must ask for a UI preset: none picked yet and none set by the admin
+	 */
+	get needsUiPreset(): boolean {
+		return (
+			this.isInitialized &&
+			serverStore.props !== null &&
+			!isUiPreset(this.config[SETTINGS_KEYS.UI_PRESET]) &&
+			!isUiPreset(serverStore.uiSettings?.[SETTINGS_KEYS.UI_PRESET])
+		);
+	}
+
+	/**
+	 * Apply the UI preset picked in the welcome dialog. It only turns features on, settings changed by the user stay.
+	 */
+	applyUiPreset(preset: UiPreset): void {
+		this.updateMultipleConfig(getUiPresetConfig(preset, this.config, true));
 	}
 
 	canSyncParameter(key: string): boolean {
@@ -201,7 +223,7 @@ class SettingsStore {
 
 		// Restore config (theme is included in config)
 		this.config = {
-			...SETTING_CONFIG_DEFAULT,
+			...getSettingsDefaults(data.config[SETTINGS_KEYS.UI_PRESET]),
 			...data.config
 		};
 
@@ -271,7 +293,11 @@ class SettingsStore {
 			// sampling param known by server: clear it, let server decide
 			setConfigValue(this.config, key, '');
 		} else if (key in SETTING_CONFIG_DEFAULT) {
-			setConfigValue(this.config, key, getConfigValue(SETTING_CONFIG_DEFAULT, key));
+			setConfigValue(
+				this.config,
+				key,
+				getSettingsDefaults(this.config[SETTINGS_KEYS.UI_PRESET])[key]
+			);
 		}
 
 		this.userOverrides.delete(key);
@@ -338,6 +364,19 @@ class SettingsStore {
 				// theme lives in mode-watcher, not just in config -> propagate
 				if (key === SETTINGS_KEYS.THEME) {
 					setMode(value as ColorMode);
+				}
+			}
+
+			// an admin preset applies like a user pick, explicit ui_settings keys win
+			const adminPreset = uiSettings[SETTINGS_KEYS.UI_PRESET];
+
+			if (isUiPreset(adminPreset)) {
+				for (const [key, value] of Object.entries(
+					getUiPresetConfig(adminPreset, this.config, true)
+				)) {
+					if (!(key in uiSettings)) {
+						setConfigValue(this.config, key, value);
+					}
 				}
 			}
 		}
@@ -441,6 +480,7 @@ class SettingsStore {
 	private getResetValues(): Record<string, unknown> {
 		const propsDefaults = this.getServerDefaults();
 		const uiSettings = serverStore.uiSettings;
+		const defaults = getSettingsDefaults(this.config[SETTINGS_KEYS.UI_PRESET]);
 		const values: Record<string, unknown> = {};
 
 		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
@@ -450,22 +490,23 @@ class SettingsStore {
 			} else if (propsDefaults[key] !== undefined) {
 				// sampling param: clear it, let server decide
 				values[key] = '';
-			} else if (key in SETTING_CONFIG_DEFAULT) {
-				values[key] = getConfigValue(SETTING_CONFIG_DEFAULT, key);
+			} else if (key in defaults) {
+				values[key] = defaults[key];
 			}
 		}
 
 		// Non-syncable keys: reset is a full return to the instance state, the
 		// admin baseline value when defined, the factory default otherwise.
-		for (const key of Object.keys(SETTING_CONFIG_DEFAULT)) {
-			if (ParameterSyncService.canSyncParameter(key)) {
+		// the preset is a user pick, reset keeps it and resets to its defaults
+		for (const key of Object.keys(defaults)) {
+			if (ParameterSyncService.canSyncParameter(key) || key === SETTINGS_KEYS.UI_PRESET) {
 				continue;
 			}
 
 			values[key] =
 				uiSettings && key in uiSettings && uiSettings[key] !== undefined
 					? uiSettings[key]
-					: getConfigValue(SETTING_CONFIG_DEFAULT, key);
+					: defaults[key];
 		}
 
 		return values;
@@ -504,9 +545,9 @@ class SettingsStore {
 		// this state, then the user's config diverges freely.
 		this.isFirstVisit = isFirstVisit;
 
-		// Merge with defaults to prevent breaking changes
+		// Merge with defaults to prevent breaking changes; a setting new since the last save gets the default of the user's preset
 		this.config = {
-			...SETTING_CONFIG_DEFAULT,
+			...getSettingsDefaults(savedVal[SETTINGS_KEYS.UI_PRESET]),
 			...savedVal
 		};
 
