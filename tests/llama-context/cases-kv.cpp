@@ -7,11 +7,10 @@
 
 #include "common.h"
 
-#include "../../src/llama-ext.h" // llama_model_set_attn_rot
+#include "../../src/llama-ext.h" // llama_model_set_attn_rot, llama_arch_from_string
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <functional>
 #include <iterator>
@@ -770,9 +769,10 @@ struct case_comp_padding : ctx_test {
     }
 
     std::string skip_reason(model_run & mr) const override {
-        char arch[64] = {};
-        llama_model_meta_val_str(mr.model, "general.architecture", arch, sizeof(arch));
-        return strcmp(arch, "deepseek4") == 0 || strcmp(arch, "deepseek41") == 0 ? "" : "requires DeepSeek V4 or V4.1";
+        char arch_name[64] = {};
+        llama_model_meta_val_str(mr.model, "general.architecture", arch_name, sizeof(arch_name));
+        const llm_arch arch = llama_arch_from_string(arch_name);
+        return arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 ? "" : "requires DeepSeek V4 or V4.1";
     }
 
     case_result run(model_run & mr) const override {
@@ -782,7 +782,8 @@ struct case_comp_padding : ctx_test {
             ctx_opts opts;
             opts.n_ctx      = 256*n_seq;
             opts.n_batch    = 64;
-            opts.n_ubatch   = 64;
+            // Reserve the DSV4.1 small-batch attention graph when n_seq == 1.
+            opts.n_ubatch   = 32;
             opts.n_seq_max  = n_seq;
             opts.kv_unified = n_seq == 1;
 

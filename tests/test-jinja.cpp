@@ -677,6 +677,24 @@ static void test_set_statement(testing & t) {
 }
 
 static void test_filters(testing & t) {
+    for (const std::string filter : {"upper", "lower", "title", "capitalize"}) {
+        for (const std::string input : {"'hello'", "missing"}) {
+            test_template_error(t, filter + " rejects unknown keyword on " + input,
+                "{{ " + input + "|" + filter + "(attribute='name') }}",
+                "unexpected keyword argument 'attribute'"
+            );
+            test_template_error(t, filter + " rejects extra positional argument on " + input,
+                "{{ " + input + "|" + filter + "('extra') }}",
+                "expected between 1 and 1 arguments, got 2"
+            );
+        }
+    }
+
+    test_template_error(t, "string method rejects unknown keyword",
+        "{{ 'hello'.upper(attribute='name') }}",
+        "unexpected keyword argument 'attribute'"
+    );
+
     test_template(t, "upper",
         "{{ 'hello'|upper }}",
         json::object(),
@@ -724,6 +742,23 @@ static void test_filters(testing & t) {
         json::object(),
         "hello"
     );
+
+    test_template(t, "trim chars keyword",
+        "{{ 'xyxhelloxyx'|trim(chars='xy') }}|{{ missing|trim(chars='xy') }}",
+        json::object(),
+        "hello|"
+    );
+
+    for (const std::string input : {"'hello'", "missing"}) {
+        test_template_error(t, "trim rejects unknown keyword on " + input,
+            "{{ " + input + "|trim(attribute='name') }}",
+            "unexpected keyword argument 'attribute'"
+        );
+        test_template_error(t, "trim rejects extra positional argument on " + input,
+            "{{ " + input + "|trim('x', 'y') }}",
+            "expected between 1 and 2 arguments, got 3"
+        );
+    }
 
     test_template(t, "length string",
         "{{ 'hello'|length }}",
@@ -2064,6 +2099,79 @@ static void test_array_methods(testing & t) {
         "{\"x\": 2}"
     );
 
+    test_template(t, "array|map with filter int materialized",
+        "{{ arr|map('int')|list|join(',') }}",
+        {{"arr", json::array({"1", "2", "3"})}},
+        "1,2,3"
+    );
+
+    test_template(t, "array|map with filter upper for schema union type",
+        "{{ item_value|map('upper')|list|join(',') }}",
+        {{"item_value", json::array({"string", "null"})}},
+        "STRING,NULL"
+    );
+
+    test_template_error(t, "array|map rejects unsupported filter attribute",
+        "{{ [{'name': 'alice'}]|map('upper', attribute='name')|join(',') }}",
+        "unexpected keyword argument 'attribute'"
+    );
+
+    test_template_error(t, "array|map rejects unknown keyword on undefined item",
+        "{{ [missing]|map('lower', attribute='name')|join(',') }}",
+        "unexpected keyword argument 'attribute'"
+    );
+
+    test_template(t, "array|map attribute then filter upper",
+        "{{ arr|map(attribute='name')|map('upper')|join(',') }}",
+        {{"arr", json::array({{{"name", "alice"}}, {{"name", "bob"}}})}},
+        "ALICE,BOB"
+    );
+
+    test_template(t, "array|map with filter arguments",
+        "{{ arr|map('replace', 'a', 'o')|join(',') }}",
+        {{"arr", json::array({"cat", "bat"})}},
+        "cot,bot"
+    );
+
+    test_template(t, "array|map with filter keyword arguments",
+        "{{ arr|map('join', '-', attribute='name')|join(';') }}",
+        {{"arr", json::array({
+            json::array({
+                json({{"name", "a"}}),
+                json({{"name", "b"}}),
+            }),
+            json::array({
+                json({{"name", "c"}}),
+            }),
+        })}},
+        "a-b;c"
+    );
+
+    test_template(t, "array|map with count alias",
+        "{{ arr|map('count')|join(',') }}",
+        {{"arr", json::array({"cat", "hello"})}},
+        "3,5"
+    );
+
+    test_template(t, "array|map with join keyword arguments",
+        "{{ [[{'name': 'a'}, {'name': 'b'}]]|map('join', d='-', attribute='name')|join(';') }}",
+        json::object(),
+        "a-b"
+    );
+
+    for (const std::string input : {"['a', 'b']", "[]", "missing"}) {
+        test_template_error(t, "join rejects unknown keyword on " + input,
+            "{{ " + input + "|join(typo='name') }}",
+            "unexpected keyword argument 'typo'"
+        );
+    }
+
+    test_template(t, "array|map with default alias and arguments",
+        "{{ arr|map('d', 'fallback', true)|join(',') }}",
+        {{"arr", json::array({"", "value"})}},
+        "fallback,value"
+    );
+
     // not used by any chat templates
     // test_template(t, "array.insert()",
     //     "{% set _ = arr.insert(1, 'x') %}{{ arr|join(',') }}",
@@ -2127,6 +2235,12 @@ static void test_array_methods(testing & t) {
 
     test_template(t, "undefined|join",
         "{{ arr|join }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|join with keyword arguments",
+        "{{ arr|join(d='-', attribute='name') }}",
         json::object(),
         ""
     );

@@ -1,0 +1,77 @@
+#ifndef HTP_DSV4_HC_OPS_H
+#define HTP_DSV4_HC_OPS_H
+
+#include <stdint.h>
+
+#include "hex-fastdiv.h"
+#include "htp-ops.h"
+
+#define HTP_DSV4_HC_CHUNK_ELEMS 32
+#define HTP_DSV4_HC_MAX_CHUNKS 128
+#define HTP_DSV4_HC_PRE_GATED_ROWS 9
+#define HTP_DSV4_HC_PRE_PLAIN_ROWS 6
+
+enum htp_dsv4_hc_pre_kernel_type {
+    HTP_DSV4_HC_PRE_KERNEL_PLAIN = 0,
+    HTP_DSV4_HC_PRE_KERNEL_GATED = 1,
+};
+
+struct htp_dsv4_hc_pre_kernel_params {
+    uint32_t kernel_type;
+    uint32_t n_hvx;
+    uint32_t n_chunks;
+    uint32_t total_jobs;
+    uint32_t jobs_per_hvx;
+
+    uint32_t dma_block_chunks;
+    uint32_t dma_row_stride;
+    uint32_t dma_buffer_size;
+    uint32_t vtcm_size;
+
+    struct fastdiv_values div_n_chunks;
+    struct fastdiv_values div_n_hvx;
+};
+
+#if defined(__cplusplus)
+static_assert(sizeof(struct htp_dsv4_hc_pre_kernel_params) <= 128, "htp_dsv4_hc_pre_kernel_params is too large for kernel_params blob");
+#else
+_Static_assert(sizeof(struct htp_dsv4_hc_pre_kernel_params) <= 128, "htp_dsv4_hc_pre_kernel_params is too large for kernel_params blob");
+#endif
+
+// dma buffer holds residual rows 0..3, x at row 4, dst rows 5..8, post/comb at row 9
+#define HTP_DSV4_HC_POST_ROWS 10
+
+enum htp_dsv4_hc_post_kernel_type {
+    HTP_DSV4_HC_POST_KERNEL_IDENTITY = 0,
+    HTP_DSV4_HC_POST_KERNEL_COMB     = 1,
+};
+
+struct htp_dsv4_hc_post_kernel_params {
+    uint32_t kernel_type;
+    uint32_t n_hvx;
+    uint32_t n_chunks;
+    uint32_t total_jobs;
+    uint32_t jobs_per_hvx;
+    uint32_t has_comb;
+
+    uint32_t dma_block_chunks;
+    uint32_t dma_row_stride;
+    uint32_t dma_buffer_size;
+    uint32_t vtcm_size;
+
+    struct fastdiv_values div_n_chunks;
+    struct fastdiv_values div_n_hvx;
+};
+
+#if defined(__cplusplus)
+static_assert(sizeof(struct htp_dsv4_hc_post_kernel_params) <= 128, "htp_dsv4_hc_post_kernel_params is too large for kernel_params blob");
+#else
+_Static_assert(sizeof(struct htp_dsv4_hc_post_kernel_params) <= 128, "htp_dsv4_hc_post_kernel_params is too large for kernel_params blob");
+#endif
+
+struct htp_ops_context;
+
+int op_dsv4_hc_pre(struct htp_ops_context * octx);
+int op_dsv4_hc_post(struct htp_ops_context * octx);
+
+#endif // HTP_DSV4_HC_OPS_H

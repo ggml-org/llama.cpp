@@ -279,6 +279,7 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_CONNECT_CODE");
     if (unset_model_args) {
         preset.unset_option("LLAMA_ARG_MODEL");
+        preset.unset_option("LLAMA_ARG_SHARD");
         preset.unset_option("LLAMA_ARG_MMPROJ");
         preset.unset_option("LLAMA_ARG_ALIAS");
         preset.unset_option("LLAMA_ARG_HF_REPO");
@@ -408,7 +409,7 @@ server_models::server_models(
 
     // set binary path
     try {
-        bin_path = fs_path_to_utf8(get_server_exec_path());
+        bin_path = get_server_exec_path().string();
     } catch (const std::exception & e) {
         bin_path = argv[0];
         SRV_WRN("failed to get server executable path: %s\n", e.what());
@@ -597,7 +598,7 @@ void server_unfinished_downloads::save() {
         data["downloads"].push_back({ {"model", d.model}, {"sidecars", d.sidecars}, {"partials", partials} });
     }
     try {
-        fs_write_atomic(std::filesystem::u8path(unfinished_downloads_path()), data.dump());
+        fs_write_atomic(unfinished_downloads_path(), data.dump());
     } catch (const std::exception & e) {
         LOG_WRN("failed to record unfinished downloads: %s\n", e.what());
     }
@@ -614,7 +615,7 @@ void server_unfinished_downloads::delete_partials(const std::vector<common_downl
             continue;
         }
         std::error_code ec;
-        std::filesystem::remove(std::filesystem::u8path(p.path), ec);
+        std::filesystem::remove(p.path, ec);
     }
 }
 
@@ -1702,7 +1703,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
         // sleep after req_count++, so the model counts as busy while we wait here
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
-    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_TRC("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
@@ -1757,7 +1758,7 @@ void server_models::proxy_ws(const server_http_req & req, server_http_context::w
         mapping[name].meta.last_used = ggml_time_ms();
         mapping[name].req_count++;
     }
-    SRV_INF("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_TRC("proxying websocket to model %s on port %d\n", name.c_str(), meta->port);
 
     std::string url = std::string("ws://") + CHILD_ADDR + ":" + std::to_string(meta->port) + req.path;
     if (!req.query_string.empty()) {

@@ -108,7 +108,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
     return MMVQ_PARAMETERS_RDNA4;
 #elif defined(RDNA3_0)
     return MMVQ_PARAMETERS_RDNA3_0;
-#elif defined(RDNA2) || defined(RDNA3_5)
+#elif defined(RDNA2) || defined(RDNA3_5) || defined(RDNA4_M)
     return MMVQ_PARAMETERS_RDNA2;
 #elif defined(GCN) || defined(CDNA)
     return MMVQ_PARAMETERS_GCN;
@@ -128,7 +128,7 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     if (GGML_CUDA_CC_IS_RDNA3_0(cc)) {
         return MMVQ_PARAMETERS_RDNA3_0;
     }
-    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
         return MMVQ_PARAMETERS_RDNA2;
     }
     if (GGML_CUDA_CC_IS_GCN(cc) || GGML_CUDA_CC_IS_CDNA(cc)) {
@@ -285,6 +285,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     // NVIDIA: P100, Volta, Ada Lovelace, and Blackwell always use MMVQ for MUL_MAT_ID.
     if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
+        cc = ggml_cuda_highest_compiled_arch(cc);
         if (cc == GGML_CUDA_CC_PASCAL || cc == GGML_CUDA_CC_VOLTA || cc >= GGML_CUDA_CC_ADA_LOVELACE) {
             return MMVQ_MAX_BATCH_SIZE;
         }
@@ -299,7 +300,7 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
         if (GGML_CUDA_CC_IS_RDNA4(cc)) {
             return get_mmvq_mmid_max_batch_rdna4(type);
         }
-        if (GGML_CUDA_CC_IS_RDNA3(cc)) {
+        if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
             return get_mmvq_mmid_max_batch_rdna3(type);
         }
         if (GGML_CUDA_CC_IS_RDNA1(cc) || GGML_CUDA_CC_IS_RDNA2(cc)) {
@@ -432,7 +433,7 @@ template <ggml_type type>
 static constexpr __device__ int get_mmvq_mmid_max_batch_for_device() {
 #if defined(RDNA4)
     return get_mmvq_mmid_max_batch_rdna4(type);
-#elif defined(RDNA3)
+#elif defined(RDNA3) || defined(RDNA4_M)
     return get_mmvq_mmid_max_batch_rdna3(type);
 #elif defined(RDNA2) || defined(RDNA1)
     return get_mmvq_mmid_max_batch_rdna1_rdna2(type);
@@ -1554,7 +1555,7 @@ void ggml_cuda_mul_mat_vec_q(
         const int64_t s11 = src1->nb[1] / ts_src1;
         const int64_t s12 = src1->nb[2] / ts_src1;
         const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        quantize_row_q8_1_cuda(src1_d, src1_q8_1.get(), ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;

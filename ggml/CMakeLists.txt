@@ -4,7 +4,7 @@ project("ggml" C CXX ASM)
 
 ### GGML Version
 set(GGML_VERSION_MAJOR 0)
-set(GGML_VERSION_MINOR 28)
+set(GGML_VERSION_MINOR 29)
 set(GGML_VERSION_PATCH 0)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
 
@@ -205,7 +205,7 @@ option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copie
 option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
 option(GGML_CUDA_FA                         "ggml: compile ggml FlashAttention CUDA kernels"  ON)
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
-set   (GGML_CUDA_FA_QUANTS "q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" CACHE STRING
+set   (GGML_CUDA_FA_QUANTS "q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16;f8_e4m3-f8_e4m3" CACHE STRING
                                             "ggml: FlashAttention K-V type combinations to compile, \"all\" or a list such as \"q8_0-q8_0;q8_0-q4_0\"")
 option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
 option(GGML_CUDA_NCCL                       "ggml: use NVIDIA Collective Comm. Library"       ON)
@@ -250,6 +250,7 @@ option(GGML_OPENMP_FETCH                    "ggml: fetch LLVM OpenMP"           
 option(GGML_RPC                             "ggml: use RPC"                                   OFF)
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
+option(GGML_SYCL_SUPPORT_XMX                "ggml: build the XMX (DPAS) code paths in the SYCL backend" ON)
 option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL backend"         ON)
 option(GGML_SYCL_HOST_MEM_FALLBACK          "ggml: allow host memory fallback in SYCL reorder (requires kernel 6.8+)" ON)
 option(GGML_SYCL_SUPPORT_LEVEL_ZERO_API     "ggml: use Level Zero API in SYCL backend"  ON)

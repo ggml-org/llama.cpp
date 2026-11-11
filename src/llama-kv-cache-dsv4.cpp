@@ -160,6 +160,7 @@ static llama_ubatch dsv4_build_raw_write_ubatch(const llama_ubatch & ubatch) {
         /*.token        =*/ data->token.empty() ? nullptr : data->token.data(),
         /*.embd         =*/ nullptr,
         /*.embd_state   =*/ nullptr,
+        /*.embd_row     =*/ nullptr,
         /*.pos          =*/ data->pos.data(),
         /*.n_seq_id     =*/ data->n_seq_id.data(),
         /*.seq_id       =*/ data->seq_id.data(),
@@ -426,25 +427,6 @@ static void dsv4_state_read_k_cache(
         }
 
         dsv4_state_read_tensor_streams(io, kv->get_k_storage(il), kv_size, n_rows_ref, s0, ns);
-    }
-
-    if (n_rows_ref == 0) {
-        return;
-    }
-
-    // refill the mirrors from their sources; a mirror gets the same rows as its source, so a whole copy is exact
-    for (uint32_t il : kv->get_layer_ids()) {
-        const int32_t src = kv_src[il];
-        if (src == (int32_t) il) {
-            continue;
-        }
-        ggml_tensor * t_src = kv->get_k_storage(src);
-        ggml_tensor * t_dst = kv->get_k_storage(il);
-        if (t_src->type != t_dst->type || !ggml_are_same_shape(t_src, t_dst)) {
-            throw std::runtime_error("DSV4 K-cache mirror layout mismatch");
-        }
-
-        ggml_backend_tensor_copy(t_src, t_dst);
     }
 }
 
@@ -1261,7 +1243,8 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     hparams_lid(model.hparams),
     n_seq_max(n_seq_max),
     n_rs_seq(n_rs_seq),
-    rs_idx(n_seq_max, 0) {
+    rs_idx(n_seq_max, 0),
+    rs_max(n_seq_max, 0) {
 
     const layer_filter_cb filter_raw = [&](int32_t il) {
         if (filter && !filter(il)) {
@@ -1618,12 +1601,8 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
             return res;
         }
 
-        if (n_rs_seq == 0) {
-            return false;
-        }
-
         const llama_pos rollback = pos_max - (p0 - 1);
-        if (rollback < 1 || rollback > (llama_pos) n_rs_seq) {
+        if (rollback < 1 || rollback > (llama_pos) rs_max[seq_id]) {
             return false;
         }
 
@@ -1663,6 +1642,7 @@ void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
 
     if (seq_id_src != seq_id_dst) {
         rs_idx[seq_id_dst] = 0;
+        rs_max[seq_id_dst] = 0;
     }
 }
 
@@ -1798,6 +1778,9 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
         dsv4_state_read_k_cache(io, kv_csa.get(), seq_id, flags, comp_il_src);
         dsv4_state_read_k_cache(io, kv_hca.get(), seq_id, flags, comp_il_src);
         dsv4_state_read_k_cache(io, kv_lid.get(), seq_id, flags, comp_il_src);
+
+        // the io can defer the tensor reads until it is destroyed, so the mirrors are refilled before the next graph
+        comp_mirrors_stale = true;
     }
 
     csa_state->state_read(io, seq_id, flags);
@@ -1807,8 +1790,10 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
     if (seq_id >= 0) {
         GGML_ASSERT((uint32_t) seq_id < n_seq_max);
         rs_idx[seq_id] = 0;
+        rs_max[seq_id] = 0;
     } else {
         std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        std::fill(rs_max.begin(), rs_max.end(), 0);
     }
 }
 
@@ -1852,19 +1837,55 @@ const std::vector<uint32_t> & llama_kv_cache_dsv4::get_rs_idx() const {
     return rs_idx;
 }
 
-void llama_kv_cache_dsv4::reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches) {
+void llama_kv_cache_dsv4::update_rs_for_ubatches(const std::vector<llama_ubatch> & ubatches) {
     if (n_rs_seq == 0) {
         return;
     }
 
+    std::vector<uint32_t> n_seq_tokens(n_seq_max);
+
     for (const llama_ubatch & ubatch : ubatches) {
+        std::fill(n_seq_tokens.begin(), n_seq_tokens.end(), 0);
+
         for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
             for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id = ubatch.seq_id[i][s];
                 if (seq_id >= 0 && (uint32_t) seq_id < n_seq_max) {
-                    rs_idx[seq_id] = 0;
+                    n_seq_tokens[seq_id]++;
                 }
             }
+        }
+
+        // the ubatch consumes any pending rollback and leaves snapshots for its own tokens only
+        for (uint32_t seq_id = 0; seq_id < n_seq_max; ++seq_id) {
+            if (n_seq_tokens[seq_id] > 0) {
+                rs_idx[seq_id] = 0;
+                rs_max[seq_id] = std::min(n_seq_tokens[seq_id], n_rs_seq);
+            }
+        }
+    }
+}
+
+void llama_kv_cache_dsv4::refill_comp_mirrors() {
+    if (!comp_mirrors_stale) {
+        return;
+    }
+
+    comp_mirrors_stale = false;
+
+    // a mirror gets the same rows as its source, so a whole copy is exact
+    for (const llama_kv_cache * kv : { kv_csa.get(), kv_hca.get(), kv_lid.get() }) {
+        for (uint32_t il : kv->get_layer_ids()) {
+            const int32_t src = comp_il_src[il];
+            if (src == (int32_t) il) {
+                continue;
+            }
+
+            ggml_tensor * t_src = kv->get_k_storage(src);
+            ggml_tensor * t_dst = kv->get_k_storage(il);
+            GGML_ASSERT(t_src->type == t_dst->type && ggml_are_same_shape(t_src, t_dst));
+
+            ggml_backend_tensor_copy(t_src, t_dst);
         }
     }
 }
@@ -1899,8 +1920,10 @@ void llama_kv_cache_dsv4::clear_compressed(llama_seq_id seq_id, bool data) {
 
     if (seq_id >= 0) {
         rs_idx[seq_id] = 0;
+        rs_max[seq_id] = 0;
     } else {
         std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        std::fill(rs_max.begin(), rs_max.end(), 0);
     }
 }
 
@@ -2060,25 +2083,21 @@ ggml_tensor * llama_kv_cache_dsv4_raw_context::build_input_k_idxs(ggml_context *
     return k_idxs;
 }
 
-ggml_tensor * llama_kv_cache_dsv4_raw_context::build_input_k_rot(ggml_context * ctx) const {
-    return kv_swa->build_input_k_rot(ctx);
+std::vector<ggml_tensor *> llama_kv_cache_dsv4_raw_context::get_k_rot() const {
+    return kv_swa->get_k_rot();
 }
 
 void llama_kv_cache_dsv4_raw_context::set_input_k_idxs(ggml_tensor * dst) const {
     kv_swa->set_input_k_idxs(dst, &ubatches_write[i_next], sinfos_write[i_next]);
 }
 
-void llama_kv_cache_dsv4_raw_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    kv_swa->set_input_kq_mask(dst, ubatch, causal_attn);
+void llama_kv_cache_dsv4_raw_context::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
+    kv_swa->set_input_attn_mask(attn_mask, ubatch, causal_attn);
 }
 
 void llama_kv_cache_dsv4_raw_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
     GGML_ASSERT(kv_swa != nullptr);
     kv_swa->get_prev_tokens(ubatch, n, res);
-}
-
-void llama_kv_cache_dsv4_raw_context::set_input_k_rot(ggml_tensor * dst) const {
-    kv_swa->set_input_k_rot(dst);
 }
 
 //
@@ -2132,12 +2151,8 @@ ggml_tensor * llama_kv_cache_dsv4_comp_context::cpy_k(ggml_context * ctx, ggml_t
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
 
-ggml_tensor * llama_kv_cache_dsv4_comp_context::build_input_k_rot(ggml_context * ctx) const {
-    return kv->build_input_k_rot(ctx);
-}
-
-void llama_kv_cache_dsv4_comp_context::set_input_k_rot(ggml_tensor * dst) const {
-    kv->set_input_k_rot(dst);
+std::vector<ggml_tensor *> llama_kv_cache_dsv4_comp_context::get_k_rot() const {
+    return kv->get_k_rot();
 }
 
 //
@@ -2235,7 +2250,7 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
     lid_state(kv->get_lid_state()),
     status(ctx_raw->get_status()),
     kv(kv) {
-    kv->reset_rs_idx_for_ubatches(this->ubatches);
+    kv->update_rs_for_ubatches(this->ubatches);
 }
 
 llama_kv_cache_dsv4_context::~llama_kv_cache_dsv4_context() = default;
@@ -2273,6 +2288,8 @@ bool llama_kv_cache_dsv4_context::apply() {
         hca_state->apply_copies(sc_info_hca);
         lid_state->apply_copies(sc_info_lid);
     }
+
+    kv->refill_comp_mirrors();
 
     return res;
 }

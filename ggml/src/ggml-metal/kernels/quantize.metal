@@ -26,11 +26,11 @@ kernel void kernel_cpy_t_t(
     const int32_t i1 = (n - i3*args.ne2*args.ne1*args.ne0 - i2*args.ne1*args.ne0)/args.ne0;
     const int32_t i0 = (n - i3*args.ne2*args.ne1*args.ne0 - i2*args.ne1*args.ne0 - i1*args.ne0);
 
-    device T1 * dst_data = (device T1 *) (dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
+    device char * dst_data = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0;
 
     for (int32_t i00 = iw0*ntg[0] + tpitg.x; i00 < args.ne00;) {
         device const T0 * src = (device T0 *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
-        dst_data[i00] = (T1) src[0];
+        *(device T1 *)(dst_data + i00*args.nb0) = (T1) src[0];
         break;
     }
 }

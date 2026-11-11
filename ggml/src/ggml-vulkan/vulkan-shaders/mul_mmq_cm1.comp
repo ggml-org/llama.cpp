@@ -173,7 +173,7 @@ void main() {
         cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
     }
 #if !defined(USE_OCP_FP4)
-    for (uint i = gl_LocalInvocationIndex; i < 128u; i += BLOCK_SIZE) {
+    for (uint i = gl_LocalInvocationIndex; i < 256u; i += BLOCK_SIZE) {
         ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
     }
 #endif

@@ -43,6 +43,9 @@
 #define cublasHandle_t hipblasHandle_t
 #define cublasSetMathMode(handle, mode) CUBLAS_STATUS_SUCCESS
 #define cublasSetStream hipblasSetStream
+#if HIP_VERSION >= 70000000
+#define cublasSetWorkspace hipblasSetWorkspace
+#endif // HIP_VERSION >= 70000000
 #define cublasSgemm hipblasSgemm
 #define cublasSgemmBatched hipblasSgemmBatched
 #define cublasSgemmStridedBatched hipblasSgemmStridedBatched
@@ -57,7 +60,9 @@
 #define cudaDeviceProp hipDeviceProp_t
 #define cudaDeviceSynchronize hipDeviceSynchronize
 #define cudaError_t hipError_t
+#define CUresult hipError_t
 #define cudaErrorMemoryAllocation hipErrorOutOfMemory
+#define CUDA_ERROR_OUT_OF_MEMORY hipErrorOutOfMemory
 #define cudaErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
 #define cudaErrorPeerAccessNotEnabled hipErrorPeerAccessNotEnabled
 #define cudaEventCreateWithFlags hipEventCreateWithFlags
@@ -216,9 +221,13 @@
 #define RDNA4
 #endif // defined(__GFX12__)
 
-#if defined(__GFX11__)
+#if defined(__gfx1170__) || defined(__gfx1171__)
+#define RDNA4_M
+#endif // defined(__gfx1170__) || defined(__gfx1171__)
+
+#if defined(__GFX11__) && !defined(RDNA4_M)
 #define RDNA3
-#endif // defined(__GFX11__)
+#endif // defined(__GFX11__) && !defined(RDNA4_M)
 
 #if defined(__gfx1150__) || defined(__gfx1151__) || defined(__gfx1152__) || defined(__gfx1153__)
 #define RDNA3_5
@@ -237,9 +246,9 @@
 #define RDNA1
 #endif // defined(__gfx1010__) || defined(__gfx1012__)
 
-#if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
+#if defined(RDNA4) || defined(RDNA4_M) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
 #define RDNA // For the entire family
-#endif // defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
+#endif // defined(RDNA4) || defined(RDNA4_M) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
 
 #ifndef __has_builtin
     #define __has_builtin(x) 0
@@ -253,6 +262,10 @@ typedef __hip_bfloat162 nv_bfloat162;
 typedef __hip_fp8_e4m3 __nv_fp8_e4m3;
 #define FP8_AVAILABLE
 #endif // HIP_VERSION >= 60300000
+
+#if HIP_VERSION < 70000000
+#define __ballot_sync(mask, var) __ballot(var)
+#endif //HIP_VERSION < 70000000
 
 typedef int8_t int8x4_t __attribute__((ext_vector_type(4)));
 typedef uint8_t uint8x4_t __attribute__((ext_vector_type(4)));

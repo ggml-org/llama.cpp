@@ -21,7 +21,7 @@ struct htp_concat_transposed_params {
 struct htp_concat_kernel_params {
     uint8_t  kernel_type;
     uint8_t  dim;
-    uint8_t  n_threads;
+    uint8_t  n_hvx;
     uint8_t  pad;
 
     uint32_t vtcm_size;
@@ -39,8 +39,8 @@ _Static_assert(sizeof(struct htp_concat_kernel_params) <= 128, "htp_concat_kerne
 #endif
 
 struct htp_concat_transposed_vtcm_layout {
-    uint32_t src0_spad_size_per_thread;
-    uint32_t src1_spad_size_per_thread;
+    uint32_t src0_spad_size_per_hvx;
+    uint32_t src1_spad_size_per_hvx;
     size_t   off_spad0;
     size_t   off_spad1;
     uint32_t total_bytes;
@@ -51,19 +51,23 @@ static inline void htp_concat_transposed_vtcm_layout_build(
     uint32_t src0_ne0,
     uint32_t src1_ne0,
     uint32_t type_size,
-    uint32_t n_threads) {
+    uint32_t n_hvx) {
 
-    uint32_t block_i = (type_size == 4) ? 32 : 64;
-    uint32_t spad1_stride = block_i * type_size;
-    uint32_t src1_ne0_padded = hex_round_up(src1_ne0, block_i);
-    uint32_t spad0_row_bytes = hex_round_up(src0_ne0 * type_size, 128) + src1_ne0_padded * type_size;
+    // src1_ne0 is processed in chunks of block_cols tokens, so VTCM does not grow with the batch
+    uint32_t block_rows = 128;
+    uint32_t block_cols = (type_size == 4) ? 256 : 512;
+    // +1 element spreads the gather lanes across VTCM, so they do not serialize on one path
+    uint32_t spad1_stride = block_rows * type_size + type_size;
+    uint32_t block_cols_padded = MIN(hex_round_up(src1_ne0, (type_size == 4) ? 32 : 64), block_cols);
+    uint32_t spad0_row_bytes = hex_round_up(src0_ne0 * type_size, 128) + block_cols_padded * type_size;
 
-    L->src0_spad_size_per_thread = block_i * spad0_row_bytes;
-    L->src1_spad_size_per_thread = src1_ne0_padded * spad1_stride;
+    // double-buffered: two slots per thread
+    L->src0_spad_size_per_hvx = 2 * block_rows * spad0_row_bytes;
+    L->src1_spad_size_per_hvx = 2 * block_cols_padded * spad1_stride;
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_spad0, (size_t) n_threads * L->src0_spad_size_per_thread);
-    VTCM_LAYOUT_ALLOC(off, off_spad1, (size_t) n_threads * L->src1_spad_size_per_thread);
+    VTCM_LAYOUT_ALLOC(off, off_spad0, (size_t) n_hvx * L->src0_spad_size_per_hvx);
+    VTCM_LAYOUT_ALLOC(off, off_spad1, (size_t) n_hvx * L->src1_spad_size_per_hvx);
     L->total_bytes = (uint32_t) off;
 }
 

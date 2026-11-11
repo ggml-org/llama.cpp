@@ -92,6 +92,10 @@ public:
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
 
+        // largest rollback whose snapshot the last ubatch guarantees: a ubatch of n <= n_rs_seq + 1 tokens
+        // writes snapshots 0..n-1, a longer one only guarantees the final state (ggml_gated_delta_net)
+        uint32_t rs_max = 0;
+
         std::set<llama_seq_id> seq_id;
 
         bool has_seq_id(const llama_seq_id & id) const {

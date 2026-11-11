@@ -1,3 +1,5 @@
+find_package(Threads REQUIRED)
+
 llama_add_compile_flags()
 
 # Optional args:
@@ -188,6 +190,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
     llama_build_and_test(test-llama-grammar.cpp  LABEL behavior  LINK llama)
     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
+    llama_build_and_test(test-kv-cache.cpp LABEL behavior)
+    target_include_directories(test-kv-cache PRIVATE ${PROJECT_SOURCE_DIR}/src)
     llama_build_and_test(test-chat.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
@@ -226,6 +230,19 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build(test-llama-archs.cpp)
+if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
+    llama_build(test-fp8.cpp)
+    set(FP8_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8")
+    file(MAKE_DIRECTORY "${FP8_MODEL_DIR}")
+    llama_test(test-llama-archs NAME test-generate-fp8-models LABEL "main behavior backend"
+        ARGS -a llama -s 1 -o "${FP8_MODEL_DIR}")
+    set_tests_properties(test-generate-fp8-models PROPERTIES FIXTURES_SETUP fp8-models)
+    llama_test(test-fp8 NAME test-fp8-requantize LABEL "main behavior backend"
+        ARGS --models "${FP8_MODEL_DIR}")
+    llama_test(test-fp8 NAME test-fp8-kv LABEL "main behavior backend"
+        ARGS --models "${FP8_MODEL_DIR}" --kv)
+    set_tests_properties(test-fp8-requantize test-fp8-kv PROPERTIES FIXTURES_REQUIRED fp8-models)
+endif()
 
 set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
 file(MAKE_DIRECTORY "${MODEL_DIR}")
@@ -277,6 +294,18 @@ llama_build(test-fusion.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp  LABEL behavior)
 llama_build_and_test(test-jinja.cpp  LABEL behavior)
 llama_test(test-jinja  NAME test-jinja-py  ARGS -py  LABEL "python behavior")
+llama_test_cmd(python3
+    NAME test-conversion-fp8
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
+)
+llama_test_cmd(python3
+    NAME test-kv-cache-scales
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_kv_cache_scales.py -v
+)
 llama_build_and_test(test-json-schema.cpp  LABEL behavior)
 llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp  LABEL behavior)
@@ -334,7 +363,16 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
     target_include_directories(test-metal-graph-optimize PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
 endif()
 
-llama_build(test-backend-ops.cpp LINK ggml)
+llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
+
+llama_build_and_test(test-backend-tensor.cpp LINK ggml)
+
+if (BUILD_SHARED_LIBS)
+    llama_build_and_test(test-llama-mmap.cpp ${PROJECT_SOURCE_DIR}/src/llama-impl.cpp ${PROJECT_SOURCE_DIR}/src/llama-mmap.cpp LABEL behavior)
+    target_compile_definitions(test-llama-mmap PRIVATE LLAMA_BUILD)
+else()
+    llama_build_and_test(test-llama-mmap.cpp LABEL behavior)
+endif()
 
 llama_build_and_test(test-tiled-mulmat.cpp  LABEL "main behavior backend"  LINK ggml)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model behavior")
@@ -343,6 +381,7 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model behavior backend")
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
+    llama_build_and_test(test-host-buffer-release.cpp LINK ggml)
 endif()
 
 if (NOT GGML_BACKEND_DL AND GGML_CPU)

@@ -29,7 +29,7 @@ struct htp_gdn_kernel_params {
     uint16_t n_chunks;
     uint16_t n_heads_batch;
 
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t S_v;
     uint32_t H;
     uint32_t n_tokens;
@@ -59,7 +59,7 @@ _Static_assert(sizeof(struct htp_gdn_kernel_params) <= 128, "htp_gdn_kernel_para
 
 struct htp_gdn_vtcm_layout {
     size_t state_aligned;
-    size_t bytes_per_thread;
+    size_t bytes_per_hvx;
     size_t off_state;
     size_t total_bytes;
 };
@@ -67,13 +67,13 @@ struct htp_gdn_vtcm_layout {
 static inline void htp_gdn_vtcm_layout_build(
     struct htp_gdn_vtcm_layout * L,
     uint32_t S_v,
-    uint32_t n_threads
+    uint32_t n_hvx
 ) {
     size_t state_bytes = (size_t) S_v * S_v * sizeof(float);
     L->state_aligned = hex_round_up(state_bytes, 128);
-    L->bytes_per_thread = 2 * L->state_aligned;
+    L->bytes_per_hvx = 2 * L->state_aligned;
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_state, L->bytes_per_thread * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_state, L->bytes_per_hvx * n_hvx);
     L->total_bytes = off;
 }
 
@@ -128,7 +128,7 @@ struct htp_gdn_hmx_vtcm_layout {
     size_t off_rows_inv;
     size_t off_rows_a;
 
-    size_t off_thread_scratch;
+    size_t off_hvx_scratch;
     size_t off_scales_1;
 
     size_t state_f32_bytes;
@@ -140,7 +140,7 @@ struct htp_gdn_hmx_vtcm_layout {
     size_t tile_64x64_bytes;
 
     uint32_t n_heads_batch;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     bool     pipeline;
     size_t   total_bytes;
 };
@@ -150,16 +150,16 @@ static inline void htp_gdn_hmx_vtcm_layout_build(
     uint32_t S_v,
     uint32_t chunk_size,
     uint32_t n_heads_batch,
-    uint32_t n_threads,
+    uint32_t n_hvx,
     bool     pipeline
 ) {
     memset(L, 0, sizeof(*L));
     L->n_heads_batch = n_heads_batch;
-    L->n_threads     = n_threads;
+    L->n_hvx         = n_hvx;
     L->pipeline      = pipeline;
 
     const size_t bh = (size_t) n_heads_batch;
-    const size_t nth = (size_t) (n_threads > 0 ? n_threads : 1);
+    const size_t nth = (size_t) (n_hvx > 0 ? n_hvx : 1);
 
     const size_t state_f32_sz   = hex_round_up(S_v * S_v * sizeof(float), 2048);
     const size_t state_f16_sz   = hex_round_up(S_v * S_v * sizeof(__fp16), 2048);
@@ -204,7 +204,7 @@ static inline void htp_gdn_hmx_vtcm_layout_build(
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_g_f32[1], bh * dma_scalar_sz, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_b_f32[0], bh * dma_scalar_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_b_f32[1], bh * dma_scalar_sz, pipeline);
-    const size_t raw_gb_sz = hex_round_up(bh * chunk_size * sizeof(float), 128);
+    const size_t raw_gb_sz = hex_round_up((bh + 1) * chunk_size * sizeof(float), 128);
     VTCM_LAYOUT_ALLOC(off, off_g_raw[0], raw_gb_sz);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_g_raw[1], raw_gb_sz, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_b_raw[0], raw_gb_sz);
@@ -248,9 +248,9 @@ static inline void htp_gdn_hmx_vtcm_layout_build(
     VTCM_LAYOUT_ALLOC(off, off_rows_inv,    bh * row_vecs_sz);
     VTCM_LAYOUT_ALLOC(off, off_rows_a,      bh * row_vecs_sz);
 
-    const size_t thread_scratch_sz = 64 * 128;
+    const size_t hvx_scratch_sz = 64 * 128;
     off = hex_align_up(off, HMX_FP16_TILE_SIZE);
-    VTCM_LAYOUT_ALLOC(off, off_thread_scratch, nth * thread_scratch_sz);
+    VTCM_LAYOUT_ALLOC(off, off_hvx_scratch, nth * hvx_scratch_sz);
     off = hex_align_up(off, HMX_FP16_TILE_SIZE);
     VTCM_LAYOUT_ALLOC(off, off_scales_1,       HMX_FP16_TILE_SIZE);
 
@@ -263,7 +263,7 @@ static inline bool htp_gdn_hmx_solve_layout(
     uint32_t chunk_size,
     uint32_t total_rows,
     size_t   vtcm_budget,
-    uint32_t n_threads,
+    uint32_t n_hvx,
     bool     pipeline,
     uint32_t * n_heads_batch_out
 ) {
@@ -271,8 +271,8 @@ static inline bool htp_gdn_hmx_solve_layout(
     if (max_batch > total_rows) {
         max_batch = total_rows;
     }
-    if (max_batch > n_threads) {
-        max_batch = n_threads;
+    if (max_batch > n_hvx) {
+        max_batch = n_hvx;
     }
     static const uint32_t candidates[] = { 8, 6, 4, 2, 1 };
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); ++i) {
@@ -281,7 +281,7 @@ static inline bool htp_gdn_hmx_solve_layout(
             continue;
         }
         struct htp_gdn_hmx_vtcm_layout L;
-        htp_gdn_hmx_vtcm_layout_build(&L, S_v, chunk_size, bh, n_threads, pipeline);
+        htp_gdn_hmx_vtcm_layout_build(&L, S_v, chunk_size, bh, n_hvx, pipeline);
         if (L.total_bytes <= vtcm_budget) {
             *layout_out = L;
             *n_heads_batch_out = bh;
@@ -289,7 +289,7 @@ static inline bool htp_gdn_hmx_solve_layout(
         }
     }
     if (pipeline) {
-        return htp_gdn_hmx_solve_layout(layout_out, S_v, chunk_size, total_rows, vtcm_budget, n_threads, false, n_heads_batch_out);
+        return htp_gdn_hmx_solve_layout(layout_out, S_v, chunk_size, total_rows, vtcm_budget, n_hvx, false, n_heads_batch_out);
     }
     return false;
 }

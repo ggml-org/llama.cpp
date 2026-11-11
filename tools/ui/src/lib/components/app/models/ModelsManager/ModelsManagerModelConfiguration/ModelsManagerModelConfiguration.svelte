@@ -7,6 +7,7 @@
 	import { Trash2 } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
 	import { Button } from '$lib/components/ui/button';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
 	import { HuggingFaceService } from '$lib/services';
 	import { deviceStore, modelsStore, uiStore } from '$lib/stores';
@@ -26,6 +27,8 @@
 
 	// the same removal the table row offers, confirmed by the same dialog
 	let deleteOpen = $state(false);
+	// a model the router did not take from its HF cache is not its own to delete
+	let removeBlockedReason = $derived(modelsStore.removeBlockedReason(option.model));
 
 	// the props cache is a plain Map, so the read has to name its version to stay reactive
 	let serverProps = $derived.by(() => {
@@ -130,15 +133,29 @@
 			<ModelsManagerModelConfigurationInformation hub={hubDetails} {option} {serverProps} />
 
 			<div class="mt-4 border-t border-border/30 pt-3 pb-2">
-				<Button
-					class="w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20"
-					onclick={() => (deleteOpen = true)}
-					size="sm"
-					variant="ghost"
-				>
-					<Trash2 class="h-4 w-4" />
-					Delete this model from disk
-				</Button>
+				{#if removeBlockedReason}
+					<!-- a disabled button takes no pointer events, so the wrapper holds the hover -->
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{#snippet child({ props })}
+								<div {...props}>
+									{@render deleteButton()}
+								</div>
+							{/snippet}
+						</Tooltip.Trigger>
+
+						<Tooltip.Content class="max-w-64">
+							<p>{removeBlockedReason}</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+
+					<!-- a phone has no hover, so the reason sits under the button -->
+					{#if deviceStore.isMobile}
+						<p class="px-3 pt-1 text-xs text-muted-foreground">{removeBlockedReason}</p>
+					{/if}
+				{:else}
+					{@render deleteButton()}
+				{/if}
 			</div>
 		{/if}
 	</div>
@@ -178,3 +195,16 @@
 		repoWithTag={option.model}
 	/>
 </div>
+
+{#snippet deleteButton()}
+	<Button
+		class="w-full justify-start gap-2 text-destructive hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20"
+		disabled={removeBlockedReason !== null}
+		onclick={() => (deleteOpen = true)}
+		size="sm"
+		variant="ghost"
+	>
+		<Trash2 class="h-4 w-4" />
+		Delete this model from disk
+	</Button>
+{/snippet}

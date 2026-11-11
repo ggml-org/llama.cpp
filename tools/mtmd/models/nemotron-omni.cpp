@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_tensor * clip_graph_nemotron_omni::build_inp_with_temporal_merge() {
+ggml_tensor * mtmd_graph_nemotron_omni::build_inp_with_temporal_merge() {
     if (n_batch == 1 && !img_batch->is_video) {
         return build_inp();
     }
@@ -22,7 +22,7 @@ ggml_tensor * clip_graph_nemotron_omni::build_inp_with_temporal_merge() {
     return ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 }
 
-ggml_cgraph * clip_graph_nemotron_omni::build() {
+ggml_cgraph * mtmd_graph_nemotron_omni::build() {
     GGML_ASSERT(model.class_embedding != nullptr);
     GGML_ASSERT(model.position_embeddings != nullptr);
 
