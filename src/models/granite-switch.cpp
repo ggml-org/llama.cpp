@@ -140,6 +140,11 @@ public:
 
     // graph topology depends on whether any token in the batch carries an adapter:
     // without one, all adapter deltas are zero and are skipped at build time
+    // adapter state is session-persistent: once an activation or substitute token
+    // enters the context it shapes every later batch, so only a session that never
+    // carried one may reuse the slim graph (latched conservatively; a KV reset does
+    // not clear it, at the cost of one unneeded chain, never a wrong graph)
+    bool session_has_adapter = false;
     bool used_adapter_path = false;
 
     bool any_adapter_tokens(const llama_ubatch & ubatch) const {
@@ -155,7 +160,10 @@ public:
     }
 
     bool can_reuse(const llm_graph_params & params) override {
-        return used_adapter_path == any_adapter_tokens(params.ubatch);
+        if (any_adapter_tokens(params.ubatch)) {
+            session_has_adapter = true;
+        }
+        return !session_has_adapter;
     }
 
     ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] adapter-substituted token ids
@@ -257,7 +265,13 @@ llama_model_granite_switch::graph::graph(const llm_graph_params & params) : llm_
     GGML_ASSERT(n_embd_head == n_rot);
 
     auto inp_switch = std::make_unique<llm_graph_input_switch>(smodel);
-    inp_switch->used_adapter_path = inp_switch->any_adapter_tokens(ubatch);
+    if (inp_switch->any_adapter_tokens(ubatch)) {
+        inp_switch->session_has_adapter = true;
+    }
+    // the session latch, not the current batch alone, picks the topology: decode
+    // batches carry only plain tokens, but the adapter shapes them for the rest
+    // of the session once an activation token has entered the context
+    inp_switch->used_adapter_path = inp_switch->session_has_adapter;
     inp_switch->sub_tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp_switch->sub_tokens);
     if (inp_switch->used_adapter_path) {
