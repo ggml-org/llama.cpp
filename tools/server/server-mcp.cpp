@@ -3,7 +3,9 @@
 #include "common.h"
 #include "subproc.h"
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -192,18 +194,46 @@ static std::string rpc_error_message(const json & resp) {
     return "unknown error";
 }
 
+// renders an MCP image or audio part as a single-line base64 data URI (wrapped base64 is joined)
+static std::string mcp_media_part_to_data_uri(const json & part) {
+    const std::string mime = part.value("mimeType", "");
+    std::string data = part.value("data", "");
+    data.erase(std::remove_if(data.begin(), data.end(), [](unsigned char c) { return std::isspace(c); }), data.end());
+    if (mime.empty() || data.empty()) {
+        return "";
+    }
+    return "data:" + mime + ";base64," + data;
+}
+
+// renders one MCP content part as text; unsupported part types render as an empty string
+static std::string mcp_content_part_to_text(const json & part) {
+    if (!part.is_object()) {
+        return "";
+    }
+    const std::string type = part.value("type", "");
+    if (type == "text") {
+        return part.value("text", "");
+    }
+    if (type == "image" || type == "audio") {
+        return mcp_media_part_to_data_uri(part);
+    }
+    return "";
+}
+
 // normalize an MCP tools/call result to the /tools contract (see README-dev.md):
-// concat text parts of result.content[], and surface an isError result
+// concat text parts of result.content[], render media parts as data URI lines, and surface an isError result
 static json mcp_result_to_response(const json & result) {
     std::string text;
     if (result.contains("content") && result.at("content").is_array()) {
         for (const auto & part : result.at("content")) {
-            if (part.is_object() && part.value("type", "") == "text") {
-                if (!text.empty()) {
-                    text += "\n";
-                }
-                text += part.value("text", "");
+            const std::string piece = mcp_content_part_to_text(part);
+            if (piece.empty()) {
+                continue;
             }
+            if (!text.empty()) {
+                text += "\n";
+            }
+            text += piece;
         }
     }
     if (result.is_object() && result.value("isError", false)) {
