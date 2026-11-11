@@ -15,6 +15,7 @@ export type {
 	ApiModelsSseProgress,
 	ApiModelsSseData,
 	ApiModelsSseDownloadProgressData,
+	ApiModelsSseDownloadFailedData,
 	ApiModelsSseEvent,
 	ApiModelsDownloadRequest,
 	ApiModelsDownloadResponse,

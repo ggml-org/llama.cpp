@@ -2506,7 +2506,7 @@ To pause a download, send an event to `/models/unload`: it keeps its partial fil
 Download procedure:
 - Send POST request to `/models`
 - Subscribe to `/models/sse` for updates
-- On downloading completed, you will receive either `download_finished` or `download_failed` event
+- On downloading completed, you will receive either `download_finished` or `download_failed` event. A download that stopped because a client paused or cancelled it fails with `{"stopped": true}` as its data
 - Call GET `/models` to trigger model list update. If the download success, you should see the new model in the list
 
 Payload:
