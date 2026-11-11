@@ -477,7 +477,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>{1, 1, 0, 0});
     } else if (arch == LLM_ARCH_GEMMA4) {
         ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,      n_embd/2);
-        ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(5));
+        // the MoE model has the shape of 26B-A4B: no KV-shared layers
+        ms.add_kv(LLM_KV_ATTENTION_SHARED_KV_LAYERS,      uint32_t(moe ? 0 : 5));
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,        n_embd_head);
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,      n_embd_head);
         ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,              10000.0f);
@@ -1066,6 +1067,7 @@ static bool moe_implemented(const llm_arch arch) {
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_LLAMA_EMBED:
         case LLM_ARCH_K2_HORIZON:
+        case LLM_ARCH_GEMMA4:
             return true;
         default:
             return false;
