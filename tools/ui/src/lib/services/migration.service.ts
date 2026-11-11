@@ -13,7 +13,9 @@ import {
 	DB_APP_NAME_DEPRECATED,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	IDXDB_STORES,
+	IDXDB_STORES_V1,
 	IDXDB_TABLES,
+	IDXDB_VERSION,
 	LEGACY_AGENTIC_REGEX,
 	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
@@ -166,7 +168,7 @@ const idxdbMigration: Migration = {
 		// Check if new database already has data
 		const newDb = new Dexie(STORAGE_APP_NAME);
 
-		newDb.version(1).stores(IDXDB_STORES);
+		newDb.version(IDXDB_VERSION).stores(IDXDB_STORES);
 		const existingConvs = await newDb.table(IDXDB_TABLES.conversations).count();
 
 		if (existingConvs > 0) {
@@ -181,7 +183,7 @@ const idxdbMigration: Migration = {
 
 		const oldDb = new Dexie(DB_APP_NAME_DEPRECATED);
 
-		oldDb.version(1).stores(IDXDB_STORES);
+		oldDb.version(1).stores(IDXDB_STORES_V1);
 
 		const conversations = await oldDb.table(IDXDB_TABLES.conversations).toArray();
 		const messages = await oldDb.table(IDXDB_TABLES.messages).toArray();
@@ -654,6 +656,39 @@ const renderKeysMigration: Migration = {
 			console.log('[Migration] Render keys: unfolded the raw text toggle');
 	}
 };
+const LEGACY_MODEL_ORG_NAME_KEY = 'showModelOrgNameInTrigger';
+const MODEL_ORG_NAME_KEY_MIGRATION_ID = 'model-org-name-key-v1';
+/**
+ * Renames the trigger-only org name key onto the selector-wide one. The persisted
+ * config always carries the legacy key, so a value it holds carries over; a config
+ * that already set the new key keeps its own value.
+ */
+const modelOrgNameKeyMigration: Migration = {
+	description: 'Rename the trigger-only org name key onto the selector-wide one',
+	id: MODEL_ORG_NAME_KEY_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+
+		if (!(LEGACY_MODEL_ORG_NAME_KEY in config)) return;
+
+		if (!(SETTINGS_KEYS.SHOW_MODEL_ORG_NAME in config)) {
+			config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] = config[LEGACY_MODEL_ORG_NAME_KEY] === true;
+		}
+
+		// Dropped rather than preserved: the new key covers the trigger too, so leaving the
+		// old one behind would let a stale value fight the restored one.
+		delete config[LEGACY_MODEL_ORG_NAME_KEY];
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] Model org name: renamed the trigger key');
+	}
+};
 const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
 const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
 /**
@@ -804,6 +839,7 @@ const migrations: Migration[] = [
 	mcpDefaultOverridesMergeMigration,
 	configTypesMigration,
 	renderKeysMigration,
+	modelOrgNameKeyMigration,
 	mcpServerOverridesToToolPolicyMigration
 ];
 

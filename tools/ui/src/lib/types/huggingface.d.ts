@@ -154,6 +154,13 @@ export interface HfModelDetailInfo extends HfModelInfo {
 	cardData?: HfModelCardData;
 	/** GGUF metadata (only present when full=true for GGUF repos) */
 	gguf?: HfModelGguf;
+	/** SafeTensors counts (only present when full=true for transformers repos) */
+	safetensors?: {
+		/** Total parameter count */
+		total?: number;
+		/** Per dtype parameter counts */
+		parameters?: Record<string, number>;
+	};
 	/** Model config (only present when full=true) */
 	config?: Record<string, unknown>;
 	/** Total repo storage in bytes (only present when full=true) */
@@ -165,6 +172,12 @@ export interface HfModelDetailInfo extends HfModelInfo {
 }
 
 /** A single entry in a model repository's file tree (`/tree` responses) */
+/** Encoders an mmproj's header says it carries; vision is null when the header was cut short before it said. */
+export interface HfMmprojEncoders {
+	audio: boolean;
+	vision: boolean | null;
+}
+
 export interface HfModelSibling {
 	/** Relative path of the file or directory within the repo */
 	path: string;
@@ -222,6 +235,8 @@ export interface HfCatalogEntry {
 	released: string;
 	license: string;
 	featured?: boolean;
+	/** Decision models answer with probabilities, not text; llama-ui cannot use them. */
+	decision?: boolean;
 	maxMemGb?: number;
 	sizes: HfCatalogSize[];
 }

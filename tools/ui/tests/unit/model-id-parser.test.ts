@@ -1,3 +1,4 @@
+import type { ModelSidecar } from '$lib/constants';
 import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { describe, expect, it } from 'vitest';
@@ -97,6 +98,32 @@ describe('parseModelId', () => {
 		});
 		expect(parseModelId('model-100B-GGML-Instruct:Q4_K_M')).toMatchObject({
 			tags: ['Instruct']
+		});
+	});
+
+	it('splits a download tag into quant and sidecar', () => {
+		expect(parseModelId('ggml-org/Qwen3.8-27B-GGUF:Q8_0-dflash')).toMatchObject({
+			orgName: 'ggml-org',
+			params: '27B',
+			quantization: 'Q8_0',
+			sidecar: 'dflash'
+		});
+
+		expect(parseModelId('ggml-org/Qwen3.8-27B-GGUF:Q4_K_M-mtp')).toMatchObject({
+			quantization: 'Q4_K_M',
+			sidecar: 'mtp'
+		});
+
+		// a bare sidecar tag is the sidecar alone, with no quant
+		expect(parseModelId('ggml-org/Qwen3.8-27B-GGUF:mmproj')).toMatchObject({
+			quantization: null,
+			sidecar: 'mmproj'
+		});
+
+		// a plain quant tag stays a quant
+		expect(parseModelId('unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q2_K_XL')).toMatchObject({
+			quantization: 'UD-Q2_K_XL',
+			sidecar: null
 		});
 	});
 
@@ -360,5 +387,37 @@ describe('parseModelId', () => {
 			quantization: 'Q4_K_M',
 			sidecar: null
 		});
+	});
+});
+
+describe('draftSidecarsByRepo', () => {
+	const entry = (id: string, sidecars: ModelSidecar[], status = 'unloaded') => ({
+		id,
+		sidecars,
+		status: { value: status }
+	});
+
+	it('keeps one badge per kind, at the repo that has it on disk', () => {
+		const byRepo = ModelsService.draftSidecarsByRepo([
+			entry('ggml-org/model:Q4_0', [ModelDraftSidecar.MTP]),
+			entry('ggml-org/model:Q8_0', [ModelDraftSidecar.MTP])
+		]);
+
+		// the listing reports kinds, never the draft's file: its quant stays unknown
+		expect(byRepo.get('ggml-org/model')).toEqual([
+			{ kind: ModelDraftSidecar.MTP, quant: null, repo: 'ggml-org/model' }
+		]);
+	});
+
+	it('drops duplicates, aux sidecars and unfinished downloads', () => {
+		const byRepo = ModelsService.draftSidecarsByRepo([
+			entry('ggml-org/model:Q4_0', [ModelDraftSidecar.MTP, ModelAuxSidecar.MMPROJ]),
+			entry('ggml-org/model:Q4_0', [ModelDraftSidecar.MTP]),
+			entry('ggml-org/model:Q8_0', [ModelDraftSidecar.MTP], 'incomplete')
+		]);
+
+		expect(byRepo.get('ggml-org/model')).toEqual([
+			{ kind: ModelDraftSidecar.MTP, quant: null, repo: 'ggml-org/model' }
+		]);
 	});
 });

@@ -40,11 +40,11 @@ jobs:
   #        path: ./spacemit_toolchain
   #        version: ${{ env.SPACEMIT_IME_TOOLCHAIN_VERSION }}
 
-  ubuntu-24-openvino-cache:
-    runs-on: ubuntu-24.04
+  ubuntu-26-openvino-cache:
+    runs-on: ubuntu-26.04
 
     env:
-      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 
@@ -72,7 +72,7 @@ jobs:
     runs-on: windows-2022
 
     env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      # Sync versions in build-openvino.yml, ci-self-hosted-openvino.yml, release.yml, release-publish.yml, build-cache.yml, .devops/openvino.Dockerfile, docs/backend/OPENVINO.md
       OPENVINO_VERSION_MAJOR: "2026.4.1"
       OPENVINO_VERSION_FULL: "2026.4.1.22982.07f9c262b05"
 

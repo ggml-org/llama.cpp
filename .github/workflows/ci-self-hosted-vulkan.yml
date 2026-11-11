@@ -79,7 +79,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_VULKAN=1 GGML_VK_DISABLE_COOPMAT2=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
 
       # - name: ccache-buckets-save
       #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -124,7 +124,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
 
       # - name: ccache-buckets-save
       #   if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -150,7 +150,7 @@ jobs:
         id: ggml-ci
         run: |
           vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp/$RUNNER_NAME ~/mnt/llama.cpp
 
   gpu-vulkan-intel-linux:
     runs-on: [self-hosted, Linux, Intel]

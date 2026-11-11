@@ -183,8 +183,8 @@ static void upscale_f32_bilinear_antialias(const float * src0,
 }
 
 namespace bicubic_interpolation {
-static float weight1(float x, const float &a) { return ((a + 2) * x - (a + 3)) * x * x + 1; };
-static float weight2(float x, const float &a) { return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a; };
+static float weight1(float x, const float &a) { return ((a + 2) * x - (a + 3)) * x * x + 1; }
+static float weight2(float x, const float &a) { return ((a * x - 5 * a) * x + 8 * a) * x - 4 * a; }
 
 static float bicubic(float p0, float p1, float p2, float p3, float x, float a) {
     const float w0 = weight2(x + 1, a);
@@ -192,7 +192,7 @@ static float bicubic(float p0, float p1, float p2, float p3, float x, float a) {
     const float w2 = weight1(1 - x, a);
     const float w3 = weight2(2 - x, a);
     return p0 * w0 + p1 * w1 + p2 * w2 + p3 * w3;
-};
+}
 
 }
 
@@ -358,7 +358,7 @@ static void upscale_f32_bicubic_sycl(const float *   x,
     }
 }
 
-void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+static void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *)src0->data;
     float * dst_d = (float *)dst->data;

@@ -47,6 +47,7 @@ export type {
 	HfModelGguf,
 	HfModelInfo,
 	HfModelSearchParams,
+	HfMmprojEncoders,
 	HfModelSibling,
 	HfModelSiblingRef
 } from './huggingface';
@@ -68,6 +69,7 @@ export type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatMessageAgenticTimings,
+	ChatMessageCompactionTimings,
 	ChatMessageAgenticTurnStats,
 	ChatMessageToolCallTiming,
 	ChatStreamCallbacks,
@@ -105,11 +107,23 @@ export type {
 	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
+	ModelDownloadEntry,
 	ModelDownloadFileProgress,
 	ModelDownloadProgress,
 	ModelLoadProgress,
+	ModelSidecarBadge,
 	ModalityCapabilities
 } from './models';
+
+// Models discover types
+export type {
+	ModelBitDepthRow,
+	ModelCompanionDraft,
+	ModelDownloadEntryState,
+	ModelQuantChip,
+	ModelQuantOption,
+	ModelSelectableFile
+} from './models-discover';
 
 // Settings types
 export type {
@@ -185,6 +199,9 @@ export type {
 	MCPServerResources
 } from './mcp';
 
+// Group types
+export type { Group } from './groups';
+
 // Search result types
 export type { SearchResult } from './search';
 
@@ -197,9 +214,6 @@ export type {
 	GlobSearchChildOptions,
 	GlobSearchChildResult
 } from './glob';
-
-// ChatFormInputRich token types (chat form)
-export type { ChatFormInputRichToken } from './chat-form-input-rich';
 
 // Agentic types
 export type {
@@ -221,7 +235,7 @@ export type {
 } from './agentic';
 
 // Navigation types
-export type { DesktopIconStripItem } from './navigation';
+export type { DesktopIconStripItem, MenuAction } from './navigation';
 
 // Tools types
 export type {

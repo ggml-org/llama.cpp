@@ -63,7 +63,7 @@ struct vk_mat_mat_id_push_constants {
     uint32_t batch_stride_a; uint32_t batch_stride_b; uint32_t batch_stride_d;
     uint32_t nei0; uint32_t nei1; uint32_t nbi1; uint32_t ne11;
     uint32_t n_experts;
-    uint32_t hoist_row_ids;
+    uint32_t row_ids_offset;
 };
 
 struct vk_mat_vec_id_push_constants {
@@ -218,9 +218,13 @@ struct vk_op_count_experts_push_constants {
     uint32_t nb01;
     uint32_t a_offset;
     uint32_t n_experts;
-    uint32_t hoist_row_ids;
     uint32_t ne00mp;
     uint32_t ne00L;
+    uint32_t row_tile_size;
+    uint32_t row_ids_offset;
+    uint32_t ne0_dst;
+    uint32_t stride_dst;
+    uint32_t batch_stride_dst;
 };
 
 struct vk_op_glu_push_constants {
@@ -825,7 +829,7 @@ struct vk_op_upscale_push_constants {
 struct vk_op_sum_rows_push_constants
 {
     uint32_t n_cols;
-    uint32_t ne01, ne02;
+    uint32_t ne01, ne02, ne03;
     uint32_t nb01, nb02, nb03;
     uint32_t nb11, nb12, nb13;
     float weight;
@@ -840,6 +844,7 @@ static vk_op_sum_rows_push_constants vk_op_sum_rows_push_constants_init(const gg
     p.n_cols = (uint32_t)n_cols;
     p.ne01 = (uint32_t)src->ne[1];
     p.ne02 = (uint32_t)src->ne[2];
+    p.ne03 = (uint32_t)src->ne[3];
     p.nb01 = (uint32_t)src->nb[1] / type_size;
     p.nb02 = (uint32_t)src->nb[2] / type_size;
     p.nb03 = (uint32_t)src->nb[3] / type_size;

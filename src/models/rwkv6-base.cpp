@@ -2,9 +2,8 @@
 
 #include "llama-memory-recurrent.h"
 
-llm_build_rwkv6_base::llm_build_rwkv6_base(const llama_model & model, const llm_graph_params & params) :
-    llm_graph_context(params),
-    model(model) {}
+llm_build_rwkv6_base::llm_build_rwkv6_base(const llm_graph_params & params) :
+    llm_graph_context(params) {}
 
 ggml_tensor * llm_build_rwkv6_base::build_rwkv6_channel_mix(const llama_layer * layer,
                                                             ggml_tensor *       cur,

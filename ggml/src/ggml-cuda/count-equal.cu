@@ -59,6 +59,5 @@ void ggml_cuda_count_equal(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         } break;
         default:
             GGML_ASSERT(false);
-            break;
     }
 }

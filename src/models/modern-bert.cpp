@@ -17,15 +17,21 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
 
     // Some ModernBert derivatives (e.g. IBM Granite Embedding 97m R2) use
     // SiLU/SwiGLU in the FFN instead of the default GELU/GeGLU.
-    hparams.llm_ffn_op = LLM_FFN_GEGLU;
+    hparams.llm_ffn_op = LLM_FFN_GEGLU_ERF;
     std::string hidden_act;
     if (ml.get_key(LLM_KV_HIDDEN_ACT, hidden_act, false)) {
-        hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
+        hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU_ERF);
     }
 
     // GGUFs without a classifier pooling type use mean (gte-reranker-modernbert-base)
     if (hparams.pooling_type_cls == LLAMA_POOLING_TYPE_UNSPECIFIED) {
         hparams.pooling_type_cls = LLAMA_POOLING_TYPE_MEAN;
+    }
+
+    // GGUFs without a classifier activation use gelu, the transformers default
+    std::string act_cls;
+    if (!ml.get_key(LLM_KV_CLASSIFIER_ACTIVATION, act_cls, false)) {
+        hparams.act_cls = GGML_UNARY_OP_GELU_ERF;
     }
 
     ml.get_key(LLM_KV_DECISION_BLOCK_COUNT, hparams.n_layer_decision, false);
@@ -126,10 +132,10 @@ void llama_model_modern_bert::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_modern_bert::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_modern_bert::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -154,8 +160,6 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
     const int n_layer_enc = n_layer - n_layer_dec;
 
     for (int il = 0; il < n_layer_enc; ++il) {
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         cur = inpL;
 
@@ -172,17 +176,8 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
                 n_embd_head, n_head, n_head_kv, il);
 
         // RoPE
-        Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
-
-        Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                ext_factor, attn_factor, beta_fast, beta_slow
-                );
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
 
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
@@ -231,7 +226,7 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
     cb(cur, "final_norm_out", -1);
 
     if (n_layer_dec > 0) {
-        cur = build_decision_head(model, cur, inp_attn, inp_out_ids);
+        cur = build_decision_head(cur, inp_attn, inp_out_ids);
     }
 
     res->t_embd = cur;
@@ -240,7 +235,6 @@ llama_model_modern_bert::graph::graph(const llama_model & model, const llm_graph
 
 // returns one score per question type for each output token, the caller reads them at the option markers
 ggml_tensor * llama_model_modern_bert::graph::build_decision_head(
-        const llama_model & model,
         ggml_tensor * inp,
         llm_graph_input_attn_no_cache * inp_attn,
         ggml_tensor * inp_out_ids) {

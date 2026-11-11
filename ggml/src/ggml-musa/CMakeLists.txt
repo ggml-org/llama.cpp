@@ -21,7 +21,10 @@ if (MUSAToolkit_FOUND)
     message(STATUS "MUSA Toolkit found")
 
     if (NOT DEFINED MUSA_ARCHITECTURES)
-        set(MUSA_ARCHITECTURES "21;22;31")
+        set(MUSA_ARCHITECTURES "22;31")
+    endif()
+    if ("21" IN_LIST MUSA_ARCHITECTURES)
+        message(WARNING "MUSA architecture 21 (MTT S70, MTT S80, MTT S3000) is deprecated and no longer tested")
     endif()
     message(STATUS "Using MUSA architectures: ${MUSA_ARCHITECTURES}")
 

@@ -46,11 +46,27 @@ void llama_model_cogvlm::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_cogvlm::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+llama_rope_params llama_model_cogvlm::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // plain ggml_rope
+    res.n_ctx_orig  = 0;
+    res.freq_base   = 10000.0f;
+    res.freq_scale  = 1.0f;
+    res.ext_factor  = 0.0f;
+    res.attn_factor = 1.0f;
+    res.beta_fast   = 0.0f;
+    res.beta_slow   = 0.0f;
+    res.factors     = nullptr;
+
+    return res;
 }
 
-llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_params & params) :
+std::unique_ptr<llm_graph_context> llama_model_cogvlm::build_arch_graph(const llm_graph_params & params) const {
+    return std::make_unique<graph>(params);
+}
+
+llama_model_cogvlm::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     const float   kq_scale    = 1.0f / sqrtf(float(n_embd_head));
@@ -113,8 +129,8 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * Vcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
                                               qkv->nb[1], 2 * n_embd * ggml_element_size(qkv));
 
-            Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, rope_type);
-            Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cur = build_attn(inp_attn,
                 wo, nullptr, wo_s,
@@ -155,5 +171,4 @@ llama_model_cogvlm::graph::graph(const llama_model & model, const llm_graph_para
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

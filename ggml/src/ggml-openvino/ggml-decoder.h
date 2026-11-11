@@ -393,6 +393,11 @@ public:
                op->src[0] != nullptr && op->src[0]->op != GGML_OP_NONE;
     }
 
+    // per-token embedding scale [1, n_tokens] (inp->scale_rows in llama-graph.cpp)
+    static bool is_inp_scale_rows(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return op->op == GGML_OP_MUL && tensor == op->src[1] && strcmp(tensor->name, "inp_scale_rows") == 0;
+    }
+
     static bool is_rope_freqs_weight(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_ROPE && tensor == op->src[2];
     }

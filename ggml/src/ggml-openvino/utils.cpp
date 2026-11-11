@@ -676,6 +676,15 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
         return input_tensor;
     }
 
+    if (GgmlOvDecoder::is_inp_scale_rows(ggml_tensor, op)) {
+        ov::Tensor input_tensor(ov::element::f32, ov::Shape{1, 1, chunk_size, 1});
+        auto * dst = input_tensor.data<float>();
+        const auto * src = static_cast<const float *>(ggml_tensor->data) + chunk_index * chunk_size;
+        std::copy(src, src + chunk_valid_size, dst);
+        std::fill(dst + chunk_valid_size, dst + chunk_size, 1.0f);
+        return input_tensor;
+    }
+
     if (GgmlOvDecoder::is_inp_mean(ggml_tensor, op)) {
         const size_t n_seqs = ggml_tensor->ne[1];
         const size_t src_stride = ggml_tensor->ne[0];
@@ -1726,6 +1735,25 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
 }
 }  // namespace
 
+// Nodes on the unselected branches of ggml_build_forward_select() stay in the graph but must not be
+// computed. Keep them out of the OV model, or their inputs become parameters with fixed shapes.
+static ggml_cgraph * get_compute_graph(ggml_cgraph * cgraph, ov_runtime_context & r_ctx) {
+    auto is_skipped = [](const ggml_tensor * node) {
+        return node->op != GGML_OP_NONE && !(node->flags & GGML_TENSOR_FLAG_COMPUTE);
+    };
+    if (std::none_of(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, is_skipped)) {
+        return cgraph;
+    }
+    auto & compute = r_ctx.compute_graphs[cgraph];
+    compute.nodes.clear();
+    std::copy_if(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, std::back_inserter(compute.nodes),
+                 [&](const ggml_tensor * node) { return !is_skipped(node); });
+    compute.graph = *cgraph;
+    compute.graph.nodes = compute.nodes.data();
+    compute.graph.n_nodes = (int) compute.nodes.size();
+    return &compute.graph;
+}
+
 // Both execution paths use two cache levels:
 // 1. Reuse this backend's decoder/request via graph_key and compatibility checks.
 // 2. On a local miss, look up compiled_graph_key in the shared compilation cache,
@@ -1744,6 +1772,7 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
         GGML_ASSERT(ctx->runtime_context != nullptr);
         std::shared_ptr<ov_runtime_context> r_ctx = std::static_pointer_cast<ov_runtime_context>(ctx->runtime_context);
         std::lock_guard<std::mutex> execution_lock(r_ctx->execution_mutex);
+        cgraph = get_compute_graph(cgraph, *r_ctx);
 
         return is_static ? ov_graph_compute_static(cgraph, r_ctx) : ov_graph_compute_dynamic(cgraph, r_ctx);
     } catch (const ov::Exception & e) {

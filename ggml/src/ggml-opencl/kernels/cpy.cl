@@ -183,6 +183,7 @@ kernel void kernel_cpy_f32_f32(
     }
 }
 
+#ifndef GGML_CL_NO_CPY_PACK
 kernel void kernel_cpy_f32_f32_pack(
         global float * src0,
         ulong offset0,
@@ -241,6 +242,7 @@ kernel void kernel_cpy_f32_f32_pack(
         dst_data[i00] = src[0];
     }
 }
+#endif // GGML_CL_NO_CPY_PACK
 
 kernel void kernel_cpy_i32_i32(
         global int * src0,
@@ -309,5 +311,90 @@ kernel void kernel_cpy_f32_f32_flat(
         for (ulong t = n4 * 4; t < ne; ++t) {
             dst[t] = src0[t];
         }
+    }
+}
+
+kernel void kernel_cpy_i32_f32(
+        global int * src0,
+        ulong offset0,
+        global float * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb00,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne0,
+        int ne1,
+        int ne2,
+        int ne3,
+        ulong nb0,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3
+) {
+    src0 = (global int *) ((global char *) src0 + offset0);
+    dst  = (global float *) ((global char *) dst  + offsetd);
+
+    const ulong i01 = get_group_id(0);
+    const ulong i02 = get_group_id(1);
+    const ulong i03 = get_group_id(2);
+
+    for (ulong i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
+        const ulong n  = ((i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
+
+        global const int * src = (global const int *) ((global char *) src0 + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+        global float * out = (global float *) ((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = convert_float(src[0]);
+    }
+}
+
+
+kernel void kernel_cpy_f32_i32(
+        global float * src0,
+        ulong offset0,
+        global int * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        int ne03,
+        ulong nb00,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne0,
+        int ne1,
+        int ne2,
+        int ne3,
+        ulong nb0,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3
+) {
+    src0 = (global float *) ((global char *) src0 + offset0);
+    dst  = (global int *) ((global char *) dst  + offsetd);
+
+    const ulong i01 = get_group_id(0);
+    const ulong i02 = get_group_id(1);
+    const ulong i03 = get_group_id(2);
+
+    for (ulong i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
+        const ulong n  = ((i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
+
+        global const float * src = (global const float *) ((global char *) src0 + i00*nb00 + i01*nb01 + i02*nb02 + i03*nb03);
+        global int * out = (global int *) ((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = convert_int_rtz(src[0]);
     }
 }

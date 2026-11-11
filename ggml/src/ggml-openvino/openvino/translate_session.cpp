@@ -7,6 +7,7 @@
 #include "input_model.h"
 #include "pass/fuse_argsort_topk.h"
 #include "pass/fuse_moe_router.h"
+#include "pass/align_eltwise_ranks.h"
 #include "pass/fuse_moe_compressed.h"
 #include "pass/fuse_to_conv.h"
 #include "pass/kv_state_seq_axis.h"
@@ -496,6 +497,17 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
             // weight (gemma-4). It only matches that shape and only when the experts carry an
             // integer zero point, so it is a no-op on the separate-gate/up models above.
             manager.register_pass<pass::FuseMoeCompressedFusedGateUp>();
+        }
+
+        // Workaround for an OpenVINO GPU-plugin defect: an eltwise op whose operands differ in
+        // rank is computed wrongly once the plugin fuses it as a post-op into `rms`. gemma-4
+        // dense under stateful execution adds a rank-3 residual to the rank-4 norm output and
+        // decodes garbage on GPU while CPU is correct. Equalising the ranks is a no-op for
+        // NUMPY broadcasting and makes the fused path correct.
+        // Remove once the plugin guards that fusion. Opt out with
+        // GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN=1.
+        if (ggml_openvino_is_gpu() && !ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN")) {
+            manager.register_pass<pass::AlignEltwiseOperandRanks>();
         }
 
         if (ggml_model_decoder->is_stateful()) {

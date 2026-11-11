@@ -267,7 +267,7 @@ int llama_completion(int argc, char ** argv) {
                 inputs.add_generation_prompt = !params.prompt.empty();
                 inputs.force_pure_content = params.force_pure_content_parser;
 
-                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt.str();
             }
         } else {
             // otherwise use the prompt as is
