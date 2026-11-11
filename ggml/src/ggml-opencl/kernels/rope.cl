@@ -33,13 +33,16 @@ float rope_yarn_corr_factor(int n_dims, int n_ctx_orig, float n_rot, float base)
 }
 
 float2 rope_yarn_corr_dims(
-    int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow
+    int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, int truncate
 ) {
     // start and end correction dims
-    return (float2)(
-        max(0.0f,         floor(rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_fast, freq_base))),
-        min(n_dims - 1.0f, ceil(rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_slow, freq_base)))
-    );
+    float start = rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_fast, freq_base);
+    float end   = rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_slow, freq_base);
+    if (truncate) {
+        start = floor(start);
+        end   = ceil(end);
+    }
+    return (float2)(max(0.0f, start), min(n_dims - 1.0f, end));
 }
 
 kernel void kernel_rope_norm_f32(
@@ -67,7 +70,7 @@ kernel void kernel_rope_norm_f32(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -87,7 +90,7 @@ kernel void kernel_rope_norm_f32(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -148,7 +151,7 @@ kernel void kernel_rope_norm_f16(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -168,7 +171,7 @@ kernel void kernel_rope_norm_f16(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -229,7 +232,7 @@ kernel void kernel_rope_neox_f32(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -249,7 +252,7 @@ kernel void kernel_rope_neox_f32(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -310,7 +313,7 @@ kernel void kernel_rope_neox_f16(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -330,7 +333,7 @@ kernel void kernel_rope_neox_f16(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -391,7 +394,7 @@ kernel void kernel_rope_multi_f32(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -413,7 +416,7 @@ kernel void kernel_rope_multi_f32(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -504,7 +507,7 @@ kernel void kernel_rope_multi_f16(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -526,7 +529,7 @@ kernel void kernel_rope_multi_f16(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -617,7 +620,7 @@ kernel void kernel_rope_vision_f32(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -637,7 +640,7 @@ kernel void kernel_rope_vision_f32(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
@@ -700,7 +703,7 @@ kernel void kernel_rope_vision_f16(
         ulong nb1,
         ulong nb2,
         ulong nb3,
-        int n_past,
+        int truncate,
         int n_dims,
         int n_ctx_orig,
         float freq_base,
@@ -720,7 +723,7 @@ kernel void kernel_rope_vision_f16(
     int i2 = get_group_id(1);
     int i1 = get_group_id(0);
 
-    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow);
+    float2 corr_dims = rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, truncate);
 
     global int * pos = src1;
 
