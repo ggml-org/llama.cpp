@@ -184,13 +184,6 @@ static __global__ void top_k_radix_gather(
     constexpr int NBINS     = 1 << RADIX_BITS;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps    = BLOCK_SIZE / warp_size;
-    const auto popc = [](const ggml_cuda_thread_mask_t mask) {
-        if constexpr (warp_size == 64) {
-            return __popcll(mask);
-        } else {
-            return __popc(mask);
-        }
-    };
     __shared__ int warp_ties[nwarps];
 
     const int row = blockIdx.x / blocks_per_row;
@@ -247,11 +240,11 @@ static __global__ void top_k_radix_gather(
         const bool    is_tie = col < warp_end && top_k_float_to_ordered(row_src[col]) == threshold;
 
         const ggml_cuda_thread_mask_t ties = ggml_cuda_ballot(is_tie);
-        const int tie_pos = pos + popc(ties & (((ggml_cuda_thread_mask_t) 1 << lane) - 1));
+        const int tie_pos = pos + ggml_cuda_popc(ties & (((ggml_cuda_thread_mask_t) 1 << lane) - 1));
         if (is_tie && tie_pos < pos_end) {
             row_dst[k - rank + tie_pos] = col;
         }
-        pos += popc(ties);
+        pos += ggml_cuda_popc(ties);
     }
 }
 
