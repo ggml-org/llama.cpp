@@ -666,6 +666,85 @@ MAKE_TEST(test_audio_log_mel_blocks) {
 }
 
 //
+// mtmd_helper_resampler
+//
+
+static std::vector<float> make_tone(double freq, int rate, size_t n) {
+    const double pi = 3.14159265358979323846;
+    std::vector<float> x(n);
+    for (size_t i = 0; i < n; i++) {
+        x[i] = (float) (0.5 * std::sin(2 * pi * freq * i / rate));
+    }
+    return x;
+}
+
+// amplitude of the freq component, skipping the edges
+static double tone_amplitude(const std::vector<float> & x, double freq, int rate) {
+    const double pi = 3.14159265358979323846;
+    const size_t skip = rate / 10;
+    double re = 0.0, im = 0.0;
+    for (size_t i = skip; i < x.size() - skip; i++) {
+        re += x[i] * std::cos(2 * pi * freq * i / rate);
+        im += x[i] * std::sin(2 * pi * freq * i / rate);
+    }
+    return 2.0 * std::sqrt(re * re + im * im) / (x.size() - 2 * skip);
+}
+
+static std::vector<float> resample_chunked(mtmd_helper_resampler * rs, const std::vector<float> & in, size_t chunk) {
+    std::vector<float> res;
+    for (size_t off = 0; off < in.size(); off += chunk) {
+        const float * out = nullptr;
+        const int64_t n = mtmd_helper_resampler_process(rs, in.data() + off, std::min(chunk, in.size() - off), &out);
+        if (n < 0) {
+            return {};
+        }
+        res.insert(res.end(), out, out + n);
+    }
+    return res;
+}
+
+MAKE_TEST(test_helper_resampler) {
+    const int rate_out = 16000;
+    for (int rate_in : { 8000, 24000, 44100, 48000 }) {
+        const std::string name = std::to_string(rate_in) + " -> " + std::to_string(rate_out);
+        const std::vector<float> in = make_tone(440, rate_in, (size_t) rate_in * 2);
+
+        mtmd_helper::resampler_ptr rs_all(mtmd_helper_resampler_init(rate_in, rate_out));
+        mtmd_helper::resampler_ptr rs_chk(mtmd_helper_resampler_init(rate_in, rate_out));
+        if (!t.assert_true(name + " init", rs_all && rs_chk)) {
+            continue;
+        }
+        const std::vector<float> all = resample_chunked(rs_all.get(), in, in.size());
+        const std::vector<float> chk = resample_chunked(rs_chk.get(), in, 1234); // odd size, not a multiple of the ratio
+
+        t.assert_equal(name + " n_samples", (size_t) rate_out * 2, all.size());
+        t.assert_true(name + " chunked == one-shot", all == chk);
+
+        const double amp = tone_amplitude(all, 440, rate_out);
+        t.assert_true(name + " amplitude = " + std::to_string(amp), std::fabs(amp - 0.5) < 0.02);
+    }
+
+    // above the output Nyquist: 10 kHz at 48 kHz aliases to 6 kHz at 16 kHz, the low-pass filter must cut it
+    {
+        mtmd_helper::resampler_ptr rs(mtmd_helper_resampler_init(48000, rate_out));
+        const std::vector<float> out = resample_chunked(rs.get(), make_tone(10000, 48000, 48000 * 2), 4800);
+        const double db = 20 * std::log10(tone_amplitude(out, 6000, rate_out) / 0.5);
+        t.assert_true("aliasing = " + std::to_string(db) + " dB", db < -15); // about -20 dB with lpfOrder = 8, -10 dB with the default
+    }
+
+    // same rate: no copy
+    {
+        mtmd_helper::resampler_ptr rs(mtmd_helper_resampler_init(rate_out, rate_out));
+        const std::vector<float> in = make_tone(440, rate_out, 1000);
+        const float * out = nullptr;
+        const int64_t n = rs ? mtmd_helper_resampler_process(rs.get(), in.data(), in.size(), &out) : -1;
+        t.assert_true("passthrough", n == (int64_t) in.size() && out == in.data());
+    }
+
+    t.assert_true("invalid rate", mtmd_helper_resampler_init(0, rate_out) == nullptr);
+}
+
+//
 // main
 //
 

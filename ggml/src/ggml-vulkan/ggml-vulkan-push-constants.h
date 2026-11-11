@@ -829,7 +829,7 @@ struct vk_op_upscale_push_constants {
 struct vk_op_sum_rows_push_constants
 {
     uint32_t n_cols;
-    uint32_t ne01, ne02;
+    uint32_t ne01, ne02, ne03;
     uint32_t nb01, nb02, nb03;
     uint32_t nb11, nb12, nb13;
     float weight;
@@ -844,6 +844,7 @@ static vk_op_sum_rows_push_constants vk_op_sum_rows_push_constants_init(const gg
     p.n_cols = (uint32_t)n_cols;
     p.ne01 = (uint32_t)src->ne[1];
     p.ne02 = (uint32_t)src->ne[2];
+    p.ne03 = (uint32_t)src->ne[3];
     p.nb01 = (uint32_t)src->nb[1] / type_size;
     p.nb02 = (uint32_t)src->nb[2] / type_size;
     p.nb03 = (uint32_t)src->nb[3] / type_size;

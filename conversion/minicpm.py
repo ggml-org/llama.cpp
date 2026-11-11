@@ -263,6 +263,7 @@ class MiniCPMV4_7VisionModel(MiniCPMV4_6VisionModel):
             # the tile separators are text tokens; clip appends their embeddings so that one chunk holds the whole image
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            assert tokenizer is not None
             ids = []
             for text in self.tok_embd_sep:
                 tok = tokenizer.encode(text, add_special_tokens=False)

@@ -60,7 +60,7 @@ struct mtmd_model_loader {
 
         ctx_gguf = gguf_context_ptr(gguf_init_from_file(fname, params));
         if (!ctx_gguf.get()) {
-            throw std::runtime_error(string_format("%s: failed to load mmproj model from %s. Does this file exist?\n", __func__, fname));
+            throw std::runtime_error(mtmd_format("%s: failed to load mmproj model from %s. Does this file exist?\n", __func__, fname));
         }
 
         ctx_meta.reset(meta);
@@ -151,7 +151,7 @@ struct mtmd_model_loader {
             model.proj_type = projector_type_from_string(proj_type);
 
             if (model.proj_type == PROJECTOR_TYPE_UNKNOWN) {
-                throw std::runtime_error(string_format("%s: unknown projector type: %s\n", __func__, proj_type.c_str()));
+                throw std::runtime_error(mtmd_format("%s: unknown projector type: %s\n", __func__, proj_type.c_str()));
             }
 
             // correct arch for multimodal models (legacy method)
@@ -169,17 +169,17 @@ struct mtmd_model_loader {
         // other hparams
         {
             const char * prefix = is_vision ? "vision" : (is_audio ? "audio" : "gen.audio");
-            get_u32(string_format(KEY_N_EMBD,         prefix), hparams.n_embd);
-            get_u32(string_format(KEY_N_HEAD,         prefix), hparams.n_head);
-            get_u32(string_format(KEY_N_EMBD_HEAD,    prefix), hparams.n_embd_head, false);
-            get_u32(string_format(KEY_N_FF,           prefix), hparams.n_ff);
-            get_u32(string_format(KEY_N_BLOCK,        prefix), hparams.n_layer);
-            get_u32(string_format(KEY_PROJ_DIM,       prefix), hparams.projection_dim);
-            get_f32(string_format(KEY_LAYER_NORM_EPS, prefix), hparams.eps);
+            get_u32(mtmd_format(KEY_N_EMBD,         prefix), hparams.n_embd);
+            get_u32(mtmd_format(KEY_N_HEAD,         prefix), hparams.n_head);
+            get_u32(mtmd_format(KEY_N_EMBD_HEAD,    prefix), hparams.n_embd_head, false);
+            get_u32(mtmd_format(KEY_N_FF,           prefix), hparams.n_ff);
+            get_u32(mtmd_format(KEY_N_BLOCK,        prefix), hparams.n_layer);
+            get_u32(mtmd_format(KEY_PROJ_DIM,       prefix), hparams.projection_dim);
+            get_f32(mtmd_format(KEY_LAYER_NORM_EPS, prefix), hparams.eps);
 
             // n_head_kv is optional (for GQA), default to n_head
             hparams.n_head_kv = hparams.n_head;
-            get_u32(string_format(KEY_N_HEAD_KV, prefix), hparams.n_head_kv, false);
+            get_u32(mtmd_format(KEY_N_HEAD_KV, prefix), hparams.n_head_kv, false);
 
             if (is_vision) {
                 get_u32(KEY_IMAGE_SIZE, hparams.image_size);
@@ -224,7 +224,7 @@ struct mtmd_model_loader {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
                 if (pinpoints.size() % 2 != 0) {
-                    throw std::runtime_error(string_format("%s: image_grid_pinpoints must have an even number of elements, got %zu\n", __func__, pinpoints.size()));
+                    throw std::runtime_error(mtmd_format("%s: image_grid_pinpoints must have an even number of elements, got %zu\n", __func__, pinpoints.size()));
                 }
                 if (!pinpoints.empty()) {
                     for (size_t i = 0; i < pinpoints.size(); i += 2) {
@@ -245,7 +245,7 @@ struct mtmd_model_loader {
                 get_bool(KEY_USE_GELU, use_gelu, false);
                 get_bool(KEY_USE_SILU, use_silu, false);
                 if (use_gelu && use_silu) {
-                    throw std::runtime_error(string_format("%s: both use_gelu and use_silu are set to true\n", __func__));
+                    throw std::runtime_error(mtmd_format("%s: both use_gelu and use_silu are set to true\n", __func__));
                 }
                 if (use_gelu) {
                     hparams.ffn_op = FFN_GELU;
@@ -273,7 +273,7 @@ struct mtmd_model_loader {
                 get_arr_f32(KEY_IMAGE_MEAN, image_mean, false);
                 get_arr_f32(KEY_IMAGE_STD , image_std, false);
                 if (image_mean.size() < 3 || image_std.size() < 3) {
-                    throw std::runtime_error(string_format("%s: image_mean/image_std arrays must have at least 3 elements, got %zu and %zu\n", __func__, image_mean.size(), image_std.size()));
+                    throw std::runtime_error(mtmd_format("%s: image_mean/image_std arrays must have at least 3 elements, got %zu and %zu\n", __func__, image_mean.size(), image_std.size()));
                 }
                 for (int i = 0; i < 3; ++i) {
                     hparams.image_mean[i] = image_mean[i];
@@ -283,10 +283,10 @@ struct mtmd_model_loader {
 
             // Load the vision/audio feature layer indices if they are explicitly provided
             // NOTE: gguf conversions should standardize the values of the vision feature layer to be non-negative, since we use -1 to mark values as unset here.
-            get_arr_int(string_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
+            get_arr_int(mtmd_format(KEY_FEATURE_LAYERS, prefix), hparams.feature_layers, false);
             for (const auto & v : hparams.feature_layers) {
                 if (v > (int) hparams.n_layer) {
-                    throw std::runtime_error(string_format("%s: feature layer index %d is out of range (n_layer: %d)",
+                    throw std::runtime_error(mtmd_format("%s: feature layer index %d is out of range (n_layer: %d)",
                                                            __func__, v, hparams.n_layer));
                 }
             }
@@ -343,7 +343,7 @@ struct mtmd_model_loader {
                         if (!wa_layer_indexes_vec.empty()) {
                             const int insert_lid = wa_layer_indexes_vec[0];
                             if (insert_lid < 0 || insert_lid >= (int) hparams.n_layer) {
-                                throw std::runtime_error(string_format("%s: layer index %d is out of range (n_layer: %d)",
+                                throw std::runtime_error(mtmd_format("%s: layer index %d is out of range (n_layer: %d)",
                                                                        __func__, insert_lid, hparams.n_layer));
                             }
                             hparams.insert_layer_id = insert_lid;
@@ -396,10 +396,10 @@ struct mtmd_model_loader {
                         get_u32(KEY_A_SPK_N_BLOCK,        hparams.spk_n_layer);
                         get_u32(KEY_A_SPK_N_HEAD,         hparams.spk_n_head);
                         if (hparams.subsampling_factor != 8) {
-                            throw std::runtime_error(string_format("%s: unsupported subsampling factor %d\n", __func__, hparams.subsampling_factor));
+                            throw std::runtime_error(mtmd_format("%s: unsupported subsampling factor %d\n", __func__, hparams.subsampling_factor));
                         }
                         if (hparams.spk_n_layer <= 0 || hparams.spk_n_layer > (int) gguf_get_n_tensors(ctx_gguf.get())) {
-                            throw std::runtime_error(string_format("%s: invalid speaker block count %d\n", __func__, hparams.spk_n_layer));
+                            throw std::runtime_error(mtmd_format("%s: invalid speaker block count %d\n", __func__, hparams.spk_n_layer));
                         }
                         hparams.audio_chunk_len    = 0;
                         hparams.audio_sample_rate  = 16000;
@@ -424,7 +424,7 @@ struct mtmd_model_loader {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
                         get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles);
                         if (hparams.preproc_max_tiles <= 0 || hparams.preproc_max_tiles > 256) {
-                            throw std::runtime_error(string_format("%s: preproc_max_tiles (%d) must be in range [1, 256]\n", __func__, hparams.preproc_max_tiles));
+                            throw std::runtime_error(mtmd_format("%s: preproc_max_tiles (%d) must be in range [1, 256]\n", __func__, hparams.preproc_max_tiles));
                         }
                     } break;
                 case PROJECTOR_TYPE_LFM2:
@@ -441,7 +441,7 @@ struct mtmd_model_loader {
                         } else if (resize_algo == "lanczos") {
                             hparams.set_image_resize_algo(RESIZE_ALGO_LANCZOS);
                         } else {
-                            throw std::runtime_error(string_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
+                            throw std::runtime_error(mtmd_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
                         }
                         hparams.image_resize_algo_rf = hparams.image_resize_algo;
                         hparams.image_resize_algo_ov = hparams.image_resize_algo;
@@ -546,6 +546,7 @@ struct mtmd_model_loader {
                         hparams.set_warmup_n_tokens(256); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_KIMIK25:
+                case PROJECTOR_TYPE_KIMIK31:
                     {
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         hparams.rope_theta = 10000.0f;
@@ -560,6 +561,9 @@ struct mtmd_model_loader {
                             hparams.warmup_image_size = static_cast<int>(std::sqrt(max_pixels));
                         } else {
                             hparams.set_limit_image_tokens(2, 4096);
+                        }
+                        if (model.proj_type == PROJECTOR_TYPE_KIMIK31) {
+                            hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                         }
                     } break;
                 case PROJECTOR_TYPE_DEEPSEEK4V:
@@ -698,7 +702,7 @@ struct mtmd_model_loader {
                         hparams.rope_theta = 10000.0f;
                         hparams.set_limit_image_tokens(16, 4096);
                         if (hparams.n_merge != 2) {
-                            throw std::runtime_error(string_format("%s: SenseNova U1 requires spatial_merge_size=2, got %u", __func__, hparams.n_merge));
+                            throw std::runtime_error(mtmd_format("%s: SenseNova U1 requires spatial_merge_size=2, got %u", __func__, hparams.n_merge));
                         }
                         hparams.set_warmup_n_tokens(16*16);
                     } break;
@@ -712,16 +716,16 @@ struct mtmd_model_loader {
                         } else if (resize_algo == "bicubic") {
                             hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true);
                         } else {
-                            throw std::runtime_error(string_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
+                            throw std::runtime_error(mtmd_format("%s: unsupported image resize algo: %s\n", __func__, resize_algo.c_str()));
                         }
                         // smart_resize stretches to the aligned size, no letterbox
                         hparams.image_resize_pad = PAD_NONE;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
                         // token counts and the projector graph assume a 2x2 merge
                         if (hparams.n_merge != 2) {
-                            throw std::runtime_error(string_format("%s: unsupported spatial_merge_size %d for lfm3vl, only 2 is supported\n", __func__, hparams.n_merge));
+                            throw std::runtime_error(mtmd_format("%s: unsupported spatial_merge_size %d for lfm3vl, only 2 is supported\n", __func__, hparams.n_merge));
                         }
-                        get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                        get_u32(mtmd_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                         hparams.rope_theta = 1000000.0f; // vision_rope_theta
                         // HF processor size; the max is also capped at 4096 tokens as an OOM guard
                         int min_pixels = 0;
@@ -729,7 +733,7 @@ struct mtmd_model_loader {
                         get_u32(KEY_IMAGE_MIN_PIXELS, min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, max_pixels);
                         if (min_pixels <= 0 || max_pixels < min_pixels) {
-                            throw std::runtime_error(string_format("%s: invalid image min/max pixels %d/%d\n", __func__, min_pixels, max_pixels));
+                            throw std::runtime_error(mtmd_format("%s: invalid image min/max pixels %d/%d\n", __func__, min_pixels, max_pixels));
                         }
                         const int patch_area = hparams.patch_size * hparams.patch_size * hparams.n_merge * hparams.n_merge;
                         hparams.set_limit_image_tokens(min_pixels / patch_area, std::min(4096, max_pixels / patch_area));
@@ -772,7 +776,7 @@ struct mtmd_model_loader {
                             n_blocks += hparams.audio_depths[i];
                         }
                         if (n_blocks != hparams.n_layer) {
-                            throw std::runtime_error(string_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
+                            throw std::runtime_error(mtmd_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
                         }
                         hparams.warmup_audio_size = hparams.audio_samples_per_token();
                     } break;
@@ -794,7 +798,7 @@ struct mtmd_model_loader {
                         hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
                         hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
-                        get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                        get_u32(mtmd_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                         // 1D banded sliding-window radius (visual_token_window_size); required
                         get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size);
                         std::vector<int> pat;
@@ -916,10 +920,10 @@ struct mtmd_model_loader {
                         get_u32(KEY_A_RVQ_NUM_QUANTIZERS, hparams.rvq_num_quantizers, false);
                         get_arr_int(KEY_A_RVQ_CODEBOOK_SIZE, hparams.rvq_codebook_size, false);
                         if (hparams.rvq_num_quantizers <= 0) {
-                            throw std::runtime_error(string_format("%s: mimo_audio: missing %s\n", __func__, KEY_A_RVQ_NUM_QUANTIZERS));
+                            throw std::runtime_error(mtmd_format("%s: mimo_audio: missing %s\n", __func__, KEY_A_RVQ_NUM_QUANTIZERS));
                         }
                         if ((int) hparams.rvq_codebook_size.size() != hparams.rvq_num_quantizers) {
-                            throw std::runtime_error(string_format(
+                            throw std::runtime_error(mtmd_format(
                                 "%s: mimo_audio: %s length (%zu) must equal %s (%d)\n", __func__,
                                 KEY_A_RVQ_CODEBOOK_SIZE, hparams.rvq_codebook_size.size(),
                                 KEY_A_RVQ_NUM_QUANTIZERS, hparams.rvq_num_quantizers));
@@ -937,7 +941,7 @@ struct mtmd_model_loader {
                         std::vector<int> wa_pattern;
                         get_arr_int(KEY_A_WA_PATTERN_MODE, wa_pattern, true);
                         if ((int) wa_pattern.size() != hparams.n_layer) {
-                            throw std::runtime_error(string_format(
+                            throw std::runtime_error(mtmd_format(
                                 "%s: mimo_audio: %s length (%zu) must equal n_layer (%d)\n", __func__,
                                 KEY_A_WA_PATTERN_MODE, wa_pattern.size(), hparams.n_layer));
                         }
@@ -946,7 +950,7 @@ struct mtmd_model_loader {
                         get_u32(KEY_A_LOCAL_BLOCK_COUNT, hparams.audio_local_n_layer);
                         get_u32(KEY_A_LOCAL_GROUP_SIZE, hparams.audio_local_group_size);
                         if (hparams.audio_local_group_size <= 0) {
-                            throw std::runtime_error(string_format(
+                            throw std::runtime_error(mtmd_format(
                                 "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
                         }
                     } break;
@@ -1094,7 +1098,7 @@ struct mtmd_model_loader {
                             hparams.preproc_max_tiles = 6;
                             hparams.preproc_tile_size = 768;
                             // qwen2 encoder is GQA, requires KEY_N_HEAD_KV
-                            get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                            get_u32(mtmd_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                         }
                         // unlimited-ocr shares the v1 projector but tiles up to 32
                         get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
@@ -1129,7 +1133,7 @@ struct mtmd_model_loader {
                     {
                         get_u32(KEY_A_ATTN_WINDOW_SIZE, hparams.attn_window_size);
                         if (hparams.attn_window_size <= 0) {
-                            throw std::runtime_error(string_format("%s: invalid audio attention window %d\n", __func__, hparams.attn_window_size));
+                            throw std::runtime_error(mtmd_format("%s: invalid audio attention window %d\n", __func__, hparams.attn_window_size));
                         }
                         hparams.rope_theta = 1000000.0f; // checked by the converter
                         // audio preprocessing params, see mtmd_audio_preprocessor_lfm3a
@@ -1152,7 +1156,7 @@ struct mtmd_model_loader {
                         if (hparams.rope_theta <= 0.0f) {
                             hparams.rope_theta = 10000.0f;
                         }
-                        get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
+                        get_u32(mtmd_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                     } break;
                 case PROJECTOR_TYPE_GEMMA4A:
                     {
@@ -1207,7 +1211,7 @@ struct mtmd_model_loader {
                         // NOTE: feature_layers loaded in common path as optional
                         get_arr_int(KEY_PROJ_SPATIAL_OFFSETS, hparams.proj_spatial_offsets);
                         if (hparams.feature_layers.size() != hparams.proj_spatial_offsets.size()) {
-                            throw std::runtime_error(string_format("%s: feature_layers.size() %d != proj_spatial_offsets.size() %d",
+                            throw std::runtime_error(mtmd_format("%s: feature_layers.size() %d != proj_spatial_offsets.size() %d",
                                                                    hparams.feature_layers.size(), hparams.proj_spatial_offsets.size()));
                         }
 
@@ -1216,33 +1220,33 @@ struct mtmd_model_loader {
                         hparams.warmup_image_size = hparams.image_size;
                     } break;
                 default:
-                    throw std::runtime_error(string_format("%s: unknown vision projector type %s\n", __func__, proj_type.c_str()));
+                    throw std::runtime_error(mtmd_format("%s: unknown vision projector type %s\n", __func__, proj_type.c_str()));
             }
 
             // sanity check
             {
                 if (hparams.image_size < 0) {
                     // note: some models having hparams.image_size == 0, which means the image size is dynamic
-                    throw std::runtime_error(string_format("%s: image_size (%d) cannot be negative\n", __func__, hparams.image_size));
+                    throw std::runtime_error(mtmd_format("%s: image_size (%d) cannot be negative\n", __func__, hparams.image_size));
                 }
                 if (hparams.image_size > 8192) {
                     // cap prevents int32 overflow in n_patches = (image_size/patch_size)^2
-                    throw std::runtime_error(string_format("%s: image_size (%d) is too large (max 8192)\n", __func__, hparams.image_size));
+                    throw std::runtime_error(mtmd_format("%s: image_size (%d) is too large (max 8192)\n", __func__, hparams.image_size));
                 }
                 if (hparams.patch_size <= 0 || hparams.patch_size >= 65536) {
-                    throw std::runtime_error(string_format("%s: patch_size (%d) must be positive and less than 65536\n", __func__, hparams.patch_size));
+                    throw std::runtime_error(mtmd_format("%s: patch_size (%d) must be positive and less than 65536\n", __func__, hparams.patch_size));
                 }
                 if (hparams.n_embd <= 0) {
-                    throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
+                    throw std::runtime_error(mtmd_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
                 }
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
-                    throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                    throw std::runtime_error(mtmd_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
                 }
                 if (hparams.n_merge <= 0 || hparams.n_merge >= 65536) {
-                    throw std::runtime_error(string_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
+                    throw std::runtime_error(mtmd_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
                 }
                 if (hparams.attn_window_size > 4096) {
-                    throw std::runtime_error(string_format("%s: attn_window_size (%d) is too large (max 4096)\n", __func__, hparams.attn_window_size));
+                    throw std::runtime_error(mtmd_format("%s: attn_window_size (%d) is too large (max 4096)\n", __func__, hparams.attn_window_size));
                 }
             }
 
@@ -1297,10 +1301,10 @@ struct mtmd_model_loader {
 
                 // Validate audio hparams loaded from GGUF metadata
                 if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
-                    throw std::runtime_error(string_format("%s: n_mel_bins (%d) must be in range [1, 256]\n", __func__, hparams.n_mel_bins));
+                    throw std::runtime_error(mtmd_format("%s: n_mel_bins (%d) must be in range [1, 256]\n", __func__, hparams.n_mel_bins));
                 }
                 if (fft_based && (hparams.audio_sample_rate <= 0 || hparams.audio_n_fft <= 0 || hparams.audio_hop_len <= 0 || hparams.audio_window_len <= 0)) {
-                    throw std::runtime_error(string_format("%s: audio hparams invalid: sample_rate=%d n_fft=%d window_len=%d hop_len=%d\n",
+                    throw std::runtime_error(mtmd_format("%s: audio hparams invalid: sample_rate=%d n_fft=%d window_len=%d hop_len=%d\n",
                         __func__, hparams.audio_sample_rate, hparams.audio_n_fft, hparams.audio_window_len, hparams.audio_hop_len));
                 }
             }
@@ -1317,7 +1321,7 @@ struct mtmd_model_loader {
 
         auto fin = open_ifstream_binary(fname);
         if (!fin) {
-            throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
+            throw std::runtime_error(mtmd_format("%s: failed to open %s\n", __func__, fname.c_str()));
         }
 
         // TODO @ngxson : support both audio and video in the future
@@ -1339,7 +1343,7 @@ struct mtmd_model_loader {
         };
         model.ctx_data.reset(ggml_init(params));
         if (!model.ctx_data) {
-            throw std::runtime_error(string_format("%s: failed to init ggml context\n", __func__));
+            throw std::runtime_error(mtmd_format("%s: failed to init ggml context\n", __func__));
         }
 
         // helper function
@@ -1347,11 +1351,11 @@ struct mtmd_model_loader {
         auto get_tensor = [&](const std::string & name, bool required = true) {
             // Each tensor should only be loaded once; duplicates indicate a bug
             if (loaded_tensor_names.count(name)) {
-                throw std::runtime_error(string_format("%s: tensor already loaded: %s\n", __func__, name.c_str()));
+                throw std::runtime_error(mtmd_format("%s: tensor already loaded: %s\n", __func__, name.c_str()));
             }
             ggml_tensor * cur = ggml_get_tensor(ctx_meta.get(), name.c_str());
             if (!cur && required) {
-                throw std::runtime_error(string_format("%s: unable to find tensor %s\n", __func__, name.c_str()));
+                throw std::runtime_error(mtmd_format("%s: unable to find tensor %s\n", __func__, name.c_str()));
             }
             if (cur) {
                 tensors_to_load.push_back(cur);
@@ -1373,20 +1377,20 @@ struct mtmd_model_loader {
             const char * res2     = is_decoder ? TN_A_GEN_WAV_SEANET_RES_CONV2  : TN_A_SEANET_RES_CONV2;
             const char * scale    = is_decoder ? TN_A_GEN_WAV_SEANET_SCALE_CONV : TN_A_SEANET_SCALE_CONV;
 
-            seanet.conv_in_w  = get_tensor(string_format(conv_in,  "weight"));
-            seanet.conv_in_b  = get_tensor(string_format(conv_in,  "bias"));
-            seanet.conv_out_w = get_tensor(string_format(conv_out, "weight"));
-            seanet.conv_out_b = get_tensor(string_format(conv_out, "bias"));
+            seanet.conv_in_w  = get_tensor(mtmd_format(conv_in,  "weight"));
+            seanet.conv_in_b  = get_tensor(mtmd_format(conv_in,  "bias"));
+            seanet.conv_out_w = get_tensor(mtmd_format(conv_out, "weight"));
+            seanet.conv_out_b = get_tensor(mtmd_format(conv_out, "bias"));
 
             seanet.stages.resize(hparams.seanet_n_stage);
             for (int i = 0; i < hparams.seanet_n_stage; i++) {
                 auto & stage = seanet.stages[i];
-                stage.res_conv1_w  = get_tensor(string_format(res1,  i, "weight"));
-                stage.res_conv1_b  = get_tensor(string_format(res1,  i, "bias"));
-                stage.res_conv2_w  = get_tensor(string_format(res2,  i, "weight"));
-                stage.res_conv2_b  = get_tensor(string_format(res2,  i, "bias"));
-                stage.scale_conv_w = get_tensor(string_format(scale, i, "weight"));
-                stage.scale_conv_b = get_tensor(string_format(scale, i, "bias"));
+                stage.res_conv1_w  = get_tensor(mtmd_format(res1,  i, "weight"));
+                stage.res_conv1_b  = get_tensor(mtmd_format(res1,  i, "bias"));
+                stage.res_conv2_w  = get_tensor(mtmd_format(res2,  i, "weight"));
+                stage.res_conv2_b  = get_tensor(mtmd_format(res2,  i, "bias"));
+                stage.scale_conv_w = get_tensor(mtmd_format(scale, i, "weight"));
+                stage.scale_conv_b = get_tensor(mtmd_format(scale, i, "bias"));
             }
         };
 
@@ -1399,17 +1403,17 @@ struct mtmd_model_loader {
 
             const int64_t idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
             if (idx < 0) {
-                throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name.c_str()));
+                throw std::runtime_error(mtmd_format("%s: failed to find tensor %s\n", __func__, name.c_str()));
             }
 
             if (const auto type = gguf_get_tensor_type(ctx_gguf.get(), idx); type != GGML_TYPE_F32) {
-                throw std::runtime_error(string_format("%s: %s must be %s, was %s\n", __func__,
+                throw std::runtime_error(mtmd_format("%s: %s must be %s, was %s\n", __func__,
                             name.c_str(), ggml_type_name(GGML_TYPE_F32), ggml_type_name(type)));
             }
 
             const size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
             if (n_bytes == 0) {
-                throw std::runtime_error(string_format("%s: tensor %s is empty\n", __func__, name.c_str()));
+                throw std::runtime_error(mtmd_format("%s: tensor %s is empty\n", __func__, name.c_str()));
             }
 
             const size_t n_elems = n_bytes / sizeof(float);
@@ -1425,7 +1429,7 @@ struct mtmd_model_loader {
                 return default_val;
             }
             if (v.size() != 1) {
-                throw std::runtime_error(string_format("%s: expected scalar tensor '%s' but got %d elements\n",
+                throw std::runtime_error(mtmd_format("%s: expected scalar tensor '%s' but got %d elements\n",
                             __func__, name.c_str(), (int) v.size()));
             }
 
@@ -1434,23 +1438,23 @@ struct mtmd_model_loader {
 
         model.class_embedding = get_tensor(TN_CLASS_EMBD, false);
 
-        model.pre_ln_w = get_tensor(string_format(TN_LN_PRE, prefix, "weight"), false);
-        model.pre_ln_b = get_tensor(string_format(TN_LN_PRE, prefix, "bias"),   false);
+        model.pre_ln_w = get_tensor(mtmd_format(TN_LN_PRE, prefix, "weight"), false);
+        model.pre_ln_b = get_tensor(mtmd_format(TN_LN_PRE, prefix, "bias"),   false);
 
-        model.post_ln_w = get_tensor(string_format(TN_LN_POST, prefix, "weight"), false);
-        model.post_ln_b = get_tensor(string_format(TN_LN_POST, prefix, "bias"),   false);
+        model.post_ln_w = get_tensor(mtmd_format(TN_LN_POST, prefix, "weight"), false);
+        model.post_ln_b = get_tensor(mtmd_format(TN_LN_POST, prefix, "bias"),   false);
 
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   false);
         model.patch_embeddings_1 = get_tensor(TN_PATCH_EMBD_1, false);
 
-        model.norm_embd_w = get_tensor(string_format(TN_NORM_EMBD, "weight"), false);
-        model.norm_embd_b = get_tensor(string_format(TN_NORM_EMBD, "bias"),   false);
+        model.norm_embd_w = get_tensor(mtmd_format(TN_NORM_EMBD, "weight"), false);
+        model.norm_embd_b = get_tensor(mtmd_format(TN_NORM_EMBD, "bias"),   false);
 
-        model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
+        model.position_embeddings = get_tensor(mtmd_format(TN_POS_EMBD, prefix), false);
 
         // lfm3vl
-        model.lfm3vl_embedding_norm_w = get_tensor(string_format(TN_LFM3VL_EMBEDDING_NORM, prefix, "weight"), false);
+        model.lfm3vl_embedding_norm_w = get_tensor(mtmd_format(TN_LFM3VL_EMBEDDING_NORM, prefix, "weight"), false);
 
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
@@ -1469,63 +1473,63 @@ struct mtmd_model_loader {
             // lfm3vl / lfm3a conv layers have no attention tensors
             const bool o_w_required = model.proj_type != PROJECTOR_TYPE_LFM3VL
                                    && model.proj_type != PROJECTOR_TYPE_LFM3A;
-            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
-            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
-            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
-            layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"), o_w_required);
-            layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
-            layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
-            layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
-            layer.ln_1_w = get_tensor(string_format(TN_LN_1,        prefix, il, "weight"), false);
-            layer.ln_2_w = get_tensor(string_format(TN_LN_2,        prefix, il, "weight"), false);
-            layer.ls_1_w        = get_tensor(string_format(TN_LS_1,         prefix, il, "weight"), false); // no bias
-            layer.ls_2_w        = get_tensor(string_format(TN_LS_2,         prefix, il, "weight"), false); // no bias
-            layer.ls_out_w      = get_tensor(string_format(TN_LS_OUT,        prefix, il, "weight"), false); // no bias
-            layer.attn_post_norm_w = get_tensor(string_format(TN_ATTN_POST_NORM, prefix, il, "weight"), false); // no bias
-            layer.ff_post_norm_w   = get_tensor(string_format(TN_FFN_POST_NORM,  prefix, il, "weight"), false); // no bias
+            layer.k_w    = get_tensor(mtmd_format(TN_ATTN_K,      prefix, il, "weight"), false);
+            layer.q_w    = get_tensor(mtmd_format(TN_ATTN_Q,      prefix, il, "weight"), false);
+            layer.v_w    = get_tensor(mtmd_format(TN_ATTN_V,      prefix, il, "weight"), false);
+            layer.o_w    = get_tensor(mtmd_format(TN_ATTN_OUTPUT, prefix, il, "weight"), o_w_required);
+            layer.qkv_w  = get_tensor(mtmd_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
+            layer.k_norm = get_tensor(mtmd_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
+            layer.q_norm = get_tensor(mtmd_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
+            layer.ln_1_w = get_tensor(mtmd_format(TN_LN_1,        prefix, il, "weight"), false);
+            layer.ln_2_w = get_tensor(mtmd_format(TN_LN_2,        prefix, il, "weight"), false);
+            layer.ls_1_w        = get_tensor(mtmd_format(TN_LS_1,         prefix, il, "weight"), false); // no bias
+            layer.ls_2_w        = get_tensor(mtmd_format(TN_LS_2,         prefix, il, "weight"), false); // no bias
+            layer.ls_out_w      = get_tensor(mtmd_format(TN_LS_OUT,        prefix, il, "weight"), false); // no bias
+            layer.attn_post_norm_w = get_tensor(mtmd_format(TN_ATTN_POST_NORM, prefix, il, "weight"), false); // no bias
+            layer.ff_post_norm_w   = get_tensor(mtmd_format(TN_FFN_POST_NORM,  prefix, il, "weight"), false); // no bias
 
-            layer.k_b    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "bias"), false);
-            layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "bias"), false);
-            layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
-            layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
-            layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
-            layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
-            layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
+            layer.k_b    = get_tensor(mtmd_format(TN_ATTN_K,      prefix, il, "bias"), false);
+            layer.q_b    = get_tensor(mtmd_format(TN_ATTN_Q,      prefix, il, "bias"), false);
+            layer.v_b    = get_tensor(mtmd_format(TN_ATTN_V,      prefix, il, "bias"), false);
+            layer.o_b    = get_tensor(mtmd_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
+            layer.qkv_b  = get_tensor(mtmd_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
+            layer.ln_1_b = get_tensor(mtmd_format(TN_LN_1,        prefix, il, "bias"), false);
+            layer.ln_2_b = get_tensor(mtmd_format(TN_LN_2,        prefix, il, "bias"), false);
 
             // MoE ffn (dots3note vision pyramid blocks); replaces the dense ffn when present
-            layer.ff_gate_inp_w  = get_tensor(string_format(TN_FFN_GATE_INP,  prefix, il, "weight"), false);
-            layer.ff_gate_exps_w = get_tensor(string_format(TN_FFN_GATE_EXPS, prefix, il, "weight"), false);
-            layer.ff_up_exps_w   = get_tensor(string_format(TN_FFN_UP_EXPS,   prefix, il, "weight"), false);
-            layer.ff_down_exps_w = get_tensor(string_format(TN_FFN_DOWN_EXPS, prefix, il, "weight"), false);
-            layer.ff_exp_probs_b = get_tensor(string_format(TN_FFN_EXP_PROBS_B, prefix, il, "weight"), false);
+            layer.ff_gate_inp_w  = get_tensor(mtmd_format(TN_FFN_GATE_INP,  prefix, il, "weight"), false);
+            layer.ff_gate_exps_w = get_tensor(mtmd_format(TN_FFN_GATE_EXPS, prefix, il, "weight"), false);
+            layer.ff_up_exps_w   = get_tensor(mtmd_format(TN_FFN_UP_EXPS,   prefix, il, "weight"), false);
+            layer.ff_down_exps_w = get_tensor(mtmd_format(TN_FFN_DOWN_EXPS, prefix, il, "weight"), false);
+            layer.ff_exp_probs_b = get_tensor(mtmd_format(TN_FFN_EXP_PROBS_B, prefix, il, "weight"), false);
             const bool is_moe = layer.ff_gate_exps_w != nullptr;
 
             // ffn
-            layer.ff_up_w   = get_tensor(string_format(TN_FFN_UP,   prefix, il, "weight"), !is_moe);
-            layer.ff_up_b   = get_tensor(string_format(TN_FFN_UP,   prefix, il, "bias"),   false);
-            layer.ff_gate_w = get_tensor(string_format(TN_FFN_GATE, prefix, il, "weight"), false);
-            layer.ff_gate_b = get_tensor(string_format(TN_FFN_GATE, prefix, il, "bias"),   false);
-            layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "weight"), !is_moe);
-            layer.ff_down_b = get_tensor(string_format(TN_FFN_DOWN, prefix, il, "bias"),   false);
+            layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,   prefix, il, "weight"), !is_moe);
+            layer.ff_up_b   = get_tensor(mtmd_format(TN_FFN_UP,   prefix, il, "bias"),   false);
+            layer.ff_gate_w = get_tensor(mtmd_format(TN_FFN_GATE, prefix, il, "weight"), false);
+            layer.ff_gate_b = get_tensor(mtmd_format(TN_FFN_GATE, prefix, il, "bias"),   false);
+            layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN, prefix, il, "weight"), !is_moe);
+            layer.ff_down_b = get_tensor(mtmd_format(TN_FFN_DOWN, prefix, il, "bias"),   false);
 
             // mimovl per-head attention sink bias
-            layer.attn_sinks = get_tensor(string_format(TN_ATTN_SINKS, prefix, il), false);
+            layer.attn_sinks = get_tensor(mtmd_format(TN_ATTN_SINKS, prefix, il), false);
 
             // qwen3vl deepstack layer
-            layer.deepstack_norm_w = get_tensor(string_format(TN_DEEPSTACK_NORM, il, "weight"), false);
-            layer.deepstack_norm_b = get_tensor(string_format(TN_DEEPSTACK_NORM, il, "bias"), false);
-            layer.deepstack_fc1_w  = get_tensor(string_format(TN_DEEPSTACK_FC1,  il, "weight"), false);
-            layer.deepstack_fc1_b  = get_tensor(string_format(TN_DEEPSTACK_FC1,  il, "bias"), false);
-            layer.deepstack_fc2_w  = get_tensor(string_format(TN_DEEPSTACK_FC2,  il, "weight"), false);
-            layer.deepstack_fc2_b  = get_tensor(string_format(TN_DEEPSTACK_FC2,  il, "bias"), false);
+            layer.deepstack_norm_w = get_tensor(mtmd_format(TN_DEEPSTACK_NORM, il, "weight"), false);
+            layer.deepstack_norm_b = get_tensor(mtmd_format(TN_DEEPSTACK_NORM, il, "bias"), false);
+            layer.deepstack_fc1_w  = get_tensor(mtmd_format(TN_DEEPSTACK_FC1,  il, "weight"), false);
+            layer.deepstack_fc1_b  = get_tensor(mtmd_format(TN_DEEPSTACK_FC1,  il, "bias"), false);
+            layer.deepstack_fc2_w  = get_tensor(mtmd_format(TN_DEEPSTACK_FC2,  il, "weight"), false);
+            layer.deepstack_fc2_b  = get_tensor(mtmd_format(TN_DEEPSTACK_FC2,  il, "bias"), false);
             if (layer.has_deepstack()) {
                 model.n_deepstack_layers++;
             }
 
             // lfm3vl conv layers
-            layer.conv2d_in_proj_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_IN_PROJ,  prefix, il, "weight"), false);
-            layer.conv2d_spatial_w  = get_tensor(string_format(TN_LFM3VL_CONV2D_SPATIAL,  prefix, il, "weight"), false);
-            layer.conv2d_out_proj_w = get_tensor(string_format(TN_LFM3VL_CONV2D_OUT_PROJ, prefix, il, "weight"), false);
+            layer.conv2d_in_proj_w  = get_tensor(mtmd_format(TN_LFM3VL_CONV2D_IN_PROJ,  prefix, il, "weight"), false);
+            layer.conv2d_spatial_w  = get_tensor(mtmd_format(TN_LFM3VL_CONV2D_SPATIAL,  prefix, il, "weight"), false);
+            layer.conv2d_out_proj_w = get_tensor(mtmd_format(TN_LFM3VL_CONV2D_OUT_PROJ, prefix, il, "weight"), false);
 
             // some models already exported with legacy (incorrect) naming which is quite messy, let's fix it here
             // note: Qwen model converted from the old surgery script has n_ff = 0, so we cannot use n_ff to check!
@@ -1565,87 +1569,87 @@ struct mtmd_model_loader {
         auto load_code2wav = [&](bool with_proj) {
             auto & c2w = model.c2w;
 
-            c2w.quant_first_in_w  = get_tensor(string_format(TN_A_GEN_WAV_QUANT_FIRST_IN,  "weight"), with_proj);
-            c2w.quant_first_out_w = get_tensor(string_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "weight"), with_proj);
-            c2w.quant_first_cb_w  = get_tensor(string_format(TN_A_GEN_WAV_QUANT_FIRST_CB,  "weight"));
-            c2w.quant_rest_in_w   = get_tensor(string_format(TN_A_GEN_WAV_QUANT_REST_IN,   "weight"), with_proj);
-            c2w.quant_rest_out_w  = get_tensor(string_format(TN_A_GEN_WAV_QUANT_REST_OUT,  "weight"), with_proj);
-            c2w.quant_rest_cb_w   = get_tensor(string_format(TN_A_GEN_WAV_QUANT_REST_CB,   "weight"));
+            c2w.quant_first_in_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_IN,  "weight"), with_proj);
+            c2w.quant_first_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "weight"), with_proj);
+            c2w.quant_first_cb_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_CB,  "weight"));
+            c2w.quant_rest_in_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_IN,   "weight"), with_proj);
+            c2w.quant_rest_out_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_OUT,  "weight"), with_proj);
+            c2w.quant_rest_cb_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_REST_CB,   "weight"));
 
-            c2w.pre_conv_w = get_tensor(string_format(TN_A_GEN_WAV_PRE_CONV, "weight"), with_proj);
-            c2w.pre_conv_b = get_tensor(string_format(TN_A_GEN_WAV_PRE_CONV, "bias"),   with_proj);
+            c2w.pre_conv_w = get_tensor(mtmd_format(TN_A_GEN_WAV_PRE_CONV, "weight"), with_proj);
+            c2w.pre_conv_b = get_tensor(mtmd_format(TN_A_GEN_WAV_PRE_CONV, "bias"),   with_proj);
 
-            c2w.tfm_in_proj_w     = get_tensor(string_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "weight"), with_proj);
-            c2w.tfm_in_proj_b     = get_tensor(string_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "bias"), with_proj);
-            c2w.tfm_out_proj_w    = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "weight"), with_proj);
-            c2w.tfm_out_proj_b    = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "bias"), with_proj);
-            c2w.tfm_output_norm_w = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_NORM, "weight"));
+            c2w.tfm_in_proj_w     = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "weight"), with_proj);
+            c2w.tfm_in_proj_b     = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "bias"), with_proj);
+            c2w.tfm_out_proj_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "weight"), with_proj);
+            c2w.tfm_out_proj_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "bias"), with_proj);
+            c2w.tfm_output_norm_w = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_OUT_NORM, "weight"));
 
             // loaded manually, the generic model.layers loop is taken by code_predictor
             c2w.tfm_layers.resize(hparams.wav_tfm_n_layer);
             for (int il = 0; il < hparams.wav_tfm_n_layer; il++) {
                 auto & layer = c2w.tfm_layers[il];
                 const char * p = "a.gen.wav.tfm";
-                layer.q_w      = get_tensor(string_format(TN_ATTN_Q,      p, il, "weight"));
-                layer.k_w      = get_tensor(string_format(TN_ATTN_K,      p, il, "weight"));
-                layer.v_w      = get_tensor(string_format(TN_ATTN_V,      p, il, "weight"));
-                layer.o_w      = get_tensor(string_format(TN_ATTN_OUTPUT, p, il, "weight"));
-                layer.ln_1_w   = get_tensor(string_format(TN_LN_1,        p, il, "weight"));
-                layer.ln_2_w   = get_tensor(string_format(TN_LN_2,        p, il, "weight"));
-                layer.ls_1_w   = get_tensor(string_format(TN_LS_1,        p, il, "weight"));
-                layer.ls_2_w   = get_tensor(string_format(TN_LS_2,        p, il, "weight"));
-                layer.ff_gate_w = get_tensor(string_format(TN_FFN_GATE,   p, il, "weight"));
-                layer.ff_up_w   = get_tensor(string_format(TN_FFN_UP,     p, il, "weight"));
-                layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,   p, il, "weight"));
+                layer.q_w      = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
+                layer.k_w      = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
+                layer.v_w      = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
+                layer.o_w      = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
+                layer.ln_1_w   = get_tensor(mtmd_format(TN_LN_1,        p, il, "weight"));
+                layer.ln_2_w   = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
+                layer.ls_1_w   = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
+                layer.ls_2_w   = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
+                layer.ff_gate_w = get_tensor(mtmd_format(TN_FFN_GATE,   p, il, "weight"));
+                layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,     p, il, "weight"));
+                layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,   p, il, "weight"));
             }
 
             // upsample: 2x (causal ConvTranspose1d + ConvNeXt block)
             c2w.upsample.resize(hparams.wav_upsample_n_block);
             for (int il = 0; il < hparams.wav_upsample_n_block; il++) {
                 auto & up = c2w.upsample[il];
-                up.conv_w   = get_tensor(string_format(TN_A_GEN_WAV_UP_CONV,   il, "weight"));
-                up.conv_b   = get_tensor(string_format(TN_A_GEN_WAV_UP_CONV,   il, "bias"));
-                up.dwconv_w = get_tensor(string_format(TN_A_GEN_WAV_UP_DWCONV, il, "weight"));
-                up.dwconv_b = get_tensor(string_format(TN_A_GEN_WAV_UP_DWCONV, il, "bias"));
-                up.norm_w   = get_tensor(string_format(TN_A_GEN_WAV_UP_NORM,   il, "weight"));
-                up.norm_b   = get_tensor(string_format(TN_A_GEN_WAV_UP_NORM,   il, "bias"));
-                up.pw1_w    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW1,    il, "weight"));
-                up.pw1_b    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW1,    il, "bias"));
-                up.pw2_w    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW2,    il, "weight"));
-                up.pw2_b    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW2,    il, "bias"));
-                up.gamma    = get_tensor(string_format(TN_A_GEN_WAV_UP_GAMMA,  il));
+                up.conv_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_CONV,   il, "weight"));
+                up.conv_b   = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_CONV,   il, "bias"));
+                up.dwconv_w = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_DWCONV, il, "weight"));
+                up.dwconv_b = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_DWCONV, il, "bias"));
+                up.norm_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_NORM,   il, "weight"));
+                up.norm_b   = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_NORM,   il, "bias"));
+                up.pw1_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW1,    il, "weight"));
+                up.pw1_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW1,    il, "bias"));
+                up.pw2_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW2,    il, "weight"));
+                up.pw2_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW2,    il, "bias"));
+                up.gamma    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_GAMMA,  il));
             }
 
             // DAC decoder: conv_pre + n upsample blocks (each with n_res residual units) + conv_post
-            c2w.dac_entry_w = get_tensor(string_format(TN_A_GEN_WAV_DAC_ENTRY, "weight"));
-            c2w.dac_entry_b = get_tensor(string_format(TN_A_GEN_WAV_DAC_ENTRY, "bias"));
+            c2w.dac_entry_w = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_ENTRY, "weight"));
+            c2w.dac_entry_b = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_ENTRY, "bias"));
 
             c2w.dac.resize(hparams.wav_dac_n_block);
             for (int il = 0; il < hparams.wav_dac_n_block; il++) {
                 auto & blk = c2w.dac[il];
-                blk.snake_alpha = get_tensor(string_format(TN_A_GEN_WAV_DAC_SNAKE, il, "alpha"));
-                blk.snake_beta  = get_tensor(string_format(TN_A_GEN_WAV_DAC_SNAKE, il, "beta"));
-                blk.conv_w      = get_tensor(string_format(TN_A_GEN_WAV_DAC_CONV,  il, "weight"));
-                blk.conv_b      = get_tensor(string_format(TN_A_GEN_WAV_DAC_CONV,  il, "bias"));
+                blk.snake_alpha = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_SNAKE, il, "alpha"));
+                blk.snake_beta  = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_SNAKE, il, "beta"));
+                blk.conv_w      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_CONV,  il, "weight"));
+                blk.conv_b      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_CONV,  il, "bias"));
 
                 blk.res.resize(hparams.wav_dac_n_res);
                 for (int ir = 0; ir < hparams.wav_dac_n_res; ir++) {
                     auto & res = blk.res[ir];
-                    res.act1_alpha = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_ACT1,  il, ir, "alpha"));
-                    res.act1_beta  = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_ACT1,  il, ir, "beta"));
-                    res.conv1_w    = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_CONV1, il, ir, "weight"));
-                    res.conv1_b    = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_CONV1, il, ir, "bias"));
-                    res.act2_alpha = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_ACT2,  il, ir, "alpha"));
-                    res.act2_beta  = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_ACT2,  il, ir, "beta"));
-                    res.conv2_w    = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_CONV2, il, ir, "weight"));
-                    res.conv2_b    = get_tensor(string_format(TN_A_GEN_WAV_DAC_RES_CONV2, il, ir, "bias"));
+                    res.act1_alpha = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_ACT1,  il, ir, "alpha"));
+                    res.act1_beta  = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_ACT1,  il, ir, "beta"));
+                    res.conv1_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_CONV1, il, ir, "weight"));
+                    res.conv1_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_CONV1, il, ir, "bias"));
+                    res.act2_alpha = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_ACT2,  il, ir, "alpha"));
+                    res.act2_beta  = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_ACT2,  il, ir, "beta"));
+                    res.conv2_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_CONV2, il, ir, "weight"));
+                    res.conv2_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_RES_CONV2, il, ir, "bias"));
                 }
             }
 
-            c2w.dac_post_snake_alpha = get_tensor(string_format(TN_A_GEN_WAV_DAC_POST_SNAKE, "alpha"));
-            c2w.dac_post_snake_beta  = get_tensor(string_format(TN_A_GEN_WAV_DAC_POST_SNAKE, "beta"));
-            c2w.dac_post_conv_w      = get_tensor(string_format(TN_A_GEN_WAV_DAC_POST_CONV,  "weight"));
-            c2w.dac_post_conv_b      = get_tensor(string_format(TN_A_GEN_WAV_DAC_POST_CONV,  "bias"));
+            c2w.dac_post_snake_alpha = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_SNAKE, "alpha"));
+            c2w.dac_post_snake_beta  = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_SNAKE, "beta"));
+            c2w.dac_post_conv_w      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_CONV,  "weight"));
+            c2w.dac_post_conv_b      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_CONV,  "bias"));
         };
 
         switch (model.proj_type) {
@@ -1653,19 +1657,19 @@ struct mtmd_model_loader {
             case PROJECTOR_TYPE_MLP_NORM:
                 {
                     // LLaVA projection
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"), false);
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"), false);
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"), false);
                     // Yi-type llava
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"), false);
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"), false);
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
                     // missing in Yi-type llava
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"), false);
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"), false);
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
                     // Yi-type llava
-                    model.mm_3_w = get_tensor(string_format(TN_LLAVA_PROJ, 3, "weight"), false);
-                    model.mm_3_b = get_tensor(string_format(TN_LLAVA_PROJ, 3, "bias"), false);
-                    model.mm_4_w = get_tensor(string_format(TN_LLAVA_PROJ, 4, "weight"), false);
-                    model.mm_4_b = get_tensor(string_format(TN_LLAVA_PROJ, 4, "bias"), false);
+                    model.mm_3_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "weight"), false);
+                    model.mm_3_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "bias"), false);
+                    model.mm_4_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "weight"), false);
+                    model.mm_4_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 4, "bias"), false);
                     if (model.mm_3_w) {
                         // TODO: this is a hack to support Yi-type llava
                         model.proj_type = PROJECTOR_TYPE_MLP_NORM;
@@ -1675,40 +1679,40 @@ struct mtmd_model_loader {
             case PROJECTOR_TYPE_LDP:
                 {
                     // MobileVLM projection
-                    model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
-                    model.mm_model_mlp_1_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "bias"));
-                    model.mm_model_mlp_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
-                    model.mm_model_mlp_3_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "bias"));
-                    model.mm_model_block_1_block_0_0_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 0, "0.weight"));
-                    model.mm_model_block_1_block_0_1_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 0, "1.weight"));
-                    model.mm_model_block_1_block_0_1_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 0, "1.bias"));
-                    model.mm_model_block_1_block_1_fc1_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc1.weight"));
-                    model.mm_model_block_1_block_1_fc1_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc1.bias"));
-                    model.mm_model_block_1_block_1_fc2_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc2.weight"));
-                    model.mm_model_block_1_block_1_fc2_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc2.bias"));
-                    model.mm_model_block_1_block_2_0_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 2, "0.weight"));
-                    model.mm_model_block_1_block_2_1_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 2, "1.weight"));
-                    model.mm_model_block_1_block_2_1_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 1, 2, "1.bias"));
-                    model.mm_model_block_2_block_0_0_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 0, "0.weight"));
-                    model.mm_model_block_2_block_0_1_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 0, "1.weight"));
-                    model.mm_model_block_2_block_0_1_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 0, "1.bias"));
-                    model.mm_model_block_2_block_1_fc1_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc1.weight"));
-                    model.mm_model_block_2_block_1_fc1_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc1.bias"));
-                    model.mm_model_block_2_block_1_fc2_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc2.weight"));
-                    model.mm_model_block_2_block_1_fc2_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc2.bias"));
-                    model.mm_model_block_2_block_2_0_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 2, "0.weight"));
-                    model.mm_model_block_2_block_2_1_w = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 2, "1.weight"));
-                    model.mm_model_block_2_block_2_1_b = get_tensor(string_format(TN_MVLM_PROJ_BLOCK, 2, 2, "1.bias"));
+                    model.mm_model_mlp_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_model_mlp_1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "bias"));
+                    model.mm_model_mlp_3_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                    model.mm_model_mlp_3_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 3, "bias"));
+                    model.mm_model_block_1_block_0_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 0, "0.weight"));
+                    model.mm_model_block_1_block_0_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 0, "1.weight"));
+                    model.mm_model_block_1_block_0_1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 0, "1.bias"));
+                    model.mm_model_block_1_block_1_fc1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc1.weight"));
+                    model.mm_model_block_1_block_1_fc1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc1.bias"));
+                    model.mm_model_block_1_block_1_fc2_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc2.weight"));
+                    model.mm_model_block_1_block_1_fc2_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 1, "fc2.bias"));
+                    model.mm_model_block_1_block_2_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 2, "0.weight"));
+                    model.mm_model_block_1_block_2_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 2, "1.weight"));
+                    model.mm_model_block_1_block_2_1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 1, 2, "1.bias"));
+                    model.mm_model_block_2_block_0_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 0, "0.weight"));
+                    model.mm_model_block_2_block_0_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 0, "1.weight"));
+                    model.mm_model_block_2_block_0_1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 0, "1.bias"));
+                    model.mm_model_block_2_block_1_fc1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc1.weight"));
+                    model.mm_model_block_2_block_1_fc1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc1.bias"));
+                    model.mm_model_block_2_block_1_fc2_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc2.weight"));
+                    model.mm_model_block_2_block_1_fc2_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 1, "fc2.bias"));
+                    model.mm_model_block_2_block_2_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 2, "0.weight"));
+                    model.mm_model_block_2_block_2_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 2, "1.weight"));
+                    model.mm_model_block_2_block_2_1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_BLOCK, 2, 2, "1.bias"));
                 } break;
             case PROJECTOR_TYPE_LDPV2:
                 {
                     // MobilVLM_V2 projection
-                    model.mm_model_mlp_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
-                    model.mm_model_mlp_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"));
-                    model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
-                    model.mm_model_mlp_2_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "bias"));
-                    model.mm_model_peg_0_w = get_tensor(string_format(TN_MVLM_PROJ_PEG, 0, "weight"));
-                    model.mm_model_peg_0_b = get_tensor(string_format(TN_MVLM_PROJ_PEG, 0, "bias"));
+                    model.mm_model_mlp_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_model_mlp_0_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 0, "bias"));
+                    model.mm_model_mlp_2_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                    model.mm_model_mlp_2_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 2, "bias"));
+                    model.mm_model_peg_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_PEG, 0, "weight"));
+                    model.mm_model_peg_0_b = get_tensor(mtmd_format(TN_MVLM_PROJ_PEG, 0, "bias"));
                 } break;
             case PROJECTOR_TYPE_MINICPMV:
                 {
@@ -1717,20 +1721,20 @@ struct mtmd_model_loader {
                     model.mm_model_query = get_tensor(TN_MINICPMV_QUERY);
                     model.mm_model_proj = get_tensor(TN_MINICPMV_PROJ);
                     model.mm_model_kv_proj = get_tensor(TN_MINICPMV_KV_PROJ);
-                    model.mm_model_attn_q_w = get_tensor(string_format(TN_MINICPMV_ATTN, "q", "weight"));
-                    model.mm_model_attn_k_w = get_tensor(string_format(TN_MINICPMV_ATTN, "k", "weight"));
-                    model.mm_model_attn_v_w = get_tensor(string_format(TN_MINICPMV_ATTN, "v", "weight"));
-                    model.mm_model_attn_q_b = get_tensor(string_format(TN_MINICPMV_ATTN, "q", "bias"));
-                    model.mm_model_attn_k_b = get_tensor(string_format(TN_MINICPMV_ATTN, "k", "bias"));
-                    model.mm_model_attn_v_b = get_tensor(string_format(TN_MINICPMV_ATTN, "v", "bias"));
-                    model.mm_model_attn_o_w = get_tensor(string_format(TN_MINICPMV_ATTN, "out", "weight"));
-                    model.mm_model_attn_o_b = get_tensor(string_format(TN_MINICPMV_ATTN, "out", "bias"));
-                    model.mm_model_ln_q_w = get_tensor(string_format(TN_MINICPMV_LN, "q", "weight"));
-                    model.mm_model_ln_q_b = get_tensor(string_format(TN_MINICPMV_LN, "q", "bias"));
-                    model.mm_model_ln_kv_w = get_tensor(string_format(TN_MINICPMV_LN, "kv", "weight"));
-                    model.mm_model_ln_kv_b = get_tensor(string_format(TN_MINICPMV_LN, "kv", "bias"));
-                    model.mm_model_ln_post_w = get_tensor(string_format(TN_MINICPMV_LN, "post", "weight"));
-                    model.mm_model_ln_post_b = get_tensor(string_format(TN_MINICPMV_LN, "post", "bias"));
+                    model.mm_model_attn_q_w = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "q", "weight"));
+                    model.mm_model_attn_k_w = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "k", "weight"));
+                    model.mm_model_attn_v_w = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "v", "weight"));
+                    model.mm_model_attn_q_b = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "q", "bias"));
+                    model.mm_model_attn_k_b = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "k", "bias"));
+                    model.mm_model_attn_v_b = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "v", "bias"));
+                    model.mm_model_attn_o_w = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "out", "weight"));
+                    model.mm_model_attn_o_b = get_tensor(mtmd_format(TN_MINICPMV_ATTN, "out", "bias"));
+                    model.mm_model_ln_q_w = get_tensor(mtmd_format(TN_MINICPMV_LN, "q", "weight"));
+                    model.mm_model_ln_q_b = get_tensor(mtmd_format(TN_MINICPMV_LN, "q", "bias"));
+                    model.mm_model_ln_kv_w = get_tensor(mtmd_format(TN_MINICPMV_LN, "kv", "weight"));
+                    model.mm_model_ln_kv_b = get_tensor(mtmd_format(TN_MINICPMV_LN, "kv", "bias"));
+                    model.mm_model_ln_post_w = get_tensor(mtmd_format(TN_MINICPMV_LN, "post", "weight"));
+                    model.mm_model_ln_post_b = get_tensor(mtmd_format(TN_MINICPMV_LN, "post", "bias"));
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
             case PROJECTOR_TYPE_MINICPMV4_7:
@@ -1742,53 +1746,53 @@ struct mtmd_model_loader {
                     };
 
                     // ViT merger: window self-attention
-                    model.vit_merger_ln1_w     = get_merger_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
-                    model.vit_merger_ln1_b     = get_merger_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
-                    model.vit_merger_attn_q_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
-                    model.vit_merger_attn_q_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
-                    model.vit_merger_attn_k_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
-                    model.vit_merger_attn_k_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
-                    model.vit_merger_attn_v_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
-                    model.vit_merger_attn_v_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
-                    model.vit_merger_attn_o_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
-                    model.vit_merger_attn_o_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
+                    model.vit_merger_ln1_w     = get_merger_tensor(mtmd_format(TN_VIT_MERGER_LN1, "weight"));
+                    model.vit_merger_ln1_b     = get_merger_tensor(mtmd_format(TN_VIT_MERGER_LN1, "bias"));
+                    model.vit_merger_attn_q_w  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_Q, "weight"));
+                    model.vit_merger_attn_q_b  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
+                    model.vit_merger_attn_k_w  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_K, "weight"));
+                    model.vit_merger_attn_k_b  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
+                    model.vit_merger_attn_v_w  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_V, "weight"));
+                    model.vit_merger_attn_v_b  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
+                    model.vit_merger_attn_o_w  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_O, "weight"));
+                    model.vit_merger_attn_o_b  = get_merger_tensor(mtmd_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
                     // ViT merger: MLP downsample
-                    model.vit_merger_ds_ln_w   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
-                    model.vit_merger_ds_ln_b   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
-                    model.vit_merger_ds_up_w   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
-                    model.vit_merger_ds_up_b   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
-                    model.vit_merger_ds_down_w = get_merger_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
-                    model.vit_merger_ds_down_b = get_merger_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
+                    model.vit_merger_ds_ln_w   = get_merger_tensor(mtmd_format(TN_VIT_MERGER_DS_LN, "weight"));
+                    model.vit_merger_ds_ln_b   = get_merger_tensor(mtmd_format(TN_VIT_MERGER_DS_LN, "bias"));
+                    model.vit_merger_ds_up_w   = get_merger_tensor(mtmd_format(TN_VIT_MERGER_DS_UP, "weight"));
+                    model.vit_merger_ds_up_b   = get_merger_tensor(mtmd_format(TN_VIT_MERGER_DS_UP, "bias"), false);
+                    model.vit_merger_ds_down_w = get_merger_tensor(mtmd_format(TN_VIT_MERGER_DS_DOWN, "weight"));
+                    model.vit_merger_ds_down_b = get_merger_tensor(mtmd_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
                     // Final Merger (DownsampleMLP)
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
-                    model.mm_ffn_up_w     = get_tensor(string_format(TN_MM_UP,   "weight"));
-                    model.mm_ffn_up_b     = get_tensor(string_format(TN_MM_UP,   "bias"), false);
-                    model.mm_ffn_down_w   = get_tensor(string_format(TN_MM_DOWN, "weight"));
-                    model.mm_ffn_down_b   = get_tensor(string_format(TN_MM_DOWN, "bias"), false);
+                    model.mm_ffn_up_w     = get_tensor(mtmd_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b     = get_tensor(mtmd_format(TN_MM_UP,   "bias"), false);
+                    model.mm_ffn_down_w   = get_tensor(mtmd_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b   = get_tensor(mtmd_format(TN_MM_DOWN, "bias"), false);
                     model.tok_embd_sep    = get_tensor(TN_TOK_EMBD_SEP, model.proj_type == PROJECTOR_TYPE_MINICPMV4_7);
                 } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
-                    model.mm_model_adapter_conv_w = get_tensor(string_format(TN_GLM_ADAPER_CONV, "weight"));
-                    model.mm_model_adapter_conv_b = get_tensor(string_format(TN_GLM_ADAPER_CONV, "bias"));
-                    model.mm_model_mlp_0_w = get_tensor(string_format(TN_GLM_ADAPTER_LINEAR, "weight"));
-                    model.mm_model_ln_q_w = get_tensor(string_format(TN_GLM_ADAPTER_NORM_1, "weight"));
-                    model.mm_model_ln_q_b = get_tensor(string_format(TN_GLM_ADAPTER_NORM_1, "bias"));
-                    model.mm_model_mlp_1_w = get_tensor(string_format(TN_GLM_ADAPTER_D_H_2_4H, "weight"));
-                    model.mm_model_mlp_2_w = get_tensor(string_format(TN_GLM_ADAPTER_GATE, "weight"));
-                    model.mm_model_mlp_3_w = get_tensor(string_format(TN_GLM_ADAPTER_D_4H_2_H, "weight"));
-                    model.mm_boi = get_tensor(string_format(TN_TOK_GLM_BOI));
-                    model.mm_eoi = get_tensor(string_format(TN_TOK_GLM_EOI));
+                    model.mm_model_adapter_conv_w = get_tensor(mtmd_format(TN_GLM_ADAPER_CONV, "weight"));
+                    model.mm_model_adapter_conv_b = get_tensor(mtmd_format(TN_GLM_ADAPER_CONV, "bias"));
+                    model.mm_model_mlp_0_w = get_tensor(mtmd_format(TN_GLM_ADAPTER_LINEAR, "weight"));
+                    model.mm_model_ln_q_w = get_tensor(mtmd_format(TN_GLM_ADAPTER_NORM_1, "weight"));
+                    model.mm_model_ln_q_b = get_tensor(mtmd_format(TN_GLM_ADAPTER_NORM_1, "bias"));
+                    model.mm_model_mlp_1_w = get_tensor(mtmd_format(TN_GLM_ADAPTER_D_H_2_4H, "weight"));
+                    model.mm_model_mlp_2_w = get_tensor(mtmd_format(TN_GLM_ADAPTER_GATE, "weight"));
+                    model.mm_model_mlp_3_w = get_tensor(mtmd_format(TN_GLM_ADAPTER_D_4H_2_H, "weight"));
+                    model.mm_boi = get_tensor(mtmd_format(TN_TOK_GLM_BOI));
+                    model.mm_eoi = get_tensor(mtmd_format(TN_TOK_GLM_EOI));
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
             case PROJECTOR_TYPE_EXAONE4_5:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_MAGEVL:
                 {
@@ -1797,35 +1801,35 @@ struct mtmd_model_loader {
                     const int d_head = hparams.n_head > 0 ? hparams.n_embd / hparams.n_head : 0;
                     if (d_head <= 0 || d_head * hparams.n_head != hparams.n_embd || d_head % 32 != 0 ||
                             model.rope_freqs->type != GGML_TYPE_F32 || ggml_nelements(model.rope_freqs) != d_head) {
-                        throw std::runtime_error(string_format("%s: hparams do not match the tensor shapes\n", __func__));
+                        throw std::runtime_error(mtmd_format("%s: hparams do not match the tensor shapes\n", __func__));
                     }
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_QWEN3VL:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM3VL:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     // each layer must be either a conv block or a complete attention block
                     for (size_t il = 0; il < model.layers.size(); ++il) {
                         const auto & layer = model.layers[il];
                         const bool is_conv = layer.conv2d_in_proj_w != nullptr;
                         const bool is_attn = layer.q_w && layer.k_w && layer.v_w && layer.o_w;
                         if (is_conv == is_attn) {
-                            throw std::runtime_error(string_format("%s: lfm3vl layer %zu is neither a complete conv nor a complete attention block\n", __func__, il));
+                            throw std::runtime_error(mtmd_format("%s: lfm3vl layer %zu is neither a complete conv nor a complete attention block\n", __func__, il));
                         }
                     }
                 } break;
@@ -1833,30 +1837,30 @@ struct mtmd_model_loader {
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);        // merger.norm
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);     // merger.norm
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));  // linear_proj.0
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));  // linear_proj.2
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));  // linear_proj.0
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));  // linear_proj.2
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_MIMOVL:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
                 } break;
             case PROJECTOR_TYPE_MINIMAX_M3:
                 {
                     // per-patch MLP: mm.1 -> gelu -> mm.2
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     // 2x2 merge MLP: mm.merge.fc1 -> gelu -> mm.merge.fc2
-                    model.mm_merger_fc1_w = get_tensor(string_format(TN_MM_MERGER_FC1, "weight"));
-                    model.mm_merger_fc1_b = get_tensor(string_format(TN_MM_MERGER_FC1, "bias"));
-                    model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
-                    model.mm_merger_fc2_b = get_tensor(string_format(TN_MM_MERGER_FC2, "bias"));
+                    model.mm_merger_fc1_w = get_tensor(mtmd_format(TN_MM_MERGER_FC1, "weight"));
+                    model.mm_merger_fc1_b = get_tensor(mtmd_format(TN_MM_MERGER_FC1, "bias"));
+                    model.mm_merger_fc2_w = get_tensor(mtmd_format(TN_MM_MERGER_FC2, "weight"));
+                    model.mm_merger_fc2_b = get_tensor(mtmd_format(TN_MM_MERGER_FC2, "bias"));
                 } break;
             case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
                 {
@@ -1864,54 +1868,54 @@ struct mtmd_model_loader {
                     model.a_patches.resize(hparams.audio_patch_sizes.size());
                     for (size_t i = 0; i < model.a_patches.size(); ++i) {
                         auto & pe = model.a_patches[i];
-                        pe.proj_w = get_tensor(string_format(TN_A_PATCH,      (int) i, "weight"));
-                        pe.proj_b = get_tensor(string_format(TN_A_PATCH,      (int) i, "bias"));
-                        pe.norm_w = get_tensor(string_format(TN_A_PATCH_NORM, (int) i, "weight"));
+                        pe.proj_w = get_tensor(mtmd_format(TN_A_PATCH,      (int) i, "weight"));
+                        pe.proj_b = get_tensor(mtmd_format(TN_A_PATCH,      (int) i, "bias"));
+                        pe.norm_w = get_tensor(mtmd_format(TN_A_PATCH_NORM, (int) i, "weight"));
                         if (pe.proj_w->ne[1] != hparams.audio_hidden_sizes[i]) {
-                            throw std::runtime_error(string_format("%s: audio stage %zu projection has width %" PRId64 ", expected %d\n", __func__, i, pe.proj_w->ne[1], hparams.audio_hidden_sizes[i]));
+                            throw std::runtime_error(mtmd_format("%s: audio stage %zu projection has width %" PRId64 ", expected %d\n", __func__, i, pe.proj_w->ne[1], hparams.audio_hidden_sizes[i]));
                         }
                     }
 
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
-                        layer.conv_w      = get_tensor(string_format(TN_CONV1D, il, "weight"));
-                        layer.conv_b      = get_tensor(string_format(TN_CONV1D, il, "bias"));
-                        layer.conv_norm_w = get_tensor(string_format(TN_A_CONV1D_NORM, il, "weight"));
-                        layer.ff_up_w     = get_tensor(string_format(TN_FFN_UP,   "a", il, "weight"));
-                        layer.ff_up_b     = get_tensor(string_format(TN_FFN_UP,   "a", il, "bias"));
-                        layer.ff_down_w   = get_tensor(string_format(TN_FFN_DOWN, "a", il, "weight"));
-                        layer.ff_down_b   = get_tensor(string_format(TN_FFN_DOWN, "a", il, "bias"));
+                        layer.conv_w      = get_tensor(mtmd_format(TN_CONV1D, il, "weight"));
+                        layer.conv_b      = get_tensor(mtmd_format(TN_CONV1D, il, "bias"));
+                        layer.conv_norm_w = get_tensor(mtmd_format(TN_A_CONV1D_NORM, il, "weight"));
+                        layer.ff_up_w     = get_tensor(mtmd_format(TN_FFN_UP,   "a", il, "weight"));
+                        layer.ff_up_b     = get_tensor(mtmd_format(TN_FFN_UP,   "a", il, "bias"));
+                        layer.ff_down_w   = get_tensor(mtmd_format(TN_FFN_DOWN, "a", il, "weight"));
+                        layer.ff_down_b   = get_tensor(mtmd_format(TN_FFN_DOWN, "a", il, "bias"));
                     }
 
                     // pre_ln and post_ln come from the generic path above, where they are optional
                     if (!model.pre_ln_w || !model.post_ln_w) {
-                        throw std::runtime_error(string_format("%s: missing pre_ln or post_ln weight\n", __func__));
+                        throw std::runtime_error(mtmd_format("%s: missing pre_ln or post_ln weight\n", __func__));
                     }
-                    model.mm_fc_w   = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
-                    model.mm_fc_b   = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
+                    model.mm_fc_w   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
+                    model.mm_fc_b   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
                     // 3-linear MLP: fc -> erf-GELU -> proj -> erf-GELU -> vision_proj (into LLM residual dim)
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_STEP3VL:
                 {
-                    model.mm_0_w     = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b     = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
-                    model.mm_1_w     = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b     = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
-                    model.mm_model_proj = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_0_w     = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b     = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_1_w     = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b     = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_model_proj = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
                 } break;
             case PROJECTOR_TYPE_YOUTUVL:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);        // merger.ln_q (RMS norm)
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));  // merger.mlp.0
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));  // merger.mlp.2
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));  // merger.mlp.0
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));  // merger.mlp.2
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_YASA2:
                 {
@@ -1925,34 +1929,34 @@ struct mtmd_model_loader {
                     model.yasa_backbone_ln_w = get_tensor(TN_YASA_BACKBONE_LN_W, false);
                     model.yasa_backbone_ln_b = get_tensor(TN_YASA_BACKBONE_LN_B, false);
                     model.yasa_vision_pos_embed = get_tensor(TN_YASA_POS_EMBD, false);
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"), false);
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
 
                     model.yasa_stages.clear();
                     for (int s = 0; ; ++s) {
                         yasa2_stage stage;
-                        stage.down_ln_w   = get_tensor(string_format(TN_YASA_STAGE_DOWN_LN, s, "weight"), false);
-                        stage.down_ln_b   = get_tensor(string_format(TN_YASA_STAGE_DOWN_LN, s, "bias"), false);
-                        stage.down_conv_w = get_tensor(string_format(TN_YASA_STAGE_DOWN_CONV, s, "weight"), false);
-                        stage.down_conv_b = get_tensor(string_format(TN_YASA_STAGE_DOWN_CONV, s, "bias"), false);
+                        stage.down_ln_w   = get_tensor(mtmd_format(TN_YASA_STAGE_DOWN_LN, s, "weight"), false);
+                        stage.down_ln_b   = get_tensor(mtmd_format(TN_YASA_STAGE_DOWN_LN, s, "bias"), false);
+                        stage.down_conv_w = get_tensor(mtmd_format(TN_YASA_STAGE_DOWN_CONV, s, "weight"), false);
+                        stage.down_conv_b = get_tensor(mtmd_format(TN_YASA_STAGE_DOWN_CONV, s, "bias"), false);
 
                         for (int bi = 0; ; ++bi) {
                             yasa2_block blk;
-                            blk.dw_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "dw", "weight"), false);
+                            blk.dw_w = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "dw", "weight"), false);
                             if (!blk.dw_w) {
                                 break;
                             }
-                            blk.dw_b  = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "dw", "bias"), false);
-                            blk.ln_w  = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "ln", "weight"), false);
-                            blk.ln_b  = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "ln", "bias"), false);
-                            blk.pw1_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw1", "weight"), false);
-                            blk.pw1_b = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw1", "bias"), false);
-                            blk.grn_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "grn", "weight"), false);
-                            blk.grn_b = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "grn", "bias"), false);
-                            blk.pw2_w = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw2", "weight"), false);
-                            blk.pw2_b = get_tensor(string_format(TN_YASA_STAGE_BLK, s, bi, "pw2", "bias"), false);
+                            blk.dw_b  = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "dw", "bias"), false);
+                            blk.ln_w  = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "ln", "weight"), false);
+                            blk.ln_b  = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "ln", "bias"), false);
+                            blk.pw1_w = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "pw1", "weight"), false);
+                            blk.pw1_b = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "pw1", "bias"), false);
+                            blk.grn_w = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "grn", "weight"), false);
+                            blk.grn_b = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "grn", "bias"), false);
+                            blk.pw2_w = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "pw2", "weight"), false);
+                            blk.pw2_b = get_tensor(mtmd_format(TN_YASA_STAGE_BLK, s, bi, "pw2", "bias"), false);
                             stage.blocks.push_back(blk);
                         }
 
@@ -1965,17 +1969,17 @@ struct mtmd_model_loader {
             case PROJECTOR_TYPE_GLM4V:
             case PROJECTOR_TYPE_GLM5V:
                 {
-                    model.mm_fc_w        = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
-                    model.mm_ffn_up_w    = get_tensor(string_format(TN_MM_UP,        "weight"));
-                    model.mm_ffn_up_b    = get_tensor(string_format(TN_MM_UP,        "bias"), false);
-                    model.mm_ffn_gate_w  = get_tensor(string_format(TN_MM_GATE,      "weight"));
-                    model.mm_ffn_gate_b  = get_tensor(string_format(TN_MM_GATE,      "bias"), false);
-                    model.mm_ffn_down_w  = get_tensor(string_format(TN_MM_DOWN,      "weight"));
-                    model.mm_ffn_down_b  = get_tensor(string_format(TN_MM_DOWN,      "bias"), false);
-                    model.mm_post_norm_w = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
-                    model.mm_post_norm_b = get_tensor(string_format(TN_MM_POST_NORM, "bias"), false);
-                    model.mm_patch_merger_w = get_tensor(string_format(TN_MM_PATCH_MERGER, "weight"));
-                    model.mm_patch_merger_b = get_tensor(string_format(TN_MM_PATCH_MERGER, "bias"));
+                    model.mm_fc_w        = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_ffn_up_w    = get_tensor(mtmd_format(TN_MM_UP,        "weight"));
+                    model.mm_ffn_up_b    = get_tensor(mtmd_format(TN_MM_UP,        "bias"), false);
+                    model.mm_ffn_gate_w  = get_tensor(mtmd_format(TN_MM_GATE,      "weight"));
+                    model.mm_ffn_gate_b  = get_tensor(mtmd_format(TN_MM_GATE,      "bias"), false);
+                    model.mm_ffn_down_w  = get_tensor(mtmd_format(TN_MM_DOWN,      "weight"));
+                    model.mm_ffn_down_b  = get_tensor(mtmd_format(TN_MM_DOWN,      "bias"), false);
+                    model.mm_post_norm_w = get_tensor(mtmd_format(TN_MM_POST_NORM, "weight"));
+                    model.mm_post_norm_b = get_tensor(mtmd_format(TN_MM_POST_NORM, "bias"), false);
+                    model.mm_patch_merger_w = get_tensor(mtmd_format(TN_MM_PATCH_MERGER, "weight"));
+                    model.mm_patch_merger_b = get_tensor(mtmd_format(TN_MM_PATCH_MERGER, "bias"));
                 } break;
             case PROJECTOR_TYPE_GEMMA3:
                 {
@@ -2011,12 +2015,12 @@ struct mtmd_model_loader {
             case PROJECTOR_TYPE_GEMMA4UV:
                 {
                     model.mm_input_proj_w = get_tensor(TN_MM_INP_PROJ);
-                    model.patch_norm_1_w = get_tensor(string_format(TN_PATCH_NORM, 1, "weight"));
-                    model.patch_norm_1_b = get_tensor(string_format(TN_PATCH_NORM, 1, "bias"));
-                    model.patch_norm_2_w = get_tensor(string_format(TN_PATCH_NORM, 2, "weight"));
-                    model.patch_norm_2_b = get_tensor(string_format(TN_PATCH_NORM, 2, "bias"));
-                    model.patch_norm_3_w = get_tensor(string_format(TN_PATCH_NORM, 3, "weight")); // pos_norm
-                    model.patch_norm_3_b = get_tensor(string_format(TN_PATCH_NORM, 3, "bias"));   // pos_norm
+                    model.patch_norm_1_w = get_tensor(mtmd_format(TN_PATCH_NORM, 1, "weight"));
+                    model.patch_norm_1_b = get_tensor(mtmd_format(TN_PATCH_NORM, 1, "bias"));
+                    model.patch_norm_2_w = get_tensor(mtmd_format(TN_PATCH_NORM, 2, "weight"));
+                    model.patch_norm_2_b = get_tensor(mtmd_format(TN_PATCH_NORM, 2, "bias"));
+                    model.patch_norm_3_w = get_tensor(mtmd_format(TN_PATCH_NORM, 3, "weight")); // pos_norm
+                    model.patch_norm_3_b = get_tensor(mtmd_format(TN_PATCH_NORM, 3, "bias"));   // pos_norm
                 } break;
             case PROJECTOR_TYPE_GEMMA3NV:
                 {
@@ -2040,56 +2044,56 @@ struct mtmd_model_loader {
                             mobilenetv5_block block;
 
                             // 1. Check for Edge Residual (S0)
-                            block.s0_conv_exp_w = get_tensor(string_format(TN_MNV5_BLK_S0_EXP_W, stage, blk_idx), false);
+                            block.s0_conv_exp_w = get_tensor(mtmd_format(TN_MNV5_BLK_S0_EXP_W, stage, blk_idx), false);
                             if (block.s0_conv_exp_w) {
                                 found_block = true;
-                                block.s0_bn1_w      = get_tensor(string_format(TN_MNV5_BLK_S0_BN1_W, stage, blk_idx), false);
-                                block.s0_conv_pwl_w = get_tensor(string_format(TN_MNV5_BLK_S0_PWL_W, stage, blk_idx), false);
-                                block.s0_bn2_w      = get_tensor(string_format(TN_MNV5_BLK_S0_BN2_W, stage, blk_idx), false);
+                                block.s0_bn1_w      = get_tensor(mtmd_format(TN_MNV5_BLK_S0_BN1_W, stage, blk_idx), false);
+                                block.s0_conv_pwl_w = get_tensor(mtmd_format(TN_MNV5_BLK_S0_PWL_W, stage, blk_idx), false);
+                                block.s0_bn2_w      = get_tensor(mtmd_format(TN_MNV5_BLK_S0_BN2_W, stage, blk_idx), false);
                             }
                             // 2. Check for UIR (Universal Inverted Residual)
                             else {
                                 // Check for dw_start OR pw_exp (some UIR blocks skip dw_start)
-                                block.dw_start_w = get_tensor(string_format(TN_MNV5_BLK_DW_START_W, stage, blk_idx), false);
-                                block.pw_exp_w   = get_tensor(string_format(TN_MNV5_BLK_PW_EXP_W, stage, blk_idx), false);
+                                block.dw_start_w = get_tensor(mtmd_format(TN_MNV5_BLK_DW_START_W, stage, blk_idx), false);
+                                block.pw_exp_w   = get_tensor(mtmd_format(TN_MNV5_BLK_PW_EXP_W, stage, blk_idx), false);
 
                                 if (block.dw_start_w || block.pw_exp_w) {
                                     found_block = true;
                                     if (block.dw_start_w) {
-                                        block.dw_start_bn_w = get_tensor(string_format(TN_MNV5_BLK_DW_START_BN, stage, blk_idx), false);
+                                        block.dw_start_bn_w = get_tensor(mtmd_format(TN_MNV5_BLK_DW_START_BN, stage, blk_idx), false);
                                     }
                                     if (block.pw_exp_w) {
-                                        block.pw_exp_bn_w   = get_tensor(string_format(TN_MNV5_BLK_PW_EXP_BN, stage, blk_idx), false);
+                                        block.pw_exp_bn_w   = get_tensor(mtmd_format(TN_MNV5_BLK_PW_EXP_BN, stage, blk_idx), false);
                                     }
-                                    block.dw_mid_w      = get_tensor(string_format(TN_MNV5_BLK_DW_MID_W, stage, blk_idx), false);
+                                    block.dw_mid_w      = get_tensor(mtmd_format(TN_MNV5_BLK_DW_MID_W, stage, blk_idx), false);
                                     if (block.dw_mid_w) {
-                                        block.dw_mid_bn_w   = get_tensor(string_format(TN_MNV5_BLK_DW_MID_BN, stage, blk_idx), false);
+                                        block.dw_mid_bn_w   = get_tensor(mtmd_format(TN_MNV5_BLK_DW_MID_BN, stage, blk_idx), false);
                                     }
-                                    block.pw_proj_w     = get_tensor(string_format(TN_MNV5_BLK_PW_PROJ_W, stage, blk_idx), false);
+                                    block.pw_proj_w     = get_tensor(mtmd_format(TN_MNV5_BLK_PW_PROJ_W, stage, blk_idx), false);
                                     if (block.pw_proj_w) {
-                                        block.pw_proj_bn_w  = get_tensor(string_format(TN_MNV5_BLK_PW_PROJ_BN, stage, blk_idx), false);
+                                        block.pw_proj_bn_w  = get_tensor(mtmd_format(TN_MNV5_BLK_PW_PROJ_BN, stage, blk_idx), false);
                                     }
-                                    block.layer_scale_w = get_tensor(string_format(TN_MNV5_BLK_LAYER_SCALE, stage, blk_idx), false);
+                                    block.layer_scale_w = get_tensor(mtmd_format(TN_MNV5_BLK_LAYER_SCALE, stage, blk_idx), false);
                                 }
                             }
 
                             // 3. Check for Attention (MQA)
                             // Even if UIR/Edge check failed, this might be a pure attention block
-                            ggml_tensor* attn_q_check = get_tensor(string_format(TN_MNV5_ATTN_Q_W, stage, blk_idx), false);
+                            ggml_tensor* attn_q_check = get_tensor(mtmd_format(TN_MNV5_ATTN_Q_W, stage, blk_idx), false);
                             if (attn_q_check) {
                                 found_block = true;
                                 block.attn_q_w = attn_q_check;
-                                block.attn_k_w = get_tensor(string_format(TN_MNV5_ATTN_K_W, stage, blk_idx), false);
-                                block.attn_v_w = get_tensor(string_format(TN_MNV5_ATTN_V_W, stage, blk_idx), false);
-                                block.attn_o_w = get_tensor(string_format(TN_MNV5_ATTN_O_W, stage, blk_idx), false);
-                                block.attn_k_dw_w   = get_tensor(string_format(TN_MNV5_ATTN_K_DW, stage, blk_idx), false);
-                                block.attn_k_norm_w = get_tensor(string_format(TN_MNV5_ATTN_K_NORM, stage, blk_idx), false);
-                                block.attn_v_dw_w   = get_tensor(string_format(TN_MNV5_ATTN_V_DW, stage, blk_idx), false);
-                                block.attn_v_norm_w = get_tensor(string_format(TN_MNV5_ATTN_V_NORM, stage, blk_idx), false);
-                                block.attn_norm_w   = get_tensor(string_format(TN_MNV5_ATTN_NORM, stage, blk_idx), false);
+                                block.attn_k_w = get_tensor(mtmd_format(TN_MNV5_ATTN_K_W, stage, blk_idx), false);
+                                block.attn_v_w = get_tensor(mtmd_format(TN_MNV5_ATTN_V_W, stage, blk_idx), false);
+                                block.attn_o_w = get_tensor(mtmd_format(TN_MNV5_ATTN_O_W, stage, blk_idx), false);
+                                block.attn_k_dw_w   = get_tensor(mtmd_format(TN_MNV5_ATTN_K_DW, stage, blk_idx), false);
+                                block.attn_k_norm_w = get_tensor(mtmd_format(TN_MNV5_ATTN_K_NORM, stage, blk_idx), false);
+                                block.attn_v_dw_w   = get_tensor(mtmd_format(TN_MNV5_ATTN_V_DW, stage, blk_idx), false);
+                                block.attn_v_norm_w = get_tensor(mtmd_format(TN_MNV5_ATTN_V_NORM, stage, blk_idx), false);
+                                block.attn_norm_w   = get_tensor(mtmd_format(TN_MNV5_ATTN_NORM, stage, blk_idx), false);
                                 // Note: Attention blocks also have layer_scale, load it if not already loaded by UIR check
                                 if (!block.layer_scale_w) {
-                                    block.layer_scale_w = get_tensor(string_format(TN_MNV5_BLK_LAYER_SCALE, stage, blk_idx), false);
+                                    block.layer_scale_w = get_tensor(mtmd_format(TN_MNV5_BLK_LAYER_SCALE, stage, blk_idx), false);
                                 }
                             }
 
@@ -2113,24 +2117,24 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_IDEFICS3:
                 {
-                    model.mm_fc_w = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
                 } break;
             case PROJECTOR_TYPE_COHERE2V:
                 {
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_LFM2:
             case PROJECTOR_TYPE_D1OMNI_V:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM, false);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_KIMIVL:
             case PROJECTOR_TYPE_PADDLEOCR:
@@ -2138,17 +2142,23 @@ struct mtmd_model_loader {
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_KIMIK31:
+                {
+                    model.mm_1_w         = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_2_w         = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_post_norm_w = get_tensor(mtmd_format(TN_MM_POST_NORM, "weight"));
                 } break;
             case PROJECTOR_TYPE_DEEPSEEK4V:
                 {
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     // sentinel token embeddings written into the output block
                     model.image_newline        = get_tensor(TN_IMAGE_NEWLINE);
                     model.token_embd_img_start = get_tensor(TN_TOK_IMG_START);
@@ -2157,10 +2167,10 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_DEEPSEEK41V:
                 {
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     // image_start / image_end / image_newline, written into the output block
                     model.image_newline        = get_tensor(TN_IMAGE_NEWLINE);
                     model.token_embd_img_start = get_tensor(TN_TOK_IMG_START);
@@ -2168,125 +2178,125 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_PIXTRAL:
                 {
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
                     // [IMG_BREAK] token embedding
                     model.token_embd_img_break = get_tensor(TN_TOK_IMG_BREAK);
                     // for mistral small 3.1
                     model.mm_input_norm_w   = get_tensor(TN_MM_INP_NORM, false);
-                    model.mm_patch_merger_w = get_tensor(string_format(TN_MM_PATCH_MERGER, "weight"), false);
+                    model.mm_patch_merger_w = get_tensor(mtmd_format(TN_MM_PATCH_MERGER, "weight"), false);
                 } break;
             case PROJECTOR_TYPE_LIGHTONOCR:
                 {
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"), false);
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"), false);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
                     model.mm_input_norm_w   = get_tensor(TN_MM_INP_NORM, false);
-                    model.mm_patch_merger_w = get_tensor(string_format(TN_MM_PATCH_MERGER, "weight"), false);
+                    model.mm_patch_merger_w = get_tensor(mtmd_format(TN_MM_PATCH_MERGER, "weight"), false);
                 } break;
             case PROJECTOR_TYPE_DOTS_OCR:
             case PROJECTOR_TYPE_DOTS3NOTE_V:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
                     // post_trunk_norm: applied after all ViT blocks, before the merger
-                    model.post_ln_w = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
+                    model.post_ln_w = get_tensor(mtmd_format(TN_MM_POST_NORM, "weight"));
                 } break;
             case PROJECTOR_TYPE_DOTS3NOTE_A:
                 {
-                    model.conv2d_1_w = get_tensor(string_format(TN_CONV2D, 1, "weight"));
-                    model.conv2d_1_b = get_tensor(string_format(TN_CONV2D, 1, "bias"));
-                    model.conv2d_2_w = get_tensor(string_format(TN_CONV2D, 2, "weight"));
-                    model.conv2d_2_b = get_tensor(string_format(TN_CONV2D, 2, "bias"));
-                    model.conv2d_3_w = get_tensor(string_format(TN_CONV2D, 3, "weight"));
-                    model.conv2d_3_b = get_tensor(string_format(TN_CONV2D, 3, "bias"));
-                    model.conv_out_w = get_tensor(string_format(TN_CONV_OUT, "weight")); // no bias
+                    model.conv2d_1_w = get_tensor(mtmd_format(TN_CONV2D, 1, "weight"));
+                    model.conv2d_1_b = get_tensor(mtmd_format(TN_CONV2D, 1, "bias"));
+                    model.conv2d_2_w = get_tensor(mtmd_format(TN_CONV2D, 2, "weight"));
+                    model.conv2d_2_b = get_tensor(mtmd_format(TN_CONV2D, 2, "bias"));
+                    model.conv2d_3_w = get_tensor(mtmd_format(TN_CONV2D, 3, "weight"));
+                    model.conv2d_3_b = get_tensor(mtmd_format(TN_CONV2D, 3, "bias"));
+                    model.conv_out_w = get_tensor(mtmd_format(TN_CONV_OUT, "weight")); // no bias
                     // adapter: LayerNorm -> Linear -> GELU -> Linear
-                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
-                    model.mm_norm_pre_b = get_tensor(string_format(TN_MM_NORM_PRE, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_NORM_PRE, "weight"));
+                    model.mm_norm_pre_b = get_tensor(mtmd_format(TN_MM_NORM_PRE, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "bias"));
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
                 {
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
-                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
-                    model.mm_norm_mid_w = get_tensor(string_format(TN_MM_NORM_MID, "weight"));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_NORM_PRE, "weight"));
+                    model.mm_norm_mid_w = get_tensor(mtmd_format(TN_MM_NORM_MID, "weight"));
                 } break;
             case PROJECTOR_TYPE_MERALION:
                 {
                     // Whisper encoder conv layers
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
                     // MERaLiON adaptor: 4 linear layers + ln_pre
                     // linear_0 = frame compression (19200->6400) + SiLU
                     // linear_1 = gate_proj (6400->6400) for GLU
                     // linear_2 = pool_proj (6400->6400) for GLU
                     // linear_3 = out_proj  (6400->3584)
-                    model.mm_0_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
-                    model.mm_3_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
-                    model.mm_3_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                    model.mm_3_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "weight"));
+                    model.mm_3_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "bias"));
                     // ln_speech (LayerNorm before adaptor)
-                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
-                    model.mm_norm_pre_b = get_tensor(string_format(TN_MM_NORM_PRE, "bias"));
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_NORM_PRE, "weight"));
+                    model.mm_norm_pre_b = get_tensor(mtmd_format(TN_MM_NORM_PRE, "bias"));
                 } break;
             case PROJECTOR_TYPE_QWEN2A:
                 {
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
-                    model.mm_fc_w = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
-                    model.mm_fc_b = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
+                    model.mm_fc_b = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
             case PROJECTOR_TYPE_QWEN3A:
                 {
-                    model.conv2d_1_w = get_tensor(string_format(TN_CONV2D, 1, "weight"));
-                    model.conv2d_1_b = get_tensor(string_format(TN_CONV2D, 1, "bias"));
-                    model.conv2d_2_w = get_tensor(string_format(TN_CONV2D, 2, "weight"));
-                    model.conv2d_2_b = get_tensor(string_format(TN_CONV2D, 2, "bias"));
-                    model.conv2d_3_w = get_tensor(string_format(TN_CONV2D, 3, "weight"));
-                    model.conv2d_3_b = get_tensor(string_format(TN_CONV2D, 3, "bias"));
-                    model.conv_out_w = get_tensor(string_format(TN_CONV_OUT, "weight")); // no bias
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                    model.conv2d_1_w = get_tensor(mtmd_format(TN_CONV2D, 1, "weight"));
+                    model.conv2d_1_b = get_tensor(mtmd_format(TN_CONV2D, 1, "bias"));
+                    model.conv2d_2_w = get_tensor(mtmd_format(TN_CONV2D, 2, "weight"));
+                    model.conv2d_2_b = get_tensor(mtmd_format(TN_CONV2D, 2, "bias"));
+                    model.conv2d_3_w = get_tensor(mtmd_format(TN_CONV2D, 3, "weight"));
+                    model.conv2d_3_b = get_tensor(mtmd_format(TN_CONV2D, 3, "bias"));
+                    model.conv_out_w = get_tensor(mtmd_format(TN_CONV_OUT, "weight")); // no bias
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_MIMO_AUDIO:
                 {
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
-                    model.downsample_conv_w = get_tensor(string_format(TN_A_DOWNSAMPLE_CONV, "weight"));
-                    model.downsample_norm_w = get_tensor(string_format(TN_A_DOWNSAMPLE_NORM, "weight"));
-                    model.downsample_norm_b = get_tensor(string_format(TN_A_DOWNSAMPLE_NORM, "bias"));
-                    model.rvq_codebook   = get_tensor(string_format(TN_A_RVQ_CODEBOOK, "weight"), false);
-                    model.mm_a_code_embd = get_tensor(string_format(TN_MM_A_CODE_EMBD, "weight"), false);
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.downsample_conv_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    model.downsample_norm_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_NORM, "weight"));
+                    model.downsample_norm_b = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_NORM, "bias"));
+                    model.rvq_codebook   = get_tensor(mtmd_format(TN_A_RVQ_CODEBOOK, "weight"), false);
+                    model.mm_a_code_embd = get_tensor(mtmd_format(TN_MM_A_CODE_EMBD, "weight"), false);
                     if (!model.rvq_codebook || !model.mm_a_code_embd) {
-                        throw std::runtime_error(string_format("%s: mimo_audio: missing %s or %s\n", __func__,
+                        throw std::runtime_error(mtmd_format("%s: mimo_audio: missing %s or %s\n", __func__,
                             TN_A_RVQ_CODEBOOK, TN_MM_A_CODE_EMBD));
                     }
                     // hparams.rvq_codebook_size comes from GGUF metadata and is independent of the
@@ -2294,7 +2304,7 @@ struct mtmd_model_loader {
                     // (mimo-audio.cpp) can never read past either tensor's allocated bins/vocab.
                     for (int32_t bins : hparams.rvq_codebook_size) {
                         if (bins <= 0 || bins > model.rvq_codebook->ne[1] || bins > model.mm_a_code_embd->ne[1]) {
-                            throw std::runtime_error(string_format(
+                            throw std::runtime_error(mtmd_format(
                                 "%s: mimo_audio: %s entry (%d) out of range for codebook/code_embd tensors\n",
                                 __func__, KEY_A_RVQ_CODEBOOK_SIZE, bins));
                         }
@@ -2304,138 +2314,138 @@ struct mtmd_model_loader {
                     model.mm_a_local_layers.resize(hparams.audio_local_n_layer);
                     for (int il = 0; il < hparams.audio_local_n_layer; il++) {
                         auto & layer = model.mm_a_local_layers[il];
-                        layer.q_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_Q,   il, "weight"));
-                        layer.q_b    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_Q,   il, "bias"));
-                        layer.k_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_K,   il, "weight"));
-                        layer.k_b    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_K,   il, "bias"));
-                        layer.v_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_V,   il, "weight"));
-                        layer.v_b    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_V,   il, "bias"));
-                        layer.o_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_OUT, il, "weight"));
-                        layer.ff_gate_w = get_tensor(string_format(TN_MM_A_LOCAL_FFN_GATE, il, "weight"));
-                        layer.ff_up_w   = get_tensor(string_format(TN_MM_A_LOCAL_FFN_UP,   il, "weight"));
-                        layer.ff_down_w = get_tensor(string_format(TN_MM_A_LOCAL_FFN_DOWN, il, "weight"));
-                        layer.ln_1_w = get_tensor(string_format(TN_MM_A_LOCAL_LN1, il, "weight"));
-                        layer.ln_2_w = get_tensor(string_format(TN_MM_A_LOCAL_LN2, il, "weight"));
+                        layer.q_w    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_Q,   il, "weight"));
+                        layer.q_b    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_Q,   il, "bias"));
+                        layer.k_w    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_K,   il, "weight"));
+                        layer.k_b    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_K,   il, "bias"));
+                        layer.v_w    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_V,   il, "weight"));
+                        layer.v_b    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_V,   il, "bias"));
+                        layer.o_w    = get_tensor(mtmd_format(TN_MM_A_LOCAL_ATTN_OUT, il, "weight"));
+                        layer.ff_gate_w = get_tensor(mtmd_format(TN_MM_A_LOCAL_FFN_GATE, il, "weight"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_MM_A_LOCAL_FFN_UP,   il, "weight"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_MM_A_LOCAL_FFN_DOWN, il, "weight"));
+                        layer.ln_1_w = get_tensor(mtmd_format(TN_MM_A_LOCAL_LN1, il, "weight"));
+                        layer.ln_2_w = get_tensor(mtmd_format(TN_MM_A_LOCAL_LN2, il, "weight"));
                     }
-                    model.mm_a_local_norm_w = get_tensor(string_format(TN_MM_A_LOCAL_NORM, "weight"));
+                    model.mm_a_local_norm_w = get_tensor(mtmd_format(TN_MM_A_LOCAL_NORM, "weight"));
 
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                 {
                     // stem TDNN (block 0)
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 0, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 0, "bias"));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 0, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 0, "bias"));
 
                     // SE-Res2Net blocks (GGUF bid 1..3, one per hparams.n_layer)
                     model.layers.resize(hparams.n_layer);
                     for (int il = 0; il < hparams.n_layer; il++) {
                         auto & layer = model.layers[il];
                         int bid = il + 1;
-                        layer.conv_pw1_w = get_tensor(string_format(TN_CONV_PW1, prefix, bid, "weight"));
-                        layer.conv_pw1_b = get_tensor(string_format(TN_CONV_PW1, prefix, bid, "bias"));
-                        layer.conv_pw2_w = get_tensor(string_format(TN_CONV_PW2, prefix, bid, "weight"));
-                        layer.conv_pw2_b = get_tensor(string_format(TN_CONV_PW2, prefix, bid, "bias"));
-                        layer.se_conv1_w = get_tensor(string_format(TN_A_SE_CONV1, bid, "weight"));
-                        layer.se_conv1_b = get_tensor(string_format(TN_A_SE_CONV1, bid, "bias"));
-                        layer.se_conv2_w = get_tensor(string_format(TN_A_SE_CONV2, bid, "weight"));
-                        layer.se_conv2_b = get_tensor(string_format(TN_A_SE_CONV2, bid, "bias"));
+                        layer.conv_pw1_w = get_tensor(mtmd_format(TN_CONV_PW1, prefix, bid, "weight"));
+                        layer.conv_pw1_b = get_tensor(mtmd_format(TN_CONV_PW1, prefix, bid, "bias"));
+                        layer.conv_pw2_w = get_tensor(mtmd_format(TN_CONV_PW2, prefix, bid, "weight"));
+                        layer.conv_pw2_b = get_tensor(mtmd_format(TN_CONV_PW2, prefix, bid, "bias"));
+                        layer.se_conv1_w = get_tensor(mtmd_format(TN_A_SE_CONV1, bid, "weight"));
+                        layer.se_conv1_b = get_tensor(mtmd_format(TN_A_SE_CONV1, bid, "bias"));
+                        layer.se_conv2_w = get_tensor(mtmd_format(TN_A_SE_CONV2, bid, "weight"));
+                        layer.se_conv2_b = get_tensor(mtmd_format(TN_A_SE_CONV2, bid, "bias"));
                         layer.res2_conv_w.resize(7);
                         layer.res2_conv_b.resize(7);
                         for (int xid = 0; xid < 7; xid++) {
-                            layer.res2_conv_w[xid] = get_tensor(string_format(TN_A_CONV_RES2, bid, xid, "weight"));
-                            layer.res2_conv_b[xid] = get_tensor(string_format(TN_A_CONV_RES2, bid, xid, "bias"));
+                            layer.res2_conv_w[xid] = get_tensor(mtmd_format(TN_A_CONV_RES2, bid, xid, "weight"));
+                            layer.res2_conv_b[xid] = get_tensor(mtmd_format(TN_A_CONV_RES2, bid, xid, "bias"));
                         }
                     }
 
                     // multi-layer feature aggregation
-                    model.conv_out_w = get_tensor(string_format(TN_CONV_OUT, "weight"));
-                    model.conv_out_b = get_tensor(string_format(TN_CONV_OUT, "bias"));
+                    model.conv_out_w = get_tensor(mtmd_format(TN_CONV_OUT, "weight"));
+                    model.conv_out_b = get_tensor(mtmd_format(TN_CONV_OUT, "bias"));
 
                     // attentive statistics pooling
-                    model.spk_asp_attn_w = get_tensor(string_format(TN_A_ASP_ATTN, "weight"));
-                    model.spk_asp_attn_b = get_tensor(string_format(TN_A_ASP_ATTN, "bias"));
-                    model.spk_asp_tdnn_w = get_tensor(string_format(TN_A_ASP_TDNN, "weight"));
-                    model.spk_asp_tdnn_b = get_tensor(string_format(TN_A_ASP_TDNN, "bias"));
+                    model.spk_asp_attn_w = get_tensor(mtmd_format(TN_A_ASP_ATTN, "weight"));
+                    model.spk_asp_attn_b = get_tensor(mtmd_format(TN_A_ASP_ATTN, "bias"));
+                    model.spk_asp_tdnn_w = get_tensor(mtmd_format(TN_A_ASP_TDNN, "weight"));
+                    model.spk_asp_tdnn_b = get_tensor(mtmd_format(TN_A_ASP_TDNN, "bias"));
 
                     // final speaker embedding projection
-                    model.mm_fc_w = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
-                    model.mm_fc_b = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
+                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
+                    model.mm_fc_b = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
             case PROJECTOR_TYPE_POCKETTTS_SPKENC:
                 {
                     load_seanet(model.seanet, false);
-                    model.downsample_w = get_tensor(string_format(TN_A_DOWNSAMPLE_CONV, "weight"));
-                    model.spk_proj_w   = get_tensor(string_format(TN_A_SPEAKER_PROJ, "weight"));
+                    model.downsample_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    model.spk_proj_w   = get_tensor(mtmd_format(TN_A_SPEAKER_PROJ, "weight"));
                 } break;
             case PROJECTOR_TYPE_POCKETTTS_GEN:
                 {
                     auto & flow = model.flow;
-                    flow.input_proj_w = get_tensor(string_format(TN_A_GEN_FLOW_INPUT_PROJ, "weight"));
-                    flow.input_proj_b = get_tensor(string_format(TN_A_GEN_FLOW_INPUT_PROJ, "bias"));
-                    flow.cond_embd_w  = get_tensor(string_format(TN_A_GEN_FLOW_COND_EMBD, "weight"));
-                    flow.cond_embd_b  = get_tensor(string_format(TN_A_GEN_FLOW_COND_EMBD, "bias"));
-                    flow.final_ada_w  = get_tensor(string_format(TN_A_GEN_FLOW_FINAL_ADA, "weight"));
-                    flow.final_ada_b  = get_tensor(string_format(TN_A_GEN_FLOW_FINAL_ADA, "bias"));
-                    flow.final_proj_w = get_tensor(string_format(TN_A_GEN_FLOW_FINAL_PROJ, "weight"));
-                    flow.final_proj_b = get_tensor(string_format(TN_A_GEN_FLOW_FINAL_PROJ, "bias"));
+                    flow.input_proj_w = get_tensor(mtmd_format(TN_A_GEN_FLOW_INPUT_PROJ, "weight"));
+                    flow.input_proj_b = get_tensor(mtmd_format(TN_A_GEN_FLOW_INPUT_PROJ, "bias"));
+                    flow.cond_embd_w  = get_tensor(mtmd_format(TN_A_GEN_FLOW_COND_EMBD, "weight"));
+                    flow.cond_embd_b  = get_tensor(mtmd_format(TN_A_GEN_FLOW_COND_EMBD, "bias"));
+                    flow.final_ada_w  = get_tensor(mtmd_format(TN_A_GEN_FLOW_FINAL_ADA, "weight"));
+                    flow.final_ada_b  = get_tensor(mtmd_format(TN_A_GEN_FLOW_FINAL_ADA, "bias"));
+                    flow.final_proj_w = get_tensor(mtmd_format(TN_A_GEN_FLOW_FINAL_PROJ, "weight"));
+                    flow.final_proj_b = get_tensor(mtmd_format(TN_A_GEN_FLOW_FINAL_PROJ, "bias"));
 
                     flow.time.resize(2);
                     for (size_t i = 0; i < flow.time.size(); i++) {
                         auto & t = flow.time[i];
-                        t.freqs  = get_tensor(string_format(TN_A_GEN_FLOW_TIME_FREQS, (int) i));
-                        t.up_w   = get_tensor(string_format(TN_A_GEN_FLOW_TIME_UP,   (int) i, "weight"));
-                        t.up_b   = get_tensor(string_format(TN_A_GEN_FLOW_TIME_UP,   (int) i, "bias"));
-                        t.down_w = get_tensor(string_format(TN_A_GEN_FLOW_TIME_DOWN, (int) i, "weight"));
-                        t.down_b = get_tensor(string_format(TN_A_GEN_FLOW_TIME_DOWN, (int) i, "bias"));
-                        t.norm   = get_tensor(string_format(TN_A_GEN_FLOW_TIME_NORM, (int) i));
+                        t.freqs  = get_tensor(mtmd_format(TN_A_GEN_FLOW_TIME_FREQS, (int) i));
+                        t.up_w   = get_tensor(mtmd_format(TN_A_GEN_FLOW_TIME_UP,   (int) i, "weight"));
+                        t.up_b   = get_tensor(mtmd_format(TN_A_GEN_FLOW_TIME_UP,   (int) i, "bias"));
+                        t.down_w = get_tensor(mtmd_format(TN_A_GEN_FLOW_TIME_DOWN, (int) i, "weight"));
+                        t.down_b = get_tensor(mtmd_format(TN_A_GEN_FLOW_TIME_DOWN, (int) i, "bias"));
+                        t.norm   = get_tensor(mtmd_format(TN_A_GEN_FLOW_TIME_NORM, (int) i));
                     }
 
                     // one AdaLN block per flow depth, the count is only known from the tensors
                     for (int il = 0; ; il++) {
-                        ggml_tensor * probe = get_tensor(string_format(TN_A_GEN_FLOW_BLK_NORM, il, "weight"), false);
+                        ggml_tensor * probe = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_NORM, il, "weight"), false);
                         if (probe == nullptr) {
                             break;
                         }
                         mtmd_flow_net::block blk;
                         blk.norm_w = probe;
-                        blk.norm_b = get_tensor(string_format(TN_A_GEN_FLOW_BLK_NORM, il, "bias"));
-                        blk.up_w   = get_tensor(string_format(TN_A_GEN_FLOW_BLK_UP,   il, "weight"));
-                        blk.up_b   = get_tensor(string_format(TN_A_GEN_FLOW_BLK_UP,   il, "bias"));
-                        blk.down_w = get_tensor(string_format(TN_A_GEN_FLOW_BLK_DOWN, il, "weight"));
-                        blk.down_b = get_tensor(string_format(TN_A_GEN_FLOW_BLK_DOWN, il, "bias"));
-                        blk.ada_w  = get_tensor(string_format(TN_A_GEN_FLOW_BLK_ADA,  il, "weight"));
-                        blk.ada_b  = get_tensor(string_format(TN_A_GEN_FLOW_BLK_ADA,  il, "bias"));
+                        blk.norm_b = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_NORM, il, "bias"));
+                        blk.up_w   = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_UP,   il, "weight"));
+                        blk.up_b   = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_UP,   il, "bias"));
+                        blk.down_w = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_DOWN, il, "weight"));
+                        blk.down_b = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_DOWN, il, "bias"));
+                        blk.ada_w  = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_ADA,  il, "weight"));
+                        blk.ada_b  = get_tensor(mtmd_format(TN_A_GEN_FLOW_BLK_ADA,  il, "bias"));
                         flow.blocks.push_back(blk);
                     }
 
-                    model.gen_out_eos_w   = get_tensor(string_format(TN_A_GEN_OUT_EOS, "weight"));
-                    model.gen_out_eos_b   = get_tensor(string_format(TN_A_GEN_OUT_EOS, "bias"));
-                    model.gen_input_lin_w = get_tensor(string_format(TN_A_GEN_INPUT_LINEAR, "weight"));
+                    model.gen_out_eos_w   = get_tensor(mtmd_format(TN_A_GEN_OUT_EOS, "weight"));
+                    model.gen_out_eos_b   = get_tensor(mtmd_format(TN_A_GEN_OUT_EOS, "bias"));
+                    model.gen_input_lin_w = get_tensor(mtmd_format(TN_A_GEN_INPUT_LINEAR, "weight"));
                     model.gen_emb_mean    = get_tensor(TN_A_GEN_EMB_MEAN);
                     model.gen_emb_std     = get_tensor(TN_A_GEN_EMB_STD);
 
                     // mimi decoder
-                    model.gen_quant_out_w = get_tensor(string_format(TN_A_GEN_WAV_QUANT_OUT, "weight"));
-                    model.gen_upsample_w  = get_tensor(string_format(TN_A_GEN_WAV_UPSAMPLE, "weight"));
+                    model.gen_quant_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_OUT, "weight"));
+                    model.gen_upsample_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_UPSAMPLE, "weight"));
                     load_seanet(model.seanet, true);
                     model.gen_tfm_layers.resize(hparams.n_layer);
                     for (int il = 0; il < hparams.n_layer; il++) {
                         auto & layer = model.gen_tfm_layers[il];
                         const char * p = "a.gen.wav.tfm";
-                        layer.ln_1_w    = get_tensor(string_format(TN_LN_1,        p, il, "weight"));
-                        layer.ln_1_b    = get_tensor(string_format(TN_LN_1,        p, il, "bias"));
-                        layer.q_w       = get_tensor(string_format(TN_ATTN_Q,      p, il, "weight"));
-                        layer.k_w       = get_tensor(string_format(TN_ATTN_K,      p, il, "weight"));
-                        layer.v_w       = get_tensor(string_format(TN_ATTN_V,      p, il, "weight"));
-                        layer.o_w       = get_tensor(string_format(TN_ATTN_OUTPUT, p, il, "weight"));
-                        layer.ls_1_w    = get_tensor(string_format(TN_LS_1,        p, il, "weight"));
-                        layer.ln_2_w    = get_tensor(string_format(TN_LN_2,        p, il, "weight"));
-                        layer.ln_2_b    = get_tensor(string_format(TN_LN_2,        p, il, "bias"));
-                        layer.ff_up_w   = get_tensor(string_format(TN_FFN_UP,      p, il, "weight"));
-                        layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,    p, il, "weight"));
-                        layer.ls_2_w    = get_tensor(string_format(TN_LS_2,        p, il, "weight"));
+                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        p, il, "weight"));
+                        layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
+                        layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
+                        layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
+                        layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
+                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
+                        layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
+                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
+                        layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
+                        layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
                     }
 
                     for (int64_t i = 0; i < gguf_get_n_tensors(ctx_gguf.get()); ++i) {
@@ -2445,13 +2455,13 @@ struct mtmd_model_loader {
                         }
                         const ggml_tensor * t = ggml_get_tensor(ctx_meta.get(), name);
                         if (t->type != GGML_TYPE_F32 || ggml_n_dims(t) > 2 || t->ne[0] != model.gen_input_lin_w->ne[1]) {
-                            throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name));
+                            throw std::runtime_error(mtmd_format("%s: invalid voice tensor %s\n", __func__, name));
                         }
                         auto & embd = model.gen_voices[name + 6].rows;
                         embd.resize(ggml_nelements(t));
                         fin.seekg(tensor_offset.at(name), std::ios::beg);
                         if (!fin.read(reinterpret_cast<char *>(embd.data()), ggml_nbytes(t))) {
-                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name));
+                            throw std::runtime_error(mtmd_format("%s: failed to read %s\n", __func__, name));
                         }
                     }
                     if (!model.gen_voices.empty()) {
@@ -2466,53 +2476,53 @@ struct mtmd_model_loader {
 
                     // depthformer, the generic loop above loaded the a.gen.code.blk.* tensors
                     for (int il = 0; il < hparams.n_layer; ++il) {
-                        model.layers[il].attn_gate_w = get_tensor(string_format(TN_ATTN_GATE, prefix, il, "weight"));
+                        model.layers[il].attn_gate_w = get_tensor(mtmd_format(TN_ATTN_GATE, prefix, il, "weight"));
                     }
-                    model.gen_code_proj_in_w   = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN,   "weight"));
-                    model.gen_code_proj_in_b   = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN,   "bias"));
-                    model.gen_code_embd_w      = get_tensor(string_format(TN_A_GEN_CODE_EMBD,      "weight")); // tied head
-                    model.gen_code_out_embd_w  = get_tensor(string_format(TN_A_GEN_CODE_OUT_EMBD,  "weight"));
-                    model.gen_code_norm_w      = get_tensor(string_format(TN_A_GEN_CODE_NORM,      "weight"));
-                    model.gen_code_head_norm_w = get_tensor(string_format(TN_A_GEN_CODE_HEAD_NORM, "weight"));
+                    model.gen_code_proj_in_w   = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN,   "weight"));
+                    model.gen_code_proj_in_b   = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN,   "bias"));
+                    model.gen_code_embd_w      = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,      "weight")); // tied head
+                    model.gen_code_out_embd_w  = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD,  "weight"));
+                    model.gen_code_norm_w      = get_tensor(mtmd_format(TN_A_GEN_CODE_NORM,      "weight"));
+                    model.gen_code_head_norm_w = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD_NORM, "weight"));
                     model.gen_code_mask_embd   = get_tensor(TN_A_GEN_CODE_MASK_EMBD);
 
                     // codec decoder: FSQ level table, one projection over all codebooks, LFM3 decoder -> polar STFT frames
                     auto & c2w = model.c2w;
-                    c2w.quant_first_cb_w  = get_tensor(string_format(TN_A_GEN_WAV_QUANT_FIRST_CB,  "weight"));
-                    c2w.quant_first_out_w = get_tensor(string_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "weight"));
-                    c2w.quant_first_out_b = get_tensor(string_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "bias"));
-                    c2w.tfm_in_proj_w     = get_tensor(string_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "weight"));
-                    c2w.tfm_in_proj_b     = get_tensor(string_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "bias"));
-                    c2w.tfm_out_proj_w    = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "weight"));
-                    c2w.tfm_out_proj_b    = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "bias"));
-                    c2w.tfm_output_norm_w = get_tensor(string_format(TN_A_GEN_WAV_TFM_OUT_NORM, "weight"));
+                    c2w.quant_first_cb_w  = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_CB,  "weight"));
+                    c2w.quant_first_out_w = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "weight"));
+                    c2w.quant_first_out_b = get_tensor(mtmd_format(TN_A_GEN_WAV_QUANT_FIRST_OUT, "bias"));
+                    c2w.tfm_in_proj_w     = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "weight"));
+                    c2w.tfm_in_proj_b     = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_IN_PROJ,  "bias"));
+                    c2w.tfm_out_proj_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "weight"));
+                    c2w.tfm_out_proj_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_OUT_PROJ, "bias"));
+                    c2w.tfm_output_norm_w = get_tensor(mtmd_format(TN_A_GEN_WAV_TFM_OUT_NORM, "weight"));
 
                     // each layer is a short conv block or a gated attention block, both with sandwich norms
                     c2w.tfm_layers.resize(hparams.wav_tfm_n_layer);
                     for (int il = 0; il < hparams.wav_tfm_n_layer; il++) {
                         auto & layer = c2w.tfm_layers[il];
                         const char * p = "a.gen.wav.tfm";
-                        layer.ln_1_w           = get_tensor(string_format(TN_LN_1,           p, il, "weight"));
-                        layer.attn_post_norm_w = get_tensor(string_format(TN_ATTN_POST_NORM, p, il, "weight"));
-                        layer.ln_2_w           = get_tensor(string_format(TN_LN_2,           p, il, "weight"));
-                        layer.ff_post_norm_w   = get_tensor(string_format(TN_FFN_POST_NORM,  p, il, "weight"));
-                        layer.ff_gate_w        = get_tensor(string_format(TN_FFN_GATE,       p, il, "weight"));
-                        layer.ff_up_w          = get_tensor(string_format(TN_FFN_UP,         p, il, "weight"));
-                        layer.ff_down_w        = get_tensor(string_format(TN_FFN_DOWN,       p, il, "weight"));
-                        layer.conv_pw1_w       = get_tensor(string_format(TN_CONV_PW1,       p, il, "weight"), false);
-                        layer.conv_dw_w        = get_tensor(string_format(TN_CONV_DW,        p, il, "weight"), false);
-                        layer.conv_pw2_w       = get_tensor(string_format(TN_CONV_PW2,       p, il, "weight"), false);
-                        layer.q_w              = get_tensor(string_format(TN_ATTN_Q,         p, il, "weight"), false);
-                        layer.k_w              = get_tensor(string_format(TN_ATTN_K,         p, il, "weight"), false);
-                        layer.v_w              = get_tensor(string_format(TN_ATTN_V,         p, il, "weight"), false);
-                        layer.o_w              = get_tensor(string_format(TN_ATTN_OUTPUT,    p, il, "weight"), false);
-                        layer.q_norm           = get_tensor(string_format(TN_ATTN_Q_NORM,    p, il, "weight"), false);
-                        layer.k_norm           = get_tensor(string_format(TN_ATTN_K_NORM,    p, il, "weight"), false);
-                        layer.attn_gate_w      = get_tensor(string_format(TN_ATTN_GATE,      p, il, "weight"), false);
+                        layer.ln_1_w           = get_tensor(mtmd_format(TN_LN_1,           p, il, "weight"));
+                        layer.attn_post_norm_w = get_tensor(mtmd_format(TN_ATTN_POST_NORM, p, il, "weight"));
+                        layer.ln_2_w           = get_tensor(mtmd_format(TN_LN_2,           p, il, "weight"));
+                        layer.ff_post_norm_w   = get_tensor(mtmd_format(TN_FFN_POST_NORM,  p, il, "weight"));
+                        layer.ff_gate_w        = get_tensor(mtmd_format(TN_FFN_GATE,       p, il, "weight"));
+                        layer.ff_up_w          = get_tensor(mtmd_format(TN_FFN_UP,         p, il, "weight"));
+                        layer.ff_down_w        = get_tensor(mtmd_format(TN_FFN_DOWN,       p, il, "weight"));
+                        layer.conv_pw1_w       = get_tensor(mtmd_format(TN_CONV_PW1,       p, il, "weight"), false);
+                        layer.conv_dw_w        = get_tensor(mtmd_format(TN_CONV_DW,        p, il, "weight"), false);
+                        layer.conv_pw2_w       = get_tensor(mtmd_format(TN_CONV_PW2,       p, il, "weight"), false);
+                        layer.q_w              = get_tensor(mtmd_format(TN_ATTN_Q,         p, il, "weight"), false);
+                        layer.k_w              = get_tensor(mtmd_format(TN_ATTN_K,         p, il, "weight"), false);
+                        layer.v_w              = get_tensor(mtmd_format(TN_ATTN_V,         p, il, "weight"), false);
+                        layer.o_w              = get_tensor(mtmd_format(TN_ATTN_OUTPUT,    p, il, "weight"), false);
+                        layer.q_norm           = get_tensor(mtmd_format(TN_ATTN_Q_NORM,    p, il, "weight"), false);
+                        layer.k_norm           = get_tensor(mtmd_format(TN_ATTN_K_NORM,    p, il, "weight"), false);
+                        layer.attn_gate_w      = get_tensor(mtmd_format(TN_ATTN_GATE,      p, il, "weight"), false);
                         const bool is_conv = layer.conv_pw1_w && layer.conv_dw_w && layer.conv_pw2_w;
                         const bool is_attn = layer.q_w && layer.k_w && layer.v_w && layer.o_w && layer.q_norm && layer.k_norm && layer.attn_gate_w;
                         if (is_conv == is_attn) {
-                            throw std::runtime_error(string_format("%s: codec layer %d is neither a conv nor an attention block\n", __func__, il));
+                            throw std::runtime_error(mtmd_format("%s: codec layer %d is neither a conv nor an attention block\n", __func__, il));
                         }
                         if (is_attn) {
                             const int d_head = layer.q_norm->ne[0];
@@ -2524,12 +2534,12 @@ struct mtmd_model_loader {
             case PROJECTOR_TYPE_QWEN3TTS_GEN:
                 {
                     // code_predictor, proj_in is absent when the talker and the predictor share the hidden size
-                    model.gen_code_proj_in_w = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "weight"), false);
-                    model.gen_code_proj_in_b = get_tensor(string_format(TN_A_GEN_CODE_PROJ_IN, "bias"),   false);
-                    model.gen_code_embd_w     = get_tensor(string_format(TN_A_GEN_CODE_EMBD,     "weight"));
-                    model.gen_code_head_w     = get_tensor(string_format(TN_A_GEN_CODE_HEAD,     "weight"));
-                    model.gen_code_out_embd_w = get_tensor(string_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
-                    model.gen_code_norm_w     = get_tensor(string_format(TN_A_GEN_CODE_NORM,     "weight"));
+                    model.gen_code_proj_in_w = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN, "weight"), false);
+                    model.gen_code_proj_in_b = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN, "bias"),   false);
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight"));
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    model.gen_code_norm_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_NORM,     "weight"));
 
                     // code2wav: RVQ codes -> raw PCM, lives in the same ctx as code_predictor
                     load_code2wav(true);
@@ -2540,16 +2550,16 @@ struct mtmd_model_loader {
                     model.drama3_layers.resize(hparams.n_layer);
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & tl = model.drama3_layers[il];
-                        model.layers[il].attn_gate_w = get_tensor(string_format(TN_ATTN_GATE, prefix, il, "weight"));
-                        tl.enorm_w    = get_tensor(string_format(TN_A_GEN_CODE_ENORM,        il, "weight"));
-                        tl.hnorm_w    = get_tensor(string_format(TN_A_GEN_CODE_HNORM,        il, "weight"));
-                        tl.eh_proj_w  = get_tensor(string_format(TN_A_GEN_CODE_EH_PROJ,      il, "weight"));
-                        tl.embd_w     = get_tensor(string_format(TN_A_GEN_CODE_BLK_EMBD,     il, "weight"));
-                        tl.out_norm_w = get_tensor(string_format(TN_A_GEN_CODE_BLK_OUT_NORM, il, "weight"));
+                        model.layers[il].attn_gate_w = get_tensor(mtmd_format(TN_ATTN_GATE, prefix, il, "weight"));
+                        tl.enorm_w    = get_tensor(mtmd_format(TN_A_GEN_CODE_ENORM,        il, "weight"));
+                        tl.hnorm_w    = get_tensor(mtmd_format(TN_A_GEN_CODE_HNORM,        il, "weight"));
+                        tl.eh_proj_w  = get_tensor(mtmd_format(TN_A_GEN_CODE_EH_PROJ,      il, "weight"));
+                        tl.embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_BLK_EMBD,     il, "weight"));
+                        tl.out_norm_w = get_tensor(mtmd_format(TN_A_GEN_CODE_BLK_OUT_NORM, il, "weight"));
                     }
-                    model.gen_code_embd_w     = get_tensor(string_format(TN_A_GEN_CODE_EMBD,     "weight")); // merged 3D, one table per codebook
-                    model.gen_code_head_w     = get_tensor(string_format(TN_A_GEN_CODE_HEAD,     "weight")); // merged 3D, codebooks 1..
-                    model.gen_code_out_embd_w = get_tensor(string_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight")); // merged 3D, one table per codebook
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight")); // merged 3D, codebooks 1..
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
                     load_code2wav(false);
                 } break;
             case PROJECTOR_TYPE_CHATTERBOX:
@@ -2791,11 +2801,11 @@ struct mtmd_model_loader {
                             ok  = t->type == GGML_TYPE_F32 && ggml_n_dims(t) <= 2 && t->ne[0] == n_embd_talker;
                         }
                         if (!ok) {
-                            throw std::runtime_error(string_format("%s: invalid voice tensor %s\n", __func__, name.c_str()));
+                            throw std::runtime_error(mtmd_format("%s: invalid voice tensor %s\n", __func__, name.c_str()));
                         }
                         fin.seekg(tensor_offset.at(name), std::ios::beg);
                         if (!fin.read(reinterpret_cast<char *>(dst), ggml_nbytes(t))) {
-                            throw std::runtime_error(string_format("%s: failed to read %s\n", __func__, name.c_str()));
+                            throw std::runtime_error(mtmd_format("%s: failed to read %s\n", __func__, name.c_str()));
                         }
                         if (!ids.empty()) {
                             model.gen_voices[voice].ref.tokens.assign(ids.begin(), ids.end());
@@ -2803,7 +2813,7 @@ struct mtmd_model_loader {
                     }
                     for (const auto & [voice, v] : model.gen_voices) {
                         if (v.rows.empty() || v.ref.tokens.empty() || v.ref.feat.size() != 2 * 80 * v.ref.tokens.size() || v.ref.spk.empty()) {
-                            throw std::runtime_error(string_format("%s: incomplete voice %s\n", __func__, voice.c_str()));
+                            throw std::runtime_error(mtmd_format("%s: incomplete voice %s\n", __func__, voice.c_str()));
                         }
                     }
                 } break;
@@ -2875,108 +2885,108 @@ struct mtmd_model_loader {
             case PROJECTOR_TYPE_SOPRANO:
                 {
                     auto & v = model.vocos;
-                    v.input_w       = get_tensor(string_format(TN_A_GEN_WAV_INPUT, "weight"));
-                    v.input_b       = get_tensor(string_format(TN_A_GEN_WAV_INPUT, "bias"));
-                    v.norm_w        = get_tensor(string_format(TN_A_GEN_WAV_NORM, "weight"));
-                    v.norm_b        = get_tensor(string_format(TN_A_GEN_WAV_NORM, "bias"));
-                    v.output_norm_w = get_tensor(string_format(TN_A_GEN_WAV_OUTPUT_NORM, "weight"));
-                    v.output_norm_b = get_tensor(string_format(TN_A_GEN_WAV_OUTPUT_NORM, "bias"));
-                    v.output_w      = get_tensor(string_format(TN_A_GEN_WAV_OUTPUT, "weight"));
-                    v.output_b      = get_tensor(string_format(TN_A_GEN_WAV_OUTPUT, "bias"));
+                    v.input_w       = get_tensor(mtmd_format(TN_A_GEN_WAV_INPUT, "weight"));
+                    v.input_b       = get_tensor(mtmd_format(TN_A_GEN_WAV_INPUT, "bias"));
+                    v.norm_w        = get_tensor(mtmd_format(TN_A_GEN_WAV_NORM, "weight"));
+                    v.norm_b        = get_tensor(mtmd_format(TN_A_GEN_WAV_NORM, "bias"));
+                    v.output_norm_w = get_tensor(mtmd_format(TN_A_GEN_WAV_OUTPUT_NORM, "weight"));
+                    v.output_norm_b = get_tensor(mtmd_format(TN_A_GEN_WAV_OUTPUT_NORM, "bias"));
+                    v.output_w      = get_tensor(mtmd_format(TN_A_GEN_WAV_OUTPUT, "weight"));
+                    v.output_b      = get_tensor(mtmd_format(TN_A_GEN_WAV_OUTPUT, "bias"));
                     v.blocks.resize(hparams.n_layer);
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & b = v.blocks[il];
-                        b.dwconv_w = get_tensor(string_format(TN_A_GEN_WAV_UP_DWCONV, il, "weight"));
-                        b.dwconv_b = get_tensor(string_format(TN_A_GEN_WAV_UP_DWCONV, il, "bias"));
-                        b.norm_w   = get_tensor(string_format(TN_A_GEN_WAV_UP_NORM, il, "weight"));
-                        b.norm_b   = get_tensor(string_format(TN_A_GEN_WAV_UP_NORM, il, "bias"));
-                        b.pw1_w    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW1, il, "weight"));
-                        b.pw1_b    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW1, il, "bias"));
-                        b.pw2_w    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW2, il, "weight"));
-                        b.pw2_b    = get_tensor(string_format(TN_A_GEN_WAV_UP_PW2, il, "bias"));
-                        b.gamma    = get_tensor(string_format(TN_A_GEN_WAV_UP_GAMMA, il));
+                        b.dwconv_w = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_DWCONV, il, "weight"));
+                        b.dwconv_b = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_DWCONV, il, "bias"));
+                        b.norm_w   = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_NORM, il, "weight"));
+                        b.norm_b   = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_NORM, il, "bias"));
+                        b.pw1_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW1, il, "weight"));
+                        b.pw1_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW1, il, "bias"));
+                        b.pw2_w    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW2, il, "weight"));
+                        b.pw2_b    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_PW2, il, "bias"));
+                        b.gamma    = get_tensor(mtmd_format(TN_A_GEN_WAV_UP_GAMMA, il));
                     }
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
             case PROJECTOR_TYPE_VOXTRAL_RT:
                 {
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_MUSIC_FLAMINGO:
                 {
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_INTERNVL:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "bias"));
-                    model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
-                    model.mm_3_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "bias"));
+                    model.mm_3_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                    model.mm_3_b = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 3, "bias"));
                 } break;
             case PROJECTOR_TYPE_NEMOTRON_V2_VL:
             case PROJECTOR_TYPE_NEMOTRON_OMNI:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
-                    model.mm_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
-                    model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_3_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 3, "weight"));
                 } break;
             case PROJECTOR_TYPE_GLMA:
                 {
-                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
-                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
-                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
-                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
-                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
-                    model.mm_norm_pre_b = get_tensor(string_format(TN_MM_NORM_PRE, "bias"));
-                    model.mm_boi = get_tensor(string_format(TN_TOK_BOI));
-                    model.mm_eoi = get_tensor(string_format(TN_TOK_EOI));
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_NORM_PRE, "weight"));
+                    model.mm_norm_pre_b = get_tensor(mtmd_format(TN_MM_NORM_PRE, "bias"));
+                    model.mm_boi = get_tensor(mtmd_format(TN_TOK_BOI));
+                    model.mm_eoi = get_tensor(mtmd_format(TN_TOK_EOI));
                 } break;
             case PROJECTOR_TYPE_LLAMA4:
                 {
-                    model.mm_model_proj    = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
-                    model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
-                    model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                    model.mm_model_proj    = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_model_mlp_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_model_mlp_2_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_COGVLM:
                 {
-                    model.mm_model_proj     = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
-                    model.mm_post_fc_norm_w = get_tensor(string_format(TN_MM_POST_FC_NORM, "weight"));
-                    model.mm_post_fc_norm_b = get_tensor(string_format(TN_MM_POST_FC_NORM, "bias"));
-                    model.mm_h_to_4h_w      = get_tensor(string_format(TN_MM_H_TO_4H,      "weight"));
-                    model.mm_gate_w         = get_tensor(string_format(TN_MM_GATE,         "weight"));
-                    model.mm_4h_to_h_w      = get_tensor(string_format(TN_MM_4H_TO_H,      "weight"));
+                    model.mm_model_proj     = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_post_fc_norm_w = get_tensor(mtmd_format(TN_MM_POST_FC_NORM, "weight"));
+                    model.mm_post_fc_norm_b = get_tensor(mtmd_format(TN_MM_POST_FC_NORM, "bias"));
+                    model.mm_h_to_4h_w      = get_tensor(mtmd_format(TN_MM_H_TO_4H,      "weight"));
+                    model.mm_gate_w         = get_tensor(mtmd_format(TN_MM_GATE,         "weight"));
+                    model.mm_4h_to_h_w      = get_tensor(mtmd_format(TN_MM_4H_TO_H,      "weight"));
                     model.mm_boi            = get_tensor(TN_TOK_BOI);
                     model.mm_eoi            = get_tensor(TN_TOK_EOI);
                 } break;
             case PROJECTOR_TYPE_HUNYUANVL:
                 {
                     // proj.0 -> mm.0 (conv1), proj.2 -> mm.2 (conv2), mlp -> mm.model.fc (linear)
-                    model.mm_0_w            = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b            = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w            = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_1_b            = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
-                    model.mm_model_proj     = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
-                    model.mm_model_proj_b   = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
-                    model.mm_pre_norm_w     = get_tensor(string_format(TN_MM_PRE_NORM, "weight"));
-                    model.mm_post_norm_w    = get_tensor(string_format(TN_MM_POST_NORM, "weight"));
+                    model.mm_0_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_model_proj     = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_model_proj_b   = get_tensor(mtmd_format(TN_MM_PROJECTOR, "bias"));
+                    model.mm_pre_norm_w     = get_tensor(mtmd_format(TN_MM_PRE_NORM, "weight"));
+                    model.mm_post_norm_w    = get_tensor(mtmd_format(TN_MM_POST_NORM, "weight"));
                     model.mm_img_begin      = get_tensor(TN_MM_IMG_BEGIN);
                     model.mm_img_end        = get_tensor(TN_MM_IMG_END);
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
@@ -2984,105 +2994,105 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
                 } break;
             case PROJECTOR_TYPE_PHI4:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
-                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
-                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_DEEPSEEKOCR:
             case PROJECTOR_TYPE_DEEPSEEKOCR2:
                 {
-                    model.pos_embed          = get_tensor(string_format(TN_SAM_POS_EMBD,   "weight"));
-                    model.patch_embed_proj_w = get_tensor(string_format(TN_SAM_PATCH_EMBD, "weight"));
-                    model.patch_embed_proj_b = get_tensor(string_format(TN_SAM_PATCH_EMBD, "bias"));
+                    model.pos_embed          = get_tensor(mtmd_format(TN_SAM_POS_EMBD,   "weight"));
+                    model.patch_embed_proj_w = get_tensor(mtmd_format(TN_SAM_PATCH_EMBD, "weight"));
+                    model.patch_embed_proj_b = get_tensor(mtmd_format(TN_SAM_PATCH_EMBD, "bias"));
                     model.n_sam_layers = hparams.sam_n_layer;
                     model.sam_layers.resize(model.n_sam_layers);
                     for (int il = 0; il < model.n_sam_layers; ++il) {
                         auto & layer    = model.sam_layers[il];
-                        layer.qkv_w     = get_tensor(string_format(TN_SAM_ATTN_QKV, il, "weight"));
-                        layer.qkv_b     = get_tensor(string_format(TN_SAM_ATTN_QKV, il, "bias"));
-                        layer.o_w       = get_tensor(string_format(TN_SAM_ATTN_OUT, il, "weight"));
-                        layer.o_b       = get_tensor(string_format(TN_SAM_ATTN_OUT, il, "bias"));
-                        layer.ln_1_w    = get_tensor(string_format(TN_SAM_PRE_NORM, il, "weight"));
-                        layer.ln_1_b    = get_tensor(string_format(TN_SAM_PRE_NORM, il, "bias"));
-                        layer.ln_2_w    = get_tensor(string_format(TN_SAM_POST_NORM, il, "weight"));
-                        layer.ln_2_b    = get_tensor(string_format(TN_SAM_POST_NORM, il, "bias"));
-                        layer.rel_pos_h = get_tensor(string_format(TN_SAM_ATTN_POS_H, il, "weight"));
-                        layer.rel_pos_w = get_tensor(string_format(TN_SAM_ATTN_POS_W, il, "weight"));
-                        layer.ff_up_w   = get_tensor(string_format(TN_SAM_FFN_UP, il, "weight"));
-                        layer.ff_up_b   = get_tensor(string_format(TN_SAM_FFN_UP, il, "bias"));
-                        layer.ff_down_w = get_tensor(string_format(TN_SAM_FFN_DOWN, il, "weight"));
-                        layer.ff_down_b = get_tensor(string_format(TN_SAM_FFN_DOWN, il, "bias"));
+                        layer.qkv_w     = get_tensor(mtmd_format(TN_SAM_ATTN_QKV, il, "weight"));
+                        layer.qkv_b     = get_tensor(mtmd_format(TN_SAM_ATTN_QKV, il, "bias"));
+                        layer.o_w       = get_tensor(mtmd_format(TN_SAM_ATTN_OUT, il, "weight"));
+                        layer.o_b       = get_tensor(mtmd_format(TN_SAM_ATTN_OUT, il, "bias"));
+                        layer.ln_1_w    = get_tensor(mtmd_format(TN_SAM_PRE_NORM, il, "weight"));
+                        layer.ln_1_b    = get_tensor(mtmd_format(TN_SAM_PRE_NORM, il, "bias"));
+                        layer.ln_2_w    = get_tensor(mtmd_format(TN_SAM_POST_NORM, il, "weight"));
+                        layer.ln_2_b    = get_tensor(mtmd_format(TN_SAM_POST_NORM, il, "bias"));
+                        layer.rel_pos_h = get_tensor(mtmd_format(TN_SAM_ATTN_POS_H, il, "weight"));
+                        layer.rel_pos_w = get_tensor(mtmd_format(TN_SAM_ATTN_POS_W, il, "weight"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_SAM_FFN_UP, il, "weight"));
+                        layer.ff_up_b   = get_tensor(mtmd_format(TN_SAM_FFN_UP, il, "bias"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_SAM_FFN_DOWN, il, "weight"));
+                        layer.ff_down_b = get_tensor(mtmd_format(TN_SAM_FFN_DOWN, il, "bias"));
                     }
-                    model.neck_0_w       = get_tensor(string_format(TN_SAM_NECK, 0, "weight"));
-                    model.neck_1_b       = get_tensor(string_format(TN_SAM_NECK, 1, "bias"));
-                    model.neck_1_w       = get_tensor(string_format(TN_SAM_NECK, 1, "weight"));
-                    model.neck_2_w       = get_tensor(string_format(TN_SAM_NECK, 2, "weight"));
-                    model.neck_3_b       = get_tensor(string_format(TN_SAM_NECK, 3, "bias"));
-                    model.neck_3_w       = get_tensor(string_format(TN_SAM_NECK, 3, "weight"));
-                    model.net_2          = get_tensor(string_format(TN_SAM_NET, 2, "weight"));
-                    model.net_3          = get_tensor(string_format(TN_SAM_NET, 3, "weight"));
+                    model.neck_0_w       = get_tensor(mtmd_format(TN_SAM_NECK, 0, "weight"));
+                    model.neck_1_b       = get_tensor(mtmd_format(TN_SAM_NECK, 1, "bias"));
+                    model.neck_1_w       = get_tensor(mtmd_format(TN_SAM_NECK, 1, "weight"));
+                    model.neck_2_w       = get_tensor(mtmd_format(TN_SAM_NECK, 2, "weight"));
+                    model.neck_3_b       = get_tensor(mtmd_format(TN_SAM_NECK, 3, "bias"));
+                    model.neck_3_w       = get_tensor(mtmd_format(TN_SAM_NECK, 3, "weight"));
+                    model.net_2          = get_tensor(mtmd_format(TN_SAM_NET, 2, "weight"));
+                    model.net_3          = get_tensor(mtmd_format(TN_SAM_NET, 3, "weight"));
                     model.image_newline  = get_tensor(TN_IMAGE_NEWLINE, false);
                     model.view_seperator = get_tensor(TN_IMAGE_SEPERATOR);
-                    model.mm_fc_w        = get_tensor(string_format(TN_MM_PROJECTOR, "weight"));
-                    model.mm_fc_b        = get_tensor(string_format(TN_MM_PROJECTOR, "bias"));
-                    model.resample_query_768  = get_tensor(string_format(TN_RESMPL_QUERY, 768, "weight"), false);
-                    model.resample_query_1024 = get_tensor(string_format(TN_RESMPL_QUERY, 1024, "weight"), false);
+                    model.mm_fc_w        = get_tensor(mtmd_format(TN_MM_PROJECTOR, "weight"));
+                    model.mm_fc_b        = get_tensor(mtmd_format(TN_MM_PROJECTOR, "bias"));
+                    model.resample_query_768  = get_tensor(mtmd_format(TN_RESMPL_QUERY, 768, "weight"), false);
+                    model.resample_query_1024 = get_tensor(mtmd_format(TN_RESMPL_QUERY, 1024, "weight"), false);
                  } break;
             case PROJECTOR_TYPE_GEMMA4A:
                 {
                     for (int i = 0; i < 2; i++) {
-                        model.sscp_conv_w[i] = get_tensor(string_format(TN_A_CONV1D, i, "weight"));
-                        model.sscp_conv_b[i] = get_tensor(string_format(TN_A_CONV1D, i, "bias"), false);
-                        model.sscp_norm_w[i] = get_tensor(string_format(TN_A_CONV1D_NORM, i, "weight"), false);
+                        model.sscp_conv_w[i] = get_tensor(mtmd_format(TN_A_CONV1D, i, "weight"));
+                        model.sscp_conv_b[i] = get_tensor(mtmd_format(TN_A_CONV1D, i, "bias"), false);
+                        model.sscp_norm_w[i] = get_tensor(mtmd_format(TN_A_CONV1D_NORM, i, "weight"), false);
                     }
-                    model.sscp_inp_proj_w = get_tensor(string_format(TN_A_INP_PROJ, "weight"));
-                    model.sscp_inp_proj_b = get_tensor(string_format(TN_A_INP_PROJ, "bias"), false);
-                    model.audio_out_proj_w = get_tensor(string_format(TN_A_OUT_PROJ, "weight"), false);
-                    model.audio_out_proj_b = get_tensor(string_format(TN_A_OUT_PROJ, "bias"), false);
+                    model.sscp_inp_proj_w = get_tensor(mtmd_format(TN_A_INP_PROJ, "weight"));
+                    model.sscp_inp_proj_b = get_tensor(mtmd_format(TN_A_INP_PROJ, "bias"), false);
+                    model.audio_out_proj_w = get_tensor(mtmd_format(TN_A_OUT_PROJ, "weight"), false);
+                    model.audio_out_proj_b = get_tensor(mtmd_format(TN_A_OUT_PROJ, "bias"), false);
                     // audio multimodal embedder (mm.a.* namespace, not mm.*)
-                    model.mm_soft_emb_norm_w = get_tensor(string_format(TN_A_MM_SOFT_EMB_N, "weight"), false);
-                    model.mm_input_proj_w    = get_tensor(string_format(TN_A_MM_INP_PROJ, "weight"), false);
+                    model.mm_soft_emb_norm_w = get_tensor(mtmd_format(TN_A_MM_SOFT_EMB_N, "weight"), false);
+                    model.mm_input_proj_w    = get_tensor(mtmd_format(TN_A_MM_INP_PROJ, "weight"), false);
 
                     // Per-layer tensors NOT loaded by the generic loop above
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
 
                         // Gemma4 audio conformer-specific tensors
-                        layer.ff_norm_w        = get_tensor(string_format(TN_FFN_NORM, prefix, il, "weight"));
-                        layer.attn_pre_norm_w  = get_tensor(string_format(TN_A_ATTN_PRE_NORM, prefix, il, "weight"), false);
-                        layer.per_dim_scale_w  = get_tensor(string_format(TN_A_PER_DIM_SCALE, prefix, il, "weight"), false);
-                        layer.per_dim_k_scale_w = get_tensor(string_format(TN_A_PER_DIM_K_SCALE, prefix, il, "weight"), false);
-                        layer.attn_k_rel_w     = get_tensor(string_format(TN_A_ATTN_K_REL, prefix, il, "weight"), false);
+                        layer.ff_norm_w        = get_tensor(mtmd_format(TN_FFN_NORM, prefix, il, "weight"));
+                        layer.attn_pre_norm_w  = get_tensor(mtmd_format(TN_A_ATTN_PRE_NORM, prefix, il, "weight"), false);
+                        layer.per_dim_scale_w  = get_tensor(mtmd_format(TN_A_PER_DIM_SCALE, prefix, il, "weight"), false);
+                        layer.per_dim_k_scale_w = get_tensor(mtmd_format(TN_A_PER_DIM_K_SCALE, prefix, il, "weight"), false);
+                        layer.attn_k_rel_w     = get_tensor(mtmd_format(TN_A_ATTN_K_REL, prefix, il, "weight"), false);
 
                         // Convolution module
                         // Note: conv_norm / norm_conv are swapped in GGUF due to
                         // upstream tensor_mapping.py, so we load them in reverse order
-                        layer.norm_conv_w  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"), false);
-                        layer.norm_conv_b  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"), false);
-                        layer.conv_pw1_w   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
-                        layer.conv_pw1_b   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"), false);
-                        layer.conv_dw_w    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
-                        layer.conv_dw_b    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "bias"), false);
-                        layer.conv_norm_w  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"), false);
-                        layer.conv_norm_b  = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"), false);
-                        layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
-                        layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"), false);
+                        layer.norm_conv_w  = get_tensor(mtmd_format(TN_CONV_NORM, prefix, il, "weight"), false);
+                        layer.norm_conv_b  = get_tensor(mtmd_format(TN_CONV_NORM, prefix, il, "bias"), false);
+                        layer.conv_pw1_w   = get_tensor(mtmd_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_pw1_b   = get_tensor(mtmd_format(TN_CONV_PW1,  prefix, il, "bias"), false);
+                        layer.conv_dw_w    = get_tensor(mtmd_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_dw_b    = get_tensor(mtmd_format(TN_CONV_DW,   prefix, il, "bias"), false);
+                        layer.conv_norm_w  = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "weight"), false);
+                        layer.conv_norm_b  = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "bias"), false);
+                        layer.conv_pw2_w   = get_tensor(mtmd_format(TN_CONV_PW2,  prefix, il, "weight"));
+                        layer.conv_pw2_b   = get_tensor(mtmd_format(TN_CONV_PW2,  prefix, il, "bias"), false);
 
                         // FFN2 (second half-step)
-                        layer.ff_norm_1_w      = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
-                        layer.ff_up_1_w        = get_tensor(string_format(TN_FFN_UP_1, prefix, il, "weight"));
-                        layer.ff_up_1_b        = get_tensor(string_format(TN_FFN_UP_1, prefix, il, "bias"), false);
-                        layer.ff_down_1_w      = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
-                        layer.ff_down_1_b      = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"), false);
-                        layer.ff_post_norm_1_w = get_tensor(string_format(TN_A_FFN_POST_NORM_1, prefix, il, "weight"), false);
+                        layer.ff_norm_1_w      = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_up_1_w        = get_tensor(mtmd_format(TN_FFN_UP_1, prefix, il, "weight"));
+                        layer.ff_up_1_b        = get_tensor(mtmd_format(TN_FFN_UP_1, prefix, il, "bias"), false);
+                        layer.ff_down_1_w      = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b      = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "bias"), false);
+                        layer.ff_post_norm_1_w = get_tensor(mtmd_format(TN_A_FFN_POST_NORM_1, prefix, il, "weight"), false);
                     }
 
                     // Load clamp info for ClippableLinear AFTER all tensors are loaded
@@ -3108,95 +3118,95 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_GEMMA4UA:
                 {
-                    model.mm_input_proj_w = get_tensor(string_format(TN_A_MM_INP_PROJ, "weight"));
+                    model.mm_input_proj_w = get_tensor(mtmd_format(TN_A_MM_INP_PROJ, "weight"));
                 } break;
             case PROJECTOR_TYPE_LFM2A:
             case PROJECTOR_TYPE_D1OMNI_A:
                 {
                     for (int i : {0, 2, 3, 5, 6}) {
-                        model.pre_encode_conv_X_w[i] = get_tensor(string_format(TN_CONV1D, i, "weight"));
-                        model.pre_encode_conv_X_b[i] = get_tensor(string_format(TN_CONV1D, i, "bias"));
+                        model.pre_encode_conv_X_w[i] = get_tensor(mtmd_format(TN_CONV1D, i, "weight"));
+                        model.pre_encode_conv_X_b[i] = get_tensor(mtmd_format(TN_CONV1D, i, "bias"));
                     }
-                    model.pre_encode_out_w    = get_tensor(string_format(TN_PRE_ENCODE_OUT, "weight"));
-                    model.pre_encode_out_b    = get_tensor(string_format(TN_PRE_ENCODE_OUT, "bias"));
+                    model.pre_encode_out_w    = get_tensor(mtmd_format(TN_PRE_ENCODE_OUT, "weight"));
+                    model.pre_encode_out_b    = get_tensor(mtmd_format(TN_PRE_ENCODE_OUT, "bias"));
 
-                    model.mm_0_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_3_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
-                    model.mm_3_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_3_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "weight"));
+                    model.mm_3_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "bias"));
 
                     // residual block after the projector: norm, down, up
                     if (model.proj_type == PROJECTOR_TYPE_D1OMNI_A) {
-                        model.mm_4_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 4, "weight"));
-                        model.mm_4_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 4, "bias"));
-                        model.mm_5_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 5, "weight"));
-                        model.mm_5_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 5, "bias"));
-                        model.mm_6_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 6, "weight"));
-                        model.mm_6_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 6, "bias"));
+                        model.mm_4_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 4, "weight"));
+                        model.mm_4_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 4, "bias"));
+                        model.mm_5_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 5, "weight"));
+                        model.mm_5_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 5, "bias"));
+                        model.mm_6_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 6, "weight"));
+                        model.mm_6_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 6, "bias"));
                     }
 
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
 
-                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
-                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"));
-                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
-                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
-                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
-                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"));
-                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
-                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"));
+                        layer.ff_norm_w   = get_tensor(mtmd_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(mtmd_format(TN_FFN_NORM,   prefix, il, "bias"));
+                        layer.ff_norm_1_w = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "bias"));
+                        layer.ff_up_1_w   = get_tensor(mtmd_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(mtmd_format(TN_FFN_UP_1,   prefix, il, "bias"));
+                        layer.ff_down_1_w = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "bias"));
 
-                        layer.pos_bias_u = get_tensor(string_format(TN_POS_BIAS_U, prefix, il));
-                        layer.pos_bias_v = get_tensor(string_format(TN_POS_BIAS_V, prefix, il));
+                        layer.pos_bias_u = get_tensor(mtmd_format(TN_POS_BIAS_U, prefix, il));
+                        layer.pos_bias_v = get_tensor(mtmd_format(TN_POS_BIAS_V, prefix, il));
 
-                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
-                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
+                        layer.norm_conv_w = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "bias"));
 
-                        layer.linear_pos_w = get_tensor(string_format(TN_LINEAR_POS, prefix, il, "weight"));
+                        layer.linear_pos_w = get_tensor(mtmd_format(TN_LINEAR_POS, prefix, il, "weight"));
 
-                        layer.conv_norm_w  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"));
-                        layer.conv_norm_b  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"));
-                        layer.conv_dw_w    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
-                        layer.conv_dw_b    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "bias"));
-                        layer.conv_pw1_w   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
-                        layer.conv_pw1_b   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"));
-                        layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
-                        layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
+                        layer.conv_norm_w  = get_tensor(mtmd_format(TN_CONV_NORM, prefix, il, "weight"));
+                        layer.conv_norm_b  = get_tensor(mtmd_format(TN_CONV_NORM, prefix, il, "bias"));
+                        layer.conv_dw_w    = get_tensor(mtmd_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_dw_b    = get_tensor(mtmd_format(TN_CONV_DW,   prefix, il, "bias"));
+                        layer.conv_pw1_w   = get_tensor(mtmd_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_pw1_b   = get_tensor(mtmd_format(TN_CONV_PW1,  prefix, il, "bias"));
+                        layer.conv_pw2_w   = get_tensor(mtmd_format(TN_CONV_PW2,  prefix, il, "weight"));
+                        layer.conv_pw2_b   = get_tensor(mtmd_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
                 } break;
             case PROJECTOR_TYPE_LFM3A:
                 {
                     for (int i : {0, 2, 3, 5, 6}) {
-                        model.pre_encode_conv_X_w[i] = get_tensor(string_format(TN_CONV1D, i, "weight"));
-                        model.pre_encode_conv_X_b[i] = get_tensor(string_format(TN_CONV1D, i, "bias"));
+                        model.pre_encode_conv_X_w[i] = get_tensor(mtmd_format(TN_CONV1D, i, "weight"));
+                        model.pre_encode_conv_X_b[i] = get_tensor(mtmd_format(TN_CONV1D, i, "bias"));
                     }
-                    model.pre_encode_out_w = get_tensor(string_format(TN_PRE_ENCODE_OUT, "weight"));
-                    model.pre_encode_out_b = get_tensor(string_format(TN_PRE_ENCODE_OUT, "bias"));
+                    model.pre_encode_out_w = get_tensor(mtmd_format(TN_PRE_ENCODE_OUT, "weight"));
+                    model.pre_encode_out_b = get_tensor(mtmd_format(TN_PRE_ENCODE_OUT, "bias"));
 
-                    model.mm_0_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
-                    model.mm_3_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "weight"));
-                    model.mm_3_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 3, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 0, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_3_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "weight"));
+                    model.mm_3_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "bias"));
 
                     if (!model.post_ln_w) {
-                        throw std::runtime_error(string_format("%s: missing tensor %s\n", __func__, string_format(TN_LN_POST, prefix, "weight").c_str()));
+                        throw std::runtime_error(mtmd_format("%s: missing tensor %s\n", __func__, mtmd_format(TN_LN_POST, prefix, "weight").c_str()));
                     }
 
                     // each layer is either a short conv block or a complete attention block
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
-                        layer.conv_pw1_w = get_tensor(string_format(TN_CONV_PW1, prefix, il, "weight"), false);
-                        layer.conv_dw_w  = get_tensor(string_format(TN_CONV_DW,  prefix, il, "weight"), false);
-                        layer.conv_pw2_w = get_tensor(string_format(TN_CONV_PW2, prefix, il, "weight"), false);
+                        layer.conv_pw1_w = get_tensor(mtmd_format(TN_CONV_PW1, prefix, il, "weight"), false);
+                        layer.conv_dw_w  = get_tensor(mtmd_format(TN_CONV_DW,  prefix, il, "weight"), false);
+                        layer.conv_pw2_w = get_tensor(mtmd_format(TN_CONV_PW2, prefix, il, "weight"), false);
                         const bool is_conv = layer.conv_pw1_w && layer.conv_dw_w && layer.conv_pw2_w;
                         const bool is_attn = layer.q_w && layer.k_w && layer.v_w && layer.o_w && layer.q_norm && layer.k_norm;
                         if (is_conv == is_attn) {
-                            throw std::runtime_error(string_format("%s: lfm3a layer %d is neither a complete conv nor a complete attention block\n", __func__, il));
+                            throw std::runtime_error(mtmd_format("%s: lfm3a layer %d is neither a complete conv nor a complete attention block\n", __func__, il));
                         }
                     }
                 } break;
@@ -3208,16 +3218,16 @@ struct mtmd_model_loader {
 
                     // Subsampling layers (conv1d)
                     for (int i : {0, 2, 3, 5, 6}) {
-                        model.pre_encode_conv_X_w[i] = get_tensor(string_format(TN_CONV1D, i, "weight"));
-                        model.pre_encode_conv_X_b[i] = get_tensor(string_format(TN_CONV1D, i, "bias"));
+                        model.pre_encode_conv_X_w[i] = get_tensor(mtmd_format(TN_CONV1D, i, "weight"));
+                        model.pre_encode_conv_X_b[i] = get_tensor(mtmd_format(TN_CONV1D, i, "bias"));
                     }
-                    model.pre_encode_out_w = get_tensor(string_format(TN_PRE_ENCODE_OUT, "weight"));
-                    model.pre_encode_out_b = get_tensor(string_format(TN_PRE_ENCODE_OUT, "bias"));
+                    model.pre_encode_out_w = get_tensor(mtmd_format(TN_PRE_ENCODE_OUT, "weight"));
+                    model.pre_encode_out_b = get_tensor(mtmd_format(TN_PRE_ENCODE_OUT, "bias"));
 
                     // Projection layers
-                    model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"), false);
-                    model.mm_0_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"), false);
-                    model.mm_1_w        = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"), false);
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_NORM_PRE, "weight"), false);
+                    model.mm_0_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"), false);
+                    model.mm_1_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"), false);
 
                     // Encoder layers
                     for (int il = 0; il < hparams.n_layer; ++il) {
@@ -3226,41 +3236,41 @@ struct mtmd_model_loader {
                         // Attention (from shared above)
 
                         // Relative position encoding
-                        layer.linear_pos_w = get_tensor(string_format(TN_LINEAR_POS, prefix, il, "weight"));
-                        layer.pos_bias_u   = get_tensor(string_format(TN_POS_BIAS_U, prefix, il));
-                        layer.pos_bias_v   = get_tensor(string_format(TN_POS_BIAS_V, prefix, il));
+                        layer.linear_pos_w = get_tensor(mtmd_format(TN_LINEAR_POS, prefix, il, "weight"));
+                        layer.pos_bias_u   = get_tensor(mtmd_format(TN_POS_BIAS_U, prefix, il));
+                        layer.pos_bias_v   = get_tensor(mtmd_format(TN_POS_BIAS_V, prefix, il));
 
                         // Convolution module
-                        layer.conv_pw1_w     = get_tensor(string_format(TN_CONV_PW1,       prefix, il, "weight"));
-                        layer.conv_pw1_b     = get_tensor(string_format(TN_CONV_PW1,       prefix, il, "bias"), false);
-                        layer.conv_dw_w      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "weight"));
-                        layer.conv_dw_b      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "bias"), false);
-                        layer.conv_norm_w    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "weight"));
-                        layer.conv_norm_b    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "bias"));
-                        layer.conv_norm_mean = get_tensor(string_format(TN_CONV_NORM_MEAN, prefix, il));
-                        layer.conv_norm_var  = get_tensor(string_format(TN_CONV_NORM_VAR,  prefix, il));
-                        layer.conv_pw2_w     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "weight"));
-                        layer.conv_pw2_b     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "bias"), false);
+                        layer.conv_pw1_w     = get_tensor(mtmd_format(TN_CONV_PW1,       prefix, il, "weight"));
+                        layer.conv_pw1_b     = get_tensor(mtmd_format(TN_CONV_PW1,       prefix, il, "bias"), false);
+                        layer.conv_dw_w      = get_tensor(mtmd_format(TN_CONV_DW,        prefix, il, "weight"));
+                        layer.conv_dw_b      = get_tensor(mtmd_format(TN_CONV_DW,        prefix, il, "bias"), false);
+                        layer.conv_norm_w    = get_tensor(mtmd_format(TN_CONV_NORM,      prefix, il, "weight"));
+                        layer.conv_norm_b    = get_tensor(mtmd_format(TN_CONV_NORM,      prefix, il, "bias"));
+                        layer.conv_norm_mean = get_tensor(mtmd_format(TN_CONV_NORM_MEAN, prefix, il));
+                        layer.conv_norm_var  = get_tensor(mtmd_format(TN_CONV_NORM_VAR,  prefix, il));
+                        layer.conv_pw2_w     = get_tensor(mtmd_format(TN_CONV_PW2,       prefix, il, "weight"));
+                        layer.conv_pw2_b     = get_tensor(mtmd_format(TN_CONV_PW2,       prefix, il, "bias"), false);
 
                         // Feed-forward networks
-                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
-                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"));
+                        layer.ff_norm_w   = get_tensor(mtmd_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(mtmd_format(TN_FFN_NORM,   prefix, il, "bias"));
 
-                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
-                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
-                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
-                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"), false);
-                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
-                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"), false);
+                        layer.ff_norm_1_w = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "bias"));
+                        layer.ff_up_1_w   = get_tensor(mtmd_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(mtmd_format(TN_FFN_UP_1,   prefix, il, "bias"), false);
+                        layer.ff_down_1_w = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "bias"), false);
 
                         // Layer norms
-                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
-                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
+                        layer.norm_conv_w = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "bias"));
                     }
 
-                    model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
-                    model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
-                    model.mm_model_mlp_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
+                    model.mm_model_mlp_1_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 0, "weight"));
+                    model.mm_model_mlp_2_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 1, "weight"));
+                    model.mm_model_mlp_3_w = get_tensor(mtmd_format(TN_MVLM_PROJ_MLP, 3, "weight"));
                 } break;
             case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
                 {
@@ -3268,49 +3278,49 @@ struct mtmd_model_loader {
                     hparams.window      = get_vector(TN_WINDOW);
 
                     // ASR expert: blocks, pre_ln and post_ln come from the generic loader
-                    model.inp_proj_w = get_tensor(string_format(TN_INP_PROJ, "weight"));
+                    model.inp_proj_w = get_tensor(mtmd_format(TN_INP_PROJ, "weight"));
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
-                        layer.q_norm_b = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "bias"));
-                        layer.k_norm_b = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "bias"));
+                        layer.q_norm_b = get_tensor(mtmd_format(TN_ATTN_Q_NORM, prefix, il, "bias"));
+                        layer.k_norm_b = get_tensor(mtmd_format(TN_ATTN_K_NORM, prefix, il, "bias"));
                     }
 
                     // speaker expert
                     const char * sp = "a.spk";
-                    model.spk_inp_proj_w   = get_tensor(string_format(TN_A_SPK_INP_PROJ, "weight"));
-                    model.spk_pre_ln_w     = get_tensor(string_format(TN_LN_PRE,  sp, "weight"));
-                    model.spk_pre_ln_b     = get_tensor(string_format(TN_LN_PRE,  sp, "bias"));
-                    model.spk_post_ln_w    = get_tensor(string_format(TN_LN_POST, sp, "weight"));
-                    model.spk_post_ln_b    = get_tensor(string_format(TN_LN_POST, sp, "bias"));
+                    model.spk_inp_proj_w   = get_tensor(mtmd_format(TN_A_SPK_INP_PROJ, "weight"));
+                    model.spk_pre_ln_w     = get_tensor(mtmd_format(TN_LN_PRE,  sp, "weight"));
+                    model.spk_pre_ln_b     = get_tensor(mtmd_format(TN_LN_PRE,  sp, "bias"));
+                    model.spk_post_ln_w    = get_tensor(mtmd_format(TN_LN_POST, sp, "weight"));
+                    model.spk_post_ln_b    = get_tensor(mtmd_format(TN_LN_POST, sp, "bias"));
                     model.spk_layers.resize(hparams.spk_n_layer);
                     for (int il = 0; il < hparams.spk_n_layer; ++il) {
                         auto & layer = model.spk_layers[il];
-                        layer.ln_1_w    = get_tensor(string_format(TN_LN_1,        sp, il, "weight"));
-                        layer.ln_1_b    = get_tensor(string_format(TN_LN_1,        sp, il, "bias"));
-                        layer.qkv_w     = get_tensor(string_format(TN_ATTN_QKV,    sp, il, "weight"));
-                        layer.o_w       = get_tensor(string_format(TN_ATTN_OUTPUT, sp, il, "weight"));
-                        layer.o_b       = get_tensor(string_format(TN_ATTN_OUTPUT, sp, il, "bias"));
-                        layer.ln_2_w    = get_tensor(string_format(TN_LN_2,        sp, il, "weight"));
-                        layer.ln_2_b    = get_tensor(string_format(TN_LN_2,        sp, il, "bias"));
-                        layer.ff_up_w   = get_tensor(string_format(TN_FFN_UP,      sp, il, "weight"));
-                        layer.ff_up_b   = get_tensor(string_format(TN_FFN_UP,      sp, il, "bias"));
-                        layer.ff_down_w = get_tensor(string_format(TN_FFN_DOWN,    sp, il, "weight"));
-                        layer.ff_down_b = get_tensor(string_format(TN_FFN_DOWN,    sp, il, "bias"));
+                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        sp, il, "weight"));
+                        layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        sp, il, "bias"));
+                        layer.qkv_w     = get_tensor(mtmd_format(TN_ATTN_QKV,    sp, il, "weight"));
+                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, sp, il, "weight"));
+                        layer.o_b       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, sp, il, "bias"));
+                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        sp, il, "weight"));
+                        layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        sp, il, "bias"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      sp, il, "weight"));
+                        layer.ff_up_b   = get_tensor(mtmd_format(TN_FFN_UP,      sp, il, "bias"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    sp, il, "weight"));
+                        layer.ff_down_b = get_tensor(mtmd_format(TN_FFN_DOWN,    sp, il, "bias"));
                     }
 
                     // Sortformer head, fusion
-                    model.spk_head_proj_w   = get_tensor(string_format(TN_A_SPK_HEAD, "proj",     "weight"));
-                    model.spk_head_proj_b   = get_tensor(string_format(TN_A_SPK_HEAD, "proj",     "bias"));
-                    model.spk_head_up_w     = get_tensor(string_format(TN_A_SPK_HEAD, "upsample", "weight"));
-                    model.spk_head_up_b     = get_tensor(string_format(TN_A_SPK_HEAD, "upsample", "bias"));
-                    model.spk_head_fc1_w    = get_tensor(string_format(TN_A_SPK_HEAD, "fc1",      "weight"));
-                    model.spk_head_fc1_b    = get_tensor(string_format(TN_A_SPK_HEAD, "fc1",      "bias"));
-                    model.spk_head_fc2_w    = get_tensor(string_format(TN_A_SPK_HEAD, "fc2",      "weight"));
-                    model.spk_head_fc2_b    = get_tensor(string_format(TN_A_SPK_HEAD, "fc2",      "bias"));
-                    model.fusion_asr_norm_w = get_tensor(string_format(TN_A_FUSION_NORM, "asr_norm", "weight"));
-                    model.fusion_asr_norm_b = get_tensor(string_format(TN_A_FUSION_NORM, "asr_norm", "bias"));
-                    model.fusion_spk_norm_w = get_tensor(string_format(TN_A_FUSION_NORM, "spk_norm", "weight"));
-                    model.fusion_spk_norm_b = get_tensor(string_format(TN_A_FUSION_NORM, "spk_norm", "bias"));
+                    model.spk_head_proj_w   = get_tensor(mtmd_format(TN_A_SPK_HEAD, "proj",     "weight"));
+                    model.spk_head_proj_b   = get_tensor(mtmd_format(TN_A_SPK_HEAD, "proj",     "bias"));
+                    model.spk_head_up_w     = get_tensor(mtmd_format(TN_A_SPK_HEAD, "upsample", "weight"));
+                    model.spk_head_up_b     = get_tensor(mtmd_format(TN_A_SPK_HEAD, "upsample", "bias"));
+                    model.spk_head_fc1_w    = get_tensor(mtmd_format(TN_A_SPK_HEAD, "fc1",      "weight"));
+                    model.spk_head_fc1_b    = get_tensor(mtmd_format(TN_A_SPK_HEAD, "fc1",      "bias"));
+                    model.spk_head_fc2_w    = get_tensor(mtmd_format(TN_A_SPK_HEAD, "fc2",      "weight"));
+                    model.spk_head_fc2_b    = get_tensor(mtmd_format(TN_A_SPK_HEAD, "fc2",      "bias"));
+                    model.fusion_asr_norm_w = get_tensor(mtmd_format(TN_A_FUSION_NORM, "asr_norm", "weight"));
+                    model.fusion_asr_norm_b = get_tensor(mtmd_format(TN_A_FUSION_NORM, "asr_norm", "bias"));
+                    model.fusion_spk_norm_w = get_tensor(mtmd_format(TN_A_FUSION_NORM, "spk_norm", "weight"));
+                    model.fusion_spk_norm_b = get_tensor(mtmd_format(TN_A_FUSION_NORM, "spk_norm", "bias"));
                     model.fusion_spk_kernel = get_tensor(TN_A_FUSION_KERNEL);
 
                     model.spk_sil_emb = get_vector(TN_A_SPK_SIL_EMB);
@@ -3336,90 +3346,90 @@ struct mtmd_model_loader {
                             model.fusion_spk_kernel->ne[0] != n_spk || model.fusion_spk_kernel->ne[1] != hparams.n_embd ||
                             hparams.mel_filters.size() != (size_t) hparams.n_mel_bins * (hparams.audio_n_fft / 2 + 1) ||
                             hparams.window.size() != (size_t) hparams.audio_window_len) {
-                        throw std::runtime_error(string_format("%s: hparams do not match the tensor shapes\n", __func__));
+                        throw std::runtime_error(mtmd_format("%s: hparams do not match the tensor shapes\n", __func__));
                     }
 
                     // projection to the text model
-                    model.mm_fc_w = get_tensor(string_format(TN_MM_AUDIO_FC, "weight"));
-                    model.mm_fc_b = get_tensor(string_format(TN_MM_AUDIO_FC, "bias"));
+                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
+                    model.mm_fc_b = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
             case PROJECTOR_TYPE_GRANITE_SPEECH:
                 {
-                    model.inp_proj_w     = get_tensor(string_format(TN_INP_PROJ,    "weight"));
-                    model.inp_proj_b     = get_tensor(string_format(TN_INP_PROJ,    "bias"));
-                    model.ctc_out_w      = get_tensor(string_format(TN_CTC_OUT,     "weight"));
-                    model.ctc_out_b      = get_tensor(string_format(TN_CTC_OUT,     "bias"));
-                    model.ctc_out_mid_w  = get_tensor(string_format(TN_CTC_OUT_MID, "weight"));
-                    model.ctc_out_mid_b  = get_tensor(string_format(TN_CTC_OUT_MID, "bias"));
+                    model.inp_proj_w     = get_tensor(mtmd_format(TN_INP_PROJ,    "weight"));
+                    model.inp_proj_b     = get_tensor(mtmd_format(TN_INP_PROJ,    "bias"));
+                    model.ctc_out_w      = get_tensor(mtmd_format(TN_CTC_OUT,     "weight"));
+                    model.ctc_out_b      = get_tensor(mtmd_format(TN_CTC_OUT,     "bias"));
+                    model.ctc_out_mid_w  = get_tensor(mtmd_format(TN_CTC_OUT_MID, "weight"));
+                    model.ctc_out_mid_b  = get_tensor(mtmd_format(TN_CTC_OUT_MID, "bias"));
 
                     // per-layer tensors not loaded by the generic loop above
                     for (int il = 0; il < hparams.n_layer; ++il) {
                         auto & layer = model.layers[il];
 
-                        layer.attn_rel_pos_emb = get_tensor(string_format(TN_ATTN_REL_POS_EMB, prefix, il));
+                        layer.attn_rel_pos_emb = get_tensor(mtmd_format(TN_ATTN_REL_POS_EMB, prefix, il));
 
-                        layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
-                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"));
+                        layer.ff_norm_w   = get_tensor(mtmd_format(TN_FFN_NORM,   prefix, il, "weight"));
+                        layer.ff_norm_b   = get_tensor(mtmd_format(TN_FFN_NORM,   prefix, il, "bias"));
 
-                        layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
-                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
-                        layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
-                        layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"));
-                        layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
-                        layer.ff_down_1_b = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "bias"));
+                        layer.ff_norm_1_w = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "weight"));
+                        layer.ff_norm_1_b = get_tensor(mtmd_format(TN_FFN_NORM_1, prefix, il, "bias"));
+                        layer.ff_up_1_w   = get_tensor(mtmd_format(TN_FFN_UP_1,   prefix, il, "weight"));
+                        layer.ff_up_1_b   = get_tensor(mtmd_format(TN_FFN_UP_1,   prefix, il, "bias"));
+                        layer.ff_down_1_w = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "weight"));
+                        layer.ff_down_1_b = get_tensor(mtmd_format(TN_FFN_DOWN_1, prefix, il, "bias"));
 
-                        layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
-                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
-                        layer.conv_norm_w = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"));
-                        layer.conv_norm_b = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"));
-                        layer.conv_dw_w   = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
-                        layer.conv_pw1_w  = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
-                        layer.conv_pw1_b  = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"));
-                        layer.conv_pw2_w  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
-                        layer.conv_pw2_b  = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
+                        layer.norm_conv_w = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "weight"));
+                        layer.norm_conv_b = get_tensor(mtmd_format(TN_NORM_CONV, prefix, il, "bias"));
+                        layer.conv_norm_w = get_tensor(mtmd_format(TN_CONV_NORM, prefix, il, "weight"));
+                        layer.conv_norm_b = get_tensor(mtmd_format(TN_CONV_NORM, prefix, il, "bias"));
+                        layer.conv_dw_w   = get_tensor(mtmd_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_pw1_w  = get_tensor(mtmd_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_pw1_b  = get_tensor(mtmd_format(TN_CONV_PW1,  prefix, il, "bias"));
+                        layer.conv_pw2_w  = get_tensor(mtmd_format(TN_CONV_PW2,  prefix, il, "weight"));
+                        layer.conv_pw2_b  = get_tensor(mtmd_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
 
                     model.qf_proj_blocks.resize(1);
                     auto & qf = model.qf_proj_blocks[0];
-                    qf.qf_proj_query    = get_tensor(string_format(TN_QF_PROJ_QUERY, prefix));
-                    qf.qf_proj_norm_w   = get_tensor(string_format(TN_QF_PROJ_NORM, prefix, "weight"));
-                    qf.qf_proj_norm_b   = get_tensor(string_format(TN_QF_PROJ_NORM, prefix, "bias"));
-                    qf.qf_proj_linear_w = get_tensor(string_format(TN_QF_PROJ_LINEAR, prefix, "weight"));
-                    qf.qf_proj_linear_b = get_tensor(string_format(TN_QF_PROJ_LINEAR, prefix, "bias"));
+                    qf.qf_proj_query    = get_tensor(mtmd_format(TN_QF_PROJ_QUERY, prefix));
+                    qf.qf_proj_norm_w   = get_tensor(mtmd_format(TN_QF_PROJ_NORM, prefix, "weight"));
+                    qf.qf_proj_norm_b   = get_tensor(mtmd_format(TN_QF_PROJ_NORM, prefix, "bias"));
+                    qf.qf_proj_linear_w = get_tensor(mtmd_format(TN_QF_PROJ_LINEAR, prefix, "weight"));
+                    qf.qf_proj_linear_b = get_tensor(mtmd_format(TN_QF_PROJ_LINEAR, prefix, "bias"));
 
                     const int n_proj_layers = 2;
                     qf.qf_proj_layers.resize(n_proj_layers);
                     for (int il = 0; il < n_proj_layers; ++il) {
                         auto & pl = qf.qf_proj_layers[il];
 
-                        pl.q_w    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, il, "weight"));
-                        pl.q_b    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, il, "bias"));
-                        pl.k_w    = get_tensor(string_format(TN_QF_SELF_ATTN_K, prefix, il, "weight"));
-                        pl.k_b    = get_tensor(string_format(TN_QF_SELF_ATTN_K, prefix, il, "bias"));
-                        pl.v_w    = get_tensor(string_format(TN_QF_SELF_ATTN_V, prefix, il, "weight"));
-                        pl.v_b    = get_tensor(string_format(TN_QF_SELF_ATTN_V, prefix, il, "bias"));
-                        pl.o_w    = get_tensor(string_format(TN_QF_SELF_ATTN_O, prefix, il, "weight"));
-                        pl.o_b    = get_tensor(string_format(TN_QF_SELF_ATTN_O, prefix, il, "bias"));
-                        pl.ln_1_w = get_tensor(string_format(TN_QF_SELF_ATTN_N, prefix, il, "weight"));
-                        pl.ln_1_b = get_tensor(string_format(TN_QF_SELF_ATTN_N, prefix, il, "bias"));
+                        pl.q_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_Q, prefix, il, "weight"));
+                        pl.q_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_Q, prefix, il, "bias"));
+                        pl.k_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_K, prefix, il, "weight"));
+                        pl.k_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_K, prefix, il, "bias"));
+                        pl.v_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_V, prefix, il, "weight"));
+                        pl.v_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_V, prefix, il, "bias"));
+                        pl.o_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_O, prefix, il, "weight"));
+                        pl.o_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_O, prefix, il, "bias"));
+                        pl.ln_1_w = get_tensor(mtmd_format(TN_QF_SELF_ATTN_N, prefix, il, "weight"));
+                        pl.ln_1_b = get_tensor(mtmd_format(TN_QF_SELF_ATTN_N, prefix, il, "bias"));
 
-                        pl.cross_attn_q_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, prefix, il, "weight"));
-                        pl.cross_attn_q_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, prefix, il, "bias"));
-                        pl.cross_attn_k_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, prefix, il, "weight"));
-                        pl.cross_attn_k_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, prefix, il, "bias"));
-                        pl.cross_attn_v_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, prefix, il, "weight"));
-                        pl.cross_attn_v_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, prefix, il, "bias"));
-                        pl.cross_attn_o_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, prefix, il, "weight"));
-                        pl.cross_attn_o_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, prefix, il, "bias"));
-                        pl.cross_attn_norm_w = get_tensor(string_format(TN_QF_CROSS_ATTN_N, prefix, il, "weight"));
-                        pl.cross_attn_norm_b = get_tensor(string_format(TN_QF_CROSS_ATTN_N, prefix, il, "bias"));
+                        pl.cross_attn_q_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_Q, prefix, il, "weight"));
+                        pl.cross_attn_q_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_Q, prefix, il, "bias"));
+                        pl.cross_attn_k_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_K, prefix, il, "weight"));
+                        pl.cross_attn_k_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_K, prefix, il, "bias"));
+                        pl.cross_attn_v_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_V, prefix, il, "weight"));
+                        pl.cross_attn_v_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_V, prefix, il, "bias"));
+                        pl.cross_attn_o_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_O, prefix, il, "weight"));
+                        pl.cross_attn_o_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_O, prefix, il, "bias"));
+                        pl.cross_attn_norm_w = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_N, prefix, il, "weight"));
+                        pl.cross_attn_norm_b = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_N, prefix, il, "bias"));
 
-                        pl.ff_up_w   = get_tensor(string_format(TN_QF_FFN_UP,   prefix, il, "weight"));
-                        pl.ff_up_b   = get_tensor(string_format(TN_QF_FFN_UP,   prefix, il, "bias"));
-                        pl.ff_down_w = get_tensor(string_format(TN_QF_FFN_DOWN, prefix, il, "weight"));
-                        pl.ff_down_b = get_tensor(string_format(TN_QF_FFN_DOWN, prefix, il, "bias"));
-                        pl.ln_2_w    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, il, "weight"));
-                        pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, il, "bias"));
+                        pl.ff_up_w   = get_tensor(mtmd_format(TN_QF_FFN_UP,   prefix, il, "weight"));
+                        pl.ff_up_b   = get_tensor(mtmd_format(TN_QF_FFN_UP,   prefix, il, "bias"));
+                        pl.ff_down_w = get_tensor(mtmd_format(TN_QF_FFN_DOWN, prefix, il, "weight"));
+                        pl.ff_down_b = get_tensor(mtmd_format(TN_QF_FFN_DOWN, prefix, il, "bias"));
+                        pl.ln_2_w    = get_tensor(mtmd_format(TN_QF_FFN_NORM, prefix, il, "weight"));
+                        pl.ln_2_b    = get_tensor(mtmd_format(TN_QF_FFN_NORM, prefix, il, "bias"));
                     }
                 } break;
             case PROJECTOR_TYPE_GRANITE4_VISION:
@@ -3434,55 +3444,55 @@ struct mtmd_model_loader {
                         auto & b = model.qf_proj_blocks[bid];
 
                         // non-layerwise tensors
-                        b.qf_proj_img_pos     = get_tensor(string_format(TN_MULTI_PROJ_IMG_POS,           bid));
-                        b.qf_proj_query       = get_tensor(string_format(TN_MULTI_PROJ_QUERY,     prefix, bid));
-                        b.qf_proj_linear_w    = get_tensor(string_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "weight"));
-                        b.qf_proj_linear_b    = get_tensor(string_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "bias"));
-                        b.qf_proj_norm_w      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "weight"));
-                        b.qf_proj_norm_b      = get_tensor(string_format(TN_MULTI_PROJ_NORM,      prefix, bid, "bias"));
-                        b.qf_proj_post_norm_w = get_tensor(string_format(TN_MULTI_PROJ_POST_NORM, prefix, bid, "weight"));
-                        b.qf_proj_post_norm_b = get_tensor(string_format(TN_MULTI_PROJ_POST_NORM, prefix, bid, "bias"));
+                        b.qf_proj_img_pos     = get_tensor(mtmd_format(TN_MULTI_PROJ_IMG_POS,           bid));
+                        b.qf_proj_query       = get_tensor(mtmd_format(TN_MULTI_PROJ_QUERY,     prefix, bid));
+                        b.qf_proj_linear_w    = get_tensor(mtmd_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "weight"));
+                        b.qf_proj_linear_b    = get_tensor(mtmd_format(TN_MULTI_PROJ_LINEAR,    prefix, bid, "bias"));
+                        b.qf_proj_norm_w      = get_tensor(mtmd_format(TN_MULTI_PROJ_NORM,      prefix, bid, "weight"));
+                        b.qf_proj_norm_b      = get_tensor(mtmd_format(TN_MULTI_PROJ_NORM,      prefix, bid, "bias"));
+                        b.qf_proj_post_norm_w = get_tensor(mtmd_format(TN_MULTI_PROJ_POST_NORM, prefix, bid, "weight"));
+                        b.qf_proj_post_norm_b = get_tensor(mtmd_format(TN_MULTI_PROJ_POST_NORM, prefix, bid, "bias"));
 
                         // laywerwise tensors
                         // NOTE: If any model uses multi-layer qformers, this will need to change
                         b.qf_proj_layers.resize(1);
                         auto & pl = b.qf_proj_layers[0];
 
-                        pl.q_w    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, bid, "weight"));
-                        pl.q_b    = get_tensor(string_format(TN_QF_SELF_ATTN_Q, prefix, bid, "bias"));
-                        pl.k_w    = get_tensor(string_format(TN_QF_SELF_ATTN_K, prefix, bid, "weight"));
-                        pl.k_b    = get_tensor(string_format(TN_QF_SELF_ATTN_K, prefix, bid, "bias"));
-                        pl.v_w    = get_tensor(string_format(TN_QF_SELF_ATTN_V, prefix, bid, "weight"));
-                        pl.v_b    = get_tensor(string_format(TN_QF_SELF_ATTN_V, prefix, bid, "bias"));
-                        pl.o_w    = get_tensor(string_format(TN_QF_SELF_ATTN_O, prefix, bid, "weight"));
-                        pl.o_b    = get_tensor(string_format(TN_QF_SELF_ATTN_O, prefix, bid, "bias"));
-                        pl.ln_1_w = get_tensor(string_format(TN_QF_SELF_ATTN_N, prefix, bid, "weight"));
-                        pl.ln_1_b = get_tensor(string_format(TN_QF_SELF_ATTN_N, prefix, bid, "bias"));
+                        pl.q_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_Q, prefix, bid, "weight"));
+                        pl.q_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_Q, prefix, bid, "bias"));
+                        pl.k_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_K, prefix, bid, "weight"));
+                        pl.k_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_K, prefix, bid, "bias"));
+                        pl.v_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_V, prefix, bid, "weight"));
+                        pl.v_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_V, prefix, bid, "bias"));
+                        pl.o_w    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_O, prefix, bid, "weight"));
+                        pl.o_b    = get_tensor(mtmd_format(TN_QF_SELF_ATTN_O, prefix, bid, "bias"));
+                        pl.ln_1_w = get_tensor(mtmd_format(TN_QF_SELF_ATTN_N, prefix, bid, "weight"));
+                        pl.ln_1_b = get_tensor(mtmd_format(TN_QF_SELF_ATTN_N, prefix, bid, "bias"));
 
-                        pl.cross_attn_q_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, prefix, bid, "weight"));
-                        pl.cross_attn_q_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_Q, prefix, bid, "bias"));
-                        pl.cross_attn_k_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, prefix, bid, "weight"));
-                        pl.cross_attn_k_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_K, prefix, bid, "bias"));
-                        pl.cross_attn_v_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, prefix, bid, "weight"));
-                        pl.cross_attn_v_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_V, prefix, bid, "bias"));
-                        pl.cross_attn_o_w    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, prefix, bid, "weight"));
-                        pl.cross_attn_o_b    = get_tensor(string_format(TN_QF_CROSS_ATTN_O, prefix, bid, "bias"));
-                        pl.cross_attn_norm_w = get_tensor(string_format(TN_QF_CROSS_ATTN_N, prefix, bid, "weight"));
-                        pl.cross_attn_norm_b = get_tensor(string_format(TN_QF_CROSS_ATTN_N, prefix, bid, "bias"));
+                        pl.cross_attn_q_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_Q, prefix, bid, "weight"));
+                        pl.cross_attn_q_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_Q, prefix, bid, "bias"));
+                        pl.cross_attn_k_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_K, prefix, bid, "weight"));
+                        pl.cross_attn_k_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_K, prefix, bid, "bias"));
+                        pl.cross_attn_v_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_V, prefix, bid, "weight"));
+                        pl.cross_attn_v_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_V, prefix, bid, "bias"));
+                        pl.cross_attn_o_w    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_O, prefix, bid, "weight"));
+                        pl.cross_attn_o_b    = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_O, prefix, bid, "bias"));
+                        pl.cross_attn_norm_w = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_N, prefix, bid, "weight"));
+                        pl.cross_attn_norm_b = get_tensor(mtmd_format(TN_QF_CROSS_ATTN_N, prefix, bid, "bias"));
 
-                        pl.ff_up_w   = get_tensor(string_format(TN_QF_FFN_UP,   prefix, bid, "weight"));
-                        pl.ff_up_b   = get_tensor(string_format(TN_QF_FFN_UP,   prefix, bid, "bias"));
-                        pl.ff_down_w = get_tensor(string_format(TN_QF_FFN_DOWN, prefix, bid, "weight"));
-                        pl.ff_down_b = get_tensor(string_format(TN_QF_FFN_DOWN, prefix, bid, "bias"));
-                        pl.ln_2_w    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, bid, "weight"));
-                        pl.ln_2_b    = get_tensor(string_format(TN_QF_FFN_NORM, prefix, bid, "bias"));
+                        pl.ff_up_w   = get_tensor(mtmd_format(TN_QF_FFN_UP,   prefix, bid, "weight"));
+                        pl.ff_up_b   = get_tensor(mtmd_format(TN_QF_FFN_UP,   prefix, bid, "bias"));
+                        pl.ff_down_w = get_tensor(mtmd_format(TN_QF_FFN_DOWN, prefix, bid, "weight"));
+                        pl.ff_down_b = get_tensor(mtmd_format(TN_QF_FFN_DOWN, prefix, bid, "bias"));
+                        pl.ln_2_w    = get_tensor(mtmd_format(TN_QF_FFN_NORM, prefix, bid, "weight"));
+                        pl.ln_2_b    = get_tensor(mtmd_format(TN_QF_FFN_NORM, prefix, bid, "bias"));
                     }
 
                 } break;
             case PROJECTOR_TYPE_SENSENOVA_U1:
                 {
-                    model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -3517,7 +3527,7 @@ struct mtmd_model_loader {
                     const size_t offset = it_off->second;
                     fin.seekg(offset, std::ios::beg);
                     if (!fin) {
-                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                        throw std::runtime_error(mtmd_format("%s: failed to seek for tensor %s\n", __func__, t->name));
                     }
                     size_t num_bytes = ggml_nbytes(cur);
                     if (ggml_backend_buft_is_host(buft)) {
@@ -3533,7 +3543,7 @@ struct mtmd_model_loader {
                     if (progress_callback && total_data_size > 0) {
                         const float progress = (float)data_loaded / (float)total_data_size;
                         if (!progress_callback(progress, progress_callback_user_data)) {
-                            throw std::runtime_error(string_format("%s: model loading cancelled by progress_callback\n", __func__));
+                            throw std::runtime_error(mtmd_format("%s: model loading cancelled by progress_callback\n", __func__));
                         }
                     }
                 }
@@ -3579,7 +3589,7 @@ struct mtmd_model_loader {
         const uint32_t val = gguf_get_val_u32(ctx_gguf.get(), i);
         // sanity check
         if (val > (uint32_t) INT32_MAX) {
-            throw std::runtime_error(string_format("%s: value %u for key '%s' exceeds INT32_MAX\n",
+            throw std::runtime_error(mtmd_format("%s: value %u for key '%s' exceeds INT32_MAX\n",
                 __func__, val, key.c_str()));
         }
         output = (int) val;
@@ -3605,15 +3615,15 @@ struct mtmd_model_loader {
             return;
         }
         if (gguf_get_kv_type(ctx_gguf.get(), i) != GGUF_TYPE_ARRAY) {
-            throw std::runtime_error(string_format("%s: key '%s' is not an array\n", __func__, key.c_str()));
+            throw std::runtime_error(mtmd_format("%s: key '%s' is not an array\n", __func__, key.c_str()));
         }
         const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
         if (type != GGUF_TYPE_FLOAT32) {
-            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_FLOAT32)\n", __func__, key.c_str(), type, GGUF_TYPE_FLOAT32));
+            throw std::runtime_error(mtmd_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_FLOAT32)\n", __func__, key.c_str(), type, GGUF_TYPE_FLOAT32));
         }
         const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
         if (n > (size_t) std::numeric_limits<int>::max()) {
-            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+            throw std::runtime_error(mtmd_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
         }
         output.resize(n);
         const float * values = (const float *)gguf_get_arr_data(ctx_gguf.get(), i);
@@ -3642,15 +3652,15 @@ struct mtmd_model_loader {
             return;
         }
         if (gguf_get_kv_type(ctx_gguf.get(), i) != GGUF_TYPE_ARRAY) {
-            throw std::runtime_error(string_format("%s: key '%s' is not an array\n", __func__, key.c_str()));
+            throw std::runtime_error(mtmd_format("%s: key '%s' is not an array\n", __func__, key.c_str()));
         }
         const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
         if (type != GGUF_TYPE_INT32) {
-            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_INT32)\n", __func__, key.c_str(), type, GGUF_TYPE_INT32));
+            throw std::runtime_error(mtmd_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_INT32)\n", __func__, key.c_str(), type, GGUF_TYPE_INT32));
         }
         const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
         if (n > (size_t) std::numeric_limits<int>::max()) {
-            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+            throw std::runtime_error(mtmd_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
         }
         output.resize(n);
         const int32_t * values = (const int32_t *)gguf_get_arr_data(ctx_gguf.get(), i);
@@ -3937,6 +3947,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_D1OMNI_V:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_KIMIK31:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * hparams.n_merge;
@@ -4278,6 +4289,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_PADDLEOCR:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_KIMIK31:
         case PROJECTOR_TYPE_YASA2:
         case PROJECTOR_TYPE_DEEPSEEK4V:
         case PROJECTOR_TYPE_DEEPSEEK41V:
