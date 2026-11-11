@@ -3265,7 +3265,8 @@ bool llama_context::sched_copy_experts(ggml_backend_t backend, const ggml_tensor
         return true;
     }
 
-    // the ids of a token chunk: the other chunks read the same copy, so copy the experts of all the tokens (see build_moe_ffn)
+    // the ids of a token chunk (see build_moe_ffn): the scheduler copies a host weight once per graph and backend,
+    // in the first split that reads it, and the splits of the other chunks read that copy, so copy the experts of all the tokens
     if (ids->view_src != nullptr && ids->view_src->type == ids->type && ids->view_src->ne[0] == ids->ne[0]) {
         ids = ids->view_src;
     }
