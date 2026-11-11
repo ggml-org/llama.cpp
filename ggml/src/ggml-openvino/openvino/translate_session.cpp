@@ -54,6 +54,8 @@
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
 #include <sstream>
+#include <unordered_map>
+#include <vector>
 
 namespace ov {
 namespace frontend {
@@ -497,19 +499,52 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     // Each constant must have a distinct bin_offset, otherwise GPU's weightless cache
     // import will map multiple constants to the same data.
     //
+    // A cached blob is imported with this model as ov::hint::model and its constants are matched by key, so a
+    // model must get the same keys in every process, however it is built. Weight nodes are shared between models
+    // (the NPU prefill/decode pair, and the whole process through the tensor extras), so a number from this
+    // model's counter would depend on which model converted the weight first. Key weights by name instead, above
+    // the counter's range.
+    //
     // Small constants (< 16 elements) are excluded since they may be introduced by
     // optimization patterns and the overhead is negligible.
     //
     // Note: use shape_size() rather than byte_size()/element_type().size() - GatherMatmul's default
     // bias is a Constant(element::dynamic, Shape{0}), whose element_type().size() is 0 and would
     // divide by zero.
+    std::unordered_map<const ov::Node *, size_t> weight_keys;
+    for (const auto & [name, weight] : ggml_model_decoder->get_model_weights()) {
+        uint64_t name_hash = 0xcbf29ce484222325ULL;
+        for (const unsigned char c : name) {
+            name_hash = (name_hash ^ c) * 0x100000001b3ULL;
+        }
+        // A quantized weight is a subgraph: number its constants (data, scales, zero points) in input order.
+        size_t index = 0;
+        std::vector<const ov::Node *> stack;
+        if (weight) {
+            stack.push_back(weight.get());
+        }
+        while (!stack.empty()) {
+            const ov::Node * node = stack.back();
+            stack.pop_back();
+            if (ov::is_type<ov::op::v0::Constant>(node)) {
+                const uint64_t key = (name_hash + index++ * 0x9e3779b97f4a7c15ULL) & ((1ULL << 61) - 1);
+                weight_keys.emplace(node, static_cast<size_t>((1ULL << 61) | key));
+                continue;
+            }
+            for (size_t i = node->get_input_size(); i-- > 0;) {
+                stack.push_back(node->get_input_node_ptr(i));
+            }
+        }
+    }
     size_t offset = 0;
     for (auto & node : resulting_model->get_ordered_ops()) {
         if (auto cnst = ov::as_type_ptr<ov::op::v0::Constant>(node); cnst && ov::shape_size(cnst->get_shape()) >= 16) {
             auto & rt_info = cnst->get_rt_info();
             if (rt_info.find(ov::WeightlessCacheAttribute::get_type_info_static()) == rt_info.end()) {
-                rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] =
-                    ov::WeightlessCacheAttribute(cnst->get_byte_size(), offset++, cnst->get_element_type());
+                const auto weight_key = weight_keys.find(cnst.get());
+                rt_info[ov::WeightlessCacheAttribute::get_type_info_static()] = ov::WeightlessCacheAttribute(
+                    cnst->get_byte_size(), weight_key != weight_keys.end() ? weight_key->second : offset++,
+                    cnst->get_element_type());
             }
         }
     }
