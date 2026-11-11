@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Nightly llama.cpp perf benchmark for DGX Spark.
+"""Nightly llama.cpp perf benchmark for DGX Spark, and the weekly vLLM comparison.
 
   nightly.py prefetch --home DIR [--tag bNNNN]   pick + download a pre-release build, models and data
   nightly.py run      --home DIR [--suites ...]  run the suites on the prefetched build, write night.json
+
+With --config weekly.yaml the same commands pull the vLLM images named by NVIDIA's DGX Spark recipes,
+download the checkpoints, and run the serving and agentic suites against vLLM in docker.
 """
 
 from __future__ import annotations
@@ -34,6 +37,18 @@ SPEED_BENCH = REPO_ROOT / "tools" / "server" / "bench" / "speed-bench" / "speed_
 WIKITEXT_SCRIPT = REPO_ROOT / "scripts" / "get-wikitext-2.sh"
 SUITES = ["engine", "speedbench", "serving", "agentic", "quality", "decision"]
 BINARIES = ["llama-server", "llama-bench", "llama-perplexity"]
+ENGINES = ["llama.cpp", "vllm"]
+# the AIPerf suites; the others drive llama.cpp tools
+VLLM_SUITES = {"serving", "agentic"}
+TOKENIZER_SUITES = {"serving", "agentic"}
+# host cache dir under <home>/vllm-cache -> container path; huggingface is always mounted
+VLLM_CACHE_MOUNTS = {
+    "huggingface": "/root/.cache/huggingface",
+    "vllm": "/root/.cache/vllm",
+    "flashinfer": "/root/.cache/flashinfer",
+    "triton": "/root/.triton",
+    "b12x": "/root/.cache/b12x",
+}
 
 
 class BenchError(RuntimeError):
@@ -56,14 +71,38 @@ def write_json(path: Path, payload: Any) -> None:
 
 def load_config(path: Path) -> dict[str, Any]:
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if cfg.get("suites_from"):
+        # one definition of the shared suites, so the weekly runs exactly what the nightly runs
+        base = yaml.safe_load((path.parent / cfg["suites_from"]).read_text(encoding="utf-8"))
+        cfg["suites"] = {**base["suites"], **(cfg.get("suites") or {})}
     for name, model in cfg["models"].items():
         for item in [model, model.get("tokenizer") or {}, *(model.get("extras") or {}).values()]:
             if item and not re.fullmatch(r"[0-9a-f]{40}", str(item.get("revision", ""))):
                 raise ValueError(f"model {name}: every repo needs a 40-hex 'revision'")
-        unknown = set(model["suites"]) - set(SUITES)
+        suites = set(model["suites"])
+        unknown = suites - set(SUITES)
         if unknown:
             raise ValueError(f"model {name}: unknown suites {sorted(unknown)}")
+        if suites & TOKENIZER_SUITES and not model.get("tokenizer"):
+            raise ValueError(f"model {name}: {sorted(suites & TOKENIZER_SUITES)} need a 'tokenizer' for AIPerf")
+        engine = engine_of(model)
+        if engine not in ENGINES:
+            raise ValueError(f"model {name}: unknown engine {engine!r}, choose from {ENGINES}")
+        if engine == "vllm":
+            if suites - VLLM_SUITES:
+                raise ValueError(f"model {name}: vllm runs only {sorted(VLLM_SUITES)}")
+            if not model.get("image"):
+                raise ValueError(f"model {name}: vllm needs a fallback 'image'")
+            unknown_mounts = set(model.get("mounts") or []) - set(VLLM_CACHE_MOUNTS)
+            if unknown_mounts:
+                raise ValueError(f"model {name}: unknown mounts {sorted(unknown_mounts)}")
+        elif not model.get("file"):
+            raise ValueError(f"model {name}: llama.cpp needs a GGUF 'file'")
     return cfg
+
+
+def engine_of(model: dict[str, Any]) -> str:
+    return model.get("engine", "llama.cpp")
 
 
 def repo_dir(home: Path, kind: str, repo: str, revision: str) -> Path:
@@ -72,6 +111,16 @@ def repo_dir(home: Path, kind: str, repo: str, revision: str) -> Path:
 
 def model_path(home: Path, item: dict[str, Any]) -> Path:
     return repo_dir(home, "models", item["repo"], item["revision"]) / item["file"]
+
+
+def vllm_cache(home: Path, name: str) -> Path:
+    # a cache only the containers use: they run as root, so their writes stay out of the host's HF cache
+    return home / "vllm-cache" / name
+
+
+def hf_snapshot_rel(model: dict[str, Any]) -> str:
+    # path of the checkpoint snapshot relative to the HF cache root, the same on the host and in the container
+    return f"hub/models--{model['repo'].replace('/', '--')}/snapshots/{model['revision']}"
 
 
 def wikitext_path(home: Path) -> Path:
@@ -151,16 +200,108 @@ def fetch_build(cfg: dict[str, Any], home: Path, tag: str | None) -> dict[str, A
     return info
 
 
-def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]) -> None:
+def fetch_recipes(url: str) -> dict[str, dict[str, Any]]:
+    # the recipe site embeds its catalog as `var MODELS=[...]`; index every recipe by its id
+    text = requests.get(url, timeout=60).text
+    marker = "var MODELS="
+    start = text.find(marker)
+    if start < 0:
+        raise BenchError(f"no '{marker}' in {url}")
+    catalog, _ = json.JSONDecoder().raw_decode(text, start + len(marker))
+    return {r["id"]: r for m in catalog for r in m.get("recipes") or []}
+
+
+def docker_image_info(image: str) -> dict[str, str]:
+    out = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True, check=True).stdout
+    meta = json.loads(out)[0]
+    repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
+    digests = [d for d in meta.get("RepoDigests") or [] if d.split("@")[0] == repo] or meta.get("RepoDigests") or [""]
+    env = dict(e.split("=", 1) for e in (meta.get("Config") or {}).get("Env") or [] if "=" in e)
+    return {"digest": digests[0], "image_vllm_version": env.get("VLLM_VERSION", "")}
+
+
+def resolve_vllm_images(cfg: dict[str, Any], models: list[str], overrides: dict[str, str]) -> dict[str, Any]:
+    # image per column: --vllm-image override > the image NVIDIA's recipe names today > the fallback in the config
+    rcfg = cfg.get("recipes") or {}
+    recipes: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    if rcfg.get("url"):
+        try:
+            recipes = fetch_recipes(rcfg["url"])
+        except (requests.RequestException, ValueError, BenchError) as exc:
+            warnings.append(f"recipe catalog unreadable, using the fallback images: {exc}")
+    columns: dict[str, Any] = {}
+    for name in models:
+        model = cfg["models"][name]
+        recipe = recipes.get(model.get("recipe", ""))
+        col: dict[str, Any] = {"recipe": model.get("recipe", "")}
+        if recipe:
+            col["recipe_image"] = (recipe.get("runtime") or {}).get("image", "")
+            col["recipe_validated_at"] = (recipe.get("validation") or {}).get("validated_at", "")
+            col["recipe_backend_version"] = recipe.get("backend_version", "")
+            copied = str(model.get("recipe_validated_at", ""))
+            if copied and col["recipe_validated_at"] and col["recipe_validated_at"] > copied:
+                warnings.append(f"{name}: recipe re-validated on {col['recipe_validated_at']} (flags copied from {copied}); review its launch command")
+        elif recipes and model.get("recipe"):
+            warnings.append(f"{name}: recipe {model['recipe']} is gone from the catalog, using the fallback image")
+        if name in overrides:
+            col["image"], col["image_source"] = overrides[name], "override"
+        elif col.get("recipe_image"):
+            col["image"], col["image_source"] = col["recipe_image"], "recipe"
+        else:
+            col["image"], col["image_source"] = model["image"], "fallback"
+        columns[name] = col
+    return {"columns": columns, "warnings": warnings}
+
+
+def prefetch_vllm(cfg: dict[str, Any], home: Path, models: list[str], overrides: dict[str, str]) -> None:
+    from huggingface_hub import snapshot_download
+
+    selected = resolve_vllm_images(cfg, models, overrides)
+    for w in selected["warnings"]:
+        log(f"warning: {w}")
+    pulled: dict[str, dict[str, str]] = {}
+    for name in models:
+        col = selected["columns"][name]
+        if col["image"] not in pulled:
+            log(f"docker pull {col['image']}")
+            subprocess.run(["docker", "pull", "-q", col["image"]], check=True)
+            pulled[col["image"]] = docker_image_info(col["image"])
+        col.update(pulled[col["image"]])
+        log(f"{name}: {col['image']} ({col['image_source']}) {col['digest']}")
+    for name in models:
+        model = cfg["models"][name]
+        hf = vllm_cache(home, "huggingface")
+        if not (hf / hf_snapshot_rel(model) / "config.json").exists():
+            log(f"downloading {model['repo']}@{model['revision'][:12]}")
+        snapshot_download(repo_id=model["repo"], revision=model["revision"], cache_dir=hf / "hub")
+        for mount in ["huggingface", *(model.get("mounts") or [])]:
+            vllm_cache(home, mount).mkdir(parents=True, exist_ok=True)
+    # a partial pick (--models) keeps the columns it did not touch
+    path = home / "selected_vllm.json"
+    if path.exists():
+        old = json.loads(path.read_text())
+        selected["columns"] = {**old.get("columns", {}), **selected["columns"]}
+    write_json(path, selected)
+
+
+def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str],
+             image_overrides: dict[str, str] | None = None) -> None:
     from huggingface_hub import HfApi, hf_hub_download
 
-    info = fetch_build(cfg, home, tag)
-    write_json(home / "selected_build.json", info)
-    log(f"build {info['tag']} ({info['commit']})")
+    llama = [n for n in models if engine_of(cfg["models"][n]) == "llama.cpp"]
+    vllm = [n for n in models if engine_of(cfg["models"][n]) == "vllm"]
+    if llama:
+        info = fetch_build(cfg, home, tag)
+        write_json(home / "selected_build.json", info)
+        log(f"build {info['tag']} ({info['commit']})")
+    if vllm:
+        prefetch_vllm(cfg, home, vllm, image_overrides or {})
 
     for name in models:
         model = cfg["models"][name]
-        for item in [model, *(model.get("extras") or {}).values()]:
+        ggufs = [model, *(model.get("extras") or {}).values()] if engine_of(model) == "llama.cpp" else []
+        for item in ggufs:
             dest = model_path(home, item)
             if not dest.exists():
                 log(f"downloading {item['repo']}/{item['file']}")
@@ -194,17 +335,21 @@ def config_selected(patterns: list[str] | None, config: str) -> bool:
 
 class Context:
     def __init__(self, cfg: dict[str, Any], home: Path, build: dict[str, Any], out_dir: Path, dry_run: bool,
-                 configs: list[str] | None = None):
+                 configs: list[str] | None = None, images: dict[str, Any] | None = None):
         self.cfg = cfg
         self.configs = configs
         self.home = home
         self.build = build
-        self.bin_dir = Path(build["bin_dir"])
+        self.bin_dir = Path(build.get("bin_dir", ""))
+        # vLLM column -> resolved image, from selected_vllm.json
+        self.images = images or {}
         self.out_dir = out_dir
         self.dry_run = dry_run
         self.port = int(cfg["server"]["port"])
         self.url = f"http://127.0.0.1:{self.port}"
         self.commands: list[list[str]] = []
+        # what the running server learned about itself (engine version, kernel lines), merged into the record
+        self.run_info: dict[str, Any] = {}
         self.save: Callable[[], None] = lambda: None
 
     def selected(self, config: str) -> bool:
@@ -263,17 +408,30 @@ def port_free(port: int) -> bool:
 
 
 class Server:
+    # llama-server; VllmServer swaps the command and a few hooks
     def __init__(self, ctx: Context, args: list[str], log_path: Path):
         self.ctx = ctx
         self.cmd = [str(ctx.bin_dir / "llama-server"), "--host", "127.0.0.1", "--port", str(ctx.port), *args]
         self.log_path = log_path
         self.proc: subprocess.Popen | None = None
 
+    def before_start(self) -> None:
+        pass
+
+    def runtime_info(self) -> dict[str, Any]:
+        return {}
+
+    def prefix_reuse(self, before: dict[str, float], after: dict[str, float]) -> float | None:
+        processed = after.get("llamacpp:prompt_tokens_total", 0) - before.get("llamacpp:prompt_tokens_total", 0)
+        cached = after.get("llamacpp:prompt_tokens_cached_total", 0) - before.get("llamacpp:prompt_tokens_cached_total", 0)
+        return cached / (processed + cached) if processed + cached > 0 else None
+
     def __enter__(self) -> Server:
         self.ctx.commands.append(self.cmd)
         if self.ctx.dry_run:
             return self
         self.ctx.cooldown()
+        self.before_start()
         deadline = time.monotonic() + 60
         while not port_free(self.ctx.port):
             if time.monotonic() > deadline:
@@ -318,14 +476,89 @@ class Server:
         return resp.json()
 
     def metrics(self) -> dict[str, float]:
+        # Prometheus text; series of one metric (vLLM labels them by engine and model) are summed
         if self.ctx.dry_run:
             return {}
         out: dict[str, float] = {}
         for line in requests.get(f"{self.ctx.url}/metrics", timeout=10).text.splitlines():
-            parts = line.split()
-            if len(parts) == 2 and not line.startswith("#"):
-                out[parts[0]] = float(parts[1])
+            if line.startswith("#") or not line.strip():
+                continue
+            m = re.fullmatch(r"([A-Za-z_:][\w:]*)(\{.*\})?\s+(\S+)(\s+\d+)?", line.strip())
+            if m:
+                try:
+                    out[m.group(1)] = out.get(m.group(1), 0.0) + float(m.group(3))
+                except ValueError:
+                    pass
         return out
+
+
+class VllmServer(Server):
+    # `vllm serve` in docker, set up the way NVIDIA's DGX Spark recipe runs it, minus the deviations in weekly.yaml
+    def __init__(self, ctx: Context, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path):
+        self.ctx = ctx
+        self.log_path = log_path
+        self.proc = None
+        self.container = f"bench-vllm-{os.getpid()}"
+        image = (ctx.images.get(name) or {}).get("image") or model["image"]
+        hf_mount = VLLM_CACHE_MOUNTS["huggingface"]
+        cmd = ["docker", "run", "--rm", "--name", self.container, "--gpus", "all", "--ipc", "host", "--network", "host",
+               *[str(a) for a in model.get("docker_args") or []],
+               # the checkpoint is a local snapshot: no hub lookups from inside the container
+               "-e", "HF_HUB_OFFLINE=1",
+               *[x for k, v in (model.get("env") or {}).items() for x in ("-e", f"{k}={v}")],
+               "-v", f"{vllm_cache(ctx.home, 'huggingface')}:{hf_mount}"]
+        for mount in model.get("mounts") or []:
+            cmd += ["-v", f"{vllm_cache(ctx.home, mount)}:{VLLM_CACHE_MOUNTS[mount]}"]
+        cmd += ["--entrypoint", "vllm", image, "serve", f"{hf_mount}/{hf_snapshot_rel(model)}",
+                "--served-model-name", "bench", "--host", "127.0.0.1", "--port", str(ctx.port),
+                "--max-num-seqs", str(slots), "--max-model-len", str(slot_tokens),
+                *[str(a) for a in model.get("args") or []]]
+        self.cmd = cmd
+
+    def before_start(self) -> None:
+        # a container left over from a killed run would hold the port and the memory
+        subprocess.run(["docker", "rm", "-f", self.container], capture_output=True, timeout=120)
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.proc is not None:
+            subprocess.run(["docker", "stop", "-t", "60", self.container], capture_output=True, timeout=180)
+        super().__exit__(*exc)
+
+    def runtime_info(self) -> dict[str, Any]:
+        text = self.log_path.read_text(encoding="utf-8", errors="replace") if self.log_path.exists() else ""
+        version = (re.search(r"Initializing a V1 LLM engine \(v([^)\s]+)\)", text)
+                   or re.search(r"vLLM API server version ([^\s,]+)", text)
+                   or re.search(r"\bversion (\d+\.\d+\.\S+)", text))
+        # kernel/backend choices: what tells a silent fallback from the intended path
+        seen: dict[str, None] = {}
+        for line in text.splitlines():
+            if re.search(r"(?i)\b(using|selected|selecting)\b.*\b(kernel|backend|marlin|cutlass|flashinfer|b12x|nvfp4|attention)", line):
+                seen[re.sub(r"^.*?\]\s*", "", line).strip()[:200]] = None
+        return {"engine_version": version.group(1) if version else "", "backend_lines": list(seen)[:15]}
+
+    def prefix_reuse(self, before: dict[str, float], after: dict[str, float]) -> float | None:
+        # vLLM counts prompt tokens looked up in the prefix cache and the ones found
+        queries = after.get("vllm:prefix_cache_queries_total", 0) - before.get("vllm:prefix_cache_queries_total", 0)
+        hits = after.get("vllm:prefix_cache_hits_total", 0) - before.get("vllm:prefix_cache_hits_total", 0)
+        return hits / queries if queries > 0 else None
+
+
+def make_server(ctx: Context, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path,
+                extra: list[str] | None = None) -> Server:
+    # the same shape for both engines: `slots` parallel sequences of up to `slot_tokens` tokens each
+    if engine_of(model) == "vllm":
+        return VllmServer(ctx, name, model, slots, slot_tokens, log_path)
+    args = [*ctx.cfg["server"]["args"], "-m", str(model_path(ctx.home, model)),
+            "-np", str(slots), "-c", str(slots * slot_tokens), *(extra or [])]
+    return Server(ctx, args, log_path)
+
+
+def model_info(ctx: Context, name: str, model: dict[str, Any]) -> dict[str, Any]:
+    if engine_of(model) == "vllm":
+        col = ctx.images.get(name) or {}
+        return {"engine": "vllm", "weights": f"{model['repo']}@{model['revision'][:12]}", "pair": model.get("pair", ""),
+                "image": col.get("image") or model["image"], "image_digest": col.get("digest", "")}
+    return {"engine": "llama.cpp", "weights": f"{model['repo']}/{model['file']}"}
 
 
 class SysMonitor:
@@ -382,13 +615,15 @@ class SysMonitor:
 
 
 def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: str, config: str,
-              fn: Callable[[Path], dict[str, float]]) -> None:
+              fn: Callable[[Path], dict[str, float]], info: dict[str, Any] | None = None) -> None:
     if not ctx.selected(config):
         return
     run_dir = ctx.out_dir / suite / model / config
     run_dir.mkdir(parents=True, exist_ok=True)
-    rec: dict[str, Any] = {"suite": suite, "model": model, "config": config, "status": "ok", "error": "", "metrics": {}}
+    rec: dict[str, Any] = {"suite": suite, "model": model, "config": config, "status": "ok", "error": "", "metrics": {},
+                           **(info or {"engine": "llama.cpp"})}
     ctx.commands = []
+    ctx.run_info = {}
     start = time.monotonic()
     with SysMonitor() as mon:
         try:
@@ -399,6 +634,7 @@ def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: st
         except Exception as exc:
             rec["status"] = "failed"
             rec["error"] = f"{type(exc).__name__}: {exc}"
+    rec.update(ctx.run_info)
     rec["duration_s"] = round(time.monotonic() - start, 1)
     rec["telemetry"] = mon.summary()
     rec["commands"] = [" ".join(c) for c in ctx.commands]
@@ -408,29 +644,31 @@ def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: st
     ctx.save()
 
 
-def run_group(ctx: Context, records: list[dict[str, Any]], suite: str, model: str, server_args: list[str],
-              log_path: Path, points: list[tuple[str, Callable[[Server, Path], dict[str, float]]]]) -> None:
+def run_group(ctx: Context, records: list[dict[str, Any]], suite: str, name: str, model: dict[str, Any], server: Server,
+              points: list[tuple[str, Callable[[Server, Path], dict[str, float]]]]) -> None:
     # one server for several points; if it fails to start or dies, the remaining points fail
     points = [p for p in points if ctx.selected(p[0])]
     if not points:
         return
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    info = model_info(ctx, name, model)
+    server.log_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with Server(ctx, server_args, log_path) as server:
+        with server:
             for config, fn in points:
                 def point(run_dir: Path, fn=fn) -> dict[str, float]:
                     ctx.commands.append(server.cmd)
                     server.check_alive()
+                    ctx.run_info = server.runtime_info()
                     return fn(server, run_dir)
-                run_point(ctx, records, suite, model, config, point)
+                run_point(ctx, records, suite, name, config, point, info)
     except BenchError as exc:
         def fail(_run_dir: Path, exc=exc) -> dict[str, float]:
             raise exc
 
         done = {(r["suite"], r["model"], r["config"]) for r in records}
         for config, _ in points:
-            if (suite, model, config) not in done:
-                run_point(ctx, records, suite, model, config, fail)
+            if (suite, name, config) not in done:
+                run_point(ctx, records, suite, name, config, fail, info)
 
 
 # --- suites ---
@@ -457,7 +695,7 @@ def suite_engine(ctx: Context, records: list[dict[str, Any]], name: str, model: 
             metrics[f"{kind}_d{row['n_depth']}_tps_stddev"] = row["stddev_ts"]
         return metrics
 
-    run_point(ctx, records, "engine", name, "llama-bench", fn)
+    run_point(ctx, records, "engine", name, "llama-bench", fn, model_info(ctx, name, model))
 
 
 def suite_speedbench(ctx: Context, records: list[dict[str, Any]], name: str, model: dict[str, Any]) -> None:
@@ -483,10 +721,10 @@ def suite_speedbench(ctx: Context, records: list[dict[str, Any]], name: str, mod
                     raise BenchError("spec_inactive: speculative decoding on, but no tokens were drafted")
                 return metrics
 
-            server_args = [*ctx.cfg["server"]["args"], "-m", str(model_path(ctx.home, model)),
-                           "-np", str(c), "-c", str(scfg["ctx_per_slot"] * c), *resolve_spec(ctx, model, spec)]
             config = f"spec-{spec}_c{c}"
-            run_group(ctx, records, "speedbench", name, server_args, ctx.out_dir / "speedbench" / name / f"server_{config}.log", [(config, fn)])
+            server = make_server(ctx, name, model, c, scfg["ctx_per_slot"], ctx.out_dir / "speedbench" / name / f"server_{config}.log",
+                                 resolve_spec(ctx, model, spec))
+            run_group(ctx, records, "speedbench", name, model, server, [(config, fn)])
 
 
 AIPERF_METRICS = [
@@ -556,9 +794,9 @@ def suite_serving(ctx: Context, records: list[dict[str, Any]], name: str, model:
                 return aiperf_metrics(run_dir)
 
             points.append((f"depth{depth}_isl{isl}_osl{osl}_c{c}", fn))
-        n_ctx = max(slot_ctx(s["isl"] + s["depth"] + osl) for s in scfg["shapes"]) * c
-        server_args = [*ctx.cfg["server"]["args"], "-m", str(model_path(ctx.home, model)), "-np", str(c), "-c", str(n_ctx)]
-        run_group(ctx, records, "serving", name, server_args, ctx.out_dir / "serving" / name / f"server_c{c}.log", points)
+        per_slot = max(slot_ctx(s["isl"] + s["depth"] + osl) for s in scfg["shapes"])
+        server = make_server(ctx, name, model, c, per_slot, ctx.out_dir / "serving" / name / f"server_c{c}.log")
+        run_group(ctx, records, "serving", name, model, server, points)
 
 
 def suite_agentic(ctx: Context, records: list[dict[str, Any]], name: str, model: dict[str, Any]) -> None:
@@ -582,16 +820,15 @@ def suite_agentic(ctx: Context, records: list[dict[str, Any]], name: str, model:
             ctx.run(cmd, run_dir / "aiperf.log", scfg["timeout_s"])
             after = server.metrics()
             metrics = aiperf_metrics(run_dir)
-            processed = after.get("llamacpp:prompt_tokens_total", 0) - before.get("llamacpp:prompt_tokens_total", 0)
-            cached = after.get("llamacpp:prompt_tokens_cached_total", 0) - before.get("llamacpp:prompt_tokens_cached_total", 0)
-            if processed + cached > 0:
-                metrics["prefix_reuse"] = cached / (processed + cached)
+            reuse = server.prefix_reuse(before, after)
+            if reuse is not None:
+                metrics["prefix_reuse"] = reuse
             return metrics
 
-        n_ctx = slot_ctx(max(r["input_length"] + r["output_length"] for r in rows)) * scfg["slots"]
-        server_args = [*ctx.cfg["server"]["args"], "-m", str(model_path(ctx.home, model)), "-np", str(scfg["slots"]), "-c", str(n_ctx)]
+        per_slot = slot_ctx(max(r["input_length"] + r["output_length"] for r in rows))
         config = f"mooncake_{Path(trace).stem.split('_')[0]}_osl{cap}"
-        run_group(ctx, records, "agentic", name, server_args, ctx.out_dir / "agentic" / name / f"server_{config}.log", [(config, fn)])
+        server = make_server(ctx, name, model, scfg["slots"], per_slot, ctx.out_dir / "agentic" / name / f"server_{config}.log")
+        run_group(ctx, records, "agentic", name, model, server, [(config, fn)])
 
 
 def suite_quality(ctx: Context, records: list[dict[str, Any]], name: str, model: dict[str, Any]) -> None:
@@ -608,7 +845,7 @@ def suite_quality(ctx: Context, records: list[dict[str, Any]], name: str, model:
             raise BenchError("parse_error: no 'Final estimate' line")
         return {"ppl": float(m.group(1))}
 
-    run_point(ctx, records, "quality", name, f"ppl_c{scfg['ctx']}_n{scfg['chunks']}", fn)
+    run_point(ctx, records, "quality", name, f"ppl_c{scfg['ctx']}_n{scfg['chunks']}", fn, model_info(ctx, name, model))
 
 
 DECISION_QUESTIONS = {
@@ -679,8 +916,8 @@ def suite_decision(ctx: Context, records: list[dict[str, Any]], name: str, model
                 }
 
             points.append((f"sys_s{n_tokens}_c{c}", fn))
-    server_args = ["-m", str(model_path(ctx.home, model)), *scfg["args"]]
-    run_group(ctx, records, "decision", name, server_args, ctx.out_dir / "decision" / name / "server.log", points)
+    server = Server(ctx, ["-m", str(model_path(ctx.home, model)), *scfg["args"]], ctx.out_dir / "decision" / name / "server.log")
+    run_group(ctx, records, "decision", name, model, server, points)
 
 
 SUITE_FNS = {
@@ -704,14 +941,20 @@ HEADLINE = {
 
 # --- report ---
 
-def previous_night(home: Path, night_id: str) -> dict[str, Any] | None:
+def previous_night(home: Path, night_id: str, kind: str = "nightly", same_day: bool = False) -> dict[str, Any] | None:
+    # the newest manifest of this kind before night_id (or on its date, with same_day); manifests before
+    # schema 2 have no kind and are nightly
+    date = night_id[:10]
     nights = sorted(p for p in (home / "results").glob("*/night.json")
-                    if p.parent.name < night_id and not p.parent.name.endswith("_dry-run"))
+                    if (p.parent.name[:10] <= date if same_day else p.parent.name < night_id)
+                    and p.parent.name != night_id and not p.parent.name.endswith("_dry-run"))
     for path in reversed(nights):
         try:
-            return json.loads(path.read_text())
+            manifest = json.loads(path.read_text())
         except (OSError, ValueError):
             continue
+        if manifest.get("kind", "nightly") == kind:
+            return manifest
     return None
 
 
@@ -742,15 +985,63 @@ def render_summary(manifest: dict[str, Any], prev: dict[str, Any] | None) -> str
     return "\n".join(lines)
 
 
+def render_weekly(manifest: dict[str, Any], nightly: dict[str, Any] | None) -> str:
+    # each vLLM row next to the llama.cpp row of its paired nightly model, same suite and config
+    lines = [f"## vLLM weekly bench on {manifest['runner']}: {manifest['date']}", ""]
+    for name, col in sorted((manifest.get("images") or {}).get("columns", {}).items()):
+        lines.append(f"- {name}: `{col.get('image', '')}` ({col.get('image_source', '')}) `{col.get('digest', '')}`")
+    for w in (manifest.get("images") or {}).get("warnings", []):
+        lines.append(f"- warning: {w}")
+    if nightly:
+        lines.append(f"- llama.cpp rows: nightly {nightly['night_id']} (build {nightly['build']['tag']})")
+    else:
+        lines.append("- llama.cpp rows: no nightly results found")
+    statuses = [r["status"] for r in manifest["records"]]
+    lines.append(f"- vLLM runs: {statuses.count('ok')} ok, {statuses.count('failed')} failed, {statuses.count('skipped')} skipped")
+    lines += ["- vLLM uses an FP8 KV cache (NVIDIA's recipes), llama.cpp f16. Neither side uses speculative decoding here.", ""]
+    base = {(r["suite"], r["model"], r["config"]): r for r in (nightly or {}).get("records", [])}
+    for suite in [s for s in SUITES if s in VLLM_SUITES]:
+        recs = [r for r in manifest["records"] if r["suite"] == suite]
+        if not recs:
+            continue
+        cols = HEADLINE[suite]
+        lines += [f"### {suite}", "", "| pair | config | engine | weights | status | " + " | ".join(cols) + " |",
+                  "|---|---|---|---|---|" + "---|" * len(cols)]
+        rows: list[dict[str, Any]] = []
+        for key in dict.fromkeys((r.get("pair", ""), r["config"]) for r in recs):
+            ref = base.get((suite, key[0], key[1]))
+            rows.append(ref or {"pair": key[0], "model": key[0], "config": key[1], "engine": "llama.cpp", "weights": "",
+                                "status": "missing", "error": "", "metrics": {}})
+            rows += [r for r in recs if (r.get("pair", ""), r["config"]) == key]
+        for r in rows:
+            vals = [f"{r['metrics'][c]:.4g}" if c in r["metrics"] else "-" for c in cols]
+            status = r["status"] if r["status"] != "failed" else f"failed: {r['error'][:60]}".replace("|", "/").replace("\n", " ")
+            # vLLM columns are named <pair>-vllm-<quant>
+            label = "llama.cpp" if r.get("engine", "llama.cpp") == "llama.cpp" else r["model"]
+            lines.append(f"| {r.get('pair') or r['model']} | {r['config']} | {label} | {r.get('weights', '')} | {status} | " + " | ".join(vals) + " |")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], dry_run: bool, summary_path: Path | None,
         configs: list[str] | None = None) -> int:
-    selected = home / "selected_build.json"
-    if selected.exists():
-        build = json.loads(selected.read_text())
-    elif dry_run:
-        build = {"tag": "dry-run", "commit": "", "bin_dir": str(home / "builds" / "dry-run")}
+    kind = cfg.get("kind", "nightly")
+    images: dict[str, Any] = {}
+    if kind == "weekly":
+        selected = home / "selected_vllm.json"
+        if selected.exists():
+            images = json.loads(selected.read_text())
+        elif not dry_run:
+            raise BenchError(f"{selected} not found, run prefetch first")
+        build: dict[str, Any] = {"tag": "vllm", "commit": ""}
     else:
-        raise BenchError(f"{selected} not found, run prefetch first")
+        selected = home / "selected_build.json"
+        if selected.exists():
+            build = json.loads(selected.read_text())
+        elif dry_run:
+            build = {"tag": "dry-run", "commit": "", "bin_dir": str(home / "builds" / "dry-run")}
+        else:
+            raise BenchError(f"{selected} not found, run prefetch first")
 
     date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     night_id = f"{date}_{build['tag']}" + ("_dry-run" if dry_run else "")
@@ -760,22 +1051,26 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
             f.write(f"night_dir={out_dir}\nnight_id={night_id}\n")
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "kind": kind,
         "night_id": night_id,
         "date": date,
         "build": build,
         "runner": os.environ.get("RUNNER_NAME", socket.gethostname()),
         "workflow_url": os.environ.get("NIGHTLY_WORKFLOW_URL", ""),
-        "models": {n: {k: cfg["models"][n][k] for k in ("repo", "revision", "file")} for n in models},
+        "models": {n: {k: cfg["models"][n][k] for k in ("engine", "repo", "revision", "file", "pair") if k in cfg["models"][n]}
+                   for n in models},
         "records": [],
     }
+    if images:
+        manifest["images"] = images
     # a re-run on the same night keeps the records of the suites, models and configs it does not run
     if (out_dir / "night.json").exists():
         old = json.loads((out_dir / "night.json").read_text())
         manifest["records"] = [r for r in old.get("records", [])
                                if r["suite"] not in suites or r["model"] not in models or not config_selected(configs, r["config"])]
         manifest["models"] = {**old.get("models", {}), **manifest["models"]}
-    ctx = Context(cfg, home, build, out_dir, dry_run, configs)
+    ctx = Context(cfg, home, build, out_dir, dry_run, configs, images.get("columns"))
     ctx.save = lambda: write_json(out_dir / "night.json", manifest)
     started = time.monotonic()
     for suite in suites:
@@ -787,7 +1082,10 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
     manifest["duration_s"] = round(time.monotonic() - started, 1)
     write_json(out_dir / "night.json", manifest)
 
-    summary = render_summary(manifest, None if dry_run else previous_night(home, night_id))
+    if kind == "weekly":
+        summary = render_weekly(manifest, previous_night(home, night_id, "nightly", same_day=True))
+    else:
+        summary = render_summary(manifest, None if dry_run else previous_night(home, night_id))
     (out_dir / "summary.md").write_text(summary, encoding="utf-8")
     if summary_path:
         with open(summary_path, "a", encoding="utf-8") as f:
@@ -817,6 +1115,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--configs", default=None, help="comma-separated shell patterns on config names, e.g. 'mooncake_T02*,depth32768*_c8'")
     parser.add_argument("--dry-run", action="store_true", help="print the commands, start nothing")
     parser.add_argument("--summary", type=Path, default=None, help="append the Markdown summary to this file")
+    parser.add_argument("--vllm-image", default=None,
+                        help="prefetch: comma-separated COLUMN=IMAGE overrides of the recipe images, e.g. 'Q27-NVFP4=nvcr.io/nvidia/vllm:26.10-py3'")
     args = parser.parse_args(argv)
 
     # turn SIGTERM (job cancel) into SystemExit so the servers get stopped
@@ -826,7 +1126,11 @@ def main(argv: list[str] | None = None) -> int:
     suites = split_list(args.suites, SUITES)
     args.home.mkdir(parents=True, exist_ok=True)
     if args.command == "prefetch":
-        prefetch(cfg, args.home, args.tag, models)
+        overrides = dict(kv.strip().split("=", 1) for kv in (args.vllm_image or "").split(",") if kv.strip())
+        unknown = sorted(set(overrides) - set(cfg["models"]))
+        if unknown:
+            raise SystemExit(f"--vllm-image: unknown columns {unknown}, choose from {list(cfg['models'])}")
+        prefetch(cfg, args.home, args.tag, models, overrides)
         return 0
     configs = [c.strip() for c in args.configs.split(",") if c.strip()] if args.configs else None
     return run(cfg, args.home, suites, models, args.dry_run, args.summary, configs)

@@ -1,0 +1,92 @@
+name: Bench weekly vLLM (DGX Spark)
+
+on:
+  schedule:
+    # Saturday; it queues behind that night's nightly (same concurrency group) and is compared with it
+    - cron: '0 2 * * 6'
+  workflow_dispatch:
+    inputs:
+      columns:
+        description: 'Comma-separated vLLM columns from weekly.yaml, e.g. M3-vllm-nvfp4,M2-vllm-fp4local (default: all)'
+        required: false
+        type: string
+      suites:
+        description: 'Comma-separated suites: serving,agentic (default: both)'
+        required: false
+        type: string
+      configs:
+        description: 'Comma-separated shell patterns on config names, e.g. mooncake_T02*,depth32768*_c8 (default: all)'
+        required: false
+        type: string
+      vllm_image:
+        description: 'Comma-separated COLUMN=IMAGE overrides of the recipe images (default: what NVIDIA recipes name today)'
+        required: false
+        type: string
+
+# never on pull requests: the runner is a shared, persistent box
+permissions:
+  contents: read
+
+concurrency:
+  # shared with the nightly: one job on the Spark at a time
+  group: bench-nightly-spark
+  cancel-in-progress: false
+
+jobs:
+  bench:
+    # the schedule stays off until the repo variable SPARK_BENCH_WEEKLY is 'true'
+    if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_WEEKLY == 'true'
+    runs-on: [self-hosted, Linux, ARM64, spark-nightly-bench]
+    # 3 columns x 11 runs: ~5.5-6.5 h estimated (tools/server/bench/nightly/BENCHMARKS.md)
+    timeout-minutes: 600
+
+    env:
+      NIGHTLY_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
+      BENCH_DIR: tools/server/bench/nightly
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Python venv
+        id: venv
+        run: |
+          if [ ! -x "$NIGHTLY_HOME/uv-venv/bin/uv" ]; then
+            python3 -m venv "$NIGHTLY_HOME/uv-venv"
+            "$NIGHTLY_HOME/uv-venv/bin/pip" install -q uv
+          fi
+          UV="$NIGHTLY_HOME/uv-venv/bin/uv"
+          "$UV" venv -q --allow-existing --python 3.12 --managed-python "$NIGHTLY_HOME/venv"
+          VIRTUAL_ENV="$NIGHTLY_HOME/venv" "$UV" pip install -q -r "$BENCH_DIR/requirements.txt"
+
+      - name: Prefetch images and checkpoints
+        id: prefetch
+        env:
+          COLUMNS_IN: ${{ inputs.columns }}
+          VLLM_IMAGE: ${{ inputs.vllm_image }}
+        run: |
+          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" prefetch --config "$BENCH_DIR/weekly.yaml" ${COLUMNS_IN:+--models "$COLUMNS_IN"} ${VLLM_IMAGE:+--vllm-image "$VLLM_IMAGE"}
+
+      - name: Run suites
+        id: run
+        env:
+          COLUMNS_IN: ${{ inputs.columns }}
+          SUITES: ${{ inputs.suites }}
+          CONFIGS: ${{ inputs.configs }}
+          NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run --config "$BENCH_DIR/weekly.yaml" ${SUITES:+--suites "$SUITES"} ${COLUMNS_IN:+--models "$COLUMNS_IN"} ${CONFIGS:+--configs "$CONFIGS"} --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Stop leftover containers
+        if: ${{ always() }}
+        run: |
+          docker ps -q --filter name=bench-vllm- | xargs -r docker rm -f
+
+      - name: Upload results
+        if: ${{ always() && steps.run.outputs.night_dir != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-weekly-${{ steps.run.outputs.night_id }}
+          path: ${{ steps.run.outputs.night_dir }}
+          retention-days: 30

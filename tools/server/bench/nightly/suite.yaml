@@ -1,5 +1,5 @@
 # Nightly llama.cpp perf benchmark on DGX Spark.
-# First cut: M3 (dense target) and M5 (decision model) only.
+# Engine on M1-M4; the other LLM suites on M2 and M3; the decision suite on M5.
 
 build:
   repo: ggml-org/llama.cpp
@@ -39,6 +39,49 @@ models:
     revision: 845f314dd047fc2444a5289a4d50c1e1d59e27e1
     file: Laya-Q8_0.gguf
     suites: [decision]
+
+  M1:
+    repo: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+    revision: 5bc3e238d916f48a861bac2f8a1990a0e9b7e98d
+    file: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+    suites: [engine]
+
+  M2:
+    repo: unsloth/Qwen3.8-Flash-Next-GGUF
+    revision: 766911a6b7369840a91dbcd95f9f997acaab6cd6
+    # split GGUF: llama.cpp loads the first shard and finds the others next to it
+    file: UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf
+    tokenizer:
+      repo: Qwen/Qwen3.8-Flash-Next
+      revision: de4b8e4d43b917e7706784d8bb445c9af86a3540
+    extras:
+      shard2:
+        repo: unsloth/Qwen3.8-Flash-Next-GGUF
+        revision: 766911a6b7369840a91dbcd95f9f997acaab6cd6
+        file: UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf
+      shard3:
+        repo: unsloth/Qwen3.8-Flash-Next-GGUF
+        revision: 766911a6b7369840a91dbcd95f9f997acaab6cd6
+        file: UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf
+      mtp:
+        repo: ggml-org/Qwen3.8-Flash-Next-GGUF
+        revision: 91fb00353e766eb43944ed223665ea4fb87dad47
+        file: mtp-Qwen3.8-Flash-Next-Q8_0.gguf
+      dflash:
+        repo: ggml-org/Qwen3.8-Flash-Next-GGUF
+        revision: 91fb00353e766eb43944ed223665ea4fb87dad47
+        file: dflash-Qwen3.8-Flash-Next-Q8_0.gguf
+    # MTP comes as a separate head, unlike M3's built-in one
+    spec:
+      mtp: [-md, "{mtp}", --spec-type, draft-mtp, --spec-draft-n-max, "3", --spec-draft-backend-sampling]
+      dflash: [-md, "{dflash}", --spec-type, draft-dflash, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
+    suites: [engine, speedbench, serving, agentic, quality]
+
+  M4:
+    repo: unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF
+    revision: f2d3fe3694501008786e81e5f20360cbf715496a
+    file: NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf
+    suites: [engine]
 
 suites:
   engine:

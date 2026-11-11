@@ -19,7 +19,7 @@ GGUFs are pinned by Hugging Face commit and downloaded once.
 | M4 | [Nemotron 3.5 Lightning 30B-A3B](https://huggingface.co/unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF) | UD-Q4_K_M | 24 GiB | engine |
 | M5 | [Laya](https://huggingface.co/ggml-org/Laya-GGUF) (decision model) | Q8_0 | 0.4 GiB | decision |
 
-The nightly config currently runs M3 and M5; M1, M2 and M4 have been measured with the engine workload only.
+The nightly runs all five. M2 is split into three shards; its MTP and DFlash2 heads are separate files.
 
 ## Common setup
 
@@ -41,6 +41,22 @@ The nightly config currently runs M3 and M5; M1, M2 and M4 have been measured wi
 
 Traces use the [Mooncake](https://github.com/kvcache-ai/Mooncake) JSONL format (`timestamp`, `input_length`, `output_length`, `hash_ids`, 512 tokens per block). AIPerf synthesizes prompt text whose shared blocks repeat across turns, so prefix caching behaves as in the original session.
 
+## Weekly vLLM comparison
+
+Once a week (Saturday, after the nightly) the serving and agentic workloads run against vLLM in docker, with the same AIPerf commands, tokenizer and seed. The llama.cpp side is the paired model's rows from that day's nightly; the weekly runs vLLM only.
+
+| Column | Pair | Checkpoint | Quant | Size | Image |
+|---|---|---|---|---|---|
+| `M3-vllm-nvfp4` | M3 | [nvidia/Qwen3.8-27B-NVFP4](https://huggingface.co/nvidia/Qwen3.8-27B-NVFP4) | NVFP4 (+ FP8 layers) | 20 GiB | NGC `nvcr.io/nvidia/vllm`, per NVIDIA's recipe |
+| `M3-vllm-int4` | M3 | [RedHatAI/Qwen3.8-27B-INT4](https://huggingface.co/RedHatAI/Qwen3.8-27B-INT4) | INT4 W4A16, groups of 128 | 18 GiB | same as above |
+| `M2-vllm-fp4local` | M2 | [nvidia/Qwen3.8-Flash-Next-FP4-Local](https://huggingface.co/nvidia/Qwen3.8-Flash-Next-FP4-Local) | NVFP4 experts, MXFP8 attention | 95 GiB | community `eugr/spark-vllm-b12x`, per NVIDIA's recipe |
+
+- Images and flags come from [NVIDIA's DGX Spark recipes](https://nvidia.github.io/local-ai-inference-recipes/hardware/dgx-spark/index.html). The image follows the recipe each week; each run records the digest, vLLM version and kernel/backend lines.
+- Deviations from the recipes, for parity with llama.cpp: no speculative decoding, no reasoning/tool parsers, `--max-num-seqs` and `--max-model-len` set per configuration like llama.cpp's slots and per-slot context.
+- Kept from the recipes: FP8 KV cache (llama.cpp uses f16); the Flash-Next n-gram embedding table on disk.
+- The NGC image runs 27B NVFP4 with the SM12x NVFP4 backend (vllm#54614), which upstream vLLM does not have yet. No Flash-Next INT4 checkpoint fits in 128 GB (the n-gram table stays BF16), and upstream vLLM cannot read FP4-Local's compressed scales yet.
+- Prefix reuse comes from vLLM's `vllm:prefix_cache_hits_total` / `vllm:prefix_cache_queries_total`.
+
 ## Failure handling
 
 A configuration that fails is recorded with its error and the night continues. A server that cannot start fails only its own configurations. A spec-decode run that drafts no tokens counts as failed.
@@ -55,6 +71,7 @@ A configuration that fails is recorded with its error and the night continues. A
 | | Runs | Wall time | Disk |
 |---|---|---|---|
 | M3 + M5 (measured) | 28 | 3.1 h | 21 GiB |
-| All five models | 58 | ~5.7 h (estimated) | 157 GiB (measured) |
+| Nightly, all five models | 49 | ~5.5 h (estimated) | 157 GiB (measured) |
+| Weekly vLLM, 3 columns | 33 | ~5.5-6.5 h (estimated) | ~135 GiB + 2 images |
 
-The five-model time scales M3's measured runs by M2's measured prefill and decode speeds (M2: 1232 / 30.5 tok/s vs M3: 1039 / 13.7 tok/s at depth 0), plus M2's 77 s load per server start. It also counts runs the harness does not have yet: backend sampling on M2, a greedy spec on/off output check on M2 and M3, and a 200-row decision accuracy set.
+The nightly time scales M3's measured runs by M2's measured prefill and decode speeds (M2: 1232 / 30.5 tok/s vs M3: 1039 / 13.7 tok/s at depth 0), plus M2's 77 s load per server start; M1, M2 and M4 engine runs took 126 / 274 / 116 s. The nightly workflow allows 480 min, the weekly 600 min.

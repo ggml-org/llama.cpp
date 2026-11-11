@@ -35,7 +35,8 @@ jobs:
     # the schedule stays off until the repo variable SPARK_BENCH_NIGHTLY is 'true'
     if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_NIGHTLY == 'true'
     runs-on: [self-hosted, Linux, ARM64, spark-nightly-bench]
-    timeout-minutes: 330
+    # M1-M5: ~5.5 h measured and estimated (tools/server/bench/nightly/BENCHMARKS.md)
+    timeout-minutes: 480
 
     env:
       NIGHTLY_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
