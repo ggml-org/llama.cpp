@@ -1669,6 +1669,7 @@ struct mtmd_model_loader {
                     model.mm_0_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
                     model.mm_3_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 3, "weight"), model.proj_type == PROJECTOR_TYPE_MLP_NORM);
                     if (model.mm_3_w) {
+                        // TODO: this is a hack to support Yi-type llava
                         model.proj_type = PROJECTOR_TYPE_MLP_NORM;
                         model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
                         model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"));
