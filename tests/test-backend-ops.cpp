@@ -5523,15 +5523,11 @@ struct test_mul_mat : public test_case {
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        return build_mul_mat(ctx, ctx);
+        return build_graph(ctx, ctx);
     }
 
-    // without weights, call the 1-argument build_graph, which subclasses extend
     ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
-        return weights ? build_mul_mat(ctx, ctx_weights) : build_graph(ctx);
-    }
-
-    ggml_tensor * build_mul_mat(ggml_context * ctx, ggml_context * ctx_a) {
+        ggml_context * ctx_a = weights ? ctx_weights : ctx;
         GGML_ASSERT(ctx_a);
 
         // C^T = A * B^T: (k, m) * (k, n) => (m, n)
@@ -5637,8 +5633,8 @@ struct test_mul_mat_hadamard : public test_mul_mat {
             GGML_ASSERT(type_a == GGML_TYPE_F32);
         }
 
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
         // Find the mul_mat op in the graph and set the hint
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
@@ -5687,8 +5683,8 @@ struct test_mul_mat_w4a8 : public test_mul_mat {
             std::array<int64_t, 2> bs = {1, 1},
             std::array<int64_t, 2> nr = {1, 1})
         : test_mul_mat(type_a, type_b, m, n, k, bs, nr) {}
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
                 ggml_prec_set_src(t, GGML_PREC_Q8, 1);
@@ -5709,8 +5705,8 @@ struct test_mul_mat_prec_src1_bf16 : public test_mul_mat {
             std::array<int64_t, 2> bs = {1, 1},
             std::array<int64_t, 2> nr = {1, 1})
         : test_mul_mat(type_a, GGML_TYPE_F32, m, n, k, bs, nr) {}
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
                 ggml_prec_set_src(t, GGML_PREC_BF16, 1);
@@ -5742,8 +5738,8 @@ struct test_mul_mat_prec_src1_f32 : public test_mul_mat {
     double max_nmse_err() override {
         return 1e-10;
     }
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * out = test_mul_mat::build_graph(ctx);
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        ggml_tensor * out = test_mul_mat::build_graph(ctx, ctx_weights);
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
                 ggml_prec_set_src(t, GGML_PREC_F32, 1);

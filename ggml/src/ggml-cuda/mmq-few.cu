@@ -865,7 +865,7 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
 
 void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_UNUSED_VARS(ctx, src0, src1, dst);
-    GGML_ABORT("fatal error");
+    GGML_ABORT("few-row MMQ is not supported on HIP or MUSA");
 }
 
 bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
