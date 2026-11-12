@@ -1413,6 +1413,10 @@ int64_t llm_graph_result::get_max_nodes() const {
     return max_nodes;
 }
 
+void llm_graph_result::set_max_nodes(int64_t max_nodes) {
+    this->max_nodes = max_nodes;
+}
+
 void llm_graph_result::reset() {
     t_inp_tokens  = nullptr;
     t_inp_embd    = nullptr;

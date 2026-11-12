@@ -678,15 +678,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
-				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
-				label: 'JavaScript sandbox tool',
-				type: SettingsFieldType.CHECKBOX
-			},
-			{
-				defaultValue: false,
-				dependsOn: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
-				help: 'Pre-load nerdamer in the sandbox for symbolic computation: simplify, diff, integrate, solve, and more. Requires "JavaScript sandbox tool" to be enabled.',
+				help: 'Pre-load nerdamer in the run_javascript sandbox for symbolic computation: simplify, diff, integrate, solve, and more.',
 				key: SETTINGS_KEYS.SYMBOLIC_MATH_ENABLED,
 				label: 'Symbolic math (nerdamer)',
 				type: SettingsFieldType.CHECKBOX
