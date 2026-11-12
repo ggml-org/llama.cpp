@@ -556,6 +556,16 @@ static void rms_norm_mul_f32_cuda(const ggml_tensor * x_t,
     }
 }
 
+// calls launch with the data of dst as float * or nv_bfloat16 *, the output types of the RMS_NORM kernels
+template <typename F>
+static void rms_norm_launch_typed(ggml_tensor * dst, const F & launch) {
+    if (dst->type == GGML_TYPE_BF16) {
+        launch((nv_bfloat16 *) dst->data);
+    } else {
+        launch((float *) dst->data);
+    }
+}
+
 static void rms_norm_back_f32_cuda(const float * grad, const float * xf, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
     if (ncols < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
@@ -643,11 +653,9 @@ void ggml_cuda_op_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s02 = nb02 / ts0;
     const int64_t s03 = nb03 / ts0;
 
-    if (src0->type == GGML_TYPE_BF16) {
-        rms_norm_f32_cuda(src0, (nv_bfloat16 *) dst->data, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
-    } else {
-        rms_norm_f32_cuda(src0, (float *) dst->data, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
-    }
+    rms_norm_launch_typed(dst, [&](auto * dst_d) {
+        rms_norm_f32_cuda(src0, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+    });
 }
 
 void ggml_cuda_op_rms_norm_scale_fused(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * scale_tensor) {
@@ -722,8 +730,8 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int mul_nchannels = mul_src->ne[2];
     const int mul_nsamples  = mul_src->ne[3];
 
-    if (mul_tensor->type == GGML_TYPE_BF16) {
-        rms_norm_mul_f32_cuda(rms_norm_src, mul_src, nullptr, (nv_bfloat16 *) mul_tensor->data,
+    rms_norm_launch_typed(mul_tensor, [&](auto * dst_d) {
+        rms_norm_mul_f32_cuda(rms_norm_src, mul_src, nullptr, dst_d,
                               ne00, ne01, ne02, ne03,
                               /*s00*/ s01, s02, s03,
                               /*mul_s00*/ mul_s01, mul_s02, mul_s03,
@@ -731,16 +739,7 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
                               /*add_s00*/ 0, 0, 0,
                               0, 0, 0, 0,
                               eps, stream);
-    } else {
-        rms_norm_mul_f32_cuda(rms_norm_src, mul_src, nullptr, (float *) mul_tensor->data,
-                              ne00, ne01, ne02, ne03,
-                              /*s00*/ s01, s02, s03,
-                              /*mul_s00*/ mul_s01, mul_s02, mul_s03,
-                              mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
-                              /*add_s00*/ 0, 0, 0,
-                              0, 0, 0, 0,
-                              eps, stream);
-    }
+    });
 }
 
 void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
@@ -815,8 +814,8 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
     const int add_nchannels = add_src->ne[2];
     const int add_nsamples  = add_src->ne[3];
 
-    if (add_tensor->type == GGML_TYPE_BF16) {
-        rms_norm_mul_f32_cuda(rms_norm_src, mul_src, add_src, (nv_bfloat16 *) add_tensor->data,
+    rms_norm_launch_typed(add_tensor, [&](auto * dst_d) {
+        rms_norm_mul_f32_cuda(rms_norm_src, mul_src, add_src, dst_d,
                               ne00, ne01, ne02, ne03,
                               /*s00*/ s01, s02, s03,
                               /*mul_s00*/ mul_s01, mul_s02, mul_s03,
@@ -824,16 +823,7 @@ void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
                               /*add_s00*/ add_s01, add_s02, add_s03,
                               add_ncols, add_nrows, add_nchannels, add_nsamples,
                               eps, stream);
-    } else {
-        rms_norm_mul_f32_cuda(rms_norm_src, mul_src, add_src, (float *) add_tensor->data,
-                              ne00, ne01, ne02, ne03,
-                              /*s00*/ s01, s02, s03,
-                              /*mul_s00*/ mul_s01, mul_s02, mul_s03,
-                              mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
-                              /*add_s00*/ add_s01, add_s02, add_s03,
-                              add_ncols, add_nrows, add_nchannels, add_nsamples,
-                              eps, stream);
-    }
+    });
 }
 
 void ggml_cuda_op_rms_norm_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
