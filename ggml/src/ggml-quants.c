@@ -5296,7 +5296,7 @@ static inline int best_index_jqk(int nlevels, const int8_t * val, const uint8_t 
 
 static void quantize_row_jqk_impl(const float * GGML_RESTRICT x, const float * quant_weights,
         const int nlevels, const int8_t * values, const uint8_t * index, const int phase,
-        const int ls_min, const int ls_max, const int ls_step, const int ls_off, const int ntry,
+        const int ls_min, const int ls_max, const int ls_step, const int ls_off, const int ntry, const bool pre_d,
         ggml_fp16_t * dh, uint16_t * extra, int8_t * ls, uint8_t * L) {
 
     const int nsb = QK_K / 16;
@@ -5372,8 +5372,10 @@ static void quantize_row_jqk_impl(const float * GGML_RESTRICT x, const float * q
         }
     }
 
-    const float d = max_scale/ls_min;
+    float d = max_scale/ls_min;
     dh[0] = GGML_FP32_TO_FP16(d);
+    // d is often subnormal so use the pre-computed d
+    if (pre_d) { d = GGML_FP16_TO_FP32(dh[0]); }
     const float id  = d ? 1 / (d * ls_step) : 0.f;
     const float off = (float)ls_off / ls_step;
     for (int ib = 0; ib < nsb; ++ib) {
@@ -5572,7 +5574,7 @@ size_t quantize_jq3_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
         block_jq3_k * jq3 = (block_jq3_k *)qrow;
         for (int ibl = 0; ibl < nblock; ++ibl) {
             const float * qw = quant_weights ? quant_weights + QK_K * ibl : NULL;
-            quantize_row_jqk_impl(src + QK_K * ibl, qw, 8, kvalues_jq3k, NULL, JQ3K_PHASE, -31, 31, 2, 1, 7,
+            quantize_row_jqk_impl(src + QK_K * ibl, qw, 8, kvalues_jq3k, NULL, JQ3K_PHASE, -31, 31, 2, 1, 7, false,
                     &jq3[ibl].d, &jq3[ibl].extra, ls, L);
             jq3[ibl].scales_h = 0;
             for (int ib = 0; ib < QK_K / 16; ++ib) {
@@ -5618,7 +5620,7 @@ size_t quantize_jq4_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
         block_jq4_k * jq4 = (block_jq4_k *)qrow;
         for (int ibl = 0; ibl < nblock; ++ibl) {
             const float * qw = quant_weights ? quant_weights + QK_K * ibl : NULL;
-            quantize_row_jqk_impl(src + QK_K * ibl, qw, 16, kvalues_jq4k, NULL, JQ4K_PHASE, -32, 31, 1, 0, 7,
+            quantize_row_jqk_impl(src + QK_K * ibl, qw, 16, kvalues_jq4k, NULL, JQ4K_PHASE, -32, 31, 1, 0, 7, false,
                     &jq4[ibl].d, &jq4[ibl].extra, ls, L);
             memset(jq4[ibl].scales_h, 0, sizeof(jq4[ibl].scales_h));
             for (int ib = 0; ib < QK_K / 16; ++ib) {
@@ -5657,7 +5659,7 @@ size_t quantize_jq5_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
         block_jq5_k * jq5 = (block_jq5_k *)qrow;
         for (int ibl = 0; ibl < nblock; ++ibl) {
             const float * qw = quant_weights ? quant_weights + QK_K * ibl : NULL;
-            quantize_row_jqk_impl(src + QK_K * ibl, qw, 32, kvalues_jq5k, NULL, JQ5K_PHASE, -32, 31, 1, 0, 7,
+            quantize_row_jqk_impl(src + QK_K * ibl, qw, 32, kvalues_jq5k, NULL, JQ5K_PHASE, -32, 31, 1, 0, 7, false,
                     &jq5[ibl].d, &jq5[ibl].extra, ls, L);
             memset(jq5[ibl].scales_h, 0, sizeof(jq5[ibl].scales_h));
             for (int ib = 0; ib < QK_K / 16; ++ib) {
@@ -5702,7 +5704,7 @@ size_t quantize_jq6_k(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
         block_jq6_k * jq6 = (block_jq6_k *)qrow;
         for (int ibl = 0; ibl < nblock; ++ibl) {
             const float * qw = quant_weights ? quant_weights + QK_K * ibl : NULL;
-            quantize_row_jqk_impl(src + QK_K * ibl, qw, 64, kvalues_jq6k, kindex_jq6k, JQ6K_PHASE, -127, 127, 1, 0, 7,
+            quantize_row_jqk_impl(src + QK_K * ibl, qw, 64, kvalues_jq6k, kindex_jq6k, JQ6K_PHASE, -127, 127, 1, 0, 7, true,
                     &jq6[ibl].d, &jq6[ibl].extra, ls, L);
             memcpy(jq6[ibl].scales, ls, sizeof(jq6[ibl].scales));
             memset(jq6[ibl].qs, 0, sizeof(jq6[ibl].qs));
