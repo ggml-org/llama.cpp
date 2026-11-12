@@ -2176,7 +2176,7 @@ struct test_unary : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const bool grad_supported = op == GGML_UNARY_OP_ABS || op == GGML_UNARY_OP_SGN || op == GGML_UNARY_OP_NEG ||
             op == GGML_UNARY_OP_STEP || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU ||
-            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS;
+            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS || op == GGML_UNARY_OP_SIGMOID;
 
         ggml_tensor * a;
         if (v & 1) {
@@ -2218,6 +2218,12 @@ struct test_unary : public test_case {
             max =  10.f;
         }
 
+        // saturated sigmoid inputs give zero analytic and numeric gradients, which the grad check cannot compare
+        if (mode == MODE_GRAD && op == GGML_UNARY_OP_SIGMOID) {
+            min = -2.f;
+            max =  2.f;
+        }
+
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             // test extended range of values to check for NaNs in GELU
             init_tensor_uniform(t, min, max);
@@ -2225,7 +2231,16 @@ struct test_unary : public test_case {
     }
 
     float grad_eps() override {
-        return 15.0f;
+        return op == GGML_UNARY_OP_SIGMOID ? 0.25f : 15.0f;
+    }
+
+    bool grad_precise() override {
+        return op == GGML_UNARY_OP_SIGMOID;
+    }
+
+    // f32 rounding of a large summed loss exceeds the tolerance, so only the small sigmoid case is grad checked
+    int64_t grad_nmax() override {
+        return op == GGML_UNARY_OP_SIGMOID ? 64 : test_case::grad_nmax();
     }
 
     std::vector<float> grad_expect() override {
@@ -3858,6 +3873,37 @@ struct test_silu_back : public test_case {
         ggml_set_name(grad, "grad");
 
         ggml_tensor * out = ggml_silu_back(ctx, a, grad);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
+// GGML_OP_SIGMOID_BACK
+struct test_sigmoid_back : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override {
+        return VARS_TO_STR2(type, ne);
+    }
+
+    test_sigmoid_back(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3})
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * grad = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(grad, "grad");
+
+        ggml_tensor * out = ggml_sigmoid_back(ctx, a, grad);
         ggml_set_name(out, "out");
 
         return out;
@@ -10567,6 +10613,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_SIGMOID, GGML_TYPE_F32, { 16, 4, 1, 1 }));
 
     // fused relu + sqr (squared ReLU)
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
@@ -11512,6 +11559,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {10, 10, 10, 10}, 2.0f, 1.0f, true, 1)); // view test, inplace
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
+    test_cases.emplace_back(new test_sigmoid_back());
 
     for (float eps : { 0.0f, 1e-6f, 1e-4f, 1e-1f, 10.f }) {
         for (uint32_t n : { 64, 1025 }) {
