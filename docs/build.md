@@ -608,7 +608,7 @@ You can test with:
 If the following info is output on screen, you are using `llama.cpp` with the CANN backend:
 ```bash
 llm_load_tensors:       CANN model buffer size = 13313.00 MiB
-llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
+llama_init_from_model:       CANN compute buffer size =  1260.81 MiB
 ```
 
 For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).
