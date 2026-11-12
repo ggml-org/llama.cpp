@@ -499,6 +499,20 @@ constexpr int FATTN_MMA_FUSED_Q4_0 = 2;
 constexpr int FATTN_MMA_Q8_0_BLOCK_BYTES = 34;
 constexpr int FATTN_MMA_Q4_0_BLOCK_BYTES = 18;
 
+// 8 B cp.async variant for the fused DKQ=DV=128 staging: q8_0/q4_0 rows of a 128-value head are 136/72 B, never 16 B
+// aligned, while the cache row pitch (K->nb[1]) equals the row size and both staging rows start out 8 B aligned.
+// cp.async.ca supports 4/8/16 B transfers (the .cg form upstream exposes only takes 16 B). Both pointers need 8 B alignment.
+static __device__ __forceinline__ void cp_async_ca_8(const unsigned int dst, const void * src) {
+#ifdef CP_ASYNC_AVAILABLE
+    asm volatile("cp.async.ca.shared.global [%0], [%1], 8;"
+        : : "r"(dst), "l"(src));
+#else
+    GGML_UNUSED(dst);
+    GGML_UNUSED(src);
+    NO_DEVICE_CODE;
+#endif // CP_ASYNC_AVAILABLE
+}
+
 // Loads a tile of raw quantized data into the shared memory staging area, to be dequantized into an f16 tile once arrived.
 // The staging area is a linear row-major layout, row size = D2/16 blocks * block_bytes.
 template<int fused, int nwarps, int nbatch_fa, int D2>
@@ -507,9 +521,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
         const int k_VKQ_0, const int32_t * const __restrict__ indices) {
     static_assert(fused == FATTN_MMA_FUSED_Q8_0 || fused == FATTN_MMA_FUSED_Q4_0, "unhandled fused type");
     constexpr int block_bytes = fused == FATTN_MMA_FUSED_Q8_0 ? FATTN_MMA_Q8_0_BLOCK_BYTES : FATTN_MMA_Q4_0_BLOCK_BYTES;
-    static_assert(D2 % 16 == 0 && (D2/16) * block_bytes % 16 == 0, "quantized tile rows must be a multiple of 16 B");
+    static_assert(D2 % 16 == 0, "fused dequant requires whole quantization blocks");
+    constexpr int row_bytes = (D2/16) * block_bytes;
+    // 16 B cp.async chunks wherever the rows are 16 B aligned (D >= 256); the D=128 rows are 136/72 B, ≡ 8 mod 16,
+    // exactly like the cache row pitch they read from, so they stage over 8 B chunks instead. See cp_async_ca_8.
+    static_assert(row_bytes % 8 == 0, "quantized tile rows must be a multiple of 8 B");
+    constexpr int copy_bytes = row_bytes % 16 == 0 ? 16 : 8;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    constexpr int chunks_per_row = (D2/16) * block_bytes / 16; // 16 B cp.async chunks per row
+    constexpr int chunks_per_row = row_bytes / copy_bytes; // cp.async chunks per row
     constexpr int preload = 64;
 
     const unsigned int stage_32 = ggml_cuda_cvta_generic_to_shared(stage);
@@ -520,7 +539,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
         const int q = c % chunks_per_row;
         // K/V rows given per mask column via the kv_rows list, negative rows are padding (mirrors flash_attn_ext_f16_load_tile):
         const int64_t i_KV = indices ? max(indices[k_VKQ_0 + i], 0) : k_VKQ_0 + i;
-        cp_async_cg_16<preload>(stage_32 + c*sizeof(uint4), KV + i_KV*(stride_KV*4) + q*sizeof(uint4));
+        if constexpr (copy_bytes == 16) {
+            cp_async_cg_16<preload>(stage_32 + c*sizeof(uint4), KV + i_KV*(stride_KV*4) + q*sizeof(uint4));
+        } else {
+            cp_async_ca_8(stage_32 + c*sizeof(uint2), KV + i_KV*(stride_KV*4) + q*sizeof(uint2));
+        }
     }
 }
 
@@ -2230,7 +2253,8 @@ static int ggml_cuda_fattn_mma_f16_fused_q_switch() {
     return value;
 }
 
-// Prototype scope: fused q8_0/q4_0 dequant in the ncols2=8 kernels of two shape/pipeline families:
+// Prototype scope: fused q8_0/q4_0 dequant in the ncols2=8 kernels of three shape/pipeline families:
+// - DKQ=DV=128: dequant of the tiles staged by the multi-stage cp.async pipeline (needs nstages > 1).
 // - DKQ=DV=256: dequant of the tiles staged by the multi-stage cp.async pipeline (needs nstages > 1).
 // - DKQ=DV=512: no full-width multi-stage tiles fit in shared memory at 512, so the bytes are staged
 //   per 256-value chunk inside the single-stage pass instead (needs nstages == 1).
@@ -2240,12 +2264,16 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_supported(
     const bool q_K = K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0;
     const bool q_V = V->type == GGML_TYPE_Q8_0 || V->type == GGML_TYPE_Q4_0;
     const bool fused_mode_ok = ncols2 == 8
-        && ((DKQ == 256 && DV == 256 && nstages > 1) || (DKQ == 512 && DV == 512 && nstages == 1));
+        && ((DKQ == 128 && DV == 128 && nstages > 1) || (DKQ == 256 && DV == 256 && nstages > 1) || (DKQ == 512 && DV == 512 && nstages == 1));
+    // The DKQ=DV=128 rows (4 quantization blocks, 136/72 B) can never be 16 B aligned; their cp.async staging runs
+    // over 8 B chunks, so the family's rows and pointers only need to be 8 B aligned. 256/512 rows are multiples of
+    // 8 blocks (272/144 B), where the check stays on 16 B.
+    const int align_req = fused_mode_ok && DKQ == 128 ? 8 : 16;
     return fused_mode_ok
         && q_K && q_V
-        && K->nb[1] % 16 == 0 && K->nb[2] % 16 == 0 && K->nb[3] % 16 == 0
-        && V->nb[1] % 16 == 0 && V->nb[2] % 16 == 0 && V->nb[3] % 16 == 0
-        && (uintptr_t) K->data % 16 == 0 && (uintptr_t) V->data % 16 == 0;
+        && K->nb[1] % align_req == 0 && K->nb[2] % align_req == 0 && K->nb[3] % align_req == 0
+        && V->nb[1] % align_req == 0 && V->nb[2] % align_req == 0 && V->nb[3] % align_req == 0
+        && (uintptr_t) K->data % align_req == 0 && (uintptr_t) V->data % align_req == 0;
 }
 
 template <int DKQ, int DV, int ncols1, int ncols2>
@@ -2360,7 +2388,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const bool fused_q = fused_q_candidate && !use_sparse;
     const int fused_K = fused_q ? (K->type == GGML_TYPE_Q4_0 ? FATTN_MMA_FUSED_Q4_0 : FATTN_MMA_FUSED_Q8_0) : FATTN_MMA_FUSED_NONE;
     const int fused_V = fused_q ? (V->type == GGML_TYPE_Q4_0 ? FATTN_MMA_FUSED_Q4_0 : FATTN_MMA_FUSED_Q8_0) : FATTN_MMA_FUSED_NONE;
-    if constexpr ((DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
+    if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
         // routing pin for tests: with GGML_CUDA_FATTN_MMA_FUSED=2 supported dense ops must reach the fused kernels
         const bool q_K = K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0;
         const bool q_V = V->type == GGML_TYPE_Q8_0 || V->type == GGML_TYPE_Q4_0;
@@ -2369,7 +2397,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         }
     }
     if (fused_q) {
-        if constexpr ((DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
+        if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
             // One linear staging area is reused by the K and V loads in turn, so it is sized by whichever side needs more bytes.
             // At DKQ=DV=256 this holds the full row; at 512 one 256-value chunk, which is the granularity the kernel stages at.
             const size_t nbytes_stage_K = nbatch_fa * (nbatch_K2/16) * (fused_K == FATTN_MMA_FUSED_Q4_0 ? FATTN_MMA_Q4_0_BLOCK_BYTES : FATTN_MMA_Q8_0_BLOCK_BYTES);
