@@ -2517,23 +2517,6 @@ k_argsort_f32_i32(const float *x, int *dst, const int ncols, int ncols_pad,
     }
 }
 
-static void diag_mask_inf_f32(const float * x, float * dst, const int ncols, const int rows_per_channel, const int n_past,
-                              const sycl::nd_item<3> &item_ct1) {
-    const int col = item_ct1.get_local_range(1) * item_ct1.get_group(1) +
-                    item_ct1.get_local_id(1);
-    const int row = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
-                    item_ct1.get_local_id(2);
-
-    if (col >= ncols) {
-        return;
-    }
-
-    const int i = row*ncols + col;
-    //dst[i] = col > (n_past + row % rows_per_channel) ? -INFINITY : x[i];
-    //dst[i] = x[i] - (col > n_past + row % rows_per_channel) * INT_MAX; // equivalent within rounding error but slightly faster on GPU
-    dst[i] = x[i] - (col > n_past + row % rows_per_channel) * FLT_MAX;
-}
-
 static void scale_f32(const float * x, float * dst, const float scale, const float bias, const int k,
                       const sycl::nd_item<3> &item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
@@ -3139,20 +3122,6 @@ static void argmax_f32_i32_sycl(const float *x, int *dst, const int ncols,
             });
     });
 }
-static void diag_mask_inf_f32_sycl(const float *x, float *dst,
-                                   const int ncols_x, const int nrows_x,
-                                   const int rows_per_channel, const int n_past,
-                                   queue_ptr stream) {
-    const sycl::range<3> block_dims(1, SYCL_DIAG_MASK_INF_BLOCK_SIZE, 1);
-    const int block_num_x = (ncols_x + SYCL_DIAG_MASK_INF_BLOCK_SIZE - 1) / SYCL_DIAG_MASK_INF_BLOCK_SIZE;
-    const sycl::range<3> block_nums(1, block_num_x, nrows_x);
-    stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                         [=](sycl::nd_item<3> item_ct1) {
-                             diag_mask_inf_f32(x, dst, ncols_x,
-                                               rows_per_channel, n_past,
-                                               item_ct1);
-                         });
-}
 
 static dpct::err0 ggml_sycl_cpy_tensor_2d(void *dst,
                                           const struct ggml_tensor *src,
@@ -3534,25 +3503,6 @@ inline void ggml_sycl_op_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * d
     GGML_ASSERT(ncols * nrows <= INT32_MAX);
 
     argmax_f32_i32_sycl(src0_dd, dst_dd, ncols, nrows, main_stream);
-}
-
-inline void ggml_sycl_op_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
-    dpct::queue_ptr main_stream = ctx.stream();
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
-    float *       dst_dd  = static_cast<float *>(dst->data);
-
-    const int64_t ne00 = dst->src[0]->ne[0];
-    const int64_t ne01 = dst->src[0]->ne[1];
-    const int nrows0 = ggml_nrows(dst->src[0]);
-    // the kernel indexes in 32-bit
-    GGML_ASSERT(ne00 * nrows0 <= INT32_MAX);
-
-    const int n_past = ((int32_t *) dst->op_params)[0];
-
-    diag_mask_inf_f32_sycl(src0_dd, dst_dd, ne00, nrows0, ne01, n_past, main_stream);
 }
 
 static void tri_f32_sycl(
@@ -6045,11 +5995,6 @@ static void ggml_sycl_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     ggml_sycl_op_scale(ctx, dst);
 }
 
-static void ggml_sycl_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
-    ggml_sycl_op_diag_mask_inf(ctx, dst);
-}
-
 static void ggml_sycl_pool2d(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_pool2d(ctx, dst);
@@ -6193,7 +6138,6 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             ggml_sycl_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-        case GGML_OP_ADD1: // TODO: more efficient implementation
             ggml_sycl_add(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
@@ -6395,9 +6339,6 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_TRI:
             ggml_sycl_op_tri(ctx, dst);
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            ggml_sycl_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
             ggml_sycl_op_soft_max(ctx, dst);
@@ -7639,7 +7580,6 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
         case GGML_OP_ADD:
-        case GGML_OP_ADD1:
         case GGML_OP_ADD_ID:
         case GGML_OP_SUB:
         case GGML_OP_COUNT_EQUAL:
@@ -7674,8 +7614,6 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                        op->type == GGML_TYPE_F32 &&
                        ggml_is_contiguous(src0);
             }
-        case GGML_OP_DIAG_MASK_INF:
-            return true;
         case GGML_OP_SOFT_MAX:
             return true;
         case GGML_OP_SOFT_MAX_BACK: {
