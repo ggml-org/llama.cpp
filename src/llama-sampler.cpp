@@ -1624,7 +1624,8 @@ static bool llama_sampler_top_p_backend_init(
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
     GGML_UNUSED(n_outputs_max_per_seq);
 
-    const bool res = llama_sampler_backend_support(smpl, buft);
+    // the backend graph does not implement min_keep, run on the CPU instead
+    const bool res = sctx->min_keep <= 1 && llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1823,7 +1824,8 @@ static bool llama_sampler_min_p_backend_init(
     auto * sctx = (llama_sampler_min_p *) smpl->ctx;
     GGML_UNUSED(n_outputs_max_per_seq);
 
-    const bool res = llama_sampler_backend_support(smpl, buft);
+    // the backend graph does not implement min_keep, run on the CPU instead
+    const bool res = sctx->min_keep <= 1 && llama_sampler_backend_support(smpl, buft);
 
     sctx->init(res);
 
@@ -1856,8 +1858,9 @@ static void llama_sampler_min_p_backend_apply(
     struct ggml_tensor * sub = ggml_sub(ctx, logits, threshold);
 
     // Create a mask where logits below the threshold are 0 (discard),
-    // and others are 1 (keep).
-    struct ggml_tensor * mask = ggml_step(ctx, sub);
+    // and others are 1 (keep). Keep logits equal to the threshold, same as the CPU sampler.
+    struct ggml_tensor * below = ggml_step(ctx, ggml_scale(ctx, sub, -1.0f));
+    struct ggml_tensor * mask  = ggml_scale_bias(ctx, below, -1.0f, 1.0f);
     ggml_set_name(mask, "min_p_mask");
 
     // Apply -INFINITY bias for masked-out tokens
