@@ -163,6 +163,8 @@
 
 		// the follow-up joins the existing branch: 4 earlier turns plus the new pair
 		await waitFor(() => expect(conversationsStore.activeMessages).toHaveLength(6));
+		// the reply is stored before the next story resets the stores
+		await waitFor(() => expect(chatStore.isLoading).toBe(false));
 	}}
 />
 
