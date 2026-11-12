@@ -1423,7 +1423,7 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
 
 // only for warmup and probe decodes, fill zeros as dummy input
 static void common_batch_set_zero_state(common_batch & batch, const llama_model * model, std::vector<float> & zeros) {
-    zeros.assign(llama_model_n_embd_out(model), 0.0f);
+    zeros.assign(llama_model_n_embd_nextn(model), 0.0f);
     for (int32_t i = 0; i < batch.size(); ++i) {
         batch.set_embd_state(i, { zeros.data(), 1, zeros.size() });
     }

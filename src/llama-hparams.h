@@ -280,6 +280,9 @@ struct llama_hparams {
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
+    // MTP hidden state dimension, the row width of the nextn embeddings (0 = use n_embd_out())
+    uint32_t n_embd_nextn_impl = 0;
+
     uint32_t dflash_block_size       = 0;
     uint32_t dflash_conv_kernel_size = 0;
     uint32_t dflash_conv_group_size  = 0;
@@ -494,6 +497,9 @@ struct llama_hparams {
 
     // dimension of output embeddings
     uint32_t n_embd_out() const;
+
+    // dimension of the MTP hidden state, the row width of the nextn embeddings
+    uint32_t n_embd_nextn() const;
 
     // dimension of key/value embeddings for each head (per layer)
     uint32_t n_embd_head_k(uint32_t il = 0) const;

@@ -157,6 +157,9 @@ LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
 
+// dimension of the MTP hidden state, the row width of llama_get_embeddings_nextn and llama_get_embeddings_nextn_ith
+LLAMA_API int32_t llama_model_n_embd_nextn(const struct llama_model * model);
+
 // Set whether the context outputs the input embeddings of a specific layer
 LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
 

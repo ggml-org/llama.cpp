@@ -42,7 +42,7 @@ void llama_model_deepseek4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
     ml.get_key(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
 
-    hparams.n_embd_out_impl = hparams.dsv4_hc_mult * hparams.n_embd;
+    hparams.n_embd_nextn_impl = hparams.dsv4_hc_mult * hparams.n_embd;
 
     uint32_t n_compress_ratios = 0;
     ml.get_arr_n(LLM_KV_ATTENTION_COMPRESS_RATIOS, n_compress_ratios);
@@ -1369,7 +1369,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llm_graph_params & params) :
     ASSERT_EMBD_OR_TOKEN(ubatch);
 
     const int64_t hc = hparams.dsv4_hc_mult;
-    GGML_ASSERT(hparams.n_embd_out() == (uint32_t) (n_embd*hc) && "DEEPSEEK4 MTP hidden width mismatch");
+    GGML_ASSERT(hparams.n_embd_nextn() == (uint32_t) (n_embd*hc) && "DEEPSEEK4 MTP hidden width mismatch");
 
     const int il = hparams.n_layer() + cparams.nextn_layer_offset;
     const auto & layer = model.layers[il];
@@ -1378,7 +1378,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llm_graph_params & params) :
     GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
 
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd_out());
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd_nextn());
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -1386,7 +1386,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llm_graph_params & params) :
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
 
-    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd_out());
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd_nextn());
 
     ggml_tensor * tok_embd;
     if (ubatch.token) {
