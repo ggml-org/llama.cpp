@@ -142,6 +142,13 @@ class Keys:
         DECODER_BLOCK_COUNT               = "{arch}.decoder_block_count"
         ATTN_LOGIT_SOFTCAPPING            = "{arch}.attn_logit_softcapping"
         ROUTER_LOGIT_SOFTCAPPING          = "{arch}.router_logit_softcapping"
+        ATTENTION_RELATIVE_LENGTH        = "{arch}.attention.relative_length"
+        ATTENTION_RELATIVE_EXTENT        = "{arch}.attention.relative_extent"
+        ATTENTION_QK_CLIP                = "{arch}.attention.qk_clip"
+        ATTENTION_RELATIVE_CLIP          = "{arch}.attention.relative_clip"
+        ATTENTION_LOG_SCALE_FLOOR        = "{arch}.attention.log_scale_floor"
+        ATTENTION_LOG_SCALE_ALPHA        = "{arch}.attention.log_scale_alpha"
+        VOCAB_SIZE_UNPADDED              = "{arch}.vocab_size_unpadded"
         FINAL_LOGIT_SOFTCAPPING           = "{arch}.final_logit_softcapping"
         FINAL_LOGIT_SIGMOID_CAPPING       = "{arch}.final_logit_sigmoid_capping"
         SWIN_NORM                         = "{arch}.swin_norm"
@@ -589,6 +596,7 @@ class GGUFType:
 
 
 class MODEL_ARCH(IntEnum):
+    INKLING2 = auto()
     MMPROJ           = auto() # dummy arch for mmproj
     LLAMA            = auto()
     LLAMA4           = auto()
@@ -779,6 +787,24 @@ class VISION_PROJECTOR_TYPE(IntEnum):
 
 
 class MODEL_TENSOR(IntEnum):
+    ATTN_REL = auto()
+    ATTN_REL_BIAS = auto()
+    ATTN_Q_CLIP = auto()
+    ATTN_REL_CLIP = auto()
+    ATTN_SINK_PROJ = auto()
+    ATTN_Q_INP_NORM = auto()
+    ATTN_K_INP_NORM = auto()
+    ATTN_V_INP_NORM = auto()
+    ATTN_K_CONV = auto()
+    ATTN_V_CONV = auto()
+    ATTN_K_CONV_PROJ = auto()
+    ATTN_V_CONV_PROJ = auto()
+    ATTN_POST_CONV = auto()
+    FFN_POST_CONV = auto()
+    ATTN_RES_QUERY = auto()
+    FFN_RES_QUERY = auto()
+    OUTPUT_RES_QUERY = auto()
+
     TOKEN_EMBD           = auto()
     TOKEN_EMBD_NORM      = auto()
     MASKED_EMBD_CENTROIDS= auto()
@@ -1508,6 +1534,7 @@ class MODEL_TENSOR(IntEnum):
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
+    MODEL_ARCH.INKLING2: "inkling2",
     MODEL_ARCH.MMPROJ:           "clip", # dummy arch for mmproj files (tools/mtmd)
     MODEL_ARCH.LLAMA:            "llama",
     MODEL_ARCH.LLAMA4:           "llama4",
@@ -1696,6 +1723,24 @@ VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
 }
 
 TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
+    MODEL_TENSOR.ATTN_REL: "blk.{bid}.attn_rel",
+    MODEL_TENSOR.ATTN_REL_BIAS: "blk.{bid}.attn_rel_bias",
+    MODEL_TENSOR.ATTN_Q_CLIP: "blk.{bid}.attn_q_clip",
+    MODEL_TENSOR.ATTN_REL_CLIP: "blk.{bid}.attn_rel_clip",
+    MODEL_TENSOR.ATTN_SINK_PROJ: "blk.{bid}.attn_sink_proj",
+    MODEL_TENSOR.ATTN_Q_INP_NORM: "blk.{bid}.attn_q_inp_norm",
+    MODEL_TENSOR.ATTN_K_INP_NORM: "blk.{bid}.attn_k_inp_norm",
+    MODEL_TENSOR.ATTN_V_INP_NORM: "blk.{bid}.attn_v_inp_norm",
+    MODEL_TENSOR.ATTN_K_CONV: "blk.{bid}.attn_k_conv",
+    MODEL_TENSOR.ATTN_V_CONV: "blk.{bid}.attn_v_conv",
+    MODEL_TENSOR.ATTN_K_CONV_PROJ: "blk.{bid}.attn_k_conv_proj",
+    MODEL_TENSOR.ATTN_V_CONV_PROJ: "blk.{bid}.attn_v_conv_proj",
+    MODEL_TENSOR.ATTN_POST_CONV: "blk.{bid}.attn_post_conv",
+    MODEL_TENSOR.FFN_POST_CONV: "blk.{bid}.ffn_post_conv",
+    MODEL_TENSOR.ATTN_RES_QUERY: "blk.{bid}.attn_res_query",
+    MODEL_TENSOR.FFN_RES_QUERY: "blk.{bid}.ffn_res_query",
+    MODEL_TENSOR.OUTPUT_RES_QUERY: "output_res_query",
+
     MODEL_TENSOR.TOKEN_EMBD:                "token_embd",
     MODEL_TENSOR.TOKEN_EMBD_NORM:           "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:               "token_types",
@@ -2418,6 +2463,42 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
+    MODEL_ARCH.INKLING2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.ATTN_REL,
+        MODEL_TENSOR.ATTN_REL_BIAS,
+        MODEL_TENSOR.ATTN_Q_CLIP,
+        MODEL_TENSOR.ATTN_REL_CLIP,
+        MODEL_TENSOR.ATTN_SINK_PROJ,
+        MODEL_TENSOR.ATTN_Q_INP_NORM,
+        MODEL_TENSOR.ATTN_K_INP_NORM,
+        MODEL_TENSOR.ATTN_V_INP_NORM,
+        MODEL_TENSOR.ATTN_K_CONV,
+        MODEL_TENSOR.ATTN_V_CONV,
+        MODEL_TENSOR.ATTN_K_CONV_PROJ,
+        MODEL_TENSOR.ATTN_V_CONV_PROJ,
+        MODEL_TENSOR.ATTN_POST_CONV,
+        MODEL_TENSOR.FFN_POST_CONV,
+        MODEL_TENSOR.ATTN_RES_QUERY,
+        MODEL_TENSOR.FFN_RES_QUERY,
+        MODEL_TENSOR.OUTPUT_RES_QUERY,
+    ],
     MODEL_ARCH.MMPROJ: [
         MODEL_TENSOR.V_MMPROJ,
         MODEL_TENSOR.V_MMPROJ_FC,

@@ -7,6 +7,8 @@ from .constants import MODEL_ARCH, MODEL_TENSOR, MODEL_TENSORS, TENSOR_NAMES
 
 class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.OUTPUT_RES_QUERY: ("model.final_input.query",),
+
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
             "gpt_neox.embed_in",                         # gptneox
@@ -55,6 +57,7 @@ class TensorNameMap:
 
         # Normalization of token embeddings
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
+            "model.embed_tokens.embed_norm",
             "word_embeddings_layernorm",  # bloom
             "embeddings.LayerNorm",       # bert
             "embeddings.norm",            # modern-bert
@@ -223,6 +226,23 @@ class TensorNameMap:
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.ATTN_REL: ("model.layers.{bid}.self_attn.r_proj",),
+        MODEL_TENSOR.ATTN_REL_BIAS: ("model.layers.{bid}.self_attn.rel_logits_proj.proj",),
+        MODEL_TENSOR.ATTN_Q_CLIP: ("model.layers.{bid}.self_attn.q_l2_clip.scale",),
+        MODEL_TENSOR.ATTN_REL_CLIP: ("model.layers.{bid}.self_attn.rel_l2_clip.scale",),
+        MODEL_TENSOR.ATTN_SINK_PROJ: ("model.layers.{bid}.self_attn.sink_proj",),
+        MODEL_TENSOR.ATTN_Q_INP_NORM: ("model.layers.{bid}.q_input_layernorm",),
+        MODEL_TENSOR.ATTN_K_INP_NORM: ("model.layers.{bid}.k_input_layernorm",),
+        MODEL_TENSOR.ATTN_V_INP_NORM: ("model.layers.{bid}.v_input_layernorm",),
+        MODEL_TENSOR.ATTN_K_CONV: ("model.layers.{bid}.self_attn.k_sconv.conv1d",),
+        MODEL_TENSOR.ATTN_V_CONV: ("model.layers.{bid}.self_attn.v_sconv.conv1d",),
+        MODEL_TENSOR.ATTN_K_CONV_PROJ: ("model.layers.{bid}.self_attn.k_sconv.weight_proj",),
+        MODEL_TENSOR.ATTN_V_CONV_PROJ: ("model.layers.{bid}.self_attn.v_sconv.weight_proj",),
+        MODEL_TENSOR.ATTN_POST_CONV: ("model.layers.{bid}.post_attention_convolution.conv1d",),
+        MODEL_TENSOR.FFN_POST_CONV: ("model.layers.{bid}.post_mlp_convolution.conv1d",),
+        MODEL_TENSOR.ATTN_RES_QUERY: ("model.layers.{bid}.attention_input.query",),
+        MODEL_TENSOR.FFN_RES_QUERY: ("model.layers.{bid}.mlp_input.query",),
+
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "layers.{bid}.mixer_connection.norm",                   # metis16
