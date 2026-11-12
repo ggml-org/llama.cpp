@@ -50,8 +50,8 @@ static_assert(sizeof(struct htp_ssm_scan_kernel_params) <= 128, "htp_ssm_scan_ke
 _Static_assert(sizeof(struct htp_ssm_scan_kernel_params) <= 128, "htp_ssm_scan_kernel_params is too large for kernel_params blob");
 #endif
 
-// Write-backs and fetches in one DMA package never share a tile, so no descriptor needs ordering:
-// decode updates the state out of place (state -> state_out), prefill pairs keep the second member in x1/y1.
+// Decode updates state out of place (off_state -> off_state_out) so writeback(N) and fetch(N+2)
+// never share a VTCM buffer. Prefill updates state in place across token chunks using off_state[0].
 struct htp_ssm_scan_vtcm_layout {
     size_t off_state[2];
     size_t off_state_out[2];
@@ -61,8 +61,6 @@ struct htp_ssm_scan_vtcm_layout {
     size_t off_dt[2];
     size_t off_A[2];
     size_t off_y[2];
-    size_t off_x1[2];
-    size_t off_y1[2];
 
     size_t xy_row_stride;
     size_t bytes_per_hvx;
@@ -83,21 +81,33 @@ static inline void htp_ssm_scan_vtcm_layout_build(
     const size_t xy_row_stride     = hex_align_up((size_t) row_tile * sizeof(float), 128);
     const size_t xy_slot_bytes     = (size_t) token_tile * xy_row_stride;
     const size_t scalar_slot_bytes = hex_align_up((size_t) token_tile * sizeof(float), 128);
-    const size_t state_out_bytes   = decode ? state_slot_bytes : 0;
-    const size_t xy1_slot_bytes    = decode ? 0 : xy_slot_bytes;
 
     size_t off = 0;
-    for (uint32_t i = 0; i < 2; ++i) {
-        layout->off_state[i]     = off; off += state_slot_bytes;
-        layout->off_state_out[i] = off; off += state_out_bytes;
-        layout->off_B[i]         = off; off += bc_slot_bytes;
-        layout->off_C[i]         = off; off += bc_slot_bytes;
-        layout->off_x[i]         = off; off += xy_slot_bytes;
-        layout->off_dt[i]        = off; off += scalar_slot_bytes;
-        layout->off_A[i]         = off; off += 128;
-        layout->off_y[i]         = off; off += xy_slot_bytes;
-        layout->off_x1[i]        = off; off += xy1_slot_bytes;
-        layout->off_y1[i]        = off; off += xy1_slot_bytes;
+    if (decode) {
+        for (uint32_t i = 0; i < 2; ++i) {
+            layout->off_state[i]     = off; off += state_slot_bytes;
+            layout->off_state_out[i] = off; off += state_slot_bytes;
+            layout->off_B[i]         = off; off += bc_slot_bytes;
+            layout->off_C[i]         = off; off += bc_slot_bytes;
+            layout->off_x[i]         = off; off += xy_slot_bytes;
+            layout->off_dt[i]        = off; off += scalar_slot_bytes;
+            layout->off_A[i]         = off; off += 128;
+            layout->off_y[i]         = off; off += xy_slot_bytes;
+        }
+    } else {
+        layout->off_state[0]     = off; off += state_slot_bytes;
+        layout->off_state[1]     = layout->off_state[0];
+        layout->off_state_out[0] = layout->off_state[0];
+        layout->off_state_out[1] = layout->off_state[0];
+        layout->off_A[0]         = off; off += 128;
+        layout->off_A[1]         = layout->off_A[0];
+        for (uint32_t i = 0; i < 2; ++i) {
+            layout->off_B[i]  = off; off += bc_slot_bytes;
+            layout->off_C[i]  = off; off += bc_slot_bytes;
+            layout->off_x[i]  = off; off += xy_slot_bytes;
+            layout->off_dt[i] = off; off += scalar_slot_bytes;
+            layout->off_y[i]  = off; off += xy_slot_bytes;
+        }
     }
 
     layout->xy_row_stride = xy_row_stride;

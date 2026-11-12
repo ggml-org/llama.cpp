@@ -2275,31 +2275,38 @@ static bool htp_kparams_solve_ssm_scan(
         return false;
     }
 
-    const uint32_t n_row_blocks = (head_dim + HTP_SSM_SCAN_ROW_TILE_DEFAULT - 1) / HTP_SSM_SCAN_ROW_TILE_DEFAULT;
-    const uint64_t total_units  = (uint64_t) n_seqs * n_head * n_row_blocks;
-    if (total_units > UINT32_MAX) {
-        return false;
-    }
-
     const uint32_t sess_hvx = htp_session_n_hvx(sess);
-
-    kparams->row_tile        = HTP_SSM_SCAN_ROW_TILE_DEFAULT;
-    kparams->token_tile      = (uint16_t) (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
-    kparams->d_state         = d_state;
-    kparams->head_dim        = head_dim;
-    kparams->n_head          = n_head;
-    kparams->n_tokens        = n_tokens;
-    kparams->n_seqs          = n_seqs;
-    kparams->K               = K;
-    kparams->heads_per_group = n_head / n_group;
-    kparams->n_row_blocks    = n_row_blocks;
-    kparams->group_units     = kparams->heads_per_group * n_row_blocks;
-    kparams->units_per_seq   = n_head * n_row_blocks;
-    kparams->total_units     = (uint32_t) total_units;
-    kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
+    uint32_t       row_tile = (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT;
 
     struct htp_ssm_scan_vtcm_layout layout;
-    htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, n_tokens, kparams->n_hvx);
+    for (;;) {
+        const uint32_t n_row_blocks = (head_dim + row_tile - 1) / row_tile;
+        const uint64_t total_units  = (uint64_t) n_seqs * n_head * n_row_blocks;
+        if (total_units > UINT32_MAX) {
+            return false;
+        }
+
+        kparams->row_tile        = (uint16_t) row_tile;
+        kparams->token_tile      = (uint16_t) (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+        kparams->d_state         = d_state;
+        kparams->head_dim        = head_dim;
+        kparams->n_head          = n_head;
+        kparams->n_tokens        = n_tokens;
+        kparams->n_seqs          = n_seqs;
+        kparams->K               = K;
+        kparams->heads_per_group = n_head / n_group;
+        kparams->n_row_blocks    = n_row_blocks;
+        kparams->group_units     = kparams->heads_per_group * n_row_blocks;
+        kparams->units_per_seq   = n_head * n_row_blocks;
+        kparams->total_units     = (uint32_t) total_units;
+        kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
+
+        htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, n_tokens, kparams->n_hvx);
+        if (layout.total_bytes <= htp_session_vtcm_size(sess) || row_tile <= HTP_SSM_SCAN_ROW_TILE_DEFAULT) {
+            break;
+        }
+        row_tile = HTP_SSM_SCAN_ROW_TILE_DEFAULT;
+    }
 
     // Fixed DMA packages need one native descriptor per push. Use v73 16-bit field limits on all targets.
     const size_t dma_max        = 0xFFFF;

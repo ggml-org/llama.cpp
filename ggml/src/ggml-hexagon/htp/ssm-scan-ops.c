@@ -28,21 +28,6 @@ struct htp_ssm_scan_unit {
     uint32_t nrows;
 };
 
-enum {
-    SSM_SCAN_DECODE_PACKAGE_SIZE = 8,
-    SSM_SCAN_CHUNK_PACKAGE_SIZE  = 5,
-    SSM_SCAN_STATE_PACKAGE_SIZE  = 3,
-    SSM_SCAN_PAIR_PACKAGE_SIZE   = 7,
-};
-
-struct ssm_scan_dma_desc {
-    dma_data data;
-    size_t   dst_stride;
-    size_t   src_stride;
-    size_t   row_size;
-    size_t   nrows;
-};
-
 static inline float ssm_scan_softplus(float x) {
     return x > 20.0f ? x : logf(1.0f + expf(x));
 }
@@ -62,23 +47,6 @@ static inline struct htp_ssm_scan_unit ssm_scan_decode_unit(
     unit.row0           = row_block * kparams->row_tile;
     unit.nrows          = MIN(kparams->row_tile, kparams->head_dim - unit.row0);
     return unit;
-}
-
-static bool ssm_scan_dma_submit(
-    struct htp_ops_context * octx,
-    dma_queue * dma_q,
-    const struct ssm_scan_dma_desc * desc,
-    uint32_t ndesc
-) {
-    for (uint32_t i = 0; i < ndesc; ++i) {
-        if (!dma_queue_push(dma_q, desc[i].data, desc[i].dst_stride, desc[i].src_stride, desc[i].row_size,
-                            desc[i].nrows)) {
-            dma_queue_flush(dma_q);
-            htp_ops_context_set_status(octx, HTP_STATUS_INTERNAL_ERR);
-            return false;
-        }
-    }
-    return true;
 }
 
 // state_in and state_out may alias (in-place prefill update).
@@ -130,141 +98,97 @@ static inline void ssm_scan_mamba2_vtcm_step4(
     hvx_vec_store_u(y, 4 * sizeof(float), hvx_vec_reduce_sum_f32x4(acc));
 }
 
-static bool ssm_scan_decode_submit_package(
-    struct htp_ssm_scan_context * scctx,
+static inline void ssm_scan_decode_push_inputs(
     dma_queue * dma_q,
-    uint8_t * base,
-    uint32_t slot,
-    bool have_previous,
-    struct htp_ssm_scan_unit previous,
-    bool have_next,
-    struct htp_ssm_scan_unit next
+    const struct htp_ssm_scan_context * scctx,
+    const struct htp_ssm_scan_unit * unit,
+    void * state_spad,
+    void * B_spad,
+    void * C_spad,
+    void * x_spad,
+    void * dt_spad,
+    void * A_spad
 ) {
-    struct htp_ops_context * octx = scctx->octx;
-    const struct htp_ssm_scan_kernel_params * kparams = scctx->kparams;
-    const struct htp_tensor * s   = octx->src[0];
-    const struct htp_tensor * x   = octx->src[1];
-    const struct htp_tensor * dt  = octx->src[2];
-    const struct htp_tensor * A   = octx->src[3];
-    const struct htp_tensor * B   = octx->src[4];
-    const struct htp_tensor * C   = octx->src[5];
-    const struct htp_tensor * ids = octx->src[6];
-    const struct htp_tensor * dst = octx->dst;
-    const struct htp_ssm_scan_vtcm_layout * layout = &scctx->layout;
-    uint8_t * state_work     = base + layout->off_state[slot];
-    uint8_t * state_out_work = base + layout->off_state_out[slot];
-    uint8_t * B_work         = base + layout->off_B[slot];
-    uint8_t * C_work         = base + layout->off_C[slot];
-    uint8_t * x_work         = base + layout->off_x[slot];
-    uint8_t * dt_work        = base + layout->off_dt[slot];
-    uint8_t * A_work         = base + layout->off_A[slot];
-    uint8_t * y_work         = base + layout->off_y[slot];
+    const struct htp_ops_context *            octx            = scctx->octx;
+    const struct htp_ssm_scan_kernel_params * kparams         = scctx->kparams;
+    const struct htp_tensor *                 s               = octx->src[0];
+    const struct htp_tensor *                 x               = octx->src[1];
+    const struct htp_tensor *                 dt              = octx->src[2];
+    const struct htp_tensor *                 A               = octx->src[3];
+    const struct htp_tensor *                 B               = octx->src[4];
+    const struct htp_tensor *                 C               = octx->src[5];
+    const struct htp_tensor *                 ids             = octx->src[6];
+    const int32_t                             id              = ((const int32_t *) (uintptr_t) ids->data)[unit->q];
+    const size_t                              state_row_bytes = (size_t) kparams->d_state * sizeof(float);
+    const size_t                              x_bytes         = (size_t) unit->nrows * sizeof(float);
 
-    dma_addr_t y_out             = dst->data;
-    dma_addr_t state_out         = dst->data;
-    size_t     output_rows       = 0;
-    size_t     state_output_rows = 0;
-    size_t     y_output_bytes    = 0;
-    if (have_previous) {
-        y_out = dst->data + ((size_t) previous.q * kparams->n_head * kparams->head_dim +
-                            (size_t) previous.head * kparams->head_dim + previous.row0) * sizeof(float);
-        state_out = dst->data + scctx->y_bytes + (size_t) previous.q * s->nb[3] +
-                    (size_t) previous.head * s->nb[2] + (size_t) previous.row0 * s->nb[1];
-        output_rows = 1;
-        state_output_rows = previous.nrows;
-        y_output_bytes = (size_t) previous.nrows * sizeof(float);
-    }
+    const dma_addr_t state_in = s->data + (size_t) id * s->nb[3] + (size_t) unit->head * s->nb[2] + (size_t) unit->row0 * s->nb[1];
+    const dma_addr_t B_in     = B->data + (size_t) unit->q * B->nb[3] + (size_t) unit->group * B->nb[1];
+    const dma_addr_t C_in     = C->data + (size_t) unit->q * C->nb[3] + (size_t) unit->group * C->nb[1];
+    const dma_addr_t x_in     = x->data + (size_t) unit->q * x->nb[3] + (size_t) unit->head * x->nb[1] + (size_t) unit->row0 * sizeof(float);
+    const dma_addr_t dt_in    = dt->data + (size_t) unit->q * dt->nb[2] + (size_t) unit->head * sizeof(float);
+    const dma_addr_t A_in     = A->data + (size_t) unit->head * A->nb[1];
 
-    dma_addr_t state_in         = s->data;
-    dma_addr_t B_in             = B->data;
-    dma_addr_t C_in             = C->data;
-    dma_addr_t x_in             = x->data;
-    dma_addr_t dt_in            = dt->data;
-    dma_addr_t A_in             = A->data;
-    size_t     input_rows       = 0;
-    size_t     state_input_rows = 0;
-    size_t     x_bytes          = 0;
-    if (have_next) {
-        const int32_t id = ((const int32_t *) (uintptr_t) ids->data)[next.q];
-        state_in = s->data + (size_t) id * s->nb[3] + (size_t) next.head * s->nb[2] + (size_t) next.row0 * s->nb[1];
-        B_in = B->data + (size_t) next.q * B->nb[3] + (size_t) next.group * B->nb[1];
-        C_in = C->data + (size_t) next.q * C->nb[3] + (size_t) next.group * C->nb[1];
-        x_in = x->data + (size_t) next.q * x->nb[3] + (size_t) next.head * x->nb[1] + (size_t) next.row0 * sizeof(float);
-        dt_in = dt->data + (size_t) next.q * dt->nb[2] + (size_t) next.head * sizeof(float);
-        A_in = A->data + (size_t) next.head * A->nb[1];
-        input_rows = 1;
-        state_input_rows = next.nrows;
-        x_bytes = (size_t) next.nrows * sizeof(float);
-    }
-
-    struct ssm_scan_dma_desc desc[SSM_SCAN_DECODE_PACKAGE_SIZE] = {
-        { dma_make_data(y_out, y_work), y_output_bytes, layout->xy_row_stride, y_output_bytes, output_rows },
-        { dma_make_data(state_out, state_out_work), s->nb[1], kparams->d_state * sizeof(float),
-          kparams->d_state * sizeof(float), state_output_rows },
-        { dma_make_data(state_work, state_in), kparams->d_state * sizeof(float), s->nb[1],
-          kparams->d_state * sizeof(float), state_input_rows },
-        { dma_make_data(B_work, B_in), kparams->d_state * sizeof(float), kparams->d_state * sizeof(float),
-          kparams->d_state * sizeof(float), input_rows },
-        { dma_make_data(C_work, C_in), kparams->d_state * sizeof(float), kparams->d_state * sizeof(float),
-          kparams->d_state * sizeof(float), input_rows },
-        { dma_make_data(x_work, x_in), x_bytes, x_bytes, x_bytes, input_rows },
-        { dma_make_data(dt_work, dt_in), sizeof(float), sizeof(float), sizeof(float), input_rows },
-        { dma_make_data(A_work, A_in), sizeof(float), sizeof(float), sizeof(float), input_rows },
-    };
-
-    return ssm_scan_dma_submit(octx, dma_q, desc, SSM_SCAN_DECODE_PACKAGE_SIZE);
+    dma_queue_push(dma_q, dma_make_data(state_spad, state_in), state_row_bytes, s->nb[1], state_row_bytes, unit->nrows);
+    dma_queue_push(dma_q, dma_make_data(B_spad, B_in), state_row_bytes, state_row_bytes, state_row_bytes, 1);
+    dma_queue_push(dma_q, dma_make_data(C_spad, C_in), state_row_bytes, state_row_bytes, state_row_bytes, 1);
+    dma_queue_push(dma_q, dma_make_data(x_spad, x_in), x_bytes, x_bytes, x_bytes, 1);
+    dma_queue_push(dma_q, dma_make_data(dt_spad, dt_in), sizeof(float), sizeof(float), sizeof(float), 1);
+    dma_queue_push(dma_q, dma_make_data(A_spad, A_in), sizeof(float), sizeof(float), sizeof(float), 1);
 }
 
 static void ssm_scan_thread_mamba2_vtcm(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
-    struct htp_ssm_scan_context *             scctx           = (struct htp_ssm_scan_context *) data;
-    struct htp_ops_context *                  octx            = scctx->octx;
-    const struct htp_ssm_scan_kernel_params * kparams         = scctx->kparams;
-    const struct htp_ssm_scan_vtcm_layout *   layout          = &scctx->layout;
-    const uint32_t                            unit_start      = scctx->unit_start + scctx->units_per_hvx * ith;
-    const uint32_t                            unit_end        = MIN(unit_start + scctx->units_per_hvx, scctx->unit_start + scctx->nunits);
+    struct htp_ssm_scan_context *             scctx      = (struct htp_ssm_scan_context *) data;
+    struct htp_ops_context *                  octx       = scctx->octx;
+    const struct htp_ssm_scan_kernel_params * kparams    = scctx->kparams;
+    const struct htp_ssm_scan_vtcm_layout *   layout     = &scctx->layout;
+    const struct htp_tensor *                 s          = octx->src[0];
+    const struct htp_tensor *                 dst        = octx->dst;
+    const uint32_t                            unit_start = scctx->unit_start + scctx->units_per_hvx * ith;
+    const uint32_t                            unit_end   = MIN(unit_start + scctx->units_per_hvx, scctx->unit_start + scctx->nunits);
 
     if (unit_start >= unit_end) {
         return;
     }
 
-    dma_queue * dma_q = th->dma_q;
-    uint8_t *   base  = octx->ctx->vtcm_base + (size_t) kparams->vtcm_per_hvx * ith;
-    struct htp_ssm_scan_unit slot_unit[2];
+    dma_queue *               dma_q           = th->dma_q;
+    struct htp_thread_trace * tr              = th->trace;
+    uint8_t *                 base            = octx->ctx->vtcm_base + (size_t) kparams->vtcm_per_hvx * ith;
+    const size_t              state_row_bytes = (size_t) kparams->d_state * sizeof(float);
 
-    uint32_t prime = MIN(2, unit_end - unit_start);
-    for (uint32_t i = 0; i < prime; ++i) {
-        uint32_t slot   = i;
-        slot_unit[slot] = ssm_scan_decode_unit(kparams, unit_start + i);
-        struct htp_ssm_scan_unit dummy      = { 0 };
-        bool ok = ssm_scan_decode_submit_package(
-            scctx, dma_q, base, slot, false, dummy, true, slot_unit[slot]);
-        if (!ok) {
-            return;
-        }
+    for (uint32_t unit_index = unit_start, spad_idx = 0; unit_index < unit_end && spad_idx < 2; ++unit_index, ++spad_idx) {
+        const struct htp_ssm_scan_unit u = ssm_scan_decode_unit(kparams, unit_index);
+
+        dma_queue_push(dma_q, dma_make_data(dst->data, base + layout->off_y[spad_idx]), 0, 0, 0, 0);
+        dma_queue_push(dma_q, dma_make_data(dst->data, base + layout->off_state_out[spad_idx]), 0, 0, 0, 0);
+
+        ssm_scan_decode_push_inputs(dma_q, scctx, &u,
+                                    base + layout->off_state[spad_idx],
+                                    base + layout->off_B[spad_idx],
+                                    base + layout->off_C[spad_idx],
+                                    base + layout->off_x[spad_idx],
+                                    base + layout->off_dt[spad_idx],
+                                    base + layout->off_A[spad_idx]);
     }
 
-    struct htp_thread_trace * tr = th->trace;
     for (uint32_t unit_index = unit_start; unit_index < unit_end; ++unit_index) {
-        uint32_t slot = (unit_index - unit_start) & 1;
-        for (uint32_t i = 0; i < SSM_SCAN_DECODE_PACKAGE_SIZE; ++i) {
-            dma_queue_pop(dma_q);
-        }
+        float *       y_work    = (float *)       (uintptr_t) dma_queue_pop(dma_q).src;
+        float *       state_out = (float *)       (uintptr_t) dma_queue_pop(dma_q).src;
+        const float * state_in  = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
+        const float * B_work    = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
+        const float * C_work    = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
+        const float * x_work    = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
+        const float * dt_work   = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
+        const float * A_work    = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
+
+        const struct htp_ssm_scan_unit unit = ssm_scan_decode_unit(kparams, unit_index);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) unit_index);
-        struct htp_ssm_scan_unit unit = slot_unit[slot];
-        const float * state_in  = (const float *) (base + layout->off_state[slot]);
-        float *       state_out = (float *) (base + layout->off_state_out[slot]);
-        float * B_work  = (float *) (base + layout->off_B[slot]);
-        float * C_work  = (float *) (base + layout->off_C[slot]);
-        float * x_work  = (float *) (base + layout->off_x[slot]);
-        float * dt_work = (float *) (base + layout->off_dt[slot]);
-        float * A_work  = (float *) (base + layout->off_A[slot]);
-        float * y_work  = (float *) (base + layout->off_y[slot]);
-        float dt_value      = hvx_vec_get_f32(hvx_vmem(dt_work));
-        float A_value       = hvx_vec_get_f32(hvx_vmem(A_work));
-        float dt_softplus   = ssm_scan_softplus(dt_value);
-        HVX_Vector vdt = hvx_vec_splat_f32(dt_softplus);
-        HVX_Vector vdA = hvx_vec_splat_f32(expf(dt_softplus * A_value));
+        const float      dt_value    = hvx_vec_get_f32(hvx_vmem(dt_work));
+        const float      A_value     = hvx_vec_get_f32(hvx_vmem(A_work));
+        const float      dt_softplus = ssm_scan_softplus(dt_value);
+        const HVX_Vector vdt         = hvx_vec_splat_f32(dt_softplus);
+        const HVX_Vector vdA         = hvx_vec_splat_f32(expf(dt_softplus * A_value));
 
         HVX_Vector vx = Q6_V_vzero();
         for (uint32_t row = 0; row < unit.nrows; row += 4) {
@@ -272,316 +196,117 @@ static void ssm_scan_thread_mamba2_vtcm(const htp_thread_t * th, unsigned int nt
                 vx = hvx_vec_mul_f32_f32(hvx_vmem(x_work + row), vdt);
             }
             ssm_scan_mamba2_vtcm_step4(state_in + (size_t) row * kparams->d_state,
-                state_out + (size_t) row * kparams->d_state, B_work, C_work, vdA, Q6_V_vror_VR(vx, (row & (VLEN_FP32 - 1)) * sizeof(float)),
-                kparams->d_state, y_work + row);
+                                       state_out + (size_t) row * kparams->d_state, B_work, C_work, vdA,
+                                       Q6_V_vror_VR(vx, (row & (VLEN_FP32 - 1)) * sizeof(float)),
+                                       kparams->d_state, y_work + row);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) unit_index);
 
-        uint32_t future_index = unit_index + 2;
-        bool have_future = future_index < unit_end;
-        struct htp_ssm_scan_unit future = { 0 };
+        const size_t     y_output_bytes = (size_t) unit.nrows * sizeof(float);
+        const dma_addr_t y_out_ddr      = dst->data + ((size_t) unit.q * kparams->n_head * kparams->head_dim +
+                                                       (size_t) unit.head * kparams->head_dim + unit.row0) * sizeof(float);
+        const dma_addr_t state_out_ddr  = dst->data + scctx->y_bytes + (size_t) unit.q * s->nb[3] +
+                                          (size_t) unit.head * s->nb[2] + (size_t) unit.row0 * s->nb[1];
 
-        if (have_future) {
-            future = ssm_scan_decode_unit(kparams, future_index);
-            slot_unit[slot] = future;
-        }
+        dma_queue_push(dma_q, dma_make_data(y_out_ddr, y_work), y_output_bytes, layout->xy_row_stride, y_output_bytes, 1);
+        dma_queue_push(dma_q, dma_make_data(state_out_ddr, state_out), s->nb[1], state_row_bytes, state_row_bytes, unit.nrows);
 
-        bool ok = ssm_scan_decode_submit_package(
-            scctx, dma_q, base, slot, true, unit, have_future, future);
-        if (!ok) {
-            return;
+        const uint32_t next_unit = unit_index + 2;
+        if (next_unit < unit_end) {
+            const struct htp_ssm_scan_unit next = ssm_scan_decode_unit(kparams, next_unit);
+            ssm_scan_decode_push_inputs(dma_q, scctx, &next,
+                                        (void *) state_in, (void *) B_work, (void *) C_work,
+                                        (void *) x_work, (void *) dt_work, (void *) A_work);
         }
     }
 
-    // Trailing packages hold the final y and state write-backs and zero-row input dummies.
-    for (uint32_t i = 0; i < prime * SSM_SCAN_DECODE_PACKAGE_SIZE; ++i) {
-        dma_queue_pop(dma_q);
-    }
-
+    dma_queue_flush(dma_q);
     (void) nth;
 }
 
-static bool ssm_scan_prefill_submit_chunk(
-    struct htp_ssm_scan_context * scctx,
-    dma_queue * dma_q,
-    uint8_t * base,
-    uint32_t slot,
-    const struct htp_ssm_scan_unit * unit,
-    bool have_previous,
-    uint32_t previous_t0,
-    uint32_t previous_nt,
-    bool have_next,
-    uint32_t next_t0,
-    uint32_t next_nt
-) {
-    struct htp_ops_context *                  octx      = scctx->octx;
-    const struct htp_ssm_scan_kernel_params * kparams   = scctx->kparams;
-    const struct htp_tensor *                 x         = octx->src[1];
-    const struct htp_tensor *                 dt        = octx->src[2];
-    const struct htp_tensor *                 B         = octx->src[4];
-    const struct htp_tensor *                 C         = octx->src[5];
-    const struct htp_tensor *                 dst       = octx->dst;
-    const struct htp_ssm_scan_vtcm_layout *   layout    = &scctx->layout;
-    uint8_t *                                 B_work    = base + layout->off_B[slot];
-    uint8_t *                                 C_work    = base + layout->off_C[slot];
-    uint8_t *                                 x_work    = base + layout->off_x[slot];
-    uint8_t *                                 dt_work   = base + layout->off_dt[slot];
-    uint8_t *                                 y_work    = base + layout->off_y[slot];
-    const size_t                              row_bytes = (size_t) unit->nrows * sizeof(float);
-    const size_t                              bc_bytes  = (size_t) kparams->d_state * sizeof(float);
-
-    dma_addr_t y_out  = dst->data;
-    size_t     y_rows = 0;
-    if (have_previous) {
-        y_out = dst->data + ((((size_t) unit->q * kparams->n_tokens + previous_t0) * kparams->n_head + unit->head) *
-                             kparams->head_dim + unit->row0) * sizeof(float);
-        y_rows = previous_nt;
-    }
-
-    dma_addr_t B_in       = B->data;
-    dma_addr_t C_in       = C->data;
-    dma_addr_t x_in       = x->data;
-    dma_addr_t dt_in      = dt->data;
-    size_t     input_rows = 0;
-    if (have_next) {
-        B_in = B->data + (size_t) unit->q * B->nb[3] + (size_t) next_t0 * B->nb[2] + (size_t) unit->group * B->nb[1];
-        C_in = C->data + (size_t) unit->q * C->nb[3] + (size_t) next_t0 * C->nb[2] + (size_t) unit->group * C->nb[1];
-        x_in = x->data + (size_t) unit->q * x->nb[3] + (size_t) next_t0 * x->nb[2] + (size_t) unit->head * x->nb[1] +
-               (size_t) unit->row0 * sizeof(float);
-        dt_in = dt->data + (size_t) unit->q * dt->nb[2] + (size_t) next_t0 * dt->nb[1] + (size_t) unit->head * sizeof(float);
-        input_rows = next_nt;
-    }
-
-    struct ssm_scan_dma_desc desc[SSM_SCAN_CHUNK_PACKAGE_SIZE] = {
-        { dma_make_data(y_out, y_work), (size_t) kparams->n_head * kparams->head_dim * sizeof(float),
-          layout->xy_row_stride, row_bytes, y_rows },
-        { dma_make_data(B_work, B_in), bc_bytes, B->nb[2], bc_bytes, input_rows },
-        { dma_make_data(C_work, C_in), bc_bytes, C->nb[2], bc_bytes, input_rows },
-        { dma_make_data(x_work, x_in), layout->xy_row_stride, x->nb[2], row_bytes, input_rows },
-        { dma_make_data(dt_work, dt_in), sizeof(float), dt->nb[1], sizeof(float), input_rows },
-    };
-    return ssm_scan_dma_submit(octx, dma_q, desc, SSM_SCAN_CHUNK_PACKAGE_SIZE);
-}
-
-// Two adjacent row blocks of one head share B, C and dt. The first member uses the x/y tiles, the second x1/y1.
-static inline bool ssm_scan_prefill_pair_at(
-    const struct htp_ssm_scan_kernel_params * kparams,
-    uint32_t unit_index,
-    uint32_t unit_end,
-    struct htp_ssm_scan_unit * first,
-    struct htp_ssm_scan_unit * second
-) {
-    *first = ssm_scan_decode_unit(kparams, unit_index);
-    *second = *first;
-    if (kparams->row_tile > VLEN_FP32 || unit_index + 1 >= unit_end) {
-        return false;
-    }
-    *second = ssm_scan_decode_unit(kparams, unit_index + 1);
-
-    return first->q == second->q && first->group == second->group && first->head == second->head;
-}
-
-static bool ssm_scan_prefill_submit_pair_chunk(
-    struct htp_ssm_scan_context * scctx,
-    dma_queue * dma_q,
-    uint8_t * base,
-    uint32_t slot,
-    const struct htp_ssm_scan_unit * u0,
-    const struct htp_ssm_scan_unit * u1,
-    bool have_previous,
-    uint32_t previous_t0,
-    uint32_t previous_nt,
-    bool have_next,
-    uint32_t next_t0,
-    uint32_t next_nt
-) {
+static void ssm_scan_thread_mamba2_vtcm_prefill(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    struct htp_ssm_scan_context *             scctx      = (struct htp_ssm_scan_context *) data;
     struct htp_ops_context *                  octx       = scctx->octx;
     const struct htp_ssm_scan_kernel_params * kparams    = scctx->kparams;
+    const struct htp_ssm_scan_vtcm_layout *   layout     = &scctx->layout;
+    const struct htp_tensor *                 s          = octx->src[0];
     const struct htp_tensor *                 x          = octx->src[1];
     const struct htp_tensor *                 dt         = octx->src[2];
+    const struct htp_tensor *                 A          = octx->src[3];
     const struct htp_tensor *                 B          = octx->src[4];
     const struct htp_tensor *                 C          = octx->src[5];
+    const struct htp_tensor *                 ids        = octx->src[6];
     const struct htp_tensor *                 dst        = octx->dst;
-    const struct htp_ssm_scan_vtcm_layout *   layout     = &scctx->layout;
-    uint8_t *                                 B_work     = base + layout->off_B[slot];
-    uint8_t *                                 C_work     = base + layout->off_C[slot];
-    uint8_t *                                 dt_work    = base + layout->off_dt[slot];
-    uint8_t *                                 x0_work    = base + layout->off_x[slot];
-    uint8_t *                                 y0_work    = base + layout->off_y[slot];
-    uint8_t *                                 x1_work    = base + layout->off_x1[slot];
-    uint8_t *                                 y1_work    = base + layout->off_y1[slot];
-    const size_t                              row_bytes0 = (size_t) u0->nrows * sizeof(float);
-    const size_t                              row_bytes1 = (size_t) u1->nrows * sizeof(float);
-    const size_t                              bc_bytes   = (size_t) kparams->d_state * sizeof(float);
-
-    dma_addr_t y_out0 = dst->data;
-    dma_addr_t y_out1 = dst->data;
-    size_t     y_rows = 0;
-    if (have_previous) {
-        const size_t y_base =
-            (((size_t) u0->q * kparams->n_tokens + previous_t0) * kparams->n_head + u0->head) * kparams->head_dim;
-        y_out0 = dst->data + (y_base + u0->row0) * sizeof(float);
-        y_out1 = dst->data + (y_base + u1->row0) * sizeof(float);
-        y_rows = previous_nt;
-    }
-
-    dma_addr_t B_in       = B->data;
-    dma_addr_t C_in       = C->data;
-    dma_addr_t x_in0      = x->data;
-    dma_addr_t x_in1      = x->data;
-    dma_addr_t dt_in      = dt->data;
-    size_t     input_rows = 0;
-    if (have_next) {
-        B_in = B->data + (size_t) u0->q * B->nb[3] + (size_t) next_t0 * B->nb[2] + (size_t) u0->group * B->nb[1];
-        C_in = C->data + (size_t) u0->q * C->nb[3] + (size_t) next_t0 * C->nb[2] + (size_t) u0->group * C->nb[1];
-        const size_t x_base = (size_t) u0->q * x->nb[3] + (size_t) next_t0 * x->nb[2] + (size_t) u0->head * x->nb[1];
-        x_in0 = x->data + x_base + (size_t) u0->row0 * sizeof(float);
-        x_in1 = x->data + x_base + (size_t) u1->row0 * sizeof(float);
-        dt_in = dt->data + (size_t) u0->q * dt->nb[2] + (size_t) next_t0 * dt->nb[1] + (size_t) u0->head * sizeof(float);
-        input_rows = next_nt;
-    }
-
-    const size_t y_stride = (size_t) kparams->n_head * kparams->head_dim * sizeof(float);
-    struct ssm_scan_dma_desc desc[SSM_SCAN_PAIR_PACKAGE_SIZE] = {
-        { dma_make_data(y_out0, y0_work), y_stride, layout->xy_row_stride, row_bytes0, y_rows },
-        { dma_make_data(y_out1, y1_work), y_stride, layout->xy_row_stride, row_bytes1, y_rows },
-        { dma_make_data(B_work, B_in), bc_bytes, B->nb[2], bc_bytes, input_rows },
-        { dma_make_data(C_work, C_in), bc_bytes, C->nb[2], bc_bytes, input_rows },
-        { dma_make_data(dt_work, dt_in), sizeof(float), dt->nb[1], sizeof(float), input_rows },
-        { dma_make_data(x0_work, x_in0), layout->xy_row_stride, x->nb[2], row_bytes0, input_rows },
-        { dma_make_data(x1_work, x_in1), layout->xy_row_stride, x->nb[2], row_bytes1, input_rows },
-    };
-
-    return ssm_scan_dma_submit(octx, dma_q, desc, SSM_SCAN_PAIR_PACKAGE_SIZE);
-}
-
-static bool ssm_scan_prefill_submit_state(
-    struct htp_ssm_scan_context * scctx,
-    dma_queue * dma_q,
-    uint8_t * base,
-    bool have_previous,
-    const struct htp_ssm_scan_unit * previous,
-    uint32_t previous_slot,
-    bool have_next,
-    const struct htp_ssm_scan_unit * next,
-    uint32_t next_slot
-) {
-    struct htp_ops_context *                  octx            = scctx->octx;
-    const struct htp_ssm_scan_kernel_params * kparams         = scctx->kparams;
-    const struct htp_tensor *                 s               = octx->src[0];
-    const struct htp_tensor *                 A               = octx->src[3];
-    const struct htp_tensor *                 ids             = octx->src[6];
-    const struct htp_tensor *                 dst             = octx->dst;
-    const struct htp_ssm_scan_vtcm_layout *   layout          = &scctx->layout;
-    const size_t                              state_row_bytes = (size_t) kparams->d_state * sizeof(float);
-
-    dma_addr_t state_out      = dst->data;
-    size_t     state_out_rows = 0;
-    if (have_previous) {
-        state_out = dst->data + scctx->y_bytes + (size_t) previous->q * s->nb[3] +
-                    (size_t) previous->head * s->nb[2] + (size_t) previous->row0 * s->nb[1];
-        state_out_rows = previous->nrows;
-    }
-
-    dma_addr_t state_in      = s->data;
-    dma_addr_t A_in          = A->data;
-    size_t     state_in_rows = 0;
-    size_t     A_rows        = 0;
-    if (have_next) {
-        const int32_t id = ((const int32_t *) (uintptr_t) ids->data)[next->q];
-        state_in = s->data + (size_t) id * s->nb[3] + (size_t) next->head * s->nb[2] + (size_t) next->row0 * s->nb[1];
-        A_in = A->data + (size_t) next->head * A->nb[1];
-        state_in_rows = next->nrows;
-        A_rows = 1;
-    }
-
-    struct ssm_scan_dma_desc desc[SSM_SCAN_STATE_PACKAGE_SIZE] = {
-        { dma_make_data(state_out, base + layout->off_state[previous_slot]), s->nb[1], state_row_bytes,
-          state_row_bytes, state_out_rows },
-        { dma_make_data(base + layout->off_state[next_slot], state_in), state_row_bytes, s->nb[1],
-          state_row_bytes, state_in_rows },
-        { dma_make_data(base + layout->off_A[next_slot], A_in), sizeof(float), sizeof(float), sizeof(float), A_rows },
-    };
-
-    return ssm_scan_dma_submit(octx, dma_q, desc, SSM_SCAN_STATE_PACKAGE_SIZE);
-}
-
-static void ssm_scan_thread_mamba2_vtcm_prefill(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
-    struct htp_ssm_scan_context *             scctx           = (struct htp_ssm_scan_context *) data;
-    struct htp_ops_context *                  octx            = scctx->octx;
-    const struct htp_ssm_scan_kernel_params * kparams         = scctx->kparams;
-    const struct htp_ssm_scan_vtcm_layout *   layout          = &scctx->layout;
-    const uint32_t                            unit_start      = scctx->unit_start + scctx->units_per_hvx * ith;
-    const uint32_t                            unit_end        = MIN(unit_start + scctx->units_per_hvx, scctx->unit_start + scctx->nunits);
+    const uint32_t                            unit_start = scctx->unit_start + scctx->units_per_hvx * ith;
+    const uint32_t                            unit_end   = MIN(unit_start + scctx->units_per_hvx, scctx->unit_start + scctx->nunits);
     if (unit_start >= unit_end) {
         return;
     }
 
-    dma_queue *               dma_q      = th->dma_q;
-    struct htp_thread_trace * tr         = th->trace;
-    uint8_t *                 base       = octx->ctx->vtcm_base + (size_t) kparams->vtcm_per_hvx * ith;
-    const uint32_t            token_tile = kparams->token_tile;
-    const uint32_t            n_tokens   = kparams->n_tokens;
-    const uint32_t            nchunks    = (n_tokens + token_tile - 1) / token_tile;
-    const uint32_t            prime      = MIN(2, nchunks);
-    const size_t              xy_stride  = layout->xy_row_stride;
+    dma_queue *               dma_q           = th->dma_q;
+    struct htp_thread_trace * tr              = th->trace;
+    uint8_t *                 base            = octx->ctx->vtcm_base + (size_t) kparams->vtcm_per_hvx * ith;
+    const uint32_t            token_tile      = kparams->token_tile;
+    const uint32_t            n_tokens        = kparams->n_tokens;
+    const uint32_t            nchunks         = (n_tokens + token_tile - 1) / token_tile;
+    const size_t              xy_stride       = layout->xy_row_stride;
+    const size_t              bc_bytes        = (size_t) kparams->d_state * sizeof(float);
+    const size_t              state_row_bytes = bc_bytes;
+    const size_t              y_stride        = (size_t) kparams->n_head * kparams->head_dim * sizeof(float);
 
-    struct htp_ssm_scan_unit    unit;
-    struct htp_ssm_scan_unit    second;
-    bool                        ok      = true;
-    bool                        loaded  = false;
-    uint32_t                    slot0   = 0;
+    float * state_work = (float *) (base + layout->off_state[0]);
+    float * A_work     = (float *) (base + layout->off_A[0]);
 
-    for (uint32_t unit_index = unit_start; unit_index < unit_end; ) {
-        const bool     pair               = ssm_scan_prefill_pair_at(kparams, unit_index, unit_end, &unit, &second);
-        const uint32_t nunits             = pair ? 2 : 1;
-        const uint32_t chunk_package_size = pair ? SSM_SCAN_PAIR_PACKAGE_SIZE : SSM_SCAN_CHUNK_PACKAGE_SIZE;
+    for (uint32_t unit_index = unit_start; unit_index < unit_end; ++unit_index) {
+        const struct htp_ssm_scan_unit unit      = ssm_scan_decode_unit(kparams, unit_index);
+        const size_t                   row_bytes = (size_t) unit.nrows * sizeof(float);
+        const int32_t                  id        = ((const int32_t *) (uintptr_t) ids->data)[unit.q];
 
-        if (!loaded) {
-            slot0   = 0;
-            ok = ssm_scan_prefill_submit_state(scctx, dma_q, base, false, &unit, 0, true, &unit, 0);
-            if (pair && ok) {
-                ok = ssm_scan_prefill_submit_state(scctx, dma_q, base, false, &second, 1, true, &second, 1);
-            }
-            if (!ok) {
-                return;
-            }
-            for (uint32_t i = 0; i < nunits * SSM_SCAN_STATE_PACKAGE_SIZE; ++i) {
-                dma_queue_pop(dma_q);
-            }
-        }
+        const dma_addr_t state_in  = s->data + (size_t) id * s->nb[3] + (size_t) unit.head * s->nb[2] + (size_t) unit.row0 * s->nb[1];
+        const dma_addr_t state_out = dst->data + scctx->y_bytes + (size_t) unit.q * s->nb[3] +
+                                     (size_t) unit.head * s->nb[2] + (size_t) unit.row0 * s->nb[1];
+        const dma_addr_t A_in      = A->data + (size_t) unit.head * A->nb[1];
+        const dma_addr_t B_base    = B->data + (size_t) unit.q * B->nb[3] + (size_t) unit.group * B->nb[1];
+        const dma_addr_t C_base    = C->data + (size_t) unit.q * C->nb[3] + (size_t) unit.group * C->nb[1];
+        const dma_addr_t x_base    = x->data + (size_t) unit.q * x->nb[3] + (size_t) unit.head * x->nb[1] + (size_t) unit.row0 * sizeof(float);
+        const dma_addr_t dt_base   = dt->data + (size_t) unit.q * dt->nb[2] + (size_t) unit.head * sizeof(float);
+        const dma_addr_t y_base    = dst->data + (((size_t) unit.q * n_tokens * kparams->n_head + unit.head) *
+                                                  kparams->head_dim + unit.row0) * sizeof(float);
 
-        float *     state_work  = (float *) (base + layout->off_state[slot0]);
-        float *     state_work1 = (float *) (base + layout->off_state[1]);
-        const float A_value     = hvx_vec_get_f32(hvx_vmem(base + layout->off_A[slot0]));
+        dma_queue_push(dma_q, dma_make_data(state_work, state_in), state_row_bytes, s->nb[1], state_row_bytes, unit.nrows);
+        dma_queue_push(dma_q, dma_make_data(A_work, A_in), sizeof(float), sizeof(float), sizeof(float), 1);
 
-        for (uint32_t c = 0; c < prime; ++c) {
+        for (uint32_t c = 0; c < 2 && c < nchunks; ++c) {
             const uint32_t t0 = c * token_tile;
             const uint32_t nt = MIN(token_tile, n_tokens - t0);
-            ok = pair ?
-                ssm_scan_prefill_submit_pair_chunk(scctx, dma_q, base, c, &unit, &second, false, 0, 0, true, t0, nt) :
-                ssm_scan_prefill_submit_chunk(scctx, dma_q, base, c, &unit, false, 0, 0, true, t0, nt);
-            if (!ok) {
-                return;
-            }
+
+            dma_queue_push(dma_q, dma_make_data(y_base, base + layout->off_y[c]), 0, 0, 0, 0);
+            dma_queue_push(dma_q, dma_make_data(base + layout->off_B[c], B_base + (size_t) t0 * B->nb[2]),
+                           bc_bytes, B->nb[2], bc_bytes, nt);
+            dma_queue_push(dma_q, dma_make_data(base + layout->off_C[c], C_base + (size_t) t0 * C->nb[2]),
+                           bc_bytes, C->nb[2], bc_bytes, nt);
+            dma_queue_push(dma_q, dma_make_data(base + layout->off_x[c], x_base + (size_t) t0 * x->nb[2]),
+                           xy_stride, x->nb[2], row_bytes, nt);
+            dma_queue_push(dma_q, dma_make_data(base + layout->off_dt[c], dt_base + (size_t) t0 * dt->nb[1]),
+                           sizeof(float), dt->nb[1], sizeof(float), nt);
         }
 
+        dma_queue_pop(dma_q);
+        dma_queue_pop(dma_q);
+        const float A_value = hvx_vec_get_f32(hvx_vmem(A_work));
+
         for (uint32_t c = 0; c < nchunks; ++c) {
-            const uint32_t slot = c & 1;
-            const uint32_t t0   = c * token_tile;
-            const uint32_t nt   = MIN(token_tile, n_tokens - t0);
-            for (uint32_t i = 0; i < chunk_package_size; ++i) {
-                dma_queue_pop(dma_q);
-            }
+            const uint32_t t0 = c * token_tile;
+            const uint32_t nt = MIN(token_tile, n_tokens - t0);
+
+            uint8_t *       y_work  = (uint8_t *)       (uintptr_t) dma_queue_pop(dma_q).src;
+            const float *   B_work  = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
+            const float *   C_work  = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
+            const uint8_t * x_work  = (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
+            const float *   dt_work = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) c);
-            const float *   B_work  = (const float *) (base + layout->off_B[slot]);
-            const float *   C_work  = (const float *) (base + layout->off_C[slot]);
-            const uint8_t * x_work  = base + layout->off_x[slot];
-            const float *   dt_work = (const float *) (base + layout->off_dt[slot]);
-            uint8_t *       y_work  = base + layout->off_y[slot];
 
-            // Copy dt out of VTCM with one HVX load, then do the scalar softplus and decay on the stack.
             float __attribute__((aligned(128))) dt_buf[VLEN_FP32];
             float __attribute__((aligned(128))) dA_buf[VLEN_FP32];
             hvx_vmem(dt_buf) = hvx_vmem(dt_work);
@@ -593,108 +318,47 @@ static void ssm_scan_thread_mamba2_vtcm_prefill(const htp_thread_t * th, unsigne
             const HVX_Vector vdt_all = hvx_vmem(dt_buf);
             const HVX_Vector vdA_all = hvx_vmem(dA_buf);
 
-            if (pair) {
-                const uint8_t * x1_work = base + layout->off_x1[slot];
-                uint8_t *       y1_work = base + layout->off_y1[slot];
-                for (uint32_t t = 0; t < nt; ++t) {
-                    const HVX_Vector vdt = hvx_vec_repl_f32(Q6_V_vror_VR(vdt_all, t * sizeof(float)));
-                    const HVX_Vector vdA = hvx_vec_repl_f32(Q6_V_vror_VR(vdA_all, t * sizeof(float)));
-                    const float *    B_t = B_work + (size_t) t * kparams->d_state;
-                    const float *    C_t = C_work + (size_t) t * kparams->d_state;
-                    const float *    x0  = (const float *) (x_work + (size_t) t * xy_stride);
-                    const float *    x1  = (const float *) (x1_work + (size_t) t * xy_stride);
-                    float *          y0  = (float *) (y_work + (size_t) t * xy_stride);
-                    float *          y1  = (float *) (y1_work + (size_t) t * xy_stride);
-                    // row_tile <= VLEN_FP32 for pairs: one vector holds all x rows of a member.
-                    const HVX_Vector vx0 = hvx_vec_mul_f32_f32(hvx_vmem(x0), vdt);
-                    const HVX_Vector vx1 = hvx_vec_mul_f32_f32(hvx_vmem(x1), vdt);
-                    for (uint32_t row = 0; row < unit.nrows; row += 4) {
-                        float * st = state_work + (size_t) row * kparams->d_state;
-                        ssm_scan_mamba2_vtcm_step4(st, st, B_t, C_t, vdA, Q6_V_vror_VR(vx0, row * sizeof(float)),
-                                                   kparams->d_state, y0 + row);
+            for (uint32_t t = 0; t < nt; ++t) {
+                const HVX_Vector vdt = hvx_vec_repl_f32(Q6_V_vror_VR(vdt_all, t * sizeof(float)));
+                const HVX_Vector vdA = hvx_vec_repl_f32(Q6_V_vror_VR(vdA_all, t * sizeof(float)));
+                const float *    B_t = B_work + (size_t) t * kparams->d_state;
+                const float *    C_t = C_work + (size_t) t * kparams->d_state;
+                const float *    x_t = (const float *) (x_work + (size_t) t * xy_stride);
+                float *          y_t = (float *) (y_work + (size_t) t * xy_stride);
+                HVX_Vector       vx  = Q6_V_vzero();
+                for (uint32_t row = 0; row < unit.nrows; row += 4) {
+                    if ((row & (VLEN_FP32 - 1)) == 0) {
+                        vx = hvx_vec_mul_f32_f32(hvx_vmem(x_t + row), vdt);
                     }
-                    for (uint32_t row = 0; row < second.nrows; row += 4) {
-                        float * st = state_work1 + (size_t) row * kparams->d_state;
-                        ssm_scan_mamba2_vtcm_step4(st, st, B_t, C_t, vdA, Q6_V_vror_VR(vx1, row * sizeof(float)),
-                                                   kparams->d_state, y1 + row);
-                    }
-                }
-            } else {
-                for (uint32_t t = 0; t < nt; ++t) {
-                    const HVX_Vector vdt = hvx_vec_repl_f32(Q6_V_vror_VR(vdt_all, t * sizeof(float)));
-                    const HVX_Vector vdA = hvx_vec_repl_f32(Q6_V_vror_VR(vdA_all, t * sizeof(float)));
-                    const float *    B_t = B_work + (size_t) t * kparams->d_state;
-                    const float *    C_t = C_work + (size_t) t * kparams->d_state;
-                    const float *    x_t = (const float *) (x_work + (size_t) t * xy_stride);
-                    float *          y_t = (float *) (y_work + (size_t) t * xy_stride);
-                    HVX_Vector       vx  = Q6_V_vzero();
-                    for (uint32_t row = 0; row < unit.nrows; row += 4) {
-                        if ((row & (VLEN_FP32 - 1)) == 0) {
-                            vx = hvx_vec_mul_f32_f32(hvx_vmem(x_t + row), vdt);
-                        }
-                        float * st = state_work + (size_t) row * kparams->d_state;
-                        ssm_scan_mamba2_vtcm_step4(st, st, B_t, C_t, vdA,
-                                                   Q6_V_vror_VR(vx, (row & (VLEN_FP32 - 1)) * sizeof(float)),
-                                                   kparams->d_state, y_t + row);
-                    }
+                    float * st = state_work + (size_t) row * kparams->d_state;
+                    ssm_scan_mamba2_vtcm_step4(st, st, B_t, C_t, vdA,
+                                               Q6_V_vror_VR(vx, (row & (VLEN_FP32 - 1)) * sizeof(float)),
+                                               kparams->d_state, y_t + row);
                 }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) c);
 
-            const uint32_t future      = c + 2;
-            const bool     have_future = future < nchunks;
-            const uint32_t future_t0   = have_future ? future * token_tile : 0;
-            const uint32_t future_nt   = have_future ? MIN(token_tile, n_tokens - future_t0) : 0;
-            ok = pair ?
-                ssm_scan_prefill_submit_pair_chunk(scctx, dma_q, base, slot, &unit, &second, true, t0, nt,
-                                                   have_future, future_t0, future_nt) :
-                ssm_scan_prefill_submit_chunk(scctx, dma_q, base, slot, &unit, true, t0, nt,
-                                              have_future, future_t0, future_nt);
-            if (!ok) {
-                return;
+            dma_queue_push(dma_q, dma_make_data(y_base + (size_t) t0 * y_stride, y_work),
+                           y_stride, xy_stride, row_bytes, nt);
+
+            const uint32_t pref_c = c + 2;
+            if (pref_c < nchunks) {
+                const uint32_t pref_t0 = pref_c * token_tile;
+                const uint32_t pref_nt = MIN(token_tile, n_tokens - pref_t0);
+
+                dma_queue_push(dma_q, dma_make_data((void *) B_work, B_base + (size_t) pref_t0 * B->nb[2]),
+                               bc_bytes, B->nb[2], bc_bytes, pref_nt);
+                dma_queue_push(dma_q, dma_make_data((void *) C_work, C_base + (size_t) pref_t0 * C->nb[2]),
+                               bc_bytes, C->nb[2], bc_bytes, pref_nt);
+                dma_queue_push(dma_q, dma_make_data((void *) x_work, x_base + (size_t) pref_t0 * x->nb[2]),
+                               xy_stride, x->nb[2], row_bytes, pref_nt);
+                dma_queue_push(dma_q, dma_make_data((void *) dt_work, dt_base + (size_t) pref_t0 * dt->nb[1]),
+                               sizeof(float), dt->nb[1], sizeof(float), pref_nt);
             }
         }
 
-        // Trailing packages hold the final y write-backs and zero-row input dummies.
-        for (uint32_t i = 0; i < prime * chunk_package_size; ++i) {
-            dma_queue_pop(dma_q);
-        }
-
-        const uint32_t next_index = unit_index + nunits;
-        struct htp_ssm_scan_unit next;
-        struct htp_ssm_scan_unit next_second;
-        const bool have_next = next_index < unit_end;
-        const bool next_pair = have_next && ssm_scan_prefill_pair_at(kparams, next_index, unit_end, &next, &next_second);
-        if (!pair && have_next && !next_pair) {
-            // Single to single: overlap the write-back with the next state fetch in the other slot.
-            ok = ssm_scan_prefill_submit_state(scctx, dma_q, base, true, &unit, slot0, true, &next, slot0 ^ 1);
-            if (!ok) {
-                return;
-            }
-            for (uint32_t i = 0; i < SSM_SCAN_STATE_PACKAGE_SIZE; ++i) {
-                dma_queue_pop(dma_q);
-            }
-            slot0 ^= 1;
-            loaded = true;
-        } else {
-            ok = ssm_scan_prefill_submit_state(scctx, dma_q, base, true, &unit, slot0, false, &unit, slot0);
-            if (pair && ok) {
-                ok = ssm_scan_prefill_submit_state(scctx, dma_q, base, true, &second, 1, false, &second, 1);
-            }
-            if (!ok) {
-                return;
-            }
-            for (uint32_t i = 0; i < nunits * SSM_SCAN_STATE_PACKAGE_SIZE; ++i) {
-                dma_queue_pop(dma_q);
-            }
-            loaded = false;
-        }
-        unit_index = next_index;
-    }
-
-    if (!dma_queue_empty(dma_q)) {
+        dma_queue_push(dma_q, dma_make_data(state_out, state_work), s->nb[1], state_row_bytes, state_row_bytes, unit.nrows);
         dma_queue_flush(dma_q);
-        htp_ops_context_set_status(octx, HTP_STATUS_INTERNAL_ERR);
     }
 
     (void) nth;
