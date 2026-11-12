@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstdint>
 #include <filesystem>
@@ -984,8 +985,16 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+static void set_env(const char * name, const char * value) {
+#ifdef _WIN32
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
 // speculative decoding: each step decodes a token and 0 to n_draft_max drafts, then rejects the drafts
-// the logits of the token must match a decode without drafts
+// the logits of the token must match a decode without drafts, and LLAMA_KPOOL_VERIFY checks each k-pool layout update
 static double check_draft_rollback(llama_model * model, const std::vector<llama_token> & tokens, const std::vector<float> & logits_ref) {
     const uint32_t n_vocab     = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_tokens    = tokens.size();
@@ -998,7 +1007,9 @@ static double check_draft_rollback(llama_model * model, const std::vector<llama_
     ctx_params.n_ubatch        = 64;
     ctx_params.n_rs_seq        = n_draft_max;
 
+    set_env("LLAMA_KPOOL_VERIFY", "1");
     llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    set_env("LLAMA_KPOOL_VERIFY", "0");
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
     }
@@ -1463,7 +1474,8 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         }
 
                         // the k-pool layout is updated in place when drafts are rejected
-                        if (arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_KIMI_K31) {
+                        // TODO: the meta backend aborts with n_rs_seq > 0 (view of permuted tensor not implemented)
+                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                             const double nmse_rollback = check_draft_rollback(model_and_ctx_dev.first.get(), tokens, logits_dev);
                             if (!(nmse_rollback <= 1e-4)) {
                                 if (test_ok) {

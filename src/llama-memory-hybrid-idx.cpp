@@ -68,7 +68,10 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
             model, no_alloc, hparams_idx, type_k, type_v, v_trans, offload, unified,
             kv_size, n_seq_max, n_swa, swa_type,
             nullptr, filter_idx, nullptr, nullptr, "idx_");
-    }()) {}
+    }()) {
+    const char * LLAMA_KPOOL_VERIFY = getenv("LLAMA_KPOOL_VERIFY");
+    kpool_verify = LLAMA_KPOOL_VERIFY ? atoi(LLAMA_KPOOL_VERIFY) != 0 : false;
+}
 
 llama_memory_context_ptr llama_memory_hybrid_idx::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     // note: repeats llama_memory_hybrid::init_batch, as the indexer needs the attention slot infos that the base context hides
@@ -371,6 +374,40 @@ int64_t kpool_rank(const std::vector<std::pair<llama_pos, uint32_t>> & cells, ll
     return it != cells.end() && it->second == cell && it->first == pos ? it - cells.begin() : -1;
 }
 
+// adds the pools that start at or after sq.j_next
+void kpool_scan(llama_memory_hybrid_idx::kpool_layout::seq & sq, uint32_t kpool, bool by_order) {
+    // Pools start at the first valid token
+    size_t j = sq.j_next;
+    if (by_order) {
+        // consecutive cells in sequence order, whatever their positions
+        for (; j + kpool <= sq.cells.size(); j += kpool) {
+            sq.pools.push_back((uint32_t) j);
+        }
+    } else {
+        while (j + kpool <= sq.cells.size()) {
+            const llama_pos p0 = sq.cells[j].first;
+            if ((p0 - sq.pos_min) % (llama_pos) kpool != 0) {
+                ++j;
+                continue;
+            }
+            bool ok = true;
+            for (uint32_t k = 1; k < kpool; ++k) {
+                if (sq.cells[j + k].first != p0 + (llama_pos) k) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                sq.pools.push_back((uint32_t) j);
+                j += kpool;
+            } else {
+                ++j;
+            }
+        }
+    }
+    sq.j_next = j;
+}
+
 }
 
 llama_memory_hybrid_idx::~llama_memory_hybrid_idx() = default;
@@ -412,71 +449,48 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
 
         sq.strm = unified ? 0 : mem_idx->get_stream(s);
 
-        if (mem_idx_stale[s] == POS_CLEAN && !sq.cells.empty() && !sp.empty() &&
-                sq.pos_min == sp.begin()->first) {
-            for (auto it = sp.upper_bound(sq.cells.back()); it != sp.end(); ++it) {
-                sq.cells.push_back(*it);
-            }
-        }
-
-        // an edit at stale > 0 leaves every cell and pool before stale unchanged: keep them and re-append the rest
-        // speculative decoding edits the end of the sequence on each rejected draft, so a full rebuild costs O(n_ctx) per step
+        // an append (POS_CLEAN) or an edit after pos_min keeps every cell and pool before the stale position
+        // speculative decoding edits the end of the sequence on each rejected draft, a full rebuild there costs O(n_ctx) per step
         const llama_pos stale = mem_idx_stale[s];
-        bool truncated = false;
-        if (stale != POS_CLEAN && stale > 0 && !sq.cells.empty() && !sp.empty() &&
-                sq.pos_min == sp.begin()->first) {
-            const auto cut = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(stale, uint32_t(0)));
-            const size_t n_keep = cut - sq.cells.begin();
-            sq.cells.erase(cut, sq.cells.end());
-            for (auto it = sp.lower_bound(std::make_pair(stale, uint32_t(0))); it != sp.end(); ++it) {
+        bool keep = !sq.cells.empty() && !sp.empty() && sq.pos_min == sp.begin()->first && stale > sq.pos_min;
+        if (keep) {
+            auto it = sp.upper_bound(sq.cells.back());
+            if (stale != POS_CLEAN) {
+                const auto cut = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(stale, uint32_t(0)));
+                sq.cells.erase(cut, sq.cells.end());
+                while (!sq.pools.empty() && sq.pools.back() + kpool > sq.cells.size()) {
+                    sq.pools.pop_back();
+                }
+                sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
+                it = sp.lower_bound(std::make_pair(stale, uint32_t(0)));
+            }
+            for (; it != sp.end(); ++it) {
                 sq.cells.push_back(*it);
             }
-            while (!sq.pools.empty() && sq.pools.back() + kpool > n_keep) {
-                sq.pools.pop_back();
-            }
-            sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
-            truncated = sq.cells.size() == sp.size();
+            keep = sq.cells.size() == sp.size();
         }
 
-        // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
-        // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
-        if (!truncated && (sq.cells.size() != sp.size() || stale != POS_CLEAN)) {
+        // a new sequence, an edit at or before pos_min, or cells that do not match: group the whole sequence again
+        if (!keep) {
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;
             sq.pos_min = sp.empty() ? 0 : sp.begin()->first;
         }
 
-        // Pools start at the first valid token
-        size_t j = sq.j_next;
-        if (hparams_idx.indexer_kpool_by_order) {
-            // consecutive cells in sequence order, whatever their positions
-            for (; j + kpool <= sq.cells.size(); j += kpool) {
-                sq.pools.push_back((uint32_t) j);
-            }
-        } else {
-            while (j + kpool <= sq.cells.size()) {
-                const llama_pos p0 = sq.cells[j].first;
-                if ((p0 - sq.pos_min) % (llama_pos) kpool != 0) {
-                    ++j;
-                    continue;
-                }
-                bool ok = true;
-                for (uint32_t k = 1; k < kpool; ++k) {
-                    if (sq.cells[j + k].first != p0 + (llama_pos) k) {
-                        ok = false;
-                        break;
-                    }
-                }
-                if (ok) {
-                    sq.pools.push_back((uint32_t) j);
-                    j += kpool;
-                } else {
-                    ++j;
-                }
+        kpool_scan(sq, kpool, hparams_idx.indexer_kpool_by_order);
+
+        if (kpool_verify) {
+            kpool_layout::seq ref;
+            ref.cells.assign(sp.begin(), sp.end());
+            ref.pos_min = sp.empty() ? 0 : sp.begin()->first;
+            kpool_scan(ref, kpool, hparams_idx.indexer_kpool_by_order);
+            if (ref.cells != sq.cells || ref.pools != sq.pools || ref.j_next != sq.j_next || ref.pos_min != sq.pos_min) {
+                LLAMA_LOG_ERROR("%s: seq %d: k-pool layout differs from a full rebuild (stale %d, cells %zu/%zu, pools %zu/%zu)\n",
+                        __func__, s, (int) stale, sq.cells.size(), ref.cells.size(), sq.pools.size(), ref.pools.size());
+                GGML_ABORT("k-pool layout verification failed");
             }
         }
-        sq.j_next = j;
 
         lay.n_pool_real += (uint32_t) sq.pools.size();
     }
