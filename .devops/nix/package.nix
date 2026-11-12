@@ -133,7 +133,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  # Builds the webui locally, taking care not to require updating any sha256 hash.
+  # Builds Llama Chat locally, taking care not to require updating any sha256 hash.
   webui = stdenvNoCC.mkDerivation {
     pname = "webui";
     version = llamaVersion;

@@ -46,7 +46,7 @@ Only vulnerabilities that fall within these parts of the project are considered 
 - `ggml/**/*`
 - `gguf-py/**/*`
 - `tools/server/*`, **excluding** the following topics:
-    - Web UI
+    - Llama Chat (the built-in chat app)
     - Features marked as experimental
     - Features not recommended for use in untrusted environments (e.g., router, MCP)
     - Bugs that can lead to Denial-of-Service attack
