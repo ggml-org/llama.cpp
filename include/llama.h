@@ -587,19 +587,6 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
 
-    //
-    // NextN / speculative draft model queries
-    //
-
-    // DFlash2 selector: number of candidate tokens the draft keeps per block position from its logits
-    // (the packed lattice also holds the top_k x top_k pairwise transition scores); 0 if the model has no selector head
-    LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
-
-    // returns pointer to the target-model layer indices
-    LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
-    // returns the number of extracted layers from target model
-    LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
-
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
@@ -675,6 +662,19 @@ extern "C" {
             const char * fname_inp,
             const char * fname_out,
             const llama_model_quantize_params * params);
+
+    //
+    // NextN / speculative draft model queries
+    //
+
+    // DFlash2 selector: number of candidate tokens the draft keeps per block position from its logits
+    // (the packed lattice also holds the top_k x top_k pairwise transition scores); 0 if the model has no selector head
+    LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
+
+    // returns pointer to the target-model layer indices
+    LLAMA_API const int32_t * llama_model_target_layer_ids  (const struct llama_model * model);
+    // returns the number of extracted layers from target model
+    LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_model * model);
 
     //
     // Adapters
@@ -1184,9 +1184,9 @@ extern "C" {
     LLAMA_API bool llama_get_embeddings_nextn_rows(struct llama_context * ctx, int64_t row0, int64_t n_rows, float * out);
     LLAMA_API bool llama_set_embeddings_nextn_rows(struct llama_context * ctx, int64_t row0, int64_t n_rows, const float * data);
 
-    // Read the state rows of batches (see llama_batch_ext_set_embd_state_row()) from the h_nextn device buffer of src.
+    // Read the state rows of batches (see llama_batch_ext_set_embd_state_row()) from the h_nextn device buffer of ctx_src.
     // Returns whether decode accepts batches with state rows.
-    LLAMA_API bool llama_set_ctx_state_src(struct llama_context * ctx, struct llama_context * src);
+    LLAMA_API bool llama_set_ctx_state_src(struct llama_context * ctx, struct llama_context * ctx_src);
 
     // The paired context (llama_context_params::ctx_other), e.g. the target context of a draft context; may be nullptr
     LLAMA_API struct llama_context * llama_get_ctx_other(struct llama_context * ctx);

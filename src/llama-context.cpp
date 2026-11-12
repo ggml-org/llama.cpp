@@ -1651,11 +1651,11 @@ bool llama_context::set_h_nextn_rows(int64_t row0, int64_t n_rows, const float *
     return true;
 }
 
-bool llama_context::set_ctx_state_src(llama_context * src) {
-    if (cparams.ctx_state_src != src) {
+bool llama_context::set_ctx_state_src(llama_context * ctx_src) {
+    if (cparams.ctx_state_src != ctx_src) {
         sched_need_reserve = true;
     }
-    cparams.ctx_state_src = src;
+    cparams.ctx_state_src = ctx_src;
     return supports_state_row();
 }
 
@@ -4736,8 +4736,8 @@ bool llama_set_embeddings_nextn_rows(llama_context * ctx, int64_t row0, int64_t 
     return ctx->set_h_nextn_rows(row0, n_rows, data);
 }
 
-bool llama_set_ctx_state_src(llama_context * ctx, llama_context * src) {
-    return ctx->set_ctx_state_src(src);
+bool llama_set_ctx_state_src(llama_context * ctx, llama_context * ctx_src) {
+    return ctx->set_ctx_state_src(ctx_src);
 }
 
 void llama_set_embeddings_layer_inp_dev(llama_context * ctx, bool value) {
