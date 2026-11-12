@@ -257,7 +257,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     uint32_t n_head  = 2;
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
-    if (arch == LLM_ARCH_LLAMA4) {
+    if (arch == LLM_ARCH_INKLING2) {
+        n_embd = 32;
+        n_head = 4;
+        n_ff = 24;
+        n_layer = 3;
+    } else if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
     } else if (arch == LLM_ARCH_MAION_CODER) {
         n_head = 4;
@@ -660,6 +665,32 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP, 7.0f);
     }
 
+    if (arch == LLM_ARCH_INKLING2) {
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH, uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT, uint32_t(16));
+        ms.add_kv(LLM_KV_ATTENTION_QK_CLIP, 0.25f);
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_CLIP, 0.1f);
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR, uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA, 0.1f);
+        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE, uint32_t(2));
+        ms.add_kv(LLM_KV_SHORTCONV_L_CACHE, uint32_t(4));
+        ms.add_kv(LLM_KV_VOCAB_SIZE, n_vocab + 2);
+        ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED, n_vocab);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA, 0.2f);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 0.3f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 8.0f);
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING, 30.0f);
+        ms.add_kv(LLM_KV_EXPERT_COUNT, uint32_t(4));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW, uint32_t(4));
+        std::vector<bool> pattern(n_layer);
+        for (uint32_t i = 0; i < n_layer; ++i) {
+            pattern[i] = i % 2 == 0;
+        }
+        std::vector<uint8_t> values(pattern.begin(), pattern.end());
+        gguf_set_arr_data(ret.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+    }
+
     if (arch == LLM_ARCH_RICURSIVE) {
         std::vector<float> swiglu_clamp;
         swiglu_clamp.reserve(n_layer);
@@ -986,6 +1017,7 @@ static bool check_causal_attn_toggle(
 
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
+        case LLM_ARCH_INKLING2:
         case LLM_ARCH_FLINT:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_MAION_CODER:
