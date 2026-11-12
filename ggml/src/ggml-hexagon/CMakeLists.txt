@@ -36,10 +36,6 @@ target_include_directories(htp_iface PUBLIC
     ${HEXAGON_SDK_ROOT}/utils/examples
     ${CMAKE_CURRENT_SOURCE_DIR}/htp
     ${CMAKE_CURRENT_BINARY_DIR})
-# The SDK's incs/stddef (AEEStdDef.h and friends) poisons the MSVC header chain
-# when it leaks onto dependent TUs' include paths, so keep it out of the public
-# interface: private here, and system-level for the backend's own TUs which
-# include <AEEStdErr.h> directly.
 target_include_directories(htp_iface PRIVATE
     ${HEXAGON_SDK_ROOT}/incs/stddef)
 
@@ -70,17 +66,13 @@ ggml_add_backend_library(${TARGET_NAME}
     libdl.h
     ../../include/ggml-hexagon.h)
 
-if(WIN32)
-    # Host TUs include Windows headers; some clang drivers (e.g. x64-hosted
-    # toolchains used on ARM64) don't predefine the arch macro, which makes
-    # winnt.h fail with "No Target Architecture". Define it explicitly.
+if (WIN32)
+    # some clang-cl drivers do not predefine ARM64 macros for winnt.h
     target_compile_definitions(${TARGET_NAME} PRIVATE _M_ARM64=1 _ARM64_=1)
 endif()
 
 target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
-# <AEEStdErr.h> from the SDK's incs/stddef; system-level so it stays out of the
-# way of the MSVC headers these TUs include.
 target_include_directories(${TARGET_NAME} SYSTEM PRIVATE ${HEXAGON_SDK_ROOT}/incs/stddef)
 
 # Build HTP skels
