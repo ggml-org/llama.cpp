@@ -480,6 +480,9 @@ struct ggml_hexagon_shared_buffer {
 
         int err = fastrpc_mmap(sess->domain_id, fd(), (void *) base(), 0, size(), flags);
         if (err != 0) {
+            if (this->extended) {
+                flags = FASTRPC_MAP_FD_EXTENDED;
+            }
             HEX_VERBOSE("ggml-hex: %s mmap failed (err 0x%08x), retrying in 100ms...\n", sess->c_name(), (unsigned) err);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             err = fastrpc_mmap(sess->domain_id, fd(), (void *) base(), 0, size(), flags);
