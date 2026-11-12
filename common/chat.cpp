@@ -683,6 +683,7 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                     /* .description = */ function.value("description", ""),
                     /* .parameters = */ function.value("parameters", json::object()).dump(),
                     /* .defer_loading = */ defer.get<bool>(),
+                    /* .strict = */ function.value("strict", json(false)) == true,
                 });
             }
         }
@@ -1504,6 +1505,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
                                        render_message_to_json_deepseek_v4_1(*messages_to_render, tmpl.original_caps()) :
                                        render_message_to_json(*messages_to_render, tmpl.original_caps());
     params.tool_choice           = inputs.tool_choice;
+    params.tools_strict          = std::any_of(inputs.tools.begin(), inputs.tools.end(),
+                                               [](const common_chat_tool & tool) { return tool.strict; });
     params.reasoning_format      = inputs.reasoning_format;
     params.enable_thinking       = inputs.enable_thinking;
     params.grammar               = inputs.grammar;
