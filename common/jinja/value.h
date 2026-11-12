@@ -493,11 +493,11 @@ struct value_array_t : public value_t {
         return hash;
     }
 protected:
-      explicit value_array_t(value_kind kind) : value_t(kind) {}
+    explicit value_array_t(value_kind kind) : value_t(kind) {}
 
-      virtual bool equivalent(const value_t & other) const override {
-          return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.as_array().begin(), other.as_array().end(), value_equivalence());
-      }
+    virtual bool equivalent(const value_t & other) const override {
+        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.as_array().begin(), other.as_array().end(), value_equivalence());
+    }
 };
 using value_array = std::shared_ptr<value_array_t>;
 
@@ -519,6 +519,7 @@ struct value_tuple_t : public value_array_t {
     virtual bool is_immutable() const override { return true; }
 };
 using value_tuple = std::shared_ptr<value_tuple_t>;
+
 
 struct value_object_t : public value_t {
     static constexpr auto                kind_id = value_kind::OBJECT;
@@ -587,7 +588,7 @@ struct value_object_t : public value_t {
         } else {
             entry.first->second = val;
             for (auto & pair : val_obj) {
-                if (*pair.first == *key) {
+                if (*(pair.first) == *key) {
                     pair.second = val;
                     break;
                 }

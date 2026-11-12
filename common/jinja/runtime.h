@@ -332,6 +332,7 @@ struct member_expression : public expression {
     statement_ptr property;
     bool computed; // true if obj[expr] and false if obj.prop
 
+    // Shared across renders; ctx.is_get_stats requires a fresh value because stats mutate it.
     value static_property;
     member_expression(statement_ptr && object, statement_ptr && property, bool computed);
     std::string type() const override { return "MemberExpression"; }
@@ -377,6 +378,7 @@ struct identifier : public expression {
 
 struct integer_literal : public expression {
     int64_t val;
+    // Shared across renders; ctx.is_get_stats requires a fresh value because stats mutate it.
     const value constant;
 
     explicit integer_literal(int64_t val) : val(val), constant(mk_val<value_int>(val)) {}
@@ -387,6 +389,7 @@ struct integer_literal : public expression {
 
 struct float_literal : public expression {
     double val;
+    // Shared across renders; ctx.is_get_stats requires a fresh value because stats mutate it.
     const value constant;
 
     explicit float_literal(double val) : val(val), constant(mk_val<value_float>(val)) {}
@@ -397,6 +400,7 @@ struct float_literal : public expression {
 
 struct string_literal : public expression {
     std::string val;
+    // Shared across renders; ctx.is_get_stats requires a fresh value because stats mutate it.
     const value constant;
 
     explicit string_literal(const std::string & val) : val(val), constant(mk_val<value_string>(val)) {}

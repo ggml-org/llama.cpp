@@ -545,6 +545,13 @@ static void test_expressions(testing & t) {
         "c"
     );
 
+    test_template(t, "array index boundaries",
+        "{% for items in arrays %}{% for i in indices %}{{ items[i] | default('_') }}|{% endfor %};{% endfor %}",
+        {{"arrays", json::array({json::array({"a", "b", "c"}), json::array()})},
+         {"indices", json::array({INT64_MIN, -4, -3, -1, 0, 2, 3, INT64_MAX})}},
+        "_|_|a|c|a|c|_|_|;_|_|_|_|_|_|_|_|;"
+    );
+
     test_template(t, "array bool access",
         "{{ items[true] }}",
         {{"items", json::array({"a", "b", "c"})}},

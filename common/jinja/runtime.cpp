@@ -868,8 +868,7 @@ value member_expression::execute_impl(context & ctx) const {
         }
     } else if (is_stmt<integer_literal>(this->property)) {
         // syntax: obj.index
-        property =
-            ctx.is_get_stats ? mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val) : static_property;
+        property = ctx.is_get_stats ? mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val) : static_property;
         if (property->as_int() < 0) {
             throw std::runtime_error("Static member property cannot be negative");
         }
@@ -878,8 +877,7 @@ value member_expression::execute_impl(context & ctx) const {
         if (!is_stmt<identifier>(this->property)) {
             throw std::runtime_error("Static member property must be an identifier");
         }
-        property =
-            ctx.is_get_stats ? mk_val<value_string>(cast_stmt<identifier>(this->property)->val) : static_property;
+        property = ctx.is_get_stats ? mk_val<value_string>(cast_stmt<identifier>(this->property)->val) : static_property;
         const auto & prop = cast_stmt<identifier>(this->property)->val;
         JJ_DEBUG("Member expression, object type %s, static property '%s'", object->type().c_str(), prop.c_str());
 
@@ -922,14 +920,16 @@ value member_expression::execute_impl(context & ctx) const {
             int64_t index = property->as_int();
             JJ_DEBUG("Accessing %s index %d", object->type().c_str(), (int)index);
             if (is_val<value_array>(object)) {
-                const auto * arr    = cast_val<value_array>(object);
-                const auto   count  = arr->as_array().size();
-                uint64_t     offset = static_cast<uint64_t>(index);
+                const auto * arr = cast_val<value_array>(object);
+                const auto count = arr->as_array().size();
                 if (index < 0) {
-                    offset = count - (uint64_t(0) - uint64_t(index));
-                }
-                if (offset < count) {
-                    val = arr->as_array().at(static_cast<size_t>(offset));
+                    // Avoid negating INT64_MIN.
+                    const uint64_t distance = static_cast<uint64_t>(-(index + 1)) + 1;
+                    if (distance <= count) {
+                        val = arr->as_array().at(static_cast<size_t>(count - distance));
+                    }
+                } else if (static_cast<uint64_t>(index) < count) {
+                    val = arr->as_array().at(static_cast<size_t>(index));
                 }
             } else { // value_string
                 if (index >= 0) {
