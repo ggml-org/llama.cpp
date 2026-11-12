@@ -17,6 +17,23 @@ struct llama_context;
 // llama_kv_cache
 //
 
+// layer-major prefill: a constant causal mask in device memory, F16 [ne0, ne1]: row j of column i is 0 if j < anchor + i/step, else -inf
+// the mask of the tokens of a chunk keeps the first rows of each column, one more row every `step` columns: it is a view of the staircase
+// one constant for all the chunks: the scheduler copies each view of a graph input as a separate tensor, a view of a constant is not copied
+// step 1: the KQ masks of the chunks (see llama_kv_cache_context::get_chunk_mask), step kpool: the pool masks of the k-pool indexer
+struct llama_kv_staircase {
+    // the CUDA flash attention kernels read the mask with 16-byte copies: a view starts at a multiple of 8 F16 values,
+    // so a view needs up to n_align rows and n_align*step columns more than its mask
+    static constexpr int64_t n_align = 8;
+
+    ggml_tensor * mask   = nullptr;
+    uint32_t      step   = 1;
+    int64_t       anchor = 0;
+
+    // the view [n_rows, n_cols] whose column i keeps the rows j < (n_first*step + phase + i)/step, n_first <= anchor, phase < step
+    ggml_tensor * view(ggml_context * ctx, int64_t n_rows, int64_t n_cols, int64_t n_first, int64_t phase) const;
+};
+
 class llama_kv_cache : public llama_memory_i {
 public:
     struct stream_copy_info {
@@ -262,18 +279,15 @@ public:
     // any chunk of consecutive tokens can then read its mask as a view of the staircase mask (see llm_graph_input_attn_kv_iswa::chunks)
     bool is_staircase(const llama_ubatch & ubatch, const slot_info & sinfo) const;
 
-    // false if no ubatch of this cache has a staircase mask, see staircase_supported
+    // the cache has a staircase (see init_staircase)
     bool can_staircase() const;
 
-    // a staircase mask in device memory: F16 [n_rows, n_cols], row j of column i is 0 if j < anchor + i/step, -inf otherwise
-    // a mask that keeps the first rows of each column, one more row every `step` columns, is a view of it (see get_staircase_offs)
-    // it is a constant, one per step and anchor: created on the first call, a view of a larger mask does not work as a graph input (the scheduler copies each view)
-    // step 1: the KQ mask of the token chunks, see is_staircase; step kpool: the pool mask of the k-pool indexer
-    ggml_tensor * get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const;
+    // allocate the staircase once, for views of up to [n_rows, n_cols], if the cache supports it: no SWA, no ALiBi, not on the meta device
+    // (it has no split state for the staircase), and the device of the cache runs flash attention with a mask view whose rows are
+    // farther apart than their length
+    void init_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols);
 
-    // offset in the staircase of a mask whose column i keeps the rows j < (n_first*step + phase + i)/step, phase < step
-    // the view needs up to 8*step columns and 8 rows more than the mask
-    static size_t get_staircase_offs(const ggml_tensor * staircase, uint32_t step, int64_t anchor, int64_t n_first, int64_t phase);
+    const llama_kv_staircase & get_staircase() const;
 
     // fill the mask of a token chunk of the ubatch (see llm_attn_mask::tokens), if it is not a view of the staircase
     void set_input_attn_mask_chunk(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
@@ -336,13 +350,9 @@ private:
     // keep constants separate from mutable KV buffers
     llama_memory_bufs attn_rot_bufs;
 
-    // the cache has staircase masks: no SWA and no ALiBi, not on the meta device (it has no split state for the staircase),
-    // and the device of the cache runs flash attention with a mask view whose rows are farther apart than their length
-    bool staircase_supported = false;
-
-    // see get_staircase()
-    mutable llama_memory_bufs staircase_bufs;
-    mutable std::map<std::pair<uint32_t, int64_t>, ggml_tensor *> staircases; // by step and anchor
+    // see init_staircase()
+    llama_kv_staircase staircase;
+    llama_memory_bufs  staircase_bufs;
 
     void init_rotation(const char * name_tag);
 
@@ -464,13 +474,12 @@ public:
     // see llama_kv_cache::is_staircase, for the current ubatch
     bool is_staircase() const;
 
-    // layer-major prefill: true if the cells of each ubatch of more than n_tokens tokens are a staircase, or if this cache has no staircase masks
-    bool is_staircase(uint32_t n_tokens) const;
+    // layer-major prefill: false if a ubatch of more than n_tokens tokens is not a staircase while the cache has one
+    bool can_chunk(uint32_t n_tokens) const override;
     bool can_staircase() const;
 
-    // the view of the staircase mask for the n tokens of the current ubatch that start at token t
-    // the staircase is sized for the largest ubatch, n_ubatch tokens
-    ggml_tensor * get_staircase(ggml_context * ctx, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const;
+    // the KQ mask of the n tokens of the current ubatch that start at token t: a view of the staircase
+    ggml_tensor * get_chunk_mask(ggml_context * ctx, uint32_t t, uint32_t n) const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;

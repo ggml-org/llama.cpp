@@ -63,6 +63,9 @@ public:
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
+    // the KQ staircase of the base cache, the SWA cache has none
+    void init_layer_major(uint32_t n_ubatch, uint32_t n_chunk, bool attn) override;
+
     bool get_can_shift() const override;
 
     void clear(bool data) override;

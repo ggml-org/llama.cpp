@@ -57,6 +57,9 @@ public:
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
+    // the pool staircase of the indexer cache (see llama_memory_hybrid_idx_context::get_kpool_mask)
+    void init_layer_major(uint32_t n_ubatch, uint32_t n_chunk, bool attn) override;
+
     void clear(bool data) override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
@@ -193,10 +196,8 @@ public:
     uint32_t get_n_kpool_new() const; // Pools to re-pool this ubatch, padded to a stable bound, never below 1.
     kpool_access get_kpool_access(ggml_context * ctx, int32_t il, int64_t n_embd) const;
     // layer-major prefill: the pool mask [n_pool, n] of the n tokens of the current ubatch from token t0,
-    // as a view of a constant staircase mask in device memory (see llama_kv_cache::get_staircase)
-    // nullptr if the cache has no staircase masks; the caller checks n_seq_max == 1, the mask of one sequence is a staircase
-    // the staircase is sized for the largest ubatch, n_ubatch tokens
-    ggml_tensor * get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const;
+    // as a view of the staircase of the indexer cache (see llama_kv_staircase), nullptr if the cache has no staircase
+    ggml_tensor * get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t t0, uint32_t n) const;
 
     // pool_mask can be null, if the graph reads the masks of get_kpool_mask
     // sel_mask (F32 [n_sel, 1, 1, n_tokens], can be null): 0 for the live selection slots, -inf for the dead ones

@@ -133,6 +133,10 @@ struct llama_memory_i {
     // status == LLAMA_MEMORY_STATUS_NO_UPDATE if there is nothing to update
     virtual llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) = 0;
 
+    // layer-major prefill: allocate the constant masks of the chunks of n_chunk tokens of a ubatch of up to n_ubatch tokens of one sequence
+    // (see llama_kv_staircase); attn: the KQ masks of the chunks are views of a staircase (see llm_graph_chunk_plan::attn)
+    virtual void init_layer_major(uint32_t /*n_ubatch*/, uint32_t /*n_chunk*/, bool /*attn*/) {}
+
     // getters
     virtual bool get_can_shift() const = 0;
 

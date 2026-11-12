@@ -135,6 +135,22 @@ llama_memory_context_ptr llama_memory_hybrid_idx::init_batch(llama_batch_allocr 
     return std::make_unique<llama_memory_hybrid_idx_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
+void llama_memory_hybrid_idx::init_layer_major(uint32_t n_ubatch, uint32_t n_chunk, bool /*attn*/) {
+    // in order mode, the pool mask of one sequence is a staircase whatever its cells: the rank of a cell in its sequence grows by
+    // one per token (in position mode, the pools that a token sees depend on the positions of the cells)
+    const uint32_t kpool = get_kpool();
+    if (get_mem_idx() == nullptr || kpool == 0 || !get_kpool_by_order()) {
+        return;
+    }
+
+    // a token sees at most all the pools of a full cache
+    const int64_t anchor = get_mem_idx()->get_size()/kpool;
+
+    // the mask of the first token of a chunk keeps n_first pools; the cells of the ubatch add up to n_ubatch/kpool + 1 pools
+    // after them, and kpool_pad up to 64 pools of padding: n_pool <= n_first + n_ubatch/kpool + 1 + 64
+    get_mem_idx()->init_staircase(kpool, anchor, anchor + n_ubatch/kpool + 1 + 64, n_chunk);
+}
+
 llama_memory_context_ptr llama_memory_hybrid_idx::init_full() {
     return std::make_unique<llama_memory_hybrid_idx_context>(this);
 }
@@ -750,7 +766,7 @@ uint32_t llama_memory_hybrid_idx_context::kpool_n_visible(const llama_ubatch & u
     return std::partition_point(sq.pools.begin(), sq.pools.end(), [&](uint32_t j) { return sq.cells[j + kpool - 1].first <= p; }) - sq.pools.begin();
 }
 
-ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t0, uint32_t n) const {
+ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx, const llama_ubatch & ubatch, uint32_t t0, uint32_t n) const {
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
 
     const auto * idx = mem->get_mem_idx();
@@ -758,39 +774,26 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
         return nullptr;
     }
 
-    const uint32_t kpool  = mem->get_kpool();
-    const int64_t  n_pool = get_n_kpool();
+    const llama_kv_staircase & staircase = idx->get_staircase();
 
-    // a token sees at most all the pools of a full cache, and the pools of one ubatch follow the first visible one
-    const int64_t anchor = GGML_PAD(idx->get_size()/kpool, 8);
-
-    ggml_tensor * staircase = idx->get_staircase(kpool, anchor, anchor + n_ubatch/kpool + 64 + 16, n_chunk + 8*kpool);
+    const int64_t n_pool = get_n_kpool();
 
     // graph reservation (there are no cells) or an empty chunk: only the shape of the view is used
     if (get_idx()->is_reserve() || n == 0) {
-        return ggml_view_2d(ctx, staircase, n_pool, n, staircase->nb[1], 0);
+        return staircase.view(ctx, n_pool, n, staircase.anchor, 0);
     }
 
-    // the cells do not decide it, so that the graph keeps the shape of its reserve: with a single sequence (the caller
-    // checks n_seq_max == 1) the rank of a cell in its sequence grows by one per token, holes and positions do not matter
-    GGML_ASSERT(mem->get_kpool_by_order() && ubatch.n_seqs_unq == 1);
+    // the staircase exists in order mode with one sequence (see llama_memory_hybrid_idx::init_layer_major):
+    // nv grows by one every kpool tokens, from some phase
+    GGML_ASSERT(ubatch.n_seqs_unq == 1);
 
-    const auto & lay = mem->kpool_layout_get();
-
-    // the pools of the sequence must be the first rows, see seq_pool_start in set_input_kpool
-    const llama_seq_id s = ubatch.seq_id[0][0];
-    for (llama_seq_id s0 = 0; s0 < s; ++s0) {
-        GGML_ASSERT(lay.seqs[s0].pools.empty());
-    }
+    const uint32_t kpool = mem->get_kpool();
 
     std::vector<int64_t> nv(n);
     for (uint32_t i = 0; i < n; ++i) {
-        GGML_ASSERT(ubatch.n_seq_id[t0 + i] == 1 && ubatch.seq_id[t0 + i][0] == s);
-
         nv[i] = kpool_n_visible(ubatch, t0 + i);
     }
 
-    // one more pool every kpool tokens, from some phase
     int64_t phase = -1;
     for (uint32_t ph = 0; ph < kpool && phase < 0; ++ph) {
         bool ok = true;
@@ -801,15 +804,9 @@ ggml_tensor * llama_memory_hybrid_idx_context::get_kpool_mask(ggml_context * ctx
             phase = ph;
         }
     }
-    GGML_ASSERT(phase >= 0 && nv[0] <= anchor && "the pool mask of a single sequence is a staircase");
+    GGML_ASSERT(phase >= 0 && "the pool mask of one sequence in order mode is a staircase");
 
-    const size_t offs = llama_kv_cache::get_staircase_offs(staircase, kpool, anchor, nv[0], phase);
-
-    // the rows of the view are within the staircase
-    const int64_t row = (offs%staircase->nb[1])/staircase->nb[0];
-    GGML_ASSERT(row + n_pool <= staircase->ne[0]);
-
-    return ggml_view_2d(ctx, staircase, n_pool, n, staircase->nb[1], offs);
+    return staircase.view(ctx, n_pool, n, nv[0], phase);
 }
 
 void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, ggml_tensor * pool_idxs, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,

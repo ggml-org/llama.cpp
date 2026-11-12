@@ -820,13 +820,13 @@ llama_model_qwen4exp::llm_graph_input_kpool * llama_model_qwen4exp::graph::build
 
     const auto & qsa_chunks = inp->tokens;
 
-    // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the cache has them
+    // layer-major prefill: the pool masks of the chunks are views of a constant mask on the device, if the cache has one
     // a pool mask input has n_pool values per token of the ubatch, in host memory and on the device
-    // the pool mask of one sequence is a staircase whatever its cells, so that the graph keeps the shape of the reserve
+    // the pool mask is a staircase whatever the cells, so that the graph keeps the shape of the reserve
     std::vector<ggml_tensor *> pool_masks;
-    if (!chunk_plan.chunks.empty() && cparams.n_seq_max == 1) {
+    if (!chunk_plan.chunks.empty()) {
         for (const auto & qc : qsa_chunks) {
-            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, cparams.n_ubatch, cparams.n_chunk, qc.t0, qc.n));
+            pool_masks.push_back(mctx_hyb->get_kpool_mask(ctx0, ubatch, qc.t0, qc.n));
             if (pool_masks.back() == nullptr) {
                 pool_masks.clear();
                 break;

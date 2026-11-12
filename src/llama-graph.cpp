@@ -173,7 +173,7 @@ static llm_attn_mask build_attn_inp_attn_mask_chunk(
 
     if (mctx->can_staircase()) {
         attn_mask.n_kv = mctx->get_n_kv();
-        attn_mask.raw  = mctx->get_staircase(ctx, cparams.n_ubatch, cparams.n_chunk, tokens.t0, tokens.n);
+        attn_mask.raw  = mctx->get_chunk_mask(ctx, tokens.t0, tokens.n);
     } else {
         const llama_ubatch slice = ubatch.slice(tokens.t0, tokens.n);
 

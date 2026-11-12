@@ -302,10 +302,6 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
     }
 
-    // the staircase mask is on the device of the first layer, see get_staircase
-    staircase_supported = swa_type == LLAMA_SWA_TYPE_NONE && !hparams.use_alibi && !layers.empty() && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR &&
-        buft_supports_mask_view(ggml_backend_buffer_get_type(layers[0].k->buffer));
-
     {
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
@@ -2036,10 +2032,6 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
     }
 }
 
-bool llama_kv_cache::can_staircase() const {
-    return staircase_supported;
-}
-
 bool llama_kv_cache::is_staircase(const llama_ubatch & ubatch, const slot_info & sinfo) const {
     if (!can_staircase()) {
         return false;
@@ -2077,17 +2069,26 @@ bool llama_kv_cache::is_staircase(const llama_ubatch & ubatch, const slot_info &
         cells.seq_n_cells(seq_id, ubatch.pos[0]) == ubatch.n_tokens;
 }
 
-ggml_tensor * llama_kv_cache::get_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) const {
-    if (staircases.count({ step, anchor }) > 0) {
-        ggml_tensor * staircase = staircases.at({ step, anchor });
-        GGML_ASSERT(staircase->ne[0] >= n_rows && staircase->ne[1] >= n_cols);
-        return staircase;
+bool llama_kv_cache::can_staircase() const {
+    return staircase.mask != nullptr;
+}
+
+void llama_kv_cache::init_staircase(uint32_t step, int64_t anchor, int64_t n_rows, int64_t n_cols) {
+    if (can_staircase() || layers.empty() || swa_type != LLAMA_SWA_TYPE_NONE || hparams.use_alibi || model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+        return;
     }
 
-    GGML_ASSERT(!layers.empty());
+    // on the device of the first layer
+    ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(layers[0].k->buffer);
+    if (!buft_supports_mask_view(buft)) {
+        return;
+    }
 
-    // the CUDA kernels read the mask rows in pairs and with 16-byte copies
-    n_rows = GGML_PAD(n_rows, 256);
+    constexpr int64_t n_align = llama_kv_staircase::n_align;
+
+    // every column starts at a multiple of n_align values
+    const int64_t ne0 = GGML_PAD(n_rows + n_align, n_align);
+    const int64_t ne1 = n_cols + n_align*step;
 
     ggml_init_params params = { ggml_tensor_overhead(), nullptr, true };
     ggml_context_ptr ctx { ggml_init(params) };
@@ -2095,10 +2096,10 @@ ggml_tensor * llama_kv_cache::get_staircase(uint32_t step, int64_t anchor, int64
         throw std::runtime_error("failed to create ggml context for the staircase mask");
     }
 
-    ggml_tensor * staircase = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, n_rows, n_cols);
-    ggml_format_name(staircase, "cache_mask_staircase_%u", step);
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F16, ne0, ne1);
+    ggml_format_name(mask, "cache_mask_staircase_%u", step);
 
-    auto * buf = staircase_bufs.emplace(std::move(ctx), ggml_backend_buffer_get_type(layers[0].k->buffer), "staircase mask");
+    auto * buf = staircase_bufs.emplace(std::move(ctx), buft, "staircase mask");
     ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     LLAMA_LOG_INFO("%s: %10s staircase mask (step %u) buffer size = %8.2f MiB\n", __func__,
             ggml_backend_buffer_name(buf), step, ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
@@ -2107,29 +2108,34 @@ ggml_tensor * llama_kv_cache::get_staircase(uint32_t step, int64_t anchor, int64
         const ggml_fp16_t mask_keep = llama_cast<ggml_fp16_t>(0.0f);
         const ggml_fp16_t mask_drop = llama_cast<ggml_fp16_t>(-INFINITY);
 
-        std::vector<ggml_fp16_t> data(n_rows*n_cols, mask_drop);
-        for (int64_t i = 0; i < n_cols; ++i) {
-            std::fill_n(data.begin() + i*n_rows, std::min<int64_t>(n_rows, anchor + i/step), mask_keep);
+        std::vector<ggml_fp16_t> data(ne0*ne1, mask_drop);
+        for (int64_t i = 0; i < ne1; ++i) {
+            std::fill_n(data.begin() + i*ne0, std::min<int64_t>(ne0, anchor + i/step), mask_keep);
         }
 
-        ggml_backend_tensor_set(staircase, data.data(), 0, ggml_nbytes(staircase));
+        ggml_backend_tensor_set(mask, data.data(), 0, ggml_nbytes(mask));
     }
 
-    staircases[{ step, anchor }] = staircase;
+    staircase = { mask, step, anchor };
+}
+
+const llama_kv_staircase & llama_kv_cache::get_staircase() const {
+    GGML_ASSERT(can_staircase());
 
     return staircase;
 }
 
-size_t llama_kv_cache::get_staircase_offs(const ggml_tensor * staircase, uint32_t step, int64_t anchor, int64_t n_first, int64_t phase) {
+ggml_tensor * llama_kv_staircase::view(ggml_context * ctx, int64_t n_rows, int64_t n_cols, int64_t n_first, int64_t phase) const {
     GGML_ASSERT(n_first <= anchor && phase >= 0 && phase < step);
 
-    // whole steps of columns shift the rows, so that the view starts at a multiple of 16 bytes for any n_first
-    const int64_t shift = ((n_first - anchor)%8 + 8)%8;
+    // whole steps of columns shift the rows, so that the view starts at a multiple of n_align values for any n_first
+    const int64_t shift = ((n_first - anchor)%n_align + n_align)%n_align;
 
-    const size_t col = phase + step*shift;
-    const size_t row = anchor + shift - n_first;
+    const int64_t col = phase + step*shift;
+    const int64_t row = anchor + shift - n_first;
+    GGML_ASSERT(row + n_rows <= mask->ne[0] && col + n_cols <= mask->ne[1]);
 
-    return col*staircase->nb[1] + row*staircase->nb[0];
+    return ggml_view_2d(ctx, mask, n_rows, n_cols, mask->nb[1], col*mask->nb[1] + row*mask->nb[0]);
 }
 
 // the cells of the later tokens of a ubatch are in the cache already: a slice of the ubatch attends to the cells up to its last position
@@ -3222,16 +3228,16 @@ uint32_t llama_kv_cache_context::get_n_kv_rows(const llama_ubatch & slice) const
     return kv->get_n_kv_rows(slice, get_slice_pos_max(slice));
 }
 
-ggml_tensor * llama_kv_cache_context::get_staircase(ggml_context * ctx, uint32_t n_ubatch, uint32_t n_chunk, uint32_t t, uint32_t n) const {
-    // token i of a chunk at cell idx attends to the cells j < idx + 1 + i, and n_kv <= idx + n_tokens + 256
-    const int64_t anchor = kv->get_size() + 1;
-
-    ggml_tensor * staircase = kv->get_staircase(1, anchor, kv->get_size() + n_ubatch + 256 + 8, n_chunk + 8);
+ggml_tensor * llama_kv_cache_context::get_chunk_mask(ggml_context * ctx, uint32_t t, uint32_t n) const {
+    const llama_kv_staircase & staircase = kv->get_staircase();
 
     // graph reservation: there are no cells, only the shape of the view is used
-    const size_t offs = reserve ? 0 : llama_kv_cache::get_staircase_offs(staircase, 1, anchor, sinfos[i_cur].idxs[0][0] + t + 1, 0);
+    if (reserve) {
+        return staircase.view(ctx, n_kv, n, staircase.anchor, 0);
+    }
 
-    return ggml_view_2d(ctx, staircase, n_kv, n, staircase->nb[1], offs);
+    // token i of a chunk attends to the cells j < idx + 1 + i, idx: the cell of the first token of the chunk
+    return staircase.view(ctx, n_kv, n, sinfos[i_cur].idxs[0][0] + t + 1, 0);
 }
 
 bool llama_kv_cache_context::is_reserve() const {
@@ -3251,7 +3257,7 @@ bool llama_kv_cache_context::is_staircase() const {
     return sinfos[i_cur].staircase;
 }
 
-bool llama_kv_cache_context::is_staircase(uint32_t n_tokens) const {
+bool llama_kv_cache_context::can_chunk(uint32_t n_tokens) const {
     if (!kv->can_staircase()) {
         return true;
     }

@@ -862,6 +862,11 @@ void llama_context::sched_reserve() {
 
     resolve_fused_ops(mctx.get(), n_seqs);
 
+    // layer-major prefill: the constant masks of the chunks, with flash attention resolved (see llm_graph_chunk_plan::attn)
+    if (memory && cparams.n_chunk > 0 && cparams.n_seq_max == 1) {
+        memory->init_layer_major(cparams.n_ubatch, cparams.n_chunk, llm_graph_chunk_plan(model, cparams, cparams.n_ubatch).attn);
+    }
+
     // reserve worst-case graph
     int n_splits_pp        = -1;
     int n_nodes_pp         = -1;

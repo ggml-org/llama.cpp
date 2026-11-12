@@ -248,6 +248,18 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_update(llama_context * lctx, 
     return std::make_unique<llama_kv_cache_iswa_context>(this, lctx, optimize);
 }
 
+void llama_kv_cache_iswa::init_layer_major(uint32_t n_ubatch, uint32_t n_chunk, bool attn) {
+    if (!attn) {
+        return;
+    }
+
+    // token i of a chunk attends to the cells j < idx + 1 + i, idx < kv_size: anchor kv_size + 1 has a view for any idx
+    // no cells follow a ubatch with chunks (see llama_kv_cache::is_staircase): n_kv <= idx + n_ubatch + 256, the padding of n_kv
+    const int64_t kv_size = kv_base->get_size();
+
+    kv_base->init_staircase(1, kv_size + 1, kv_size + n_ubatch + 256, n_chunk);
+}
+
 bool llama_kv_cache_iswa::get_can_shift() const {
     return kv_base->get_can_shift() &&
            kv_swa->get_can_shift() &&
@@ -343,7 +355,7 @@ const llama_ubatch & llama_kv_cache_iswa_context::get_ubatch() const {
 }
 
 bool llama_kv_cache_iswa_context::can_chunk(uint32_t n_tokens) const {
-    return get_base()->is_staircase(n_tokens);
+    return get_base()->can_chunk(n_tokens);
 }
 
 const llama_kv_cache_context * llama_kv_cache_iswa_context::get_base() const {
