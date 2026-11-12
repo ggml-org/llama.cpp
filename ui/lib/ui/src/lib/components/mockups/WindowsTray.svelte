@@ -17,13 +17,13 @@
 </script>
 
 <script lang="ts">
-	import hfLogo from '$lib/assets/hf-logo.svg?url';
-	import gemma from '$lib/assets/model-logos/gemma.svg?raw';
-	import gpt from '$lib/assets/model-logos/gpt.svg?raw';
-	import liquid from '$lib/assets/model-logos/liquid.svg?raw';
-	import meta from '$lib/assets/model-logos/meta.svg?raw';
-	import qwen from '$lib/assets/model-logos/qwen.svg?raw';
-	import { Logo } from '$lib/components/app/misc';
+	import hfLogo from '../../assets/hf-logo.svg?url';
+	import gemma from '../../assets/model-logos/gemma.svg?raw';
+	import gpt from '../../assets/model-logos/gpt.svg?raw';
+	import liquid from '../../assets/model-logos/liquid.svg?raw';
+	import meta from '../../assets/model-logos/meta.svg?raw';
+	import qwen from '../../assets/model-logos/qwen.svg?raw';
+	import { Logo } from '../app/misc';
 	import {
 		ArrowLeft,
 		Check,

@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
 	import type { MCPConnectionLog } from '#lib/types/index.ts';
 	import { formatTime, getMcpLogLevelClass, getMcpLogLevelIcon } from '#lib/utils/index.ts';
 

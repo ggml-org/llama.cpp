@@ -4,10 +4,10 @@
 	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
 	import ModelsManagerModelConfigurationHeader from './ModelsManagerModelConfigurationHeader.svelte';
 	import ModelsManagerModelConfigurationInformation from './ModelsManagerModelConfigurationInformation.svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Trash2 } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { ModelDownloadConfirmAction, ServerModelStatus } from '#lib/enums/index.ts';
 	import { HuggingFaceService } from '#lib/services/index.ts';
 	import { deviceStore, modelsStore, uiStore } from '#lib/stores/index.ts';

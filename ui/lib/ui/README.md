@@ -1,14 +1,15 @@
 # @ggml-org/llama-ui
 
 Llama UI, the design system of Llama Chat and the Llama apps, as a package: its tokens, fonts, surfaces and
-components, for llama.pages (llama.app) first and Llama Chat (`ui/apps/chat`) later. It lives in llama.cpp at
-`ui/lib/ui`, beside the apps built on it in `ui/apps`.
+components, for Llama Chat (`ui/apps/chat`) and llama.pages (llama.app). It lives in llama.cpp at `ui/lib/ui`,
+beside the apps built on it in `ui/apps`.
 
 ## Use
 
 ```css
 /* app.css */
 @import 'tailwindcss';
+@import 'tw-animate-css';
 @import '@ggml-org/llama-ui/theme.css';
 ```
 
@@ -21,7 +22,8 @@ components, for llama.pages (llama.app) first and Llama Chat (`ui/apps/chat`) la
 <Badge variant="success">Downloaded</Badge>
 ```
 
-- `theme.css`: everything: fonts, tokens, surfaces, the Tailwind theme and base styles. It needs Tailwind 4.
+- `theme.css`: everything: fonts, tokens, surfaces, the Tailwind theme and base styles. It needs Tailwind 4 and
+  `tw-animate-css`, both peer dependencies, imported before it.
 - `tokens.css`: the three tiers of tokens only. `fonts.css`: Llama Sans and Llama Mono. `surfaces.css`: the matte
   surface utilities.
 - Dark mode is the `dark` class on `<html>`; the Matte light surfaces are the `theme-matte` class.
@@ -30,7 +32,10 @@ components, for llama.pages (llama.app) first and Llama Chat (`ui/apps/chat`) la
 
 - **Foundations:** the primitive, semantic and component tokens, the type roles (`text-body`, `text-label`…), corner,
   icon and control-height roles, the matte surfaces and elevations, Llama Sans and Llama Mono.
-- **Components:** Button, Badge, Card, Input, Label, Popover, Select, Separator, Switch, Toggle, ToggleGroup, Tooltip, ActionIcon (an icon button with a tooltip), SearchInput (a search field with a clear button), SyntaxHighlightedCode (code as Llama Chat shows it, in highlight.js's GitHub themes; needs `mode-watcher`) and Logo (the brand mark). `FILTER_TRIGGER_CLASS` and `FILTER_TOGGLE_ITEM_CLASS` style a filters bar the way Llama Chat's Models Manager does.
+- **Components:** every base component of Llama Chat: Alert, AlertDialog, Badge, Button, ButtonGroup, Card, Checkbox,
+  Collapsible, ContextMenu, Dialog, Drawer, DropdownMenu, Empty, HoverCard, Input, Label, Popover, RadioGroup,
+  ScrollArea, Select, Separator, Skeleton, Switch, Table, Tabs, Textarea, Toggle, ToggleGroup and Tooltip. Each is
+  also its own entry point (`@ggml-org/llama-ui/ui/dialog`), with `cn` and `tv` at `@ggml-org/llama-ui/utils`. Then ActionIcon (an icon button with a tooltip), SearchInput (a search field with a clear button), SyntaxHighlightedCode (code as Llama Chat shows it, in highlight.js's GitHub themes; needs `mode-watcher`) and Logo (the brand mark). `FILTER_TRIGGER_CLASS` and `FILTER_TOGGLE_ITEM_CLASS` style a filters bar the way Llama Chat's Models Manager does.
 - **App mockups:** MacMenu (Llama for Mac's menu) and WindowsTray (Llama for Windows' tray flyout), the native apps' UIs as the brand's communications draw them, with an `annotate` snippet to pin a page's numbered callouts to their edges.
 - **Model UI:** how a model is shown in Llama Chat and on llama.app: `ModelCard`, `ModelFamilyCard` (a family as llama.app's catalog
   shows it), `ModelId` (name, badges, capability,
@@ -39,7 +44,19 @@ components, for llama.pages (llama.app) first and Llama Chat (`ui/apps/chat`) la
   `minMemoryTierGb` and `summarizeSizes`. They take model data in and report what the user did out; fetching and downloading stay in the
   app.
 
-Next: Tabs and Separator, and llama.app's model page.
+Next: llama.app's model page.
+
+## How the apps in this repo use it
+
+Llama Chat does not install the package: it compiles these sources as part of its own build, so a change here
+shows in the app at once and the app keeps no copy of a component or a token. For that to work:
+
+- Sources under `src/lib` import each other by relative path, never through `$lib`, which in an app points at
+  the app's own `src/lib`.
+- What they import from npm is listed in `dependencies` or `peerDependencies`: the app reads that list to resolve
+  those packages from its own `node_modules` (`ui/apps/chat/scripts/llama-ui.js`).
+- Stylesheets import no package. An app imports Tailwind and `tw-animate-css` itself, before `theme.css`.
+- A component added with shadcn-svelte (`components.json`) arrives with `$lib` imports: make them relative.
 
 ## Development
 

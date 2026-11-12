@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ArrowUp } from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 
 	interface Props {
 		canSend?: boolean;

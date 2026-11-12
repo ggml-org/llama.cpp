@@ -3,8 +3,8 @@
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import ModelsDiscoverDetailsHfHubStats from './ModelsDiscoverDetailsHfHubStats.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { ExternalLink } from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { HuggingFaceService } from '#lib/services/index.ts';
 	import type { HfModelDetailInfo, HfModelGguf } from '#lib/types/huggingface.js';
 	import type { ModelModalities } from '#lib/types/models.js';

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { DARK_INVERT_AVATAR_ORGS } from '$lib/models/constants';
-	import { getAvatarUrl } from '$lib/models/format';
+	import { DARK_INVERT_AVATAR_ORGS } from '../../models/constants';
+	import { getAvatarUrl } from '../../models/format';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	// Avatars a failed request is cooling down for. A failure hides the image

@@ -1,5 +1,5 @@
 // highlightCode and its helpers, from ui/apps/chat's utils/code.ts (only what SyntaxHighlightedCode uses)
-import { CODE_BLOCK } from "$lib/constants";
+import { CODE_BLOCK } from "../constants";
 import hljs from "highlight.js";
 import bash from "highlight.js/lib/languages/bash";
 

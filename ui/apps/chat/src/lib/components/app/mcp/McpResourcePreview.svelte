@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { AlertCircle, Download, FileText, Loader2 } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { MimeTypeApplication, MimeTypeText } from '#lib/enums/index.ts';
 	import { mcpStore } from '#lib/stores/index.ts';

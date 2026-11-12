@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { BadgeInfo } from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { copyToClipboard } from '#lib/utils/index.ts';
 	import type { Component } from 'svelte';
 

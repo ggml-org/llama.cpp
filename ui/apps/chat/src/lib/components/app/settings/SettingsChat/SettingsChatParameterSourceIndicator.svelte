@@ -1,6 +1,6 @@
 <script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
 	import { Wrench } from '@lucide/svelte';
-	import { Badge } from '#lib/components/ui/badge/index.ts';
 
 	interface Props {
 		class?: string;

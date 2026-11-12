@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { Loader2, RefreshCw } from '@lucide/svelte';
 	import { SearchInput } from '#lib/components/app/forms/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	interface Props {

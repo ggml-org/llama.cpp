@@ -2,7 +2,7 @@ import Content from './tooltip-content.svelte';
 import Trigger from './tooltip-trigger.svelte';
 import { Tooltip as TooltipPrimitive } from 'bits-ui';
 
-// annotated so svelte-package can name the types in the generated declarations (llama-ui only)
+// annotated so svelte-package can name the types in the generated declarations
 const Root: typeof TooltipPrimitive.Root = TooltipPrimitive.Root;
 const Provider: typeof TooltipPrimitive.Provider = TooltipPrimitive.Provider;
 const Portal: typeof TooltipPrimitive.Portal = TooltipPrimitive.Portal;

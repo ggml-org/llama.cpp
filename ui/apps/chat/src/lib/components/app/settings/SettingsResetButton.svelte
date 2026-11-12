@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { RotateCcw } from '@lucide/svelte';
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { settingsStore } from '#lib/stores/index.ts';
 
 	interface Props {

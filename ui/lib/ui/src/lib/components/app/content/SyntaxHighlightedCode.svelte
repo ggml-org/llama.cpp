@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX, UI_DATA_ATTRS } from '$lib/constants';
-	import { BooleanString, ColorMode } from '$lib/enums';
-	import { highlightCode } from '$lib/utils';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX, UI_DATA_ATTRS } from '../../../constants';
+	import { BooleanString, ColorMode } from '../../../enums';
+	import { highlightCode } from '../../../utils';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import { mode } from 'mode-watcher';

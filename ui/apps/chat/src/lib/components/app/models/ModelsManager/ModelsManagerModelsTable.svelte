@@ -9,6 +9,7 @@
 		type ModelQuantGroup,
 		type ModelsTableGroup
 	} from './utils';
+	import * as Empty from '@ggml-org/llama-ui/ui/empty';
 	import {
 		ArrowDown,
 		ArrowUp,
@@ -29,7 +30,6 @@
 		ModelAvatar,
 		ModelsSection
 	} from '#lib/components/app/index.ts';
-	import * as Empty from '#lib/components/ui/empty/index.ts';
 	import {
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,

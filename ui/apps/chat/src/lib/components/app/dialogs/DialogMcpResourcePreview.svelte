@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Download } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '#lib/constants/index.ts';
 	import { MimeTypeText } from '#lib/enums/index.ts';
 	import { deviceStore, mcpStore } from '#lib/stores/index.ts';

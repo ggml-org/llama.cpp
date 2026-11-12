@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import ModelsDiscover from '#lib/components/app/models/discover/ModelsDiscover.svelte';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { DISCOVER_ICON } from '#lib/constants/index.ts';
 	import { uiStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';

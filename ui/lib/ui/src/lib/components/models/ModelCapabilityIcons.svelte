@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Badge } from '$lib/components/ui/badge';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Badge } from '../ui/badge';
+	import * as Tooltip from '../ui/tooltip';
 	import {
 		CAPABILITY_ICONS,
 		CAPABILITY_LABELS,
@@ -8,9 +8,9 @@
 		MODALITY_ICONS,
 		MODALITY_LABELS,
 		MODALITY_ORDER
-	} from '$lib/models/constants';
-	import { ModelCapability } from '$lib/models/enums';
-	import type { ModelModalities } from '$lib/models/types';
+	} from '../../models/constants';
+	import { ModelCapability } from '../../models/enums';
+	import type { ModelModalities } from '../../models/types';
 
 	interface Props {
 		/** Name every capability in an outline badge, the way the MCP server cards do. */

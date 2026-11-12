@@ -27,11 +27,11 @@
 </script>
 
 <script lang="ts">
-	import gemma from '$lib/assets/model-logos/gemma.svg?raw';
-	import gpt from '$lib/assets/model-logos/gpt.svg?raw';
-	import liquid from '$lib/assets/model-logos/liquid.svg?raw';
-	import qwen from '$lib/assets/model-logos/qwen.svg?raw';
-	import qr from '$lib/assets/qr-network.svg?raw';
+	import gemma from '../../assets/model-logos/gemma.svg?raw';
+	import gpt from '../../assets/model-logos/gpt.svg?raw';
+	import liquid from '../../assets/model-logos/liquid.svg?raw';
+	import qwen from '../../assets/model-logos/qwen.svg?raw';
+	import qr from '../../assets/qr-network.svg?raw';
 	import {
 		ArrowDown,
 		ArrowUpRight,

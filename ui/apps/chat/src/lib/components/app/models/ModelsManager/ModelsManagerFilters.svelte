@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Select from '@ggml-org/llama-ui/ui/select';
+	import * as ToggleGroup from '@ggml-org/llama-ui/ui/toggle-group';
 	import { ScrollCarousel } from '#lib/components/app/index.ts';
-	import * as Select from '#lib/components/ui/select/index.ts';
-	import * as ToggleGroup from '#lib/components/ui/toggle-group/index.ts';
 	import {
 		CAPABILITY_ICONS,
 		CAPABILITY_LABELS,

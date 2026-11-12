@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Select from '@ggml-org/llama-ui/ui/select';
 	import { Check, Copy } from '@lucide/svelte';
-	import * as Select from '#lib/components/ui/select/index.ts';
 	import {
 		COPY_FEEDBACK_RESET_MS,
 		MODEL_ID,

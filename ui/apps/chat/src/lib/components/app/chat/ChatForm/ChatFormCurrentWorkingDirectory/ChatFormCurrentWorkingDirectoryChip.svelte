@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Folder, X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/actions/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
 	import { abbreviateWorkingDir } from '#lib/utils/index.ts';
 

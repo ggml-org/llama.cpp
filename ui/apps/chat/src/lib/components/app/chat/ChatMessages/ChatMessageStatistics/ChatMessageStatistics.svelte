@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { BookOpenText, Clock, Gauge, Layers, Sparkles, WholeWord, Wrench } from '@lucide/svelte';
 	import { ChatMessageStatisticsBadge } from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { DEFAULT_PERFORMANCE_TIME, MS_PER_SECOND } from '#lib/constants/index.ts';
 	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '#lib/enums/index.ts';
 	import type { ChatMessageAgenticTimings } from '#lib/types/chat.js';

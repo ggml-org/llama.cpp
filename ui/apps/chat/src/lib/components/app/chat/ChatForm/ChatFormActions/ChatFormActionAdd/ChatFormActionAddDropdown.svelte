@@ -1,10 +1,10 @@
 <script lang="ts">
+	import { buttonVariants } from '@ggml-org/llama-ui/ui/button';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import { File, Folder, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
 	import { ChatFormActionAddToolsSubmenu } from '#lib/components/app/index.ts';
-	import { buttonVariants } from '#lib/components/ui/button/index.ts';
-	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
-	import { cn } from '#lib/components/ui/utils.ts';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,

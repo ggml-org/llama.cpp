@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { GLASS_KEY_CLASS } from '#lib/constants/index.ts';
 	import { deviceStore } from '#lib/stores/index.ts';
 	import type { Component, Snippet } from 'svelte';

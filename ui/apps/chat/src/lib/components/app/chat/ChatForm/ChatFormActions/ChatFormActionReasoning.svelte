@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Check, Info, Lightbulb, LightbulbOff } from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Drawer from '#lib/components/ui/drawer/index.ts';
-	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { ICON_CLASS_DEFAULT, REASONING_EFFORT_LABELS } from '#lib/constants/index.ts';
 	import { ReasoningEffort } from '#lib/enums/index.ts';
 	import { useReasoningMenu } from '#lib/hooks/use-reasoning-menu.svelte.ts';

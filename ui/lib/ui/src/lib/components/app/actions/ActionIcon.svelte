@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { Button, type ButtonSize, type ButtonVariant } from '$lib/components/ui/button';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { TooltipSide } from '$lib/enums';
+	import { Button, type ButtonSize, type ButtonVariant } from '../../ui/button';
+	import * as Tooltip from '../../ui/tooltip';
+	import { TooltipSide } from '../../../enums';
 	import type { Component } from 'svelte';
 
 	interface Props {

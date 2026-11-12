@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { KeyboardKey } from '#lib/enums/index.ts';
 	import type { Component, Snippet } from 'svelte';
 

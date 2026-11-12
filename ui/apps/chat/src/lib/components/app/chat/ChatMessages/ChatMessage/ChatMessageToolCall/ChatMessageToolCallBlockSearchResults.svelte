@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as HoverCard from '@ggml-org/llama-ui/ui/hover-card';
 	import { Globe, Loader2 } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
-	import * as HoverCard from '#lib/components/ui/hover-card/index.ts';
 	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
 	import { mcpStore } from '#lib/stores/index.ts';

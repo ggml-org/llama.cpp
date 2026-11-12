@@ -9,8 +9,8 @@
 	import ModelCard from './ModelCard.svelte';
 	import ModelOrgAvatar from './ModelOrgAvatar.svelte';
 	import { Database, MemoryStick } from '@lucide/svelte';
-	import { formatFileSize, formatSizeRange } from '$lib/models/format';
-	import type { ModelModalities, ModelSizeRange } from '$lib/models/types';
+	import { formatFileSize, formatSizeRange } from '../../models/format';
+	import type { ModelModalities, ModelSizeRange } from '../../models/types';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

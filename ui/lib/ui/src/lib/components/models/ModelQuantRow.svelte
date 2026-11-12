@@ -10,7 +10,7 @@
 		GIGABYTE_LABEL,
 		OTHER_BIT_DEPTH,
 		OTHER_BIT_DEPTH_LABEL
-	} from '$lib/models/constants';
+	} from '../../models/constants';
 	import type { Snippet } from 'svelte';
 	import { cubicOut } from 'svelte/easing';
 	import { slide } from 'svelte/transition';

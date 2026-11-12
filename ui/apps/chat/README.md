@@ -339,7 +339,7 @@ flowchart TB
 
 #### Components (`src/lib/components/`)
 
-Components are organized in `app/` (application-specific) and `ui/` (shadcn-svelte primitives).
+Application components live in `app/`. The base components (the shadcn-svelte primitives: button, dialog, tooltip…), the design tokens, the fonts and the surfaces are Llama UI's, in [`ui/lib/ui`](../../lib/ui/README.md): the app imports them as `@ggml-org/llama-ui/ui/<name>` and compiles them from source as part of its own build, with no install or build of the library (see `scripts/llama-ui.js`).
 
 **Chat Components** (`app/chat/`):
 
@@ -748,7 +748,7 @@ npm run check         # TypeScript type checking
 ui/apps/chat/
 ├── src/
 │   ├── lib/
-│   │   ├── components/   # UI components (app/, ui/)
+│   │   ├── components/   # Application components (base ones come from ui/lib/ui)
 │   │   ├── hooks/        # Svelte hooks
 │   │   ├── stores/       # State management
 │   │   ├── services/     # API and database services

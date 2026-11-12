@@ -1,6 +1,6 @@
 <script lang="ts">
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { cn } from '#lib/components/ui/utils.ts';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
 	import { useScrollCarousel } from '#lib/hooks/use-scroll-carousel.svelte.ts';

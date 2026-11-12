@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import {
 		Compass,
 		Eject,
@@ -10,7 +11,6 @@
 		SquarePen,
 		Trash2
 	} from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { conversationsStore, deviceStore, uiStore } from '#lib/stores/index.ts';
 
 	interface Props {

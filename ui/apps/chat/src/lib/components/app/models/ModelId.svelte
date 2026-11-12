@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
 	import ModelDraftSidecars from './ModelDraftSidecars.svelte';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Database, ScrollText } from '@lucide/svelte';
 	import { TruncatedText } from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '#lib/constants/index.ts';
 	import type { ModelDraftSidecar } from '#lib/enums/index.ts';
 	import { HuggingFaceService } from '#lib/services/index.ts';

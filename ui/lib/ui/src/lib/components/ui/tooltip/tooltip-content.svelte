@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils.js';
+	import { cn } from '../utils.js';
 	import { Tooltip as TooltipPrimitive } from 'bits-ui';
 
 	let {

@@ -7,14 +7,14 @@
 <script lang="ts">
 	import ModelDownloadProgressBar from './ModelDownloadProgressBar.svelte';
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { SIDECAR_BADGE_CLASS } from '$lib/models/constants';
-	import { formatFileSize } from '$lib/models/format';
+	import * as Tooltip from '../ui/tooltip';
+	import { SIDECAR_BADGE_CLASS } from '../../models/constants';
+	import { formatFileSize } from '../../models/format';
 	import type {
 		ModelDownloadProgress,
 		ModelQuantCompanion,
 		ModelQuantState
-	} from '$lib/models/types';
+	} from '../../models/types';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

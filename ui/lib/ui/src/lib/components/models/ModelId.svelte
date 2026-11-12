@@ -10,9 +10,9 @@
 		MODEL_BADGE_CLASS,
 		MODEL_TAG_BADGE_CLASS,
 		MODEL_VARIANT_BADGE_CLASS
-	} from '$lib/models/constants';
-	import { formatParameters, formatSizeRange } from '$lib/models/format';
-	import type { ModelModalities, ModelSizeRange } from '$lib/models/types';
+	} from '../../models/constants';
+	import { formatParameters, formatSizeRange } from '../../models/format';
+	import type { ModelModalities, ModelSizeRange } from '../../models/types';
 
 	interface Props {
 		/** The model's name, e.g. `gemma-4` or `Gemma 4 E4B`. */

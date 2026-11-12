@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Card from '#lib/components/ui/card/index.ts';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Card from '@ggml-org/llama-ui/ui/card';
 
 	let { needRefresh: needRefreshProp, updateServiceWorker } = $props();
 	let needRefresh = $derived(needRefreshProp ?? false);

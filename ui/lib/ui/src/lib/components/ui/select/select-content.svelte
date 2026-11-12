@@ -1,7 +1,7 @@
 <script lang="ts">
 	import SelectScrollDownButton from './select-scroll-down-button.svelte';
 	import SelectScrollUpButton from './select-scroll-up-button.svelte';
-	import { cn, type WithoutChild } from '$lib/components/ui/utils.js';
+	import { cn, type WithoutChild } from '../utils.js';
 	import { Select as SelectPrimitive } from 'bits-ui';
 	import { onDestroy, onMount } from 'svelte';
 

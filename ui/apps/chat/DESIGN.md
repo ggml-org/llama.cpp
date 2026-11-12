@@ -6,7 +6,7 @@ description: >-
   bundles. Neutral and quiet: frosted matte surfaces with faint
   blue-grey hairlines, near-flat fills, and status colours for success, warning, error and info. Tokens come in
   three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs)
-  and components. Generated from src/lib/styles/tokens/*.css.
+  and components. Generated from ui/lib/ui/src/lib/styles/tokens/*.css.
 colors:
   primary: '{colors.action-primary}'
   neutral-0: 'oklch(1 0 0)'
@@ -761,7 +761,7 @@ This file is the how, written for agents first. Its principles, as rules to appl
 - **Reuse before adding.** An existing role before a new token, an existing component before
   a new one.
 
-Design tokens come in three tiers, each in its own file under `src/lib/styles/tokens/`:
+Design tokens come in three tiers, each in its own file under `ui/lib/ui/src/lib/styles/tokens/`:
 
 1. **Primitives** (`primitives.css`): raw values named by what they are, such as
    `neutral-900`, `cool-gray-200`, `red-500`, `white-a30`, `font-size-14` or `length-24`.
@@ -919,7 +919,7 @@ pinned content with the insets simulated, since they are 0 in a desktop browser.
 
 ## Elevation & Depth
 
-Depth is built from the matte utilities in `src/lib/styles/surfaces.css`. Pick the one that
+Depth is built from the matte utilities in `ui/lib/ui/src/lib/styles/surfaces.css`. Pick the one that
 matches the role of the surface instead of combining raw shadows.
 
 - **`matte-glass`:** large resting surfaces. A translucent fill with a backdrop blur, an

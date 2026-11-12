@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { AlertTriangle, TimerOff } from '@lucide/svelte';
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
 	import { ErrorDialogType } from '#lib/enums/index.ts';
 
 	interface Props {

@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import { tv } from '$lib/components/ui/utils';
+	import { tv } from '../utils';
 	import type { VariantProps } from 'tailwind-variants';
 
 	export const toggleVariants = tv({
@@ -32,7 +32,7 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils.js';
+	import { cn } from '../utils.js';
 	import { Toggle as TogglePrimitive } from 'bits-ui';
 
 	let {

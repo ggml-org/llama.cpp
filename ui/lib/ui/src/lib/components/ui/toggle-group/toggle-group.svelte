@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import type { ToggleSize } from '$lib/components/ui/toggle/index.js';
+	import type { ToggleSize } from '../toggle/index.js';
 	import { getContext, setContext } from 'svelte';
 
 	/** A group is as tall as a control of its size; its keys fill it. */
@@ -27,7 +27,7 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils.js';
+	import { cn } from '../utils.js';
 	import { ToggleGroup as ToggleGroupPrimitive } from 'bits-ui';
 
 	let {

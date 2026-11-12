@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
 	import {
 		Database,
 		ExternalLink,
@@ -8,7 +9,6 @@
 		Sparkles,
 		Wrench
 	} from '@lucide/svelte';
-	import { Badge } from '#lib/components/ui/badge/index.ts';
 	import type { MCPCapabilitiesInfo } from '#lib/types/index.ts';
 
 	interface Props {

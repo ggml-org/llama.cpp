@@ -34,6 +34,21 @@
 	--sidebar-shadow: var(--elevation-surface);
 	--sidebar-radius: var(--radius-container);
 
+	/* inset group: rows grouped inside a glass panel, e.g. the sidebar footer. A soft white on
+	   the light glass, with the sidebar's own ambient edge and a faint shade under it, so it
+	   reads as part of the panel rather than a button or a field */
+	--inset-group-background: color-mix(in oklch, var(--surface-raised) 55%, transparent);
+	--inset-group-edge-side: var(--edge-ambient-side);
+	--inset-group-edge-mid: var(--edge-ambient-mid);
+	--inset-group-shadow: 0 2px 8px -4px var(--black-a8);
+	/* a step rounder than a card, so the rows inside it (its radius less its padding, see the
+	   nested surfaces in Llama Chat's app.css) keep soft corners */
+	--inset-group-radius: var(--length-16);
+
+	/* selected row: the page a sidebar row opens is on. A tint of the text colour, under hover's,
+	   with the inset group's edge and shade so it reads as picked out rather than hovered */
+	--selected-row-background: color-mix(in oklch, var(--fg-default) 5%, transparent);
+
 	/* user message bubble */
 	--user-bubble-background: color-mix(in oklch, var(--action-primary) 5%, transparent);
 	--user-bubble-edge: var(--edge-faint);
@@ -159,6 +174,10 @@
 .dark {
 	/* in dark the keys stay frosted glass and quiet fills, lighter than the page */
 	--button-secondary-background: var(--surface-glass);
+	/* a raised fill would be darker than the dark glass: a faint tint of the text colour instead */
+	--inset-group-background: color-mix(in oklch, var(--fg-default) 3%, transparent);
+	--inset-group-shadow: 0 2px 8px -4px var(--black-a40);
+	--selected-row-background: color-mix(in oklch, var(--fg-default) 5%, transparent);
 	--button-secondary-background-hover: var(--surface-muted);
 	--button-tertiary-background: var(--action-quiet);
 	--button-tertiary-background-hover: var(--action-quiet-hover);

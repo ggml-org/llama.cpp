@@ -100,6 +100,36 @@
 		0 0 0 var(--elevation-ring-width) var(--elevation-ring);
 }
 
+/* rows grouped inside a glass panel; the edge stays the same while focus is inside. It sits on
+   glass already, so it does not blur: a second backdrop blur re-paints the panel's own fill
+   behind it and turns the group visibly lighter, whatever its fill */
+@utility inset-group-surface {
+	@apply matte-glass;
+	backdrop-filter: none;
+	--glass-background: var(--inset-group-background);
+	--glass-edge-side: var(--inset-group-edge-side);
+	--glass-edge-mid: var(--inset-group-edge-mid);
+	--glass-edge-side-focus: var(--inset-group-edge-side);
+	--glass-edge-mid-focus: var(--inset-group-edge-mid);
+	--glass-highlight: transparent;
+	--glass-shadow: var(--inset-group-shadow);
+	border-radius: var(--inset-group-radius);
+}
+
+/* the row a sidebar list is on: the inset group's edge and shade around a tint. It keeps the
+   row's own radius, and hover or press fills (bg-*) still paint over it */
+@utility selected-row-surface {
+	@apply matte-glass;
+	backdrop-filter: none;
+	--glass-background: var(--selected-row-background);
+	--glass-edge-side: var(--inset-group-edge-side);
+	--glass-edge-mid: var(--inset-group-edge-mid);
+	--glass-edge-side-focus: var(--inset-group-edge-side);
+	--glass-edge-mid-focus: var(--inset-group-edge-mid);
+	--glass-highlight: transparent;
+	--glass-shadow: var(--inset-group-shadow);
+}
+
 /* Floating panel (menus, popovers, drawers): frosted fill, faint rim, lifted shadow. The edge is the hairline ring
    baked into the shadow, not the border, so the two never draw a double edge; the border stays transparent so the
    panel keeps its size. */

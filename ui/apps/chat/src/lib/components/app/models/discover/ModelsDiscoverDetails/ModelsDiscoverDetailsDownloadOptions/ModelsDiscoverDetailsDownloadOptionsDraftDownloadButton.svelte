@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Download } from '@lucide/svelte';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { HuggingFaceService } from '#lib/services/index.ts';
 	import { modelsStore } from '#lib/stores/index.ts';
 	import type { ModelCompanionDraft } from '#lib/types/index.ts';

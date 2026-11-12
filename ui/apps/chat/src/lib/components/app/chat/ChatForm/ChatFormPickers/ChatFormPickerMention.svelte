@@ -1,9 +1,9 @@
 <script lang="ts">
+	import * as Popover from '@ggml-org/llama-ui/ui/popover';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { File, Folder } from '@lucide/svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '#lib/components/app/chat/index.ts';
 	import HighlightedMatch from '#lib/components/app/forms/HighlightedMatch.svelte';
-	import * as Popover from '#lib/components/ui/popover/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '#lib/constants/index.ts';
 	import {
 		BuiltInTool,

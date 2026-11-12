@@ -1,8 +1,8 @@
 <script lang="ts">
 	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { X } from '@lucide/svelte';
 	import { ModelAvatar, ModelId } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { ServerModelStatus } from '#lib/enums/index.ts';
 	import { deviceStore } from '#lib/stores/index.ts';
 	import type { ModelOption } from '#lib/types/models.js';

@@ -28,3 +28,9 @@ export const FILTER_TRIGGER_CLASS = `
 export const FILTER_TOGGLE_ITEM_CLASS = 'w-8';
 
 export const ICON_CLASS_DEFAULT = 'size-icon-md';
+
+/** Close control of a dialog, a panel or the navigation rail on a phone: one tap target,
+ *  one cross, one look. Each site adds the offsets that keep the cross on the 16px inset
+ *  the titles sit on. */
+export const PANEL_CLOSE_MOBILE_CLASS =
+	'max-md:grid max-md:size-10 max-md:place-items-center max-md:rounded-full max-md:text-muted-foreground max-md:opacity-100 max-md:hover:bg-accent max-md:hover:text-accent-foreground';

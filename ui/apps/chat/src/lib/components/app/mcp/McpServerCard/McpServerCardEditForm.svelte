@@ -1,6 +1,6 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { McpServerForm } from '#lib/components/app/mcp/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { parseHeadersToArray } from '#lib/utils/index.ts';
 
 	interface Props {

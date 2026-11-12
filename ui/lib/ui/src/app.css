@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import 'tw-animate-css';
 @import './lib/styles/theme.css';
 
 /* stories may use classes the components do not, so tailwind scans them too */

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		ModelId,
@@ -9,7 +10,6 @@
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
 	} from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
 		MODEL_ICON,

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { Input } from '#lib/components/ui/input/index.ts';
-	import { Label } from '#lib/components/ui/label/index.ts';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import type { MCPPromptInfo } from '#lib/types/index.ts';
 	import { fly } from 'svelte/transition';
 

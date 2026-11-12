@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { SkipForward, Square } from '@lucide/svelte';
 	import {
 		ChatFormActionReasoning,
@@ -8,7 +9,6 @@
 		ChatFormContextGauge,
 		ModelsSelector
 	} from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
 	import { setChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { FileTypeCategory } from '#lib/enums/index.ts';

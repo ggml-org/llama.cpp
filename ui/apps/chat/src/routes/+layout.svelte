@@ -1,8 +1,8 @@
 <script lang="ts">
 	import '../app.css';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { GlassKey, MenuIcon, SidebarNavigation } from '#lib/components/app/index.ts';
 	import { PwaMetaTags, PwaRefreshAlert } from '#lib/components/pwa/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		BOX_BORDER,
 		CHAT_FORM_CHROME_FADE_MS,

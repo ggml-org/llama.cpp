@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
 	import { Download, Pin, PinOff, Trash2, X } from '@lucide/svelte';
 	import { ActionIcon, DialogConfirmation } from '#lib/components/app/index.ts';
-	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
 	import { TooltipSide } from '#lib/enums/index.ts';
 
 	interface Props {

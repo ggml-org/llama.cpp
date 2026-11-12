@@ -1,5 +1,5 @@
 <script>
-	import logoMark from '$lib/assets/logo.svg?raw';
+	import logoMark from '../../../assets/logo.svg?raw';
 	let { class: className = '', style = '' } = $props();
 </script>
 

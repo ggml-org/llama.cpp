@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import { Loader2, Square, X } from '@lucide/svelte';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
-	import { cn } from '#lib/components/ui/utils.ts';
 	import {
 		ICON_CLASS_SM,
 		ICON_CLASS_XS,

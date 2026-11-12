@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
 
 	interface Props {
 		instructions?: string;
