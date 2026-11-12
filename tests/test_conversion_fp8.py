@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+import traceback
 import unittest
 
 import numpy as np
@@ -56,7 +57,12 @@ class ReorderedRowsModel(Qwen2MoeModel):
 class TestFP8Conversion(unittest.TestCase):
     def convert(self, model_class, tensors, eager=False, check_lazy=False, scan_nvfp4=False, ftype=gguf.LlamaFileType.GUESSED, hparams_override=None, **kwargs):
         with tempfile.TemporaryDirectory() as directory:
-            return self._convert(Path(directory), model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs)
+            try:
+                return self._convert(Path(directory), model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs)
+            except Exception as e:
+                # traceback locals keep the safetensors mmap open, which blocks cleanup on Windows
+                traceback.clear_frames(e.__traceback__)
+                raise
 
     def _convert(self, path, model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs):
         hparams = {
