@@ -29,6 +29,7 @@ import {
 	findLeafNode,
 	generateConversationTitle
 } from '$lib/utils';
+import { withSearchChatsDisabled } from '$lib/utils/search-chats';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -529,7 +530,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	async importConversationsData(
 		data: ExportedConversations
 	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
-		const result = await DatabaseService.importConversations(data);
+		// exports can predate search_chats or come from another device, keep it off like for existing chats
+		const result = await DatabaseService.importConversations(
+			(Array.isArray(data) ? data : [data]).map(({ conv, messages }) => ({
+				conv: { ...conv, disabledTools: withSearchChatsDisabled(conv.disabledTools) },
+				messages
+			}))
+		);
 
 		await this.loadConversations();
 

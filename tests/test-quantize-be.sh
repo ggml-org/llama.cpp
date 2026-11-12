@@ -34,7 +34,7 @@ if [ "$(uname -m)" != s390x ]; then
     exit 1
 fi
 
-MODEL_URL=https://huggingface.co/ggml-org/models/resolve/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories15M.gguf
+MODEL_URL=https://huggingface.co/ggml-org-dev/stories15M/resolve/main/stories15M.gguf
 MODEL_SHA256=61b50d457809a5194818fd22e6724b456cd7bb9a6264c52c8110684c53f3704a
 F32_SHA256=55174d7a7d46f29fc6be163ccb040330c357aa727b22ec13e2c5d713e5ba5b76
 

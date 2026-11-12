@@ -3,6 +3,7 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
+#include "chat-tts-norm.h"
 #include "common.h"
 #include "ggml.h"
 #include "json-schema-to-grammar.h"
@@ -807,6 +808,8 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 // renders a task template (e.g. "tts") with the given variables
 static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
     jinja::context ctx(tmpl.source());
+    // text normalization helpers: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
@@ -1274,13 +1277,6 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
     return common_chat_params_init_lfm2(tmpl, inputs, /* tool_list_tokens = */ false);
 }
 
-// Older gemma4 templates need their tool responses rewritten before rendering
-static common_chat_params common_chat_params_init_gemma4_legacy(const common_chat_template & tmpl, const autoparser::generation_params & inputs) {
-    auto adjusted = inputs;
-    workaround::convert_tool_responses_gemma4(adjusted.messages);
-    return common_chat_params_init_gemma4(tmpl, adjusted);
-}
-
 // Pick the dedicated handler for a template from its source, or null for the autoparser.
 // Order matters: the first match wins, and later checks assume the earlier ones did not match.
 static common_chat_params_init_fn common_chat_template_detect_params_init(const std::string & src) {
@@ -1415,11 +1411,6 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
     // Gemma4 format detection
     if (src.find("'<|tool_call>call:'") != std::string::npos) {
         LOG_DBG("Using specialized template: Gemma4\n");
-        if (src.find("{#- OpenAI Chat Completions:") == std::string::npos) {
-            LOG_WRN("%s: detected an outdated gemma4 chat template, applying compatibility workarounds. "
-                    "Consider updating to the official template.\n", __func__);
-            return common_chat_params_init_gemma4_legacy;
-        }
         return common_chat_params_init_gemma4;
     }
 

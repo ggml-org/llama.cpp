@@ -1413,6 +1413,10 @@ int64_t llm_graph_result::get_max_nodes() const {
     return max_nodes;
 }
 
+void llm_graph_result::set_max_nodes(int64_t max_nodes) {
+    this->max_nodes = max_nodes;
+}
+
 void llm_graph_result::reset() {
     t_inp_tokens  = nullptr;
     t_inp_embd    = nullptr;
@@ -1436,11 +1440,16 @@ void llm_graph_result::reset() {
     fused_nodes.clear();
     hdmd_inputs.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    const size_t meta_size = ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false);
+    if (meta_size != buf_compute_meta_size) {
+        // not make_unique: it would zero the whole reserve and make its pages resident
+        buf_compute_meta.reset(new uint8_t[meta_size]);
+        buf_compute_meta_size = meta_size;
+    }
 
     ggml_init_params params = {
-        /*.mem_size   =*/ buf_compute_meta.size(),
-        /*.mem_buffer =*/ buf_compute_meta.data(),
+        /*.mem_size   =*/ buf_compute_meta_size,
+        /*.mem_buffer =*/ buf_compute_meta.get(),
         /*.no_alloc   =*/ true,
     };
 
@@ -2678,7 +2687,16 @@ llm_graph_moe_cache_slots llm_graph_context::build_moe_cache_slots(
         return { nullptr, nullptr };
     }
     for (ggml_tensor * w : { up_exps, gate_exps, down_exps, gate_up_exps }) {
-        if (w != nullptr && moe_cache->get_experts(w) == nullptr) {
+        if (w == nullptr) {
+            continue;
+        }
+        ggml_tensor * experts = moe_cache->get_experts(w);
+        if (experts == nullptr) {
+            return { nullptr, nullptr };
+        }
+        // the device of the cache must compute the matmul, else the scheduler copies the cache to another backend
+        ggml_tensor * b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, experts->ne[0], w == down_exps ? selected_experts->ne[0] : 1, selected_experts->ne[1]);
+        if (!ggml_backend_supports_op(moe_cache->backend(il), ggml_mul_mat_id(ctx0, experts, b, selected_experts))) {
             return { nullptr, nullptr };
         }
     }
