@@ -321,6 +321,14 @@ llama_context::llama_context(
 
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
+    if (model.arch == LLM_ARCH_INKLING2) {
+        if (ggml_is_quantized(params.type_v)) {
+            throw std::runtime_error("Inkling2 requires an unquantized V cache for its unfused attention path");
+        }
+        cparams.flash_attn = false;
+        cparams.auto_fa = false;
+        LLAMA_LOG_INFO("%s: Inkling2 uses unfused attention for per-query bias and sinks\n", __func__);
+    }
 
     // the KV cache is shared with ctx_other, so follow its flash attention setting instead of resolving it here:
     // the probe disables it when the layers and the shared KV are on different devices, which breaks a quantized V cache
