@@ -2478,18 +2478,16 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         return result;
     };
 
-    auto add_narrow_n_cm1 = [&](std::vector<vk_tile_config>& configs, ggml_type type, bool is_id) {
-        if (is_id || configs.empty()) {
-            return;
-        }
-
-        constexpr uint32_t bm = 32, bn = 32, bk = 32;
+    auto add_narrow_n_cm1_tile = [&](std::vector<vk_tile_config>& configs, ggml_type type, uint32_t bn) {
+        constexpr uint32_t bm = 32, bk = 32;
         const uint32_t tm = device->coopmat_m, tn = device->coopmat_n, tk = device->coopmat_k;
 
-        const uint32_t subgroup_size = std::max(mul_mat_subgroup_size, tm);
+        const bool rdna = device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4;
+        const uint32_t base_subgroup_size = rdna && device->subgroup_size_control ? device->subgroup_min_size : mul_mat_subgroup_size;
+        const uint32_t subgroup_size = std::max(base_subgroup_size, tm);
 
         const uint32_t wm = subgroup_size > 32 ? 32 : 16;
-        const uint32_t wn = subgroup_size > 64 ? 32 : 16;
+        const uint32_t wn = std::min(bn, subgroup_size > 64 ? 32u : 16u);
         const uint32_t subgroup_count = (bm / wm) * (bn / wn);
         const uint32_t workgroup_size = subgroup_count * subgroup_size;
 
@@ -2519,6 +2517,13 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         if (ggml_vk_matmul_shmem_support(device, wt, false, type)) {
             configs.push_back({wt, {bm, bn, 1}, bk, bn});
         }
+    };
+    auto add_narrow_n_cm1 = [&](std::vector<vk_tile_config>& configs, ggml_type type, bool is_id) {
+        if (is_id || configs.empty()) {
+            return;
+        }
+        add_narrow_n_cm1_tile(configs, type, 16);
+        add_narrow_n_cm1_tile(configs, type, 32);
     };
 
     std::vector<vk_tile_config> tc_mm = {{s_warptile, s_wg_denoms, s_align}, {m_warptile, m_wg_denoms, m_align}, {l_warptile, l_wg_denoms, l_align}};
@@ -6264,6 +6269,7 @@ static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m,
     }
 
     const bool rdna = ctx->device->architecture == AMD_RDNA3 || ctx->device->architecture == AMD_RDNA4;
+    narrow_n = narrow_n && !rdna;
     uint32_t split_k = narrow_n ? 8u : 1u;
     if (!narrow_n && rdna && ctx->device->shader_core_count != 0 && k >= 2048 && n <= 32) {
         // Small n gives too few workgroups to hide latency, aim for 8 per CU. Small tiles are one subgroup each.
