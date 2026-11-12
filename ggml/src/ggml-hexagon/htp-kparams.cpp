@@ -939,12 +939,13 @@ static bool htp_matmul_check_types(
         return false;
     }
 
+    if (ggml_prec_get_src(dst, 1) == GGML_PREC_BF16 || ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
+        return false;
+    }
+
     if (is_matmul_id) {
         const struct ggml_tensor * src2 = dst->src[2];
         if (src1->type != GGML_TYPE_F32 || !src2 || src2->type != GGML_TYPE_I32) {
-            return false;
-        }
-        if (ggml_get_op_params_i32(dst, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(dst, 3) == GGML_PREC_F32) {
             return false;
         }
         switch (src0->type) {
@@ -952,6 +953,8 @@ static bool htp_matmul_check_types(
             case GGML_TYPE_Q2_0:
             case GGML_TYPE_Q4_0:
             case GGML_TYPE_Q4_1:
+            case GGML_TYPE_Q5_0:
+            case GGML_TYPE_Q5_1:
             case GGML_TYPE_Q8_0:
             case GGML_TYPE_IQ4_NL:
             case GGML_TYPE_MXFP4:
@@ -994,6 +997,8 @@ static bool htp_matmul_check_types(
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:

@@ -6,6 +6,7 @@
 import { APP_NAME } from './app.constants';
 
 export const MEDIA_QUERIES = {
+	COARSE_POINTER: '(pointer: coarse)',
 	DISPLAY_MODE_STANDALONE: '(display-mode: standalone)',
 	PREFERS_DARK: '(prefers-color-scheme: dark)',
 	PREFERS_LIGHT: '(prefers-color-scheme: light)'
@@ -33,13 +34,6 @@ export const FAVICON_PATHS = {
 	ICO_LIGHT: 'favicon.ico',
 	SVG_DARK: 'favicon-dark.svg',
 	SVG_LIGHT: 'favicon.svg'
-} as const;
-
-// Substituted for `currentColor` in src/lib/assets/logo.svg when generating
-// the light/dark static sources consumed by the PWA asset generator.
-export const FAVICON_COLORS = {
-	DARK: '#fafafa',
-	LIGHT: '#111111'
 } as const;
 
 export const FAVICON_SELECTORS = {
@@ -231,14 +225,13 @@ export const PWA_GENERATOR_DEVICES = [
 
 // PWA assets generator configuration — used by pwa-assets.config.ts
 // FAVICON_PADDING: fraction (0..1) of the icon reserved as equal margin on
-// each side. Applied to icon PNG/ICO outputs by @vite-pwa/assets-generator and
-// post-processed into the static favicon.svg so the in-app logo (which reads
-// src/lib/assets/logo.svg directly) is unaffected.
+// each side of the icon PNG/ICO outputs. 0, because llama-brand's favicons
+// already carry their margin and optical centring.
 export const PWA_ASSET_GENERATOR = {
 	ADD_MEDIA_SCREEN: true,
 	BASE_PATH: './',
 	DARK_PREFIX: 'dark-',
-	FAVICON_PADDING: 0.04,
+	FAVICON_PADDING: 0,
 	FIT_MODE: 'contain',
 	LINK_PRESET: '2023',
 	PNG_COMPRESSION_LEVEL: 9,

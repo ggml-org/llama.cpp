@@ -217,8 +217,8 @@ def test_slot_erase():
 # Erase remains gated on the slot's content.
 #
 
-IMG_URL_CAT = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
-IMG_URL_TRUCK = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+IMG_URL_CAT = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/91_cat.png"
+IMG_URL_TRUCK = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
 
 
 def _get_img_base64(url: str) -> str:
@@ -785,7 +785,7 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
 @pytest.mark.parametrize("ctkd_restore", ["f16", "q8_0"])
 def test_slot_restore_checkpoints_draft_kv_type_change(swa_server, ctkd_restore):
     server = swa_server
-    server.model_draft_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"  # same file as the target, already in the HF cache
+    server.model_draft_hf_repo = "ggml-org-dev/tinygemma3-GGUF:Q8_0"  # same file as the target, already in the HF cache
     server.spec_type = "draft-simple"
     server.ctkd = "f16"
     server.start()

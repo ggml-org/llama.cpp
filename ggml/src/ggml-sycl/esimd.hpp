@@ -2,10 +2,13 @@
 #define GGML_SYCL_ESIMD_HPP
 
 #include <sycl/ext/intel/esimd.hpp>
-#include <sycl/ext/intel/esimd/xmx/dpas.hpp>
 #include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 
 #include "common.hpp"
+
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
+#include <sycl/ext/intel/esimd/xmx/dpas.hpp>
+#endif
 
 namespace ggml_sycl_esimd {
 
@@ -586,6 +589,7 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q6_K> {
     }
 };
 
+
 //
 // Multi-column mul_mat_vec for reordered K-quant weights on the XMX engines (int8 DPAS).
 // A thread owns 16 weight rows (B operand, one dword is 4 weights of a row), the q8_1 activation
@@ -1024,6 +1028,7 @@ template <typename T, int NC, bool FUSED> constexpr int xmx_grf() {
     return FUSED || NC >= T::nc_wide ? 256 : 128;
 }
 
+#ifdef GGML_SYCL_MMVQ_HAS_XMX
 // One DPAS of a block of RC columns: the int32 products of the weights B and the activations A, as float and scaled
 // per weight row. Every quant type sums one or two of these per group of 32.
 template <int RC, int NT>
@@ -1393,6 +1398,8 @@ static void xmx_mul_mat_ncols(const void *    vx,
         }
     }
 }
+
+#endif // GGML_SYCL_MMVQ_HAS_XMX
 
 } // namespace ggml_sycl_esimd
 

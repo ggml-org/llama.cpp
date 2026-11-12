@@ -16,8 +16,7 @@
 
 // !!! Internal header, to be used by mtmd only !!!
 
-// a subcontext runs the graphs of one mtmd_model (one modality)
-// it owns the backends and the compute buffers, the weights are owned by the model
+// runs the graphs of one mtmd_model on the shared backends and scheduler
 
 enum mtmd_flash_attn_type {
     MTMD_FLASH_ATTN_TYPE_AUTO     = -1,
@@ -26,22 +25,40 @@ enum mtmd_flash_attn_type {
 };
 
 struct mtmd_subctx_params {
-    ggml_backend_dev_t device; // nullptr means CPU, see mtmd_select_device()
-    std::shared_ptr<ggml_threadpool> threadpool; // CPU threadpool shared by the subcontexts, can be nullptr
     enum mtmd_flash_attn_type flash_attn_type;
     bool warmup;
-    ggml_backend_sched_eval_callback cb_eval;
-    void * cb_eval_user_data;
 };
 
 // the device the weights and the graphs are placed on, nullptr means CPU
 ggml_backend_dev_t mtmd_select_device(bool use_gpu, ggml_backend_dev_t device);
 
-// nullptr if n_threads < 2 or the CPU backend has no threadpool support
-std::shared_ptr<ggml_threadpool> mtmd_threadpool_init(int n_threads);
+// shared by the subcontexts, not thread-safe
+struct mtmd_backends {
+    ggml_backend_t backend     = nullptr; // backend_cpu if no accelerator
+    ggml_backend_t backend_cpu = nullptr;
+
+    // for ggml_backend_sched_new(), backend_cpu last
+    std::vector<ggml_backend_t>             ptrs;
+    std::vector<ggml_backend_buffer_type_t> bufts;
+
+    std::shared_ptr<ggml_threadpool> threadpool; // can be nullptr
+
+    // its buffers fit the largest graph reserved by the subcontexts
+    ggml_backend_sched_ptr sched;
+
+    // device nullptr means CPU
+    mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
+                  ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data);
+    ~mtmd_backends();
+
+    std::map<ggml_backend_dev_t, size_t> get_mem_compute() const;
+
+    mtmd_backends(const mtmd_backends &) = delete;
+    mtmd_backends & operator=(const mtmd_backends &) = delete;
+};
 
 // compute the log-mel of n_frames frames, the waveform must already be padded and window must hold one whole frame
-// out has the layout [n_frames, n_mel]; like the encoders, must not run at the same time as another pass on config.sched
+// out has the layout [n_frames, n_mel]; must not run at the same time as another pass
 struct mtmd_audio_mel_config;
 bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out);
 
@@ -134,37 +151,25 @@ struct mtmd_subctx_encode_params {
 
 struct mtmd_subcontext {
     const mtmd_model & model;
+    mtmd_backends & backends;
 
     std::vector<uint8_t> buf_compute_meta;
 
-    std::vector<ggml_backend_t> backend_ptrs;
-    std::vector<ggml_backend_buffer_type_t> backend_buft;
-
-    std::shared_ptr<ggml_threadpool> threadpool; // shared by the subcontexts of a model
-
-    ggml_backend_t backend = nullptr;
-    ggml_backend_t backend_cpu = nullptr;
-
     int max_nodes = 8192;
-    ggml_backend_sched_ptr sched;
     mtmd_flash_attn_type flash_attn_type = MTMD_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
     bool debug_output_embeddings = false;
 
-    // for measuring memory usage
-    std::map<ggml_backend_dev_t, size_t> mem_compute;
-
     bool support_batch = false;
 
-    // the model must outlive the subcontext
-    mtmd_subcontext(const mtmd_model & model, const mtmd_subctx_params & params);
-    ~mtmd_subcontext();
+    // model and backends must outlive the subcontext
+    mtmd_subcontext(const mtmd_model & model, mtmd_backends & backends, const mtmd_subctx_params & params);
+
+    bool encode(mtmd_subctx_encode_params * params);
 
     // reserve the compute buffers for the given batch
     void warmup(const mtmd_image_f32_batch & batch);
-
-    bool encode(mtmd_subctx_encode_params * params);
 
     // TODO: remove encode_image() and always use batched version
     bool encode_image(int n_threads, const mtmd_image_f32 * img, std::vector<float> & out_vec);
@@ -175,9 +180,6 @@ struct mtmd_subcontext {
 
     // seed UINT32_MAX means random, free the result with delete
     mtmd_subctx_gen_state * gen_state_init(uint32_t seed);
-
-    // weights and compute buffers
-    std::map<ggml_backend_dev_t, size_t> get_mem_usage() const;
 
 private:
     struct support_info_op {

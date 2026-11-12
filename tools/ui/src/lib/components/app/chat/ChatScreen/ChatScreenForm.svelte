@@ -2,10 +2,11 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { deviceStore } from '$lib/stores';
+	import { deviceStore, settingsStore } from '$lib/stores';
 	import { hapticTap } from '$lib/utils';
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -93,13 +94,14 @@
 		uploadedFiles = [];
 		clearDraft();
 
-		chatFormRef?.resetTextareaHeight();
-
+		// called in the same task: the page still sees the form as it was sent (expanded or not)
 		const success = await onSend?.(messageToSend, filesToSend);
 
 		if (!success) {
 			message = messageToSend;
 			uploadedFiles = filesToSend;
+			await tick();
+			chatFormRef?.expandForMessage();
 		}
 	}
 
@@ -153,11 +155,13 @@
 		bind:value={message}
 		class="mx-auto max-w-3xl {className}"
 		{disabled}
+		expandable
 		{isLoading}
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
+		singleRow={settingsStore.config[SETTINGS_KEYS.SINGLE_ROW_CHAT_FORM] !== false}
 	/>
 </div>

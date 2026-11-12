@@ -27,7 +27,7 @@ def test_router_props():
 @pytest.mark.parametrize(
     "model,success",
     [
-        ("ggml-org/tinygemma3-GGUF:Q8_0", True),
+        ("ggml-org-dev/tinygemma3-GGUF:Q8_0", True),
         ("non-existent/model", False),
     ]
 )
@@ -109,7 +109,7 @@ def _load_model_and_wait(
 def test_router_unload_model():
     global server
     server.start()
-    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_id = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
 
     _load_model_and_wait(model_id)
 
@@ -125,9 +125,9 @@ def test_router_models_max_evicts_lru():
     server.start()
 
     candidate_models = [
-        "ggml-org/tinygemma3-GGUF:Q8_0",
-        "ggml-org/test-model-stories260K:F32",
-        "ggml-org/test-model-stories260K-infill:F32",
+        "ggml-org-dev/tinygemma3-GGUF:Q8_0",
+        "ggml-org-dev/test-model-stories260K:F32",
+        "ggml-org-dev/test-model-stories260K-infill:F32",
     ]
 
     # Load only the first 2 models to fill the cache
@@ -150,9 +150,9 @@ def test_router_models_max_evicts_lru():
 
 # server_lru_sched tests (relying on LLAMA_SERVER_DEBUG_FAKE_TIMING)
 
-MODEL_A = "ggml-org/tinygemma3-GGUF:Q8_0"
-MODEL_B = "ggml-org/test-model-stories260K:F32"
-MODEL_C = "ggml-org/test-model-stories260K-infill:F32"
+MODEL_A = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
+MODEL_B = "ggml-org-dev/test-model-stories260K:F32"
+MODEL_C = "ggml-org-dev/test-model-stories260K-infill:F32"
 
 
 def _tokenize(model_id: str, timeout: float | None = DEFAULT_REQUEST_TIMEOUT) -> ServerResponse:
@@ -388,7 +388,7 @@ def test_router_no_models_autoload():
     global server
     server.no_models_autoload = True
     server.start()
-    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_id = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
 
     res = server.make_request(
         "POST",
@@ -422,7 +422,7 @@ def test_router_api_key_required():
     server.api_key = "sk-router-secret"
     server.start()
 
-    model_id = "ggml-org/tinygemma3-GGUF:Q8_0"
+    model_id = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
     auth_headers = {"Authorization": f"Bearer {server.api_key}"}
 
     res = server.make_request(
@@ -463,10 +463,10 @@ def test_router_reload_models():
     with open(preset_path, "w") as f:
         f.write(
             "[model-reload-a]\n"
-            "hf-repo = ggml-org/test-model-stories260K\n"
+            "hf-repo = ggml-org-dev/test-model-stories260K\n"
             "\n"
             "[model-reload-b]\n"
-            "hf-repo = ggml-org/test-model-stories260K-infill\n"
+            "hf-repo = ggml-org-dev/test-model-stories260K-infill\n"
         )
 
     server.models_preset = preset_path
@@ -480,10 +480,10 @@ def test_router_reload_models():
     with open(preset_path, "w") as f:
         f.write(
             "[model-reload-b]\n"
-            "hf-repo = ggml-org/test-model-stories260K-infill\n"
+            "hf-repo = ggml-org-dev/test-model-stories260K-infill\n"
             "\n"
             "[model-reload-c]\n"
-            "hf-repo = ggml-org/test-model-stories260K\n"
+            "hf-repo = ggml-org-dev/test-model-stories260K\n"
         )
 
     try:
@@ -500,14 +500,14 @@ def test_router_dedup_cache_models():
     global server
 
     preset_path = os.path.join(TMP_DIR, "test_dedup.ini")
-    main_cache_id = "ggml-org/test-model-stories260K:F32"
-    draft_cache_id = "ggml-org/test-model-stories260K-infill:F32"
+    main_cache_id = "ggml-org-dev/test-model-stories260K:F32"
+    draft_cache_id = "ggml-org-dev/test-model-stories260K-infill:F32"
 
     with open(preset_path, "w") as f:
         f.write(
             "[model-dedup]\n"
-            "hf-repo = ggml-org/test-model-stories260K\n"
-            "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
+            "hf-repo = ggml-org-dev/test-model-stories260K\n"
+            "spec-draft-hf = ggml-org-dev/test-model-stories260K-infill\n"
             "dedup-cache-models = 1\n"
         )
 
@@ -520,7 +520,7 @@ def test_router_dedup_cache_models():
         assert main_cache_id not in ids, "main cache model should be hidden by dedup"
         assert draft_cache_id not in ids, "draft cache model should be hidden by dedup"
         # other cache models are unaffected
-        assert "ggml-org/tinygemma3-GGUF:Q8_0" in ids
+        assert "ggml-org-dev/tinygemma3-GGUF:Q8_0" in ids
 
         # the hidden model is only hidden from the listing, it can still be used
         res = server.make_request("POST", "/tokenize", data={"model": main_cache_id, "content": "hello"})
@@ -530,8 +530,8 @@ def test_router_dedup_cache_models():
         with open(preset_path, "w") as f:
             f.write(
                 "[model-dedup]\n"
-                "hf-repo = ggml-org/test-model-stories260K\n"
-                "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
+                "hf-repo = ggml-org-dev/test-model-stories260K\n"
+                "spec-draft-hf = ggml-org-dev/test-model-stories260K-infill\n"
             )
         ids = _get_model_ids(is_reload=True)
         assert main_cache_id in ids
@@ -544,8 +544,8 @@ def test_router_dedup_cache_models():
                 "dedup-cache-models = 1\n"
                 "\n"
                 "[model-dedup]\n"
-                "hf-repo = ggml-org/test-model-stories260K\n"
-                "spec-draft-hf = ggml-org/test-model-stories260K-infill\n"
+                "hf-repo = ggml-org-dev/test-model-stories260K\n"
+                "spec-draft-hf = ggml-org-dev/test-model-stories260K-infill\n"
             )
         ids = _get_model_ids(is_reload=True)
         assert "model-dedup" in ids
@@ -557,7 +557,7 @@ def test_router_dedup_cache_models():
 
 def test_router_remote_preset():
     global server
-    server.model_hf_repo = "ggml-org/test-preset-ci"
+    server.model_hf_repo = "ggml-org-dev/test-preset-ci"
     server.model_hf_file = None
     server.offline = False
     server.start()
@@ -574,7 +574,7 @@ def test_router_remote_preset():
     _load_model_and_wait(model_id)
 
 
-MODEL_DOWNLOAD_ID = "ggml-org/test-model-router-download:F16"
+MODEL_DOWNLOAD_ID = "ggml-org-dev/test-model-router-download:F16"
 MODEL_DOWNLOAD_TIMEOUT = 30
 
 
@@ -843,7 +843,7 @@ def test_router_preset_model_sidecars():
     preset_path = os.path.join(TMP_DIR, "test_preset_sidecars.ini")
 
     with open(preset_path, "w") as f:
-        f.write("[preset-sidecars]\nhf-repo = ggml-org/tinygemma3-GGUF:Q8_0\n")
+        f.write("[preset-sidecars]\nhf-repo = ggml-org-dev/tinygemma3-GGUF:Q8_0\n")
 
     server.models_preset = preset_path
     server.start()
@@ -929,3 +929,66 @@ def test_router_download_drops_stale_partials():
 
     _wait_for_model_status(MODEL_DOWNLOAD_ID, {"downloaded", "unloaded"}, timeout=MODEL_DOWNLOAD_TIMEOUT)
     server.make_request("DELETE", f"/models?model={MODEL_DOWNLOAD_ID}")
+
+
+def test_router_restricted_cors_same_origin_reaches_child():
+    # same-origin request via LAN address must not be refused by the child
+    global server
+    lan_ip = get_lan_ip()
+    if lan_ip is None:
+        pytest.skip("no non-loopback interface")  # ty: ignore[too-many-positional-arguments]
+    server.cors_origins = "localhost"
+    server.server_host = "0.0.0.0"
+    server.start()
+    body = {
+        "model": "ggml-org-dev/tinygemma3-GGUF:Q8_0",
+        "max_tokens": 4,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    res = requests.post(server.make_url("/chat/completions", host=lan_ip), json=body, headers={
+        "Origin": f"http://{lan_ip}:{server.server_port}",
+        "Sec-Fetch-Site": "same-origin",
+    })
+    assert res.status_code == 200, res.text
+
+    res = requests.post(server.make_url("/chat/completions", host="127.0.0.1"), json=body, headers={"Origin": "http://evil.com"})
+    assert res.status_code == 403
+
+
+def test_router_child_refuses_browser_requests(tmp_path):
+    import re
+    global server
+    log_path = tmp_path / "router.log"
+    server.log_path = str(log_path)
+    server.start()
+    model_id = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
+    _load_model_and_wait(model_id)
+
+    pattern = rf"spawning server instance with name={re.escape(model_id)} on port (\d+)"
+    match = None
+    for _ in range(50):
+        match = re.search(pattern, log_path.read_text())
+        if match:
+            break
+        time.sleep(0.1)
+    assert match, "child port not found in router log"
+    child_url = f"http://127.0.0.1:{match.group(1)}"
+
+    # non-browser clients can reach the child directly
+    assert requests.get(f"{child_url}/health").status_code == 200
+
+    for headers in [
+        {"Origin": "http://evil.com"},
+        {"Origin": child_url},
+        {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"},
+        {"Sec-Fetch-Site": "same-origin"},
+    ]:
+        assert requests.get(f"{child_url}/health", headers=headers).status_code == 403, headers
+
+    # browser requests through the router still reach the child
+    res = requests.post(server.make_url("/chat/completions"), json={
+        "model": model_id,
+        "max_tokens": 4,
+        "messages": [{"role": "user", "content": "hello"}],
+    }, headers={"Origin": f"http://127.0.0.1:{server.server_port}", "Sec-Fetch-Site": "same-origin"})
+    assert res.status_code == 200, res.text

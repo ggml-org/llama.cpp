@@ -1,6 +1,8 @@
 <script lang="ts">
+	import SidebarNavigationGroupSubmenu from './SidebarNavigationGroupSubmenu.svelte';
 	import {
 		Download,
+		FolderInput,
 		GitBranch,
 		ListChecks,
 		Loader2,
@@ -10,7 +12,8 @@
 		Pin,
 		PinOff,
 		Square,
-		Trash2
+		Trash2,
+		Unlink
 	} from '@lucide/svelte';
 	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
 	import { TruncatedText } from '$lib/components/app';
@@ -25,15 +28,18 @@
 		SHORTCUT_EXPORT_CONVERSATION,
 		UI_DATA_ATTRS
 	} from '$lib/constants';
+	import type { MenuKind } from '$lib/enums';
 	import { useLongPress } from '$lib/hooks/use-long-press.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import {
 		chatStore,
 		conversationsStore,
 		deviceStore,
+		groupsStore,
 		settingsStore,
 		sidebarDragStore,
-		tabsStore
+		tabsStore,
+		uiStore
 	} from '$lib/stores';
 	import type { MenuAction } from '$lib/types';
 	import { hapticTap } from '$lib/utils';
@@ -134,6 +140,41 @@
 		openInNewTab();
 	}
 
+	function setGroup(groupId: string | null) {
+		void conversationsStore.setConversationGroup(conversation.id, groupId);
+	}
+
+	// a group the chat points at may be gone; then it is in none
+	let groupId = $derived(groupsStore.groupIdOf(conversation));
+
+	// the picker stands in for the submenu where a phone's menu shows no flyouts
+	function handlePickGroup(event: Event) {
+		event.stopPropagation();
+		uiStore.openGroupPicker({ currentGroupId: groupId, onSelect: setGroup });
+	}
+
+	// a chat in a group can move to another one or leave it, a loose chat can join one
+	let groupActions = $derived<MenuAction[]>([
+		{
+			icon: FolderInput,
+			label: 'Move to group',
+			onclick: handlePickGroup,
+			submenu: groupSubmenu
+		},
+		...(groupId
+			? [
+					{
+						icon: Unlink,
+						label: 'Remove from group',
+						onclick: (event: Event) => {
+							event.stopPropagation();
+							setGroup(null);
+						}
+					}
+				]
+			: [])
+	]);
+
 	// the "more actions" dropdown and the right-click menu offer the same actions; the
 	// shortcuts act on the active conversation, so only its row shows them
 	let actions = $derived<MenuAction[]>([
@@ -164,6 +205,7 @@
 			onclick: handleEdit,
 			shortcut: isActive ? SHORTCUT_EDIT_CONVERSATION : undefined
 		},
+		...groupActions,
 		{
 			icon: Download,
 			label: 'Export',
@@ -279,9 +321,9 @@
 		bind:this={rowElement}
 		style:--row-hold-ms="{ROW_LONG_PRESS_MS}ms"
 		class={[
-			'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground md:min-h-8 md:py-1',
+			'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground max-md:min-h-12 max-md:rounded-2xl max-md:px-3.5 max-md:py-3 md:min-h-8 md:py-1',
 			isLanding && 'invisible',
-			isActive ? 'bg-foreground/5 text-accent-foreground' : 'text-foreground/75',
+			isActive ? 'bg-accent text-accent-foreground' : 'text-foreground/75',
 			contextMenuOpen && 'bg-foreground/10',
 			isSelected && 'bg-primary/10 hover:bg-primary/15',
 			isSelectionMode && 'is-selection-mode',
@@ -380,7 +422,11 @@
 				</Tooltip.Root>
 			{/if}
 
-			<TruncatedText class="text-sm" showTooltip={false} text={conversation.name} />
+			<TruncatedText
+				class="text-sm max-md:text-[17px]"
+				showTooltip={false}
+				text={conversation.name}
+			/>
 		</div>
 
 		{#if !isSelectionMode && renderActionsDropdown}
@@ -397,6 +443,16 @@
 		{/if}
 	</button>
 </ContextMenuActions>
+
+{#snippet groupSubmenu({ close, kind }: { close: () => void; kind: MenuKind })}
+	<SidebarNavigationGroupSubmenu
+		currentGroupId={groupId}
+		{kind}
+		label="Move to group"
+		onClose={close}
+		onSelect={setGroup}
+	/>
+{/snippet}
 
 <style>
 	button {

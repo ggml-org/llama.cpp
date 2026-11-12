@@ -34,6 +34,18 @@ class common_chat_peg_mapper {
 
 class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
   public:
+    // Tags of the Gemma 4 argument syntax. The parser may wrap them in any rules.
+    static constexpr const char * STRING         = "gemma4-string";
+    static constexpr const char * STRING_CONTENT = "gemma4-string-content";
+    static constexpr const char * NUMBER         = "gemma4-number";
+    static constexpr const char * BOOL           = "gemma4-bool";
+    static constexpr const char * NULL_          = "gemma4-null";
+    static constexpr const char * ARRAY          = "gemma4-array";
+    static constexpr const char * DICT           = "gemma4-dict";
+    static constexpr const char * DICT_KV        = "gemma4-dict-kv";
+    static constexpr const char * DICT_KEY       = "gemma4-dict-key";
+    static constexpr const char * DICT_KEY_NAME  = "gemma4-dict-key-name";
+
     common_chat_peg_gemma4_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
     virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
   private:
