@@ -257,12 +257,12 @@ set_tests_properties(test-generate-models PROPERTIES
     FIXTURES_SETUP generate-models
 )
 
-# the expert FFN of large ubatches runs in token chunks, small chunks cover it with the dummy models of all MoE archs
+# the expert FFN and the QSA of large ubatches run in token chunks, small chunks cover it with the dummy models of all MoE archs
 llama_test(
     test-llama-archs
-    NAME test-llama-archs-moe-chunk
+    NAME test-llama-archs-chunk
     LABEL main
-    ARGS --moe-chunk 24 -d 0.3
+    ARGS --chunk 24 -d 0.3
 )
 
 # Target model for test-speculative-rejection-sampling

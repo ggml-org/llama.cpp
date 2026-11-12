@@ -2440,50 +2440,71 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
     const llm_graph_moe_cache_slots cache = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, can_cpu_share, il);
 
-    // the experts of the tokens of the given rows
-    const auto build_experts = [&](ggml_tensor * rows, ggml_tensor * rows_ids, ggml_tensor * rows_weights, const llm_graph_moe_cache_slots & rows_cache) {
-        return build_moe_experts(rows, rows_ids, rows_weights, rows_cache,
+    const std::vector<llm_graph_chunk> chunks = get_chunks(n_tokens, cparams.n_moe_chunk);
+
+    // the chunks read views of the experts selected for all tokens, see mul_mat_id_chunk
+    ggml_tensor * ids = selected_experts;
+    if (chunks.size() > 1 && ids->view_src) {
+        ids = ggml_cont(ctx0, ids);
+        ggml_build_forward_expand(gf, ids);
+    }
+
+    // the expert tensors have n_ff*n_expert_used values per token
+    ggml_tensor * moe_out = build_chunked(cur, chunks, [&](size_t, const llm_graph_chunk & chunk) {
+        return build_moe_experts(
+                build_chunk_view(cur, 1, chunk), build_chunk_view(ids, 1, chunk), build_chunk_view(weights, 2, chunk),
+                { build_chunk_view(cache.slots, 1, chunk), build_chunk_view(cache.cpu_ids, 1, chunk) },
                 up_exps, up_exps_b, gate_exps, gate_exps_b, down_exps, down_exps_b, gate_up_exps, gate_up_exps_b,
                 up_exps_s, gate_exps_s, down_exps_s,
                 n_expert_used, type_op, il, post_exp_norm, post_exp_norm_eps);
-    };
-
-    // the experts of a large ubatch are computed in chunks of tokens: the expert tensors have n_ff*n_expert_used values per token
-    // the chunks have the same size, so that no chunk is too small for a device
-    const int64_t n_chunks = cparams.n_moe_chunk > 0 ? (n_tokens + cparams.n_moe_chunk - 1)/cparams.n_moe_chunk : 1;
-    if (n_chunks <= 1) {
-        return build_experts(cur, selected_experts, weights, cache);
-    }
-
-    // the chunks read views of the experts selected for all tokens, see mul_mat_id_chunk
-    ggml_tensor * ids = selected_experts->view_src ? ggml_cont(ctx0, selected_experts) : selected_experts;
-    ggml_build_forward_expand(gf, ids);
-
-    weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
-
-    // not a new leaf: ggml-alloc allocates all the leafs of a graph before its first node
-    ggml_tensor * moe_out = ggml_fill(ctx0, cur, 0.0f);
-
-    for (int64_t ic = 0; ic < n_chunks; ++ic) {
-        const int64_t t0 = ic*n_tokens/n_chunks;
-        const int64_t n  = (ic + 1)*n_tokens/n_chunks - t0;
-
-        // the rows of the tokens of the chunk
-        const auto view = [&](ggml_tensor * t) {
-            return t ? ggml_view_2d(ctx0, t, t->ne[0], n, t->nb[1], t0*t->nb[1]) : nullptr;
-        };
-
-        ggml_tensor * out = build_experts(view(cur), view(ids), ggml_reshape_3d(ctx0, view(weights), 1, n_expert_used, n),
-                { view(cache.slots), view(cache.cpu_ids) });
-
-        // each store reads the previous one, so a chunk is computed after the tensors of the previous chunk are free
-        moe_out = ggml_set_2d_inplace(ctx0, moe_out, out, moe_out->nb[1], t0*moe_out->nb[1]);
-        ggml_build_forward_expand(gf, moe_out);
-    }
-
+    });
     cb(moe_out, "ffn_moe_out", il);
 
     return moe_out;
+}
+
+std::vector<llm_graph_chunk> llm_graph_context::get_chunks(int64_t n_tokens, int64_t n_chunk) const {
+    const int64_t n_chunks = n_chunk > 0 ? std::max<int64_t>(1, (n_tokens + n_chunk - 1)/n_chunk) : 1;
+
+    std::vector<llm_graph_chunk> res;
+    for (int64_t ic = 0; ic < n_chunks; ++ic) {
+        const int64_t t0 = ic*n_tokens/n_chunks;
+        res.push_back({ t0, (ic + 1)*n_tokens/n_chunks - t0 });
+    }
+
+    return res;
+}
+
+ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * like, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const {
+    if (chunks.size() == 1) {
+        return fn(0, chunks[0]);
+    }
+
+    // not a new leaf: ggml-alloc allocates all the leafs of a graph before its first node
+    ggml_tensor * res = ggml_fill(ctx0, like, 0.0f);
+
+    for (size_t ic = 0; ic < chunks.size(); ++ic) {
+        ggml_tensor * rows = fn(ic, chunks[ic]);
+        GGML_ASSERT(rows->ne[0] == res->ne[0] && rows->ne[1] == chunks[ic].n);
+
+        // each store reads the previous one, so a chunk is computed after the tensors of the previous chunk are free
+        res = ggml_set_2d_inplace(ctx0, res, rows, res->nb[1], chunks[ic].t0*res->nb[1]);
+        ggml_build_forward_expand(gf, res);
+    }
+
+    return res;
+}
+
+ggml_tensor * llm_graph_context::build_chunk_view(ggml_tensor * t, int dim, const llm_graph_chunk & chunk) const {
+    if (t == nullptr || chunk.n == t->ne[dim]) {
+        return t;
+    }
+
+    GGML_ASSERT(dim == 1 || dim == 2);
+
+    return dim == 1 ?
+        ggml_view_2d(ctx0, t, t->ne[0], chunk.n, t->nb[1], chunk.t0*t->nb[1]) :
+        ggml_view_3d(ctx0, t, t->ne[0], t->ne[1], chunk.n, t->nb[1], t->nb[2], chunk.t0*t->nb[2]);
 }
 
 ggml_tensor * llm_graph_context::build_moe_experts(

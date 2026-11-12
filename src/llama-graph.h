@@ -1030,6 +1030,12 @@ struct llm_graph_amax_src1 {
     ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
 };
 
+// the tokens [t0, t0 + n) of a ubatch
+struct llm_graph_chunk {
+    int64_t t0;
+    int64_t n;
+};
+
 struct llm_graph_moe_cache_slots {
     ggml_tensor * slots;   // [n_expert_used, n_tokens] slots of the selected experts in the MoE cache, or nullptr
     ggml_tensor * cpu_ids; // [n_expert_used, n_tokens] misses computed from the host experts, -1 for the other experts, or nullptr
@@ -1247,6 +1253,21 @@ struct llm_graph_context {
              ggml_tensor * selected_experts_in = nullptr,
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
+
+    // token chunks: a block whose rows do not depend on each other can be built once per chunk of tokens,
+    // its tensors then have the size of a chunk and not of the ubatch
+
+    // n_tokens tokens in chunks of at most n_chunk tokens: the chunks have the same size, so that no chunk is too small for a device
+    // one chunk with all the tokens if n_chunk is 0
+    std::vector<llm_graph_chunk> get_chunks(int64_t n_tokens, int64_t n_chunk) const;
+
+    // fn builds the rows [ne0, chunk.n] of the tokens of chunk ic, the result is [ne0, n_tokens]: the shape and the type of like
+    // with one chunk the result is the result of fn
+    using llm_chunk_fn = std::function<ggml_tensor * (size_t ic, const llm_graph_chunk & chunk)>;
+    ggml_tensor * build_chunked(ggml_tensor * like, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const;
+
+    // the tokens of chunk in dimension dim (1 or 2) of t: t if the chunk has all of them, nullptr if t is nullptr
+    ggml_tensor * build_chunk_view(ggml_tensor * t, int dim, const llm_graph_chunk & chunk) const;
 
     // the expert part of build_moe_ffn, for the rows of cur: build_moe_ffn calls it once, or once per token chunk of a large ubatch
     // selected_experts [n_expert_used, n_tokens], weights [1, n_expert_used, n_tokens] and cache are the rows of the same tokens

@@ -178,7 +178,7 @@ static void usage(char ** argv) {
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
-    LOG("  --moe-chunk <n>          Check that the expert FFN in chunks of n tokens (LLAMA_MOE_CHUNK) matches the FFN without chunks (CPU only)\n");
+    LOG("  --chunk <n>              Check that token chunks of n tokens (LLAMA_MOE_CHUNK, LLAMA_QSA_CHUNK) match the graph without chunks (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
     LOG("  %s\n", argv[0]);
@@ -1792,13 +1792,17 @@ static void set_env(const char * name, const char * value) {
 #endif
 }
 
-// the logits of all tokens, with the expert FFN in chunks of n_chunk tokens ("0": no chunks)
+// the logits of all tokens, with the expert FFN and the QSA in chunks of n_chunk tokens ("0": no chunks)
 // a fresh context for each chunk size, as the context reads it when it is created
 // batches of n_ubatch/2, n_ubatch and n_ubatch/2 tokens give ubatches with different chunk counts
-static std::vector<float> get_logits_moe_chunk(llama_model * model, const llama_context_params & ctx_params, const std::vector<llama_token> & tokens, const char * n_chunk) {
-    set_env("LLAMA_MOE_CHUNK", n_chunk);
+static std::vector<float> get_logits_chunk(llama_model * model, const llama_context_params & ctx_params, const std::vector<llama_token> & tokens, const char * n_chunk) {
+    for (const char * name : { "LLAMA_MOE_CHUNK", "LLAMA_QSA_CHUNK" }) {
+        set_env(name, n_chunk);
+    }
     llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
-    set_env("LLAMA_MOE_CHUNK", "0");
+    for (const char * name : { "LLAMA_MOE_CHUNK", "LLAMA_QSA_CHUNK" }) {
+        set_env(name, "0");
+    }
     if (!lctx) {
         throw std::runtime_error("failed to create llama context");
     }
@@ -1821,9 +1825,11 @@ static std::vector<float> get_logits_moe_chunk(llama_model * model, const llama_
     return ret;
 }
 
-// the experts of a token do not depend on the other tokens, so the chunks of the expert FFN (LLAMA_MOE_CHUNK) match the FFN without chunks
-// for every MoE arch: the chunks are built by llm_graph_context::build_moe_ffn
-static int test_moe_chunk(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * n_chunk) {
+// the experts of a token and its QSA attention do not depend on the other tokens of the ubatch, so the token chunks
+// (LLAMA_MOE_CHUNK, LLAMA_QSA_CHUNK) match the graph without chunks
+// for every MoE arch: the chunks of the expert FFN are built by llm_graph_context::build_moe_ffn
+// flash attention is off: the CPU tiles it by batch size, and the rounding of the QSA chunks would differ from the reference
+static int test_chunk(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * n_chunk) {
     struct user_data_t {
         struct {
             ggml_log_callback callback;
@@ -1867,16 +1873,21 @@ static int test_moe_chunk(const std::string & arch_filter, const size_t seed, co
         n_tests++;
         try {
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, true);
-            llama_model_ptr  model    = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+            if (arch == LLM_ARCH_QWEN4EXP) {
+                // a realistic top-k, so that the selection depends on the indexer query
+                gguf_set_val_u32(gguf_ctx.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_INDEXER_TOP_K).c_str(), 8);
+            }
+            llama_model_ptr model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
 
             llama_context_params ctx_params = llama_context_default_params();
             ctx_params.n_ctx           = 0;
             ctx_params.n_threads       = 4;
             ctx_params.n_threads_batch = 4;
             ctx_params.n_ubatch        = n_ubatch;
+            ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
-            const std::vector<float> logits_ref   = get_logits_moe_chunk(model.get(), ctx_params, tokens, "0");
-            const std::vector<float> logits_chunk = get_logits_moe_chunk(model.get(), ctx_params, tokens, n_chunk);
+            const std::vector<float> logits_ref   = get_logits_chunk(model.get(), ctx_params, tokens, "0");
+            const std::vector<float> logits_chunk = get_logits_chunk(model.get(), ctx_params, tokens, n_chunk);
 
             const double nmse_val = nmse(logits_ref, logits_chunk);
             const bool   ok       = nmse_val <= 1e-10;
@@ -1918,7 +1929,7 @@ int main(int argc, char ** argv) {
     std::string out;
     const char * target_backend = nullptr;
     bool kv_shift = false;
-    const char * moe_chunk = nullptr;
+    const char * chunk = nullptr;
 
     int verbosity = LOG_LEVEL_ERROR;
 
@@ -1988,9 +1999,9 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[i], "--kv-shift") == 0) {
             kv_shift = true;
-        } else if (strcmp(argv[i], "--moe-chunk") == 0) {
+        } else if (strcmp(argv[i], "--chunk") == 0) {
             if (i + 1 < argc) {
-                moe_chunk = argv[++i];
+                chunk = argv[++i];
             } else {
                 usage(argv);
                 return 1;
@@ -2016,8 +2027,8 @@ int main(int argc, char ** argv) {
         if (kv_shift) {
             return test_kv_shift(arch_filter, seed, stdev, verbosity);
         }
-        if (moe_chunk) {
-            return test_moe_chunk(arch_filter, seed, stdev, verbosity, moe_chunk);
+        if (chunk) {
+            return test_chunk(arch_filter, seed, stdev, verbosity, chunk);
         }
         return test_backends(arch_filter, seed, stdev, verbosity, target_backend);
     } catch (const std::exception & err) {

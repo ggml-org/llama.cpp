@@ -394,12 +394,19 @@ llama_context::llama_context(
     }
 
     {
-        const char * LLAMA_MOE_CHUNK = getenv("LLAMA_MOE_CHUNK");
-        cparams.n_moe_chunk = LLAMA_MOE_CHUNK ? std::max(0, atoi(LLAMA_MOE_CHUNK)) : 0;
+        const auto n_chunk = [](const char * name, const char * block) -> uint32_t {
+            const char * value = getenv(name);
+            const int    res   = value ? std::max(0, atoi(value)) : 0;
 
-        if (cparams.n_moe_chunk > 0) {
-            LLAMA_LOG_INFO("%s: LLAMA_MOE_CHUNK set, the expert FFN runs in chunks of %u tokens\n", __func__, cparams.n_moe_chunk);
-        }
+            if (res > 0) {
+                LLAMA_LOG_INFO("%s: %s set, %s runs in chunks of %d tokens\n", "llama_context", name, block, res);
+            }
+
+            return res;
+        };
+
+        cparams.n_moe_chunk = n_chunk("LLAMA_MOE_CHUNK", "the expert FFN");
+        cparams.n_qsa_chunk = n_chunk("LLAMA_QSA_CHUNK", "the QSA");
     }
 
     // initialized later
@@ -2949,9 +2956,12 @@ uint32_t llama_context::graph_max_nodes() const {
         }
     }
 
-    // each chunk of the expert FFN of a layer has its own nodes, see llm_graph_context::build_moe_ffn
+    // each token chunk of a block of a layer has its own nodes, see llm_graph_context::build_chunked
     if (cparams.n_moe_chunk > 0) {
         res += model.layers.size()*(cparams.n_ubatch/cparams.n_moe_chunk)*(128 + 2*model.hparams.n_expert_used_max());
+    }
+    if (cparams.n_qsa_chunk > 0) {
+        res += model.layers.size()*(cparams.n_ubatch/cparams.n_qsa_chunk)*96;
     }
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
