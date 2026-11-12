@@ -129,27 +129,21 @@ def test_tools_builtin_exec_shell_command_stream():
     assert "[exit code: 0]" in chunks
 
 
-def test_tools_builtin_cwd_header():
+def test_tools_builtin_cwd_header(tmp_path):
     global server
     server.start()
 
-    cwd_dir = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit")
-    headers = {"x-tool-cwd": cwd_dir}
+    headers = {"x-tool-cwd": str(tmp_path)}
 
-    res = call_tool("read_file", {"path": "test_tools_builtin.py"}, headers=headers)
-    assert GREP_MARKER in res["plain_text_response"]
+    (tmp_path / "cwd.txt").write_text("cwd-content")
+    res = call_tool("read_file", {"path": "cwd.txt"}, headers=headers)
+    assert "cwd-content" in res["plain_text_response"]
 
     # exec_shell_command should also run with that directory as its working directory:
-    # writing to a relative filename must land inside cwd_dir
+    # writing to a relative filename must land inside it
     marker_name = "llama_cpp_test_tools_builtin_cwd_marker.txt"
-    marker_path = os.path.join(cwd_dir, marker_name)
-    try:
-        command = f"echo hello > {marker_name}"
-        call_tool("exec_shell_command", {"command": command}, headers=headers)
-        assert os.path.exists(marker_path)
-    finally:
-        if os.path.exists(marker_path):
-            os.remove(marker_path)
+    call_tool("exec_shell_command", {"command": f"echo hello > {marker_name}"}, headers=headers)
+    assert (tmp_path / marker_name).exists()
 
 
 def _container_engine_unavailable_reason(engine: str) -> str | None:
