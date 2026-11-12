@@ -234,8 +234,8 @@ __global__ void topk_moe_cuda(const float *         logits,
             const int expert = i + threadIdx.x;
             selection_wt[i / warp_size] =
                 (n_experts % warp_size == 0 || expert < n_experts) ? wt[i / warp_size] + bias[expert] : -INFINITY;
-            if (__isnanf(selection_wt[i / WARP_SIZE])) {
-                selection_wt[i / WARP_SIZE] = -FLT_MAX;
+            if (__isnanf(selection_wt[i / warp_size])) {
+                selection_wt[i / warp_size] = -FLT_MAX;
             }
         }
     }
