@@ -1271,6 +1271,8 @@ const ggml_cuda_device_info & ggml_cuda_info();
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
 
+bool ggml_cuda_pool_debug_enabled();
+
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
