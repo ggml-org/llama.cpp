@@ -122,6 +122,8 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
+    debug_proxy_allow_private: bool = False # test-only: lets the CORS proxy reach local servers
+    media_allow_private_urls: bool = False
     allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
@@ -149,6 +151,8 @@ class ServerProcess:
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
+        if self.debug_proxy_allow_private:
+            env["LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE"] = "1"
         if self.llama_cache is not None:
             env["LLAMA_CACHE"] = self.llama_cache
         elif "LLAMA_CACHE" not in os.environ:
@@ -303,6 +307,8 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.media_allow_private_urls:
+            server_args.append("--media-allow-private-urls")
         if self.allow_unauthenticated_tools:
             server_args.append("--allow-unauthenticated-tools")
         if self.server_tools:
