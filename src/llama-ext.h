@@ -201,6 +201,7 @@ LLAMA_API bool llama_batch_ext_set_embd_state_row(struct llama_batch_ext * batch
 // model/context data extraction
 //
 
+// width of the candidate lattice in a DFlash draft's nextn output (DFlash2 selector, DSpine refinement), 0 if none
 LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
 
 // returns pointer to the target-model layer indices

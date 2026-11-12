@@ -74,6 +74,13 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
+[DSpine](https://github.com/Tencent/DSpine) drafts (for example `tencent/Qwen3-8B-DSpine-b16` for
+`Qwen/Qwen3-8B` and `tencent/Qwen3.8-27B-DSpine-b16` for `Qwen/Qwen3.8-27B`) are converted and run
+the same way with `--spec-type draft-dflash`. Each draft layer passes a code of the previous block
+position's token to the next position, and the draft rescores its top-k candidates per position
+(16 in both checkpoints) with the exact predecessor token. The draft ubatch (`--spec-draft-n-ubatch`, default `--ubatch-size`)
+must hold one block per parallel sequence, that is `-np * (--spec-draft-n-max + 1)` tokens.
+
 See:
 
 - #22105

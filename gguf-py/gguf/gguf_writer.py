@@ -1341,6 +1341,12 @@ class GGUFWriter:
     def add_lilicorr_logit_scale(self, value: float) -> None:
         self.add_float32(Keys.LiliCorr.LOGIT_SCALE, value)
 
+    def add_dspine_head_topk(self, value: int) -> None:
+        self.add_uint32(Keys.DSpine.HEAD_TOPK.format(arch=self.arch), value)
+
+    def add_dspine_eps(self, value: float) -> None:
+        self.add_float32(Keys.DSpine.EPS.format(arch=self.arch), value)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 
