@@ -206,6 +206,21 @@ def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
     assert "hello container" in exec_res["plain_text_response"]
 
 
+def test_tools_builtin_runtime_header_refused_with_configured_runtime(container_engine: str, container_id: str):
+    global server
+    server.server_tools_runtime = f"{container_engine}-container:{container_id}"
+    server.start()
+
+    res = call_tool("exec_shell_command", {"command": "echo sandboxed"})
+    assert "sandboxed" in res["plain_text_response"]
+
+    for runtime in ["ssh:user@internal-host", f"{container_engine}-container:other", server.server_tools_runtime]:
+        res = server.make_request("POST", "/tools",
+                                  data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                                  headers={"x-tool-runtime": runtime})
+        assert res.status_code == 403, res.body
+
+
 def test_tools_builtin_runtime_header_unknown_scheme():
     global server
     server.start()
