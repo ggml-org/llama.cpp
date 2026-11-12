@@ -1739,6 +1739,7 @@ private:
                 /* reasoning_budget      */ params_base.sampling.reasoning_budget_tokens,
                 /* reasoning_budget_msg  */ params_base.sampling.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
+                /* media_allow_private   */ params_base.media_allow_private_urls,
                 /* force_pure_content    */ params_base.force_pure_content_parser
             };
 
@@ -5302,12 +5303,19 @@ server_context_meta server_context::get_meta() const {
 // may have bypass_sleep = true if the task does not use ctx_server
 struct server_res_generator : server_res_spipe {
     server_response_reader rd;
+    server_queue * queue_awake = nullptr; // set while this response keeps the server awake
     server_res_generator(server_queue & queue_tasks, server_response & queue_results, int sleep_idle_seconds, bool bypass_sleep = false)
             : rd(queue_tasks, queue_results, HTTP_POLLING_SECONDS) {
         // fast path in case sleeping is disabled
         bypass_sleep |= sleep_idle_seconds < 0;
         if (!bypass_sleep) {
             queue_tasks.wait_until_no_sleep();
+            queue_awake = &queue_tasks;
+        }
+    }
+    ~server_res_generator() {
+        if (queue_awake) {
+            queue_awake->release_inflight();
         }
     }
     void ok(const json & response_data) {
@@ -6186,7 +6194,7 @@ void server_routes::init_routes() {
         // live transcription: Voxtral Realtime (no chat), or an "asr" model in a session opened with ?intent=transcription
         const bool live_asr = !ctx_server.asr_prompt.empty() && req.get_param("intent") == "transcription";
         if (ctx_server.mtmd_cap.audio_stream && ctx_server.mtmd_cap.chat && !live_asr) {
-            server_realtime_conversation({queue_tasks, queue_results, *meta, params.sampling, ctx_server.mctx, ctx_server.mtmd_cap, ctx_server.vocab}, conn);
+            server_realtime_conversation({queue_tasks, queue_results, *meta, params, ctx_server.mctx, ctx_server.mtmd_cap, ctx_server.vocab}, conn);
             return;
         }
 
@@ -6944,7 +6952,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_rerank_impl(const se
         auto add_image = [&](const std::string & url) {
             // marker is appended by format_prompt_rerank, one per decoded file
             try {
-                handle_media(out_files, url, params.media_path);
+                handle_media(out_files, url, params.media_path, params.media_allow_private_urls);
             } catch (const std::runtime_error & e) {
                 throw std::invalid_argument(e.what());
             }
@@ -7073,8 +7081,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     server_schema::eval_tts_schema(params, task, body);
     const bool stream = task.params.stream;
     // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
-    const std::string lang       = json_value(body, "lang", std::string());
-    const std::string voice      = json_value(body, "voice", std::string());
+    const std::string lang       = json_value(body, "lang", params.tts_lang);
+    // speaker_ref in the request overrides the default voice
+    const bool has_speaker_ref   = req.files.count("speaker_ref") > 0 || !json_value(body, "speaker_ref_b64", std::string()).empty();
+    const std::string voice      = json_value(body, "voice", has_speaker_ref ? std::string() : params.tts_voice);
     const std::string tts_prompt = common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
     // a model with predefined voices only speaks with one of them
     mtmd::bitmap_ptr voice_ref;

@@ -32,7 +32,7 @@ static void mtmd_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_thr
     }
 }
 
-std::shared_ptr<ggml_threadpool> mtmd_threadpool_init(int n_threads) {
+static std::shared_ptr<ggml_threadpool> mtmd_threadpool_init(int n_threads) {
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
     if (!reg || n_threads < 2) {
@@ -63,14 +63,9 @@ ggml_backend_dev_t mtmd_select_device(bool use_gpu, ggml_backend_dev_t device) {
     return dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
 }
 
-mtmd_subcontext::mtmd_subcontext(const mtmd_model & model, const mtmd_subctx_params & params) :
-        model(model),
-        threadpool(params.threadpool),
-        max_nodes(model.max_nodes),
-        flash_attn_type(params.flash_attn_type) {
-    if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_AUTO && !model.flash_attn_auto) {
-        flash_attn_type = MTMD_FLASH_ATTN_TYPE_DISABLED;
-    }
+mtmd_backends::mtmd_backends(ggml_backend_dev_t device, int n_threads, int max_nodes,
+                             ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) {
+    threadpool = mtmd_threadpool_init(n_threads);
 
     backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     if (!backend_cpu) {
@@ -83,57 +78,70 @@ mtmd_subcontext::mtmd_subcontext(const mtmd_model & model, const mtmd_subctx_par
             set_threadpool_fn(backend_cpu, threadpool.get());
         }
     }
-    if (params.device != nullptr) {
-        backend = ggml_backend_dev_init(params.device, nullptr);
+    if (device != nullptr) {
+        backend = ggml_backend_dev_init(device, nullptr);
         if (!backend) {
             ggml_backend_free(backend_cpu);
-            throw std::runtime_error(string_format("%s: failed to initialize \"%s\" backend\n",
-                                                   __func__, ggml_backend_dev_name(params.device)));
+            throw std::runtime_error(mtmd_format("%s: failed to initialize \"%s\" backend\n",
+                                                   __func__, ggml_backend_dev_name(device)));
         }
     }
 
     if (backend) {
         LOG_INF("%s: using %s backend\n", __func__, ggml_backend_name(backend));
-        backend_ptrs.push_back(backend);
-        backend_buft.push_back(ggml_backend_get_default_buffer_type(backend));
+        ptrs.push_back(backend);
+        bufts.push_back(ggml_backend_get_default_buffer_type(backend));
     } else {
         backend = backend_cpu;
         LOG_INF("%s: using CPU backend\n", __func__);
     }
 
-    backend_ptrs.push_back(backend_cpu);
-    backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
+    ptrs.push_back(backend_cpu);
+    bufts.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
 
-    sched.reset(
-        ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, true)
-    );
+    sched.reset(ggml_backend_sched_new(ptrs.data(), bufts.data(), ptrs.size(), max_nodes, false, true));
+    if (cb_eval != nullptr) {
+        ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
+    }
+}
 
-    if (params.cb_eval != nullptr) {
-        ggml_backend_sched_set_eval_callback(sched.get(), params.cb_eval, params.cb_eval_user_data);
+mtmd_backends::~mtmd_backends() {
+    // before the backends it uses
+    sched.reset();
+    ggml_backend_free(backend);
+    if (backend != backend_cpu) {
+        ggml_backend_free(backend_cpu);
+    }
+}
+
+std::map<ggml_backend_dev_t, size_t> mtmd_backends::get_mem_compute() const {
+    std::map<ggml_backend_dev_t, size_t> res;
+    for (ggml_backend_t b : ptrs) {
+        res[ggml_backend_get_device(b)] += ggml_backend_sched_get_buffer_size(sched.get(), b);
+    }
+    return res;
+}
+
+mtmd_subcontext::mtmd_subcontext(const mtmd_model & model, mtmd_backends & backends, const mtmd_subctx_params & params) :
+        model(model),
+        backends(backends),
+        max_nodes(model.max_nodes),
+        flash_attn_type(params.flash_attn_type) {
+    if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_AUTO && !model.flash_attn_auto) {
+        flash_attn_type = MTMD_FLASH_ATTN_TYPE_DISABLED;
     }
 
     debug_output_embeddings = std::getenv("MTMD_DEBUG_EMBEDDINGS") != nullptr;
 
     buf_compute_meta.resize(max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false));
 
-    // TODO: fix warmup for audio gen
+    auto batch = get_dummy_batch();
     if (model.modality != MTMD_MODALITY_GEN_AUDIO) {
         // check batching support
-        auto batch = get_dummy_batch();
         support_batch = mtmd_get_graph_builder(this, batch)->support_batch();
-
-        if (params.warmup) {
-            warmup(batch);
-        }
     }
-}
-
-mtmd_subcontext::~mtmd_subcontext() {
-    // the scheduler references the backends
-    sched.reset();
-    ggml_backend_free(backend);
-    if (backend != backend_cpu) {
-        ggml_backend_free(backend_cpu);
+    if (params.warmup) {
+        warmup(batch);
     }
 }
 
@@ -146,12 +154,17 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
         const int sz = hparams.warmup_image_size;
         img.set_size({sz, sz}, false, false);
         LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
+    } else if (model.modality == MTMD_MODALITY_GEN_AUDIO) {
+        // TODO: improve this, move to per-model impl
+        const int n_embd = model.n_mmproj_embd();
+        img.set_size({n_embd, 1}, false, true);
+        LOG_INF("%s: warmup with one gen-audio step\n", __func__);
     } else {
         // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
         // so the [1, 256] bound only applies to FFT-based models.
         const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA;
         if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
-            throw std::runtime_error(string_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
+            throw std::runtime_error(mtmd_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
         }
         img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
@@ -170,7 +183,7 @@ void mtmd_subcontext::warmup(const mtmd_image_f32_batch & batch) {
         if (!info.fattn && info.fattn_op) {
             auto op = info.fattn_op;
             LOG_WRN("%s: *****************************************************************\n", __func__);
-            LOG_WRN("%s: WARNING: flash attention not supported by %s, memory usage will increase\n", __func__, ggml_backend_name(backend));
+            LOG_WRN("%s: WARNING: flash attention not supported by %s, memory usage will increase\n", __func__, ggml_backend_name(backends.backend));
             LOG_WRN("%s: op params: \n", __func__);
             static auto print_shape = [](const char * fn, const char * name, ggml_tensor * t) {
                 LOG_WRN("%s:   %s: type = %s, ne = [%d %d %d %d], nb = [%d %d %d %d]\n", fn,
@@ -200,7 +213,7 @@ void mtmd_subcontext::warmup(const mtmd_image_f32_batch & batch) {
         (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) ? "enabled" : "disabled");
 
     // print ops that are not supported by the GPU backend (if there is one)
-    if (backend && backend != backend_cpu) {
+    if (backends.backend != backends.backend_cpu) {
         std::vector<support_info_op> unsupported_ops;
         for (const auto & op : info.ops) {
             if (!op.is_accel) {
@@ -211,7 +224,7 @@ void mtmd_subcontext::warmup(const mtmd_image_f32_batch & batch) {
             LOG_WRN("%s: *****************************************************************\n", __func__);
             LOG_WRN("%s: WARNING: the mmproj graph uses unsupported operators by the backend\n", __func__);
             LOG_WRN("%s:          the performance will be suboptimal                      \n", __func__);
-            LOG_WRN("%s:          list of unsupported ops (backend=%s):\n", __func__, ggml_backend_name(backend));
+            LOG_WRN("%s:          list of unsupported ops (backend=%s):\n", __func__, ggml_backend_name(backends.backend));
             for (const auto & op : unsupported_ops) {
                 LOG_WRN("%s: %16s: type = %s, ne = [%d %d %d %d]\n", __func__,
                         ggml_op_name(op.op->op),
@@ -229,22 +242,9 @@ void mtmd_subcontext::warmup(const mtmd_image_f32_batch & batch) {
 
 mtmd_subcontext::support_info_graph mtmd_subcontext::reserve_compute_meta(const mtmd_image_f32_batch & batch) {
     ggml_cgraph * gf = mtmd_get_graph_builder(this, batch)->build();
-    ggml_backend_sched_reserve(sched.get(), gf);
+    ggml_backend_sched_reserve(backends.sched.get(), gf);
 
-    mem_compute.clear();
-    for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-        ggml_backend_t backend = backend_ptrs[i];
-        ggml_backend_buffer_type_t buft = backend_buft[i];
-        size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
-        if (size > 1) {
-            LOG_INF("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
-                    ggml_backend_buft_name(buft),
-                    size / 1024.0 / 1024.0);
-        }
-        mem_compute[ggml_backend_get_device(backend)] += size;
-    }
-
-    const int n_splits = ggml_backend_sched_get_n_splits(sched.get());
+    const int n_splits = ggml_backend_sched_get_n_splits(backends.sched.get());
     const int n_nodes  = ggml_graph_n_nodes(gf);
 
     LOG_INF("%s: graph splits = %d, nodes = %d\n", __func__,  n_splits, n_nodes);
@@ -259,7 +259,7 @@ mtmd_subcontext::support_info_graph mtmd_subcontext::reserve_compute_meta(const 
     for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
         ggml_tensor * node = ggml_graph_node(gf, i);
         res.ops.push_back({node, true});
-        if (!ggml_backend_supports_op(backend, node)) {
+        if (!ggml_backend_supports_op(backends.backend, node)) {
             res.ops.back().is_accel = false;
             if (node->op == GGML_OP_FLASH_ATTN_EXT) {
                 res.fattn    = false;
@@ -269,46 +269,6 @@ mtmd_subcontext::support_info_graph mtmd_subcontext::reserve_compute_meta(const 
     }
 
     return res;
-}
-
-// TODO: remove this and use ggml_mul_mat with GGML_PREC_F32 once all backends honor it for F32 x F32
-// ggml_mul_mat for 2D F32 tensors, always in F32 on CPU: some GPU backends round the inputs to F16 or TF32, which loses the quiet bins of a spectrum
-static void mtmd_mul_mat_prec_op(ggml_tensor * dst, int ith, int nth, void * /*userdata*/) {
-    const ggml_tensor * a = dst->src[0];
-    const ggml_tensor * b = dst->src[1];
-    const int64_t n_k = a->ne[0];
-
-    for (int64_t n = ith; n < b->ne[1]; n += nth) {
-        const float * b_row = (const float *) ((const char *) b->data + n * b->nb[1]);
-        float * dst_row = (float *) ((char *) dst->data + n * dst->nb[1]);
-        for (int64_t m = 0; m < a->ne[1]; m++) {
-            const float * a_row = (const float *) ((const char *) a->data + m * a->nb[1]);
-            // independent partial sums, so that the compiler can vectorize the loop
-            float acc[16] = {};
-            int64_t k = 0;
-            for (; k + 16 <= n_k; k += 16) {
-                for (int l = 0; l < 16; l++) {
-                    acc[l] += a_row[k + l] * b_row[k + l];
-                }
-            }
-            float sum = 0.0f;
-            for (; k < n_k; k++) {
-                sum += a_row[k] * b_row[k];
-            }
-            for (int l = 0; l < 16; l++) {
-                sum += acc[l];
-            }
-            dst_row[m] = sum;
-        }
-    }
-}
-
-static ggml_tensor * mtmd_mul_mat_prec(ggml_context * ctx, ggml_tensor * a, ggml_tensor * b) {
-    GGML_ASSERT(a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32);
-    GGML_ASSERT(ggml_n_dims(a) <= 2 && ggml_n_dims(b) <= 2 && a->ne[0] == b->ne[0]);
-    GGML_ASSERT(a->nb[0] == sizeof(float) && b->nb[0] == sizeof(float));
-    ggml_tensor * args[] = { a, b };
-    return ggml_custom_4d(ctx, GGML_TYPE_F32, a->ne[1], b->ne[1], 1, 1, args, 2, mtmd_mul_mat_prec_op, GGML_N_TASKS_MAX, nullptr);
 }
 
 bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
@@ -356,7 +316,8 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         ggml_set_input(inp_filters);
 
         ggml_tensor * cur = ggml_cont(ctx0, ggml_view_2d(ctx0, inp_samples, frame_size, n_cur, config.hop_length * ggml_element_size(inp_samples), 0));
-        cur = mtmd_mul_mat_prec(ctx0, inp_dft, cur); // [2 * n_fft_bins, n_cur]
+        cur = ggml_mul_mat(ctx0, inp_dft, cur); // [2 * n_fft_bins, n_cur]
+        ggml_prec_set_src(cur, GGML_PREC_F32, 1);
 
         cur = ggml_sqr(ctx0, cur);
         cur = ggml_add(ctx0,
@@ -366,7 +327,8 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
             cur = ggml_sqrt(ctx0, cur);
         }
 
-        cur = mtmd_mul_mat_prec(ctx0, cur, inp_filters); // [n_cur, n_mel]
+        cur = ggml_mul_mat(ctx0, cur, inp_filters); // [n_cur, n_mel]
+        ggml_prec_set_src(cur, GGML_PREC_F32, 1);
         cur = config.mel_floor_add
             ? ggml_scale_bias(ctx0, cur, 1.0f, config.mel_floor)
             : ggml_clamp(ctx0, cur, config.mel_floor, FLT_MAX);
@@ -475,7 +437,7 @@ mtmd_subctx_gen_state * mtmd_subcontext::gen_state_init(uint32_t seed) {
         ggml_format_name(t, "gen_state_%s", slot.name.c_str());
         st->slots.push_back(t);
     }
-    st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), backend));
+    st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), backends.backend));
     if (!st->buf) {
         LOG_ERR("%s: failed to allocate the gen state\n", __func__);
         return nullptr;
@@ -503,7 +465,7 @@ mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
             ggml_format_name(t, "enc_state_%s", slot.name.c_str());
             st->slots.push_back(t);
         }
-        st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), backend));
+        st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), backends.backend));
         if (!st->buf) {
             LOG_ERR("%s: failed to allocate the encoder state\n", __func__);
             return nullptr;
@@ -543,7 +505,7 @@ mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
         st->k.push_back(k);
         st->v.push_back(v);
     }
-    st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), backend));
+    st->buf.reset(ggml_backend_alloc_ctx_tensors(st->ctx_data.get(), backends.backend));
     if (!st->buf) {
         LOG_ERR("%s: failed to allocate the encoder state\n", __func__);
         return nullptr;
@@ -588,14 +550,14 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     }
 
     // build the inference graph
-    ggml_backend_sched_reset(sched.get());
+    ggml_backend_sched_reset(backends.sched.get());
     ggml_cgraph * gf = mtmd_get_graph_builder(this, imgs, params)->build();
 
     // the last node is the embedding tensor, code2wav has no out_embd
     // read it before scheduling: backends may reorder the nodes of graphs with several outputs (Metal)
     ggml_tensor * embeddings = params->out_embd ? ggml_graph_node(gf, -1) : nullptr;
 
-    if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+    if (!ggml_backend_sched_alloc_graph(backends.sched.get(), gf)) {
         LOG_ERR("%s: failed to allocate compute graph\n", __func__);
         return false;
     }
@@ -1362,6 +1324,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
+        case PROJECTOR_TYPE_KIMIK31:
         case PROJECTOR_TYPE_LIGHTONOCR:
             {
                 // set the 2D positions
@@ -2308,9 +2271,9 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             GGML_ABORT("Unknown projector type");
     }
 
-    mtmd_backend_cpu_set_n_threads(backend_cpu, params->n_threads);
+    mtmd_backend_cpu_set_n_threads(backends.backend_cpu, params->n_threads);
 
-    auto status = ggml_backend_sched_graph_compute(sched.get(), gf);
+    auto status = ggml_backend_sched_graph_compute(backends.sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
@@ -2707,12 +2670,4 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     }
 
     return true;
-}
-
-std::map<ggml_backend_dev_t, size_t> mtmd_subcontext::get_mem_usage() const {
-    std::map<ggml_backend_dev_t, size_t> result = model.mem_weights;
-    for (auto & [dev, size] : mem_compute) {
-        result[dev] += size;
-    }
-    return result;
 }

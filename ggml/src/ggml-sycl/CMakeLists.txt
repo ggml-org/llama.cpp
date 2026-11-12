@@ -223,7 +223,7 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     if (NOT GGML_SYCL_DEVICE_ARCH)
         target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
     else()
-        message(STATUS "Passing -ze-intel-greater-than-4GB-buffer-required to ocloc via -options for spir64_gen AOT")
+        message(STATUS "spir64_gen AOT: -ze-intel-greater-than-4GB-buffer-required passed to ocloc")
     endif()
 
     # Link against Intel oneMKL
@@ -261,7 +261,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_compile_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"${GGML_SYCL_AOT_BACKEND_OPTIONS}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH} -options -ze-intel-greater-than-4GB-buffer-required\""
     )
 
     # Pass through parallel job (process) count for parallelising the
@@ -276,7 +276,7 @@ if (GGML_SYCL_DEVICE_ARCH)
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
-        "SHELL:-Xsycl-target-backend=spir64_gen \"${GGML_SYCL_AOT_BACKEND_OPTIONS}\""
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH} -options -ze-intel-greater-than-4GB-buffer-required\""
         -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 

@@ -2160,6 +2160,12 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         })
         .run();
 
+    // Raw control characters in pythonic string arguments must be escaped into valid JSON.
+    tst.test("<|tool_call_start|>[python(code='a\nb')]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({ { "python", R"#({"code": "a\nb"})#", "" } })
+        .run();
+
     // String escape sequences decode to their actual characters (newline + tab here),
     // so a "write a two line file" style call produces real line breaks, not literal "\n".
     tst.test("<|tool_call_start|>[python(code=\"First line\\nSecond line\\tindented\")]<|tool_call_end|>")
@@ -3259,6 +3265,61 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "<|tool_call>call:amount{orig:1.5e10}<tool_call|>")
             .tools({ amount_tool })
             .expect(message_with_tool_calls("amount", R"({"orig": 1.5e10})"))
+            .run();
+
+        // The argument grammar follows the shape of the parameter schema: keys in
+        // alphabetical order, optional keys skipped in place, nested objects and arrays
+        // shaped the same way, any other value accepted as written.
+        common_chat_tool shape_tool{
+            /* .name = */ "shape",
+            /* .description = */ "Schema-shaped arguments",
+            /* .parameters = */ R"({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "edits": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "oldText": {"type": "string"},
+                                "newText": {"type": "string"}
+                            },
+                            "required": ["oldText", "newText"]
+                        }
+                    },
+                    "mode": {"type": "string", "enum": ["fast", "safe"]},
+                    "count": {"type": "integer"},
+                    "headers": {
+                        "type": "object",
+                        "properties": {
+                            "content-type": {"type": "string"},
+                            "accept:lang": {"type": "string"}
+                        }
+                    },
+                    "options": {"type": "object"}
+                },
+                "required": ["path", "edits"]
+            })",
+        };
+
+        tst.test(
+                "<|tool_call>call:shape{edits:[{newText:<|\"|>b<|\"|>,oldText:<|\"|>a<|\"|>}],path:<|\"|>f.c<|\"|>}<tool_call|>")
+            .tools({ shape_tool })
+            .expect(message_with_tool_calls("shape", R"({"edits":[{"newText":"b","oldText":"a"}],"path":"f.c"})"))
+            .run();
+
+        // Optional keys in place, quoted keys that are not identifiers
+        tst.test(
+                "<|tool_call>call:shape{count:3,edits:[],headers:{<|\"|>accept:lang<|\"|>:<|\"|>en<|\"|>,'content-type':<|\"|>text<|\"|>},mode:<|\"|>fast<|\"|>,options:{b:1,a:[true]},path:<|\"|>f<|\"|>}<tool_call|>")
+            .tools({ shape_tool })
+            .expect(message_with_tool_calls("shape", R"({"count":3,"edits":[],"headers":{"accept:lang":"en","content-type":"text"},"mode":"fast","options":{"b":1,"a":[true]},"path":"f"})"))
+            .run();
+
+        tst.test(
+                "<|tool_call>call:shape{edits:[],headers:{\"content-type\":<|\"|>text<|\"|>},path:<|\"|>f<|\"|>}<tool_call|>")
+            .tools({ shape_tool })
+            .expect(message_with_tool_calls("shape", R"({"edits":[],"headers":{"content-type":"text"},"path":"f"})"))
             .run();
 
         // Edge cases
@@ -7011,6 +7072,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_reasoning("Thinking.")
             .expect_content("Working on it.Hello!")
+            .run();
+
+        // Structured output, straight to the final answer
+        tst.test(" to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // Structured output after a reasoning message: reasoning stays free-form
+        tst.test(" to=self<|message|>I need to output the invoice details in JSON<|eom|>"
+                 "<|start|>assistant to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
     }
 

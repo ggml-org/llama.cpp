@@ -104,6 +104,24 @@
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
+
+	/* Nested surfaces, outermost first: the page, the sidebar on it, a group inset in the
+	   sidebar (its footer) and a row in the group. A row keeps its corners concentric with the
+	   group's: its radius is the group's less the padding between their edges. The sidebar's
+	   actions above the footer share the row radius, so every action row rounds alike. See "Nested
+	   surfaces" in the README; tests/client/nested-surfaces.svelte.test.ts holds the rule */
+	--surface-group-radius: 1rem;
+	--surface-group-padding: 0.25rem;
+	--surface-row-radius: calc(var(--surface-group-radius) - var(--surface-group-padding));
+
+	/* the chat form card holding one line of text, as it rests on a new chat */
+	--chat-form-collapsed-height: 6.375rem;
+	/* the empty chat form card, its text and actions in one row: a new chat centers its top edge */
+	--chat-form-resting-height: 3.375rem;
+	/* the chat form's corners while its text and actions share one row */
+	--chat-form-single-row-radius: 1.25rem;
+	/* the card's translucent fill over the page, made opaque: the phone sheet, and the page and Safari's bars around it */
+	--chat-form-sheet-fill: color-mix(in oklab, var(--muted) 60%, var(--background));
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
 }
 
@@ -131,6 +149,7 @@
 }
 
 .dark {
+	--chat-form-sheet-fill: color-mix(in oklab, var(--muted) 75%, var(--background));
 	--background: oklch(0.16 0 0);
 	--foreground: oklch(0.985 0 0);
 	--card: oklch(0.205 0 0);
@@ -213,6 +232,16 @@
 		@apply bg-(--sidebar-reveal-bg) text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+	}
+
+	/* While the chat form is a full-screen sheet on a phone, the page around it takes the
+	   sheet's fill: iOS paints the installed app's status bar and home indicator areas, and
+	   Safari tints its bars, from this background */
+	@media (width < 48rem) {
+		html[data-chat-form-sheet],
+		html[data-chat-form-sheet] body {
+			background-color: var(--chat-form-sheet-fill);
+		}
 	}
 
 	/* no elastic bounce past the ends of the page: it drags the sticky and

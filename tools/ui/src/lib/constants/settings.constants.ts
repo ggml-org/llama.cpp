@@ -107,9 +107,16 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Use Enter to send messages and Shift + Enter for new lines. When disabled, use Ctrl/Cmd + Enter.',
+				help: 'Use Enter to send messages, and Shift + Enter or Ctrl/Cmd + Enter for new lines. When disabled, and always on a touch screen, Enter adds a line and Ctrl/Cmd + Enter sends.',
 				key: SETTINGS_KEYS.SEND_ON_ENTER,
 				label: 'Send message on Enter',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'Render the markdown in the message input as you write it: every line but the one you are on shows as it will look in the conversation. When disabled, the input shows the plain markdown text.',
+				key: SETTINGS_KEYS.LIVE_MARKDOWN_PREVIEW,
+				label: 'Live markdown preview in the message input',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -283,6 +290,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Stop the view from following new content while messages stream, so you control the viewport position yourself.',
 				key: SETTINGS_KEYS.DISABLE_AUTO_SCROLL,
 				label: 'Disable automatic scroll',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: true,
+				help: 'On desktop, keep a one-line message on the same row as the + button, the model selector and the send button. A second line, or a line too long for the row, brings back the two-row form.',
+				key: SETTINGS_KEYS.SINGLE_ROW_CHAT_FORM,
+				label: 'Single-row chat form for short messages',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -664,15 +678,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
-				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
-				label: 'JavaScript sandbox tool',
-				type: SettingsFieldType.CHECKBOX
-			},
-			{
-				defaultValue: false,
-				dependsOn: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
-				help: 'Pre-load nerdamer in the sandbox for symbolic computation: simplify, diff, integrate, solve, and more. Requires "JavaScript sandbox tool" to be enabled.',
+				help: 'Pre-load nerdamer in the run_javascript sandbox for symbolic computation: simplify, diff, integrate, solve, and more.',
 				key: SETTINGS_KEYS.SYMBOLIC_MATH_ENABLED,
 				label: 'Symbolic math (nerdamer)',
 				type: SettingsFieldType.CHECKBOX

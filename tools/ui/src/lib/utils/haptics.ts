@@ -1,6 +1,4 @@
-import { HAPTIC_TAP_MS } from '$lib/constants';
-
-const COARSE_POINTER_QUERY = '(pointer: coarse)';
+import { HAPTIC_TAP_MS, MEDIA_QUERIES } from '$lib/constants';
 
 /**
  * A light tap of the phone's haptic engine, the confirmation a native app gives by feel.
@@ -11,7 +9,8 @@ const COARSE_POINTER_QUERY = '(pointer: coarse)';
  * iOS stays silent. A screen without touch gets nothing.
  */
 export function hapticTap(): void {
-	if (typeof window === 'undefined' || !window.matchMedia(COARSE_POINTER_QUERY).matches) return;
+	if (typeof window === 'undefined' || !window.matchMedia(MEDIA_QUERIES.COARSE_POINTER).matches)
+		return;
 
 	if (typeof navigator.vibrate === 'function') {
 		navigator.vibrate(HAPTIC_TAP_MS);
