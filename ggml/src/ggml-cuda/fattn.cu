@@ -740,12 +740,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !turing_mma_available(cc) || !mask || Q->ne[0] == 40 || Q->ne[0] == 72) {
             return BEST_FATTN_KERNEL_NONE;
         }
-        // Decode-shaped ops on quantized caches go to the vec kernel with its kv_rows gather,
+        // Decode-shaped ops on quantized or f8_e4m3 caches go to the vec kernel with its kv_rows gather,
         // unless the fused MMA dequant path applies to them (fused beats vec at depth there).
         // The f16 conversion fallback can't read through kv_rows, so a compiled vec instance is required.
+        // (ggml_is_quantized excludes f8_e4m3, which needs its own clause; the vec kernel supports it per side.)
+        const bool vec_rows_types_ok =
+            (ggml_is_quantized(K->type) || K->type == GGML_TYPE_F8_E4M3) &&
+            (ggml_is_quantized(V->type) || V->type == GGML_TYPE_F8_E4M3);
         if (cc >= GGML_CUDA_CC_ADA_LOVELACE && can_use_vector_kernel &&
                 Q->ne[1] <= 2 &&
-                ggml_is_quantized(K->type) && ggml_is_quantized(V->type) &&
+                vec_rows_types_ok &&
                 ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr &&
                 !ggml_cuda_fattn_mma_f16_fused_q_applies(cc, dst)) {
             return BEST_FATTN_KERNEL_VEC;
