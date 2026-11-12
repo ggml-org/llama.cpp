@@ -220,6 +220,9 @@ class TensorNameMap:
         MODEL_TENSOR.LILICORR_ANCHOR_OUT_HEAD: (
             "model.lilicorr.anchor_out_head",
         ),
+        MODEL_TENSOR.RES_SCALE_IN: (
+            "model.input_hidden_states",  # zaya1
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -3230,7 +3233,6 @@ class TensorNameMap:
     # architecture-specific block mappings
     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
         MODEL_ARCH.ZAYA1: {
-            MODEL_TENSOR.RES_SCALE_IN:  ("model.input_hidden_states",),
             MODEL_TENSOR.ATTN_Q:        ("model.layers.{bid}.self_attn.qkv_proj.q_proj",),
             MODEL_TENSOR.ATTN_K:        ("model.layers.{bid}.self_attn.qkv_proj.k_proj",),
             # the converter joins v_proj_delayed onto v_proj_current, attn_v holds both kv heads

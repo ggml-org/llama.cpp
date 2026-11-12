@@ -1,11 +1,21 @@
 #include "models.h"
-#include "../llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
 
 void llama_model_zaya1::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,             hparams.ssm_d_conv);
     ml.get_key(LLM_KV_ROUTER_HIDDEN_SIZE,          hparams.n_router_hidden);
     ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
+
+    if (hparams.ssm_d_conv != 2) {
+        throw std::runtime_error("zaya1: only ssm.conv_kernel == 2 is supported");
+    }
+    // the two kv heads are v_cur and v_del, and the router picks one expert
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        if (hparams.n_head_kv(il) != 2 || hparams.n_embd_head_v(il) != hparams.n_embd_head_k(il) || hparams.n_expert_used(il) != 1) {
+            throw std::runtime_error("zaya1: only 2 kv heads of equal k/v size and 1 used expert are supported");
+        }
+    }
 
     hparams.n_cca_qk = (hparams.n_head() + hparams.n_head_kv()) * hparams.n_embd_head_k();
 
@@ -30,8 +40,8 @@ void llama_model_zaya1::load_arch_tensors(llama_model_loader &) {
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-    res_scale_in   = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "weight", 0), {n_embd}, 0);
-    res_scale_in_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "bias",   0), {n_embd}, 0);
+    res_scale_in   = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "weight"), {n_embd}, 0);
+    res_scale_in_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "bias"),   {n_embd}, 0);
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
@@ -122,7 +132,7 @@ ggml_tensor * llama_model_zaya1::graph::build_cca_block(const llama_model & mode
     const auto & layer = model.layers[il];
     const auto & z     = layer.zaya1;
 
-    const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
+    const auto * mctx_cur = inp->get_recr()->mctx;
     const uint32_t kv_head = mctx_cur->get_head();
 
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;

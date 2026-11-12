@@ -39,18 +39,18 @@ class ZayaModel(TextModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # added tokens overlap the base vocab, so count the token list itself
-        self._n_vocab = gguf.LlamaHfVocab(self.dir_model).vocab_size
+        self._vocab = gguf.LlamaHfVocab(self.dir_model)
+        self._n_vocab = self._vocab.vocab_size
         self._parts: dict[tuple[int, str], dict[str, Tensor]] = {}
         self.rope_parameters = self.hparams["rope_parameters"]["hybrid"]
 
     def set_vocab(self):
-        vocab = gguf.LlamaHfVocab(self.dir_model)
         # added special tokens overlap the base vocab, so mark them as control here
         with open(self.dir_model / "tokenizer.json", "r", encoding="utf-8") as f:
             added = {t["id"]: t["special"] for t in json.load(f)["added_tokens"]}
 
         tokens, scores, toktypes = [], [], []
-        for i, (text, score, toktype) in enumerate(vocab.all_tokens()):
+        for i, (text, score, toktype) in enumerate(self._vocab.all_tokens()):
             tokens.append(text)
             scores.append(score)
             if added.get(i):

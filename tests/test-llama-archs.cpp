@@ -332,7 +332,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
+            arch == LLM_ARCH_ZAYA1) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
