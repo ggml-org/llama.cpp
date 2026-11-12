@@ -156,6 +156,82 @@ static void test_server_tokens_clone(testing & t) {
     t.assert_true("get_text_tokens", cl.get_text_tokens() == llama_tokens({1, 2, 3, 4}));
 }
 
+static void test_server_tokens_prefix_hashes(testing & t) {
+    const size_t n_blk = server_tokens::hash_block_size;
+
+    auto make_tokens = [](size_t n) {
+        llama_tokens res(n);
+        for (size_t i = 0; i < n; i++) {
+            res[i] = 100 + (llama_token) i;
+        }
+        return res;
+    };
+
+    {
+        server_tokens a(make_tokens(3 * n_blk + 10), false);
+        t.assert_equal("full blocks only", (size_t) 3, a.get_prefix_hashes().size());
+        t.assert_equal("same tokens", 3 * n_blk, a.get_common_prefix_lower(a.clone().get_prefix_hashes()));
+        t.assert_equal("no hashes",   (size_t) 0, a.get_common_prefix_lower({}));
+
+        // the exact value is 2 * n_blk + 5
+        llama_tokens toks = make_tokens(3 * n_blk + 10);
+        toks[2 * n_blk + 5] = 7;
+        server_tokens b(toks, false);
+        t.assert_equal("diverge in block 2", 2 * n_blk, a.get_common_prefix_lower(b.get_prefix_hashes()));
+        t.assert_equal("exact, diverge in block 2", 2 * n_blk + 5, a.get_common_prefix(b));
+        t.assert_equal("exact, same tokens",        3 * n_blk + 10, a.get_common_prefix(a.clone()));
+        t.assert_equal("b is shorter",       1 * n_blk, a.get_common_prefix_lower(server_tokens(make_tokens(n_blk + 3), false).get_prefix_hashes()));
+
+        toks[0] = 7;
+        t.assert_equal("diverge in block 0", (size_t) 0, a.get_common_prefix_lower(server_tokens(toks, false).get_prefix_hashes()));
+    }
+
+    {
+        server_tokens a(make_tokens(3 * n_blk), false);
+        const auto hashes = a.get_prefix_hashes();
+
+        server_tokens b = a.clone();
+        b.set_token(n_blk + 1, 7);
+        t.assert_equal("set_token", n_blk, b.get_common_prefix_lower(hashes));
+
+        b = a.clone();
+        b.keep_first(n_blk + 1);
+        for (size_t i = n_blk + 1; i < 3 * n_blk; i++) {
+            b.push_back(7);
+        }
+        t.assert_equal("keep_first + push_back", n_blk, b.get_common_prefix_lower(hashes));
+
+        b.clear();
+        t.assert_equal("clear", (size_t) 0, b.get_prefix_hashes().size());
+    }
+
+    {
+        // the image chunk starts in block 0 and ends in a later block
+        mtmd::input_chunks chunks(mtmd_test_create_input_chunks());
+        const mtmd_input_chunk * image = chunks[1];
+        const size_t n_image = mtmd_input_chunk_get_n_tokens(image);
+        const size_t i_image = n_blk - 4;
+
+        auto make_mtmd = [&](bool with_image, llama_token last) {
+            server_tokens res(make_tokens(i_image), true);
+            if (with_image) {
+                res.push_back(image);
+            }
+            while (res.size() < i_image + n_image) {
+                res.push_back(5);
+            }
+            res.push_back(last);
+            return res;
+        };
+
+        server_tokens a = make_mtmd(true, 1);
+        t.assert_true("image is longer than a block", n_image > n_blk);
+        t.assert_equal("exact value", i_image + n_image, a.get_common_prefix(make_mtmd(true, 2)));
+        t.assert_equal("block ends inside the image", i_image, a.get_common_prefix_lower(make_mtmd(true, 2).get_prefix_hashes()));
+        t.assert_equal("text in place of the image",  (size_t) 0, a.get_common_prefix_lower(make_mtmd(false, 1).get_prefix_hashes()));
+    }
+}
+
 static void test_server_tokens(testing & t) {
     t.test("basic",         test_server_tokens_basic);
     t.test("pos",           test_server_tokens_pos);
@@ -163,6 +239,7 @@ static void test_server_tokens(testing & t) {
     t.test("common_prefix", test_server_tokens_common_prefix);
     t.test("serialize",     test_server_tokens_serialize);
     t.test("clone",         test_server_tokens_clone);
+    t.test("prefix_hashes", test_server_tokens_prefix_hashes);
 }
 
 //
