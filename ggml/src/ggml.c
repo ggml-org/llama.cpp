@@ -3483,8 +3483,8 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
 
     if (scale_weight) {
         struct ggml_tensor * s = scale_weight;
-        const bool per_tensor = s->ne[0] == 1        && s->ne[1] == 1        && s->ne[2] == 1 && s->ne[3] == 1;
-        const bool per_expert = s->ne[0] == as->ne[2] && s->ne[1] == 1        && s->ne[2] == 1 && s->ne[3] == 1;
+        const bool per_tensor = ggml_is_scalar(s);
+        const bool per_expert = ggml_is_vector(s) && s->ne[0] == as->ne[2];
         const bool per_ch_exp = s->ne[0] == as->ne[1] && s->ne[1] == as->ne[2] && s->ne[2] == 1 && s->ne[3] == 1;
         GGML_ASSERT(per_tensor || per_expert || per_ch_exp);
         result->src[3] = s;
@@ -3492,8 +3492,8 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
 
     if (scale_activations) {
         const struct ggml_tensor * s = scale_activations;
-        const bool per_tensor = ggml_nelements(s) == 1;
-        const bool per_expert = s->ne[0] == as->ne[2] && s->ne[1] == 1 && s->ne[2] == 1 && s->ne[3] == 1;
+        const bool per_tensor = ggml_is_scalar(s);
+        const bool per_expert = ggml_is_vector(s) && s->ne[0] == as->ne[2];
         GGML_ASSERT(per_tensor || per_expert);
         result->src[4] = scale_activations;
     }
