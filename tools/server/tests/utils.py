@@ -391,6 +391,8 @@ class ServerProcess:
     def make_url(self, path: str, host: str | None = None) -> str:
         if host is None:
             host = self.server_host.split(",")[0].strip()
+            # a wildcard bind cannot be connected to on Windows
+            host = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, host)
         return f"http://{host}:{self.server_port}{path}"
 
     def make_request(
