@@ -2214,6 +2214,68 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect(simple_assist_msg("", "", "empty_args", "{}"))
         .run();
 
+    // no "strict" (OpenAI default false) - undeclared names stay tool calls instead of being forced onto a declared tool
+    const auto lenient_tools_json = json::parse(R"([{
+        "type": "function",
+        "function": {
+            "name": "special_function",
+            "description": "I'm special",
+            "parameters": {"type": "object", "properties": {"arg1": {"type": "integer"}}, "required": ["arg1"]}
+        }
+    }])");
+    auto strict_tools_json = lenient_tools_json;
+    strict_tools_json[0]["function"]["strict"] = true;
+    const auto lenient_tools = common_chat_tools_parse_oaicompat(lenient_tools_json);
+
+    tst.test("<|tool_call_start|>[reseat_sim_card()]<|tool_call_end|>")
+        .tools(lenient_tools)
+        .expect(simple_assist_msg("", "", "reseat_sim_card", "{}"))
+        .run();
+
+    tst.test("<|tool_call_start|>[set_sim_lock(mode='pin', force=True)]<|tool_call_end|>")
+        .tools(lenient_tools)
+        .expect_tool_calls({ { "set_sim_lock", R"({"mode": "pin", "force": true})", "" } })
+        .run();
+
+    tst.test("<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+        .tools(lenient_tools)
+        .expect(message_assist_call)
+        .run();
+
+    // strict:true keeps the grammar to declared names, and strict never reaches the prompt
+    if (g_template_filter.empty() || template_path.find(g_template_filter) != std::string::npos) {
+        auto tmpls = read_templates(template_path);
+        std::string prompts[2];
+        for (const bool strict : { true, false }) {
+            common_chat_templates_inputs inputs;
+            inputs.messages = { message_user };
+            inputs.tools    = common_chat_tools_parse_oaicompat(strict ? strict_tools_json : lenient_tools_json);
+
+            auto params  = common_chat_templates_apply(tmpls.get(), inputs);
+            auto grammar = build_grammar(params.grammar);
+            if (!grammar) {
+                throw std::runtime_error("LFM2 strict=" + std::to_string(strict) + ": failed to build grammar");
+            }
+            if (match_string("<|tool_call_start|>[reseat_sim_card()]<|tool_call_end|>", grammar.get()) == strict) {
+                throw std::runtime_error(std::string("LFM2 strict=") + (strict ? "true" : "false") +
+                                         ": unexpected grammar result for an undeclared tool name");
+            }
+            prompts[strict] = params.prompt.str();
+        }
+        if (prompts[0] != prompts[1]) {
+            throw std::runtime_error("LFM2: strict changed the rendered prompt");
+        }
+
+        // tool_choice=required stays constrained to the declared tools
+        common_chat_templates_inputs inputs;
+        inputs.messages    = { message_user };
+        inputs.tools       = lenient_tools;
+        inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        auto grammar       = build_grammar(common_chat_templates_apply(tmpls.get(), inputs).grammar);
+        if (!grammar || match_string("<|tool_call_start|>[reseat_sim_card()]<|tool_call_end|>", grammar.get())) {
+            throw std::runtime_error("LFM2: tool_choice=required admitted an undeclared tool name");
+        }
+    }
 }
 
 static void test_template_output_peg_parsers(bool detailed_debug) {
