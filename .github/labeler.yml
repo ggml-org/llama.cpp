@@ -48,7 +48,6 @@ examples:
             - all-globs-to-all-files:
                 - '!tools/server/**'
                 - '!tools/mtmd/**'
-                - '!tools/ui/**'
 testing:
     - changed-files:
         - any-glob-to-any-file:
@@ -72,7 +71,7 @@ android:
 server/ui:
     - changed-files:
         - any-glob-to-any-file:
-            - tools/ui/**
+            - ui/**
 server:
     - changed-files:
         - any-glob-to-any-file:

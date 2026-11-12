@@ -1,0 +1,120 @@
+/*
+ * Llama UI's theme: fonts, tokens, surfaces and the Tailwind theme the components read.
+ * Consumers import it right after Tailwind:
+ *
+ *   @import 'tailwindcss';
+ *   @import '@ggml/llama-ui/theme.css';
+ *
+ * Dark mode is the `dark` class on <html>; the Matte light surfaces are the `theme-matte` class.
+ */
+
+@import 'tw-animate-css';
+@import './fonts.css';
+@import './tokens.css';
+@import './surfaces.css';
+
+/* the components' own classes, so Tailwind generates them in the consumer's build */
+@source '../';
+
+@custom-variant dark (&:is(.dark *));
+
+/* shadcn components key their orientation styles off these, toggle-group among them */
+@custom-variant data-horizontal (&[data-orientation='horizontal']);
+@custom-variant data-vertical (&[data-orientation='vertical']);
+
+/*
+ * Tailwind v4 dropped the pointer cursor from buttons. Every control a user can
+ * press gets it back, and anything disabled keeps the cursor its own class asks for.
+ */
+@layer base {
+	button:not(:disabled),
+	[role='button']:not([data-disabled]),
+	[role='checkbox']:not([data-disabled]),
+	[role='combobox']:not([data-disabled]),
+	[role='menuitem']:not([data-disabled]),
+	[role='menuitemcheckbox']:not([data-disabled]),
+	[role='menuitemradio']:not([data-disabled]),
+	[role='option']:not([data-disabled]),
+	[role='radio']:not([data-disabled]),
+	[role='switch']:not([data-disabled]),
+	[role='tab']:not([data-disabled]),
+	label[for],
+	select,
+	summary {
+		cursor: pointer;
+	}
+}
+
+:root {
+	--radius: 0.625rem;
+	--font-mono:
+		'Llama Mono', ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono',
+		Consolas, 'Liberation Mono', Menlo, monospace;
+
+	/*
+	 * shadcn names, kept so the vendored components and their classes keep working.
+	 * They alias semantic tokens; new code uses the semantic names directly.
+	 */
+	--background: var(--surface-page);
+	--foreground: var(--fg-default);
+	--card: var(--surface-raised);
+	--card-foreground: var(--fg-default);
+	--popover: var(--surface-raised);
+	--popover-foreground: var(--fg-default);
+	--primary: var(--action-primary);
+	--primary-foreground: var(--fg-on-action);
+	--secondary: var(--surface-emphasis);
+	--secondary-foreground: var(--fg-default);
+	--muted: var(--surface-muted);
+	--muted-foreground: var(--fg-muted);
+	--accent: var(--surface-selected);
+	--accent-foreground: var(--fg-default);
+	--destructive: var(--fg-danger);
+	--border: var(--line-default);
+	--input: var(--line-field);
+	--ring: var(--line-focus);
+	--code-background: var(--surface-code);
+	--code-foreground: var(--fg-code);
+}
+
+@theme inline {
+	/* the sans everywhere, headings included (their size sets the optical size): Llama Sans, then the system stack
+	   while it loads or if it can't */
+	--font-sans: 'Llama Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--radius-sm: calc(var(--radius) - 4px);
+	--radius-md: calc(var(--radius) - 2px);
+	--radius-lg: var(--radius);
+	--radius-xl: calc(var(--radius) + 4px);
+	--color-background: var(--background);
+	--color-foreground: var(--foreground);
+	--color-card: var(--card);
+	--color-card-foreground: var(--card-foreground);
+	--color-popover: var(--popover);
+	--color-popover-foreground: var(--popover-foreground);
+	--color-primary: var(--primary);
+	--color-primary-foreground: var(--primary-foreground);
+	--color-secondary: var(--secondary);
+	--color-secondary-foreground: var(--secondary-foreground);
+	--color-muted: var(--muted);
+	--color-muted-foreground: var(--muted-foreground);
+	--color-accent: var(--accent);
+	--color-accent-foreground: var(--accent-foreground);
+	--color-destructive: var(--destructive);
+	--color-border: var(--border);
+	--color-input: var(--input);
+	--color-ring: var(--ring);
+}
+
+@layer base {
+	* {
+		@apply border-border outline-ring/50;
+	}
+
+	body {
+		@apply bg-background text-foreground antialiased;
+	}
+
+	:where(code, pre, kbd, samp) {
+		font-family: var(--font-mono);
+	}
+}

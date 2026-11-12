@@ -1,0 +1,43 @@
+<!--
+	The Storybook's front page (Introduction): what this package is, what's in it so far and how it keeps in step with
+	Llama UI in llama.cpp. Set in the Philosophy pages' Editorial, like the Storybook it is taken from.
+-->
+
+<p class="kicker">Llama UI · package</p>
+
+# Introduction
+
+<p class="lead"><strong>@ggml/llama-ui</strong> is Llama UI as a package: the tokens, fonts, surfaces and components of Llama Chat, for llama.app first and the Llama apps after.</p>
+
+## Where it comes from
+
+Llama UI is designed and built in llama.cpp, in `ui/apps/chat`, and its Storybook there is the source of truth: the **Philosophy**, the **Brand**, the **Communications** and every component of Llama Chat. This Storybook is a copy of it, cut down to what the package holds so far, with the same sections, the same toolbar and the same stories.
+
+Until `ui/apps/chat` uses this package itself, changes flow one way, from `ui/apps/chat` to here.
+
+## What's in it
+
+- **Foundations:** the primitive, semantic and component tokens, the type, corner, icon and control-height roles, the matte surfaces and elevations, and Llama Sans and Llama Mono.
+- **Components:** Button, Badge, Label, Switch and Tooltip.
+- **Model UI:** how a model is shown in Llama Chat and on llama.app: its name and badges, capability icons, maker's avatar and quant chips, under **UI › Blocks › Models**. They take model data in and report what the user did out.
+- **Scrapbook:** proposals and variations, rendered before anything is decided.
+
+## Using it
+
+Import the theme right after Tailwind, then the components:
+
+```css
+@import 'tailwindcss';
+@import '@ggml/llama-ui/theme.css';
+```
+
+```svelte
+<script lang="ts">
+	import { Badge, Button } from '@ggml/llama-ui';
+</script>
+
+<Button variant="secondary">View on Hugging Face</Button>
+<Badge variant="success">Downloaded</Badge>
+```
+
+Use the toolbar to switch between light and dark, and between the Paper and Matte light surfaces.

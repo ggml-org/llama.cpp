@@ -130,7 +130,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -196,7 +196,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -274,7 +274,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -381,7 +381,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -479,7 +479,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -571,7 +571,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Build
         id: cmake_build
@@ -624,7 +624,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Build
         id: cmake_build
@@ -672,7 +672,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -894,7 +894,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Install Ninja
         run: |
@@ -1459,7 +1459,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
@@ -1531,7 +1531,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Free up disk space
         uses: ggml-org/free-disk-space@v1.3.1
@@ -1646,7 +1646,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: llama-ui.zip
-          path: tools/ui/dist
+          path: ui/apps/chat/dist
 
       - name: Dependencies
         id: depends
