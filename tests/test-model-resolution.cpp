@@ -153,6 +153,14 @@ static const std::vector<std::string> vendors = {
     "BlackSheep-24B.Q8_0.gguf",
 };
 
+// a tag must match the full token: F16 ends inside BF16, Q4_XS inside IQ4_XS
+static const std::vector<std::string> twins = {
+    "model-BF16.gguf",
+    "model-F16.gguf",
+    "model-IQ4_XS.gguf",
+    "model-Q4_XS.gguf",
+};
+
 // every speculative sidecar type at the same quant
 static const std::vector<std::string> quad = {
     "model-Q8_0.gguf",
@@ -268,6 +276,23 @@ static const plan_case plan_cases[] = {
     // first match wins between two files at the same quant
     {"vendor prefix", vendors, "test/repo:Q8_0", "", false, true,
      "TheDrummer_Model-24B-v4.1-Q8_0.gguf", {"TheDrummer_Model-24B-v4.1-Q8_0.gguf"},
+     "", "", "", "", ""},
+
+    // the tag picks the file carrying it as a full token, never a longer one
+    {"twins f16 tag", twins, "test/repo:F16", "", false, false,
+     "model-F16.gguf", {"model-F16.gguf"},
+     "", "", "", "", ""},
+
+    {"twins bf16 tag", twins, "test/repo:BF16", "", false, false,
+     "model-BF16.gguf", {"model-BF16.gguf"},
+     "", "", "", "", ""},
+
+    {"twins q4_xs tag", twins, "test/repo:Q4_XS", "", false, false,
+     "model-Q4_XS.gguf", {"model-Q4_XS.gguf"},
+     "", "", "", "", ""},
+
+    {"twins iq4_xs tag", twins, "test/repo:IQ4_XS", "", false, false,
+     "model-IQ4_XS.gguf", {"model-IQ4_XS.gguf"},
      "", "", "", "", ""},
 
     // every sidecar type resolves at the tag
@@ -868,7 +893,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "MTP/Qwen3.8-27B-Uncensored-OrcaRouter-MTP-Q8_0.gguf", 1, "", "", "", "", ""},
       {"BF16", "BF16/Qwen3.8-27B-Uncensored-OrcaRouter-FP8-derived-BF16-00001-of-00002.gguf", 2, "", "", "", "", ""},
       {"Q5_K_M", "Qwen3.8-27B-Uncensored-OrcaRouter-Q5_K_M.gguf", 1, "", "", "", "", ""},
-      {"F16", "BF16/Qwen3.8-27B-Uncensored-OrcaRouter-FP8-derived-BF16-00001-of-00002.gguf", 2, "", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_0", "Q5_K_M", "Q4_K_M", "BF16"}},
 
     {"ChrisColeTech/qwen-image-edit-uncensored-GGUF",
@@ -980,7 +1005,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-MTP-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"IQ2_M", "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-NEO-MAX-IQ2_M.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-plusIQ-NEO-MAX-MTP-bf16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "Qwen3.5-9B-The-Defiant-Fable-Uncnr-Heretic-plusIQ-NEO-MAX-MTP-bf16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_0", "BF16", "Q4_K_S", "Q4_K_M", "IQ2_M"}},
 
     {"DavidAU/Qwen3.6-27B-Heretic-Uncensored-FINETUNE-NEO-CODE-Di-IMatrix-MAX-GGUF",
@@ -1044,7 +1069,7 @@ static const real_repo real_repos[] = {
       {"Q4_K_M", "Qwythos-27B-MTP-Q4_K_M.gguf", 1, "mmproj-Qwythos-27B-F16.gguf", "", "", "", ""},
       {"Q8_0", "Qwythos-27B-MTP-Q8_0.gguf", 1, "mmproj-Qwythos-27B-F16.gguf", "", "", "", ""},
       {"BF16", "Qwythos-27B-BF16.gguf", 1, "mmproj-Qwythos-27B-F16.gguf", "", "", "", ""},
-      {"F16", "Qwythos-27B-BF16.gguf", 1, "mmproj-Qwythos-27B-F16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_0", "Q5_K_M", "Q4_K_M", "BF16"}},
 
     {"empero-ai/Qwythos-9B-v2-GGUF",
@@ -1198,6 +1223,20 @@ static const real_repo real_repos[] = {
       {"MXFP4", "gpt-oss-120b-MXFP4.gguf", 1, "", "", "", "eagle3-gpt-oss-120b-Q8_0.gguf", ""},
       {"BF16", "", 0, "", "", "", "eagle3-gpt-oss-120b-BF16.gguf", ""}},
      {"MXFP4"}},
+
+    // F16 and BF16 in one repo, the F16 tag must not pick the BF16 file
+    {"ggml-org/Llama-2-7B-GGUF",
+     {{"Llama-2-7B-BF16.gguf"},
+      {"Llama-2-7B-F16.gguf"},
+      {"Llama-2-7B-Q4_0.gguf"},
+      {"Llama-2-7B-Q8_0.gguf"}},
+     {
+      {"", "Llama-2-7B-Q8_0.gguf", 1, "", "", "", "", ""},
+      {"Q8_0", "Llama-2-7B-Q8_0.gguf", 1, "", "", "", "", ""},
+      {"Q4_0", "Llama-2-7B-Q4_0.gguf", 1, "", "", "", "", ""},
+      {"F16", "Llama-2-7B-F16.gguf", 1, "", "", "", "", ""},
+      {"BF16", "Llama-2-7B-BF16.gguf", 1, "", "", "", "", ""}},
+     {"F16", "Q4_0", "Q8_0", "BF16"}},
 
     {"ggml-org/MiMo-V2.6-Distill-Qwen-9B-GGUF",
      {{"MiMo-V2.6-Distill-Qwen-9B-Q8_0.gguf"},
@@ -1412,7 +1451,7 @@ static const real_repo real_repos[] = {
       {"Q4_K_M", "Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf", 1, "mmproj-Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""},
       {"Q8_0", "Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf", 1, "mmproj-Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""},
       {"BF16", "Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-BF16.gguf", 1, "mmproj-Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""},
-      {"F16", "Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-BF16.gguf", 1, "mmproj-Qwen3.5-27B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_0", "Q4_K_M", "Q3_K_M", "BF16"}},
 
     {"HauhauCS/Qwen3.5-2B-Uncensored-HauhauCS-Aggressive",
@@ -1426,7 +1465,7 @@ static const real_repo real_repos[] = {
       {"Q4_K_M", "Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-Q4_K_M.gguf", 1, "mmproj-Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""},
       {"Q8_0", "Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-Q8_0.gguf", 1, "mmproj-Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""},
       {"BF16", "Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-BF16.gguf", 1, "mmproj-Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""},
-      {"F16", "Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-BF16.gguf", 1, "mmproj-Qwen3.5-2B-Uncensored-HauhauCS-Aggressive-f16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_0", "Q6_K", "Q4_K_M", "BF16"}},
 
     {"HauhauCS/Qwen3.5-4B-Uncensored-HauhauCS-Aggressive",
@@ -1622,7 +1661,7 @@ static const real_repo real_repos[] = {
       {"IQ2_M", "Qwen3.8-27B-Uncensored-IQ2_M.gguf", 1, "mmproj-Qwen3.8-27B-Uncensored-F16.gguf", "", "", "", ""},
       {"Q4_0", "Qwen3.8-27B-Uncensored-draft-Q4_0.gguf", 1, "mmproj-Qwen3.8-27B-Uncensored-F16.gguf", "", "", "", ""},
       {"F16", "", 0, "", "", "", "", ""},
-      {"mtp", "Qwen3.8-27B-Uncensored-noMTP-IQ2_M.gguf", 1, "mmproj-Qwen3.8-27B-Uncensored-F16.gguf", "", "", "", ""}},
+      {"mtp", "", 0, "", "", "", "", ""}},
      {"Q8_0", "Q5_K_M", "Q4_K_M", "IQ2_M", "Q4_0"}},
 
     {"kai-os/Carnice-V2-27b-GGUF",
@@ -1903,7 +1942,7 @@ static const real_repo real_repos[] = {
       {"Q4_K_M", "Huihui-Qwen3-VL-4B-Instruct-abliterated-Q4_K_M.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"Q8_0", "Huihui-Qwen3-VL-4B-Instruct-abliterated-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "Huihui-Qwen3-VL-4B-Instruct-abliterated-BF16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "Huihui-Qwen3-VL-4B-Instruct-abliterated-BF16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_0", "Q4_K_M", "IQ4_XS", "BF16"}},
 
     {"OBLITERATUS/Gemma-4-12B-OBLITERATED",
@@ -2291,7 +2330,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "embeddinggemma-2-Q8_0.gguf", 1, "mmproj-Q8_0.gguf", "", "", "", ""},
       {"BF16", "embeddinggemma-2-BF16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q6_K_XL", "embeddinggemma-2-UD-Q6_K_XL.gguf", 1, "mmproj-Q8_0.gguf", "", "", "", ""},
-      {"F16", "embeddinggemma-2-BF16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q6_K_XL", "Q4_K_XL", "Q8_0", "BF16"}},
 
     {"unsloth/GLM-4.7-Flash-GGUF",
@@ -2320,7 +2359,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Q8_0/GLM-5.3-Flash-Q8_0-00001-of-00008.gguf", 8, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/GLM-5.3-Flash-BF16-00001-of-00014.gguf", 14, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q6_K_XL", "UD-Q6_K_XL/GLM-5.3-Flash-UD-Q6_K_XL-00001-of-00007.gguf", 7, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/GLM-5.3-Flash-BF16-00001-of-00014.gguf", 14, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q6_K_XL", "IQ4_XS", "Q8_0", "BF16"}},
 
     {"unsloth/GLM-5.3-GGUF",
@@ -2359,7 +2398,7 @@ static const real_repo real_repos[] = {
       {"", "BF16/Kimi-K2.6-BF16-00001-of-00046.gguf", 46, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Kimi-K2.6-BF16-00001-of-00046.gguf", 46, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "UD-Q8_K_XL/Kimi-K2.6-UD-Q8_K_XL-00001-of-00014.gguf", 14, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Kimi-K2.6-BF16-00001-of-00046.gguf", 46, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "Q4_K_XL", "BF16"}},
 
     {"unsloth/Kimi-K2.7-Code-GGUF",
@@ -2405,7 +2444,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "LFM2.5-VL-3B-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "LFM2.5-VL-3B-BF16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "LFM2.5-VL-3B-UD-Q8_K_XL.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "LFM2.5-VL-3B-BF16.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "Q8_0", "Q5_K_S", "Q4_K_M", "BF16"}},
 
     {"unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF",
@@ -2449,7 +2488,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Qwen3-VL-30B-A3B-Instruct-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Qwen3-VL-30B-A3B-Instruct-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-TQ1_0", "Qwen3-VL-30B-A3B-Instruct-UD-TQ1_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Qwen3-VL-30B-A3B-Instruct-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"TQ1_0", "Q8_0", "Q6_K", "Q4_K_M", "BF16"}},
 
     {"unsloth/Qwen3.5-27B-GGUF",
@@ -2467,7 +2506,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Qwen3.5-27B-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Qwen3.5-27B-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "Qwen3.5-27B-UD-Q8_K_XL.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Qwen3.5-27B-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "Q8_0", "Q6_K", "Q4_K_M", "BF16"}},
 
     {"unsloth/Qwen3.5-35B-A3B-GGUF",
@@ -2485,7 +2524,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Qwen3.5-35B-A3B-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Qwen3.5-35B-A3B-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "Qwen3.5-35B-A3B-UD-Q8_K_XL.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Qwen3.5-35B-A3B-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "IQ3_S", "Q8_0", "Q4_K_M", "BF16"}},
 
     {"unsloth/Qwen3.5-397B-A17B-GGUF",
@@ -2503,7 +2542,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Q8_0/Qwen3.5-397B-A17B-Q8_0-00001-of-00010.gguf", 10, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Qwen3.5-397B-A17B-BF16-00001-of-00017.gguf", 17, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "UD-Q8_K_XL/Qwen3.5-397B-A17B-UD-Q8_K_XL-00001-of-00010.gguf", 10, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Qwen3.5-397B-A17B-BF16-00001-of-00017.gguf", 17, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "IQ3_XXS", "Q8_0", "Q4_K_M", "BF16"}},
 
     {"unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
@@ -2519,7 +2558,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Qwen3.6-35B-A3B-Q8_0.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Qwen3.6-35B-A3B-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "Qwen3.6-35B-A3B-UD-Q8_K_XL.gguf", 1, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Qwen3.6-35B-A3B-BF16-00001-of-00002.gguf", 2, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "Q3_K_M", "Q8_0", "BF16"}},
 
     {"unsloth/Qwen3.8-Flash-Next-GGUF",
@@ -2557,7 +2596,7 @@ static const real_repo real_repos[] = {
       {"Q8_0", "Q8_0/Step-3.7-Flash-Q8_0-00001-of-00006.gguf", 6, "mmproj-BF16.gguf", "", "", "", ""},
       {"BF16", "BF16/Step-3.7-Flash-BF16-00001-of-00008.gguf", 8, "mmproj-BF16.gguf", "", "", "", ""},
       {"UD-Q8_K_XL", "UD-Q8_K_XL/Step-3.7-Flash-UD-Q8_K_XL-00001-of-00006.gguf", 6, "mmproj-BF16.gguf", "", "", "", ""},
-      {"F16", "BF16/Step-3.7-Flash-BF16-00001-of-00008.gguf", 8, "mmproj-BF16.gguf", "", "", "", ""}},
+      {"F16", "", 0, "", "", "", "", ""}},
      {"Q8_K_XL", "Q3_K_M", "Q8_0", "BF16"}},
 
     {"vmlinux/Qwen3.8-Flash-Next-Uncensored-Gufo-Q4Mix-GGUF",

@@ -170,6 +170,7 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
+        bool download_stop_requested = false; // a client asked the download to stop (pause or cancel)
 
         // ask the child to exit (it handles the command on its stdin, see server_role::setup)
         void request_exit() const;

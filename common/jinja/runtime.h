@@ -472,6 +472,28 @@ struct binary_expression : public expression {
 };
 
 /**
+ * Two or more comparisons in a row, e.g. `a < b <= c`
+ * It is the same as `a < b and b <= c`, but each operand is executed only one time.
+ */
+struct comparison_chain_expression : public expression {
+    statements operands;
+    std::vector<token> ops;
+
+    comparison_chain_expression(statements && operands, std::vector<token> && ops)
+        : operands(std::move(operands)), ops(std::move(ops)) {
+        assert(this->operands.size() == this->ops.size() + 1);
+        for (const auto & operand : this->operands) chk_type<expression>(operand);
+    }
+    std::string type() const override { return "ComparisonChainExpression"; }
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"operands", stmts_to_ptr(operands)}
+        });
+    }
+};
+
+/**
  * An operation with two sides, separated by the | operator.
  * Operator precedence: https://github.com/pallets/jinja/issues/379#issuecomment-168076202
  */
@@ -633,7 +655,9 @@ struct keyword_argument_expression : public expression {
 
 struct spread_expression : public expression {
     statement_ptr argument;
-    explicit spread_expression(statement_ptr && argument) : argument(std::move(argument)) {
+    bool is_kwargs;
+    spread_expression(statement_ptr && argument, bool is_kwargs)
+        : argument(std::move(argument)), is_kwargs(is_kwargs) {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "SpreadExpression"; }

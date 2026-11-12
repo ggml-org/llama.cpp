@@ -76,6 +76,7 @@ enum llm_type {
     LLM_TYPE_7B,
     LLM_TYPE_8B,
     LLM_TYPE_9B,
+    LLM_TYPE_10B,
     LLM_TYPE_11B,
     LLM_TYPE_12B,
     LLM_TYPE_13B,
@@ -289,6 +290,8 @@ struct llama_layer {
     struct ggml_tensor * wq        = nullptr;
     struct ggml_tensor * wk        = nullptr;
     struct ggml_tensor * wv        = nullptr;
+    struct ggml_tensor * k_cache_s = nullptr;
+    struct ggml_tensor * v_cache_s = nullptr;
     struct ggml_tensor * wo        = nullptr;
     struct ggml_tensor * wqkv      = nullptr;
     struct ggml_tensor * wg        = nullptr;
@@ -375,6 +378,9 @@ struct llama_layer {
     struct ggml_tensor * attn_resid_beta  = nullptr;
     struct ggml_tensor * ffn_resid_alpha  = nullptr;
     struct ggml_tensor * ffn_resid_beta   = nullptr;
+
+    // value residual mix
+    struct ggml_tensor * attn_vres_lambda = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
@@ -646,6 +652,18 @@ struct llama_layer {
     // gemma4 layer output scale, reused for talkie embedding skip scale
     struct ggml_tensor * out_scale = nullptr;
 
+    // metis16 per-pass hyper-connection mixes, attention pass LoRA, expert route embeddings
+    struct ggml_tensor * hc_attn_mix         = nullptr;
+    struct ggml_tensor * hc_attn_read        = nullptr;
+    struct ggml_tensor * hc_attn_write       = nullptr;
+    struct ggml_tensor * hc_ffn_mix          = nullptr;
+    struct ggml_tensor * hc_ffn_read         = nullptr;
+    struct ggml_tensor * hc_ffn_write        = nullptr;
+    struct ggml_tensor * attn_pass_lora_down = nullptr;
+    struct ggml_tensor * attn_pass_lora_up   = nullptr;
+    struct ggml_tensor * attn_pass_gate      = nullptr;
+    struct ggml_tensor * ffn_exp_embd        = nullptr;
+
     // limite
     struct ggml_tensor * attn_ve_gate     = nullptr;
     struct ggml_tensor * attn_xsa_alpha   = nullptr;
@@ -730,6 +748,23 @@ struct llama_hadamard {
     llama_hadamard_rotations inv; // latent lookup table -> inverse transform
 };
 
+struct llama_rope_params {
+    int32_t n_rot      = 0; // 0 if the layer has no RoPE
+    int32_t n_offs     = 0; // first rotated dim in a cached K head
+    int32_t type       = LLAMA_ROPE_TYPE_NONE;
+    int32_t n_ctx_orig = 0;
+
+    float freq_base   = 0.0f;
+    float freq_scale  = 0.0f;
+    float ext_factor  = 0.0f;
+    float attn_factor = 0.0f;
+    float beta_fast   = 0.0f;
+    float beta_slow   = 0.0f;
+
+    ggml_tensor * factors = nullptr;
+    ggml_tensor * k_norm  = nullptr; // K norm weight applied after RoPE, a K-shift has to undo it
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -778,6 +813,34 @@ struct llama_model {
 
     // hrm-text initial low-cycle state
     struct ggml_tensor * hrm_z_l_init = nullptr;
+
+    // metis16 hyper-connection stream embeddings, depth memory and continuation head
+    struct ggml_tensor * stream_embd             = nullptr;
+    struct ggml_tensor * depth_mem_state_write   = nullptr;
+    struct ggml_tensor * depth_mem_meta_write    = nullptr;
+    struct ggml_tensor * depth_mem_entry_bias    = nullptr;
+    struct ggml_tensor * depth_mem_query         = nullptr;
+    struct ggml_tensor * depth_mem_query_b       = nullptr;
+    struct ggml_tensor * depth_mem_key           = nullptr;
+    struct ggml_tensor * depth_mem_key_b         = nullptr;
+    struct ggml_tensor * depth_mem_value         = nullptr;
+    struct ggml_tensor * depth_mem_value_b       = nullptr;
+    struct ggml_tensor * depth_mem_out           = nullptr;
+    struct ggml_tensor * depth_mem_out_b         = nullptr;
+    struct ggml_tensor * depth_mem_route_state   = nullptr;
+    struct ggml_tensor * depth_mem_route_retr    = nullptr;
+    struct ggml_tensor * depth_mem_route_diff    = nullptr;
+    struct ggml_tensor * depth_mem_route_hist    = nullptr;
+    struct ggml_tensor * depth_mem_route_b       = nullptr;
+    struct ggml_tensor * depth_mem_stream_gate   = nullptr;
+    struct ggml_tensor * depth_mem_stream_gate_b = nullptr;
+    struct ggml_tensor * cont_hidden_state       = nullptr;
+    struct ggml_tensor * cont_hidden_retr        = nullptr;
+    struct ggml_tensor * cont_hidden_diff        = nullptr;
+    struct ggml_tensor * cont_hidden_route       = nullptr;
+    struct ggml_tensor * cont_hidden_b           = nullptr;
+    struct ggml_tensor * cont_output             = nullptr;
+    struct ggml_tensor * cont_output_b           = nullptr;
 
     // DeepSeek-V4
     struct ggml_tensor * hc_head_fn    = nullptr;
@@ -926,6 +989,12 @@ struct llama_model {
     bool has_tensor_overrides() const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+
+    // the RoPE of a layer, used by both the model graph and the K-shift
+    virtual llama_rope_params get_rope_params(const llama_cparams & cparams, int il) const;
+
+    // same, for the keys of the lightning indexer
+    virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;
 
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
