@@ -998,8 +998,8 @@ class MODEL_TENSOR(IntEnum):
     HC_FFN_INJECT        = auto() # qwen4exp
     HC_ATTN_DOWN_INJECT  = auto() # qwen4exp, [hc_attn_down | hc_attn_inject]
     HC_FFN_DOWN_INJECT   = auto() # qwen4exp, [hc_ffn_down | hc_ffn_inject]
-    ATTN_QKV_GATE        = auto() # qwen4exp, [attn_qkv | attn_gate]
-    SSM_BETA_ALPHA_CAT   = auto() # qwen4exp, [ssm_beta | ssm_alpha], unlike the grouped qwen3next ssm_ba
+    ATTN_QKV_GATE        = auto() # qwen35, qwen4exp, [attn_qkv | attn_gate]
+    SSM_BETA_ALPHA_CAT   = auto() # qwen35, qwen4exp, [ssm_beta | ssm_alpha], unlike the grouped qwen3next ssm_ba
     PLE_KEY              = auto() # qwen4exp
     PLE_VALUE            = auto() # qwen4exp
     PLE_NORM_KEY         = auto() # qwen4exp
@@ -3409,6 +3409,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.ATTN_GATE,
         MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_QKV_GATE,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
@@ -3418,6 +3419,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_NORM,
         MODEL_TENSOR.SSM_BETA,
         MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_BETA_ALPHA_CAT,
         MODEL_TENSOR.SSM_OUT,
         # NextN/MTP tensors - preserved but unused
         MODEL_TENSOR.NEXTN_EH_PROJ,

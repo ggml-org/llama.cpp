@@ -2656,7 +2656,8 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        const std::string & resolved_addr
         ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
@@ -2671,7 +2672,11 @@ server_http_proxy::server_http_proxy(
     }
 
     // setup Client
-    cli->set_follow_location(true);
+    if (!resolved_addr.empty()) {
+        // pin the checked address; a redirect could lead to an unchecked one
+        cli->set_direct_hostname_addr_map({{host, resolved_addr}});
+    }
+    cli->set_follow_location(resolved_addr.empty());
     cli->set_connection_timeout(timeout_read, 0); // use --timeout value instead of hardcoded 5 s
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
