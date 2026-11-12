@@ -185,7 +185,7 @@ next_nc:
 // (Q2_K: per-16 k sums, q8_1_s16)
 static inline bool htp_mm_weight_has_offset(int weight_type) {
     return weight_type == HTP_TYPE_Q4_1 || weight_type == HTP_TYPE_Q4_K || weight_type == HTP_TYPE_Q5_K ||
-           weight_type == HTP_TYPE_Q2_K || weight_type == HTP_TYPE_Q2_0;
+           weight_type == HTP_TYPE_Q2_K || weight_type == HTP_TYPE_Q2_0 || weight_type == HTP_TYPE_Q5_1;
 }
 
 // --- Activation/Row Size Helpers ---
