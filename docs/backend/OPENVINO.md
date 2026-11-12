@@ -16,6 +16,7 @@ For guidance on contributing to the OpenVINO backend, see the [OpenVINO Backend 
 
 ## Contents
 
+- [Quick Start](#quick-start)
 - [Supported Devices](#supported-devices)
 - [Supported Model Precisions](#supported-model-precisions)
 - [Supported Llama.cpp Tools](#supported-llamacpp-tools)
@@ -30,8 +31,42 @@ For guidance on contributing to the OpenVINO backend, see the [OpenVINO Backend 
   - [4. Run Inference with OpenVINO Backend](#4-run-inference-with-openvino-backend)
   - [5. Docker Build](#5-docker-build)
 - [GGML OpenVINO Backend Runtime Configurations](#ggml-openvino-backend-runtime-configurations)
+  - [Basic](#basic)
+  - [Plugin properties](#plugin-properties)
+  - [Advanced tuning](#advanced-tuning)
+  - [Compiled model cache](#compiled-model-cache)
+  - [Deprecated](#deprecated)
+  - [Debugging and development](#debugging-and-development)
+  - [Example Usage](#example-usage)
+    - [GPU Inference with Profiling](#gpu-inference-with-profiling)
 - [Known Limitations](#known-limitations)
 - [Work in Progress](#work-in-progress)
+
+## Quick Start
+
+On Ubuntu, with the [prerequisites](#0-prerequisites) and the [OpenVINO Runtime](#1-install-openvino-runtime) installed:
+
+```bash
+# 1. Build
+git clone https://github.com/ggml-org/llama.cpp
+cd llama.cpp
+source /opt/intel/openvino/setupvars.sh
+cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON
+cmake --build build/ReleaseOV --parallel
+
+# 2. Download a model
+mkdir -p ~/models/
+wget https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
+     -O ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+
+# 3. Run on CPU, GPU or NPU
+export GGML_OPENVINO_DEVICE=GPU
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 1024
+```
+
+The [Ubuntu Build Script](#ubuntu-build-script) and the [Windows Build Script](#windows-build-script) do the setup in one step: they install the prerequisites and the OpenVINO Runtime, and build llama.cpp with the OpenVINO backend.
+
+See [Build Instructions](#build-instructions) for Windows and Docker, and [Runtime Configurations](#ggml-openvino-backend-runtime-configurations) for the environment variables.
 
 ## Supported Devices
 
@@ -41,7 +76,7 @@ OpenVINO backend supports the following hardware:
 - Intel GPUs (integrated and discrete)
 - Intel NPUs
 
-Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvino.ai/2026/about-openvino/release-notes-openvino/system-requirements.html), the llama.cpp OpenVINO backend has been validated specifically on AI PCs such as the Intel® Core™ Ultra Series 1 and Series 2.
+Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvino.ai/2026/about-openvino/release-notes-openvino/system-requirements.html), the llama.cpp OpenVINO backend has been validated specifically on AI PCs such as the Intel® Core™ Ultra Series 2 (Lunar Lake) and Series 3 (Panther Lake).
 
 ## Supported Model Precisions
 
@@ -52,24 +87,39 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 - `Q4_1`
 - `Q4_K`
 - `Q4_K_M`
-- `Q5_K` (converted to `Q8_0_C` at runtime by default)
-- `Q6_K` (converted to `Q8_0_C` at runtime by default)
+- `Q5_K` (converted at runtime, see the details below)
+- `Q6_K` (converted at runtime, see the details below)
 
 > [!NOTE]
 > Accuracy validation and performance optimizations for quantized models are a work in progress.
 
-**CPU and GPU Quantization Details:**
-- `Q5_K` and `Q6_K` tensors are converted to `Q8_0_C`
+<details>
+<summary>Quantization details for each device</summary>
 
-**NPU Quantization Details:**
-- Primary supported quantization scheme is `Q4_0`
-- `Q6_K` tensors are requantized to `Q4_0_128` in general. For embedding weights, `Q6_K` tensors are requantized to `Q8_0_C` except for the token embedding matrix which is dequantized to fp16
+**All devices:**
+- `FP16` and `BF16` tensors are used as they are.
+- A quantized token embedding (`token_embd.weight`) and output weight (`output.weight`) are converted to `Q8_0_C`.
+
+**CPU and GPU:**
+- `Q4_0`, `Q4_1`, `Q4_K`, `Q5_1` and `Q8_0` tensors keep their layout: weights, scales and zero points are extracted directly.
+- `Q5_K` and `Q6_K` tensors are converted to `Q8_0_C`. `GGML_OPENVINO_REQUANT_KQUANT` selects a 4-bit layout instead.
+- `Q5_0` tensors are converted to `Q4_0_64`.
+
+**NPU:**
+- All other quantized tensors are requantized to `Q4_0_128`.
+- For a `Q6_K` token embedding, `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` selects another layout.
+- The validated models use `Q4_K_M` files.
+
+**Layout names:**
+- `Q8_0_C`: 8-bit, one scale per row.
+- `Q4_0_128` and `Q4_0_64`: 4-bit, symmetric, one scale per 128 or 64 weights.
 
 **Additional Notes:**
 - Both `Q4_0` and `Q4_1` models use `Q6_K` for the token embedding tensor and the final matmul weight tensor (often the same tensor)
 - `Q4_0` models may produce some `Q4_1` tensors if an imatrix is provided during quantization using `llama-quantize`
 - `Q4_K_M` models may include both `Q6_K` and `Q5_K` tensors (observed in Phi-3)
-- `Q5_1` tensors are dequantized natively (weights, scales, and zero-points extracted directly)
+
+</details>
 
 ## Supported Llama.cpp Tools
 
@@ -81,7 +131,6 @@ However, all the tools coverage across all devices is not uniform and exhaustive
 - llama-completion
 - llama-embedding
 - llama-perplexity
-- llama-run
 - llama-server
 - llama-simple
 
@@ -95,8 +144,11 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 **Legend & Test Configuration:**
 - **Status:** ✓ = Passed | ~ = Accuracy issues | ✗ = Failed or Unsupported
 - **Execution mode:** stateless (`GGML_OPENVINO_STATEFUL_EXECUTION=0`) on every device.
-- **Validation system:** Intel® Core™ Ultra 7 258V (Lunar Lake) | 32 GB RAM | Ubuntu 26.04.1 | Intel Graphics Compiler 2.41.5 | Intel OpenCL GPU Driver 26.35.39758.10-0 | Intel NPU Driver 1.38.0.
+- **Validation system:** Intel® Core™ Ultra 7 258V (Lunar Lake) | 32 GB RAM | Ubuntu 26.04.1 | Intel Graphics Compiler 2.42.6 | Intel OpenCL GPU Driver 26.40.40196.8-0 | Intel NPU Driver 1.38.0.
 - See [Known Limitations](#known-limitations) for context on observed failures.
+
+<details open>
+<summary><b>Validated models</b> (35)</summary>
 
 | Model | CPU | GPU | NPU |
 | :--- | :---: | :---: | :---: |
@@ -110,13 +162,13 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [bartowski/Qwen_Qwen3-1.7B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF) | ✓ | ✓ | ✓ |
 | [Qwen/Qwen3-4B-Q4_K_M](https://huggingface.co/Qwen/Qwen3-4B-GGUF) | ✓ | ✓ | ✓ |
 | [lm-kit/Qwen3-8B-Q4_K_M](https://huggingface.co/lm-kit/qwen-3-8b-instruct-gguf) | ✓ | ✓ | ✓ |
-| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ | ✓ | ✗ |
-| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ | ✓ | ✗ |
-| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ | ✓ | ✗ |
-| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ | ✓ | ✗ |
+| [bartowski/Qwen_Qwen3.5-0.8B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Qwen_Qwen3.5-2B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF) | ✓ | ✓ | ✓ |
+| [bartowski/Qwen_Qwen3.5-4B-Q4_K_M](https://huggingface.co/bartowski/Qwen_Qwen3.5-4B-GGUF) | ✓ | ✓ | ✓ |
+| [lmstudio-community/Qwen3.5-9B-Q4_K_M](https://huggingface.co/lmstudio-community/Qwen3.5-9B-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
 | [unsloth/gemma-3-4b-it-Q4_K_M](https://huggingface.co/unsloth/gemma-3-4b-it-GGUF) | ✓ | ✓ | ✓ |
-| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ | ✓ | ~ |
+| [bartowski/google_gemma-4-E2B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E2B-it-GGUF) | ✓ | ✓ | ✓ |
 | [bartowski/google_gemma-4-E4B-it-Q4_K_M](https://huggingface.co/bartowski/google_gemma-4-E4B-it-GGUF) | ✓ | ✓ | ✓ |
 | [bartowski/gemma-4-12B-it-Q4_K_M](https://huggingface.co/bartowski/gemma-4-12B-it-GGUF) | ✓ | ✓ | ✗ |
 |  |  |  |  |
@@ -131,9 +183,9 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [bartowski/DeepSeek-R1-Distill-Llama-8B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF) | ✓ | ✓ | ✓ |
 | [bartowski/DeepSeek-R1-Distill-Qwen-7B-Q4_K_M](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [ibm-granite/granite-4.0-350m-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-350m-GGUF) | ✓ | ~ | ✓ |
+| [ibm-granite/granite-4.0-350m-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-350m-GGUF) | ✓ | ✓ | ✓ |
 | [ibm-granite/granite-4.0-micro-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-micro-GGUF) | ✓ | ✓ | ✓ |
-| [ibm-granite/granite-4.0-1b-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-1b-GGUF) | ✓ | ~ | ~ |
+| [ibm-granite/granite-4.0-1b-Q4_K_M](https://huggingface.co/ibm-granite/granite-4.0-1b-GGUF) | ✓ | ✓ | ~ |
 | [ibm-research/granite-3.2-8b-instruct-Q4_K_M](https://huggingface.co/ibm-research/granite-3.2-8b-instruct-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
 | [HuggingFaceTB/smollm2-1.7b-instruct-q4_k_m](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
@@ -142,7 +194,9 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-Q4_K_M](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 | [bartowski/prism-ml_Bonsai-8B-unpacked-Q4_K_M](https://huggingface.co/bartowski/prism-ml_Bonsai-8B-unpacked-GGUF) | ✓ | ✓ | ✓ |
 |  |  |  |  |
-| [gpustack/bge-m3-Q4_K_M.gguf](https://huggingface.co/gpustack/bge-m3-GGUF) | ✓ | ✗ | ✗ |
+| [Qwen/Qwen3-Embedding-0.6B-Q8_0](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) | ✓ | ✓ | ✗ |
+
+</details>
 
 ## Build Instructions
 
@@ -151,39 +205,51 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 - Linux or Windows system with Intel hardware (CPU, GPU, or NPU)
 - **For Intel GPU or NPU Usage**: Install the appropriate hardware drivers for your Intel GPU or NPU. For detailed instructions, see: [Additional Configurations for Hardware Acceleration](https://docs.openvino.ai/2026/get-started/install-openvino/configurations.html).
 
-- **Linux:**
-    - Git, CMake, and Ninja software tools are needed for building.
-    ```bash
-      sudo apt-get update
-      sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
-    ```
-    - OpenCL
-    ```bash
-      sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
-    ```
+<details open>
+<summary><b>Linux</b></summary>
 
-- **Windows:**
-  - Download and install [Microsoft Visual Studio 2022 Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe). During installation, select the **"Desktop development with C++"** workload.
+Build tools (Git, CMake, Ninja):
 
-  - Install required tools:
-    ```powershell
-    # Windows PowerShell
-    winget install Git.Git
-    winget install GNU.Wget
-    winget install Ninja-build.Ninja
-    ```
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
+```
 
-  - Install **OpenCL** using **vcpkg**:
-    ```powershell
-    # Windows PowerShell
-    cd C:\
-    git clone https://github.com/microsoft/vcpkg
-    cd vcpkg
-    .\bootstrap-vcpkg.bat
-    .\vcpkg install opencl
-    # Optional but recommended: Integrate vcpkg with Visual Studio / CMake:
-    .\vcpkg integrate install
-    ```
+OpenCL:
+
+```bash
+sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+```
+
+</details>
+
+<details>
+<summary><b>Windows</b></summary>
+
+1. Download and install [Microsoft Visual Studio 2022 Build Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe). During installation, select the **"Desktop development with C++"** workload.
+2. Install the required tools:
+
+   ```powershell
+   # Windows PowerShell
+   winget install Git.Git
+   winget install GNU.Wget
+   winget install Ninja-build.Ninja
+   ```
+
+3. Install **OpenCL** using **vcpkg**:
+
+   ```powershell
+   # Windows PowerShell
+   cd C:\
+   git clone https://github.com/microsoft/vcpkg
+   cd vcpkg
+   .\bootstrap-vcpkg.bat
+   .\vcpkg install opencl
+   # Optional but recommended: Integrate vcpkg with Visual Studio / CMake:
+   .\vcpkg integrate install
+   ```
+
+</details>
 
 ### 1. Install OpenVINO Runtime
 
@@ -196,21 +262,25 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 
 ### 2. Build llama.cpp with OpenVINO Backend
 
-Clone llama.cpp repo and build :
+Clone the llama.cpp repository:
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
 ```
 
-- **Linux:**
+Build on Linux:
+
 ```bash
 source /opt/intel/openvino/setupvars.sh
 cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON
 cmake --build build/ReleaseOV --parallel
 ```
 
-- **Windows:** Open **x64 Native Tools Command Prompt for VS** (so the MSVC toolchain is on `PATH`), then run:
+<details>
+<summary><b>Build on Windows</b></summary>
+
+Open **x64 Native Tools Command Prompt for VS** (so the MSVC toolchain is on `PATH`), then run:
 
 ```cmd
 C:\Intel\openvino\setupvars.bat
@@ -220,6 +290,8 @@ cmake --build build\ReleaseOV --parallel
 
 > [!NOTE]
 > The Windows install path is `C:\Intel\openvino` (no spaces) to avoid quoting problems some CMake/Ninja toolchains have with `C:\Program Files (x86)\...`. Adjust to wherever you installed OpenVINO Runtime. From `cmd`, run `C:\Intel\openvino\setupvars.bat`; from PowerShell, run `& "C:\Intel\openvino\setupvars.ps1"` instead. Once the build is finished you can launch the binaries from any `cmd` or `PowerShell` window after sourcing the matching `setupvars` script for that shell.
+
+</details>
 
 #### Ubuntu Build Script
 
@@ -553,50 +625,63 @@ endlocal
 
 </details>
 
-
 ### 3. Download Sample Model
 
-Download sample model for testing.
+Download a sample model for testing.
 
 ```bash
-# Linux
 mkdir -p ~/models/
 wget https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf \
      -O ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+```
 
+<details>
+<summary><b>Windows</b></summary>
+
+```powershell
 # Windows PowerShell
 mkdir C:\models
 Invoke-WebRequest -Uri https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf -OutFile C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf
+```
 
+```cmd
 # Windows Command Line
 mkdir C:\models
 curl -L https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf -o C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf
 ```
+
+</details>
 
 ### 4. Run Inference with OpenVINO Backend
 
 When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
 
 > [!NOTE]
-> Default context size is set to the model training context, which may be very large. For example, 131072 for Llama 3.2 1B, which may result in lower performance, especially on edge/laptop devices. Use `-c` to limit context size in supported llama.cpp tools for better performance. For example, `-c 512`.
+> Default context size is set to the model training context, which may be very large. For example, 131072 for Llama 3.2 1B, which may result in lower performance, especially on edge/laptop devices. Use `-c` to limit context size in supported llama.cpp tools for better performance:
+> - CPU and GPU: for example `-c 1024`.
+> - NPU: keep the context small, for example `-c 512`, or `-c 256` for larger models. Decode may slow down as the context grows.
 
 ```bash
-# If device is unset or unavailable, defaults to CPU.
+# If the device is unset, the CPU is used.
 # If the system has multiple GPUs, use GPU.0 or GPU.1 to explicitly target a specific GPU.
 
-# Linux
 export GGML_OPENVINO_DEVICE=GPU
 # To run llama-simple:
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -n 50 "The story of AI is "
 # To run in chat mode:
 ./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 1024
-# To run llama-bench, -fa 1 is needed
-GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-bench -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -fa 1
+# To run llama-bench:
+GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-bench -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 
 # NPU: keep context small to avoid failures from very large model context windows.
 export GGML_OPENVINO_DEVICE=NPU
 ./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 512
+```
 
+<details>
+<summary><b>Windows</b></summary>
+
+```powershell
 # Windows Command Line
 set GGML_OPENVINO_DEVICE=GPU
 # Windows PowerShell
@@ -606,8 +691,8 @@ $env:GGML_OPENVINO_DEVICE = "GPU"
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -n 50 "The story of AI is "
 # To run in chat mode:
 build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -c 1024
-# To run llama-bench, -fa 1 is needed
-build\ReleaseOV\bin\llama-bench.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -fa 1
+# To run llama-bench:
+build\ReleaseOV\bin\llama-bench.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 
 # NPU: keep context small to avoid failures from very large model context windows.
 # Windows Command Line
@@ -616,12 +701,23 @@ set GGML_OPENVINO_DEVICE=NPU
 $env:GGML_OPENVINO_DEVICE = "NPU"
 build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -c 512
 ```
+
+</details>
+
 > [!NOTE]
-> On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. A device that is not available is an error (no fallback to CPU), and the error message lists the available OpenVINO devices with their names. Run `llama-cli --list-devices` to see the valid values: each OpenVINO device shows the `GGML_OPENVINO_DEVICE=<value>` to set, and `(selected)` marks the active one. Select the OpenVINO device with this variable, not with `-dev`. To split a model across several GPUs, set a comma-separated list, e.g. `GPU.0,GPU.1`, and use `-sm layer`. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html) for more details.
+> - Select the OpenVINO device with `GGML_OPENVINO_DEVICE`, not with `-dev`.
+> - On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU.
+> - To split a model across several GPUs, set a comma-separated list, e.g. `GPU.0,GPU.1`, and use `-sm layer`.
+> - A device that is not available is an error (no fallback to CPU). The error message lists the available OpenVINO devices with their names.
+> - Run `llama-cli --list-devices` to see the valid values: each OpenVINO device shows the `GGML_OPENVINO_DEVICE=<value>` to set, and `(selected)` marks the active one.
+> - See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html) for more details.
 
 ### 5. Docker Build
 
 You can build and run llama.cpp with OpenVINO backend using Docker.
+
+<details>
+<summary><b>Build the images</b></summary>
 
 ```bash
 # Build the base runtime image with compiled shared libraries and minimal dependencies.
@@ -640,9 +736,12 @@ docker build --target=server -t llama-openvino:server -f .devops/openvino.Docker
 docker build --build-arg http_proxy=$http_proxy --build-arg https_proxy=$https_proxy --target=server -t llama-openvino:server -f .devops/openvino.Dockerfile .
 ```
 
-Run llama.cpp with OpenVINO backend Docker container.
-Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
+</details>
 
+<details>
+<summary><b>Run a container</b> (CPU, GPU, NPU)</summary>
+
+Run llama.cpp with OpenVINO backend Docker container. Save sample models in `~/models` as [shown above](#3-download-sample-model). It will be mounted to the container in the examples below.
 
 ```bash
 #  Run Docker container
@@ -658,10 +757,14 @@ llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M
 docker run --rm -it -v ~/models:/models \
 --device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
 --env=GGML_OPENVINO_DEVICE=NPU \
-llama-openvino:light --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+llama-openvino:light --no-warmup -c 512 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
 ```
 
-Run Llama.cpp Server with OpenVINO Backend.
+</details>
+
+<details>
+<summary><b>Run llama-server</b> (container or local build) and test it</summary>
+
 > [!NOTE]
 > `llama-server` with OpenVINO backend supports only one chat session/thread, when `GGML_OPENVINO_STATEFUL_EXECUTION=1` is enabled.
 
@@ -679,7 +782,7 @@ llama-openvino:server --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_
 docker run --rm -it -v ~/models:/models \
 --device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
 -p 8080:8080 --env=GGML_OPENVINO_DEVICE=NPU \
-llama-openvino:server --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --host 0.0.0.0
+llama-openvino:server --no-warmup -c 512 -m /models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --host 0.0.0.0
 
 # Or Using llama-server executable
 ./build/ReleaseOV/bin/llama-server -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --port 8080 -c 1024
@@ -698,77 +801,147 @@ curl -X POST "http://localhost:8080/v1/chat/completions" -H "Content-Type: appli
  -d '{"messages":[{"role":"user","content":"Write a poem about OpenVINO"}],"max_tokens":100}' | jq .
 ```
 
+</details>
+
 ## GGML OpenVINO Backend Runtime Configurations
 
-The OpenVINO backend can be configured using the following environment variables at runtime to control device selection, caching, debugging, and profiling behavior.
-Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `1`) to enable; `0` or negative values are treated as disabled; unset or empty means the default in the table. Values that are not whole integers (e.g. `true`, `1x`) are not accepted: a flag with default `1` stays on, any other flag stays off.
+The backend needs no environment variable: it runs on the CPU with its defaults. Set `GGML_OPENVINO_DEVICE` to use the GPU or the NPU. All other variables are optional.
 
-| Variable                          | Type      | Default    | Description                                                                                                 |
-|-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
-| `GGML_OPENVINO_DEVICE`            | String    | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU, or a comma-separated GPU list (e.g. `GPU.0,GPU.1`) to split the model across them with `-sm layer`. A device that is not available is an error (no fallback to CPU), and the error message lists the available OpenVINO devices with their names. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
-| `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO's separate plugin cache. On NPU, this sets `NPUW_CACHE_DIR`. |
-| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for standalone compiled blobs with weights. Dynamic CPU/GPU graphs can import matching blobs on later runs. |
-| `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | Boolean | `0` | Require an existing compiled blob and skip weight uploads and compilation. Requires Linux or Windows mmap loading and a full dynamic CPU/GPU graph on OpenVINO. |
-| `GGML_OPENVINO_SELF_CONTAINED_BLOB` | Boolean | `0` | NPU-only. Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR`. Export the static prefill and decode graphs as separate blobs with the weights embedded (`ENABLE_WEIGHTLESS=false`). A later run imports them directly and skips weight requantization, graph conversion and compilation. Each blob takes about model-size disk space. Decode attends the whole context, so `GGML_OPENVINO_NPU_BLOB_PREBUILD` has no effect: NPUW cannot load the decode blob of each KV window into the weights bank of the pair. `GGML_OPENVINO_NPU_WEIGHTLESS_BANK` keeps the KV windows. |
-| `GGML_OPENVINO_SELF_CONTAINED_MMAP` | Boolean | `0` | NPU-only, import-only. Requires `GGML_OPENVINO_SELF_CONTAINED_BLOB=1` and existing valid blobs. Use the GGUF mmap as the model buffer instead of copying the weights into a private OpenVINO buffer, cutting the host memory peak. Fails if a blob is missing or invalid; run once without it to build the cache. |
-| `GGML_OPENVINO_NPU_SHARED_BANK` | Boolean | `0` | NPU-only, with `GGML_OPENVINO_SELF_CONTAINED_BLOB=1`. Put the prefill and decode blobs in one shared `NPUW_WEIGHTS_BANK` instead of one bank each, so their weights are kept in memory once (about 2 GiB less resident memory on phi-4-mini) at the cost of larger blobs. Use the same value for the export and import runs. |
-| `GGML_OPENVINO_NPU_WEIGHTLESS_BANK` | Boolean | `0` | NPU-only. Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR`; replaces `GGML_OPENVINO_SELF_CONTAINED_BLOB` and `GGML_OPENVINO_NPU_SHARED_BANK`. Export weightless prefill and decode blobs plus one shared `<prefill>-<decode>.weights.bin`. Import reads the weights from that file and NPUW keeps one resident copy for both graphs, without an OpenVINO patch. Also works with `GGML_OPENVINO_SELF_CONTAINED_MMAP=1` and with the KV windows of `GGML_OPENVINO_NPU_BLOB_PREBUILD`. |
-| `GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB` | Integer | `2048` | NPU-only, with `GGML_OPENVINO_SELF_CONTAINED_MMAP=1`. Buffers of at least this size get demand-zero host memory instead of a Level Zero host tensor, so the large prefill compute buffer the NPU never reads on the host stays non-resident. Smaller buffers, including a large-context KV cache, keep Level Zero memory for zero-copy import. |
-| `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
-| `GGML_OPENVINO_NPU_CONFIG`       | String    | `not set`  | Recommended NPU plugin/compiler override entry point. Comma-separated `KEY=VALUE` pairs are applied after named NPU options, so they can override defaults or aliases; for example, `NPU_TILES=6,NPUW_SLICE_OUT=YES,NPU_COMPILATION_MODE_PARAMS=optimization-level=3`. |
-| `GGML_OPENVINO_NPU_COMPILE_CONFIG` | String | `not set` | Legacy alias for `GGML_OPENVINO_NPU_CONFIG=NPU_COMPILATION_MODE_PARAMS=...`, for example `optimization-level=3`. `GGML_OPENVINO_NPU_CONFIG` is preferred and overrides this alias when it sets the same property. |
-| `GGML_OPENVINO_NPU_COMPILER_TYPE` | String | `DRIVER` | Named alias for the `NPU_COMPILER_TYPE` property. Values include `PLUGIN`, `DRIVER`, and `PREFER_PLUGIN`; `GGML_OPENVINO_NPU_CONFIG` can override it. When neither sets the compiler type, models with `GATED_DELTA_NET` layers (Qwen3.5) compile with `PLUGIN`, because the driver compiler gives wrong output for them. |
-| `GGML_OPENVINO_NPUW_FUNCALL_FOR_ALL` | String | OpenVINO default | Named alias for the `NPUW_FUNCALL_FOR_ALL` property. Useful for disabling funcall-for-all on driver/compiler combinations where it hurts stability or long-context performance; `GGML_OPENVINO_NPU_CONFIG` can override it. |
-| `GGML_OPENVINO_NPUW_UNFOLD_IREQS` | String | OpenVINO default | Named alias for the `NPUW_UNFOLD_IREQS` property. Unfolding can reduce repeated funcall dispatch overhead at the cost of higher memory use; `GGML_OPENVINO_NPU_CONFIG` can override it. |
-| `GGML_OPENVINO_NPU_DECODE_UNFOLD` | Boolean | `0` | NPU-only. Set `NPUW_UNFOLD_IREQS=YES` on the static decode graph only. Speeds up decode on many models and slows it on others. An explicit `GGML_OPENVINO_NPUW_UNFOLD_IREQS` or `GGML_OPENVINO_NPU_CONFIG` value takes precedence. |
-| `GGML_OPENVINO_NPU_PARALLEL_COMPILE` | Boolean | `0` | NPU-only. Compile the static prefill and decode graphs in parallel. Shortens model load, but raises the host memory peak during compilation. |
-| `GGML_OPENVINO_NPU_BLOB_PREBUILD` | Boolean | `1` | NPU-only. `1`: decode attends the smallest `1024 * 2^k` rows (clamped to the context) that cover the next position, with one decode graph per window; all windows are built (or imported from the cache) together with the prefill/decode pair, so a growing sequence only switches requests and an export run covers every window a later import can reach. With the head-major KV of `GGML_OPENVINO_NPU_KV_ON_DEMAND` the prefill also runs at a KV window, so the prefill graph of every window is exported with the first pair and preloaded on import, and any prompt length works from a cache exported by one run. Cuts decode KV traffic and memory for prompts much shorter than the context; each window adds one decode graph to compile at load. `0`: one static decode graph attends the whole context. Use the same value for the export and import runs. No effect with `GGML_OPENVINO_SELF_CONTAINED_BLOB` unless `GGML_OPENVINO_NPU_WEIGHTLESS_BANK` is also set. |
-| `GGML_OPENVINO_NPU_KV_ON_DEMAND` | Boolean | `0` | NPU-only. Keep the ggml KV buffer non-resident and bind per-layer storage that grows in `1024 * 2^k` rows with the rows in use, so a large `-c` costs memory only for the context actually reached. With `GGML_OPENVINO_NPU_BLOB_PREBUILD` and `GGML_OPENVINO_KV_SLICE` the storage also takes the NPU attention layout, as OpenVINO GenAI does: K is stored head-major (`[heads][rows][head_size]`) and V transposed (`[heads][head_size][rows]`), both bound whole to prefill and decode, new rows are scattered in place and attention is computed as `softmax(QK^T) * (V^T)^T`. With `GGML_OPENVINO_NPU_HFA_PREFILL` the prefill returns each chunk's V rows and the host copies them into the cache. |
-| `GGML_OPENVINO_COMPILATION_NUM_THREADS` | String | OpenVINO default | Named alias for the `COMPILATION_NUM_THREADS` property. Caps compiler worker parallelism to reduce peak host memory during large NPU graph compilation; `GGML_OPENVINO_NPU_CONFIG` can override it. |
-| `GGML_OPENVINO_NPUW_DUMP_SUBS` | String | `not set` | NPU-only. Dump NPUW subgraphs for profiling. Requires an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. Accepts `YES` (all), `MIN` (unique function bodies), `last`, or comma-separated indices such as `0,2`. |
-| `GGML_OPENVINO_NPUW_DUMP_SUBS_DIR` | String | `not set` | NPU-only. Directory for NPUW subgraph dumps. Requires an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. |
-| `GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL` | String | `not set` | NPU-only. Forwarded unchanged to OpenVINO as `NPUW_DUMP_SUBS_ON_FAIL` to control subgraph dumps on failure. Requires an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. |
-| `GGML_OPENVINO_NPUW_DUMP_IO` | String | `not set` | NPU-only. Forwarded unchanged to OpenVINO as `NPUW_DUMP_IO` to configure input/output dumps for profiling. Requires an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. |
-| `GGML_OPENVINO_GDN_Q_SCALE` | Float | `64` | NPU static path: factor of the GDN q pre-scaling, which keeps the GDN output above the FP16 flush-to-zero floor of the NPU. Zero, negative, or non-numeric values turn the pre-scaling off. Values below `64` are clamped to `64`. |
-| `GGML_OPENVINO_GDN_NATIVE_STATE` | Boolean | `0` | NPU-only, ignored on other devices. Keep the `GATED_DELTA_NET` recurrent state in the OpenVINO op layout `[B, H_v, key_dim, value_dim]` instead of the GGML layout `[B, H_v, value_dim, key_dim]`. Removes two state transposes per GDN layer and per inference. The state buffer then holds the OpenVINO layout, so every `GATED_DELTA_NET` must run on the OpenVINO backend; loading aborts if one would fall back to the CPU backend. See the note below. |
-| `GGML_OPENVINO_GDN_DECOMPOSE` | Boolean | auto | Translate `GATED_DELTA_NET` into a MatMul decomposition instead of the OpenVINO `GatedDeltaNet` op: chunked for multi-token graphs (prefill), one step for single-token graphs (decode). Unset: on for NPU 4000 (Lunar Lake); off elsewhere. `0` turns it off, a positive integer turns it on for any device (e.g. to compare accuracy with the op). Applies to static token counts and to graphs without fused q/k l2 norm. Snapshot (MTP) graphs still use the op. |
-| `GGML_OPENVINO_GDN_DECOMPOSE_CHUNK` | Integer | `16` | Tokens per chunk when `GGML_OPENVINO_GDN_DECOMPOSE` is on. A power of 2 in `[2, 128]`; other values use `16`. Larger chunks mean fewer sequential steps and bigger MatMuls. |
-| `GGML_OPENVINO_NPU_REQUANT_POLICY`| String    | `group-128` | NPU-only weight requantization layout. Use `group-128` for `Q4_0_128` or experimental `channel-wise` for `Q4_0_C`. Any other value fails during model loading. |
-| `GGML_OPENVINO_NPU_FAST_MASK`     | Boolean   | `1`        | NPU-only. Build the static prefill attention mask directly into the input tensor, skipping an intermediate host allocation + full-tensor copy per chunk. Numerically identical to the fallback path. Set to `0` to disable. |
-| `GGML_OPENVINO_NPU_L0_HOST_TENSORS`| Boolean  | `1`        | NPU-only. Back the KV-cache / compute buffers with Level Zero host memory so the plugin imports them without an extra host-to-device copy each infer, cutting KV I/O time (mainly decode). Falls back to plain host memory if the L0 allocation is unavailable. Set to `0` to disable. |
-| `GGML_OPENVINO_KV_SLICE`          | Boolean   | `1`        | Bind the KV cache, and size the KQ masks, at the attended length instead of the full context. Dynamic graphs (CPU/GPU): a view over the cache, no recompilation. Static graphs (NPU, or `GGML_OPENVINO_FORCE_STATIC`): the prefill graph is compiled at the attended length rounded up to a power of two (clamped to the context) and replaced when that size changes, decode keeps its full-context graph. Set to `0` to disable. |
-| `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | **Deprecated**, to be removed; use stateless execution (`0`). Keep KV and supported recurrent caches inside the model. Single-slot CPU/GPU execution only. |
-| `GGML_OPENVINO_DISABLE_CACHE`     | Boolean   | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
-| `GGML_OPENVINO_ENABLE_KV_4D`      | Boolean   | `0`        | GPU, stateless: bind the KV cache as `[1, ctx, n_heads_kv, head_size]` instead of `[1, 1, ctx, n_heads_kv * head_size]`, so the GPU plugin's `StatelessKVFusion` can update and read the cache in place. **Off by default**: it needs an OpenVINO build with openvino#37569 (2026.5 or a recent nightly) and is much slower on older releases (e.g. 2026.4.1). Set to a positive integer to enable. |
-| `GGML_OPENVINO_KV_SCATTER_ELEMENTS` | Boolean | `0`        | Use `ScatterElementsUpdate` instead of `ScatterUpdate` for non-stateful single-row KV writes. Intended for NPU decode paths where `ScatterUpdate` copies the full destination tensor to update one row. |
-| `GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT` | Boolean | `0`     | Disable the stateful KV-state sequence-axis relayout (relayout is on by default). It moves the KV state sequence axis from dim 1 to dim 2, so the GPU plugin can append new tokens in place instead of copying the whole state every token, and the reader side no longer transposes the whole accumulated state. Set to `1` to disable. |
-| `GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK` | Boolean | `0` | Dynamic CPU/GPU graphs read the active sequence count and the attended KV length from the shape of the KQ mask inside the model, so the GPU plugin can infer the attention shapes without waiting for input values and selects its fused SDPA kernel. Set to `1` to pass them as separate inputs instead. |
-| `GGML_OPENVINO_MANUAL_GQA_ATTN`   | Boolean   | device-based | Tri-state. When **unset**, manual GQA attention is enabled by default on `GPU` and disabled on other devices. Set to a positive integer to force-enable, or `0` to force-disable. |
-| `GGML_OPENVINO_MEMORY_OPTIMIZE`   | Boolean   | `0`        | Umbrella switch for compile-time memory reductions. Enables `GGML_OPENVINO_REDUCE_COMPILE_MEM` and, on GPU, `GGML_OPENVINO_RELEASE_WEIGHTS` unless those fine-grained variables are explicitly set. |
-| `GGML_OPENVINO_REDUCE_COMPILE_MEM`| Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` | Reduce compile-time host memory use by avoiding extra weight-node materialization where possible. Set explicitly to override the umbrella switch. |
-| `GGML_OPENVINO_RELEASE_WEIGHTS`   | Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` on GPU | GPU-only. Release host weight buffers after the compiled model cache can reuse the device/plugin copy. Requires stable graph shapes; dynamic workloads that need recompilation should leave this disabled. |
-| `GGML_OPENVINO_SPILL_DIR`         | String    | `not set`  | Directory for a disk-backed weight buffer. When set, the repacked weight buffer is mapped from an unlinked file on this path instead of anonymous memory, so its pages are reclaimable under memory pressure instead of staying pinned, cutting the load-time host memory peak. Must point at real storage; a tmpfs mount (e.g. `/tmp` on many systems) backs it with RAM and makes the peak worse. |
-| `GGML_OPENVINO_REQUANT_KQUANT`    | String    | `not set`  | Requantize Q6_K/Q5_K weights (and matching MoE expert weights) to a 4-bit target instead of the default Q8_0_C, trading accuracy for less memory traffic. One of `q4_asym64` (Q6_K/Q5_K only, keeps a real zero point at group 64), `q4_asym64_all` (also requantizes Q4_K), `q4_sym128` (Q6_K/Q5_K only), `q4_sym128_all` (Q4_K too, drops its per-group zero point), or `native` (no requantization). |
-| `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` | String | `f16` | NPU-only. How a Q6_K `token_embd.weight` (also used as the output projection when the embeddings are tied) is stored for the NPU. `f16` converts it to FP16, `q8_0_c` stores it as int8 with one scale per row, `q4_0_128` as symmetric int4 with group size 128, and `q4_0_c` as symmetric int4 with one scale per row. A quantized table is looked up by gathering the selected rows before dequantizing them. The int4 layouts read about 1 GB less weight data per token for a 248320 x 2560 table, at some cost in accuracy (on Qwen3.5-4B Q4_0: mean KLD 0.112 with `f16`, 0.128 with `q4_0_128`, 0.151 with `q4_0_c`). Any other value fails during model loading. |
-| `GGML_OPENVINO_PROFILING`         | Integer   | `0`        | `1` logs execution timing; `2` or higher also enables OpenVINO and OpenCL profiling.                        |
-| `GGML_OPENVINO_DEBUG_NODE`       | String    | `not set`  | Add the named graph nodes as compiled outputs for debugging. Separate multiple names with commas.          |
-| `GGML_OPENVINO_MOE_OP`           | Boolean   | `1`        | On GPU, set to `0` to keep the unfused GatherMatmul path.                                                  |
-| `GGML_OPENVINO_EXACT_ZERO_POINT`  | Boolean   | `0`        | Keep the exact zero point (`min / scale`, f16) of asymmetric weights that are not requantized (Q4_1, Q4_K, Q5_1, Q5_K) instead of rounding it to an integer. Improves accuracy. On GPU, use it only with an OpenVINO version whose oneDNN fully-connected path accepts f16 zero points; older versions run these weights on a slower kernel. MoE expert weights always use the exact zero point. |
-| `GGML_OPENVINO_DUMP_CGRAPH`       | Boolean   | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
-| `GGML_OPENVINO_DUMP_IR`           | Boolean   | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |
-| `GGML_OPENVINO_DEBUG_INPUT`       | Boolean   | `0`        | Enable input debugging and print input tensor info.                                                         |
-| `GGML_OPENVINO_DEBUG_OUTPUT`      | Boolean   | `0`        | Enable output debugging and print output tensor info.                                                       |
-| `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | Boolean | `0` | Print tensor address map once.                                                                           |
-| `GGML_OPENVINO_LOG_UNSUPPORTED_OPS`| Boolean   | `0`        | Log warning messages with tensor details and rejection reasons for any ops not supported by the OpenVINO backend. Emits at `WARN` level (requires `--log-verbosity >= 2`, enabled by default). |
+```bash
+export GGML_OPENVINO_DEVICE=GPU            # String
+export GGML_OPENVINO_PROFILING=1           # Integer
+export GGML_OPENVINO_EXACT_ZERO_POINT=1    # Boolean: 1 (on) or 0 (off)
 
-> [!NOTE]
-> - `GGML_OPENVINO_STATEFUL_EXECUTION` is **deprecated** and will be removed; stateless execution (the default) is the supported mode. It manages caches internally inside the OpenVINO model on CPUs and GPUs. Use a single slot (`-np 1`). KV caches retain the append-based state layout and sequence-axis optimization. Qwen3.5 adds recurrent cache states in their GGML layouts. Qwen3.5 requires an unsplit graph with model caching enabled and no recurrent rollback. A prompt starting at position 0 resets all states. State save/restore, sequence rewind, context shift, and mid-sequence graph replacement are unsupported. Stateful execution is not effective on NPUs.
-> - `GGML_OPENVINO_GDN_Q_SCALE` is for eligible GDN graphs on the NPU static path. The q pre-scaling is on by default with the factor `64`; a larger positive integer sets another factor. Set it to `0` to turn the pre-scaling off.
-> - `GGML_OPENVINO_GDN_NATIVE_STATE` stores the GDN state in a layout that only the OpenVINO backend reads correctly. The backend aborts if a `GATED_DELTA_NET` would fall back to the CPU backend (state snapshots for recurrent rollback on NPU or with `GGML_OPENVINO_FORCE_STATIC=1`, per-key-dimension gating), because the CPU would read the state in the wrong layout. Saved sequence states and `GGML_OPENVINO_DEBUG_NODE` dumps of the state hold the OpenVINO layout, so compare or restore them only with the same setting. `test-backend-ops` compares the GDN state against the CPU backend and fails with this flag set.
-> - `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` emits logs at `WARN` level (`GGML_LOG_WARN`), which requires application log verbosity `--log-verbosity >= 2` (or `-lv 2`).
-> - With `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1`, use the same compilation settings as the export run. One directory can hold blobs for different models and settings; `GGML_OPENVINO_SPILL_DIR` does not affect the cache key and is ignored in cache-only mode. See [Compiled model cache](../../ggml/src/ggml-openvino/README.md) for the workflow and restrictions.
-> - NPU self-contained cache: run once with `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` and `GGML_OPENVINO_SELF_CONTAINED_BLOB=1` (and optionally `GGML_OPENVINO_NPU_SHARED_BANK=1`) to export the blobs (`model cache WROTE` in the log), then add `GGML_OPENVINO_SELF_CONTAINED_MMAP=1` on later runs (`model cache HIT`). Keep all other NPU settings identical between the runs; with `GGML_OPENVINO_KV_SLICE` each aligned prefill length needs its own export run.
-> - The `GGML_OPENVINO_NPUW_DUMP_*` variables are for NPU profiling and require an OpenVINO developer build with `NPU_PLUGIN_DEVELOPER_BUILD`. Set `GGML_OPENVINO_DEVICE=NPU`, use `GGML_OPENVINO_NPUW_DUMP_SUBS` to select subgraphs, and optionally set `GGML_OPENVINO_NPUW_DUMP_SUBS_DIR` to choose the output directory. The `DUMP_SUBS_ON_FAIL` and `DUMP_IO` values are passed to OpenVINO unchanged.
+# Show the variables in effect (log verbosity 4)
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 1024 -lv 4 2>&1 | grep "settings from the environment"
+```
+
+- The backend reads the variables once, at start. Unset or empty means the default.
+- A value that is not valid stops the backend. A `GGML_OPENVINO_*` name that the backend does not know gives a warning:
+
+```text
+ggml-openvino: GGML_OPENVINO_EXACT_ZERO_POINT=yes is not valid, use 1 (on) or 0 (off)
+ggml-openvino: unknown environment variable GGML_OPENVINO_DEVCE is ignored
+```
+
+### Basic
+
+| Variable | Device | Type | Default | Description |
+|---|---|---|---|---|
+| `GGML_OPENVINO_DEVICE` | all | String | `CPU` | Target device: `CPU`, `GPU` or `NPU`. With several GPUs, `GPU.0` or `GPU.1` selects one, and a comma-separated GPU list splits the model across them with `-sm layer`. A device that is not available is an error (no fallback to the CPU); the message lists the available devices. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). Examples: `GGML_OPENVINO_DEVICE=NPU`, `GGML_OPENVINO_DEVICE=GPU.0,GPU.1`. |
+| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | all | String | `not set` | Directory for the backend's cache of compiled models. A later start with the same model and settings loads faster. See [Compiled model cache](#compiled-model-cache). Example: `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache`. |
+| `GGML_OPENVINO_NPU_CONFIG` | NPU | String | `not set` | OpenVINO properties for the NPU plugin, as comma-separated `KEY=VALUE` pairs. See [Plugin properties](#plugin-properties). Example: `GGML_OPENVINO_NPU_CONFIG="NPU_COMPILER_TYPE=PLUGIN"`. |
+| `GGML_OPENVINO_GPU_CONFIG` | GPU | String | `not set` | OpenVINO properties for the GPU plugin, as comma-separated `KEY=VALUE` pairs. See [Plugin properties](#plugin-properties). Example: `GGML_OPENVINO_GPU_CONFIG="INFERENCE_PRECISION_HINT=f16"`. |
+| `GGML_OPENVINO_CPU_CONFIG` | CPU | String | `not set` | OpenVINO properties for the CPU plugin, as comma-separated `KEY=VALUE` pairs. See [Plugin properties](#plugin-properties). Example: `GGML_OPENVINO_CPU_CONFIG="INFERENCE_PRECISION_HINT=f16"`. |
+| `GGML_OPENVINO_PROFILING` | all | Integer | `0` | `1` logs execution timing. `2` or higher also turns on OpenVINO and OpenCL profiling. Example: `GGML_OPENVINO_PROFILING=1`. |
+
+### Plugin properties
+
+`GGML_OPENVINO_NPU_CONFIG`, `GGML_OPENVINO_GPU_CONFIG` and `GGML_OPENVINO_CPU_CONFIG` pass OpenVINO plugin properties to the device in their name.
+
+```bash
+# Format: comma-separated KEY=VALUE pairs. The backend uses the variable of the selected device only.
+export GGML_OPENVINO_DEVICE=NPU
+export GGML_OPENVINO_NPU_CONFIG="NPU_COMPILER_TYPE=PLUGIN,COMPILATION_NUM_THREADS=4"
+
+# CPU: compute in FP16, as the GPU and the NPU do. This helps to debug the accuracy of a quantized model.
+export GGML_OPENVINO_DEVICE=CPU
+export GGML_OPENVINO_CPU_CONFIG="INFERENCE_PRECISION_HINT=f16"
+```
+
+- Property names and values are those of OpenVINO, for example `YES` and `NO`. They are not the `1` and `0` of the `GGML_OPENVINO_*` variables.
+- The backend applies the variable last, so it overrides the properties that the backend sets.
+- OpenVINO checks the properties when the model loads. If it rejects one, the load fails and the error names the variable.
+- All properties and their values are in the OpenVINO documentation: [NPU device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/npu-device.html), [GPU device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html), [CPU device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/cpu-device.html).
+- NPU: the backend sets several properties by default. They are listed in the [developer documentation](../../ggml/src/ggml-openvino/dev_doc/OpenVINO-ENV-VARS.md#npu-plugin-properties).
+- GPU and CPU: the backend sets no property, except `CACHE_DIR` and `CACHE_MODE=OPTIMIZE_SIZE` when `GGML_OPENVINO_CACHE_DIR` is set.
+
+`NPU_COMPILER_TYPE` selects the NPU compiler. Both forms below work; use the first one. If both are set, `GGML_OPENVINO_NPU_CONFIG` takes precedence.
+
+```bash
+# Values: DRIVER (the compiler in the NPU driver; backend default), PLUGIN (the compiler in OpenVINO),
+# PREFER_PLUGIN (OpenVINO default: PLUGIN when it is available, DRIVER if not).
+export GGML_OPENVINO_NPU_CONFIG="NPU_COMPILER_TYPE=PLUGIN"   # recommended form
+export GGML_OPENVINO_NPU_COMPILER_TYPE=PLUGIN                # older name, still works
+```
+
+### Advanced tuning
+
+The defaults fit most models. The variables below trade one property for another, for example speed for accuracy.
+
+<details>
+<summary><b>Advanced tuning variables</b></summary>
+
+| Variable | Device | Type | Default | Description |
+|---|---|---|---|---|
+| `GGML_OPENVINO_PREFILL_CHUNK_SIZE` | NPU | Integer | `256` | Number of tokens that the NPU processes in one prefill step. A larger value can make long prompts faster, and makes the first load longer. Zero or a negative value means the default. Example: `GGML_OPENVINO_PREFILL_CHUNK_SIZE=512`. |
+| `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` | NPU | String | `q8_0_c` | How a `Q6_K` `token_embd.weight` is stored for the NPU: `q8_0_c` (8-bit, one scale per row), `f16`, `q4_0_128` (4-bit, one scale per 128 weights) or `q4_0_c` (4-bit, one scale per row). The 4-bit layouts use less memory at some cost in accuracy; `f16` uses more memory. Keep the default unless memory is tight. |
+| `GGML_OPENVINO_GDN_DECOMPOSE` | all | Integer | auto | Translate `GATED_DELTA_NET` (Qwen3.5) into MatMul operations instead of the OpenVINO `GatedDeltaNet` op. Unset: on for the Lunar Lake NPU, off elsewhere. `0` turns it off, `1` turns it on for any device. Try `1` for Qwen3.5 on the Panther Lake NPU. |
+| `GGML_OPENVINO_MANUAL_GQA_ATTN` | CPU, GPU | Boolean | on for GPU | Build grouped-query attention from separate MatMul operations. Unset: on for GPU, off for CPU and NPU. `1` turns it on, `0` turns it off. Try `1` on the CPU for faster decode. |
+| `GGML_OPENVINO_REQUANT_KQUANT` | CPU, GPU | String | `not set` | Requantize `Q6_K` and `Q5_K` weights to a 4-bit layout instead of `Q8_0_C`: faster decode for lower accuracy. One of `q4_asym64`, `q4_asym64_all` (also `Q4_K`), `q4_sym128`, `q4_sym128_all` (also `Q4_K`) or `native` (no requantization). On GPU with `Q4_K_M` files use `q4_asym64_all`, because `q4_asym64` does not compile there. |
+| `GGML_OPENVINO_EXACT_ZERO_POINT` | CPU, GPU | Boolean | `0` | Keep the exact zero point of asymmetric weights (`Q4_1`, `Q4_K`, `Q5_1`, `Q5_K`) instead of rounding it to an integer. This improves accuracy and lowers speed. Use it when accuracy matters more than speed. |
+
+</details>
+
+### Compiled model cache
+
+The cache keeps compiled models on disk, so later starts of the same model load faster. Use the same model and the same settings in every run.
+
+```bash
+# CPU or GPU: the first run compiles the model and writes the cache. Later runs read it.
+export GGML_OPENVINO_DEVICE=GPU
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 1024
+
+# CPU or GPU, later runs (optional): require the cached model and skip the weight upload and the compilation.
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1
+
+# NPU: add the weightless bank.
+export GGML_OPENVINO_DEVICE=NPU
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache
+export GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 512
+
+# NPU, later runs (optional): use less memory. The run fails if a cached model is missing.
+export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
+```
+
+<details>
+<summary><b>Cache variables</b></summary>
+
+| Variable | Device | Type | Default | Description |
+|---|---|---|---|---|
+| `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | CPU, GPU | Boolean | `0` | Require an existing cached model and skip the weight upload and the compilation. Needs mmap model loading (the default on Linux and Windows) and a model that runs fully on OpenVINO. |
+| `GGML_OPENVINO_NPU_WEIGHTLESS_BANK` | NPU | Boolean | `0` | Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR`. Write the prefill and decode models without weights, plus one shared weights file. Later runs read the weights from that file and keep one copy in memory. |
+| `GGML_OPENVINO_SELF_CONTAINED_MMAP` | NPU | Boolean | `0` | Later runs only. Requires `GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1` and an existing cache. Use the memory-mapped GGUF file as the model buffer, which lowers the host memory peak. Fails if a cached model is missing; run once without it to build the cache. |
+| `GGML_OPENVINO_CACHE_DIR` | all | String | `not set` | Directory for the cache of the OpenVINO plugin itself. `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` is the recommended cache. |
+
+- One directory can hold the cached models of different models and settings.
+- NPU: each prefill length enters the cache in a run without `GGML_OPENVINO_SELF_CONTAINED_MMAP`.
+- See [Compiled model cache](../../ggml/src/ggml-openvino/README.md) for the workflow and the restrictions.
+
+</details>
+
+### Deprecated
+
+| Variable | Device | Type | Default | Description |
+|---|---|---|---|---|
+| `GGML_OPENVINO_STATEFUL_EXECUTION` | CPU, GPU | Boolean | `0` | **Deprecated**, to be removed. Keep the KV cache inside the OpenVINO model. Use the default, stateless execution (`0`). |
+
+<details>
+<summary>Limits of stateful execution</summary>
+
+- CPU and GPU only; it has no effect on the NPU.
+- One slot only (`-np 1`).
+- State save and restore, sequence rewind, context shift and recurrent rollback are not supported.
+- Qwen3.5 needs a graph that runs fully on OpenVINO, with model caching on.
+- A prompt that starts at position 0 resets all states.
+
+</details>
+
+### Debugging and development
+
+Debug output, switches that turn a default optimization off, experimental options and older variable names are in the [developer documentation](../../ggml/src/ggml-openvino/dev_doc/OpenVINO-ENV-VARS.md).
 
 ### Example Usage
 
@@ -777,26 +950,31 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 ```bash
 # If the system has multiple GPUs, use GPU.0 or GPU.1 to explicitly target a specific GPU.
 
-# Linux
-export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache
 export GGML_OPENVINO_PROFILING=1
 export GGML_OPENVINO_DEVICE=GPU
 
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -n 50 "The story of AI is "
+```
 
+<details>
+<summary><b>Windows</b></summary>
+
+```powershell
 # Windows Command Line
-set GGML_OPENVINO_CACHE_DIR=C:\tmp\ov_cache
+set GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=C:\tmp\ov_cache
 set GGML_OPENVINO_PROFILING=1
 set GGML_OPENVINO_DEVICE=GPU
 
 # Windows PowerShell
-$env:GGML_OPENVINO_CACHE_DIR = "C:\tmp\ov_cache"
+$env:GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR = "C:\tmp\ov_cache"
 $env:GGML_OPENVINO_PROFILING = "1"
 $env:GGML_OPENVINO_DEVICE = "GPU"
 
 build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.gguf" -n 50 "The story of AI is "
-
 ```
+
+</details>
 
 ## Known Limitations
 
@@ -804,26 +982,40 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 
 - Llama.cpp OpenVINO backend currently supports a subset of GGML ops and text-only models. Unsupported ops or unsupported op shapes/cases fail during OpenVINO translation.
 - Multimodal features (audio/image/video) are a work in progress.
-- Limited Embedding and Reranking model support.
+- Embedding models: BERT-based models (`bge-m3`, `nomic-embed-text-v1.5`) fail on all devices. `Qwen3-Embedding-0.6B` runs on CPU and GPU. Reranking models are not validated.
 - Llama.cpp tool coverage across CPU/GPU/NPU is not uniform.
 
 **Tool-specific**
 
-- `llama-bench`: requires `-fa 1` (flash-attention).
 - `llama-cli --context-shift`: stateless only (`GGML_OPENVINO_STATEFUL_EXECUTION=0`). In stateful mode the KV cache is owned by the OpenVINO model and cannot be shifted externally.
 - `llama-server`: only one chat session/thread when `GGML_OPENVINO_STATEFUL_EXECUTION=1`.
 
 **GPU-specific**
 
 - `llama-server -np > 1`: concurrent requests are batched together, which may slightly reduce per-request throughput.
+- Multiple GPUs (`GGML_OPENVINO_DEVICE=GPU.0,GPU.1` with `-sm layer`):
+  - `-sm tensor` is not supported.
+  - Copies between GPUs go through host memory. There is no asynchronous copy and no peer-to-peer copy.
+  - Only GPUs can be combined. A list with several NPUs, or with a GPU and the CPU or the NPU, is rejected.
 
 **NPU-specific**
 
 - Default context resolves to the model's training context (e.g. 131072 for Llama 3.2 1B), which can OOM or fail or degrade performance on NPU. Inspect the resolved value with `-lv 3`.
-  - **Workaround:** Pass an explicit `-c <N>`, e.g. `-c 1024`.
+  - **Workaround:** Pass an explicit `-c <N>`, e.g. `-c 512`.
 - NPU device uses a static graph with a fixed prefill chunk size (defaults to 256), configurable with `GGML_OPENVINO_PREFILL_CHUNK_SIZE`. Large prefill/batch settings may need tuning.
 - `llama-server -np > 1` (multiple parallel sequences) is not supported.
 - `llama-perplexity`: requires `-b 512` or smaller.
+- Flash attention must stay on, which is the default (`-fa auto`). With `-fa off`, the run fails on the NPU.
+- `llama-embedding` fails on the NPU.
+- Lunar Lake NPU: decode slows down sharply when the context is large. The context size at which this starts depends on the model.
+  - **Workaround:** Pass the smallest context that fits the use, e.g. `-c 512`, or `-c 256` for larger models.
+- Panther Lake NPU: the load of a Qwen3.5 model can end with a segmentation fault in the NPU compiler of OpenVINO 2026.4.1.
+  - **Workaround:** Set `GGML_OPENVINO_NPU_CONFIG=COMPILATION_NUM_THREADS=1`.
+- Panther Lake NPU: `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT=f16` and `q4_0_128` can give wrong output. Keep the default.
+- Lunar Lake NPU: `granite-4.0-1b` gives wrong output. The activations of the model exceed the FP16 range, and the NPU computes in FP16. The model runs correctly on CPU and GPU.
+- Lunar Lake NPU: `gemma-4-12B` does not run. The first inference fails with `ZE_RESULT_ERROR_UNINITIALIZED` from the NPU driver. The model runs on CPU and GPU.
+- The first load of a model on the NPU compiles it for the device, which can take minutes for large models.
+  - **Workaround:** Use the [compiled model cache](#compiled-model-cache).
 
 > [!NOTE]
 > The OpenVINO backend is actively under development. Fixes and improvements are underway, and this document will continue to be updated.

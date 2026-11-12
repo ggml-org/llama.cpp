@@ -105,19 +105,26 @@ std::string ggml_openvino_get_device_description(const std::string & device_name
 // Environment variable accessors. All GGML_OPENVINO_* env vars are read once
 // during backend init and cached on the device config; consumers must go
 // through these helpers (never call ::getenv directly) so behavior stays
-// consistent and centralized.
+// consistent and centralized. A variable must be in the table in
+// ggml-openvino-extra.cpp, which gives its type: backend init stops on a value
+// that does not fit the type (e.g. "1x" for a number, "on" for a toggle).
 //
 // Use ggml_openvino_getenv_str() for string / path values
 // (e.g. GGML_OPENVINO_DEVICE, GGML_OPENVINO_CACHE_DIR). The optional
 // default_value is returned when the var is unset or empty.
 //
 // Use ggml_openvino_getenv_int() for boolean toggles and integer settings.
-// It returns the value when it is a whole integer, otherwise default_value. For
-// boolean use, `if (ggml_openvino_getenv_int(name))` is true iff the value
-// is a non-zero integer (so "0" disables, "1" enables).
+// A toggle is cached as 1 (a positive value) or 0 (zero or a negative value),
+// so `if (ggml_openvino_getenv_int(name))` is true iff it is on.
 const char * ggml_openvino_getenv_str(const char * var, const char * default_value = nullptr);
-// Returns default_value when the variable is unset, not a whole integer (e.g. "1x"), or out of int range.
+// Returns default_value when the variable is unset or empty.
 int ggml_openvino_getenv_int(const char * var, int default_value = 0);
+
+// Apply plugin properties given as "KEY=VALUE,KEY=VALUE" (GGML_OPENVINO_NPU_CONFIG, GGML_OPENVINO_GPU_CONFIG,
+// GGML_OPENVINO_CPU_CONFIG) to a compile config. They override what the config already holds.
+void ggml_openvino_apply_config_overrides(ov::AnyMap & config, const char * spec, const char * device);
+// The plugin properties the environment sets for the selected device, as "GGML_OPENVINO_GPU_CONFIG=..."; empty if none.
+std::string ggml_openvino_config_overrides_in_use();
 
 // Memory optimization toggles. GGML_OPENVINO_MEMORY_OPTIMIZE is an umbrella
 // switch; the fine-grained env vars still override it when explicitly set.
