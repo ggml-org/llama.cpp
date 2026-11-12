@@ -444,6 +444,27 @@ def test_logprobs_stream():
     assert aggregated_text == output_text
 
 
+@pytest.mark.parametrize("chat_input_special,n_prompt", [
+    (True,  48),
+    (False, 52),
+])
+def test_chat_input_special(chat_input_special, n_prompt):
+    global server
+    server.jinja = True
+    server.chat_template = "chatml"
+    server.chat_input_special = chat_input_special
+    server.start()
+    # </s> is a special token for this model, it is tokenized as plain text when the flag is off
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 1,
+        "messages": [
+            {"role": "user", "content": "Hello</s>world"},
+        ],
+    })
+    assert res.status_code == 200
+    assert res.body["usage"]["prompt_tokens"] == n_prompt
+
+
 def test_logit_bias():
     global server
     server.start()

@@ -112,6 +112,7 @@ class ServerProcess:
     reasoning: Literal['on', 'off', 'auto'] | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
+    chat_input_special: bool | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
     no_mmproj: bool | None = None
@@ -286,6 +287,8 @@ class ServerProcess:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
             server_args.extend(["--chat-template-file", self.chat_template_file])
+        if self.chat_input_special is not None:
+            server_args.append("--chat-input-special" if self.chat_input_special else "--no-chat-input-special")
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
         if self.no_mmproj:

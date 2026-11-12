@@ -3830,6 +3830,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_PREFILL_ASSISTANT"));
     add_opt(common_arg(
+        {"--chat-input-special"},
+        {"--no-chat-input-special"},
+        string_format("experimental: whether to parse special tokens from user input messages in chat completions, does not affect the raw /completions endpoint (default: %s)\n"
+                      "note: this is not a security feature, do not rely on it to prevent prompt injection", params.chat_input_special ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.chat_input_special = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CHAT_INPUT_SPECIAL"));
+    add_opt(common_arg(
         {"-sps", "--slot-prompt-similarity"}, "SIMILARITY",
         string_format("how much the prompt of a request must match the prompt of a slot in order to use that slot (default: %.2f, 0.0 = disabled)\n", params.slot_prompt_similarity),
         [](common_params & params, const std::string & value) {

@@ -1066,15 +1066,13 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-server_tokens process_mtmd_prompt(
+static void load_media_files(
         mtmd_context * mctx,
-        const std::string & prompt,
         const std::vector<raw_buffer> & files,
         const mtmd_helper_init_opt & init_opt,
-        bool is_placeholder) {
-    // these will be freed upon going out of scope
-    mtmd::bitmaps bitmaps;
-    std::vector<mtmd_helper::video_ptr> videos;
+        bool is_placeholder,
+        mtmd::bitmaps & bitmaps,
+        std::vector<mtmd_helper::video_ptr> & videos) {
     for (auto & file : files) {
         auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder, init_opt);
         if (!out.bitmap) {
@@ -1085,6 +1083,18 @@ server_tokens process_mtmd_prompt(
             videos.emplace_back(out.video_ctx);
         }
     }
+}
+
+server_tokens process_mtmd_prompt(
+        mtmd_context * mctx,
+        const std::string & prompt,
+        const std::vector<raw_buffer> & files,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_placeholder) {
+    // these will be freed upon going out of scope
+    mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
+    load_media_files(mctx, files, init_opt, is_placeholder, bitmaps, videos);
     // process prompt
     std::vector<server_tokens> inputs;
     // multimodal
@@ -1106,6 +1116,94 @@ server_tokens process_mtmd_prompt(
     }
     auto result = server_tokens(chunks, true);
     return result;
+}
+
+server_tokens tokenize_chat_prompt(
+        const llama_vocab * vocab,
+        mtmd_context * mctx,
+        const common_chat_prompt & prompt,
+        const std::vector<raw_buffer> & files,
+        bool chat_input_special,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_placeholder) {
+    if (chat_input_special) {
+        // all parts are tokenized the same way
+        std::string text = prompt.str();
+        if (mctx != nullptr) {
+            return process_mtmd_prompt(mctx, text, files, init_opt, is_placeholder);
+        }
+        return server_tokens(common_tokenize(vocab, text, true, true), false);
+    }
+
+    if (mctx == nullptr) {
+        llama_tokens tokens;
+        for (size_t i = 0; i < prompt.parts.size(); i++) {
+            const auto & part = prompt.parts[i];
+            auto tmp = common_tokenize(vocab, part.text, /* add_special */ i == 0, /* parse_special */ !part.is_input);
+            tokens.insert(tokens.end(), tmp.begin(), tmp.end());
+        }
+        return server_tokens(tokens, false);
+    }
+
+    mtmd::bitmaps bitmaps;
+    std::vector<mtmd_helper::video_ptr> videos;
+    load_media_files(mctx, files, init_opt, is_placeholder, bitmaps, videos);
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+
+    // split the text parts on media markers and put the bitmaps in their place
+    struct segment {
+        std::string text;
+        bool is_input;
+        const mtmd_bitmap * bitmap;
+    };
+    std::vector<segment> segments;
+    const std::string marker = get_media_marker();
+    size_t i_bm = 0;
+    for (const auto & part : prompt.parts) {
+        size_t start = 0;
+        while (true) {
+            size_t pos = part.text.find(marker, start);
+            if (pos > start) {
+                segments.push_back({part.text.substr(start, pos - start), part.is_input, nullptr});
+            }
+            if (pos == std::string::npos) {
+                break;
+            }
+            if (i_bm >= bitmaps_c_ptr.size()) {
+                throw std::runtime_error("number of media markers in prompt exceeds number of media files");
+            }
+            segments.push_back({"", false, bitmaps_c_ptr[i_bm++]});
+            start = pos + marker.size();
+        }
+    }
+    if (i_bm != bitmaps_c_ptr.size()) {
+        throw std::runtime_error("number of media markers in prompt does not match number of media files");
+    }
+
+    std::vector<mtmd_input_text> texts(segments.size());
+    std::vector<mtmd_input_part> parts(segments.size());
+    std::vector<const mtmd_input_part *> parts_ptr(segments.size());
+    for (size_t i = 0; i < segments.size(); i++) {
+        const auto & seg = segments[i];
+        if (seg.bitmap != nullptr) {
+            parts[i] = {nullptr, seg.bitmap};
+        } else {
+            texts[i] = {seg.text.data(), seg.text.size(), /* add_special */ false, /* parse_special */ !seg.is_input};
+            parts[i] = {&texts[i], nullptr};
+        }
+        parts_ptr[i] = &parts[i];
+    }
+
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    int32_t tokenized = mtmd_tokenize_from_parts(mctx,
+                                                 chunks.ptr.get(),
+                                                 parts_ptr.data(),
+                                                 parts_ptr.size(),
+                                                 /* add_special */ true);
+    if (tokenized != 0) {
+        throw std::runtime_error("Failed to tokenize prompt");
+    }
+    return server_tokens(chunks, true);
 }
 
 /**
