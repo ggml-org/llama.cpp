@@ -704,7 +704,8 @@ bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_context *backend_c
 bool use_q4_0_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->mul_mat.kernel_gemv_noshuffle_q4_0_f32_32b_trans ||
-        !backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin) {
+        !(backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin ||
+          backend_ctx->mul_mat.kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin)) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights

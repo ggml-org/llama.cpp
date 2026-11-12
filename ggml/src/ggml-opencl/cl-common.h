@@ -577,6 +577,16 @@ struct ggml_opencl_fa_kernels {
     std::map<std::pair<int, int>, cl_kernel> kv_pad_f16;
     std::map<std::pair<int, int>, cl_kernel> mask_pad_f16;
     std::map<std::pair<int, int>, cl_kernel> blk_f16;
+    // decomposed prefill: V^T, built with the prepass
+    std::map<std::pair<int, int>, cl_kernel> v_transpose_f16;
+    cl_kernel kernel_fa_decompose_soft_max_4_f16 = nullptr;
+    cl_kernel kernel_fa_decompose_scale_rows_f32 = nullptr;
+    cl_kernel kernel_mul_mm_f16_f32_kq_p8 = nullptr;
+    cl_kernel kernel_mul_mm_q8_f32_kqv = nullptr;
+    cl_kernel kernel_fa_p8_fixup = nullptr;
+    cl_kernel kernel_fa_kqv_direct_f16 = nullptr;
+    cl_kernel kernel_fa_kqv_direct_reduce = nullptr;
+    cl_kernel kernel_fa_v_transpose_q8 = nullptr;
     // generic prefill tile dims (f16 / f32 paths)
     std::map<std::pair<int, int>, int>       bm;
     std::map<std::pair<int, int>, int>       bn;
@@ -767,6 +777,18 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_src0;
     ggml_cl_buffer prealloc_src1;
     ggml_cl_buffer prealloc_top_k;
+
+    // scratch for the decomposed flash attention prefill, sized per query chunk
+    ggml_cl_buffer prealloc_fa_vt;
+    ggml_cl_buffer prealloc_fa_kq;
+    ggml_cl_buffer prealloc_fa_kqv;
+    ggml_cl_buffer prealloc_fa_sums;
+    ggml_cl_buffer prealloc_fa_vtq;
+    ggml_cl_buffer prealloc_fa_vtd;
+    ggml_cl_buffer prealloc_fa_pq;
+    ggml_cl_buffer prealloc_fa_pd;
+    ggml_cl_buffer prealloc_fa_bmax;
+    ggml_cl_buffer prealloc_fa_bsum;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_buffer prealloc_adreno_xmem_const;
@@ -1001,6 +1023,11 @@ struct ggml_backend_opencl_context {
     }
 
     ~ggml_backend_opencl_context() {
+        for (cl_kernel kernel : {fa.kernel_mul_mm_f16_f32_kq_p8, fa.kernel_mul_mm_q8_f32_kqv, fa.kernel_fa_p8_fixup, fa.kernel_fa_v_transpose_q8, fa.kernel_fa_kqv_direct_f16, fa.kernel_fa_kqv_direct_reduce}) {
+            if (kernel != nullptr) {
+                CL_CHECK(clReleaseKernel(kernel));
+            }
+        }
         if (dsv4_hc.kernel_dsv4_hc_pre) {
             CL_CHECK(clReleaseKernel(dsv4_hc.kernel_dsv4_hc_pre));
         }
