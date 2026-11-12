@@ -1241,8 +1241,6 @@ void process_shaders() {
 
     string_to_spv("ssm_scan_f32",          "ssm_scan.comp", {{"A_TYPE", "float"}});
     string_to_spv("ssm_scan_subgroup_f32", "ssm_scan.comp", {{"A_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}});
-    string_to_spv("ssm_scan_96_f32", "ssm_scan.comp", {{"A_TYPE", "float"}, {"D_STATE_96", "1"}});
-    string_to_spv("ssm_scan_96_subgroup_f32", "ssm_scan.comp", {{"A_TYPE", "float"}, {"D_STATE_96", "1"}, {"USE_SUBGROUP_ADD", "1"}});
 
     string_to_spv("ssm_conv_f32", "ssm_conv.comp", {{"A_TYPE", "float"}});
 
