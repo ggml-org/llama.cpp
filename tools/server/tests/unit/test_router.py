@@ -953,3 +953,42 @@ def test_router_restricted_cors_same_origin_reaches_child():
 
     res = requests.post(server.make_url("/chat/completions", host="127.0.0.1"), json=body, headers={"Origin": "http://evil.com"})
     assert res.status_code == 403
+
+
+def test_router_child_refuses_browser_requests(tmp_path):
+    import re
+    global server
+    log_path = tmp_path / "router.log"
+    server.log_path = str(log_path)
+    server.start()
+    model_id = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
+    _load_model_and_wait(model_id)
+
+    pattern = rf"spawning server instance with name={re.escape(model_id)} on port (\d+)"
+    match = None
+    for _ in range(50):
+        match = re.search(pattern, log_path.read_text())
+        if match:
+            break
+        time.sleep(0.1)
+    assert match, "child port not found in router log"
+    child_url = f"http://127.0.0.1:{match.group(1)}"
+
+    # non-browser clients can reach the child directly
+    assert requests.get(f"{child_url}/health").status_code == 200
+
+    for headers in [
+        {"Origin": "http://evil.com"},
+        {"Origin": child_url},
+        {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"},
+        {"Sec-Fetch-Site": "same-origin"},
+    ]:
+        assert requests.get(f"{child_url}/health", headers=headers).status_code == 403, headers
+
+    # browser requests through the router still reach the child
+    res = requests.post(server.make_url("/chat/completions"), json={
+        "model": model_id,
+        "max_tokens": 4,
+        "messages": [{"role": "user", "content": "hello"}],
+    }, headers={"Origin": f"http://127.0.0.1:{server.server_port}", "Sec-Fetch-Site": "same-origin"})
+    assert res.status_code == 200, res.text
