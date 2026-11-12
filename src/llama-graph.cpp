@@ -2332,10 +2332,57 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * selected_experts_in,
          ggml_tensor * post_exp_norm,
                float   post_exp_norm_eps) const {
+    const llm_graph_moe_selection sel = build_moe_select(cur, gate_inp, gate_inp_b, exp_probs_b, n_expert, n_expert_used,
+            norm_w, w_scale, gating_op, il, probs_in, selected_experts_in);
+
+    if (chunk_plan.chunks.empty()) {
+        return build_moe_experts(cur, sel, up_exps, up_exps_b, gate_exps, gate_exps_b, down_exps, down_exps_b, n_expert_used, type_op, il,
+                gate_up_exps, gate_up_exps_b, up_exps_s, gate_exps_s, down_exps_s, post_exp_norm, post_exp_norm_eps);
+    }
+
+    // layer-major prefill: the router runs once for all the tokens, the experts of each token chunk are computed apart
+    // the copy callback of the first chunk reads the ids of all the tokens, so that it uploads the experts of all the chunks
+    // (see llama_context::sched_copy_experts): the ids must not be a view of the argsort
+    ggml_tensor * ids = sel.ids->view_src ? ggml_cont(ctx0, sel.ids) : sel.ids;
+    ggml_build_forward_expand(gf, ids);
+
+    // the experts of every chunk run on the device of the layer: the scheduler would compute the host experts of a chunk
+    // with few tokens on the CPU, and the backends of the graph would then depend on the token count of the ubatch
+    ggml_backend_t backend = backend_layer(il);
+
+    return build_chunked(cur, chunk_plan.chunks, [&](ggml_tensor * rows, size_t, const llm_graph_chunk & chunk) {
+        const llm_graph_moe_selection sel_chunk = {
+            build_view_rows(ids, chunk),
+            ggml_view_3d(ctx0, sel.weights, 1, sel.weights->ne[1], chunk.n, sel.weights->nb[1], sel.weights->nb[2], chunk.t0*sel.weights->nb[2]),
+        };
+
+        const int n_first = ggml_graph_n_nodes(gf);
+
+        ggml_tensor * res = build_moe_experts(rows, sel_chunk, up_exps, up_exps_b, gate_exps, gate_exps_b, down_exps, down_exps_b, n_expert_used, type_op, il,
+                gate_up_exps, gate_up_exps_b, up_exps_s, gate_exps_s, down_exps_s, post_exp_norm, post_exp_norm_eps);
+        ggml_build_forward_expand(gf, res);
+
+        set_backend_nodes(n_first, backend);
+
+        return res;
+    });
+}
+
+llm_graph_moe_selection llm_graph_context::build_moe_select(
+         ggml_tensor * cur,
+         ggml_tensor * gate_inp,
+         ggml_tensor * gate_inp_b,
+         ggml_tensor * exp_probs_b,
+             int64_t   n_expert,
+             int64_t   n_expert_used,
+                bool   norm_w,
+               float   w_scale,
+        llama_expert_gating_func_type gating_op,
+                 int   il,
+         ggml_tensor * probs_in,
+         ggml_tensor * selected_experts_in) const {
     const llm_arch arch = model.arch;
-    const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
-    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
     ggml_tensor * logits = nullptr;
 
@@ -2430,33 +2477,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
     cb(selected_experts, "ffn_moe_topk", il);
 
-    // layer-major prefill: the experts of each token chunk are computed apart, all the chunks read the same expert tensors
-    // the experts of all tokens are selected first, so that the copy callback uploads the experts of all the chunks at the first chunk
-    // the chunks call build_moe_ffn again with the experts of their tokens, which must not split them again
-    if (!chunk_plan.chunks.empty() && !moe_chunk) {
-        ggml_tensor * ids = selected_experts->view_src ? ggml_cont(ctx0, selected_experts) : selected_experts;
-        ggml_build_forward_expand(gf, ids);
-
-        moe_chunk = true;
-
-        // a chunk with few tokens can compute the experts in host memory on the CPU, the stores stay on the device of the layer
-        ggml_tensor * moe_out = build_chunked(cur, chunk_plan.chunks, [&](ggml_tensor * cur_chunk, size_t, const llm_graph_chunk & rows) {
-            return build_moe_ffn(cur_chunk,
-                    gate_inp, gate_inp_b,
-                    up_exps, up_exps_b, gate_exps, gate_exps_b, down_exps, down_exps_b,
-                    exp_probs_b,
-                    n_expert, n_expert_used,
-                    type_op, norm_w, w_scale, gating_op, il,
-                    probs_in ? build_view_rows(probs_in, rows) : nullptr, gate_up_exps, gate_up_exps_b,
-                    up_exps_s, gate_exps_s, down_exps_s,
-                    build_view_rows(ids, rows), post_exp_norm, post_exp_norm_eps);
-        }, backend_layer(il));
-
-        moe_chunk = false;
-
-        return moe_out;
-    }
-
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
         // TODO: Use scalar div instead when/if implemented
         ggml_tensor * f_sel = ggml_cast(ctx0, selected_experts, GGML_TYPE_F32);
@@ -2504,6 +2524,36 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
+
+    return { selected_experts, weights };
+}
+
+ggml_tensor * llm_graph_context::build_moe_experts(
+         ggml_tensor * cur,
+        llm_graph_moe_selection sel,
+         ggml_tensor * up_exps,
+         ggml_tensor * up_exps_b,
+         ggml_tensor * gate_exps,
+         ggml_tensor * gate_exps_b,
+         ggml_tensor * down_exps,
+         ggml_tensor * down_exps_b,
+             int64_t   n_expert_used,
+     llm_ffn_op_type   type_op,
+                 int   il,
+         ggml_tensor * gate_up_exps,
+         ggml_tensor * gate_up_exps_b,
+         ggml_tensor * up_exps_s,
+         ggml_tensor * gate_exps_s,
+         ggml_tensor * down_exps_s,
+         ggml_tensor * post_exp_norm,
+               float   post_exp_norm_eps) const {
+    const llm_arch arch = model.arch;
+    const int64_t n_embd   = cur->ne[0];
+    const int64_t n_tokens = cur->ne[1];
+    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
+
+    ggml_tensor * selected_experts = sel.ids;
+    ggml_tensor * weights          = sel.weights;
 
     // compute the expert input before the slot lookup, so that the scheduler prefetches it for the CPU part (the router can read a different tensor)
     ggml_build_forward_expand(gf, cur);
@@ -2767,7 +2817,7 @@ llm_graph_moe_cache_slots llm_graph_context::build_moe_cache_slots(
     // layer-major prefill: the chunks do not read the experts from the cache, whatever their token count
     // - the copy callback looks up the experts of the first lookup of a layer only, the other chunks read the same slot map
     // - an empty or short chunk must build the same nodes as the chunks of the reserve
-    if (moe_chunk) {
+    if (!chunk_plan.chunks.empty()) {
         return { nullptr, nullptr };
     }
 
@@ -3296,18 +3346,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn, ggml_backend_t backend) const {
+ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const {
     const int64_t n_rows = cur->ne[1];
-
-    const auto set_backend = [&](ggml_tensor * t) {
-        if (backend != nullptr && ggml_backend_supports_op(backend, t)) {
-            ggml_backend_sched_set_tensor_backend(sched, t, backend);
-        }
-    };
 
     // not a new leaf: ggml-alloc allocates all the leafs of a graph before its first node
     ggml_tensor * dst = ggml_fill(ctx0, cur, 0.0f);
-    set_backend(dst);
     ggml_build_forward_expand(gf, dst);
 
     for (size_t ic = 0; ic < chunks.size(); ++ic) {
@@ -3321,7 +3364,6 @@ ggml_tensor * llm_graph_context::build_chunked(ggml_tensor * cur, const std::vec
         // an empty chunk stores nothing: offset 0 keeps the store within dst (the CPU backend checks the bounds of the first row)
         // each store reads the previous one: a view that no node reads keeps its source allocated until the end of the graph
         dst = ggml_set_2d_inplace(ctx0, dst, res, dst->nb[1], n == 0 ? 0 : t0*dst->nb[1]);
-        set_backend(dst);
         ggml_build_forward_expand(gf, dst);
     }
 
@@ -3338,6 +3380,10 @@ ggml_tensor * llm_graph_context::build_view_rows(ggml_tensor * t, const llm_grap
 
 ggml_backend_t llm_graph_context::backend_layer(int il) const {
     const ggml_backend_dev_t dev = model.dev_layer(il);
+    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+        return nullptr;
+    }
+
     for (int i = 0; i < ggml_backend_sched_get_n_backends(sched); ++i) {
         ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
         if (ggml_backend_get_device(backend) == dev) {
@@ -3345,6 +3391,19 @@ ggml_backend_t llm_graph_context::backend_layer(int il) const {
         }
     }
     return nullptr;
+}
+
+void llm_graph_context::set_backend_nodes(int n_first, ggml_backend_t backend) const {
+    if (backend == nullptr) {
+        return;
+    }
+
+    for (int i = n_first; i < ggml_graph_n_nodes(gf); ++i) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+        if (ggml_backend_supports_op(backend, node)) {
+            ggml_backend_sched_set_tensor_backend(sched, node, backend);
+        }
+    }
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_chunk(ggml_tensor * inp_pos, const llm_graph_chunk & chunk) const {

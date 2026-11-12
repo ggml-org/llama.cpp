@@ -1067,6 +1067,12 @@ struct llm_graph_amax_src1 {
     ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
 };
 
+// the experts that the router selects for each token, and their weights (see build_moe_select)
+struct llm_graph_moe_selection {
+    ggml_tensor * ids;     // I32 [n_expert_used, n_tokens]
+    ggml_tensor * weights; // F32 [1, n_expert_used, n_tokens]
+};
+
 struct llm_graph_moe_cache_slots {
     ggml_tensor * slots;   // [n_expert_used, n_tokens] slots of the selected experts in the MoE cache, or nullptr
     ggml_tensor * cpu_ids; // [n_expert_used, n_tokens] misses computed from the host experts, -1 for the other experts, or nullptr
@@ -1108,9 +1114,6 @@ struct llm_graph_context {
 
     // layer-major prefill: the token chunks of the ubatch
     const llm_graph_chunk_plan chunk_plan;
-
-    // true while build_moe_ffn builds the experts of one chunk
-    mutable bool moe_chunk = false;
 
     const enum llama_pooling_type pooling_type;
     const enum llama_rope_type    rope_type;
@@ -1291,6 +1294,42 @@ struct llm_graph_context {
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
 
+    // the router of build_moe_ffn: the gate logits (or probs_in), the gating, the group selection, the top-k experts and their weights
+    llm_graph_moe_selection build_moe_select(
+             ggml_tensor * cur,
+             ggml_tensor * gate_inp,
+             ggml_tensor * gate_inp_b,
+             ggml_tensor * exp_probs_b,
+                 int64_t   n_expert,
+                 int64_t   n_expert_used,
+                    bool   norm_w,
+                   float   w_scale,
+            llama_expert_gating_func_type gating_op,
+                     int   il,
+             ggml_tensor * probs_in,
+             ggml_tensor * selected_experts_in) const;
+
+    // the experts of build_moe_ffn: the expert matmuls of the selected experts of each token, weighted and summed
+    ggml_tensor * build_moe_experts(
+             ggml_tensor * cur,
+ llm_graph_moe_selection   sel,
+             ggml_tensor * up_exps,
+             ggml_tensor * up_exps_b,
+             ggml_tensor * gate_exps,
+             ggml_tensor * gate_exps_b,
+             ggml_tensor * down_exps,
+             ggml_tensor * down_exps_b,
+                 int64_t   n_expert_used,
+         llm_ffn_op_type   type_op,
+                     int   il,
+             ggml_tensor * gate_up_exps,
+             ggml_tensor * gate_up_exps_b,
+             ggml_tensor * up_exps_s,
+             ggml_tensor * gate_exps_s,
+             ggml_tensor * down_exps_s,
+             ggml_tensor * post_exp_norm,
+                   float   post_exp_norm_eps) const;
+
     // the slots of the selected experts in the MoE cache, nullptr if the experts of the layer are not read from the cache
     // with cpu_part, also the misses computed from the host experts, if the cache leaves any to the CPU
     llm_graph_moe_cache_slots build_moe_cache_slots(
@@ -1349,17 +1388,19 @@ struct llm_graph_context {
 
     // layer-major prefill: fn(rows, ic, chunk) for the rows of cur of each chunk ic, rows clamped to the rows of cur
     // the results [ne0 of cur, chunk.n] are stored in one tensor with the shape of cur, in chunk order
-    // backend: if set, the stores run on it; set it when the chunks can run on different backends,
-    //   the stores write a view of one tensor, so they must run on the backend of that tensor
+    // the stores write views of one tensor: the results must be on the backend of cur
     using llm_chunk_fn = std::function<ggml_tensor * (ggml_tensor * rows, size_t ic, const llm_graph_chunk & chunk)>;
-    ggml_tensor * build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn, ggml_backend_t backend = nullptr) const;
+    ggml_tensor * build_chunked(ggml_tensor * cur, const std::vector<llm_graph_chunk> & chunks, const llm_chunk_fn & fn) const;
 
     // the rows of the tokens of a chunk, of a tensor with one row of ne[0] values per token
     // n_per_token > 0: of a 1-d tensor with n_per_token values per token (f.ex. the cell indices of the tokens), the view is 1-d too
     ggml_tensor * build_view_rows(ggml_tensor * t, const llm_graph_chunk & chunk, int64_t n_per_token = 0) const;
 
-    // the backend of the device of layer il, nullptr if the scheduler has none
+    // the backend of the device of layer il, nullptr if the layer is on the CPU or the scheduler has no backend for its device
     ggml_backend_t backend_layer(int il) const;
+
+    // the graph nodes from node n_first on run on backend, where it supports them
+    void set_backend_nodes(int n_first, ggml_backend_t backend) const;
 
     // the positions of the tokens of a chunk, for the inputs of its attention block: one section per position input
     ggml_tensor * build_inp_pos_chunk(ggml_tensor * inp_pos, const llm_graph_chunk & chunk) const;
