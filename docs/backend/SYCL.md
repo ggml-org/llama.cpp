@@ -208,6 +208,9 @@ export ONEAPI_DEVICE_SELECTOR="level_zero:0"
 ## build from source code
 examples\sycl\win-build-sycl.bat
 
+## check the runtime DLL dependencies of the build output or a release package
+examples\sycl\win-check-dlls.bat
+
 ## run CONV_2D_DW unit test cases
 build\bin\test-backend-ops.exe -b SYCL0 -o CONV_2D_DW
 
