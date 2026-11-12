@@ -2172,8 +2172,13 @@ static void ggml_backend_sched_prefetch_inputs(ggml_backend_sched_t sched, int s
             continue;
         }
 
-        // not if this split computes or writes the input
+        // only results of earlier splits, the copy callback of this split runs later and can write other tensors (e.g. the MoE cache)
         const struct ggml_tensor * base = input->view_src ? input->view_src : input;
+        if (base->buffer == NULL || ggml_backend_buffer_get_usage(base->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+            continue;
+        }
+
+        // not if this split computes or writes the input
         bool written = false;
         for (int j = 0; j < split->graph.n_nodes && !written; j++) {
             const struct ggml_tensor * node = split->graph.nodes[j];
