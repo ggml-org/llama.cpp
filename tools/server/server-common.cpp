@@ -87,7 +87,7 @@ std::filesystem::path get_server_exec_path() {
     if (result == -1) {
         throw std::runtime_error("failed to determine execpath");
     }
-    return std::filesystem::path(std::string(path, strlen(path)));
+    return std::filesystem::path(path);
 #else
     char path[FILENAME_MAX];
     ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
