@@ -267,7 +267,7 @@ static bool server_setup_features(
         warn_names.push_back("peer-to-peer tunnel (llama-connect, experimental)");
     }
 
-    // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    // CORS proxy (EXPERIMENTAL, only used by Llama Chat for MCP)
     if (params.ui_mcp_proxy) {
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));

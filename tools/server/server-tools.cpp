@@ -1076,7 +1076,7 @@ struct server_tool_file_glob_search : server_tool {
         }
 
         // `base` is always absolute (resolve falls back to the server cwd), so
-        // API clients (e.g. the web UI picker) can join the relative entries
+        // API clients (e.g. the Llama Chat picker) can join the relative entries
         // into absolute paths. `plain_text_response` is what the model sees;
         // `entries` is the same data as structured JSON for the UI picker,
         // which reads `entries`/`base` instead of re-parsing the text.
@@ -1953,7 +1953,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     // IMPORTANT: for contributors, please keep this array of tools as minimal as possible
     //            we only accept minimal i/o and shell command tools here
     //            for example, do not add: web search, get date time, etc.
-    //            high-level functionality should be added either via MCP or web UI
+    //            high-level functionality should be added either via MCP or Llama Chat
     std::vector<std::unique_ptr<server_tool>> tools;
     tools.push_back(std::make_unique<server_tool_read_file>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());

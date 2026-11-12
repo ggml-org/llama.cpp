@@ -479,7 +479,7 @@ bool server_http_context::init_listener(const common_params & params) {
     };
 
     //
-    // Web UI setup
+    // Llama Chat setup
     //
 
     // Use new `params.ui` field (backed by old `params.webui` for compat)
