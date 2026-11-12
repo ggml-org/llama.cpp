@@ -148,7 +148,7 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 - See [Known Limitations](#known-limitations) for context on observed failures.
 
 <details open>
-<summary><b>Validated models</b> (35)</summary>
+<summary><b>Validated models</b></summary>
 
 | Model | CPU | GPU | NPU |
 | :--- | :---: | :---: | :---: |
@@ -193,6 +193,8 @@ Although, the validated models below were tested with `llama-cli` using the `Q4_
 | [bartowski/tencent_Hunyuan-7B-Instruct-Q4_K_M](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 | [LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-Q4_K_M](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 | [bartowski/prism-ml_Bonsai-8B-unpacked-Q4_K_M](https://huggingface.co/bartowski/prism-ml_Bonsai-8B-unpacked-GGUF) | ✓ | ✓ | ✓ |
+| [LiquidAI/LFM2.5-2.6B-Q4_K_M](https://huggingface.co/LiquidAI/LFM2.5-2.6B-GGUF) | ✓ | ✓ | ✗ |
+| [bartowski/inclusionAI_Ling-mini-2.0-Q4_K_M](https://huggingface.co/bartowski/inclusionAI_Ling-mini-2.0-GGUF) | ✓ | ✓ | ✗ |
 |  |  |  |  |
 | [Qwen/Qwen3-Embedding-0.6B-Q8_0](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) | ✓ | ✓ | ✗ |
 
