@@ -27,6 +27,10 @@ ui/
 Each folder is its own npm package with its own `package-lock.json`: run `npm ci` in the one you work on. Building,
 checking and testing `apps/chat` needs no install in `lib/ui`, `lib/voice` or `lib/harness`.
 
+The split between library and app is not finished. Llama Chat takes its tokens, fonts, surfaces and base components
+from `lib/ui`, but still has its own versions of what the library holds above those (ActionIcon, SearchInput, Logo,
+SyntaxHighlightedCode and the Model UI), and `DESIGN.md`, `BRAND.md` and the full Storybook still sit beside the app.
+
 ## Releases
 
 The npm packages are versioned by hand, with semver, and published by CI:
