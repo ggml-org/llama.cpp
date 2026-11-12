@@ -160,6 +160,12 @@ bool server_service::init(const common_params & params,
     sock = params.service_sock;
     host = params.hostnames.empty() ? "" : params.hostnames[0];
 
+    // httplib reports a socket path that does not fit in sockaddr_un as a failed bind
+    if (sock.size() > sizeof(sockaddr_un::sun_path)) {
+        SRV_ERR("service socket path is %zu bytes, the limit is %zu: %s\n", sock.size(), sizeof(sockaddr_un::sun_path), sock.c_str());
+        return false;
+    }
+
     // the mutex makes this process the only service of the config directory before anything binds
     mutex = std::make_unique<common_file_lock>(server_service_mutex_path().string());
     if (!mutex->acquire([]() { return false; })) {

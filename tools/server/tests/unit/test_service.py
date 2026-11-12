@@ -76,7 +76,7 @@ def test_service_status_and_lock():
         lock = json.load(f)
     assert lock["pid"] == server.process.pid
     assert lock["port"] == server.server_port
-    assert lock["sock"] == server.service_sock
+    assert lock["sock"] == os.path.abspath(server.service_sock)
     assert "--service-sock" in lock["args"]
 
     # the service routes are not on the TCP port
