@@ -19,6 +19,11 @@ const config: StorybookConfig = {
 		config.server = config.server || {};
 		config.server.fs = config.server.fs || {};
 		config.server.fs.allow = [...(config.server.fs.allow || []), resolve(__dirname, '../tests')];
+		// the brand files the stories offer to download stay files: Vite inlines one under 4 KB as a data: URL,
+		// which a download link does not reliably save, and which can navigate the story's frame away instead
+		config.build = config.build || {};
+		config.build.assetsInlineLimit = (file) =>
+			file.includes('/tests/stories/brand/assets/files/') ? false : undefined;
 		return config;
 	}
 };
