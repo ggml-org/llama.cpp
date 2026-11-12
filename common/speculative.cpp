@@ -10,8 +10,6 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 
-#include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
-
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -1650,9 +1648,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         // shared memory and chained heads keep the host rows
         if (!is_mem_shared && !chain_heads) {
-            dev_rows = llama_set_embeddings_nextn_dev(ctx_tgt, true) && llama_set_embd_state_src(ctx_dft, ctx_tgt);
+            dev_rows = llama_set_embeddings_nextn_dev(ctx_tgt, true) && llama_set_ctx_state_src(ctx_dft, ctx_tgt);
             if (!dev_rows) {
-                llama_set_embd_state_src(ctx_dft, nullptr);
+                llama_set_ctx_state_src(ctx_dft, nullptr);
                 llama_set_embeddings_nextn_dev(ctx_tgt, false);
             }
         }
@@ -1662,7 +1660,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     ~common_speculative_impl_draft_mtp() override {
         auto * ctx_dft = this->params.ctx_dft;
         if (dev_rows) {
-            llama_set_embd_state_src(ctx_dft, nullptr);
+            llama_set_ctx_state_src(ctx_dft, nullptr);
             llama_set_embeddings_nextn_dev(this->params.ctx_tgt, false);
         }
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
