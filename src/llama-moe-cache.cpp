@@ -4,10 +4,10 @@
 #include "llama-impl.h"
 #include "llama-memory.h"
 #include "llama-model.h"
+#include "llama-moe-cpu-misses.h"
 
 #include "ggml-cpp.h"
 #include "ggml-cpu.h"
-#include "ggml-moe-cpu-misses.h"
 
 #include <algorithm>
 #include <array>
@@ -38,6 +38,8 @@ namespace {
 struct moe_cache_lru {
     static constexpr int   n_class  = 8; // floor(log2(1/(1 - 2^(-1/crf_half_life)))) = 7, class of CRF_max for half-life of 128
     static constexpr float crf_half_life = 128.0f; // tokens
+    // the devices take the decay as 0 from this many tokens on: 2^-64 times a CRF below 2^n_class does not change the CRF + 1 of the host
+    static constexpr int   n_decay  = 8192;
 
     int32_t n_expert = 0;
     int32_t n_slots  = 0;
@@ -146,17 +148,17 @@ struct moe_cache_lru {
         last_use[key] = clock[il];
     }
 
-    // decay() for d < GGML_MOE_CPU_N_DECAY, then the least CRF of each class, see ggml_moe_cpu_layer::decay
+    // decay() for d < n_decay, then the least CRF of each class, see ggml_moe_cpu_layer::decay
     // a device reads them instead of computing exp2 and log2, its functions round differently
     static std::vector<float> device_tables() {
-        std::vector<float> res(GGML_MOE_CPU_N_DECAY + n_class);
-        for (int d = 0; d < GGML_MOE_CPU_N_DECAY; ++d) {
+        std::vector<float> res(n_decay + n_class);
+        for (int d = 0; d < n_decay; ++d) {
             res[d] = decay(d);
         }
         // log2 rounds up to c for some CRF below 2^c, so search for the least CRF of class c among the floats in [1, 2^n_class]
         auto bits  = [](float x)    { uint32_t u; memcpy(&u, &x, sizeof(u)); return u; };
         auto value = [](uint32_t u) { float x;    memcpy(&x, &u, sizeof(x)); return x; };
-        res[GGML_MOE_CPU_N_DECAY] = 0.0f;
+        res[n_decay] = 0.0f;
         for (int c = 1; c < n_class; ++c) {
             uint32_t lo = bits(1.0f); // class < c
             uint32_t hi = bits(std::ldexp(1.0f, n_class)); // class >= c
@@ -164,10 +166,10 @@ struct moe_cache_lru {
                 const uint32_t mid = lo + (hi - lo)/2;
                 (class_of_crf(value(mid)) >= c ? hi : lo) = mid;
             }
-            res[GGML_MOE_CPU_N_DECAY + c] = value(hi);
+            res[n_decay + c] = value(hi);
         }
-        // the decay after GGML_MOE_CPU_N_DECAY tokens is 0 for the device
-        GGML_ASSERT(std::fma(std::ldexp(1.0f, n_class), decay(GGML_MOE_CPU_N_DECAY), 1.0f) == 1.0f);
+        // the decay after n_decay tokens is 0 for the device
+        GGML_ASSERT(std::fma(std::ldexp(1.0f, n_class), decay(n_decay), 1.0f) == 1.0f);
         return res;
     }
 
@@ -385,9 +387,8 @@ struct moe_cache_lru {
     }
 };
 
-// the device runs the same ClassLRU, see ggml_moe_cpu_layer::lru
-static_assert(moe_cache_lru::n_class == GGML_MOE_CPU_N_CLASS, "n_class mismatch");
-static_assert(moe_cache_lru::crf_half_life == GGML_MOE_CPU_CRF_HALF_LIFE, "crf_half_life mismatch");
+// the device runs the same ClassLRU, see ggml_moe_cpu_layer::lru, a lane of a warp searches each list
+static_assert(moe_cache_lru::n_class <= 32, "n_class must fit in a warp");
 
 // gate, up, down or gate_up, down
 static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer) {
@@ -550,7 +551,7 @@ struct llama_moe_cache::impl {
     // LLAMA_MOE_CACHE_TRACE: the selected experts of each slot lookup, for a simulator of the cache
     FILE * trace = nullptr;
 
-    // batches of up to max_single tokens compute the misses within the graph, see ggml-moe-cpu-misses.h
+    // batches of up to max_single tokens compute the misses within the graph, see llama-moe-cpu-misses.h
     struct single_graph {
         const ggml_moe_cpu_misses_api * api = nullptr;
         int32_t id = -1; // device
@@ -778,7 +779,7 @@ struct llama_moe_cache::impl {
         if (single_ok && single_id >= 0) {
             ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(devices[single_id].backend));
             auto get_api = (ggml_moe_cpu_misses_get_api_t) ggml_backend_reg_get_proc_address(reg, "ggml_moe_cpu_misses_get_api");
-            sg.api = get_api ? get_api() : nullptr;
+            sg.api = get_api ? get_api(GGML_MOE_CPU_MISSES_VERSION) : nullptr;
         }
         if (sg.api != nullptr) {
             // the device caches the misses itself if it can read the host experts, otherwise the CPU computes all the misses
@@ -849,7 +850,7 @@ struct llama_moe_cache::impl {
             sg.crf      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_expert, layers.size());
             sg.last_use = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert, layers.size());
             sg.clock    = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, layers.size());
-            sg.decay    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, GGML_MOE_CPU_N_DECAY + moe_cache_lru::n_class);
+            sg.decay    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, moe_cache_lru::n_decay + moe_cache_lru::n_class);
             ggml_set_name(sg.maps,     "moe_cache.maps");
             ggml_set_name(sg.state,    "moe_cache.state");
             ggml_set_name(sg.carry,    "moe_cache.carry");
@@ -1048,6 +1049,8 @@ struct llama_moe_cache::impl {
                 p.share_q   = cpu_share_q;
                 p.carry_log = (uint32_t *) (dev + off_carry);
                 p.slots_log = (int32_t  *) (dev + off_slots) + il*n_expert_used*max_single;
+                p.n_class   = moe_cache_lru::n_class;
+                p.n_decay   = moe_cache_lru::n_decay;
                 p.n_slots   = g.n_slots;
                 p.n_zero    = n_zero;
                 p.n_expert  = sg.maps->ne[0];
@@ -1247,7 +1250,7 @@ struct llama_moe_cache::impl {
         return true;
     }
 
-    // batches of up to 8 tokens compute the misses within the graph, without slot lookups (see ggml-moe-cpu-misses.h):
+    // batches of up to 8 tokens compute the misses within the graph, without slot lookups (see llama-moe-cpu-misses.h):
     // the device looks up the slots, the CPU computes a share of the misses, and the other misses are cached by the device or between the graphs
     // can_cpu_part: the graph can compute the misses of layer il on the CPU
     bool single(int32_t il, int64_t n_tokens, bool can_cpu_part) const {

@@ -68,7 +68,7 @@ public:
 
     // 1. the lookup of the selected experts in the cache, built after the expert input cur and before the expert matmuls
     //    returns no slots if the layer does not read its experts from the cache for this ubatch
-    //    ubatches of up to 8 tokens compute the misses within the graph, without slot lookups (see ggml-moe-cpu-misses.h):
+    //    ubatches of up to 8 tokens compute the misses within the graph, without slot lookups (see llama-moe-cpu-misses.h):
     //    the device looks up the slots, the CPU computes a share of the misses, and the other misses are cached by the device or between the graphs
     llama_moe_cache_lookup build_lookup(const llm_graph_context & g, const llama_moe_cache_layer & layer, ggml_tensor * cur, ggml_tensor * selected_experts) const;
 

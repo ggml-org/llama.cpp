@@ -2,6 +2,9 @@
 
 #include "ggml-backend.h"
 
+// the MoE cache ops of a backend, obtained with ggml_backend_reg_get_proc_address(reg, "ggml_moe_cpu_misses_get_api")
+// a copy of the definitions in ggml/src/ggml-cuda/moe-cpu-misses.cuh: keep the two the same and bump GGML_MOE_CPU_MISSES_VERSION on a change
+
 // the MoE cache computes the experts that are not in the cache within one graph, with the publish, join and merge ops below
 // the publish op writes the input and the CPU experts of a layer to mapped host memory, then bumps the request counter
 // a CPU thread computes these experts, writes the result and sets the completed counter
@@ -11,17 +14,14 @@
 // each takes the next victim slot and is copied there from host memory, the host replays the slots given to the selected experts after the graph
 // without a CPU share there are no CPU misses and no merge op
 
+// the version of these definitions, the backend returns NULL from get_api for another version
+#define GGML_MOE_CPU_MISSES_VERSION 1
+
 #define GGML_MOE_CPU_OK      0
 #define GGML_MOE_CPU_STOP    1 // set by the host, the device does not wait for the CPU
 #define GGML_MOE_CPU_TIMEOUT 2 // set by the device, the CPU did not answer in time
 
 #define GGML_MOE_CPU_MAX_BANKS 4
-
-// the ClassLRU of the MoE cache: lists of the frequency classes and the half-life of the CRF in tokens
-#define GGML_MOE_CPU_N_CLASS        8
-#define GGML_MOE_CPU_CRF_HALF_LIFE  128.0f
-// the decay of the CRF is 0 from this many tokens on: 2^-64 times a CRF below 2^8 does not change the CRF + 1 of the host
-#define GGML_MOE_CPU_N_DECAY        8192
 
 // the counters are on separate cache lines
 struct ggml_moe_cpu_request {
@@ -56,11 +56,13 @@ struct ggml_moe_cpu_layer {
     float *      crf;       // [n_expert, n_layer]
     int32_t *    last_use;  // [n_expert, n_layer] clock of the layer at the last use
     int32_t *    clock;     // [n_layer] tokens seen by each layer
-    const float * decay;    // [GGML_MOE_CPU_N_DECAY] decay of the CRF after d tokens, then [GGML_MOE_CPU_N_CLASS] least CRF of each class, computed by the host
+    const float * decay;    // [n_decay] decay of the CRF after d tokens, then [n_class] least CRF of each class, computed by the host
     uint32_t *   carry;     // [n_layer] fraction of a CPU miss carried over by each layer, as in the host plan
     uint32_t *   carry_log; // a copy in host memory
     int32_t *    slots_log; // [n_used, n_tokens] slots given to the selected experts, in host memory
     uint32_t     share_q;   // share of the misses computed on the CPU once the cache is full, in 1/65536
+    int32_t      n_class;   // frequency classes of the ClassLRU, at most 32 (a lane of a warp searches each list)
+    int32_t      n_decay;   // the decay of the CRF is 0 from n_decay tokens on
     int32_t      n_slots;
     int32_t      n_zero;    // zero slots, 0 without a CPU share
     int32_t      n_expert;  // row size of maps
@@ -110,4 +112,5 @@ struct ggml_moe_cpu_misses_api {
     ggml_custom_op_t merge;
 };
 
-typedef const struct ggml_moe_cpu_misses_api * (*ggml_moe_cpu_misses_get_api_t)(void);
+// version: GGML_MOE_CPU_MISSES_VERSION of the caller, NULL if the backend has another version
+typedef const struct ggml_moe_cpu_misses_api * (*ggml_moe_cpu_misses_get_api_t)(int version);

@@ -144,6 +144,8 @@ struct moe_cpu_misses_lru {
     int32_t * clock;    // [n_layer]
     const float * decay;
     int32_t   n_expert;
+    int32_t   n_class;
+    int32_t   n_decay;
 };
 
 // the lists in p.lru, see ggml_moe_cpu_layer::lru
@@ -155,21 +157,23 @@ static __device__ moe_cpu_misses_lru moe_cpu_misses_lru_of(const ggml_moe_cpu_la
     l.next     = l.prev    + S;
     l.list_of  = l.next    + S;
     l.head     = l.list_of + S;
-    l.tail     = l.head    + GGML_MOE_CPU_N_CLASS;
-    l.n_filled = l.tail    + GGML_MOE_CPU_N_CLASS;
+    l.tail     = l.head    + p.n_class;
+    l.n_filled = l.tail    + p.n_class;
     l.crf      = p.crf;
     l.last_use = p.last_use;
     l.clock    = p.clock;
     l.decay    = p.decay;
     l.n_expert = p.n_expert;
+    l.n_class  = p.n_class;
+    l.n_decay  = p.n_decay;
     return l;
 }
 
 // the class of a CRF, with the class bounds of the host
 static __device__ int moe_cpu_misses_lru_class(const moe_cpu_misses_lru & l, const float crf) {
     int c = 0;
-    for (int i = 1; i < GGML_MOE_CPU_N_CLASS; ++i) {
-        c += crf >= l.decay[GGML_MOE_CPU_N_DECAY + i];
+    for (int i = 1; i < l.n_class; ++i) {
+        c += crf >= l.decay[l.n_decay + i];
     }
     return c;
 }
@@ -203,7 +207,7 @@ static __device__ void moe_cpu_misses_lru_move(const moe_cpu_misses_lru & l, con
 // update the CRF of a key and return its class, with the decay and the class bounds of the host: exp2 and log2 of the device round differently
 static __device__ int moe_cpu_misses_lru_use(const moe_cpu_misses_lru & l, const int il, const int32_t key) {
     const int32_t d   = l.clock[il] - l.last_use[key];
-    const float   crf = fmaf(l.crf[key], d < GGML_MOE_CPU_N_DECAY ? l.decay[d] : 0.0f, 1.0f);
+    const float   crf = fmaf(l.crf[key], d < l.n_decay ? l.decay[d] : 0.0f, 1.0f);
     l.crf[key]      = crf;
     l.last_use[key] = l.clock[il];
     return moe_cpu_misses_lru_class(l, crf);
@@ -215,7 +219,7 @@ static __device__ int32_t moe_cpu_misses_lru_victim(const moe_cpu_misses_lru & l
     int32_t s     = -1;
     int64_t score = -1; // no candidate
     bool    empty = false;
-    if (lane < GGML_MOE_CPU_N_CLASS) {
+    if (lane < l.n_class) {
         for (s = l.head[lane]; s >= 0; s = l.next[s]) {
             const int32_t key = l.key_of[s];
             if (key < 0 || key / l.n_expert != il || s_res[key % l.n_expert] == -2) {
@@ -227,7 +231,7 @@ static __device__ int32_t moe_cpu_misses_lru_victim(const moe_cpu_misses_lru & l
             empty = key < 0;
             if (!empty) {
                 // age/2^class of the host, times 2^(n_class - 1)
-                score = (int64_t) (l.clock[key / l.n_expert] - l.last_use[key]) << (GGML_MOE_CPU_N_CLASS - 1 - lane);
+                score = (int64_t) (l.clock[key / l.n_expert] - l.last_use[key]) << (l.n_class - 1 - lane);
             }
         }
     }
@@ -277,7 +281,7 @@ static __global__ void moe_cpu_misses_publish_dev(
     int32_t * hit  = miss + 1 + 2*p.n_ids_max; // count, n_tokens, (expert, slot) pairs, see moe_cpu_misses_book
 
     // the kernels between two layers evict the lists from the caches, load them in parallel before the serial updates
-    for (int i = 32*threadIdx.x; i < 4*S + 2*GGML_MOE_CPU_N_CLASS + 1; i += 32*blockDim.x) {
+    for (int i = 32*threadIdx.x; i < 4*S + 2*p.n_class + 1; i += 32*blockDim.x) {
         asm volatile("prefetch.global.L1 [%0];" :: "l"(l.key_of + i));
     }
 
@@ -509,7 +513,7 @@ static __global__ void moe_cpu_misses_book(const ggml_moe_cpu_layer p) {
 // copy the misses of the layer from host memory to their slots, blockIdx.y is the bank
 static __global__ void moe_cpu_misses_copy(const ggml_moe_cpu_layer p) {
 #ifdef GGML_CUDA_MOE_CPU_MISSES_AVAILABLE
-    const int32_t * miss = p.lru + 4*p.n_slots + 2*GGML_MOE_CPU_N_CLASS + 1;
+    const int32_t * miss = p.lru + 4*p.n_slots + 2*p.n_class + 1;
     const int n_miss = miss[0];
 
     const int     ib   = blockIdx.y;
@@ -738,8 +742,11 @@ static void moe_cpu_misses_free(void * host) {
     }
 }
 
-const ggml_moe_cpu_misses_api * ggml_cuda_moe_cpu_misses_get_api() {
+const ggml_moe_cpu_misses_api * ggml_cuda_moe_cpu_misses_get_api(int version) {
 #ifdef GGML_CUDA_MOE_CPU_MISSES_AVAILABLE
+    if (version != GGML_MOE_CPU_MISSES_VERSION) {
+        return nullptr;
+    }
     static const ggml_moe_cpu_misses_api api = {
         /*.alloc         =*/ moe_cpu_misses_alloc,
         /*.free          =*/ moe_cpu_misses_free,
