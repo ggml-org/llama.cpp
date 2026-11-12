@@ -1149,7 +1149,7 @@ struct common_batch {
     // attach a state embedding (e.g. the target hidden state for MTP) to the entry at idx, can only be set once per entry
     bool set_embd_state(int32_t idx, llama_embd state);
 
-    // the state of entry idx is row `row` of the h_nextn device buffer of the state source context, see llama_set_embd_state_src()
+    // the state of entry idx is row `row` of the h_nextn device buffer of the state source context, see llama_set_ctx_state_src()
     bool set_embd_state_row(int32_t idx, int32_t row);
 
     // add an embedding-only entry (no token id)
