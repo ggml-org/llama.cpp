@@ -104,6 +104,7 @@ public:
                     ggml_type   type_v,
                          bool   v_trans,
                          bool   offload,
+                         bool   lazy,
                          bool   unified,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
@@ -230,7 +231,8 @@ public:
     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
-    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+    // false if the memory for its cells ran out
+    bool apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
     //
     // input API

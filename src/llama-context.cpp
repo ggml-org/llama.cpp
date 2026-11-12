@@ -559,7 +559,8 @@ llama_context::llama_context(
                 // use the host buffer of the first device CPU for faster transfer of the intermediate state
                 const auto & dev = model.devices[0];
                 auto * host_buft = ggml_backend_dev_host_buffer_type(dev.dev);
-                if (host_buft) {
+                // a device with lazy buffers keeps the inputs in pageable memory, which is only taken as it is written
+                if (host_buft && !ggml_backend_dev_lazy_buffer_type(dev.dev)) {
                     buft = host_buft;
                 }
             }
@@ -775,6 +776,18 @@ void llama_context::sched_new(const sched_params & params) {
         LLAMA_LOG_DEBUG("%s: reusing scheduler: max_nodes = %zu (current max_nodes = %zu)\n",
                 __func__, params.max_nodes, sched_params_cur.max_nodes);
         return;
+    }
+
+    // the compute buffers take memory as the graph uses it when the device can, as the KV cache does
+    // the CPU keeps the buffer type chosen above: its compute buffer already takes memory as it is written
+    for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend_ptrs[i]);
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            continue;
+        }
+        if (auto * lazy = ggml_backend_dev_lazy_buffer_type(dev)) {
+            backend_buft[i] = lazy;
+        }
     }
 
     sched.reset(ggml_backend_sched_new(

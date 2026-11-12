@@ -81,10 +81,10 @@ int main() {
         for (ggml_type type_k : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
             for (ggml_type type_v : { GGML_TYPE_F16, GGML_TYPE_F8_E4M3 }) {
                 llama_kv_cache source(*target, false, target->hparams, type_k, type_v,
-                        false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
+                        false, false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr,
                         [](uint32_t il) { return il == 0 ? 2 : -1; }, nullptr);
                 llama_kv_cache shared(*assistant, false, assistant->hparams, type_k, type_v,
-                        false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
+                        false, false, false, true, 32, 1, 0, LLAMA_SWA_TYPE_NONE, &source, nullptr, nullptr,
                         [](int32_t il) { return il == 0 ? 2 : 1; });
 
                 GGML_ASSERT(source.get_k_scale(2) == (type_k == GGML_TYPE_F8_E4M3 ? target->layers[2].k_cache_s : nullptr));

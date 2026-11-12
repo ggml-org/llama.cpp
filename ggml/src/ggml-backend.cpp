@@ -766,6 +766,21 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     buf->iface.memset_tensor(buf, tensor, value, offset, size);
 }
 
+bool ggml_backend_tensor_commit(const struct ggml_tensor * tensor, size_t offset, size_t size) {
+    GGML_ASSERT(tensor);
+    ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+
+    if (size == 0) {
+        return true;
+    }
+
+    GGML_ASSERT(buf != NULL && "tensor buffer not set");
+    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
+
+    return buf->iface.commit_tensor == NULL || buf->iface.commit_tensor(buf, tensor, offset, size);
+}
+
 void ggml_backend_synchronize(ggml_backend_t backend) {
     GGML_ASSERT(backend);
     if (backend->iface.synchronize == NULL) {
@@ -1023,6 +1038,15 @@ ggml_backend_buffer_type_t ggml_backend_dev_host_buffer_type(ggml_backend_dev_t 
     return device->iface.get_host_buffer_type(device);
 }
 
+ggml_backend_buffer_type_t ggml_backend_dev_lazy_buffer_type(ggml_backend_dev_t device) {
+    GGML_ASSERT(device);
+    if (device->iface.get_lazy_buffer_type == NULL) {
+        return NULL;
+    }
+
+    return device->iface.get_lazy_buffer_type(device);
+}
+
 ggml_backend_buffer_t ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size, size_t max_tensor_size) {
     GGML_ASSERT(device);
     return device->iface.buffer_from_host_ptr(device, ptr, size, max_tensor_size);
@@ -1113,6 +1137,7 @@ static const struct ggml_backend_buffer_i ggml_backend_multi_buffer_i = {
     /* .set_tensor_n    = */ NULL,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers) {
@@ -2884,6 +2909,7 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_i = {
     /* .set_tensor_n    = */ NULL,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
@@ -2901,6 +2927,7 @@ static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_from_ptr_i = {
     /* .set_tensor_n    = */ NULL,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 // CPU backend buffer type

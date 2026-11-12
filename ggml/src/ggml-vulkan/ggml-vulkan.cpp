@@ -4986,6 +4986,15 @@ vk_device ggml_vk_get_device(size_t idx) {
             /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name, device },
         };
 
+        device->lazy_block = ggml_vk_lazy_block(device);
+        if (device->lazy_block) {
+            device->lazy_buffer_type = {
+                /* .iface    = */ ggml_backend_vk_buffer_type_interface,
+                /* .device   = */ device->buffer_type.device,
+                /* .context  = */ new ggml_backend_vk_buffer_type_context{ device->name + "_Lazy", device, true },
+            };
+        }
+
         device->idx = idx;
 
         device->serialize_submissions = getenv("GGML_VK_SERIALIZE_SUBMISSIONS") != nullptr;
@@ -13411,7 +13420,7 @@ ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buff
 
     vk_buffer dev_buffer = nullptr;
     try {
-        dev_buffer = ggml_vk_create_buffer_device(ctx->device, size);
+        dev_buffer = ctx->lazy ? ggml_vk_create_buffer_lazy(ctx->device, size) : ggml_vk_create_buffer_device(ctx->device, size);
     } catch (const vk::SystemError& e) {
         return nullptr;
     }
@@ -13535,11 +13544,18 @@ static ggml_backend_buffer_type_t ggml_backend_vk_get_default_buffer_type(ggml_b
     return &ctx->device->buffer_type;
 }
 
+// the device's own buffer types, eager or lazy
+static bool ggml_backend_vk_is_device_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+
+    return buft == ggml_backend_vk_get_default_buffer_type(backend) || buft == &ctx->device->lazy_buffer_type;
+}
+
 static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset,
                                                 size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     VK_LOG_DEBUG("ggml_backend_vk_set_tensor_2d_async(" << size << ", " << n_copies << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
-    GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
+    GGML_ASSERT((ggml_backend_vk_is_device_buft(backend, tensor->buffer->buft) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
 
     if (size == 0) {
         return;
@@ -13602,7 +13618,7 @@ static void ggml_backend_vk_get_tensor_2d_async(ggml_backend_t backend, const gg
                                                 size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data) {
     VK_LOG_DEBUG("ggml_backend_vk_get_tensor_2d_async(" << size << ", " << n_copies << ")");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
-    GGML_ASSERT((tensor->buffer->buft == ggml_backend_vk_get_default_buffer_type(backend) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
+    GGML_ASSERT((ggml_backend_vk_is_device_buft(backend, tensor->buffer->buft) || tensor->buffer->buft == ggml_backend_vk_host_buffer_type()) && "unsupported buffer type");
 
     if (size == 0) {
         return;
@@ -13663,7 +13679,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
         return true;
     }
 
-    if (dst->buffer->buft != ggml_backend_vk_get_default_buffer_type(backend_dst)) {
+    if (!ggml_backend_vk_is_device_buft(backend_dst, dst->buffer->buft)) {
         return false;
     }
 
@@ -15673,6 +15689,12 @@ static ggml_backend_buffer_type_t ggml_backend_vk_device_get_host_buffer_type(gg
     return ggml_backend_vk_host_buffer_type();
 }
 
+static ggml_backend_buffer_type_t ggml_backend_vk_device_get_lazy_buffer_type(ggml_backend_dev_t dev) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    vk_device device = ggml_vk_get_device(ctx->device);
+    return device->lazy_block ? &device->lazy_buffer_type : nullptr;
+}
+
 static enum ggml_backend_dev_type ggml_backend_vk_device_get_type(ggml_backend_dev_t dev) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
 
@@ -16497,6 +16519,7 @@ static const struct ggml_backend_device_i ggml_backend_vk_device_i = {
     /* .event_new            = */ ggml_backend_vk_device_event_new,
     /* .event_free           = */ ggml_backend_vk_device_event_free,
     /* .event_synchronize    = */ ggml_backend_vk_device_event_synchronize,
+    /* .get_lazy_buffer_type = */ ggml_backend_vk_device_get_lazy_buffer_type,
 };
 
 static const char * ggml_backend_vk_reg_get_name(ggml_backend_reg_t reg) {

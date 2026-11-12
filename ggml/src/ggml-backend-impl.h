@@ -76,6 +76,8 @@ extern "C" {
         void         (*get_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor * const * tensors,       void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
         // (optional) batched tensor copies: returns true if all copies were performed, false if unsupported and no copies were performed
         bool         (*cpy_tensor_n) (ggml_backend_buffer_t buffer, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors);
+        // (optional) lazy buffers: make size bytes of the tensor writable from offset, false if memory ran out
+        bool         (*commit_tensor)(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, size_t offset, size_t size);
     };
 
     struct ggml_backend_buffer {
@@ -224,6 +226,9 @@ extern "C" {
         ggml_backend_event_t (*event_new)         (ggml_backend_dev_t dev);
         void                 (*event_free)        (ggml_backend_dev_t dev, ggml_backend_event_t event);
         void                 (*event_synchronize) (ggml_backend_dev_t dev, ggml_backend_event_t event);
+
+        // (optional) buffer type whose memory is committed on demand, see ggml_backend_tensor_commit
+        ggml_backend_buffer_type_t (*get_lazy_buffer_type)(ggml_backend_dev_t dev);
     };
 
     struct ggml_backend_device {

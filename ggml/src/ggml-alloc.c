@@ -994,6 +994,55 @@ static void ggml_gallocr_init_tensor(ggml_gallocr_t galloc, struct ggml_tensor *
     }
 }
 
+// a lazy buffer takes memory per tensor and can refuse it: own tensors are placed and committed before anything else, so that
+// a refusal can take them all back and the graph is left as before, with no tensor placed for the scheduler to plan around
+static bool ggml_gallocr_has_lazy(ggml_gallocr_t galloc) {
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(galloc->bufts[i]);
+        if (dev != NULL && ggml_backend_dev_lazy_buffer_type(dev) == galloc->bufts[i]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool ggml_gallocr_place_own(ggml_gallocr_t galloc, struct ggml_tensor * tensor, struct tensor_alloc * tensor_alloc, bool undo) {
+    if (tensor->view_src != NULL || tensor_alloc->buffer_id < 0) {
+        return true;
+    }
+    struct vbuffer * buf = galloc->buffers[tensor_alloc->buffer_id];
+    if (undo) {
+        if (tensor->buffer != NULL && tensor->buffer == buf->chunks[tensor_alloc->addr.chunk]) {
+            tensor->data   = NULL;
+            tensor->buffer = NULL;
+        }
+        return true;
+    }
+    if (tensor->data != NULL) {
+        return true;
+    }
+    ggml_vbuffer_tensor_alloc(buf, tensor, tensor_alloc->addr);
+    return ggml_backend_tensor_commit(tensor, 0, ggml_nbytes(tensor));
+}
+
+static bool ggml_gallocr_place_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph, bool undo) {
+    bool ok = true;
+    for (int i = 0; ok && i < graph->n_leafs; i++) {
+        ok = ggml_gallocr_place_own(galloc, graph->leafs[i], &galloc->leaf_allocs[i].leaf, undo);
+    }
+    for (int i = 0; ok && i < graph->n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+        struct node_alloc * node_alloc = &galloc->node_allocs[i];
+        for (int j = 0; ok && j < GGML_MAX_SRC; j++) {
+            if (node->src[j] != NULL) {
+                ok = ggml_gallocr_place_own(galloc, node->src[j], &node_alloc->src[j], undo);
+            }
+        }
+        ok = ok && ggml_gallocr_place_own(galloc, node, &node_alloc->dst, undo);
+    }
+    return ok;
+}
+
 static bool ggml_gallocr_node_needs_realloc(ggml_gallocr_t galloc, struct ggml_tensor * node, struct tensor_alloc * talloc) {
     size_t node_size = 0;
     if (!node->data && !node->view_src) {
@@ -1071,6 +1120,11 @@ bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph)
         if (galloc->buffers[i] != NULL) {
             ggml_vbuffer_reset(galloc->buffers[i]);
         }
+    }
+
+    if (ggml_gallocr_has_lazy(galloc) && !ggml_gallocr_place_graph(galloc, graph, false)) {
+        ggml_gallocr_place_graph(galloc, graph, true);
+        return false;
     }
 
     // allocate the graph tensors from the previous assignments

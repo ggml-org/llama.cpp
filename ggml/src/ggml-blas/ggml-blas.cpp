@@ -471,6 +471,7 @@ static const struct ggml_backend_device_i ggml_backend_blas_device_i = {
     /* .event_new            = */ NULL,
     /* .event_free           = */ NULL,
     /* .event_synchronize    = */ NULL,
+    /* .get_lazy_buffer_type = */ NULL,
 };
 
 // backend reg interface

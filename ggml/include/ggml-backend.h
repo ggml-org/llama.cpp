@@ -99,6 +99,8 @@ extern "C" {
     GGML_API void ggml_backend_tensor_set_n (      struct ggml_tensor * const * tensors, const void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
     GGML_API void ggml_backend_tensor_get_n (const struct ggml_tensor * const * tensors,       void * data, const size_t * offsets, const size_t * sizes, const size_t * data_offsets, size_t n_tensors);
     GGML_API void ggml_backend_tensor_memset(      struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
+    // make [offset, offset + size) of the tensor writable, false if out of memory, no-op for other buffers
+    GGML_API bool ggml_backend_tensor_commit(const struct ggml_tensor * tensor, size_t offset, size_t size);
 
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
 
@@ -192,6 +194,9 @@ extern "C" {
     GGML_API ggml_backend_t                ggml_backend_dev_init(ggml_backend_dev_t device, const char * params);
     GGML_API ggml_backend_buffer_type_t    ggml_backend_dev_buffer_type(ggml_backend_dev_t device);
     GGML_API ggml_backend_buffer_type_t    ggml_backend_dev_host_buffer_type(ggml_backend_dev_t device);
+    // buffer type with memory committed on demand, NULL if the device has none. Uncommitted bytes read as zero.
+    // host writes and copies commit their own range, a range that a graph op writes must be committed first with ggml_backend_tensor_commit
+    GGML_API ggml_backend_buffer_type_t    ggml_backend_dev_lazy_buffer_type(ggml_backend_dev_t device);
     GGML_API ggml_backend_buffer_t         ggml_backend_dev_buffer_from_host_ptr(ggml_backend_dev_t device, void * ptr, size_t size, size_t max_tensor_size);
 
     GGML_API bool                          ggml_backend_dev_supports_op(ggml_backend_dev_t device, const struct ggml_tensor * op);

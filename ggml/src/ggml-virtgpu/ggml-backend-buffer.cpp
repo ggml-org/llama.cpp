@@ -109,6 +109,7 @@ const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
     /* .set_tensor_n    = */ NULL,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 const ggml_backend_buffer_i ggml_backend_remoting_buffer_from_ptr_interface = {
@@ -126,4 +127,5 @@ const ggml_backend_buffer_i ggml_backend_remoting_buffer_from_ptr_interface = {
     /* .set_tensor_n    = */ NULL,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };

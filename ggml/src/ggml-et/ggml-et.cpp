@@ -376,6 +376,7 @@ static const struct ggml_backend_buffer_i ggml_backend_et_buffer_i = {
     /* .set_tensor_n    = */ NULL,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 static const char * ggml_backend_et_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
@@ -1692,6 +1693,7 @@ static const struct ggml_backend_device_i ggml_backend_et_device_i = {
     /* .event_new         = */ NULL,
     /* .event_free        = */ NULL,
     /* .event_synchronize = */ NULL,
+    /* .get_lazy_buffer_type = */ NULL,
 };
 
 /*

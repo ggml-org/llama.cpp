@@ -133,6 +133,7 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_shared_i = {
     /* .set_tensor_n  = */ ggml_backend_metal_buffer_shared_set_tensor_n,
     /* .get_tensor_n  = */ ggml_backend_metal_buffer_shared_get_tensor_n,
     /* .cpy_tensor_n  = */ ggml_backend_metal_buffer_shared_cpy_tensor_n,
+    /* .commit_tensor = */ NULL,
 };
 
 // private buffer
@@ -242,6 +243,7 @@ static ggml_backend_buffer_i ggml_backend_metal_buffer_private_i = {
     /* .set_tensor_n  = */ ggml_backend_metal_buffer_private_set_tensor_n,
     /* .get_tensor_n  = */ ggml_backend_metal_buffer_private_get_tensor_n,
     /* .cpy_tensor_n  = */ ggml_backend_metal_buffer_private_cpy_tensor_n,
+    /* .commit_tensor = */ NULL,
 };
 
 static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer) {
@@ -903,6 +905,7 @@ static ggml_backend_device_i ggml_backend_metal_device_i = {
     /* .event_new            = */ ggml_backend_metal_device_event_new,
     /* .event_free           = */ ggml_backend_metal_device_event_free,
     /* .event_synchronize    = */ ggml_backend_metal_device_event_synchronize,
+    /* .get_lazy_buffer_type = */ NULL,
 };
 
 // backend registry

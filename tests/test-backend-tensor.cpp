@@ -287,6 +287,89 @@ static bool test_buft(ggml_backend_buffer_type_t buft) {
     return test_tensor_n(buft) && test_tensor_n_mixed_buft(buft);
 }
 
+// lazy buffer type: uncommitted bytes read as zero, host writes and copies commit their own range
+static bool test_lazy(ggml_backend_buffer_type_t buft, ggml_backend_buffer_type_t dev_buft) {
+    ggml_init_params params = {};
+    params.mem_size = ggml_tensor_overhead()*8;
+    params.no_alloc = true;
+
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        return false;
+    }
+
+    // 3 MiB tensors, so the ranges below cross the 1 MiB blocks of a lazy buffer
+    const size_t ne = 3*1024*1024/sizeof(float);
+
+    std::vector<ggml_tensor *> tensors;
+    ggml_backend_buffer_ptr buf = alloc_tensors(ctx.get(), buft, { ne, ne }, tensors);
+    if (!buf) {
+        return false;
+    }
+    ggml_tensor * t = tensors[0];
+    ggml_tensor * u = tensors[1];
+
+    std::vector<ggml_tensor *> src;
+    ggml_backend_buffer_ptr src_buf = alloc_tensors(ctx.get(), dev_buft, { ne }, src);
+    if (!src_buf) {
+        return false;
+    }
+
+    const size_t nbytes = ggml_nbytes(t);
+    std::vector<uint8_t> expected(nbytes, 0);
+    std::vector<uint8_t> data(nbytes);
+    std::vector<uint8_t> out(nbytes);
+    for (size_t i = 0; i < nbytes; i++) {
+        data[i] = (uint8_t) (i*7 + 1);
+    }
+
+    const auto check = [&](const ggml_tensor * x) {
+        ggml_backend_tensor_get(x, out.data(), 0, nbytes);
+        return memcmp(out.data(), expected.data(), nbytes) == 0;
+    };
+
+    if (!check(t)) {
+        return false;
+    }
+
+    ggml_backend_tensor_memset(t, 0, 4096, 8192);
+    if (!check(t)) {
+        return false;
+    }
+
+    const size_t off  = 1024*1024 - 4096;
+    const size_t size = 64*1024;
+    if (!ggml_backend_tensor_commit(t, off, size)) {
+        return false;
+    }
+    ggml_backend_tensor_set(t, data.data() + off, off, size);
+    memcpy(expected.data() + off, data.data() + off, size);
+    if (!check(t)) {
+        return false;
+    }
+
+    // a zero memset must still clear what is committed
+    ggml_backend_tensor_memset(t, 0, off, size/2);
+    memset(expected.data() + off, 0, size/2);
+    if (!check(t)) {
+        return false;
+    }
+
+    ggml_backend_tensor_memset(t, 0x5A, 0, 4096);
+    memset(expected.data(), 0x5A, 4096);
+    if (!check(t)) {
+        return false;
+    }
+
+    // batched copy from an eager buffer of the same device
+    ggml_backend_tensor_set(src[0], data.data(), 0, nbytes);
+    const ggml_tensor * srcs[1] = { src[0] };
+    ggml_tensor * dsts[1] = { u };
+    ggml_backend_tensor_copy_n(srcs, dsts, 1);
+    memcpy(expected.data(), data.data(), nbytes);
+    return check(u);
+}
+
 //
 // Mock buffer type
 //
@@ -411,6 +494,7 @@ static ggml_backend_buffer_t mock_buft_alloc_buffer(ggml_backend_buffer_type_t b
         /* .set_tensor_n    = */ NULL,
         /* .get_tensor_n    = */ NULL,
         /* .cpy_tensor_n    = */ NULL,
+        /* .commit_tensor   = */ NULL,
     };
     if (g_mock.set_n) iface.set_tensor_n = mock_buffer_set_tensor_n;
     if (g_mock.get_n) iface.get_tensor_n = mock_buffer_get_tensor_n;
@@ -614,6 +698,7 @@ int main() {
     // run the unified test set on each backend buffer type
     const size_t n_devs = ggml_backend_dev_count();
     size_t n_ok = 0;
+    bool lazy_ok = true;
 
     for (size_t i = 0; i < n_devs; i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -625,6 +710,13 @@ int main() {
         if (ok) {
             n_ok++;
         }
+
+        ggml_backend_buffer_type_t lazy_buft = ggml_backend_dev_lazy_buffer_type(dev);
+        if (lazy_buft) {
+            const bool ok_lazy = test_buft(lazy_buft) && test_lazy(lazy_buft, buft);
+            printf("%s lazy %s\n", name, ok_lazy ? "PASSED" : "FAILED");
+            lazy_ok = lazy_ok && ok_lazy;
+        }
     }
 
     printf("%zu/%zu backends passed\n", n_ok, n_devs);
@@ -634,5 +726,5 @@ int main() {
     const bool mock_ok = test_buft(mock_buft()) && test_mock();
     printf("MOCK %s\n", mock_ok ? "PASSED" : "FAILED");
 
-    return n_ok == n_devs && mock_ok ? 0 : 1;
+    return n_ok == n_devs && lazy_ok && mock_ok ? 0 : 1;
 }

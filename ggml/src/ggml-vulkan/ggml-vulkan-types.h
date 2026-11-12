@@ -297,6 +297,7 @@ typedef std::weak_ptr<vk_buffer_struct> vk_buffer_ref;
 struct ggml_backend_vk_buffer_type_context {
     std::string name;
     vk_device device;
+    bool lazy = false;
 };
 
 struct vk_command_buffer {
@@ -1018,6 +1019,8 @@ struct vk_device_struct {
     vk_buffer sync_staging;
 
     ggml_backend_buffer_type buffer_type;
+    ggml_backend_buffer_type lazy_buffer_type;
+    size_t lazy_block = 0; // 0 if the device has no lazy buffers
 
     bool disable_fusion;
     std::atomic<bool> fusion_stats_enabled {false};
@@ -1051,6 +1054,13 @@ inline void vk_command_pool::destroy(vk::Device& device) {
     cmd_buffers.clear();
 }
 
+struct vk_lazy_span {
+    size_t offset;
+    size_t size;
+    vk::DeviceMemory mem;
+    void * ptr = nullptr; // mapped on UMA, freeing the memory unmaps it
+};
+
 struct vk_buffer_struct {
     vk::Buffer buffer = VK_NULL_HANDLE;
     vk::DeviceMemory device_memory = VK_NULL_HANDLE;
@@ -1061,6 +1071,12 @@ struct vk_buffer_struct {
 
     vk_device device;
 
+    // lazy buffers only
+    std::vector<bool> blocks;
+    std::vector<vk_lazy_span> spans;
+    uint32_t mem_type = 0;
+    bool span_map = false;
+
     ~vk_buffer_struct() {
         if (size == 0) {
             return;
@@ -1069,6 +1085,9 @@ struct vk_buffer_struct {
 
         // bump before destroying, so a thread that sees the buffer gone also sees the new count
         device->buffer_destroy_count.fetch_add(1, std::memory_order_release);
+        for (const vk_lazy_span & span : spans) {
+            device->device.freeMemory(span.mem);
+        }
         device->device.freeMemory(device_memory);
         device->device.destroyBuffer(buffer);
     }

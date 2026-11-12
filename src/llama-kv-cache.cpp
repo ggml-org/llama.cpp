@@ -70,6 +70,7 @@ llama_kv_cache::llama_kv_cache(
                 ggml_type   type_v,
                      bool   v_trans,
                      bool   offload,
+                     bool   lazy,
                      bool   unified,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
@@ -209,15 +210,14 @@ llama_kv_cache::llama_kv_cache(
         const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il);
         const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
 
-        const char * dev_name = "CPU";
+        auto * dev = offload ? model.dev_layer(il) : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
 
-        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+        const char * dev_name = offload ? ggml_backend_dev_name(dev) : "CPU";
 
-        if (offload) {
-            auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
-
-            dev_name = ggml_backend_dev_name(dev);
+        // a lazy buffer gets memory as apply_ubatch() commits the rows, on the device of the layer or on the CPU
+        ggml_backend_buffer_type_t buft = lazy && dev ? ggml_backend_dev_lazy_buffer_type(dev) : nullptr;
+        if (buft == nullptr) {
+            buft = offload ? ggml_backend_dev_buffer_type(dev) : ggml_backend_cpu_buffer_type();
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
@@ -837,8 +837,11 @@ llama_kv_cache::slot_info_vec_t llama_kv_cache::prepare(const std::vector<llama_
             states.push_back(std::move(state));
         }
 
-        // now emplace the ubatch
-        apply_ubatch(sinfo_new, ubatch);
+        // now emplace the ubatch, no memory for its rows is the same as no free cells
+        if (!apply_ubatch(sinfo_new, ubatch)) {
+            success = false;
+            break;
+        }
     }
 
     GGML_ASSERT(!states.empty() || !success);
@@ -1146,10 +1149,25 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     return res;
 }
 
-void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
+bool llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
+    // commit the rows that the graph writes for this ubatch, a transposed V has its cells over the whole tensor
+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+        const auto rows = std::minmax_element(sinfo.idxs[s].begin(), sinfo.idxs[s].end());
+        const auto commit = [&](const ggml_tensor * t, bool all) {
+            const size_t row = t->nb[1];
+            return all ? ggml_backend_tensor_commit(t, 0, ggml_nbytes(t)) :
+                ggml_backend_tensor_commit(t, sinfo.strm[s]*t->nb[2] + *rows.first*row, (*rows.second - *rows.first + 1)*row);
+        };
+        for (const auto & layer : layers) {
+            if (!commit(layer.k, false) || (layer.v && !commit(layer.v, v_trans))) {
+                return false;
+            }
+        }
+    }
+
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
-        return;
+        return true;
     }
 
     // keep track of the max sequence position that we would overwrite with this ubatch
@@ -1235,6 +1253,8 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
         head = sinfo.idxs[s].back() + 1;
     }
+
+    return true;
 }
 
 bool llama_kv_cache::get_can_shift() const {
@@ -2613,7 +2633,9 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
         // note: apply_ubatch() rebuilds llama_kv_cell_ext from the ubatch
         //       only ext.tok and the M-RoPE 2D position round-trip through it
         //       see: https://github.com/ggml-org/llama.cpp/pull/16825#issuecomment-3460868350
-        apply_ubatch(sinfo, ubatch);
+        if (!apply_ubatch(sinfo, ubatch)) {
+            return false;
+        }
 
         // apply_ubatch() takes the 2D position from the ubatch, and that ubatch is built with this
         // cache's own n_pos_per_embd. a cache that does not use M-RoPE itself but mirrors one that
@@ -3032,7 +3054,9 @@ bool llama_kv_cache_context::apply() {
         return true;
     }
 
-    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
+    if (!kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur])) {
+        return false;
+    }
     n_kv      = kv->get_n_kv(sinfos[i_cur]);
     n_kv_rows = kv->get_n_kv_rows(ubatches[i_cur]);
 
