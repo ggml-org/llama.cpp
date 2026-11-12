@@ -88,7 +88,7 @@ Its use is subject to the license in the `license.txt` file shipped with it.
 
 The library is enabled by default (`GGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON`).
 On Windows on ARM64, CMake downloads the library version pinned in `ggml/src/ggml-opencl/CMakeLists.txt` during configuration (`GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=ON`).
-The download is verified against a SHA256 hash, and the build copies `adreno-opencl-kernels.dll` and `LICENSE-adreno-opencl-kernels` alongside the executables.
+The download is verified against a SHA256 hash, and the build copies `adreno-opencl-kernels.dll` and `LICENSE-adreno-opencl-kernels.txt` alongside the executables.
 If the download fails, configuration continues with a warning.
 To skip the download, add `-DGGML_OPENCL_ADRENO_BIN_KERNELS_FETCH=OFF`, then extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables yourself.
 If kernels compatible with the current GPU are found in the library, they will be loaded and used.

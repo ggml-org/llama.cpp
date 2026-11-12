@@ -103,10 +103,10 @@ if (GGML_OPENCL_USE_ADRENO_BIN_KERNELS AND GGML_OPENCL_ADRENO_BIN_KERNELS_FETCH 
         add_custom_target(ggml-opencl-adreno-bin-kernels ALL
             COMMAND ${CMAKE_COMMAND} -E make_directory "${ADRENO_BIN_KERNELS_OUTPUT_DIR}"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ADRENO_BIN_KERNELS_DLL}" "${ADRENO_BIN_KERNELS_OUTPUT_DIR}/adreno-opencl-kernels.dll"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ADRENO_BIN_KERNELS_LICENSE}" "${ADRENO_BIN_KERNELS_OUTPUT_DIR}/LICENSE-adreno-opencl-kernels")
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${ADRENO_BIN_KERNELS_LICENSE}" "${ADRENO_BIN_KERNELS_OUTPUT_DIR}/LICENSE-adreno-opencl-kernels.txt")
         add_dependencies(${TARGET_NAME} ggml-opencl-adreno-bin-kernels)
         install(FILES "${ADRENO_BIN_KERNELS_DLL}" DESTINATION ${CMAKE_INSTALL_BINDIR})
-        install(FILES "${ADRENO_BIN_KERNELS_LICENSE}" DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME LICENSE-adreno-opencl-kernels)
+        install(FILES "${ADRENO_BIN_KERNELS_LICENSE}" DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME LICENSE-adreno-opencl-kernels.txt)
     endif ()
 endif ()
 
