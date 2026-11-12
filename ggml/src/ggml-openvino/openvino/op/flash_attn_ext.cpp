@@ -363,15 +363,25 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     k = tile_kv(num_heads, num_heads_kv, head_size, k);
     v = tile_kv(num_heads, num_heads_kv, head_size, v, v_transposed);
 
-    if (v_transposed) {
-        // SDPA has no transposed-V form: decompose it as GenAI does, with MatMul(probs, V^T, transpose_b).
+    // The NPU 4000 compiler (Lunar Lake) computes ScaledDotProductAttention wrongly when K has one KV head and is
+    // square, that is when the attended rows equal the head size (gemma-4 E2B: 512 rows with its 512-wide
+    // full-attention heads, 256 rows with its 256-wide sliding-window heads). The same attention as separate MatMuls
+    // is correct there. Remove when the NPU compiler computes the op correctly for this shape.
+    const auto k_dims = k.get_partial_shape();
+    const bool npu_square_k = ggml_openvino_npu_is_4000() && !has_sink && num_heads_kv == 1 &&
+                              k_dims.rank().is_static() && k_dims.size() == 4 && k_dims[2].is_static() &&
+                              k_dims[3].is_static() && k_dims[2].get_length() == k_dims[3].get_length();
+
+    if (v_transposed || npu_square_k) {
+        // The attention as separate ops. SDPA has no transposed-V form: as GenAI does, that case uses
+        // MatMul(probs, V^T, transpose_b).
         auto q_scaled = std::make_shared<ov::op::v1::Multiply>(q, scale_node);
         ov::Output<ov::Node> scores = std::make_shared<ov::op::v0::MatMul>(q_scaled, k, false, true);
         if (has_mask) {
             scores = std::make_shared<ov::op::v1::Add>(scores, mask);
         }
         auto probs = std::make_shared<ov::op::v8::Softmax>(scores, -1);
-        auto attended = std::make_shared<ov::op::v0::MatMul>(probs, v, false, true);
+        auto attended = std::make_shared<ov::op::v0::MatMul>(probs, v, false, v_transposed);
         res = std::make_shared<ov::op::v1::Transpose>(
             attended, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
         res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);
