@@ -8,11 +8,11 @@
 
 #include "types.glsl"
 
-layout(constant_id = 0) const uint D_STATE = 128;
+layout(constant_id = 0) const uint BLOCK_SIZE = 128;
 layout(constant_id = 1) const uint SUBGROUP_SIZE = 32;
-layout(constant_id = 2) const uint N_STATE = 128;
+layout(constant_id = 2) const uint D_STATE = 128;
 
-const uint32_t c_factor = (N_STATE + SUBGROUP_SIZE - 1) / SUBGROUP_SIZE;
+const uint32_t c_factor = (D_STATE + SUBGROUP_SIZE - 1) / SUBGROUP_SIZE;
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -47,28 +47,28 @@ float softplus(float x) {
 }
 
 #if !USE_SUBGROUP_ADD
-shared float temp[D_STATE];
+shared float temp[BLOCK_SIZE];
 #endif
 
 void main() {
     const uint subgroup = gl_SubgroupID;
     const uint lane     = gl_SubgroupInvocationID;
     const uint tid      = gl_SubgroupID * SUBGROUP_SIZE + lane;
-    const uint subgroup_idx = gl_WorkGroupID.x * (D_STATE / SUBGROUP_SIZE) + subgroup;
+    const uint subgroup_idx = gl_WorkGroupID.x * (BLOCK_SIZE / SUBGROUP_SIZE) + subgroup;
 
     const uint head_idx =  subgroup_idx / d_head;
     const uint head_off = (subgroup_idx % d_head) * 4;
     const uint seq_idx  = gl_WorkGroupID.y;
 
-    const uint group_off = (head_idx / (n_head / n_group)) * N_STATE * 4;
-    const uint s0_base_idx = (uint(ids[seq_idx]) * nb03 + head_idx * nb02 + head_off * N_STATE) / 4;
+    const uint group_off = (head_idx / (n_head / n_group)) * D_STATE * 4;
+    const uint s0_base_idx = (uint(ids[seq_idx]) * nb03 + head_idx * nb02 + head_off * D_STATE) / 4;
     const uint x_base_idx = (seq_idx * nb13 + subgroup_idx * 4) / 4;
     const uint dt_base_idx = (seq_idx * nb22 + head_idx * 4) / 4;
     const uint A_base_idx = (head_idx * nb31) / 4;
     const uint B_base_idx = (seq_idx * nb43 + group_off) / 4;
     const uint C_base_idx = (seq_idx * nb53 + group_off) / 4;
     const uint y_base_idx = seq_idx * n_tok * n_head * d_head + subgroup_idx;
-    const uint s_base_idx = (s_off + seq_idx * nb03 + head_idx * nb02 + head_off * N_STATE) / 4;
+    const uint s_base_idx = (s_off + seq_idx * nb03 + head_idx * nb02 + head_off * D_STATE) / 4;
 
     const uint stride_x = nb12 / 4;
     const uint stride_dt = nb21 / 4;
@@ -80,7 +80,7 @@ void main() {
 
     [[unroll]] for (uint j = 0; j < c_factor; j++) {
         const uint state_idx = SUBGROUP_SIZE * j + lane;
-        state[j] = N_STATE % SUBGROUP_SIZE == 0 || state_idx < N_STATE ? s0[s0_base_idx + state_idx] : 0.0f;
+        state[j] = D_STATE % SUBGROUP_SIZE == 0 || state_idx < D_STATE ? s0[s0_base_idx + state_idx] : 0.0f;
     }
 
     float a = A[A_base_idx];
@@ -94,8 +94,8 @@ void main() {
         const float x_dt = x[x_base_idx + i * stride_x] * dt_soft_plus;
         [[unroll]] for (uint j = 0; j < c_factor; j++) {
             const uint state_idx = SUBGROUP_SIZE * j + lane;
-            float B_val = N_STATE % SUBGROUP_SIZE == 0 || state_idx < N_STATE ? B[B_base_idx + i * stride_B + state_idx] : 0.0f;
-            float C_val = N_STATE % SUBGROUP_SIZE == 0 || state_idx < N_STATE ? C[C_base_idx + i * stride_C + state_idx] : 0.0f;
+            float B_val = D_STATE % SUBGROUP_SIZE == 0 || state_idx < D_STATE ? B[B_base_idx + i * stride_B + state_idx] : 0.0f;
+            float C_val = D_STATE % SUBGROUP_SIZE == 0 || state_idx < D_STATE ? C[C_base_idx + i * stride_C + state_idx] : 0.0f;
             state[j] = (state[j] * dA) + (B_val * x_dt);
             state_sum += state[j] * C_val;
         }
@@ -124,7 +124,7 @@ void main() {
         if (slot > 0u && slot < K) {
             const uint snapshot_base_idx = s_base_idx + slot * n_seq * (nb03 / 4u);
             [[unroll]] for (uint j = 0; j < c_factor; j++) {
-                if (N_STATE % SUBGROUP_SIZE == 0 || SUBGROUP_SIZE * j + lane < N_STATE) {
+                if (D_STATE % SUBGROUP_SIZE == 0 || SUBGROUP_SIZE * j + lane < D_STATE) {
                     d[snapshot_base_idx + SUBGROUP_SIZE * j + lane] = state[j];
                 }
             }
@@ -134,7 +134,7 @@ void main() {
     // write back the state
     [[unroll]]
     for (int j = 0; j < c_factor; j++) {
-        if (N_STATE % SUBGROUP_SIZE == 0 || SUBGROUP_SIZE * j + lane < N_STATE) {
+        if (D_STATE % SUBGROUP_SIZE == 0 || SUBGROUP_SIZE * j + lane < D_STATE) {
             d[s_base_idx + SUBGROUP_SIZE * j + lane] = state[j];
         }
     }
