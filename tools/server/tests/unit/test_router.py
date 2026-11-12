@@ -941,7 +941,7 @@ def test_router_restricted_cors_same_origin_reaches_child():
     server.server_host = "0.0.0.0"
     server.start()
     body = {
-        "model": "ggml-org/tinygemma3-GGUF:Q8_0",
+        "model": "ggml-org-dev/tinygemma3-GGUF:Q8_0",
         "max_tokens": 4,
         "messages": [{"role": "user", "content": "hello"}],
     }
