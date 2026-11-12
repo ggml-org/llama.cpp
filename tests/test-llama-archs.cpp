@@ -1780,8 +1780,11 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
             }
             const char * config_name = moe ? "MoE" : "Dense";
 
-            // the attention scale depends on the absolute position, so the hidden states of the prefix do too
-            const double thold = arch == LLM_ARCH_MISTRAL_LARGE4 ? 1e-4 : 1e-6;
+            // the hidden states of the prefix depend on the absolute position:
+            // mistral-large4 scales attention by position, hunyuan/maincoder apply q/k norm weights after RoPE
+            const bool pos_dependent = arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HUNYUAN_MOE ||
+                                       arch == LLM_ARCH_HUNYUAN_DENSE  || arch == LLM_ARCH_MAINCODER;
+            const double thold = pos_dependent ? 1e-4 : 1e-6;
 
             // at least 4 layers, so that "every 4th layer" patterns (NoPE, full attention) are covered
             // exaone4 is SWA only with 64 layers, smallthinker always ropes with 4
