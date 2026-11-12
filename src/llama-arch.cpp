@@ -1583,6 +1583,9 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_ZAYA1:
         case LLM_ARCH_GROK:
         case LLM_ARCH_MPT:
+        case LLM_ARCH_BLOOM:  // ALiBi
+        case LLM_ARCH_JAIS:   // ALiBi
+        case LLM_ARCH_REFACT: // ALiBi
         case LLM_ARCH_PLAMO2:
         case LLM_ARCH_MINICPM3:
         case LLM_ARCH_GEMMA3N:
