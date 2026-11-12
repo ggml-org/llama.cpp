@@ -381,6 +381,34 @@
 			label: formatLabel[format],
 			name: `${asset.path.split('/').at(-1)}.${format}`
 		}));
+
+	/**
+	 * Saves a file by fetching it and handing the browser a blob, as a link's own download does not hold everywhere: a
+	 * host that redirects to a CDN (the Hugging Face Space serves its PNG and WebP files from one) is another origin, so
+	 * the browser drops the download attribute and opens the image in the story's frame. The click stops here too:
+	 * @storybook/sveltekit's MockProvider cancels every link click that reaches the window, to log it as navigation.
+	 */
+	async function save(event: MouseEvent, file: { href: string; name: string }) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		try {
+			const response = await fetch(file.href);
+
+			if (!response.ok) throw new Error(`${response.status}`);
+
+			const href = URL.createObjectURL(await response.blob());
+			const link = Object.assign(document.createElement('a'), { download: file.name, href });
+
+			link.click();
+			// the browser reads the blob once the download starts
+			setTimeout(() => URL.revokeObjectURL(href), 10_000);
+		} catch (error) {
+			// no fallback that navigates: past the fetch the click no longer counts as the user's, so a new tab can open
+			// in this frame instead, which is what this replaces; the link's own menu can still save the file
+			console.error(`[AssetGrid] could not download ${file.name}`, error);
+		}
+	}
 </script>
 
 <div class="mx-auto grid w-[min(72rem,calc(100%-2rem))] gap-20 py-10">
@@ -452,14 +480,13 @@
 									<span class="text-sm">{asset.label}</span>
 
 									<span class={['flex flex-wrap gap-1', asset.round && 'justify-center']}>
-										<!-- the click stops here: @storybook/sveltekit's MockProvider cancels every link click that
-										     reaches the window, to log it as navigation, which would swallow the download -->
+										<!-- href and download stay for a link's own menu (save, copy); a click saves through save() -->
 										{#each downloads(asset) as file (file.name)}
 											<Button
 												class="h-6 px-1.5 font-mono text-xs text-muted-foreground has-[>svg]:px-1.5"
 												download={file.name}
 												href={file.href}
-												onclick={(event: MouseEvent) => event.stopPropagation()}
+												onclick={(event: MouseEvent) => save(event, file)}
 												size="sm"
 												variant="ghost"><Download class="size-3" />{file.label}</Button
 											>
