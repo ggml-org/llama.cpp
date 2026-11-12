@@ -21,6 +21,9 @@
 #include <memory>
 #include <mutex>
 #include <openvino/core/type/element_type.hpp>
+#include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
+#include <openvino/op/parameter.hpp>
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/allocator.hpp>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
@@ -706,6 +709,64 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     }
 }
 
+// Evaluates a weight node (Constant -> Convert -> [Subtract] -> Multiply -> [Reshape]) on the host.
+static ov::Tensor ggml_openvino_eval_weight_node(const ov::Output<ov::Node> & output) {
+    const auto node = output.get_node_shared_ptr();
+    if (const auto constant = ov::as_type_ptr<ov::op::v0::Constant>(node)) {
+        return constant->get_tensor_view();
+    }
+    ov::TensorVector inputs;
+    for (const auto & input : node->input_values()) {
+        inputs.push_back(ggml_openvino_eval_weight_node(input));
+    }
+    ov::TensorVector outputs;
+    for (size_t i = 0; i < node->get_output_size(); i++) {
+        outputs.emplace_back(node->get_output_element_type(i), node->get_output_shape(i));
+    }
+    if (!node->evaluate(outputs, inputs)) {
+        OPENVINO_THROW("cannot evaluate ", node->get_type_name());
+    }
+    return outputs[output.get_index()];
+}
+
+// set_tensor converts a quantized weight in place (extracted or requantized layout), so tensor->data
+// no longer holds the ggml bytes. Rebuild them from the weight node: dequantize, then quantize back
+// to the tensor type. The result is close to the original data, but not bit-exact.
+static bool ggml_openvino_weight_to_ggml(const ggml_tensor * tensor, std::vector<uint8_t> & out) {
+    const auto * extra = static_cast<const ggml_openvino_extra_base *>(tensor->extra);
+    std::shared_ptr<ov::Node> weight_node;
+    if (extra->type == ggml_openvino_extra_base::Type::QUANTIZED_WEIGHT) {
+        weight_node = static_cast<const ggml_openvino_quantized_weight_extra *>(extra)->weight_node;
+    } else if (extra->type == ggml_openvino_extra_base::Type::WEIGHT) {
+        weight_node = static_cast<const ggml_openvino_weight_extra *>(extra)->weight_node;
+    }
+    if (weight_node == nullptr || ggml_quantize_requires_imatrix(tensor->type)) {
+        return false;
+    }
+    try {
+        ov::Tensor values = ggml_openvino_eval_weight_node(weight_node->output(0));
+        if (values.get_size() != (size_t) ggml_nelements(tensor)) {
+            return false;
+        }
+        if (values.get_element_type() != ov::element::f32) {
+            auto param = std::make_shared<ov::op::v0::Parameter>(values.get_element_type(), values.get_shape());
+            auto convert = std::make_shared<ov::op::v0::Convert>(param, ov::element::f32);
+            ov::TensorVector f32{ov::Tensor(ov::element::f32, values.get_shape())};
+            if (!convert->evaluate(f32, {values})) {
+                return false;
+            }
+            values = f32[0];
+        }
+        out.resize(ggml_nbytes(tensor));
+        ggml_quantize_chunk(tensor->type, values.data<float>(), out.data(), 0, ggml_nrows(tensor), tensor->ne[0],
+                            nullptr);
+        return true;
+    } catch (const std::exception & e) {
+        GGML_LOG_WARN("%s: cannot rebuild %s: %s\n", __func__, tensor->name, e.what());
+        return false;
+    }
+}
+
 static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                     const ggml_tensor * tensor,
                                                     void * data,
@@ -717,6 +778,15 @@ static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer
 
     if (ggml_openvino_model_cache_only() && buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
         GGML_ABORT("ggml-openvino: cannot read unloaded weights in cache-only mode");
+    }
+
+    if (ggml_is_quantized(tensor->type) && tensor->view_src == nullptr && tensor->extra != nullptr &&
+        static_cast<const ggml_openvino_extra_base *>(tensor->extra)->type != ggml_openvino_extra_base::Type::TENSOR) {
+        std::vector<uint8_t> rebuilt;
+        if (ggml_openvino_weight_to_ggml(tensor, rebuilt)) {
+            memcpy(data, rebuilt.data() + offset, size);
+            return;
+        }
     }
 
     if (ctx->is_remote) {
