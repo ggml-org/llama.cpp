@@ -11,6 +11,15 @@ export const CODE_BLOCK = {
 	/** Matches the language specifier at the start of a code fence. */
 	LANG_PATTERN: /^(\w*)\n?/,
 	LT_REGEX: /</g,
+	/**
+	 * A shell command's name: the first word of the code or of a line (unless the line before it ends in a `\` continuation),
+	 * or the first after `|`, `;`, `&`, `(` or `$(`, but not a shell keyword.
+	 * highlight.js compiles grammars multiline, so the code's start is `(?<![\s\S])`, not `^`.
+	 */
+	SHELL_COMMAND_REGEX:
+		/(?<=(?:(?<![\s\S])|[^\\\s][ \t]*\n|\n\n|[|;&(][ \t]*|\$\([ \t]*)[ \t]*)(?!(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|function|in|select|time)\b)[A-Za-z_][\w.+-]*(?=[ \t\n;|&)]|$)/,
+	/** A shell command's flag: `-x`, `-LsSf` or `--long-name`, after whitespace. */
+	SHELL_FLAG_REGEX: /(?<=[ \t])--?[A-Za-z0-9][\w-]*/,
 
 	// Matches the `text:` prefix that file-type identifiers use to denote a
 	// plain-text language (e.g. `text:typescript`). Used by tool-call renderers

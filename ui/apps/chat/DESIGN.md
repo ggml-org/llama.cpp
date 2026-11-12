@@ -736,7 +736,8 @@ warning, error and info), destructive actions, and the content itself.
 
 There are three layers between a person and a model: the **model** (the weights, a GGUF
 file), the **service** (the server that runs inference: llama.cpp and llama-server) and the
-**application** (the harness, the UI and UX). Llama UI and Llama Chat are the application
+**application** (the harness, the UI and UX). The harness, the agentic loop, is its own headless
+package, Llama Harness (`@ggml-org/llama-harness`), next to Llama UI (`@ggml-org/llama-ui`). Llama UI and Llama Chat are the application
 layer. Running all three locally is the point: people choose their model and keep their
 conversations and traces, so the UI never assumes a cloud account or hides which model runs.
 The service need not be on the same machine: a server can be run by one person and shared by
@@ -845,10 +846,10 @@ faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte
 
 The UI uses Llama Sans for all text, headings included (with the system sans-serif stack as its
 fallback), and Llama Mono for code (with the system monospace stack as its fallback). Llama Sans
-is one variable font with an optical size axis: the browser sets it from the font-size, so text up
-to 16px gets the UI spacing and kerning, 40px and up the tighter Display setting, with a blend in
-between. Nothing needs choosing per element; pin an end only to show it, with
-`font-variation-settings: 'opsz' 16` or `40`. Its line box is 1.25 at every size, centred on the
+is one variable font with an optical size axis: the browser sets it from the font-size, so text at
+16px gets the UI spacing and kerning, 36px and up the tighter Display setting and text under 16px a
+looser Small one, with a blend in between. Nothing needs choosing per element; pin a point only to
+show it, with `font-variation-settings: 'opsz' 16` or `36`. Its line box is 1.25 at every size, centred on the
 cap height; large headings set `line-height: 1.15` themselves. Llama Mono keeps every character,
 its coding ligatures included, in one cell, so code and numbers line up in columns. Type is set through roles that fix size, line height and weight together:
 

@@ -1,8 +1,8 @@
 /* Llama Sans, the sans of the Llama type family (OFL, see assets/fonts/OFL.txt): one variable font for every
-   weight from 400 to 700 and every optical size from 16 to 40. The browser sets the optical size from font-size
-   (font-optical-sizing: auto), so text up to 16px is spaced and kerned for interfaces, 40px and up tight for
-   headlines, with a blend in between. Its line box is centred on the cap height, so labels sit in the middle of
-   buttons and chips. */
+   weight from 400 to 700 and every optical size from 10 to 36. The browser sets the optical size from font-size
+   (font-optical-sizing: auto), so 16px text is spaced and kerned for interfaces, 36px and up tight for headlines
+   and text under 16px looser, with a blend in between. Its line box is centred on the cap height, so labels sit in
+   the middle of buttons and chips. */
 @font-face {
 	font-family: 'Llama Sans';
 	src: url('../assets/fonts/LlamaSans.woff2') format('woff2');
