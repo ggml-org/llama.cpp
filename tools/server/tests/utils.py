@@ -710,6 +710,23 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def small_test() -> ServerProcess:
+        # ~95M Qwen3.5 based VLM with MTP head: chat, tool calling, OCR and draft-mtp in one fixture
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "Serveurperso/small-test:F16"
+        server.model_alias = "small-test"
+        server.jinja = True
+        server.n_ctx = 8192
+        server.n_batch = 2048
+        server.n_slots = 2
+        server.n_predict = 512
+        server.seed = 42
+        return server
+
+    @staticmethod
     def router() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()
