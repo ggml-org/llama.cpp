@@ -11,8 +11,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
         ggml_tensor * v,
         ggml_tensor * g,
         ggml_tensor * b,
-        ggml_tensor * s,
-        int           il) {
+        ggml_tensor * s) {
     const int64_t S_k      = q->ne[0];
     const int64_t H_k      = q->ne[1];
     const int64_t n_tokens = q->ne[2];
@@ -35,12 +34,6 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
 
     // K=1: output carries the final state only. state s is 4D [S_v, S_v, H_v, n_seqs].
     ggml_tensor * result = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, nullptr, nullptr, nullptr, nullptr, /*K=*/1, false);
-    if (n_tokens == 1) {
-        res->add_fused_node({LLM_FUSED_OP_GDN_AR, result, il});
-    } else {
-        res->add_fused_node({LLM_FUSED_OP_GDN_CH, result, il});
-    }
-
     ggml_tensor * output = ggml_view_4d(ctx0, result,
             S_v, H_v, n_tokens, n_seqs,
             ggml_row_size(result->type, S_v),
@@ -257,7 +250,7 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const bool keep = cparams.n_rs_seq > 0;
 
     if (!keep) {
-        auto attn_out = build_delta_net(q, k, v, g, b, s, il);
+        auto attn_out = build_delta_net(q, k, v, g, b, s);
         ggml_tensor * output    = attn_out.first;
         ggml_tensor * new_state = attn_out.second;
         cb(output, "attn_output", il);
@@ -276,12 +269,6 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
 
     // state s is 4D [S_v, S_v, H_v, n_seqs]; K snapshot slots are written into the output.
     ggml_tensor * gdn_out = ggml_gated_delta_net(ctx0, q, k, v, g, b, s, nullptr, nullptr, nullptr, nullptr, K, false);
-    if (n_seq_tokens > 1) {
-        res->add_fused_node({LLM_FUSED_OP_GDN_CH, gdn_out, il});
-    } else {
-        res->add_fused_node({LLM_FUSED_OP_GDN_AR, gdn_out, il});
-    }
-
     const int64_t attn_score_elems    = S_v * H_v * n_seq_tokens * n_seqs;
     const int64_t state_size_per_snap = S_v * S_v * H_v * n_seqs;
 

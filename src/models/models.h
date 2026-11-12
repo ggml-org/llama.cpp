@@ -43,8 +43,7 @@ struct llm_build_delta_net_base : public llm_graph_context {
                 ggml_tensor * v,
                 ggml_tensor * g,
                 ggml_tensor * b,
-                ggml_tensor * s,
-                int           il);
+                ggml_tensor * s);
 
     // read conv state from cache, concat with qkv_mixed, write back (single slot or per-token)
     // qkv_mixed: (qkv_dim, n_seq_tokens, n_seqs); returns conv_input: (kernel_size + n_seq_tokens - 1, channels, n_seqs)
