@@ -317,6 +317,17 @@ llama_test(
     ARGS -a "qwen4exp|^gemma4$" --layer-major 24 -d 0.3
 )
 
+# layer-major prefill: the node budget of the graph has room for the chunks of every arch (64 chunks of 1 token per ubatch)
+llama_test(
+    test-llama-archs
+    NAME test-llama-archs-layer-major-nodes
+    LABEL main
+    ARGS -b CPU
+)
+set_tests_properties(test-llama-archs-layer-major-nodes PROPERTIES
+    ENVIRONMENT "LLAMA_LAYER_MAJOR=1"
+)
+
 llama_test(
     test-llama-context
     NAME test-llama-context-qsa-chunk

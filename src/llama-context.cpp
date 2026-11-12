@@ -2990,12 +2990,14 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         for (const auto & lora : model.loras) {
             res += lora->get_n_nodes();
         }
+    }
 
-        // layer-major prefill: each chunk has its own attention and expert nodes
-        // the budgets above grow with n_tokens and have room for the chunks
-        if (cparams.n_chunk > 0 && n_tokens > cparams.n_chunk) {
-            res *= 2 + n_tokens/cparams.n_chunk;
-        }
+    // layer-major prefill: each chunk adds the nodes of its attention block and of its expert FFN to each layer
+    // about 55 per chunk and layer for gemma4 (attention and experts), 20 for qwen4exp, 15 or less for the archs with expert chunks only
+    if (cparams.n_chunk > 0 && n_tokens > cparams.n_chunk) {
+        const uint32_t n_chunks = (n_tokens + cparams.n_chunk - 1)/cparams.n_chunk;
+
+        res += n_chunks*model.hparams.n_layer_all*128;
     }
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
