@@ -60,7 +60,7 @@ Implementation: [`htp-repack.cpp`](../../../ggml/src/ggml-hexagon/htp-repack.cpp
 ### Tile Dimensions and Grid Layout
 
 Each tile represents a submatrix of `N_rows = 32` rows and `K_cols` columns:
-- Standard types (`Q4_0`, `Q4_1`, `Q8_0`, `IQ4_NL`, `MXFP4`, and K-quants): `K_cols = 32` (`HTP_TENSOR_TILE_N_COLS = 32`).
+- Standard types (`Q4_0`, `Q4_1`, `Q5_0`, `Q5_1`, `Q8_0`, `IQ4_NL`, `MXFP4`, and K-quants): `K_cols = 32` (`HTP_TENSOR_TILE_N_COLS = 32`).
 - `Q2_0`: `K_cols = 64` (`HTP_TENSOR_TILE_K_Q2_0 = 64`).
 - `Q1_0`: `K_cols = 128` (`HTP_TENSOR_TILE_K_Q1_0 = 128`).
 
@@ -122,6 +122,17 @@ Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`):
     Same 4-bit nibble transposition and storage layout as `Q4_0`.
   - **Scales** (bytes 512..639, 128 bytes):
     32 pairs of FP16 values (`ggml_half`): `scale[2 * row + 0] = d` (scale) and `scale[2 * row + 1] = m` (min) for each row `row = 0..31`.
+
+- **Q5_0** (704 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_0`):
+  - **Quants** (bytes 0..511): same 4-bit nibble transposition and storage layout as `Q4_0`, holding the low 4 bits.
+  - **5th-bit plane** (bytes 512..639): byte `32*c + row` (`c = 0..3`) holds a flag for `k = 2*(4i + c)` at bit `2i` and for `k = 2*(4i + c) + 1` at bit `2i + 1`, for `i = 0..3`. The flag is set when the 5th bit of the quant is clear.
+  - **Scales** (bytes 640..703, 64 bytes): 32 FP16 values, storing scale `d` for each row `row = 0..31`.
+  - **Dequantization**: `0xF0` is OR-ed into the nibble where the flag is set, giving the signed value `q - 16` (-16..15), scaled by `d`.
+
+- **Q5_1** (768 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_1`, same layout as the Q5_K tile):
+  - **Quants** (bytes 0..511) and **scales** (bytes 512..639): same as `Q4_1`, holding the low 4 bits and `(d, m)` pairs.
+  - **5th-bit plane** (bytes 640..767): same as `Q5_K`; a bit is set when the 5th bit of the quant is set.
+  - Uses the `Q5_K` HVX/HMX kernels (Q8_1 activations with block sums).
 
 ### Q1_0 Format (1-Bit Quantization)
 
