@@ -19,6 +19,7 @@ private:
     bool sleeping = false;
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
+    int n_inflight = 0; // requests that keep the server awake, see wait_until_no_sleep()
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -67,7 +68,11 @@ public:
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
+    // the server then stays awake until the caller calls release_inflight()
     void wait_until_no_sleep();
+
+    // let the server sleep again once the caller no longer uses the server state
+    void release_inflight();
 
     bool is_sleeping() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
