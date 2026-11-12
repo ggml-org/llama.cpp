@@ -681,8 +681,7 @@ def main() -> int:
             result = _submit_and_run_job(client, args, spec, target_id, artifact_id)
             break
         except RunnerUnavailableError as e:
-            log.warning("QDC runner unavailable for %s: %s", args.device, e)
-            print(f"::warning::QDC runner unavailable for {args.device} after {args.runner_timeout}s - job skipped")
+            log.warning("QDC runner unavailable for %s after %ds - job skipped: %s", args.device, args.runner_timeout, e)
             write_summary(
                 JobResult(passed=True, tests={}),
                 title=f"QDC Tests ({args.device})",
