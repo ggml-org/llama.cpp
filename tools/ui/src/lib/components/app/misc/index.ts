@@ -60,6 +60,9 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  */
 export { default as Logo } from './Logo.svelte';
 
+/** Two-line menu glyph for the phone sidebar toggle, its lower line two thirds as long. */
+export { default as MenuIcon } from './MenuIcon.svelte';
+
 /** Section with a trigger that expands in place. */
 export { default as CollapsibleSection } from './CollapsibleSection.svelte';
 export {

@@ -6,10 +6,10 @@
  */
 
 import { base } from '$app/paths';
-import { API_TOOLS, HEADERS } from '$lib/constants';
-import { ToolResponseField } from '$lib/enums';
-import type { ServerToolInfo, ToolExecutionResult } from '$lib/types';
-import { apiFetch } from '$lib/utils';
+import { API_TOOLS, HEADERS, HOME_TILDE, SEARCH } from '$lib/constants';
+import { BuiltInTool, GlobSearchType, ToolResponseField } from '$lib/enums';
+import type { GlobEntry, ServerToolInfo, ToolExecutionResult } from '$lib/types';
+import { apiFetch, buildCaseInsensitiveGlob, joinPath, lastPathSegment } from '$lib/utils';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 
@@ -81,6 +81,35 @@ export class ToolsService {
 	 */
 	static async list(): Promise<ServerToolInfo[]> {
 		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
+	}
+
+	/**
+	 * Resolve a folder name picked in the browser (a native directory picker
+	 * exposes only the leaf name) to a server-side absolute path. Returns null
+	 * when the server cannot find it.
+	 */
+	static async resolveDirectoryPath(
+		name: string,
+		homeBase: string | null = null
+	): Promise<string | null> {
+		try {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
+				include: buildCaseInsensitiveGlob(name),
+				limit: SEARCH.NATIVE_LIMIT,
+				max_depth: SEARCH.NATIVE_MAX_DEPTH,
+				path: homeBase ?? HOME_TILDE,
+				type: GlobSearchType.DIR
+			});
+			const base = typeof res.base === 'string' ? res.base : '';
+			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
+			const match = entries.find(
+				(entry) => lastPathSegment(entry.path).toLowerCase() === name.toLowerCase()
+			);
+
+			return match ? joinPath(base, match.path) : null;
+		} catch {
+			return null;
+		}
 	}
 
 	/**

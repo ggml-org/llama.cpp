@@ -1,4 +1,9 @@
-import { PATH_SEPARATOR, SETTINGS_KEYS } from '$lib/constants';
+import {
+	GGUF_KEY_HAS_AUDIO_ENCODER,
+	GGUF_KEY_HAS_VISION_ENCODER,
+	PATH_SEPARATOR,
+	SETTINGS_KEYS
+} from '$lib/constants';
 import {
 	BYTE,
 	BYTE_LABEL,
@@ -24,19 +29,24 @@ import {
 	HF_GATED_TAG,
 	HF_GGUF_FILTER,
 	HF_GGUF_TAG,
+	HF_HTTP_NO_ACCESS_STATUSES,
 	HF_HTTP_NOT_FOUND,
+	HF_HTTP_PARTIAL_CONTENT,
 	HF_HTTP_SERVER_ERROR_MIN,
 	HF_LICENSE_TAG_PREFIX,
 	HF_LINK_HEADER,
 	HF_LINK_NEXT_REGEX,
 	HF_MAIN_BRANCH,
 	HF_MAX_LIMIT,
+	HF_MMPROJ_HEADER_BYTES,
+	HF_MODALITY_PIPELINE_TAGS,
 	HF_MODEL_LIST_EXPAND,
 	HF_PARAM_COUNT_REGEX,
 	HF_QUANT_PRECISION_REGEX,
 	HF_RAW_PATH,
 	HF_README_FILENAME,
 	HF_RECURSIVE_TREE_PARAM,
+	HF_RESOLVE_PATH,
 	HF_RETRY_ATTEMPTS,
 	HF_RETRY_DELAY_MS,
 	HF_SAFETENSORS_TAG,
@@ -69,12 +79,14 @@ import { HfEntryType, HfModelSort, SidecarForm } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type {
 	HfCatalogEntry,
+	HfMmprojEncoders,
 	HfModelDetailInfo,
 	HfModelInfo,
 	HfModelSearchParams,
 	HfModelSibling
 } from '$lib/types/huggingface';
-import { sidecarFromFileToken } from '$lib/utils';
+import type { ModelModalities } from '$lib/types/models';
+import { readGgufMetadata, sidecarFromFileToken } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Fetch failure carrying the HTTP status, so retry logic tests the code instead of the message. */
@@ -106,6 +118,11 @@ export class HuggingFaceService {
 	private static detailsCache = new SvelteMap<string, HfModelDetailInfo | null>();
 
 	private static detailsPending = new Map<string, Promise<HfModelDetailInfo | null>>();
+
+	// Encoders an mmproj carries, keyed by repo id: its header never changes, so one read per session.
+	private static mmprojEncodersCache = new SvelteMap<string, HfMmprojEncoders>();
+
+	private static mmprojEncodersPending = new Map<string, Promise<HfMmprojEncoders | null>>();
 
 	/**
 	 * Map of quant token to its average bit-depth in bits-per-weight (bpw).
@@ -160,8 +177,6 @@ export class HuggingFaceService {
 		return HuggingFaceService.detailsCache.get(hfRepoId);
 	}
 
-	// GGUF Model Browsing
-
 	/**
 	 * Collapse split GGUF shard sets (`-00001-of-00015.gguf`, ...) to their first
 	 * shard, summing every shard's size so the kept entry reflects the whole
@@ -199,6 +214,8 @@ export class HuggingFaceService {
 
 		return result;
 	}
+
+	// GGUF Model Browsing
 
 	/**
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any sidecar type
@@ -355,8 +372,6 @@ export class HuggingFaceService {
 		return `${Math.floor(diffDays / DAYS_PER_YEAR)} ${YEARS_AGO_LABEL}`;
 	}
 
-	// Model Details & Files
-
 	/**
 	 * Format a min-max size range with one shared unit, e.g. `19.0-28.6 GB`.
 	 */
@@ -381,6 +396,8 @@ export class HuggingFaceService {
 
 		return `${fmt(min)}-${fmt(max)} ${unit}`;
 	}
+
+	// Model Details & Files
 
 	/**
 	 * Avatar URL for an author (org or user). 404s when the author does not
@@ -542,6 +559,97 @@ export class HuggingFaceService {
 		HuggingFaceService.detailsPending.set(modelId, promise);
 
 		return promise;
+	}
+
+	/**
+	 * Which encoders a repo's mmproj carries, from the metadata at the start of the file: a ranged read of its
+	 * first bytes, so the file itself is never downloaded. The pipeline tag can't say this: omni models are
+	 * `any-to-any`, and their audio encoder lives in the same mmproj as the vision one. Null when the read fails.
+	 */
+	static getMmprojEncoders(modelId: string, mmprojPath: string): Promise<HfMmprojEncoders | null> {
+		if (!HuggingFaceService.isEnabled()) return Promise.resolve(null);
+
+		const cached = HuggingFaceService.mmprojEncodersCache.get(modelId);
+
+		if (cached) return Promise.resolve(cached);
+
+		const pending = HuggingFaceService.mmprojEncodersPending.get(modelId);
+
+		if (pending) return pending;
+
+		// Do not encode the modelId, it contains slashes for author/name
+		const url = `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_RESOLVE_PATH}${PATH_SEPARATOR}${HF_MAIN_BRANCH}${PATH_SEPARATOR}${mmprojPath.split(PATH_SEPARATOR).map(encodeURIComponent).join(PATH_SEPARATOR)}`;
+		const promise = (async () => {
+			const response = await fetch(url, {
+				headers: { Range: `bytes=0-${HF_MMPROJ_HEADER_BYTES - 1}` }
+			});
+
+			// anything but a partial response would stream the whole file, which can be gigabytes
+			if (response.status !== HF_HTTP_PARTIAL_CONTENT) {
+				void response.body?.cancel();
+
+				// a gated, private or missing file answers the same on every read: keep what the repo says
+				if (HF_HTTP_NO_ACCESS_STATUSES.includes(response.status)) {
+					const unknown: HfMmprojEncoders = { audio: false, vision: null };
+
+					HuggingFaceService.mmprojEncodersCache.set(modelId, unknown);
+
+					return unknown;
+				}
+
+				throw new Error(`Failed to read ${mmprojPath}: ${response.status}`);
+			}
+
+			const { complete, metadata } = readGgufMetadata(await response.arrayBuffer());
+
+			if (metadata.size === 0) throw new Error(`${mmprojPath} has no GGUF metadata`);
+
+			// the converter writes these keys only when true, so one missing from a header read in full means no
+			// such encoder; a header cut short leaves vision unknown
+			const hasVision = metadata.get(GGUF_KEY_HAS_VISION_ENCODER) === true;
+			const encoders: HfMmprojEncoders = {
+				audio: metadata.get(GGUF_KEY_HAS_AUDIO_ENCODER) === true,
+				vision: hasVision || (complete ? false : null)
+			};
+
+			HuggingFaceService.mmprojEncodersCache.set(modelId, encoders);
+
+			return encoders;
+		})()
+			.catch((error: unknown) => {
+				// not cached: a rate limited or failed read should retry on the next mount
+				console.error(`Error reading the mmproj of ${modelId}:`, error);
+
+				return null;
+			})
+			.finally(() => HuggingFaceService.mmprojEncodersPending.delete(modelId));
+
+		HuggingFaceService.mmprojEncodersPending.set(modelId, promise);
+
+		return promise;
+	}
+
+	/**
+	 * Modalities a repo offers, from its pipeline tag and its mmproj: vision from a vision tag or an mmproj
+	 * (unless its header has no vision encoder, as in audio-only models), audio from an audio tag or
+	 * an audio encoder in the mmproj (omni models are `any-to-any`), video from a video tag. Reactive: it
+	 * updates once {@link getMmprojEncoders} has read the mmproj.
+	 */
+	static getModalities(
+		modelId: string,
+		pipelineTag: string | null | undefined,
+		mmprojPath: string | undefined
+	): ModelModalities {
+		const tag = pipelineTag ?? '';
+		const encoders = mmprojPath ? HuggingFaceService.mmprojEncodersCache.get(modelId) : undefined;
+
+		return {
+			audio: HF_MODALITY_PIPELINE_TAGS.audio.includes(tag) || encoders?.audio === true,
+			video: HF_MODALITY_PIPELINE_TAGS.video.includes(tag),
+			vision:
+				HF_MODALITY_PIPELINE_TAGS.vision.includes(tag) ||
+				(Boolean(mmprojPath) && encoders?.vision !== false)
+		};
 	}
 
 	static getModelUrl(modelId: string): string {

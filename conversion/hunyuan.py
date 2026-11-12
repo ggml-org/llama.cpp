@@ -24,6 +24,7 @@ class HunYuanMoEModel(TextModel):
     def set_vocab(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        assert tokenizer is not None
 
         # 1. Get the pre-tokenizer identifier hash
         tokpre = self.get_vocab_base_pre(tokenizer)
@@ -31,7 +32,7 @@ class HunYuanMoEModel(TextModel):
         # 2. Reverse-engineer the merges list from mergeable_ranks
         merges = []
         vocab = {}
-        mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[unresolved-attribute]
+        mergeable_ranks = tokenizer.mergeable_ranks
         for token, rank in mergeable_ranks.items():
             vocab[QwenModel.token_bytes_to_string(token)] = rank
             if len(token) == 1:
@@ -42,8 +43,8 @@ class HunYuanMoEModel(TextModel):
 
         # 3. Generate the tokens and toktypes lists
         vocab_size = self.hparams["vocab_size"]
-        assert tokenizer.vocab_size == vocab_size  # ty: ignore[unresolved-attribute]
-        special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
+        assert tokenizer.vocab_size == vocab_size
+        special_tokens = tokenizer.special_tokens
         reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -184,6 +185,7 @@ class HunYuanModel(TextModel):
         else:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+            assert tokenizer is not None
 
             # 1. Get the pre-tokenizer identifier hash
             tokpre = self.get_vocab_base_pre(tokenizer)
@@ -191,7 +193,7 @@ class HunYuanModel(TextModel):
             # 2. Reverse-engineer the merges list from mergeable_ranks
             merges = []
             vocab = {}
-            mergeable_ranks = tokenizer.mergeable_ranks  # ty: ignore[unresolved-attribute]
+            mergeable_ranks = tokenizer.mergeable_ranks
             for token, rank in mergeable_ranks.items():
                 vocab[QwenModel.token_bytes_to_string(token)] = rank
                 if len(token) == 1:
@@ -202,8 +204,8 @@ class HunYuanModel(TextModel):
 
             # 3. Generate the tokens and toktypes lists
             vocab_size = self.hparams["vocab_size"]
-            assert tokenizer.vocab_size == vocab_size  # ty: ignore[unresolved-attribute]
-            special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
+            assert tokenizer.vocab_size == vocab_size
+            special_tokens = tokenizer.special_tokens
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []

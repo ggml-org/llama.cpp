@@ -59,6 +59,12 @@ void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t sp
 void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_t size);
 void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size);
 void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size);
+size_t ggml_vk_buffer_write_n_async(vk_context& subctx, const vk_buffer_region * regions, size_t n, vk_buffer * staging = nullptr, size_t * staging_offset = nullptr);
+size_t ggml_vk_buffer_read_n_async(vk_context& subctx, const vk_buffer_region * regions, size_t n, vk_buffer * staging = nullptr, size_t * staging_offset = nullptr);
+void ggml_vk_buffer_copy_n_async(vk_context& subctx, const vk_buffer_copy_region * regions, size_t n);
+void ggml_vk_buffer_write_n(const vk_buffer_region * regions, size_t n);
+void ggml_vk_buffer_read_n(const vk_buffer_region * regions, size_t n);
+void ggml_vk_buffer_copy_n(const vk_buffer_copy_region * regions, size_t n);
 void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t offset, uint32_t c, size_t size);
 void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t size);
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size);
@@ -86,6 +92,7 @@ void ggml_vk_cmd_label_begin(vk::CommandBuffer buf, const char * name);
 void ggml_vk_ctx_end(vk_context& ctx);
 void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx);
 vk_context ggml_vk_get_compute_ctx(ggml_backend_vk_context * ctx);
+vk::Semaphore ggml_vk_create_binary_semaphore(ggml_backend_vk_context * ctx);
 vk_context ggml_vk_get_transfer_ctx(ggml_backend_vk_context * ctx);
 bool ggml_vk_submit_transfer_ctx(ggml_backend_vk_context * ctx);
 size_t ggml_vk_align_size(size_t width, size_t align);
@@ -226,6 +233,9 @@ void ggml_backend_vk_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_ten
 void ggml_backend_vk_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size);
 void ggml_backend_vk_buffer_get_tensor_2d(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
 bool ggml_backend_vk_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst);
+void ggml_backend_vk_buffer_set_tensor_n(ggml_backend_buffer_t buffer, ggml_tensor * const * tensors, const void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
+void ggml_backend_vk_buffer_get_tensor_n(ggml_backend_buffer_t buffer, const ggml_tensor * const * tensors, void * const * data, const size_t * offsets, const size_t * sizes, size_t n_tensors);
+bool ggml_backend_vk_buffer_cpy_tensor_n(ggml_backend_buffer_t buffer, const ggml_tensor * const * srcs, ggml_tensor * const * dsts, size_t n_tensors);
 void ggml_backend_vk_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value);
 const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
 ggml_backend_buffer_t ggml_backend_vk_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size);
@@ -233,9 +243,23 @@ size_t ggml_backend_vk_buffer_type_get_alignment(ggml_backend_buffer_type_t buft
 size_t ggml_backend_vk_buffer_type_get_max_size(ggml_backend_buffer_type_t buft);
 size_t ggml_backend_vk_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor);
 void ggml_backend_vk_free(ggml_backend_t backend);
+ggml_backend_buffer_t ggml_backend_vk_device_buffer_from_host_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size);
 ggml_backend_reg_t ggml_backend_vk_reg();
 
+// comm
+#if !defined(_WIN32)
+void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_backends);
+void ggml_backend_vk_comm_free(void * comm_ctx);
+bool ggml_backend_vk_comm_allreduce_tensor(void * comm_ctx, ggml_tensor ** tensors);
+#endif
+
 // debug
+void ggml_vk_count_fusion(const vk_device & device, const char * label);
+void * ggml_backend_vk_fusion_get(ggml_backend_dev_t dev);
+void ggml_backend_vk_fusion_stats_init(void * finfo);
+void ggml_backend_vk_fusion_stats_reset(void * finfo);
+int ggml_backend_vk_fusion_stats_get(void * finfo, const char ** labels, uint64_t * counts, int n);
+void ggml_backend_vk_fusion_set_enabled(void * finfo, bool enabled);
 int64_t ggml_vk_get_op_batch_size(const ggml_tensor * op);
 #ifdef GGML_VULKAN_RUN_TESTS
 template <typename X_TYPE, typename Y_TYPE>

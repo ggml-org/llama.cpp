@@ -69,7 +69,7 @@
 #define VECTOR_REGISTERS 16
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 #define LMUL 4
 #endif
 
@@ -180,7 +180,7 @@ inline float32x4_t madd(float32x4_t a, float32x4_t b, float32x4_t c) {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 template <> inline vfloat32m1_t madd(vfloat32m1_t a, vfloat32m1_t b, vfloat32m1_t c) {
     return __riscv_vfmacc_vv_f32m1(c, a, b, __riscv_vsetvlmax_e32m1());
 }
@@ -277,7 +277,7 @@ inline float hsum(__m512 x) {
 }
 #endif // __AVX512F__
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 inline float hsum(vfloat32m1_t x) {
     return __riscv_vfmv_f_s_f32m1_f32(
         __riscv_vfredusum_vs_f32m1_f32m1(x, __riscv_vfmv_v_f_f32m1(0, 1), __riscv_vsetvlmax_e32m1()));
@@ -325,6 +325,12 @@ template <> inline float32x4_t load(const ggml_fp16_t * p) {
     }
 
     return vec_xl(0, (const float *)(tmp));
+}
+template <> inline float32x4_t load(const ggml_bf16_t * p) {
+    uint64_t bits;
+    memcpy(&bits, p, sizeof(bits));
+    const uint64x2_t v_bits = { bits, bits };
+    return GGML_BF16_TO_F32_HI((GGML_BF16_VEC) v_bits);
 }
 template <> inline float32x4_t load(const float * p) {
     return vec_xl(0, p);
@@ -458,7 +464,7 @@ template <> inline __m512bh load_partial(const ggml_bf16_t *p, int n) {
 #endif
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 template <> inline vfloat32m1_t load(const float *p) {
     return __riscv_vle32_v_f32m1(p, __riscv_vsetvlmax_e32m1());
 }
@@ -503,7 +509,7 @@ template <> inline vbfloat16m4_t load(const ggml_bf16_t *p) {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 template <typename T> T set_zero();
 
 template <> inline vfloat32m1_t set_zero() {
@@ -520,7 +526,7 @@ template <> inline vfloat32m8_t set_zero() {
 }
 #endif
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 template <typename T> size_t vlmax() {
     if constexpr (std::is_same_v<T, vfloat32m1_t>) { return  __riscv_vsetvlmax_e32m1(); }
     else if constexpr (std::is_same_v<T, vfloat32m2_t>) { return  __riscv_vsetvlmax_e32m2(); }
@@ -732,7 +738,7 @@ class tinyBLAS {
     const int64_t ldc;
 };
 
-#if defined(__riscv_v_intrinsic)
+#if defined(__riscv_v)
 template <typename D, typename V, typename TA, typename TB, typename TC>
 class tinyBLAS_RVV {
   public:
@@ -1301,6 +1307,88 @@ class tinyBLAS_RVV {
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // QUANT ZERO MATRIX MULTIPLICATION
+
+#if defined(__VXE__) || defined(__VXE2__)
+template <typename TA>
+class tinyBLAS_Q0_VXE {
+    static_assert(sizeof(TA::qs) == QK8_0, "VXE weight loads require 32 quantized bytes per block");
+
+  public:
+    tinyBLAS_Q0_VXE(int64_t k,
+                    const TA * A, int64_t lda,
+                    const block_q8_0 * B, int64_t ldb,
+                    float * C, int64_t ldc,
+                    int32_t ith, int32_t nth)
+        : A(A), B(B), C(C), k(k), lda(lda), ldb(ldb), ldc(ldc), ith(ith), nth(nth) {
+    }
+
+    void matmul(int64_t m, int64_t n) {
+        constexpr int32_t tile_size = 2;
+        const int64_t row_tiles = m / tile_size;
+        const int64_t tiles     = row_tiles * (n / tile_size);
+        const int64_t duty      = (tiles + nth - 1) / nth;
+        const int64_t start     = duty * ith;
+        const int64_t end       = MIN(start + duty, tiles);
+
+        for (int64_t job = start; job < end; ++job) {
+            const int64_t ii = tile_size * (job % row_tiles);
+            const int64_t jj = tile_size * (job / row_tiles);
+            float32x4_t v_sum[tile_size][tile_size] = {};
+
+            for (int64_t l = 0; l < k; ++l) {
+                int8x16_t v_xl[tile_size], v_xh[tile_size], v_yl[tile_size], v_yh[tile_size];
+                float x_scale[tile_size], y_scale[tile_size];
+
+                for (int32_t i = 0; i < tile_size; ++i) {
+                    const TA & x = A[lda * (ii + i) + l];
+                    const block_q8_0 & y = B[ldb * (jj + i) + l];
+
+                    const int8_t * x_qs = x.qs;
+                    const int8_t * y_qs = y.qs;
+                    v_xl[i] = vec_xl(0, x_qs);
+                    v_xh[i] = vec_xl(0, x_qs + QK8_0 / 2);
+                    v_yl[i] = vec_xl(0, y_qs);
+                    v_yh[i] = vec_xl(0, y_qs + QK8_0 / 2);
+                    x_scale[i] = unhalf(x.d);
+                    y_scale[i] = unhalf(y.d);
+                }
+
+                for (int32_t j = 0; j < tile_size; ++j) {
+                    for (int32_t i = 0; i < tile_size; ++i) {
+                        const int32x4_t v_dot = dot_s8_wide(v_xl[i], v_yl[j]) + dot_s8_wide(v_xh[i], v_yh[j]);
+                        const float32x4_t v_scale = vec_splats(x_scale[i] * y_scale[j]);
+                        v_sum[j][i] = vec_madd(vec_float(v_dot), v_scale, v_sum[j][i]);
+                    }
+                }
+            }
+
+            for (int32_t j = 0; j < tile_size; ++j) {
+                for (int32_t i = 0; i < tile_size; ++i) {
+                    C[ldc * (jj + j) + ii + i] = hsum(v_sum[j][i]);
+                }
+            }
+        }
+    }
+
+  private:
+    static int32x4_t dot_s8_wide(int8x16_t v_x, int8x16_t v_y) {
+        const int16x8_t v_even = vec_mule(v_x, v_y);
+        const int16x8_t v_odd  = vec_mulo(v_x, v_y);
+        // Two (-128) * (-128) products can overflow a signed 16-bit sum.
+        return vec_unpackh(v_even) + vec_unpackl(v_even) + vec_unpackh(v_odd) + vec_unpackl(v_odd);
+    }
+
+    const TA * const A;
+    const block_q8_0 * const B;
+    float * const C;
+    const int64_t k;
+    const int64_t lda;
+    const int64_t ldb;
+    const int64_t ldc;
+    const int32_t ith;
+    const int32_t nth;
+};
+#endif
 
 #if defined(__ARM_FEATURE_DOTPROD)
 template <typename TA>
@@ -3958,7 +4046,7 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
             params->ith, params->nth};
         tb.matmul(m, n);
         return true;
-#elif defined(__riscv_v_intrinsic)
+#elif defined(__riscv_v)
     #if LMUL == 1
         tinyBLAS_RVV<vfloat32m1_t, vfloat32m1_t, float, float, float> tb{ params,
             k, (const float *)A, lda,
@@ -4001,6 +4089,14 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
 #elif defined(__AVX2__)
         if (Btype == GGML_TYPE_BF16) {
             tinyBLAS<8, __m256, __m256, ggml_bf16_t, ggml_bf16_t, float> tb{ params, k,
+                (const ggml_bf16_t *)A, lda,
+                (const ggml_bf16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
+#elif defined(__VXE__) || defined(__VXE2__)
+        if (Btype == GGML_TYPE_BF16) {
+            tinyBLAS<4, float32x4_t, float32x4_t, ggml_bf16_t, ggml_bf16_t, float> tb{ params, k,
                 (const ggml_bf16_t *)A, lda,
                 (const ggml_bf16_t *)B, ldb,
                 (float *)C, ldc};
@@ -4054,11 +4150,25 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
                 (float *)C, ldc};
             return tb.matmul(m, n);
         }
+        if (Btype == GGML_TYPE_F32) {
+            tinyBLAS<16, __m512, __m512, ggml_fp16_t, float, float> tb{ params, k,
+                (const ggml_fp16_t *)A, lda,
+                (const float *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
 #elif (defined(__AVX__) || defined(__AVX2__)) && defined(__F16C__)
         if (Btype == GGML_TYPE_F16) {
             tinyBLAS<8, __m256, __m256, ggml_fp16_t, ggml_fp16_t, float> tb{ params, k,
                 (const ggml_fp16_t *)A, lda,
                 (const ggml_fp16_t *)B, ldb,
+                (float *)C, ldc};
+            return tb.matmul(m, n);
+        }
+        if (Btype == GGML_TYPE_F32) {
+            tinyBLAS<8, __m256, __m256, ggml_fp16_t, float, float> tb{ params, k,
+                (const ggml_fp16_t *)A, lda,
+                (const float *)B, ldb,
                 (float *)C, ldc};
             return tb.matmul(m, n);
         }
@@ -4142,6 +4252,17 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
         return true;
 #elif defined(__ARM_FEATURE_DOTPROD)
         tinyBLAS_Q0_ARM<block_q8_0> tb{
+            k, (const block_q8_0 *)A, lda,
+            (const block_q8_0 *)B, ldb,
+            (float *)C, ldc,
+            params->ith, params->nth};
+        tb.matmul(m, n);
+        return true;
+#elif defined(__VXE__) || defined(__VXE2__)
+        if (m % 2 || n % 2) {
+            return false;
+        }
+        tinyBLAS_Q0_VXE<block_q8_0> tb{
             k, (const block_q8_0 *)A, lda,
             (const block_q8_0 *)B, ldb,
             (float *)C, ldc,

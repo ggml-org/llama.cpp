@@ -6,6 +6,9 @@
 
 #include <cpp-httplib/httplib.h>
 
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <functional>
 #include <future>
 #include <memory>
@@ -79,6 +82,99 @@ static bool origin_is_localhost(const std::string & origin) {
     } catch (const std::exception &) {
         return false;
     }
+}
+
+static std::string ascii_lower(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return std::tolower(c); });
+    return s;
+}
+
+// true if the text is a dotted IPv4 address in 127.0.0.0/8
+static bool ipv4_is_loopback(const std::string & s) {
+    unsigned a, b, c, d;
+    char tail;
+    return std::sscanf(s.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) == 4 && a == 127 && b < 256 && c < 256 && d < 256;
+}
+
+// true if the address is loopback: 127.0.0.0/8, ::1 or an IPv4 mapped 127.0.0.0/8
+static bool addr_is_loopback(const std::string & addr) {
+    static const std::string mapped = "::ffff:";
+    if (addr.compare(0, mapped.size(), mapped) == 0) {
+        return ipv4_is_loopback(addr.substr(mapped.size()));
+    }
+    return addr == "::1" || ipv4_is_loopback(addr);
+}
+
+// the name of a Host header value, lowercase, without port and IPv6 brackets
+static std::string host_name(const std::string & host) {
+    if (!host.empty() && host[0] == '[') {
+        const size_t end = host.find(']');
+        return end == std::string::npos ? "" : ascii_lower(host.substr(1, end - 1));
+    }
+    return ascii_lower(host.substr(0, host.find(':')));
+}
+
+// DNS rebinding guard: a page whose own name resolves to 127.0.0.1 reaches a loopback
+// connection with that name in Host, so Host names loopback or the host of an allowed origin
+static bool request_host_is_allowed(const std::string & cors_origins, const httplib::Request & req) {
+    if (!addr_is_loopback(req.local_addr)) {
+        return true;
+    }
+    const std::string host = req.get_header_value("Host");
+    const std::string name = host_name(host);
+    // the unspecified addresses only reach this machine, e.g. curl http://0.0.0.0:8080
+    if (name == "localhost" || name == "0.0.0.0" || name == "::" || addr_is_loopback(name)) {
+        return true;
+    }
+    if (cors_origins == "localhost") {
+        return false;
+    }
+    for (const auto & entry : string_split<std::string>(cors_origins, ',')) {
+        const std::string allowed = string_strip(entry);
+        const size_t sep = allowed.find("://");
+        if (sep != std::string::npos && ascii_lower(allowed.substr(sep + 3)) == ascii_lower(host)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// CSRF guard when CORS is not "*"
+// no ACAO header only hides the response, browsers still send simple requests (text/plain POST, no-cors GET), so reject them here
+static bool request_origin_is_allowed(const std::string & cors_origins, const httplib::Request & req, bool is_frontend_path) {
+    if (cors_origins == "*") {
+        return true;
+    }
+
+    if (!request_host_is_allowed(cors_origins, req)) {
+        return false;
+    }
+
+    const std::string origin = req.get_header_value("Origin");
+    if (!origin.empty()) {
+        // same-origin, e.g. UI opened via LAN address
+        const std::string host = req.get_header_value("Host");
+        const size_t sep = origin.find("://");
+        if (!host.empty() && sep != std::string::npos && ascii_lower(origin.substr(sep + 3)) == ascii_lower(host)) {
+            return true;
+        }
+        if (cors_origins == "localhost") {
+            return origin_is_localhost(origin);
+        }
+        for (const auto & allowed : string_split<std::string>(cors_origins, ',')) {
+            if (string_strip(allowed) == origin) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // no Origin: non-browser client or browser no-cors GET; if cross-site, only allow navigation to the UI
+    const std::string site = req.get_header_value("Sec-Fetch-Site");
+    if (site == "cross-site" || site == "same-site") {
+        return req.method == "GET" && req.get_header_value("Sec-Fetch-Mode") == "navigate" && is_frontend_path;
+    }
+    return true;
 }
 
 // For Google Cloud Platform deployment compatibility
@@ -351,6 +447,23 @@ bool server_http_context::init_listener(const common_params & params) {
             res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
+        }
+        if (!request_origin_is_allowed(params.cors_origins, req, frontend_paths.count(req.path) > 0)) {
+            SRV_WRN("(CORS) rejected cross-origin request: %s %s, host = '%s', origin = '%s', sec-fetch-site = '%s'\n",
+                    req.method.c_str(), req.path.c_str(), req.get_header_value("Host").c_str(),
+                    req.get_header_value("Origin").c_str(), req.get_header_value("Sec-Fetch-Site").c_str());
+            res.status = 403;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Cross-origin request not allowed (see --cors-origins)"},
+                        {"type", "permission_error"},
+                        {"code", 403}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
+            return httplib::Server::HandlerResponse::Handled;
         }
         if (!middleware_server_state(req, res)) {
             return httplib::Server::HandlerResponse::Handled;

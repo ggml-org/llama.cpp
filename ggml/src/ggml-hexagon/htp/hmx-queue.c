@@ -46,9 +46,9 @@ static inline void hmx_queue_process(hmx_queue_t q, bool* killed) {
                 case HMX_QUEUE_WAKEUP:  hmx_lock(q);    break;
                 default:
                     hmx_lock(q);
-                    htp_trace_event_start(q->trace, HTP_TRACE_EVT_HMX_COMP, ir);
-                    d->func(d->data);
-                    htp_trace_event_stop(q->trace, HTP_TRACE_EVT_HMX_COMP, ir);
+                    htp_trace_event_start(q->th.trace, HTP_TRACE_EVT_HMX_COMP, ir);
+                    d->func(&q->th, d->data);
+                    htp_trace_event_stop(q->th.trace, HTP_TRACE_EVT_HMX_COMP, ir);
                     break;
             }
 
@@ -63,7 +63,7 @@ static inline void hmx_queue_process(hmx_queue_t q, bool* killed) {
 static void hmx_queue_thread(void * arg) {
     hmx_queue_t q = (hmx_queue_t) arg;
 
-    FARF(HIGH, "hmx-queue-thread: started");
+    FARF(HIGH, "hmx-queue-thread (tid %u): started", q->th.tid);
 
     bool killed = false;
 
@@ -90,7 +90,7 @@ static void hmx_queue_thread(void * arg) {
         hmx_queue_process(q, &killed);
     }
 
-    FARF(HIGH, "hmx-queue-thread: stopped");
+    FARF(HIGH, "hmx-queue-thread (tid %u): stopped", q->th.tid);
 }
 
 size_t hmx_queue_sizeof(size_t capacity, uint32_t stack_size) {
@@ -105,7 +105,7 @@ size_t hmx_queue_alignof(void) {
     return HEX_L2_LINE_SIZE;
 }
 
-hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, struct htp_thread_trace * trace) {
+hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, dma_queue_t * dma, struct htp_thread_trace * trace) {
     capacity = hex_ceil_pow2(capacity);
     size_t size_q = hex_align_up(sizeof(struct hmx_queue_s), HEX_L2_LINE_SIZE);
     size_t size_desc = hex_align_up(capacity * sizeof(struct hmx_queue_desc), HEX_L2_LINE_SIZE);
@@ -126,7 +126,7 @@ hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uin
     q->stack = block;
     memset(q->stack, 0, stack_size);
 
-    q->trace = trace;
+    htp_thread_init(&q->th, dma, trace);
 
     // Match caller thread priority (same pattern as worker-pool.c).
     int prio = qurt_thread_get_priority(qurt_thread_get_id());

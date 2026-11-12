@@ -2,13 +2,13 @@
 
 std::unique_ptr<llm_graph_context> llama_model_nemotron_h_moe::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // MTP draft head for Nemotron-H MoE
-llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "NEMOTRON_H_MOE MTP currently supports a single MTP block");
 
@@ -42,9 +42,7 @@ llama_model_nemotron_h_moe::graph_mtp::graph_mtp(const llama_model & model, cons
     }
     cb(tok_embd, "mtp_tok_embd", il);
 
-    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->h);
-    ggml_set_name(inp->h, "mtp_h_input");
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
 
     ggml_tensor * h_embd = inp->h;
 

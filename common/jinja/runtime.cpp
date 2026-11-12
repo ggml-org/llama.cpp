@@ -117,20 +117,8 @@ value object_literal::execute_impl(context & ctx) const {
     return obj;
 }
 
-value binary_expression::execute_impl(context & ctx) const {
-    value left_val = left->execute(ctx);
-
-    // Logical operators
-    if (op.value == "and") {
-        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
-        return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
-    } else if (op.value == "or") {
-        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
-        return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
-    }
-
+static value exec_binary_op(context & ctx, const token & op, value left_val, value right_val) {
     // Equality operators
-    value right_val = right->execute(ctx);
     JJ_DEBUG("Executing binary expression %s '%s' %s", left_val->type().c_str(), op.value.c_str(), right_val->type().c_str());
     if (op.value == "==") {
         return mk_val<value_bool>(*left_val == *right_val);
@@ -307,58 +295,74 @@ value binary_expression::execute_impl(context & ctx) const {
     throw std::runtime_error("Unknown operator \"" + op.value + "\" between " + left_val->type() + " and " + right_val->type());
 }
 
-static value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false) {
-    JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
-    if (ctx.is_get_stats) {
-        value_t::stats_t::mark_used(input);
-        input->stats.ops.insert(name);
+value binary_expression::execute_impl(context & ctx) const {
+    value left_val = left->execute(ctx);
+
+    // Logical operators
+    if (op.value == "and") {
+        JJ_DEBUG("Executing logical test: %s AND %s", left->type().c_str(), right->type().c_str());
+        return left_val->as_bool() ? right->execute(ctx) : std::move(left_val);
+    } else if (op.value == "or") {
+        JJ_DEBUG("Executing logical test: %s OR %s", left->type().c_str(), right->type().c_str());
+        return left_val->as_bool() ? std::move(left_val) : right->execute(ctx);
     }
-    auto builtins = input->get_builtins();
-    auto it = builtins.find(name);
-    if (it != builtins.end()) {
-        JJ_DEBUG("Binding built-in '%s'", name.c_str());
-        return mk_val<value_func>(name, it->second, input);
+
+    return exec_binary_op(ctx, op, std::move(left_val), right->execute(ctx));
+}
+
+value comparison_chain_expression::execute_impl(context & ctx) const {
+    value left_val = operands[0]->execute(ctx);
+    value res;
+    for (size_t i = 0; i < ops.size(); ++i) {
+        value right_val = operands[i + 1]->execute(ctx);
+        res = exec_binary_op(ctx, ops[i], left_val, right_val);
+        if (!res->as_bool()) {
+            break; // same as "and", the next operands are not executed
+        }
+        left_val = std::move(right_val);
     }
-    if (undef_on_missing) {
-        return mk_val<value_undefined>(name);
+    return res;
+}
+
+static void exec_call_args(context & ctx, const statements & arg_stmts, func_args & args) {
+    for (const auto & arg_stmt : arg_stmts) {
+        if (!is_stmt<spread_expression>(arg_stmt)) {
+            auto arg_val = arg_stmt->execute(ctx);
+            JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
+            args.push_back(arg_val);
+            continue;
+        }
+        auto spread = cast_stmt<spread_expression>(arg_stmt);
+        value val = spread->argument->execute(ctx);
+        JJ_DEBUG("  Unpacked argument type: %s", val->type().c_str());
+        if (spread->is_kwargs) {
+            if (!is_val<value_object>(val)) {
+                throw std::runtime_error("Argument after ** must be an object, got " + val->type());
+            }
+            for (const auto & pair : val->as_ordered_object()) {
+                if (!is_val<value_string>(pair.first)) {
+                    throw std::runtime_error("Keyword argument key must be a string, got " + pair.first->type());
+                }
+                args.push_back(mk_val<value_kwarg>(pair.first->as_string().str(), pair.second));
+            }
+        } else {
+            if (!is_val<value_array>(val)) {
+                throw std::runtime_error("Argument after * must be an array, got " + val->type());
+            }
+            for (const auto & item : val->as_array()) {
+                args.push_back(item);
+            }
+        }
     }
-    throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
 
 static value apply_filter(context & ctx, const statement_ptr & filter, value input) {
     JJ_DEBUG("Applying filter to %s", input->type().c_str());
 
-    auto set_filter_alias = [](auto & filter_id) {
-        if (filter_id == "count") {
-            filter_id = "length";
-        } else if (filter_id == "d") {
-            filter_id = "default";
-        } else if (filter_id == "e") {
-            filter_id = "escape";
-        } else if (filter_id == "trim") {
-            filter_id = "strip";
-        }
-    };
-
     if (is_stmt<identifier>(filter)) {
         auto filter_id = cast_stmt<identifier>(filter)->val;
-
-        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' to %s", filter_id.c_str(), input->type().c_str());
-        // TODO: Refactor filters so this coercion can be done automatically
-        if (!input->is_undefined() && !is_val<value_string>(input) && (
-            filter_id == "capitalize" ||
-            filter_id == "lower" ||
-            filter_id == "replace" ||
-            filter_id == "strip" ||
-            filter_id == "title" ||
-            filter_id == "upper" ||
-            filter_id == "wordcount"
-        )) {
-            JJ_DEBUG("Coercing %s to String for '%s' filter", input->type().c_str(), filter_id.c_str());
-            input = mk_val<value_string>(input->as_string());
-        }
-        return try_builtin_func(ctx, filter_id, input)->invoke(func_args(ctx));
+        return apply_filter_by_name(ctx, filter_id, input, func_args(ctx));
 
     } else if (is_stmt<call_expression>(filter)) {
         auto call = cast_stmt<call_expression>(filter);
@@ -367,14 +371,11 @@ static value apply_filter(context & ctx, const statement_ptr & filter, value inp
         }
         auto filter_id = cast_stmt<identifier>(call->callee)->val;
 
-        set_filter_alias(filter_id);
         JJ_DEBUG("Applying filter '%s' with arguments to %s", filter_id.c_str(), input->type().c_str());
         func_args args(ctx);
-        for (const auto & arg_expr : call->args) {
-            args.push_back(arg_expr->execute(ctx));
-        }
+        exec_call_args(ctx, call->args, args);
 
-        return try_builtin_func(ctx, filter_id, input)->invoke(args);
+        return apply_filter_by_name(ctx, filter_id, input, args);
 
     } else {
         throw std::runtime_error("Invalid filter expression");
@@ -415,9 +416,7 @@ value test_expression::execute_impl(context & ctx) const {
         test_id = cast_stmt<identifier>(call->callee)->val;
 
         JJ_DEBUG("Applying test '%s' with arguments to %s", test_id.c_str(), input->type().c_str());
-        for (const auto & arg_expr : call->args) {
-            args.push_back(arg_expr->execute(ctx));
-        }
+        exec_call_args(ctx, call->args, args);
 
     } else {
         throw std::runtime_error("Invalid test expression");
@@ -808,12 +807,7 @@ value call_statement::execute_impl(context & ctx) const {
     call_ctx.set_val("caller", mk_val<value_func>("caller", func));
 
     func_args args(call_ctx);
-
-    for (const auto & arg_expr : call_expr->args) {
-        auto arg_val = arg_expr->execute(ctx);
-        JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(arg_val);
-    }
+    exec_call_args(ctx, call_expr->args, args);
 
     JJ_DEBUG("Calling macro '%s' with %zu arguments", callee_func->name.c_str(), args.count());
     return callee_func->invoke(args);
@@ -953,11 +947,7 @@ value member_expression::execute_impl(context & ctx) const {
 value call_expression::execute_impl(context & ctx) const {
     // gather arguments
     func_args args(ctx);
-    for (auto & arg_stmt : this->args) {
-        auto arg_val = arg_stmt->execute(ctx);
-        JJ_DEBUG("  Argument type: %s", arg_val->type().c_str());
-        args.push_back(arg_val);
-    }
+    exec_call_args(ctx, this->args, args);
     // execute callee
     value callee_val = callee->execute(ctx);
     if (!is_val<value_func>(callee_val)) {
