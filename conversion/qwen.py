@@ -225,12 +225,13 @@ class Qwen3Model(Qwen2Model):
     def _find_rerank_config(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
 
         self.is_rerank = True
         self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
-        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[unresolved-attribute, invalid-assignment]
-        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[unresolved-attribute, invalid-assignment]
-        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")  # ty: ignore[unresolved-attribute]
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[invalid-assignment]
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[invalid-assignment]
+        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")
 
         assert self.token_false_id is not None and self.token_true_id is not None
 
@@ -329,7 +330,7 @@ class _QwenMtpMixin:
         key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
         type(self)._original_block_count = hparams.get(key)
         type(self).opt_num_mtp_layers = 0
-        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[missing-attribute]
 
     @classmethod
     def filter_tensors(cls, item):
@@ -366,7 +367,7 @@ class _QwenMtpMixin:
         return name, gen
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()  # ty: ignore[missing-attribute]
         if self.no_mtp:
             return
         if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
@@ -374,15 +375,15 @@ class _QwenMtpMixin:
 
     def prepare_metadata(self, vocab_only: bool):
         from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
+        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[missing-attribute]
 
         if not self.mtp_only or not from_dir:
             return
 
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
@@ -685,7 +686,7 @@ class _Qwen35MRopeMixin:
     rope_parameters: dict
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()  # ty: ignore[missing-attribute]
         if "mrope_section" not in self.rope_parameters:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
@@ -843,7 +844,7 @@ class DFlashModel(Qwen3Model):
         if target_cls is not type(self):
             if target_arch == "NemotronHForCausalLM":
                 setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
-            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+            target_cls.set_vocab(self)  # ty: ignore[missing-attribute]
         else:
             super().set_vocab()
 

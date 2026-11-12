@@ -1676,7 +1676,7 @@ bool mtmd_audio_preprocessor_gemma4a::process(const float *                 samp
     GGML_ASSERT(!cache.filters.data.empty());
 
     // Split into 30-second chunks (model context limit, ~750 tokens each)
-    const size_t chunk_samples = 30 * hparams.audio_sample_rate;
+    const size_t chunk_samples = (size_t) segment_seconds * hparams.audio_sample_rate;
     for (size_t off = 0; off < n_samples; off += chunk_samples) {
         const float * chunk_ptr = samples + off;
         size_t chunk_len = std::min(chunk_samples, n_samples - off);

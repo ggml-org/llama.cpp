@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -197,6 +198,18 @@ class SarvamMoEModel(BailingMoeV2Model):
     # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:
     #  - full rotary (no partial_rotary_factor)
     #  - expert bias is zero-mean normalized at load time
+
+    def set_vocab(self):
+        # BPE with byte fallback: mark <0xXX> tokens as BYTE so they decode to raw bytes
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        toktypes = [gguf.TokenType.BYTE if re.fullmatch(r"<0x[0-9A-F]{2}>", tok) else typ for tok, typ in zip(tokens, toktypes)]
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()

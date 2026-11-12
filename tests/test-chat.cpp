@@ -2043,6 +2043,55 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Test JSON schema conversion
+    {
+        json input = json::parse(R"({
+            "input": "Hello",
+            "model": "test-model",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "TestOutput",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "message": {"type": "string"}
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false
+                    },
+                    "strict": true
+                }
+            }
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(false, result.contains("text"));
+        assert_equals(true, result.contains("response_format"));
+        const auto & response_format = result.at("response_format");
+        assert_equals(std::string("json_schema"), response_format.at("type").get<std::string>());
+        const auto & json_schema = response_format.at("json_schema");
+        assert_equals(std::string("TestOutput"), json_schema.at("name").get<std::string>());
+        assert_equals(true, json_schema.at("strict").get<bool>());
+        assert_equals(std::string("object"), json_schema.at("schema").at("type").get<std::string>());
+        assert_equals(false, json_schema.contains("type"));
+
+        input["extra_params"] = {{"seed", 42}, {"min_p", 0.1}};
+        json result_extra = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(false, result_extra.contains("text"));
+        assert_equals(false, result_extra.contains("extra_params"));
+        assert_equals(42, result_extra.at("seed").get<int>());
+        assert_equals(0.1, result_extra.at("min_p").get<double>());
+        assert_equals(response_format.dump(), result_extra.at("response_format").dump());
+
+        input["extra_params"]["response_format"] = {{"type", "text"}};
+        result_extra = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals(input.at("extra_params").at("response_format").dump(), result_extra.at("response_format").dump());
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser
@@ -2109,6 +2158,12 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect_tool_calls({
             { "python", R"#({"code": "def hello():\n    print('hey')"})#", "" }
         })
+        .run();
+
+    // Raw control characters in pythonic string arguments must be escaped into valid JSON.
+    tst.test("<|tool_call_start|>[python(code='a\nb')]<|tool_call_end|>")
+        .tools({ python_tool })
+        .expect_tool_calls({ { "python", R"#({"code": "a\nb"})#", "" } })
         .run();
 
     // String escape sequences decode to their actual characters (newline + tab here),
@@ -2343,6 +2398,18 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                R"({"amount": 123.45, "date": "2025-12-03"})")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(
+               "I need to output the invoice details in JSON\n"
+               "</think>\n\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ get_time_tool })
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
@@ -2687,6 +2754,18 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                R"({"amount": 123.45, "date": "2025-12-03"})"
                "\n```")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(
+               "[THINK]I need to output the invoice details in JSON[/THINK]"
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
@@ -4275,6 +4354,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .enable_thinking(false)
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist)
+            .run();
+
+        tst.test(
+               "```json\n"
+               R"({"amount": 123.45, "date": "2025-12-03"})"
+               "\n```")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
         // Thinking + content
@@ -6927,6 +7017,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect_reasoning("Thinking.")
             .expect_content("Working on it.Hello!")
+            .run();
+
+        // Structured output, straight to the final answer
+        tst.test(" to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        // Structured output after a reasoning message: reasoning stays free-form
+        tst.test(" to=self<|message|>I need to output the invoice details in JSON<|eom|>"
+                 "<|start|>assistant to=user<|message|>" R"({"amount": 123.45, "date": "2025-12-03"})")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
     }
 

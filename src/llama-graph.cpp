@@ -223,6 +223,12 @@ void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
         ggml_backend_tensor_set(embd, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(embd));
     }
 
+    if (h_rows) {
+        GGML_ASSERT(ubatch->data && ubatch->data->embd_state_row.size() == (size_t) n_tokens);
+        ggml_backend_tensor_set(h_rows, ubatch->data->embd_state_row.data(), 0, n_tokens*ggml_element_size(h_rows));
+        return;
+    }
+
     GGML_ASSERT(ubatch->embd_state && "this graph requires a state embedding, see llama_batch_ext_set_embd_state()");
     GGML_ASSERT(n_embd_state == h->ne[0]);
 
@@ -235,6 +241,10 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
     res &= (!params.ubatch.token)      || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
     res &= (!params.ubatch.embd)       || (embd   && embd->ne[1]   == params.ubatch.n_tokens);
     res &= (!params.ubatch.embd_state) || (h      && h->ne[1]      == params.ubatch.n_tokens);
+
+    const bool has_rows = params.ubatch.data && !params.ubatch.data->embd_state_row.empty();
+    res &= has_rows == (h_rows != nullptr);
+    res &= !has_rows || h_rows->ne[0] == params.ubatch.n_tokens;
 
     return res;
 }
@@ -1418,6 +1428,7 @@ void llm_graph_result::reset() {
     t_sampled_probs.clear();
     t_sampled_logits.clear();
     t_candidates.clear();
+    t_sampling_all.clear();
 
     params = {};
 
@@ -1466,22 +1477,8 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
             }
         }
     }
-    for (auto * tensor : t_sampled) {
-        if (tensor != nullptr) {
-            ggml_set_output(tensor);
-        }
-    }
-    for (auto * tensor : t_sampled_probs) {
-        if (tensor != nullptr) {
-            ggml_set_output(tensor);
-        }
-    }
-    for (auto * tensor : t_sampled_logits) {
-        if (tensor != nullptr) {
-            ggml_set_output(tensor);
-        }
-    }
-    for (auto * tensor : t_candidates) {
+    // the chains are read on the host after compute, so keep every one alive
+    for (auto * tensor : t_sampling_all) {
         if (tensor != nullptr) {
             ggml_set_output(tensor);
         }
@@ -1588,6 +1585,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     hdmd             (params.hdmd),
     layer_inp_dev    (params.layer_inp_dev),
     layer_inp_src    (params.layer_inp_src),
+    h_nextn_dev      (params.h_nextn_dev),
+    h_nextn_src      (params.h_nextn_src),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -2883,6 +2882,24 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd, float to
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_inp_embd_state(llm_graph_input_embd_h * inp, int64_t n_embd_state) const {
+    if (ubatch.data && !ubatch.data->embd_state_row.empty()) {
+        GGML_ASSERT(h_nextn_src != nullptr && h_nextn_src->ne[0] == n_embd_state);
+
+        inp->h_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+        ggml_set_input(inp->h_rows);
+        ggml_set_name(inp->h_rows, "mtp_h_rows");
+
+        return ggml_get_rows(ctx0, h_nextn_src, inp->h_rows);
+    }
+
+    ggml_tensor * h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_state, n_tokens);
+    ggml_set_input(h);
+    ggml_set_name(h, "mtp_h_input");
+
+    return h;
+}
+
 ggml_tensor * llm_graph_context::build_inp_pos() const {
     auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd(), hparams.rope_section_order);
 
@@ -3298,6 +3315,43 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
+static void build_attn_scale_kv_inputs(
+        ggml_context * ctx,
+        const llama_kv_cache_context * mctx,
+        ggml_tensor * & q,
+        ggml_tensor * & k,
+        ggml_tensor * & v,
+        int32_t il) {
+    if (ggml_tensor * scale = mctx->get_k_scale(il)) {
+        // Store K/s and move its dequant scale to Q: (Q*s) dot (K/s) = Q dot K.
+        q = ggml_mul(ctx, q, scale);
+        if (k) {
+            k = ggml_div(ctx, k, scale);
+        }
+    }
+
+    if (v) {
+        // Store V/s here and restore its dequant scale after the weighted sum.
+        ggml_tensor * scale = mctx->get_v_scale(il);
+        if (scale) {
+            v = ggml_div(ctx, v, scale);
+        }
+    }
+}
+
+static ggml_tensor * build_attn_scale_kv_output(
+        ggml_context * ctx,
+        const llama_kv_cache_context * mctx,
+        ggml_tensor * cur,
+        int32_t il) {
+    if (ggml_tensor * scale = mctx->get_v_scale(il)) {
+        // P*(V/s)*s = P*V.
+        cur = ggml_mul(ctx, cur, scale);
+    }
+
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor * wo,
@@ -3324,14 +3378,16 @@ ggml_tensor * llm_graph_context::build_attn(
         v_cur = llama_mul_mat_hadamard(ctx0, v_cur, inp->self_v_rot[il]);
     }
 
+    const auto * mctx_cur = inp->mctx;
+
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     // expand k later to enable rope fusion which directly writes into k-v cache
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, v_cur);
     ggml_build_forward_expand(gf, k_cur);
-
-    const auto * mctx_cur = inp->mctx;
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k;
@@ -3359,6 +3415,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto & kv_rows = inp->self_attn_mask.rows;
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot[il]) {
@@ -3618,6 +3675,11 @@ ggml_tensor * llm_graph_context::build_attn(
         }
     }
 
+    const auto * mctx_iswa = inp->mctx;
+    const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
+
+    build_attn_scale_kv_inputs(ctx0, mctx_cur, q_cur, k_cur, v_cur, il);
+
     // these nodes are added to the graph together so that they are not reordered
     // by doing so, the number of splits in the graph is reduced
     ggml_build_forward_expand(gf, q_cur);
@@ -3629,10 +3691,6 @@ ggml_tensor * llm_graph_context::build_attn(
     if (v_cur) {
         ggml_build_forward_expand(gf, v_cur);
     }
-
-    const auto * mctx_iswa = inp->mctx;
-
-    const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
 
     // whole seq fits into batch in training mode
     const bool use_kv_cur = cparams.training && k_cur && v_cur;
@@ -3663,6 +3721,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
@@ -4396,6 +4455,25 @@ void llm_graph_context::build_layer_inp_dev() const {
     res->add_input(std::move(inp));
 }
 
+void llm_graph_context::build_h_nextn_dev() const {
+    ggml_tensor * src = res->t_h_nextn;
+    if (h_nextn_dev == nullptr || src == nullptr) {
+        return;
+    }
+
+    // the device buffer is only enabled for the unmasked extraction, which has a row per batch token
+    GGML_ASSERT(src->ne[0] == h_nextn_dev->ne[0] && ggml_nrows(src) == n_tokens);
+
+    auto inp = std::make_unique<llm_graph_input_batch_idxs>();
+
+    inp->idxs = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_tokens);
+    ggml_set_input(inp->idxs);
+
+    ggml_build_forward_expand(gf, ggml_set_rows(ctx0, h_nextn_dev, ggml_reshape_2d(ctx0, src, src->ne[0], n_tokens), inp->idxs));
+
+    res->add_input(std::move(inp));
+}
+
 void llm_graph_context::build_sampling() const {
     if (samplers.empty() || !res->t_logits) {
         return;
@@ -4457,6 +4535,11 @@ void llm_graph_context::build_sampling() const {
 
             assert(sampler->iface->backend_apply);
             sampler->iface->backend_apply(sampler, ctx0, gf, &data);
+
+            if (data.sampled     != nullptr) { res->t_sampling_all.push_back(data.sampled);     }
+            if (data.probs       != nullptr) { res->t_sampling_all.push_back(data.probs);       }
+            if (data.logits      != nullptr) { res->t_sampling_all.push_back(data.logits);      }
+            if (data.candidates  != nullptr) { res->t_sampling_all.push_back(data.candidates);  }
 
             if (data.sampled != nullptr) {
                 if (active) {
