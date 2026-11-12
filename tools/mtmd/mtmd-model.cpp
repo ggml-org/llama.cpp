@@ -662,6 +662,10 @@ struct mtmd_model_loader {
                         hparams.image_resize_pad  = PAD_NONE; // the HF processor resizes to the smart_resize size, no padding
                         hparams.image_round_half_even = true; // smart_resize uses Python round()
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        if (hparams.n_merge != 2) {
+                            // the temporal merge input and the merger use a 2x2 patch grid
+                            throw std::runtime_error(mtmd_format("%s: spatial_merge_size (%d) must be 2\n", __func__, hparams.n_merge));
+                        }
                         get_u32(KEY_WIN_ATTN_PATTERN, hparams.n_wa_pattern, model.proj_type == PROJECTOR_TYPE_QWEN25VL); // only 2.5 requires it
                         // ref: https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct/blob/main/preprocessor_config.json
                         hparams.set_limit_image_tokens(8, 4096);
