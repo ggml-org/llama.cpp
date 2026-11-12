@@ -360,6 +360,8 @@ class Context:
         self.commands: list[list[str]] = []
         # what the running server learned about itself (engine version, kernel lines), merged into the record
         self.run_info: dict[str, Any] = {}
+        # --resume: ok records of the earlier part, kept in place instead of re-run
+        self.done: dict[tuple[str, str, str], dict[str, Any]] = {}
         self.save: Callable[[], None] = lambda: None
 
     def selected(self, config: str) -> bool:
@@ -509,7 +511,9 @@ class VllmServer(Server):
         self.log_path = log_path
         self.proc = None
         self.container = f"bench-vllm-{os.getpid()}"
-        image = (ctx.images.get(name) or {}).get("image") or model["image"]
+        # by digest when prefetch recorded one: every run of a night, resumed parts included, uses the same image
+        col = ctx.images.get(name) or {}
+        image = col.get("digest") or col.get("image") or model["image"]
         hf_mount = VLLM_CACHE_MOUNTS["huggingface"]
         cmd = ["docker", "run", "--rm", "--name", self.container, "--gpus", "all", "--ipc", "host", "--network", "host",
                *[str(a) for a in model.get("docker_args") or []],
@@ -628,7 +632,15 @@ def run_point(ctx: Context, records: list[dict[str, Any]], suite: str, model: st
               fn: Callable[[Path], dict[str, float]], info: dict[str, Any] | None = None) -> None:
     if not ctx.selected(config):
         return
+    kept = ctx.done.get((suite, model, config))
+    if kept is not None:
+        # resumed night: the earlier part already ran this one; keep its record in the usual order
+        records.append(kept)
+        ctx.save()
+        return
     run_dir = ctx.out_dir / suite / model / config
+    # a re-run must not read what an earlier, interrupted attempt left behind
+    shutil.rmtree(run_dir, ignore_errors=True)
     run_dir.mkdir(parents=True, exist_ok=True)
     rec: dict[str, Any] = {"suite": suite, "model": model, "config": config, "status": "ok", "error": "", "metrics": {},
                            **(info or {"engine": "llama.cpp"})}
@@ -659,6 +671,11 @@ def run_group(ctx: Context, records: list[dict[str, Any]], suite: str, name: str
     # one server for several points; if it fails to start or dies, the remaining points fail
     points = [p for p in points if ctx.selected(p[0])]
     if not points:
+        return
+    if all((suite, name, p[0]) in ctx.done for p in points):
+        # resumed night, nothing left to run in this group: no server start
+        for config, fn in points:
+            run_point(ctx, records, suite, name, config, lambda _d: {})
         return
     info = model_info(ctx, name, model)
     server.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -979,6 +996,7 @@ def render_summary(manifest: dict[str, Any], prev: dict[str, Any] | None) -> str
         lines.append("- same build as last night")
     statuses = [r["status"] for r in manifest["records"]]
     lines.append(f"- runs: {statuses.count('ok')} ok, {statuses.count('failed')} failed, {statuses.count('skipped')} skipped")
+    lines += parts_line(manifest)
     lines.append("")
     for suite in SUITES:
         recs = [r for r in manifest["records"] if r["suite"] == suite]
@@ -1008,6 +1026,7 @@ def render_weekly(manifest: dict[str, Any], nightly: dict[str, Any] | None) -> s
         lines.append("- llama.cpp rows: no nightly results found")
     statuses = [r["status"] for r in manifest["records"]]
     lines.append(f"- vLLM runs: {statuses.count('ok')} ok, {statuses.count('failed')} failed, {statuses.count('skipped')} skipped")
+    lines += parts_line(manifest)
     lines += ["- vLLM uses an FP8 KV cache (NVIDIA's recipes), llama.cpp f16. Neither side uses speculative decoding here.", ""]
     base = {(r["suite"], r["model"], r["config"]): r for r in (nightly or {}).get("records", [])}
     for suite in [s for s in SUITES if s in VLLM_SUITES]:
@@ -1033,29 +1052,57 @@ def render_weekly(manifest: dict[str, Any], nightly: dict[str, Any] | None) -> s
     return "\n".join(lines)
 
 
-def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], dry_run: bool, summary_path: Path | None,
-        configs: list[str] | None = None) -> int:
-    kind = cfg.get("kind", "nightly")
-    images: dict[str, Any] = {}
-    if kind == "weekly":
-        selected = home / "selected_vllm.json"
-        if selected.exists():
-            images = json.loads(selected.read_text())
-        elif not dry_run:
-            raise BenchError(f"{selected} not found, run prefetch first")
-        build: dict[str, Any] = {"tag": "vllm", "commit": ""}
-    else:
-        selected = home / "selected_build.json"
-        if selected.exists():
-            build = json.loads(selected.read_text())
-        elif dry_run:
-            build = {"tag": "dry-run", "commit": "", "bin_dir": str(home / "builds" / "dry-run")}
-        else:
-            raise BenchError(f"{selected} not found, run prefetch first")
+def parts_line(manifest: dict[str, Any]) -> list[str]:
+    # a night finished with --resume says which workflow runs it took
+    parts = manifest.get("parts") or []
+    if len(parts) < 2:
+        return []
+    items = []
+    for i, p in enumerate(parts, 1):
+        link = f"[part {i}]({p['workflow_url']})" if p.get("workflow_url") else f"part {i}"
+        when = f", started {p['started'][:16].replace('T', ' ')} UTC" if p.get("started") else ""
+        items.append(f"{link} ({p.get('ran', '?')} runs{when})")
+    return [f"- ran in {len(parts)} parts: " + ", ".join(items)]
 
-    date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    night_id = f"{date}_{build['tag']}" + ("_dry-run" if dry_run else "")
-    out_dir = home / "results" / night_id
+
+def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], dry_run: bool, summary_path: Path | None,
+        configs: list[str] | None = None, resume: str | None = None) -> int:
+    kind = cfg.get("kind", "nightly")
+    part = {"workflow_url": os.environ.get("NIGHTLY_WORKFLOW_URL", ""),
+            "started": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
+    old: dict[str, Any] | None = None
+    if resume:
+        # finish an earlier night: same night id, date, build and images, so it reads as one report
+        night_dir = home / "results" / resume
+        if not (night_dir / "night.json").exists():
+            raise BenchError(f"--resume: {night_dir / 'night.json'} not found")
+        old = json.loads((night_dir / "night.json").read_text())
+        if old.get("kind", "nightly") != kind:
+            raise BenchError(f"--resume: {resume} is a {old.get('kind', 'nightly')} night, this config is {kind}")
+        build, images = old["build"], old.get("images") or {}
+        date, night_id = old["date"], old["night_id"]
+        # a dry run never touches the night it would resume
+        out_dir = home / "results" / (f"{resume}_dry-run" if dry_run else resume)
+    else:
+        images = {}
+        if kind == "weekly":
+            selected = home / "selected_vllm.json"
+            if selected.exists():
+                images = json.loads(selected.read_text())
+            elif not dry_run:
+                raise BenchError(f"{selected} not found, run prefetch first")
+            build = {"tag": "vllm", "commit": ""}
+        else:
+            selected = home / "selected_build.json"
+            if selected.exists():
+                build = json.loads(selected.read_text())
+            elif dry_run:
+                build = {"tag": "dry-run", "commit": "", "bin_dir": str(home / "builds" / "dry-run")}
+            else:
+                raise BenchError(f"{selected} not found, run prefetch first")
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        night_id = f"{date}_{build['tag']}" + ("_dry-run" if dry_run else "")
+        out_dir = home / "results" / night_id
     out_dir.mkdir(parents=True, exist_ok=True)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
@@ -1067,21 +1114,32 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
         "date": date,
         "build": build,
         "runner": os.environ.get("RUNNER_NAME", socket.gethostname()),
-        "workflow_url": os.environ.get("NIGHTLY_WORKFLOW_URL", ""),
+        "workflow_url": part["workflow_url"],
         "models": {n: {k: cfg["models"][n][k] for k in ("engine", "repo", "revision", "file", "pair") if k in cfg["models"][n]}
                    for n in models},
         "records": [],
+        "parts": [part],
     }
     if images:
         manifest["images"] = images
-    # a re-run on the same night keeps the records of the suites, models and configs it does not run
-    if (out_dir / "night.json").exists():
-        old = json.loads((out_dir / "night.json").read_text())
-        manifest["records"] = [r for r in old.get("records", [])
-                               if r["suite"] not in suites or r["model"] not in models or not config_selected(configs, r["config"])]
-        manifest["models"] = {**old.get("models", {}), **manifest["models"]}
     ctx = Context(cfg, home, build, out_dir, dry_run, configs, images.get("columns"))
+    if old is None and (out_dir / "night.json").exists():
+        old = json.loads((out_dir / "night.json").read_text())
+    if old is not None:
+        def in_scope(r: dict[str, Any]) -> bool:
+            return r["suite"] in suites and r["model"] in models and config_selected(configs, r["config"])
+        # records outside this run's scope stay as they are
+        manifest["records"] = [r for r in old.get("records", []) if not in_scope(r)]
+        manifest["models"] = {**old.get("models", {}), **manifest["models"]}
+        manifest["workflow_url"] = old.get("workflow_url", "")
+        # manifests from before `parts` existed: one part, its start time unknown
+        first = {"workflow_url": old.get("workflow_url", ""), "ran": len(old.get("records", []))}
+        manifest["parts"] = (old.get("parts") or [first]) + [part]
+        if resume:
+            # in scope: ok runs are kept in their usual place, the rest run again
+            ctx.done = {(r["suite"], r["model"], r["config"]): r for r in old.get("records", []) if in_scope(r) and r["status"] == "ok"}
     ctx.save = lambda: write_json(out_dir / "night.json", manifest)
+    initial = len(manifest["records"])
     started = time.monotonic()
     for suite in suites:
         for name in models:
@@ -1089,7 +1147,10 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
             if suite in model["suites"]:
                 log(f"suite {suite} on {name}")
                 SUITE_FNS[suite](ctx, manifest["records"], name, model)
-    manifest["duration_s"] = round(time.monotonic() - started, 1)
+    kept = {id(r) for r in ctx.done.values()}
+    part["ran"] = sum(1 for r in manifest["records"][initial:] if id(r) not in kept)
+    part["finished"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    manifest["duration_s"] = round(time.monotonic() - started, 1) + (float(old.get("duration_s", 0)) if resume and old else 0)
     write_json(out_dir / "night.json", manifest)
 
     if kind == "weekly":
@@ -1124,6 +1185,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--models", default=None, help="comma-separated subset of the models in the config")
     parser.add_argument("--configs", default=None, help="comma-separated shell patterns on config names, e.g. 'mooncake_T02*,depth32768*_c8'")
     parser.add_argument("--dry-run", action="store_true", help="print the commands, start nothing")
+    parser.add_argument("--resume", metavar="NIGHT_ID", default=None,
+                        help="run: finish an earlier night (e.g. 2026-11-11_vllm) into one report; its ok runs are kept, the rest run")
     parser.add_argument("--summary", type=Path, default=None, help="append the Markdown summary to this file")
     parser.add_argument("--vllm-image", default=None,
                         help="prefetch: comma-separated COLUMN=IMAGE overrides of the recipe images, e.g. 'Q27-NVFP4=nvcr.io/nvidia/vllm:26.10-py3'")
@@ -1143,7 +1206,7 @@ def main(argv: list[str] | None = None) -> int:
         prefetch(cfg, args.home, args.tag, models, overrides)
         return 0
     configs = [c.strip() for c in args.configs.split(",") if c.strip()] if args.configs else None
-    return run(cfg, args.home, suites, models, args.dry_run, args.summary, configs)
+    return run(cfg, args.home, suites, models, args.dry_run, args.summary, configs, args.resume)
 
 
 if __name__ == "__main__":

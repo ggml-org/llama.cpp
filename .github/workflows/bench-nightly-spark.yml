@@ -21,6 +21,10 @@ on:
         description: 'Comma-separated shell patterns on config names, e.g. mooncake_T02*,depth32768*_c8 (default: all)'
         required: false
         type: string
+      resume:
+        description: 'Finish an interrupted night into its report, e.g. 2026-11-11_b12284: its ok runs are kept, the rest run on its build'
+        required: false
+        type: string
 
 # never on pull requests: the runner is a shared, persistent box
 permissions:
@@ -75,9 +79,10 @@ jobs:
           SUITES: ${{ inputs.suites }}
           MODELS: ${{ inputs.models }}
           CONFIGS: ${{ inputs.configs }}
+          RESUME: ${{ inputs.resume }}
           NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run ${SUITES:+--suites "$SUITES"} ${MODELS:+--models "$MODELS"} ${CONFIGS:+--configs "$CONFIGS"} --summary "$GITHUB_STEP_SUMMARY"
+          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run ${SUITES:+--suites "$SUITES"} ${MODELS:+--models "$MODELS"} ${CONFIGS:+--configs "$CONFIGS"} ${RESUME:+--resume "$RESUME"} --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
         if: ${{ always() && steps.run.outputs.night_dir != '' }}

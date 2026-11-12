@@ -22,6 +22,10 @@ on:
         description: 'Comma-separated COLUMN=IMAGE overrides of the recipe images (default: what NVIDIA recipes name today)'
         required: false
         type: string
+      resume:
+        description: 'Finish an interrupted run into its report, e.g. 2026-11-11_vllm: its ok runs are kept, the rest run with its images'
+        required: false
+        type: string
 
 # never on pull requests: the runner is a shared, persistent box
 permissions:
@@ -74,9 +78,10 @@ jobs:
           COLUMNS_IN: ${{ inputs.columns }}
           SUITES: ${{ inputs.suites }}
           CONFIGS: ${{ inputs.configs }}
+          RESUME: ${{ inputs.resume }}
           NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run --config "$BENCH_DIR/weekly.yaml" ${SUITES:+--suites "$SUITES"} ${COLUMNS_IN:+--models "$COLUMNS_IN"} ${CONFIGS:+--configs "$CONFIGS"} --summary "$GITHUB_STEP_SUMMARY"
+          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run --config "$BENCH_DIR/weekly.yaml" ${SUITES:+--suites "$SUITES"} ${COLUMNS_IN:+--models "$COLUMNS_IN"} ${CONFIGS:+--configs "$CONFIGS"} ${RESUME:+--resume "$RESUME"} --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Stop leftover containers
         if: ${{ always() }}
