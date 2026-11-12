@@ -201,6 +201,8 @@ LLAMA_API bool llama_batch_ext_set_embd_state_row(struct llama_batch_ext * batch
 // model/context data extraction
 //
 
+// DFlash2 selector: number of candidate tokens the draft keeps per block position from its logits
+// (the packed lattice also holds the top_k x top_k pairwise transition scores); 0 if the model has no selector head
 LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
 
 // returns pointer to the target-model layer indices
