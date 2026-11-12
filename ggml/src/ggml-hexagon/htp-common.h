@@ -97,7 +97,7 @@ struct ggml_hexagon_session;
 
 const char * htp_session_name(const struct ggml_hexagon_session * sess);
 size_t       htp_session_vtcm_size(const struct ggml_hexagon_session * sess);
-uint32_t     htp_session_n_threads(const struct ggml_hexagon_session * sess);
+uint32_t     htp_session_n_hvx(const struct ggml_hexagon_session * sess);
 uint32_t     htp_session_n_hmx(const struct ggml_hexagon_session * sess);
 uint32_t     htp_session_mdev_count(const struct ggml_hexagon_session * sess);
 

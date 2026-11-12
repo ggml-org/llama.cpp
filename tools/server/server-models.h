@@ -170,6 +170,7 @@ private:
         std::shared_ptr<server_subproc> subproc; // shared with the monitor thread
         server_model_meta meta;
         int req_count = 0; // number of active proxy requests
+        bool download_stop_requested = false; // a client asked the download to stop (pause or cancel)
 
         // ask the child to exit (it handles the command on its stdin, see server_role::setup)
         void request_exit() const;
@@ -443,7 +444,8 @@ struct server_http_proxy : server_http_res {
                       const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
-                      int32_t timeout_write
+                      int32_t timeout_write,
+                      const std::string & resolved_addr = "" // if set: connect to this address only, do not follow redirects
                       );
     ~server_http_proxy() {
         if (cleanup_pipes) {

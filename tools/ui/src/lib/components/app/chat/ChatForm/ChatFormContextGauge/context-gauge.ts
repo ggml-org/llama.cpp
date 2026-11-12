@@ -1,4 +1,5 @@
-import { ColorLevel } from '$lib/enums';
+import { ColorLevel, MessageRole } from '$lib/enums';
+import type { ApiProcessingState, DatabaseMessage } from '$lib/types';
 
 const WARNING_THRESHOLD = 80;
 const CRITICAL_THRESHOLD = 95;
@@ -37,4 +38,43 @@ export function colorLevelBgClass(level: ColorLevel): string {
 		default:
 			return 'bg-muted';
 	}
+}
+
+/**
+ * Whether the conversation has spent any tokens yet, so the gauge has something to show: the
+ * timings its replies recorded, or the live state of a reply still being generated.
+ */
+export function hasProcessedTokens(
+	messages: DatabaseMessage[],
+	liveState: ApiProcessingState | null
+): boolean {
+	let totalHistoricalTokens = 0;
+
+	for (const m of messages) {
+		if (m.role !== MessageRole.ASSISTANT) continue;
+
+		const timings = m.timings;
+
+		if (!timings) continue;
+
+		const agenticLlm = timings.agentic?.llm;
+
+		if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
+			totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
+		} else {
+			totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
+		}
+	}
+
+	if (totalHistoricalTokens > 0) return true;
+
+	if (!liveState) return false;
+
+	const livePromptTokens = Math.max(
+		liveState.promptTokens ?? 0,
+		liveState.promptProgress?.processed ?? 0
+	);
+	const liveOutputTokens = liveState.outputTokensUsed ?? 0;
+
+	return livePromptTokens > 0 || liveOutputTokens > 0;
 }

@@ -2241,17 +2241,34 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_l2_norm(ggml_met
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_group_norm(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_GROUP_NORM);
 
-    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+    GGML_ASSERT(ggml_is_contiguous_rows(op->src[0]));
 
     char base[256];
     char name[256];
 
     snprintf(base, 256, "kernel_group_norm_f32");
-    snprintf(name, 256, "%s", base);
+
+    const ggml_tensor * src0 = op->src[0];
+
+    const bool flat = src0->nb[1] == src0->ne[0]*src0->nb[0] &&
+                      src0->nb[2] == src0->nb[1]*src0->ne[1] &&
+                      op->nb[1]   == op->ne[0] *op->nb[0]    &&
+                      op->nb[2]   == op->nb[1] *op->ne[1];
+
+    if (flat) {
+        snprintf(name, 256, "%s", base);
+    } else {
+        snprintf(name, 256, "%s_strided", base);
+    }
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        ggml_metal_cv_set_bool(cv, flat, FC_GROUP_NORM + 0);
+
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+
+        ggml_metal_cv_free(cv);
     }
 
     res.smem = 32*sizeof(float);

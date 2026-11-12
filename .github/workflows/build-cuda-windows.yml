@@ -40,12 +40,12 @@ jobs:
           - cuda: '12.4'
             arch: x64
             defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
-          - cuda: '13.4'
+          - cuda: '13.5'
             arch: x64
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3'
-          - cuda: '13.4'
+            defines: ''
+          - cuda: '13.5'
             arch: arm64
-            defines: '-DGGML_CUDA_CCCL_VERSION=v3.4.3 -DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
+            defines: '-DCMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-msvc-cuda.cmake'
 
     steps:
       - name: Clone

@@ -46,8 +46,7 @@ kernel void kernel_tri(
     // threadgroup, so this will loop once for each index that this thread is
     // responsible for
     for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
-        // Use the comparison as a mask for branchless
-        dst_row[i0] = static_cast<T>(_ggml_vec_tri_cmp<ttype>(i0, i1)) * src_row[i0];
+        dst_row[i0] = _ggml_vec_tri_cmp<ttype>(i0, i1) ? src_row[i0] : static_cast<T>(0);
     }
 }
 

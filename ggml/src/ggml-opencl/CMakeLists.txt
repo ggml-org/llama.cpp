@@ -71,11 +71,11 @@ set(GGML_OPENCL_KERNELS
     lightning_indexer
     tri
     fill
+    arange
     fwht
     clamp
     cpy
     cvt
-    diag_mask_inf
     diag
     div
     dsv4_hc
@@ -194,6 +194,8 @@ set(GGML_OPENCL_KERNELS
     mul_mv_mxfp4_f32
     mul_mv_mxfp4_f32_flat
     mul_mv_id_q4_0_f32_8x_flat
+    mul_mv_id_f32_f32
+    mul_mm_id_f32_f32
     mul_mv_id_q8_0_f32
     mul_mv_id_q8_0_f32_flat
     mul_mv_id_mxfp4_f32
@@ -319,11 +321,14 @@ set(GGML_OPENCL_KERNELS
     repeat
     mul_mat_f16_f32
     mul_mm_f16_f32_kq_kqv
+    mul_mm_f16_f32_kq_p8
+    mul_mm_q8_f32_kqv
     conv2d
     conv2d_f16_f32
     conv2_dw
     flash_attn_repack
     flash_attn_pre_f16
+    flash_attn_pv_direct
     flash_attn_f32_f16
     flash_attn_f32_q8_0
     flash_attn_f32_q4_0
