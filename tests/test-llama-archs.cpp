@@ -1471,7 +1471,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
-                        if (nmse_val > 1e-4) {
+                        // hrm_text repeats its stacks, which accumulates rounding error
+                        const double nmse_max = arch == LLM_ARCH_HRM_TEXT ? 5e-4 : 1e-4;
+                        if (nmse_val > nmse_max) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }
