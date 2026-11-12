@@ -6112,7 +6112,7 @@ static void ggml_sycl_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 
 
 static void ggml_sycl_set_main_device(const int main_device) try {
-    if (dpct::get_current_device_id() == static_cast<unsigned int> (main_device)) {
+    if (get_current_device_id() == main_device) {
         return;
     }
     check_allow_gpu_index(main_device);

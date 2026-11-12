@@ -136,18 +136,6 @@ static const llm_fused_op_probe llm_fused_op_flash_attn_kv_rows_probe = {
     /*.n_tokens_per_seq =*/ 1,
 };
 
-static const llm_fused_op_probe llm_fused_op_gdn_ar_probe = {
-    /*.op               =*/ LLM_FUSED_OP_GDN_AR,
-    /*.name             =*/ "fused Gated Delta Net (autoregressive)",
-    /*.n_tokens_per_seq =*/ 1,
-};
-
-static const llm_fused_op_probe llm_fused_op_gdn_ch_probe = {
-    /*.op               =*/ LLM_FUSED_OP_GDN_CH,
-    /*.name             =*/ "fused Gated Delta Net (chunked)",
-    /*.n_tokens_per_seq =*/ 16,
-};
-
 static const llm_fused_op_probe llm_fused_op_lid_probe = {
     /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
     /*.name             =*/ "Lightning Indexer",
@@ -347,10 +335,6 @@ llama_context::llama_context(
         cparams.auto_fa    = false;
     }
 
-    cparams.fused_gdn_ar = true;
-    cparams.fused_gdn_ch = true;
-    cparams.auto_fgdn    = false;
-
     cparams.fused_lid = true;
     cparams.auto_flid = false;
 
@@ -463,6 +447,15 @@ llama_context::llama_context(
     if (cparams.n_ctx_seq > hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_seq (%u) > n_ctx_train (%u) -- possible training context overflow\n",
                 __func__, cparams.n_ctx_seq, hparams.n_ctx_train);
+    }
+
+    {
+        const int64_t max_nodes = graph_max_nodes();
+
+        gf_res_reserve = std::make_unique<llm_graph_result>(max_nodes);
+        for (auto & res : gf_res_prev) {
+            res = std::make_unique<llm_graph_result>(max_nodes);
+        }
     }
 
     if (!hparams.vocab_only) {
@@ -724,13 +717,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         cparams.auto_fkvr = false;
     }
 
-    if (cparams.auto_fgdn) {
-        LLAMA_LOG_INFO("%s: resolving fused Gated Delta Net support:\n", func);
-        resolve(llm_fused_op_gdn_ar_probe, cparams.fused_gdn_ar);
-        resolve(llm_fused_op_gdn_ch_probe, cparams.fused_gdn_ch);
-        cparams.auto_fgdn = false;
-    }
-
     if (cparams.auto_flid) {
         LLAMA_LOG_INFO("%s: resolving fused Lightning Indexer support:\n", func);
         resolve(llm_fused_op_lid_probe, cparams.fused_lid);
@@ -816,15 +802,18 @@ void llama_context::sched_reserve() {
     const uint32_t n_seqs = cparams.n_seq_max;
     const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-    const size_t max_nodes = this->graph_max_nodes(n_tokens);
+    const size_t max_nodes = this->graph_max_nodes();
 
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
-    for (auto & res : gf_res_prev) {
-        res.reset();
-    }
-    gf_res_reserve.reset(new llm_graph_result(max_nodes));
     gf_res_prev_active = nullptr;
+
+    gf_res_reserve->set_max_nodes(max_nodes);
+    gf_res_reserve->reset();
+    for (auto & res : gf_res_prev) {
+        res->set_max_nodes(max_nodes);
+        res->reset();
+    }
 
     sched_new({
         /*.max_nodes  =*/ max_nodes,
@@ -1070,9 +1059,7 @@ bool llama_context::memory_update(bool optimize) {
         // reset the previous graph results to make sure that they won't be reused
         // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
         for (auto & res : gf_res_prev) {
-            if (res) {
-                res->reset();
-            }
+            res->reset();
         }
         gf_res_prev_active = nullptr;
 
@@ -2919,14 +2906,11 @@ void llama_context::output_reorder() {
 // graph
 //
 
-uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+uint32_t llama_context::graph_max_nodes() const {
     uint32_t res;
-    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT) {
-        // the n_tokens*40 budget below is exhausted at ubatch 3840
-        res = std::max<uint32_t>(n_tokens * 160, 64u * model.n_tensors());
-    } else if (model.arch == LLM_ARCH_HRM_TEXT) {
-        // the 128-slot looped graph needs roughly one stack per token budget
-        res = std::max<uint32_t>(n_tokens * 80, 64u * model.n_tensors());
+    if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
+        model.arch == LLM_ARCH_HRM_TEXT) {
+        res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
         model.arch == LLM_ARCH_METIS16 ||
@@ -2944,7 +2928,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_MINIMAX_01 ||
         model.arch == LLM_ARCH_MINIMAX_M3 ||
         model.arch == LLM_ARCH_HY_V4) {
-        res = std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        res = std::max<uint32_t>(1024u, 32u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_DFLASH && model.hparams.dflash_selector_rank > 0) {
         // DFlash2's convolutions and selector are shape work rather than matmuls,
         // so they cost ~8.6 nodes per tensor against ~5.9 for a plain DFlash draft
@@ -2973,11 +2957,7 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 llm_graph_result * llama_context::get_gf_res_prev() {
-    auto & res = gf_res_prev[n_outputs > 0];
-    if (!res) {
-        res.reset(new llm_graph_result(gf_res_reserve->get_max_nodes()));
-    }
-    return res.get();
+    return gf_res_prev[n_outputs > 0].get();
 }
 
 // pack sampler outputs into as few sequences as possible before using sequences without samplers
@@ -3051,9 +3031,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     // when the scheduler is reset, we cannot reuse old graphs, so we reset the previous graph results
     for (auto & res : gf_res_prev) {
-        if (res) {
-            res->reset();
-        }
+        res->reset();
     }
     gf_res_prev_active = nullptr;
 

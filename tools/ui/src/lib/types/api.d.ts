@@ -156,6 +156,11 @@ export interface ApiModelsSseDownloadProgressData {
 	progress: Record<string, { done: number; total: number }>;
 }
 
+/** download_failed data: `stopped` when a client paused or cancelled the download. */
+export interface ApiModelsSseDownloadFailedData {
+	stopped?: boolean;
+}
+
 /**
  * Event kind multiplexed on the /models/sse feed.
  * Only the status_* events carry a status payload, models_reload signals a
@@ -168,7 +173,7 @@ export interface ApiModelsSseDownloadProgressData {
 export interface ApiModelsSseEvent {
 	model: string;
 	event: ServerModelsSseEventType;
-	data?: ApiModelsSseData | ApiModelsSseDownloadProgressData;
+	data?: ApiModelsSseData | ApiModelsSseDownloadProgressData | ApiModelsSseDownloadFailedData;
 }
 
 /**

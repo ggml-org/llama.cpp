@@ -2093,15 +2093,20 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             }
 
             // accept x-tool-runtime header to route tool I/O through an isolate, e.g. "docker-container:<id>";
-            // falls back to the --tools-runtime isolate, if configured
+            // --tools-runtime wins: it is the sandbox, the client must not move tools out of it
             if (params.contains("runtime")) {
                 params.erase("runtime");
             }
             auto runtime_header = get_header(req.headers, "x-tool-runtime");
-            if (!runtime_header.empty()) {
-                params["runtime"] = runtime_header;
-            } else if (runtime) {
+            if (runtime) {
+                if (!runtime_header.empty()) {
+                    res->status = 403;
+                    res->data   = safe_json_to_str(format_error_response("x-tool-runtime is not allowed when --tools-runtime is set", ERROR_TYPE_PERMISSION));
+                    return res;
+                }
                 params["runtime"] = runtime->spec();
+            } else if (!runtime_header.empty()) {
+                params["runtime"] = runtime_header;
             }
 
             // x-resp-type header is only used by read_file for now
