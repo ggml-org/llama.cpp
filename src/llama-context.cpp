@@ -2967,7 +2967,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
 
     // each chunk of the expert FFN of a layer has its own nodes, see llm_graph_context::build_moe_ffn
     if (cparams.n_moe_chunk > 0) {
-        res += model.layers.size()*(n_tokens/cparams.n_moe_chunk)*(128 + 2*model.hparams.n_expert_used_max());
+        res += model.layers.size()*(cparams.n_ubatch/cparams.n_moe_chunk)*(128 + 2*model.hparams.n_expert_used_max());
     }
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
