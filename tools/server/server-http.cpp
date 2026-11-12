@@ -424,8 +424,26 @@ bool server_http_context::init_listener(const common_params & params) {
         return true;
     };
 
+    // a router child has no API key; the router strips the browser headers, so only a browser sends them here
+    const bool managed_by_router = std::getenv(SERVER_ENV_ROUTER_PORT) != nullptr;
+
     // register server middlewares
-    srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+    srv->set_pre_routing_handler([&params, managed_by_router, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+        if (managed_by_router && (req.has_header("Origin") || req.has_header("Sec-Fetch-Site") || req.has_header("Sec-Fetch-Mode"))) {
+            SRV_WRN("rejected browser request on router child: %s %s\n", req.method.c_str(), req.path.c_str());
+            res.status = 403;
+            res.set_content(
+                safe_json_to_str(json {
+                    {"error", {
+                        {"message", "Browser requests must go through the router"},
+                        {"type", "permission_error"},
+                        {"code", 403}
+                    }}
+                }),
+                "application/json; charset=utf-8"
+            );
+            return httplib::Server::HandlerResponse::Handled;
+        }
         if (params.cors_credentials && params.cors_origins == "*") {
             // special case: echo back the Origin header to allow any origin to access the server with credentials
             res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
