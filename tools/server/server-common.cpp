@@ -1416,6 +1416,12 @@ json oaicompat_chat_params_parse(
         }
     }
 
+    // fall back to --json-schema if the request doesn't overwrite it
+    bool use_tools = has_tools && tool_choice != "none";
+    if (!opt.json_schema.empty() && !use_tools && json_schema.is_null() && grammar.empty() && !body.contains("response_format")) {
+        json_schema = json::parse(opt.json_schema);
+    }
+
     // an absent or empty schema means any object
     if (json_schema.is_object() && json_schema.empty()) {
         json_schema["type"] = "object";
@@ -1493,6 +1499,10 @@ json oaicompat_chat_params_parse(
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
+        }
+        if (!json_schema.is_null()) {
+            // only a few models natively support response_format and tools, but none have support yet
+            throw std::invalid_argument("Cannot use response_format or json_schema with tools.");
         }
     }
 

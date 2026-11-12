@@ -366,6 +366,7 @@ struct server_chat_params {
     std::string reasoning_budget_message;
     std::string media_path;
     bool force_pure_content = false;
+    std::string json_schema;
 };
 
 // used by /completions endpoint

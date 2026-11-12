@@ -291,6 +291,23 @@ def test_completion_with_json_schema(jinja: bool, json_schema: dict, n_predicted
     assert match_regex(re_content, choice["message"]["content"]), f'Expected {re_content}, got {choice["message"]["content"]}'
 
 
+@pytest.mark.parametrize("jinja", [False, True])
+def test_completion_with_server_json_schema(jinja: bool):
+    global server
+    server.jinja = jinja
+    server.json_schema = '{"const": "42"}'
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 6,
+        "messages": [
+            {"role": "system", "content": "You are a coding assistant."},
+            {"role": "user", "content": "Write an example"},
+        ],
+    })
+    assert res.status_code == 200, f'Expected 200, got {res.status_code}'
+    assert match_regex("\"42\"", res.body["choices"][0]["message"]["content"])
+
+
 @pytest.mark.parametrize("jinja,grammar,n_predicted,re_content", [
     (False, 'root ::= "a"{5,5}', 6, "a{5,5}"),
     (True, 'root ::= "a"{5,5}', 6, "a{5,5}"),
