@@ -237,9 +237,9 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
-#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#if defined(GGML_SYCL_SUPPORT_XMX) && defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
 #    define GGML_SYCL_MMVQ_HAS_XMX
-#endif // __INTEL_LLVM_COMPILER
+#endif // GGML_SYCL_SUPPORT_XMX && __INTEL_LLVM_COMPILER
 
 // default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
 #define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
