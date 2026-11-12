@@ -110,32 +110,12 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
 @pytest.mark.parametrize("origin", [
     "http://localhost",
     "http://localhost:8080",
-    "http://127.0.0.1",
     "http://127.0.0.1:3000",
-    "http://[::1]",
     "http://[::1]:3000",
-])
-def test_cors_origins_localhost_reflects(origin: str):
-    global server
-    server = ServerPreset.router()
-    server.cors_origins = "localhost"
-    server.start()
-    res = server.make_request("OPTIONS", "/completions", headers={
-        "Origin": origin,
-        "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Authorization",
-    })
-    assert res.status_code == 200
-    assert res.headers["Access-Control-Allow-Origin"] == origin
-
-
-@pytest.mark.parametrize("origin", [
-    "http://web.mydomain.fr",
     "http://evil.com",
-    "http://notlocalhost",
     "http://localhost.evil.com",
 ])
-def test_cors_origins_localhost_rejects(origin: str):
+def test_cors_origins_localhost_no_cross_origin_header(origin: str):
     global server
     server = ServerPreset.router()
     server.cors_origins = "localhost"
@@ -149,26 +129,19 @@ def test_cors_origins_localhost_rejects(origin: str):
     assert "Access-Control-Allow-Origin" not in res.headers
 
 
-def test_cors_origins_defaults_to_localhost_with_tools_enabled():
+@pytest.mark.parametrize("feature", ["server_tools", "ui_mcp_proxy"])
+def test_cors_origins_defaults_to_localhost(feature: str):
     global server
     server = ServerPreset.router()
-    server.server_tools = "all"
+    if feature == "server_tools":
+        server.server_tools = "all"
+    else:
+        server.ui_mcp_proxy = True
     server.start()
-    res = server.make_request("OPTIONS", "/completions", headers={
-        "Origin": "http://localhost:8080",
-        "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Authorization",
-    })
+    res = server.make_request("GET", "/props", headers={"Origin": f"http://127.0.0.1:{server.server_port}"})
     assert res.status_code == 200
-    assert res.headers["Access-Control-Allow-Origin"] == "http://localhost:8080"
-
-    res = server.make_request("OPTIONS", "/completions", headers={
-        "Origin": "http://evil.com",
-        "Access-Control-Request-Method": "POST",
-        "Access-Control-Request-Headers": "Authorization",
-    })
-    assert res.status_code == 200
-    assert "Access-Control-Allow-Origin" not in res.headers
+    res = server.make_request("GET", "/props", headers={"Origin": "http://localhost:5173"})
+    assert res.status_code == 403
 
 
 def _raw_post(path: str, body: str, headers: dict) -> requests.Response:
@@ -178,7 +151,8 @@ def _raw_post(path: str, body: str, headers: dict) -> requests.Response:
 
 @pytest.mark.parametrize("headers,expected_status", [
     ({}, 200),                                                    # non-browser client
-    ({"Origin": "http://localhost:3000"}, 200),                   # allowed localhost origin
+    ({"Origin": "http://127.0.0.1:{port}"}, 200),                 # same-origin
+    ({"Origin": "http://localhost:3000"}, 403),                   # other localhost app
     ({"Origin": "http://evil.com"}, 403),                         # cross-origin simple request
     ({"Origin": "http://localhost.evil.com"}, 403),
     ({"Origin": "null"}, 403),                                    # sandboxed iframe / file://
@@ -189,6 +163,7 @@ def test_cors_origins_localhost_blocks_simple_requests(headers: dict, expected_s
     server.api_key = None
     server.cors_origins = "localhost"
     server.start()
+    headers = {k: v.format(port=server.server_port) for k, v in headers.items()}
     res = _raw_post("/tokenize", '{"content": "hello"}', headers)
     assert res.status_code == expected_status
 
@@ -292,8 +267,31 @@ def test_tools_drive_by_exec_is_blocked():
     assert "csrf-guard-test" not in res.text
 
     res = _raw_post("/tools", body, {"Origin": "http://localhost:5173"})
+    assert res.status_code == 403
+
+    res = _raw_post("/tools", body, {"Origin": f"http://127.0.0.1:{server.server_port}"})
     assert res.status_code == 200
     assert "csrf-guard-test" in res.text
+
+
+@pytest.mark.parametrize("server_host,api_key,allow_unauth,should_start", [
+    ("127.0.0.1", None, False, True),
+    ("0.0.0.0", None, False, False),
+    ("0.0.0.0", TEST_API_KEY, False, True),
+    ("0.0.0.0", None, True, True),
+])
+def test_tools_refuse_unauthenticated_network_bind(server_host: str, api_key: str | None, allow_unauth: bool, should_start: bool):
+    global server
+    server = ServerPreset.router()
+    server.server_tools = "all"
+    server.server_host = server_host
+    server.api_key = api_key
+    server.allow_unauthenticated_tools = allow_unauth
+    if should_start:
+        server.start()
+    else:
+        with pytest.raises(RuntimeError):
+            server.start()
 
 
 def test_cors_proxy_only_forwards_explicit_proxy_headers():

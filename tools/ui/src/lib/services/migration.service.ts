@@ -19,12 +19,14 @@ import {
 	LEGACY_AGENTIC_REGEX,
 	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
+	SEARCH_CHATS_TOOL_KEY,
 	SETTINGS_KEYS,
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
 import { BooleanString, MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
+import { withSearchChatsDisabled } from '$lib/utils/search-chats';
 import Dexie from 'dexie';
 
 // Types
@@ -829,6 +831,42 @@ const mcpServerOverridesToToolPolicyMigration: Migration = {
 			);
 	}
 };
+const SEARCH_CHATS_DEFAULT_DISABLED_MIGRATION_ID = 'search-chats-default-disabled-v1';
+const searchChatsDefaultDisabledMigration: Migration = {
+	description: 'Disable the search_chats tool by default, globally and in existing conversations',
+	id: SEARCH_CHATS_DEFAULT_DISABLED_MIGRATION_ID,
+
+	async run(): Promise<void> {
+		// tool policy is a deny-list, so a new tool is enabled everywhere unless its key is added to the defaults and to each conversation
+		let defaults: string[] = [];
+
+		try {
+			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+			const parsed: unknown = raw ? JSON.parse(raw) : [];
+
+			if (Array.isArray(parsed))
+				defaults = parsed.filter((k): k is string => typeof k === 'string');
+		} catch {
+			// unreadable defaults are replaced below
+		}
+
+		localStorage.setItem(
+			DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+			JSON.stringify(withSearchChatsDisabled(defaults))
+		);
+
+		const db = await getDatabaseService();
+		const conversations = await db.getAllConversations();
+
+		for (const conv of conversations) {
+			if (conv.disabledTools?.includes(SEARCH_CHATS_TOOL_KEY)) continue;
+
+			await db.updateConversation(conv.id, {
+				disabledTools: withSearchChatsDisabled(conv.disabledTools)
+			});
+		}
+	}
+};
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -840,7 +878,8 @@ const migrations: Migration[] = [
 	configTypesMigration,
 	renderKeysMigration,
 	modelOrgNameKeyMigration,
-	mcpServerOverridesToToolPolicyMigration
+	mcpServerOverridesToToolPolicyMigration,
+	searchChatsDefaultDisabledMigration
 ];
 
 export const MigrationService = {
