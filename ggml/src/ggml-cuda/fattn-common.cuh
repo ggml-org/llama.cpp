@@ -1197,6 +1197,12 @@ void launch_fattn(
     const dim3 block_dim(warp_size, nwarps, 1);
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
+#ifdef GGML_USE_HIP
+    // ROCm 7.1 reports 0 on RDNA2 for 256-thread wave32 kernels using >128 VGPRs, but they launch fine.
+    if (max_blocks_per_sm <= 0) {
+        max_blocks_per_sm = 1;
+    }
+#endif // GGML_USE_HIP
     GGML_ASSERT(max_blocks_per_sm > 0);
     int parallel_blocks = max_blocks_per_sm;
 
