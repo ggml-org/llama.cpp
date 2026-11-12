@@ -462,12 +462,6 @@ struct vk_op_add_id_push_constants {
     uint32_t s21;
 };
 
-struct vk_op_diag_mask_push_constants {
-    uint32_t ncols;
-    uint32_t rows_per_channel;
-    int32_t n_past;
-};
-
 struct vk_op_rope_push_constants {
     uint32_t rope_mode;
     uint32_t nrows;
