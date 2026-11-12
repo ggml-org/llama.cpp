@@ -3000,6 +3000,10 @@ struct mtmd_model_loader {
                     model.mm_img_end        = get_tensor(TN_MM_IMG_END);
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     model.view_seperator    = get_tensor(TN_IMAGE_SEPERATOR, false);
+                    // the position embedding is resampled on the host as F32
+                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32) {
+                        throw std::runtime_error(mtmd_format("%s: HunyuanVL requires an F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                    }
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:
                 {
