@@ -1160,7 +1160,7 @@ static bool llama_grammar_detect_left_recursion(
 }
 
 const llama_grammar_rules & llama_grammar_get_rules(const struct llama_grammar * grammar) {
-    return grammar->rules;
+    return *grammar->rules;
 }
 
 llama_grammar_stacks & llama_grammar_get_stacks(struct llama_grammar * grammar) {
@@ -1189,7 +1189,7 @@ static void llama_grammar_accept_chr(
         if (!llama_grammar_is_end_of_sequence(match.second)) {
             new_stack.push_back(match.second);
         }
-        llama_grammar_advance_stack(grammar.rules, new_stack, new_stacks);
+        llama_grammar_advance_stack(*grammar.rules, new_stack, new_stacks);
     }
 }
 
@@ -1425,7 +1425,7 @@ struct llama_grammar * llama_grammar_init_impl(
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
     return new llama_grammar {
         vocab,
-        std::move(vec_rules),
+        std::make_shared<const llama_grammar_rules>(std::move(vec_rules)),
         std::move(stacks),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     false,
@@ -1540,7 +1540,7 @@ struct llama_grammar * llama_grammar_init_impl(
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
     return new llama_grammar {
         vocab,
-        std::move(vec_rules),
+        std::make_shared<const llama_grammar_rules>(std::move(vec_rules)),
         std::move(stacks),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     lazy,
@@ -1561,34 +1561,7 @@ void llama_grammar_free_impl(struct llama_grammar * grammar) {
 }
 
 struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & grammar) {
-    auto * result = new llama_grammar {
-        grammar.vocab,
-        grammar.rules,
-        grammar.stacks,
-        grammar.partial_utf8,
-        grammar.lazy,
-        grammar.awaiting_trigger,
-        grammar.trigger_buffer,
-        grammar.trigger_buffer_positions,
-        grammar.trigger_tokens,
-        grammar.trigger_patterns,
-    };
-
-    // redirect elements in stacks to point to new rules using per-rule pointer offsets
-    for (auto & stack : result->stacks) {
-        for (auto & elem : stack) {
-            for (size_t ir = 0; ir < grammar.rules.size(); ir++) {
-                const auto & old_rule = grammar.rules[ir];
-                if (!old_rule.empty() && elem >= old_rule.data() && elem < old_rule.data() + old_rule.size()) {
-                    size_t offset = static_cast<size_t>(elem - old_rule.data());
-                    elem = result->rules[ir].data() + offset;
-                    break;
-                }
-            }
-        }
-    }
-
-    return result;
+    return new llama_grammar(grammar);
 }
 
 void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_data_array * cur_p) {
@@ -1628,7 +1601,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
-    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
+    const auto rejects = llama_grammar_reject_candidates(*grammar.rules, grammar.stacks, candidates_grammar);
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }
@@ -1729,7 +1702,7 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
                 if (!llama_grammar_is_end_of_sequence(pos + 1)) {
                     new_stack.push_back(pos + 1);
                 }
-                llama_grammar_advance_stack(grammar.rules, new_stack, stacks_new);
+                llama_grammar_advance_stack(*grammar.rules, new_stack, stacks_new);
             }
         } else {
             llama_grammar_stacks current_stacks = {stack};
