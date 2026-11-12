@@ -20,6 +20,12 @@
 #include <optional>
 #include <sstream>
 
+#if defined(__APPLE__)
+#    include <crt_externs.h>
+#elif !defined(_WIN32)
+extern char ** environ;
+#endif
+
 ov::Core & ov_singleton_core() {
     static ov::Core core;
     return core;
@@ -97,6 +103,204 @@ static std::string resolve_openvino_device_name(const std::vector<std::string> &
     return requested;
 }
 
+namespace {
+
+enum class env_type {
+    STR,    // any text: a device, a path, plugin properties
+    ENUM,   // one of env_var::values
+    INT,    // a whole number
+    FLOAT,  // a number
+    BOOL,   // a whole number: positive is on, zero or negative is off
+};
+
+struct env_var {
+    const char * name;
+    env_type type;
+    const char * values = nullptr;  // ENUM only: the accepted values, separated by '|'
+};
+
+// All recognized GGML_OPENVINO_* env vars. Their values are checked and cached once at backend init time and read
+// back via ggml_openvino_getenv_str() (raw string) or ggml_openvino_getenv_int() (integer / boolean toggle).
+// A value that does not fit the type stops the backend; another GGML_OPENVINO_* name in the environment is reported.
+constexpr env_var env_vars[] = {
+    // Text
+    {"GGML_OPENVINO_DEVICE", env_type::STR},
+    {"GGML_OPENVINO_CACHE_DIR", env_type::STR},
+    {"GGML_OPENVINO_SPILL_DIR", env_type::STR},
+    {"GGML_OPENVINO_DEBUG_NODE", env_type::STR},
+    {"GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR", env_type::STR},
+    {"GGML_OPENVINO_NPU_COMPILE_CONFIG", env_type::STR},
+    {"GGML_OPENVINO_NPU_COMPILER_TYPE", env_type::STR},
+    {"GGML_OPENVINO_NPUW_FUNCALL_FOR_ALL", env_type::STR},
+    {"GGML_OPENVINO_NPUW_UNFOLD_IREQS", env_type::STR},
+    {"GGML_OPENVINO_COMPILATION_NUM_THREADS", env_type::STR},
+    {"GGML_OPENVINO_NPU_CONFIG", env_type::STR},
+    {"GGML_OPENVINO_GPU_CONFIG", env_type::STR},
+    {"GGML_OPENVINO_CPU_CONFIG", env_type::STR},
+    // NPUW dump options require an OpenVINO developer build (NPU_PLUGIN_DEVELOPER_BUILD).
+    // DUMP_SUBS accepts YES, MIN (unique function bodies), last, or indices such as 0,2.
+    {"GGML_OPENVINO_NPUW_DUMP_SUBS", env_type::STR},
+    {"GGML_OPENVINO_NPUW_DUMP_SUBS_DIR", env_type::STR},
+    {"GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL", env_type::STR},
+    {"GGML_OPENVINO_NPUW_DUMP_IO", env_type::STR},
+    // One of a fixed set of values
+    {"GGML_OPENVINO_NPU_REQUANT_POLICY", env_type::ENUM, "group-128|channel-wise"},
+    {"GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT", env_type::ENUM, "f16|q8_0_c|q4_0_128|q4_0_c"},
+    {"GGML_OPENVINO_REQUANT_KQUANT", env_type::ENUM, "q4_sym128|q4_sym128_all|q4_asym64|q4_asym64_all|native"},
+    // Numbers
+    {"GGML_OPENVINO_PREFILL_CHUNK_SIZE", env_type::INT},
+    {"GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB", env_type::INT},
+    {"GGML_OPENVINO_PROFILING", env_type::INT},
+    {"GGML_OPENVINO_GDN_DECOMPOSE_CHUNK", env_type::INT},
+    {"GGML_OPENVINO_GDN_Q_SCALE", env_type::FLOAT},
+    // Switches
+    {"GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_BLOB_PREBUILD", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_KV_ON_DEMAND", env_type::BOOL},
+    {"GGML_OPENVINO_STATEFUL_EXECUTION", env_type::BOOL},
+    {"GGML_OPENVINO_DUMP_CGRAPH", env_type::BOOL},
+    {"GGML_OPENVINO_DUMP_IR", env_type::BOOL},
+    {"GGML_OPENVINO_DEBUG_INPUT", env_type::BOOL},
+    {"GGML_OPENVINO_DEBUG_OUTPUT", env_type::BOOL},
+    // Force the static (NPU-shape) compute path on any device, e.g. GGML_OPENVINO_DEVICE=CPU,
+    // to test the static-shape translation without NPUW/real NPU hardware in the loop.
+    {"GGML_OPENVINO_FORCE_STATIC", env_type::BOOL},
+    {"GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS", env_type::BOOL},
+    {"GGML_OPENVINO_DISABLE_CACHE", env_type::BOOL},
+    {"GGML_OPENVINO_DISABLE_FUSED_RECURRENCE", env_type::BOOL},
+    {"GGML_OPENVINO_ENABLE_KV_4D", env_type::BOOL},
+    {"GGML_OPENVINO_ENABLE_FALLBACK", env_type::BOOL},
+    {"GGML_OPENVINO_KV_SCATTER_ELEMENTS", env_type::BOOL},
+    {"GGML_OPENVINO_MANUAL_GQA_ATTN", env_type::BOOL},
+    {"GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN", env_type::BOOL},
+    {"GGML_OPENVINO_MOE_OP", env_type::BOOL},
+    {"GGML_OPENVINO_EXACT_ZERO_POINT", env_type::BOOL},
+    {"GGML_OPENVINO_MEMORY_OPTIMIZE", env_type::BOOL},
+    {"GGML_OPENVINO_RELEASE_WEIGHTS", env_type::BOOL},
+    {"GGML_OPENVINO_REDUCE_COMPILE_MEM", env_type::BOOL},
+    {"GGML_OPENVINO_LOG_UNSUPPORTED_OPS", env_type::BOOL},
+    {"GGML_OPENVINO_LOG_SWA_LAYERS", env_type::BOOL},
+    {"GGML_OPENVINO_NATIVE_SOFTPLUS", env_type::BOOL},
+    {"GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS", env_type::BOOL},
+    {"GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_FAST_MASK", env_type::BOOL},
+    {"GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK", env_type::BOOL},
+    {"GGML_OPENVINO_GDN_NATIVE_STATE", env_type::BOOL},
+    {"GGML_OPENVINO_GDN_DECOMPOSE", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_L0_HOST_TENSORS", env_type::BOOL},
+    {"GGML_OPENVINO_KV_SLICE", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_HFA_PREFILL", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_DECODE_UNFOLD", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_PARALLEL_COMPILE", env_type::BOOL},
+    {"GGML_OPENVINO_SELF_CONTAINED_BLOB", env_type::BOOL},
+    {"GGML_OPENVINO_SELF_CONTAINED_MMAP", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_SHARED_BANK", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_WEIGHTLESS_BANK", env_type::BOOL},
+    // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
+    {"GGML_OPENVINO_FULL_GRAPH_KEY", env_type::BOOL},
+};
+
+std::string trim_spaces(const std::string & s) {
+    size_t begin = 0;
+    size_t end = s.size();
+    while (begin < end && std::isspace(static_cast<unsigned char>(s[begin]))) {
+        begin++;
+    }
+    while (end > begin && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+        end--;
+    }
+    return s.substr(begin, end - begin);
+}
+
+// Strict parse: digits with optional sign and surrounding spaces, in int range.
+// "set X=1 && ..." in cmd keeps a trailing space, so trailing spaces are allowed.
+bool parse_env_int(const char * v, int & out) {
+    char * end = nullptr;
+    errno = 0;
+    const long value = std::strtol(v, &end, 10);
+    if (end == v || errno == ERANGE || value < INT_MIN || value > INT_MAX) {
+        return false;
+    }
+    while (std::isspace(static_cast<unsigned char>(*end))) {
+        end++;
+    }
+    if (*end != '\0') {
+        return false;
+    }
+    out = static_cast<int>(value);
+    return true;
+}
+
+// The value to cache for a variable that is set. Stops the backend when the value does not fit the type: a silent
+// fallback to the default is easy to miss.
+std::string checked_env_value(const env_var & var, const char * value) {
+    int number = 0;
+    switch (var.type) {
+    case env_type::STR:
+        break;
+    case env_type::ENUM: {
+        const std::string wanted = trim_spaces(value);
+        const std::string values = var.values;
+        std::string list;
+        for (size_t pos = 0; pos <= values.size();) {
+            const size_t bar = std::min(values.find('|', pos), values.size());
+            const std::string accepted = values.substr(pos, bar - pos);
+            if (wanted == accepted) {
+                return wanted;
+            }
+            list += (list.empty() ? "" : ", ") + accepted;
+            pos = bar + 1;
+        }
+        GGML_ABORT("ggml-openvino: %s=%s is not valid, use one of: %s", var.name, value, list.c_str());
+    }
+    case env_type::INT:
+        if (!parse_env_int(value, number)) {
+            GGML_ABORT("ggml-openvino: %s=%s is not valid, use a whole number", var.name, value);
+        }
+        return std::to_string(number);
+    case env_type::FLOAT: {
+        char * end = nullptr;
+        (void) std::strtof(value, &end);
+        if (end == value || !trim_spaces(end).empty()) {
+            GGML_ABORT("ggml-openvino: %s=%s is not valid, use a number", var.name, value);
+        }
+        break;
+    }
+    case env_type::BOOL:
+        if (!parse_env_int(value, number)) {
+            GGML_ABORT("ggml-openvino: %s=%s is not valid, use 1 (on) or 0 (off)", var.name, value);
+        }
+        return number > 0 ? "1" : "0";
+    }
+    return value;
+}
+
+// A misspelled name would otherwise be ignored without a message.
+void warn_unknown_env_vars() {
+    static const char prefix[] = "GGML_OPENVINO_";
+#if defined(_WIN32)
+    char ** env = _environ;
+#elif defined(__APPLE__)
+    char ** env = *_NSGetEnviron();
+#else
+    char ** env = environ;
+#endif
+    for (; env != nullptr && *env != nullptr; ++env) {
+        if (strncmp(*env, prefix, sizeof(prefix) - 1) != 0) {
+            continue;
+        }
+        const char * eq = strchr(*env, '=');
+        const std::string name(*env, eq ? static_cast<size_t>(eq - *env) : strlen(*env));
+        const bool known = std::any_of(std::begin(env_vars), std::end(env_vars),
+                                       [&name](const env_var & var) { return name == var.name; });
+        if (!known) {
+            GGML_LOG_WARN("ggml-openvino: unknown environment variable %s is ignored\n", name.c_str());
+        }
+    }
+}
+
+}  // namespace
+
 // =====================================================
 // Device Configuration Implementations
 // =====================================================
@@ -110,90 +314,29 @@ void ggml_openvino_device_config::init() {
     // Set up front: a failed OpenCL setup below is not retried on every call
     initialized = true;
 
-    // All recognized GGML_OPENVINO_* env vars. Their values are cached here
-    // once at backend init time and read back via ggml_openvino_getenv_str()
-    // (raw string) or ggml_openvino_getenv_int() (integer / boolean toggle).
-    static constexpr const char * env_var_names[] = {
-        // String values (use ggml_openvino_getenv_str)
-        "GGML_OPENVINO_DEVICE",
-        "GGML_OPENVINO_CACHE_DIR",
-        "GGML_OPENVINO_SPILL_DIR",
-        "GGML_OPENVINO_DEBUG_NODE",
-        "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
-        "GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY",
-        "GGML_OPENVINO_NPU_COMPILE_CONFIG",
-        "GGML_OPENVINO_NPU_COMPILER_TYPE",
-        "GGML_OPENVINO_NPUW_FUNCALL_FOR_ALL",
-        "GGML_OPENVINO_NPUW_UNFOLD_IREQS",
-        "GGML_OPENVINO_COMPILATION_NUM_THREADS",
-        "GGML_OPENVINO_NPU_CONFIG",
-        "GGML_OPENVINO_NPU_REQUANT_POLICY",
-        // Integer values (use ggml_openvino_getenv_int)
-        "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
-        "GGML_OPENVINO_LAZY_HOST_THRESHOLD_MB",
-        "GGML_OPENVINO_NPU_BLOB_PREBUILD",
-        "GGML_OPENVINO_NPU_KV_ON_DEMAND",
-        // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
-        "GGML_OPENVINO_STATEFUL_EXECUTION",
-        "GGML_OPENVINO_PROFILING",
-        "GGML_OPENVINO_DUMP_CGRAPH",
-        "GGML_OPENVINO_DUMP_IR",
-        "GGML_OPENVINO_DEBUG_INPUT",
-        "GGML_OPENVINO_DEBUG_OUTPUT",
-        // NPUW dump options require an OpenVINO developer build (NPU_PLUGIN_DEVELOPER_BUILD).
-        // DUMP_SUBS accepts YES, MIN (unique function bodies), last, or indices such as 0,2.
-        "GGML_OPENVINO_NPUW_DUMP_SUBS",
-        "GGML_OPENVINO_NPUW_DUMP_SUBS_DIR",
-        "GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL",
-        "GGML_OPENVINO_NPUW_DUMP_IO",
-        // Force the static (NPU-shape) compute path on any device, e.g. GGML_OPENVINO_DEVICE=CPU,
-        // to test the static-shape translation without NPUW/real NPU hardware in the loop.
-        "GGML_OPENVINO_FORCE_STATIC",
-        "GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS",
-        "GGML_OPENVINO_ENABLE_CACHE",
-        "GGML_OPENVINO_DISABLE_CACHE",
-        "GGML_OPENVINO_DISABLE_FUSED_RECURRENCE",
-        "GGML_OPENVINO_ENABLE_KV_4D",
-        "GGML_OPENVINO_ENABLE_FALLBACK",
-        "GGML_OPENVINO_KV_SCATTER_ELEMENTS",
-        "GGML_OPENVINO_MANUAL_GQA_ATTN",
-        "GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN",
-        "GGML_OPENVINO_MOE_OP",
-        "GGML_OPENVINO_EXACT_ZERO_POINT",
-        "GGML_OPENVINO_MEMORY_OPTIMIZE",
-        "GGML_OPENVINO_RELEASE_WEIGHTS",
-        "GGML_OPENVINO_REDUCE_COMPILE_MEM",
-        "GGML_OPENVINO_LOG_UNSUPPORTED_OPS",
-        "GGML_OPENVINO_LOG_SWA_LAYERS",
-        "GGML_OPENVINO_NATIVE_SOFTPLUS",
-        "GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT",
-        "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
-        "GGML_OPENVINO_REQUANT_KQUANT",
-        "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
-        "GGML_OPENVINO_NPU_FAST_MASK",
-        "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
-        "GGML_OPENVINO_GDN_Q_SCALE",
-        "GGML_OPENVINO_GDN_NATIVE_STATE",
-        "GGML_OPENVINO_GDN_DECOMPOSE",
-        "GGML_OPENVINO_GDN_DECOMPOSE_CHUNK",
-        "GGML_OPENVINO_NPU_L0_HOST_TENSORS",
-        "GGML_OPENVINO_KV_SLICE",
-        "GGML_OPENVINO_NPU_HFA_PREFILL",
-        "GGML_OPENVINO_NPU_DECODE_UNFOLD",
-        "GGML_OPENVINO_NPU_PARALLEL_COMPILE",
-        "GGML_OPENVINO_SELF_CONTAINED_BLOB",
-        "GGML_OPENVINO_SELF_CONTAINED_MMAP",
-        "GGML_OPENVINO_NPU_SHARED_BANK",
-        "GGML_OPENVINO_NPU_WEIGHTLESS_BANK",
-        // Build the precise (but O(n_nodes)) graph cache key. Needed by op tests.
-        "GGML_OPENVINO_FULL_GRAPH_KEY",
-    };
-
-    for (const char * const & env_var : env_var_names) {
-        auto * env = getenv(env_var);
-        if (env) {
-            environment_variables[env_var] = env;
+    for (const env_var & var : env_vars) {
+        const char * value = getenv(var.name);
+        // unset and empty both mean the default
+        if (value != nullptr && value[0] != '\0') {
+            environment_variables[var.name] = checked_env_value(var, value);
         }
+    }
+    warn_unknown_env_vars();
+    if (!environment_variables.empty()) {
+        std::string settings;
+        for (const env_var & var : env_vars) {
+            const auto it = environment_variables.find(var.name);
+            if (it != environment_variables.end()) {
+                settings += std::string(" ") + var.name + "=" + it->second;
+            }
+        }
+        GGML_LOG_INFO("ggml-openvino: settings from the environment:%s\n", settings.c_str());
+    }
+
+    if (ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION") != 0) {
+        GGML_LOG_WARN(
+            "ggml-openvino: GGML_OPENVINO_STATEFUL_EXECUTION is deprecated and will be removed, "
+            "use stateless execution (the default)\n");
     }
 
     available_devices = ov_enumerate_devices();
@@ -219,9 +362,16 @@ void ggml_openvino_device_config::init() {
     const char * cache_dir = ggml_openvino_getenv_str("GGML_OPENVINO_CACHE_DIR");
     if (has_prefix(device_name, "NPU")) {
         compile_config = ggml_openvino_npu_build_compile_config(cache_dir);
-    } else if (cache_dir && strlen(cache_dir) > 0) {
-        compile_config.insert(ov::cache_dir(cache_dir));
-        compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
+    } else {
+        if (cache_dir && strlen(cache_dir) > 0) {
+            compile_config.insert(ov::cache_dir(cache_dir));
+            compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
+        }
+        // Plugin properties of the selected device, applied last
+        const bool gpu = has_prefix(device_name, "GPU");
+        ggml_openvino_apply_config_overrides(
+            compile_config, ggml_openvino_getenv_str(gpu ? "GGML_OPENVINO_GPU_CONFIG" : "GGML_OPENVINO_CPU_CONFIG"),
+            gpu ? "GPU" : "CPU");
     }
 
     if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2) {
@@ -337,26 +487,60 @@ const char * ggml_openvino_getenv_str(const char * var, const char * default_val
 }
 
 // Get the value of a GGML_OPENVINO_* env var as an int. Returns default_value
-// (0) when the var is unset, empty, or not a whole integer. Used for both
-// integer settings (e.g. GGML_OPENVINO_PREFILL_CHUNK_SIZE) and boolean
-// toggles: "0" disables, any non-zero integer enables.
+// (0) when the var is unset or empty. Used for both integer settings (e.g.
+// GGML_OPENVINO_PREFILL_CHUNK_SIZE) and boolean toggles, which are cached as 1 (on) or 0 (off).
 int ggml_openvino_getenv_int(const char * var, int default_value) {
     const char * v = ggml_openvino_getenv_str(var, nullptr);
-    if (v == nullptr) {
-        return default_value;
+    int value = default_value;
+    return v != nullptr && parse_env_int(v, value) ? value : default_value;
+}
+
+void ggml_openvino_apply_config_overrides(ov::AnyMap & config, const char * spec, const char * device) {
+    if (spec == nullptr) {
+        return;
     }
-    // Strict parse: digits with optional sign and surrounding spaces, in int range.
-    // "set X=1 && ..." in cmd keeps a trailing space, so trailing spaces are allowed.
-    char * end = nullptr;
-    errno = 0;
-    const long value = std::strtol(v, &end, 10);
-    if (end == v || errno == ERANGE || value < INT_MIN || value > INT_MAX) {
-        return default_value;
+    // A property name: letters, digits, '_' and '.'
+    auto is_key = [](const std::string & s) {
+        return !s.empty() &&
+               std::all_of(s.begin(), s.end(), [](unsigned char c) { return std::isalnum(c) || c == '_' || c == '.'; });
+    };
+    std::string key;
+    std::string value;
+    auto apply_pair = [&] {
+        if (!key.empty()) {
+            value = trim_spaces(value);
+            config[key] = value;
+            GGML_LOG_INFO("GGML OpenVINO: %s config override %s=%s\n", device, key.c_str(), value.c_str());
+        }
+    };
+    const std::string pairs(spec);
+    for (size_t pos = 0; pos <= pairs.size();) {
+        const size_t comma = std::min(pairs.find(',', pos), pairs.size());
+        const std::string part = pairs.substr(pos, comma - pos);
+        const size_t eq = part.find('=');
+        const std::string name = eq == std::string::npos ? std::string() : trim_spaces(part.substr(0, eq));
+        if (is_key(name)) {
+            apply_pair();
+            key = name;
+            value = part.substr(eq + 1);
+        } else if (!key.empty()) {
+            // no KEY= after the comma: the comma belongs to the value, as in NPUW_DEVICES=NPU,CPU
+            value += "," + part;
+        } else if (!trim_spaces(part).empty()) {
+            GGML_LOG_WARN("ggml-openvino: GGML_OPENVINO_%s_CONFIG: '%s' is ignored, expected KEY=VALUE\n", device,
+                          part.c_str());
+        }
+        pos = comma + 1;
     }
-    while (std::isspace(static_cast<unsigned char>(*end))) {
-        end++;
-    }
-    return *end == '\0' ? static_cast<int>(value) : default_value;
+    apply_pair();
+}
+
+std::string ggml_openvino_config_overrides_in_use() {
+    const char * name = ggml_openvino_is_npu() ? "GGML_OPENVINO_NPU_CONFIG" :
+                        ggml_openvino_is_gpu() ? "GGML_OPENVINO_GPU_CONFIG" :
+                                                 "GGML_OPENVINO_CPU_CONFIG";
+    const char * value = ggml_openvino_getenv_str(name);
+    return value ? std::string(name) + "=" + value : std::string();
 }
 
 bool ggml_openvino_gdn_prescale_enabled() {

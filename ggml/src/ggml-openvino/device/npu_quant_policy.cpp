@@ -18,7 +18,7 @@ ExtraQuantType ggml_openvino_get_npu_requant_type() {
 }
 
 std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const ggml_tensor * tensor) {
-    // NPU widens a Q6_K embedding table to f16 by default. The int4 layouts only pay off for a tied
+    // A Q6_K embedding table is stored as q8_0_c by default on the NPU. The int4 layouts only pay off for a tied
     // embedding, where the table is also the lm_head weight and GET_ROWS gathers the packed rows
     // before dequantizing them (see gather_compressed_rows).
     if (tensor->type != GGML_TYPE_Q6_K) {

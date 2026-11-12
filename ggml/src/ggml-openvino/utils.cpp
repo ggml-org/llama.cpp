@@ -3156,6 +3156,11 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph, ggml_backend_t backend) 
         return is_static ? ov_graph_compute_static(cgraph, r_ctx) : ov_graph_compute_dynamic(cgraph, r_ctx);
     } catch (const ov::Exception & e) {
         GGML_LOG_ERROR("GGML OpenVINO backend ov::Exception: %s\n", e.what());
+        // A plugin reports a property it rejects as a failed internal check that does not name the property
+        const std::string overrides = ggml_openvino_config_overrides_in_use();
+        if (!overrides.empty()) {
+            GGML_LOG_ERROR("GGML OpenVINO backend: plugin properties from the environment: %s\n", overrides.c_str());
+        }
         if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING")) {
             fprintf(stderr, "GGML OpenVINO profiling: ov::Exception: %s\n", e.what());
         }

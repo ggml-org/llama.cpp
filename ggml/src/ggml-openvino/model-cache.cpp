@@ -166,6 +166,8 @@ bool ggml_openvino_model_cache_only() {
 }
 
 static const char * cache_settings[] = {
+    "GGML_OPENVINO_GPU_CONFIG",
+    "GGML_OPENVINO_CPU_CONFIG",
     "GGML_OPENVINO_REQUANT_KQUANT",
     "GGML_OPENVINO_NATIVE_SOFTPLUS",
     // GGML_OPENVINO_KV_SLICE only changes dynamic runtime bindings. Dynamic
@@ -182,6 +184,8 @@ static const char * cache_settings[] = {
     "GGML_OPENVINO_MEMORY_OPTIMIZE",
     "GGML_OPENVINO_PROFILING",
     "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
+    "GGML_OPENVINO_KV_SCATTER_ELEMENTS",
+    "GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN",
 };
 
 void ggml_openvino_model_cache_init() {

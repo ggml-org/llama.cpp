@@ -58,24 +58,7 @@ ov::AnyMap ggml_openvino_npu_build_compile_config(const char * cache_dir) {
     set_compile_option_from_env("GGML_OPENVINO_NPUW_DUMP_IO", "NPUW_DUMP_IO");
     // Comma-separated KEY=VALUE pairs appended last, so they override anything above.
     // Escape hatch for bisecting plugin options without a rebuild.
-    const char * extra_config = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_CONFIG");
-    if (extra_config && strlen(extra_config) > 0) {
-        std::string spec(extra_config);
-        size_t pos = 0;
-        while (pos < spec.size()) {
-            size_t comma = spec.find(',', pos);
-            if (comma == std::string::npos) {
-                comma = spec.size();
-            }
-            const std::string pair = spec.substr(pos, comma - pos);
-            const size_t eq = pair.find('=');
-            if (eq != std::string::npos && eq > 0) {
-                compile_config[pair.substr(0, eq)] = pair.substr(eq + 1);
-                GGML_LOG_INFO("GGML OpenVINO: NPU config override %s\n", pair.c_str());
-            }
-            pos = comma + 1;
-        }
-    }
+    ggml_openvino_apply_config_overrides(compile_config, ggml_openvino_getenv_str("GGML_OPENVINO_NPU_CONFIG"), "NPU");
     npu_compiler_type_is_default = compile_config.find("NPU_COMPILER_TYPE") == compile_config.end();
     if (npu_compiler_type_is_default) {
         compile_config["NPU_COMPILER_TYPE"] = "DRIVER";
