@@ -463,6 +463,10 @@ export class DatabaseService {
 				const newConv: DatabaseConversation = {
 					currNode: lastClonedMessage.id,
 					cwd: sourceConv.cwd,
+					disabledToolCategories: sourceConv.disabledToolCategories
+						? [...sourceConv.disabledToolCategories]
+						: undefined,
+					disabledTools: sourceConv.disabledTools ? [...sourceConv.disabledTools] : undefined,
 					forkedFromConversationId: sourceConvId,
 					groupId: sourceConv.groupId,
 					id: newConvId,
@@ -611,6 +615,15 @@ export class DatabaseService {
 
 				return { imported, skipped };
 			}
+		);
+	}
+
+	/** Run `fn` in a readonly transaction over all tables. `fn` must await only Dexie calls, else the transaction commits early */
+	static async readOnly<T>(
+		fn: (tables: Pick<LlamaUiDatabase, keyof typeof IDXDB_TABLES>) => Promise<T>
+	): Promise<T> {
+		return db.transaction('r', [db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]], () =>
+			fn(db)
 		);
 	}
 

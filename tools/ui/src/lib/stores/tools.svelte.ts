@@ -12,6 +12,7 @@ import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
+	buildSearchChatsToolDefinition,
 	DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
@@ -114,7 +115,9 @@ class ToolsStore {
 	get browserTools(): OpenAIToolDefinition[] {
 		const tools: OpenAIToolDefinition[] = [
 			buildGetDatetimeToolDefinition(),
-			buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled)
+			buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled),
+			// disabled by default, see searchChatsDefaultDisabledMigration
+			buildSearchChatsToolDefinition()
 		];
 		const readMedia = this.readMediaTool();
 
