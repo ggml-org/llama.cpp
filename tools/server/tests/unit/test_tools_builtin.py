@@ -53,15 +53,16 @@ def test_tools_builtin_grep_search():
     assert "Total matches: 1" in text
 
 
-def test_tools_builtin_read_file():
+def test_tools_builtin_read_file(tmp_path):
     global server
     server.start()
 
-    this_file = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit", "test_tools_builtin.py")
-    res = call_tool("read_file", {"path": this_file})
-    text = res["plain_text_response"]
-    assert GREP_MARKER in text
-    assert "def test_tools_builtin_read_file" in text
+    # a file of its own keeps the test below the read limit, unlike this file which grows with every test
+    path = str(tmp_path / "read.txt")
+    with open(path, "w", newline="\n") as f:
+        f.write("line1\nline2\nline3\n")
+    res = call_tool("read_file", {"path": path})
+    assert res["plain_text_response"] == "line1\nline2\nline3\n"
 
 
 def test_tools_builtin_write_then_edit_file(tmp_path):
