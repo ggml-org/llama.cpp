@@ -765,6 +765,9 @@ struct vk_device_struct {
     bool dot2_f16 {};
     bool ocp_fp4 {};
 
+    bool workgroup_memory_explicit_layout {};
+    bool workgroup_memory_explicit_layout_16bit {};
+
     bool pipeline_executable_properties_support {};
 
     bool device_fault {};
