@@ -1802,6 +1802,7 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
     }
     if (input.text != text) {
         // the pieces do not give back the same text, keep the text without tokens
+        LOG_WRN("%s: token pieces do not match the text, parsing without token ids\n", __func__);
         return common_chat_input(text);
     }
     return input;

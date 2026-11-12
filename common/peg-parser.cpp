@@ -1834,12 +1834,6 @@ static std::string gbnf_ac_grammar(
         builder.add_rule(state_name(q), build_rule(completing, completing_to, buckets, fallback, state_name));
     }
 
-    // An empty delimiter makes the start state terminal. Emit an entry rule
-    // that matches the empty string so the returned reference stays valid.
-    if (ac.is_terminal(0)) {
-        builder.add_rule(prefix, "|");
-    }
-
     return state_name(0);
 }
 
