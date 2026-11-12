@@ -705,6 +705,7 @@ struct common_params {
     // enable built-in tools
     std::vector<std::string> server_tools;
     std::string server_tools_runtime;
+    bool server_tools_allow_unauth = false; // allow tools/MCP on a non-loopback address without API key
 
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
