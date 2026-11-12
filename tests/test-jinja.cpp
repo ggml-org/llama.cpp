@@ -625,6 +625,14 @@ static void test_expressions(testing & t) {
         "('c', 'b', 'a')"
     );
 
+    test_template(t, "multipart string comparison and access",
+        "{% set left = a + 'bc' %}{% set right = 'ab' + c %}{{ left == right }}|"
+        "{{ left[0] }}{{ left[1] }}{{ left[2] }}|{{ right[1:3] }}|"
+        "{{ left[3] is undefined }}|{{ empty[0] is undefined }}",
+        {{"a", "a"}, {"c", "c"}, {"empty", ""}},
+        "True|abc|bc|True|True"
+    );
+
     test_template(t, "string slice negative step",
         "{{ 'abcdef'[::-2] }}",
         json::object(),
@@ -2779,6 +2787,27 @@ static void test_string_parts(testing & t) {
         jinja::runtime runtime(ctx);
         return runtime.gather_string_parts(runtime.execute(ast))->as_string();
     };
+
+    t.test("comparison across part boundaries", [](testing & t) {
+        jinja::string left, right;
+        left.parts = {{true, "a"}, {false, "bc"}};
+        right.parts = {{false, "ab"}, {true, "c"}};
+        t.assert_true("equal text with different partitions", left.equals(right) && right.equals(left));
+
+        right.parts = {{false, ""}, {false, "ab"}, {true, ""}, {true, "c"}, {false, ""}};
+        t.assert_true("empty parts do not change equality", left.equals(right) && right.equals(left));
+        t.assert_true("different bytes are unequal", !left.equals(jinja::string("abd")));
+        t.assert_true("prefixes are unequal", !left.equals(jinja::string("ab")) && !jinja::string("ab").equals(left));
+
+        jinja::string empty;
+        empty.parts = {{true, ""}, {false, ""}};
+        t.assert_true("empty partitions equal an empty string", empty.equals(jinja::string()) && jinja::string().equals(empty));
+
+        auto object = jinja::mk_val<jinja::value_object>();
+        object->insert(jinja::mk_val<jinja::value_string>(left), jinja::mk_val<jinja::value_int>(7));
+        const auto found = object->find(jinja::mk_val<jinja::value_string>(right));
+        t.assert_true("object keys ignore partition boundaries", found && found->as_int() == 7);
+    });
 
     t.test("merge joins only the neighbours with the same type", [](testing & t) {
         // "AB" comes from the input and merges, "-" comes from the template and must not

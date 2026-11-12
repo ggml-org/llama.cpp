@@ -845,7 +845,11 @@ value member_expression::execute_impl(context & ctx) const {
                 }
                 arr_size = static_cast<int64_t>(count);
             } else if (is_val<value_string>(object)) {
-                arr_size = cast_val<value_string>(object)->val_str.length();
+                auto count = cast_val<value_string>(object)->val_str.length();
+                if (count > INT64_MAX) {
+                    throw std::length_error("string length exceeds int64");
+                }
+                arr_size = static_cast<int64_t>(count);
             }
             auto s = cast_stmt<slice_expression>(this->property);
             value step_val  = s->step_expr  ? s->step_expr->execute(ctx)  : mk_val<value_int>(1);

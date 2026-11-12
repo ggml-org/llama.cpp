@@ -596,10 +596,6 @@ struct value_object_t : public value_t {
         }
     }
 
-    value find(const value & key) override {
-        value missing;
-        return at(key, missing);
-    }
     virtual value & at(const value & key, value & default_val) override {
         if (!key->is_immutable() || !key->is_hashable()) {
             throw std::runtime_error("Object key of unhashable type: " + key->type());
