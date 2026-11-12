@@ -480,6 +480,12 @@ struct ggml_hexagon_shared_buffer {
 
         int err = fastrpc_mmap(sess->domain_id, fd(), (void *) base(), 0, size(), flags);
         if (err != 0) {
+            HEX_VERBOSE("ggml-hex: %s mmap failed (err 0x%08x), retrying in 100ms...\n", sess->c_name(), (unsigned) err);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            err = fastrpc_mmap(sess->domain_id, fd(), (void *) base(), 0, size(), flags);
+        }
+
+        if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: %s buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", sess->c_name(),
                     sess->domain_id, size(), fd(), (unsigned) err);
             if (!this->pinned) {
