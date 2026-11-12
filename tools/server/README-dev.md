@@ -15,7 +15,7 @@ In-scope types of feature:
     - Multimodal input/output
     - Memory management: save/load state, context checkpoints
     - Model management
-    - Features that are required by the Web UI
+    - Features that are required by Llama Chat
 - Frontend:
     - Chat-oriented features, example: basic chat, image upload, edit messages
     - Agentic features, example: MCP
@@ -182,7 +182,7 @@ For detailed instructions, see the [test documentation](./tests/README.md).
 
 ### API for tools
 
-This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+This endpoint is intended to be used internally by Llama Chat and subject to change or to be removed in the future.
 
 **GET /tools**
 
@@ -277,7 +277,7 @@ For the direction from router to child:
 
 Model management API was added via PR [#23976](https://github.com/ggml-org/llama.cpp/pull/23976)
 
-The main goal of this API is to allow downloading models and/or removing models from the web UI. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
+The main goal of this API is to allow downloading models and/or removing models from Llama Chat. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
 
 Instead of building everything from the ground up (like what most AI agents will do when you ask them to implement a similar feature), we built on top of existing, already well-engineered components inside the codebase:
 - Model cache infrastructure as mentioned above (`common/download.h`)
@@ -340,11 +340,11 @@ Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, 
 
 
 
-## Web UI
+## Llama Chat
 
-The project includes a web-based user interface for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
+The project includes Llama Chat, a web-based chat app for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
 
-The SvelteKit-based Web UI is introduced in this PR: https://github.com/ggml-org/llama.cpp/pull/14839
+The SvelteKit-based app is introduced in this PR: https://github.com/ggml-org/llama.cpp/pull/14839
 
 ### Features
 

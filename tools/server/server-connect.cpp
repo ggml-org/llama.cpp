@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-// share code = room code + pass code, must match llama-connect and the Web UI
+// share code = room code + pass code, must match llama-connect and Llama Chat
 // ref: https://github.com/ggml-org/llama-connect/blob/master/src/protocol.rs
 static constexpr size_t CONNECT_ROOM_CODE_LEN = 8;
 static constexpr size_t CONNECT_PASS_CODE_LEN = 32;
@@ -55,7 +55,7 @@ static std::string format_share_code(const std::string & code) {
     return out;
 }
 
-// whitespace is tolerated, the Web UI shows the code in blocks and users paste it back
+// whitespace is tolerated, Llama Chat shows the code in blocks and users paste it back
 // returns an empty string if it is not a valid share code
 static std::string normalize_share_code(const std::string & key) {
     std::string code;
@@ -242,7 +242,7 @@ bool server_connect::start(const common_params & params, int port) {
 
     SRV_INF("%s", "-----------------\n");
     SRV_INF("%s", "remote access is enabled via llama-connect\n");
-    SRV_INF("share code (enter it in the Web UI under Settings -> Remote Access): %s\n",
+    SRV_INF("share code (enter it in Llama Chat under Settings -> Remote Access): %s\n",
             format_share_code(code).c_str());
     SRV_WRN("%s", "anyone with this code can use this server, do not share it publicly\n");
     SRV_INF("%s", "-----------------\n");

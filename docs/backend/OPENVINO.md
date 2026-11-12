@@ -692,7 +692,7 @@ llama-openvino:server --no-warmup -c 1024 -m /models/Llama-3.2-1B-Instruct-Q4_K_
 # Or Using llama-server executable
 ./build/ReleaseOV/bin/llama-server -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf --port 8080 -c 1024
 
-# Option 1: Open your browser to http://localhost:8080 to access the web UI for the llama.cpp server.
+# Option 1: Open your browser to http://localhost:8080 to open Llama Chat, the built-in chat app of the llama.cpp server.
 # Option 2: In a NEW terminal, test the server with curl
 
 # If you are behind a proxy, make sure to set NO_PROXY to avoid proxy for localhost
