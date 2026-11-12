@@ -419,9 +419,28 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             }
         }
 
+        // an edit at stale > 0 leaves every cell and pool before stale unchanged: keep them and re-append the rest
+        // speculative decoding edits the end of the sequence on each rejected draft, so a full rebuild costs O(n_ctx) per step
+        const llama_pos stale = mem_idx_stale[s];
+        bool truncated = false;
+        if (stale != POS_CLEAN && stale > 0 && !sq.cells.empty() && !sp.empty() &&
+                sq.pos_min == sp.begin()->first) {
+            const auto cut = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(stale, uint32_t(0)));
+            const size_t n_keep = cut - sq.cells.begin();
+            sq.cells.erase(cut, sq.cells.end());
+            for (auto it = sp.lower_bound(std::make_pair(stale, uint32_t(0))); it != sp.end(); ++it) {
+                sq.cells.push_back(*it);
+            }
+            while (!sq.pools.empty() && sq.pools.back() + kpool > n_keep) {
+                sq.pools.pop_back();
+            }
+            sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
+            truncated = sq.cells.size() == sp.size();
+        }
+
         // the appended tail accounts for every cell only if nothing before it was dropped, but an edit can
         // regroup a sequence without changing its cell count, so a stale sequence must rebuild regardless
-        if (sq.cells.size() != sp.size() || mem_idx_stale[s] != POS_CLEAN) {
+        if (!truncated && (sq.cells.size() != sp.size() || stale != POS_CLEAN)) {
             sq.cells.assign(sp.begin(), sp.end());
             sq.pools.clear();
             sq.j_next  = 0;
