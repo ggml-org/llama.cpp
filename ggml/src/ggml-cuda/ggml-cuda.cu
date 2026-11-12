@@ -2122,6 +2122,18 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
     }
 }
 
+static const ggml_tensor * ggml_cuda_mm_weight_scale(const ggml_tensor * mm) {
+    return mm->op == GGML_OP_MUL_MAT_ID ? mm->src[3] : mm->src[2];
+}
+
+// the weight scale forms that the fused gate/up/GLU kernels apply: per-tensor or per-expert, NVFP4 (mmvq/mmq) or F8 (mmvf)
+static bool ggml_cuda_mm_weight_scale_fusable(const ggml_tensor * mm) {
+    const ggml_tensor * s = ggml_cuda_mm_weight_scale(mm);
+    return s && s->type == GGML_TYPE_F32 && ggml_is_contiguous(s) &&
+        ggml_nelements(s) == (mm->op == GGML_OP_MUL_MAT_ID ? mm->src[0]->ne[2] : 1) &&
+        (mm->src[0]->type == GGML_TYPE_NVFP4 || mm->src[0]->type == GGML_TYPE_F8_E4M3);
+}
+
 static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
                                           const ggml_tensor * ffn_gate,
                                           const ggml_tensor * glu,
@@ -2148,9 +2160,10 @@ static bool ggml_cuda_should_fuse_mul_mat(const ggml_tensor * ffn_up,
         return false;
     }
 
-    const int scale_src = is_mul_mat ? 2 : 3;
-    if (ffn_up->src[scale_src] || ffn_gate->src[scale_src]) {
-        return false;
+    if (ggml_cuda_mm_weight_scale(ffn_up) || ggml_cuda_mm_weight_scale(ffn_gate)) {
+        if (has_scale || !ggml_cuda_mm_weight_scale_fusable(ffn_up) || !ggml_cuda_mm_weight_scale_fusable(ffn_gate)) {
+            return false;
+        }
     }
 
     const ggml_op expected_bias_op = is_mul_mat ? GGML_OP_ADD : GGML_OP_ADD_ID;
@@ -2311,6 +2324,7 @@ static bool ggml_cuda_match_shared_expert(const ggml_cgraph * graph, int routed_
     if (!is_pair(gate, up, routed_idx) || !is_pair(shared_gate, shared_up, shared_idx) ||
             !ggml_cuda_should_fuse_mul_mat(up, gate, routed) ||
             !ggml_cuda_should_fuse_mul_mat(shared_up, shared_gate, shared) ||
+            ggml_cuda_mm_weight_scale(up) || ggml_cuda_mm_weight_scale(shared_up) ||
             !up->src[0]->buffer ||
             !ggml_is_quantized(up->src[0]->type)) {
         return false;
@@ -2448,7 +2462,7 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
     return ggml_cuda_mmq_fusion_is_efficient(x_up->type, ggml_prec_get_src(up, 1), x_up->ne[1], ncols, nchannels, device);
 }
 
-// returns true if a scaled matmul applied its weight scale in-kernel (mmvq epilogue fold),
+// returns true if a scaled matmul applied its weight scale in-kernel (mmvq/mmq epilogue fold),
 // so the caller can skip the separate ggml_cuda_op_mul_mat_scale pass
 static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -2457,13 +2471,13 @@ static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return false;
     }
 
-    // mmvq can fold the weight scale (src[2]) into its epilogue for NVFP4 per-tensor scales
+    // mmvq and mmq can fold the weight scale (src[2]) into their epilogue for NVFP4 per-tensor scales
     const bool scale_fold = dst->src[2] != NULL &&
-        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[2]) == 1 &&
-        ggml_cuda_should_fuse_mul_mat_vec_q(dst);
+        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[2]) == 1;
     ggml_cuda_mm_fusion_args_host fusion = {};
     if (scale_fold) {
-        fusion.x_scale = dst->src[2];
+        fusion.x_scale   = dst->src[2];
+        fusion.prec_src1 = ggml_prec_get_src(dst, 1);
     }
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
@@ -2506,16 +2520,17 @@ static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     // from a per-type number of src1 columns up to 24, few-row MMQ is faster than MMVQ and MMQ
     const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, cc);
     if (!use_mmq_few && ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
-        ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst, scale_fold ? &fusion : nullptr);
-        return scale_fold;
+        const bool fold = scale_fold && ggml_cuda_should_fuse_mul_mat_vec_q(dst);
+        ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst, fold ? &fusion : nullptr);
+        return fold;
     }
     if (use_mmq_few) {
         ggml_cuda_mul_mat_q_few(ctx, src0, src1, dst);
         return false;
     }
     if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
-        ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
-        return false;
+        ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst, scale_fold ? &fusion : nullptr);
+        return scale_fold;
     }
     if (src0->type == GGML_TYPE_F8_E4M3 && ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
         return false;
@@ -2559,7 +2574,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
     return true;
 }
 
-// returns true if a scaled matmul applied its weight scale in-kernel (mmvq epilogue fold)
+// returns true if a scaled matmul applied its weight scale in-kernel (mmvq/mmq epilogue fold)
 static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -2573,14 +2588,14 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int cc        = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
-    // mmvq can fold the per-expert weight scale (src[3]) into its epilogue for NVFP4
+    // mmvq and mmq can fold the per-expert weight scale (src[3]) into their epilogue for NVFP4
     const bool scale_fold = dst->src[3] != NULL &&
         src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[3]) == src0->ne[2] &&
-        ggml_is_contiguous(dst->src[3]) &&
-        ggml_cuda_should_fuse_mul_mat_vec_q(dst);
+        ggml_is_contiguous(dst->src[3]);
     ggml_cuda_mm_fusion_args_host fusion = {};
     if (scale_fold) {
-        fusion.x_scale = dst->src[3];
+        fusion.x_scale   = dst->src[3];
+        fusion.prec_src1 = ggml_prec_get_src(dst, 1);
     }
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
@@ -2590,8 +2605,9 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             if (ggml_is_quantized(src0->type)) {
                 const int mmvq_mmid_max = get_mmvq_mmid_max_batch(src0->type, cc);
                 if (ne2 <= mmvq_mmid_max) {
-                    ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst, scale_fold ? &fusion : nullptr);
-                    return scale_fold;
+                    const bool fold = scale_fold && ggml_cuda_should_fuse_mul_mat_vec_q(dst);
+                    ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst, fold ? &fusion : nullptr);
+                    return fold;
                 }
             } else if (src0->type == GGML_TYPE_F8_E4M3 &&
                     ggml_cuda_should_use_mmvf(src0, cc, warp_size, ne2)) {
@@ -2606,8 +2622,8 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         }
 
         if (ggml_cuda_should_use_mmq(src0->type, cc, ne12, /*n_experts=*/ne02)) {
-            ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst);
-            return false;
+            ggml_cuda_mul_mat_q(ctx, src0, src1, ids, dst, scale_fold ? &fusion : nullptr);
+            return scale_fold;
         }
 
         if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
@@ -4454,11 +4470,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
-    // a scaled matmul applies its weight scale in-kernel or via epilogue; keep it out of multi-op fusion
-    if ((node->op == GGML_OP_MUL_MAT    && node->src[2] != NULL) ||
-        (node->op == GGML_OP_MUL_MAT_ID && node->src[3] != NULL)) {
-        return 0;
-    }
+    // a scaled matmul only takes part in the gate/up/GLU fusion, which passes its weight scale on
+    const bool scaled_mm = (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) && ggml_cuda_mm_weight_scale(node);
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
@@ -4956,15 +4969,17 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
             const ggml_tensor * src0 = up_n->src[0];
             const ggml_tensor * src1 = up_n->src[1];
-            const ggml_tensor * ids  = up_n->src[2];
+            const ggml_tensor * ids  = op == GGML_OP_MUL_MAT_ID ? up_n->src[2] : nullptr;
 
             if (ggml_cuda_should_fuse_mul_mat_vec_f(up_n, gate_n)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
-                fusion_data.gate      = gate_n->src[0];
-                fusion_data.x_bias    = up_bias_tensor;
-                fusion_data.gate_bias = gate_bias_tensor;
-                fusion_data.glu_op    = ggml_get_glu_op(glu);
-                fusion_data.glu_limit = ggml_get_op_params_f32(glu, 3);
+                fusion_data.gate       = gate_n->src[0];
+                fusion_data.x_bias     = up_bias_tensor;
+                fusion_data.gate_bias  = gate_bias_tensor;
+                fusion_data.x_scale    = ggml_cuda_mm_weight_scale(up_n);
+                fusion_data.gate_scale = ggml_cuda_mm_weight_scale(gate_n);
+                fusion_data.glu_op     = ggml_get_glu_op(glu);
+                fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
 
                 ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
                 fused_mul_mat_vec = true;
@@ -4974,11 +4989,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
             if (ggml_cuda_should_fuse_mul_mat_vec_q(up_n)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
-                fusion_data.gate      = gate_n->src[0];
-                fusion_data.x_bias    = up_bias_tensor;
-                fusion_data.gate_bias = gate_bias_tensor;
-                fusion_data.glu_op    = ggml_get_glu_op(glu);
-                fusion_data.glu_limit = ggml_get_op_params_f32(glu, 3);
+                fusion_data.gate       = gate_n->src[0];
+                fusion_data.x_bias     = up_bias_tensor;
+                fusion_data.gate_bias  = gate_bias_tensor;
+                fusion_data.x_scale    = ggml_cuda_mm_weight_scale(up_n);
+                fusion_data.gate_scale = ggml_cuda_mm_weight_scale(gate_n);
+                fusion_data.glu_op     = ggml_get_glu_op(glu);
+                fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
 
                 ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
                 fused_mul_mat_vec = true;
@@ -4999,13 +5016,15 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
             const ggml_tensor * src0 = up->src[0];
             const ggml_tensor * src1 = up->src[1];
-            const ggml_tensor * ids  = up->src[2];
+            const ggml_tensor * ids  = op == GGML_OP_MUL_MAT_ID ? up->src[2] : nullptr;
 
             if (ggml_cuda_should_fuse_mul_mat_vec_f(up, gate)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
-                fusion_data.gate      = gate->src[0];
-                fusion_data.glu_op    = ggml_get_glu_op(glu);
-                fusion_data.glu_limit = ggml_get_op_params_f32(glu, 3);
+                fusion_data.gate       = gate->src[0];
+                fusion_data.x_scale    = ggml_cuda_mm_weight_scale(up);
+                fusion_data.gate_scale = ggml_cuda_mm_weight_scale(gate);
+                fusion_data.glu_op     = ggml_get_glu_op(glu);
+                fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
 
                 ggml_cuda_mul_mat_vec_f(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
                 fused_mul_mat_vec = true;
@@ -5015,9 +5034,11 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
             if (ggml_cuda_should_fuse_mul_mat_vec_q(up)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
-                fusion_data.gate      = gate->src[0];
-                fusion_data.glu_op    = ggml_get_glu_op(glu);
-                fusion_data.glu_limit = ggml_get_op_params_f32(glu, 3);
+                fusion_data.gate       = gate->src[0];
+                fusion_data.x_scale    = ggml_cuda_mm_weight_scale(up);
+                fusion_data.gate_scale = ggml_cuda_mm_weight_scale(gate);
+                fusion_data.glu_op     = ggml_get_glu_op(glu);
+                fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
 
                 ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
                 fused_mul_mat_vec = true;
@@ -5027,10 +5048,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
             if (ggml_cuda_should_fuse_mul_mat_q(up, gate, glu)) {
                 ggml_cuda_mm_fusion_args_host fusion_data{};
-                fusion_data.gate      = gate->src[0];
-                fusion_data.glu_op    = ggml_get_glu_op(glu);
-                fusion_data.glu_limit = ggml_get_op_params_f32(glu, 3);
-                fusion_data.prec_src1 = ggml_prec_get_src(up, 1);
+                fusion_data.gate       = gate->src[0];
+                fusion_data.x_scale    = ggml_cuda_mm_weight_scale(up);
+                fusion_data.gate_scale = ggml_cuda_mm_weight_scale(gate);
+                fusion_data.glu_op     = ggml_get_glu_op(glu);
+                fusion_data.glu_limit  = ggml_get_op_params_f32(glu, 3);
+                fusion_data.prec_src1  = ggml_prec_get_src(up, 1);
 
                 ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, glu, &fusion_data);
                 fused_mul_mat_vec = true;
@@ -5042,6 +5065,10 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     if (fused_mul_mat_vec) {
         return fused_node_count - 1;
+    }
+
+    if (scaled_mm) {
+        return 0;
     }
 
     fused_mul_mat_vec = false;
