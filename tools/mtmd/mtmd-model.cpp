@@ -4233,7 +4233,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_MLP_NORM:
             return mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
-            return mm_model_proj->ne[0];
+            return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
