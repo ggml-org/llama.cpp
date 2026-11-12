@@ -7087,7 +7087,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Muse Glimmer format tests
     {
         auto tst = peg_tester("models/templates/muse-glimmer.jinja", detailed_debug);
-        tst.specials({ "<|start|>", "<|message|>", "<|eom|>", "<|eot|>" });
+        tst.specials({ "<|start|>", "<|message|>", "<|eom|>" });
 
         const std::string call_markup =
             "<atem:function_calls>\n"
@@ -7097,7 +7097,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             "</atem:function_calls>";
 
         // A plain answer is unaffected
-        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eot|>")
+        tst.test(" to=user<|message|>Hello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .expect(message_assist)
             .run();

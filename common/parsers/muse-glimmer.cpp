@@ -17,7 +17,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     data.supports_thinking = true;
 
     data.preserved_tokens = {
-        "<|start|>", "<|message|>", "<|eom|>", "<|eot|>",
+        "<|start|>", "<|message|>", "<|eom|>",
         // ATEM tool-call markup emitted on " to=<tool>" turns.
         "<atem:function_calls>", "<atem:invoke", "<atem:parameter", "</atem:parameter>",
         "</atem:invoke>", "</atem:function_calls>",
@@ -52,7 +52,6 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         auto start_token = p.token("<|start|>");
         auto message     = p.token("<|message|>");
         auto eom         = p.token("<|eom|>");
-        auto eot         = p.token("<|eot|>");
         auto start       = p.rule("start", start_token + p.literal("assistant"));
 
         if (!extract_reasoning && !include_grammar) {
@@ -67,7 +66,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
         auto analysis = p.ref("analysis");
 
         auto recipient  = p.optional(p.literal(" to=user"));
-        auto final_msg  = p.rule("final", recipient + message + p.content(p.until(eot | eom)));
+        auto final_msg  = p.rule("final", recipient + message + p.content(p.until(eom)));
 
         if (has_response_format) {
             auto response_json   = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
