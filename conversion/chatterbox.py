@@ -212,6 +212,8 @@ class ChatterboxTalkerModel(TextModel):
         self.gguf_writer.add_sampling_temp(sampling["temp"])
         self.gguf_writer.add_sampling_penalty_repeat(sampling["penalty_repeat"])
         self.gguf_writer.add_sampling_penalty_last_n(PENALTY_LAST_N)
+        if not self.is_turbo:
+            self.gguf_writer.add_classifier_free_guidance(True)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if self.is_turbo:
@@ -353,7 +355,7 @@ class ChatterboxMmprojModel(MmprojModel):
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
 
-        # speaker encoder, the front-end hparams are hard-coded in clip.cpp
+        # speaker encoder, the front-end hparams are hard-coded in tools/mtmd
         self.gguf_writer.add_clip_has_audio_encoder(True)
         self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.CHATTERBOX_SPKENC)
         self.gguf_writer.add_audio_projection_dim(80)

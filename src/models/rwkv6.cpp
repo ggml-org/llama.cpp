@@ -88,11 +88,11 @@ void llama_model_rwkv6::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_rwkv6::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_rwkv6::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_rwkv6_base(model, params) {
+llama_model_rwkv6::graph::graph(const llm_graph_params & params) :
+    llm_build_rwkv6_base(params) {
     GGML_ASSERT(hparams.token_shift_count == 2);
 
     ggml_tensor * cur;

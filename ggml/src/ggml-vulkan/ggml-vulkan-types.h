@@ -433,6 +433,21 @@ struct vk_fa_pipeline_state {
     }
 };
 
+struct vk_xe_fa_pipeline_state {
+    uint32_t HSK, HSV;
+    uint32_t qk_ratio, pv_ratio;
+    uint32_t decode_n;
+    bool unaligned_seq_len;
+    bool unaligned_q;
+    bool partial_row_mask;
+    bool multi_head_mask;
+
+    bool operator<(const vk_xe_fa_pipeline_state &b) const {
+        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
+               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
+    }
+};
+
 struct vk_conv2d_pipeline_state {
     vk_conv2d_pipeline_state(uint32_t s0, uint32_t s1, uint32_t p0, uint32_t p1, uint32_t d0, uint32_t d1, uint32_t KW, uint32_t KH, uint32_t aligned)
         : s0(s0), s1(s1), p0(p0), p1(p1), d0(d0), d1(d1), KW(KW), KH(KH), aligned(aligned) {}
@@ -485,6 +500,15 @@ static constexpr uint32_t num_argsort_pipelines = 11;
 static constexpr uint32_t num_topk_moe_pipelines = 10;
 
 static constexpr uint32_t num_topk_pipelines = 11;
+
+// FWHT block widths with a dedicated pipeline. The subgroup shader keeps n/subgroup_size
+// values per invocation, so widths above fwht_max_subgroup_n, or a subgroup narrow enough to
+// exceed fwht_max_subgroup_el_w values, use the shared-memory shader with one row per
+// workgroup instead.
+static constexpr uint32_t num_fwht_pipelines     = 8;
+static constexpr uint32_t fwht_max_subgroup_n    = 512;
+static constexpr uint32_t fwht_max_subgroup_el_w = 64;
+static constexpr uint32_t fwht_rows              = 4;
 
 static constexpr std::initializer_list<ggml_op> topk_moe_early_softmax_norm{ GGML_OP_SOFT_MAX, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,
                                                                              GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE,
@@ -698,6 +722,7 @@ struct vk_device_struct {
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
     bool uma;
+    bool rebar;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
     bool float_controls_denorm_preserve_fp16;
@@ -752,6 +777,9 @@ struct vk_device_struct {
 
     bool dot2_f16 {};
     bool ocp_fp4 {};
+
+    bool workgroup_memory_explicit_layout {};
+    bool workgroup_memory_explicit_layout_16bit {};
 
     bool pipeline_executable_properties_support {};
 
@@ -827,6 +855,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add_id_f32;
 
     vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64;
+    vk_pipeline pipeline_concat_transpose_i8, pipeline_concat_transpose_i16, pipeline_concat_transpose_i32;
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_log[2];
@@ -914,7 +943,6 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_leaky_relu[2];
     vk_pipeline pipeline_silu_back_f32;
-    vk_pipeline pipeline_diag_mask_inf_f32;
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
     vk_pipeline pipeline_soft_max_f32_wg512, pipeline_soft_max_f32_f16_wg512;
     vk_pipeline pipeline_soft_max_back_f32;
@@ -935,7 +963,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_sum_rows_f32;
     vk_pipeline pipeline_cross_entropy_loss_f32, pipeline_cross_entropy_loss_f32_wg512;
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
-    vk_pipeline pipeline_fwht_f32[4];
+    vk_pipeline pipeline_fwht_f32[num_fwht_pipelines];
+    vk_pipeline pipeline_fwht_f16[num_fwht_pipelines];
+    uint32_t    fwht_rows_per_wg[num_fwht_pipelines] = {};
     vk_pipeline pipeline_cumsum_f32;
     vk_pipeline pipeline_cumsum_small_f32;
     vk_pipeline pipeline_cumsum_multipass1_f32;
@@ -993,7 +1023,8 @@ struct vk_device_struct {
     bool fa_sparse_compact_use_subgroups;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
+    std::map<vk_xe_fa_pipeline_state, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
+    std::map<vk_xe_fa_pipeline_state, vk_pipeline> pipeline_xe_fa_prefill;
     vk_pipeline pipeline_count_experts;
 
     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
@@ -1007,11 +1038,15 @@ struct vk_device_struct {
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    std::atomic<bool> fusion_stats_enabled {false};
+    std::mutex fusion_mutex;
+    std::map<std::string, uint64_t> fusion_counts;
     bool disable_descriptor_reuse;
     std::atomic<uint64_t> buffer_destroy_count {};
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    bool xe_fa_support {};
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1117,6 +1152,21 @@ struct vk_staging_memset {
     void * dst;
     uint32_t val;
     size_t n;
+};
+
+struct vk_buffer_region {
+    vk_buffer buf;
+    size_t offset;
+    void * host;
+    size_t size;
+};
+
+struct vk_buffer_copy_region {
+    vk_buffer dst;
+    size_t dst_offset;
+    vk_buffer src;
+    size_t src_offset;
+    size_t size;
 };
 
 struct vk_context_struct {
@@ -1374,6 +1424,34 @@ struct vk_fa_tuning_params {
                      " row_split=" << row_split << " shmem_staging=" << shmem_staging << " disable_subgroups=" << disable_subgroups <<
                      " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
     }
+};
+
+struct vk_xe_fa_tuning_params {
+    size_t shmem_sz;
+    std::array<uint32_t, 2> workgroup_size;
+    std::array<uint32_t, 2> subgroup_size;
+    uint32_t tm;
+    uint32_t tn;
+    uint32_t tk;
+
+    struct {
+        uint32_t wg_row;
+        uint32_t gqa_fold;
+        uint32_t q_in_reg;
+        uint32_t p_per_iter;
+        uint32_t sg_col;
+        uint32_t acc_count;
+        uint32_t pipeline_flag;
+    } prefill_params;
+
+    struct {
+        uint32_t p_chunk_ph1;
+        uint32_t out_per_wg_ph1;
+        uint32_t split_p_per_iter_ph2;
+        uint32_t out_row_per_wg_ph2;
+        uint32_t out_col_per_wg_ph2;
+        uint32_t pipeline_flag_ph2;
+    } decode_params;
 };
 
 struct GpuPipelineConfig {

@@ -19,6 +19,8 @@ import { untrack } from 'svelte';
 
 /** Distance from the bottom that still counts as being at the bottom. */
 const AT_BOTTOM_PX = 24;
+/** Distance from the bottom past which a way back down is offered. */
+const FAR_FROM_BOTTOM_PX = 240;
 /**
  * Growth this soon after a press is the reader's own doing (expanding a block,
  * opening a preview), so it must not drag the viewport down with it.
@@ -29,8 +31,10 @@ const STICK_ATTRIBUTE = 'data-stick-to-bottom';
 const NATIVE_ANCHORING = typeof CSS !== 'undefined' && CSS.supports('overflow-anchor', 'none');
 
 export class StickToBottom {
-	/** Measured position, which drives the "scroll to bottom" affordance. */
+	/** Measured position: at the bottom, or within AT_BOTTOM_PX of it. */
 	atBottom = $state(true);
+	/** Far enough up that the "scroll to bottom" affordance is worth showing. */
+	farFromBottom = $state(false);
 	/** The reader is at the bottom, so new content should follow. */
 	stick = $state(true);
 
@@ -94,6 +98,19 @@ export class StickToBottom {
 		this.container = undefined;
 	}
 
+	/**
+	 * Also follows `element`'s size changes, even right after a press: the grace keeps
+	 * a block the reader expands from dragging the viewport, but the chat form
+	 * expanding on their click must carry the conversation along. Returns the cleanup.
+	 */
+	followSizeOf(element: HTMLElement): () => void {
+		const observer = new ResizeObserver(() => this.follow(true));
+
+		observer.observe(element);
+
+		return () => observer.disconnect();
+	}
+
 	/** Reader scrolls are the only thing that re-arms or stops following. */
 	handleScroll(): void {
 		this.measure();
@@ -107,6 +124,7 @@ export class StickToBottom {
 		el.scrollTo({ behavior, top: el.scrollHeight });
 		this.stick = true;
 		this.atBottom = true;
+		this.farFromBottom = false;
 		// asking for the bottom outranks the press that led here (a sidebar row,
 		// the send button), so the growth that follows is followed
 		this.pressedAt = -Infinity;
@@ -118,16 +136,28 @@ export class StickToBottom {
 		untrack(() => this.syncAnchor());
 	}
 
+	/**
+	 * The document scroller's clientHeight is iOS's smaller viewport: Safari's with its
+	 * toolbar shown, the installed app's without the status bar. The page scrolls on past it
+	 * by that difference, so at its real bottom it would read as that far above it; the
+	 * window's own height is the room it really shows.
+	 */
 	private distanceFromBottom(el: HTMLElement): number {
-		return el.scrollHeight - el.clientHeight - el.scrollTop;
+		const shown =
+			el === document.documentElement
+				? Math.max(el.clientHeight, window.innerHeight)
+				: el.clientHeight;
+
+		return Math.max(0, el.scrollHeight - shown - el.scrollTop);
 	}
 
-	private follow(): void {
+	private follow(ignoreGrace = false): void {
 		const el = this.container;
 
 		if (!el) return;
 
-		const pressedRecently = performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
+		const pressedRecently =
+			!ignoreGrace && performance.now() - this.pressedAt < INTERACTION_GRACE_MS;
 		const atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
 
 		// with native anchoring the pin already held the bottom; write only when
@@ -135,11 +165,13 @@ export class StickToBottom {
 		if (this.enabled && this.stick && !pressedRecently && !(this.native && atBottom)) {
 			el.scrollTop = el.scrollHeight;
 			this.atBottom = true;
+			this.farFromBottom = false;
 
 			return;
 		}
 
 		this.atBottom = atBottom;
+		this.farFromBottom = this.distanceFromBottom(el) > FAR_FROM_BOTTOM_PX;
 	}
 
 	/**
@@ -158,8 +190,10 @@ export class StickToBottom {
 
 		const top = el.scrollTop;
 		const height = el.scrollHeight;
+		const distance = this.distanceFromBottom(el);
 
-		this.atBottom = this.distanceFromBottom(el) <= AT_BOTTOM_PX;
+		this.atBottom = distance <= AT_BOTTOM_PX;
+		this.farFromBottom = distance > FAR_FROM_BOTTOM_PX;
 
 		if (top < this.lastScrollTop && height >= this.lastScrollHeight) {
 			this.stick = false;
