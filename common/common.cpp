@@ -117,7 +117,7 @@ int32_t common_cpu_get_num_physical_cores() {
     if (result == 0) {
         return num_physical_cores;
     }
-#elif defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+#elif defined(_WIN32) && (_WIN32_WINNT >= 0x0601) // windows 7 and later
     // TODO: windows + arm64 + mingw64
     unsigned int n_threads_win = std::thread::hardware_concurrency();
     unsigned int default_threads = n_threads_win > 0 ? (n_threads_win <= 4 ? n_threads_win : n_threads_win / 2) : 4;
@@ -200,10 +200,69 @@ static int cpu_count_math_cpus(int n_cpu) {
 
 #endif // __x86_64__ && __linux__
 
+bool common_cpu_get_pcore_mask(bool (&mask)[GGML_MAX_N_THREADS], int32_t & n_pcores) {
+    n_pcores = 0;
+    std::fill(std::begin(mask), std::end(mask), false);
+#if defined(_WIN32) && (_WIN32_WINNT >= 0x0601)
+    DWORD buffer_size = 0;
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &buffer_size)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            return false;
+        }
+    }
+    std::vector<char> buffer(buffer_size);
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &buffer_size)) {
+        return false;
+    }
+
+    BYTE max_eff = 0;
+    BYTE min_eff = 255;
+    DWORD offset = 0;
+    while (offset < buffer_size) {
+        auto * info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
+        if (info->Relationship == RelationProcessorCore) {
+            BYTE eff = info->Processor.EfficiencyClass;
+            if (eff > max_eff) { max_eff = eff; }
+            if (eff < min_eff) { min_eff = eff; }
+        }
+        offset += info->Size;
+    }
+
+    const bool is_hybrid = (max_eff > min_eff);
+    offset = 0;
+    while (offset < buffer_size) {
+        auto * info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
+        if (info->Relationship == RelationProcessorCore) {
+            if (!is_hybrid || info->Processor.EfficiencyClass == max_eff) {
+                KAFFINITY core_mask = info->Processor.GroupMask[0].Mask;
+                for (int b = 0; b < 64 && b < GGML_MAX_N_THREADS; ++b) {
+                    if ((core_mask >> b) & 1ULL) {
+                        mask[b] = true;
+                        n_pcores++;
+                        break;
+                    }
+                }
+            }
+        }
+        offset += info->Size;
+    }
+    return n_pcores > 0;
+#else
+    return false;
+#endif
+}
+
 /**
  * Returns number of CPUs on system that are useful for math.
  */
 int32_t common_cpu_get_num_math() {
+#if defined(_WIN32) && (_WIN32_WINNT >= 0x0601)
+    bool pmask[GGML_MAX_N_THREADS];
+    int32_t n_pcores = 0;
+    if (common_cpu_get_pcore_mask(pmask, n_pcores) && n_pcores > 0) {
+        return n_pcores;
+    }
+#endif
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
     int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
     if (n_cpu < 1) {
@@ -315,6 +374,17 @@ void postprocess_cpu_params(common_cpu_params & cpuparams, const common_cpu_para
             cpuparams = *role_model;
         } else {
             cpuparams.n_threads = common_cpu_get_num_math();
+        }
+    }
+
+    if (!cpuparams.mask_valid) {
+        int32_t n_pcores = 0;
+        if (common_cpu_get_pcore_mask(cpuparams.cpumask, n_pcores) && n_pcores > 0) {
+            cpuparams.mask_valid = true;
+            cpuparams.strict_cpu = false; // Keep non-strict to avoid OpenMP barrier preemption
+            if (cpuparams.n_threads > n_pcores) {
+                cpuparams.n_threads = n_pcores;
+            }
         }
     }
 
