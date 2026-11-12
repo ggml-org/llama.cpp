@@ -629,6 +629,13 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
+// The 6-bit scales 4*ksc .. 4*ksc + 3 of a q3_K block, minus 32, as int8.
+static __device__ __forceinline__ int unpack_scales_q3_K(const uint8_t * scales, const int ksc) {
+    const int sc_low  = (get_int_b2(scales, ksc % 2) >> (4 * (ksc / 2))) & 0x0F0F0F0F;
+    const int sc_high = ((get_int_b2(scales, 2) >> (2 * ksc)) << 4) & 0x30303030;
+    return __vsub4(sc_low | sc_high, 0x20202020);
+}
+
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_q3_K(
         const char * __restrict__ x, const char * __restrict__ x_gate, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
     GGML_UNUSED(x_gate);
@@ -695,15 +702,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
         const int ksc = threadIdx.x % 4;
 
-        const int ksc_low = ksc % (QI3_K/8);
-        const int shift_low = 4 * (ksc / (QI3_K/8));
-        const int sc_low = (get_int_b2(bxi->scales, ksc_low) >> shift_low) & 0x0F0F0F0F;
-
-        const int ksc_high = QI3_K/8;
-        const int shift_high = 2 * ksc;
-        const int sc_high = ((get_int_b2(bxi->scales, ksc_high) >> shift_high) << 4) & 0x30303030;
-
-        const int sc = __vsub4(sc_low | sc_high, 0x20202020);
+        const int sc = unpack_scales_q3_K(bxi->scales, ksc);
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         const int8_t * sc8 = (const int8_t *) &sc;
@@ -1724,10 +1723,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
-template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4(
+template <ggml_type type, int J, bool fallback, ggml_prec prec_src1, bool has_fusion> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4(
         const char * __restrict__ x, const char * __restrict__ x_gate, int * __restrict__ x_tile, const int kb0, const int i_max, const int stride) {
-    GGML_UNUSED(x_gate);
-
     constexpr int warp_size   = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps      = ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1) / warp_size;
     constexpr int I           = ggml_cuda_mmq_get_I(type, J, fallback, prec_src1);
@@ -1755,7 +1752,7 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
             i = min(i, i_max);
         }
 
-        const block_nvfp4 * bxi = (const block_nvfp4 *) x + kb0 + i * stride + kbx;
+        const block_nvfp4 * bxi = ggml_cuda_mmq_x_row<block_nvfp4, has_fusion>(x, x_gate, kb0, i, stride) + kbx;
         const uint32_t * __restrict__ src_qs = reinterpret_cast<const uint32_t *>(bxi->qs);
         const int kqs = 16 * kbx;
         const int ksc = 4 * kbx;
@@ -1782,10 +1779,8 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
     }
 }
 
-template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4_nvfp4(
+template <ggml_type type, int J, bool fallback, bool has_fusion> static __device__ __forceinline__ void ggml_cuda_mmq_load_tiles_nvfp4_nvfp4(
         const char * __restrict__ x, const char * __restrict__ x_gate, int * __restrict__ x_tile, const int kbx0, const int i_max, const int stride) {
-    GGML_UNUSED(x_gate);
-
     constexpr int warp_size       = ggml_cuda_get_physical_warp_size();
     constexpr int nwarps          = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q4) / warp_size;
     constexpr int I               = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q4);
@@ -1800,7 +1795,6 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int kbx = txi % threads_per_row;
     const int row_in_warp = txi / threads_per_row;
 
-    const block_nvfp4 * bxi_base = (const block_nvfp4 *) x + kbx0 + kbx;
     uint32_t * x_u32_scale = x_u32 + 64 + kbx;
 
 #pragma unroll
@@ -1811,7 +1805,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             i = min(i, i_max);
         }
 
-        const block_nvfp4 * bxi = bxi_base + i * stride;
+        const block_nvfp4 * bxi = ggml_cuda_mmq_x_row<block_nvfp4, has_fusion>(x, x_gate, kbx0, i, stride) + kbx;
 
         const uint32_t * src_qs = reinterpret_cast<const uint32_t *>(bxi->qs);
 

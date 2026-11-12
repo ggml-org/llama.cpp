@@ -3,6 +3,7 @@
 #include <random>
 #include <cstdlib>
 
+#include "chat-tts-norm.h"
 #include "json.h"
 #include "subproc.h"
 
@@ -16,8 +17,8 @@
 
 using json = common_json;
 
-static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect);
-static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect);
+static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect, bool tts_norm = false);
+static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect, bool tts_norm = false);
 
 static void test_whitespace_control(testing & t);
 static void test_conditionals(testing & t);
@@ -39,6 +40,7 @@ static void test_stats(testing & t);
 static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
+static void test_tts_norm_patterns(testing & t);
 
 static bool g_python_mode = false;
 
@@ -75,6 +77,7 @@ int main(int argc, char *argv[]) {
     t.test("string methods", test_string_methods);
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
+    t.test("tts norm patterns", test_tts_norm_patterns);
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
@@ -167,6 +170,18 @@ static void test_conditionals(testing & t) {
         "{% if x > 5 %}big{% endif %}",
         {{"x", 10}},
         "big"
+    );
+
+    test_template(t, "chained comparison",
+        "{{ 1 <= x <= 100 }},{{ 1 <= y <= 100 }},{{ 1 < 2 < 3 < 2 }},{{ 1 == 1 != 2 }},{{ 'a' in 'apple' == 'apple' }}",
+        {{"x", 42}, {"y", 500}},
+        "True,False,False,True,True"
+    );
+
+    test_template(t, "chained comparison short circuit",
+        "{{ 2 < 1 < y }}",
+        json::object(),
+        "False"
     );
 
     test_template(t, "object comparison",
@@ -677,6 +692,24 @@ static void test_set_statement(testing & t) {
 }
 
 static void test_filters(testing & t) {
+    for (const std::string filter : {"upper", "lower", "title", "capitalize"}) {
+        for (const std::string input : {"'hello'", "missing"}) {
+            test_template_error(t, filter + " rejects unknown keyword on " + input,
+                "{{ " + input + "|" + filter + "(attribute='name') }}",
+                "unexpected keyword argument 'attribute'"
+            );
+            test_template_error(t, filter + " rejects extra positional argument on " + input,
+                "{{ " + input + "|" + filter + "('extra') }}",
+                "expected between 1 and 1 arguments, got 2"
+            );
+        }
+    }
+
+    test_template_error(t, "string method rejects unknown keyword",
+        "{{ 'hello'.upper(attribute='name') }}",
+        "unexpected keyword argument 'attribute'"
+    );
+
     test_template(t, "upper",
         "{{ 'hello'|upper }}",
         json::object(),
@@ -724,6 +757,23 @@ static void test_filters(testing & t) {
         json::object(),
         "hello"
     );
+
+    test_template(t, "trim chars keyword",
+        "{{ 'xyxhelloxyx'|trim(chars='xy') }}|{{ missing|trim(chars='xy') }}",
+        json::object(),
+        "hello|"
+    );
+
+    for (const std::string input : {"'hello'", "missing"}) {
+        test_template_error(t, "trim rejects unknown keyword on " + input,
+            "{{ " + input + "|trim(attribute='name') }}",
+            "unexpected keyword argument 'attribute'"
+        );
+        test_template_error(t, "trim rejects extra positional argument on " + input,
+            "{{ " + input + "|trim('x', 'y') }}",
+            "expected between 1 and 2 arguments, got 3"
+        );
+    }
 
     test_template(t, "length string",
         "{{ 'hello'|length }}",
@@ -1281,6 +1331,18 @@ static void test_macros(testing & t) {
         "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
         json::object(),
         "Hello, John Smith,Hi, Jane Doe"
+    );
+
+    test_template(t, "macro with unpacked args",
+        "{% macro add(a, b, c=0) %}{{ a + b + c }}{% endmacro %}{{ add(*[1, 2]) }},{{ add(1, **{'b': 2, 'c': 3}) }},{{ add(*xs, **kw) }}",
+        {{"xs", json::array({1, 2})}, {"kw", {{"c", 5}}}},
+        "3,6,8"
+    );
+
+    test_template(t, "filter with unpacked args",
+        "{{ 'a-b' | replace(*['-', '+']) }}",
+        json::object(),
+        "a+b"
     );
 
     test_template(t, "macro with caller",
@@ -2064,6 +2126,79 @@ static void test_array_methods(testing & t) {
         "{\"x\": 2}"
     );
 
+    test_template(t, "array|map with filter int materialized",
+        "{{ arr|map('int')|list|join(',') }}",
+        {{"arr", json::array({"1", "2", "3"})}},
+        "1,2,3"
+    );
+
+    test_template(t, "array|map with filter upper for schema union type",
+        "{{ item_value|map('upper')|list|join(',') }}",
+        {{"item_value", json::array({"string", "null"})}},
+        "STRING,NULL"
+    );
+
+    test_template_error(t, "array|map rejects unsupported filter attribute",
+        "{{ [{'name': 'alice'}]|map('upper', attribute='name')|join(',') }}",
+        "unexpected keyword argument 'attribute'"
+    );
+
+    test_template_error(t, "array|map rejects unknown keyword on undefined item",
+        "{{ [missing]|map('lower', attribute='name')|join(',') }}",
+        "unexpected keyword argument 'attribute'"
+    );
+
+    test_template(t, "array|map attribute then filter upper",
+        "{{ arr|map(attribute='name')|map('upper')|join(',') }}",
+        {{"arr", json::array({{{"name", "alice"}}, {{"name", "bob"}}})}},
+        "ALICE,BOB"
+    );
+
+    test_template(t, "array|map with filter arguments",
+        "{{ arr|map('replace', 'a', 'o')|join(',') }}",
+        {{"arr", json::array({"cat", "bat"})}},
+        "cot,bot"
+    );
+
+    test_template(t, "array|map with filter keyword arguments",
+        "{{ arr|map('join', '-', attribute='name')|join(';') }}",
+        {{"arr", json::array({
+            json::array({
+                json({{"name", "a"}}),
+                json({{"name", "b"}}),
+            }),
+            json::array({
+                json({{"name", "c"}}),
+            }),
+        })}},
+        "a-b;c"
+    );
+
+    test_template(t, "array|map with count alias",
+        "{{ arr|map('count')|join(',') }}",
+        {{"arr", json::array({"cat", "hello"})}},
+        "3,5"
+    );
+
+    test_template(t, "array|map with join keyword arguments",
+        "{{ [[{'name': 'a'}, {'name': 'b'}]]|map('join', d='-', attribute='name')|join(';') }}",
+        json::object(),
+        "a-b"
+    );
+
+    for (const std::string input : {"['a', 'b']", "[]", "missing"}) {
+        test_template_error(t, "join rejects unknown keyword on " + input,
+            "{{ " + input + "|join(typo='name') }}",
+            "unexpected keyword argument 'typo'"
+        );
+    }
+
+    test_template(t, "array|map with default alias and arguments",
+        "{{ arr|map('d', 'fallback', true)|join(',') }}",
+        {{"arr", json::array({"", "value"})}},
+        "fallback,value"
+    );
+
     // not used by any chat templates
     // test_template(t, "array.insert()",
     //     "{% set _ = arr.insert(1, 'x') %}{{ arr|join(',') }}",
@@ -2127,6 +2262,12 @@ static void test_array_methods(testing & t) {
 
     test_template(t, "undefined|join",
         "{{ arr|join }}",
+        json::object(),
+        ""
+    );
+
+    test_template(t, "undefined|join with keyword arguments",
+        "{{ arr|join(d='-', attribute='name') }}",
         json::object(),
         ""
     );
@@ -2310,6 +2451,12 @@ static void test_object_methods(testing & t) {
     test_template(t, "dict from tuples and kwargs",
         "{% set o = dict((obj | items | list), c=2) %}{{ o|tojson }}",
         {{"obj", {{"a", 3}, {"b", 1}}}},
+        "{\"a\": 3, \"b\": 1, \"c\": 2}"
+    );
+
+    test_template(t, "dict from dict and unpacked kwargs",
+        "{% set o = dict(obj, **{k: 2}) %}{{ o|tojson }}",
+        {{"obj", {{"a", 3}, {"b", 1}}}, {"k", "c"}},
         "{\"a\": 3, \"b\": 1, \"c\": 2}"
     );
 }
@@ -2599,13 +2746,134 @@ static void test_string_parts(testing & t) {
 
 }
 
-static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect) {
-    t.test(name, [&tmpl, &expect](testing & t) {
+// TTS normalization patterns: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
+// these functions are only available to task templates (e.g. "tts"), so every test here passes tts_norm = true
+static void test_tts_norm_patterns(testing & t) {
+    test_template(t, "not available without tts norm builtins",
+        "{{ tts_norm_scan is defined }}",
+        json::object(),
+        "False");
+
+    test_template(t, "tts_norm_scan splits text into matched and unmatched segments",
+        "{%- for s in tts_norm_scan(text, [['num', '%d+'], ['word', '%a+']]) -%}[{{ s.rule or '-' }}:{{ s.text }}]{%- endfor -%}",
+        {{"text", "abc 123, x9"}},
+        "[word:abc][-: ][num:123][-:, ][word:x][num:9]", true);
+
+    test_template(t, "tts_norm_scan groups, optional group that did not match is empty",
+        "{%- for s in tts_norm_scan(text, [['money', '%$(%d+)(?:%.(%d%d))?']]) -%}"
+        "{%- if s.rule -%}{%- set whole, cents = s.groups -%}{{ whole }}|{{ cents }}|{{ s.groups | length }};{%- endif -%}"
+        "{%- endfor -%}",
+        {{"text", "$3.50 and $7"}},
+        "3|50|2;7||2;", true);
+
+    test_template(t, "tts_norm_scan rules as dict, the first rule that matches wins",
+        "{%- for s in tts_norm_scan(text, {'ordinal': '%d+(?:st|nd|rd|th)%b', 'number': '%d+'}) -%}"
+        "{%- if s.rule -%}<{{ s.rule }}:{{ s.text }}>{%- else -%}{{ s.text }}{%- endif -%}"
+        "{%- endfor -%}",
+        {{"text", "the 3rd of 10 or 4three"}},
+        "the <ordinal:3rd> of <number:10> or <number:4>three", true);
+
+    // unlike regex, a failed sequence does not retry the other branches: (?:a|ab)c never matches "abc"
+    test_template(t, "ordered alternation commits to the first branch that matches",
+        "{%- for s in tts_norm_scan(text, '(?:a|ab)c') -%}[{{ s.rule or '-' }}:{{ s.text }}]{%- endfor -%}",
+        {{"text", "abc ac"}},
+        "[-:abc ][match:ac]", true);
+
+    // unlike regex, quantifiers never give back what they consumed: %d+0 never matches
+    test_template(t, "quantifiers are possessive",
+        "{{ tts_norm_sub(text, '%d+0', 'X') }}|{{ tts_norm_sub(text, '%d+', 'X') }}",
+        {{"text", "100 20"}},
+        "100 20|X X", true);
+
+    test_template(t, "quantifier ranges",
+        "{{ tts_norm_sub(text, '%d{3}-%d{2,}', '#') }}",
+        {{"text", "123-4 123-45 123-456789"}},
+        "123-4 # #", true);
+
+    test_template(t, "lookbehind: a minus sign is not part of a word",
+        "{{ tts_norm_sub(text, '(?<!%w)-(%d+)', 'minus %1') }}",
+        {{"text", "GPT-5 is -5, (-3)"}},
+        "GPT-5 is minus 5, (minus 3)", true);
+
+    test_template(t, "lookahead: clock time not followed by a digit",
+        "{{ tts_norm_sub(text, '(%d%d?):(%d%d)(?!%d)', '%1h%2') }}",
+        {{"text", "at 10:30 or 1:234"}},
+        "at 10h30 or 1:234", true);
+
+    test_template(t, "tts_norm_sub references: group, whole match and literal percent",
+        "{{ tts_norm_sub(text, '(%d+)%%', '%1 percent (%0) 100%%') }}",
+        {{"text", "up 50%"}},
+        "up 50 percent (50%) 100%", true);
+
+    test_template(t, "split letters and digits, non-ASCII letters included",
+        "{{ tts_norm_sub(tts_norm_sub(text, '(%a)(%d)', '%1 %2'), '(%d)(%a)', '%1 %2') }}",
+        {{"text", "R2D2 café2 4K"}},
+        "R 2 D 2 café 2 4 K", true);
+
+    test_template(t, "case-insensitive pattern and word boundary",
+        "{{ tts_norm_sub(text, '(?i)%bdr%.', 'doctor') }}",
+        {{"text", "Dr. Who and dr. No, not Mdr."}},
+        "doctor Who and doctor No, not Mdr.", true);
+
+    test_template(t, "sets with multi-byte codepoints, negated sets with classes",
+        "{{ tts_norm_sub(text, '[$€£]%s*(%d+)', '<%1>') }}|{{ tts_norm_sub(text, '[^%w%s]', '') }}",
+        {{"text", "€ 5 & $6!"}},
+        "<5> & <6>!| 5  6", true);
+
+    test_template(t, "remove spaces between Han characters",
+        "{{ tts_norm_sub(text, '(%h) +(%h)', '%1%2') }}",
+        {{"text", "你 好 world 世界"}},
+        "你好 world 世界", true);
+
+    test_template(t, "mini text normalizer",
+        "{%- set ones = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',"
+        "                'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen'] -%}\n"
+        "{%- set tens = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'] -%}\n"
+        "{%- macro num(n) -%}{{ ones[n] if n < 20 else tens[(n / 10) | int] ~ ('-' ~ ones[n % 10] if n % 10 else '') }}{%- endmacro -%}\n"
+        "{%- for s in tts_norm_scan(text, [\n"
+        "    ['money',   '%$(%d+)(?:%.(%d%d))?'],\n"
+        "    ['percent', '(%d+)%%'],\n"
+        "    ['time',    '(%d%d?):(%d%d)(?!%d)'],\n"
+        "    ['neg',     '(?<!%w)-(%d+)'],\n"
+        "    ['number',  '%d+'],\n"
+        "]) -%}\n"
+        "{%- if s.rule == 'money' -%}{%- set whole, cents = s.groups -%}{{ num(whole | int) }} dollars{{ ' and ' ~ num(cents | int) ~ ' cents' if cents else '' }}\n"
+        "{%- elif s.rule == 'percent' -%}{{ num(s.groups[0] | int) }} percent\n"
+        "{%- elif s.rule == 'time' -%}{%- set h, m = s.groups -%}{{ num(h | int) }} {{ num(m | int) }}\n"
+        "{%- elif s.rule == 'neg' -%}minus {{ num(s.groups[0] | int) }}\n"
+        "{%- elif s.rule == 'number' -%}{{ num(s.text | int) }}\n"
+        "{%- else -%}{{ s.text }}\n"
+        "{%- endif -%}\n"
+        "{%- endfor -%}",
+        {{"text", "It costs $3.50, 20% off, at 10:45, -5 degrees, 7 cats."}},
+        "It costs three dollars and fifty cents, twenty percent off, at ten forty-five, minus five degrees, seven cats.", true);
+
+    if (!g_python_mode) {
+        test_template_error(t, "error: unclosed group",               "{{ tts_norm_scan('x', '(a') }}",        "expected ')' to close group", true);
+        test_template_error(t, "error: unbalanced parenthesis",       "{{ tts_norm_scan('x', 'a)') }}",        "unbalanced ')'", true);
+        test_template_error(t, "error: nothing to repeat",            "{{ tts_norm_scan('x', '*a') }}",        "nothing to repeat", true);
+        test_template_error(t, "error: multiple quantifiers",         "{{ tts_norm_scan('x', 'a+?') }}",       "multiple quantifiers", true);
+        test_template_error(t, "error: bad quantifier range",         "{{ tts_norm_scan('x', 'a{2,1}') }}",    "quantifier max is smaller than min", true);
+        test_template_error(t, "error: repeated assertion",           "{{ tts_norm_scan('x', '%b+') }}",       "zero-width assertion cannot be repeated", true);
+        test_template_error(t, "error: unknown class",                "{{ tts_norm_scan('x', '%q') }}",        "unknown escape '%q'", true);
+        test_template_error(t, "error: unescaped bracket",            "{{ tts_norm_scan('x', 'a]') }}",        "unescaped ']'", true);
+        test_template_error(t, "error: no named groups",              "{{ tts_norm_scan('x', '(?<n>a)') }}",   "unknown group type", true);
+        test_template_error(t, "error: wide lookbehind",              "{{ tts_norm_scan('x', '(?<=ab)c') }}",  "lookbehind must contain exactly one codepoint matcher", true);
+        test_template_error(t, "error: missing group in replacement", "{{ tts_norm_sub('x', '(a)', '%2') }}",  "group %2 does not exist", true);
+        test_template_error(t, "error: bad rules",                    "{{ tts_norm_scan('x', 1) }}",           "rules must be a string, a dict or a list", true);
+    }
+}
+
+static void test_template_error(testing & t, const std::string & name, const std::string & tmpl, const std::string & expect, bool tts_norm) {
+    t.test(name, [&tmpl, &expect, tts_norm](testing & t) {
         std::string error;
         try {
             jinja::lexer lexer;
             jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
             jinja::context ctx(tmpl);
+            if (tts_norm) {
+                common_chat_tts_norm_add_builtins(ctx);
+            }
             jinja::runtime runtime(ctx);
             runtime.gather_string_parts(runtime.execute(ast));
         } catch (const std::exception & e) {
@@ -2615,14 +2883,17 @@ static void test_template_error(testing & t, const std::string & name, const std
     });
 }
 
-static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
-    t.test(name, [&tmpl, &vars, &expect](testing & t) {
+static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect, bool tts_norm) {
+    t.test(name, [&tmpl, &vars, &expect, tts_norm](testing & t) {
         jinja::lexer lexer;
         auto lexer_res = lexer.tokenize(tmpl);
 
         jinja::program ast = jinja::parse_from_tokens(lexer_res);
 
         jinja::context ctx(tmpl);
+        if (tts_norm) {
+            common_chat_tts_norm_add_builtins(ctx);
+        }
         jinja::global_from_json(ctx, vars, true);
 
         jinja::runtime runtime(ctx);
@@ -2674,17 +2945,36 @@ env.filters["tojson"] = lambda x, ensure_ascii=False, indent=None, separators=No
 env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)
 env.globals["raise_exception"] = raise_exception
 
+if merged_input.get("tts_norm_ref"):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("chat_tts_norm", merged_input["tts_norm_ref"])
+    chat_tts_norm = importlib.util.module_from_spec(spec)
+    sys.modules["chat_tts_norm"] = chat_tts_norm # required by dataclasses
+    spec.loader.exec_module(chat_tts_norm)
+    env.globals["tts_norm_scan"] = chat_tts_norm.tts_norm_scan
+    env.globals["tts_norm_sub"] = chat_tts_norm.tts_norm_sub
+
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
 sys.stdout.buffer.write(result.encode())
 )";
 
-static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
-    t.test(name, [&tmpl, &vars, &expect](testing & t) {
+// python reference of the TTS normalization patterns, relative to this file
+static std::string tts_norm_ref_path() {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    return (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../scripts/chat_tts_norm.py";
+}
+
+static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect, bool tts_norm) {
+    t.test(name, [&tmpl, &vars, &expect, tts_norm](testing & t) {
         // Prepare arguments
         json merged;
         merged["tmpl"] = json(tmpl);
         merged["vars"] = vars;
+        if (tts_norm) {
+            merged["tts_norm_ref"] = tts_norm_ref_path();
+        }
 
 #ifdef _WIN32
         const char * python_executable = "python.exe";
@@ -2745,11 +3035,11 @@ static void test_template_py(testing & t, const std::string & name, const std::s
     });
 }
 
-static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
+static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect, bool tts_norm) {
     if (g_python_mode) {
-        test_template_py(t, name, tmpl, vars, expect);
+        test_template_py(t, name, tmpl, vars, expect, tts_norm);
     } else {
-        test_template_cpp(t, name, tmpl, vars, expect);
+        test_template_cpp(t, name, tmpl, vars, expect, tts_norm);
     }
 }
 

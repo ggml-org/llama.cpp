@@ -198,6 +198,7 @@ pre_computed_hashes = [
     # jina-v2-de variants
     {"name": "jina-v2-de", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/aari1995/German_Semantic_V3", "chkhsh": "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df"},
     {"name": "gpt-2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/evilfreelancer/ruGPT3XL", "chkhsh": "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4"},
+    {"name": "gpt-2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Lernex/Metis-1.6-Logos", "chkhsh": "df1bc34a6366466bcb36a9a1b1cc0afdb08cfe21c9250602c930f159085390a9"},
     # lfm2 variants
     {"name": "lfm2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2.5-8B-A1B", "chkhsh": "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7"},
     # hrm-text (DFM Mimir) is SPM-style BPE: normalizer maps ' ' -> '▁', merges
@@ -324,7 +325,8 @@ for model in [*pre_computed_hashes, *all_models]:
         except Exception as e:
             raise OSError(f"Error loading tokenizer for model {name}.") from e
 
-        chktok = tokenizer.encode(CHK_TXT)  # ty: ignore[unresolved-attribute]
+        assert tokenizer is not None
+        chktok = tokenizer.encode(CHK_TXT)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
 
         logger.info(f"model: {name}")
@@ -485,6 +487,7 @@ for model in models:
         logger.error(f"Failed to load tokenizer for model {name}. Error: {e}")
         continue  # Skip this model and continue with the next one in the loop
 
+    assert tokenizer is not None
     if not os.path.exists(f"models/ggml-vocab-{name}.gguf"):
         logger.info(f"Skip vocab files for model {name}, no GGUF file found")
         continue
@@ -496,7 +499,7 @@ for model in models:
 
     with open(f"models/ggml-vocab-{name}.gguf.out", "w") as f:
         for text in tests:
-            res = tokenizer.encode(text, add_special_tokens=False)  # ty: ignore[unresolved-attribute]
+            res = tokenizer.encode(text, add_special_tokens=False)
             for r in res:
                 f.write(f" {r}")
             f.write("\n")

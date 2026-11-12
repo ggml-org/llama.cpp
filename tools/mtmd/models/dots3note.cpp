@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_dots3note_a::build() {
+ggml_cgraph * mtmd_graph_dots3note_a::build() {
     // inp_raw: [n_frames, n_mel, 1], one 60s chunk, mel frames not padded
     // the reference impl zero-masks conv inputs beyond the valid length at each stage;
     // running on exactly the valid frames with the convs' zero padding is equivalent
@@ -37,7 +37,7 @@ ggml_cgraph * clip_graph_dots3note_a::build() {
     ggml_set_input(positions);
 
     // partial rotary: first half of each head, NEOX style
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return ggml_rope_ext(ctx0, cur, positions, nullptr, d_head/2,
                              GGML_ROPE_TYPE_NEOX, 0, hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
     };

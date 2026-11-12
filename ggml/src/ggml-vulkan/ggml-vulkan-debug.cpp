@@ -12,6 +12,58 @@ uint32_t vk_perf_logger_frequency = 1;
 
 std::string vk_pipeline_stats_filter;
 
+void ggml_vk_count_fusion(const vk_device & device, const char * label) {
+    if (!device->fusion_stats_enabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    device->fusion_counts[label]++;
+}
+
+void * ggml_backend_vk_fusion_get(ggml_backend_dev_t dev) {
+    auto * ctx = (ggml_backend_vk_device_context *) dev->context;
+    return ggml_vk_get_device(ctx->device).get();
+}
+
+void ggml_backend_vk_fusion_stats_init(void * finfo) {
+    auto * device = (vk_device_struct *) finfo;
+    device->fusion_stats_enabled.store(true, std::memory_order_relaxed);
+}
+
+void ggml_backend_vk_fusion_stats_reset(void * finfo) {
+    auto * device = (vk_device_struct *) finfo;
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    // Keep labels and their order stable between fused and unfused runs.
+    for (auto & entry : device->fusion_counts) {
+        entry.second = 0;
+    }
+}
+
+int ggml_backend_vk_fusion_stats_get(void * finfo, const char ** labels, uint64_t * counts, int n) {
+    auto * device = (vk_device_struct *) finfo;
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    if (labels == nullptr) {
+        return (int) device->fusion_counts.size();
+    }
+    int i = 0;
+    for (const auto & entry : device->fusion_counts) {
+        if (i >= n) {
+            break;
+        }
+        labels[i] = entry.first.c_str();
+        if (counts) {
+            counts[i] = entry.second;
+        }
+        i++;
+    }
+    return i;
+}
+
+void ggml_backend_vk_fusion_set_enabled(void * finfo, bool enabled) {
+    auto * device = (vk_device_struct *) finfo;
+    device->disable_fusion = !enabled;
+}
+
 void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     if (!vk_memory_logger_enabled) {
         return;
@@ -983,8 +1035,6 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
         } else if (tensor->op == GGML_OP_SCALE) {
             const float * params = (const float *)tensor->op_params;
             tensor_clone = ggml_scale_bias(ggml_ctx, src_clone[0], params[0], params[1]);
-        } else if (tensor->op == GGML_OP_ADD1) {
-            tensor_clone = ggml_add1(ggml_ctx, src_clone[0], src_clone[1]);
         } else if (tensor->op == GGML_OP_ARANGE) {
             const float start = ggml_get_op_params_f32(tensor, 0);
             const float stop = ggml_get_op_params_f32(tensor, 1);
@@ -1049,12 +1099,9 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
             }
         } else if (tensor->op == GGML_OP_SOFT_MAX_BACK) {
             tensor_clone = ggml_soft_max_ext_back(ggml_ctx, src_clone[0], src_clone[1], ((float *)tensor->op_params)[0], ((float *)tensor->op_params)[1]);
-        } else if (tensor->op == GGML_OP_DIAG_MASK_INF) {
-            tensor_clone = ggml_diag_mask_inf(ggml_ctx, src_clone[0], tensor->op_params[0]);
         } else if (tensor->op == GGML_OP_ROPE || tensor->op == GGML_OP_ROPE_BACK) {
             const int n_dims      = ((int32_t *) tensor->op_params)[1];
             const int mode        = ((int32_t *) tensor->op_params)[2];
-            //const int n_ctx_ggml       = ((int32_t *) tensor->op_params)[3];
             const int n_ctx_orig_ggml  = ((int32_t *) tensor->op_params)[4];
             const float freq_base       = ((float *) tensor->op_params)[5];
             const float freq_scale      = ((float *) tensor->op_params)[6];
@@ -1076,6 +1123,7 @@ void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph
                     tensor_clone = ggml_rope_ext_back(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], n_dims, mode, n_ctx_orig_ggml, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
                 }
             }
+            ggml_rope_set_truncate(tensor_clone, ggml_rope_get_truncate(tensor));
             const int n_offs = ((int32_t *) tensor->op_params)[15];
             if (n_offs != 0) {
                 tensor_clone = ggml_rope_set_offset(tensor_clone, n_offs);
