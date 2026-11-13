@@ -4420,6 +4420,7 @@ int mtmd_model::n_mmproj_embd() const {
 // this logic should be refactored in near future to distinctly handle "merge frames" and "batching"
 int mtmd_model::n_temporal_merge() const {
     switch (proj_type) {
+        case PROJECTOR_TYPE_INKLING2:
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
