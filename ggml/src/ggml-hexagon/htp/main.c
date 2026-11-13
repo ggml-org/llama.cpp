@@ -1053,6 +1053,9 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ROLL:
             return op_roll(octx);
 
+        case HTP_OP_TIMESTEP_EMBEDDING:
+            return op_timestep_embedding(octx);
+
         case HTP_OP_POOL_2D:
             return op_pool_2d(octx);
 
