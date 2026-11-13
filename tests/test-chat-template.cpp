@@ -244,7 +244,7 @@ static std::string format_using_common(
     inputs.messages = messages;
     inputs.tools = std::move(tools);
     inputs.add_generation_prompt = true;
-    auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    auto output = common_chat_templates_apply(tmpls.get(), inputs).prompt.str();
     output = normalize_newlines(output);
     return output;
 }

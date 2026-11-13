@@ -11,7 +11,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
+from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, jinja_str_or_json, logger
 
 
 @ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
@@ -132,6 +132,7 @@ class BertModel(TextModel):
             from base64 import b64decode
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+            assert tokenizer is not None
 
             with open(tokenizer_path, "r", encoding="utf-8") as fp:
                 tokenizer_json = json.load(fp)
@@ -140,13 +141,13 @@ class BertModel(TextModel):
                 with open(tokenizer_config_path, "r", encoding="utf-8") as fp:
                     tokenizer_config_json = json.load(fp)
 
-            add_prefix = tokenizer.add_prefix_space  # ty: ignore[unresolved-attribute]
-            remove_whitespaces = tokenizer.clean_up_tokenization_spaces  # ty: ignore[unresolved-attribute]
+            add_prefix = tokenizer.add_prefix_space
+            remove_whitespaces = tokenizer.clean_up_tokenization_spaces
             precompiled_charsmap = b64decode(tokenizer_json["normalizer"]["precompiled_charsmap"])
 
-            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)  # ty: ignore[unresolved-attribute]
+            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
         else:
-            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
             assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
 
@@ -183,20 +184,20 @@ class BertModel(TextModel):
                 scores[token_id] = score
                 toktypes[token_id] = toktype
         else:
-            added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+            added_vocab = tokenizer.get_added_vocab()
             unk_token = tokenizer_config_json.get("unk_token")
-            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))  # ty: ignore[no-matching-overload]
+            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))
 
-            for token_id in range(tokenizer.vocab_size):  # ty: ignore[unresolved-attribute]
-                piece = tokenizer._convert_id_to_token(token_id)  # ty: ignore[unresolved-attribute]
-                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:  # ty: ignore[unresolved-attribute]
+            for token_id in range(tokenizer.vocab_size):
+                piece = tokenizer._convert_id_to_token(token_id)
+                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:
                     text = piece.encode("utf-8")
                     score = tokenizer_json["model"]["vocab"][token_id][1]
 
                     toktype = SentencePieceTokenTypes.NORMAL
                     if token_id == unk_token_id:
                         toktype = SentencePieceTokenTypes.UNKNOWN
-                    elif token_id in tokenizer.all_special_ids:  # ty: ignore[unresolved-attribute]
+                    elif token_id in tokenizer.all_special_ids:
                         toktype = SentencePieceTokenTypes.CONTROL
                     elif token_id in added_vocab.values():
                         toktype = SentencePieceTokenTypes.USER_DEFINED
@@ -341,7 +342,7 @@ class NomicBertModel(BertModel):
         else:
             raise ValueError(f"unrecognized parameters: n_positions={npos}, max_trained_positions={mtp}")
 
-        assert self.hparams["activation_function"] == "gelu" if self.is_moe else "swiglu"
+        assert self.hparams["activation_function"] == ("gelu" if self.is_moe else "swiglu")
 
         # this doesn't do anything in the HF version
         assert self.hparams["causal"] is False
@@ -606,6 +607,17 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_add_sep_token(True)
         self._set_vocab_gpt2()
 
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        tokens, toktypes, tokpre = super().get_vocab_base()
+        if tokpre == "mmbert":
+            # the added tokens for runs of spaces are never matched by the reference tokenizer
+            space = b"\xe2\x96\x81".decode("utf-8")
+            for i, token in enumerate(tokens):
+                if toktypes[i] == gguf.TokenType.USER_DEFINED and token and not token.strip(" "):
+                    tokens[i] = space * len(token)
+                    toktypes[i] = gguf.TokenType.NORMAL
+        return tokens, toktypes, tokpre
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_sliding_window(self.hparams["local_attention"])
@@ -637,5 +649,100 @@ class ModernBertModel(BertModel):
 
             if name == "classifier.bias":
                 name = "classifier.out_proj.bias"
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+def _is_decision_checkpoint(dir_model: Path) -> bool:
+    if not (dir_model / "encoder" / "config.json").is_file():
+        return False
+    return (dir_model / "rl_agent_config.json").is_file() or (dir_model / "julia_config.json").is_file()
+
+
+@ModelBase.register_hparams_loader(_is_decision_checkpoint)
+def _load_decision_hparams(dir_model: Path) -> dict[str, Any]:
+    logger.info("gguf: detected ModernBert decision checkpoint")
+    hparams = ModelBase.load_hparams(dir_model / "encoder", False, guess=False)
+    is_julia = (dir_model / "julia_config.json").is_file()
+    with open(dir_model / ("julia_config.json" if is_julia else "rl_agent_config.json"), encoding="utf-8") as f:
+        decision = json.load(f)
+    n_layer = hparams["num_hidden_layers"]
+    n_layer_head = decision["head_layers"]
+    hparams["architectures"] = ["ModernBertDecisionModel"]
+    hparams["decision"] = decision
+    # the head blocks are appended to the encoder blocks, they use a plain 4x MLP
+    hparams["num_hidden_layers"] = n_layer + n_layer_head
+    hparams["intermediate_size"] = [hparams["intermediate_size"]] * n_layer + [4 * hparams["hidden_size"]] * n_layer_head
+    return hparams
+
+
+@ModelBase.register("ModernBertDecisionModel")
+@ModelBase.example("convaiinnovations/laya", "SupersonicLabs/Julia-1")
+class ModernBertDecisionModel(ModernBertModel):
+    model_arch = gguf.MODEL_ARCH.MODERN_BERT
+
+    def set_vocab(self):
+        # vocab loaders read self.dir_model, point it to the tokenizer sub-directory
+        dir_model = self.dir_model
+        self.dir_model = dir_model / "tokenizer"
+        try:
+            super().set_vocab()
+        finally:
+            self.dir_model = dir_model
+        self.gguf_writer.add_token_type_count(3)  # choice, score, noul
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        with open(self.dir_model / "tokenizer" / "tokenizer_config.json", encoding="utf-8") as f:
+            tokenizer_config = json.load(f)
+        tok_cls, tok_sep, tok_mask = (tokenizer_config[k] for k in ("cls_token", "sep_token", "mask_token"))
+        description = jinja_str_or_json("o.description")
+        if self.hparams["decision"].get("architecture") == "JuliaDecisionModel":
+            option = "{% if o.description %}" + description + "{% else %}{{ o.key }}{% endif %}"
+        else:
+            option = (
+                "{% if type == 'choice' %}{{ o.key }}{% if o.description %}: " + description + "{% endif %}"
+                "{% elif type == 'score' %}level {{ o.key }}: " + description
+                + "{% else %}{{ o.key }}: {% if o.description %}" + description
+                + "{% elif o.key == 'true' %}yes, the statement holds"
+                "{% else %}no, the statement does not hold{% endif %}{% endif %}"
+            )
+        return (
+            tok_cls + "{{ type }} question: " + jinja_str_or_json("instructions") + tok_sep
+            + "{% for o in options %}" + tok_mask + " " + option + "{% endfor %}"
+            + tok_sep + jinja_str_or_json("state") + tok_sep
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        decision = self.hparams["decision"]
+        self.gguf_writer.add_decision_type(gguf.DecisionType.LAYA)
+        self.gguf_writer.add_decision_block_count(decision["head_layers"])
+        self.gguf_writer.add_decision_max_head_tokens(decision.get("head_max_len", 256))
+        for name, value in zip(("choice", "score", "noul"), decision.get("temperature", [])):
+            self.gguf_writer.add_decision_temperature(name, value)
+        # "choice:3-5" -> "choice.3_5", "choice:11+" -> "choice.11"
+        for name, value in decision.get("temperature_by_options", {}).items():
+            self.gguf_writer.add_decision_temperature(name.replace(":", ".").replace("-", "_").rstrip("+"), value)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # act_head is not used for the answer, the fitted temperatures come from the config
+        if name.startswith("act_head.") or name == "temperature":
+            return None
+
+        if name.startswith("encoder."):
+            name = name[8:]
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("head.layers.") and bid is not None:
+            # the head blocks come after the encoder blocks
+            suffix = name.split(".", 3)[3].replace("in_proj_", "in_proj.")
+            bid += self.block_count - self.hparams["decision"]["head_layers"]
+            name = f"head.layers.{bid}.{suffix}"
 
         yield from super().modify_tensors(data_torch, name, bid)

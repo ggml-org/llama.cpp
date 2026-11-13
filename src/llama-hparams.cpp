@@ -283,7 +283,8 @@ bool llama_hparams::is_ple(uint32_t il) const {
 }
 
 uint32_t llama_hparams::n_pos_per_embd() const {
-    return rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE ? 4 : 1;
+    return (rope_type == LLAMA_ROPE_TYPE_MROPE || rope_type == LLAMA_ROPE_TYPE_IMROPE)
+            ? GGML_MROPE_SECTIONS : 1;
 }
 
 bool llama_hparams::is_swa(uint32_t il) const {
@@ -318,16 +319,15 @@ uint32_t llama_hparams::n_embd_head_v_mla() const {
 }
 
 bool llama_hparams::has_kv(uint32_t il) const {
-    if (n_layer_kv_from_start >= 0) {
-        if (il < (uint32_t) n_layer_kv_from_start) {
-            return true;
-        }
+    return kv_source(il) == il;
+}
 
-        return false;
+uint32_t llama_hparams::kv_source(uint32_t il) const {
+    if (il < n_layer_all) {
+        return kv_source_impl[il];
     }
 
-    // by default, all layers have kv
-    return true;
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
 bool llama_hparams::has_rope(uint32_t il) const {

@@ -136,7 +136,7 @@ export { ConversationTransferService } from './conversation-transfer.service';
  *
  * **Server Mode Behavior:**
  * - **MODEL mode**: Only `list()` is relevant — single model always loaded
- * - **ROUTER mode**: Full lifecycle — `list()`, `listRouter()`, `load()`, `unload()`
+ * - **ROUTER mode**: Full lifecycle - `list()`, `load()`, `unload()`
  *
  * **Endpoints:**
  * - `GET /v1/models` — OpenAI-compatible model list (both modes)
@@ -146,6 +146,16 @@ export { ConversationTransferService } from './conversation-transfer.service';
  * @see modelsStore in stores/models/index.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
+
+/**
+ * **HuggingFaceService** - Hugging Face Hub browsing and searching
+ *
+ * Stateless HTTP client for the HF REST API (`/api/models`, `/tree`, raw
+ * README) and the llama.app model catalog. Provides GGUF file analysis
+ * (quant metadata, shard collapsing, size formatting) used by the models
+ * discover UI.
+ */
+export { HuggingFaceService } from './huggingface.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval
@@ -289,6 +299,14 @@ export { MCPService } from './mcp.service';
  * @see agenticStore in stores/agentic/index.svelte.ts - tool dispatch
  */
 export { SandboxService } from './sandbox.service';
+
+/**
+ * **SearchChatsService** - Read-only search over saved chats, executor of the search_chats browser tool
+ *
+ * @see buildSearchChatsToolDefinition in constants/search-chats - tool schema sent to the LLM
+ * @see utils/search-chats - parameter parsing, matching and formatting
+ */
+export { SearchChatsService } from './search-chats.service';
 
 /**
  * **RouterService** — Dynamic route URL construction utility

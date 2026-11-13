@@ -28,7 +28,7 @@ export interface UseToolsPanelReturn {
  * Shared reactive state and helpers for the tools panel UI.
  *
  * Used by both the desktop dropdown (`ChatFormActionAddToolsSubmenu`)
- * and the mobile sheet (`ChatFormActionAddSheet`) to avoid
+ * and the mobile drawer (`ChatFormActionAddDrawer`) to avoid
  * duplicating group filtering, checked-state derivation, and favicon logic.
  *
  * All toggle state routes through `conversationsStore.preferences`: with an
@@ -47,7 +47,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 		if (toolsStore.toolGroups.length > 0) return null;
 
-		// Tools endpoint is unreachable (404) — server started without --tools
+		// Tools endpoint unreachable (403) — server started without tools
 		if (toolsStore.isToolsEndpointUnreachable) {
 			return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 		}

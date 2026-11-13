@@ -129,8 +129,9 @@ class LlamaModel(TextModel):
                 tokenizer_config_json = json.load(f)
                 if (add_prefix_space := tokenizer_config_json.get("add_prefix_space")) is not None:
                     self.gguf_writer.add_add_space_prefix(add_prefix_space)
-                if tokenizer_config_json.get("tokenizer_class") == "HybridDNATokenizer":
-                    return self._set_vocab_hybriddna()
+
+        if self._is_hybriddna():
+            return self._set_vocab_hybriddna()
 
         try:
             self._set_vocab_sentencepiece()

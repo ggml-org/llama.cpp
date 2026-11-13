@@ -6,6 +6,9 @@
 #include <vector>
 #include <cstdio>
 
+// staging buffer size for direct I/O reads, 64MB works well for NVMe drives
+#define LLAMA_DIRECT_IO_BUFFER_SIZE (64 * 1024 * 1024)
+
 struct llama_file;
 struct llama_mmap;
 struct llama_mlock;
@@ -75,5 +78,15 @@ private:
     struct impl;
     std::unique_ptr<impl> pimpl;
 };
+
+struct llama_memory_range {
+    const void * addr;
+    size_t size;
+};
+
+using llama_memory_ranges = std::vector<llama_memory_range>;
+
+// Prefetch the host pages covering these memory ranges.
+void llama_prefetch(llama_memory_ranges mr);
 
 size_t llama_path_max();

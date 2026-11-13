@@ -1,9 +1,16 @@
-.markdown-block--unstable {
+/* Long unbreakable content (inline code, paths, hashes) wraps inside the
+   column; break-word keeps the min-content width intact, so wide tables and
+   code blocks still scroll in their own containers. */
+.markdown-content {
+	overflow-wrap: break-word;
+}
+
+.markdown-content :global(.markdown-block--unstable) {
 	display: contents;
 }
 
 /* Streaming code block uses .code-block-wrapper styles */
-.streaming-code-block .streaming-code-pre {
+.markdown-content :global(.streaming-code-block .streaming-code-pre) {
 	background: transparent;
 	padding: 0.5rem;
 	margin: 0;
@@ -125,20 +132,22 @@
 	word-break: break-all;
 }
 
-.markdown-content :global(a:hover) {
-	color: var(--primary);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(a:hover) {
+		color: var(--primary);
+	}
 }
 
 /* Lists */
 .markdown-content :global(ul) {
 	list-style-type: disc;
-	margin-inline-start: 1.5rem;
+	margin-inline-start: 2rem;
 	margin-bottom: 1rem;
 }
 
 .markdown-content :global(ol) {
 	list-style-type: decimal;
-	margin-inline-start: 1.5rem;
+	margin-inline-start: 2rem;
 	margin-bottom: 1rem;
 }
 
@@ -252,11 +261,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	max-height: var(--max-message-height);
 }
 
-.markdown-content .markdown-block:not(:first-child) :global(.code-block-wrapper) {
+.markdown-content :global(.markdown-block:not(:first-child) .code-block-wrapper) {
 	margin-top: 1rem;
 }
 
-.markdown-content .markdown-block:not(:last-child) :global(.code-block-wrapper) {
+.markdown-content :global(.markdown-block:not(:last-child) .code-block-wrapper) {
 	margin-bottom: 1rem;
 }
 
@@ -266,7 +275,7 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Scroll container for code blocks (both streaming and completed) */
 .markdown-content :global(.code-block-scroll-container),
-.streaming-code-scroll-container {
+.markdown-content :global(.streaming-code-scroll-container) {
 	min-height: var(--min-message-height);
 	max-height: var(--max-message-height);
 	overflow-y: auto;
@@ -280,7 +289,7 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .full-height-code-blocks :global(.code-block-scroll-container),
-.full-height-code-blocks .streaming-code-scroll-container {
+.full-height-code-blocks :global(.streaming-code-scroll-container) {
 	max-height: none;
 	overflow-y: visible;
 }
@@ -327,10 +336,12 @@ div.markdown-user-content :global(.table-wrapper) {
 	transition: all 0.2s ease;
 }
 
-.markdown-content :global(.copy-code-btn:hover),
-.markdown-content :global(.preview-code-btn:hover),
-.markdown-content :global(.toggle-source-btn:hover) {
-	transform: scale(1.05);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.copy-code-btn:hover),
+	.markdown-content :global(.preview-code-btn:hover),
+	.markdown-content :global(.toggle-source-btn:hover) {
+		transform: scale(1.05);
+	}
 }
 
 .markdown-content :global(.copy-code-btn:active),
@@ -359,8 +370,10 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-decoration: none;
 }
 
-.markdown-content :global(.mention:hover) {
-	text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.mention:hover) {
+		text-decoration: underline;
+	}
 }
 
 .markdown-content :global(.hashtag) {
@@ -369,8 +382,10 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-decoration: none;
 }
 
-.markdown-content :global(.hashtag:hover) {
-	text-decoration: underline;
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.hashtag:hover) {
+		text-decoration: underline;
+	}
 }
 
 /* Advanced table enhancements */
@@ -378,15 +393,17 @@ div.markdown-user-content :global(.table-wrapper) {
 	transition: all 0.2s ease;
 }
 
-.markdown-content :global(table:hover) {
-	box-shadow:
-		0 4px 6px -1px rgb(0 0 0 / 0.1),
-		0 2px 4px -2px rgb(0 0 0 / 0.1);
-}
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(table:hover) {
+		box-shadow:
+			0 4px 6px -1px rgb(0 0 0 / 0.1),
+			0 2px 4px -2px rgb(0 0 0 / 0.1);
+	}
 
-.markdown-content :global(th:hover),
-.markdown-content :global(td:hover) {
-	background: var(--muted);
+	.markdown-content :global(th:hover),
+	.markdown-content :global(td:hover) {
+		background: var(--muted);
+	}
 }
 
 /* Disable hover effects when rendering user messages */
@@ -410,10 +427,12 @@ div.markdown-user-content :global(.table-wrapper) {
 	position: relative;
 }
 
-.markdown-content :global(blockquote:hover) {
-	border-left-width: 6px;
-	background: var(--muted);
-	transform: translateX(2px);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(blockquote:hover) {
+		border-left-width: 6px;
+		background: var(--muted);
+		transform: translateX(2px);
+	}
 }
 
 .markdown-content :global(blockquote::before) {
@@ -429,15 +448,19 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Enhanced images */
 .markdown-content :global(img) {
-	transition: all 0.3s ease;
+	transition:
+		transform 200ms ease-out,
+		box-shadow 200ms ease-out;
 	cursor: pointer;
 }
 
-.markdown-content :global(img:hover) {
-	transform: scale(1.02);
-	box-shadow:
-		0 10px 15px -3px rgb(0 0 0 / 0.1),
-		0 4px 6px -4px rgb(0 0 0 / 0.1);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(img:hover) {
+		transform: scale(1.02);
+		box-shadow:
+			0 10px 15px -3px rgb(0 0 0 / 0.1),
+			0 4px 6px -4px rgb(0 0 0 / 0.1);
+	}
 }
 
 /* Image zoom overlay */
@@ -489,6 +512,8 @@ div.markdown-user-content :global(.table-wrapper) {
 	margin: 1.5rem 0;
 	border-radius: 0.5rem;
 	border: 1px solid var(--border);
+	/* a wide table scrolls here, it does not widen the column */
+	max-width: 100%;
 }
 
 .markdown-content :global(.table-wrapper table) {
@@ -519,16 +544,14 @@ div.markdown-user-content :global(.table-wrapper) {
 		padding: 0.375rem 0.5rem;
 	}
 
+	/* no full-bleed: it hid the outer columns */
 	.markdown-content :global(.table-wrapper) {
-		margin: 0.5rem -1rem;
-		border-radius: 0;
-		border-left: none;
-		border-right: none;
+		margin: 1rem 0;
 	}
 }
 
 /* Dark mode adjustments */
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: dark) and (hover: hover) and (pointer: fine) {
 	.markdown-content :global(blockquote:hover) {
 		background: var(--muted);
 	}
@@ -578,9 +601,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	transition: all 0.2s ease;
 }
 
-.markdown-content :global(.image-error-link:hover) {
-	background: var(--muted);
-	border-color: var(--primary);
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(.image-error-link:hover) {
+		background: var(--muted);
+		border-color: var(--primary);
+	}
 }
 
 /* Mermaid and svg blocks share the same block styling */
@@ -613,9 +638,11 @@ div.markdown-user-content :global(.table-wrapper) {
 	display: none;
 }
 
-.markdown-content :global(pre.mermaid:hover),
-.markdown-content :global(.svg-block:hover) {
-	opacity: 0.85;
+@media (hover: hover) and (pointer: fine) {
+	.markdown-content :global(pre.mermaid:hover),
+	.markdown-content :global(.svg-block:hover) {
+		opacity: 0.85;
+	}
 }
 
 .markdown-content :global(pre.mermaid svg) {
@@ -735,14 +762,14 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 /* Streaming mermaid block - empty preview box */
-.mermaid-streaming-block {
+.markdown-content :global(.mermaid-streaming-block) {
 	min-height: 300px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 }
 
-.mermaid-loading-placeholder {
+.markdown-content :global(.mermaid-loading-placeholder) {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -750,7 +777,7 @@ div.markdown-user-content :global(.table-wrapper) {
 	color: var(--muted-foreground);
 }
 
-.mermaid-loading-text {
+.markdown-content :global(.mermaid-loading-text) {
 	font-size: 0.875rem;
 	font-style: italic;
 }

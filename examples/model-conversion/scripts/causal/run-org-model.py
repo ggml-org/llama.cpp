@@ -19,6 +19,8 @@ def parse_arguments():
     parser.add_argument("--prompt-file", "-f", help="Optional prompt file", required=False)
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose debug output")
     parser.add_argument("--device", "-d", help="Device to use (cpu, cuda, mps, auto)", default="auto")
+    parser.add_argument("--add-bos", action=argparse.BooleanOptionalAction, default=None,
+                        help="Override BOS token setting (default: use model's own setting)")
     return parser.parse_args()
 
 def load_model_and_tokenizer(model_path, device="auto"):
@@ -118,6 +120,9 @@ def main():
 
 
     model, tokenizer, config = load_model_and_tokenizer(model_path, args.device)
+
+    if args.add_bos is not None and hasattr(tokenizer, "add_bos_token"):
+        tokenizer.add_bos_token = args.add_bos
 
     if args.verbose:
         enable_torch_debugging(model)

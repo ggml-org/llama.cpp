@@ -19,6 +19,7 @@ private:
     bool sleeping = false;
     bool req_stop_sleeping = false;
     int64_t time_last_task = 0;
+    int n_inflight = 0; // requests that keep the server awake, see wait_until_no_sleep()
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -67,7 +68,11 @@ public:
 
     // if sleeping, request exiting sleep state and wait until it is done
     // returns immediately if not sleeping
+    // the server then stays awake until the caller calls release_inflight()
     void wait_until_no_sleep();
+
+    // let the server sleep again once the caller no longer uses the server state
+    void release_inflight();
 
     bool is_sleeping() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
@@ -225,7 +230,7 @@ struct server_response_reader {
 
     // if front = true, the task will be posted to the front of the queue (high priority)
     void post_task(server_task && task, bool front = false);
-    void post_tasks(std::vector<server_task> && tasks, bool front = false);
+    void post_tasks(std::vector<server_task> && tasks, const common_chat_session & session = {}, bool front = false);
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result

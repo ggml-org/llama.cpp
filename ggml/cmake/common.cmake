@@ -2,9 +2,15 @@ function(ggml_get_flags CCID CCVER)
     set(C_FLAGS "")
     set(CXX_FLAGS "")
 
-    if (CCID MATCHES "Clang")
+    if (CCID MATCHES "Clang" OR CCID MATCHES "IntelLLVM")
         set(C_FLAGS   -Wunreachable-code-break -Wunreachable-code-return)
         set(CXX_FLAGS -Wunreachable-code-break -Wunreachable-code-return -Wmissing-prototypes -Wextra-semi)
+
+        if (CCID STREQUAL "IntelLLVM")
+            # for Intel DPC++ and LLVM SYCL, using debug does not disable optimization
+            list(APPEND C_FLAGS    -Rno-debug-disables-optimization)
+            list(APPEND CXX_FLAGS  -Rno-debug-disables-optimization)
+        endif()
 
         if (
             (CCID STREQUAL "Clang"      AND CCVER VERSION_GREATER_EQUAL 3.8.0) OR
@@ -28,6 +34,7 @@ endfunction()
 function(ggml_get_system_arch)
     if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
         CMAKE_GENERATOR_PLATFORM_LWR STREQUAL "arm64" OR
+        (CMAKE_GENERATOR_PLATFORM_LWR STREQUAL "arm64ec" AND MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang") OR
         (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
             CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm.*|ARM64)$"))
         set(GGML_SYSTEM_ARCH "ARM" PARENT_SCOPE)
@@ -51,7 +58,7 @@ endfunction()
 
 # Determines which FlashAttention vector kernel template instances to compile, returns them in OUT_SRCS.
 function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
-    set(FA_TYPES q4_0 q4_1 q5_0 q5_1 q8_0 bf16 f16)
+    set(FA_TYPES q4_0 q4_1 q5_0 q5_1 q8_0 bf16 f16 f8_e4m3)
 
     string(TOLOWER "${GGML_CUDA_FA_QUANTS}" FA_QUANTS)
     string(STRIP   "${FA_QUANTS}" FA_QUANTS)

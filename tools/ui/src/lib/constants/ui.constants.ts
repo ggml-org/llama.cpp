@@ -1,6 +1,55 @@
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { MODEL_ICON } from './icons.constants';
+import {
+	SHORTCUT_MODELS,
+	SHORTCUT_NEW_CHAT,
+	SHORTCUT_SEARCH,
+	SHORTCUT_SETTINGS
+} from './keyboard-shortcuts.constants';
+import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
+import { Search, Settings, SquarePen } from '@lucide/svelte';
+import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
+
+/** Delay before a copied affordance resets from its check to the copy icon. */
+export const COPY_FEEDBACK_RESET_MS = 1500;
+
+/** How long a collapsible block's body takes to expand or collapse. */
+export const COLLAPSIBLE_TRANSITION_MS = 200;
+
+/**
+ * Parts of a message where right-click keeps the browser's own menu (open or
+ * copy a link, save an image, copy code or a field), not the message actions.
+ */
+export const NATIVE_CONTEXT_MENU_SELECTOR =
+	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
+
+/**
+ * A sidebar section under a dragged chat, or one being moved: the faint tint
+ * of the sidebar's resize handle, edged like the handle while it is dragged.
+ */
+export const SIDEBAR_DRAG_HIGHLIGHT_CLASS = 'bg-foreground/6 ring-1 ring-foreground/15 ring-inset';
+
+/** How long a sidebar chat row takes to slide out of a section, or into one. */
+export const SIDEBAR_ROW_SLIDE_MS = 200;
+
+/** Chats a sidebar section shows before its "Show more" row. */
+export const SIDEBAR_SECTION_PREVIEW_COUNT = 6;
+
+/**
+ * The "Show less" row of an opened section stays at the bottom of the sidebar
+ * while the section scrolls under it, with room below it and a fade above
+ * (see app.css). "Show more" is a plain row.
+ */
+export const SIDEBAR_SHOW_MORE_ROW_CLASS = 'sidebar-show-more sticky bottom-0 z-10 pb-2';
+
+/** Ids of the sidebar's conversation sections, for their folded state. */
+export const SIDEBAR_SECTION_IDS = {
+	/** Followed by the group id: one section per group. */
+	GROUP_PREFIX: 'group:',
+	PINNED: 'pinned',
+	RECENT: 'recent'
+} as const;
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
@@ -9,6 +58,8 @@ export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 export const UI_DATA_ATTRS = {
 	ACTIVE: 'data-active',
 	ACTIVE_TAB: 'data-active-tab',
+	/** On <html> while the main chat form is expanded (a full-screen sheet on a phone). */
+	CHAT_FORM_SHEET: 'data-chat-form-sheet',
 	CONVERSATION_ROW: 'data-conversation-row',
 	HIGHLIGHT_THEME_PREVIEW: 'data-highlight-theme-preview',
 	PICKER_INDEX: 'data-picker-index',
@@ -44,26 +95,100 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
-/** Icon used for the model selector and the `/model` slash command. */
-export const MODEL_SELECTOR_ICON = Package;
+/** Models listed per remote provider before the "+ X more" line; search covers the rest. */
+export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
+
+/** Orgs whose avatar is dark and needs inverting in dark mode. */
+export const DARK_INVERT_AVATAR_ORGS = ['openai'];
+
+/** Model rows mounted before the list scrolls; a local catalog can hold hundreds. */
+export const MODEL_ROW_WINDOW = 50;
+
+/** Models of one family shown before the rest fold behind a "show more" row. */
+export const FAMILY_ROW_WINDOW = 6;
+
+/** Recently used models kept per browser, most recent first. */
+export const RECENT_MODEL_LIMIT = 20;
 
 export const ICON_STRIP_TRANSITION_DURATION = 150;
 export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 
+/** Collapsed desktop sidebar strip width, matching its `md:w-12`. */
+export const SIDEBAR_COLLAPSED_WIDTH = '3rem';
+/** Bounds the expanded desktop sidebar can be dragged between. */
+export const SIDEBAR_MIN_WIDTH = '18rem';
+export const SIDEBAR_MAX_WIDTH = '32rem';
+/** Dragging the sidebar edge narrower than this snaps it to the pointer; letting go hides it. */
+export const SIDEBAR_COLLAPSE_WIDTH = '9rem';
+/** How far past its min or max width a drag can stretch the sidebar before it resists fully. */
+export const SIDEBAR_OVERSTRETCH_PX = 80;
+/** Spring-back duration when a drag ends outside the width bounds. */
+export const SIDEBAR_SETTLE_MS = 300;
+/** Duration of the sidebar's open and close slide, matching its `duration-200` transition. */
+export const SIDEBAR_TOGGLE_MS = 200;
+/** The sidebar's contents fading out while a phone's full-screen search covers them, and back in. */
+export const SIDEBAR_CONTENT_FADE_MS = 200;
+
+/** Phone sidebar reveal: the page slides aside by this share of the screen, up to the max width. */
+export const SIDEBAR_REVEAL_RATIO = 0.8;
+export const SIDEBAR_REVEAL_MAX_WIDTH = '20rem';
+/** Duration of the phone sidebar reveal, matching the page's `duration-300` slide. */
+export const SIDEBAR_REVEAL_MS = 300;
+/** Wait after a tap in the phone sidebar closes it, before the tap's page or dialog appears. */
+export const SIDEBAR_REVEAL_ACTION_DELAY_MS = 180;
+/** A swipe that starts this close to the left edge can open the phone sidebar. */
+export const SIDEBAR_REVEAL_EDGE_PX = 24;
+/** Movement before a reveal swipe locks to a horizontal drag. */
+export const SIDEBAR_REVEAL_SLOP_PX = 8;
+/** A rightward swipe this long from anywhere on the page opens the phone sidebar too. */
+export const SIDEBAR_REVEAL_SWIPE_PX = 16;
+/** Share of the reveal a drag must cover to open or close the phone sidebar when let go slowly. */
+export const SIDEBAR_REVEAL_COMMIT_RATIO = 0.3;
+/** Release speed past which a drag opens or closes the phone sidebar the way it was heading. */
+export const SIDEBAR_REVEAL_FLING_PX_PER_MS = 0.3;
+
+/** Hold time before a phone conversation row opens its action menu. */
+export const ROW_LONG_PRESS_MS = 450;
+/** Drift that cancels a row hold, so scrolling still works. */
+export const ROW_LONG_PRESS_SLOP_PX = 8;
+
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 
+/** The sidebar's actions at its top: starting, finding and organizing chats. */
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{
 		action: SidebarAction.NEW_CHAT,
 		icon: SquarePen,
-		keys: ['shift', 'cmd', 'o'],
+		keys: SHORTCUT_NEW_CHAT,
 		tooltip: 'New chat'
 	},
-	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
+	{ action: SidebarAction.SEARCH, icon: Search, keys: SHORTCUT_SEARCH, tooltip: 'Search' }
+];
+
+/** The sidebar's footer: managing the app around the chats. */
+export const SIDEBAR_FOOTER_ITEMS: DesktopIconStripItem[] = [
+	{
+		action: SidebarAction.MANAGE_MODELS,
+		activeRouteId: MODELS_ROUTE_ID,
+		icon: MODEL_ICON,
+		keys: SHORTCUT_MODELS,
+		tooltip: 'Models'
+	},
+	{
+		action: SidebarAction.MCP,
+		activeRouteId: MCP_SERVERS_ROUTE_ID,
+		icon: McpLogo,
+		tooltip: 'MCP'
+	},
 	{
 		action: SidebarAction.SETTINGS,
+		activeRouteId: SETTINGS_ROUTE_ID,
 		icon: Settings,
+		keys: SHORTCUT_SETTINGS,
 		tooltip: 'Settings'
 	}
 ];
+
+/** A light haptic tap's length where the browser vibrates (Android): a click, not a buzz. */
+export const HAPTIC_TAP_MS = 8;

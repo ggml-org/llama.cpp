@@ -1,5 +1,13 @@
 #include "common.h"
 
+constant bool FC_topk_moe_with_norm [[function_constant(FC_TOPK_MOE + 0)]];
+constant int  FC_topk_moe_n_expert  [[function_constant(FC_TOPK_MOE + 1)]];
+constant int  FC_topk_moe_top_k     [[function_constant(FC_TOPK_MOE + 2)]];
+constant int  FC_topk_moe_gating    [[function_constant(FC_TOPK_MOE + 3)]];
+constant bool FC_topk_moe_pbias     [[function_constant(FC_TOPK_MOE + 4)]];
+
+constant int  FC_moe_reduce_n_expert_used [[function_constant(FC_MOE_REDUCE + 0)]];
+
 // bitonic sort implementation following the CUDA kernels as reference
 typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
@@ -248,7 +256,6 @@ kernel void kernel_top_k_f32_i32(
         threadgroup atomic_uint * histo     [[threadgroup(0)]],
         threadgroup        uint * sh_bucket [[threadgroup(1)]],
         threadgroup        uint * sh_above  [[threadgroup(2)]],
-        threadgroup atomic_uint * out_count [[threadgroup(3)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
@@ -286,20 +293,32 @@ kernel void kernel_top_k_f32_i32(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        // top-down scan for the bucket holding the k-th value
-        if (tid == 0) {
-            uint acc = 0;
-            uint b   = 0;
-            for (int bb = 255; bb >= 0; --bb) {
-                const uint c = atomic_load_explicit(&histo[bb], memory_order_relaxed);
-                if (acc + c >= desired) {
-                    b = uint(bb);
-                    break;
-                }
-                acc += c;
+        // top-down scan for the bucket holding the k-th value: each lane of the first
+        // simdgroup sums 8 bins, the lane whose range reaches desired scans its own bins
+        if (tid < 32) {
+            const uint top = 255 - 8*tid;
+
+            uint c[8];
+            uint sum = 0;
+            for (uint j = 0; j < 8; ++j) {
+                c[j] = atomic_load_explicit(&histo[top - j], memory_order_relaxed);
+                sum += c[j];
             }
-            *sh_bucket = b;
-            *sh_above  = acc;
+            uint acc = simd_prefix_exclusive_sum(sum);
+
+            const simd_vote::vote_t hit = simd_vote::vote_t(simd_ballot(acc + sum >= desired));
+            if (tid == (uint) ctz(hit)) {
+                uint b = top;
+                for (uint j = 0; j < 8; ++j) {
+                    if (acc + c[j] >= desired) {
+                        b = top - j;
+                        break;
+                    }
+                    acc += c[j];
+                }
+                *sh_bucket = b;
+                *sh_above  = acc;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -310,28 +329,266 @@ kernel void kernel_top_k_f32_i32(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    if (tid == 0) {
-        atomic_store_explicit(out_count, 0u, memory_order_relaxed);
+    // deterministic compaction: rank the kept elements by column order, so the
+    // result does not depend on the thread scheduling
+    const uint threshold = prefix;
+
+    // each warp scans a contiguous chunk of the row, and the lanes of the warp
+    // interleave within the chunk with stride 32 to keep the accesses coalesced
+    const uint lane  = tid & 31u;
+    const uint wg    = tid >> 5u;
+    const uint nw    = ntg_x >> 5u;
+    const uint wlo   = wg*((ncols + nw - 1) / nw);
+    const uint whi   = MIN(wlo + (ncols + nw - 1) / nw, ncols);
+    const uint wlen  = wlo < whi ? whi - wlo : 0;
+    const uint nstep = (wlen + 31) >> 5;
+
+    uint ca = 0; // elements above the threshold in this lane's substream
+    uint ct = 0; // elements tied with the threshold in this lane's substream
+    for (uint i = wlo + lane; i < whi; i += 32u) {
+        const uint key = ggml_top_k_f2ui(src0_row[i]);
+        ca += (key >  threshold) ? 1u : 0u;
+        ct += (key == threshold) ? 1u : 0u;
+    }
+
+    // per-warp totals into the now unused histogram, so that the first warp can
+    // compute the exclusive base of each warp with a scan across its lanes
+    const uint wca = simd_sum(ca);
+    const uint wct = simd_sum(ct);
+    if (lane == 0) {
+        atomic_store_explicit(&histo[wg],      wca, memory_order_relaxed);
+        atomic_store_explicit(&histo[32 + wg], wct, memory_order_relaxed);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    // emit everything above the threshold, then fill the rest from ties
-    const uint threshold = prefix;
-
-    for (uint i = tid; i < ncols; i += ntg_x) {
-        if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
-            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
-            dst_row[pos] = (int32_t) i;
+    if (tid < 32) {
+        const bool valid = tid < nw;
+        const uint sa = valid ? atomic_load_explicit(&histo[tid],      memory_order_relaxed) : 0u;
+        const uint st = valid ? atomic_load_explicit(&histo[32 + tid], memory_order_relaxed) : 0u;
+        const uint ea = simd_prefix_exclusive_sum(sa);
+        const uint et = simd_prefix_exclusive_sum(st);
+        if (valid) {
+            atomic_store_explicit(&histo[tid],      ea, memory_order_relaxed);
+            atomic_store_explicit(&histo[32 + tid], et, memory_order_relaxed);
+        }
+        const uint ta = simd_sum(sa);
+        const uint tt = simd_sum(st);
+        if (tid == 0) {
+            *sh_bucket = ta; // total above the threshold
+            *sh_above  = tt; // total tied with the threshold
         }
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    for (uint i = tid; i < ncols; i += ntg_x) {
-        if (ggml_top_k_f2ui(src0_row[i]) == threshold) {
-            const uint pos = atomic_fetch_add_explicit(out_count, 1u, memory_order_relaxed);
-            if (pos < top_k) {
+    const uint above_total = *sh_bucket;
+    const uint tie_total   = *sh_above;
+    const uint base_wa = atomic_load_explicit(&histo[wg],      memory_order_relaxed);
+    const uint base_wt = above_total + atomic_load_explicit(&histo[32 + wg], memory_order_relaxed);
+
+    // the lanes write their kept elements at lane-major ranks, which does not
+    // depend on the thread scheduling. with more tied candidates than remaining
+    // slots, the ties are instead ranked in column order with a per-step
+    // cross-lane scan, so that the lowest tied indices are the ones kept
+    const uint excl_a = simd_prefix_exclusive_sum(ca);
+    const uint excl_t = simd_prefix_exclusive_sum(ct);
+
+    if (tie_total <= top_k - above_total) {
+        uint na = 0;
+        uint nt = 0;
+        for (uint i = wlo + lane; i < whi; i += 32u) {
+            const uint key = ggml_top_k_f2ui(src0_row[i]);
+            if (key > threshold) {
+                dst_row[base_wa + excl_a + na] = (int32_t) i;
+                ++na;
+            } else if (key == threshold) {
+                dst_row[base_wt + excl_t + nt] = (int32_t) i;
+                ++nt;
+            }
+        }
+    } else {
+        uint na = 0;
+        for (uint i = wlo + lane; i < whi; i += 32u) {
+            if (ggml_top_k_f2ui(src0_row[i]) > threshold) {
+                dst_row[base_wa + excl_a + na] = (int32_t) i;
+                ++na;
+            }
+        }
+
+        uint tt = 0; // tied elements in the earlier steps of this warp
+        for (uint s = 0; s < nstep; ++s) {
+            const uint i   = wlo + 32u*s + lane;
+            const bool ok  = i < whi;
+            const bool t   = ok && ggml_top_k_f2ui(src0_row[i]) == threshold;
+            const uint pos = base_wt + tt + simd_prefix_exclusive_sum((uint) t);
+            if (t && pos < top_k) {
                 dst_row[pos] = (int32_t) i;
+            }
+            tt += simd_sum((uint) t);
+        }
+    }
+}
+
+// fused SOFT_MAX or sqrt(softplus) + top-k + GET_ROWS (+ optional norm/scale) for MoE routing.
+// One SIMDgroup handles one token row; n_expert is limited to 1024 by the host.
+kernel void kernel_topk_moe_f32(
+        constant   ggml_metal_kargs_topk_moe & args,
+        device const char * src0,
+        device       float * weights,
+        device      int32_t * ids,
+        device const float * probs_bias,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiisg[[thread_index_in_simdgroup]]) {
+    const int row = (int) tgpig.x;
+    if (row >= args.ne01) {
+        return;
+    }
+
+    const int n_expert   = FC_topk_moe_n_expert;
+    const int top_k      = FC_topk_moe_top_k;
+    const int lane       = (int) tiisg;
+    const int n_per_lane = (n_expert + 31) / 32;
+
+    device const float * logits_row = (device const float *) (src0 + row * args.nb01);
+    device       float * weights_row = weights + row * top_k;
+    device      int32_t * ids_row   = ids + row * (args.nb1_ids / sizeof(int32_t));
+
+    float wt[32];
+    float output_weights[32];
+    FOR_UNROLL (int i = 0; i < 32; ++i) {
+        wt[i]            = -INFINITY;
+        output_weights[i] = 0.0f;
+    }
+
+    for (int i = lane; i < n_expert; i += 32) {
+        const float v = logits_row[i];
+        wt[i / 32] = isnan(v) ? -FLT_MAX : v;
+    }
+
+    if (FC_topk_moe_gating == 1) {
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            const float v = wt[i];
+            wt[i] = sqrt(v > 20.0f ? v : log(1.0f + exp(v)));
+        }
+    } else if (FC_topk_moe_gating == 2) {
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            wt[i] = 1.0f / (1.0f + exp(-wt[i]));
+        }
+    } else {
+        // softmax over the expert logits
+        float max_val = -INFINITY;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            max_val = max(max_val, wt[i]);
+        }
+        max_val = simd_max(max_val);
+
+        float sum_val = 0.0f;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            wt[i] = exp(wt[i] - max_val);
+            sum_val += wt[i];
+        }
+        sum_val = simd_sum(sum_val);
+
+        const float inv_sum = 1.0f / sum_val;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            wt[i] *= inv_sum;
+        }
+    }
+
+    // the ranking keys add the selection bias, the output weights stay unbiased
+    float sel[32];
+    if (FC_topk_moe_pbias) {
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            const int expert = lane + i * 32;
+            sel[i] = expert < n_expert ? wt[i] + probs_bias[expert] : -INFINITY;
+        }
+    }
+
+    float wt_sum = 0.0f;
+
+    for (int k = 0; k < top_k; ++k) {
+        float best_val  = -INFINITY;
+        float best_key  = -INFINITY;
+        int   best_expert = -1;
+
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            const int   expert = lane + i * 32;
+            const float key    = FC_topk_moe_pbias ? sel[i] : wt[i];
+            if (expert < n_expert && (key > best_key || (key == best_key && expert < best_expert))) {
+                best_val    = wt[i];
+                best_key    = key;
+                best_expert = expert;
+            }
+        }
+
+        FOR_UNROLL (int mask = 16; mask > 0; mask >>= 1) {
+            const float val    = simd_shuffle_xor(best_val, mask);
+            const float key    = simd_shuffle_xor(best_key, mask);
+            const int   expert = simd_shuffle_xor(best_expert, mask);
+            if (key > best_key || (key == best_key && expert < best_expert)) {
+                best_val    = val;
+                best_key    = key;
+                best_expert = expert;
+            }
+        }
+
+        if ((best_expert & 31) == lane) {
+            wt[best_expert / 32] = -INFINITY;
+            if (FC_topk_moe_pbias) {
+                sel[best_expert / 32] = -INFINITY;
+            }
+        }
+
+        if ((k & 31) == lane) {
+            output_weights[k / 32] = best_val;
+        }
+
+        if ((best_expert & 31) == lane) {
+            ids_row[k] = best_expert;
+            if (FC_topk_moe_with_norm) {
+                wt_sum += best_val;
             }
         }
     }
+
+    if (FC_topk_moe_with_norm) {
+        wt_sum = simd_sum(wt_sum);
+        wt_sum = max(wt_sum, args.clamp) + args.bias;
+        const float inv = 1.0f / wt_sum;
+        FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+            output_weights[i] *= inv;
+        }
+    }
+
+    FOR_UNROLL (int i = 0; i < n_per_lane; ++i) {
+        const int idx = i * 32 + lane;
+        if (idx < top_k) {
+            weights_row[idx] = output_weights[i] * args.scale;
+        }
+    }
+}
+
+// fused MoE expert weighting + reduction: weighted = sum(experts[e] * weights[e]).
+// The host guarantees all tensors are contiguous F32.
+kernel void kernel_moe_reduce_f32(
+        constant   ggml_metal_kargs_moe_reduce & args,
+        device const float * experts,
+        device const float * weights,
+        device       float * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int64_t token = tgpig.x;
+    const int64_t col   = (int64_t) tgpig.y * ntg.x + tpitg.x;
+    if (token >= args.ne02 || col >= args.ne00) {
+        return;
+    }
+
+    const int n_expert_used = FC_moe_reduce_n_expert_used;
+
+    const int64_t base = token * (int64_t) n_expert_used * args.ne00 + col;
+    float sum = 0.0f;
+    FOR_UNROLL (int e = 0; e < n_expert_used; ++e) {
+        sum += experts[base + e * args.ne00] * weights[token * n_expert_used + e];
+    }
+    dst[token * args.ne00 + col] = sum;
 }

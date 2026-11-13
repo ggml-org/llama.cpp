@@ -41,6 +41,9 @@
 	}: Props = $props();
 
 	const scrollClasses = $derived(limitToSingleRow ? 'first:ml-4 last:mr-4' : '');
+	// Carousel items must keep their width; wrapped attachments (message bubbles)
+	// shrink so wide images fit the bubble instead of overflowing it
+	const layoutClasses = $derived(limitToSingleRow ? 'flex-shrink-0' : 'min-w-0');
 
 	function toMcpResourceAttachment(
 		extra: DatabaseMessageExtraMcpResource,
@@ -92,7 +95,7 @@
 	/>
 {:else if item.isImage && item.preview}
 	<ChatAttachmentsListItemThumbnailImage
-		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
+		class="{layoutClasses} cursor-pointer {className} {scrollClasses}"
 		height={imageHeight}
 		id={item.id}
 		{imageClass}
@@ -103,18 +106,22 @@
 		{readonly}
 		width={imageWidth}
 	/>
-{:else if isPdfFile(item.attachment, item.uploadedFile)}
-	<ChatAttachmentsListItemThumbnailFile
-		attachment={item.attachment}
-		class="flex-shrink-0 cursor-pointer {className} {scrollClasses}"
+{:else if isPdfFile(item.attachment, item.uploadedFile) && item.preview}
+	{@const pageCount =
+		item.attachment?.type === AttachmentType.PDF ? (item.attachment.images?.length ?? 0) : 0}
+
+	<ChatAttachmentsListItemThumbnailImage
+		class="{layoutClasses} cursor-pointer {className} {scrollClasses}"
+		height={imageHeight}
 		id={item.id}
+		{imageClass}
+		label={pageCount > 0 ? `PDF, ${pageCount} ${pageCount === 1 ? 'page' : 'pages'}` : 'PDF'}
 		name={item.name}
 		onRemove={onFileRemove}
 		onclick={() => onPreview?.(item)}
+		preview={item.preview}
 		{readonly}
-		size={item.size}
-		textContent={item.textContent}
-		uploadedFile={item.uploadedFile}
+		width={imageWidth}
 	/>
 {:else}
 	<ChatAttachmentsListItemThumbnailFile

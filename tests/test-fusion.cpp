@@ -32,6 +32,7 @@
 #include <iostream>
 #include <map>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -145,13 +146,11 @@ static llama_context_ptr create_ctx(llama_model * model, int n_ubatch) {
 // decode all tokens in one batch; returns the logits of every token
 static std::vector<float> decode_prefill(llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
+    common_batch batch(lctx);
     for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_add(batch, tokens[i], i, { 0 }, true);
+        batch.add(tokens[i], i, 0, true);
     }
-    batch.n_tokens = tokens.size();
-    if (llama_decode(lctx, batch)) {
-        llama_batch_free(batch);
+    if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         throw std::runtime_error("prefill decode failed");
     }
 
@@ -163,20 +162,18 @@ static std::vector<float> decode_prefill(llama_model * model, llama_context * lc
             ret.push_back(logits_ith[j]);
         }
     }
-    llama_batch_free(batch);
     return ret;
 }
 
 // decode one token at a time; returns the logits of the last token of each step
 static std::vector<float> decode_gen(llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
     const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    llama_batch batch = llama_batch_init(1, 0, 1);
+    common_batch batch(lctx);
     std::vector<float> ret;
     for (size_t i = 0; i < tokens.size(); i++) {
-        common_batch_clear(batch);
-        common_batch_add(batch, tokens[i], i, { 0 }, true);
-        if (llama_decode(lctx, batch)) {
-            llama_batch_free(batch);
+        batch.clear();
+        batch.add(tokens[i], i, 0, true);
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
             throw std::runtime_error("decode failed");
         }
         const float * logits = llama_get_logits_ith(lctx, 0);
@@ -184,7 +181,6 @@ static std::vector<float> decode_gen(llama_model * model, llama_context * lctx, 
             ret.push_back(logits[j]);
         }
     }
-    llama_batch_free(batch);
     return ret;
 }
 
@@ -195,6 +191,14 @@ static void read_counts(fusion_stats_get_t api_stats_get, ggml_backend_fusion_t 
     counts.assign(n, 0);
     api_stats_get(finfo, labels.data(), counts.data(), n);
 }
+
+struct baseline_row {
+    std::string arch;
+    bool        moe;
+    std::string mode;
+    std::string label;
+    uint64_t    count;
+};
 
 // one row of the per-label report
 struct fusion_row {
@@ -297,7 +301,7 @@ int main(int argc, char ** argv) {
     }
 
     common_init();
-    ggml_backend_load_all();
+    llama_backend_init();
 
     ggml_backend_dev_t dev = ggml_backend_dev_by_name(device_name.c_str());
     if (!dev) {
@@ -334,8 +338,8 @@ int main(int argc, char ** argv) {
 
     const bool has_counts = true;
 
-    // load the baseline (if any): key arch|moe|mode|label -> expected count
-    std::map<std::string, uint64_t> baseline;
+    // load the baseline (if any): key arch|moe|mode|label -> expected row
+    std::map<std::string, baseline_row> baseline;
     if (!check_path.empty()) {
         std::ifstream in(check_path);
         if (!in) {
@@ -357,11 +361,15 @@ int main(int argc, char ** argv) {
             if (cols.size() != 5) {
                 continue;
             }
-            baseline[cols[0] + "|" + cols[1] + "|" + cols[2] + "|" + cols[3]] = std::stoull(cols[4]);
+            const std::string key = cols[0] + "|" + cols[1] + "|" + cols[2] + "|" + cols[3];
+            baseline[key] = { cols[0], cols[1] == "1", cols[2], cols[3], std::stoull(cols[4]) };
         }
     }
 
     std::vector<fusion_row> rows;
+
+    std::set<std::string> run_arches;
+    std::set<std::string> produced;
 
     LOG_INF("%s: running fusion test over %zu models on '%s'\n", __func__, models.size(), base_name.c_str());
 
@@ -382,6 +390,8 @@ int main(int argc, char ** argv) {
             LOG_ERR("%s: %s: %s\n", __func__, model_path.c_str(), e.what());
             continue;
         }
+
+        run_arches.insert(arch);
 
         struct mode_cfg {
             std::string name;
@@ -485,7 +495,8 @@ int main(int argc, char ** argv) {
                 if (match) {
                     // one "any" row; use the worst NMSE across the two modes
                     const std::string any_key = arch + "|" + (moe ? "1" : "0") + "|any|" + label;
-                    const uint64_t expected = baseline.count(any_key) ? baseline.at(any_key) : 0;
+                    produced.insert(any_key);
+                    const uint64_t expected = baseline.count(any_key) ? baseline.at(any_key).count : 0;
                     const bool ok_count = check_path.empty() || d[0].count_fused == expected;
                     const bool ok_nmse   = d[0].ok_nmse && d[1].ok_nmse;
                     const double nmse_fus = std::max(d[0].nmse_fus, d[1].nmse_fus);
@@ -500,7 +511,8 @@ int main(int argc, char ** argv) {
                         }
                         const mode_data & a = d[mi];
                         const std::string mode_key = arch + "|" + (moe ? "1" : "0") + "|" + modes[mi].name + "|" + label;
-                        const uint64_t expected = baseline.count(mode_key) ? baseline.at(mode_key) : 0;
+                        produced.insert(mode_key);
+                        const uint64_t expected = baseline.count(mode_key) ? baseline.at(mode_key).count : 0;
                         const bool ok_count = check_path.empty() || a.count_fused == expected;
                         rows.push_back({ arch, moe, modes[mi].name, label, a.count_fused, a.count_unfused,
                                          expected, a.nmse_fus, a.nmse_dev, ok_count, a.ok_nmse });
@@ -510,6 +522,18 @@ int main(int argc, char ** argv) {
         }
 
         LOG_INF("%s: %-20s (%s) done\n", __func__, arch.c_str(), model_path.c_str());
+    }
+
+    if (!check_path.empty()) {
+        for (const auto & kv : baseline) {
+            if (produced.count(kv.first) || !run_arches.count(kv.second.arch)) {
+                continue;
+            }
+            const baseline_row & b = kv.second;
+            LOG_WRN("%s: %s: fusion %s x%llu is no longer matched\n", __func__, b.arch.c_str(),
+                    b.label.c_str(), (unsigned long long) b.count);
+            rows.push_back({ b.arch, b.moe, b.mode, b.label, 0, 0, b.count, 0.0, 0.0, false, true });
+        }
     }
 
     // print the report

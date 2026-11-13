@@ -52,6 +52,53 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard(HVX_Vector v,
     return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
 }
 
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_2it(HVX_Vector v) {
+    v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+    v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
+
+    HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
+    HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
+    HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
+
+    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx), Q6_V_vsplat_R(FAST_SIGMOID_C2));
+    v1            = Q6_Vqf32_vadd_Vqf32Vsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
+
+    HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x), Q6_V_vsplat_R(FAST_SIGMOID_C1));
+    v2            = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx);
+    v2            = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x);
+
+    HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
+    v3            = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
+
+    HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
+    HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
+
+    // Newton-Raphson with 2 iterations
+    HVX_Vector two_sf = hvx_vec_splat_f32(2.0f);
+    HVX_Vector i_sf   = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v5);
+    HVX_Vector r_qf   = Q6_Vqf32_vmpy_VsfVsf(
+        i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
+    r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
+        r_qf, Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
+    HVX_Vector res = Q6_Vsf_equals_Vqf32(r_qf);
+
+    res = Q6_Vqf32_vmpy_VsfVsf(v3, res);
+
+    return Q6_Vsf_equals_Vqf32(res);
+}
+
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard_2it(HVX_Vector v,
+                                                            HVX_Vector one,
+                                                            HVX_Vector max_exp,
+                                                            HVX_Vector min_exp) {
+    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
+    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
+
+    HVX_Vector out = hvx_vec_fast_sigmoid_f32_2it(v);
+    out            = Q6_V_vmux_QVV(pred_max, out, one);
+    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
+}
+
 static inline HVX_Vector hvx_vec_tanh_f32(HVX_Vector x) {
     // tanh(x) = 2 * sigmoid(2x) - 1
     HVX_Vector two = hvx_vec_splat_f32(2.0f);
@@ -66,6 +113,14 @@ static inline HVX_Vector hvx_vec_tanh_f32(HVX_Vector x) {
     HVX_Vector res = Q6_Vqf32_vmpy_VsfVsf(sig2x, two);
     res = Q6_Vqf32_vsub_Vqf32Vsf(res, one);
     return Q6_Vsf_equals_Vqf32(res);
+}
+
+static inline HVX_Vector hvx_vec_silu_f32(HVX_Vector x) {
+    HVX_Vector one     = hvx_vec_splat_f32(1.0f);
+    HVX_Vector max_exp = hvx_vec_splat_f32(87.f);
+    HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);
+    HVX_Vector sig     = hvx_vec_fast_sigmoid_f32_guard(x, one, max_exp, min_exp);
+    return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(x, sig));
 }
 
 #define hvx_sigmoid_loop_body(dst_type, src_type, vec_store)                                  \
@@ -176,6 +231,60 @@ static inline HVX_Vector hvx_vec_tanh_f16(HVX_Vector x) {
 
     const HVX_Vector v_neg_one = hvx_vec_splat_f16(-1.0f);
     return hvx_vec_add_f16_f16(hvx_vec_mul_f16_f16(sig2x, v_two), v_neg_one);
+}
+
+#define hvx_sigmoid_f16_loop_body(dst_type, src_type, vec_store)         \
+    do {                                                                 \
+        dst_type * restrict vdst = (dst_type *) dst;                     \
+        src_type * restrict vsrc = (src_type *) src;                     \
+                                                                         \
+        const uint32_t epv  = 128 / sizeof(_Float16);                    \
+        const uint32_t nvec = n / epv;                                   \
+        const uint32_t nloe = n % epv;                                   \
+                                                                         \
+        uint32_t i = 0;                                                  \
+                                                                         \
+        _Pragma("unroll(4)")                                             \
+        for (; i < nvec; i++) {                                          \
+             vdst[i] = hvx_vec_fast_sigmoid_f16(vsrc[i]);                \
+        }                                                                \
+        if (nloe) {                                                      \
+             HVX_Vector tmp = hvx_vec_fast_sigmoid_f16(vsrc[i]);         \
+             vec_store((void *) &vdst[i], nloe * sizeof(_Float16), tmp); \
+        }                                                                \
+    } while(0)
+
+#define hvx_tanh_f16_loop_body(dst_type, src_type, vec_store)            \
+    do {                                                                 \
+        dst_type * restrict vdst = (dst_type *) dst;                     \
+        src_type * restrict vsrc = (src_type *) src;                     \
+                                                                         \
+        const uint32_t epv  = 128 / sizeof(_Float16);                    \
+        const uint32_t nvec = n / epv;                                   \
+        const uint32_t nloe = n % epv;                                   \
+                                                                         \
+        uint32_t i = 0;                                                  \
+                                                                         \
+        _Pragma("unroll(4)")                                             \
+        for (; i < nvec; i++) {                                          \
+             vdst[i] = hvx_vec_tanh_f16(vsrc[i]);                        \
+        }                                                                \
+        if (nloe) {                                                      \
+             HVX_Vector tmp = hvx_vec_tanh_f16(vsrc[i]);                 \
+             vec_store((void *) &vdst[i], nloe * sizeof(_Float16), tmp); \
+        }                                                                \
+    } while(0)
+
+static inline void hvx_sigmoid_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_sigmoid_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_tanh_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_tanh_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
 }
 
 #endif /* HVX_SIGMOID_H */

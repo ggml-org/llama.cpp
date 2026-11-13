@@ -2,10 +2,10 @@
 #include <cstring>
 #include <cmath>
 
-// note: this is similar to clip_graph::resize_position_embeddings, major difference is having
+// note: this is similar to mtmd_graph::resize_position_embeddings, major difference is having
 // the w/h in ne[1] and ne[2] instead of assuming with sqrt. Could try storing the tensor in 2D instead
 // with a w*h? Also the permute is a bit different at (2, 1, 0, 3) instead of (2, 0, 1, 3).
-ggml_tensor * clip_graph_kimik25::resize_position_embeddings_3d(uint32_t interpolation_mode) {
+ggml_tensor * mtmd_graph_kimik25::resize_position_embeddings_3d(uint32_t interpolation_mode) {
     ggml_tensor * pos_embd = model.position_embeddings;
     const int height       = img.ny() / patch_size;
     const int width        = img.nx() / patch_size;
@@ -31,7 +31,7 @@ ggml_tensor * clip_graph_kimik25::resize_position_embeddings_3d(uint32_t interpo
     return pos_embd;
 }
 
-ggml_cgraph * clip_graph_kimik25::build() {
+ggml_cgraph * mtmd_graph_kimik25::build() {
     ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
     ggml_set_name(pos_h, "pos_h");
     ggml_set_input(pos_h);
@@ -40,11 +40,13 @@ ggml_cgraph * clip_graph_kimik25::build() {
     ggml_set_name(pos_w, "pos_w");
     ggml_set_input(pos_w);
 
-    ggml_tensor * learned_pos_embd = resize_position_embeddings_3d(GGML_SCALE_MODE_BICUBIC);
+    const bool is_k31 = proj_type == PROJECTOR_TYPE_KIMIK31;
+
+    ggml_tensor * learned_pos_embd = resize_position_embeddings_3d(is_k31 ? GGML_SCALE_MODE_BILINEAR : GGML_SCALE_MODE_BICUBIC);
 
     // Kimi-K2.5 uses interleaved 2D RoPE pattern natively, but
     // Q / K are permuted during conversion to use split format.
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         cur = build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
         return cur;
     };
@@ -57,14 +59,25 @@ ggml_cgraph * clip_graph_kimik25::build() {
 
     ggml_tensor * cur = build_vit(
                             inp, n_patches,
-                            NORM_TYPE_NORMAL,
+                            is_k31 ? NORM_TYPE_RMS : NORM_TYPE_NORMAL,
                             hparams.ffn_op,
                             nullptr,
                             add_pos);
 
     cb(cur, "vit_out", -1);
 
-    {
+    if (is_k31) {
+        // patchmergerv2: no pre-norm, RMS norm after the MLP
+        cur = build_patch_merge_permute(cur, hparams.n_merge);
+        cur = build_ffn(cur,
+            model.mm_1_w, nullptr,
+            nullptr, nullptr,
+            model.mm_2_w, nullptr,
+            FFN_GELU_ERF,
+            -1);
+        cur = build_norm(cur, model.mm_post_norm_w, nullptr, NORM_TYPE_RMS, 1e-5f, -1);
+        cb(cur, "proj_out", -1);
+    } else {
         // patch_merger
         const int scale_factor = model.hparams.n_merge;
         cur = build_patch_merge_permute(cur, scale_factor);
@@ -88,7 +101,7 @@ ggml_cgraph * clip_graph_kimik25::build() {
             model.mm_1_w, model.mm_1_b,
             nullptr, nullptr,
             model.mm_2_w, model.mm_2_b,
-            FFN_GELU,
+            FFN_GELU_ERF,
             -1);
 
         cb(cur, "proj_out", -1);

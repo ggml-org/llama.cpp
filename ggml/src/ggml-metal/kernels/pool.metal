@@ -84,65 +84,117 @@ kernel void kernel_pool_1d_max_f32(
         constant        ggml_metal_kargs_pool_1d & args,
         device  const   float * src,
         device          float * dst,
-        uint            gid [[thread_position_in_grid]]
-) {
-
-    if (gid >= args.np) {
+        threadgroup    char * shmem [[threadgroup(0)]],
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint sgitg[[simdgroup_index_in_threadgroup]],
+        uint tiisg[[thread_index_in_simdgroup]],
+        uint ntg[[threads_per_threadgroup]]) {
+    if (tgpig >= args.np) {
         return;
     }
 
-    const int ow  = (int)gid % args.OW;
-    const int row = (int)gid / args.OW;
+    const int out = (int) tgpig;
+    const int ow  = out % (int) args.OW;
+    const int row = out / (int) args.OW;
 
-    const int base = ow * args.s0 - args.p0;
+    const int base     = ow * args.s0 - args.p0;
+    const int src_off  = row * args.IW;
+    const int dst_off  = row * args.OW;
 
-    float acc = -INFINITY;
+    float lmax = -INFINITY;
 
-    const int src_off = row * args.IW;
-    const int dst_off = row * args.OW;
-
-    for (int ki = 0; ki < args.k0; ++ki) {
-        int j = base + ki;
-        if (j < 0 || j >= args.IW){
-            continue;
+    for (int ki = tpitg; ki < args.k0; ki += ntg) {
+        const int j = base + ki;
+        if (j >= 0 && j < args.IW) {
+            lmax = max(lmax, src[src_off + j]);
         }
-        float v = src[src_off + j];
-        acc = max(acc, v);
     }
 
-    dst[dst_off + ow] = acc;
+    float max_val = simd_max(lmax);
+
+    threadgroup float * shared_max = (threadgroup float *) shmem;
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            shared_max[tiisg] = -INFINITY;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            shared_max[sgitg] = max_val;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        max_val = shared_max[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    if (tpitg == 0) {
+        dst[dst_off + ow] = max_val;
+    }
 }
 
 kernel void kernel_pool_1d_avg_f32(
         constant        ggml_metal_kargs_pool_1d & args,
         device  const   float * src,
         device          float * dst,
-        uint            gid [[thread_position_in_grid]]
-) {
-
-    if (gid >= args.np) {
+        threadgroup    char * shmem [[threadgroup(0)]],
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint sgitg[[simdgroup_index_in_threadgroup]],
+        uint tiisg[[thread_index_in_simdgroup]],
+        uint ntg[[threads_per_threadgroup]]) {
+    if (tgpig >= args.np) {
         return;
     }
 
-    const int ow  = (int)gid % args.OW;
-    const int row = (int)gid / args.OW;
+    const int out = (int) tgpig;
+    const int ow  = out % (int) args.OW;
+    const int row = out / (int) args.OW;
 
-    const int base = ow * args.s0 - args.p0;
+    const int base     = ow * args.s0 - args.p0;
+    const int src_off  = row * args.IW;
+    const int dst_off  = row * args.OW;
 
-    float acc = 0.0f;
-    int   cnt = 0;
+    float lsum = 0.0f;
+    int   lcnt = 0;
 
-    const int src_off = row * args.IW;
-    const int dst_off = row * args.OW;
-
-    for (int ki = 0; ki < args.k0; ++ki) {
+    for (int ki = tpitg; ki < args.k0; ki += ntg) {
         const int j = base + ki;
-        if (j < 0 || j >= args.IW) {
-            continue;
+        if (j >= 0 && j < args.IW) {
+            lsum += src[src_off + j];
+            lcnt += 1;
         }
-        acc += src[src_off + j];
-        cnt += 1;
     }
 
-    dst[dst_off + ow] = (cnt > 0) ? (acc / (float)cnt) : 0.0f;
+    float sum = simd_sum(lsum);
+    float cnt = simd_sum((float) lcnt);
+
+    threadgroup float * shared_sum = (threadgroup float *) shmem;
+    threadgroup float * shared_cnt = (threadgroup float *) shmem + N_SIMDWIDTH;
+
+    if (ntg > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            shared_sum[tiisg] = 0.0f;
+            shared_cnt[tiisg] = 0.0f;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            shared_sum[sgitg] = sum;
+            shared_cnt[sgitg] = cnt;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        sum = shared_sum[tiisg];
+        cnt = shared_cnt[tiisg];
+
+        sum = simd_sum(sum);
+        cnt = simd_sum(cnt);
+    }
+
+    if (tpitg == 0) {
+        dst[dst_off + ow] = (cnt > 0.0f) ? (sum / cnt) : 0.0f;
+    }
 }

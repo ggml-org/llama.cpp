@@ -10,6 +10,7 @@ import bisect
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
+logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 logger = logging.getLogger("ggml-hexagon-trace")
 
 op_pattern = re.compile(
@@ -432,7 +433,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
     time_mappers = {dev: DeviceTimeMapper(dev, filtered_ops) for dev in unique_devices}
 
     # Process events
-    completed_events = []
+    completed_events: List[Dict[str, Any]] = []
     if trace_events:
         trace_events = sorted(trace_events, key=lambda e: e['unwrapped_cycles'])
 
@@ -513,7 +514,10 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         tm = time_mappers[dev]
         e['ts_ns'] = tm.cycle_to_ns(e['start_cyc'])
         dur_ns = tm.dur_cycles_to_ns(e['start_cyc'], e['end_cyc'] - e['start_cyc'])
-        e['dur_ns'] = max(dur_ns, 100)
+        e['dur_ns'] = max(dur_ns, 1)
+
+    # Identify HMX threads dynamically from HMX* events
+    hmx_threads = {(e['device'], e['thread']) for e in completed_events if e['event'].startswith('HMX')}
 
     # Allocate slots (sub-tracks) to prevent overlaps on same virtual track
     active_slots = defaultdict(list)
@@ -527,7 +531,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
             track_key = (dev, t, "DMA")
-        elif t == 10:
+        elif (dev, t) in hmx_threads:
             track_key = (dev, t, "HMX")
         else:
             track_key = (dev, t, "HVX")
@@ -551,23 +555,24 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         evt = e['event']
         slot = e['slot']
         dev = e['device']
+        is_hmx = (dev, t) in hmx_threads
 
         norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
             track_evt = "DMA"
             evt_id = 1
-        elif t == 10:
+        elif is_hmx:
             track_evt = "HMX"
             evt_id = 3
         else:
             track_evt = "HVX"
             evt_id = 2
 
-        t_sort = 1 if t == 10 else t + 2
+        t_sort = 1 if is_hmx else t + 2
         dev_idx = device_to_idx[dev]
 
         # Unique UUID for each sub-track
-        if t == 10:
+        if is_hmx:
             uuid = dev_idx * 10000000 + 20  # HMX thread track UUID
         else:
             uuid = int(dev_idx * 10000000 + t_sort * 1000000 + evt_id * 1000 + slot)
@@ -600,9 +605,9 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
             hmx_packet = make_trace_packet(0, track_descriptor=make_track_descriptor(hmx_track_uuid, parent_uuid=proc_uuid, thread=hmx_thread_desc))
             write_trace_packet_to_file(f, hmx_packet)
 
-            # Define Thread Tracks (T0, T1, ..., T9) for this device
+            # Define Thread Tracks for this device
             dev_used_tracks = {uuid: val for uuid, val in used_tracks.items() if val[0] == dev}
-            unique_threads = sorted(list(set(t for (_, t, _, _) in dev_used_tracks.values() if t != 10)))
+            unique_threads = sorted(list(set(t for (_, t, _, _) in dev_used_tracks.values() if (dev, t) not in hmx_threads)))
             for t in unique_threads:
                 thread_uuid = dev_idx * 10000000 + 10 + t
                 thread_name = f"T{t}"
@@ -622,7 +627,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         for uuid in sorted(used_tracks.keys()):
             dev, t, evt, slot = used_tracks[uuid]
             dev_idx = device_to_idx[dev]
-            if t == 10:
+            if (dev, t) in hmx_threads:
                 continue
             name = f"T{t} {evt}"
             rank = 0 if evt == "HVX" else 1
@@ -732,7 +737,7 @@ def main():
     group.add_argument("--tail", type=int, help="Limit to last N ops")
 
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format='%(message)s')
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     op_filter_re = None
     if args.filter:

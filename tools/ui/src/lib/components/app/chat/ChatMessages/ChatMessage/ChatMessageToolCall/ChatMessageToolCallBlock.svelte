@@ -23,13 +23,15 @@
 	interface Props {
 		section: AgenticSection;
 		attachments?: DatabaseMessageExtra[];
+		conversationCwd?: string;
 		open: boolean;
 		isStreaming: boolean;
 		isExecuting?: boolean;
 		onToggle?: () => void;
 	}
 
-	let { attachments, isExecuting, isStreaming, onToggle, open, section }: Props = $props();
+	let { attachments, conversationCwd, isExecuting, isStreaming, onToggle, open, section }: Props =
+		$props();
 
 	// Runs for every tool block on mount, before the body renders: the cheap
 	// content prefilter and the tool-name allow-list come first so blobs from
@@ -48,7 +50,7 @@
 {:else if section.toolName === BuiltInTool.BROWSER_GET_DATETIME}
 	<ChatMessageToolCallBlockGetDatetime {isStreaming} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_GET_INFO}
-	<ChatMessageToolCallBlockGetInfo {isStreaming} {section} />
+	<ChatMessageToolCallBlockGetInfo {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_READ_FILE}
 	<ChatMessageToolCallBlockReadFile {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.BROWSER_READ_MEDIA}
@@ -60,6 +62,7 @@
 {:else if section.toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND}
 	<ChatMessageToolCallBlockExecShellCommand
 		{attachments}
+		{conversationCwd}
 		{isExecuting}
 		{isStreaming}
 		{onToggle}

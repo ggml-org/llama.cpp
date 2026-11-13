@@ -8,16 +8,17 @@
 #include <string.h>
 #include <math.h>
 
-#include "hex-dma.h"
+#include "dma-queue.h"
 #include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
+#include "sum-rows-ops.h"
 
 #define sum_rows_preamble                         \
     const struct htp_tensor *src0 = octx->src[0]; \
@@ -50,19 +51,18 @@ struct sum_rows_context {
     uint32_t        ne00;
     size_t          src_stride;
     size_t          dst_stride;
-    uint32_t        rows_per_thread;
+    uint32_t        rows_per_hvx;
     uint32_t        total_rows;
-    bool            opt_path;
 };
 
-static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) {
+static void sum_rows_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void *data) {
     const struct sum_rows_context * smctx = (const struct sum_rows_context *) data;
 
-    const uint32_t rows_per_thread = smctx->rows_per_thread;
+    const uint32_t rows_per_hvx    = smctx->rows_per_hvx;
     const uint32_t total_rows      = smctx->total_rows;
 
-    const uint32_t start_row = rows_per_thread * ith;
-    const uint32_t end_row   = MIN(start_row + rows_per_thread, total_rows);
+    const uint32_t start_row = rows_per_hvx * ith;
+    const uint32_t end_row   = MIN(start_row + rows_per_hvx, total_rows);
 
     if (start_row >= end_row) {
         return;
@@ -71,7 +71,6 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     const size_t   src_stride = smctx->src_stride;
     const size_t   dst_stride = smctx->dst_stride;
     const uint32_t ne00       = smctx->ne00;
-    const bool     opt_path   = smctx->opt_path;
 
     const float * restrict src_th = (const float *) (smctx->src_data + (start_row * src_stride));
     float       * restrict dst_th = (float *)       (smctx->dst_data + (start_row * dst_stride));
@@ -79,21 +78,18 @@ static void sum_rows_thread_f32(unsigned int nth, unsigned int ith, void *data) 
     // Calculate actual number of rows for this thread
     const uint32_t n_rows = end_row - start_row;
 
-    struct htp_thread_trace * tr = &smctx->octx->ctx->trace[ith];
+    struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
 
     for (uint32_t ir = 0; ir < n_rows; ir++) {
-        const float * restrict src_local = src_th + (ir * (src_stride / sizeof(float)));
+        const float * restrict src_local = (const float *) ((const uint8_t *) src_th + ir * src_stride);
+        float       * restrict dst_local = (float *)       ((uint8_t *)       dst_th + ir * dst_stride);
 
         if (ir + 1 < n_rows) {
-            hex_l2fetch(src_local + (src_stride / sizeof(float)), src_stride, src_stride, 1);
+            hex_l2fetch((const uint8_t *) src_local + src_stride, src_stride, src_stride, 1);
         }
 
-        if (opt_path) {
-            dst_th[ir] = hvx_reduce_sum_f32_a((const uint8_t *) src_local, ne00);
-        } else {
-            dst_th[ir] = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00);
-        }
+        *dst_local = hvx_reduce_sum_f32((const uint8_t *) src_local, ne00);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start_row);
@@ -106,8 +102,15 @@ int op_sum_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->flags & HTP_OPFLAGS_SKIP_COMPUTE) {
-        return HTP_STATUS_OK;
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const struct htp_sum_rows_kernel_params * kparams =
+        (const struct htp_sum_rows_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
+        return HTP_STATUS_INVAL_PARAMS;
     }
 
     const uint32_t src0_nrows      = ne01 * ne02 * ne03;
@@ -128,13 +131,8 @@ int op_sum_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = octx->n_threads;
-    const uint32_t rows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
-
-    bool opt_path = false;
-    if ((0 == hex_is_aligned((void *) src0->data, VLEN)) && !(nb01 & (VLEN - 1))) {
-        opt_path = true;
-    }
+    const uint32_t n_hvx        = octx->n_hvx;
+    const uint32_t rows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     struct sum_rows_context smctx = {
         .octx            = octx,
@@ -143,12 +141,278 @@ int op_sum_rows(struct htp_ops_context * octx) {
         .ne00            = ne00,
         .src_stride      = nb01,
         .dst_stride      = nb1,
-        .rows_per_thread = rows_per_thread,
+        .rows_per_hvx    = rows_per_hvx,
         .total_rows      = nrows,
-        .opt_path        = opt_path,
     };
 
-    work_queue_run(octx->ctx->work_queue, sum_rows_thread_f32, &smctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, sum_rows_thread_f32, &smctx, n_hvx);
 
+    return HTP_STATUS_OK;
+}
+
+struct sum_context {
+    struct htp_ops_context * octx;
+    const float            * src_data;
+    float                    partial_sums[HTP_MAX_NHVX];
+    uint32_t                 total_elems;
+    uint32_t                 elems_per_hvx;
+};
+
+static void sum_thread_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    struct sum_context * sctx = (struct sum_context *) data;
+    const uint32_t start = sctx->elems_per_hvx * ith;
+    const uint32_t end   = MIN(start + sctx->elems_per_hvx, sctx->total_elems);
+
+    if (start >= end) {
+        sctx->partial_sums[ith] = 0.0f;
+        return;
+    }
+
+    const uint32_t n = end - start;
+    const float * src = sctx->src_data + start;
+
+    struct htp_thread_trace * tr = th->trace;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    hex_l2fetch_block((const void *) src, n * sizeof(float));
+
+    sctx->partial_sums[ith] = hvx_reduce_sum_f32((const uint8_t *) src, n);
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+}
+
+int op_sum(struct htp_ops_context * octx) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
+
+    if (src0->type != HTP_TYPE_F32) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const struct htp_sum_rows_kernel_params * kparams =
+        (const struct htp_sum_rows_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx > 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t total_elems = (uint32_t) (src0->ne[0] * src0->ne[1] * src0->ne[2] * src0->ne[3]);
+    if (total_elems == 0) {
+        ((float *) dst->data)[0] = 0.0f;
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_hvx         = octx->n_hvx;
+    const uint32_t elems_per_hvx = kparams->elems_per_hvx;
+
+    struct sum_context sctx = {
+        .octx             = octx,
+        .src_data         = (const float *) src0->data,
+        .total_elems      = total_elems,
+        .elems_per_hvx    = elems_per_hvx,
+    };
+
+    work_queue_run(octx->ctx->hvx_queue, sum_thread_f32, &sctx, n_hvx);
+
+    float sum = 0.0f;
+    for (uint32_t i = 0; i < n_hvx; i++) {
+        sum += sctx.partial_sums[i];
+    }
+    ((float *) dst->data)[0] = sum;
+
+    return HTP_STATUS_OK;
+}
+
+static inline void argmax_slice_f32(
+    const float * restrict src,
+    uint32_t n,
+    uint32_t offset,
+    float * out_val,
+    int32_t * out_idx
+) {
+    hvx_argmax_f32(src, n, offset, out_val, out_idx);
+}
+
+struct argmax_context {
+    struct htp_ops_context * octx;
+    const float            * src_data;
+    int32_t                * dst_data;
+    uint32_t                 ne00;
+    uint32_t                 src_stride;
+    uint32_t                 dst_stride;
+    uint32_t                 row_start;
+    uint32_t                 nrows;
+    uint32_t                 rows_per_hvx;
+    uint32_t                 elems_per_hvx;
+
+    float                    partial_max[HTP_MAX_NHVX];
+    int32_t                  partial_idx[HTP_MAX_NHVX];
+};
+
+static void argmax_thread_single_row(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    struct argmax_context * actx = (struct argmax_context *) data;
+    const uint32_t start = actx->elems_per_hvx * ith;
+    const uint32_t end   = MIN(start + actx->elems_per_hvx, actx->ne00);
+
+    if (start >= end) {
+        actx->partial_max[ith] = -INFINITY;
+        actx->partial_idx[ith] = 0;
+        return;
+    }
+
+    const uint32_t n = end - start;
+    const float * src = actx->src_data + start;
+
+    struct htp_thread_trace * tr = th->trace;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+
+    hex_l2fetch_block((const void *) src, n * sizeof(float));
+
+    float max_val;
+    int32_t max_idx;
+    argmax_slice_f32(src, n, start, &max_val, &max_idx);
+
+    actx->partial_max[ith] = max_val;
+    actx->partial_idx[ith] = max_idx;
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) start);
+}
+
+static void argmax_thread_multi_row(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    struct argmax_context * actx = (struct argmax_context *) data;
+    const uint32_t r0 = actx->row_start + actx->rows_per_hvx * ith;
+    const uint32_t r1 = MIN(r0 + actx->rows_per_hvx, actx->row_start + actx->nrows);
+
+    if (r0 >= r1) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = th->trace;
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r0);
+
+    for (uint32_t r = r0; r < r1; r++) {
+        const float * src_row = (const float *) ((const uint8_t *) actx->src_data + r * actx->src_stride);
+        int32_t * dst_val     = (int32_t *) ((uint8_t *) actx->dst_data + r * actx->dst_stride);
+
+        hex_l2fetch_block((const void *) src_row, actx->ne00 * sizeof(float));
+
+        float max_val;
+        int32_t max_idx;
+        argmax_slice_f32(src_row, actx->ne00, 0, &max_val, &max_idx);
+
+        *dst_val = max_idx;
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r0);
+}
+
+int op_argmax(struct htp_ops_context * octx) {
+    const struct htp_tensor * src0 = octx->src[0];
+    const struct htp_tensor * dst  = octx->dst;
+
+    if (src0->type != HTP_TYPE_F32 || dst->type != HTP_TYPE_I32) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    if (htp_tensor_is_extended(src0) || htp_tensor_is_extended(dst)) {
+        return HTP_STATUS_NO_SUPPORT;
+    }
+
+    const struct htp_sum_rows_kernel_params * kparams =
+        (const struct htp_sum_rows_kernel_params *) octx->kernel_params;
+
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
+        return HTP_STATUS_INVAL_PARAMS;
+    }
+
+    const uint32_t ne00 = src0->ne[0];
+    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+
+    if (ne00 == 0 || src0_nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    if (src0_nrows == 1) {
+        if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx > 0) {
+            return HTP_STATUS_OK;
+        }
+
+        if (ne00 == 1) {
+            ((int32_t *) dst->data)[0] = 0;
+            return HTP_STATUS_OK;
+        }
+
+        const uint32_t n_hvx         = octx->n_hvx;
+        const uint32_t elems_per_hvx = kparams->elems_per_hvx;
+
+        struct argmax_context actx = {
+            .octx             = octx,
+            .src_data         = (const float *) src0->data,
+            .dst_data         = (int32_t *) dst->data,
+            .ne00             = ne00,
+            .src_stride       = src0->nb[1] > 0 ? (uint32_t) src0->nb[1] : (uint32_t) (ne00 * sizeof(float)),
+            .dst_stride       = dst->nb[0] > 0 ? (uint32_t) dst->nb[0] : (uint32_t) sizeof(int32_t),
+            .row_start        = 0,
+            .nrows            = 1,
+            .rows_per_hvx     = 1,
+            .elems_per_hvx    = elems_per_hvx,
+        };
+
+        work_queue_run(octx->ctx->hvx_queue, argmax_thread_single_row, &actx, n_hvx);
+
+        float best_val = actx.partial_max[0];
+        int32_t best_idx = actx.partial_idx[0];
+        for (uint32_t i = 1; i < n_hvx; i++) {
+            if (actx.partial_max[i] > best_val) {
+                best_val = actx.partial_max[i];
+                best_idx = actx.partial_idx[i];
+            }
+        }
+        ((int32_t *) dst->data)[0] = best_idx;
+        return HTP_STATUS_OK;
+    }
+
+    uint32_t row_start = 0;
+    uint32_t nrows     = src0_nrows;
+
+    if (octx->ctx->mdev.count > 1) {
+        const bool can_split = htp_tensor_mdev_data_aligned(dst) &&
+                               htp_tensor_is_contiguous(dst, sizeof(int32_t));
+        const uint32_t elems_per_chunk = can_split ? 32 : 0;
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
+            src0_nrows, elems_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        row_start = range.start;
+        nrows     = range.count;
+    }
+
+    if (nrows == 0) {
+        return HTP_STATUS_OK;
+    }
+
+    const uint32_t n_hvx        = octx->n_hvx;
+    const uint32_t rows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
+
+    struct argmax_context actx = {
+        .octx             = octx,
+        .src_data         = (const float *) src0->data,
+        .dst_data         = (int32_t *) dst->data,
+        .ne00             = ne00,
+        .src_stride       = src0->nb[1] > 0 ? (uint32_t) src0->nb[1] : (uint32_t) (ne00 * sizeof(float)),
+        .dst_stride       = dst->nb[0] > 0 ? (uint32_t) dst->nb[0] : (uint32_t) sizeof(int32_t),
+        .row_start        = row_start,
+        .nrows            = nrows,
+        .rows_per_hvx     = rows_per_hvx,
+        .elems_per_hvx    = 0,
+    };
+
+    work_queue_run(octx->ctx->hvx_queue, argmax_thread_multi_row, &actx, n_hvx);
     return HTP_STATUS_OK;
 }

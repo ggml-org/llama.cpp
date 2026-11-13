@@ -6,13 +6,15 @@
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
-		SettingsFooter
+		SettingsFooter,
+		SettingsResetButton
 	} from '$lib/components/app/settings';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
+		SETTINGS_KEYS,
 		SETTINGS_SECTION_SLUGS
 	} from '$lib/constants';
 	import { ColorMode } from '$lib/enums/ui.enums';
@@ -22,11 +24,13 @@
 	import { fade } from 'svelte/transition';
 	interface Props {
 		initialSection?: string;
+		/** Where the phone's section tabs pin, see SettingsChatMobileHeader */
+		mobileHeaderClass?: string;
 		onSectionChange?: (section: SettingsSectionTitle) => void;
 		onClose?: () => void;
 	}
 
-	let { initialSection, onClose, onSectionChange }: Props = $props();
+	let { initialSection, mobileHeaderClass, onClose, onSectionChange }: Props = $props();
 
 	let activeSlug = $derived(initialSection ?? 'general');
 
@@ -46,6 +50,20 @@
 	);
 
 	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
+
+	// inputs hand back strings for numeric fields, so compare stringified values
+	let hasChanges = $derived.by(() => {
+		const saved = settingsStore.config;
+		const keys = new Set([...Object.keys(saved), ...Object.keys(localConfig)]);
+
+		for (const key of keys) {
+			if (String(localConfig[key] ?? '') !== String(saved[key] ?? '')) {
+				return true;
+			}
+		}
+
+		return false;
+	});
 
 	let mobileHeader: { updateCarousel: () => void } | undefined;
 
@@ -70,6 +88,12 @@
 
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
+
+		// discover needs the hub metadata reads: checking it turns the hub on,
+		// unchecking it turns the hub back off, so the checkbox never lies
+		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
+			localConfig[SETTINGS_KEYS.USE_HUGGING_FACE_HUB] = value === true;
+		}
 	}
 
 	function handleReset() {
@@ -139,6 +163,7 @@
 
 		<SettingsChatMobileHeader
 			bind:this={mobileHeader}
+			class={mobileHeaderClass}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
 			onSectionChange={handleSectionChange}
 			sections={SETTINGS_CHAT_SECTIONS}
@@ -161,7 +186,9 @@
 							/>
 
 							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.GENERAL}
-								<div class="flex justify-end">
+								<div class="flex justify-end gap-2">
+									<SettingsResetButton onReset={handleReset} />
+
 									<Button onclick={() => window.location.reload()} variant="outline">
 										<RefreshCw class="h-3 w-3" />
 										Reload app
@@ -172,12 +199,12 @@
 					{/if}
 				</div>
 
-				<div class="mt-8 border-t border-border/30 pt-6">
+				<div class="mt-8 border-t border-border/30 pt-6 pb-6">
 					<p class="text-xs text-muted-foreground">Settings are saved in browser's localStorage</p>
 				</div>
 			</div>
 
-			<SettingsFooter onReset={handleReset} onSave={handleSave} />
+			<SettingsFooter {hasChanges} onSave={handleSave} />
 		</div>
 	</div>
 </div>
