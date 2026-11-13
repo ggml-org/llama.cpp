@@ -1,5 +1,23 @@
 include("ggml/cmake/common.cmake")
 
+# compiles the CUDA kernels in source to PTX and embeds it in the target as <source name>.ptx.hpp
+# the CUDA backend runs the kernels in GGML_OP_CUSTOM nodes, see ggml_cuda_kernel in ggml-cuda.h
+# needs find_package(CUDAToolkit), header is shared with the kernels, the other arguments are flags of nvcc
+function(llama_embed_ptx target source header)
+    get_filename_component(name ${source} NAME_WE)
+    set(ptx ${CMAKE_CURRENT_BINARY_DIR}/${name}.ptx)
+    add_custom_command(
+        OUTPUT  ${ptx}.hpp
+        COMMAND ${CUDAToolkit_NVCC_EXECUTABLE} -ptx ${ARGN} -I ${CMAKE_CURRENT_SOURCE_DIR} -o ${ptx} ${CMAKE_CURRENT_SOURCE_DIR}/${source}
+        COMMAND ${CMAKE_COMMAND} -DINPUT=${ptx} -DOUTPUT=${ptx}.hpp -P ${PROJECT_SOURCE_DIR}/scripts/xxd.cmake
+        DEPENDS ${source} ${header} ${PROJECT_SOURCE_DIR}/scripts/xxd.cmake
+        COMMENT "Compiling ${source} to PTX"
+        VERBATIM
+    )
+    target_sources(${target} PRIVATE ${ptx}.hpp)
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+endfunction()
+
 function(llama_add_compile_flags)
     if (LLAMA_FATAL_WARNINGS)
         if (CMAKE_CXX_COMPILER_ID MATCHES "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")

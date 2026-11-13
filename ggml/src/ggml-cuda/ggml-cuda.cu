@@ -74,7 +74,7 @@
 #include "ggml-cuda/fill.cuh"
 #include "ggml-cuda/lightning-indexer.cuh"
 #include "ggml-cuda/top-k-mask.cuh"
-#include "ggml-cuda/moe-cpu-misses.cuh"
+#include "ggml-cuda/kernel-op.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -918,6 +918,11 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
+    }
+    for (cudaEvent_t event : kernel_op_events) {
+        if (event != nullptr) {
+            CUDA_CHECK(cudaEventDestroy(event));
+        }
     }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
@@ -3057,10 +3062,10 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_top_k_mask(ctx, dst);
             break;
         case GGML_OP_CUSTOM:
-            if (!ggml_cuda_moe_cpu_misses_is_op(dst)) {
+            if (!ggml_cuda_kernel_op_supported(ctx.device, dst)) {
                 return false;
             }
-            ggml_cuda_op_moe_cpu_misses(ctx, dst);
+            ggml_cuda_op_kernel(ctx, dst);
             break;
         default:
             return false;
@@ -5285,8 +5290,8 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 ggml_tensor * node = cgraph->nodes[i];
 #ifdef USE_CUDA_GRAPH
                 // fused nodes are skipped together, so a cut never splits a fusion
-                // a concurrent region must join before its capture can end
-                if (use_cuda_graph && chunk_size > 0 && i >= chunk_end && !is_concurrent_event_active && !ggml_cuda_moe_cpu_misses_fork_open()) {
+                // a concurrent region and the side streams of the kernel ops must join before their capture can end
+                if (use_cuda_graph && chunk_size > 0 && i >= chunk_end && !is_concurrent_event_active && cuda_ctx->kernel_op_side_open == 0) {
                     ggml_cuda_graph_launch_chunk(cuda_ctx, graph, n_chunks++);
                     CUDA_CHECK(cudaStreamBeginCapture(cuda_ctx->stream(), cudaStreamCaptureModeRelaxed));
                     chunk_end = i + chunk_size;
@@ -5371,6 +5376,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     try_launch_concurrent_event(node);
                }
             }
+            GGML_ASSERT(cuda_ctx->kernel_op_side_open == 0 && "a kernel op on a side stream needs a join in the same graph");
         }
 
 #ifdef USE_CUDA_GRAPH
@@ -5529,6 +5535,26 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             }
         }
     };
+
+    // a kernel op on a side stream runs until the next join: keep its tensors allocated until then
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        bool join = false;
+        if (ggml_cuda_kernel_op_stream(cgraph->nodes[i], &join) == 0) {
+            continue;
+        }
+        for (int j = i + 1; j < cgraph->n_nodes && !join; ++j) {
+            ggml_cuda_kernel_op_stream(cgraph->nodes[j], &join);
+            if (!join) {
+                continue;
+            }
+            params->add_alloc_dep(params->user_data, cgraph->nodes[i], cgraph->nodes[j]);
+            for (int k = 0; k < GGML_MAX_SRC; ++k) {
+                if (cgraph->nodes[i]->src[k]) {
+                    params->add_alloc_dep(params->user_data, cgraph->nodes[i]->src[k], cgraph->nodes[j]);
+                }
+            }
+        }
+    }
 
     if (!disable_fusion) {
         // add alloc deps for performance positive fusions. This may increase the overall compute buffer size.
@@ -6007,6 +6033,15 @@ void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
         // clear the error
         (void)cudaGetLastError();
     }
+}
+
+int ggml_backend_cuda_mul_mat_id_skip_max_batch(ggml_backend_t backend, enum ggml_type type) {
+    if (!ggml_backend_is_cuda(backend) || !ggml_is_quantized(type)) {
+        return 0;
+    }
+    // MMVQ writes zero rows for negative ids, MUL_MAT_ID uses it up to this batch size
+    const auto * ctx = (const ggml_backend_cuda_context *) backend->context;
+    return std::min(get_mmvq_mmid_max_batch(type, ggml_cuda_info().devices[ctx->device].cc), MMVQ_MAX_BATCH_SIZE);
 }
 
 
@@ -6686,7 +6721,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_TOP_K_MASK:
             return op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32;
         case GGML_OP_CUSTOM:
-            return ggml_cuda_moe_cpu_misses_is_op(op);
+            return ggml_cuda_kernel_op_supported(dev_ctx->device, op);
 
         default:
             return false;
@@ -6882,8 +6917,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
     }
-    if (strcmp(name, "ggml_moe_cpu_misses_get_api") == 0) {
-        return (void *)ggml_cuda_moe_cpu_misses_get_api;
+    if (strcmp(name, "ggml_backend_cuda_kernel_op") == 0) {
+        return (void *)ggml_cuda_kernel_op_fun();
+    }
+    if (strcmp(name, "ggml_backend_cuda_mul_mat_id_skip_max_batch") == 0) {
+        return (void *)ggml_backend_cuda_mul_mat_id_skip_max_batch;
     }
     return nullptr;
 }

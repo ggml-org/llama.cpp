@@ -1,30 +1,31 @@
 #pragma once
 
-#include "ggml-backend.h"
+#include <stdint.h>
 
-// the MoE cache ops of a backend, obtained with ggml_backend_reg_get_proc_address(reg, "ggml_moe_cpu_misses_get_api")
-// a copy of the definitions in ggml/src/ggml-cuda/moe-cpu-misses.cuh: keep the two the same and bump GGML_MOE_CPU_MISSES_VERSION on a change
-
-// the MoE cache computes the experts that are not in the cache within one graph, with the publish, join and merge ops below
-// the publish op writes the input and the CPU experts of a layer to mapped host memory, then bumps the request counter
-// a CPU thread computes these experts, writes the result and sets the completed counter
-// the merge op waits for the completed counter and adds the CPU result to the result of the device
+// the MoE cache computes the experts that are not in the cache within one graph, with its own kernels (llama-moe-cpu-misses.cu)
+// the CUDA backend runs them in GGML_OP_CUSTOM nodes (see ggml_cuda_kernel in ggml-cuda.h)
+// this file is shared by the kernels and the host (llama-moe-cache.cpp)
 //
-// when the device can read the host experts, the publish op picks the CPU misses like the host plan and caches the other misses itself:
+// the publish kernel writes the input and the CPU experts of a layer to pinned host memory, then bumps the request counter
+// a CPU thread computes these experts, writes the result and sets the completed counter
+// the merge kernel waits for the completed counter and adds the CPU result to the result of the device
+//
+// when the device can read the host experts, the publish kernel picks the CPU misses like the host plan and caches the other misses itself:
 // each takes the next victim slot and is copied there from host memory, the host replays the slots given to the selected experts after the graph
-// without a CPU share there are no CPU misses and no merge op
+// without a CPU share there are no CPU misses and no merge kernel
 
-// the version of these definitions, the backend returns NULL from get_api for another version
-#define GGML_MOE_CPU_MISSES_VERSION 1
+#define LLAMA_MOE_CPU_OK      0
+#define LLAMA_MOE_CPU_STOP    1 // set by the host, the device does not wait for the CPU
+#define LLAMA_MOE_CPU_TIMEOUT 2 // set by the device, the CPU did not answer in time
 
-#define GGML_MOE_CPU_OK      0
-#define GGML_MOE_CPU_STOP    1 // set by the host, the device does not wait for the CPU
-#define GGML_MOE_CPU_TIMEOUT 2 // set by the device, the CPU did not answer in time
+#define LLAMA_MOE_CPU_MAX_BANKS 4
 
-#define GGML_MOE_CPU_MAX_BANKS 4
+#define LLAMA_MOE_CPU_BLOCK_SIZE 256
+// blocks per bank of the miss copy: PCIe saturates with a few KiB in flight, more blocks only take DRAM bandwidth from the kernels that run beside it
+#define LLAMA_MOE_CPU_COPY_BLOCKS 1
 
 // the counters are on separate cache lines
-struct ggml_moe_cpu_request {
+struct llama_moe_cpu_request {
     uint32_t request;   // set by the device after it wrote the request
     uint32_t pad0[15];
     uint32_t completed; // set to request by the CPU after it wrote the result
@@ -36,9 +37,9 @@ struct ggml_moe_cpu_request {
     uint32_t pad2[12];
 };
 
-// the parameters of the publish and merge ops of a layer, in host memory, the pointers are device pointers
-struct ggml_moe_cpu_layer {
-    struct ggml_moe_cpu_request * req;
+// the parameters of the kernels of a layer, the pointers are device pointers
+struct llama_moe_cpu_layer {
+    struct llama_moe_cpu_request * req;
     int32_t * ids;      // [n_used, n_tokens] experts of the CPU, -1 for the experts of the device
     float   * input;    // [n_embd, n_tokens]
     float   * output;   // [n_embd, n_used, n_tokens] result of the CPU
@@ -68,49 +69,36 @@ struct ggml_moe_cpu_layer {
     int32_t      n_expert;  // row size of maps
     int32_t      n_ids_max; // most selected experts of one ubatch (n_used*n_tokens), sizes the miss and hit lists in lru
     int32_t      n_banks;
-    char *       bank[GGML_MOE_CPU_MAX_BANKS];
-    const char * host[GGML_MOE_CPU_MAX_BANKS]; // host experts of the layer, read by the device
-    int64_t      size[GGML_MOE_CPU_MAX_BANKS]; // bytes of one expert
+    char *       bank[LLAMA_MOE_CPU_MAX_BANKS];
+    const char * host[LLAMA_MOE_CPU_MAX_BANKS]; // host experts of the layer, read by the device
+    int64_t      size[LLAMA_MOE_CPU_MAX_BANKS]; // bytes of one expert
 };
 
-struct ggml_moe_cpu_misses_api {
-    // mapped host memory, returns the device pointer and sets *host, nullptr on failure
-    void * (*alloc)(ggml_backend_t backend, size_t size, void ** host);
-    void   (*free)(void * host);
-
-    // true if the device can read the host memory at ptr
-    bool   (*host_readable)(const void * ptr);
-
-    // the address of the data of a tensor (on the device or in readable host memory) for the parameters of the ops, nullptr on failure
-    // NULL: the data pointer
-    void * (*addr)(ggml_backend_t backend, const struct ggml_tensor * t);
-
-    // the most tokens for which MUL_MAT_ID with experts of this type writes zero rows for negative ids,
-    // so that the misses can be computed in a second pass (see join), 0 for none, NULL: no join op
-    int    (*max_two_pass)(ggml_backend_t backend, enum ggml_type type);
-
-    bool cpu_part; // a CPU share of the misses: the merge op and the CPU requests
-
-    // the ops are GGML_OP_CUSTOM ops (ggml_custom_4d) with one of these as fun and the ggml_moe_cpu_layer of the layer as userdata,
-    // the backend recognizes and computes them, the CPU backend aborts if it gets one
-    //
-    // publish: args ids   [n_used, n_tokens] i32, selected experts
-    //               cur   [n_embd, n_tokens] f32, input of the experts
-    //               map   [n_expert]         i32, view of the device slot maps at the layer, slot of each expert, -1 if not cached
-    //               state [1 + n_layer]      i32, request counters in device memory
-    //          res  [n_used, n_tokens] i32, slot of each selected expert, zero slots for the experts of the CPU
-    //               two pass: [n_used, n_tokens, 2], the slots of the hits and the zero slots of the CPU (-1 for the misses that the device caches),
-    //               then the slots of the misses that the device caches (-1 for the others)
-    // join:    args slots [n_used, n_tokens] i32, the second plane of publish
-    //          res  the same slots, once the misses are copied
-    // merge:   args experts [n_embd, n_used, n_tokens] f32, result of the cached experts, the experts of the CPU read zero slots
-    //               slots, the result of publish, the first plane with two passes
-    //               state
-    //          res  experts plus the result of the CPU
-    ggml_custom_op_t publish;
-    ggml_custom_op_t join;
-    ggml_custom_op_t merge;
+// the last argument of each kernel, after the data of the node and of its arguments
+//
+// llama_moe_cpu_publish, llama_moe_cpu_publish_dev (the device caches the misses):
+//          args ids   [n_used, n_tokens] i32, selected experts
+//               cur   [n_embd, n_tokens] f32, input of the experts
+//               map   [n_expert]         i32, view of the device slot maps at the layer, slot of each expert, -1 if not cached
+//               state [1 + n_layer]      i32, request counters in device memory
+//          res  [n_used, n_tokens] i32, slot of each selected expert, zero slots for the experts of the CPU
+//               two pass: [n_used, n_tokens, 2], the slots of the hits and the zero slots of the CPU (-1 for the misses that the device caches),
+//               then the slots of the misses that the device caches (-1 for the others)
+// llama_moe_cpu_copy: copies the misses that publish_dev cached to their slots, after publish_dev (its argument)
+// llama_moe_cpu_book: the bookkeeping of publish_dev that its slots do not need, after publish_dev (its argument)
+//          with two passes both run on side streams, next to the hits pass
+// llama_moe_cpu_join (two pass):
+//          args slots [n_used, n_tokens] i32, the second plane of publish_dev, then the copy and book nodes
+//          res  the same slots, once the misses are copied
+// llama_moe_cpu_merge:
+//          args experts [n_embd, n_used, n_tokens] f32, result of the cached experts, the experts of the CPU read zero slots
+//               slots, the result of publish, the first plane with two passes
+//               state
+//          res  experts plus the result of the CPU
+struct llama_moe_cpu_kernel_params {
+    struct llama_moe_cpu_layer layer;
+    int32_t n_used;   // experts per token
+    int32_t n_tokens;
+    int32_t n_embd;   // publish: elements of cur, merge: row size of experts
+    int32_t two_pass;
 };
-
-// version: GGML_MOE_CPU_MISSES_VERSION of the caller, NULL if the backend has another version
-typedef const struct ggml_moe_cpu_misses_api * (*ggml_moe_cpu_misses_get_api_t)(int version);

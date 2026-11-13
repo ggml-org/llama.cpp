@@ -1364,6 +1364,10 @@ struct ggml_backend_cuda_context {
 
     int curr_stream_no = 0;
 
+    // kernel ops (see kernel-op.cuh): bit i is set while side stream i runs kernels that did not join, [0] fork event, [i] join event of side stream i
+    uint32_t    kernel_op_side_open = 0;
+    cudaEvent_t kernel_op_events[4] = {};
+
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)

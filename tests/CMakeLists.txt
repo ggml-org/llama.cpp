@@ -364,6 +364,19 @@ if (GGML_METAL AND NOT GGML_BACKEND_DL)
     target_include_directories(test-metal-graph-optimize PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/ggml/src/ggml-metal)
 endif()
 
+if (GGML_CUDA)
+    find_package(CUDAToolkit)
+    if (CUDAToolkit_FOUND)
+        # kernels of the user in GGML_OP_CUSTOM nodes, also without CUDA graphs and with a graph cut at each node
+        llama_build_and_test(test-cuda-kernel-op.cpp  LABEL "main behavior backend"  LINK ggml)
+        llama_embed_ptx(test-cuda-kernel-op test-cuda-kernel-op.cu test-cuda-kernel-op.h)
+        llama_test(test-cuda-kernel-op  NAME test-cuda-kernel-op-no-graphs  LABEL "main behavior backend")
+        set_tests_properties(test-cuda-kernel-op-no-graphs PROPERTIES ENVIRONMENT "GGML_CUDA_DISABLE_GRAPHS=1")
+        llama_test(test-cuda-kernel-op  NAME test-cuda-kernel-op-chunks  LABEL "main behavior backend")
+        set_tests_properties(test-cuda-kernel-op-chunks PROPERTIES ENVIRONMENT "GGML_CUDA_GRAPH_CHUNK_SIZE=1")
+    endif()
+endif()
+
 llama_build(test-backend-ops.cpp LINK ggml Threads::Threads)
 
 llama_build_and_test(test-backend-tensor.cpp LINK ggml)

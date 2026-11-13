@@ -72,6 +72,20 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 find_package(Threads REQUIRED)
 target_link_libraries(llama PUBLIC ggml PRIVATE Threads::Threads)
 
+# the kernels of the MoE cache for the CUDA backend, compiled to PTX and embedded (see llama-moe-cpu-misses.h)
+if (GGML_CUDA)
+    find_package(CUDAToolkit)
+    if (CUDAToolkit_FOUND)
+        # same math flags as the backend, and nanosleep needs sm_70: the default of the older toolkits is lower
+        set(LLAMA_MOE_PTX_FLAGS -use_fast_math)
+        if (CUDAToolkit_VERSION VERSION_LESS "13.0")
+            list(APPEND LLAMA_MOE_PTX_FLAGS -arch=sm_70)
+        endif()
+        llama_embed_ptx(llama llama-moe-cpu-misses.cu llama-moe-cpu-misses.h ${LLAMA_MOE_PTX_FLAGS})
+        target_compile_definitions(llama PRIVATE LLAMA_MOE_CACHE_CUDA)
+    endif()
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
