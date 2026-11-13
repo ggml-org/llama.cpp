@@ -685,11 +685,14 @@ static bool htp_kparams_solve_hmx_mm(
     int m_for_solver        = ne11;
     int m_for_solver_padded = ne11_padded;
     if (!is_matmul_id && mdev_count > 1 && ((uint32_t) ne11 >= mdev_count)) {
-        const bool dst_row_split = dst ? htp_can_row_partition(dst) : true;
-        const bool act_row_split = htp_can_row_partition(act);
-        if (dst_row_split && act_row_split) {
-            m_for_solver        = (ne11 + (int) mdev_count - 1) / (int) mdev_count;
-            m_for_solver_padded = hex_round_up(std::max(m_for_solver, 32), 32);
+        const uint32_t rows_per_chunk = dst ? htp_mdev_rows_per_chunk(dst) : 1;
+        const uint32_t total_chunks   = rows_per_chunk ? ((uint32_t) ne11 / rows_per_chunk) : 0;
+        if (total_chunks >= mdev_count) {
+            const uint32_t chunks_per_mdev = (total_chunks + mdev_count - 1) / mdev_count;
+            const uint32_t m_dev0          = chunks_per_mdev * rows_per_chunk;
+            const uint32_t m_last          = (uint32_t) ne11 > (mdev_count - 1) * m_dev0 ? (uint32_t) ne11 - (mdev_count - 1) * m_dev0 : 0;
+            m_for_solver                   = (int) std::max(m_dev0, m_last);
+            m_for_solver_padded            = hex_round_up(std::max(m_for_solver, 32), 32);
         }
     }
     const bool pipeline       = is_matmul_id ? false : htp_mm_hmx_pipeline(m_for_solver);

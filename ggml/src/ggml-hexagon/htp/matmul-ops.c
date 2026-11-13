@@ -2961,17 +2961,17 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
     int m_start = 0;
     int m_rows  = m;
     if (octx->ctx->mdev.count > 1) {
-        bool can_split = htp_tensor_can_row_partition(act, act_elem_size);
-        if (can_split) {
-            for (uint32_t p = 0; p < n_weights; ++p) {
-                const struct htp_tensor * restrict dst = octx->dsts[p];
-                if (!htp_tensor_can_row_partition(dst, sizeof(float))) {
-                    can_split = false;
-                    break;
-                }
+        uint32_t rows_per_chunk = 1;
+        for (uint32_t p = 0; p < n_weights; ++p) {
+            const struct htp_tensor * restrict dst = octx->dsts[p];
+            uint32_t dst_rpc = 0;
+            if (!htp_tensor_mdev_rows_per_chunk(dst, sizeof(float), dst->ne[0] * sizeof(float), &dst_rpc)) {
+                rows_per_chunk = 0;
+                break;
             }
+            rows_per_chunk = MAX(rows_per_chunk, dst_rpc);
         }
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         m_start = (int) range.start;
         m_rows  = (int) range.count;
     }
@@ -3646,12 +3646,12 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     int m_start = 0;
     int m_rows  = m_total;
     if (octx->ctx->mdev.count > 1) {
-        bool can_split = htp_tensor_can_row_partition(dst, sizeof(float)) &&
-                         htp_tensor_can_row_partition(act, act_elem_size);
-        if (src2 && src2->ne[1] > 1 && !htp_tensor_can_row_partition(src2, sizeof(float))) {
-            can_split = false;
+        uint32_t rows_per_chunk = 0;
+        if ((dst->ne[2] <= 1 || (dst->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0) &&
+            (dst->ne[3] <= 1 || (dst->nb[3] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0)) {
+            htp_tensor_mdev_rows_per_chunk(dst, sizeof(float), dst->ne[0] * sizeof(float), &rows_per_chunk);
         }
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m_total, can_split ? 1 : 0, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition((uint32_t) m_total, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         m_start = (int) range.start;
         m_rows  = (int) range.count;
     }
@@ -3667,8 +3667,9 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
     size_t src2_nb3 = 0;
     if (src2) {
         src2_stride = (src2->ne[1] == 1) ? 0 : (uint32_t) (src2->nb[1] / sizeof(float));
-        src2_addr = src2->data + m_start * src2_stride * sizeof(float);
-        src2_bytes = (size_t) kparams->vtcm_bias_size;
+        src2_addr = src2->data + (size_t) m_start * src2_stride * sizeof(float);
+        const size_t slice_bytes = (src2->ne[1] == 1) ? src2->nb[1] : (size_t) m_rows * src2->nb[1];
+        src2_bytes = MIN((size_t) kparams->vtcm_bias_size, slice_bytes);
         src2_nb2 = (src2->ne[2] == 1) ? 0 : src2->nb[2];
         src2_nb3 = (src2->ne[3] == 1) ? 0 : src2->nb[3];
     }
