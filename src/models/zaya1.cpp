@@ -40,8 +40,8 @@ void llama_model_zaya1::load_arch_tensors(llama_model_loader &) {
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
-    res_scale_in   = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "weight"), {n_embd}, 0);
-    res_scale_in_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "bias"),   {n_embd}, 0);
+    res_scale_in   = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "weight", 0), {n_embd}, 0);
+    res_scale_in_b = create_tensor(tn(LLM_TENSOR_RES_SCALE_IN, "bias",   0), {n_embd}, 0);
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
