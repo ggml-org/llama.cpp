@@ -5,6 +5,8 @@
 #   - no --speculative-config (the recipes use DFlash / MTP; the llama.cpp runs use no drafting)
 #   - no reasoning / tool-call parsers (AIPerf counts tokens from the server's usage)
 #   - --max-num-seqs and --max-model-len follow each config, as llama.cpp's -np and per-slot context do
+#   - --max-num-batched-tokens 2048, as llama.cpp's -ub 2048 (vLLM's default was 8192 on GB10, Flash-Next's recipe 4096)
+#   - serving runs with --no-enable-prefix-caching (suite.yaml serving.vllm_args), as llama.cpp runs it with -cram 0 -ctxcp 0
 # Not a deviation, but a difference: the recipes use an FP8 KV cache, llama.cpp uses f16.
 
 kind: weekly
@@ -51,6 +53,8 @@ models:
       - '{"linear_backend":"nvfp4_dynamic","nvfp4_dynamic_max_tokens":16,"unquantized_linear_backend":"flashinfer_cudnn","linear_backend_per_quant":{"fp8_w8a8":"cutlass"}}'
       - --compilation-config
       - '{"pass_config":{"fuse_act_quant":true},"max_cudagraph_capture_size":64}'
+      - --max-num-batched-tokens
+      - "2048"
     suites: [serving, agentic]
 
   # no NVIDIA recipe for INT4: the 27B recipe's image and flags, minus the NVFP4 --kernel-config,
@@ -75,6 +79,8 @@ models:
       - "0.60"
       - --compilation-config
       - '{"pass_config":{"fuse_act_quant":true},"max_cudagraph_capture_size":64}'
+      - --max-num-batched-tokens
+      - "2048"
     suites: [serving, agentic]
 
   M2-vllm-fp4local:
@@ -127,8 +133,9 @@ models:
       - "16"
       - --load-format
       - b12x
+      # recipe: 4096
       - --max-num-batched-tokens
-      - "4096"
+      - "2048"
       - --gdn-decode-kernel
       - b12x
       - --linear-backend

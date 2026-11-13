@@ -506,7 +506,8 @@ class Server:
 
 class VllmServer(Server):
     # `vllm serve` in docker, set up the way NVIDIA's DGX Spark recipe runs it, minus the deviations in weekly.yaml
-    def __init__(self, ctx: Context, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path):
+    def __init__(self, ctx: Context, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path,
+                 extra: list[str] | None = None):
         self.ctx = ctx
         self.log_path = log_path
         self.proc = None
@@ -526,7 +527,9 @@ class VllmServer(Server):
         cmd += ["--entrypoint", "vllm", image, "serve", f"{hf_mount}/{hf_snapshot_rel(model)}",
                 "--served-model-name", "bench", "--host", "127.0.0.1", "--port", str(ctx.port),
                 "--max-num-seqs", str(slots), "--max-model-len", str(slot_tokens),
-                *[str(a) for a in model.get("args") or []]]
+                *[str(a) for a in model.get("args") or []],
+                # last, so a suite's flags win over the recipe's
+                *[str(a) for a in extra or []]]
         self.cmd = cmd
 
     def before_start(self) -> None:
@@ -557,13 +560,15 @@ class VllmServer(Server):
         return hits / queries if queries > 0 else None
 
 
-def make_server(ctx: Context, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path,
+def make_server(ctx: Context, suite: str, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path,
                 extra: list[str] | None = None) -> Server:
-    # the same shape for both engines: `slots` parallel sequences of up to `slot_tokens` tokens each
+    # the same shape for both engines: `slots` parallel sequences of up to `slot_tokens` tokens each;
+    # a suite adds its own flags per engine (`server_args` for llama-server, `vllm_args` for vLLM)
+    scfg = ctx.cfg["suites"][suite]
     if engine_of(model) == "vllm":
-        return VllmServer(ctx, name, model, slots, slot_tokens, log_path)
+        return VllmServer(ctx, name, model, slots, slot_tokens, log_path, scfg.get("vllm_args"))
     args = [*ctx.cfg["server"]["args"], "-m", str(model_path(ctx.home, model)),
-            "-np", str(slots), "-c", str(slots * slot_tokens), *(extra or [])]
+            "-np", str(slots), "-c", str(slots * slot_tokens), *(scfg.get("server_args") or []), *(extra or [])]
     return Server(ctx, args, log_path)
 
 
@@ -749,7 +754,7 @@ def suite_speedbench(ctx: Context, records: list[dict[str, Any]], name: str, mod
                 return metrics
 
             config = f"spec-{spec}_c{c}"
-            server = make_server(ctx, name, model, c, scfg["ctx_per_slot"], ctx.out_dir / "speedbench" / name / f"server_{config}.log",
+            server = make_server(ctx, "speedbench", name, model, c, scfg["ctx_per_slot"], ctx.out_dir / "speedbench" / name / f"server_{config}.log",
                                  resolve_spec(ctx, model, spec))
             run_group(ctx, records, "speedbench", name, model, server, [(config, fn)])
 
@@ -822,7 +827,7 @@ def suite_serving(ctx: Context, records: list[dict[str, Any]], name: str, model:
 
             points.append((f"depth{depth}_isl{isl}_osl{osl}_c{c}", fn))
         per_slot = max(slot_ctx(s["isl"] + s["depth"] + osl) for s in scfg["shapes"])
-        server = make_server(ctx, name, model, c, per_slot, ctx.out_dir / "serving" / name / f"server_c{c}.log")
+        server = make_server(ctx, "serving", name, model, c, per_slot, ctx.out_dir / "serving" / name / f"server_c{c}.log")
         run_group(ctx, records, "serving", name, model, server, points)
 
 
@@ -854,7 +859,7 @@ def suite_agentic(ctx: Context, records: list[dict[str, Any]], name: str, model:
 
         per_slot = slot_ctx(max(r["input_length"] + r["output_length"] for r in rows))
         config = f"mooncake_{Path(trace).stem.split('_')[0]}_osl{cap}"
-        server = make_server(ctx, name, model, scfg["slots"], per_slot, ctx.out_dir / "agentic" / name / f"server_{config}.log")
+        server = make_server(ctx, "agentic", name, model, scfg["slots"], per_slot, ctx.out_dir / "agentic" / name / f"server_{config}.log")
         run_group(ctx, records, "agentic", name, model, server, [(config, fn)])
 
 

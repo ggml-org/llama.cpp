@@ -14,7 +14,8 @@ server:
   health_timeout_s: 600
   # idle wait before every llama-server, llama-bench and llama-perplexity start, the first one included
   cooldown_s: 60
-  args: [-ngl, "999", -fa, "on", --jinja, --metrics, --alias, bench]
+  # every llama-server except decision's; -ub 2048 matches llama-bench and vLLM's --max-num-batched-tokens 2048 (weekly.yaml)
+  args: [-ngl, "999", -fa, "on", -ub, "2048", --backend-sampling, --jinja, --metrics, --alias, bench]
 
 models:
   M3:
@@ -97,6 +98,8 @@ suites:
     spec: [none, mtp, dflash]
     concurrency: [1, 4]
     extra_inputs: {temperature: 1.0, top_p: 0.95, top_k: 20, seed: 42}
+    # no host prompt cache, no context checkpoints
+    server_args: [-cram, "0", -ctxcp, "0"]
     timeout_s: 1800
 
   serving:
@@ -108,7 +111,11 @@ suites:
     concurrency: [1, 4, 8]
     requests: {1: 16, 4: 16, 8: 32}
     warmup: 2
-    timeout_s: 1800
+    # caches off on both engines: every request processes its whole prompt, the 32k shared prefix included
+    server_args: [-cram, "0", -ctxcp, "0"]
+    vllm_args: [--no-enable-prefix-caching]
+    # with no prefix reuse, the 32k-depth configs take far longer
+    timeout_s: 3600
 
   # Mooncake trace replay, one turn after the other (timestamps are ignored)
   agentic:
@@ -118,7 +125,8 @@ suites:
     # some turns ask for 35k output tokens; cap them so one night stays in budget
     max_output_tokens: 256
     block_size: 512
-    # both traces are one agent session (each turn extends the previous), so one slot keeps the prefix cached
+    # both traces are one agent session (each turn extends the previous), so one slot keeps the prefix cached;
+    # caches stay on here, since prefix reuse is what this suite measures
     slots: 1
     timeout_s: 3600
 
@@ -129,7 +137,7 @@ suites:
 
   decision:
     # Laya evaluates the whole prompt in one batch: -ub must hold the longest prompt
-    args: [-ngl, "999", -np, "16", -ub, "8192", -b, "8192", -c, "65536", --metrics]
+    args: [-ngl, "999", -np, "16", -ub, "8192", -b, "8192", -c, "65536", --backend-sampling, --metrics]
     state_tokens: [64, 512, 2048]
     concurrency: [1, 4, 16]
     warmup: 8

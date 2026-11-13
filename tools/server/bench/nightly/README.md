@@ -58,7 +58,7 @@ vLLM only: each vLLM row is shown next to the llama.cpp row of its paired nightl
 | `M2-vllm-fp4local` | M2 | `nvidia/Qwen3.8-Flash-Next-FP4-Local` | NVIDIA recipe `qwen/qwen3.8-flash-next/dgx-spark/linux/vllm/fp4-local` (community b12x image) |
 
 - **Images:** each week prefetch reads the image of each column from [NVIDIA's DGX Spark recipes](https://nvidia.github.io/local-ai-inference-recipes/hardware/dgx-spark/index.html), so the weekly follows NVIDIA's updates. It falls back to the `image` in `weekly.yaml` when the catalog can't be read. Each run records the digest, the vLLM version and the kernel/backend lines from the server log.
-- **Flags:** copied from the recipes, minus speculative decoding and the reasoning/tool parsers (the llama.cpp runs use neither), with `--max-num-seqs` / `--max-model-len` per config. Prefetch warns when a recipe was re-validated after the flags were copied (`recipe_validated_at`).
+- **Flags:** copied from the recipes, minus speculative decoding and the reasoning/tool parsers (the llama.cpp runs use neither), with `--max-num-seqs` / `--max-model-len` per config and `--max-num-batched-tokens 2048` (llama.cpp runs `-ub 2048`). Serving runs with prefix caching off on both engines (`serving.vllm_args` / `serving.server_args` in `suite.yaml`). Prefetch warns when a recipe was re-validated after the flags were copied (`recipe_validated_at`).
 - **Known difference:** vLLM runs with an FP8 KV cache (as the recipes do), llama.cpp with f16.
 - **Inputs and schedule:** `workflow_dispatch` takes optional `columns`, `suites`, `configs`, `vllm_image` (`COLUMN=IMAGE` overrides) and `resume` inputs. The Saturday schedule only runs when `SPARK_BENCH_WEEKLY` is `true`, and it queues behind that night's nightly.
 
@@ -67,4 +67,4 @@ vLLM only: each vLLM row is shown next to the llama.cpp row of its paired nightl
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --config tools/server/bench/nightly/weekly.yaml --home /opt/llama-nightly --models M3-vllm-nvfp4 --configs 'depth0_*_c1'
 ```
 
-Not covered: backend-sampling runs, the greedy spec on/off check, the decision accuracy set, vLLM with speculative decoding, SGLang, llama.cpp NVFP4 GGUFs, the rolling-baseline compare and the dashboard.
+Not covered: the greedy spec on/off check, the decision accuracy set, vLLM with speculative decoding, SGLang, llama.cpp NVFP4 GGUFs, the rolling-baseline compare and the dashboard.
