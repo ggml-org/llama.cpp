@@ -59,7 +59,7 @@ public:
     ggml_tensor * build_experts(const llm_graph_context & g, const llama_moe_cache_lookup & lookup,
             ggml_tensor * cur, ggml_tensor * selected_experts, llama_moe_cache_build_experts_t build, void * user_data) const;
 
-    // weight or input scales of w in cache-slot order, or the original per-tensor scale
+    // weight or input scales of w on the cache device: in cache-slot order, or a copy of the per-tensor scale
     ggml_tensor * get_scales(const ggml_tensor * w, llama_moe_cache_scale kind) const;
 
     // ggml_backend_sched copy callback, returns false if src is not a slot map
