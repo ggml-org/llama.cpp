@@ -1,6 +1,6 @@
 # OpenVINO backend environment variables for development
 
-The variables for users, and the rules for values, are in [docs/backend/OPENVINO.md](../../../../docs/backend/OPENVINO.md#ggml-openvino-backend-runtime-configurations). This file lists the other `GGML_OPENVINO_*` variables. They are for debugging, comparisons and experiments, and they can change or be removed.
+The variables for users, and the rules for values, are in [docs/backend/OPENVINO.md](../../../../docs/backend/OPENVINO.md#runtime-configuration). This file lists the other `GGML_OPENVINO_*` variables. They are for debugging, comparisons and experiments, and they can change or be removed.
 
 ## Debug output
 
@@ -14,6 +14,8 @@ The variables for users, and the rules for values, are in [docs/backend/OPENVINO
 | `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | all | Boolean | `0` | Print the tensor address map once. |
 | `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` | all | Boolean | `0` | Log each op that the backend does not support, with the tensor details and the reason. |
 | `GGML_OPENVINO_DISABLE_CACHE` | all | Boolean | `0` | Turn the in-process cache of compiled models and decoders off. |
+| `GGML_OPENVINO_FULL_GRAPH_KEY` | all | Boolean | `0` | Add the external inputs of a graph to the key of the in-process cache. By default the key is the node count and the names of the first and last nodes. Use it when two different graphs could share that key. |
+| `GGML_OPENVINO_LOG_SWA_LAYERS` | all | Boolean | `0` | Log the attention extent of each layer and which layers use sliding-window attention, on an `ov-swa:` line at the WARN level. |
 | `GGML_OPENVINO_NPUW_DUMP_SUBS` | NPU | String | `not set` | Dump NPUW subgraphs: `YES` (all), `MIN` (unique function bodies), `last`, or indices such as `0,2`. |
 | `GGML_OPENVINO_NPUW_DUMP_SUBS_DIR` | NPU | String | `not set` | Directory for the NPUW subgraph dumps. |
 | `GGML_OPENVINO_NPUW_DUMP_SUBS_ON_FAIL` | NPU | String | `not set` | Passed to OpenVINO unchanged as `NPUW_DUMP_SUBS_ON_FAIL`. |
@@ -48,6 +50,9 @@ Each variable turns off an optimization that is on by default, or sets its stren
 | `GGML_OPENVINO_MOE_OP` | GPU | Boolean | `1` | `0` keeps the unfused GatherMatmul path for mixture-of-experts layers. |
 | `GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK` | CPU, GPU | Boolean | `0` | By default the model reads the sequence count and the attended KV length from the shape of the KQ mask, so the GPU plugin can select its fused attention kernel. `1` passes them as separate inputs. |
 | `GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT` | CPU, GPU | Boolean | `0` | Stateful execution only. By default the sequence axis of the KV state is moved so that new tokens are appended in place. `1` keeps the original layout. |
+| `GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS` | GPU | Boolean | `0` | By default an output tensor in a GPU buffer is bound directly to the infer request when its shape and type match. `1` turns this off. |
+| `GGML_OPENVINO_DISABLE_FUSED_RECURRENCE` | GPU | Boolean | `0` | Stateless execution only, with an OpenVINO build newer than 2026.4.1 (2026.4.1 does not build the fusion). By default the recurrent-state cache updates (Qwen3.5, LFM2) are fused into the OpenVINO model. `1` keeps the separate copies. |
+| `GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN` | GPU | Boolean | `0` | By default the operands of an element-wise op get the same rank, which works around a GPU plugin defect when the op is fused into RMS norm (gemma-4 in stateful execution gave wrong output). `1` turns the workaround off. |
 
 ```bash
 # Find out whether an optimization causes a wrong result: turn it off and compare the output
@@ -67,6 +72,9 @@ These options are off by default. They are not validated for general use: some h
 | `GGML_OPENVINO_NPU_REQUANT_POLICY` | NPU | String | `group-128` | Layout of requantized weights: `group-128` (`Q4_0_128`) or `channel-wise` (`Q4_0_C`, lower accuracy). |
 | `GGML_OPENVINO_GDN_DECOMPOSE_CHUNK` | all | Integer | `16` | Tokens in one chunk when `GGML_OPENVINO_GDN_DECOMPOSE` is on. A power of 2 from 2 to 128; other values use `16`. |
 | `GGML_OPENVINO_GDN_NATIVE_STATE` | NPU | Boolean | `0` | Keep the `GATED_DELTA_NET` state in the layout of the OpenVINO op instead of the GGML layout. Every `GATED_DELTA_NET` must then run on the OpenVINO backend; the load aborts if one would run on the CPU backend. Saved states and `GGML_OPENVINO_DEBUG_NODE` dumps hold the OpenVINO layout. `test-backend-ops` fails with it. |
+| `GGML_OPENVINO_FORCE_STATIC` | CPU, GPU | Boolean | `0` | Run the static-shape path of the NPU on the CPU or the GPU, to separate translation bugs from NPU plugin or driver problems. Cannot be used with `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY`. |
+| `GGML_OPENVINO_ENABLE_FALLBACK` | all | Boolean | `0` | Detect graphs that the scheduler splits between OpenVINO and another backend, and translate them as partial graphs, without the compiled model cache. By default every graph is treated as a complete model graph. Cannot be used with `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY`. |
+| `GGML_OPENVINO_NATIVE_SOFTPLUS` | all | Boolean | `0` | Translate `SOFTPLUS` to the OpenVINO `SoftPlus` op instead of the default `relu(x) + log(1 + exp(-abs(x)))`. |
 | `GGML_OPENVINO_KV_SCATTER_ELEMENTS` | all | Boolean | `0` | Use `ScatterElementsUpdate` instead of `ScatterUpdate` for single-row KV writes in stateless execution. |
 | `GGML_OPENVINO_ENABLE_KV_4D` | GPU | Boolean | `0` | Bind the KV cache as `[1, ctx, n_heads_kv, head_size]`, so the GPU plugin can update and read it in place. Needs an OpenVINO build newer than 2026.4.1; do not use it with 2026.4.1. |
 | `GGML_OPENVINO_MEMORY_OPTIMIZE` | all | Boolean | `0` | Turn on `GGML_OPENVINO_REDUCE_COMPILE_MEM` and, on GPU, `GGML_OPENVINO_RELEASE_WEIGHTS`, unless they are set. |
