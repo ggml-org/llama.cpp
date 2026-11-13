@@ -87,6 +87,7 @@
 /src/llama-graph.*                      @CISC
 /src/llama-model.*                      @CISC
 /src/llama-vocab.*                      @CISC
+/src/llama-moe-cache.*                  @am17an
 /src/models/                            @ggml-org/llama-models
 /tests/                                 @ggerganov
 /tests/test-chat.*                      @pwilkin

@@ -3175,4 +3175,199 @@ template void forward_get_rows<int16_t>(ggml_compute_params * params, ggml_tenso
 template void forward_concat<int32_t>(ggml_compute_params * params, ggml_tensor * op);
 template void forward_concat<int16_t>(ggml_compute_params * params, ggml_tensor * op);
 
+static inline float rvv_dot_f32(const float * x, const float * y, int64_t n) {
+    size_t       vl   = __riscv_vsetvlmax_e32m4();
+    vfloat32m4_t vsum = __riscv_vfmv_v_f_f32m4(0.0f, vl);
+    for (int64_t i = 0; i < n; i += vl) {
+        vl                 = __riscv_vsetvl_e32m4(n - i);
+        vfloat32m4_t ax    = __riscv_vle32_v_f32m4(x + i, vl);
+        vfloat32m4_t ay    = __riscv_vle32_v_f32m4(y + i, vl);
+        vsum               = __riscv_vfmacc_vv_f32m4_tu(vsum, ax, ay, vl);
+    }
+    vl              = __riscv_vsetvlmax_e32m4();
+    vfloat32m1_t vs = __riscv_vfmv_v_f_f32m1(0.0f, 1);
+    vs              = __riscv_vfredusum_vs_f32m4_f32m1(vsum, vs, vl);
+    return __riscv_vfmv_f_s_f32m1_f32(vs);
+}
+
+static void forward_gated_delta_net_one_chunk(
+    const ggml_compute_params * params,
+    ggml_tensor * dst,
+    int64_t ir0,
+    int64_t ir1) {
+
+    ggml_tensor * src_q     = dst->src[0];
+    ggml_tensor * src_k     = dst->src[1];
+    ggml_tensor * src_v     = dst->src[2];
+    ggml_tensor * src_g     = dst->src[3];
+    ggml_tensor * src_beta  = dst->src[4];
+    ggml_tensor * src_state = dst->src[5];
+
+    const int64_t S_v      = src_v->ne[0];
+    const int64_t H        = src_v->ne[1];
+    const int64_t n_tokens = src_v->ne[2];
+    const int64_t n_seqs   = src_v->ne[3];
+
+    GGML_ASSERT(ggml_is_contiguous_rows(src_q));
+    GGML_ASSERT(ggml_is_contiguous_rows(src_k));
+    GGML_ASSERT(ggml_is_contiguous_rows(src_v));
+    GGML_ASSERT(ggml_is_contiguous(src_g));
+    GGML_ASSERT(ggml_is_contiguous(src_beta));
+    GGML_ASSERT(ggml_is_contiguous(src_state));
+
+    GGML_ASSERT(src_g->ne[0] == 1 || src_g->ne[0] == S_v);
+    GGML_ASSERT(src_beta->ne[0] == 1);
+
+    GGML_TENSOR_LOCALS(int64_t, neq, src_q, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbq, src_q, nb);
+    GGML_TENSOR_LOCALS(int64_t, nek, src_k, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbk, src_k, nb);
+    GGML_TENSOR_LOCALS(int64_t, nev, src_v, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbv, src_v, nb);
+    GGML_TENSOR_LOCALS(int64_t, neg, src_g, ne);
+    GGML_TENSOR_LOCALS(size_t,  nbg, src_g, nb);
+    GGML_TENSOR_LOCALS(size_t,  nbb, src_beta, nb);
+
+    const bool kda = (neg0 == S_v);
+
+    const int64_t K = ggml_get_op_params_i32(dst, 0);
+    GGML_ASSERT(K >= 1);
+    const int64_t state_seq_stride = src_state->nb[3] / sizeof(float);
+
+    const int64_t per_thread = S_v + (K > 1 ? S_v * S_v : 0);
+    const int ith = params->ith;
+
+    float * delta      = (float *) params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
+    float * state_work = K > 1 ? (delta + S_v) : nullptr;
+
+    const int64_t attn_score_elems    = S_v * H * n_tokens * n_seqs;
+    const int64_t state_size_per_snap = S_v * S_v * H * n_seqs;
+    float * attn_out_base  = (float *) dst->data;
+    float * state_out_base = (float *) dst->data + attn_score_elems;
+
+    const float * state_in_base = (const float *) src_state->data;
+
+    const int64_t rq3 = nev3 / neq3;
+    const int64_t rk3 = nev3 / nek3;
+
+    const float scale = 1.0f / sqrtf((float) S_v);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t iv1 = ir % H;
+        const int64_t iv3 = ir / H;
+
+        const int64_t iq1 = iv1 % neq1;
+        const int64_t ik1 = iv1 % nek1;
+
+        const int64_t iq3 = iv3 / rq3;
+        const int64_t ik3 = iv3 / rk3;
+
+        float * s_out = (K > 1)
+            ? state_work
+            : state_out_base + (iv3 * H + iv1) * S_v * S_v;
+
+        const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
+        memcpy(s_out, s_in, S_v * S_v * sizeof(float));
+
+        float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
+
+        for (int64_t t = 0; t < n_tokens; t++) {
+            const float * q_d = (const float *) ((const char *) src_q->data + iq3 * nbq3 + t * nbq2 + iq1 * nbq1);
+            const float * k_d = (const float *) ((const char *) src_k->data + ik3 * nbk3 + t * nbk2 + ik1 * nbk1);
+            const float * v_d = (const float *) ((const char *) src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
+
+            const float beta_val = *(const float *) ((const char *) src_beta->data + iv3 * nbb3 + t * nbb2 + iv1 * nbb1);
+            const float * g_d    = (const float *) ((const char *) src_g->data + iv3 * nbg3 + t * nbg2 + iv1 * nbg1);
+
+            if (kda) {
+                for (int64_t i = 0; i < S_v; ++i) {
+                    delta[i] = expf(g_d[i]);
+                }
+                for (int64_t j = 0; j < S_v; ++j) {
+                    float * row = s_out + j * S_v;
+                    const float * d = delta;
+                    int64_t remaining = S_v;
+                    while (remaining > 0) {
+                        const size_t vl = __riscv_vsetvl_e32m4(remaining);
+                        vfloat32m4_t vr = __riscv_vle32_v_f32m4(row, vl);
+                        vfloat32m4_t vd = __riscv_vle32_v_f32m4(d, vl);
+                        vr = __riscv_vfmul_vv_f32m4(vr, vd, vl);
+                        __riscv_vse32_v_f32m4(row, vr, vl);
+                        row += vl;
+                        d += vl;
+                        remaining -= vl;
+                    }
+                }
+            } else {
+                const float gate = expf(g_d[0]);
+                float * p = s_out;
+                int64_t remaining = S_v * S_v;
+                while (remaining > 0) {
+                    const size_t vl = __riscv_vsetvl_e32m4(remaining);
+                    vfloat32m4_t v = __riscv_vle32_v_f32m4(p, vl);
+                    v = __riscv_vfmul_vf_f32m4(v, gate, vl);
+                    __riscv_vse32_v_f32m4(p, v, vl);
+                    p += vl;
+                    remaining -= vl;
+                }
+            }
+
+            for (int64_t j = 0; j < S_v; ++j) {
+                const float sum = rvv_dot_f32(s_out + j * S_v, k_d, S_v);
+                delta[j] = (v_d[j] - sum) * beta_val;
+            }
+
+            for (int64_t j = 0; j < S_v; ++j) {
+                float * row = s_out + j * S_v;
+                const float * k = k_d;
+                const float dj = delta[j];
+                int64_t remaining = S_v;
+                while (remaining > 0) {
+                    const size_t vl = __riscv_vsetvl_e32m4(remaining);
+                    vfloat32m4_t vr = __riscv_vle32_v_f32m4(row, vl);
+                    vfloat32m4_t vk = __riscv_vle32_v_f32m4(k, vl);
+                    vr = __riscv_vfmacc_vf_f32m4(vr, dj, vk, vl);
+                    __riscv_vse32_v_f32m4(row, vr, vl);
+                    row += vl;
+                    k += vl;
+                    remaining -= vl;
+                }
+            }
+
+            for (int64_t j = 0; j < S_v; ++j) {
+                const float sum = rvv_dot_f32(s_out + j * S_v, q_d, S_v);
+                attn_data[j] = sum * scale;
+            }
+
+            attn_data += S_v * H;
+
+            if (K > 1) {
+                const int64_t target_slot = n_tokens - 1 - t;
+                if (target_slot >= 0 && target_slot < K) {
+                    float * curr_state_o = state_out_base + target_slot * state_size_per_snap +
+                                     (iv3 * H + iv1) * S_v * S_v;
+                    memcpy(curr_state_o, s_out, S_v * S_v * sizeof(float));
+                }
+            }
+        }
+    }
+}
+
+void forward_gated_delta_net_f32(ggml_compute_params * params, ggml_tensor * dst) {
+    ggml_tensor * src_v = dst->src[2];
+
+    int ith = params->ith;
+    int nth = params->nth;
+
+    const auto nr              = src_v->ne[1] * src_v->ne[3];
+    const auto task_per_thread = (nr + nth - 1) / nth;
+
+    const auto task_begin = ith * task_per_thread;
+    const auto task_end   = std::min((ith + 1) * task_per_thread, nr);
+
+    if (task_begin < task_end) {
+        forward_gated_delta_net_one_chunk(params, dst, task_begin, task_end);
+    }
+}
+
 }  // namespace spacemit_kernels::rvv

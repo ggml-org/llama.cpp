@@ -26,6 +26,6 @@
 	</ContextMenu.Trigger>
 
 	<ContextMenu.Content class="z-[999999] w-48">
-		<MenuActionsList {actions} kind={MenuKind.CONTEXT} />
+		<MenuActionsList {actions} kind={MenuKind.CONTEXT} onClose={() => (open = false)} />
 	</ContextMenu.Content>
 </ContextMenu.Root>

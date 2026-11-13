@@ -10,7 +10,7 @@
 #include "htp-vtcm.h"
 
 struct htp_sort_kernel_params {
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t order;             // GGML_SORT_ORDER_ASC (0) or GGML_SORT_ORDER_DESC (1)
     uint32_t is_top_k;          // 1 if TOP_K, 0 if ARGSORT
     uint32_t chunk_elems;
@@ -31,7 +31,7 @@ struct htp_sort_vtcm_layout {
     uint32_t chunk_elems;
     uint32_t n_chunks;
     uint32_t merge_elems;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t n_slots;
 };
 
@@ -41,14 +41,14 @@ static inline void htp_sort_vtcm_layout_build(
     uint32_t chunk_elems,
     uint32_t n_chunks,
     uint32_t merge_elems,
-    uint32_t n_threads,
+    uint32_t n_hvx,
     uint32_t n_slots) {
 
     memset(L, 0, sizeof(*L));
     L->chunk_elems = chunk_elems;
     L->n_chunks    = n_chunks;
     L->merge_elems = merge_elems;
-    L->n_threads   = n_threads;
+    L->n_hvx       = n_hvx;
     L->n_slots     = n_slots;
 
     const size_t values_size  = ((chunk_elems * sizeof(float)) + 127) & ~127;
@@ -57,7 +57,7 @@ static inline void htp_sort_vtcm_layout_build(
 
     size_t off = 0;
     if (total_rows > 1) {
-        VTCM_LAYOUT_ALLOC(off, off_phase1, L->phase1_slot_size * n_slots * n_threads);
+        VTCM_LAYOUT_ALLOC(off, off_phase1, L->phase1_slot_size * n_slots * n_hvx);
     } else {
         VTCM_LAYOUT_ALLOC(off, off_phase1, L->phase1_slot_size * n_chunks * n_slots);
         const size_t merge_values_size  = ((merge_elems * sizeof(float)) + 127) & ~127;
@@ -73,14 +73,14 @@ static inline bool htp_sort_solve_layout(
     uint32_t ne00,
     uint32_t total_rows,
     uint32_t k,
-    uint32_t n_threads_max,
+    uint32_t n_hvx_max,
     size_t vtcm_budget,
     bool is_top_k) {
 
     memset(layout, 0, sizeof(*layout));
 
     if (total_rows > 1) {
-        uint32_t n_threads = total_rows < n_threads_max ? total_rows : n_threads_max;
+        uint32_t n_hvx = total_rows < n_hvx_max ? total_rows : n_hvx_max;
 
         uint32_t n_vec = (ne00 + 31) / 32;
         uint32_t n_vec_pow2 = 1;
@@ -96,13 +96,13 @@ static inline bool htp_sort_solve_layout(
             n_slots = 1;
         }
 
-        size_t spad_per_thread = spad_per_slot * n_slots;
+        size_t spad_per_hvx = spad_per_slot * n_slots;
 
-        while (n_threads > 1 && (spad_per_thread * n_threads) > vtcm_budget) {
-            n_threads--;
+        while (n_hvx > 1 && (spad_per_hvx * n_hvx) > vtcm_budget) {
+            n_hvx--;
         }
 
-        htp_sort_vtcm_layout_build(layout, total_rows, ne00_padded, 1, 0, n_threads, n_slots);
+        htp_sort_vtcm_layout_build(layout, total_rows, ne00_padded, 1, 0, n_hvx, n_slots);
         return layout->total_bytes <= vtcm_budget;
     }
 
@@ -112,7 +112,7 @@ static inline bool htp_sort_solve_layout(
 
     uint32_t n_chunks = 1;
     if (ne00 > 1024) {
-        while (n_chunks * 2 <= n_threads_max && n_chunks * 2 <= n_vec_pow2) {
+        while (n_chunks * 2 <= n_hvx_max && n_chunks * 2 <= n_vec_pow2) {
             n_chunks *= 2;
         }
     }

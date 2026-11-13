@@ -26,7 +26,8 @@ struct server_tool {
         std::function<bool()> alive;
         void push(const std::string & chunk);
     };
-    virtual json invoke(json params, stream * st = nullptr) const = 0;
+    // should_stop: true once the caller stopped waiting, e.g. the client dropped the connection; a null should_stop means "never stop"
+    virtual json invoke(json params, stream * st = nullptr, const std::function<bool()> & should_stop = nullptr) const = 0;
 
     json to_json() const;
 };

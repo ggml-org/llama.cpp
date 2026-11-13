@@ -542,11 +542,15 @@ std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
 
     add((new field_num("top_k", task.tts_inp.data.top_k))
         ->set_limits(0, INT32_MAX)
-        ->set_desc("Top-k for the acoustic code predictor, 0 to use the model default"));
+        ->set_desc("Top-k for the backbone sampler and the acoustic code predictor, 0 to use the defaults"));
 
     add((new field_num("top_p", task.tts_inp.data.top_p))
         ->set_limits(0.0f, 1.0f)
-        ->set_desc("Top-p for the acoustic code predictor, 0.0 to use the model default"));
+        ->set_desc("Top-p for the backbone sampler and the acoustic code predictor, 0.0 to use the defaults"));
+
+    add((new field_num("temperature", task.tts_inp.data.temp))
+        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
+        ->set_desc("Temperature for the backbone sampler and the audio frames, for models that support it, 0.0 = greedy"));
 
     add((new field_num("seed", task.tts_inp.data.seed))
         ->set_desc("RNG seed for the backbone sampler and the codec/vocoder (-1 = random)"));
@@ -573,6 +577,7 @@ void eval_tts_schema(const common_params & params_base, server_task & task, cons
     task.params.n_predict = -1;
     task.tts_inp.data.top_k = 0;
     task.tts_inp.data.top_p = 0.0f;
+    task.tts_inp.data.temp  = -1.0f; // not given: --temp for the backbone, model default for the audio
     task.tts_inp.data.seed  = params_base.sampling.seed;
 
     field_eval_context ctx(task.params);

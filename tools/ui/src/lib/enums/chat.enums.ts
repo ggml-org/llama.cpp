@@ -91,13 +91,3 @@ export enum FileMentionEntryType {
 	DIRECTORY = 'directory',
 	FILE = 'file'
 }
-
-/**
- * Kinds of tokens the chat-form-input-rich produces.
- */
-export enum ChatFormInputRichTokenKind {
-	BADGE = 'badge',
-	CODE_BLOCK = 'code_block',
-	CODE_INLINE = 'code_inline',
-	TEXT = 'text'
-}
