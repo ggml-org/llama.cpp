@@ -1,7 +1,6 @@
 -r ../../requirements/requirements-convert_legacy_llama.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
-pillow~=11.3.0; python_version < "3.15"
-pillow~=12.3.0; python_version >= "3.15"
+pillow~=12.3.0
 
 torch==2.11.0; python_version < "3.15" # check_requirements: ignore "=="
 torch==2.15.0; python_version >= "3.15" # check_requirements: ignore "=="
