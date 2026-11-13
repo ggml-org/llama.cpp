@@ -1080,6 +1080,15 @@ class GGUFWriter:
     def add_has_confidence_head(self, value: bool) -> None:
         self.add_bool(Keys.LLM.HAS_CONFIDENCE_HEAD.format(arch=self.arch), value)
 
+    def add_log_snr_conditioning(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.LOG_SNR_CONDITIONING.format(arch=self.arch), value)
+
+    def add_min_log_snr(self, value: float) -> None:
+        self.add_float32(Keys.LLM.MIN_LOG_SNR.format(arch=self.arch), value)
+
+    def add_max_log_snr(self, value: float) -> None:
+        self.add_float32(Keys.LLM.MAX_LOG_SNR.format(arch=self.arch), value)
+
     def add_target_layers(self, value: Sequence[int]) -> None:
         self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
 

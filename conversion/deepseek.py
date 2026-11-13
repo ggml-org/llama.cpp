@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 
@@ -938,6 +939,10 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
         "markov_head.markov_w1.weight": (gguf.MODEL_TENSOR.DSPARK_MARKOV_W1, ".weight"),
         "markov_head.markov_w2.weight": (gguf.MODEL_TENSOR.DSPARK_MARKOV_W2, ".weight"),
         "confidence_head.proj.weight": (gguf.MODEL_TENSOR.DSPARK_CONF_PROJ, ".weight"),
+        "log_snr_embed.fc1.weight": (gguf.MODEL_TENSOR.DSPARK_LOG_SNR_FC1, ".weight"),
+        "log_snr_embed.fc1.bias": (gguf.MODEL_TENSOR.DSPARK_LOG_SNR_FC1, ".bias"),
+        "log_snr_embed.fc2.weight": (gguf.MODEL_TENSOR.DSPARK_LOG_SNR_FC2, ".weight"),
+        "log_snr_embed.fc2.bias": (gguf.MODEL_TENSOR.DSPARK_LOG_SNR_FC2, ".bias"),
     }
 
     def __init__(self, *args, **kwargs):
@@ -1035,6 +1040,31 @@ class DeepseekV4DSparkModel(DeepseekV4Model):
 
         self.gguf_writer.add_block_size(self.hparams["dspark_block_size"])
         self.gguf_writer.add_target_layers([layer + 1 for layer in self.hparams["dspark_target_layer_ids"]])
+        self._add_log_snr_conditioning()
+
+    def _add_log_snr_conditioning(self) -> None:
+        cfg = self.hparams.get("dflash_config") or self.hparams.get("dspark_config") or {}
+        if "log_snr_conditioning" not in cfg and "log_snr_conditioning" not in self.hparams:
+            return
+
+        log_snr = bool(cfg.get("log_snr_conditioning", self.hparams.get("log_snr_conditioning", False)))
+        self.gguf_writer.add_log_snr_conditioning(log_snr)
+        if not log_snr:
+            return
+
+        if not any("log_snr_embed.fc1.weight" in name for name in self.model_tensors):
+            raise ValueError("log_snr_conditioning is enabled but log_snr_embed.fc1.weight is missing")
+
+        min_log_snr = cfg.get("min_log_snr", self.hparams.get("min_log_snr"))
+        max_log_snr = cfg.get("max_log_snr", self.hparams.get("max_log_snr"))
+        if min_log_snr is None or max_log_snr is None:
+            raise ValueError("log_snr_conditioning is enabled but min_log_snr/max_log_snr are missing")
+        min_log_snr = float(min_log_snr)
+        max_log_snr = float(max_log_snr)
+        if not (math.isfinite(min_log_snr) and math.isfinite(max_log_snr) and max_log_snr > min_log_snr):
+            raise ValueError("log_snr_conditioning has invalid min_log_snr/max_log_snr bounds")
+        self.gguf_writer.add_min_log_snr(min_log_snr)
+        self.gguf_writer.add_max_log_snr(max_log_snr)
 
 
 @ModelBase.register("DeepseekV4ForCausalLM")

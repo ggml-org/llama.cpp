@@ -1691,6 +1691,16 @@ class TensorNameMap:
             "model.confidence_head.proj", # dspark
         ),
 
+        MODEL_TENSOR.DSPARK_LOG_SNR_FC1: (
+            "model.log_snr_embed.fc1",
+            "log_snr_embed.fc1",
+        ),
+
+        MODEL_TENSOR.DSPARK_LOG_SNR_FC2: (
+            "model.log_snr_embed.fc2",
+            "log_snr_embed.fc2",
+        ),
+
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE: (
             "model.layers.{bid}.attention_conv.base_kernel",
         ),
