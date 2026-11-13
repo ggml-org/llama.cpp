@@ -258,7 +258,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     uint32_t n_ff    = 384;
     uint32_t n_layer = 2;
     if (arch == LLM_ARCH_INKLING2) {
-        n_embd = 32;
+        n_embd = 128;
         n_head = 4;
         n_ff = 24;
         n_layer = 3;
