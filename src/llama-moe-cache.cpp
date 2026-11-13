@@ -1,5 +1,6 @@
 #include "llama-moe-cache.h"
 
+#include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
 #include "llama-model.h"
@@ -635,6 +636,7 @@ struct llama_moe_cache::impl {
         }
     }
 
+    // the device that caches layer il
     ggml_backend_t backend(int32_t il) const {
         return devices[groups[layers[il].ig].id].backend;
     }
@@ -684,6 +686,8 @@ struct llama_moe_cache::impl {
         }
     }
 
+    // the slot map of layer il, if its experts can be read from the cache for n_tokens tokens, nullptr otherwise
+    // cpu_part: the graph computes the misses in the CPU map of the layer (see get_cpu_map)
     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used, bool cpu_part) const {
         if (il < 0 || il >= (int32_t) layers.size() || layers[il].ig < 0) {
             return nullptr;
@@ -698,6 +702,8 @@ struct llama_moe_cache::impl {
         return cpu_part ? l.slot_map_cpu : l.slot_map;
     }
 
+    // the experts of layer il computed on the CPU: I32 [1, n_expert] in host memory, e for these experts, -1 for the others
+    // nullptr if no misses of layer il are computed on the CPU for ubatches of n_tokens tokens
     ggml_tensor * get_cpu_map(int32_t il, int64_t n_tokens) const {
         if (il < 0 || il >= (int32_t) layers.size() || layers[il].cpu_map == nullptr) {
             return nullptr;
@@ -791,7 +797,7 @@ struct llama_moe_cache::impl {
             }
         }
         GGML_ASSERT(ggml_is_contiguous(sel));
-        GGML_ASSERT(sel->op == GGML_OP_RESHAPE); // of the [n_expert_used, n_tokens] ids, see build_moe_cache_slots
+        GGML_ASSERT(sel->op == GGML_OP_RESHAPE); // of the [n_expert_used, n_tokens] ids, see build_lookup
 
         const int32_t n_used = (int32_t) sel->src[0]->ne[0];
 
@@ -878,20 +884,82 @@ llama_moe_cache::llama_moe_cache(const llama_model & model, bool no_alloc, const
 
 llama_moe_cache::~llama_moe_cache() = default;
 
-ggml_backend_t llama_moe_cache::backend(int32_t il) const {
-    return pimpl->backend(il);
-}
-
-ggml_tensor * llama_moe_cache::get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used, bool cpu_part) const {
-    return pimpl->get_slot_map(il, n_tokens, n_expert_used, cpu_part);
-}
-
 ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
     return pimpl->get_experts(w);
 }
 
-ggml_tensor * llama_moe_cache::get_cpu_map(int32_t il, int64_t n_tokens) const {
-    return pimpl->get_cpu_map(il, n_tokens);
+llama_moe_cache_lookup llama_moe_cache::build_lookup(const llm_graph_context & g, const llama_moe_cache_layer & layer, ggml_tensor * selected_experts) const {
+    const int32_t il = layer.il;
+    ggml_context * ctx0 = g.ctx0;
+
+    // part of the misses may be computed from the host experts, but not with weights before the FFN, LoRAs or rotated experts
+    bool cpu_part = !layer.weight_before_ffn && g.loras->empty();
+    for (ggml_tensor * w : { layer.up_exps, layer.gate_exps, layer.down_exps, layer.gate_up_exps }) {
+        cpu_part = cpu_part && !(w != nullptr && g.hdmd != nullptr && g.hdmd->rot.count(w) > 0);
+    }
+
+    ggml_tensor * cpu_map  = cpu_part ? pimpl->get_cpu_map(il, selected_experts->ne[1]) : nullptr;
+    ggml_tensor * slot_map = pimpl->get_slot_map(il, selected_experts->ne[1], selected_experts->ne[0], cpu_map != nullptr);
+    if (slot_map == nullptr) {
+        return {};
+    }
+    for (ggml_tensor * w : { layer.up_exps, layer.gate_exps, layer.down_exps, layer.gate_up_exps }) {
+        if (w == nullptr) {
+            continue;
+        }
+        ggml_tensor * experts = pimpl->get_experts(w);
+        if (experts == nullptr) {
+            return {};
+        }
+        // the device of the cache must compute the matmul, else the scheduler copies the cache to another backend
+        ggml_tensor * b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, experts->ne[0], w == layer.down_exps ? selected_experts->ne[0] : 1, selected_experts->ne[1]);
+        if (!ggml_backend_supports_op(pimpl->backend(il), ggml_mul_mat_id(ctx0, experts, b, selected_experts))) {
+            return {};
+        }
+    }
+
+    ggml_tensor * ids = selected_experts;
+    if (!ggml_is_contiguous(ids)) {
+        ids = ggml_cont(ctx0, ids);
+    }
+    ids = ggml_reshape_1d(ctx0, ids, ggml_nelements(ids));
+
+    // the slot map is a host weight, so the scheduler starts a new split here and copies it with the copy callback
+    // the callback reads the selected experts, uploads the missing ones and updates the slot map
+    ggml_tensor * slots = ggml_get_rows(ctx0, slot_map, ids); // [1, n_expert_used*n_tokens]
+    if (!ggml_backend_supports_op(pimpl->backend(il), slots)) {
+        return {};
+    }
+    ggml_backend_sched_set_tensor_backend(g.sched, slots, pimpl->backend(il));
+    g.cb(slots, "ffn_moe_slots", il);
+
+    // add the lookup now: the transform of a Hadamard-folded expert reads host weights and would start its split first
+    ggml_build_forward_expand(g.gf, slots);
+
+    // the misses computed from the host experts, read after the lookup has picked them
+    ggml_tensor * cpu_ids = nullptr;
+    if (cpu_map != nullptr) {
+        cpu_ids = ggml_get_rows(ctx0, cpu_map, ids); // [1, n_expert_used*n_tokens]
+        cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, selected_experts->ne[0], selected_experts->ne[1]);
+    }
+
+    return { il, ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]), cpu_ids };
+}
+
+ggml_tensor * llama_moe_cache::build_experts(const llm_graph_context & g, const llama_moe_cache_lookup & lookup,
+        ggml_tensor * cur, ggml_tensor * selected_experts, llama_moe_cache_build_experts_t build, void * user_data) const {
+    GGML_ASSERT(lookup.slots != nullptr);
+
+    ggml_tensor * experts = build(cur, selected_experts, lookup.slots, true, user_data);
+    if (lookup.cpu_ids != nullptr) {
+        // the cached experts and the misses computed from the host experts, each reads the others as zero
+        // the cached experts come first in the graph, so that they are computed while the misses are
+        ggml_build_forward_expand(g.gf, experts);
+        experts = ggml_add(g.ctx0, experts, build(cur, selected_experts, lookup.cpu_ids, false, user_data));
+        g.cb(experts, "ffn_moe_down_merged", lookup.il);
+    }
+
+    return experts;
 }
 
 bool llama_moe_cache::copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {

@@ -99,7 +99,7 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
     ctx_params.n_threads_batch = n_threads;
     auto *context = llama_init_from_model(g_model, ctx_params);
     if (context == nullptr) {
-        LOGe("%s: llama_new_context_with_model() returned null)", __func__);
+        LOGe("%s: llama_init_from_model() returned null)", __func__);
     }
     return context;
 }

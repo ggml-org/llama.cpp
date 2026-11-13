@@ -133,12 +133,11 @@ struct llama_context {
     bool get_h_nextn_rows(int64_t row0, int64_t n_rows, float * out);
     bool set_h_nextn_rows(int64_t row0, int64_t n_rows, const float * data);
 
-    // state rows read from the h_nextn device buffer of src, see llama_set_embd_state_src()
-    bool set_state_src(llama_context * src);
+    // state rows read from the h_nextn device buffer of ctx_src, see llama_set_ctx_state_src()
+    bool set_ctx_state_src(llama_context * ctx_src);
     bool supports_state_row() const;
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
-    void set_warmup(bool value);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
