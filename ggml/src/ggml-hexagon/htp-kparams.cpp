@@ -2259,7 +2259,7 @@ static bool htp_kparams_solve_ssm_scan(
     const struct ggml_tensor * C  = op->src[5];
 
     if (s->type != GGML_TYPE_F32 || x->type != GGML_TYPE_F32 || dt->type != GGML_TYPE_F32 || A->type != GGML_TYPE_F32 ||
-        B->type != GGML_TYPE_F32 || C->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+        B->type != GGML_TYPE_F32 || C->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -2276,12 +2276,9 @@ static bool htp_kparams_solve_ssm_scan(
         return false;
     }
 
-    const uint8_t  kernel_type = (n_tokens == 1) ? HTP_SSM_SCAN_KERNEL_DECODE : HTP_SSM_SCAN_KERNEL_PREFILL;
     const uint8_t  fast_step4  = (n_a == 1 && (d_state & 31U) == 0) ? 1 : 0;
     const uint32_t sess_hvx    = htp_session_n_hvx(sess);
     const size_t   vtcm_size   = htp_session_vtcm_size(sess);
-    uint32_t       row_tile    = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
-    uint32_t       token_tile  = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
 
     const uint64_t y_token_stride = (uint64_t) n_head * head_dim * sizeof(float);
     const uint64_t y_seq_stride   = (uint64_t) n_tokens * y_token_stride;
@@ -2290,44 +2287,88 @@ static bool htp_kparams_solve_ssm_scan(
         return false;
     }
 
+    const bool can_use_hmx = (htp_session_n_hmx(sess) > 0) &&
+                             (n_tokens >= HTP_SSM_SCAN_HMX_TOKEN_TILE) &&
+                             (n_a == 1) &&
+                             (K == 1) &&
+                             (d_state >= 32U && d_state <= HTP_SSM_SCAN_HMX_MAX_DIM && (d_state & 31U) == 0) &&
+                             (head_dim >= 32U && head_dim <= HTP_SSM_SCAN_HMX_MAX_DIM && (head_dim & 31U) == 0);
+
     struct htp_ssm_scan_vtcm_layout layout;
-    for (;;) {
-        const uint32_t n_row_blocks = (head_dim + row_tile - 1) / row_tile;
-        const uint64_t total_units  = (uint64_t) n_seqs * n_head * n_row_blocks;
-        if (total_units > UINT32_MAX) {
-            return false;
-        }
+    bool hmx_selected = false;
 
-        kparams->kernel_type     = kernel_type;
-        kparams->fast_step4      = fast_step4;
-        kparams->row_tile        = (uint16_t) row_tile;
-        kparams->token_tile      = (uint16_t) token_tile;
-        kparams->n_chunks        = (n_tokens + token_tile - 1) / token_tile;
-        kparams->d_state         = d_state;
-        kparams->n_a             = n_a;
-        kparams->head_dim        = head_dim;
-        kparams->n_tokens        = n_tokens;
-        kparams->n_seqs          = n_seqs;
-        kparams->K               = K;
-        kparams->heads_per_group = n_head / n_group;
-        kparams->n_row_blocks    = n_row_blocks;
-        kparams->group_units     = kparams->heads_per_group * n_row_blocks;
-        kparams->units_per_seq   = n_head * n_row_blocks;
-        kparams->total_units     = (uint32_t) total_units;
-        kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
-        kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
-
-        htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, kparams->n_hvx);
-        if (layout.total_bytes <= vtcm_size) {
-            break;
+    if (can_use_hmx) {
+        const uint64_t total_units = (uint64_t) n_seqs * n_head;
+        if (total_units <= UINT32_MAX) {
+            const uint32_t n_hvx = (std::min)(sess_hvx, (uint32_t) total_units);
+            htp_ssm_scan_vtcm_layout_build(&layout, d_state, head_dim, HTP_SSM_SCAN_HMX_TOKEN_TILE, n_hvx, true);
+            if (layout.total_bytes <= vtcm_size) {
+                kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_HMX_CHUNKED;
+                kparams->fast_step4      = fast_step4;
+                kparams->row_tile        = (uint16_t) head_dim;
+                kparams->token_tile      = (uint16_t) HTP_SSM_SCAN_HMX_TOKEN_TILE;
+                kparams->n_chunks        = (n_tokens + HTP_SSM_SCAN_HMX_TOKEN_TILE - 1) / HTP_SSM_SCAN_HMX_TOKEN_TILE;
+                kparams->d_state         = d_state;
+                kparams->n_a             = n_a;
+                kparams->head_dim        = head_dim;
+                kparams->n_tokens        = n_tokens;
+                kparams->n_seqs          = n_seqs;
+                kparams->K               = K;
+                kparams->heads_per_group = n_head / n_group;
+                kparams->n_row_blocks    = 1;
+                kparams->group_units     = kparams->heads_per_group;
+                kparams->units_per_seq   = n_head;
+                kparams->total_units     = (uint32_t) total_units;
+                kparams->n_hvx           = (uint16_t) n_hvx;
+                kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
+                hmx_selected             = true;
+            }
         }
-        if (row_tile > 1) {
-            row_tile = (row_tile > 4) ? ((row_tile / 2) & ~3U) : 1U;
-        } else if (token_tile > 1) {
-            token_tile /= 2;
-        } else {
-            kparams->kernel_type = HTP_SSM_SCAN_KERNEL_UNSUPPORTED;
-            return false;
+    }
+
+    if (!hmx_selected) {
+        const uint8_t kernel_type = (n_tokens == 1) ? HTP_SSM_SCAN_KERNEL_DECODE : HTP_SSM_SCAN_KERNEL_PREFILL;
+        uint32_t      row_tile    = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
+        uint32_t      token_tile  = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+
+        for (;;) {
+            const uint32_t n_row_blocks = (head_dim + row_tile - 1) / row_tile;
+            const uint64_t total_units  = (uint64_t) n_seqs * n_head * n_row_blocks;
+            if (total_units > UINT32_MAX) {
+                return false;
+            }
+
+            kparams->kernel_type     = kernel_type;
+            kparams->fast_step4      = fast_step4;
+            kparams->row_tile        = (uint16_t) row_tile;
+            kparams->token_tile      = (uint16_t) token_tile;
+            kparams->n_chunks        = (n_tokens + token_tile - 1) / token_tile;
+            kparams->d_state         = d_state;
+            kparams->n_a             = n_a;
+            kparams->head_dim        = head_dim;
+            kparams->n_tokens        = n_tokens;
+            kparams->n_seqs          = n_seqs;
+            kparams->K               = K;
+            kparams->heads_per_group = n_head / n_group;
+            kparams->n_row_blocks    = n_row_blocks;
+            kparams->group_units     = kparams->heads_per_group * n_row_blocks;
+            kparams->units_per_seq   = n_head * n_row_blocks;
+            kparams->total_units     = (uint32_t) total_units;
+            kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
+            kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
+
+            htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, kparams->n_hvx, false);
+            if (layout.total_bytes <= vtcm_size) {
+                break;
+            }
+            if (row_tile > 1) {
+                row_tile = (row_tile > 4) ? ((row_tile / 2) & ~3U) : 1U;
+            } else if (token_tile > 1) {
+                token_tile /= 2;
+            } else {
+                kparams->kernel_type = HTP_SSM_SCAN_KERNEL_UNSUPPORTED;
+                return false;
+            }
         }
     }
 

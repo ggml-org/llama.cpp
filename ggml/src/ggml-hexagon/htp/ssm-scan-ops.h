@@ -10,11 +10,14 @@
 
 #define HTP_SSM_SCAN_ROW_TILE_DEFAULT   32U
 #define HTP_SSM_SCAN_TOKEN_TILE_DEFAULT 32U
+#define HTP_SSM_SCAN_HMX_TOKEN_TILE     64U
+#define HTP_SSM_SCAN_HMX_MAX_DIM        128U
 
 enum htp_ssm_scan_kernel_type {
     HTP_SSM_SCAN_KERNEL_UNSUPPORTED = 0,
     HTP_SSM_SCAN_KERNEL_DECODE      = 1,
     HTP_SSM_SCAN_KERNEL_PREFILL     = 2,
+    HTP_SSM_SCAN_KERNEL_HMX_CHUNKED = 3,
 };
 
 struct htp_ssm_scan_kernel_params {
@@ -70,6 +73,18 @@ struct htp_ssm_scan_vtcm_layout {
     size_t off_A[2];
     size_t off_y[2];
 
+    size_t off_hmx_scales;
+    size_t off_hmx_c_row;
+    size_t off_hmx_b_t_col;
+    size_t off_hmx_b_col;
+    size_t off_hmx_s_t_col;
+    size_t off_hmx_q_m;
+    size_t off_hmx_y_tiles;
+    size_t off_hmx_x_tilde_col;
+    size_t off_hmx_x_hat_t_row;
+    size_t off_hmx_L;
+    size_t off_hmx_p;
+
     size_t state_row_stride;
     size_t xy_row_stride;
     size_t bytes_per_hvx;
@@ -81,7 +96,8 @@ static inline void htp_ssm_scan_vtcm_layout_build(
     uint32_t d_state,
     uint32_t row_tile,
     uint32_t token_tile,
-    uint32_t n_hvx
+    uint32_t n_hvx,
+    bool use_hmx
 ) {
     const size_t state_row_stride  = hex_align_up((size_t) d_state * sizeof(float), 128);
     const size_t state_slot_bytes  = (size_t) row_tile * state_row_stride;
@@ -101,6 +117,43 @@ static inline void htp_ssm_scan_vtcm_layout_build(
         layout->off_dt[i]        = off; off += scalar_slot_bytes;
         layout->off_A[i]         = off; off += a_slot_bytes;
         layout->off_y[i]         = off; off += xy_slot_bytes;
+    }
+
+    if (use_hmx) {
+        const size_t n_ds_tiles      = (size_t) (d_state / 32U);
+        const size_t n_d_tiles       = (size_t) (row_tile / 32U);
+        const size_t tile_64x64_sz   = 2U * 2U * 2048U;
+        const size_t tile_64xds_sz   = 2U * n_ds_tiles * 2048U;
+        const size_t tile_64xd_sz    = 2U * n_d_tiles * 2048U;
+        const size_t tile_dxds_sz    = n_d_tiles * n_ds_tiles * 2048U;
+        const size_t l_f32_sz        = 64U * 64U * sizeof(float);
+        const size_t p_f32_sz        = hex_align_up(4U * 64U * sizeof(float), 2048U);
+
+        off = hex_align_up(off, 2048U);
+        layout->off_hmx_scales      = off; off += 2048U;
+        layout->off_hmx_c_row       = off; off += tile_64xds_sz;
+        layout->off_hmx_b_t_col     = off; off += tile_64xds_sz;
+        layout->off_hmx_b_col       = off; off += tile_64xds_sz;
+        layout->off_hmx_s_t_col     = off; off += tile_dxds_sz;
+        layout->off_hmx_q_m         = off; off += tile_64x64_sz;
+        layout->off_hmx_y_tiles     = off; off += tile_64xd_sz;
+        layout->off_hmx_x_tilde_col = off; off += tile_64xd_sz;
+        layout->off_hmx_x_hat_t_row = off; off += tile_64xd_sz;
+        layout->off_hmx_L           = off; off += l_f32_sz;
+        layout->off_hmx_p           = off; off += p_f32_sz;
+        off = hex_align_up(off, 2048U);
+    } else {
+        layout->off_hmx_scales      = 0;
+        layout->off_hmx_c_row       = 0;
+        layout->off_hmx_b_t_col     = 0;
+        layout->off_hmx_b_col       = 0;
+        layout->off_hmx_s_t_col     = 0;
+        layout->off_hmx_q_m         = 0;
+        layout->off_hmx_y_tiles     = 0;
+        layout->off_hmx_x_tilde_col = 0;
+        layout->off_hmx_x_hat_t_row = 0;
+        layout->off_hmx_L           = 0;
+        layout->off_hmx_p           = 0;
     }
 
     layout->state_row_stride = state_row_stride;
