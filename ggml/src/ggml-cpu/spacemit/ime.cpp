@@ -1154,9 +1154,17 @@ class tensor_traits_common : public tensor_traits_base {
                     ggml_compute_forward_concat(params, op);
                 }
                 return true;
-            // TODO For GGML_OP_GATED_DELTA_NET
-            // case GGML_OP_GATED_DELTA_NET:
-            //     return true;
+            case GGML_OP_GATED_DELTA_NET:
+                if (params->use_ref) {
+                    return false;
+                }
+                switch (op->src[0]->type) {
+                    case GGML_TYPE_F32:
+                        spacemit_kernels::rvv::forward_gated_delta_net_f32(params, op);
+                        return true;
+                    default:
+                        GGML_ABORT("fatal error");
+                }
             default:
                 break;
         }
@@ -1315,11 +1323,10 @@ static const ggml::cpu::tensor_traits * ggml_riscv64_spacemit_get_optimal_repack
         case GGML_TYPE_Q4_1:
             {
 #if defined(RISCV64_SPACEMIT_IME2)
-                // TODO
-                // if (cur->ne[1] % 32 == 0 && cur->ne[0] % 256 == 0 &&
-                //     (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
-                //     return &ggml::cpu::riscv64_spacemit::q4_1_32x256_q8_0;
-                // }
+                if (cur->ne[1] % 32 == 0 && cur->ne[0] % 256 == 0 &&
+                    (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
+                    return &ggml::cpu::riscv64_spacemit::q4_1_32x256_q8_0;
+                }
 
                 if (cur->ne[1] % 32 == 0 && (ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2)) {
                     return &ggml::cpu::riscv64_spacemit::q4_1_32x32_q8_0;
@@ -1661,7 +1668,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             case GGML_OP_SUM_ROWS:
             case GGML_OP_GET_ROWS:
             case GGML_OP_CONCAT:
-                // case GGML_OP_GATED_DELTA_NET:
+            case GGML_OP_GATED_DELTA_NET:
                 return (ggml::cpu::tensor_traits *) (&ggml::cpu::riscv64_spacemit::rvv_impl);
             default:
                 // GGML_ABORT("fatal error");

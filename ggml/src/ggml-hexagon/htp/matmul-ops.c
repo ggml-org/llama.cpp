@@ -1664,6 +1664,12 @@ static int hvx_mm_init_tiled_vec_dot(struct htp_mm_context * mmctx, enum htp_dat
             mmctx->vec_dot_32x1 = tiled_vec_dot_q8_0_32x1;
             mmctx->vec_dot_32x2 = tiled_vec_dot_q8_0_32x2;
             return 0;
+        case HTP_TYPE_Q5_0:
+            mmctx->type         = "q5_0_tiled-f32";
+            mmctx->vec_dot_32x1 = tiled_vec_dot_q5_0_32x1;
+            mmctx->vec_dot_32x2 = tiled_vec_dot_q5_0_32x2;
+            return 0;
+        case HTP_TYPE_Q5_1:
         case HTP_TYPE_Q5_K:
             mmctx->type         = "q5_k_tiled-f32";
             mmctx->vec_dot_32x1 = tiled_vec_dot_q5_k_32x1;
@@ -2316,6 +2322,8 @@ static inline tiled_dequant_task_fn_t hmx_get_dequant_worker_fn(int weight_type,
         case HTP_TYPE_Q4_K:   return dequantize_tiled_weight_to_fp16_task_q4_1;
         case HTP_TYPE_MXFP4:  return dequantize_tiled_weight_to_fp16_task_mxfp4;
         case HTP_TYPE_Q8_0:   return dequantize_tiled_weight_to_fp16_task_q8_0;
+        case HTP_TYPE_Q5_0:   return dequantize_tiled_weight_to_fp16_task_q5_0;
+        case HTP_TYPE_Q5_1:
         case HTP_TYPE_Q5_K:   return dequantize_tiled_weight_to_fp16_task_q5_k;
         case HTP_TYPE_Q6_K:   return dequantize_tiled_weight_to_fp16_task_q6_k;
         case HTP_TYPE_Q3_K:   return dequantize_tiled_weight_to_fp16_task_q3_k;

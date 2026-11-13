@@ -112,6 +112,8 @@ export { KeyboardKey } from './keyboard.enums';
 export {
 	BuiltInTool,
 	GlobSearchType,
+	SearchChatsMessageSelection,
+	SearchChatsOrder,
 	ToolSource,
 	ToolPermissionDecision,
 	ToolResponseField

@@ -301,6 +301,14 @@ export { MCPService } from './mcp.service';
 export { SandboxService } from './sandbox.service';
 
 /**
+ * **SearchChatsService** - Read-only search over saved chats, executor of the search_chats browser tool
+ *
+ * @see buildSearchChatsToolDefinition in constants/search-chats - tool schema sent to the LLM
+ * @see utils/search-chats - parameter parsing, matching and formatting
+ */
+export { SearchChatsService } from './search-chats.service';
+
+/**
  * **RouterService** — Dynamic route URL construction utility
  *
  * Stateless utility for building dynamic route URLs from ROUTES base paths.
