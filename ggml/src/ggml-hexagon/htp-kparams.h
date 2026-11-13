@@ -29,6 +29,7 @@
 #include "htp/softmax-ops.h"
 #include "htp/solve-tri-ops.h"
 #include "htp/ssm-conv.h"
+#include "htp/ssm-scan-ops.h"
 #include "htp/sum-rows-ops.h"
 #include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"

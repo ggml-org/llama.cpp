@@ -12,7 +12,7 @@ permissions:
 jobs:
   update:
     name: Update Winget Package
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
     if: github.repository_owner == 'ggml-org'
 
     steps:

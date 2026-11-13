@@ -39,7 +39,9 @@ kernel void kernel_solve_tri_f32(
 
             for (short t = 0; t*NW < N; ++t) {
                 const short idx = t*NW + tiisg;
-                sh0_cur[idx] = src0_ptr[idx];
+                if (rr + sgitg < N && idx < N) {
+                    sh0_cur[idx] = src0_ptr[idx];
+                }
             }
 
             src0_ptr += NSG*N;
@@ -60,7 +62,9 @@ kernel void kernel_solve_tri_f32(
 
             for (short t = 0; t*NW < r; ++t) {
                 const short idx = t*NW + tiisg;
-                sum += sh0_cur[idx] * dst_ptr[idx*K] * (idx < r);
+                if (idx < r) {
+                    sum += sh0_cur[idx] * dst_ptr[idx*K];
+                }
             }
 
             sum = simd_sum(sum);
