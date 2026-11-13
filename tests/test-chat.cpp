@@ -3178,6 +3178,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // Tool call after reasoning, the model did not close the thought channel (#32231)
+        tst.test(
+                "<|channel>thought\nI'm\nthinking<|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect_reasoning("I'm\nthinking")
+            .expect_tool_calls({
+                { "get_time", R"({"city": "Paris"})", {} },
+            })
+            .run();
+
         // Parallel tool calls
         tst.test(
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>"
