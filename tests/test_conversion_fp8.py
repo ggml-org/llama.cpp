@@ -20,7 +20,7 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
-from conversion.inkling2 import Inkling2Model, Inkling2VisionModel, _E4M3, _E2M1
+from conversion.inkling2 import Inkling2Model, Inkling2VisionModel, Inkling2DSparkModel, _E4M3, _E2M1
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
 from conversion.phi import PhiMoeModel
@@ -580,6 +580,80 @@ class TestInkling2VisionConversion(unittest.TestCase):
                                (gguf.Keys.ClipVision.POSITION_GRID_SIZE, 3), (gguf.Keys.ClipVision.Projector.HIDDEN_SIZE, 12),
                                (gguf.Keys.ClipVision.Projector.USE_BIAS, False)):
                 self.assertEqual(kv[key].value, value)
+
+
+class TestInkling2DSparkConversion(unittest.TestCase):
+    def fixture(self, path):
+        mtp = {"hidden_size": 16, "num_hidden_layers": 5, "num_attention_heads": 4, "num_key_value_heads": 1,
+               "head_dim": 4, "intermediate_size": 32, "max_position_embeddings": 128, "rms_norm_eps": 1e-6,
+               "rope_theta": 1000000.0, "local_layer_ids": [0, 1, 3, 4], "sliding_window_size": 16,
+               "block_size": 8, "markov_rank": 4, "markov_head_type": "rnn_hidden", "target_layer_ids": [0, 2]}
+        config = {"model_type": "inkling2", "architectures": ["Inkling2ForConditionalGeneration"],
+                  "text_config": {"hidden_size": 16, "num_hidden_layers": 2, "vocab_size": 64,
+                                  "unpadded_vocab_size": 60, "final_logit_softcapping": 30.0}, "mtp_config": mtp}
+        (path / "config.json").write_text(json.dumps(config))
+        shapes = {"norm.weight": (16,), "mask_embed": (16,), "fuse_weight": (6, 2),
+                  "markov_head.markov_w1.weight": (64, 4), "markov_head.rnn_proj.weight": (12, 40),
+                  "markov_head.rnn_proj.bias": (12,), "markov_head.hidden_out.weight": (16, 4),
+                  "markov_head.hidden_out.bias": (16,), "markov_head.dflare_norm.weight": (16,)}
+        for i in range(5):
+            for name in ("input_layernorm", "post_attention_layernorm", "dflare_norm"):
+                shapes[f"layers.{i}.{name}.weight"] = (16,)
+            for name in ("q_norm", "k_norm", "k_norm_ctx"):
+                shapes[f"layers.{i}.self_attn.{name}.weight"] = (4,)
+            for name, shape in (("q_proj", (16, 16)), ("k_proj", (4, 16)), ("v_proj", (4, 16)),
+                                ("o_proj", (16, 16)), ("k_proj_ctx", (4, 16)), ("v_proj_ctx", (4, 16))):
+                shapes[f"layers.{i}.self_attn.{name}.weight"] = shape
+            for name, shape in (("gate_proj", (32, 16)), ("up_proj", (32, 16)), ("down_proj", (16, 32))):
+                shapes[f"layers.{i}.mlp.{name}.weight"] = shape
+        tensors = {name: (torch.arange(int(np.prod(shape))).reshape(shape) / 100).bfloat16() for name, shape in shapes.items()}
+        save_file(tensors, path / "mtp.safetensors")
+        save_file({"model.llm.embed.weight": torch.ones(64, 16)}, path / "model.safetensors")
+        return config, tensors
+
+    def test_dspark_names_and_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            _, tensors = self.fixture(path)
+            for ftype in (gguf.LlamaFileType.ALL_F32, gguf.LlamaFileType.MOSTLY_F16, gguf.LlamaFileType.MOSTLY_BF16, gguf.LlamaFileType.GUESSED):
+                for eager in (False, True):
+                    model = Inkling2DSparkModel(path, ftype, path / "unused.gguf", eager=eager)
+                    model.set_gguf_parameters()
+                    model.prepare_tensors()
+                    actual = {name: gguf.quants.dequantize(gguf.LazyNumpyTensor.to_eager(info.tensor), info.dtype) for name, info in model.gguf_writer.tensors[0].items()}
+                    self.assertEqual(model.gguf_writer.tensors[0]["dspark_fuse.weight"].dtype, gguf.GGMLQuantizationType.F32)
+                    self.assertEqual(len(actual), 84)
+                    self.assertNotIn("token_embd.weight", actual)
+                    for source, target in (("fuse_weight", "dspark_fuse.weight"), ("mask_embed", "mask_embd.weight"),
+                                           ("markov_head.rnn_proj.weight", "joint_proj.weight"),
+                                           ("markov_head.hidden_out.bias", "dspark_hidden_out.bias"),
+                                           ("layers.4.self_attn.k_proj_ctx.weight", "blk.4.attn_k_ctx.weight"),
+                                           ("layers.4.self_attn.k_norm_ctx.weight", "blk.4.attn_k_ctx_norm.weight"),
+                                           ("layers.4.dflare_norm.weight", "blk.4.dflare_norm.weight")):
+                        np.testing.assert_array_equal(actual[target], tensors[source].float().numpy())
+                    kv = model.gguf_writer.kv_data[0]
+                    for key, value in (("general.architecture", "dflash"), ("dflash.block_count", 5),
+                                       ("dflash.block_size", 8), ("dflash.dspark.markov_rank", 4),
+                                       ("dflash.sample_from_anchor", False), ("dflash.has_confidence_head", False),
+                                       ("dflash.rope.freq_base", 1000000.0), ("dflash.attention.sliding_window", 16)):
+                        self.assertEqual(kv[key].value, value)
+
+    def test_dspark_invalid_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            config, _ = self.fixture(path)
+            for key, value in (("target_layer_ids", [2, 0]), ("target_layer_ids", [0, 1]),
+                               ("markov_head_type", "nextn"), ("hidden_size", 8), ("block_size", 5)):
+                with self.subTest(key=key, value=value):
+                    bad = json.loads(json.dumps(config))
+                    bad["mtp_config"][key] = value
+                    (path / "config.json").write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):
+                        Inkling2DSparkModel(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf")
+            (path / "config.json").write_text(json.dumps(config))
+            (path / "mtp.safetensors").unlink()
+            with self.assertRaisesRegex(ValueError, "requires mtp.safetensors"):
+                Inkling2DSparkModel(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf")
 
 
 if __name__ == "__main__":
