@@ -2972,14 +2972,13 @@ struct llama_model_kimi_k31 : public llama_model_base {
 
         struct dsa_out {
             ggml_tensor * out;
-            std::vector<ggml_tensor *> picks; // the top-k cells of each token chunk
+            ggml_tensor * sel;
         };
 
         dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                 const llama_kv_cache_context * mctx_idx,
                                 llm_graph_input_attn_k * inp_attn,
-                                const std::vector<ggml_tensor *> & chunks_kq_mask,
-                                const std::vector<ggml_tensor *> & prev_picks,
+                                ggml_tensor * prev_sel,
                                 int64_t n_embd_head_k_mla, int64_t kv_lora_rank,
                                 int64_t n_embd_head_qk_rope,
                                 int64_t n_embd_head_qk_nope, float kq_scale, int il);
