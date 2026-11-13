@@ -112,7 +112,7 @@ static __global__ void mul_mat_f(
     const int sample_x    = sample_dst / sample_ratio;
     const int sample_y    = sample_dst;
 
-    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x  + row0*stride_row ;
+    x   += int64_t(sample_x) * stride_sample_x + int64_t(channel_x) * stride_channel_x + int64_t(row0) * stride_row;
     y   += int64_t(sample_y)  *stride_sample_y   + (has_ids ? 0 : channel_y  *stride_channel_y);
     dst += int64_t(sample_dst)*stride_sample_dst + (has_ids ? 0 : channel_dst*stride_channel_dst);
 
@@ -372,7 +372,7 @@ static __global__ void mul_mat_f_ids(
     const int sample_x    = sample_dst / sample_ratio;
     const int sample_y    = sample_dst;
 
-    x   += int64_t(sample_x)  *stride_sample_x   + channel_x  *stride_channel_x  + row0*stride_row;
+    x   += int64_t(sample_x) * stride_sample_x + int64_t(channel_x) * stride_channel_x + int64_t(row0) * stride_row;
     y   += int64_t(sample_y)  *stride_sample_y;
     dst += int64_t(sample_dst)*stride_sample_dst;
 
