@@ -1654,8 +1654,6 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 
 Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
-See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
-
 ### POST `/v1/audio/speech`: OpenAI-compatible Speech API
 
 Generates speech from text, for models that can generate audio. The request is converted to a [`/tts`](#post-tts-generate-speech-audio-from-text) request, so the `/tts` options such as `lang`, `seed` or `speaker_ref_b64` can also be used.
