@@ -19664,6 +19664,10 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
         CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb1));
         CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb2));
         CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb3));
+        if (src0->type != GGML_TYPE_F32) {
+            const int is_bf16 = dst->type == GGML_TYPE_BF16;
+            CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int), &is_bf16));
+        }
 
         size_t global_work_size[] = {(size_t)ne01 * 64, (size_t)ne02, (size_t)ne03};
         size_t local_work_size[] = {64, 1, 1};
@@ -19687,6 +19691,11 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
+
+    if (src0->type != GGML_TYPE_F32) {
+        const int is_bf16 = dst->type == GGML_TYPE_BF16;
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &is_bf16));
+    }
 
     const int64_t n = ggml_nelements(dst);
 
