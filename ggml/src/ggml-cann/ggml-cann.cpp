@@ -2601,6 +2601,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_SUM:
             return ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_RMS_NORM:
+            // the cached gamma of ones does not track its type, so F32 and BF16 can not share it
+            return op->src[0]->type != GGML_TYPE_BF16;
         case GGML_OP_L2_NORM:
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_DUP:
@@ -2617,7 +2620,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
-        case GGML_OP_RMS_NORM:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
