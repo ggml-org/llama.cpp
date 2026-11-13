@@ -22,13 +22,3 @@ unresolved-reference = "ignore"
 import-not-found = "ignore"
 missing-attribute = "ignore"
 missing-union-attribute = "ignore"
-
-[[overrides]]
-include = [
-    "./examples/pydantic_models_to_grammar.py",
-]
-
-[overrides.rules]
-unsupported-operator = "ignore"
-not-subscriptable = "ignore"
-invalid-type-form = "ignore"

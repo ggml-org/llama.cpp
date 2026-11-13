@@ -189,7 +189,7 @@ llama-server ... --spec-type ngram-mod --spec-ngram-mod-n-match 24 --spec-ngram-
 
 Applications:
 
-- Iterating over a block of text/code (e.g. in llama.vim)
+- Iterating over a block of text/code (e.g. in [llama.vim](https://github.com/ggml-org/llama.vim))
 - Reasoning models (when they have to repeat their thinking in the final answer)
 - Summarization
 
