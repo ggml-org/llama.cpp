@@ -365,7 +365,7 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_conv1d(
         n_embd_r_total * ggml_element_size(conv_state_all),
         qkv * conv_state_size * ggml_element_size(conv_state_all));
 
-    ggml_tensor * x_proj = ggml_mul_mat(ctx0, proj_w, x);
+    ggml_tensor * x_proj = build_lora_mm(proj_w, x);
     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
 
