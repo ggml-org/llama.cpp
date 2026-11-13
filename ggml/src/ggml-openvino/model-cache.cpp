@@ -365,7 +365,8 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Version 3 includes dense Q8_0/Q5_1 requantization in q4_asym64_all.
     // Version 4 uses GatedDeltaNet output 1 for snapshots in snapshot mode; older
     // graphs use the incompatible three-output contract.
-    h = fnv1a_u64(h, 4);
+    // Version 5 requantizes K-quant MoE experts to Q4_1_64 on GPU by default.
+    h = fnv1a_u64(h, 5);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");

@@ -994,6 +994,12 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
     const bool asym64_all = is_opt("q4_asym64_all");
     const bool asym64 = is_opt("q4_asym64");
 
+    // TODO: temporary workaround for slow GPU-plugin GatherMatmul prefill above 16 tokens. Q4_1_64 experts let the plugin fuse the MoE into MOECompressed.
+    if (ggml_openvino_is_gpu() && tensor->ne[2] > 1 && strstr(tensor->name, "exps") != nullptr &&
+        (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K || tensor->type == GGML_TYPE_Q6_K)) {
+        return ExtraQuantType::Q4_1_64;
+    }
+
     if (tensor->type == GGML_TYPE_Q4_K) {
         if (sym128_all) {
             return ExtraQuantType::Q4_0_128;

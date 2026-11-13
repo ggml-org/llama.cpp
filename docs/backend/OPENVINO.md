@@ -105,6 +105,9 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 - `Q5_K` and `Q6_K` tensors are converted to `Q8_0_C`. `GGML_OPENVINO_REQUANT_KQUANT` selects a 4-bit layout instead.
 - `Q5_0` tensors are converted to `Q4_0_64`.
 
+**GPU:**
+- `Q4_K`, `Q5_K` and `Q6_K` MoE expert tensors are converted to `Q4_1_64`. This lets the GPU plugin use its fused MoE op, which is much faster for prompt processing. `GGML_OPENVINO_REQUANT_KQUANT` does not change this.
+
 **NPU:**
 - All other quantized tensors are requantized to `Q4_0_128`.
 - For a `Q6_K` token embedding, `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` selects another layout.
