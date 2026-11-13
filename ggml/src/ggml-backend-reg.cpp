@@ -493,7 +493,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         std::error_code cwd_ec;
         const fs::path cwd = fs::current_path(cwd_ec);
         if (cwd_ec) {
-            GGML_LOG_DEBUG("%s: current_path() failure, error-message: %s\n", __func__, cwd_ec.message().c_str());
+            GGML_LOG_DEBUG("%s: failed to get current directory: %s\n", __func__, cwd_ec.message().c_str());
         } else {
             search_paths.push_back(cwd);
         }
@@ -506,20 +506,9 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     std::error_code ec;
 
     for (const auto & search_path : search_paths) {
-        if (!fs::exists(search_path, ec)) {
-            if (ec) {
-                GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
-            } else {
-                GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
-            }
-            continue;
-        }
         std::error_code dir_ec;
-        fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied, dir_ec);
-        if (dir_ec) {
-            GGML_LOG_DEBUG("%s: failed to enumerate %s: %s\n", __func__, path_str(search_path).c_str(), dir_ec.message().c_str());
-            continue;
-        }
+        fs::directory_iterator dir_it(search_path, dir_ec);
+
         for (const fs::directory_iterator end; dir_it != end; dir_it.increment(dir_ec)) {
             const auto & entry = *dir_it;
             if (entry.is_regular_file(ec)) {
@@ -549,6 +538,10 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
                     }
                 }
             }
+        }
+
+        if (dir_ec) {
+            GGML_LOG_DEBUG("%s: failed to enumerate %s: %s\n", __func__, path_str(search_path).c_str(), dir_ec.message().c_str());
         }
     }
 
@@ -582,21 +575,22 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     bool silent = false;
 #endif
 
-    ggml_backend_load_best("blas", silent, dir_path);
-    ggml_backend_load_best("zendnn", silent, dir_path);
-    ggml_backend_load_best("cann", silent, dir_path);
-    ggml_backend_load_best("cuda", silent, dir_path);
-    ggml_backend_load_best("hip", silent, dir_path);
-    ggml_backend_load_best("metal", silent, dir_path);
-    ggml_backend_load_best("rpc", silent, dir_path);
-    ggml_backend_load_best("sycl", silent, dir_path);
-    ggml_backend_load_best("vulkan", silent, dir_path);
-    ggml_backend_load_best("virtgpu", silent, dir_path);
-    ggml_backend_load_best("opencl", silent, dir_path);
-    ggml_backend_load_best("hexagon", silent, dir_path);
-    ggml_backend_load_best("musa", silent, dir_path);
+    ggml_backend_load_best("blas",     silent, dir_path);
+    ggml_backend_load_best("zendnn",   silent, dir_path);  // AMD ZenDNN backend
+    ggml_backend_load_best("zdnn",     silent, dir_path);  // IBM zDNN backend
+    ggml_backend_load_best("cann",     silent, dir_path);
+    ggml_backend_load_best("cuda",     silent, dir_path);
+    ggml_backend_load_best("hip",      silent, dir_path);
+    ggml_backend_load_best("metal",    silent, dir_path);
+    ggml_backend_load_best("rpc",      silent, dir_path);
+    ggml_backend_load_best("sycl",     silent, dir_path);
+    ggml_backend_load_best("vulkan",   silent, dir_path);
+    ggml_backend_load_best("virtgpu",  silent, dir_path);
+    ggml_backend_load_best("opencl",   silent, dir_path);
+    ggml_backend_load_best("hexagon",  silent, dir_path);
+    ggml_backend_load_best("musa",     silent, dir_path);
     ggml_backend_load_best("openvino", silent, dir_path);
-    ggml_backend_load_best("cpu", silent, dir_path);
+    ggml_backend_load_best("cpu",      silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend
     const char * backend_path = std::getenv("GGML_BACKEND_PATH");
     if (backend_path) {

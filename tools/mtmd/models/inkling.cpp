@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_tensor * clip_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_inkling::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
     ggml_prec_set_acc(cur, GGML_PREC_F32);
     return cur;
@@ -27,11 +27,11 @@ static ggml_tensor * inkling_fold_spatial(
     return cur;
 }
 
-ggml_cgraph * clip_graph_inkling::build() {
-    return model.modality == CLIP_MODALITY_AUDIO ? build_audio() : build_vision();
+ggml_cgraph * mtmd_graph_inkling::build() {
+    return model.modality == MTMD_MODALITY_AUDIO ? build_audio() : build_vision();
 }
 
-ggml_cgraph * clip_graph_inkling::build_vision() {
+ggml_cgraph * mtmd_graph_inkling::build_vision() {
     static constexpr int temporal_patch_size = 2;
     static constexpr int spatial_folds[] = {5, 2, 4};
 
@@ -65,13 +65,12 @@ ggml_cgraph * clip_graph_inkling::build_vision() {
     cur = build_norm(cur, model.inkling_hmlp_final_norm_w,
                      nullptr, NORM_TYPE_RMS, eps, 3);
 
-    // Batched mtmd convention: one token in ne[1], patch count in ne[2].
     cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], 1, n_patches);
     ggml_build_forward_expand(gf, cur);
     return gf;
 }
 
-ggml_cgraph * clip_graph_inkling::build_audio() {
+ggml_cgraph * mtmd_graph_inkling::build_audio() {
     static constexpr int n_mels = 80;
     static constexpr int mel_vocab_size = 16;
 
@@ -80,7 +79,6 @@ ggml_cgraph * clip_graph_inkling::build_audio() {
     GGML_ASSERT(model.inkling_dmel_final_norm_w);
     GGML_ASSERT(model.inkling_dmel_embd_w->ne[1] == n_mels * mel_vocab_size);
 
-    // decoder width varies per checkpoint
     const int64_t n_embd = model.inkling_dmel_embd_w->ne[0];
 
     const int64_t n_tokens = img.nx();

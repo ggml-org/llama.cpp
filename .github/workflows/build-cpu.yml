@@ -7,7 +7,6 @@ on:
       - master
     paths: [
       '.github/workflows/build-cpu.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -20,7 +19,6 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-cpu.yml',
-      '.github/workflows/build-cmake-pkg.yml',
       'ggml/src/ggml-rpc/**',
       '**/CMakeLists.txt',
       '**/.cmake',
@@ -30,6 +28,10 @@ on:
       '**/*.cpp'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -37,22 +39,20 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  build-cmake-pkg:
-    uses: ./.github/workflows/build-cmake-pkg.yml
-
   ubuntu:
     strategy:
       matrix:
         include:
           - build: 'x64'
-            os: ubuntu-22.04
+            os: ubuntu-26.04
           - build: 'arm64'
-            os: ubuntu-24.04-arm
+            os: ubuntu-26.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -64,7 +64,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: cpu-${{ matrix.os }}
+          restore: false
           save: false
 
       - name: Build Dependencies
@@ -76,19 +76,12 @@ jobs:
             libjpeg-dev build-essential libssl-dev \
             git-lfs
 
-      - name: Toolchain workaround (GCC 14)
-        if: ${{ contains(matrix.os, 'ubuntu-24.04') }}
-        run: |
-          sudo apt-get install -y gcc-14 g++-14
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
-
       - name: Python Dependencies
         id: python_depends
         run: |
           export PIP_BREAK_SYSTEM_PACKAGES="1"
           python3 -m pip install --upgrade pip setuptools
-          pip3 install ./gguf-py
+          pip3 install ./gguf-py jinja2==3.1.6
 
       - name: ccache-buckets-restore
         uses: ./.github/actions/ccache-buckets
@@ -140,6 +133,11 @@ jobs:
   windows:
     name: windows / ${{ matrix.build }}
     runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
 
     env:
       OPENBLAS_VERSION: 0.3.23
@@ -232,3 +230,79 @@ jobs:
           older: 5m
           min: 1
           dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
+  build-cmake-pkg:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Clone
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: build-cmake-pkg
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
+
+      - name: Build
+        run: |
+          PREFIX="$(pwd)"/inst
+          cmake -S . -B build \
+                -DCMAKE_PREFIX_PATH="$PREFIX" \
+                -DLLAMA_OPENSSL=OFF \
+                -DLLAMA_BUILD_TESTS=OFF \
+                -DLLAMA_BUILD_TOOLS=OFF \
+                -DLLAMA_BUILD_EXAMPLES=OFF \
+                -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_IS_DEV=OFF \
+                -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j $(nproc)
+          cmake --install build --prefix "$PREFIX" --config Release
+
+          export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
+          build_commit=$(git rev-parse --short HEAD | xargs)
+          build_number=$(git rev-list --count HEAD | xargs)
+
+          major=$(grep -oE "set\(LLAMA_VERSION_MAJOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          minor=$(grep -oE "set\(LLAMA_VERSION_MINOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          patch=$(grep -oE "set\(LLAMA_VERSION_PATCH[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          build_version="$major.$minor.$patch"
+
+          checks=("set\(LLAMA_VERSION[[:space:]]+$build_version\)"
+                  "set\(LLAMA_BUILD_COMMIT[[:space:]]+$build_commit\)"
+                  "set\(LLAMA_BUILD_NUMBER[[:space:]]+$build_number\)")
+
+          for check in "${checks[@]}"; do
+              if ! grep -qE "$check" "$LLAMA_CONFIG"; then
+                  echo "Checking llama-config.cmake version... \"$check\" failed!"
+                  exit 1
+              fi
+          done
+
+          echo "Checking llama-config.cmake version... success."
+
+          cd examples/simple-cmake-pkg
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
+          cmake --build build -j $(nproc)
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: build-cmake-pkg
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true

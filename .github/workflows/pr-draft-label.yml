@@ -4,6 +4,7 @@ on:
   pull_request_target:
     types: [labeled]
 
+cache-mode: none
 permissions:
   pull-requests: write
   issues: write

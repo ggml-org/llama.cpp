@@ -66,8 +66,14 @@ if (Vulkan_FOUND)
                              ggml-vulkan-push-constants.h
                              ggml-vulkan-common.h
                              ggml-vulkan-buffers.cpp
+                             ggml-vulkan-comm.cpp
                              ggml-vulkan-debug.cpp
                             )
+
+    # hide symbols, so dlclosed duplicate copies cannot interpose them
+    set_target_properties(ggml-vulkan PROPERTIES
+                          CXX_VISIBILITY_PRESET hidden
+                          VISIBILITY_INLINES_HIDDEN ON)
 
     set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 

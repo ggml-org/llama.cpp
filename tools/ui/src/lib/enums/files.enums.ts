@@ -38,7 +38,8 @@ export enum FileTypeAudio {
 
 export enum FileTypeVideo {
 	MP4 = 'mp4',
-	OGG = 'ogg'
+	OGG = 'ogg',
+	WEBM = 'webm'
 }
 
 export enum FileTypePdf {
@@ -104,7 +105,8 @@ export enum FileExtensionAudio {
 
 export enum FileExtensionVideo {
 	MP4 = '.mp4',
-	OGG = '.ogg'
+	OGG = '.ogg',
+	WEBM = '.webm'
 }
 
 export enum FileExtensionPdf {
@@ -191,6 +193,7 @@ export enum MimeTypeAudio {
 	MP3 = 'audio/mp3',
 	MP3_MPEG = 'audio/mpeg',
 	MP4 = 'audio/mp4',
+	OGG = 'audio/ogg',
 	VND_WAVE = 'audio/vnd.wave',
 	WAV = 'audio/wav',
 	WAVE = 'audio/wave',
@@ -203,7 +206,8 @@ export enum MimeTypeAudio {
 
 export enum MimeTypeVideo {
 	MP4 = 'video/mp4',
-	OGG = 'video/ogg'
+	OGG = 'video/ogg',
+	WEBM = 'video/webm'
 }
 
 export enum MimeTypeImage {

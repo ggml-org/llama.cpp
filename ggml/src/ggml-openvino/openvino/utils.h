@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <openvino/core/node.hpp>
+#include <openvino/op/convert.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
 #include <utility>
@@ -57,8 +58,9 @@ OutputVector rename_outputs_with_suffix(const OutputVector & outputs, const std:
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
                                                            std::shared_ptr<ov::Node> rope_freqs_weight = nullptr,
-                                                           bool imrope = false,
-                                                           bool stateful = false);
+                                                           int mode = 0,
+                                                           bool stateful = false,
+                                                           int64_t head_dim = 0);
 
 ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len = 0, int axis = -1);
 
@@ -69,7 +71,21 @@ template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeConte
     num_inputs_check(context, 2, 2);
     auto input_0 = process_view_input_new(context, 0);
     auto input_1 = process_view_input_new(context, 1);
-    auto res = std::make_shared<T>(input_0, input_1);
+
+    auto output_type = context.get_output_type();
+    if (input_0.get_element_type() != input_1.get_element_type()) {
+        if (input_0.get_element_type() != ov::element::f32) {
+            input_0 = std::make_shared<ov::op::v0::Convert>(input_0, ov::element::f32);
+        }
+        if (input_1.get_element_type() != ov::element::f32) {
+            input_1 = std::make_shared<ov::op::v0::Convert>(input_1, ov::element::f32);
+        }
+    }
+
+    ov::Output<ov::Node> res = std::make_shared<T>(input_0, input_1);
+    if (res.get_element_type() != output_type) {
+        res = std::make_shared<ov::op::v0::Convert>(res, output_type);
+    }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

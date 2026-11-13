@@ -110,8 +110,24 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 //   X(suffix, name): name is both the kernels/<name>.metal basename and the
 //   ggml_metallib_<name>_{start,end} embed-symbol stem.
 #define GGML_METAL_LIBS \
-    X(FA,              fa)             \
+    X(FA_AUX,          fa_aux)         \
+    X(FA_F16,          fa_f16)         \
+    X(FA_F32,          fa_f32)         \
+    X(FA_Q4_0,         fa_q4_0)        \
+    X(FA_Q4_1,         fa_q4_1)        \
+    X(FA_Q5_0,         fa_q5_0)        \
+    X(FA_Q5_1,         fa_q5_1)        \
+    X(FA_Q8_0,         fa_q8_0)        \
+    X(FA_TENSOR,       fa_tensor)      \
+    X(FA_VEC_F16,      fa_vec_f16)     \
+    X(FA_VEC_F32,      fa_vec_f32)     \
+    X(FA_VEC_Q4_0,     fa_vec_q4_0)    \
+    X(FA_VEC_Q4_1,     fa_vec_q4_1)    \
+    X(FA_VEC_Q5_0,     fa_vec_q5_0)    \
+    X(FA_VEC_Q5_1,     fa_vec_q5_1)    \
+    X(FA_VEC_Q8_0,     fa_vec_q8_0)    \
     X(MUL_MV,          mul_mv)         \
+    X(MUL_MV_MMA,      mul_mv_mma)     \
     X(MUL_MM,          mul_mm)         \
     X(QUANTIZE,        quantize)       \
     X(SOFTMAX,         softmax)        \
@@ -1264,8 +1280,6 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
                     dev->props.use_shared_buffers = true;
                 }
 
-                dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
-
                 dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
 
                 dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
@@ -1496,12 +1510,25 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
     }
 }
 
+static bool ggml_metal_supports_mul_mat_src1_prec(const struct ggml_tensor * op, bool has_tensor) {
+    const enum ggml_prec prec = ggml_prec_get_src(op, 1);
+
+    if (prec == GGML_PREC_F32) {
+        return false;
+    }
+    if (prec == GGML_PREC_BF16) {
+        return has_tensor && op->op == GGML_OP_MUL_MAT && op->src[0]->type != GGML_TYPE_F32;
+    }
+    return true;
+}
+
 static bool ggml_metal_supports_mul_mat_op(
         bool has_simdgroup_reduction,
         const struct ggml_tensor * op,
         bool src0_f16_has_mv,
         bool mm_path) {
     if (!has_simdgroup_reduction ||
+        op->src[0]->type == GGML_TYPE_F8_E4M3 ||
         op->src[0]->type == GGML_TYPE_NVFP4 ||
         op->src[0]->type == GGML_TYPE_TQ1_0) {
         return false;
@@ -1541,6 +1568,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
 
     switch (op->op) {
         case GGML_OP_SCALE:
+            return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16);
         case GGML_OP_FILL:
         case GGML_OP_CLAMP:
         case GGML_OP_SQR:
@@ -1665,9 +1693,13 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_CUMSUM:
         case GGML_OP_MEAN:
         case GGML_OP_SOFT_MAX:
-        case GGML_OP_GROUP_NORM:
         case GGML_OP_L2_NORM:
             return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_GROUP_NORM:
+            return has_simdgroup_reduction &&
+                op->src[0]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_COUNT_EQUAL:
             return has_simdgroup_reduction &&
                 op->src[0]->type == GGML_TYPE_I32 &&
@@ -1680,7 +1712,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return has_simdgroup_reduction && (ggml_is_contiguous_rows(op->src[0]));
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
-            return true;
+            return ggml_rope_get_truncate(op);
         case GGML_OP_IM2COL:
             return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
         case GGML_OP_CONV_2D:
@@ -1699,13 +1731,6 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_POOL_2D:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_PAD:
-            // TODO: add circular padding support for metal, see https://github.com/ggml-org/llama.cpp/pull/16985
-            if (ggml_get_op_params_i32(op, 8) != 0) {
-                return false;
-            }
-
-            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
-                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_TIMESTEP_EMBEDDING:
             return op->src[0]->type == GGML_TYPE_F32;
@@ -1718,6 +1743,39 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ROLL:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_FLASH_ATTN_EXT:
+            // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
+            if (op->src[5] != NULL) {
+                const struct ggml_tensor * kv_rows = op->src[5];
+
+                if (kv_rows->type != GGML_TYPE_I32 ||
+                    !ggml_is_contiguous(kv_rows) ||
+                    kv_rows->ne[2] != 1 || kv_rows->ne[3] != 1 ||
+                    kv_rows->ne[1] != op->src[0]->ne[3] ||
+                    !op->src[3] || op->src[1]->ne[3] != 1 || op->src[2]->ne[3] != 1) {
+                    return false;
+                }
+
+                // the non-vec kernels attend over a contiguous F16 copy of the referenced rows:
+                // - F16 K/V is gathered directly
+                // - quantized K/V is first dequantized with kernel_flash_attn_ext_kv_*_f16
+                // - other types keep attending to the whole cache (dense mask)
+                switch (op->src[1]->type) {
+                    case GGML_TYPE_F16:
+                    case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_Q4_1:
+                    case GGML_TYPE_Q5_0:
+                    case GGML_TYPE_Q5_1:
+                    case GGML_TYPE_Q8_0:
+                        break;
+                    default:
+                        return false;
+                }
+
+                // the row gather copies F16 values in groups of 4
+                if (op->src[2]->ne[0] % 4 != 0) {
+                    return false;
+                }
+            }
             // for new head sizes, add checks here
             if (op->src[0]->ne[0] != 32 &&
                 op->src[0]->ne[0] != 40 &&
@@ -1735,10 +1793,13 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 op->src[0]->ne[0] != 576) {
                 return false;
             }
-            if (op->src[1]->ne[0] == 72 && op->src[1]->ne[0] != op->src[2]->ne[0]) {
-                return false;
-            }
-            if (op->src[1]->ne[0] < op->src[2]->ne[0]) {
+            // the kernels exist for K == V and for these K > V pairs only
+            if (op->src[1]->ne[0] != op->src[2]->ne[0] &&
+                !(op->src[1]->ne[0] ==  96 && op->src[2]->ne[0] ==  64) &&
+                !(op->src[1]->ne[0] == 128 && op->src[2]->ne[0] ==  96) &&
+                !(op->src[1]->ne[0] == 192 && op->src[2]->ne[0] == 128) &&
+                !(op->src[1]->ne[0] == 320 && op->src[2]->ne[0] == 256) &&
+                !(op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512)) {
                 return false;
             }
             if (op->src[1]->type != op->src[2]->type) {
@@ -1763,8 +1824,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
             return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_LIGHTNING_INDEXER:
-            if (op->src[0]->ne[0] != OP_LIGHTNING_INDEXER_DK ||
-                op->src[0]->ne[1] != OP_LIGHTNING_INDEXER_NH) {
+            if (op->src[0]->ne[0] != OP_LIGHTNING_INDEXER_DK) {
                 return false;
             }
             if (!has_simdgroup_mm ||
@@ -1825,6 +1885,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 ggml_is_contiguous_rows(op->src[1]) &&
                 ggml_is_contiguous_rows(op->src[2]) &&
                 (op->src[3] == NULL || ggml_is_contiguous_rows(op->src[3]));
+        case GGML_OP_TOP_K_MASK:
+            return (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32) &&
+                op->src[0]->type == op->type &&
+                op->src[0]->nb[0] == ggml_type_size(op->src[0]->type) &&
+                op->nb[0] == ggml_type_size(op->type) &&
+                op->src[1]->type == GGML_TYPE_I32 &&
+                (op->src[2] == NULL || op->src[2]->type == GGML_TYPE_F32) &&
+                (op->src[3] == NULL || op->src[3]->type == GGML_TYPE_I32) &&
+                (op->src[4] == NULL || op->src[4]->type == GGML_TYPE_I32);
         case GGML_OP_SSM_SCAN:
             return has_simdgroup_reduction;
         case GGML_OP_SSM_CONV:
@@ -1837,16 +1906,22 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
+            if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_tensor)) {
+                return false;
+            }
             // the FWHT kernels read an F16 source directly; every other F16 src1 path
             // still goes through ggml_metal_supports_mul_mat_op
             if (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F16 &&
-                ggml_metal_op_mul_mat_use_fwht(op)) {
+                ggml_metal_op_mul_mat_use_fwht(op, dev->props.max_theadgroup_memory_size)) {
                 return has_simdgroup_reduction;
             }
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, true,
                     ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
+            if (!ggml_metal_supports_mul_mat_src1_prec(op, dev->props.has_tensor)) {
+                return false;
+            }
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, false,
                     ggml_metal_op_mul_mat_id_use_mm(op, has_simdgroup_mm));
@@ -1914,7 +1989,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
         case GGML_OP_GET_ROWS:
             return op->src[0]->type != GGML_TYPE_NVFP4 &&
-                   op->src[0]->type != GGML_TYPE_TQ1_0;
+                   op->src[0]->type != GGML_TYPE_TQ1_0 &&
+                   op->src[0]->type != GGML_TYPE_F8_E4M3;
         case GGML_OP_SET_ROWS:
             {
                 if (op->src[0]->type == GGML_TYPE_F16) {
@@ -2081,19 +2157,11 @@ static void ggml_metal_buffer_rset_free(ggml_metal_buffer_t buf) {
 static void * ggml_metal_host_malloc(size_t n) {
     void * data = NULL;
 
-#if TARGET_OS_OSX
     kern_return_t err = vm_allocate((vm_map_t) mach_task_self(), (void *) &data, n, VM_FLAGS_ANYWHERE);
     if (err != KERN_SUCCESS) {
         GGML_LOG_ERROR("%s: error: vm_allocate failed\n", __func__);
         return NULL;
     }
-#else
-    const int result = posix_memalign((void **) &data, sysconf(_SC_PAGESIZE), n);
-    if (result != 0) {
-        GGML_LOG_ERROR("%s: error: posix_memalign failed\n", __func__);
-        return NULL;
-    }
-#endif
 
     return data;
 }
@@ -2275,11 +2343,7 @@ void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
     }
 
     if (buf->is_shared && buf->owned) {
-#if TARGET_OS_OSX
         vm_deallocate((vm_map_t)mach_task_self(), (vm_address_t)buf->all_data, buf->all_size);
-#else
-        free(buf->all_data);
-#endif
     }
 
     free(buf);
@@ -2372,6 +2436,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
         dispatch_release(completion_semaphore);
 
         //[cmd_buf waitUntilCompleted];
+
+        [buf_src release];
     }
 }
 
@@ -2410,6 +2476,150 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+
+        [buf_dst release];
+    }
+}
+
+static bool ggml_metal_buffer_data_span(const void * const * data, const size_t * sizes, size_t n_tensors, uintptr_t * min_data, uintptr_t * max_data) {
+    bool found = false;
+
+    for (size_t i = 0; i < n_tensors; i++) {
+        if (sizes[i] == 0) {
+            continue;
+        }
+
+        const uintptr_t start = (uintptr_t) data[i];
+        const uintptr_t end   = start + sizes[i];
+        if (!found) {
+            *min_data = start;
+            *max_data = end;
+            found = true;
+        } else {
+            if (start < *min_data) {
+                *min_data = start;
+            }
+            if (end > *max_data) {
+                *max_data = end;
+            }
+        }
+    }
+
+    return found;
+}
+
+void ggml_metal_buffer_set_tensor_n(ggml_metal_buffer_t buf, struct ggml_tensor * const * tensors, const void * const * data,
+        const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    if (buf->is_shared) {
+        for (size_t i = 0; i < n_tensors; i++) {
+            if (sizes[i] == 0) {
+                continue;
+            }
+            memcpy((char *) tensors[i]->data + offsets[i], data[i], sizes[i]);
+        }
+        return;
+    }
+
+    uintptr_t min_data = 0, max_data = 0;
+    if (!ggml_metal_buffer_data_span(data, sizes, n_tensors, &min_data, &max_data)) {
+        return;
+    }
+
+    @autoreleasepool {
+        void * data_ptr = (void *) min_data;
+        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
+                                                               length:max_data - min_data
+                                                              options:MTLResourceStorageModeShared
+                                                          deallocator:nil];
+
+        GGML_ASSERT(buf_src);
+
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            for (size_t i = 0; i < n_tensors; i++) {
+                if (sizes[i] == 0) {
+                    continue;
+                }
+
+                ggml_backend_buffer_t tensor_buf_ggml = tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
+                ggml_metal_buffer_t tensor_buf = (ggml_metal_buffer_t) tensor_buf_ggml->context;
+                struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(tensor_buf, tensors[i]);
+                bid_dst.offs += offsets[i];
+
+                [encoder copyFromBuffer:buf_src
+                           sourceOffset:(uintptr_t) data[i] - min_data
+                               toBuffer:bid_dst.metal
+                      destinationOffset:bid_dst.offs
+                                   size:sizes[i]];
+            }
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+
+        [buf_src release];
+    }
+}
+
+void ggml_metal_buffer_get_tensor_n(ggml_metal_buffer_t buf, const struct ggml_tensor * const * tensors, void * const * data,
+        const size_t * offsets, const size_t * sizes, size_t n_tensors) {
+    if (buf->is_shared) {
+        for (size_t i = 0; i < n_tensors; i++) {
+            if (sizes[i] == 0) {
+                continue;
+            }
+            memcpy(data[i], (const char *) tensors[i]->data + offsets[i], sizes[i]);
+        }
+        return;
+    }
+
+    uintptr_t min_data = 0, max_data = 0;
+    if (!ggml_metal_buffer_data_span((const void * const *) data, sizes, n_tensors, &min_data, &max_data)) {
+        return;
+    }
+
+    @autoreleasepool {
+        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:(void *) min_data
+                                                               length:max_data - min_data
+                                                              options:MTLResourceStorageModeShared
+                                                          deallocator:nil];
+
+        GGML_ASSERT(buf_dst);
+
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            for (size_t i = 0; i < n_tensors; i++) {
+                if (sizes[i] == 0) {
+                    continue;
+                }
+
+                ggml_backend_buffer_t tensor_buf_ggml = tensors[i]->view_src ? tensors[i]->view_src->buffer : tensors[i]->buffer;
+                ggml_metal_buffer_t tensor_buf = (ggml_metal_buffer_t) tensor_buf_ggml->context;
+                struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(tensor_buf, tensors[i]);
+                bid_src.offs += offsets[i];
+
+                [encoder copyFromBuffer:bid_src.metal
+                           sourceOffset:bid_src.offs
+                               toBuffer:buf_dst
+                      destinationOffset:(uintptr_t) data[i] - min_data
+                                   size:sizes[i]];
+            }
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+
+        [buf_dst release];
     }
 }
 
@@ -2449,6 +2659,74 @@ bool ggml_metal_buffer_cpy_tensor(ggml_metal_buffer_t buf_dst, const struct ggml
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+    }
+
+    return true;
+}
+
+bool ggml_metal_buffer_cpy_tensor_n(ggml_metal_buffer_t buf_dst, const struct ggml_tensor * const * srcs, struct ggml_tensor * const * dsts, size_t n_tensors) {
+    if (n_tensors == 0) {
+        return true;
+    }
+
+    bool all_shared = true;
+    for (size_t i = 0; i < n_tensors; ++i) {
+        ggml_backend_buffer_t src_buf = srcs[i]->view_src ? srcs[i]->view_src->buffer : srcs[i]->buffer;
+        ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t) src_buf->context;
+        if (!buf_dst->is_shared || !buf_src->is_shared) {
+            all_shared = false;
+            break;
+        }
+    }
+
+    if (all_shared) {
+        for (size_t i = 0; i < n_tensors; ++i) {
+            memcpy(dsts[i]->data, srcs[i]->data, ggml_nbytes(srcs[i]));
+        }
+        return true;
+    }
+
+    // for private buffers, we need to use Metal blit commands
+    @autoreleasepool {
+        struct ggml_metal_buffer_id * bid_srcs = malloc(n_tensors * sizeof(struct ggml_metal_buffer_id));
+        struct ggml_metal_buffer_id * bid_dsts = malloc(n_tensors * sizeof(struct ggml_metal_buffer_id));
+
+        for (size_t i = 0; i < n_tensors; ++i) {
+            ggml_backend_buffer_t src_buf = srcs[i]->view_src ? srcs[i]->view_src->buffer : srcs[i]->buffer;
+            ggml_backend_buffer_t dst_buf = dsts[i]->view_src ? dsts[i]->view_src->buffer : dsts[i]->buffer;
+            ggml_metal_buffer_t buf_src = (ggml_metal_buffer_t) src_buf->context;
+            ggml_metal_buffer_t buf_dst_i = (ggml_metal_buffer_t) dst_buf->context;
+            bid_srcs[i] = ggml_metal_buffer_get_id(buf_src, srcs[i]);
+            bid_dsts[i] = ggml_metal_buffer_get_id(buf_dst_i, dsts[i]);
+
+            if (bid_srcs[i].metal == nil || bid_dsts[i].metal == nil) {
+                free(bid_srcs);
+                free(bid_dsts);
+                return false;
+            }
+        }
+
+        id<MTLCommandBuffer> cmd_buf = [buf_dst->dev->mtl_queue commandBufferWithUnretainedReferences];
+
+        {
+            id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
+
+            for (size_t i = 0; i < n_tensors; ++i) {
+                [encoder copyFromBuffer:bid_srcs[i].metal
+                           sourceOffset:bid_srcs[i].offs
+                               toBuffer:bid_dsts[i].metal
+                      destinationOffset:bid_dsts[i].offs
+                                   size:ggml_nbytes(srcs[i])];
+            }
+
+            [encoder endEncoding];
+        }
+
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+
+        free(bid_srcs);
+        free(bid_dsts);
     }
 
     return true;

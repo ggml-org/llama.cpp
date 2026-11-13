@@ -6,6 +6,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 from .base import MmprojModel, ModelBase, TextModel, gguf
+from .llama import LlamaModel
 
 
 @ModelBase.register("UltravoxModel")
@@ -208,3 +209,47 @@ class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
             # Was trained in BF16, being safe, avoiding quantizing to FP16
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
+@ModelBase.register("VoxtralRealtimeForConditionalGeneration")
+@ModelBase.example("mistralai/Voxtral-Mini-4B-Realtime-2602")
+class VoxtralRealtimeEncoderModel(MmprojModel):
+    has_vision_encoder = False
+    has_audio_encoder = True
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_audio is not None
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.VOXTRAL_RT)
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
+        self.gguf_writer.add_audio_head_dim(self.hparams_audio["head_dim"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_audio_window_size(self.hparams_audio["sliding_window"])
+        self.gguf_writer.add_audio_stack_factor(self.global_config["downsample_factor"])
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        # prevent clash naming with vision tensors
+        if name.startswith("multi_modal_projector"):
+            name = "audio." + name
+
+        return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if "conv1.bias" in name or "conv2.bias" in name:
+            data_torch = data_torch.unsqueeze(-1)
+
+        # HF stores q/k in rotate-half layout, the encoder uses interleaved (normal) RoPE
+        if ".self_attn.q_proj." in name or ".self_attn.k_proj." in name:
+            assert self.hparams_audio is not None
+            n_head = self.hparams_audio["num_attention_heads"]
+            data_torch = LlamaModel.permute(data_torch, n_head, n_head)
+
+        yield from super().modify_tensors(data_torch, name, bid)

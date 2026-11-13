@@ -46,11 +46,23 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let i2 = wg_linear / params.ne1;
         let i1 = wg_linear % params.ne1;
 
-        let i11 = u32(ids[params.offset_ids + i1 * params.nb20 + i2 * params.nb21]);
+        let i11 = i32(ids[params.offset_ids + i1 * params.nb20 + i2 * params.nb21]);
 
         let src0_row = params.offset_src0 + i1 * params.nb01 + i2 * params.nb02;
-        let src1_row = params.offset_src1 + i11 * params.nb11;
         let dst_row = params.offset_dst + i1 * params.ne0 + i2 * (params.ne0 * params.ne1);
+
+        if (i11 == -1) { // skipped slot, add nothing
+#ifdef INPLACE
+            // src0 already holds the result
+#else
+            for (var i = thread_id;i < params.ne0; i += WG_SIZE) {
+                dst[dst_row + i] = src0[src0_row + i];
+            }
+#endif
+            return;
+        }
+
+        let src1_row = params.offset_src1 + u32(i11) * params.nb11;
 
         for (var i = thread_id;i < params.ne0; i += WG_SIZE) {
 #ifdef INPLACE

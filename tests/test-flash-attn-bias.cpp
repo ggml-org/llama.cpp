@@ -27,7 +27,7 @@ struct bias_test_config {
     int64_t n_batch = 1;
     int64_t rel_batch = 1;
     bool strided_rel = false;
-    float v_scale = 1.0f; // v = v_scale*(sin + v_bias)
+    float v_scale = 1.0f;
     float v_bias = 0.0f;
 };
 
@@ -331,7 +331,6 @@ static bool add_checked(uint64_t a, uint64_t b, uint64_t & out) {
 }
 
 static void overflow_arithmetic_self_test() {
-    // mirrors the scalar-path offset math; the offset lands past 2^31
     const uint64_t nb0 = sizeof(float);
     const uint64_t nb1 = 1024*nb0;
     const uint64_t nb2 = 64*nb1;
@@ -503,7 +502,6 @@ int main(int argc, char ** argv) {
             {"medium_f16_e1024", 128, 1024, 1024, 8, 2, 1024, GGML_TYPE_F16,  true, false},
             {"medium_bf16_local", 64, 2048, 2048, 8, 2,  512, GGML_TYPE_BF16, true, true },
             {"decode_8k_e1024",  128,    1, 8192, 8, 1, 1024, GGML_TYPE_F16,  true, false},
-            // large single-signed V: saturates an FP16 VKQ accumulator, row turns into inf
             {"large_v_16k",      128,   16, 16384, 8, 1, 1024, GGML_TYPE_F16, true, false, 1, 1, false, 512.0f, 1.0f},
         };
     } else if (suite == "hard") {
@@ -522,8 +520,7 @@ int main(int argc, char ** argv) {
         test_data data = make_data(c);
         run_result flash = run_graph(backend.get(), c, data, false, repeats);
         run_result dense = run_graph(backend.get(), c, data, true,  repeats);
-        // always compare to an independently materialized oracle (O(T^2), test-only)
-        const std::vector<float> naive = naive_materialized(c, data);
+            const std::vector<float> naive = naive_materialized(c, data);
 
         double abs_dense, mean_abs_dense, rel_dense, mean_rel_dense, rmse_dense;
         error_stats(flash.output, dense.output, abs_dense, mean_abs_dense, rel_dense, mean_rel_dense, rmse_dense);

@@ -26,11 +26,11 @@ kernel void kernel_cpy_t_t(
     const int32_t i1 = (n - i3*args.ne2*args.ne1*args.ne0 - i2*args.ne1*args.ne0)/args.ne0;
     const int32_t i0 = (n - i3*args.ne2*args.ne1*args.ne0 - i2*args.ne1*args.ne0 - i1*args.ne0);
 
-    device T1 * dst_data = (device T1 *) (dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
+    device char * dst_data = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0;
 
     for (int32_t i00 = iw0*ntg[0] + tpitg.x; i00 < args.ne00;) {
         device const T0 * src = (device T0 *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
-        dst_data[i00] = (T1) src[0];
+        *(device T1 *)(dst_data + i00*args.nb0) = (T1) src[0];
         break;
     }
 }
@@ -171,7 +171,8 @@ kernel void kernel_concat(
 
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = ntg.y == 1 ? tgpig.x : tgpig.x*ntg.y + tpitg.y;
+    const int i1 = ntg.y == 1 ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
+    const int ic = ntg.y == 1 ? tgpig.x%args.nc0 : 0;
 
     if (i1 >= args.ne1) {
         return;
@@ -180,7 +181,11 @@ kernel void kernel_concat(
     int o[4] = {0, 0, 0, 0};
     o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
 
-    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+    // chunk ic of nc0 along the row
+    const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
+    const int i0e = min(args.ne0, (ic + 1)*n0);
+
+    for (int i0 = ic*n0 + tpitg.x; i0 < i0e; i0 += ntg.x) {
         device const T * x;
 
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
@@ -220,7 +225,8 @@ kernel void kernel_concat_q(
     // note: for quantized types, the args are in units of blocks (nb0 == type_size)
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
-    const int i1 = ntg.y == 1 ? tgpig.x : tgpig.x*ntg.y + tpitg.y;
+    const int i1 = ntg.y == 1 ? tgpig.x/args.nc0 : tgpig.x*ntg.y + tpitg.y;
+    const int ic = ntg.y == 1 ? tgpig.x%args.nc0 : 0;
 
     if (i1 >= args.ne1) {
         return;
@@ -229,7 +235,11 @@ kernel void kernel_concat_q(
     int o[4] = {0, 0, 0, 0};
     o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
 
-    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+    // chunk ic of nc0 along the row
+    const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
+    const int i0e = min(args.ne0, (ic + 1)*n0);
+
+    for (int i0 = ic*n0 + tpitg.x; i0 < i0e; i0 += ntg.x) {
         device const block_q * x;
 
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {

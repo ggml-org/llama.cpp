@@ -42,6 +42,7 @@ export enum MessageRole {
  * Message types for different content kinds.
  */
 export enum MessageType {
+	COMPACTION = 'compaction',
 	ROOT = 'root',
 	SYSTEM = 'system',
 	TEXT = 'text',
@@ -80,6 +81,7 @@ export enum PdfViewMode {
 }
 
 export enum ChatFormCommandAction {
+	COMPACT = 'compact',
 	CWD = 'cwd',
 	MODEL = 'model',
 	PROMPT = 'prompt'
@@ -88,14 +90,4 @@ export enum ChatFormCommandAction {
 export enum FileMentionEntryType {
 	DIRECTORY = 'directory',
 	FILE = 'file'
-}
-
-/**
- * Kinds of tokens the chat-form-input-rich produces.
- */
-export enum ChatFormInputRichTokenKind {
-	BADGE = 'badge',
-	CODE_BLOCK = 'code_block',
-	CODE_INLINE = 'code_inline',
-	TEXT = 'text'
 }

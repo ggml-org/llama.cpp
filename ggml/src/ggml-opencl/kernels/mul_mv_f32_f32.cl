@@ -116,3 +116,70 @@ kernel void kernel_mul_mat_f32_f32(
         }
     }
 }
+
+// Each group computes two rows and four columns, with 32 lanes per row.
+kernel void kernel_mul_mv_f32_f32_r2(
+        global const char * src0,
+        ulong offset0,
+        global const char * src1,
+        ulong offset1,
+        global float * dst,
+        ulong offsetd,
+        int ne00,
+        int ne01,
+        int ne02,
+        ulong nb00,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne10,
+        int ne11,
+        int ne12,
+        ulong nb10,
+        ulong nb11,
+        ulong nb12,
+        ulong nb13,
+        int ne0,
+        int ne1,
+        int r2,
+        int r3
+) {
+    src0 += offset0;
+    src1 += offset1;
+    dst = (global float *)((global char *)dst + offsetd);
+
+    const int lid = get_local_id(0);
+    const int lane = lid % 32;
+    const int row = get_group_id(0)*2 + lid/32;
+    const int col = get_group_id(1)*4;
+    const int im = get_group_id(2);
+    const int i12 = im % ne12;
+    const int i13 = im / ne12;
+    global const float4 * x = (global const float4 *)(src0 + min(row, ne01 - 1)*nb01 + (i12/r2)*nb02 + (i13/r3)*nb03);
+    global const char * y = src1 + col*nb11 + i12*nb12 + i13*nb13;
+
+    float4 sum = 0.0f;
+    for (int i = lane; i < ne00/4; i += 32) {
+        const float4 xv = x[i];
+        if (col + 0 < ne11) sum.s0 += dot(xv, ((global const float4 *)(y + 0*nb11))[i]);
+        if (col + 1 < ne11) sum.s1 += dot(xv, ((global const float4 *)(y + 1*nb11))[i]);
+        if (col + 2 < ne11) sum.s2 += dot(xv, ((global const float4 *)(y + 2*nb11))[i]);
+        if (col + 3 < ne11) sum.s3 += dot(xv, ((global const float4 *)(y + 3*nb11))[i]);
+    }
+
+    local float4 part[64];
+    part[lid] = sum;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    for (int s = 16; s > 0; s /= 2) {
+        if (lane < s) {
+            part[lid] += part[lid + s];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+    if (lane == 0 && row < ne01) {
+        if (col + 0 < ne11) dst[im*ne1*ne0 + (col + 0)*ne0 + row] = part[lid].s0;
+        if (col + 1 < ne11) dst[im*ne1*ne0 + (col + 1)*ne0 + row] = part[lid].s1;
+        if (col + 2 < ne11) dst[im*ne1*ne0 + (col + 2)*ne0 + row] = part[lid].s2;
+        if (col + 3 < ne11) dst[im*ne1*ne0 + (col + 3)*ne0 + row] = part[lid].s3;
+    }
+}

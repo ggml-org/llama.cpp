@@ -17,10 +17,8 @@ class InklingModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # explicit raises (not assert, stripped by python -O) guard the single supported variant
         hp = self.hparams
 
-        # normalize keys renamed by HF-port re-saved configs back to checkpoint names
         if "dense_intermediate_size" not in hp and "moe_intermediate_size" in hp:
             hp["dense_intermediate_size"] = hp["intermediate_size"]
             hp["intermediate_size"] = hp["moe_intermediate_size"]
@@ -58,11 +56,9 @@ class InklingModel(TextModel):
                 f"num_attention_heads {hp['num_attention_heads']}"
             )
 
-        # context length comes from model_max_length per the design contract
         if (mml := hp.get("model_max_length")) is not None:
             self.hparams["max_position_embeddings"] = mml
 
-        # checked by the base find_hparam list before the MoE "intermediate_size"
         self.hparams["prefix_dense_intermediate_size"] = hp["dense_intermediate_size"]
 
         self._local_layer_flags = self._get_local_layer_flags()
@@ -83,14 +79,12 @@ class InklingModel(TextModel):
 
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens, toktypes, tokpre = super().get_vocab_base()
-        # dedicated pre-type: o200k-family regex that keeps combining marks attached to base letters
         tokpre = "inkling"
         import gguf as _gguf
         n_vocab = self.hparams["vocab_size"]
         n_unpadded = self.hparams.get("unpadded_vocab_size") or n_vocab
         if len(tokens) != n_vocab:
             raise ValueError(f"Inkling tokenizer produced {len(tokens)} entries, expected {n_vocab}")
-        # force-CONTROL special ids from added_tokens_decoder, else the trailing-60 convention
         try:
             import json as _json
             import pathlib as _pl
@@ -109,12 +103,9 @@ class InklingModel(TextModel):
         self._set_vocab_gpt2()
         eos_id = int(self.hparams.get("eos_token_id", 200006))
         if eos_id < 199998:
-            # HF-port configs re-save generic bos/eos defaults; the real EOS lives at 199998+
             eos_id = 200006
-        # 200006 is the SOLE end-of-generation token; <|end_message|> (200010) is an
-        # intra-turn block separator and must NOT be registered eot/eog
+        # 200006 is the only EOG; <|end_message|> (200010) separates blocks and must not be EOG
         self.gguf_writer.add_eos_token_id(eos_id)
-        # no BOS is ever prepended; pin bos to EOS so a stale base-tokenizer bos id never surfaces
         self.gguf_writer.add_bos_token_id(eos_id)
         self.gguf_writer.add_add_bos_token(False)
 
@@ -128,7 +119,6 @@ class InklingModel(TextModel):
         self.gguf_writer.add_expert_weights_scale(hp["route_scale"])
         self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
 
-        # sliding_window_size is canonical; explicit is-None fallback so a serialized 0 cannot bypass the mismatch check
         canonical_window = hp["sliding_window_size"]
         sliding_window = hp.get("sliding_window")
         if sliding_window is None:
@@ -141,10 +131,8 @@ class InklingModel(TextModel):
         if sliding_window <= 0:
             raise ValueError(f"sliding_window must be positive, got {sliding_window}")
         self.gguf_writer.add_sliding_window(sliding_window)
-        # true = local (swa) layer
         self.gguf_writer.add_sliding_window_pattern(self._local_layer_flags)
 
-        # no RoPE (arch-determined NONE); custom inkling.* keys per INKLING_DESIGN.md
         arch = gguf.MODEL_ARCH_NAMES[self.model_arch]
         self.gguf_writer.add_uint32(f"{arch}.d_rel", hp["d_rel"])
         self.gguf_writer.add_uint32(f"{arch}.rel_extent", hp["rel_extent"])
@@ -167,7 +155,6 @@ class InklingModel(TextModel):
             return None
 
         name = name.replace("model.llm.", "model.")
-        # parameter has no ".weight"-style suffix in the checkpoint
         name = name.replace("rel_logits_proj.proj", "rel_logits_proj.weight")
 
         return super().filter_tensors((name, gen))
@@ -180,7 +167,6 @@ class InklingModel(TextModel):
         return gate, up
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # short convs: [C, 1, K] -> [C, K] (same layout as LFM2 shortconv.conv)
         if name.endswith("_sconv.weight"):
             data_torch = data_torch.squeeze(1)
             return [(self.map_tensor_name(name), data_torch)]
@@ -212,7 +198,6 @@ class InklingModel(TextModel):
             assert bid is not None
             return [(self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN_EXP, bid), data_torch)]
 
-        # shared experts stored stacked for mul_mat_id
         if name.endswith(".mlp.shared_experts.shared_w13_weight"):
             assert bid is not None
             gate, up = self._deinterleave_w13(data_torch)
@@ -264,7 +249,6 @@ class InklingMmprojModel(MmprojModel):
                 raise NotImplementedError(
                     f"Inkling mmproj requires vision_config.{key}={want!r}, got {got!r}"
                 )
-        # decoder_dmodel is the text model width, it varies per checkpoint
         if not hp.get("decoder_dmodel"):
             raise NotImplementedError("Inkling mmproj requires vision_config.decoder_dmodel")
 
@@ -296,7 +280,6 @@ class InklingMmprojModel(MmprojModel):
         self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.INKLING)
         self.gguf_writer.add_vision_projection_dim(hp["decoder_dmodel"])
 
-        # clip.cpp requires these common fields even though hMLP is not a ViT.
         self.gguf_writer.add_vision_image_size(hp["patch_size"])
         self.gguf_writer.add_vision_patch_size(hp["patch_size"])
         self.gguf_writer.add_vision_embedding_length(hp["n_channels"])

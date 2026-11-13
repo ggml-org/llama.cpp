@@ -40,6 +40,10 @@ export const VIDEO_FILE_TYPES = {
 	[FileTypeVideo.OGG]: {
 		extensions: [FileExtensionVideo.OGG],
 		mimeTypes: [MimeTypeVideo.OGG]
+	},
+	[FileTypeVideo.WEBM]: {
+		extensions: [FileExtensionVideo.WEBM],
+		mimeTypes: [MimeTypeVideo.WEBM]
 	}
 } as const;
 
@@ -69,6 +73,9 @@ export const IMAGE_FILE_TYPES = {
 		mimeTypes: [MimeTypeImage.WEBP]
 	}
 } as const;
+
+/** `content` that messages stored before the text was kept carry for a PDF sent as images. */
+export const PDF_AS_IMAGES_LEGACY_CONTENT_REGEX = /^PDF file with \d+ pages$/;
 
 export const PDF_FILE_TYPES = {
 	[FileTypePdf.PDF]: {

@@ -13,6 +13,7 @@
 
 llama_kv_cache_dsa_iswa::llama_kv_cache_dsa_iswa(
         const llama_model & model,
+                     bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
                      bool   v_trans,
@@ -22,7 +23,6 @@ llama_kv_cache_dsa_iswa::llama_kv_cache_dsa_iswa(
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
-                 uint32_t   n_pad,
     const layer_filter_cb & filter_mla,
     const layer_filter_cb & filter_lid,
     const  layer_reuse_cb & reuse) : unified(unified) {
@@ -63,15 +63,15 @@ llama_kv_cache_dsa_iswa::llama_kv_cache_dsa_iswa(
     LLAMA_LOG_INFO("%s: creating DSA KV cache, size = %u cells\n", __func__, size_dsa);
 
     kv_dsa = std::make_unique<llama_kv_cache_dsa>(
-            model, type_k, type_v,
-            v_trans, offload, unified, size_dsa, n_seq_max, n_pad,
+            model, no_alloc, type_k, type_v,
+            v_trans, offload, unified, size_dsa, n_seq_max,
             0, LLAMA_SWA_TYPE_NONE, filter_dsa, filter_lid, reuse);
 
     LLAMA_LOG_INFO("%s: creating SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache>(
-            model, hparams, type_k, type_v,
-            v_trans, offload, unified, size_swa, n_seq_max, n_pad,
+            model, no_alloc, hparams, type_k, type_v,
+            v_trans, offload, unified, size_swa, n_seq_max,
             hparams.n_swa, hparams.swa_type, nullptr, filter_swa, reuse, nullptr);
 }
 
@@ -234,18 +234,12 @@ bool llama_kv_cache_dsa_iswa::get_can_shift() const {
 }
 
 void llama_kv_cache_dsa_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
-    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_dsa->state_write(io, seq_id, flags);
-    }
-
+    kv_dsa->state_write(io, seq_id, flags);
     kv_swa->state_write(io, seq_id, flags);
 }
 
 void llama_kv_cache_dsa_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
-    if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_dsa->state_read(io, seq_id, flags);
-    }
-
+    kv_dsa->state_read(io, seq_id, flags);
     kv_swa->state_read(io, seq_id, flags);
 }
 

@@ -40,6 +40,7 @@ import type {
 import type { DatabaseMessageExtraMcpResource } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 import {
+	buildProxiedIconUrl,
 	detectMcpTransportFromUrl,
 	getMcpIconUrl,
 	getMcpServerFaviconFallback,
@@ -675,11 +676,11 @@ class MCPStore implements McpHealthHost {
 			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, isDark);
 
 			if (mcpIconUrl) {
-				return mcpIconUrl;
+				return this.toRenderableIconUrl(mcpIconUrl);
 			}
 		}
 
-		return getMcpServerFaviconFallback(server.url);
+		return this.toRenderableIconUrl(getMcpServerFaviconFallback(server.url));
 	}
 
 	/**
@@ -1398,6 +1399,15 @@ class MCPStore implements McpHealthHost {
 		this.indexServerTools(serverName, connection.tools);
 
 		console.log(`[MCPStore][${serverName}] Session recovered successfully`);
+	}
+
+	/**
+	 * Icons come from the MCP server's own origin, which the browser cannot load
+	 * under the UI's cross-origin isolation. With the proxy enabled the server
+	 * fetches them instead; data URLs need no help and stay as they are.
+	 */
+	private toRenderableIconUrl(iconUrl: string | null): string | null {
+		return buildProxiedIconUrl(iconUrl, this.isProxyAvailable);
 	}
 
 	private updateState(state: {

@@ -30,6 +30,10 @@ on:
       'ggml/src/ggml-cuda/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -45,7 +49,7 @@ env:
 
 jobs:
   gpu-cuda:
-    runs-on: "hf-jobs-t4-small:cuda13"
+    runs-on: "hf-jobs-t4-medium:cuda13"
 
     steps:
       - name: Clone
@@ -89,12 +93,71 @@ jobs:
           save: true
 
   gpu-rocm:
-    runs-on: [self-hosted, Linux, AMD]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Strix Halo (iGPU, RDNA3.5)
+          - gpu: gfx1151
+            runner: [self-hosted, Linux, strix-halo, devlab-dispatch]
+            # async-execution correctness workaround, gfx1151 only (see Test step)
+            hip_launch_blocking: "1"
+          # Radeon AI PRO R9700 (dGPU, RDNA4)
+          - gpu: gfx1201
+            runner: [self-hosted, Linux, radeon-r9700, devlab-dispatch]
+            hip_launch_blocking: "0"
+            # HIP-graph capture fails on gfx1201 (hipMemset -> hipErrorStreamCaptureImplicit)
+            disable_hip_graphs: true
+
+    name: gpu-rocm (${{ matrix.gpu }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+
+    env:
+      ROCM_VERSION: "10.0.0"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
+
+      - name: Verify GPU device
+        run: |
+          ls /dev/kfd /dev/dri/renderD* || { echo "ERROR: no amdgpu compute device"; exit 1; }
+
+      # same TheRock wheels as the ubuntu-24-rocm release build, so the runner does not need a ROCm install
+      - name: Setup TheRock with Wheels
+        run: |
+          python3 -m venv "$RUNNER_TEMP/rocm"
+          "$RUNNER_TEMP/rocm/bin/python" -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,devel,device-${{ matrix.gpu }}]==${ROCM_VERSION}"
+          ROCM_PATH=$("$RUNNER_TEMP/rocm/bin/rocm-sdk" path --root)
+          {
+            echo "ROCM_PATH=$ROCM_PATH"
+            echo "HIP_PATH=$ROCM_PATH"
+            echo "CMAKE_PREFIX_PATH=$("$RUNNER_TEMP/rocm/bin/rocm-sdk" path --cmake)"
+            echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}"
+          } >> "$GITHUB_ENV"
+          "$RUNNER_TEMP/rocm/bin/rocm-sdk" path --bin >> "$GITHUB_PATH"
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.24
+        with:
+          restore: false
+          save: false
+
+      # ROCm is installed again on each run, so hash the compiler content, not its mtime
+      - name: Tune ccache for reinstalled ROCm toolchain
+        run: |
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=depend_mode=true
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        with:
+          key: self-hosted-gpu-rocm-${{ matrix.gpu }}
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Test
         id: ggml-ci
@@ -103,10 +166,25 @@ jobs:
         # incorrect output (perplexity ~88 vs ~9.4). Serializing kernel launches
         # restores correctness. Remove once the underlying ROCm/HIP issue is fixed.
         env:
-          HIP_LAUNCH_BLOCKING: "1"
+          HIP_LAUNCH_BLOCKING: ${{ matrix.hip_launch_blocking }}
         run: |
           rocminfo
-          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+          # Exported rather than set in env:, because ggml only checks that the
+          # variable is defined: an empty value would disable graphs on gfx1151 too.
+          if [ "${{ matrix.disable_hip_graphs }}" = "true" ]; then export GGML_CUDA_DISABLE_GRAPHS=1; fi
+          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=${{ matrix.gpu }} bash ./ci/run.sh "$RUNNER_TEMP/results/llama.cpp" "$RUNNER_TEMP/mnt/llama.cpp"
+
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: self-hosted-gpu-rocm-${{ matrix.gpu }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   # TODO: provision AMD GPU machine
   # amd-rocm:

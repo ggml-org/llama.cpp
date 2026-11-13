@@ -12,22 +12,30 @@ endif()
 
 find_package(Threads REQUIRED)
 
+set(MTMD_CORE_SOURCES
+    mtmd.cpp
+    mtmd-audio.cpp
+    mtmd-image.cpp
+    mtmd.h
+    mtmd-internal.h
+    mtmd-helper.cpp
+    mtmd-helper-gen.cpp
+    mtmd-helper-common.h
+    mtmd-helper.h
+    mtmd-model.cpp
+    mtmd-subcontext.cpp
+    mtmd-graph.cpp
+    mtmd-subcontext.h
+    mtmd-impl.h
+    mtmd-model.h
+    mtmd-graph.h
+)
+
 add_library(mtmd
-            mtmd.cpp
-            mtmd-audio.cpp
-            mtmd-image.cpp
-            mtmd.h
-            mtmd-internal.h
-            mtmd-helper.cpp
-            mtmd-helper-gen.cpp
-            mtmd-helper-common.h
-            mtmd-helper.h
-            clip.cpp
-            clip.h
-            clip-impl.h
-            clip-model.h
-            clip-graph.h
+            ${MTMD_CORE_SOURCES}
             models/models.h
+            models/chatterbox-gen.cpp
+            models/chatterbox-spkenc.cpp
             models/cogvlm.cpp
             models/conformer.cpp
             models/deepseek4v.cpp
@@ -47,26 +55,38 @@ add_library(mtmd
             models/kimivl.cpp
             models/kimik25.cpp
             models/nemotron-v2-vl.cpp
+            models/nemotron-omni.cpp
+            models/nemotron-transcribe.cpp
             models/muse-glimmer.cpp
+            models/muse-spark-audio.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp
+            models/sensenova-u1.cpp
             models/minimax-m3.cpp
             models/qwen3vl.cpp
+            models/magevl.cpp
+            models/lfm3vl.cpp
+            models/lfm3a.cpp
+            models/lfm3a-gen.cpp
+            models/ling3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
             models/mimo-audio.cpp
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
+            models/drama3-gen.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp
             models/pockettts-gen.cpp
+            models/soprano.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
+            models/voxtral-rt.cpp
             models/deepseekocr.cpp
             models/deepseekocr2.cpp
             models/mobilenetv5.cpp
@@ -79,12 +99,21 @@ set_target_properties(mtmd PROPERTIES
     VERSION ${LLAMA_VERSION_BASE}
     SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
+    UNITY_BUILD ON
+    UNITY_BUILD_BATCH_SIZE 16
 )
+
+# exclude non-model sources from unity build
+set_source_files_properties(${MTMD_CORE_SOURCES}
+    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::miniaudio vendor::stb vendor::sheredom)
 target_include_directories(mtmd PUBLIC  .)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+# for M_PI, set here because a unity batch can include <cmath> before the source that needs it
+target_compile_definitions(mtmd PRIVATE _USE_MATH_DEFINES)
 
 if (MTMD_VIDEO)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
@@ -122,6 +151,13 @@ endif()
 if (ANDROID)
     # miniaudio.h defines ma_android_sdk_version() without a prior prototype
     target_compile_options(mtmd PRIVATE -Wno-missing-prototypes)
+endif()
+
+# MSVC defines _M_X64 for ARM64EC, so miniaudio.h takes its x64 path.
+# ARM64EC does not support AVX types.
+string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" MTMD_GENERATOR_PLATFORM_LWR)
+if (MSVC AND MTMD_GENERATOR_PLATFORM_LWR STREQUAL "arm64ec")
+    target_compile_definitions(mtmd PRIVATE MA_NO_AVX2)
 endif()
 
 if (TARGET BUILD_INFO)

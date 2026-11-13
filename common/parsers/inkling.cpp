@@ -1,7 +1,5 @@
 #include "parsers.h"
 
-// Inkling / TML typed-content-block parser: <|end_message|> separates blocks within a turn,
-// <|content_model_end_sampling|> is the sole end-of-generation token (mirrors sglang TmlDetector).
 common_chat_params common_chat_params_init_inkling(const common_chat_template &          tmpl,
                                                           const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -45,16 +43,13 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
             data.generation_prompt += END_MESSAGE + TEXT + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(MSG_MODEL);
         auto end               = p.end();
 
-        // thinking block; may also reappear mid-turn (after content), so it is both an optional
-        // prefix and a choice inside the block loops. With reasoning_format=NONE keep it
-        // (markers included) inline as content
         common_peg_parser reasoning_block = p.eps();
         if (extract_reasoning) {
             reasoning_block = p.literal(THINK) +
@@ -67,9 +62,7 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
         }
         auto reasoning = p.optional(reasoning_block);
 
-        // TML re-emits <|message_model|> before each content block; a turn may contain several
-        // text blocks (one per content part), so the block repeats and bodies concatenate.
-        // THINK stops the content scan so a mid-turn thinking block is never leaked as text
+        // one text block per content part; THINK stops the scan so mid-turn thinking never leaks as text
         auto text_block = p.optional(p.literal(MSG_MODEL)) +
                           p.optional(p.literal(TEXT)) +
                           p.content(p.until_one_of({ THINK, END_MESSAGE, END_SAMPLING })) +
@@ -81,9 +74,7 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
                    p.optional(p.literal(END_SAMPLING)) + end;
         }
 
-        // each call is its own block (role opener + bare name echo + JSON section);
-        // force_tool_calls=true makes the JSON section required so a pure-text answer fails the
-        // block cleanly; parallel calls are separate blocks, hence repeat + parallel=false
+        // one block per call; force_tool_calls makes a pure-text answer fail the tool branch
         auto tool_section = p.standard_json_tools(
             INVOKE_TOOL, END_MESSAGE, inputs.tools, /* parallel_tool_calls = */ false,
             /* force_tool_calls = */ true,
@@ -96,15 +87,12 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
             /* parameters_order  = */ {},
             /* accept_openai_wrapper = */ false,
             /* require_object_args   = */ true);
-        // the name-echo scan must stop at any block marker: a greedy until(INVOKE_TOOL) returns
-        // NEED_MORE_INPUT mid-stream, which choice() treats as a match and shadows the text branch
+        // stop at any marker: a greedy until(INVOKE_TOOL) returns NEED_MORE_INPUT and shadows the text branch
         auto tool_block = p.optional(p.literal(MSG_MODEL)) +
                           p.until_one_of({ INVOKE_TOOL, TEXT, THINK, END_MESSAGE, END_SAMPLING }) +
                           tool_section;
         auto tool_calls = inputs.parallel_tool_calls ? p.one_or_more(tool_block) : tool_block;
-        // turns may interleave narration, thinking and calls; parse block-by-block (tool block
-        // first) since a whole-body choice would let the text branch swallow tool blocks into
-        // visible content
+        // block-by-block, tool first, so the text branch cannot swallow tool blocks
         auto mixed_body = p.one_or_more(p.choice({ tool_block, reasoning_block, text_block }));
         auto body       = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED
                               ? tool_calls
@@ -113,8 +101,6 @@ common_chat_params common_chat_params_init_inkling(const common_chat_template & 
         return generation_prompt + reasoning + body +
                p.optional(p.literal(END_SAMPLING)) + end;
     });
-
-    data.parser = parser.save();
 
     return data;
 }
