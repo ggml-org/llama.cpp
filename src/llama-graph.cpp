@@ -2372,6 +2372,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         selected_experts = ggml_argsort_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
         cb(selected_experts->src[0], "ffn_moe_argsort", il);
     }
+    // ensure tensor name includes layer index for external profiling (format: ffn_moe_topk.<il>)
+    ggml_format_name(selected_experts, "ffn_moe_topk.%d", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
     if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {

@@ -15,6 +15,7 @@
 #include "llama.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -22,6 +23,255 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
+
+// MoE router export ring buffer implementation
+struct llama_moe_router_export {
+    static constexpr uint32_t MAGIC = 0x52454F4D; // "MOER"
+    static constexpr uint32_t VERSION = 1;
+    static constexpr size_t HEADER_SIZE = 4096;
+    static constexpr uint64_t DEFAULT_CAPACITY = 8192; // ~134 MB in /dev/shm (tmpfs = RAM)
+
+    struct Header {
+        uint32_t magic;
+        uint32_t version;
+        uint32_t n_layer;
+        uint32_t n_expert;
+        uint32_t n_expert_used;
+        uint32_t _pad;
+        uint64_t capacity;
+        std::atomic<uint64_t> write_seq;
+    };
+
+    const char * path = nullptr;
+    int fd = -1;
+    void * mmap_ptr = nullptr;
+    size_t mmap_size = 0;
+    Header * header = nullptr;
+    uint8_t * records = nullptr;
+    uint32_t n_layer = 0;
+    uint32_t n_expert = 0;
+    uint32_t n_expert_used = 0;
+    uint32_t max_tokens_per_record = 0;
+    bool disabled = false;
+    bool warned = false;
+
+    llama_moe_router_export() = default;
+    ~llama_moe_router_export() { close(); }
+
+    bool init(const char * path_, uint32_t n_layer_, uint32_t n_expert_, uint32_t n_expert_used_, uint32_t max_tokens) {
+        path = path_;
+        n_layer = n_layer_;
+        n_expert = n_expert_;
+        n_expert_used = n_expert_used_;
+        // Stride must match the reader side exactly: reader always assumes 512-token records
+        (void)max_tokens;
+        max_tokens_per_record = 512;
+
+        if (disabled) return false;
+
+#if defined(_WIN32)
+        disabled = true;
+        if (!warned) {
+            LLAMA_LOG_WARN("moe-router-export: not supported on Windows\n");
+            warned = true;
+        }
+        return false;
+#else
+        // Create/truncate the file
+        fd = ::open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
+        if (fd < 0) {
+            disabled = true;
+            if (!warned) {
+                LLAMA_LOG_WARN("moe-router-export: failed to open '%s': %s\n", path, strerror(errno));
+                warned = true;
+            }
+            return false;
+        }
+
+        // Calculate file size
+        const size_t record_max = 8 + 4 + 4 + (size_t)max_tokens_per_record * n_expert_used * 4;
+        const size_t file_size = HEADER_SIZE + DEFAULT_CAPACITY * record_max;
+
+        // Resize file
+        if (::ftruncate(fd, file_size) != 0) {
+            disabled = true;
+            if (!warned) {
+                LLAMA_LOG_WARN("moe-router-export: failed to ftruncate '%s': %s\n", path, strerror(errno));
+                warned = true;
+            }
+            ::close(fd);
+            fd = -1;
+            return false;
+        }
+
+        // mmap the file
+        mmap_ptr = ::mmap(nullptr, file_size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_NORESERVE, fd, 0);
+        if (mmap_ptr == MAP_FAILED) {
+            disabled = true;
+            if (!warned) {
+                LLAMA_LOG_WARN("moe-router-export: failed to mmap '%s': %s\n", path, strerror(errno));
+                warned = true;
+            }
+            ::close(fd);
+            fd = -1;
+            return false;
+        }
+
+        mmap_size = file_size;
+        header = (Header *)mmap_ptr;
+        records = (uint8_t *)mmap_ptr + HEADER_SIZE;
+
+        // Initialize header
+        header->magic = MAGIC;
+        header->version = VERSION;
+        header->n_layer = n_layer;
+        header->n_expert = n_expert;
+        header->n_expert_used = n_expert_used;
+        header->_pad = 0;
+        header->capacity = DEFAULT_CAPACITY;
+        header->write_seq.store(0, std::memory_order_relaxed);
+
+        LLAMA_LOG_INFO("moe-router-export: initialized ring at '%s' (capacity=%" PRIu64 ", record_max=%zu bytes)\n",
+                       path, DEFAULT_CAPACITY, record_max);
+        return true;
+#endif
+    }
+
+    void close() {
+#if !defined(_WIN32)
+        if (mmap_ptr && mmap_ptr != MAP_FAILED) {
+            ::munmap(mmap_ptr, mmap_size);
+            mmap_ptr = nullptr;
+        }
+        if (fd >= 0) {
+            ::close(fd);
+            fd = -1;
+        }
+#endif
+    }
+
+    bool write_record(uint32_t layer, uint32_t n_tokens, const int32_t * expert_ids) {
+        if (disabled || !header) return false;
+
+        if (n_tokens > max_tokens_per_record) {
+            // Skip record but still bump sequence
+            uint64_t seq = header->write_seq.fetch_add(1, std::memory_order_acq_rel);
+            (void)seq;
+            return false;
+        }
+
+        const size_t record_max = 8 + 4 + 4 + (size_t)max_tokens_per_record * n_expert_used * 4;
+    // seq is 1-based so the reader's "record i valid iff seq == i+1" check works
+        uint64_t seq = header->write_seq.fetch_add(1, std::memory_order_acq_rel) + 1;
+        uint64_t slot = (seq - 1) % header->capacity;
+        uint8_t * record = records + slot * record_max;
+
+        // Write record: seq (u64), layer (u32), n_tokens (u32), expert_ids (n_tokens * n_expert_used * i32)
+        *(uint64_t *)record = seq;
+        record += 8;
+        *(uint32_t *)record = layer;
+        record += 4;
+        *(uint32_t *)record = n_tokens;
+        record += 4;
+
+        // Copy expert IDs (row-major: token-major, k experts per token)
+        // The tensor is [n_expert_used, n_tokens], so we need to transpose to [n_tokens, n_expert_used]
+        for (uint32_t t = 0; t < n_tokens; ++t) {
+            for (uint32_t k = 0; k < n_expert_used; ++k) {
+                ((int32_t *)record)[t * n_expert_used + k] = expert_ids[k * n_tokens + t];
+            }
+        }
+
+        return true;
+    }
+};
+
+// Global instance (one per context, stored in llama_context)
+static thread_local llama_moe_router_export * g_moe_router_export = nullptr;
+
+// Composed eval callback that handles MoE router export
+static bool moe_router_export_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto * ctx = (llama_context *)user_data;
+
+    // First, call the existing callback if any
+    const auto & cparams = ctx->get_cparams();
+    if (cparams.cb_eval) {
+        if (!cparams.cb_eval(t, ask, cparams.cb_eval_user_data)) {
+            return false;
+        }
+    }
+
+    // Then handle MoE router export
+    if (!cparams.moe_router_export_path) return true;
+
+    // Lazy initialization
+    if (!g_moe_router_export) {
+        g_moe_router_export = new llama_moe_router_export();
+        const auto & hparams = ctx->get_model().hparams;
+        if (!g_moe_router_export->init(cparams.moe_router_export_path,
+                                        hparams.n_layer(),
+                                        hparams.n_expert,
+                                        hparams.n_expert_used_max(),
+                                        cparams.n_ubatch)) {
+            delete g_moe_router_export;
+            g_moe_router_export = nullptr;
+            // Disable by clearing the path
+            ctx->set_moe_router_export_path(nullptr);
+            return true;
+        }
+    }
+
+    if (g_moe_router_export->disabled) return true;
+
+    if (ask) {
+        // Only interested in ffn_moe_topk tensors
+        const char * name = t->name;
+        if (name && strstr(name, "ffn_moe_topk") != nullptr) {
+            return true;
+        }
+        return false;
+    }
+
+    // ask == false: data is ready, copy and write to ring
+    const char * name = t->name;
+    if (!name || strstr(name, "ffn_moe_topk") == nullptr) return true;
+
+    // Parse layer index from name (format: "ffn_moe_topk.<il>" or "ffn_moe_topk-<il>")
+    uint32_t layer = 0;
+    const char * sep = strrchr(name, '.');
+    if (!sep) sep = strrchr(name, '-');
+    if (sep) {
+        layer = (uint32_t)atoi(sep + 1);
+    } else {
+        // Fallback: try to parse from end
+        const char * p = name + strlen(name) - 1;
+        while (p > name && *p >= '0' && *p <= '9') --p;
+        if (p > name && (*p == '.' || *p == '-')) {
+            layer = (uint32_t)atoi(p + 1);
+        }
+    }
+
+    // Copy tensor data to host
+    if (t->type != GGML_TYPE_I32) return true;
+
+    const int64_t n_expert_used = t->ne[0];
+    const int64_t n_tokens = t->ne[1];
+    if (n_expert_used <= 0 || n_tokens <= 0) return true;
+
+    const size_t n_bytes = (size_t)n_expert_used * n_tokens * sizeof(int32_t);
+    std::vector<int32_t> host_data(n_expert_used * n_tokens);
+    ggml_backend_tensor_get(t, host_data.data(), 0, n_bytes);
+
+    g_moe_router_export->write_record(layer, (uint32_t)n_tokens, host_data.data());
+
+    return true;
+}
 
 //
 // llama_context
@@ -378,6 +628,7 @@ llama_context::llama_context(
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size      = params.moe_cache_size;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
+    cparams.moe_router_export_path = params.moe_router_export_path;
 
     // resolved after flash attention, see resolve_fused_ops()
     {
@@ -633,6 +884,12 @@ llama_context::llama_context(
 llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
+
+    // cleanup MoE router export
+    if (g_moe_router_export) {
+        delete g_moe_router_export;
+        g_moe_router_export = nullptr;
+    }
 
     // when training, ggml_opt allocates extra buffers through the scheduler, so the sizes no longer match the expectation
     if (!model.no_alloc() && !opt_ctx) {
@@ -1694,6 +1951,10 @@ void llama_context::set_causal_attn(bool value) {
     cparams.causal_attn = value;
 }
 
+void llama_context::set_moe_router_export_path(const char * path) {
+    cparams.moe_router_export_path = path;
+}
+
 bool llama_context::get_causal_attn() const {
     return cparams.causal_attn;
 }
@@ -1844,7 +2105,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        if (cparams.moe_router_export_path) {
+            ggml_backend_sched_set_eval_callback(sched.get(), moe_router_export_eval_callback, this);
+        } else {
+            ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        }
 
         //const auto t_start_us = ggml_time_us();
 
@@ -4441,6 +4706,7 @@ llama_context_params llama_context_default_params() {
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.moe_cache_size              =*/ 0,
         /*.moe_cache_cpu_share         =*/ 0.0f,
+        /*.moe_router_export_path      =*/ nullptr,
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
