@@ -11,15 +11,23 @@
 #define HTP_SSM_SCAN_ROW_TILE_DEFAULT   32U
 #define HTP_SSM_SCAN_TOKEN_TILE_DEFAULT 32U
 
+enum htp_ssm_scan_kernel_type {
+    HTP_SSM_SCAN_KERNEL_UNSUPPORTED = 0,
+    HTP_SSM_SCAN_KERNEL_DECODE      = 1,
+    HTP_SSM_SCAN_KERNEL_PREFILL     = 2,
+};
+
 struct htp_ssm_scan_kernel_params {
+    uint8_t  kernel_type;
+    uint8_t  fast_step4;
     uint16_t row_tile;
     uint16_t token_tile;
     uint16_t n_hvx;
 
+    uint32_t n_chunks;
     uint32_t d_state;
     uint32_t n_a;
     uint32_t head_dim;
-    uint32_t n_head;
     uint32_t n_tokens;
     uint32_t n_seqs;
     uint32_t K;
@@ -29,6 +37,11 @@ struct htp_ssm_scan_kernel_params {
     uint32_t group_units;
     uint32_t units_per_seq;
     uint32_t total_units;
+    uint32_t units_per_hvx;
+
+    uint32_t y_token_stride;
+    uint32_t y_seq_stride;
+    uint32_t y_bytes;
 
     uint32_t vtcm_per_hvx;
     uint32_t vtcm_size;
@@ -36,6 +49,7 @@ struct htp_ssm_scan_kernel_params {
     struct fastdiv_values div_units_per_seq;
     struct fastdiv_values div_group_units;
     struct fastdiv_values div_n_row_blocks;
+    struct fastdiv_values div_n_hvx;
 };
 
 #if defined(__cplusplus)
@@ -64,14 +78,14 @@ struct htp_ssm_scan_vtcm_layout {
 
 static inline void htp_ssm_scan_vtcm_layout_build(
     struct htp_ssm_scan_vtcm_layout * layout,
+    uint8_t kernel_type,
     uint32_t d_state,
     uint32_t row_tile,
     uint32_t token_tile,
-    uint32_t n_tokens,
     uint32_t K,
     uint32_t n_hvx
 ) {
-    const bool   decode            = n_tokens == 1;
+    const bool   decode            = kernel_type == HTP_SSM_SCAN_KERNEL_DECODE;
     const size_t state_row_stride  = hex_align_up((size_t) d_state * sizeof(float), 128);
     const size_t state_slot_bytes  = (size_t) row_tile * state_row_stride;
     const size_t bc_slot_bytes     = (size_t) token_tile * state_row_stride;

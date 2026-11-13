@@ -2276,10 +2276,19 @@ static bool htp_kparams_solve_ssm_scan(
         return false;
     }
 
-    const uint32_t sess_hvx   = htp_session_n_hvx(sess);
-    const size_t   vtcm_size  = htp_session_vtcm_size(sess);
-    uint32_t       row_tile   = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
-    uint32_t       token_tile = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+    const uint8_t  kernel_type = (n_tokens == 1) ? HTP_SSM_SCAN_KERNEL_DECODE : HTP_SSM_SCAN_KERNEL_PREFILL;
+    const uint8_t  fast_step4  = (n_a == 1 && (d_state & 31U) == 0) ? 1 : 0;
+    const uint32_t sess_hvx    = htp_session_n_hvx(sess);
+    const size_t   vtcm_size   = htp_session_vtcm_size(sess);
+    uint32_t       row_tile    = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
+    uint32_t       token_tile  = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+
+    const uint64_t y_token_stride = (uint64_t) n_head * head_dim * sizeof(float);
+    const uint64_t y_seq_stride   = (uint64_t) n_tokens * y_token_stride;
+    const uint64_t y_bytes        = (uint64_t) n_seqs * y_seq_stride;
+    if (y_bytes > UINT32_MAX) {
+        return false;
+    }
 
     struct htp_ssm_scan_vtcm_layout layout;
     for (;;) {
@@ -2289,12 +2298,14 @@ static bool htp_kparams_solve_ssm_scan(
             return false;
         }
 
+        kparams->kernel_type     = kernel_type;
+        kparams->fast_step4      = fast_step4;
         kparams->row_tile        = (uint16_t) row_tile;
         kparams->token_tile      = (uint16_t) token_tile;
+        kparams->n_chunks        = (n_tokens + token_tile - 1) / token_tile;
         kparams->d_state         = d_state;
         kparams->n_a             = n_a;
         kparams->head_dim        = head_dim;
-        kparams->n_head          = n_head;
         kparams->n_tokens        = n_tokens;
         kparams->n_seqs          = n_seqs;
         kparams->K               = K;
@@ -2304,8 +2315,9 @@ static bool htp_kparams_solve_ssm_scan(
         kparams->units_per_seq   = n_head * n_row_blocks;
         kparams->total_units     = (uint32_t) total_units;
         kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
+        kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
 
-        htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, n_tokens, K, kparams->n_hvx);
+        htp_ssm_scan_vtcm_layout_build(&layout, kernel_type, d_state, kparams->row_tile, kparams->token_tile, K, kparams->n_hvx);
         if (layout.total_bytes <= vtcm_size) {
             break;
         }
@@ -2314,15 +2326,20 @@ static bool htp_kparams_solve_ssm_scan(
         } else if (token_tile > 1) {
             token_tile /= 2;
         } else {
+            kparams->kernel_type = HTP_SSM_SCAN_KERNEL_UNSUPPORTED;
             return false;
         }
     }
 
+    kparams->y_token_stride    = (uint32_t) y_token_stride;
+    kparams->y_seq_stride      = (uint32_t) y_seq_stride;
+    kparams->y_bytes           = (uint32_t) y_bytes;
     kparams->vtcm_per_hvx      = (uint32_t) layout.bytes_per_hvx;
     kparams->vtcm_size         = (uint32_t) layout.total_bytes;
     kparams->div_units_per_seq = init_fastdiv_values(kparams->units_per_seq);
     kparams->div_group_units   = init_fastdiv_values(kparams->group_units);
     kparams->div_n_row_blocks  = init_fastdiv_values(kparams->n_row_blocks);
+    kparams->div_n_hvx         = init_fastdiv_values(kparams->n_hvx);
 
     return true;
 }
