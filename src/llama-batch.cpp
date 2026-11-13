@@ -59,8 +59,14 @@ bool llama_batch_allocr::init(
     int32_t n_embd_only = 0;
     int32_t n_both      = 0;
 
-    const bool has_state = batch_inp.tokens[0].has_state;
-    const bool has_row   = batch_inp.tokens[0].embd_row >= 0;
+    const bool has_state     = batch_inp.tokens[0].has_state;
+    const bool has_row       = batch_inp.tokens[0].embd_row >= 0;
+    const bool has_state_row = batch_inp.tokens[0].state_row >= 0;
+
+    if (has_state && has_state_row) {
+        LLAMA_LOG_ERROR("%s: the entries have a state embedding and a state row\n", __func__);
+        return false;
+    }
 
     for (int32_t i = 0; i < n_tok; ++i) {
         const bool is_tok = batch_inp.tokens[i].id != LLAMA_TOKEN_NULL;
@@ -84,6 +90,11 @@ bool llama_batch_allocr::init(
 
         if (batch_inp.tokens[i].has_state != has_state) {
             LLAMA_LOG_ERROR("%s: all entries in the batch must have the same state embedding presence\n", __func__);
+            return false;
+        }
+
+        if ((batch_inp.tokens[i].state_row >= 0) != has_state_row) {
+            LLAMA_LOG_ERROR("%s: all entries in the batch must have the same state row presence\n", __func__);
             return false;
         }
 
@@ -154,6 +165,13 @@ bool llama_batch_allocr::init(
         embd_row_vec.resize(n_tok);
         for (int32_t i = 0; i < n_tok; ++i) {
             embd_row_vec[i] = batch_inp.tokens[i].embd_row;
+        }
+    }
+
+    if (has_state_row) {
+        state_row_vec.resize(n_tok);
+        for (int32_t i = 0; i < n_tok; ++i) {
+            state_row_vec[i] = batch_inp.tokens[i].state_row;
         }
     }
 
@@ -861,6 +879,7 @@ void llama_batch_allocr::clear() {
     is_embd_vec .clear();
     state_vec   .clear();
     embd_row_vec.clear();
+    state_row_vec.clear();
     seq_id_data .clear();
     pos         .clear();
     n_seq_id    .clear();
@@ -905,6 +924,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     const bool use_embd  = batch.embd  && !(mixed_batch && n_embd_rows == 0);
     const bool has_state = !state_vec.empty();
     const bool has_row   = !embd_row_vec.empty();
+    const bool has_srow  = !state_row_vec.empty();
 
     const int64_t n_embd_all  = use_embd  ? (int64_t) n_tokens*n_embd       : 0;
     const int64_t n_state_all = has_state ? (int64_t) n_tokens*n_embd_state : 0;
@@ -914,6 +934,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->embd      .resize(n_embd_all);
     udata->embd_state.resize(n_state_all);
     udata->embd_row  .resize(has_row ? n_tokens : 0);
+    udata->embd_state_row.resize(has_srow ? n_tokens : 0);
     udata->pos       .resize(n_pos_all);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
@@ -947,6 +968,10 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
         if (has_row) {
             udata->embd_row[i] = embd_row_vec[idxs[i]];
+        }
+
+        if (has_srow) {
+            udata->embd_state_row[i] = state_row_vec[idxs[i]];
         }
 
         for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {
@@ -1354,6 +1379,23 @@ bool llama_batch_ext::set_token_embd_row(int32_t idx, int32_t row) {
     return true;
 }
 
+bool llama_batch_ext::set_token_state_row(int32_t idx, int32_t row) {
+    if (idx < 0 || idx >= (int32_t) tokens.size() || row < 0) {
+        return false;
+    }
+
+    token & t = tokens[idx];
+
+    if (t.has_state || t.state_row >= 0) {
+        LLAMA_LOG_ERROR("%s: entry %d already has a state embedding or a state row\n", __func__, idx);
+        return false;
+    }
+
+    t.state_row = row;
+
+    return true;
+}
+
 bool llama_batch_ext::set_token_pos(int32_t idx, const llama_pos * pos_in) {
     if (idx < 0 || idx >= (int32_t) tokens.size()) {
         return false;
@@ -1453,6 +1495,10 @@ bool llama_batch_ext_set_embd_token(llama_batch_ext * batch, int32_t idx, llama_
 
 bool llama_batch_ext_set_embd_state(llama_batch_ext * batch, int32_t idx, llama_embd embd) {
     return batch->set_token_state(idx, embd);
+}
+
+bool llama_batch_ext_set_embd_state_row(llama_batch_ext * batch, int32_t idx, int32_t row) {
+    return batch->set_token_state_row(idx, row);
 }
 
 bool llama_batch_ext_set_output_embd(llama_batch_ext * batch, int32_t idx, bool value) {

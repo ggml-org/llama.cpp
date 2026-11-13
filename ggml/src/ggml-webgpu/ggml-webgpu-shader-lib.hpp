@@ -27,6 +27,7 @@
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
 #define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
+#define GGML_WEBGPU_COUNT_EQUAL_WG_SIZE       256u
 
 // Matrix multiplication parameters
 
@@ -332,14 +333,18 @@ struct ggml_webgpu_rms_norm_mul_shader_decisions {
 /** Pad **/
 struct ggml_webgpu_pad_pipeline_key {
     bool circular;
+    bool reflect;
 
-    bool operator==(const ggml_webgpu_pad_pipeline_key & other) const { return circular == other.circular; }
+    bool operator==(const ggml_webgpu_pad_pipeline_key & other) const {
+        return circular == other.circular && reflect == other.reflect;
+    }
 };
 
 struct ggml_webgpu_pad_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_pad_pipeline_key & key) const {
         size_t seed = 0;
         ggml_webgpu_hash_combine(seed, key.circular);
+        ggml_webgpu_hash_combine(seed, key.reflect);
         return seed;
     }
 };
@@ -1262,6 +1267,7 @@ class ggml_webgpu_shader_lib {
     std::unordered_map<int, webgpu_pipeline> argsort_merge_pipelines;  // key is order
     std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;         // key is fixed, no variants yet
     std::unordered_map<int, webgpu_pipeline> arange_pipelines;         // key is fixed, no variants yet
+    std::unordered_map<int, webgpu_pipeline> count_equal_pipelines;    // key is src_overlap
     std::unordered_map<ggml_webgpu_row_norm_pipeline_key, webgpu_pipeline, ggml_webgpu_row_norm_pipeline_key_hash>
         row_norm_pipelines;                                            // op/inplace
 
@@ -1345,6 +1351,21 @@ class ggml_webgpu_shader_lib {
 
   public:
     ggml_webgpu_shader_lib(wgpu::Device device) { this->device = device; }
+
+    webgpu_pipeline get_count_equal_pipeline(bool src_overlap) {
+        const int key = src_overlap;
+        auto      it  = count_equal_pipelines.find(key);
+        if (it != count_equal_pipelines.end()) {
+            return it->second;
+        }
+        std::vector<std::string> defines = { "WG_SIZE=" + std::to_string(GGML_WEBGPU_COUNT_EQUAL_WG_SIZE) };
+        if (src_overlap) {
+            defines.push_back("SRC_OVERLAP");
+        }
+        auto processed             = preprocessor.preprocess(wgsl_count_equal, defines);
+        count_equal_pipelines[key] = ggml_webgpu_create_pipeline(device, processed, "count_equal");
+        return count_equal_pipelines[key];
+    }
 
     webgpu_pipeline get_sum_rows_pipeline(const ggml_webgpu_shader_lib_context & context) {
         const bool mean = context.dst->op == GGML_OP_MEAN;
@@ -2030,7 +2051,8 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_pad_pipeline(const ggml_webgpu_shader_lib_context & context) {
         ggml_webgpu_pad_pipeline_key key = {};
-        key.circular                     = ggml_get_op_params_i32(context.dst, 8) != 0;
+        key.reflect                      = context.dst->op == GGML_OP_PAD_REFLECT_1D;
+        key.circular                     = !key.reflect && ggml_get_op_params_i32(context.dst, 8) != 0;
 
         auto it = pad_pipelines.find(key);
         if (it != pad_pipelines.end()) {
@@ -2040,6 +2062,10 @@ class ggml_webgpu_shader_lib {
         std::vector<std::string> defines;
         std::string              variant = "pad";
 
+        if (key.reflect) {
+            defines.push_back("REFLECT");
+            variant += "_reflect";
+        }
         if (key.circular) {
             defines.push_back("CIRCULAR");
             variant += "_circular";

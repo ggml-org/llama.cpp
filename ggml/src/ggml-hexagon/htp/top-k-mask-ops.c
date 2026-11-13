@@ -9,7 +9,7 @@
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "hex-common.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
@@ -25,11 +25,11 @@ struct htp_top_k_mask_context {
     struct htp_ops_context *                    octx;
     const struct htp_top_k_mask_kernel_params * kparams;
 
-    uint32_t rows_per_thread;
+    uint32_t rows_per_hvx;
     uint32_t row0, row1;           // rows this device handles
     uint32_t off_extra, off_score; // parts inside one row input slot
     uint32_t col0, ncols_out;      // PICKS: columns this device writes back
-    atomic_uint barrier;           // PICKS: arrivals, barrier k waits for k * n_threads
+    atomic_uint barrier;           // PICKS: arrivals, barrier k waits for k * n_hvx
 
     uint8_t * blocks;
     uint8_t * mask;
@@ -348,7 +348,7 @@ static inline void top_k_mask_next(uint32_t * r, uint32_t * ct, uint32_t n_col_t
 
 // ROWS: the thread count follows the device rows (mdev), so the slice of an n byte copy is sized here
 static inline uint32_t top_k_mask_slice(const struct htp_ops_context * octx, unsigned int nth, uint32_t n) {
-    return hex_round_up(fastdiv(n + nth - 1, &octx->n_threads_div), HTP_TOP_K_MASK_UNIT);
+    return hex_round_up(fastdiv(n + nth - 1, &octx->n_hvx_div), HTP_TOP_K_MASK_UNIT);
 }
 
 // Push this thread's slice (128B aligned) of a contiguous n byte copy. Returns the push count.
@@ -363,12 +363,12 @@ static inline uint32_t top_k_mask_push_slice(dma_queue * dma_q, unsigned int ith
 }
 
 // Pass 1 (ROWS): load the blocks table and the resident mask row, split across threads. Fill the tiles of this thread with -inf meanwhile.
-static void top_k_mask_preload(unsigned int nth, unsigned int ith, void * data) {
+static void top_k_mask_preload(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_top_k_mask_context *             tctx  = (struct htp_top_k_mask_context *) data;
     const struct htp_top_k_mask_kernel_params * kp    = tctx->kparams;
     struct htp_ops_context *                    octx  = tctx->octx;
-    dma_queue *                                 dma_q = octx->ctx->dma[ith];
-    struct htp_thread_trace *                   tr    = &octx->ctx->trace[ith];
+    dma_queue *                                 dma_q = th->dma_q;
+    struct htp_thread_trace *                   tr    = th->trace;
 
     uint32_t n_pushed = 0;
 
@@ -393,12 +393,12 @@ static void top_k_mask_preload(unsigned int nth, unsigned int ith, void * data) 
 
 // Pass 2 (ROWS): depth-2 DMA pipeline over the items of rows [row_first, row_last), item = (row, col tile).
 // The row inputs alternate between 2 slots by row.
-static void top_k_mask_run_items(const struct htp_top_k_mask_context * tctx, unsigned int ith, uint32_t row_first, uint32_t row_last) {
+static void top_k_mask_run_items(const struct htp_top_k_mask_context * tctx, const htp_thread_t * th, unsigned int ith, uint32_t row_first, uint32_t row_last) {
     struct htp_ops_context *                    octx  = tctx->octx;
     const struct htp_top_k_mask_kernel_params * kp    = tctx->kparams;
     const struct htp_tensor *                   dst   = octx->dst;
-    dma_queue *                                 dma_q = octx->ctx->dma[ith];
-    struct htp_thread_trace *                   tr    = &octx->ctx->trace[ith];
+    dma_queue *                                 dma_q = th->dma_q;
+    struct htp_thread_trace *                   tr    = th->trace;
 
     const bool     is_f16    = kp->flags & HTP_TOP_K_MASK_F16;
     const uint32_t elem_size = kp->elem_size;
@@ -480,16 +480,16 @@ static void top_k_mask_run_items(const struct htp_top_k_mask_context * tctx, uns
 }
 
 // Pass 2 (ROWS): whole rows split across threads, the col tiles of a row in order
-static void top_k_mask_thread_rows(unsigned int nth, unsigned int ith, void * data) {
+static void top_k_mask_thread_rows(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     const struct htp_top_k_mask_context * tctx = (const struct htp_top_k_mask_context *) data;
 
-    const uint32_t ir0 = tctx->row0 + ith * tctx->rows_per_thread;
-    const uint32_t ir1 = MIN(ir0 + tctx->rows_per_thread, tctx->row1);
+    const uint32_t ir0 = tctx->row0 + ith * tctx->rows_per_hvx;
+    const uint32_t ir1 = MIN(ir0 + tctx->rows_per_hvx, tctx->row1);
     if (ir0 >= ir1) {
         return;
     }
 
-    top_k_mask_run_items(tctx, ith, ir0, ir1);
+    top_k_mask_run_items(tctx, th, ith, ir0, ir1);
 }
 
 static inline void top_k_mask_barrier(atomic_uint * b, uint32_t target, struct htp_thread_trace * tr, uint16_t info) {
@@ -501,15 +501,15 @@ static inline void top_k_mask_barrier(atomic_uint * b, uint32_t target, struct h
     htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, info);
 }
 
-// PICKS, one pass over n_virt = kp->n_threads virtual workers (host slices); real worker ith runs the virtual workers ith, ith + nth, ...
+// PICKS, one pass over n_virt = kp->n_hvx virtual workers (host slices); real worker ith runs the virtual workers ith, ith + nth, ...
 // A: shared preload and a slice of the flag clear per virtual worker, the mask slice of this worker into the row tile;
 // barrier; B: scatter keep flags of the picks of each virtual worker; barrier; C: select mask or -inf in this worker's slice and write it back
-static void top_k_mask_thread_picks(unsigned int nth, unsigned int ith, void * data) {
+static void top_k_mask_thread_picks(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_top_k_mask_context *             tctx  = (struct htp_top_k_mask_context *) data;
     const struct htp_top_k_mask_kernel_params * kp    = tctx->kparams;
     struct htp_ops_context *                    octx  = tctx->octx;
-    dma_queue *                                 dma_q = octx->ctx->dma[ith];
-    struct htp_thread_trace *                   tr    = &octx->ctx->trace[ith];
+    dma_queue *                                 dma_q = th->dma_q;
+    struct htp_thread_trace *                   tr    = th->trace;
 
     const struct htp_tensor * top_k = octx->src[1];
     const struct htp_tensor * score = octx->src[2];
@@ -520,13 +520,13 @@ static void top_k_mask_thread_picks(unsigned int nth, unsigned int ith, void * d
     uint8_t *      out        = tctx->tiles;
     uint8_t *      flags      = tctx->tiles + tile_bytes;
 
-    const uint32_t n_virt = kp->n_threads;
+    const uint32_t n_virt = kp->n_hvx;
 
     // this worker's slice of the device columns: the mask goes straight into the row tile, it is popped after the scan.
     // The device share of the columns depends on mdev, so this slice is sized here.
     const uint32_t out_b0 = tctx->col0 * kp->elem_size;
     const uint32_t out_nb = tctx->ncols_out * kp->elem_size;
-    const uint32_t wslice = hex_round_up(fastdiv(out_nb + nth - 1, &octx->n_threads_div), 128);
+    const uint32_t wslice = hex_round_up(fastdiv(out_nb + nth - 1, &octx->n_hvx_div), 128);
     const uint32_t wb0    = out_b0 + ith * wslice;
     const uint32_t wnb    = ith * wslice < out_nb ? MIN(wslice, out_nb - ith * wslice) : 0;
 
@@ -567,8 +567,8 @@ static void top_k_mask_thread_picks(unsigned int nth, unsigned int ith, void * d
     HVX_Vector * tmp = (HVX_Vector *) (tctx->scratch + ith * HTP_TOP_K_MASK_SCRATCH_BYTES);
 
     for (uint32_t v = ith; v < n_virt; v += nth) {
-        const uint32_t j0       = MIN(v * kp->u.picks.picks_per_thread, kp->n_top);
-        const uint32_t j1       = MIN(j0 + kp->u.picks.picks_per_thread, kp->n_top);
+        const uint32_t j0       = MIN(v * kp->u.picks.picks_per_hvx, kp->n_top);
+        const uint32_t j1       = MIN(j0 + kp->u.picks.picks_per_hvx, kp->n_top);
         const bool     do_extra = v == n_virt - 1;
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) v);
@@ -624,12 +624,12 @@ int op_top_k_mask(struct htp_ops_context * octx) {
         }
     }
 
-    // fewer workers than kparams->n_threads always fit the VTCM layout: ROWS runs one row range per worker, PICKS loops over the host slices
-    const uint32_t max_threads = MIN((uint32_t) kp->n_threads, octx->ctx->n_threads);
-    if (!htp_ops_context_set_n_threads(octx, picks ? max_threads : MIN(max_threads, dev_rows))) {
+    // fewer workers than kparams->n_hvx always fit the VTCM layout: ROWS runs one row range per worker, PICKS loops over the host slices
+    const uint32_t max_hvx = MIN((uint32_t) kp->n_hvx, octx->ctx->n_hvx);
+    if (!htp_ops_context_set_n_hvx(octx, picks ? max_hvx : MIN(max_hvx, dev_rows))) {
         return HTP_STATUS_INVAL_PARAMS;
     }
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     uint8_t * vtcm = octx->ctx->vtcm_base;
 
@@ -652,14 +652,14 @@ int op_top_k_mask(struct htp_ops_context * octx) {
 
     if (picks) {
         atomic_init(&tctx.barrier, 0);
-        work_queue_run(octx->ctx->work_queue, top_k_mask_thread_picks, &tctx, n_threads);
+        work_queue_run(octx->ctx->hvx_queue, top_k_mask_thread_picks, &tctx, n_hvx);
         return HTP_STATUS_OK;
     }
 
-    tctx.rows_per_thread = fastdiv(dev_rows + n_threads - 1, &octx->n_threads_div);
+    tctx.rows_per_hvx = fastdiv(dev_rows + n_hvx - 1, &octx->n_hvx_div);
 
-    work_queue_run(octx->ctx->work_queue, top_k_mask_preload, &tctx, n_threads);
-    work_queue_run(octx->ctx->work_queue, top_k_mask_thread_rows, &tctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, top_k_mask_preload, &tctx, n_hvx);
+    work_queue_run(octx->ctx->hvx_queue, top_k_mask_thread_rows, &tctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

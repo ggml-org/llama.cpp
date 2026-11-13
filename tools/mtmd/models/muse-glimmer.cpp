@@ -5,13 +5,13 @@
 // adapter MLP + LLM's vision_projection.
 //
 // Several quantities are precomputed on host and fed as named graph inputs (filled in
-// clip.cpp set_input, PROJECTOR_TYPE_MUSE_GLIMMER branch):
+// mtmd-subcontext.cpp set_input, PROJECTOR_TYPE_MUSE_GLIMMER branch):
 //   muse_glimmer_pos_w/_h [n_tok] i32         : 1-indexed RoPE positions (sparse-permuted order)
 //   muse_glimmer_sp_perm  [n_tok] i32         : window grouping permutation (applied after ln_pre)
 //   muse_glimmer_inv_perm [n_tok] i32         : inverse of sp_perm (applied after blocks)
 //   muse_glimmer_ds_perm  [n_tok] i32         : pixel-shuffle gather (original order)
 //   attn_mask             [n_tok, n_tok] f32 (f16 with flash attn) : block-diagonal window mask (sparse layers)
-ggml_cgraph * clip_graph_muse_glimmer::build() {
+ggml_cgraph * mtmd_graph_muse_glimmer::build() {
     const int ds = hparams.n_merge;              // downsample factor (2)
     const int sf = hparams.muse_glimmer_sparse_factor;   // 4
     const int n_tok     = n_patches;
@@ -50,7 +50,7 @@ ggml_cgraph * clip_graph_muse_glimmer::build() {
     }
 
     // 2D RoPE: first half of head_dim uses width pos, second half uses height pos
-    auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
+    auto add_pos = [&](ggml_tensor * cur, const mtmd_layer &) {
         return build_rope_2d(ctx0, cur, pos_w, pos_h, rope_base, false);
     };
 
