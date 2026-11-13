@@ -41,9 +41,12 @@ using grouped_gemm_xe2   = grouped_gemm_arch<16, GROUPED_GEMM_MR, true>;
 using grouped_gemm_xehpg = grouped_gemm_arch<8, 16, false>;
 
 // An AOT build compiles each kernel only for the targets of its dpas width: GGML_SYCL_XMX_AOT_SG for
-// spir64_gen, FG_AOT_SG (fused-gemm.hpp) for intel_gpu_* targets
+// spir64_gen, FG_AOT_SG (fused-gemm.hpp) for intel_gpu_* targets. A build without XMX (GGML_SYCL_SUPPORT_XMX
+// off) compiles none of them
 template <typename A> static constexpr bool grouped_gemm_built() {
-#if defined(GGML_SYCL_XMX_AOT_SG)
+#if !defined(GGML_SYCL_SUPPORT_XMX)
+    return false;
+#elif defined(GGML_SYCL_XMX_AOT_SG)
     return A::NW == GGML_SYCL_XMX_AOT_SG;
 #elif defined(FG_AOT_SG)
     return A::NW == FG_AOT_SG;
@@ -1051,7 +1054,11 @@ static int ggml_sycl_grouped_gemm_esimd_mode() {
 }
 
 bool ggml_sycl_grouped_gemm_esimd_enabled() {
+#if defined(GGML_SYCL_SUPPORT_XMX)
     return ggml_sycl_grouped_gemm_esimd_mode() != 0;
+#else
+    return false;
+#endif
 }
 
 template <typename block_q_t, typename T, bool AOS, typename A>
