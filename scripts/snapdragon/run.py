@@ -35,6 +35,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_FA_HEAD_SPLIT",
     "GGML_HEXAGON_LI_SELECT",
     "GGML_HEXAGON_GDN_SELECT",
+    "GGML_HEXAGON_SSM_SELECT",
     "GGML_HEXAGON_AR_SELECT",
     "GGML_HEXAGON_AR_SCATTER",
     "GGML_HEXAGON_ETM",
@@ -222,6 +223,7 @@ def main():
     parser.add_argument("--hex-fa-head-split", help="Enable (1) or disable (0) head-parallel flash_attn partitioning (GGML_HEXAGON_FA_HEAD_SPLIT)")
     parser.add_argument("--hex-li-select", help="Select Lightning Indexer kernel (GGML_HEXAGON_LI_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-gdn-select", help="Select Gated Delta Net kernel (GGML_HEXAGON_GDN_SELECT) 2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-ssm-select", help="Select SSM Scan kernel (GGML_HEXAGON_SSM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ar-select", help="Select All-Reduce kernel (GGML_HEXAGON_AR_SELECT) 1:enable,0:disable")
     parser.add_argument("--hex-ar-scatter", help="Enable (1) or disable (0) reduce-scatter for fused ALLREDUCE+ADD (GGML_HEXAGON_AR_SCATTER)")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
@@ -377,6 +379,7 @@ def main():
     set_env("GGML_HEXAGON_FA_HEAD_SPLIT", args.hex_fa_head_split)
     set_env("GGML_HEXAGON_LI_SELECT", args.hex_li_select)
     set_env("GGML_HEXAGON_GDN_SELECT", args.hex_gdn_select)
+    set_env("GGML_HEXAGON_SSM_SELECT", args.hex_ssm_select)
     set_env("GGML_HEXAGON_AR_SELECT", args.hex_ar_select)
     set_env("GGML_HEXAGON_AR_SCATTER", args.hex_ar_scatter)
     set_env("GGML_HEXAGON_ETM", args.hex_etm)

@@ -2249,6 +2249,10 @@ static bool htp_kparams_solve_ssm_scan(
     const struct ggml_tensor * op,
     struct htp_ssm_scan_kernel_params * kparams
 ) {
+    if (opt_ssm_select < 1) {
+        return false;
+    }
+
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * s  = op->src[0];
@@ -2287,7 +2291,8 @@ static bool htp_kparams_solve_ssm_scan(
         return false;
     }
 
-    const bool can_use_hmx = (htp_session_n_hmx(sess) > 0) &&
+    const bool can_use_hmx = (opt_ssm_select >= 2) &&
+                             (htp_session_n_hmx(sess) > 0) &&
                              (n_tokens >= HTP_SSM_SCAN_HMX_TOKEN_TILE) &&
                              (n_a == 1) &&
                              (K == 1) &&
