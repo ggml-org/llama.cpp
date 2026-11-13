@@ -1,5 +1,11 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
+	import {
+		getDiagramButtonAction,
+		renderMermaidDiagrams,
+		renderSvgDiagrams,
+		toggleDiagramSource
+	} from './markdown-diagrams';
 	import { getMarkdownProcessor, type MarkdownProcessor } from './markdown-processor';
 	import {
 		getCodeInfoFromTarget,
@@ -7,6 +13,7 @@
 		getMdastNodeHash,
 		isAppendMode
 	} from './markdown-utils';
+	import MarkdownSurface from './MarkdownSurface.svelte';
 	import { SAFE_HTML_CONFIG } from './safe-html-config';
 	import {
 		ActionIconCopyToClipboard,
@@ -16,20 +23,12 @@
 	} from '$lib/components/app';
 	import {
 		CODE_BLOCK_CLASS,
-		DIAGRAM_VIEW_MODE_ATTR,
-		DIAGRAM_VIEW_RENDERED,
-		DIAGRAM_VIEW_SOURCE,
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		MARKDOWN_DATA_ATTRS,
 		MERMAID_BLOCK_CLASS,
 		MERMAID_LANGUAGE,
-		MERMAID_RENDERED_ATTR,
-		MERMAID_SYNTAX_ATTR,
-		MERMAID_WRAPPER_CLASS,
 		SETTINGS_KEYS,
-		SVG,
-		TOGGLE_SOURCE_BTN_CLASS,
-		UI_DATA_ATTRS
+		SVG
 	} from '$lib/constants';
 	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
 	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
@@ -39,6 +38,7 @@
 		copyCodeToClipboard,
 		copyToClipboard,
 		getImageErrorFallbackHtml,
+		loadHighlightTheme,
 		preprocessLaTeX,
 		splitGluedClosingCodeFences
 	} from '$lib/utils';
@@ -47,8 +47,6 @@
 	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 	import DOMPurify from 'dompurify';
 	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
-	import githubLightCss from 'highlight.js/styles/github.css?inline';
-	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import type { Root as MdastRoot } from 'mdast';
 	import { mode } from 'mode-watcher';
 	import { onDestroy, tick } from 'svelte';
@@ -153,27 +151,6 @@
 		for (const button of previewButtons) {
 			button.removeEventListener('click', handlePreviewClick);
 		}
-	}
-
-	/**
-	 * Loads the appropriate highlight.js theme based on dark/light mode.
-	 * One shared style element for every markdown block, mirroring
-	 * SyntaxHighlightedCode.svelte. The old per-instance copies duplicated the
-	 * full theme CSS once per rendered message, which grows without bound in
-	 * long conversations.
-	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
-	 */
-	function loadHighlightTheme(isDark: boolean) {
-		document
-			.querySelectorAll(`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`)
-			.forEach((style) => style.remove());
-
-		const style = document.createElement('style');
-
-		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
-
-		document.head.appendChild(style);
 	}
 
 	/**
@@ -477,107 +454,35 @@
 	 */
 	async function handleMermaidClick(event: MouseEvent) {
 		const target = event.target as HTMLElement;
-		// Toggle a diagram block between its rendered view and its source view.
-		// Shared by mermaid and svg, css drives the visibility from the wrapper mode.
-		const toggleBtn = target.closest(`.${TOGGLE_SOURCE_BTN_CLASS}`);
 
-		if (toggleBtn) {
+		if (toggleDiagramSource(target)) {
 			event.preventDefault();
 			event.stopPropagation();
-
-			const wrapper = toggleBtn.closest(`.${MERMAID_WRAPPER_CLASS}, .${SVG.WRAPPER_CLASS}`);
-
-			if (!wrapper) return;
-
-			const isSource = wrapper.getAttribute(DIAGRAM_VIEW_MODE_ATTR) === DIAGRAM_VIEW_SOURCE;
-			const next = isSource ? DIAGRAM_VIEW_RENDERED : DIAGRAM_VIEW_SOURCE;
-
-			wrapper.setAttribute(DIAGRAM_VIEW_MODE_ATTR, next);
-			toggleBtn.setAttribute('aria-pressed', String(!isSource));
 
 			return;
 		}
 
-		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
-		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
+		const action = getDiagramButtonAction(target);
 
-		if (copyBtn || previewBtn) {
-			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
+		if (action) {
+			event.preventDefault();
+			event.stopPropagation();
 
-			if (!wrapper) return;
-
-			const preElement = wrapper.querySelector<HTMLElement>(
-				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
-			);
-
-			if (!preElement) return;
-
-			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
-
-			if (copyBtn) {
-				event.preventDefault();
-				event.stopPropagation();
+			if ('copy' in action) {
 				try {
-					await copyToClipboard(mermaidSyntax);
+					await copyToClipboard(action.copy);
 				} catch (error) {
-					console.error('Failed to copy mermaid syntax:', error);
+					console.error('Failed to copy diagram source:', error);
 				}
 
 				return;
 			}
 
-			if (previewBtn) {
-				event.preventDefault();
-				event.stopPropagation();
-				const svg = preElement.querySelector('svg');
+			mermaidPreviewSvgHtml = action.previewSvg;
+			svgPreviewLive = false;
+			mermaidPreviewOpen = true;
 
-				if (!svg) return;
-
-				mermaidPreviewSvgHtml = svg.outerHTML;
-				svgPreviewLive = false;
-				mermaidPreviewOpen = true;
-
-				return;
-			}
-		}
-
-		// Check if clicking on copy or preview button in svg block
-		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .copy-code-btn`);
-		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .preview-code-btn`);
-
-		if (svgCopyBtn || svgPreviewBtn) {
-			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);
-
-			if (!wrapper) return;
-
-			const preElement = wrapper.querySelector<HTMLElement>(
-				`pre.${SVG.BLOCK_CLASS}[${SVG.SOURCE_ATTR}]`
-			);
-
-			if (!preElement) return;
-
-			if (svgCopyBtn) {
-				event.preventDefault();
-				event.stopPropagation();
-				try {
-					await copyToClipboard(preElement.getAttribute(SVG.SOURCE_ATTR) ?? '');
-				} catch (error) {
-					console.error('Failed to copy svg source:', error);
-				}
-
-				return;
-			}
-
-			if (svgPreviewBtn) {
-				event.preventDefault();
-				event.stopPropagation();
-				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG.SOURCE_ATTR) ?? '');
-				svgPreviewLive = false;
-				mermaidPreviewOpen = true;
-
-				return;
-			}
+			return;
 		}
 
 		// A click on the header chrome targets the action buttons, never the
@@ -629,85 +534,6 @@
 			mermaidPreviewSvgHtml = '';
 			svgPreviewLive = false;
 		}
-	}
-
-	/**
-	 * Renders mermaid diagrams that haven't been rendered yet.
-	 * Called after each markdown content update.
-	 * Marks nodes immediately to prevent duplicate renders during streaming.
-	 * Reads mode.current before await to ensure reactive tracking.
-	 */
-	async function renderMermaidDiagrams() {
-		if (!containerRef) return;
-
-		const nodes = containerRef.querySelectorAll(
-			`pre.${MERMAID_BLOCK_CLASS}:not([${MERMAID_RENDERED_ATTR}])`
-		);
-
-		if (nodes.length === 0) return;
-
-		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
-		// This avoids needing a guard that would block node discovery.
-		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, BooleanString.TRUE));
-
-		// Read mode before await so Svelte tracks it reactively.
-		const isDark = mode.current === ColorMode.DARK;
-		// lazy load the mermaid dependecy only when needed to reduce bundle size.
-		const { default: mermaid } = await import('mermaid');
-
-		mermaid.initialize({
-			flowchart: {
-				htmlLabels: true,
-				useMaxWidth: false
-			},
-			gantt: {
-				useMaxWidth: false
-			},
-			securityLevel: 'strict',
-			sequence: {
-				useMaxWidth: false
-			},
-			startOnLoad: false,
-			theme: isDark ? 'dark' : 'default'
-		});
-
-		try {
-			await mermaid.run({
-				nodes: Array.from(nodes) as unknown as NodeListOf<HTMLElement>
-			});
-		} catch (error) {
-			console.error('Failed to render mermaid diagram:', error);
-		}
-	}
-
-	/**
-	 * Renders svg diagrams that haven't been rendered yet.
-	 * Sanitizes the source before injecting and marks each node so it renders once.
-	 * An empty sanitize result keeps the raw source as escaped text.
-	 */
-	function renderSvgDiagrams() {
-		if (!containerRef) return;
-
-		const nodes = containerRef.querySelectorAll<HTMLElement>(
-			`pre.${SVG.BLOCK_CLASS}:not([${SVG.RENDERED_ATTR}])`
-		);
-
-		if (nodes.length === 0) return;
-
-		nodes.forEach((node) => {
-			node.setAttribute(SVG.RENDERED_ATTR, BooleanString.TRUE);
-
-			const source = node.getAttribute(SVG.SOURCE_ATTR) ?? node.textContent ?? '';
-			const clean = sanitizeSvg(source);
-
-			if (clean) {
-				node.textContent = '';
-				const host = document.createElement('div');
-
-				node.appendChild(host);
-				mountSvgShadow(host, clean, SVG.INLINE_SHADOW_STYLE);
-			}
-		});
 	}
 
 	/**
@@ -795,8 +621,8 @@
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
-			renderMermaidDiagrams();
-			renderSvgDiagrams();
+			renderMermaidDiagrams(containerRef, mode.current === ColorMode.DARK);
+			renderSvgDiagrams(containerRef);
 		}
 	});
 
@@ -813,11 +639,9 @@
 	});
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-	bind:this={containerRef}
-	class="markdown-content {className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+<MarkdownSurface
+	bind:ref={containerRef}
+	class="{className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
 	onclick={handleMermaidClick}
@@ -913,7 +737,7 @@
 			</div>
 		{/if}
 	{/if}
-</div>
+</MarkdownSurface>
 
 <DialogCodePreview
 	code={previewCode}
@@ -927,7 +751,3 @@
 	open={mermaidPreviewOpen}
 	svgHtml={mermaidPreviewSvgHtml}
 />
-
-<style>
-	@import './markdown-content.css';
-</style>

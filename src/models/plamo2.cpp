@@ -318,7 +318,6 @@ ggml_tensor * llama_model_plamo2::graph::build_plamo2_mamba_layer(llm_graph_inpu
                                                             (d_conv - 1) * (d_inner + 2 * n_group * d_state) * (n_seqs),
                                                             kv_head * (d_conv - 1) * (d_inner + 2 * n_group * d_state) *
                                                                 ggml_element_size(conv_states_all))));
-        cb(conv_states_all, "mamba_conv1d_state", il);
 
         // 1D convolution
         x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
@@ -390,7 +389,6 @@ ggml_tensor * llama_model_plamo2::graph::build_plamo2_mamba_layer(llm_graph_inpu
                                  n_heads * head_dim * n_seq_tokens * n_seqs * ggml_element_size(y_ssm)),
                     ggml_view_1d(ctx0, ssm_states_all, n_heads * head_dim * d_state * n_seqs,
                                  kv_head * n_seqs * n_heads * head_dim * d_state * ggml_element_size(ssm_states_all))));
-        cb(ssm_states_all, "mamba_ssm_states", il);
 
         ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_heads, n_seq_tokens, n_seqs,
                                        head_dim * ggml_element_size(x), head_dim * n_heads * ggml_element_size(x),

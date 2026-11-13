@@ -9,6 +9,7 @@ Invariants verified:
 4. Misconfigured MCP servers do not crash the server
 5. Multiple MCP servers can be configured simultaneously
 6. Warmup populates the tool list at startup
+7. The MCP server receives notifications/cancelled when the client drops or the call times out
 """
 import json
 import os
@@ -319,29 +320,60 @@ def test_mcp_concurrent_tool_calls():
         server.stop()
 
 
-def test_mcp_tool_timeout():
-    """Tool call should timeout if MCP server is too slow."""
-    global server
+def _slow_server_config(log_path: str, timeout_ms: int) -> str:
     MCP_SLOW_SERVER = os.path.join(FIXTURES_DIR, "mcp_slow_server.py")
-    mcp_json = _mcp_config_json({
+    return _mcp_config_json({
         "slow": {
             "command": sys.executable,
-            "args": [MCP_SLOW_SERVER, "--delay", "5"],
-            "timeout_ms": 500
+            "args": [MCP_SLOW_SERVER, "--log", log_path],
+            "timeout_ms": timeout_ms,
         }
     })
-    server = _start_server_with_mcp(mcp_json)
+
+
+def _messages_read_by_mcp_server(log_path: str) -> list:
+    """Parses the fixture's log, skipping a last line that the fixture is still writing."""
+    with open(log_path) as f:
+        return [json.loads(line) for line in f if line.endswith("\n")]
+
+
+def _wait_for_cancellation(log_path: str, limit_seconds: float) -> dict:
+    """Returns the notifications/cancelled message once the MCP server has read it."""
+    deadline = time.time() + limit_seconds
+    while time.time() < deadline:
+        for message in _messages_read_by_mcp_server(log_path):
+            if message.get("method") == "notifications/cancelled":
+                return message
+        time.sleep(0.1)
+    raise AssertionError(f"the MCP server read no notifications/cancelled: {_messages_read_by_mcp_server(log_path)}")
+
+
+def _tools_call_id(log_path: str):
+    """Returns the id of the one tools/call request the MCP server has read."""
+    ids = [m["id"] for m in _messages_read_by_mcp_server(log_path) if m.get("method") == "tools/call"]
+    assert len(ids) == 1, ids
+    return ids[0]
+
+
+def test_mcp_tool_timeout():
+    """A tool call that exceeds timeout_ms returns an error and sends notifications/cancelled to the MCP server."""
+    global server
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        log_path = f.name
+    server = _start_server_with_mcp(_slow_server_config(log_path, timeout_ms=500))
 
     try:
         res = server.make_request("POST", "/tools", data={
             "tool": "slow_sleep",
-            "params": {"seconds": 5}
+            "params": {"seconds": 1}
         })
         assert res.status_code == 200, res.body
-        body = res.body
-        assert "error" in body, body
+        assert "error" in res.body, res.body
+        cancellation = _wait_for_cancellation(log_path, limit_seconds=10)
+        assert cancellation["params"]["requestId"] == _tools_call_id(log_path)
     finally:
         server.stop()
+        os.unlink(log_path)
 
 
 def test_mcp_warmup_partial_failure():
@@ -711,3 +743,23 @@ def test_mcp_grandchild_holding_pipes_does_not_deadlock():
         assert elapsed < 3, f"server shutdown took {elapsed:.1f}s (expected < 3s) — teardown likely deadlocked"
     finally:
         server.stop()
+
+
+def test_mcp_dropped_client_sends_cancellation():
+    """Dropping the connection during a tool call sends notifications/cancelled for that request to the MCP server."""
+    global server
+    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
+        log_path = f.name
+    server = _start_server_with_mcp(_slow_server_config(log_path, timeout_ms=30000))
+
+    try:
+        with pytest.raises(requests.exceptions.ReadTimeout):
+            server.make_request("POST", "/tools", data={
+                "tool": "slow_sleep",
+                "params": {"seconds": 1.5}
+            }, timeout=0.5)
+        cancellation = _wait_for_cancellation(log_path, limit_seconds=10)
+        assert cancellation["params"]["requestId"] == _tools_call_id(log_path)
+    finally:
+        server.stop()
+        os.unlink(log_path)

@@ -277,13 +277,14 @@ class DeepseekV2Model(TextModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        assert tokenizer is not None
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         if tokpre == "kimi-k2":
             # Build merges list using the approach similar to HunYuanMoE
             merges = []
             vocab = {}
-            mergeable_ranks = tokenizer.model._mergeable_ranks  # ty: ignore[unresolved-attribute]
+            mergeable_ranks = tokenizer.model._mergeable_ranks  # ty: ignore[missing-union-attribute]
             for token, rank in mergeable_ranks.items():
                 vocab[QwenModel.token_bytes_to_string(token)] = rank
                 if len(token) == 1:
@@ -294,7 +295,7 @@ class DeepseekV2Model(TextModel):
 
             # Build token list
             vocab_size = self.hparams["vocab_size"]
-            special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
+            special_tokens = tokenizer.special_tokens
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []
@@ -1078,7 +1079,7 @@ class DeepseekV4FlashVisionModel(MmprojModel):
         self.gguf_writer.add_vision_use_silu(True) # SwiGLU MLP
         self.gguf_writer.add_vision_projector_scale_factor(self.hparams_vision["downsample_ratio"])
         self.gguf_writer.add_vision_min_pixels(self.hparams_vision["min_pixels"])
-        # hardcoded on the C++ side (see PROJECTOR_TYPE_DEEPSEEK4V in clip.cpp)
+        # hardcoded on the C++ side (see PROJECTOR_TYPE_DEEPSEEK4V in tools/mtmd)
         # if future models use different values, add GGUF keys for those
         assert self.global_config["vision_max_n_token"] == 384
         assert self.global_config["vision_max_wh_ratio"] == 8
