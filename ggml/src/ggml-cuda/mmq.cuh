@@ -467,7 +467,7 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
         const ggml_glu_op glu_op, const float glu_limit, const float * __restrict__ x_scale, const float * __restrict__ gate_scale) {
     GGML_UNUSED_VARS(glu_op, glu_limit, gate_scale);
 
-    // NVFP4 weight scale of a fused MUL (per tensor, or of the expert of this tile), 1 without.
+    // NVFP4 weight scale (per tensor, or of the expert of this tile), 1 without.
     const float scale = type == GGML_TYPE_NVFP4 && x_scale ? *x_scale : 1.0f;
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -528,7 +528,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 
     const bool y_scale_used = type == GGML_TYPE_NVFP4 && y_scale != nullptr;
 
-    // NVFP4: load the weight scales once, 1 without scales. Without fusion x_scale is the scale of a fused MUL.
+    // NVFP4: load the weight scales once, 1 without scales. Without fusion x_scale is the weight scale attached to the MUL_MAT.
     constexpr bool fused_nvfp4 = has_fusion && type == GGML_TYPE_NVFP4;
     const float scale_up   = type == GGML_TYPE_NVFP4 && x_scale ? *x_scale : 1.0f;
     const float scale_gate = fused_nvfp4 && gate_scale ? *gate_scale : 1.0f;
