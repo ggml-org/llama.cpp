@@ -3,12 +3,66 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Callable, Iterable, TYPE_CHECKING
+from functools import partial
+from typing import Callable, Iterable, TYPE_CHECKING, cast
+
+import numpy as np
+import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
+
+
+def _e4m3_table() -> np.ndarray:
+    codes = np.arange(256, dtype=np.uint8)
+    exponent = ((codes & 0x7F) >> 3).astype(np.int32)
+    mantissa = (codes & 7).astype(np.float32)
+    values = np.where(exponent == 0, np.ldexp(mantissa, -9), np.ldexp(1 + mantissa / 8, exponent - 7))
+    values = np.where(codes & 0x80, -values, values)
+    values[(codes & 0x7F) == 0x7F] = np.nan
+    return values.astype(np.float32)
+
+
+_E4M3 = _e4m3_table()
+_E2M1 = np.array([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=np.float32)
+_EXPERT_CHUNK_ROWS = 128
+
+
+def _dequant_expert_chunk(weight: Callable[[], Tensor], scale: Callable[[], Tensor], amax: Callable[[], Tensor] | None, denominator: Callable[[], Tensor] | None, name: str, expert: int, rows: slice) -> np.ndarray:
+    # Fresh lazy tensors release their mappings after each chunk instead of caching the layer.
+    packed = LazyTorchTensor.to_eager(weight().view(torch.uint8)[expert, rows]).numpy()
+    scales = LazyTorchTensor.to_eager(scale().view(torch.uint8)[expert, rows]).numpy()
+    if amax is not None:
+        block_scale = _E4M3[scales]
+        if np.isnan(block_scale).any():
+            raise ValueError(f"Inkling2: {name}_scale expert {expert}: E4M3FN NaN")
+        values = np.empty((packed.shape[0], packed.shape[1] * 2), dtype=np.float32)
+        values[:, 0::2] = _E2M1[packed & 15]
+        values[:, 1::2] = _E2M1[packed >> 4]
+        values.reshape(values.shape[0], -1, 16)[:] *= block_scale[:, :, None]
+        assert denominator is not None
+        a = LazyTorchTensor.to_eager(amax()[expert]).item()
+        d = LazyTorchTensor.to_eager(denominator()).item()
+        if not np.isfinite(a) or a < 0:
+            raise ValueError(f"Inkling2: {name}_amax expert {expert}: expected finite nonnegative value")
+        if not np.isfinite(d) or d <= 0:
+            raise ValueError(f"Inkling2: {name}_outer_scale_denominator expert {expert}: expected finite positive value")
+        with np.errstate(over="ignore", invalid="ignore"):
+            values *= np.float32(a) / np.float32(d)
+    else:
+        if np.any(scales == 255):
+            raise ValueError(f"Inkling2: {name}_scale expert {expert}: UE8M0 byte 255 is NaN")
+        values = _E4M3[packed]
+        if np.isnan(values).any():
+            raise ValueError(f"Inkling2: {name} expert {expert}: E4M3FN NaN")
+        block_scale = np.ldexp(np.ones(scales.shape, dtype=np.float32), scales.astype(np.int32) - 127)
+        with np.errstate(over="ignore", invalid="ignore"):
+            values.reshape(values.shape[0], -1, 32)[:] *= block_scale[:, :, None]
+    if not np.isfinite(values).all():
+        raise ValueError(f"Inkling2: {name} expert {expert}: non-finite dequantized weight")
+    return values
 
 
 def _is_inkling2(dir_model: Path) -> bool:
@@ -31,13 +85,20 @@ class Inkling2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INKLING2
 
     def __init__(self, dir_model: Path, *args, **kwargs):
+        self._expert_quant: dict[str, dict] = {}
+        self._packed_experts: dict[str, gguf.LazyChunkedTensor] = {}
         quant_path = dir_model / "hf_quant_config.json"
         if quant_path.is_file():
             with open(quant_path, encoding="utf-8") as f:
                 groups = json.load(f).get("model", {}).get("parameter_groups", [])
-            schemes = sorted({g.get("weight_transform", "unknown") for g in groups} - {"cast"})
-            if schemes:
-                raise ValueError(f"Inkling2: unsupported packed expert quantization {schemes}; NVFP4 amax_denominator and MXFP8 block-scale layouts are not verified. Supply dequantized floating-point weights.")
+            for group in groups:
+                for name in group.get("tensors", []):
+                    item = self.filter_tensors((name, lambda: torch.empty(0)))
+                    if item is not None and item[0].endswith((".w13_weight", ".w2_weight")):
+                        name = item[0]
+                        if name in self._expert_quant:
+                            raise ValueError(f"Inkling2: duplicate hf_quant_config.json scheme for {name}")
+                        self._expert_quant[name] = group
         super().__init__(dir_model, *args, **kwargs)
         logger.warning("Inkling2: converting the text backbone only; vision and MTP tensors are skipped")
         hp = self.hparams
@@ -51,6 +112,75 @@ class Inkling2Model(TextModel):
         if len(types) != self.block_count or set(types) - {"hybrid", "hybrid_sliding"}:
             raise ValueError("Inkling2: invalid layer_types")
         self.is_swa = [t == "hybrid_sliding" for t in types]
+
+    def dequant_model(self):
+        for name in list(self.model_tensors):
+            if not name.endswith((".w13_weight", ".w2_weight")):
+                continue
+            weight = self.model_tensors[name]
+            tensor = weight()
+            companions = [name + suffix for suffix in ("_scale", "_amax", "_outer_scale_denominator")]
+            if tensor.dtype.is_floating_point and tensor.element_size() > 1:
+                if any(n in self.model_tensors for n in companions):
+                    raise ValueError(f"Inkling2: floating-point {name} has packed quantization companions")
+                continue
+            config = self._expert_quant.get(name, {})
+            scheme = config.get("weight_transform")
+            if scheme not in ("nvfp4_nearest", "mxfp8_nearest"):
+                raise ValueError(f"Inkling2: {name}: missing or unsupported hf_quant_config.json scheme {scheme!r}")
+            nvfp4 = scheme == "nvfp4_nearest"
+            if nvfp4 and config.get("weight_scale_format") != "amax_denominator":
+                raise ValueError(f"Inkling2: {name}: expected NVFP4 amax_denominator scale format")
+            required = companions if nvfp4 else companions[:1]
+            for companion in required:
+                if companion not in self.model_tensors:
+                    raise ValueError(f"Inkling2: {name}: missing companion {companion}")
+            if not nvfp4 and any(n in self.model_tensors for n in companions[1:]):
+                raise ValueError(f"Inkling2: {name}: MXFP8 must not have amax or outer_scale_denominator")
+            scale = self.model_tensors[companions[0]]
+            scale_tensor = scale()
+            weight_dtype, scale_dtype = (torch.uint8, torch.float8_e4m3fn) if nvfp4 else (torch.float8_e4m3fn, torch.uint8)
+            if tensor.dtype != weight_dtype or scale_tensor.dtype != scale_dtype:
+                raise ValueError(f"Inkling2: {name}: expected {weight_dtype} weights and {scale_dtype} scales, got {tensor.dtype} and {scale_tensor.dtype}")
+            experts = self.hparams.get("n_routed_experts", 384)
+            hidden = self.hparams["hidden_size"]
+            inter = self.hparams.get("moe_intermediate_size", self.hparams.get("intermediate_size", 2304))
+            w13 = name.endswith(".w13_weight")
+            rows, cols = (2 * inter, hidden) if w13 else (hidden, inter)
+            shape = (experts, rows, cols)
+            if min(shape) <= 0 or cols % (16 if nvfp4 else 32) or tuple(tensor.shape) != (experts, rows, cols // (2 if nvfp4 else 1)):
+                raise ValueError(f"Inkling2: {name}: invalid packed shape {tuple(tensor.shape)} for logical shape {shape}")
+            ss = tuple(scale_tensor.shape)
+            if len(ss) != 3 or ss[0] != experts or min(ss) <= 0 or rows % ss[1] or cols % ss[2]:
+                raise ValueError(f"Inkling2: {name}_scale: shape {ss} does not divide logical shape {shape}")
+            block = (rows // ss[1], cols // ss[2])
+            if block != (1, 16 if nvfp4 else 32):
+                raise ValueError(f"Inkling2: {name}_scale: unsupported stored block shape {block}")
+            if list(block) != config.get("weight_block_shape"):
+                logger.warning("Inkling2: %s: hf_quant_config.json weight_block_shape %s conflicts with stored weight/scale shapes %s/%s; using %s", name, config.get("weight_block_shape"), tuple(tensor.shape), ss, list(block))
+            amax = denominator = None
+            if nvfp4:
+                amax, denominator = (self.model_tensors[n] for n in companions[1:])
+                for companion, gen, expected in ((companions[1], amax, (experts,)), (companions[2], denominator, (1,))):
+                    t = gen()
+                    if t.dtype != torch.float32 or tuple(t.shape) != expected:
+                        raise ValueError(f"Inkling2: {companion}: expected F32 {expected}, got {t.dtype} {tuple(t.shape)}")
+            chunks: list[Callable[[], np.ndarray]] = []
+            for expert in range(experts):
+                for half in range(2 if w13 else 1):
+                    for start in range(0, rows // 2 if w13 else rows, _EXPERT_CHUNK_ROWS):
+                        stop = min(start + _EXPERT_CHUNK_ROWS, rows // 2 if w13 else rows)
+                        # The same packed row slice selects the weight and its scale groups.
+                        row_slice = slice(2 * start + half, 2 * stop + half, 2) if w13 else slice(start, stop)
+                        chunks.append(partial(_dequant_expert_chunk, weight, scale, amax, denominator, name, expert, row_slice))
+            self._packed_experts[name] = gguf.LazyChunkedTensor(chunks, shape, np.float32)
+            self.model_tensors[name] = lambda shape=shape: torch.empty(shape, dtype=torch.float32, device="meta")
+            for companion in required:
+                del self.model_tensors[companion]
+        for name, gen in self.model_tensors.items():
+            t = gen()
+            if not t.dtype.is_floating_point or t.element_size() == 1 or name.endswith(("_weight_scale", "_weight_amax", "_weight_outer_scale_denominator")):
+                raise ValueError(f"Inkling2: unexpected packed tensor or orphan companion {name}")
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -134,8 +264,10 @@ class Inkling2Model(TextModel):
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if not data_torch.dtype.is_floating_point or data_torch.element_size() == 1 or "_scale" in name or "_amax" in name:
-            raise ValueError(f"Inkling2: unsupported packed expert tensor {name!r}; supply dequantized floating-point weights")
+        if name in self._packed_experts:
+            target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
+            yield self.map_tensor_name(target, try_suffixes=()) + ".weight", cast("Tensor", self._packed_experts[name])
+            return
         if name.endswith(".w13_weight"):
             shape = data_torch.shape
             data_torch = data_torch.reshape(shape[0], shape[1] // 2, 2, shape[2]).transpose(1, 2).reshape(shape)

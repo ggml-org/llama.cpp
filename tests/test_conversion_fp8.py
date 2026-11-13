@@ -20,6 +20,7 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
+from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
 from conversion.phi import PhiMoeModel
@@ -364,6 +365,166 @@ class TestFP8Conversion(unittest.TestCase):
         dtype, data = result["blk.0.attn_q.weight"]
         self.assertEqual(dtype, gguf.GGMLQuantizationType.Q8_0)
         np.testing.assert_allclose(gguf.dequantize(data, dtype), np.full((4, 32), 0.25), atol=1e-4)
+
+
+class TestInkling2PackedConversion(unittest.TestCase):
+    def fixture(self):
+        tensors, groups, expected = {}, [], {}
+        for layer, nvfp4 in enumerate((True, False)):
+            names = []
+            for projection, shape in (("w13", (2, 320, 64)), ("w2", (2, 64, 160))):
+                name = f"model.llm.layers.{layer}.mlp.experts.{projection}_weight"
+                names.append(name)
+                e, r, c = shape
+                grid = torch.arange(e * r * c).reshape(shape)
+                if nvfp4:
+                    codes = ((grid * 7 + grid // c) % 16).to(torch.uint8)
+                    packed = codes[:, :, ::2] | (codes[:, :, 1::2] << 4)
+                    scales = (torch.arange(e * r * (c // 16)).reshape(e, r, c // 16) % 126 + 1).to(torch.uint8).view(torch.float8_e4m3fn)
+                    amax = torch.tensor([0.7, 1.9])
+                    den = torch.tensor([3.0 if projection == "w13" else 7.0])
+                    tensors[name + "_amax"] = amax
+                    tensors[name + "_outer_scale_denominator"] = den
+                    lut = torch.tensor([0, .5, 1, 1.5, 2, 3, 4, 6, -0., -.5, -1, -1.5, -2, -3, -4, -6])
+                    decoded = lut[codes.long()] * scales.float().repeat_interleave(16, -1)
+                    decoded *= (amax / den)[:, None, None]
+                else:
+                    packed = ((grid * 13 + grid // c) % 256).to(torch.uint8)
+                    packed[(packed & 127) == 127] = 126
+                    packed = packed.view(torch.float8_e4m3fn)
+                    scales = (torch.arange(e * r * (c // 32)).reshape(e, r, c // 32) % 7 + 123).to(torch.uint8)
+                    scales[0, 0, 0] = 0
+                    decoded = packed.float() * torch.exp2(scales.float() - 127).repeat_interleave(32, -1)
+                tensors[name] = packed
+                tensors[name + "_scale"] = scales
+                if projection == "w13":
+                    decoded = decoded.reshape(e, r // 2, 2, c).transpose(1, 2).reshape(shape)
+                key = f"blk.{layer}.ffn_{'gate_up' if projection == 'w13' else 'down'}_exps.weight"
+                expected[key] = decoded.numpy()
+            groups.append({"tensors": names, "weight_transform": "nvfp4_nearest" if nvfp4 else "mxfp8_nearest", "weight_scale_format": "amax_denominator", "weight_block_shape": [1, 16] if nvfp4 else [32, 32]})
+        return tensors, groups, expected
+
+    def model(self, path, tensors, groups, ftype=gguf.LlamaFileType.ALL_F32, eager=False):
+        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": 64, "moe_intermediate_size": 160, "n_routed_experts": 2}
+        (path / "config.json").write_text(json.dumps(hp))
+        (path / "hf_quant_config.json").write_text(json.dumps({"model": {"parameter_groups": groups}}))
+        save_file(tensors, path / "model.safetensors")
+        return Inkling2Model(path, ftype, path / "unused.gguf", hparams=hp, eager=eager)
+
+    def test_lookup_semantics(self):
+        reference = torch.arange(256, dtype=torch.uint8).view(torch.float8_e4m3fn).float().numpy()
+        np.testing.assert_array_equal(_E4M3.view(np.uint32)[np.isfinite(reference)], reference.view(np.uint32)[np.isfinite(reference)])
+        np.testing.assert_array_equal(np.flatnonzero(np.isnan(_E4M3)), [127, 255])
+        self.assertTrue(np.signbit(_E2M1[8]))
+
+    def test_mixed_schemes_and_streaming_outtypes(self):
+        tensors, groups, expected = self.fixture()
+        for eager in (False, True):
+            for ftype, qtype in ((gguf.LlamaFileType.GUESSED, gguf.GGMLQuantizationType.F16), (gguf.LlamaFileType.ALL_F32, gguf.GGMLQuantizationType.F32), (gguf.LlamaFileType.MOSTLY_F16, gguf.GGMLQuantizationType.F16), (gguf.LlamaFileType.MOSTLY_BF16, gguf.GGMLQuantizationType.BF16)):
+                with self.subTest(eager=eager, outtype=qtype), tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory)
+                    model = self.model(path, tensors, groups, ftype, eager)
+                    with self.assertLogs("hf-to-gguf", level="WARNING") as logs:
+                        model.prepare_tensors()
+                    self.assertTrue(any("[32, 32]" in m and "[1, 32]" in m for m in logs.output))
+                    infos = model.gguf_writer.tensors[0]
+                    self.assertEqual(infos.keys(), expected.keys())
+                    for name, info in infos.items():
+                        self.assertEqual(info.dtype, qtype)
+                        self.assertEqual(tuple(info.shape), expected[name].shape)
+                        self.assertIsInstance(info.tensor, gguf.LazyChunkedTensor)
+                        with self.assertRaises(TypeError):
+                            np.asarray(info.tensor)
+                        for load in info.tensor._chunks:
+                            self.assertLessEqual(load().shape[0], 128)
+                        output = path / "tensor.bin"
+                        with output.open("wb") as f:
+                            info.tensor.tofile(f)
+                        reference = gguf.quantize(expected[name], qtype)
+                        self.assertEqual(output.read_bytes(), reference.tobytes(), name)
+
+    def test_projection_and_companions_in_separate_shards(self):
+        tensors, groups, expected = self.fixture()
+        name = groups[0]["tensors"][0]
+        tensors = {k: v for k, v in tensors.items() if k.startswith(name)}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            self.model(path, tensors, groups)
+            (path / "model.safetensors").rename(path / "model-00001-of-00002.safetensors")
+            save_file({name: tensors.pop(name)}, path / "model-00001-of-00002.safetensors")
+            save_file(tensors, path / "model-00002-of-00002.safetensors")
+            model = Inkling2Model(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf")
+            model.prepare_tensors()
+            key = "blk.0.ffn_gate_up_exps.weight"
+            infos = model.gguf_writer.tensors[0]
+            self.assertEqual(list(infos), [key])
+            tensor = infos[key].tensor
+            assert tensor is not None
+            with (path / "tensor.bin").open("wb") as f:
+                tensor.tofile(f)
+            self.assertEqual((path / "tensor.bin").read_bytes(), expected[key].tobytes())
+
+    def test_float_experts_with_stale_quant_config(self):
+        _, groups, expected = self.fixture()
+        tensors = {}
+        for layer in range(2):
+            for projection, target in (("w13", "gate_up"), ("w2", "down")):
+                values = torch.from_numpy(expected[f"blk.{layer}.ffn_{target}_exps.weight"]).double()
+                e, r, c = values.shape
+                if projection == "w13":
+                    values = values.reshape(e, 2, r // 2, c).transpose(1, 2).reshape(e, r, c)
+                tensors[f"model.llm.layers.{layer}.mlp.experts.{projection}_weight"] = values
+        with tempfile.TemporaryDirectory() as directory:
+            model = self.model(Path(directory), tensors, groups)
+            model.prepare_tensors()
+            for name, info in model.gguf_writer.tensors[0].items():
+                actual = gguf.LazyNumpyTensor.to_eager(info.tensor)
+                np.testing.assert_array_equal(actual.view(np.uint32), expected[name].view(np.uint32))
+
+    def test_invalid_metadata_and_companions(self):
+        cases = ("missing", "dtype", "amax_shape", "den_shape", "grid", "block", "scheme", "orphan", "mxfp8_amax")
+        for case in cases:
+            tensors, groups, _ = self.fixture()
+            name = groups[0]["tensors"][0]
+            if case == "missing":
+                del tensors[name + "_amax"]
+            elif case == "dtype":
+                tensors[name + "_scale"] = tensors[name + "_scale"].view(torch.uint8)
+            elif case == "amax_shape":
+                tensors[name + "_amax"] = torch.ones(1)
+            elif case == "den_shape":
+                tensors[name + "_outer_scale_denominator"] = torch.ones(2)
+            elif case == "grid":
+                tensors[name + "_scale"] = tensors[name + "_scale"][:, :, :3].contiguous()
+            elif case == "block":
+                tensors[name + "_scale"] = tensors[name + "_scale"][:, ::2].contiguous()
+            elif case == "scheme":
+                groups[0]["weight_transform"] = "unknown"
+            elif case == "orphan":
+                del tensors[name]
+            else:
+                tensors[groups[1]["tensors"][0] + "_amax"] = torch.ones(2)
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                model = self.model(Path(directory), tensors, groups)
+                with self.assertRaisesRegex(ValueError, "Inkling2:"):
+                    model.prepare_tensors()
+
+    def test_invalid_values_name_expert(self):
+        for layer, suffix, value in ((0, "_scale", 127), (0, "_scale", 255), (1, "", 127), (1, "", 255), (1, "_scale", 255), (0, "_amax", float("nan")), (0, "_outer_scale_denominator", 0.0)):
+            tensors, groups, _ = self.fixture()
+            name = groups[layer]["tensors"][0]
+            target = tensors[name + suffix]
+            if suffix in ("_amax", "_outer_scale_denominator"):
+                target[-1] = value
+            else:
+                target.view(torch.uint8)[1, 0, 0] = value
+            with self.subTest(layer=layer, suffix=suffix, value=value), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                model = self.model(path, tensors, groups)
+                model.prepare_tensors()
+                tensor = model.gguf_writer.tensors[0][f"blk.{layer}.ffn_gate_up_exps.weight"].tensor
+                with (path / "tensor.bin").open("wb") as f, self.assertRaisesRegex(ValueError, r"w13_weight.*expert [01]"):
+                    tensor.tofile(f)
 
 
 if __name__ == "__main__":
