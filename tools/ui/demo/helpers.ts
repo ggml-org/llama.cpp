@@ -390,21 +390,32 @@ async function importTraces(page: Page, file: string): Promise<void> {
 		page.locator('aside button[aria-label="Expand navigation"]')
 	];
 
-	for (const key of keys) {
-		if (await reachable(settings)) break;
+	// a few rounds, as a cold dev server reloads the page once it has optimized its dependencies,
+	// which can land right after a key opened the sidebar and close it again
+	for (let round = 0; round < 3 && !(await reachable(settings)); round++) {
+		for (const key of keys) {
+			if (await reachable(settings)) break;
 
-		if ((await key.count()) > 0 && (await reachable(key.first()))) await key.first().click();
+			if ((await key.count()) > 0 && (await reachable(key.first()))) await key.first().click();
+		}
 	}
 
 	await settings.click();
 
-	const dialog = page.getByRole('dialog');
+	// a dialog on a desktop or tablet, a page of its own on a phone
+	const settingsView = page
+		.getByRole('dialog')
+		.or(page.getByRole('heading', { exact: true, level: 1, name: 'Settings' }));
 
-	await dialog.getByText('Import/Export', { exact: true }).filter({ visible: true }).click();
+	await settingsView.first().waitFor();
+
+	const scope = (await page.getByRole('dialog').count()) > 0 ? page.getByRole('dialog') : page;
+
+	await scope.getByText('Import/Export', { exact: true }).filter({ visible: true }).click();
 
 	const chooser = page.waitForEvent('filechooser');
 
-	await dialog.getByRole('button', { name: 'Import conversations' }).click();
+	await scope.getByRole('button', { name: 'Import conversations' }).click();
 	await (await chooser).setFiles(file);
 	await page.getByRole('button', { name: /^Import \(\d+\)$/ }).click();
 	await page.getByRole('heading', { name: /^Imported \d+ conversation/ }).waitFor();

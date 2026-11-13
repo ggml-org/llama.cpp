@@ -1,7 +1,7 @@
 // similar to qwen2vl, except for GQA attention
 #include "models.h"
 
-ggml_cgraph * clip_graph_exaone4_5::build() {
+ggml_cgraph * mtmd_graph_exaone4_5::build() {
     GGML_ASSERT(model.patch_bias == nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);
 

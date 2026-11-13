@@ -3,8 +3,8 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("ggml" C CXX ASM)
 
 ### GGML Version
-set(GGML_VERSION_MAJOR 0)
-set(GGML_VERSION_MINOR 29)
+set(GGML_VERSION_MAJOR 1)
+set(GGML_VERSION_MINOR 0)
 set(GGML_VERSION_PATCH 0)
 set(GGML_VERSION_BASE "${GGML_VERSION_MAJOR}.${GGML_VERSION_MINOR}.${GGML_VERSION_PATCH}")
 
@@ -205,7 +205,7 @@ option(GGML_CUDA_NO_PEER_COPY               "ggml: do not use peer to peer copie
 option(GGML_CUDA_NO_VMM                     "ggml: do not try to use CUDA VMM"                OFF)
 option(GGML_CUDA_FA                         "ggml: compile ggml FlashAttention CUDA kernels"  ON)
 option(GGML_CUDA_FA_ALL_QUANTS              "ggml: compile all quants for FlashAttention"     OFF)
-set   (GGML_CUDA_FA_QUANTS "q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16" CACHE STRING
+set   (GGML_CUDA_FA_QUANTS "q4_0-q4_0;q8_0-q8_0;f16-f16;bf16-bf16;f8_e4m3-f8_e4m3" CACHE STRING
                                             "ggml: FlashAttention K-V type combinations to compile, \"all\" or a list such as \"q8_0-q8_0;q8_0-q4_0\"")
 option(GGML_CUDA_GRAPHS                     "ggml: use CUDA graphs (llama.cpp only)"          ${GGML_CUDA_GRAPHS_DEFAULT})
 option(GGML_CUDA_NCCL                       "ggml: use NVIDIA Collective Comm. Library"       ON)
