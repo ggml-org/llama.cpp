@@ -1679,6 +1679,7 @@ struct mtmd_tokenizer {
             // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)
 
             mtmd_image_preproc_out preproc_out;
+            std::vector<mtmd_image_u8> video_frames;
 
             for (const auto * bmp : bitmaps) {
                 // sanity check
@@ -1697,10 +1698,11 @@ struct mtmd_tokenizer {
                     bmp->is_placeholder());
                 img_u8.cpy_buf(bmp->get_ro_buf());
 
-                // preprocess image
-                mtmd_image_preproc_out tmp_preproc_out = bmp->is_video_frame()
-                    ? ctx->image_preproc->preprocess_video_frame(img_u8)
-                    : ctx->image_preproc->preprocess(img_u8);
+                if (bmp->is_video_frame()) {
+                    video_frames.push_back(std::move(img_u8));
+                    continue;
+                }
+                mtmd_image_preproc_out tmp_preproc_out = ctx->image_preproc->preprocess(img_u8);
 
                 // move entries and grid dimensions to the "global" preproc_out
                 for (auto & entry : tmp_preproc_out.entries) {
@@ -1716,6 +1718,13 @@ struct mtmd_tokenizer {
                     preproc_out.grid_y = tmp_preproc_out.grid_y;
                     preproc_out.overview = std::move(tmp_preproc_out.overview);
                 }
+            }
+
+            if (!video_frames.empty()) {
+                if (video_frames.size() != bitmaps.size()) {
+                    throw std::runtime_error("cannot merge video frames with still images");
+                }
+                preproc_out = ctx->image_preproc->preprocess_video_frames(video_frames);
             }
 
             LOG_DBG("%s: preproc_out has %zu entries, grid_x = %d, grid_y = %d, has_overview = %d\n",

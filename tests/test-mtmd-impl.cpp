@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -92,13 +93,27 @@ MAKE_TEST(test_image_preprocessor_inkling2) {
         t.assert_equal("placeholder width", output.nx(), placeholder.entries[0].nx());
         t.assert_equal("placeholder height", output.ny(), placeholder.entries[0].ny());
     }
+    mtmd_image_u8 first, second;
+    first.set_size({61, 43}, false);
+    second.set_size({61, 43}, false);
+    first.cpy_buf(std::vector<uint8_t>(61 * 43 * 3, 17));
+    second.cpy_buf(std::vector<uint8_t>(61 * 43 * 3, 28));
+    const auto still = preproc.preprocess(first);
+    const auto duplicate = preproc.preprocess_video_frames({first, first});
+    const auto odd = preproc.preprocess_video_frames({first});
+    const auto mean = preproc.preprocess_video_frames({first, second});
+    t.assert_true("duplicate frames bit exact", !std::memcmp(still.entries[0].get_ro_buf().data(), duplicate.entries[0].get_ro_buf().data(), still.entries[0].get_ro_buf().size()*sizeof(float)));
+    t.assert_true("odd frame retained", still.entries[0].get_ro_buf() == odd.entries[0].get_ro_buf());
+    t.assert_equal("fractional raw mean", (22.5f - 127.5f) / 127.5f, mean.entries[0].get_ro_buf()[0]);
+    t.assert_equal("mean padding unchanged", still.entries[0].get_ro_buf().back(), mean.entries[0].get_ro_buf().back());
+    second.set_size({40, 40}, false);
     bool rejected = false;
     try {
-        preproc.preprocess_video_frame(mtmd_image_u8{});
+        preproc.preprocess_video_frames({first, second});
     } catch (const std::runtime_error &) {
         rejected = true;
     }
-    t.assert_true("reject video", rejected);
+    t.assert_true("reject unequal frame sizes", rejected);
 }
 
 MAKE_TEST(test_image_preprocessor_longest_edge) {
