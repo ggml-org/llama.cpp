@@ -4265,7 +4265,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--spec-draft-sampling"}, "{greedy,probabilistic}",
         string_format("how the draft is sampled: greedy takes its argmax, probabilistic samples it and has "
-                      "the target verify by rejection sampling (default: %s)",
+                      "the target verify by rejection sampling; Inkling2 DSpark uses target temperature (1 at target temp 0) (default: %s)",
                       params.speculative.draft.probabilistic ? "probabilistic" : "greedy"),
         [](common_params & params, const std::string & value) {
             if (value == "greedy") {
