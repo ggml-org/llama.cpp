@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-26.04-arm
 
     steps:
       - name: Checkout code

@@ -2880,7 +2880,8 @@ static webgpu_encoded_op ggml_webgpu_rope(webgpu_context & ctx,
     float theta_scale = powf(freq_base, -2.0f / n_dims);
 
     float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, true, corr_dims);
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, ggml_rope_get_truncate(dst),
+                             corr_dims);
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
@@ -3624,6 +3625,7 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             }
         case GGML_OP_ARANGE:
             return ggml_webgpu_arange(ctx, node);
+        case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_PAD:
             return ggml_webgpu_pad(ctx, src0, node);
         case GGML_OP_COUNT_EQUAL:
@@ -4909,6 +4911,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     default:
                         break;
                 }
+                if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                    supports_op = false;
+                }
                 break;
             }
         case GGML_OP_MUL_MAT_ID:
@@ -4952,7 +4957,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 default:
                     break;
             }
-            if (ggml_get_op_params_i32(op, 3) == GGML_PREC_BF16 || ggml_get_op_params_i32(op, 3) == GGML_PREC_F32) {
+            if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
                 supports_op = false;
             }
             break;
@@ -5037,7 +5042,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = (op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32) && ggml_is_contiguous_rows(src0);
             break;
         case GGML_OP_ROPE:
-            supports_op = ggml_rope_get_truncate(op) && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+            supports_op = op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
             break;
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(op)) {
@@ -5160,6 +5165,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_ARANGE:
             supports_op = op->type == GGML_TYPE_F32 && ggml_is_contiguous(op);
+            break;
+        case GGML_OP_PAD_REFLECT_1D:
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
         case GGML_OP_PAD:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
