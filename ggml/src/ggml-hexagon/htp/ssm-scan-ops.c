@@ -1529,7 +1529,7 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
 
     htp_ssm_scan_vtcm_layout_build(
         &scctx.layout, kparams->d_state, kparams->row_tile, kparams->token_tile, kparams->n_hvx,
-        kparams->kernel_type == HTP_SSM_SCAN_KERNEL_HMX_CHUNKED
+        kparams->kernel_type == HTP_SSM_SCAN_KERNEL_HMX
     );
 
     octx->n_hvx                 = n_hvx;
@@ -1538,15 +1538,15 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     octx->src0_spad.size         = kparams->vtcm_size;
 
     switch (kparams->kernel_type) {
-        case HTP_SSM_SCAN_KERNEL_DECODE:
+        case HTP_SSM_SCAN_KERNEL_HVX_DECODE:
             work_queue_run(octx->ctx->hvx_queue, ssm_scan_thread_f32_decode, &scctx, n_hvx);
             break;
 
-        case HTP_SSM_SCAN_KERNEL_PREFILL:
+        case HTP_SSM_SCAN_KERNEL_HVX_PREFILL:
             work_queue_run(octx->ctx->hvx_queue, ssm_scan_thread_f32_prefill, &scctx, n_hvx);
             break;
 
-        case HTP_SSM_SCAN_KERNEL_HMX_CHUNKED:
+        case HTP_SSM_SCAN_KERNEL_HMX:
             ssm_scan_run_hmx_chunked(&scctx);
             break;
 

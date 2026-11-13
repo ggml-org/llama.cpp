@@ -2308,7 +2308,7 @@ static bool htp_kparams_solve_ssm_scan(
             const uint32_t n_hvx = (std::min)(sess_hvx, (uint32_t) total_units);
             htp_ssm_scan_vtcm_layout_build(&layout, d_state, head_dim, HTP_SSM_SCAN_HMX_TOKEN_TILE, n_hvx, true);
             if (layout.total_bytes <= vtcm_size) {
-                kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_HMX_CHUNKED;
+                kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_HMX;
                 kparams->fast_step4      = fast_step4;
                 kparams->row_tile        = (uint16_t) head_dim;
                 kparams->token_tile      = (uint16_t) HTP_SSM_SCAN_HMX_TOKEN_TILE;
@@ -2332,7 +2332,7 @@ static bool htp_kparams_solve_ssm_scan(
     }
 
     if (!hmx_selected) {
-        const uint8_t kernel_type = (n_tokens == 1) ? HTP_SSM_SCAN_KERNEL_DECODE : HTP_SSM_SCAN_KERNEL_PREFILL;
+        const uint8_t kernel_type = (n_tokens == 1) ? HTP_SSM_SCAN_KERNEL_HVX_DECODE : HTP_SSM_SCAN_KERNEL_HVX_PREFILL;
         uint32_t      row_tile    = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
         uint32_t      token_tile  = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
 

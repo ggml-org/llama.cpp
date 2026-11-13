@@ -15,9 +15,9 @@
 
 enum htp_ssm_scan_kernel_type {
     HTP_SSM_SCAN_KERNEL_UNSUPPORTED = 0,
-    HTP_SSM_SCAN_KERNEL_DECODE      = 1,
-    HTP_SSM_SCAN_KERNEL_PREFILL     = 2,
-    HTP_SSM_SCAN_KERNEL_HMX_CHUNKED = 3,
+    HTP_SSM_SCAN_KERNEL_HVX_DECODE  = 1,
+    HTP_SSM_SCAN_KERNEL_HVX_PREFILL = 2,
+    HTP_SSM_SCAN_KERNEL_HMX         = 3,
 };
 
 struct htp_ssm_scan_kernel_params {
