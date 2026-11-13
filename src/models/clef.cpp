@@ -487,9 +487,9 @@ ggml_tensor * llama_model_clef::graph::build_head_attn(ggml_tensor * q, ggml_ten
     const int64_t n_q      = q->ne[1];
     const int64_t n_kv     = kv->ne[1];
 
-    ggml_tensor * Qcur = ggml_add(ctx0, ggml_mul_mat(ctx0, a.wq, q),  a.bq);
-    ggml_tensor * Kcur = ggml_add(ctx0, ggml_mul_mat(ctx0, a.wk, kv), a.bk);
-    ggml_tensor * Vcur = ggml_add(ctx0, ggml_mul_mat(ctx0, a.wv, kv), a.bv);
+    ggml_tensor * Qcur = ggml_add(ctx0, build_lora_mm(a.wq, q),  a.bq);
+    ggml_tensor * Kcur = ggml_add(ctx0, build_lora_mm(a.wk, kv), a.bk);
+    ggml_tensor * Vcur = ggml_add(ctx0, build_lora_mm(a.wv, kv), a.bv);
 
     Qcur = ggml_permute(ctx0, ggml_reshape_3d(ctx0, Qcur, d_head, n_head_h, n_q),  0, 2, 1, 3); // [d_head, n_q,  n_head]
     Kcur = ggml_permute(ctx0, ggml_reshape_3d(ctx0, Kcur, d_head, n_head_h, n_kv), 0, 2, 1, 3); // [d_head, n_kv, n_head]
@@ -502,7 +502,7 @@ ggml_tensor * llama_model_clef::graph::build_head_attn(ggml_tensor * q, ggml_ten
     ggml_tensor * cur = ggml_mul_mat(ctx0, Vcur, kq); // [d_head, n_q, n_head]
     cur = ggml_cont_2d(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3), n_embd_h, n_q);
 
-    return ggml_add(ctx0, ggml_mul_mat(ctx0, a.wo, cur), a.bo);
+    return ggml_add(ctx0, build_lora_mm(a.wo, cur), a.bo);
 }
 
 ggml_tensor * llama_model_clef::graph::build_head_ffn(ggml_tensor * cur, const head_layer & layer) {
