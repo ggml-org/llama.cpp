@@ -1239,7 +1239,8 @@ class tensor_traits_common : public tensor_traits_base {
             if (use_tiled) {
                 spacemit_kernels::rvv::forward_flash_attn_ext_f16_tiled_vlen1024_vf16(
                     params, dst, ir0, ir1, ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer,
-                    ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer_size);
+                    ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer_size,
+                    ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2);
             } else {
                 spacemit_kernels::rvv::forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(
                     params, dst, ir0, ir1, ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer,

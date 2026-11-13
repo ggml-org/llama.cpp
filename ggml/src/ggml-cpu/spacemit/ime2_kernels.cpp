@@ -5853,5 +5853,189 @@ size_t moe_m2_gemm_kernel_i8i5(size_t           blk_len,
     return 2;
 }
 
+// Flash attention tiles on vfwmadot (A100, VLEN=1024).
+// vfwmadot vd, vs1, vs2, fp16: vd (8x8 f32, row-major, register pair) += vs1 (8x8 f16, row-major) * vs2^T,
+// where vs2 holds one row of 8 reduction elements per output column. It requires vtype with LMUL=1.
+
+// kq[r][n] = sum_d q[r][d] * k[n][d] for 8 q rows and 64 keys; kq is row-major with leading dim ld_kq.
+// qp: [dk / 8][q_c_stride] with this tile's 8x8 block at offset 0; kp: [dk / 8][64 keys][8].
+void flash_attn_qk_tile_f16(float *          kq,
+                            int64_t          ld_kq,
+                            const _Float16 * qp,
+                            int64_t          q_c_stride,
+                            const _Float16 * kp,
+                            int64_t          dk) {
+    const size_t vl  = 64;
+    int64_t      n   = dk / 8;
+    const size_t qcs = q_c_stride * sizeof(_Float16);
+
+    __asm__ volatile(
+        "vsetvli        zero, %[vl], e32, m2, ta, ma    \n\t"
+        "vmv.v.i        v16, 0                          \n\t"
+        "vmv.v.i        v18, 0                          \n\t"
+        "vmv.v.i        v20, 0                          \n\t"
+        "vmv.v.i        v22, 0                          \n\t"
+        "vmv.v.i        v24, 0                          \n\t"
+        "vmv.v.i        v26, 0                          \n\t"
+        "vmv.v.i        v28, 0                          \n\t"
+        "vmv.v.i        v30, 0                          \n\t"
+        "vsetvli        zero, %[vl], e16, m1, ta, ma    \n\t"
+
+        // each step: 8 q rows x 8 dims against 8 groups of 8 keys x 8 dims
+        "1:                                             \n\t"
+        "vle16.v        v1, (%[q])                      \n\t"
+        "vle16.v        v2, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vle16.v        v3, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vle16.v        v4, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vle16.v        v5, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vfwmadot       v16, v1, v2, fp16               \n\t"
+        "vfwmadot       v18, v1, v3, fp16               \n\t"
+        "vfwmadot       v20, v1, v4, fp16               \n\t"
+        "vfwmadot       v22, v1, v5, fp16               \n\t"
+        "vle16.v        v6, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vle16.v        v7, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vle16.v        v8, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vle16.v        v9, (%[k])                      \n\t"
+        "addi           %[k], %[k], 128                 \n\t"
+        "vfwmadot       v24, v1, v6, fp16               \n\t"
+        "vfwmadot       v26, v1, v7, fp16               \n\t"
+        "vfwmadot       v28, v1, v8, fp16               \n\t"
+        "vfwmadot       v30, v1, v9, fp16               \n\t"
+        "add            %[q], %[q], %[qcs]              \n\t"
+        "addi           %[n], %[n], -1                  \n\t"
+        "bnez           %[n], 1b                        \n\t"
+
+        // scatter the 8x8 tiles into kq: byte offset of element i = ((i >> 3) * ld_kq + (i & 7)) * 4
+        "vsetvli        zero, %[vl], e32, m2, ta, ma    \n\t"
+        "vid.v          v10                             \n\t"
+        "vsrl.vi        v12, v10, 3                     \n\t"
+        "vand.vi        v10, v10, 7                     \n\t"
+        "vmacc.vx       v10, %[ld], v12                 \n\t"
+        "vsll.vi        v10, v10, 2                     \n\t"
+        "vsuxei32.v     v16, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v18, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v20, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v22, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v24, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v26, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v28, (%[kq]), v10               \n\t"
+        "addi           %[kq], %[kq], 32                \n\t"
+        "vsuxei32.v     v30, (%[kq]), v10               \n\t"
+        : [q] "+r"(qp), [k] "+r"(kp), [kq] "+r"(kq), [n] "+r"(n)
+        : [vl] "r"(vl), [qcs] "r"(qcs), [ld] "r"(ld_kq)
+        : "cc", "memory", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v16",
+          "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31");
+}
+
+// vkq[j][r][c] = vkq[j][r][c] * ms[r] + sum_n p[r][n] * v[n][j * 8 + c] for 8 q rows and 64 keys.
+// p: row-major softmax probabilities (leading dim ld_p); vp: [64 / 8][dv][8] (V transposed per 8-key block).
+void flash_attn_pv_tile_f16(float *          vkq,
+                            const float *    ms,
+                            const float *    p,
+                            int64_t          ld_p,
+                            const _Float16 * vp,
+                            int64_t          dv) {
+    const size_t vl = 64;
+    float        ms_buf[64];
+    for (int i = 0; i < 64; ++i) {
+        ms_buf[i] = ms[i >> 3];
+    }
+    int64_t      n   = dv / 8;
+    const size_t kcs = dv * 8 * sizeof(_Float16);  // stride between the 8-key blocks of vp
+
+    __asm__ volatile(
+        "vsetvli        zero, %[vl], e32, m2, ta, ma    \n\t"
+        "vle32.v        v6, (%[ms])                     \n\t"
+
+        // gather the 8 blocks of 8 keys of p (8x8 each) and convert them to f16
+        "vid.v          v2                              \n\t"
+        "vsrl.vi        v4, v2, 3                       \n\t"
+        "vand.vi        v2, v2, 7                       \n\t"
+        "vmacc.vx       v2, %[ld], v4                   \n\t"
+        "vsll.vi        v2, v2, 2                       \n\t"
+        "mv             t0, %[p]                        \n\t"
+        "vluxei32.v     v16, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v18, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v20, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v22, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v24, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v26, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v28, (t0), v2                   \n\t"
+        "addi           t0, t0, 32                      \n\t"
+        "vluxei32.v     v30, (t0), v2                   \n\t"
+        "vsetvli        zero, %[vl], e16, m1, ta, ma    \n\t"
+        "vfncvt.f.f.w   v8, v16                         \n\t"
+        "vfncvt.f.f.w   v9, v18                         \n\t"
+        "vfncvt.f.f.w   v10, v20                        \n\t"
+        "vfncvt.f.f.w   v11, v22                        \n\t"
+        "vfncvt.f.f.w   v12, v24                        \n\t"
+        "vfncvt.f.f.w   v13, v26                        \n\t"
+        "vfncvt.f.f.w   v14, v28                        \n\t"
+        "vfncvt.f.f.w   v15, v30                        \n\t"
+
+        // one 8x8 output block per step; keys 0-31 accumulate into v16, keys 32-63 into v18
+        "1:                                             \n\t"
+        "vsetvli        zero, %[vl], e32, m2, ta, ma    \n\t"
+        "vle32.v        v16, (%[o])                     \n\t"
+        "vfmul.vv       v16, v16, v6                    \n\t"
+        "vmv.v.i        v18, 0                          \n\t"
+        "vsetvli        zero, %[vl], e16, m1, ta, ma    \n\t"
+        "mv             t0, %[v]                        \n\t"
+        "vle16.v        v24, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v25, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v26, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v27, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v28, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v29, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v30, (t0)                       \n\t"
+        "add            t0, t0, %[kcs]                  \n\t"
+        "vle16.v        v31, (t0)                       \n\t"
+        "vfwmadot       v16, v8, v24, fp16              \n\t"
+        "vfwmadot       v18, v12, v28, fp16             \n\t"
+        "vfwmadot       v16, v9, v25, fp16              \n\t"
+        "vfwmadot       v18, v13, v29, fp16             \n\t"
+        "vfwmadot       v16, v10, v26, fp16             \n\t"
+        "vfwmadot       v18, v14, v30, fp16             \n\t"
+        "vfwmadot       v16, v11, v27, fp16             \n\t"
+        "vfwmadot       v18, v15, v31, fp16             \n\t"
+        "vsetvli        zero, %[vl], e32, m2, ta, ma    \n\t"
+        "vfadd.vv       v16, v16, v18                   \n\t"
+        "vse32.v        v16, (%[o])                     \n\t"
+        "addi           %[o], %[o], 256                 \n\t"
+        "addi           %[v], %[v], 128                 \n\t"
+        "addi           %[n], %[n], -1                  \n\t"
+        "bnez           %[n], 1b                        \n\t"
+        : [o] "+r"(vkq), [v] "+r"(vp), [n] "+r"(n)
+        : [vl] "r"(vl), [ms] "r"(ms_buf), [p] "r"(p), [ld] "r"(ld_p), [kcs] "r"(kcs)
+        : "cc", "memory", "t0", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13", "v14",
+          "v15", "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23", "v24", "v25", "v26", "v27", "v28", "v29",
+          "v30", "v31");
+}
+
 }  // namespace ime2
 }  // namespace spacemit_kernels

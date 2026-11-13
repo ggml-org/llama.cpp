@@ -56,7 +56,8 @@ void forward_flash_attn_ext_f16_tiled_vlen1024_vf16(const ggml_compute_params * 
                                                     int                         ir0,
                                                     int                         ir1,
                                                     void *                      tcm_buffer,
-                                                    size_t                      tcm_buffer_size);
+                                                    size_t                      tcm_buffer_size,
+                                                    bool                        use_ime);
 
 void forward_rms_norm_f32(ggml_compute_params * params, ggml_tensor * op);
 
