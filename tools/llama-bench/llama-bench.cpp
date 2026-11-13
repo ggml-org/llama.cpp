@@ -500,6 +500,9 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     if (s == "bf16") {
         return GGML_TYPE_BF16;
     }
+    if (s == "f8_e4m3") {
+        return GGML_TYPE_F8_E4M3;
+    }
     if (s == "q8_0") {
         return GGML_TYPE_Q8_0;
     }
@@ -2352,7 +2355,7 @@ int llama_bench(int argc, char ** argv) {
             uint32_t n_ctx_needed = std::max<uint32_t>(inst.n_prompt + inst.n_gen + inst.n_depth, inst.fit_min_ctx);
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
-            common_fit_params(inst.model.c_str(), &mparams, &cparams,
+            common_fit_params({ inst.model }, &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
                 margins.data(),

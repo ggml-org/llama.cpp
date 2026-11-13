@@ -244,12 +244,28 @@ json server_mcp_transport::send_rpc(const json & request, const std::function<bo
     }
 
     if (should_stop && should_stop()) {
+        notify_cancelled(request, "cancelled");
         return {{"error", {{"code", -32603}, {"message", "cancelled"}}}};
     }
     if (std::chrono::steady_clock::now() >= deadline) {
+        notify_cancelled(request, "request timed out");
         return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
     }
     return {{"error", {{"code", -32603}, {"message", "transport closed"}}}};
+}
+
+// MCP cancellation: a notification that lets the server abandon work nobody waits for anymore
+// (e.g. a slow tool call after the client dropped the connection). the spec forbids cancelling initialize.
+void server_mcp_transport::notify_cancelled(const json & request, const std::string & reason) {
+    if (!request.contains("id") || request.value("method", "") == "initialize") {
+        return;
+    }
+    json notif = {
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/cancelled"},
+        {"params", {{"requestId", request.at("id")}, {"reason", reason}}},
+    };
+    to_server.write(notif.dump());
 }
 
 bool server_mcp_transport::ensure_init(const std::function<bool()> & should_stop) {

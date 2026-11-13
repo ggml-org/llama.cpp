@@ -100,7 +100,7 @@ jobs:
         run: |
           cd build
           echo "Fetch llama2c big-endian model"
-          wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
+          wget https://huggingface.co/ggml-org-dev/stories260K/resolve/main/stories260K-be.gguf
           ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
       - name: Test quantize (s390x)

@@ -43,6 +43,7 @@ export const HF_MODEL_LIST_EXPAND: readonly string[] = [
 export const HF_MAIN_BRANCH = 'main';
 export const HF_README_FILENAME = 'README.md';
 export const HF_RAW_PATH = 'raw';
+export const HF_RESOLVE_PATH = 'resolve';
 export const HF_TREE_PATH = 'tree';
 
 // Pagination
@@ -55,7 +56,10 @@ export const HF_LINK_HEADER = 'Link';
 
 export const HF_RETRY_ATTEMPTS = 3;
 export const HF_RETRY_DELAY_MS = 1000;
+export const HF_HTTP_PARTIAL_CONTENT = 206;
 export const HF_HTTP_NOT_FOUND = 404;
+/** Unauthorized, forbidden, not found: a gated, private or missing file, which a retry won't change. */
+export const HF_HTTP_NO_ACCESS_STATUSES: readonly number[] = [401, 403, HF_HTTP_NOT_FOUND];
 export const HF_HTTP_SERVER_ERROR_MIN = 500;
 
 // Search limits
@@ -128,6 +132,13 @@ export const HF_MODALITY_PIPELINE_TAGS: Readonly<
 
 /** Filename token marking an mmproj sidecar sibling (unlocks vision / audio). */
 export const HF_MMPROJ_FILENAME_TOKEN = 'mmproj';
+
+/** Bytes read from the start of an mmproj to reach its metadata, which comes before the tensors. */
+export const HF_MMPROJ_HEADER_BYTES = 65_536;
+
+/** mmproj metadata keys saying which encoders it carries (tools/mtmd/mtmd-impl.h). */
+export const GGUF_KEY_HAS_VISION_ENCODER = 'clip.has_vision_encoder';
+export const GGUF_KEY_HAS_AUDIO_ENCODER = 'clip.has_audio_encoder';
 
 export const HF_TASK_TAGS: readonly string[] = [
 	'audio-classification',
