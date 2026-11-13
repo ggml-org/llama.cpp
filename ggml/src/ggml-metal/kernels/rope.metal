@@ -68,11 +68,9 @@ kernel void kernel_rope_norm(
 
     float corr_dims[2];
     if (FC_rope_truncate) {
-        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                  corr_dims);
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     } else {
-        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                   corr_dims);
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     }
 
     device const int32_t * pos = (device const int32_t *) src1;
@@ -132,11 +130,9 @@ kernel void kernel_rope_neox(
 
     float corr_dims[2];
     if (FC_rope_truncate) {
-        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                  corr_dims);
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     } else {
-        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                   corr_dims);
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     }
 
     device const int32_t * pos = (device const int32_t *) src1;
@@ -196,11 +192,9 @@ kernel void kernel_rope_multi(
 
     float corr_dims[2];
     if (FC_rope_truncate) {
-        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                  corr_dims);
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     } else {
-        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                   corr_dims);
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     }
 
     device const int32_t * pos = (device const int32_t *) src1;
@@ -290,11 +284,9 @@ kernel void kernel_rope_vision(
 
     float corr_dims[2];
     if (FC_rope_truncate) {
-        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                  corr_dims);
+        rope_yarn_corr_dims<true>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     } else {
-        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow,
-                                   corr_dims);
+        rope_yarn_corr_dims<false>(args.n_dims, args.n_ctx_orig, args.freq_base, args.beta_fast, args.beta_slow, corr_dims);
     }
 
     device const int32_t * pos = (device const int32_t *) src1;
