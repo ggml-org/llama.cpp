@@ -12,7 +12,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, MmprojModel, TextModel, gguf, logger
 
 
 def _e4m3_table() -> np.ndarray:
@@ -286,3 +286,60 @@ class Inkling2Model(TextModel):
             yield new_name + suffix, data_torch
         else:
             yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Inkling2ForConditionalGeneration")
+class Inkling2VisionModel(MmprojModel):
+    def get_vision_config(self):
+        config = self.global_config.get("vision_config")
+        if not config:
+            return None
+        config = dict(config)
+        config["patch_size"] = config.get("native_patch_size", config.get("patch_size", 20))
+        config["spatial_merge_size"] = config.get("adapter_merge_size", config.get("spatial_merge_size", 2))
+        config["intermediate_size"] = config.get("intermediate_size") or int(config["hidden_size"] * config.get("mlp_ratio", 4.0))
+        config["image_size"] = config["posemb_grid_size"] * config["patch_size"]
+        if config.get("num_channels", 3) != 3 or config.get("hidden_act", "gelu") != "gelu":
+            raise ValueError("Inkling2 vision requires RGB patches and exact GELU")
+        return config
+
+    def set_gguf_parameters(self):
+        self.preprocessor_config.setdefault("image_mean", [0.5, 0.5, 0.5])
+        self.preprocessor_config.setdefault("image_std", [0.5, 0.5, 0.5])
+        super().set_gguf_parameters()
+        config = self.hparams
+        rope = config.get("rope_parameters") or {"rope_type": "axial", "rope_theta": 10000.0}
+        if rope["rope_type"] != "axial":
+            raise ValueError("Inkling2 vision requires axial RoPE")
+        w = self.gguf_writer
+        w.add_clip_vision_projector_type(gguf.VisionProjectorType.INKLING2)
+        w.add_vision_attention_layernorm_eps(config["layer_norm_eps"])
+        w.add_vision_spatial_merge_size(config["spatial_merge_size"])
+        w.add_uint32(gguf.Keys.ClipVision.POSITION_GRID_SIZE, config["posemb_grid_size"])
+        w.add_uint32(gguf.Keys.ClipVision.Projector.HIDDEN_SIZE, config["projection_hidden_dim"])
+        w.add_bool(gguf.Keys.ClipVision.Projector.USE_BIAS, config.get("projector_bias", False))
+        w.add_float32(gguf.Keys.ClipVision.ROPE_FREQ_BASE, float(rope["rope_theta"]))
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, gen = item
+        if not name.startswith(("model.visual.", "model.vision_tower.")):
+            return None
+        name = name.replace("model.visual.backbone.embeddings.", "model.vision_tower.embeddings.")
+        name = name.replace("model.visual.backbone.ln_pre.", "model.vision_tower.pre_layernorm.")
+        name = name.replace("model.visual.backbone.layers.", "model.vision_tower.layers.")
+        name = name.replace("model.visual.proj_in.", "model.vision_tower.merger.linear_1.")
+        name = name.replace("model.visual.proj_out.", "model.vision_tower.merger.linear_2.")
+        for old, new in (("ln_1", "layernorm_before"), ("ln_2", "layernorm_after"), ("mlp.c_fc", "mlp.fc1"), ("mlp.c_proj", "mlp.fc2"), ("ls_1.gamma", "lambda_1"), ("ls_2.gamma", "lambda_2")):
+            name = name.replace("." + old, "." + new)
+        if name.endswith(("position_embedding", "lambda_1", "lambda_2")):
+            name += ".weight"
+        return name, gen
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        for index in (1, 2):
+            if name.startswith(f"model.vision_tower.merger.linear_{index}."):
+                suffix = name.rsplit(".", 1)[1]
+                yield self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, bid=index, suffix="." + suffix), data_torch
+                return
+        yield from super().modify_tensors(data_torch, name, bid)

@@ -1873,7 +1873,12 @@ class TensorNameMap:
             "model.mm_projector.peg.peg.{bid}",
         ),
 
+        MODEL_TENSOR.V_ENC_EMBD_CLS_POS: (
+            "model.vision_tower.embeddings.cls_position_embedding",
+        ),
+
         MODEL_TENSOR.V_ENC_EMBD_CLS: (
+            "model.vision_tower.embeddings.class_embedding", # inkling2
             "vision_tower.vision_model.embeddings.class_embedding",
             "model.vision_tower.embeddings.cls_token", # Intern-S1
             "vision_model.class_embedding", # llama 4
@@ -2055,6 +2060,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "model.vision_tower.layers.{bid}.layernorm_before", # inkling2
             "visual.encoder.layers.{bid}.layer_norm1", # mage-vl
             "vision_model.encoder.layer.{bid}.norm1", # Nemotron Omni
             "vision.blocks.{bid}.norm1", # deepseek4v
@@ -2119,6 +2125,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "model.vision_tower.layers.{bid}.layernorm_after", # inkling2
             "visual.encoder.layers.{bid}.layer_norm2", # mage-vl
             "vision_model.encoder.layer.{bid}.norm2", # Nemotron Omni
             "vision.blocks.{bid}.norm2", # deepseek4v
@@ -2251,6 +2258,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
+            "model.vision_tower.layers.{bid}.lambda_1", # inkling2
             "vision_model.encoder.layer.{bid}.layer_scale1", # Nemotron Omni
             "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_1", # Intern-S1
@@ -2258,6 +2266,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_2: (
+            "model.vision_tower.layers.{bid}.lambda_2", # inkling2
             "vision_model.encoder.layer.{bid}.layer_scale2", # Nemotron Omni
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
@@ -2269,6 +2278,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
+            "model.vision_tower.pre_layernorm", # inkling2
             "visual.layernorm_pre", # mage-vl
             "vision_tower.vision_model.pre_layrnorm",
             "vision_tower.ln_pre", # pixtral-hf
