@@ -145,6 +145,10 @@ struct mtmd_hparams {
 
     // Muse Glimmer vision (per-block sparse-window pattern, learned pos-emb, patch-temporal)
     // NOTE: these perhaps shouldn't have the architecture prefix
+    int32_t position_grid_size = 0;
+    int32_t projection_hidden_size = 0;
+    bool projector_bias = false;
+
     int32_t muse_glimmer_patch_temporal = 0;
     int32_t muse_glimmer_sparse_factor  = 0;
 
@@ -898,6 +902,7 @@ struct mtmd_model {
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;
+    ggml_tensor * class_position_embedding = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
     ggml_tensor * patch_embeddings_1 = nullptr;  // additional patch kernel; interpretation is model-specific (Qwen2VL, Nemotron Omni)
     ggml_tensor * patch_bias = nullptr;

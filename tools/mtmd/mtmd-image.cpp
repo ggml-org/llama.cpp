@@ -2145,6 +2145,40 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
     return output;
 }
 
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess(const mtmd_image_u8 & img) const {
+    const auto size = img.get_size();
+    const int align = hparams.patch_size * hparams.n_merge;
+    if (size.width <= 0 || size.height <= 0 || size.width > INT_MAX - align || size.height > INT_MAX - align) {
+        throw std::runtime_error("inkling2: invalid image size");
+    }
+    const int width = ((size.width + align - 1) / align) * align;
+    const int height = ((size.height + align - 1) / align) * align;
+    mtmd_image_f32 padded;
+    padded.set_size({width, height}, img.is_placeholder(), false);
+    if (!img.is_placeholder()) {
+        std::vector<float> pixels(size_t(width) * height * 3, -1.0f);
+        const auto & src = img.get_ro_buf();
+        for (int y = 0; y < size.height; ++y) {
+            std::copy_n(src.begin() + size_t(y) * size.width * 3, size_t(size.width) * 3, pixels.begin() + size_t(y) * width * 3);
+        }
+        padded.cpy_buf(pixels);
+        // Match the reference's fused rescale and normalization, including negative padding.
+        float mean[3], std[3];
+        for (int c = 0; c < 3; ++c) {
+            mean[c] = hparams.image_mean[c] * 255.0f;
+            std[c] = hparams.image_std[c] * 255.0f;
+        }
+        padded.normalize(mean, std);
+    }
+    mtmd_image_preproc_out result;
+    result.append(hparams, padded, false);
+    return result;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess_video_frame(const mtmd_image_u8 &) const {
+    throw std::runtime_error("inkling2: video is not supported");
+}
+
 //#define MTMD_DEBUG_FUNCTIONS
 
 #ifdef MTMD_DEBUG_FUNCTIONS

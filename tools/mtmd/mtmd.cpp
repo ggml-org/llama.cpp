@@ -905,6 +905,10 @@ struct mtmd_context {
                     img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_INKLING2:
+                {
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
                     img_beg = "<|image_start|>";
@@ -3410,6 +3414,25 @@ const char * mtmd_get_marker(const mtmd_context * ctx) {
 //
 
 // mtmd_bitmap
+
+mtmd_bitmap * mtmd_bitmap_init_from_rgba(const mtmd_context * ctx, uint32_t nx, uint32_t ny, const unsigned char * data) {
+    if (!data) {
+        return mtmd_bitmap_init(nx, ny, nullptr);
+    }
+    const bool checkerboard = ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2;
+    std::vector<unsigned char> rgb(size_t(nx) * ny * 3);
+    for (uint32_t y = 0; y < ny; ++y) {
+        for (uint32_t x = 0; x < nx; ++x) {
+            const size_t i = size_t(y) * nx + x;
+            const int alpha = data[4 * i + 3];
+            const int background = ((y / 8 + x / 8) % 2 == 0) ? 204 : 153;
+            for (int c = 0; c < 3; ++c) {
+                rgb[3 * i + c] = checkerboard ? (data[4 * i + c] * alpha + background * (255 - alpha) + 127) / 255 : data[4 * i + c];
+            }
+        }
+    }
+    return mtmd_bitmap_init(nx, ny, rgb.data());
+}
 
 mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
                                uint32_t ny,
