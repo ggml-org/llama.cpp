@@ -304,12 +304,12 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     bool process(const common_batch & batch_in) override {
         auto * ctx_dft = params.ctx_dft;
 
-        // copy the entries to a batch owned by the draft context, only the last token is output
+        // copy the entries to a batch owned by the draft context, no token is output
         batch.clear();
         const int32_t n_tokens = batch_in.size();
         for (int32_t k = 0; k < n_tokens; ++k) {
             const auto & t = batch_in.tokens[k];
-            const bool output = k == n_tokens - 1;
+            const bool output = false;
             if (t.id != LLAMA_TOKEN_NULL) {
                 const int32_t idx = batch.add(t.id, t.pos[0], t.seq_id, output);
                 if (t.embd.data) {
@@ -419,6 +419,8 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
 
                 // only collect very high-confidence draft tokens
                 if (cur_p->data[0].p < params.p_min) {
+                    auto & dp = dparams.at(seq_id);
+                    dp.seed_reusable = n_seq == 1 && i == 0 && dp.result->empty();
                     drafting[seq_id] = false;
                     n_drafting--;
 
