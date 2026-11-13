@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Callable, Iterable
 
 import torch
@@ -22,15 +23,9 @@ class Raon1NanoModel(TextModel):
     # kept unquantized by llama-quantize (src/llama-quant.cpp); a quantized --outtype keeps them at F16 the same way
     _KEEP_UNQUANTIZED = ("hc_attn_fn", "hc_ffn_fn", "ssm_f_a", "ssm_f_b")
     _KEEP_UNQUANTIZED_Q8_0 = ("attn_kv_a_mqa", "attn_k_b", "attn_v_b")
-    # RDA tensors folded into the fused layout (src/models/raon1nano.cpp build_rda_layer)
+    # RDA tensors folded into the fused layout (src/models/raon1-nano.cpp build_rda_layer)
     _RDA_PARTS = ("q_proj.weight", "k_proj.weight", "v_proj.weight", "g_proj.weight", "q_conv1d.weight", "k_conv1d.weight",
                   "v_conv1d.weight", "f_a_proj.weight", "b_proj.weight", "rda_w_proj.weight", "f_b_proj.weight", "A_log", "dt_bias")
-    # per_layer_input_gate is not a Linear: its parameters have no .weight suffix
-    _PLE_LAYER = {"gate": gguf.MODEL_TENSOR.PER_LAYER_INP_GATE, "projection": gguf.MODEL_TENSOR.PER_LAYER_PROJ,
-                  "output_norm.weight": gguf.MODEL_TENSOR.PER_LAYER_POST_NORM}
-    _PLE_MODEL = {"model.per_layer_inputs.table": gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
-                  "model.per_layer_inputs.embedding_projection": gguf.MODEL_TENSOR.PER_LAYER_MODEL_PROJ,
-                  "model.per_layer_inputs.projection_norm.weight": gguf.MODEL_TENSOR.PER_LAYER_PROJ_NORM}
     # post = 2 * sigmoid(.) in the reference; the 2 is folded into o_proj and down_proj (exact, a power of two)
     _HC_POST_MAGNITUDE = 2.0
 
@@ -64,6 +59,10 @@ class Raon1NanoModel(TextModel):
                 or hp.get("attn_res_block_size") or hp.get("num_nextn_predict_layers")):
             raise ValueError("Unsupported Raon-1 nano architecture variant")
 
+        bound = rda_config["gate_lower_bound"]
+        if bound is None or not math.isfinite(bound) or bound >= 0:
+            raise ValueError("Raon-1 nano requires a finite negative RDA gate lower bound")
+
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(hp["vocab_size"])
         # RDA and MLA head counts differ: per-layer arrays
@@ -72,8 +71,7 @@ class Raon1NanoModel(TextModel):
         self.gguf_writer.add_ssm_conv_kernel(rda_config["conv_kernel_size"])
         self.gguf_writer.add_ssm_time_step_rank(hp.get("rda_decay_rank", 128))
         self.gguf_writer.add_kda_head_dim(rda_config["head_dim"])
-        if (bound := rda_config["gate_lower_bound"]) is not None:
-            self.gguf_writer.add_kda_gate_lower_bound(bound)
+        self.gguf_writer.add_kda_gate_lower_bound(bound)
         self.gguf_writer.add_q_lora_rank(hp["q_lora_rank"])
         self.gguf_writer.add_kv_lora_rank(hp["kv_lora_rank"])
         self.gguf_writer.add_rope_dimension_count(hp["qk_rope_head_dim"])
@@ -177,13 +175,11 @@ class Raon1NanoModel(TextModel):
         if name.endswith(".per_layer_input_gate.gate"):
             # the graph feeds the stream sum, not the mean
             data_torch = data_torch.float() / self.hparams["raon_mhc_streams"]
-        if name in self._PLE_MODEL:
-            yield self.format_tensor_name(self._PLE_MODEL[name]), data_torch
-            return
-        if ".per_layer_input_gate." in name:
-            assert bid is not None
-            yield self.format_tensor_name(self._PLE_LAYER[name.split(".per_layer_input_gate.", 1)[1]], bid), data_torch
-            return
+        # The HF per-layer embedding matrices are bare parameters.
+        if name in ("model.per_layer_inputs.table", "model.per_layer_inputs.embedding_projection") or name.endswith(
+            (".per_layer_input_gate.gate", ".per_layer_input_gate.projection")
+        ):
+            name += ".weight"
         if name.endswith("kv_b_proj.weight"):
             # absorbed MLA: per-head k_b [kv_lora_rank, qk_nope] (transposed) and v_b [v_head_dim, kv_lora_rank]
             heads = self.hparams["num_attention_heads"]
