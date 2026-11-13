@@ -1976,6 +1976,27 @@ vec4 bf16_to_fp32(uvec4 u)
     return vec4(bf16_to_fp32(u.x), bf16_to_fp32(u.y), bf16_to_fp32(u.z), bf16_to_fp32(u.w));
 }
 
+#if defined(DATA_A_BF16)
+#define A_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define A_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_B_BF16)
+#define B_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define B_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_C_BF16)
+#define C_TO_FLOAT(x) bf16_to_fp32(uint32_t(x))
+#else
+#define C_TO_FLOAT(x) float(x)
+#endif
+#if defined(DATA_D_BF16)
+#define FLOAT_TO_D(x) D_TYPE(fp32_to_bf16(x))
+#else
+#define FLOAT_TO_D(x) D_TYPE(x)
+#endif
+
 float e8m0_to_fp32(uint8_t x) {
     uint32_t bits;
 
