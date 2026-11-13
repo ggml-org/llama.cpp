@@ -28,8 +28,12 @@ struct htp_ssm_scan_unit {
     uint32_t nrows;
 };
 
-static inline float ssm_scan_softplus(float x) {
-    return x > 20.0f ? x : logf(1.0f + expf(x));
+static inline HVX_Vector ssm_scan_vec_softplus_f32(HVX_Vector vx) {
+    const HVX_Vector     v20 = hvx_vec_splat_f32(20.0f);
+    const HVX_Vector     v1  = hvx_vec_splat_f32(1.0f);
+    const HVX_VectorPred gt  = Q6_Q_vcmp_gt_VsfVsf(vx, v20);
+    const HVX_Vector     sp  = hvx_vec_log_f32(hvx_vec_add_f32_f32(v1, hvx_vec_exp_f32(vx)));
+    return Q6_V_vmux_QVV(gt, vx, sp);
 }
 
 static inline struct htp_ssm_scan_unit ssm_scan_decode_unit(
@@ -237,9 +241,11 @@ static void ssm_scan_thread_f32_decode(const htp_thread_t * th, unsigned int nth
         const struct htp_ssm_scan_unit unit = ssm_scan_decode_unit(kparams, unit_index);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) unit_index);
-        const float dt_value    = hvx_vec_get_f32(hvx_vmem(dt_work));
-        const float dt_softplus = ssm_scan_softplus(dt_value);
-        const float dA_scalar   = kparams->n_a == 1 ? expf(dt_softplus * hvx_vec_get_f32(hvx_vmem(A_work))) : 0.0f;
+        const HVX_Vector vdt_sp      = ssm_scan_vec_softplus_f32(hvx_vmem(dt_work));
+        const float      dt_softplus = hvx_vec_get_f32(vdt_sp);
+        const float      dA_scalar   = kparams->n_a == 1
+            ? hvx_vec_get_f32(hvx_vec_exp_f32(hvx_vec_mul_f32_f32(vdt_sp, hvx_vmem(A_work))))
+            : 0.0f;
 
         uint32_t row = 0;
         if (kparams->fast_step4) {
@@ -385,7 +391,7 @@ static void ssm_scan_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
     uint32_t                 cur_u          = unit_start;
     uint32_t                 cur_c          = 0;
     struct htp_ssm_scan_unit unit           = { 0 };
-    float                    A_value        = 0.0f;
+    HVX_Vector               vA             = Q6_V_vzero();
     dma_addr_t               state_out_base = 0;
     dma_addr_t               y_base         = 0;
 
@@ -401,7 +407,7 @@ static void ssm_scan_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
 
         if (cur_c == 0) {
             unit           = ssm_scan_decode_unit(kparams, cur_u);
-            A_value        = kparams->n_a == 1 ? hvx_vec_get_f32(hvx_vmem(A_work)) : 0.0f;
+            vA             = kparams->n_a == 1 ? hvx_vec_splat_f32(hvx_vec_get_f32(hvx_vmem(A_work))) : Q6_V_vzero();
             state_out_base = dst->data + kparams->y_bytes + (size_t) unit.head * s->nb[2] + (size_t) unit.row0 * s->nb[1];
             y_base         = dst->data + (size_t) unit.q * kparams->y_seq_stride +
                              ((size_t) unit.head * kparams->head_dim + unit.row0) * sizeof(float);
@@ -414,12 +420,9 @@ static void ssm_scan_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) step);
         float __attribute__((aligned(128))) dt_buf[VLEN_FP32];
         float __attribute__((aligned(128))) dA_buf[VLEN_FP32];
-        hvx_vmem(dt_buf) = hvx_vmem(dt_work);
-        for (uint32_t t = 0; t < nt; ++t) {
-            const float dt_softplus = ssm_scan_softplus(dt_buf[t]);
-            dt_buf[t]               = dt_softplus;
-            dA_buf[t]               = kparams->n_a == 1 ? expf(dt_softplus * A_value) : 0.0f;
-        }
+        const HVX_Vector vdt_sp = ssm_scan_vec_softplus_f32(hvx_vmem(dt_work));
+        hvx_vmem(dt_buf)        = vdt_sp;
+        hvx_vmem(dA_buf)        = kparams->n_a == 1 ? hvx_vec_exp_f32(hvx_vec_mul_f32_f32(vdt_sp, vA)) : Q6_V_vzero();
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) step);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) step);
