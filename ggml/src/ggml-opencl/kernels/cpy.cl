@@ -33,18 +33,16 @@ kernel void kernel_cpy_f16_f16(
     int i02 = get_group_id(1);
     int i01 = get_group_id(0);
 
-    int n = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
-
-    int i3 = n / (ne2*ne1*ne0);
-    int i2 = (n - i3*ne2*ne1*ne0) / (ne1*ne0);
-    int i1 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0) / ne0;
-    int i0 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0 - i1*ne0);
-
-    global half * dst_data = (global half *) ((global char *) dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
+        const ulong n  = (((ulong)i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
+
         global const half * src = (global half *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
-        dst_data[i00] = src[0];
+        global half * out = (global half *)((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = src[0];
     }
 }
 
@@ -78,18 +76,16 @@ kernel void kernel_cpy_f16_f32(
     int i02 = get_group_id(1);
     int i01 = get_group_id(0);
 
-    int n = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
-
-    int i3 = n / (ne2*ne1*ne0);
-    int i2 = (n - i3*ne2*ne1*ne0) / (ne1*ne0);
-    int i1 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0) / ne0;
-    int i0 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0 - i1*ne0);
-
-    global float * dst_data = (global float *) ((global char *) dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
-        global half * src = (global half *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
-        dst_data[i00] = src[0];
+        const ulong n  = (((ulong)i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
+
+        global const half * src = (global half *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        global float * out = (global float *)((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = src[0];
     }
 }
 
@@ -122,19 +118,16 @@ kernel void kernel_cpy_f32_f16(
     int i02 = get_group_id(1);
     int i01 = get_group_id(0);
 
-    int n = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
-
-    int i3 = n / (ne2*ne1*ne0);
-    int i2 = (n - i3*ne2*ne1*ne0) / (ne1*ne0);
-    int i1 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0) / ne0;
-    int i0 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0 - i1*ne0);
-
-    global half * dst_data = (global half *) ((global char *) dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
-        global const float * src = (global float *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        const ulong n  = (((ulong)i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
 
-        dst_data[i00] = src[0];
+        global const float * src = (global float *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        global half * out = (global half *)((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = src[0];
     }
 }
 
@@ -167,19 +160,16 @@ kernel void kernel_cpy_f32_f32(
     int i02 = get_group_id(1);
     int i01 = get_group_id(0);
 
-    int n = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
-
-    int i3 = n / (ne2*ne1*ne0);
-    int i2 = (n - i3*ne2*ne1*ne0) / (ne1*ne0);
-    int i1 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0) / ne0;
-    int i0 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0 - i1*ne0);
-
-    global float * dst_data = (global float *) ((global char *) dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
-        global const float * src = (global float *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        const ulong n  = (((ulong)i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
 
-        dst_data[i00] = src[0];
+        global const float * src = (global float *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        global float * out = (global float *)((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = src[0];
     }
 }
 
@@ -226,20 +216,16 @@ kernel void kernel_cpy_f32_f32_pack(
     int i02 = t % ne02;
     int i03 = t / ne02;
 
-    // linear index of the first element of this row, unflattened over dst dims
-    long n  = (long)row * ne00;
-    int i3  = (int)(n / ((long)ne2*ne1*ne0));
-    long rm = n - (long)i3*ne2*ne1*ne0;
-    int i2  = (int)(rm / ((long)ne1*ne0));
-    rm     -= (long)i2*ne1*ne0;
-    int i1  = (int)(rm / ne0);
-    int i0  = (int)(rm - (long)i1*ne0);
-
-    global float * dst_data = (global float *) ((global char *) dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
     for (int i00 = lane; i00 < ne00; i00 += tpr) {
+        const ulong n  = (ulong)row * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
+
         global const float * src = (global float *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
-        dst_data[i00] = src[0];
+        global float * out = (global float *)((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = src[0];
     }
 }
 #endif // GGML_CL_NO_CPY_PACK
@@ -273,19 +259,16 @@ kernel void kernel_cpy_i32_i32(
     int i02 = get_group_id(1);
     int i01 = get_group_id(0);
 
-    int n = i03*ne02*ne01*ne00 + i02*ne01*ne00 + i01*ne00;
-
-    int i3 = n / (ne2*ne1*ne0);
-    int i2 = (n - i3*ne2*ne1*ne0) / (ne1*ne0);
-    int i1 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0) / ne0;
-    int i0 = (n - i3*ne2*ne1*ne0 - i2*ne1*ne0 - i1*ne0);
-
-    global int * dst_data = (global int *) ((global char *) dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
     for (int i00 = get_local_id(0); i00 < ne00; i00 += get_local_size(0)) {
-        global const int * src = (global int *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        const ulong n  = (((ulong)i03 * ne02 + i02) * ne01 + i01) * ne00 + i00;
+        const ulong i0 = n % ne0;
+        const ulong i1 = n / ne0 % ne1;
+        const ulong i2 = n / ne0 / ne1 % ne2;
+        const ulong i3 = n / ne0 / ne1 / ne2;
 
-        dst_data[i00] = src[0];
+        global const int * src = (global int *)((global char *) src0 + i03*nb03 + i02*nb02 + i01*nb01 + i00*nb00);
+        global int * out = (global int *)((global char *) dst + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3);
+        out[0] = src[0];
     }
 }
 
