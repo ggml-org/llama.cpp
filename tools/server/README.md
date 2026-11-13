@@ -68,9 +68,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-kvo, --kv-offload, -nkvo, --no-kv-offload` | whether to enable KV cache offloading (default: enabled)<br/>(env: LLAMA_ARG_KV_OFFLOAD) |
 | `--repack, -nr, --no-repack` | whether to enable weight repacking (default: enabled)<br/>(env: LLAMA_ARG_REPACK) |
 | `--no-host` | bypass host buffer allowing extra buffers to be used<br/>(env: LLAMA_ARG_NO_HOST) |
-| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
-| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
-| `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
+| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
+| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
 | `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
 | `-lzm, --lazy-mode MODE` | on-demand reading of certain tensors, for example per-layer embeddings (default: auto)<br/>- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)<br/>- auto: on, but only for tensors larger than 4 GiB<br/>- off: always keep them resident<br/>(env: LLAMA_ARG_LAZY_MODE) |
@@ -99,6 +98,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--control-vector-scaled FNAME:SCALE,...` | add a control vector with user defined scaling SCALE<br/>note: use comma-separated values (format: FNAME:SCALE,...) |
 | `--control-vector-layer-range START END` | layer range to apply the control vector(s) to, start and end inclusive |
 | `-m, --model FNAME` | model path to load<br/>(env: LLAMA_ARG_MODEL) |
+| `--ple, --shard FNAME,...` | extra GGUF shards for the model, comma separated; may be given more than once<br/>paths may live anywhere, including on different drives; --ple is an alias for --shard<br/>(env: LLAMA_ARG_SHARD) |
 | `-mu, --model-url MODEL_URL` | model download url (default: unused)<br/>(env: LLAMA_ARG_MODEL_URL) |
 | `-dr, --docker-repo [<repo>/]<model>[:quant]` | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO) |
 | `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
@@ -113,8 +113,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:<br/> - 0: generic output<br/> - 1: error<br/> - 2: warning<br/> - 3: info<br/> - 4: trace (more info)<br/> - 5: debug<br/>(default: 3)<br/><br/>(env: LLAMA_ARG_LOG_VERBOSITY) |
 | `--log-prefix, --no-log-prefix` | Enable prefix in log messages<br/>(env: LLAMA_ARG_LOG_PREFIX) |
 | `--log-timestamps, --no-log-timestamps` | Enable timestamps in log messages<br/>(env: LLAMA_ARG_LOG_TIMESTAMPS) |
-| `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K) |
-| `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V) |
+| `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K) |
+| `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, f8_e4m3, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V) |
 
 
 ### Sampling params
@@ -195,16 +195,17 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--port PORT` | port to listen (default: 9931)<br/>(env: LLAMA_ARG_PORT) |
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
-| `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
+| `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', only allow same-origin requests (e.g. the built-in UI)<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
 | `--cors-methods METHODS` | comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)<br/>(env: LLAMA_ARG_CORS_METHODS) |
 | `--cors-headers HEADERS` | comma-separated list of allowed headers for CORS (default: *)<br/>(env: LLAMA_ARG_CORS_HEADERS) |
 | `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: enabled)<br/>note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
-| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
+| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy, for the Web UI to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
 | `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
 | `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
+| `--allow-unauthenticated-tools` | allow server tools, MCP servers or MCP proxy on a non-loopback address without an API key - only for trusted networks (default: disabled)<br/>(env: LLAMA_ARG_ALLOW_UNAUTHENTICATED_TOOLS) |
 | `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
 | `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
@@ -228,6 +229,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled)<br/>(env: LLAMA_ARG_SLOT_SAVE_PATH) |
 | `--media-path PATH` | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled) |
+| `--media-allow-private-urls` | allow http(s) media URLs (e.g. image_url) that point to local or private addresses (default: disabled, only public addresses)<br/>(env: LLAMA_ARG_MEDIA_ALLOW_PRIVATE_URLS) |
 | `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
 | `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
 | `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
@@ -239,7 +241,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--reasoning-effort LEVEL` | reasoning effort level given to the chat template: 'default' to keep the template default,<br/>or a level such as 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max' (default: default)<br/>(env: LLAMA_ARG_REASONING_EFFORT) |
 | `--reasoning-budget N` | token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
 | `--reasoning-budget-message MESSAGE` | message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)<br/>(env: LLAMA_ARG_THINK_BUDGET_MESSAGE) |
-| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
+| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: enabled)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
 | `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
 | `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
 | `--skip-chat-parsing, --no-skip-chat-parsing` | force a pure content parser, even if a Jinja template is specified; model will output everything in the content section, including any reasoning and/or tool calls (default: disabled)<br/>(env: LLAMA_ARG_SKIP_CHAT_PARSING) |
@@ -293,6 +295,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-ngram-size-n N` | the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match |
 | `--spec-ngram-size-m N` | the argument has been removed. use the respective --spec-ngram-*-size-m |
 | `--spec-ngram-min-hits N` | the argument has been removed. use the respective --spec-ngram-*-min-hits |
+| `--tts-lang FNAME` | language (ISO 639-1) for audio generation<br/>see tts/README.md for per-model usage notes |
+| `--tts-voice VOICE` | voice for audio generation (model-dependent)<br/>see tts/README.md for per-model usage notes |
 | `--embd-gemma-default` | use default EmbeddingGemma model (note: can download weights from the internet) |
 | `--fim-qwen-1.5b-default` | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet) |
 | `--fim-qwen-3b-default` | use default Qwen 2.5 Coder 3B (note: can download weights from the internet) |
@@ -389,7 +393,7 @@ Every server is spawned once at startup to list its tools, then stopped, and res
 
 The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
 
-Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach remote MCP servers from the browser.
+Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach public MCP servers that do not send CORS headers. It refuses local and private addresses (loopback, LAN, link-local); connect to those from the Web UI directly.
 
 Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
 

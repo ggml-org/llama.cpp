@@ -25,7 +25,6 @@
 #include "ggml-cuda/cpy.cuh"
 #include "ggml-cuda/cross-entropy-loss.cuh"
 #include "ggml-cuda/cumsum.cuh"
-#include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
 #include "ggml-cuda/fattn.cuh"
 #include "ggml-cuda/fp8.cuh"
@@ -34,6 +33,7 @@
 #include "ggml-cuda/im2col.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
+#include "ggml-cuda/mmq-few.cuh"
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/moe-weighted-reduction.cuh"
@@ -2431,6 +2431,10 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
     const int64_t ncols     = is_id ? y->ne[2]    : y->ne[1];
     const int64_t nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
     const bool    use_mmvq  = is_id ? ncols <= get_mmvq_mmid_max_batch(x_up->type, cc) : ggml_cuda_should_use_mmvq(x_up->type, cc, ncols);
+    // do not fuse the matmuls that few-row MMQ takes in ggml_cuda_mul_mat
+    if (!is_id && ggml_cuda_should_use_mmq_few(x_up, y, cc)) {
+        return false;
+    }
     if (use_mmvq || !ggml_cuda_should_use_mmq(x_up->type, cc, ncols, /*n_experts =*/ is_id ? x_up->ne[2] : 0)) {
         return false;
     }
@@ -2483,8 +2487,14 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
+    // from a per-type number of src1 columns up to 24, few-row MMQ is faster than MMVQ and MMQ
+    const bool use_mmq_few = ggml_cuda_should_use_mmq_few(src0, src1, cc);
+    if (!use_mmq_few && ggml_cuda_should_use_mmvq(src0->type, cc, ne11)) {
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
+        return;
+    }
+    if (use_mmq_few) {
+        ggml_cuda_mul_mat_q_few(ctx, src0, src1, dst);
         return;
     }
     if (ggml_cuda_should_use_mmq(src0->type, cc, ne11, /*n_experts =*/ 0)) {
@@ -2731,7 +2741,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-        case GGML_OP_ADD1: // TODO: more efficient implementation
             ggml_cuda_op_add(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
@@ -2925,9 +2934,6 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 break;
         case GGML_OP_DIAG:
             ggml_cuda_op_diag(ctx, dst);
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            ggml_cuda_op_diag_mask_inf(ctx, dst);
             break;
         case GGML_OP_SOFT_MAX:
             ggml_cuda_op_soft_max(ctx, dst);
@@ -6529,7 +6535,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
         case GGML_OP_ADD_ID:
-        case GGML_OP_ADD1:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
@@ -6575,8 +6580,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->ne[1] % 128 == 0;
         }
         case GGML_OP_CONT:
-            return true;
-        case GGML_OP_DIAG_MASK_INF:
             return true;
         case GGML_OP_SOFT_MAX:
             return true;

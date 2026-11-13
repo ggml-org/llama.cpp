@@ -1437,6 +1437,186 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
     };
 }
 
+static vk_xe_fa_tuning_params get_xe_fa_tuning_params(const vk_device_struct * device, const vk_xe_fa_pipeline_state& pipeline_state, bool use_prefill) {
+    vk_xe_fa_tuning_params params {};
+    size_t shmem_sz = 0;
+    uint32_t sg_sz = 32u;
+    std::array<uint32_t, 3> matrix_mnk = { 16u, 16u, 16u };
+    bool intel_gpu = device->vendor_id == VK_VENDOR_ID_INTEL;
+
+    if (device->architecture == INTEL_XE1) {
+        sg_sz = 8u;
+        matrix_mnk = { 8u, 8u, 16u };
+    } else if (device->architecture == INTEL_XE2) {
+        sg_sz = 16u;
+        matrix_mnk = { 8u, 16u, 16u };
+    }
+
+    uint32_t tm = matrix_mnk[0];
+    uint32_t tn = matrix_mnk[1];
+    uint32_t tk = matrix_mnk[2];
+    uint32_t hsk = pipeline_state.HSK;
+    uint32_t hsv = pipeline_state.HSV;
+    uint32_t qk_ratio = pipeline_state.qk_ratio;
+    uint32_t pv_ratio = pipeline_state.pv_ratio;
+    uint32_t sg_per_gw;
+
+    params.tm = tm;
+    params.tn = tn;
+    params.tk = tk;
+    GGML_ASSERT(hsv % tm == 0);
+
+    if (use_prefill) {
+        sg_per_gw = sg_sz == 8 ? 32 : 16;
+        uint32_t wg_sz = sg_per_gw * sg_sz;
+        uint32_t output_div = hsk > 256 ? 8 : hsk > 160 ? 4 : hsk > 64 ? 2 : 1;
+        uint32_t p_per_iter = intel_gpu ? (hsk > 256 ? 16 : 32) : 16;
+        uint32_t q_in_reg = hsk > 512 ? hsk - 384 : std::min(128u, hsk);
+        uint32_t q_in_shmem = hsk - q_in_reg;
+        uint32_t wg_row = 256u / output_div;
+        uint32_t gqa_fold = (pipeline_state.multi_head_mask || qk_ratio != pv_ratio) ? 1 : 16;
+        uint32_t max_fold_rows = sg_sz <= 16 ? 16 : 8;
+
+        while (gqa_fold > 1 && (qk_ratio % gqa_fold != 0 || gqa_fold * output_div > max_fold_rows)) {
+            gqa_fold = gqa_fold / 2;
+        }
+
+        uint32_t mask_row = wg_row / gqa_fold;
+        uint32_t k_col = (hsk % 64 == 0 && hsk <= 512 && wg_sz <= 256) ? 8 : 4;
+        uint32_t k_loops = CEIL_DIV(hsk * p_per_iter, k_col * wg_sz);
+
+        bool k_in_shmem = hsk <= 576u;
+        bool v_in_shmem = hsk <= 128u && hsv <= 128u;
+        bool emf_in_shmem = wg_row / matrix_mnk[1] != sg_per_gw;
+        bool mask_in_shmem = mask_row <= 64;
+        size_t shmem_q_sz = q_in_shmem * wg_row * sizeof(ggml_fp16_t);
+        size_t shmem_oob_staging_sz = sg_per_gw * tm * tk * sizeof(ggml_fp16_t);
+        size_t shmem_mask_sz = mask_in_shmem ? (mask_row * p_per_iter * sizeof(ggml_fp16_t)) : 0;
+        size_t shmem_k_sz = k_in_shmem ? (k_loops * k_col * wg_sz * sizeof(ggml_fp16_t)) : shmem_oob_staging_sz;
+        size_t shmem_v_sz = v_in_shmem ? (hsv * p_per_iter * sizeof(ggml_fp16_t)) : 0;
+        size_t shmem_p_sz = wg_row * p_per_iter * sizeof(float);
+        size_t shmem_emf_sz = emf_in_shmem ? (wg_row * sizeof(float)) : 0;
+        size_t shmem_pv_sz = intel_gpu ? 0 : (sg_per_gw * tm * tn * sizeof(float));
+
+        // Reuse section sits at tail of shmem, reused with k + mask/kv oob staging/pv staging
+        size_t shmem_reuse_sz = shmem_k_sz + shmem_mask_sz;
+        // When v is not in shmem, its staging reuses the k + mask region; size the reuse section to the larger of the two
+        shmem_reuse_sz = v_in_shmem ? shmem_reuse_sz : std::max(shmem_reuse_sz, shmem_oob_staging_sz);
+        shmem_reuse_sz = std::max(shmem_pv_sz, shmem_reuse_sz);
+
+        // Q shmem size check for prologue staging is safe to bypass:
+        // 1. Prologue q staging shmem is released right after prologue, so it never overlaps other shmem sections
+        // 2. Extreme large hsk one-time q staging is capped within shader (max_q_reg_staging = shmem_size / 2 / Wr)
+        shmem_sz = shmem_q_sz + shmem_reuse_sz + shmem_v_sz + shmem_p_sz + shmem_emf_sz;
+
+        uint32_t sg_col = hsv / tm;
+        uint32_t pipeline_flag = 0;
+        sg_col = (sg_col + output_div - 1) / output_div;
+        sg_col = sg_col * tm;
+        if (pipeline_state.unaligned_seq_len) {
+            pipeline_flag |= 1 << 0;
+        }
+
+        if (pipeline_state.unaligned_q) {
+            pipeline_flag |= 1 << 1;
+        }
+
+        if (pipeline_state.partial_row_mask) {
+            pipeline_flag |= 1 << 2;
+        }
+
+        if (intel_gpu) {
+            pipeline_flag |= 1 << 3;
+        }
+
+        params.workgroup_size = { wg_sz };
+        params.subgroup_size = { sg_sz };
+        params.shmem_sz = shmem_sz;
+        params.prefill_params.pipeline_flag = pipeline_flag;
+        params.prefill_params.wg_row = wg_row;
+        params.prefill_params.gqa_fold = gqa_fold;
+        params.prefill_params.q_in_reg = q_in_reg;
+        params.prefill_params.p_per_iter = p_per_iter;
+        params.prefill_params.sg_col = sg_col;
+        params.prefill_params.acc_count = tm == 8 ? (sg_col % 16 == 0 ? 2 : 1) : 1;
+    } else {
+        auto upper_power_of_2 = [&](uint32_t in) {
+            GGML_ASSERT(in != 0);
+            if (in <= 1) return 1u;
+            uint32_t ret = in - 1;
+            ret |= ret >> 1;
+            ret |= ret >> 2;
+            ret |= ret >> 4;
+            ret |= ret >> 8;
+            ret |= ret >> 16;
+            return ret + 1;
+        };
+
+        size_t shmem_ph1_sz = 0;
+        size_t shmem_ph2_sz = 0;
+
+        // Phase 1 shmem size calculation
+        const uint32_t p_chunk_ph1 = 32;
+        // Phase 1 k shmem staging for extreme large hsk is capped within shader, bypass that check
+        uint32_t pmat_row = CEIL_DIV(qk_ratio, tn);
+        uint32_t aligned_q_len = upper_power_of_2(pipeline_state.decode_n);
+        uint32_t group_sz_ph1 = std::min(std::max(aligned_q_len * sg_sz, 64u), 256u);
+        uint32_t out_per_wg_ph1 = std::min(pipeline_state.decode_n, 256u / sg_sz);
+        size_t shmem_k_sz = group_sz_ph1 / sg_sz * tm * tk * sizeof(ggml_fp16_t);
+        size_t shmem_mask_sz = out_per_wg_ph1 * p_chunk_ph1 * sizeof(float);
+        size_t shmem_p_sz = p_chunk_ph1 * pmat_row * tn * sizeof(float);
+        // K shmem is reused with mask/p, calculate the max size
+        shmem_ph1_sz = std::max(shmem_k_sz, shmem_mask_sz + shmem_p_sz);
+
+        // Phase 2 shmem size calculation
+        uint32_t aligned_pv_ratio = upper_power_of_2(pv_ratio);
+        uint32_t split_p_per_iter_ph2 = (pv_ratio <= 32) ? 256 : 128;
+        uint32_t out_col_per_wg_ph2 = intel_gpu ? (pv_ratio > 16 ? 8 : 16) : 16;
+        uint32_t split_p_per_warp = 16;
+        uint32_t group_sz_ph2 = (split_p_per_iter_ph2 / split_p_per_warp) * sg_sz;
+        sg_per_gw = group_sz_ph2 / sg_sz;
+        uint32_t out_row_per_wg_ph2 = std::min(std::max(16u / aligned_pv_ratio, 1u), pipeline_state.decode_n);
+        uint32_t o_row = pv_ratio * out_row_per_wg_ph2;
+        uint32_t omat_row = CEIL_DIV(o_row, tn) * tn;
+        uint32_t global_max_loops = CEIL_DIV(o_row, sg_per_gw);
+        size_t shmem_global_max_sz = CEIL_DIV(global_max_loops * sg_per_gw, sg_sz) * sg_sz * sizeof(float);
+
+        uint32_t size_max = o_row * split_p_per_iter_ph2 / p_chunk_ph1;
+        size_t shmem_group_max_sz = CEIL_DIV(size_max, group_sz_ph2) * group_sz_ph2 * sizeof(float);
+
+        uint32_t p_loop_col = group_sz_ph2 * 4;
+        uint32_t p_loops = CEIL_DIV(o_row * split_p_per_iter_ph2, p_loop_col);
+        shmem_p_sz = std::max(p_loop_col * p_loops * sizeof(ggml_fp16_t), omat_row * split_p_per_iter_ph2 * sizeof(ggml_fp16_t));
+
+        size_t shmem_lf_sz = CEIL_DIV(sg_per_gw * p_loops, sg_sz) * sg_sz * sizeof(float);
+        size_t shmem_oob_staging_sz = sg_per_gw * tm * tk * sizeof(ggml_fp16_t);
+        size_t shmem_o_sz = sg_per_gw * out_col_per_wg_ph2 * omat_row * sizeof(float);
+        size_t shmem_reuse_sz = 2 * shmem_group_max_sz + std::max(shmem_oob_staging_sz, 2 * shmem_p_sz);
+
+        shmem_ph2_sz = shmem_lf_sz + shmem_global_max_sz;
+        // Shmem of p/group max is reused with output accumulation, calculate the max size
+        shmem_ph2_sz += std::max(shmem_reuse_sz, shmem_o_sz);
+        shmem_sz = std::max(shmem_ph1_sz, shmem_ph2_sz);
+
+        params.workgroup_size = { group_sz_ph1, group_sz_ph2 };
+        params.subgroup_size = { sg_sz, sg_sz };
+        params.shmem_sz = shmem_sz;
+        params.decode_params.p_chunk_ph1 = p_chunk_ph1;
+        params.decode_params.out_per_wg_ph1 = out_per_wg_ph1;
+        params.decode_params.split_p_per_iter_ph2 = split_p_per_iter_ph2;
+        params.decode_params.out_row_per_wg_ph2 = out_row_per_wg_ph2;
+        params.decode_params.out_col_per_wg_ph2 = out_col_per_wg_ph2;
+        params.decode_params.pipeline_flag_ph2 = pipeline_state.unaligned_seq_len ? (1u << 0) : 0;
+    }
+
+    if (shmem_sz > device->properties.limits.maxComputeSharedMemorySize) {
+        VK_LOG_DEBUG("get_xe_fa_tuning_params(HSK=" << hsk << ", HSV=" << hsv << ", qk_ratio=" << qk_ratio << ", pv_ratio=" << pv_ratio << "), "
+                     "shmem_sz = " << shmem_sz << ", exceeding max shmem size = " << device->properties.limits.maxComputeSharedMemorySize);
+    }
+
+    return params;
+}
+
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     uint32_t lut_size = 0;
@@ -3205,43 +3385,36 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
 
 #if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-    if (device->vendor_id == VK_VENDOR_ID_INTEL && (device->architecture == INTEL_XE2 || (device->architecture == INTEL_XE1 && device->coopmat_support && device->uma))) {
-        auto upper_power_of_2 = [&](uint32_t in) {
-            GGML_ASSERT(in != 0);
-            if (in <= 1) return 1u;
-            uint32_t ret = in - 1;
-            ret |= ret >> 1;
-            ret |= ret >> 2;
-            ret |= ret >> 4;
-            ret |= ret >> 8;
-            ret |= ret >> 16;
-            return ret + 1;
-            };
-
-        uint32_t xe_native_sub_group_size = 16;
-        if (device->architecture == INTEL_XE1) {
-            xe_native_sub_group_size = 8;
-        }
+    if (device->xe_fa_support) {
+        uint32_t shmem_sz = (uint32_t)device->properties.limits.maxComputeSharedMemorySize;
+        vk_xe_fa_tuning_params xe_fa_params {};
 
         for (auto& it : device->pipeline_xe_fa_decode_dual_phases) {
-            const uint32_t split_p_chunk = 32;
-            auto HdQk = it.first;
+            auto pipeline_state = it.first;
             auto& pipelines = it.second;
-            uint32_t head_dim_qk = std::get<0>(HdQk);
-            uint32_t head_dim_pv = std::get<1>(HdQk);
-            uint32_t gqa_ratio = std::get<2>(HdQk);
-            uint32_t q_len = std::get<3>(HdQk);
-            const uint32_t out_dim_per_wg = gqa_ratio > 16 ? 8 : 16;
-            uint32_t aligned_q_len = upper_power_of_2(q_len);
-            uint32_t group_sz_ph1 = std::min(std::max(aligned_q_len * xe_native_sub_group_size, 64u), 256u);
-            uint32_t out_per_wg_ph1 = std::min(q_len, 256u / xe_native_sub_group_size);
-            uint32_t aligned_gqa_ratio = upper_power_of_2(gqa_ratio);
-            uint32_t split_p_per_iter_ph2 = 256;
-            uint32_t split_p_per_warp = 16;
-            uint32_t group_sz_ph2 = (split_p_per_iter_ph2 / split_p_per_warp) * xe_native_sub_group_size;
-            uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_gqa_ratio, 1u), q_len);
-            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_fa_xe_opt_push_constants), { 1, 32, 1 }, { group_sz_ph1, gqa_ratio, head_dim_qk, xe_native_sub_group_size, split_p_chunk, out_per_wg_ph1 }, 1, false, true, xe_native_sub_group_size);
-            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_fa_xe_opt_push_constants), { 1, 1, 1 }, { group_sz_ph2, gqa_ratio, head_dim_pv, out_per_wg_ph2, xe_native_sub_group_size, split_p_per_iter_ph2, split_p_chunk, out_dim_per_wg }, 1, false, true, xe_native_sub_group_size);
+            xe_fa_params = get_xe_fa_tuning_params(device.get(), pipeline_state, false);
+            std::vector<uint32_t> sc_ph1 = { xe_fa_params.workgroup_size[0], pipeline_state.qk_ratio, pipeline_state.HSK,
+                                             xe_fa_params.subgroup_size[0], xe_fa_params.decode_params.p_chunk_ph1,
+                                             xe_fa_params.decode_params.out_per_wg_ph1, xe_fa_params.decode_params.p_chunk_ph1 / xe_fa_params.tm,
+                                             xe_fa_params.tm, xe_fa_params.tn, shmem_sz };
+            std::vector<uint32_t> sc_ph2 = { xe_fa_params.workgroup_size[1], pipeline_state.pv_ratio, pipeline_state.HSV,
+                                             xe_fa_params.decode_params.out_row_per_wg_ph2, xe_fa_params.subgroup_size[1], xe_fa_params.decode_params.split_p_per_iter_ph2,
+                                             xe_fa_params.decode_params.p_chunk_ph1, xe_fa_params.decode_params.out_col_per_wg_ph2,
+                                             xe_fa_params.tm, xe_fa_params.tn, xe_fa_params.decode_params.pipeline_flag_ph2 };
+            ggml_vk_create_pipeline(device, pipelines.first, "xe_fa_decode_ph1", fa_decode_ph1_cm1_len, fa_decode_ph1_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, xe_fa_params.decode_params.p_chunk_ph1, 1 }, sc_ph1, 1, false, true, xe_fa_params.subgroup_size[0]);
+            ggml_vk_create_pipeline(device, pipelines.second, "xe_fa_decode_ph2", fa_decode_ph2_cm1_len, fa_decode_ph2_cm1_data, "main", 5, sizeof(vk_xe_fa_push_constants), { 1, 1, 1 }, sc_ph2, 1, false, true, xe_fa_params.subgroup_size[0]);
+        }
+
+        for (auto& it : device->pipeline_xe_fa_prefill) {
+            auto pipeline_state = it.first;
+            auto& pipelines = it.second;
+            xe_fa_params = get_xe_fa_tuning_params(device.get(), pipeline_state, true);
+
+            std::vector<uint32_t> sc = { xe_fa_params.workgroup_size[0], xe_fa_params.prefill_params.wg_row, xe_fa_params.prefill_params.sg_col,
+                                         pipeline_state.HSK, pipeline_state.HSV, pipeline_state.qk_ratio, xe_fa_params.prefill_params.p_per_iter,
+                                         xe_fa_params.tm, xe_fa_params.tn, xe_fa_params.prefill_params.q_in_reg, shmem_sz, xe_fa_params.prefill_params.acc_count,
+                                         xe_fa_params.prefill_params.pipeline_flag, xe_fa_params.subgroup_size[0], xe_fa_params.prefill_params.gqa_fold };
+            ggml_vk_create_pipeline(device, pipelines, "xe_fa_prefill", fa_prefill_cm1_len, fa_prefill_cm1_data, "main", 6, sizeof(vk_xe_fa_push_constants), { xe_fa_params.prefill_params.gqa_fold, xe_fa_params.prefill_params.wg_row / xe_fa_params.prefill_params.gqa_fold, 1 }, sc, 1, false, true, xe_fa_params.subgroup_size[0]);
         }
     }
 #endif
@@ -3506,10 +3679,6 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     CREATE_UNARY_MUL(softplus, 3)
 #undef CREATE_UNARY_MUL
 
-    ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f16, "add1_f16_f16", add1_f16_f16_len, add1_f16_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f32, "add1_f16_f32", add1_f16_f32_len, add1_f16_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_add1_f32_f32, "add1_f32_f32", add1_f32_f32_len, add1_f32_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
-
     ggml_vk_create_pipeline(device, device->pipeline_arange_f32, "arange_f32", arange_f32_len, arange_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
@@ -3529,8 +3698,6 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #undef CREATE_GLU
 
     ggml_vk_create_pipeline(device, device->pipeline_silu_back_f32, "silu_back_f32", silu_back_f32_len, silu_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
-
-    ggml_vk_create_pipeline(device, device->pipeline_diag_mask_inf_f32, "diag_mask_inf_f32", diag_mask_inf_f32_len, diag_mask_inf_f32_data, "main", 2, sizeof(vk_op_diag_mask_push_constants), {1, 512, 1}, {}, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32, "soft_max_f32", soft_max_f32_len, soft_max_f32_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_wg512, "soft_max_f32_wg512", soft_max_f32_len, soft_max_f32_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
@@ -4128,6 +4295,7 @@ vk_device ggml_vk_get_device(size_t idx) {
         bool dot2_f16_support = false;
         bool ocp_microscaling_extension = false;
         bool shader_float8_extension = false;
+        bool workgroup_memory_explicit_layout_support = false;
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_KHR_maintenance4", properties.extensionName) == 0) {
@@ -4183,6 +4351,10 @@ vk_device ggml_vk_get_device(size_t idx) {
                 dot2_f16_support = true;
             } else if (strcmp("VK_KHR_pipeline_executable_properties", properties.extensionName) == 0) {
                 pipeline_executable_properties_support = true;
+#if defined(VK_KHR_workgroup_memory_explicit_layout)
+            } else if (strcmp("VK_KHR_workgroup_memory_explicit_layout", properties.extensionName) == 0) {
+                workgroup_memory_explicit_layout_support = true;
+#endif
             } else if (strcmp("VK_EXT_memory_priority", properties.extensionName) == 0 &&
                        getenv("GGML_VK_ENABLE_MEMORY_PRIORITY")) {
                 device->memory_priority = true;
@@ -4535,6 +4707,16 @@ vk_device ggml_vk_get_device(size_t idx) {
             device_extensions.push_back("VK_KHR_pipeline_executable_properties");
         }
 
+#if defined(VK_KHR_workgroup_memory_explicit_layout)
+        VkPhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR wg_explicit_layout_features {};
+        wg_explicit_layout_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_FEATURES_KHR;
+        if (workgroup_memory_explicit_layout_support) {
+            last_struct->pNext = (VkBaseOutStructure *)&wg_explicit_layout_features;
+            last_struct = (VkBaseOutStructure *)&wg_explicit_layout_features;
+            device_extensions.push_back("VK_KHR_workgroup_memory_explicit_layout");
+        }
+#endif
+
         if (device->external_memory_host) {
             device_extensions.push_back("VK_EXT_external_memory_host");
         }
@@ -4595,6 +4777,16 @@ vk_device ggml_vk_get_device(size_t idx) {
         device->ocp_fp4 = ocp_microscaling_extension && ocp_microscaling_features.shaderFloat4 &&
                           shader_float8_extension && shader_float8_features.shaderFloat8 &&
                           !getenv("GGML_VK_DISABLE_OCP_FP4");
+
+#if defined(VK_KHR_workgroup_memory_explicit_layout)
+        device->workgroup_memory_explicit_layout = workgroup_memory_explicit_layout_support &&
+                                                   wg_explicit_layout_features.workgroupMemoryExplicitLayout;
+        device->workgroup_memory_explicit_layout_16bit = device->workgroup_memory_explicit_layout &&
+                                                         wg_explicit_layout_features.workgroupMemoryExplicitLayout16BitAccess;
+#else
+        device->workgroup_memory_explicit_layout = false;
+        device->workgroup_memory_explicit_layout_16bit = false;
+#endif
 
         device->pipeline_robustness = pl_robustness_features.pipelineRobustness;
 
@@ -4960,6 +5152,13 @@ vk_device ggml_vk_get_device(size_t idx) {
             dsl_binding);
         descriptor_set_layout_create_info.setPNext(&dslbfci);
         device->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
+
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        device->xe_fa_support = device->coopmat_support && device->properties.limits.maxComputeSharedMemorySize >= 48 * 1024 &&
+                                device->workgroup_memory_explicit_layout && device->workgroup_memory_explicit_layout_16bit &&
+                                ((device->vendor_id == VK_VENDOR_ID_INTEL && (device->architecture == INTEL_XE2 || (device->architecture == INTEL_XE1 && device->uma))) ||
+                                 (device->subgroup_size == 32 && device->coopmat_support_16x16x16_f32acc && (getenv("GGML_VK_FORCE_XE_FA") != nullptr)));
+#endif
 
         ggml_vk_load_shaders(device);
 
@@ -8410,32 +8609,98 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
     vk_pipeline pipeline = nullptr;
 
+    auto tensor_aligned_with = [&](const ggml_tensor * t, uint32_t in) {
+        GGML_ASSERT(t != nullptr && in != 0);
+        return t->nb[1] % in == 0 && t->nb[2] % in == 0 && t->nb[3] % in == 0 && ggml_vk_tensor_buffer_offset(ctx, t) % in == 0;
+    };
+    auto vk_dev = ctx->device.get();
     bool xe_fa_opt = false;
-    bool fa_copy_qstate = false;
-    bool xe_fa_supported_platform =
-        (ctx->device.get()->architecture == INTEL_XE2 && ctx->device.get()->properties.deviceID != 0xFD80 && ctx->device.get()->properties.deviceID != 0xFD81) ||
-        (ctx->device.get()->architecture == INTEL_XE1 && ctx->device.get()->coopmat_support && ctx->device.get()->uma);
-    bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && q->nb[1] > q->nb[2] && k->nb[1] > k->nb[2] && v->nb[1] > v->nb[2] && mask != nullptr;
-    bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 && (mask != nullptr && mask->type == GGML_TYPE_F16);
+    bool xe_fa_use_2phases = false;
+    bool xe_fa_supported_platform = vk_dev->xe_fa_support && vk_dev->properties.deviceID != 0xFD80 && vk_dev->properties.deviceID != 0xFD81;
+    bool xe_fa_supported_usage = neq0 % 32 == 0 && nev0 % 16 == 0 && mask != nullptr && !use_sparse && max_bias == 0.0f && logit_softcap == 0.0f &&
+                                 tensor_aligned_with(k, 16u) && tensor_aligned_with(v, 16u);
+    bool xe_fa_supported_dtype = q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+                                 mask != nullptr && mask->type == GGML_TYPE_F16;
+    xe_fa_opt = xe_fa_supported_platform && xe_fa_supported_usage && xe_fa_supported_dtype;
     std::pair<vk_pipeline, vk_pipeline> xe_fa_pipeline_dual_phases = { nullptr , nullptr };
     vk_pipeline xe_fa_pipeline = nullptr;
+    size_t size_q_staging = 0;
     size_t size_p = 0;
     size_t size_group_max = 0;
+    size_t size_decode_temp = 0;
+    uint32_t pv_ratio = uint32_t(neq2 / nev2);
+    vk_xe_fa_tuning_params xe_fa_params {};
 
     {
         std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
-        auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
-        auto it = pipelines.find(fa_pipeline_state);
-        if (it != pipelines.end()) {
-            pipeline = it->second;
-        } else {
-            pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+        if (xe_fa_opt) {
+            if (neq1 > 8 || pv_ratio > 64) {
+                uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
+                uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
+                vk_xe_fa_pipeline_state prefill_state = { (uint32_t)neq0, (uint32_t)nev0, qk_ratio, pv_ratio, 0, false, false, false, false };
+                prefill_state.unaligned_seq_len = nek1 % 32 != 0;
+                prefill_state.unaligned_q = head_stride_q % 8 != 0 || q_stride % 8 != 0 || batch_stride_q % 8 != 0;
+                prefill_state.partial_row_mask = neq1 > nem1;
+                prefill_state.multi_head_mask = nem2 > 1;
+                xe_fa_params = get_xe_fa_tuning_params(vk_dev, prefill_state, true);
+                if (xe_fa_params.shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize) {
+                    auto& xe_fa_pipelines = ctx->device->pipeline_xe_fa_prefill;
+                    auto it = xe_fa_pipelines.find(prefill_state);
+                    if (it != xe_fa_pipelines.end()) {
+                        xe_fa_pipeline = it->second;
+                    } else {
+                        xe_fa_pipelines[prefill_state] = xe_fa_pipeline = std::make_shared<vk_pipeline_struct>();
+                    }
+                } else {
+                    xe_fa_opt = false;
+                }
+            } else {
+                vk_xe_fa_pipeline_state decode_state = { (uint32_t)neq0, (uint32_t)nev0, qk_ratio, pv_ratio, (uint32_t)neq1, false, false, false, false };
+                decode_state.unaligned_seq_len = nek1 % 256 != 0;
+                xe_fa_params = get_xe_fa_tuning_params(vk_dev, decode_state, false);
+                const uint32_t split_p_size = xe_fa_params.decode_params.p_chunk_ph1;
+                const size_t max_dim = std::max<size_t>(CEIL_DIV(nek1, split_p_size), 1);
+                const size_t p_dim = max_dim * split_p_size;
+                const size_t q_head_padding = 16;
+                size_q_staging = neq0 * neq1 * (neq2 * neq3 + q_head_padding) * sizeof(ggml_fp16_t);
+                size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
+                size_group_max = neq1 * neq2 * max_dim * neq3 * sizeof(float);
+                size_decode_temp = size_q_staging + size_p + size_group_max;
+                uint32_t ph1_wg1 = CEIL_DIV(nek1, xe_fa_params.decode_params.p_chunk_ph1);
+                if (xe_fa_params.shmem_sz <= vk_dev->properties.limits.maxComputeSharedMemorySize &&
+                    ph1_wg1 <= ctx->device->properties.limits.maxComputeWorkGroupCount[1] &&
+                    size_decode_temp <= ctx->device->properties.limits.maxStorageBufferRange) {
+                    auto& pipelines = ctx->device->pipeline_xe_fa_decode_dual_phases;
+                    auto it = pipelines.find(decode_state);
+                    if (it != pipelines.end()) {
+                        xe_fa_pipeline_dual_phases = it->second;
+                    } else {
+                        pipelines[decode_state] = xe_fa_pipeline_dual_phases =
+                            std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
+                    }
+                    xe_fa_use_2phases = true;
+                } else {
+                    xe_fa_opt = false;
+                }
+            }
+        }
+
+        if (!xe_fa_opt) {
+            auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
+            auto it = pipelines.find(fa_pipeline_state);
+            if (it != pipelines.end()) {
+                pipeline = it->second;
+            } else {
+                pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+            }
         }
     }
 
-    assert(pipeline);
-    // Compile early to initialize wg_denoms.
-    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    if (!xe_fa_opt) {
+        assert(pipeline);
+        // Compile early to initialize wg_denoms.
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    }
 
     uint32_t split_kv = KV;
     uint32_t split_k = 1;
@@ -8449,7 +8714,9 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const uint32_t Br = fa_pipeline_state.Br;
     const uint32_t Bc = fa_pipeline_state.Bc;
 
-    GGML_ASSERT(Br == pipeline->wg_denoms[0]);
+    if (!xe_fa_opt) {
+        GGML_ASSERT(Br == pipeline->wg_denoms[0]);
+    }
     const uint32_t Tr = CEIL_DIV(N, Br);
 
     // Try to use split_k when KV is large enough to be worth the overhead.
@@ -8479,43 +8746,22 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         // of "align", so recompute split_k based on that.
         split_kv = ROUNDUP_POW2(std::max(1u, KV / split_k), alignment);
         split_k = CEIL_DIV(KV, split_kv);
-        xe_fa_opt = xe_fa_supported_platform && xe_fa_supported_usage && xe_fa_supported_dtype;
-        if (xe_fa_opt) {
-            const uint32_t split_p_size = 32;
-            const size_t max_dim = (nek1 + split_p_size - 1) / split_p_size;
-            const size_t p_dim = max_dim * split_p_size;
-#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
-            std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
-            auto& pipelines = ctx->device->pipeline_xe_fa_decode_dual_phases;
-            auto it = pipelines.find({ (uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1 });
-            if (it != pipelines.end()) {
-                xe_fa_pipeline_dual_phases = it->second;
-            } else {
-                pipelines[{(uint32_t)neq0, (uint32_t)nev0, qk_ratio, (uint32_t)neq1}] = xe_fa_pipeline_dual_phases = std::make_pair(std::make_shared<vk_pipeline_struct>(), std::make_shared<vk_pipeline_struct>());
-            }
-#endif
-            if (xe_fa_pipeline_dual_phases.first == nullptr || xe_fa_pipeline_dual_phases.second == nullptr) {
-                xe_fa_opt = false;
-                fa_copy_qstate = false;
-            } else {
-                size_p = neq1 * neq2 * p_dim * neq3 * sizeof(ggml_fp16_t);
-                size_group_max = neq1 * neq2 * max_dim * neq3 * sizeof(float);
-                size_t temp_size = ggml_nelements(q) * sizeof(ggml_fp16_t) + size_p + size_group_max;
-                fa_copy_qstate = true;
-                if (ctx->prealloc_size_x < temp_size) {
-                    ctx->prealloc_size_x = temp_size;
-                    ggml_vk_preallocate_buffers(ctx, subctx);
-                }
-
-                if (ctx->prealloc_x_need_sync) {
-                    ggml_vk_sync_buffers(ctx, subctx);
-                }
-            }
-        }
     }
 
-    if (xe_fa_opt == true) {
+    if (xe_fa_opt) {
+        // Bypass mask_opt and split_k buffer grow when they are not in use
         use_mask_opt = false;
+        split_k = 1;
+        if (xe_fa_use_2phases) {
+            if (ctx->prealloc_size_x < size_decode_temp) {
+                ctx->prealloc_size_x = size_decode_temp;
+                ggml_vk_preallocate_buffers(ctx, subctx);
+            }
+
+            if (ctx->prealloc_x_need_sync) {
+                ggml_vk_sync_buffers(ctx, subctx);
+            }
+        }
     }
 
     // Reserve space for split_k temporaries. For each split x batch, we need to store the O matrix (D x ne1)
@@ -8704,67 +8950,59 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
                                               mask_n_head_log2, m0, m1,
                                               gqa_ratio, split_kv, split_k };
 
-    if (xe_fa_opt && split_k > 1) {
-        auto upper_power_of_2 = [&](uint32_t in) {
-            GGML_ASSERT(in != 0);
-            if (in <= 1) return 1u;
-            uint32_t ret = in - 1;
-            ret |= ret >> 1;
-            ret |= ret >> 2;
-            ret |= ret >> 4;
-            ret |= ret >> 8;
-            ret |= ret >> 16;
-            return ret + 1;
-        };
-        auto to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, q->type);
-        const uint32_t out_dim_per_wg = qk_ratio > 16 ? 8 : 16;
-        size_t x_ne = ggml_nelements(q);
-        size_t temp_buf_offset = 0;
+    if (xe_fa_opt) {
+        uint32_t head_stride_q = uint32_t(nbq2 / ggml_type_size(q->type));
         uint32_t head_stride_k = uint32_t(nbk2 / ggml_type_size(k->type));
         uint32_t head_stride_v = uint32_t(nbv2 / ggml_type_size(v->type));
         uint32_t batch_stride_q = uint32_t(nbq3 / ggml_type_size(q->type));
         uint32_t batch_stride_k = uint32_t(nbk3 / ggml_type_size(k->type));
         uint32_t batch_stride_v = uint32_t(nbv3 / ggml_type_size(v->type));
-        uint32_t batch_stride_m = mask ? uint32_t(mask->nb[3] / ggml_type_size(mask->type)) : 0u;
         uint32_t batch_stride_o = uint32_t(nb3 / ggml_type_size(dst->type));
-        vk_fa_xe_opt_push_constants pc_ph1 = { (uint32_t)nek1, (uint32_t)neq1, (uint32_t)neq2, (uint32_t)nek2, qk_ratio, 1, (sinks != nullptr) ? 1u : 0u, (uint32_t)k_stride, head_stride_k,
-            batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_m, batch_stride_o, scale };
-        vk_fa_xe_opt_push_constants pc_ph2 = pc_ph1;
-        pc_ph2.nbkv_tok = v_stride;
-        pc_ph2.nbkv_head = head_stride_v;
-        vk_subbuffer q_temp_buf = fa_copy_qstate ? ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset) : q_buf;
-        temp_buf_offset += fa_copy_qstate ? x_ne * sizeof(ggml_fp16_t) : 0;
-        vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
-        temp_buf_offset += size_p;
-        vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
-        temp_buf_offset += size_group_max;
-        uint32_t xe_native_sub_group_size = ctx->device.get()->architecture == INTEL_XE1 ? 8 : 16;
-        uint32_t aligned_gqa_ratio = upper_power_of_2(qk_ratio);
-        uint32_t out_per_wg_ph1 = std::min(256u / xe_native_sub_group_size, (uint32_t)neq1);
-        uint32_t out_per_wg_ph2 = std::min(std::max(16u / aligned_gqa_ratio, 1u), (uint32_t)neq1);
-        uint32_t ph1_wg = ((neq1 + out_per_wg_ph1 - 1) / out_per_wg_ph1) * nek2;
-        uint32_t ph2_wg = ((neq1 + out_per_wg_ph2 - 1) / out_per_wg_ph2) * ne0 / out_dim_per_wg;
-        if (fa_copy_qstate) {
-            const std::vector<uint32_t> pc_cpy_fp16 =
-            { (uint32_t)q->ne[0], (uint32_t)q->ne[1], (uint32_t)q->ne[2], (uint32_t)q->ne[3], (uint32_t)(x_ne) };
-            ggml_vk_sync_buffers(ctx, subctx);
+
+        vk_xe_fa_push_constants pc_xe_fa = { (uint32_t)neq1, (uint32_t)neq2, (uint32_t)neq3,
+                                             (uint32_t)nek1, (uint32_t)nek2, (uint32_t)nek3, (uint32_t)nev2, (uint32_t)nev3,
+                                             (uint32_t)nem1, (uint32_t)nem2, (uint32_t)nem3,
+                                             q_stride, head_stride_q, k_stride, head_stride_k, v_stride, head_stride_v,
+                                             batch_stride_q, batch_stride_k, batch_stride_v, batch_stride_o,
+                                             (sinks != nullptr) ? (1u << 16) : 0u, scale };
+
+        if (xe_fa_use_2phases) {
+            auto to_fp16_vk_0 = ggml_vk_get_cpy_pipeline(ctx, q, nullptr, GGML_TYPE_F16);
+            size_t temp_buf_offset = 0;
+            vk_subbuffer q_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
+            temp_buf_offset += size_q_staging;
+            vk_subbuffer p_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
+            temp_buf_offset += size_p;
+            vk_subbuffer max_temp_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_x, temp_buf_offset);
+            temp_buf_offset += size_group_max;
+            uint32_t ph1_wg = CEIL_DIV(neq1, xe_fa_params.decode_params.out_per_wg_ph1) * nek2;
+            uint32_t ph2_wg = CEIL_DIV(neq1, xe_fa_params.decode_params.out_row_per_wg_ph2) * ne0 / xe_fa_params.decode_params.out_col_per_wg_ph2;
+
+            pc_xe_fa.nbq1 = uint32_t(neq0);
+            pc_xe_fa.nbq2 = uint32_t(neq0 * neq1);
+            pc_xe_fa.nbq3 = uint32_t(neq0 * neq1 * neq2);
+
             ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
-            ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { q_buf, q_temp_buf }, pc_cpy_fp16, { (uint32_t)(x_ne), 1, 1 });
+            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_0, q, q_buf, q_temp_buf);
+
+            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
+            ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
+                { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
+                pc_xe_fa, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
+
+            ggml_vk_sync_buffers(ctx, subctx);
+            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
+            ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.second,
+                { p_temp_buf, v_buf, max_temp_buf, sinks_buf, dst_buf },
+                pc_xe_fa, { (uint32_t)ph2_wg, (uint32_t)nev2, (uint32_t)neq3 });
+
+            ctx->prealloc_x_need_sync = true;
+        } else {
+            ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline, 1);
+            ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline,
+                { q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf },
+                pc_xe_fa, { (uint32_t)neq2, (uint32_t)neq1, (uint32_t)neq3 });
         }
-
-        ggml_vk_sync_buffers(ctx, subctx);
-        ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
-        ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
-            { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf },
-            pc_ph1, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
-
-        ggml_vk_sync_buffers(ctx, subctx);
-        ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.second, 1);
-        ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.second,
-            { p_temp_buf, v_buf, max_temp_buf, sinks_buf, dst_buf },
-            pc_ph2, { (uint32_t)ph2_wg, (uint32_t)nev2, (uint32_t)neq3 });
-
-        ctx->prealloc_x_need_sync = true;
     } else if (split_k > 1) {
         ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
 
@@ -9240,11 +9478,6 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 break;
         }
         return nullptr;
-    case GGML_OP_DIAG_MASK_INF:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_diag_mask_inf_f32;
-        }
-        return nullptr;
     case GGML_OP_SOFT_MAX:
         GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
         GGML_ASSERT(!src2 || src2->type == GGML_TYPE_F32);
@@ -9623,17 +9856,6 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return pipeline;
         }
         return nullptr;
-    case GGML_OP_ADD1:
-        if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
-            return ctx->device->pipeline_add1_f16_f16;
-        }
-        if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
-            return ctx->device->pipeline_add1_f16_f32;
-        }
-        if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_add1_f32_f32;
-        }
-        return nullptr;
     case GGML_OP_ARANGE:
         if (dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_arange_f32;
@@ -9772,9 +9994,6 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             elements = { groups_x, groups_y, uint32_t(CEIL_DIV(uint64_t(total_workgroups), groups_xy)) };
             GGML_ASSERT(elements[2] <= ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
         } break;
-    case GGML_OP_DIAG_MASK_INF:
-        elements = { (uint32_t)ggml_nrows(src0), (uint32_t)ne00, 1 };
-        break;
     case GGML_OP_ROPE:
     case GGML_OP_ROPE_BACK:
         {
@@ -9908,7 +10127,6 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_SUB:
     case GGML_OP_DIV:
     case GGML_OP_MUL:
-    case GGML_OP_ADD1:
     case GGML_OP_OUT_PROD:
     case GGML_OP_ARANGE:
     case GGML_OP_FILL:
@@ -10803,21 +11021,6 @@ void ggml_vk_sqrt(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_SQRT, vk_op_unary_push_constants_init(src0, dst));
 }
 
-void ggml_vk_add1(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    const uint32_t src0_type_size = ggml_type_size(src0->type);
-    const uint32_t src1_type_size = ggml_type_size(src1->type);
-    const uint32_t dst_type_size = ggml_type_size(dst->type);
-
-    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, dst, GGML_OP_ADD1, {
-        (uint32_t)ggml_nelements(src0),
-        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
-        (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
-        (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
-        0,
-        0.0f, 0.0f, 0,
-    });
-}
-
 void ggml_vk_arange(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst) {
     VK_LOG_DEBUG("ggml_vk_arange(dst=" << dst << ", ne=" << ggml_nelements(dst) << ")");
 
@@ -11330,11 +11533,6 @@ void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_t
             0,
             0, 0, 0, 0, 0, 0,
         });
-}
-
-void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
-    int32_t * op_params = (int32_t *)dst->op_params;
-    ggml_vk_op_f32<vk_op_diag_mask_push_constants>(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_DIAG_MASK_INF, { (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], op_params[0] });
 }
 
 void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst) {
@@ -12709,10 +12907,6 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
         ggml_vk_upscale(ctx, compute_ctx, src0, node);
 
         break;
-    case GGML_OP_ADD1:
-        ggml_vk_add1(ctx, compute_ctx, src0, src1, node);
-
-        break;
     case GGML_OP_ARANGE:
         ggml_vk_arange(ctx, compute_ctx, node);
 
@@ -12862,10 +13056,6 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
         default:
             return false;
         }
-        break;
-    case GGML_OP_DIAG_MASK_INF:
-        ggml_vk_diag_mask_inf(ctx, compute_ctx, src0, node);
-
         break;
     case GGML_OP_SOFT_MAX:
         if (ctx->fused_topk_moe_mode != TOPK_MOE_COUNT) {
@@ -16135,10 +16325,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             return ggml_vk_concat_supported(op->src[0], op->src[1], op);
         }
-        case GGML_OP_ADD1:
-            return (op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32)
-                || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F32)
-                || (op->src[0]->type == GGML_TYPE_F16 && op->src[1]->type == GGML_TYPE_F16);
         case GGML_OP_ARANGE:
             return op->type == GGML_TYPE_F32;
         case GGML_OP_FILL:
@@ -16149,8 +16335,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ROLL:
             return op->src[0]->type == GGML_TYPE_F32;
-        case GGML_OP_DIAG_MASK_INF:
-            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SOFT_MAX:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && (!op->src[1] || (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16));

@@ -76,7 +76,6 @@ set(GGML_OPENCL_KERNELS
     clamp
     cpy
     cvt
-    diag_mask_inf
     diag
     div
     dsv4_hc

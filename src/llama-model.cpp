@@ -424,6 +424,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
     static const std::regex pattern_v_exps_weight   ("blk\\.\\d*\\.attn_v_exps.weight"); // K2 Horizon MoVA
     static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
+    static const std::regex pattern_qkv_gate_weight ("blk\\.\\d*\\.attn_qkv_gate.weight");
     static const std::regex pattern_q_bias          ("blk\\.\\d*\\.attn_q\\.bias");
     static const std::regex pattern_kv_bias         ("blk\\.\\d*\\.attn_(k|v)\\.bias");
     static const std::regex pattern_qkv_bias        ("blk\\.\\d*\\.attn_qkv.bias");
@@ -446,6 +447,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_ssm_alpha       ("blk\\.\\d*\\.ssm_alpha.weight");
     static const std::regex pattern_ssm_beta        ("blk\\.\\d*\\.ssm_beta.weight");
     static const std::regex pattern_ssm_beta_alpha  ("blk\\.\\d*\\.ssm_ba.weight");
+    static const std::regex pattern_ssm_beta_alpha_cat("blk\\.\\d*\\.ssm_beta_alpha.weight");
     static const std::regex pattern_r_cache         ("cache_r_l\\d*");
     static const std::regex pattern_ple_r_cache     ("cache_ple_r_l\\d*");
     static const std::regex pattern_s_cache         ("cache_s_l\\d*");
@@ -593,7 +595,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         if (std::regex_match(tensor_name, pattern_q_bias) || std::regex_match(tensor_name, pattern_kv_bias)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight", "ssm_out.weight");
         }
-        if (std::regex_match(tensor_name, pattern_qkv_weight)) {
+        if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_qkv_gate_weight)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight", "ssm_out.weight");
         }
         if ( std::regex_match(tensor_name, pattern_qkv_bias)) {
@@ -620,7 +622,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "ssm_out.weight");
         }
         if (std::regex_match(tensor_name, pattern_ssm_alpha) || std::regex_match(tensor_name, pattern_ssm_beta) ||
-                std::regex_match(tensor_name, pattern_ssm_beta_alpha)) {
+                std::regex_match(tensor_name, pattern_ssm_beta_alpha) || std::regex_match(tensor_name, pattern_ssm_beta_alpha_cat)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "ssm_out.weight");
         }
         if (std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache)) {
@@ -715,6 +717,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 }
             } else {
                 const int64_t head_ratio = n_v_heads / n_k_heads;
+                if (std::regex_match(tensor_name, pattern_qkv_gate_weight)) {
+                    GGML_ASSERT(tensor->ne[axis] == 2*key_dim + 2*value_dim);
+                    return {{key_dim, 2 + 2*head_ratio}};
+                }
+                if (std::regex_match(tensor_name, pattern_ssm_beta_alpha_cat)) {
+                    GGML_ASSERT(tensor->ne[axis] == 2*n_v_heads);
+                    return {{n_k_heads, 2*head_ratio}};
+                }
                 if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_ssm_conv1d)) {
                     GGML_ASSERT(tensor->ne[axis] == 2*key_dim + value_dim);
                     return {{key_dim, 2 + head_ratio}};
@@ -811,11 +821,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             const int64_t blck_size_perf  = std::lcm(blck_size, 128);
             const int64_t granularity_qkv = std::lcm(blck_size_perf, head_dim);
             if (std::regex_match(tensor_name, pattern_qkv_weight) || std::regex_match(tensor_name, pattern_attn_gate_weight) ||
-                    std::regex_match(tensor_name, pattern_ssm_conv1d) || std::regex_match(tensor_name, pattern_ssm_out_weight)) {
+                    std::regex_match(tensor_name, pattern_ssm_conv1d) || std::regex_match(tensor_name, pattern_ssm_out_weight) ||
+                    std::regex_match(tensor_name, pattern_qkv_gate_weight)) {
                 return std::vector<int64_t>(segments.size(), granularity_qkv);
             }
             if (std::regex_match(tensor_name, pattern_ssm_dt) || std::regex_match(tensor_name, pattern_ssm_a) ||
-                    std::regex_match(tensor_name, pattern_ssm_alpha) || std::regex_match(tensor_name, pattern_ssm_beta)) {
+                    std::regex_match(tensor_name, pattern_ssm_alpha) || std::regex_match(tensor_name, pattern_ssm_beta) ||
+                    std::regex_match(tensor_name, pattern_ssm_beta_alpha_cat)) {
                 return std::vector<int64_t>(segments.size(), granularity_qkv / head_dim);
             }
             if (std::regex_match(tensor_name, pattern_ssm_beta_alpha)) {
@@ -3566,10 +3578,6 @@ const llama_vocab * llama_model_get_vocab(const llama_model * model) {
     return &model->vocab;
 }
 
-void llama_free_model(llama_model * model) {
-    llama_model_free(model);
-}
-
 void llama_model_free(llama_model * model) {
     delete model;
 }
@@ -3638,26 +3646,6 @@ const char * llama_model_decision_label(const struct llama_model * model, uint32
     }
 
     return nullptr;
-}
-
-// deprecated
-int32_t llama_n_ctx_train(const llama_model * model) {
-    return llama_model_n_ctx_train(model);
-}
-
-// deprecated
-int32_t llama_n_embd(const llama_model * model) {
-    return llama_model_n_embd(model);
-}
-
-// deprecated
-int32_t llama_n_layer(const llama_model * model) {
-    return llama_model_n_layer(model);
-}
-
-// deprecated
-int32_t llama_n_head(const llama_model * model) {
-    return llama_model_n_head(model);
 }
 
 llama_rope_type llama_model_rope_type(const llama_model * model) {

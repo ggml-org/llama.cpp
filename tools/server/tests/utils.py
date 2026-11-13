@@ -34,6 +34,9 @@ DEFAULT_HTTP_TIMEOUT = 600
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
 
+# timeout of the reachability probe of the LAN address
+LAN_PROBE_TIMEOUT = 5
+
 
 class ServerResponse:
     headers: dict
@@ -122,6 +125,9 @@ class ServerProcess:
     no_cache_idle_slots: bool = False
     log_path: str | None = None
     ui_mcp_proxy: bool = False
+    debug_proxy_allow_private: bool = False # test-only: lets the CORS proxy reach local servers
+    media_allow_private_urls: bool = False
+    allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
@@ -148,6 +154,8 @@ class ServerProcess:
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
+        if self.debug_proxy_allow_private:
+            env["LLAMA_SERVER_DEBUG_PROXY_ALLOW_PRIVATE"] = "1"
         if self.llama_cache is not None:
             env["LLAMA_CACHE"] = self.llama_cache
         elif "LLAMA_CACHE" not in os.environ:
@@ -302,6 +310,10 @@ class ServerProcess:
             server_args.append("--no-cache-idle-slots")
         if self.ui_mcp_proxy:
             server_args.append("--ui-mcp-proxy")
+        if self.media_allow_private_urls:
+            server_args.append("--media-allow-private-urls")
+        if self.allow_unauthenticated_tools:
+            server_args.append("--allow-unauthenticated-tools")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
         if self.server_tools_runtime:
@@ -388,6 +400,8 @@ class ServerProcess:
     def make_url(self, path: str, host: str | None = None) -> str:
         if host is None:
             host = self.server_host.split(",")[0].strip()
+            # a wildcard bind cannot be connected to on Windows
+            host = {"0.0.0.0": "127.0.0.1", "::": "[::1]"}.get(host, host)
         return f"http://{host}:{self.server_port}{path}"
 
     def make_request(
@@ -794,7 +808,7 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     return output_file
 
 
-def get_lan_ip() -> str | None:
+def get_lan_ip(server: ServerProcess) -> str | None:
     # address of the interface that routes outside, no packet is sent
     import socket
     try:
@@ -803,7 +817,14 @@ def get_lan_ip() -> str | None:
             ip = s.getsockname()[0]
     except OSError:
         return None
-    return None if ip.startswith("127.") else ip
+    if ip.startswith("127."):
+        return None
+    # a host can fail to reach its own LAN address (firewall, VPN, system proxy)
+    try:
+        requests.get(server.make_url("/health", host=ip), timeout=LAN_PROBE_TIMEOUT)
+    except requests.exceptions.RequestException:
+        return None
+    return ip
 
 
 def is_slow_test_allowed():

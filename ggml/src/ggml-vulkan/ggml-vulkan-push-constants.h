@@ -124,22 +124,30 @@ struct vk_flash_attn_push_constants {
 
 static_assert(sizeof(vk_flash_attn_push_constants) <= 128, "sizeof(vk_flash_attn_push_constants) must be <= 128");
 
-struct vk_fa_xe_opt_push_constants {
-    uint32_t kv_seq_len;
-    uint32_t activation_length;
-    uint32_t q_head;
-    uint32_t kv_head;
-    uint32_t qk_ratio;
-    uint32_t qk_sub_groups;
+struct vk_xe_fa_push_constants {
+    uint32_t neq1;
+    uint32_t neq2;
+    uint32_t neq3;
+    uint32_t nek1;
+    uint32_t nek2;
+    uint32_t nek3;
+    uint32_t nev2;
+    uint32_t nev3;
+    uint32_t nem1;
+    uint32_t nem2;
+    uint32_t nem3;
+    uint32_t nbq1;
+    uint32_t nbq2;
+    uint32_t nbk1;
+    uint32_t nbk2;
+    uint32_t nbv1;
+    uint32_t nbv2;
+    uint32_t nbq3;
+    uint32_t nbk3;
+    uint32_t nbv3;
+    uint32_t nb3;
     uint32_t flag;
-    uint32_t nbkv_tok;
-    uint32_t nbkv_head;
-    uint32_t batch_stride_q;
-    uint32_t batch_stride_k;
-    uint32_t batch_stride_v;
-    uint32_t batch_stride_m;
-    uint32_t batch_stride_o;
-    float softmax_scale;
+    float scale;
 };
 
 struct vk_op_push_constants {
@@ -452,12 +460,6 @@ struct vk_op_add_id_push_constants {
     uint32_t s02;
     uint32_t s11;
     uint32_t s21;
-};
-
-struct vk_op_diag_mask_push_constants {
-    uint32_t ncols;
-    uint32_t rows_per_channel;
-    int32_t n_past;
 };
 
 struct vk_op_rope_push_constants {
