@@ -476,17 +476,24 @@ struct ggml_cuda_unroll<1> {
 template<typename T, int width>
 static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
 #if defined(GGML_USE_HIP)
-    if constexpr ((width == 32 || width == 64) && width <= ggml_cuda_get_physical_warp_size()) {
+    if constexpr ((width == 4 || width == 8 || width == 16 || width == 32 || width == 64) && width <= ggml_cuda_get_physical_warp_size()) {
         x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_1032>(x);
         x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_2301>(x);
-        x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_4>(x);
-        x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
+        if constexpr (width >= 8) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_4>(x);
+        }
+        if constexpr (width >= 16) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
+        }
         if constexpr (width == 64) {
             x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_15>(x);
             x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_31>(x);
             return __shfl_sync(0xffffffff, x, 63, 64);
         }
-        return x + __shfl_xor_sync(0xffffffff, x, 16, 32);
+        if constexpr (width == 32) {
+            return x + __shfl_xor_sync(0xffffffff, x, 16, 32);
+        }
+        return x;
     } else
 #endif // defined(GGML_USE_HIP)
     {
