@@ -14,7 +14,7 @@ from .llama import LlamaModel
 from .mamba import Mamba2Model
 
 
-@ModelBase.register("GraniteForCausalLM")
+@ModelBase.register("GraniteForCausalLM", "Granite4VisionForConditionalGeneration")
 @ModelBase.example("ibm-granite/granite-3.3-2b-instruct")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
