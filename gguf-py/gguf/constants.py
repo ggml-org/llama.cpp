@@ -462,6 +462,8 @@ class Keys:
         PREPROC_IMAGE_SIZE    = "clip.vision.preproc_image_size"
         PREPROC_TILE_SIZE     = "clip.vision.preproc_tile_size"
         PREPROC_MAX_PIXELS_TOLERANCE = "clip.vision.preproc_max_pixels_tolerance"
+        POSITION_GRID_SIZE    = "clip.vision.position_grid_size"
+        ROPE_FREQ_BASE        = "clip.vision.rope.freq_base"
         PATCH_SIZE            = "clip.vision.patch_size"
         EMBEDDING_LENGTH      = "clip.vision.embedding_length"
         FEED_FORWARD_LENGTH   = "clip.vision.feed_forward_length"
@@ -492,6 +494,8 @@ class Keys:
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
 
         class Projector:
+            HIDDEN_SIZE     = "clip.vision.projector.hidden_size"
+            USE_BIAS        = "clip.vision.projector.use_bias"
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
             QUERY_SIDE      = "clip.vision.projector.query_side"
             WINDOW_SIDE     = "clip.vision.projector.window_side"
@@ -1137,6 +1141,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_NORM      = auto()
     V_ENC_EMBD_PATCH_NORM = auto() # allow multiple norms in the same embd, e.g. for gemma4u
+    V_ENC_EMBD_CLS_POS   = auto()
     V_ENC_EMBD_POS       = auto()
     V_ENC_ROPE_FREQS     = auto()
     V_ENC_INPUT_NORM     = auto()
@@ -2071,6 +2076,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM:     "v.patch_norm.{bid}",
+    MODEL_TENSOR.V_ENC_EMBD_CLS_POS:        "v.class_position_embd",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
     MODEL_TENSOR.V_ENC_ROPE_FREQS:          "v.rope_freqs",
     MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
@@ -2508,6 +2514,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_NORM,
         MODEL_TENSOR.V_ENC_EMBD_PATCH_NORM,
+        MODEL_TENSOR.V_ENC_EMBD_CLS_POS,
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_ROPE_FREQS,
         MODEL_TENSOR.V_ENC_EMBD_IMGNL,
@@ -7167,6 +7174,7 @@ class VisionProjectorType:
     MAGEVL         = "magevl"
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
+    INKLING2       = "inkling2"
     MUSE_GLIMMER   = "muse-glimmer"
     COHERE2V       = "cohere2v"
     D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens

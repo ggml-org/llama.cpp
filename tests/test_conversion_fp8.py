@@ -20,7 +20,7 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
-from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
+from conversion.inkling2 import Inkling2Model, Inkling2VisionModel, _E4M3, _E2M1
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
 from conversion.phi import PhiMoeModel
@@ -525,6 +525,61 @@ class TestInkling2PackedConversion(unittest.TestCase):
                 tensor = model.gguf_writer.tensors[0][f"blk.{layer}.ffn_gate_up_exps.weight"].tensor
                 with (path / "tensor.bin").open("wb") as f, self.assertRaisesRegex(ValueError, r"w13_weight.*expert [01]"):
                     tensor.tofile(f)
+
+
+
+class TestInkling2VisionConversion(unittest.TestCase):
+    def test_original_names_and_hwc_weights(self):
+        from conversion import get_model_class
+        self.assertIs(get_model_class("Inkling2ForConditionalGeneration", mmproj=True), Inkling2VisionModel)
+        shapes = {
+            "backbone.embeddings.class_embedding": (8,),
+            "backbone.embeddings.cls_position_embedding": (8,),
+            "backbone.embeddings.position_embedding": (9, 8),
+            "backbone.embeddings.patch_embedding.weight": (8, 1200),
+            "backbone.ln_pre.weight": (8,),
+            "backbone.ln_pre.bias": (8,),
+            "backbone.layers.0.ls_1.gamma": (8,),
+            "backbone.layers.0.ls_2.gamma": (8,),
+            "proj_in.weight": (12, 32),
+            "proj_out.weight": (16, 12),
+        }
+        for name in ("q_proj", "k_proj", "v_proj", "out_proj"):
+            shapes[f"backbone.layers.0.self_attn.{name}.weight"] = (8, 8)
+            shapes[f"backbone.layers.0.self_attn.{name}.bias"] = (8,)
+        for name, shape in (("ln_1", (8,)), ("ln_2", (8,)), ("mlp.c_fc", (32, 8)), ("mlp.c_proj", (8, 32))):
+            shapes[f"backbone.layers.0.{name}.weight"] = shape
+            shapes[f"backbone.layers.0.{name}.bias"] = (shape[0],)
+        tensors = {"model.visual." + name: torch.arange(int(np.prod(shape)), dtype=torch.float32).reshape(shape) / 100 for name, shape in shapes.items()}
+        tensors["model.llm.embed.weight"] = torch.ones(16, 16)
+        tensors["model.mtp.dummy.weight"] = torch.ones(2)
+        config = {"model_type": "inkling2", "architectures": ["Inkling2ForConditionalGeneration"], "text_config": {"hidden_size": 16}, "vision_config": {
+            "hidden_size": 8, "native_patch_size": 20, "adapter_merge_size": 2, "num_hidden_layers": 1,
+            "num_attention_heads": 2, "mlp_ratio": 4.0, "posemb_grid_size": 3, "projection_hidden_dim": 12,
+            "projector_bias": False, "layer_norm_eps": 1e-5, "temporal_patch_size": 2}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / "config.json").write_text(json.dumps(config))
+            save_file(tensors, path / "model.safetensors")
+            model = Inkling2VisionModel(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf", hparams=config)
+            model.set_gguf_parameters()
+            model.prepare_tensors()
+            actual = {name: gguf.LazyNumpyTensor.to_eager(info.tensor) for name, info in model.gguf_writer.tensors[0].items()}
+            self.assertEqual(len(actual), len(shapes))
+            self.assertTrue(all(name.startswith(("v.", "mm.")) for name in actual))
+            for target, source in (("v.patch_embd.weight", "backbone.embeddings.patch_embedding.weight"),
+                                   ("v.class_embd", "backbone.embeddings.class_embedding"),
+                                   ("v.class_position_embd.weight", "backbone.embeddings.cls_position_embedding"),
+                                   ("v.blk.0.ls1.weight", "backbone.layers.0.ls_1.gamma"),
+                                   ("v.blk.0.ffn_up.weight", "backbone.layers.0.mlp.c_fc.weight"),
+                                   ("mm.2.weight", "proj_out.weight")):
+                np.testing.assert_array_equal(actual[target], tensors["model.visual." + source].numpy())
+            kv = model.gguf_writer.kv_data[0]
+            for key, value in ((gguf.Keys.ClipVision.PROJECTOR_TYPE, "inkling2"),
+                               (gguf.Keys.ClipVision.PATCH_SIZE, 20), (gguf.Keys.ClipVision.SPATIAL_MERGE_SIZE, 2),
+                               (gguf.Keys.ClipVision.POSITION_GRID_SIZE, 3), (gguf.Keys.ClipVision.Projector.HIDDEN_SIZE, 12),
+                               (gguf.Keys.ClipVision.Projector.USE_BIAS, False)):
+                self.assertEqual(kv[key].value, value)
 
 
 if __name__ == "__main__":

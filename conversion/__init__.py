@@ -337,6 +337,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
+    "Inkling2ForConditionalGeneration": "inkling2",
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
