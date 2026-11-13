@@ -161,7 +161,9 @@ struct llama_context {
                        ggml_status & ret);
 
     int encode(const llama_batch_ext & batch_inp);
-    int decode(const llama_batch_ext & batch_inp);
+    int decode(const llama_batch_ext & batch_inp, llm_graph_type gtype = LLM_GRAPH_TYPE_DEFAULT);
+    bool draft_step(llama_token token, llama_embd hidden, llama_embd base, llama_embd context,
+            std::vector<float> & state, std::vector<float> & logits_out);
 
     // compat version
     int encode(const llama_batch & batch_inp);

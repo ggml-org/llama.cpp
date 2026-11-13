@@ -4,6 +4,7 @@
 #include "ggml.h"
 #include "ggml-cpp.h"
 #include "llama.h"
+#include "../src/llama-ext.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
@@ -1007,6 +1008,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     std::vector<llama_pos> context_pos;
 
     bool    is_dflash2     = false;
+    int32_t markov_rank = 0;
     bool    is_mrope       = false;
     int32_t selector_top_k = 0;
 
@@ -1075,14 +1077,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         is_lilicorr = lilicorr_top_k > 0;
         char rank_meta[32] = {};
         has_rnn_context = llama_model_meta_val_str(model_dft, "dflash.dspark.markov_rank", rank_meta, sizeof(rank_meta)) >= 0;
+        markov_rank = has_rnn_context ? std::atoi(rank_meta) : 0;
         if (has_rnn_context && (n_embd_tgt != n_embd_dec || target_layer_ids[target_layer_ids_n - 1] != llama_model_n_layer(model_tgt))) {
             throw std::runtime_error("DSpark target feature dimensions do not match");
         }
         if (has_rnn_context && (sample_from_anchor || causal_attn)) {
             throw std::runtime_error("Inkling2 DSpark requires a noncausal block with an anchor");
-        }
-        if (has_rnn_context && this->params.probabilistic) {
-            throw std::runtime_error("Inkling2 DSpark supports greedy draft conditioning only; disable probabilistic drafting");
         }
         if (is_lilicorr || has_rnn_context) {
             context_rows = (size_t) block_size + 1;
@@ -1378,11 +1378,23 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             return;
         }
 
-        // decode all sequence's noise block in a single batch
-        int ret = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        const bool sample_rnn = has_rnn_context && params.probabilistic;
+        int ret = sample_rnn ? llama_draft_backbone(ctx_dft, batch.get())
+                             : llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (ret != 0) {
             LOG_WRN("%s: llama_process returned %d\n", __func__, ret);
             return;
+        }
+
+        const int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx_dft)));
+        std::vector<float> hidden, base_logits;
+        if (sample_rnn) {
+            const float * rows = llama_get_embeddings_nextn(ctx_dft);
+            hidden.assign(rows, rows + size_t(batch.size())*n_embd_dec);
+            for (int32_t i = 0; i < batch.size(); ++i) {
+                const float * logits = llama_get_logits_ith(ctx_dft, i);
+                base_logits.insert(base_logits.end(), logits, logits + n_vocab);
+            }
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -1397,6 +1409,59 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             auto * smpl = smpls[seq_id].get();
 
             auto & result = *dp.result;
+
+            if (sample_rnn) {
+                if (dflash2_seed[seq_id] != dp.seed) {
+                    dflash2_seed[seq_id] = dp.seed;
+                    dflash2_rng[seq_id].seed(dp.seed == LLAMA_DEFAULT_SEED ? std::random_device{}() : dp.seed ^ 0x85ebca6bu);
+                }
+                const float temp = dp.temp > 0.0f ? dp.temp : 1.0f;
+                const size_t slot = size_t(seq_id)*context_rows + size_t(dp.pos0 - 1)%context_rows;
+                const llama_embd context = { context_embd.data() + slot*n_embd_dec, 1, size_t(n_embd_dec) };
+                std::vector<float> state(markov_rank, 0.0f), logits;
+                llama_token prev = dp.id_last;
+                for (int32_t i = 1; i < std::min(n_block_tokens, params.n_max + 1); ++i) {
+                    const size_t row = beg + i;
+                    if (!llama_draft_step(ctx_dft, prev,
+                            { hidden.data() + row*n_embd_dec, 1, size_t(n_embd_dec) },
+                            { base_logits.data() + row*n_vocab, 1, size_t(n_vocab) }, context, state, logits)) {
+                        result.clear();
+                        if (dp.result_q) {
+                            dp.result_q->clear();
+                        }
+                        LOG_ERR("%s: DSpark recurrent head failed\n", __func__);
+                        break;
+                    }
+                    const float maximum = *std::max_element(logits.begin(), logits.end());
+                    std::vector<llama_token_data> q(n_vocab);
+                    double sum = 0.0;
+                    for (int32_t k = 0; k < n_vocab; ++k) {
+                        const float p = std::exp((logits[k] - maximum)/temp);
+                        q[k] = { k, logits[k], p };
+                        sum += p;
+                    }
+                    if (!std::isfinite(sum) || sum <= 0.0) {
+                        throw std::runtime_error("DSpark produced non-finite proposal probabilities");
+                    }
+                    for (auto & candidate : q) {
+                        candidate.p /= sum;
+                    }
+                    double u = std::uniform_real_distribution<double>(0.0, 1.0)(dflash2_rng[seq_id]);
+                    prev = std::max_element(logits.begin(), logits.end()) - logits.begin();
+                    for (const auto & candidate : q) {
+                        u -= candidate.p;
+                        if (u < 0.0) {
+                            prev = candidate.id;
+                            break;
+                        }
+                    }
+                    result.push_back(prev);
+                    if (dp.result_q) {
+                        dp.result_q->push_back(std::move(q));
+                    }
+                }
+                continue;
+            }
 
             if (is_dflash2 || is_lilicorr) {
                 // Both DFlash and LiliCorr greedily walk the candidate lattice.
