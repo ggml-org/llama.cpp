@@ -86,22 +86,177 @@ static inline void ssm_scan_step4(
     for (uint32_t i = 0; i < d_state; i += VLEN_FP32) {
         HVX_Vector b  = hvx_vmem(B + i);
         HVX_Vector c  = hvx_vmem(C + i);
-        HVX_Vector s0 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmem(in0 + i), vdA), hvx_vec_mul_f32_f32(b, vx0));
-        HVX_Vector s1 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmem(in1 + i), vdA), hvx_vec_mul_f32_f32(b, vx1));
-        HVX_Vector s2 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmem(in2 + i), vdA), hvx_vec_mul_f32_f32(b, vx2));
-        HVX_Vector s3 = hvx_vec_add_f32_f32(hvx_vec_mul_f32_f32(hvx_vmem(in3 + i), vdA), hvx_vec_mul_f32_f32(b, vx3));
+        HVX_Vector s0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(in0 + i), vdA), Q6_Vqf32_vmpy_VsfVsf(b, vx0)));
+        HVX_Vector s1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(in1 + i), vdA), Q6_Vqf32_vmpy_VsfVsf(b, vx1)));
+        HVX_Vector s2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(in2 + i), vdA), Q6_Vqf32_vmpy_VsfVsf(b, vx2)));
+        HVX_Vector s3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(hvx_vmem(in3 + i), vdA), Q6_Vqf32_vmpy_VsfVsf(b, vx3)));
         hvx_vmem(out0 + i) = s0;
         hvx_vmem(out1 + i) = s1;
         hvx_vmem(out2 + i) = s2;
         hvx_vmem(out3 + i) = s3;
-        acc0 = hvx_vec_add_f32_f32(acc0, hvx_vec_mul_f32_f32(s0, c));
-        acc1 = hvx_vec_add_f32_f32(acc1, hvx_vec_mul_f32_f32(s1, c));
-        acc2 = hvx_vec_add_f32_f32(acc2, hvx_vec_mul_f32_f32(s2, c));
-        acc3 = hvx_vec_add_f32_f32(acc3, hvx_vec_mul_f32_f32(s3, c));
+        acc0 = Q6_Vqf32_vadd_Vqf32Vqf32(acc0, Q6_Vqf32_vmpy_VsfVsf(s0, c));
+        acc1 = Q6_Vqf32_vadd_Vqf32Vqf32(acc1, Q6_Vqf32_vmpy_VsfVsf(s1, c));
+        acc2 = Q6_Vqf32_vadd_Vqf32Vqf32(acc2, Q6_Vqf32_vmpy_VsfVsf(s2, c));
+        acc3 = Q6_Vqf32_vadd_Vqf32Vqf32(acc3, Q6_Vqf32_vmpy_VsfVsf(s3, c));
     }
 
-    HVX_Vector_x4 acc = { .v = { acc0, acc1, acc2, acc3 } };
+    HVX_Vector_x4 acc = { .v = {
+        Q6_Vsf_equals_Vqf32(acc0),
+        Q6_Vsf_equals_Vqf32(acc1),
+        Q6_Vsf_equals_Vqf32(acc2),
+        Q6_Vsf_equals_Vqf32(acc3),
+    } };
     hvx_vec_store_u(y, 4 * sizeof(float), hvx_vec_reduce_sum_f32x4(acc));
+}
+
+// Prefill 4-row step across nt tokens. For d_state == 128, keeps all 4 state rows
+// (16 HVX vectors) in registers across the token chunk to avoid per-token VTCM traffic.
+// Assumes x_work has already been scaled by softplus(dt) per token.
+static __attribute__((noinline)) void ssm_scan_prefill_step4(
+    const float * state_in,
+    float * state_out,
+    size_t state_stride_elems,
+    const float * restrict B_work,
+    const float * restrict C_work,
+    const uint8_t * restrict x_work,
+    uint8_t * restrict y_work,
+    size_t xy_stride,
+    const float * restrict dA_buf,
+    uint32_t row,
+    uint32_t nt,
+    uint32_t d_state
+) {
+    const float * in0  = state_in  + (size_t) (row + 0) * state_stride_elems;
+    const float * in1  = state_in  + (size_t) (row + 1) * state_stride_elems;
+    const float * in2  = state_in  + (size_t) (row + 2) * state_stride_elems;
+    const float * in3  = state_in  + (size_t) (row + 3) * state_stride_elems;
+    float *       out0 = state_out + (size_t) (row + 0) * state_stride_elems;
+    float *       out1 = state_out + (size_t) (row + 1) * state_stride_elems;
+    float *       out2 = state_out + (size_t) (row + 2) * state_stride_elems;
+    float *       out3 = state_out + (size_t) (row + 3) * state_stride_elems;
+    const uint32_t row_vec = row & ~(VLEN_FP32 - 1);
+    const uint32_t row_rot = (row & (VLEN_FP32 - 1)) * sizeof(float);
+
+    if (d_state == 4 * VLEN_FP32) {
+        HVX_Vector s0_0 = hvx_vmem(in0 + 0 * VLEN_FP32);
+        HVX_Vector s0_1 = hvx_vmem(in0 + 1 * VLEN_FP32);
+        HVX_Vector s0_2 = hvx_vmem(in0 + 2 * VLEN_FP32);
+        HVX_Vector s0_3 = hvx_vmem(in0 + 3 * VLEN_FP32);
+
+        HVX_Vector s1_0 = hvx_vmem(in1 + 0 * VLEN_FP32);
+        HVX_Vector s1_1 = hvx_vmem(in1 + 1 * VLEN_FP32);
+        HVX_Vector s1_2 = hvx_vmem(in1 + 2 * VLEN_FP32);
+        HVX_Vector s1_3 = hvx_vmem(in1 + 3 * VLEN_FP32);
+
+        HVX_Vector s2_0 = hvx_vmem(in2 + 0 * VLEN_FP32);
+        HVX_Vector s2_1 = hvx_vmem(in2 + 1 * VLEN_FP32);
+        HVX_Vector s2_2 = hvx_vmem(in2 + 2 * VLEN_FP32);
+        HVX_Vector s2_3 = hvx_vmem(in2 + 3 * VLEN_FP32);
+
+        HVX_Vector s3_0 = hvx_vmem(in3 + 0 * VLEN_FP32);
+        HVX_Vector s3_1 = hvx_vmem(in3 + 1 * VLEN_FP32);
+        HVX_Vector s3_2 = hvx_vmem(in3 + 2 * VLEN_FP32);
+        HVX_Vector s3_3 = hvx_vmem(in3 + 3 * VLEN_FP32);
+
+        for (uint32_t t = 0; t < nt; ++t) {
+            const float * B_t = B_work + (size_t) t * state_stride_elems;
+            const float * C_t = C_work + (size_t) t * state_stride_elems;
+            const float * x_t = (const float *) (x_work + (size_t) t * xy_stride);
+            float *       y_t = (float *)       (y_work + (size_t) t * xy_stride) + row;
+
+            const HVX_Vector vdA = hvx_vec_splat_f32(dA_buf[t]);
+            const HVX_Vector vx  = Q6_V_vror_VR(hvx_vmem(x_t + row_vec), row_rot);
+            const HVX_Vector vx0 = hvx_vec_repl_f32(vx);
+            const HVX_Vector vx1 = hvx_vec_repl_f32(Q6_V_vror_VR(vx, sizeof(float)));
+            const HVX_Vector vx2 = hvx_vec_repl_f32(Q6_V_vror_VR(vx, 2 * sizeof(float)));
+            const HVX_Vector vx3 = hvx_vec_repl_f32(Q6_V_vror_VR(vx, 3 * sizeof(float)));
+
+            HVX_Vector b0   = hvx_vmem(B_t + 0 * VLEN_FP32);
+            HVX_Vector c0   = hvx_vmem(C_t + 0 * VLEN_FP32);
+            s0_0            = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0_0, vdA), Q6_Vqf32_vmpy_VsfVsf(b0, vx0)));
+            HVX_Vector acc0 = Q6_Vqf32_vmpy_VsfVsf(s0_0, c0);
+            s1_0            = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s1_0, vdA), Q6_Vqf32_vmpy_VsfVsf(b0, vx1)));
+            HVX_Vector acc1 = Q6_Vqf32_vmpy_VsfVsf(s1_0, c0);
+            s2_0            = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s2_0, vdA), Q6_Vqf32_vmpy_VsfVsf(b0, vx2)));
+            HVX_Vector acc2 = Q6_Vqf32_vmpy_VsfVsf(s2_0, c0);
+            s3_0            = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s3_0, vdA), Q6_Vqf32_vmpy_VsfVsf(b0, vx3)));
+            HVX_Vector acc3 = Q6_Vqf32_vmpy_VsfVsf(s3_0, c0);
+
+            HVX_Vector b1 = hvx_vmem(B_t + 1 * VLEN_FP32);
+            HVX_Vector c1 = hvx_vmem(C_t + 1 * VLEN_FP32);
+            s0_1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0_1, vdA), Q6_Vqf32_vmpy_VsfVsf(b1, vx0)));
+            acc0 = Q6_Vqf32_vadd_Vqf32Vqf32(acc0, Q6_Vqf32_vmpy_VsfVsf(s0_1, c1));
+            s1_1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s1_1, vdA), Q6_Vqf32_vmpy_VsfVsf(b1, vx1)));
+            acc1 = Q6_Vqf32_vadd_Vqf32Vqf32(acc1, Q6_Vqf32_vmpy_VsfVsf(s1_1, c1));
+            s2_1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s2_1, vdA), Q6_Vqf32_vmpy_VsfVsf(b1, vx2)));
+            acc2 = Q6_Vqf32_vadd_Vqf32Vqf32(acc2, Q6_Vqf32_vmpy_VsfVsf(s2_1, c1));
+            s3_1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s3_1, vdA), Q6_Vqf32_vmpy_VsfVsf(b1, vx3)));
+            acc3 = Q6_Vqf32_vadd_Vqf32Vqf32(acc3, Q6_Vqf32_vmpy_VsfVsf(s3_1, c1));
+
+            HVX_Vector b2 = hvx_vmem(B_t + 2 * VLEN_FP32);
+            HVX_Vector c2 = hvx_vmem(C_t + 2 * VLEN_FP32);
+            s0_2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0_2, vdA), Q6_Vqf32_vmpy_VsfVsf(b2, vx0)));
+            acc0 = Q6_Vqf32_vadd_Vqf32Vqf32(acc0, Q6_Vqf32_vmpy_VsfVsf(s0_2, c2));
+            s1_2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s1_2, vdA), Q6_Vqf32_vmpy_VsfVsf(b2, vx1)));
+            acc1 = Q6_Vqf32_vadd_Vqf32Vqf32(acc1, Q6_Vqf32_vmpy_VsfVsf(s1_2, c2));
+            s2_2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s2_2, vdA), Q6_Vqf32_vmpy_VsfVsf(b2, vx2)));
+            acc2 = Q6_Vqf32_vadd_Vqf32Vqf32(acc2, Q6_Vqf32_vmpy_VsfVsf(s2_2, c2));
+            s3_2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s3_2, vdA), Q6_Vqf32_vmpy_VsfVsf(b2, vx3)));
+            acc3 = Q6_Vqf32_vadd_Vqf32Vqf32(acc3, Q6_Vqf32_vmpy_VsfVsf(s3_2, c2));
+
+            HVX_Vector b3 = hvx_vmem(B_t + 3 * VLEN_FP32);
+            HVX_Vector c3 = hvx_vmem(C_t + 3 * VLEN_FP32);
+            s0_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0_3, vdA), Q6_Vqf32_vmpy_VsfVsf(b3, vx0)));
+            acc0 = Q6_Vqf32_vadd_Vqf32Vqf32(acc0, Q6_Vqf32_vmpy_VsfVsf(s0_3, c3));
+            s1_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s1_3, vdA), Q6_Vqf32_vmpy_VsfVsf(b3, vx1)));
+            acc1 = Q6_Vqf32_vadd_Vqf32Vqf32(acc1, Q6_Vqf32_vmpy_VsfVsf(s1_3, c3));
+            s2_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s2_3, vdA), Q6_Vqf32_vmpy_VsfVsf(b3, vx2)));
+            acc2 = Q6_Vqf32_vadd_Vqf32Vqf32(acc2, Q6_Vqf32_vmpy_VsfVsf(s2_3, c3));
+            s3_3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s3_3, vdA), Q6_Vqf32_vmpy_VsfVsf(b3, vx3)));
+            acc3 = Q6_Vqf32_vadd_Vqf32Vqf32(acc3, Q6_Vqf32_vmpy_VsfVsf(s3_3, c3));
+
+            HVX_Vector_x4 acc = { .v = {
+                Q6_Vsf_equals_Vqf32(acc0),
+                Q6_Vsf_equals_Vqf32(acc1),
+                Q6_Vsf_equals_Vqf32(acc2),
+                Q6_Vsf_equals_Vqf32(acc3),
+            } };
+            hvx_vec_store_u(y_t, 4 * sizeof(float), hvx_vec_reduce_sum_f32x4(acc));
+        }
+
+        hvx_vmem(out0 + 0 * VLEN_FP32) = s0_0;
+        hvx_vmem(out0 + 1 * VLEN_FP32) = s0_1;
+        hvx_vmem(out0 + 2 * VLEN_FP32) = s0_2;
+        hvx_vmem(out0 + 3 * VLEN_FP32) = s0_3;
+
+        hvx_vmem(out1 + 0 * VLEN_FP32) = s1_0;
+        hvx_vmem(out1 + 1 * VLEN_FP32) = s1_1;
+        hvx_vmem(out1 + 2 * VLEN_FP32) = s1_2;
+        hvx_vmem(out1 + 3 * VLEN_FP32) = s1_3;
+
+        hvx_vmem(out2 + 0 * VLEN_FP32) = s2_0;
+        hvx_vmem(out2 + 1 * VLEN_FP32) = s2_1;
+        hvx_vmem(out2 + 2 * VLEN_FP32) = s2_2;
+        hvx_vmem(out2 + 3 * VLEN_FP32) = s2_3;
+
+        hvx_vmem(out3 + 0 * VLEN_FP32) = s3_0;
+        hvx_vmem(out3 + 1 * VLEN_FP32) = s3_1;
+        hvx_vmem(out3 + 2 * VLEN_FP32) = s3_2;
+        hvx_vmem(out3 + 3 * VLEN_FP32) = s3_3;
+        return;
+    }
+
+    for (uint32_t t = 0; t < nt; ++t) {
+        const float * state_src = (t == 0) ? in0 : out0;
+        const float * B_t       = B_work + (size_t) t * state_stride_elems;
+        const float * C_t       = C_work + (size_t) t * state_stride_elems;
+        const float * x_t       = (const float *) (x_work + (size_t) t * xy_stride);
+        float *       y_t       = (float *)       (y_work + (size_t) t * xy_stride);
+        const HVX_Vector vdA    = hvx_vec_splat_f32(dA_buf[t]);
+        const HVX_Vector vx     = hvx_vmem(x_t + row_vec);
+        ssm_scan_step4(state_src, out0, state_stride_elems, B_t, C_t, vdA,
+                       Q6_V_vror_VR(vx, row_rot), d_state, y_t + row);
+    }
 }
 
 // Single-row step for tail rows (nrows % 4 != 0), unaligned d_state, or vector-A (n_a == d_state).
@@ -114,14 +269,13 @@ static void ssm_scan_step1(
     uint32_t n_a,
     float dt_softplus,
     float dA_scalar,
-    float x_dt,
+    HVX_Vector vx0,
     uint32_t d_state,
     float * restrict y
 ) {
     HVX_Vector acc        = Q6_V_vzero();
     HVX_Vector vdt        = hvx_vec_splat_f32(dt_softplus);
     HVX_Vector vdA_splat  = hvx_vec_splat_f32(dA_scalar);
-    HVX_Vector vx0        = hvx_vec_splat_f32(x_dt);
 
     uint32_t i = 0;
     for (; i + VLEN_FP32 <= d_state; i += VLEN_FP32) {
@@ -247,9 +401,9 @@ static void ssm_scan_thread_f32_decode(const htp_thread_t * th, unsigned int nth
             ? hvx_vec_get_f32(hvx_vec_exp_f32(hvx_vec_mul_f32_f32(vdt_sp, hvx_vmem(A_work))))
             : 0.0f;
 
-        uint32_t row = 0;
+        uint32_t         row = 0;
+        const HVX_Vector vdt = hvx_vec_splat_f32(dt_softplus);
         if (kparams->fast_step4) {
-            const HVX_Vector vdt = hvx_vec_splat_f32(dt_softplus);
             const HVX_Vector vdA = hvx_vec_splat_f32(dA_scalar);
             HVX_Vector       vx  = Q6_V_vzero();
             for (; row + 4 <= unit.nrows; row += 4) {
@@ -264,11 +418,12 @@ static void ssm_scan_thread_f32_decode(const htp_thread_t * th, unsigned int nth
             }
         }
         for (; row < unit.nrows; ++row) {
+            const HVX_Vector vx  = hvx_vec_mul_f32_f32(hvx_vmem(x_work + (row & ~(VLEN_FP32 - 1))), vdt);
+            const HVX_Vector vx0 = hvx_vec_repl_f32(Q6_V_vror_VR(vx, (row & (VLEN_FP32 - 1)) * sizeof(float)));
             ssm_scan_step1(state_in + (size_t) row * state_stride_elems,
                            state_out + (size_t) row * state_stride_elems,
                            B_work, C_work, A_work, kparams->n_a, dt_softplus, dA_scalar,
-                           x_work[row] * dt_softplus,
-                           kparams->d_state, y_work + row);
+                           vx0, kparams->d_state, y_work + row);
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) unit_index);
 
@@ -402,8 +557,8 @@ static void ssm_scan_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         const float *   A_work    = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
         const float *   B_work    = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
         const float *   C_work    = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
-        const uint8_t * x_work    = (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
-        const float *   dt_work   = (const float *)   (uintptr_t) dma_queue_pop(dma_q).dst;
+        uint8_t *     x_work    = (uint8_t *)     (uintptr_t) dma_queue_pop(dma_q).dst;
+        const float * dt_work   = (const float *) (uintptr_t) dma_queue_pop(dma_q).dst;
 
         if (cur_c == 0) {
             unit           = ssm_scan_decode_unit(kparams, cur_u);
@@ -423,38 +578,41 @@ static void ssm_scan_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         const HVX_Vector vdt_sp = ssm_scan_vec_softplus_f32(hvx_vmem(dt_work));
         hvx_vmem(dt_buf)        = vdt_sp;
         hvx_vmem(dA_buf)        = kparams->n_a == 1 ? hvx_vec_exp_f32(hvx_vec_mul_f32_f32(vdt_sp, vA)) : Q6_V_vzero();
+        for (uint32_t t = 0; t < nt; ++t) {
+            float *          x_t = (float *) (x_work + (size_t) t * xy_stride);
+            const HVX_Vector vdt = hvx_vec_splat_f32(dt_buf[t]);
+            for (uint32_t r = 0; r < unit.nrows; r += VLEN_FP32) {
+                hvx_vmem(x_t + r) = hvx_vec_mul_f32_f32(hvx_vmem(x_t + r), vdt);
+            }
+        }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, (uint16_t) step);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) step);
-        float * state_dst = last_chunk ? state_out : state_work;
-        for (uint32_t t = 0; t < nt; ++t) {
-            const float * state_src = (last_chunk && t > 0) ? state_out : state_work;
-            const float * B_t       = B_work + (size_t) t * state_stride_elems;
-            const float * C_t       = C_work + (size_t) t * state_stride_elems;
-            const float * x_t       = (const float *) (x_work + (size_t) t * xy_stride);
-            float *       y_t       = (float *) (y_work + (size_t) t * xy_stride);
-            uint32_t      row       = 0;
-            if (kparams->fast_step4) {
-                const HVX_Vector vdt = hvx_vec_splat_f32(dt_buf[t]);
-                const HVX_Vector vdA = hvx_vec_splat_f32(dA_buf[t]);
-                HVX_Vector       vx  = Q6_V_vzero();
-                for (; row + 4 <= unit.nrows; row += 4) {
-                    if ((row & (VLEN_FP32 - 1)) == 0) {
-                        vx = hvx_vec_mul_f32_f32(hvx_vmem(x_t + row), vdt);
-                    }
-                    ssm_scan_step4(state_src + (size_t) row * state_stride_elems,
-                                   state_dst + (size_t) row * state_stride_elems, state_stride_elems,
-                                   B_t, C_t, vdA,
-                                   Q6_V_vror_VR(vx, (row & (VLEN_FP32 - 1)) * sizeof(float)),
-                                   kparams->d_state, y_t + row);
-                }
+        float *  state_dst = last_chunk ? state_out : state_work;
+        uint32_t row       = 0;
+        if (kparams->fast_step4) {
+            for (; row + 4 <= unit.nrows; row += 4) {
+                ssm_scan_prefill_step4(state_work, state_dst, state_stride_elems,
+                                       B_work, C_work, x_work, y_work, xy_stride,
+                                       dA_buf, row, nt, kparams->d_state);
             }
-            for (; row < unit.nrows; ++row) {
-                ssm_scan_step1(state_src + (size_t) row * state_stride_elems,
-                               state_dst + (size_t) row * state_stride_elems,
-                               B_t, C_t, A_work, kparams->n_a, dt_buf[t], dA_buf[t],
-                               x_t[row] * dt_buf[t],
-                               kparams->d_state, y_t + row);
+        }
+        if (row < unit.nrows) {
+            const uint32_t row0 = row;
+            for (uint32_t t = 0; t < nt; ++t) {
+                const float * state_src = (last_chunk && t > 0) ? state_out : state_work;
+                const float * B_t       = B_work + (size_t) t * state_stride_elems;
+                const float * C_t       = C_work + (size_t) t * state_stride_elems;
+                const float * x_t       = (const float *) (x_work + (size_t) t * xy_stride);
+                float *       y_t       = (float *) (y_work + (size_t) t * xy_stride);
+                for (uint32_t r = row0; r < unit.nrows; ++r) {
+                    const HVX_Vector vx  = hvx_vmem(x_t + (r & ~(VLEN_FP32 - 1)));
+                    const HVX_Vector vx0 = hvx_vec_repl_f32(Q6_V_vror_VR(vx, (r & (VLEN_FP32 - 1)) * sizeof(float)));
+                    ssm_scan_step1(state_src + (size_t) r * state_stride_elems,
+                                   state_dst + (size_t) r * state_stride_elems,
+                                   B_t, C_t, A_work, kparams->n_a, dt_buf[t], dA_buf[t],
+                                   vx0, kparams->d_state, y_t + r);
+                }
             }
         }
 
