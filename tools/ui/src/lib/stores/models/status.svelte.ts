@@ -26,6 +26,7 @@ import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
 import type {
+	ApiModelsSseDownloadFailedData,
 	ApiModelsSseDownloadProgressData,
 	ModelDownloadEntry,
 	ModelDownloadProgress
@@ -656,6 +657,12 @@ export class ModelStatusManager {
 		if (event.event === ServerModelsSseEventType.DOWNLOAD_FAILED) {
 			request = this.stopRequests.get(event.model);
 			this.stopRequests.delete(event.model);
+
+			// a stop another client asked for (e.g. the Llama app) reads as a pause: a
+			// cancel follows with model_remove, which drops the row
+			if (!request && (event.data as ApiModelsSseDownloadFailedData | undefined)?.stopped) {
+				request = ModelDownloadStopRequest.PAUSE;
+			}
 		}
 
 		const progress = this.downloadProgress.get(event.model) ?? null;
@@ -716,6 +723,20 @@ export class ModelStatusManager {
 		for (const file of Object.values(progress)) {
 			downloaded += file?.done ?? 0;
 			total += file?.total ?? 0;
+		}
+
+		// a download another client started (e.g. the Llama app) pulls the sidecars the
+		// list reports for it; the first event of one the list does not know refreshes it
+		if (!this.downloadSidecars.has(event.model)) {
+			const listed = this.host.routerModels.find(
+				(m) => downloadIdKey(m.id) === downloadIdKey(event.model)
+			);
+
+			if (listed) {
+				this.downloadSidecars.set(event.model, listed.sidecars ?? []);
+			} else if (!this.downloadProgress.has(event.model)) {
+				void this.host.fetchRouterModels();
+			}
 		}
 
 		this.downloadProgress.set(event.model, {
@@ -809,14 +830,17 @@ export class ModelStatusManager {
 	private removeRouterModel(modelId: string): void {
 		const idx = this.host.routerModels.findIndex((m) => m.id === modelId);
 
+		// download state goes even for a row the list does not carry yet, e.g. a
+		// download another client started and then cancelled
+		this.downloadProgress.delete(modelId);
+		this.failedDownloads.delete(modelId);
+		this.deletePausedDownload(modelId);
+		this.downloadSidecars.delete(modelId);
+		this.stopRequests.delete(modelId);
+
 		if (idx !== -1) {
 			this.host.routerModels = this.host.routerModels.filter((m) => m.id !== modelId);
 			this.loadProgress.delete(modelId);
-			this.downloadProgress.delete(modelId);
-			this.failedDownloads.delete(modelId);
-			this.deletePausedDownload(modelId);
-			this.downloadSidecars.delete(modelId);
-			this.stopRequests.delete(modelId);
 			this.rejectStatus(modelId, new Error(`Model removed: ${this.host.toDisplayName(modelId)}`));
 		}
 

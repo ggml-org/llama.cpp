@@ -6,7 +6,7 @@
 
 #include "hex-common.h"
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
@@ -306,7 +306,7 @@ struct upscale_context {
     const void * lut_y;
     uint32_t chunk_start;
     uint32_t chunk_count;
-    uint32_t chunks_per_thread;
+    uint32_t chunks_per_hvx;
 };
 
 static void compute_nearest_chunk(
@@ -756,31 +756,31 @@ static inline void dma_push_src_chunk(
     }
 }
 
-static void upscale_worker(unsigned int nth, unsigned int ith, void * data) {
+static void upscale_worker(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct upscale_context * ctx = (struct upscale_context *) data;
     const struct htp_upscale_kernel_params * p = ctx->kparams;
     const struct htp_upscale_vtcm_layout * L = &ctx->layout;
     const struct htp_tensor * src0 = ctx->octx->src[0];
     const struct htp_tensor * dst  = ctx->octx->dst;
 
-    const uint32_t first = ctx->chunk_start + ith * ctx->chunks_per_thread;
-    const uint32_t last  = MIN(first + ctx->chunks_per_thread, ctx->chunk_start + ctx->chunk_count);
+    const uint32_t first = ctx->chunk_start + ith * ctx->chunks_per_hvx;
+    const uint32_t last  = MIN(first + ctx->chunks_per_hvx, ctx->chunk_start + ctx->chunk_count);
 
     if (first >= last) {
         return;
     }
 
-    struct htp_thread_trace * tr = &ctx->octx->ctx->trace[ith];
-    dma_queue * dma_q            = ctx->octx->ctx->dma[ith];
+    struct htp_thread_trace * tr = th->trace;
+    dma_queue * dma_q            = th->dma_q;
 
     const uint32_t src_spad_half = (uint32_t) L->src_spad_half_size;
     const uint32_t dst_spad_half = (uint32_t) L->dst_spad_half_size;
 
     uint8_t * vtcm_base  = (uint8_t *) ctx->octx->ctx->vtcm_base;
-    uint8_t * src_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_src)    + ith * L->src_bytes_per_thread;
-    uint8_t * dst_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_dst)    + ith * L->dst_bytes_per_thread;
-    float   * R_buf      = VTCM_LAYOUT_PTR(float,   vtcm_base, L->off_r)      + ith * (L->r_bytes_per_thread / sizeof(float));
-    float   * gather_tmp = VTCM_LAYOUT_PTR(float,   vtcm_base, L->off_gather) + ith * (L->gather_bytes_per_thread / sizeof(float));
+    uint8_t * src_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_src)    + ith * L->src_bytes_per_hvx;
+    uint8_t * dst_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_dst)    + ith * L->dst_bytes_per_hvx;
+    float   * R_buf      = VTCM_LAYOUT_PTR(float,   vtcm_base, L->off_r)      + ith * (L->r_bytes_per_hvx / sizeof(float));
+    float   * gather_tmp = VTCM_LAYOUT_PTR(float,   vtcm_base, L->off_gather) + ith * (L->gather_bytes_per_hvx / sizeof(float));
     const void * lut_y   = ctx->lut_y;
 
     float * srcb2[2] = { (float *) src_spad, (float *) (src_spad + src_spad_half) };
@@ -866,12 +866,12 @@ int op_upscale(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = MIN(p->n_threads, chunk_count);
-    if (!htp_ops_context_set_n_threads(octx, n_threads)) {
+    const uint32_t n_hvx = MIN(p->n_hvx, chunk_count);
+    if (!htp_ops_context_set_n_hvx(octx, n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t chunks_per_thread = fastdiv(chunk_count + n_threads - 1, &octx->n_threads_div);
+    const uint32_t chunks_per_hvx = fastdiv(chunk_count + n_hvx - 1, &octx->n_hvx_div);
 
     size_t lut_x_size = 0;
     size_t elem_y_sz  = sizeof(uint32_t);
@@ -946,13 +946,13 @@ int op_upscale(struct htp_ops_context * octx) {
         .lut_y              = lut_y,
         .chunk_start        = chunk_start,
         .chunk_count        = chunk_count,
-        .chunks_per_thread  = chunks_per_thread,
+        .chunks_per_hvx     = chunks_per_hvx,
     };
 
     htp_upscale_vtcm_layout_build(&ctx.layout, src_x, src_y, dst_x, dst_y,
-                                  p->dst_nrows_per_chunk, p->inv_sf1, p->filter_radius1, n_threads);
+                                  p->dst_nrows_per_chunk, p->inv_sf1, p->filter_radius1, n_hvx);
 
-    work_queue_run(octx->ctx->work_queue, upscale_worker, &ctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, upscale_worker, &ctx, n_hvx);
 
     return HTP_STATUS_OK;
 }
