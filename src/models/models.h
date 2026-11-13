@@ -1469,12 +1469,6 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
         std::map<std::pair<int32_t, int32_t>, ggml_tensor *> gather_k_of;
         std::map<int32_t, ggml_tensor *> gather_sel_of;
         std::map<int32_t, ggml_tensor *> gather_mask_of;
-
-        // the rows of the attention masks of each token chunk (see build_attention41)
-        // the views are made once per graph: each view of a host input is a separate upload
-        std::vector<ggml_tensor *> chunks_raw_mask;
-        std::vector<ggml_tensor *> chunks_csa_mask;
-        std::vector<ggml_tensor *> chunks_hca_mask;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -3058,35 +3052,18 @@ struct llama_model_glm5_next : public llama_model_base {
                                        int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
                                        int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs);
 
-        // the indexer state that the selection of every token chunk reads
-        struct kpool_idx {
-            ggml_tensor * cur    = nullptr; // [n_embd, n_tokens]                         the layer input
-            ggml_tensor * iq     = nullptr; // [n_embd_indexer, n_indexer_head, n_tokens] the indexer queries
-            ggml_tensor * pooled = nullptr; // [n_embd_indexer, 1, n_pool]                the pooled keys
-        };
+        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
+                                         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
 
-        kpool_idx build_kpool_idx(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
-                                  const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
-
-        // the pools that the tokens of a chunk picked
-        struct kpool_picks {
-            ggml_tensor * top_k = nullptr; // I32 [n_top_pool, n_tokens]
-            ggml_tensor * score = nullptr; // F32 [n_pool, n_tokens] -inf for a pool that a token cannot see, nullptr if top_k has no dead picks to skip by score
-        };
-
-        kpool_picks   build_kpool_picks(const llama_layer & layer, llm_graph_input_kpool * inp_kpool, const kpool_idx & idx, size_t ic, int il);
-        ggml_tensor * build_kpool_picks_shared(const kpool_picks & picks);
-        ggml_tensor * build_kpool_mask(llm_graph_input_kpool * inp_kpool, const kpool_picks & picks, size_t ic, int il);
-
-        // attention output (cur) and the picks of each token chunk, for the next shared layer (picks)
+        // attention output (cur) and the selection to carry to the next shared layer (sel)
         struct dsa_out {
             ggml_tensor * cur;
-            std::vector<ggml_tensor *> picks;
+            ggml_tensor * sel;
         };
 
         dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                 const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
-                                llm_graph_input_kpool * inp_kpool, const std::vector<ggml_tensor *> & prev_picks, int il);
+                                llm_graph_input_kpool * inp_kpool, ggml_tensor * prev_sel, int il);
 
     };
 
