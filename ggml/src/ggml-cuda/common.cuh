@@ -517,26 +517,43 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
+template<typename T, int width>
+static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
+#if defined(GGML_USE_HIP)
+    if constexpr ((width == 32 || width == 64) && width <= ggml_cuda_get_physical_warp_size()) {
+        x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_1032>(x);
+        x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_2301>(x);
+        x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_4>(x);
+        x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
+        if constexpr (width == 64) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_15>(x);
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_31>(x);
+            return ggml_cuda_shfl(x, 63, 64);
+        }
+        return x + ggml_cuda_shfl_xor(x, 16, 32);
+    } else
+#endif // defined(GGML_USE_HIP)
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x += ggml_cuda_shfl_xor(x, offset, width);
+        }
+        return x;
+    }
+}
+
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(GGML_CUDA_FULL_THREAD_MASK, x);
 #else
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += ggml_cuda_shfl_xor(x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<int, width>(x);
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 }
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += ggml_cuda_shfl_xor(x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<float, width>(x);
 }
 
 template<int width = WARP_SIZE>
