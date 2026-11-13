@@ -78,14 +78,11 @@ struct htp_ssm_scan_vtcm_layout {
 
 static inline void htp_ssm_scan_vtcm_layout_build(
     struct htp_ssm_scan_vtcm_layout * layout,
-    uint8_t kernel_type,
     uint32_t d_state,
     uint32_t row_tile,
     uint32_t token_tile,
-    uint32_t K,
     uint32_t n_hvx
 ) {
-    const bool   decode            = kernel_type == HTP_SSM_SCAN_KERNEL_DECODE;
     const size_t state_row_stride  = hex_align_up((size_t) d_state * sizeof(float), 128);
     const size_t state_slot_bytes  = (size_t) row_tile * state_row_stride;
     const size_t bc_slot_bytes     = (size_t) token_tile * state_row_stride;
@@ -95,34 +92,15 @@ static inline void htp_ssm_scan_vtcm_layout_build(
     const size_t a_slot_bytes      = state_row_stride;
 
     size_t off = 0;
-    if (decode) {
-        for (uint32_t i = 0; i < 2; ++i) {
-            layout->off_state[i]     = off; off += state_slot_bytes;
-            layout->off_state_out[i] = off; off += state_slot_bytes;
-            layout->off_B[i]         = off; off += bc_slot_bytes;
-            layout->off_C[i]         = off; off += bc_slot_bytes;
-            layout->off_x[i]         = off; off += xy_slot_bytes;
-            layout->off_dt[i]        = off; off += scalar_slot_bytes;
-            layout->off_A[i]         = off; off += a_slot_bytes;
-            layout->off_y[i]         = off; off += xy_slot_bytes;
-        }
-    } else {
-        layout->off_state[0] = off; off += state_slot_bytes;
-        layout->off_state[1] = layout->off_state[0];
-        layout->off_A[0]     = off; off += a_slot_bytes;
-        layout->off_A[1]     = layout->off_A[0];
-        for (uint32_t i = 0; i < 2; ++i) {
-            if (K > 1) {
-                layout->off_state_out[i] = off; off += state_slot_bytes;
-            } else {
-                layout->off_state_out[i] = layout->off_state[0];
-            }
-            layout->off_B[i]  = off; off += bc_slot_bytes;
-            layout->off_C[i]  = off; off += bc_slot_bytes;
-            layout->off_x[i]  = off; off += xy_slot_bytes;
-            layout->off_dt[i] = off; off += scalar_slot_bytes;
-            layout->off_y[i]  = off; off += xy_slot_bytes;
-        }
+    for (uint32_t i = 0; i < 2; ++i) {
+        layout->off_state[i]     = off; off += state_slot_bytes;
+        layout->off_state_out[i] = off; off += state_slot_bytes;
+        layout->off_B[i]         = off; off += bc_slot_bytes;
+        layout->off_C[i]         = off; off += bc_slot_bytes;
+        layout->off_x[i]         = off; off += xy_slot_bytes;
+        layout->off_dt[i]        = off; off += scalar_slot_bytes;
+        layout->off_A[i]         = off; off += a_slot_bytes;
+        layout->off_y[i]         = off; off += xy_slot_bytes;
     }
 
     layout->state_row_stride = state_row_stride;

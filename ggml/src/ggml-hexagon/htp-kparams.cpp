@@ -2317,7 +2317,7 @@ static bool htp_kparams_solve_ssm_scan(
         kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
         kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
 
-        htp_ssm_scan_vtcm_layout_build(&layout, kernel_type, d_state, kparams->row_tile, kparams->token_tile, K, kparams->n_hvx);
+        htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, kparams->n_hvx);
         if (layout.total_bytes <= vtcm_size) {
             break;
         }
