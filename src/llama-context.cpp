@@ -2909,6 +2909,7 @@ uint32_t llama_context::graph_max_nodes() const {
         model.arch == LLM_ARCH_HRM_TEXT) {
         res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_INKLING2 ||
+        model.hparams.dspark_markov_rank > 0 ||
         model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
         model.arch == LLM_ARCH_METIS16 ||
