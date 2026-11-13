@@ -1140,6 +1140,10 @@ protected:
         llama_set_causal_attn(ctx_dft, causal_attn); // DFlash needs non-causal attention unless the model says otherwise
     }
 
+    // only LiliCorr uses this, to keep the context features for its scorer; the other heads only need the KV cache
+    // called after the host copy injection of a chunk, while h_nextn still holds the context features of batch_inject
+    virtual void store_context_features(llama_seq_id /*seq_id*/, int32_t /*n_chunk*/) {}
+
 public:
     ~common_speculative_impl_draft_dflash() override {
         auto * ctx_dft = this->params.ctx_dft;
@@ -1271,6 +1275,7 @@ public:
                             __func__, rc, (int) n_chunk, (int) offset);
                     return false;
                 }
+                store_context_features(seq_id, n_chunk);
             }
         }
 
@@ -1282,7 +1287,7 @@ public:
 
         batch.clear();
 
-        // build one batch holding every drafting sequence's noise block into a single decode)
+        // build one batch holding every drafting sequence's noise block into a single decode
         // record where each block starts and its size
         std::vector<int32_t> i_block_beg(n_seq, -1);
         std::vector<int32_t> n_block    (n_seq,  0);
@@ -1407,7 +1412,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
 
         batch.clear();
 
-        // build one batch holding every drafting sequence's noise block into a single decode)
+        // build one batch holding every drafting sequence's noise block into a single decode
         // record where each block starts and its size
         std::vector<int32_t> i_block_beg(n_seq, -1);
         std::vector<int32_t> n_block    (n_seq,  0);
@@ -1528,7 +1533,7 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
 
         batch.clear();
 
-        // build one batch holding every drafting sequence's noise block into a single decode)
+        // build one batch holding every drafting sequence's noise block into a single decode
         // record where each block starts and its size
         std::vector<int32_t> i_block_beg(n_seq, -1);
         std::vector<int32_t> n_block    (n_seq,  0);
@@ -1682,114 +1687,33 @@ struct common_speculative_impl_draft_lilicorr final : public common_speculative_
         });
     }
 
-    // host copy injection only; the context features of a chunk are stored before the next decode overwrites h_nextn
-    bool process(const common_batch & batch_in) override {
-        if (batch_in.size() <= 0) {
-            return true;
-        }
-
-        // Target prefill may contain token IDs or multimodal embeddings. Both
-        // produce the target-layer features used to seed the draft KV cache, so
-        // embeddings are injected too, except the pinned ones skipped below.
-        // TODO: revisit after https://github.com/ggml-org/llama.cpp/pull/24669 is merged
-        const bool has_tokens     = batch_in.has_token();
-        const bool has_embeddings = batch_in.has_embd();
-        if (has_tokens == has_embeddings) {
-            return true;
-        }
-
-        const int32_t n_tokens = batch_in.size();
-
-        // per-seq inclusive batch range (assumes each seq's tokens are contiguous in the batch)
-        std::vector<int32_t> i_batch_beg(n_seq, -1);
-        std::vector<int32_t> i_batch_end(n_seq, -1);
-        for (int32_t k = 0; k < n_tokens; ++k) {
-            const llama_seq_id seq_id = batch_in.tokens[k].seq_id;
-            if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
-                continue;
-            }
-            i_batch_end[seq_id] = k;
-            if (i_batch_beg[seq_id] < 0) {
-                i_batch_beg[seq_id] = k;
+protected:
+    void store_context_features(llama_seq_id seq_id, int32_t n_chunk) override {
+        // Ordinary DFlash can write to the KV cache, but LiliCorr needs to store embeddings across sequences.
+        const float * projected = llama_get_embeddings_nextn(params.ctx_dft);
+        if (projected) {
+            const size_t seq_offset = (size_t) seq_id * lilicorr_rows;
+            const llama_pos pos_min = std::max(0, batch_inject.tokens.back().pos[0] - block_size);
+            for (int32_t i = 0; i < n_chunk; ++i) {
+                const llama_pos pos = batch_inject.tokens[i].pos[0];
+                if (pos < pos_min) {
+                    continue;
+                }
+                const size_t slot = seq_offset + (size_t) pos % lilicorr_rows;
+                std::memcpy(lilicorr_embd.data() + slot * (size_t) n_embd_dec,
+                        projected + (size_t) i * n_embd_dec, (size_t) n_embd_dec * sizeof(float));
+                lilicorr_pos[slot] = pos;
             }
         }
-
-        auto * ctx_tgt = this->params.ctx_tgt;
-        auto * ctx_dft = this->params.ctx_dft;
-
-        const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
-
-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            if (i_batch_beg[seq_id] < 0) {
-                continue;
-            }
-            const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
-
-            // an M-RoPE image pins all its rows to one position, so a windowed draft
-            // cache cannot free cells for it - skip it, the draft can jump over the gap
-            const bool pos_pinned = batch_in.tokens[i_batch_beg[seq_id]].pos[0] == batch_in.tokens[i_batch_end[seq_id]].pos[0];
-            if (has_embeddings && n_rows > 1 && pos_pinned) {
-                continue;
-            }
-
-            for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
-                const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
-
-                // gather target features per extract layer; the fused decode encodes and
-                // injects them into the K/V cache at the target positions
-                features_buf.resize((size_t) n_chunk * n_embd_enc);
-                for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
-                    if (!layer) {
-                        GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
-                    }
-                    for (int32_t i = 0; i < n_chunk; ++i) {
-                        float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
-                        const float * src = layer + (size_t) (i_batch_beg[seq_id] + offset + i) * n_embd_tgt;
-                        std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
-                    }
-                }
-
-                batch_inject.clear();
-                for (int32_t i = 0; i < n_chunk; ++i) {
-                    const llama_pos p = batch_in.tokens[i_batch_beg[seq_id] + offset + i].pos[0];
-                    const llama_pos pos_arr[4] = { p, p, p, 0 };
-                    batch_inject.add_embd({ features_buf.data() + (size_t) i * n_embd_enc, 1, (size_t) n_embd_enc }, pos_arr, seq_id, false);
-                }
-                const int32_t rc = llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch_inject.get());
-                if (rc != 0) {
-                    LOG_ERR("%s: llama_process(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                            __func__, rc, (int) n_chunk, (int) offset);
-                    return false;
-                }
-                // Ordinary DFlash can write to the KV cache, but LiliCorr needs to store embeddings across sequences.
-                const float * projected = llama_get_embeddings_nextn(ctx_dft);
-                if (projected) {
-                    const size_t seq_offset = (size_t) seq_id * lilicorr_rows;
-                    const llama_pos pos_min = std::max(0, batch_inject.tokens.back().pos[0] - block_size);
-                    for (int32_t i = 0; i < n_chunk; ++i) {
-                        const llama_pos pos = batch_inject.tokens[i].pos[0];
-                        if (pos < pos_min) {
-                            continue;
-                        }
-                        const size_t slot = seq_offset + (size_t) pos % lilicorr_rows;
-                        std::memcpy(lilicorr_embd.data() + slot * (size_t) n_embd_dec,
-                                projected + (size_t) i * n_embd_dec, (size_t) n_embd_dec * sizeof(float));
-                        lilicorr_pos[slot] = pos;
-                    }
-                }
-            }
-        }
-
-        return true;
     }
 
+public:
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
         batch.clear();
 
-        // build one batch holding every drafting sequence's noise block into a single decode)
+        // build one batch holding every drafting sequence's noise block into a single decode
         // record where each block starts, all blocks have the same size
         std::vector<int32_t> i_block_beg(n_seq, -1);
 
@@ -2949,15 +2873,8 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
         return {};
     }
 
-    // the head on the block picks the type: the selector, the scorer, the Markov head or none
-    auto type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
-    if (gguf_find_tensor(gguf_ctx.get(), "selector_hidden.weight") >= 0) {
-        type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2;
-    } else if (gguf_find_key(gguf_ctx.get(), "lilicorr.candidate_topk") >= 0) {
-        type = COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR;
-    } else if (gguf_find_tensor(gguf_ctx.get(), "markov_w1.weight") >= 0) {
-        type = COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
-    }
+    // draft-dflash runs every DFlash family draft, the head of the loaded draft picks the driver
+    const auto type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
 
     SPC_INF("auto-detected speculative type '%s' from the draft model metadata\n", common_speculative_type_to_str(type).c_str());
 
@@ -3330,23 +3247,20 @@ common_speculative * common_speculative_init(common_params_speculative & params,
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2:
             case COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR: {
-                const llama_model * model_dft = llama_get_model(config.params.draft.ctx_dft);
-
-                char buf[32] = {};
-                if (llama_model_meta_val_str(model_dft, "general.architecture", buf, sizeof(buf)) < 0 || std::strcmp(buf, "dflash") != 0) {
+                common_speculative_type type_model = COMMON_SPECULATIVE_TYPE_NONE;
+                switch (llama_model_dflash_variant(llama_get_model(config.params.draft.ctx_dft))) {
+                    case LLAMA_DFLASH_VARIANT_DFLASH:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;   break;
+                    case LLAMA_DFLASH_VARIANT_DFLASH2:  type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2;  break;
+                    case LLAMA_DFLASH_VARIANT_DSPARK:   type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;   break;
+                    case LLAMA_DFLASH_VARIANT_LILICORR: type_model = COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR; break;
+                    case LLAMA_DFLASH_VARIANT_NONE:     break;
+                }
+                if (type_model == COMMON_SPECULATIVE_TYPE_NONE) {
                     throw std::runtime_error(string_format("--spec-type %s requires a DFlash draft model",
                             common_speculative_type_to_str(config.type).c_str()));
                 }
 
-                // DFlash2 and LiliCorr drafts are known from their metadata, DSpark drafts only from draft-dspark
-                common_speculative_type type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
-                if (llama_model_dflash_selector_top_k(model_dft) > 0) {
-                    type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2;
-                } else if (llama_model_meta_val_str(model_dft, "lilicorr.candidate_topk", buf, sizeof(buf)) >= 0 && std::atoi(buf) > 0) {
-                    type_model = COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR;
-                } else if (config.type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) {
-                    type_model = COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
-                }
+                // draft-dflash runs every DFlash family draft, the other types must match the head of the draft
                 if (config.type != COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH && config.type != type_model) {
                     throw std::runtime_error(string_format("--spec-type %s does not match the draft model: use %s",
                             common_speculative_type_to_str(config.type).c_str(), common_speculative_type_to_str(type_model).c_str()));
@@ -3418,8 +3332,8 @@ common_speculative * common_speculative_init(common_params_speculative & params,
     }
 
     // the n-gram drafters ignore p_min, and DSpark uses it as the cutoff of its confidence head
-    const bool uses_p_min = std::any_of(configs.begin(), configs.end(), [](const common_speculative_config & c) {
-        switch (c.type) {
+    const bool uses_p_min = std::any_of(impls.begin(), impls.end(), [](const auto & impl) {
+        switch (impl->type) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
             case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:

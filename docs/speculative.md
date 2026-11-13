@@ -74,10 +74,9 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
-DFlash2, DSpark and LiliCorr drafts are DFlash drafts with a head on the block. `draft-dflash` also
-runs DFlash2 and LiliCorr drafts, recognized from their metadata; DSpark drafts run as DSpark only with
-`draft-dspark`. `draft-dflash2` and `draft-lilicorr` must match the draft model, and `draft-dspark`
-rejects DFlash2 and LiliCorr drafts; on a mismatch, speculative decoding is not initialized.
+DFlash2, DSpark and LiliCorr drafts are DFlash backbones with a head on the block, and the head is read from the draft model.
+`draft-dflash` runs each of them with the driver of its head.
+The other spec types must match the head of the draft model: `draft-dspark` needs the Markov head, `draft-dflash2` the candidate selector and `draft-lilicorr` the candidate scorer. On a mismatch, speculative decoding is not initialized.
 Without `--spec-type`, the type is detected from the draft model.
 
 See:
@@ -417,7 +416,7 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
 | `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
-| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step (also DFlash2 and LiliCorr drafts, resolved from the model) |
+| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step (also DFlash2, DSpark and LiliCorr drafts, resolved from the model) |
 | `draft-dflash2` | Use a DFlash2 draft model (DFlash + local convolution + candidate selector) |
 | `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
 | `draft-lilicorr` | Use a LiliCorr draft model (DFlash + candidate scorer conditioned on the target's hidden state) |
