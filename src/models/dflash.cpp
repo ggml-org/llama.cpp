@@ -52,6 +52,13 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
 
+    ml.get_key(LLM_KV_DSPARK_MARKOV_RANK, hparams.dspark_markov_rank, false);
+    if (hparams.dspark_markov_rank) {
+        if (target_layer_ids.size() > LLAMA_MAX_LAYERS + 1 ||
+                target_layer_ids.size() * (uint64_t) hparams.n_embd > UINT32_MAX) {
+            throw std::runtime_error("invalid DFlash target feature dimensions");
+        }
+    }
     hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
 
     std::string layers;
@@ -64,7 +71,10 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: DFlash extract_layers = [%s]\n", __func__, layers.c_str());
 
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT, hparams.dsv4_hc_mult, false);
-    if (hparams.dsv4_hc_mult > 0) {
+    if (hparams.dspark_markov_rank > 0) {
+        load_hparams_inkling2(ml);
+        backbone = BACKBONE_INKLING2;
+    } else if (hparams.dsv4_hc_mult > 0) {
         load_hparams_dsv4(ml);
         backbone = hparams.dsv4_hc_single_pass ? BACKBONE_DSV41 : BACKBONE_DSV4;
     } else if (ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK, hparams.n_lora_kv, false)) {
@@ -86,6 +96,12 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
 void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
+
+    // Inkling2 DSpark shares the target's embeddings and lm head and has no fc encoder
+    if (backbone == BACKBONE_INKLING2) {
+        load_tensors_inkling2();
+        return;
+    }
 
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
 
@@ -122,6 +138,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         case BACKBONE_DSV4:
         case BACKBONE_DSV41:          load_tensors_layers_dsv4();           break;
         case BACKBONE_MISTRAL_LARGE4: load_tensors_layers_mistral_large4(); break;
+        case BACKBONE_INKLING2:                                             break; // loaded above
     }
 }
 
@@ -204,7 +221,7 @@ llama_model_dflash::graph<true>::graph(const llm_graph_params & params) : llm_gr
 }
 
 // target features of an injection batch: host embd rows, or rows of the target's layer input device buffer
-static ggml_tensor * build_inp_target_features(llm_graph_context & g, llm_graph_input_embd & inp, int64_t n_embd_inp) {
+ggml_tensor * llama_model_dflash::build_inp_target_features(llm_graph_context & g, llm_graph_input_embd & inp, int64_t n_embd_inp) {
     if (g.ubatch.embd_row) {
         GGML_ASSERT(g.layer_inp_src != nullptr && g.layer_inp_src->ne[0] == n_embd_inp);
 
@@ -540,6 +557,7 @@ std::unique_ptr<llm_graph_context> llama_model_dflash::build_arch_graph(const ll
                 case BACKBONE_DSV4:           return std::make_unique<graph_dsv4>(params);
                 case BACKBONE_DSV41:          return std::make_unique<graph_dsv41>(params);
                 case BACKBONE_MISTRAL_LARGE4: return std::make_unique<graph_mistral_large4>(params);
+                case BACKBONE_INKLING2:       return std::make_unique<graph_inkling2>(params);
             }
             switch (variant) {
                 case VARIANT_DFLASH:   return std::make_unique<graph_dflash>(params);
