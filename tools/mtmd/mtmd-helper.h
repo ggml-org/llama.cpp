@@ -23,11 +23,40 @@ extern "C" {
 struct mtmd_helper_video;
 typedef struct mtmd_helper_video mtmd_helper_video;
 
+struct mtmd_helper_video_stream_info {
+    uint32_t width;    // as displayed (rotation applied)
+    uint32_t height;
+    float    fps;
+    int32_t  n_frames; // -1 if unknown
+    float    duration; // in seconds, -1 if unknown
+};
+
+// Video decoder: the built-in one runs ffmpeg/ffprobe (MTMD_VIDEO), an application can provide its own.
+// Call order: open, start, read_audio, read_frame..., close
+struct mtmd_helper_video_decoder {
+    // path and/or buf is set; buf is only valid during the call
+    // returns the decoder state, NULL on failure
+    void * (*open)(void * user_data, const char * path, const unsigned char * buf, size_t len,
+                   struct mtmd_helper_video_stream_info * info);
+    // next frame in presentation order, as RGB24 scaled to width x height (same on every call)
+    // rgb == NULL skips the frame; returns false at the end of the stream or on error
+    bool (*read_frame)(void * state, unsigned char * rgb, uint32_t width, uint32_t height);
+    // optional: the soundtrack as mono F32 PCM at sample_rate, starting at the first video frame
+    // the samples are valid until the next call to the decoder; NULL if there is no soundtrack
+    const float * (*read_audio)(void * state, int sample_rate, size_t * n_samples);
+    void (*close)(void * state);
+    void * user_data;
+    // optional: called once with the size read_frame() will ask for
+    // if fps > 0, a decoder that resamples to fps itself sets *fps_picked; otherwise the helper picks frames by index
+    bool (*start)(void * state, uint32_t width, uint32_t height, float fps, bool * fps_picked);
+};
+
 struct mtmd_helper_video_init_params {
     float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
     const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
     int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
     bool no_soundtrack;          // frames only, also for models that hear the soundtrack of a video (LFM3-Omni)
+    const struct mtmd_helper_video_decoder * decoder; // NULL means ffmpeg (requires MTMD_VIDEO)
     // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
 };
 
@@ -155,7 +184,7 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 void * user_data);
 
 //
-// video input helpers (requires ffmpeg/ffprobe installed on the system)
+// video input helpers (requires ffmpeg/ffprobe installed on the system, or a mtmd_helper_video_decoder)
 // the notion of video only exists at the helper level, it is not visible to the core mtmd library
 //
 // NOTE: this implementation is model-agnostic, it can be used with any vision-capable model
@@ -172,16 +201,14 @@ struct mtmd_helper_video_info {
 
 // note: mtmd_helper_video_init_params is defined at the top, as it is part of mtmd_helper_init_opt
 
-// returns NULL on failure (ffprobe not found, file unreadable, etc.)
+// returns NULL on failure (no decoder, ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(
                     const struct mtmd_context * mctx,
                     const char * path,
                     struct mtmd_helper_video_init_params params);
 
 // Same as mtmd_helper_video_init(), but reads from an in-memory buffer.
-// The buffer is copied internally; the caller does not need to keep it alive.
-// Note: pipe input is not seekable, so seeking will use output-side seeking
-// (ffmpeg decodes and discards frames up to the target position).
+// The caller does not need to keep the buffer alive.
 MTMD_API mtmd_helper_video * mtmd_helper_video_init_from_buf(
                     const struct mtmd_context * mctx,
                     const unsigned char * buf, size_t len,
@@ -482,8 +509,14 @@ struct mtmd_helper_video_seq {
     virtual ~mtmd_helper_video_seq();
 
     virtual bool read_raw_frame() = 0;
+    virtual bool skip_raw_frame() { return read_raw_frame(); }
 
     void configure(const mtmd_video_config & cfg, const mtmd_helper_video_src & src, float fps_target_arg);
+
+    // pick the frames of fps_target by index, for a source that yields every frame
+    void sample_by_index(const mtmd_helper_video_src & src);
+    // pcm: mono, starting at the first video frame
+    void set_soundtrack(const float * pcm, size_t n, int rate);
 
     int32_t ts_per_n_frames() const;
 
