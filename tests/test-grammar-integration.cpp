@@ -1544,87 +1544,57 @@ static void test_json_schema_any_order() {
         });
 
     test_schema(
-        "10 properties: each at most once, the last 2 in declared order among themselves",
-        R"""({
-            "type": "object",
-            "properties": {
-                "sku": {"type": "string"}, "title": {"type": "string"}, "price": {"type": "number"}, "brand": {"type": "string"},
-                "color": {"type": "string"}, "weight_kg": {"type": "number"}, "in_stock": {"type": "boolean"},
-                "tags": {"type": "array", "items": {"type": "string"}}, "rating": {"type": "number"}, "warranty_years": {"type": "integer"}
-            },
-            "required": ["sku", "title", "price"],
-            "additionalProperties": false
-        })""",
-        {
-            R"""({"brand": "b", "sku": "s", "rating": 4.9, "title": "t", "warranty_years": 2, "tags": [], "price": 1})""",
-            R"""({"rating": 4.9, "warranty_years": 2, "tags": [], "in_stock": true, "weight_kg": 1, "color": "c", "brand": "b", "price": 1, "title": "t", "sku": "s"})""",
-        },
-        {
-            R"""({"sku": "s", "title": "t", "price": 1, "tags": [], "in_stock": true, "tags": []})""",
-            R"""({"sku": "s", "title": "t", "price": 1, "rating": 4.9, "rating": 4.9})""",
-            R"""({"sku": "s", "title": "t", "price": 1, "warranty_years": 2, "rating": 4.9})""",
-            R"""({"sku": "s", "title": "t"})""",
-        });
-
-    test_schema(
-        "more than 8 required properties keep the declared order",
-        R"""({
-            "type": "object",
-            "properties": {"a": {}, "b": {}, "c": {}, "d": {}, "e": {}, "f": {}, "g": {}, "h": {}, "i": {}, "j": {}},
-            "required": ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
-            "additionalProperties": false
-        })""",
-        {
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
-            R"""({"j": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
-        },
-        {
-            R"""({"b": 1, "a": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1})""",
-            R"""({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1})""",
-            R"""({"j": 1, "a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1, "g": 1, "h": 1, "i": 1, "j": 1})""",
-        });
-
-    test_schema(
         "property names that clash with generated rule names",
         R"""({
             "type": "object",
             "properties": {
                 "rest-0": {"type": "object", "properties": {"x": {"type": "integer"}}, "required": ["x"]},
                 "rest-1": {"type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]},
-                "untracked-kv": {"type": "object", "properties": {"z": {"type": "boolean"}}, "required": ["z"]}
+                "rest-2": {"type": "object", "properties": {"z": {"type": "boolean"}}, "required": ["z"]}
             },
             "required": ["rest-1"]
         })""",
         {
-            R"""({"untracked-kv": {"z": true}, "rest-1": {"y": "s"}, "rest-0": {"x": 1}})""",
+            R"""({"rest-2": {"z": true}, "rest-1": {"y": "s"}, "rest-0": {"x": 1}})""",
         },
         {
             R"""({"rest-0": {"x": 1}})""",
             R"""({"rest-1": {"x": 1}})""",
-            R"""({"rest-1": {"y": "s"}, "untracked-kv": {"y": "s"}})""",
+            R"""({"rest-1": {"y": "s"}, "rest-2": {"y": "s"}})""",
             R"""({"rest-1": {"y": "s"}, "rest-1": {"y": "t"}})""",
         });
 }
 
 static void test_json_schema_any_order_many_keys() {
-    auto closed_object = [](int n_keys, bool required) {
+    auto closed_object = [](int n_required, int n_optional) {
         json props = json::object();
         json req = json::array();
-        for (int i = 0; i < n_keys; i++) {
+        for (int i = 0; i < n_required + n_optional; i++) {
             props["k" + std::to_string(i)] = {{"type", "integer"}};
-            req.push_back("k" + std::to_string(i));
+            if (i < n_required) {
+                req.push_back("k" + std::to_string(i));
+            }
         }
-        json schema = {{"type", "object"}, {"properties", props}, {"additionalProperties", false}};
-        if (required) {
-            schema["required"] = req;
-        }
-        return schema;
+        return json{{"type", "object"}, {"properties", props}, {"required", req}, {"additionalProperties", false}};
     };
-    fprintf(stdout, "Testing any-order objects with many keys\n");
-    assert(!json_schema_to_grammar(closed_object(1000, true), true).empty());
-    const size_t size_50 = json_schema_to_grammar(closed_object(50, false), true).size();
-    const size_t size_100 = json_schema_to_grammar(closed_object(100, false), true).size();
-    assert(size_100 < 3 * size_50);
+    auto first_two_swapped = [](int n_keys) {
+        std::string s = R"""({"k1": 1, "k0": 1)""";
+        for (int i = 2; i < n_keys; i++) {
+            s += ", \"k" + std::to_string(i) + "\": 1";
+        }
+        return s + "}";
+    };
+
+    test("8 keys in any order", json_schema_to_grammar(closed_object(0, 8), true), {first_two_swapped(8)}, {});
+    test("9 keys in declared order", json_schema_to_grammar(closed_object(0, 9), true), {}, {first_two_swapped(9)});
+
+    fprintf(stdout, "Testing grammar size of wide closed objects\n");
+    assert(json_schema_to_grammar(closed_object(0, 300), true).size() < 1024 * 1024);
+    const std::string grammar_str = json_schema_to_grammar(closed_object(1000, 250), true);
+    assert(grammar_str.size() < 1024 * 1024);
+    llama_grammar * grammar = build_grammar(grammar_str);
+    assert(grammar != nullptr);
+    llama_grammar_free_impl(grammar);
 }
 
 int main() {

@@ -352,7 +352,7 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
     return 2 + n_hex;
 }
 
-static constexpr size_t ANY_ORDER_MAX_TRACKED_KEYS = 8;
+static constexpr size_t ANY_ORDER_MAX_KEYS = 8;
 
 class common_chat_schema_converter {
 private:
@@ -391,17 +391,6 @@ private:
         }
         std::string key = esc_name + std::to_string(i);
         _rules[key] = rule;
-        return key;
-    }
-
-    // for rules that refer to themselves: pick a free name now, set the body later
-    std::string _reserve_rule_name(const std::string & name) {
-        std::string esc_name = gbnf_format_rule_name(name);
-        std::string key = esc_name;
-        for (int i = 0; _rules.find(key) != _rules.end(); i++) {
-            key = esc_name + std::to_string(i);
-        }
-        _rules[key] = "";
         return key;
     }
 
@@ -780,7 +769,7 @@ private:
             return "\"{\" space \"}\"";
         }
 
-        if (!additional_properties) {
+        if (!additional_properties && required_props.size() + optional_props.size() <= ANY_ORDER_MAX_KEYS) {
             return _build_any_order_object_rule(required_props, optional_props, prop_kv_rule_names, name);
         }
 
@@ -837,104 +826,44 @@ private:
         return rule;
     }
 
-
-    // keys in any order: the first ANY_ORDER_MAX_TRACKED_KEYS are seen at most once (one state per subset);
-    // the rest are also seen at most once but keep their declared order among themselves (one state per position)
+    // keys in any order, each at most once: one rule per set of keys already seen
     std::string _build_any_order_object_rule(
         const std::vector<std::string> & required_props,
         const std::vector<std::string> & optional_props,
-        std::unordered_map<std::string, std::string> & prop_kv_rule_names,
+        const std::unordered_map<std::string, std::string> & prop_kv_rule_names,
         const std::string & name)
     {
         const std::string prefix = name + (name.empty() ? "" : "-");
         std::vector<std::string> keys = required_props;
         keys.insert(keys.end(), optional_props.begin(), optional_props.end());
-        const size_t n_required = required_props.size();
-        const size_t n_keys = keys.size();
-        // too many required keys to track as a set: they keep the declared order
-        const bool ordered_required = n_required > ANY_ORDER_MAX_TRACKED_KEYS;
-        const size_t n_tracked = ordered_required ? n_required : std::min(n_keys, ANY_ORDER_MAX_TRACKED_KEYS);
-        const size_t n_untracked = n_keys - n_tracked;
+        const size_t all_seen = (size_t(1) << keys.size()) - 1;
+        const size_t required_mask = (size_t(1) << required_props.size()) - 1;
 
-        const size_t required_mask = ordered_required ? 0 : (size_t(1) << n_required) - 1;
-        auto all_required = [&](size_t seen) {
-            return ordered_required ? seen == n_required : (seen & required_mask) == required_mask;
-        };
-        auto all_tracked = [&](size_t seen) {
-            return ordered_required ? seen == n_required : seen == (size_t(1) << n_tracked) - 1;
+        std::vector<std::string> rest_names(all_seen + 1);
+        auto next_kvs = [&](size_t seen) {
+            std::vector<std::string> alts;
+            for (size_t i = 0; i < keys.size(); i++) {
+                const size_t seen_after = seen | (size_t(1) << i);
+                if (seen_after != seen) {
+                    const std::string & rest = rest_names[seen_after];
+                    alts.push_back(prop_kv_rule_names.at(keys[i]) + (rest.empty() ? "" : " " + rest));
+                }
+            }
+            return alts;
         };
         auto group = [](const std::vector<std::string> & alts) {
             return alts.size() == 1 ? alts[0] : "( " + string_join(alts, " | ") + " )";
         };
 
-        // states are (tracked keys seen, next untracked key); every name is reserved first, so the bodies need no recursion
-        const size_t n_seen = ordered_required ? n_required + 1 : size_t(1) << n_tracked;
-        std::vector<std::string> rest_names(n_seen * (n_untracked + 1));
-        auto rest = [&](size_t seen, size_t next_untracked) -> const std::string & {
-            return rest_names[seen * (n_untracked + 1) + next_untracked];
-        };
-        for (size_t seen = 0; seen < n_seen; seen++) {
-            for (size_t p = 0; p <= n_untracked; p++) {
-                // the first key is inlined in the object rule, so (0, 0) has no rule
-                if (!(all_tracked(seen) && p == n_untracked) && !(seen == 0 && p == 0)) {
-                    rest_names[seen * (n_untracked + 1) + p] = _reserve_rule_name(prefix + "rest-" + std::to_string(seen) + (n_untracked == 0 ? "" : "-" + std::to_string(p)));
-                }
-            }
-        }
-        // untracked key j, or skip it for a later one: a chain, so each state lists the untracked keys once
-        std::vector<std::string> chain_names(n_seen * n_untracked);
-        for (size_t seen = 0; seen < n_seen; seen++) {
-            for (size_t j = 0; j < n_untracked; j++) {
-                chain_names[seen * n_untracked + j] = _reserve_rule_name(prefix + "untracked-" + std::to_string(seen) + "-" + std::to_string(j));
-            }
-        }
-        for (size_t seen = 0; seen < n_seen; seen++) {
-            for (size_t j = 0; j < n_untracked; j++) {
-                const std::string & r = rest(seen, j + 1);
-                std::string b = prop_kv_rule_names[keys[n_tracked + j]] + (r.empty() ? "" : " " + r);
-                if (j + 1 < n_untracked) {
-                    b += " | " + chain_names[seen * n_untracked + j + 1];
-                }
-                _rules[chain_names[seen * n_untracked + j]] = b;
-            }
-        }
-        auto next_kvs = [&](size_t seen, size_t next_untracked) {
-            std::vector<std::string> alts;
-            auto add = [&](const std::string & kv, size_t seen_after, size_t next_after) {
-                const std::string & r = rest(seen_after, next_after);
-                alts.push_back(kv + (r.empty() ? "" : " " + r));
-            };
-            if (ordered_required) {
-                if (seen < n_required) {
-                    add(prop_kv_rule_names[keys[seen]], seen + 1, next_untracked);
-                }
-            } else {
-                for (size_t i = 0; i < n_tracked; i++) {
-                    const size_t bit = size_t(1) << i;
-                    if (!(seen & bit)) {
-                        add(prop_kv_rule_names[keys[i]], seen | bit, next_untracked);
-                    }
-                }
-            }
-            if (next_untracked < n_untracked) {
-                alts.push_back(chain_names[seen * n_untracked + next_untracked]);
-            }
-            return alts;
-        };
-        // one "," then the next key, so only one stack waits for the comma
-        for (size_t seen = 0; seen < n_seen; seen++) {
-            for (size_t p = 0; p <= n_untracked; p++) {
-                const std::string & name = rest(seen, p);
-                if (name.empty()) {
-                    continue;
-                }
-                const std::string b = "\",\" space " + group(next_kvs(seen, p));
-                _rules[name] = all_required(seen) ? "( " + b + " )?" : b;
-            }
+        // larger sets first, so every rule refers only to rules already added
+        for (size_t seen = all_seen - 1; seen > 0; seen--) {
+            const std::string body = "\",\" space " + group(next_kvs(seen));
+            const bool done = (seen & required_mask) == required_mask;
+            rest_names[seen] = _add_rule(prefix + "rest-" + std::to_string(seen), done ? "( " + body + " )?" : body);
         }
 
-        const auto firsts = next_kvs(0, 0);
-        return "\"{\" space " + (all_required(0) ? "( " + string_join(firsts, " | ") + " )?" : group(firsts)) + " space \"}\"";
+        const auto firsts = next_kvs(0);
+        return "\"{\" space " + (required_mask == 0 ? "( " + string_join(firsts, " | ") + " )?" : group(firsts)) + " space \"}\"";
     }
 
     std::string _add_primitive(const std::string & name, const BuiltinRule & rule) {
@@ -957,8 +886,7 @@ private:
     }
 
 public:
-    explicit common_chat_schema_converter(const common_grammar_options & options)
-        : _dotall(options.dotall) {
+    explicit common_chat_schema_converter(bool dotall) : _dotall(dotall) {
         _rules["space"] = SPACE_RULE;
     }
 
@@ -1156,14 +1084,14 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
 }
 
 std::string json_schema_to_grammar(const common_chat_schema_document & schema) {
-    common_chat_schema_converter converter(common_grammar_options{});
+    common_chat_schema_converter converter(false);
     converter.visit(*schema.root, "");
     converter.check_errors();
     return converter.format_grammar();
 }
 
 std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options) {
-    common_chat_schema_converter converter(options);
+    common_chat_schema_converter converter(options.dotall);
     common_grammar_builder builder {
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
