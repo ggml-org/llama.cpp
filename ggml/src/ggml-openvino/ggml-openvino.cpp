@@ -1455,6 +1455,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_RMS_NORM: {
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "RMS_NORM with BF16 type is not supported"};
+        }
+        break;
+    }
     case GGML_OP_ADD_ID: {
         // Keep support aligned with the CPU backend implementation, which only handles f32 inputs/output and i32 ids.
         if (op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32 ||

@@ -3019,6 +3019,26 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         return nullptr;
     }
 
+    // the n-gram drafters ignore p_min, and DSpark uses it as the cutoff of its confidence head
+    const bool uses_p_min = std::any_of(configs.begin(), configs.end(), [](const common_speculative_config & c) {
+        switch (c.type) {
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_MOD:
+            case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
+                return false;
+            default:
+                return true;
+        }
+    });
+
+    if (params.draft.probabilistic && params.draft.p_min > 0.0f && uses_p_min) {
+        LOG_WRN("%s: --spec-draft-p-min %.2f stops sampled drafts early, consider setting it to 0 with --spec-draft-sampling probabilistic\n",
+                __func__, (double) params.draft.p_min);
+    }
+
     common_speculative_ptr result(new common_speculative {
         /* .dparams     = */ common_speculative_draft_params_vec(n_seq),
         /* .impls       = */ std::move(impls),
