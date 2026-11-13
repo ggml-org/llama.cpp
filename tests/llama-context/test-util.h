@@ -119,7 +119,7 @@ struct ctx_opts {
     ggml_type type_k = GGML_TYPE_COUNT; // COUNT = from params
     ggml_type type_v = GGML_TYPE_COUNT; // COUNT = from params
 
-    // COUNT leaves the context default (same as type_k / type_v)
+    // COUNT takes the SWA types from common_params
     ggml_type type_k_swa = GGML_TYPE_COUNT;
     ggml_type type_v_swa = GGML_TYPE_COUNT;
 

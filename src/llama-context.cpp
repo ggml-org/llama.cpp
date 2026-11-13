@@ -4518,7 +4518,8 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3;
+    const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3 ||
+        (model->hparams.is_swa_any() && (params.type_k_swa == GGML_TYPE_F8_E4M3 || params.type_v_swa == GGML_TYPE_F8_E4M3));
     // Direct cache consumers do not use the shared attention scaling helpers.
     if (fp8_cache && (model->hparams.is_mla() ||
             model->arch == LLM_ARCH_DEEPSEEK32 ||

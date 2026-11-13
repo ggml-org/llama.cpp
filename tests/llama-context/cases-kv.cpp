@@ -853,7 +853,11 @@ struct case_swa_cache_type : ctx_test {
         base.type_v   = GGML_TYPE_Q8_0;
         base.quiet    = true;
 
-        auto uniform = mr.ctx(base);
+        auto params_uniform = mr.params;
+        params_uniform.cache_type_k_swa = GGML_TYPE_COUNT;
+        params_uniform.cache_type_v_swa = GGML_TYPE_COUNT;
+
+        auto uniform = make_ctx(mr.model, params_uniform, base);
         if (!uniform) {
             return case_result::skip("q8_0 KV cache is not supported");
         }
