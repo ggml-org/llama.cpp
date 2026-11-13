@@ -1,6 +1,7 @@
 <script lang="ts">
 	import XIcon from '@lucide/svelte/icons/x';
 	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import { PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
 
@@ -33,7 +34,7 @@
 
 	{#if showCloseButton}
 		<DialogPrimitive.Close
-			class="absolute top-0 right-0 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+			class="absolute top-0 right-0 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none max-md:-top-3 max-md:-right-3 {PANEL_CLOSE_MOBILE_CLASS} [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 		>
 			<XIcon />
 

@@ -1,5 +1,7 @@
 #include "diffusion.h"
 
+#include "common.h"
+
 #include "log.h"
 
 #include <algorithm>
@@ -144,8 +146,7 @@ void diffusion_generate(llama_context *          ctx,
 
     struct llama_sampler * dist_sampler = llama_sampler_init_dist(params.seed);
 
-    llama_batch batch = llama_batch_init(params.max_length, 0, 1);
-    batch.n_tokens    = params.max_length;
+    common_batch batch(ctx);
 
     // Pre-allocate buffers for CFG if needed
     int32_t                  logits_size = n_vocab * params.max_length;
@@ -202,18 +203,15 @@ void diffusion_generate(llama_context *          ctx,
             }
 
             // Setup batch
+            batch.clear();
             for (int32_t i = 0; i < params.max_length; i++) {
-                batch.token[i]     = output_tokens[i];
-                batch.pos[i]       = i;
-                batch.n_seq_id[i]  = 1;
-                batch.seq_id[i][0] = 0;
-                batch.logits[i]    = 1;
+                batch.add(output_tokens[i], i, 0, true);
             }
 
             float * logits = nullptr;
 
             if (params.cfg_scale > 0.0f) {
-                int ret = llama_decode(ctx, batch);
+                int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
                 if (ret != 0) {
                     LOG_ERR("Failed to generate conditional");
                     break;
@@ -227,10 +225,11 @@ void diffusion_generate(llama_context *          ctx,
                     un_x_buffer[i] = params.mask_token_id;
                 }
 
+                batch.clear();
                 for (int32_t i = 0; i < params.max_length; i++) {
-                    batch.token[i] = un_x_buffer[i];
+                    batch.add(un_x_buffer[i], i, 0, true);
                 }
-                ret = llama_decode(ctx, batch);
+                ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
                 if (ret != 0) {
                     LOG_ERR("Failed to generate unconditional");
                     break;
@@ -244,7 +243,7 @@ void diffusion_generate(llama_context *          ctx,
                 }
                 logits = cond_logits_buffer.data();
             } else {
-                int ret = llama_decode(ctx, batch);
+                int ret = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
                 if (ret != 0) {
                     LOG_ERR("%s: failed to decode at step %d, ret = %d\n", __func__, global_step, ret);
                     break;
@@ -400,7 +399,6 @@ void diffusion_generate(llama_context *          ctx,
             total_time / 1000.0 / params.steps,
             total_sampling_time / 1000.0 / params.steps);
 
-    llama_batch_free(batch);
     llama_sampler_free(sampler);
     llama_sampler_free(dist_sampler);
 

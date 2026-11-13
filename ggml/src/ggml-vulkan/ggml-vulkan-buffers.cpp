@@ -1,12 +1,39 @@
 #include "ggml-vulkan-common.h"
 
+#include <cstdint>
+#include <cstdlib>
+#include <mutex>
+#include <shared_mutex>
+
+static void * portable_aligned_malloc(size_t align, size_t size) {
+#ifdef _WIN32
+    return _aligned_malloc(size, align);
+#else
+    void * ptr = nullptr;
+    if (posix_memalign(&ptr, align, size) != 0) {
+        return nullptr;
+    }
+    return ptr;
+#endif
+}
+
+static void portable_aligned_free(void * ptr) {
+#ifdef _WIN32
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
 ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_vk_buffer_type_name,
-    /* .alloc_buffer     = */ ggml_backend_vk_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_vk_buffer_type_get_alignment,
-    /* .get_max_size     = */ ggml_backend_vk_buffer_type_get_max_size,
-    /* .get_alloc_size   = */ ggml_backend_vk_buffer_type_get_alloc_size,
-    /* .is_host          = */ NULL,
+    /* .get_name            = */ ggml_backend_vk_buffer_type_name,
+    /* .alloc_buffer        = */ ggml_backend_vk_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ NULL,
+    /* .get_alignment       = */ ggml_backend_vk_buffer_type_get_alignment,
+    /* .get_max_size        = */ ggml_backend_vk_buffer_type_get_max_size,
+    /* .get_alloc_size      = */ ggml_backend_vk_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ NULL,
 };
 
 static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
@@ -202,7 +229,7 @@ vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
             buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
-        } else if (device->disable_host_visible_vidmem) {
+        } else if (!device->rebar || device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
                 buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
@@ -241,67 +268,120 @@ void ggml_vk_destroy_buffer(vk_buffer& buf) {
     buf.reset();
 }
 
-void * ggml_vk_host_malloc(vk_device& device, size_t size) {
-    VK_LOG_MEMORY("ggml_vk_host_malloc(" << size << ")");
-    vk_buffer buf = ggml_vk_create_buffer(device, size,
-        {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
-         vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+// caller must hold host_allocations_mutex
+static size_t ggml_vk_host_allocation_find(const void * ptr) {
+    for (size_t i = 0; i < vk_instance.host_allocations.size(); i++) {
+        const uint8_t * base = (const uint8_t *) vk_instance.host_allocations[i].base;
+        if (ptr >= base && ptr < base + vk_instance.host_allocations[i].size) {
+            return i;
+        }
+    }
+    return SIZE_MAX;
+}
 
-    if(!(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
-        fprintf(stderr, "WARNING: failed to allocate %.2f MB of pinned memory\n",
-            size/1024.0/1024.0);
-        device->device.freeMemory(buf->device_memory);
-        device->device.destroyBuffer(buf->buffer);
+void * ggml_vk_host_malloc(size_t size) {
+    VK_LOG_MEMORY("ggml_vk_host_malloc(" << size << ")");
+
+    ggml_vk_instance_init();
+
+    if (vk_instance.multi_device) {
+        const size_t align      = std::max<size_t>(vk_instance.host_import_alignment, TENSOR_ALIGNMENT);
+        const size_t alloc_size = (size + align - 1) / align * align;
+
+        void * ptr = portable_aligned_malloc(align, alloc_size);
+        if (ptr == nullptr) {
+            return nullptr;
+        }
+        vk_host_allocation entry;
+        entry.base = ptr;
+        entry.size = alloc_size;
+
+        std::unique_lock<std::shared_mutex> guard(vk_instance.host_allocations_mutex);
+        vk_instance.host_allocations.push_back(std::move(entry));
+        return ptr;
+    }
+
+    vk_device dev0 = ggml_vk_get_device(0);
+    vk_buffer buf;
+    try {
+        buf = ggml_vk_create_buffer(dev0, size,
+            {vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
+             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
+    } catch (vk::SystemError&) {
         return nullptr;
     }
 
-    std::lock_guard<std::shared_mutex> guard(device->pinned_memory_mutex);
-    device->pinned_memory.push_back(std::make_tuple(buf->ptr, size, buf));
+    if (!(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible)) {
+        fprintf(stderr, "WARNING: failed to allocate %.2f MB of pinned memory\n", size / 1024.0 / 1024.0);
+        ggml_vk_destroy_buffer(buf);
+        return nullptr;
+    }
 
+    vk_host_allocation entry;
+    entry.base             = buf->ptr;
+    entry.size             = size;
+    entry.views[dev0->idx] = buf;
+
+    std::unique_lock<std::shared_mutex> guard(vk_instance.host_allocations_mutex);
+    vk_instance.host_allocations.push_back(std::move(entry));
     return buf->ptr;
 }
 
-void ggml_vk_host_free(vk_device& device, void* ptr) {
+void ggml_vk_host_free(void * ptr) {
     if (ptr == nullptr) {
         return;
     }
     VK_LOG_MEMORY("ggml_vk_host_free(" << ptr << ")");
-    std::lock_guard<std::shared_mutex> guard(device->pinned_memory_mutex);
 
-    vk_buffer buf;
-    size_t index;
-    for (size_t i = 0; i < device->pinned_memory.size(); i++) {
-        const uint8_t* addr = (const uint8_t*) std::get<0>(device->pinned_memory[i]);
-        const uint8_t* endr = addr + std::get<1>(device->pinned_memory[i]);
-        if (ptr >= addr && ptr < endr) {
-            buf = std::get<2>(device->pinned_memory[i]);
-            index = i;
-            break;
+    vk_host_allocation entry;
+    {
+        std::unique_lock<std::shared_mutex> guard(vk_instance.host_allocations_mutex);
+        const size_t index = ggml_vk_host_allocation_find(ptr);
+        if (index == SIZE_MAX) {
+            fprintf(stderr, "WARNING: failed to free pinned memory: memory not in map\n");
+            return;
         }
-    }
-    if (buf == nullptr) {
-        fprintf(stderr, "WARNING: failed to free pinned memory: memory not in map\n");
-        return;
+        entry = std::move(vk_instance.host_allocations[index]);
+        vk_instance.host_allocations.erase(vk_instance.host_allocations.begin() + index);
     }
 
-    ggml_vk_destroy_buffer(buf);
-
-    device->pinned_memory.erase(device->pinned_memory.begin() + index);
+    for (auto & view : entry.views) {
+        ggml_vk_destroy_buffer(view);
+    }
+    if (vk_instance.multi_device) {
+        portable_aligned_free(entry.base);
+    }
 }
 
 void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf, size_t& buf_offset) {
-    std::shared_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
     buf = nullptr;
     buf_offset = 0;
-    for (size_t i = 0; i < device->pinned_memory.size(); i++) {
-        const uint8_t* addr = (const uint8_t*) std::get<0>(device->pinned_memory[i]);
-        const uint8_t* endr = addr + std::get<1>(device->pinned_memory[i]);
-        if (ptr >= addr && ptr < endr) {
-            buf = std::get<2>(device->pinned_memory[i]);
-            buf_offset = ((const uint8_t *)ptr) - addr;
-            break;
+
+    std::unique_lock<std::shared_mutex> guard(vk_instance.host_allocations_mutex);
+
+    const size_t index = ggml_vk_host_allocation_find(ptr);
+    if (index == SIZE_MAX) {
+        return;
+    }
+    vk_host_allocation & entry = vk_instance.host_allocations[index];
+
+    if (entry.views[device->idx] == nullptr) {
+        const uint32_t bit = 1u << device->idx;
+        if (!vk_instance.multi_device || !vk_instance.device_host_buffer_import[device->idx] || (vk_instance.host_import_failed & bit)) {
+            return;
+        }
+        GGML_ASSERT(device->external_memory_host);
+        // const only propagates from the const context; the pointee is mutable
+        entry.views[device->idx] = ggml_vk_buffer_from_host_ptr(const_cast<vk_device&>(device), entry.base, entry.size);
+        if (entry.views[device->idx] == nullptr) {
+            vk_instance.host_import_failed |= bit;
+            GGML_LOG_WARN("ggml_vulkan: %s: host memory import failed, using staging\n", device->name.c_str());
+            return;
         }
     }
+
+    buf = entry.views[device->idx];
+    buf_offset = (const uint8_t *) ptr - (const uint8_t *) entry.base;
 }
 
 void ggml_vk_ensure_sync_staging_buffer(vk_device& device, size_t size) {
@@ -321,6 +401,33 @@ void ggml_vk_ensure_sync_staging_buffer(ggml_backend_vk_context * ctx, size_t si
         ctx->sync_staging = ggml_vk_create_buffer_check(ctx->device, size,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostCached,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+    }
+}
+
+static vk_context ggml_vk_begin_sync_ctx(vk_device & device, vk_command_pool & pool) {
+    vk_context subctx = ggml_vk_create_temporary_context(pool);
+    ggml_vk_ctx_begin(device, subctx);
+    return subctx;
+}
+
+static void ggml_vk_submit_sync(vk_device & device, vk_context & subctx) {
+    ggml_vk_ctx_end(subctx);
+
+    for (auto & cpy : subctx->in_memcpys) {
+        memcpy(cpy.dst, cpy.src, cpy.n);
+    }
+
+    for (auto & mset : subctx->memsets) {
+        memset(mset.dst, mset.val, mset.n);
+    }
+
+    ggml_vk_submit(subctx, device->fence);
+    VK_CHECK(device->device.waitForFences({ device->fence }, true, UINT64_MAX), "vk_submit_sync waitForFences", device);
+    device->device.resetFences({ device->fence });
+    ggml_vk_queue_command_pools_cleanup(device);
+
+    for (auto & cpy : subctx->out_memcpys) {
+        memcpy(cpy.dst, cpy.src, cpy.n);
     }
 }
 
@@ -510,24 +617,10 @@ void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * src, si
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
 
-        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue->cmd_pool);
-        ggml_vk_ctx_begin(dst->device, subctx);
+        vk_context subctx = ggml_vk_begin_sync_ctx(dst->device, dst->device->transfer_queue->cmd_pool);
         bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, dpitch, width, height, true);
         GGML_ASSERT(ret);
-        ggml_vk_ctx_end(subctx);
-
-        for (auto& cpy : subctx->in_memcpys) {
-            memcpy(cpy.dst, cpy.src, cpy.n);
-        }
-
-        for (auto& mset : subctx->memsets) {
-            memset(mset.dst, mset.val, mset.n);
-        }
-
-        ggml_vk_submit(subctx, dst->device->fence);
-        VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences", dst->device);
-        dst->device->device.resetFences({ dst->device->fence });
-        ggml_vk_queue_command_pools_cleanup(dst->device);
+        ggml_vk_submit_sync(dst->device, subctx);
     }
 }
 
@@ -615,18 +708,24 @@ static bool ggml_vk_buffer_read_async(vk_context subctx, vk_buffer& src, size_t 
     return ggml_vk_buffer_read_2d_async(subctx, src, offset, dst, size, size, size, 1, sync_staging);
 }
 
-void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height) {
-    VK_LOG_DEBUG("ggml_vk_buffer_read_2d(" << src->buffer << ", " << offset << ", " << width << ", " << height << ")");
-
+static bool ggml_vk_buffer_host_read_direct(const vk_buffer & buf) {
     // If the device is not an UMA device the memory is host-accessible through rebar. While writing
     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
     // the HW device to host copy path.
-    if(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible && src->device->uma) {
+    // AMD UMA: uncached host-visible memory is write-combined, CPU reads are slow
+    const bool slow_host_read = buf->device->vendor_id == VK_VENDOR_ID_AMD &&
+                                !(buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
+    return (buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) && buf->device->uma && !slow_host_read;
+}
+
+void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t spitch, size_t dpitch, size_t width, size_t height) {
+    VK_LOG_DEBUG("ggml_vk_buffer_read_2d(" << src->buffer << ", " << offset << ", " << width << ", " << height << ")");
+
+    if (ggml_vk_buffer_host_read_direct(src)) {
         GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue->cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
+        vk_context subctx = ggml_vk_begin_sync_ctx(src->device, src->device->compute_queue->cmd_pool);
         subctx->s->buffer->buf.pipelineBarrier(
             vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
             vk::PipelineStageFlagBits::eHost,
@@ -634,12 +733,7 @@ void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t sp
             { { vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite,
                 vk::AccessFlagBits::eHostRead } },
             {}, {});
-        ggml_vk_ctx_end(subctx);
-        ggml_vk_submit(subctx, src->device->fence);
-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX),
-                 "vk_buffer_read_2d uma waitForFences", src->device);
-        src->device->device.resetFences({ src->device->fence });
-        ggml_vk_queue_command_pools_cleanup(src->device);
+        ggml_vk_submit_sync(src->device, subctx);
 
         if (width == spitch && width == dpitch) {
             memcpy(dst, (const uint8_t *) src->ptr + offset, width * height);
@@ -651,20 +745,10 @@ void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t sp
     } else {
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue->cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
+        vk_context subctx = ggml_vk_begin_sync_ctx(src->device, src->device->transfer_queue->cmd_pool);
         bool ret = ggml_vk_buffer_read_2d_async(subctx, src, offset, dst, spitch, dpitch, width, height, true);
         GGML_ASSERT(ret);
-        ggml_vk_ctx_end(subctx);
-
-        ggml_vk_submit(subctx, src->device->fence);
-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read_2d waitForFences", src->device);
-        src->device->device.resetFences({ src->device->fence });
-        ggml_vk_queue_command_pools_cleanup(src->device);
-
-        for (auto& cpy : subctx->out_memcpys) {
-            memcpy(cpy.dst, cpy.src, cpy.n);
-        }
+        ggml_vk_submit_sync(src->device, subctx);
     }
 }
 
@@ -688,14 +772,9 @@ void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         VK_LOG_DEBUG("ggml_vk_buffer_copy(SINGLE_DEVICE, " << size << ")");
         // Copy within the device
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue->cmd_pool);
-        ggml_vk_ctx_begin(src->device, subctx);
+        vk_context subctx = ggml_vk_begin_sync_ctx(src->device, src->device->transfer_queue->cmd_pool);
         ggml_vk_buffer_copy_async(subctx, dst, dst_offset, src, src_offset, size);
-        ggml_vk_ctx_end(subctx);
-        ggml_vk_submit(subctx, src->device->fence);
-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_copy waitForFences", src->device);
-        src->device->device.resetFences({ src->device->fence });
-        ggml_vk_queue_command_pools_cleanup(src->device);
+        ggml_vk_submit_sync(src->device, subctx);
     } else {
         VK_LOG_DEBUG("ggml_vk_buffer_copy(MULTI_DEVICE, " << size << ")");
         // Copy device to device
@@ -731,15 +810,222 @@ void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t siz
     }
 
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
-    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue->cmd_pool);
-    ggml_vk_ctx_begin(dst->device, subctx);
+    vk_context subctx = ggml_vk_begin_sync_ctx(dst->device, dst->device->transfer_queue->cmd_pool);
     subctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
-    ggml_vk_ctx_end(subctx);
+    ggml_vk_submit_sync(dst->device, subctx);
+}
 
-    ggml_vk_submit(subctx, dst->device->fence);
-    VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_memset waitForFences", dst->device);
-    dst->device->device.resetFences({ dst->device->fence });
-    ggml_vk_queue_command_pools_cleanup(dst->device);
+static size_t ggml_vk_staging_size_n(const vk_device & device, const std::vector<vk_buffer_region> & regions) {
+    size_t total = 0;
+    size_t max   = 0;
+    for (const auto & r : regions) {
+        vk_buffer pinned;
+        size_t pinned_offset;
+        ggml_vk_host_get(device, r.host, pinned, pinned_offset);
+        if (pinned != nullptr) {
+            continue;
+        }
+        total += r.size;
+        max = std::max(max, r.size);
+    }
+    return std::max(max, std::min(total, (size_t) device->suballocation_block_size));
+}
+
+// returns number of regions recorded, stops when staging is full
+size_t ggml_vk_buffer_write_n_async(vk_context& subctx, const vk_buffer_region * regions, size_t n, vk_buffer * staging, size_t * staging_offset) {
+    VK_LOG_DEBUG("ggml_vk_buffer_write_n_async(" << n << ")");
+    ggml_vk_sync_buffers(nullptr, subctx);
+
+    size_t i = 0;
+    for (; i < n; i++) {
+        const vk_buffer_region & r = regions[i];
+
+        vk_buffer pinned = nullptr;
+        size_t pinned_offset = 0;
+        ggml_vk_host_get(r.buf->device, r.host, pinned, pinned_offset);
+
+        if (pinned != nullptr) {
+            subctx->s->buffer->buf.copyBuffer(pinned->buffer, r.buf->buffer, { vk::BufferCopy{ pinned_offset, r.offset, r.size } });
+            continue;
+        }
+
+        if (staging == nullptr || *staging_offset + r.size > (*staging)->size) {
+            break;
+        }
+
+        subctx->s->buffer->buf.copyBuffer((*staging)->buffer, r.buf->buffer, { vk::BufferCopy{ *staging_offset, r.offset, r.size } });
+        deferred_memcpy((uint8_t *) (*staging)->ptr + *staging_offset, r.host, r.size, &subctx->in_memcpys);
+        *staging_offset += r.size;
+    }
+    return i;
+}
+
+// returns number of regions recorded, stops when staging is full
+size_t ggml_vk_buffer_read_n_async(vk_context& subctx, const vk_buffer_region * regions, size_t n, vk_buffer * staging, size_t * staging_offset) {
+    VK_LOG_DEBUG("ggml_vk_buffer_read_n_async(" << n << ")");
+    ggml_vk_sync_buffers(nullptr, subctx);
+
+    size_t i = 0;
+    for (; i < n; i++) {
+        const vk_buffer_region & r = regions[i];
+
+        vk_buffer pinned = nullptr;
+        size_t pinned_offset = 0;
+        ggml_vk_host_get(r.buf->device, r.host, pinned, pinned_offset);
+
+        if (pinned != nullptr) {
+            subctx->s->buffer->buf.copyBuffer(r.buf->buffer, pinned->buffer, { vk::BufferCopy{ r.offset, pinned_offset, r.size } });
+            continue;
+        }
+
+        if (staging == nullptr || *staging_offset + r.size > (*staging)->size) {
+            break;
+        }
+
+        subctx->s->buffer->buf.copyBuffer(r.buf->buffer, (*staging)->buffer, { vk::BufferCopy{ r.offset, *staging_offset, r.size } });
+        deferred_memcpy(r.host, (const uint8_t *) (*staging)->ptr + *staging_offset, r.size, &subctx->out_memcpys);
+        *staging_offset += r.size;
+    }
+    return i;
+}
+
+void ggml_vk_buffer_copy_n_async(vk_context& subctx, const vk_buffer_copy_region * regions, size_t n) {
+    VK_LOG_DEBUG("ggml_vk_buffer_copy_n_async(" << n << ")");
+    ggml_vk_sync_buffers(nullptr, subctx);
+
+    for (size_t i = 0; i < n; i++) {
+        const vk_buffer_copy_region & r = regions[i];
+        GGML_ASSERT(r.src->device == r.dst->device);
+        subctx->s->buffer->buf.copyBuffer(r.src->buffer, r.dst->buffer, { vk::BufferCopy{ r.src_offset, r.dst_offset, r.size } });
+    }
+}
+
+void ggml_vk_buffer_write_n(const vk_buffer_region * regions, size_t n) {
+    VK_LOG_DEBUG("ggml_vk_buffer_write_n(" << n << ")");
+    std::vector<vk_buffer_region> pending;
+
+    for (size_t i = 0; i < n; i++) {
+        const vk_buffer_region & r = regions[i];
+        if (r.size == 0) {
+            continue;
+        }
+        if (r.buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
+            GGML_ASSERT(r.buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+            memcpy((uint8_t *) r.buf->ptr + r.offset, r.host, r.size);
+            continue;
+        }
+        GGML_ASSERT(pending.empty() || r.buf->device == pending[0].buf->device);
+        pending.push_back(r);
+    }
+
+    if (pending.empty()) {
+        return;
+    }
+
+    vk_device device = pending[0].buf->device;
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    const size_t staging_size = ggml_vk_staging_size_n(device, pending);
+    if (staging_size > 0) {
+        ggml_vk_ensure_sync_staging_buffer(device, staging_size);
+    }
+
+    for (size_t i = 0; i < pending.size();) {
+        vk_context subctx = ggml_vk_begin_sync_ctx(device, device->transfer_queue->cmd_pool);
+        size_t staging_offset = 0;
+        const size_t recorded = ggml_vk_buffer_write_n_async(subctx, pending.data() + i, pending.size() - i, &device->sync_staging, &staging_offset);
+        GGML_ASSERT(recorded > 0);
+        ggml_vk_submit_sync(device, subctx);
+        i += recorded;
+    }
+}
+
+void ggml_vk_buffer_read_n(const vk_buffer_region * regions, size_t n) {
+    VK_LOG_DEBUG("ggml_vk_buffer_read_n(" << n << ")");
+    std::vector<vk_buffer_region> direct;
+    std::vector<vk_buffer_region> pending;
+
+    for (size_t i = 0; i < n; i++) {
+        const vk_buffer_region & r = regions[i];
+        if (r.size == 0) {
+            continue;
+        }
+        GGML_ASSERT((direct.empty() && pending.empty()) || r.buf->device == (direct.empty() ? pending[0] : direct[0]).buf->device);
+        if (ggml_vk_buffer_host_read_direct(r.buf)) {
+            GGML_ASSERT(r.buf->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+            direct.push_back(r);
+        } else {
+            pending.push_back(r);
+        }
+    }
+
+    if (direct.empty() && pending.empty()) {
+        return;
+    }
+
+    vk_device device = (direct.empty() ? pending[0] : direct[0]).buf->device;
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+
+    if (!direct.empty()) {
+        vk_context subctx = ggml_vk_begin_sync_ctx(device, device->compute_queue->cmd_pool);
+        subctx->s->buffer->buf.pipelineBarrier(
+            vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eHost,
+            {},
+            { { vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite,
+                vk::AccessFlagBits::eHostRead } },
+            {}, {});
+        ggml_vk_submit_sync(device, subctx);
+
+        for (const auto & r : direct) {
+            memcpy(r.host, (const uint8_t *) r.buf->ptr + r.offset, r.size);
+        }
+    }
+
+    if (pending.empty()) {
+        return;
+    }
+
+    const size_t staging_size = ggml_vk_staging_size_n(device, pending);
+    if (staging_size > 0) {
+        ggml_vk_ensure_sync_staging_buffer(device, staging_size);
+    }
+
+    for (size_t i = 0; i < pending.size();) {
+        vk_context subctx = ggml_vk_begin_sync_ctx(device, device->transfer_queue->cmd_pool);
+        size_t staging_offset = 0;
+        const size_t recorded = ggml_vk_buffer_read_n_async(subctx, pending.data() + i, pending.size() - i, &device->sync_staging, &staging_offset);
+        GGML_ASSERT(recorded > 0);
+        ggml_vk_submit_sync(device, subctx);
+        i += recorded;
+    }
+}
+
+void ggml_vk_buffer_copy_n(const vk_buffer_copy_region * regions, size_t n) {
+    VK_LOG_DEBUG("ggml_vk_buffer_copy_n(" << n << ")");
+    std::vector<vk_buffer_copy_region> same_device;
+
+    for (size_t i = 0; i < n; i++) {
+        vk_buffer_copy_region r = regions[i];
+        if (r.size == 0) {
+            continue;
+        }
+        if (r.src->device != r.dst->device) {
+            ggml_vk_buffer_copy(r.dst, r.dst_offset, r.src, r.src_offset, r.size);
+            continue;
+        }
+        GGML_ASSERT(same_device.empty() || r.dst->device == same_device[0].dst->device);
+        same_device.push_back(std::move(r));
+    }
+
+    if (same_device.empty()) {
+        return;
+    }
+
+    vk_device device = same_device[0].dst->device;
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    vk_context subctx = ggml_vk_begin_sync_ctx(device, device->transfer_queue->cmd_pool);
+    ggml_vk_buffer_copy_n_async(subctx, same_device.data(), same_device.size());
+    ggml_vk_submit_sync(device, subctx);
 }
 
 ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
@@ -754,6 +1040,9 @@ ggml_backend_buffer_i ggml_backend_vk_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_vk_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_vk_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ ggml_backend_vk_buffer_set_tensor_n,
+    /* .get_tensor_n    = */ ggml_backend_vk_buffer_get_tensor_n,
+    /* .cpy_tensor_n    = */ ggml_backend_vk_buffer_cpy_tensor_n,
 };
 
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size) {

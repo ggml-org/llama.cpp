@@ -27,6 +27,11 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     load_swa_pattern(ml, 4, true);
 
+    // the dense prefix and the MTP layers use RoPE even if they are not SWA
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.rope_pattern[il] = hparams.is_swa(il) || il < hparams.n_layer_dense_lead || il >= hparams.n_layer();
+    }
+
     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
     hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
@@ -40,18 +45,9 @@ void llama_model_cohere2moe::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
     LLAMA_LOAD_LOCALS;
 
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    // Trunk-only: the GGUF declares MTP layers in metadata but the actual MTP
-    // tensors live in a separate file. Mark MTP tensors NOT_REQUIRED so the
-    // trunk loads cleanly.
-    const std::string mtp_probe = "blk." + std::to_string(n_layer) + ".nextn.eh_proj.weight";
-    const bool trunk_only = (hparams.n_layer_nextn > 0) && (ml.get_weight(mtp_probe.c_str()) == nullptr);
-    const int trunk_flags = mtp_only  ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags         = trunk_only ? TENSOR_NOT_REQUIRED : 0;
-
-    if (!ml.load_mtp) {
-        mtp_flags |= TENSOR_SKIP;
-    }
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
@@ -142,14 +138,24 @@ void llama_model_cohere2moe::load_arch_tensors(llama_model_loader & ml) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_cohere2moe::build_arch_graph(const llm_graph_params & params) const {
-    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
-    }
-    return std::make_unique<graph>(*this, params);
+llama_rope_params llama_model_cohere2moe::get_rope_params(const llama_cparams & cparams, int il) const {
+    auto res = llama_model::get_rope_params(cparams, il);
+
+    // the SWA layers use the global base and scale
+    res.freq_base  = cparams.rope_freq_base;
+    res.freq_scale = cparams.rope_freq_scale;
+
+    return res;
 }
 
-llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+std::unique_ptr<llm_graph_context> llama_model_cohere2moe::build_arch_graph(const llm_graph_params & params) const {
+    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        return std::make_unique<graph_mtp>(params);
+    }
+    return std::make_unique<graph>(params);
+}
+
+llama_model_cohere2moe::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -166,9 +172,6 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = 0; il < n_layer; ++il) {
-        const bool is_swa = hparams.is_swa(il);
-        // Dense-prefix full-attention layers use RoPE; later layers follow the SWA pattern.
-        const bool force_rope = static_cast<uint32_t>(il) < hparams.n_layer_dense_lead;
 
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, cohere2moe_norm_type, il);
         cb(cur, "attn_norm", il);
@@ -181,19 +184,8 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
             auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur,
                     n_embd_head, n_head, n_head_kv, il);
 
-            if (is_swa || force_rope) {
-                ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, rope_factors,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, rope_factors,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -205,7 +197,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
                     1.0f / sqrtf(float(n_embd_head)), il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpL    = ggml_get_rows(ctx0, inpL, inp_out_ids);
             ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
@@ -269,7 +261,7 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -284,11 +276,9 @@ llama_model_cohere2moe::graph::graph(const llama_model & model, const llm_graph_
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
-llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_cohere2moe::graph_mtp::graph_mtp(const llm_graph_params & params) : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "COHERE2MOE MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "COHERE2MOE MTP currently only supports a single MTP block");
 
@@ -306,7 +296,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     const llm_norm_type cohere2moe_norm_type = hparams.f_norm_rms_eps == 0.0f ? LLM_NORM : LLM_NORM_RMS;
 
     // TODO: extract in a common llm_graph_context::build_inp_embd_h()
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -317,6 +307,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     // TODO: make static using `ggml_build_forward_select()`
     //       see llm_graph_context::build_inp_embd() for reference
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
         tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
@@ -325,9 +316,7 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     }
     cb(tok_embd, "mtp_tok_embd", il);
 
-    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->h);
-    ggml_set_name(inp->h, "mtp_h_input");
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
 
     ggml_tensor * h_embd = inp->h;
 
@@ -356,15 +345,8 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
     ggml_tensor * ffn_inp = cur;
 
     auto [Qcur, Kcur, Vcur] = build_qkv(layer, cur, n_embd_head, n_head, n_head_kv, il);
-    ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-    Qcur = ggml_rope_ext(
-            ctx0, Qcur, inp_pos, rope_factors,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-    Kcur = ggml_rope_ext(
-            ctx0, Kcur, inp_pos, rope_factors,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
@@ -434,6 +416,4 @@ llama_model_cohere2moe::graph_mtp::graph_mtp(const llama_model & model, const ll
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

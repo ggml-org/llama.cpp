@@ -201,7 +201,7 @@ Invoke a tool call, request body is a JSON object with:
 
 Headers:
 - `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
-- `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host
+- `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host. Refused with 403 when the server is started with `--tools-runtime`, so clients cannot move tools out of that sandbox
 
 Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 
@@ -286,7 +286,7 @@ Instead of building everything from the ground up (like what most AI agents will
 
 The flow for downloading a new model:
 - POST request comes in --> `post_router_models` --> validation
-- A new `llama-server` subprocess will be spawned with special `SERVER_CHILD_MODE_DOWNLOAD`
+- A new `llama-server` subprocess will be spawned with the `SERVER_ROLE_DOWNLOAD` role (see `server_role_type` in `server-common.h`)
 - Child process runs the download and report status back to router via stdin/out
 - If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
@@ -403,4 +403,4 @@ npm run build
 
 After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
 
-**Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.
+**Note:** The Vite dev server automatically proxies API requests to `http://localhost:9931`. Make sure `llama-server` is running on that port during development.

@@ -4855,7 +4855,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                     const int32_t i02 =
                         *(const int32_t *) ((const char *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
 
-                    GGML_ASSERT(i02 >= 0 && i02 < n_as);
+                    GGML_ASSERT(i02 == -1 || (i02 >= 0 && i02 < n_as));
+
+                    if (i02 == -1) {
+                        memset((char *) dst->data + id*nb1 + iid1*nb2, 0, ne0*sizeof(float));
+                        continue;
+                    }
 
                     MMID_MATRIX_ROW(i02, matrix_row_counts[i02]) = { id, iid1 };
                     matrix_row_counts[i02] += 1;
@@ -5238,12 +5243,14 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void) {
     static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_repack = {
         /* .iface    = */ {
-                           /* .get_name         = */ ggml_backend_cpu_repack_buffer_type_get_name,
-                           /* .alloc_buffer     = */ ggml_backend_cpu_repack_buffer_type_alloc_buffer,
-                           /* .get_alignment    = */ ggml_backend_cpu_repack_buffer_type_get_alignment,
-                           /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
-                           /* .get_alloc_size   = */ nullptr,  // defaults to ggml_nbytes
-                           /* .is_host          = */ nullptr,
+                           /* .get_name             = */ ggml_backend_cpu_repack_buffer_type_get_name,
+                           /* .alloc_buffer         = */ ggml_backend_cpu_repack_buffer_type_alloc_buffer,
+                           /* .alloc_buffer_n       = */ nullptr,
+                           /* .get_alignment        = */ ggml_backend_cpu_repack_buffer_type_get_alignment,
+                           /* .get_max_size         = */ nullptr,  // defaults to SIZE_MAX
+                           /* .get_alloc_size       = */ nullptr,  // defaults to ggml_nbytes
+                           /* .get_alloc_size_n     = */ NULL,
+                           /* .is_host              = */ nullptr,
                            },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
         /* .context = */ new ggml::cpu::repack::extra_buffer_type(),

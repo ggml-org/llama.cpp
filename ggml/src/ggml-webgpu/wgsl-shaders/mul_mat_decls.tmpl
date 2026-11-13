@@ -45,8 +45,14 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let global_k = k_outer + tile_k;
         let src0_idx = batch_offset + global_m * params.stride_01 + global_k;
         let src0_val = select( // taking a slight performance hit to avoid oob
+#if defined(TYPE_F16) || defined(TYPE_F32)
             SRC0_TYPE(0.0),
             SRC0[src0_idx/VEC_SIZE],
+#endif
+#ifdef TYPE_BF16
+            f32(0.0),
+            bf16_word_to_f32(SRC0[src0_idx / 2u], src0_idx & 1u),
+#endif
             global_m < params.m && global_k < params.k);
         store_shmem(SHMEM_TYPE(src0_val), elem_idx);
     }
@@ -104,6 +110,29 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
     }
 }
 #endif // INIT_SRC0_SHMEM_Q1_0
+
+#ifdef INIT_SRC0_SHMEM_Q2_0
+const BLOCK_SIZE = 64u;
+const BLOCK_SIZE_BYTES = 18u;
+const NQ = 16u;
+
+fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u32) {
+    for (var i = thread_id * NQ; i < TILE_SRC0_SHMEM; i += TOTAL_WORKGROUP_SIZE * NQ) {
+        let global_m = offset_m + i / TILE_K;
+        let global_k = k_outer + i % TILE_K;
+        if (global_m < params.m && global_k < params.k) {
+            let block_idx = batch_offset + global_m * params.stride_01 + global_k / BLOCK_SIZE;
+            let block_byte_base = block_idx * BLOCK_SIZE_BYTES;
+            let d = load_f16_at_src0(block_byte_base);
+            let q_packed = load_u32_at_src0(block_byte_base + 2u + (global_k % BLOCK_SIZE) / 4u);
+            for (var k = 0u; k < NQ; k++) {
+                let q = (q_packed >> (2u * k)) & 3u;
+                shmem[i + k] = (f16(q) - 1.0) * d;
+            }
+        }
+    }
+}
+#endif // INIT_SRC0_SHMEM_Q2_0
 
 // legacy-quants
 #if defined(INIT_SRC0_SHMEM_Q4_0) || defined(INIT_SRC0_SHMEM_Q4_1) || defined(INIT_SRC0_SHMEM_Q5_0) || defined(INIT_SRC0_SHMEM_Q5_1) || defined(INIT_SRC0_SHMEM_Q8_0) || defined(INIT_SRC0_SHMEM_Q8_1) || defined(INIT_SRC0_SHMEM_MXFP4)

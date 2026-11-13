@@ -12,6 +12,58 @@ uint32_t vk_perf_logger_frequency = 1;
 
 std::string vk_pipeline_stats_filter;
 
+void ggml_vk_count_fusion(const vk_device & device, const char * label) {
+    if (!device->fusion_stats_enabled.load(std::memory_order_relaxed)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    device->fusion_counts[label]++;
+}
+
+void * ggml_backend_vk_fusion_get(ggml_backend_dev_t dev) {
+    auto * ctx = (ggml_backend_vk_device_context *) dev->context;
+    return ggml_vk_get_device(ctx->device).get();
+}
+
+void ggml_backend_vk_fusion_stats_init(void * finfo) {
+    auto * device = (vk_device_struct *) finfo;
+    device->fusion_stats_enabled.store(true, std::memory_order_relaxed);
+}
+
+void ggml_backend_vk_fusion_stats_reset(void * finfo) {
+    auto * device = (vk_device_struct *) finfo;
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    // Keep labels and their order stable between fused and unfused runs.
+    for (auto & entry : device->fusion_counts) {
+        entry.second = 0;
+    }
+}
+
+int ggml_backend_vk_fusion_stats_get(void * finfo, const char ** labels, uint64_t * counts, int n) {
+    auto * device = (vk_device_struct *) finfo;
+    std::lock_guard<std::mutex> lock(device->fusion_mutex);
+    if (labels == nullptr) {
+        return (int) device->fusion_counts.size();
+    }
+    int i = 0;
+    for (const auto & entry : device->fusion_counts) {
+        if (i >= n) {
+            break;
+        }
+        labels[i] = entry.first.c_str();
+        if (counts) {
+            counts[i] = entry.second;
+        }
+        i++;
+    }
+    return i;
+}
+
+void ggml_backend_vk_fusion_set_enabled(void * finfo, bool enabled) {
+    auto * device = (vk_device_struct *) finfo;
+    device->disable_fusion = !enabled;
+}
+
 void vk_memory_logger::log_allocation(vk_buffer_ref buf_ref, size_t size) {
     if (!vk_memory_logger_enabled) {
         return;
@@ -47,12 +99,10 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
 }
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
-static size_t vk_skip_checks;
-static size_t vk_output_tensor;
+size_t vk_skip_checks;
+size_t vk_output_tensor;
 
 static void ggml_vk_print_tensor(const ggml_tensor * tensor, const char * name);
-static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx);
-static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx);
 #endif
 
 #ifdef GGML_VULKAN_RUN_TESTS
@@ -90,7 +140,7 @@ static void ggml_vk_print_matrix_area(const void * data, ggml_type type, int ne0
 }
 
 template <typename X_TYPE, typename Y_TYPE>
-static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, int split_k, int shader_size) {
+void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, int split_k, int shader_size) {
     VK_LOG_DEBUG("ggml_vk_test_matmul(" << m << ", " << n << ", " << k << ", " << batch << ", " << num_it << ", " << split_k << ", " << shader_size << ")");
     const size_t x_ne = m * k * batch;
     const size_t y_ne = k * n * batch;
@@ -175,7 +225,8 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
             ctx, subctx, p, ggml_vk_subbuffer(ctx, d_X), ggml_vk_subbuffer(ctx, d_Y), ggml_vk_subbuffer(ctx, d_D), ggml_vk_subbuffer(ctx, ctx->prealloc_split_k),
             m, n, k,
             k, k, m, k*m, k*n, m*n,
-            split_k, batch, batch, batch, 1, 1, n
+            split_k, batch, batch, batch, 1, 1, n,
+            k * sizeof(Y_TYPE), m * sizeof(float)
         );
     }
     ggml_vk_ctx_end(subctx);
@@ -297,6 +348,8 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     free(d);
 }
 
+template void ggml_vk_test_matmul<ggml_fp16_t, float>(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, int split_k, int shader_size);
+
 static void ggml_vk_print_tensor_area(const ggml_tensor * tensor, int i0, int i1, int i2, int i3) {
     if (tensor->type != GGML_TYPE_F32 && tensor->type != GGML_TYPE_F16) {
         return;
@@ -348,7 +401,7 @@ static void ggml_vk_dequantize_data(const void * from, float * to, size_t ne, gg
     dequant_fn(from, to, ne);
 }
 
-static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant) {
+void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_type quant) {
     VK_LOG_DEBUG("ggml_vk_test_dequant(" << ne << ")");
     const size_t x_sz = sizeof(float) * ne;
     const size_t x_sz_f16 = sizeof(ggml_fp16_t) * ne;
@@ -540,7 +593,7 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
 //     free(qx_res);
 // }
 
-static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, size_t split_k, size_t shader_size, ggml_type quant, bool mmq = false) {
+void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m, size_t n, size_t k, size_t batch, size_t num_it, size_t split_k, size_t shader_size, ggml_type quant, bool mmq) {
     VK_LOG_DEBUG("ggml_vk_test_dequant_matmul(" << m << ", " << n << ", " << k << ", " << batch << ", " << num_it << ", " << split_k << ", " << ggml_type_name(quant) << ")");
     const size_t x_ne = m * k * batch;
     const size_t y_ne = k * n * batch;
@@ -640,7 +693,8 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
                 ctx, subctx, p, { qx_buf, 0, qx_sz }, { qy_buf, 0, qy_sz }, { d_buf, 0, d_sz }, { ctx->prealloc_split_k, 0, ctx->prealloc_size_split_k },
                 m, n, k,
                 k, k, m, k*m, k*n, m*n,
-                split_k, batch, batch, batch, 1, 1, n
+                split_k, batch, batch, batch, 1, 1, n,
+                (uint64_t)(k / ggml_blck_size(GGML_TYPE_Q8_1)) * ggml_type_size(GGML_TYPE_Q8_1), m * sizeof(float)
             );
         }
     } else {
@@ -649,7 +703,8 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
                 ctx, subctx, p, { qx_buf, 0, qx_sz }, { y_buf, 0, y_sz }, { d_buf, 0, d_sz }, { ctx->prealloc_split_k, 0, ctx->prealloc_size_split_k },
                 m, n, k,
                 k, k, m, k*m, k*n, m*n,
-                split_k, batch, batch, batch, 1, 1, n
+                split_k, batch, batch, batch, 1, 1, n,
+                k * sizeof(float), m * sizeof(float)
             );
         }
     }
@@ -871,7 +926,7 @@ void * comp_result;
 size_t comp_size;
 size_t comp_nb[GGML_MAX_DIMS];
 size_t check_counter = 0;
-static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx) {
+void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx) {
     ggml_tensor * tensor = cgraph->nodes[tensor_idx + ctx->num_additional_fused_ops];
     if (tensor->op == GGML_OP_TRANSPOSE || tensor->op == GGML_OP_SET_ROWS) {
         return;
@@ -1051,7 +1106,6 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         } else if (tensor->op == GGML_OP_ROPE || tensor->op == GGML_OP_ROPE_BACK) {
             const int n_dims      = ((int32_t *) tensor->op_params)[1];
             const int mode        = ((int32_t *) tensor->op_params)[2];
-            //const int n_ctx_ggml       = ((int32_t *) tensor->op_params)[3];
             const int n_ctx_orig_ggml  = ((int32_t *) tensor->op_params)[4];
             const float freq_base       = ((float *) tensor->op_params)[5];
             const float freq_scale      = ((float *) tensor->op_params)[6];
@@ -1073,6 +1127,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
                     tensor_clone = ggml_rope_ext_back(ggml_ctx, src_clone[0], src_clone[1], src_clone[2], n_dims, mode, n_ctx_orig_ggml, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
                 }
             }
+            ggml_rope_set_truncate(tensor_clone, ggml_rope_get_truncate(tensor));
             const int n_offs = ((int32_t *) tensor->op_params)[15];
             if (n_offs != 0) {
                 tensor_clone = ggml_rope_set_offset(tensor_clone, n_offs);
@@ -1374,7 +1429,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
     VK_LOG_DEBUG("END ggml_vk_check_results_0(" << tensor->name << ")");
 }
 
-static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx) {
+void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx) {
     ggml_tensor * tensor = cgraph->nodes[tensor_idx + ctx->num_additional_fused_ops];
     if (tensor->op == GGML_OP_TRANSPOSE || tensor->op == GGML_OP_SET_ROWS) {
         return;

@@ -8,11 +8,14 @@ on:
         required: false
         type: string
 
+cache-mode: none
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-slim
-    env:
-      BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
 
     steps:
       - name: Checkout code
@@ -52,7 +55,7 @@ jobs:
         working-directory: tools/ui
 
       - name: Upload built UI
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: llama-ui.zip
           path: tools/ui/dist/

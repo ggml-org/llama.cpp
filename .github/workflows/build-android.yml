@@ -20,6 +20,10 @@ on:
       - '.github/workflows/build-android.yml'
       - 'examples/llama.android/**'
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -33,7 +37,7 @@ env:
 
 jobs:
   default:
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Clone
@@ -52,6 +56,7 @@ jobs:
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
           log-accepted-android-sdk-licenses: false
+          packages: platform-tools cmake;3.31.6
 
       - name: Build
         run: |
@@ -59,12 +64,16 @@ jobs:
           ./gradlew build --no-daemon
 
   ndk:
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
     container:
       image: 'ghcr.io/snapdragon-toolchain/arm64-android:v0.3'
     defaults:
       run:
         shell: bash
+
+    permissions:
+      actions: write
+      contents: read
 
     steps:
       - name: Clone
@@ -93,7 +102,7 @@ jobs:
           path: pkg-adb/llama.cpp
 
   arm64:
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
 
     env:
       NDK_VERSION: "29.0.14206865"

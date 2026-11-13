@@ -78,17 +78,18 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma4_assistant::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_gemma4_assistant::graph::graph(const llm_graph_params & params) :
         llm_graph_context(params) {
     const int64_t n_embd_backbone = hparams.n_embd_inp();
 
     ggml_tensor * inp_tokens;
+    ggml_tensor * inp_embd;
     ggml_tensor * inp_h;
     {
-        auto inp = std::make_unique<llm_graph_input_embd>(n_embd_backbone);
+        auto inp = std::make_unique<llm_graph_input_embd_h>(n_embd_backbone, n_embd_backbone);
 
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         cb(inp->tokens, "inp_tokens", -1);
@@ -97,10 +98,14 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         res->t_inp_tokens = inp->tokens;
 
         inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_backbone, ubatch.n_tokens);
-        cb(inp->embd, "inp_h", -1);
+        cb(inp->embd, "inp_embd", -1);
         ggml_set_input(inp->embd);
-        inp_h = inp->embd;
+        inp_embd = inp->embd;
         res->t_inp_embd = inp->embd;
+
+        inp->h = build_inp_embd_state(inp.get(), n_embd_backbone);
+        cb(inp->h, "inp_h", -1);
+        inp_h = inp->h;
 
         res->add_input(std::move(inp));
     }
@@ -108,7 +113,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     GGML_ASSERT(cparams.ctx_other != nullptr);
     const auto * model_other = llama_get_model(cparams.ctx_other);
 
-    ggml_tensor * x = ggml_get_rows(ctx0, model_other->tok_embd, inp_tokens);
+    ggml_tensor * x = ubatch.token ? ggml_get_rows(ctx0, model_other->tok_embd, inp_tokens) : inp_embd;
     x = ggml_scale(ctx0, x, sqrtf((float) n_embd_backbone));
     cb(x, "inp_embd_target", -1);
 
@@ -125,14 +130,9 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     ggml_tensor * inpL = cur;
 
     for (int il = 0; il < n_layer_nextn; ++il) {
-        const bool is_swa = hparams.is_swa(il);
 
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head      = hparams.n_head(il);
-
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-        const int   n_rot_l      = hparams.n_rot(il);
 
         ggml_tensor * cur_norm = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur_norm, "attn_norm", il);
@@ -142,9 +142,7 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
         cb(Qcur, "Qcur_normed", il);
 
-        ggml_tensor * freq_factors = is_swa ? nullptr : model.layers[il].rope_freqs;
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig,
-                             freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
+        Qcur = build_rope(Qcur, inp_pos, il);
         cb(Qcur, "Qcur_pos", il);
 
         cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
@@ -195,6 +193,5 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     cb(h_next, "h_nextn", -1);
     res->t_h_nextn = h_next;
 
-    ggml_build_forward_expand(gf, logits);
     ggml_build_forward_expand(gf, h_next);
 }

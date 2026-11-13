@@ -5,9 +5,35 @@
 // try as much as possible to not include this header in the rest of the codebase
 
 #include "llama.h"
+#include "llama-arch.h"
 
 #include <cstdint>
 #include <map>
+#include <string>
+#include <vector>
+
+//
+// llama architecture queries
+//
+
+// all the LLM architectures known to the library
+LLAMA_API std::vector<llm_arch> llama_arch_all();
+
+// the canonical name of an architecture (e.g. "llama"), or "unknown"
+LLAMA_API const char * llama_arch_name(llm_arch arch);
+
+// the architecture with the given canonical name, or LLM_ARCH_UNKNOWN
+LLAMA_API llm_arch llama_arch_from_string(const std::string & name);
+
+// the arch-resolved GGUF key of a KV id, e.g. LLM_KV_CONTEXT_LENGTH -> "llama.context_length"
+LLAMA_API std::string llama_arch_kv_name(llm_arch arch, llm_kv key);
+
+LLAMA_API bool llama_arch_supports_sm_tensor(llm_arch arch);
+
+LLAMA_API bool llama_arch_supports_mixed_batch(llm_arch arch);
+
+// FIXME temporary function for better error messages
+LLAMA_API bool llama_arch_supports_save(llm_arch arch);
 
 // Reserve a new compute graph. It is valid until the next call to llama_graph_reserve.
 LLAMA_API struct ggml_cgraph * llama_graph_reserve(
@@ -90,6 +116,13 @@ LLAMA_API ggml_backend_dev_t llama_model_get_device(const struct llama_model * m
 
 LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * ctx);
 
+// the backend buffers that a state write of this memory would touch - empty caches report none
+LLAMA_API std::vector<ggml_backend_buffer_t> llama_memory_get_buffers(const llama_memory_t mem);
+
+// Turn the KV cache attention rotation on or off for the contexts created from this model.
+// Useful for testing purposes.
+LLAMA_API void llama_model_set_attn_rot(struct llama_model * model, bool value);
+
 // Set whether the context outputs nextn embeddings or not
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
@@ -99,6 +132,23 @@ LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value
 // the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
 // chain multiple trained NextN heads. Default 0 (first head).
 LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t offset);
+
+// Marks the entries that a decision head (clef, vllm-decision2) reads, the default is 0
+// See https://github.com/ggml-org/llama.cpp/pull/29831 for details
+// A run of entries with the same value is one span, spans must be separated by entries with value 0
+// An option belongs to the last question before it
+enum llama_decision_order {
+    LLAMA_DECISION_ORDER_NONE            = 0, // not read by the head
+    LLAMA_DECISION_ORDER_QUESTION_NOUL   = 1, // text of a question
+    LLAMA_DECISION_ORDER_QUESTION_CHOICE = 2,
+    LLAMA_DECISION_ORDER_QUESTION_SCORE  = 3,
+    LLAMA_DECISION_ORDER_OPTION          = 4, // text of an option
+};
+// The embeddings output has one value per entry: row i is the score of option i
+LLAMA_API bool llama_batch_ext_set_decision_order(struct llama_batch_ext * batch, int32_t idx, enum llama_decision_order order);
+
+// Label of option i of a decision model ("<arch>.decision.labels"), nullptr past the last one
+LLAMA_API const char * llama_model_decision_label(const struct llama_model * model, uint32_t i);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
@@ -114,7 +164,38 @@ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 
+// Write the enabled layer inputs to a device buffer [n_layer_inp*n_embd, n_batch] instead of host memory.
+// Row r holds the token at batch index r, layers in ascending layer id order.
+LLAMA_API void llama_set_embeddings_layer_inp_dev(struct llama_context * ctx, bool value);
+
+// Whether decode accepts entries added with llama_batch_ext_add_embd_row()
+// (needs a DFlash/DSpark decoder context whose ctx_other has a layer input device buffer).
+LLAMA_API bool llama_supports_embd_row(const struct llama_context * ctx);
+
+// Add an entry whose embedding is row `row` of the layer input device buffer of ctx_other.
+// All entries of the batch must be of this kind. Positions are set with llama_batch_ext_set_pos(), n_pos_per_embd of them.
+// Returns the batch index (>= 0), or the llama_batch_ext_add() error codes.
+LLAMA_API int32_t llama_batch_ext_add_embd_row(struct llama_batch_ext * batch, llama_seq_id seq_id, int32_t row);
+
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
+
+// Write the unmasked h_nextn rows (see llama_set_embeddings_nextn) of each decode to a device buffer
+// [n_embd_out, n_batch + n_seq_max] instead of host memory: row r < n_batch is the token at batch index r of the last decode,
+// row n_batch + s is free for the caller, e.g. for seq s (see llama_set_embeddings_nextn_rows()).
+// Returns false if the buffer cannot be used, the rows are then extracted to host memory.
+LLAMA_API bool llama_set_embeddings_nextn_dev(struct llama_context * ctx, bool value);
+
+// Copy rows of the h_nextn device buffer to or from host memory, ordered after the last decode and its readers
+LLAMA_API bool llama_get_embeddings_nextn_rows(struct llama_context * ctx, int64_t row0, int64_t n_rows, float * out);
+LLAMA_API bool llama_set_embeddings_nextn_rows(struct llama_context * ctx, int64_t row0, int64_t n_rows, const float * data);
+
+// Read the state rows of batches (see llama_batch_ext_set_embd_state_row()) from the h_nextn device buffer of src.
+// Returns whether decode accepts batches with state rows.
+LLAMA_API bool llama_set_embd_state_src(struct llama_context * ctx, struct llama_context * src);
+
+// The state of entry idx is row `row` of the h_nextn device buffer of the context set with llama_set_embd_state_src().
+// All entries of a batch have a state row, or none.
+LLAMA_API bool llama_batch_ext_set_embd_state_row(struct llama_batch_ext * batch, int32_t idx, int32_t row);
 
 //
 // model/context data extraction
@@ -132,3 +213,13 @@ LLAMA_API uint32_t        llama_model_target_layer_ids_n(const struct llama_mode
 // if out is nullptr, returns the number of tokens without writing to out
 // caller must allocate enough memory for out before calling
 LLAMA_API uint32_t llama_model_get_tok_embd(const struct llama_model * model, float * out);
+
+// same as above, but only the rows of the given tokens, in order (n_tokens * n_embd elements)
+// returns the number of elements written or 0 on error
+LLAMA_API uint32_t llama_model_get_tok_embd_rows(const struct llama_model * model, const llama_token * tokens, uint32_t n_tokens, float * out);
+
+// realtime models: number of tokens the output lags behind the audio input, used by mtmd; 0 if not applicable
+LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
+
+// each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
+LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);

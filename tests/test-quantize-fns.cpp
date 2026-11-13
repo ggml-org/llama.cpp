@@ -7,6 +7,7 @@
 #include <assert.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <math.h>
 #include <stdio.h>
 #include <string>
@@ -36,7 +37,7 @@ static const char* RESULT_STR[] = {"ok", "FAILED"};
 // Generate synthetic data
 static void generate_data(float offset, size_t n, float * dst, float amplitude = 2.0f) {
     for (size_t i = 0; i < n; i++) {
-        dst[i] = 0.1 + amplitude*cosf(i + offset);
+        dst[i] = 0.1 + amplitude*std::cos(i + offset);
     }
 }
 
@@ -47,7 +48,7 @@ static float array_rmse(const float * a1, const float * a2, size_t n) {
         double diff = a1[i] - a2[i];
         sum += diff * diff;
     }
-    return sqrtf(sum) / n;
+    return std::sqrt(sum) / n;
 }
 
 // Total quantization error on test data
@@ -105,7 +106,7 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
         qfns_cpu->vec_dot(test_size, &result, 0, tmp_q1.data(), 0, tmp_q2.data(), 0, 1);
 
         const float dot_ref = dot_product(test_data1, test_data2, test_size);
-        return fabsf(result - dot_ref) / test_size;
+        return std::fabs(result - dot_ref) / test_size;
     }
 
     // nrc == 2: kernel computes a 2x2 dot product matrix
@@ -124,7 +125,7 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
     const float ref11 = dot_product(test_data3, test_data4, test_size);
 
     const auto err = [test_size](float val, float ref) {
-        const float e = fabsf(val - ref) / test_size;
+        const float e = std::fabs(val - ref) / test_size;
         return std::isfinite(e) ? e : INFINITY;
     };
 
@@ -143,7 +144,7 @@ static int test_vec_dot_f32(bool verbose) {
         float result = 0.0f;
         f32->vec_dot(n, &result, 0, a.data(), 0, b.data(), 0, 1);
         const float ref = dot_product(a.data(), b.data(), n);
-        const float error = fabsf(result - ref) / n;
+        const float error = std::fabs(result - ref) / n;
 
         const bool failed = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
         num_failed += failed;
@@ -151,6 +152,152 @@ static int test_vec_dot_f32(bool verbose) {
             printf(" f32 vec_dot n=%4d:                 %s (ref=%f got=%f err=%f)\n",
                    n, RESULT_STR[failed], ref, result, error);
         }
+    }
+    return num_failed;
+}
+
+// Positive finite E4M3 values in encoding order, from OCP FP8 rev. 1.1, section 5.1.
+static const float F8_E4M3_VALUES[] = {
+    0.0f, 0.001953125f, 0.00390625f, 0.005859375f, 0.0078125f, 0.009765625f, 0.01171875f, 0.013671875f,
+    0.015625f, 0.017578125f, 0.01953125f, 0.021484375f, 0.0234375f, 0.025390625f, 0.02734375f, 0.029296875f,
+    0.03125f, 0.03515625f, 0.0390625f, 0.04296875f, 0.046875f, 0.05078125f, 0.0546875f, 0.05859375f,
+    0.0625f, 0.0703125f, 0.078125f, 0.0859375f, 0.09375f, 0.1015625f, 0.109375f, 0.1171875f,
+    0.125f, 0.140625f, 0.15625f, 0.171875f, 0.1875f, 0.203125f, 0.21875f, 0.234375f,
+    0.25f, 0.28125f, 0.3125f, 0.34375f, 0.375f, 0.40625f, 0.4375f, 0.46875f,
+    0.5f, 0.5625f, 0.625f, 0.6875f, 0.75f, 0.8125f, 0.875f, 0.9375f,
+    1.0f, 1.125f, 1.25f, 1.375f, 1.5f, 1.625f, 1.75f, 1.875f,
+    2.0f, 2.25f, 2.5f, 2.75f, 3.0f, 3.25f, 3.5f, 3.75f,
+    4.0f, 4.5f, 5.0f, 5.5f, 6.0f, 6.5f, 7.0f, 7.5f,
+    8.0f, 9.0f, 10.0f, 11.0f, 12.0f, 13.0f, 14.0f, 15.0f,
+    16.0f, 18.0f, 20.0f, 22.0f, 24.0f, 26.0f, 28.0f, 30.0f,
+    32.0f, 36.0f, 40.0f, 44.0f, 48.0f, 52.0f, 56.0f, 60.0f,
+    64.0f, 72.0f, 80.0f, 88.0f, 96.0f, 104.0f, 112.0f, 120.0f,
+    128.0f, 144.0f, 160.0f, 176.0f, 192.0f, 208.0f, 224.0f, 240.0f,
+    256.0f, 288.0f, 320.0f, 352.0f, 384.0f, 416.0f, 448.0f,
+};
+
+static uint8_t fp32_to_f8_e4m3_ref(float value) {
+    if (std::isnan(value)) {
+        return 0x7F;
+    }
+    const uint8_t sign = std::signbit(value) ? 0x80 : 0;
+    const double magnitude = std::fabs((double) value);
+    if (magnitude >= F8_E4M3_VALUES[126]) {
+        return sign | 126;
+    }
+    int nearest = 0;
+    double distance = magnitude;
+    for (int i = 1; i < 127; ++i) {
+        const double candidate = std::fabs(magnitude - F8_E4M3_VALUES[i]);
+        if (candidate < distance || (candidate == distance && (i & 1) == 0)) {
+            nearest = i;
+            distance = candidate;
+        }
+    }
+    return sign | (uint8_t) nearest;
+}
+
+static int test_f8_e4m3(bool verbose) {
+    static_assert(sizeof(ggml_fp8_e4m3_t) == 1);
+
+    const auto * traits = ggml_get_type_traits(GGML_TYPE_F8_E4M3);
+    const auto * traits_cpu = ggml_get_type_traits_cpu(GGML_TYPE_F8_E4M3);
+    std::vector<uint8_t> encoded(256);
+    std::vector<uint8_t> roundtrip(256);
+    std::vector<float> decoded(256);
+    int num_failed = 0;
+
+    const bool traits_failed = traits->blck_size != 1 || traits->type_size != sizeof(ggml_fp8_e4m3_t) || traits->is_quantized;
+    num_failed += traits_failed;
+    if (verbose || traits_failed) {
+        printf("f8_e4m3 scalar type traits:          %s\n", RESULT_STR[traits_failed]);
+    }
+
+    for (int i = 0; i < 256; ++i) {
+        encoded[i] = (uint8_t) i;
+    }
+    traits->to_float(encoded.data(), decoded.data(), decoded.size());
+    traits_cpu->from_float(decoded.data(), roundtrip.data(), decoded.size());
+
+    for (int i = 0; i < 256; ++i) {
+        const bool is_nan = (i & 0x7F) == 0x7F;
+        const float expected = is_nan ? NAN : std::copysign(F8_E4M3_VALUES[i & 0x7F], i & 0x80 ? -1.0f : 1.0f);
+        const bool decode_failed = is_nan ? !std::isnan(decoded[i])
+            : decoded[i] != expected || (expected == 0.0f && std::signbit(decoded[i]) != std::signbit(expected));
+        const bool encode_failed = !is_nan && roundtrip[i] != encoded[i];
+        if (decode_failed || encode_failed) {
+            num_failed++;
+            if (verbose) {
+                printf("f8_e4m3 code 0x%02x failed: decoded=%f expected=%f roundtrip=0x%02x\n",
+                        i, decoded[i], expected, roundtrip[i]);
+            }
+        }
+    }
+
+    std::vector<float> inputs;
+    for (float value : F8_E4M3_VALUES) {
+        inputs.push_back(value);
+        inputs.push_back(-value);
+    }
+    for (int i = 0; i < 126; ++i) {
+        const float midpoint = (F8_E4M3_VALUES[i] + F8_E4M3_VALUES[i + 1]) / 2.0f;
+        for (float value : {std::nextafter(midpoint, -INFINITY), midpoint, std::nextafter(midpoint, INFINITY)}) {
+            inputs.push_back(value);
+            inputs.push_back(-value);
+        }
+    }
+    for (float value : {std::numeric_limits<float>::denorm_min(), std::numeric_limits<float>::max(),
+                       std::nextafter(448.0f, INFINITY), std::nextafter(464.0f, -INFINITY), 464.0f,
+                       std::nextafter(464.0f, INFINITY), INFINITY, NAN}) {
+        inputs.push_back(value);
+        inputs.push_back(-value);
+    }
+
+    std::vector<uint8_t> quantized(inputs.size());
+    std::vector<uint8_t> quantized_ref(inputs.size());
+    traits_cpu->from_float(inputs.data(), quantized.data(), inputs.size());
+    traits->from_float_ref(inputs.data(), quantized_ref.data(), inputs.size());
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        const uint8_t expected = fp32_to_f8_e4m3_ref(inputs[i]);
+        if (quantized[i] != expected || quantized_ref[i] != expected) {
+            num_failed++;
+            if (verbose) {
+                printf("f8_e4m3 input %a failed: encoded=0x%02x reference=0x%02x expected=0x%02x\n",
+                       inputs[i], quantized[i], quantized_ref[i], expected);
+            }
+        }
+    }
+
+    for (int n : {0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 65, 129, 257}) {
+        std::vector<uint8_t> x(n + 1);
+        std::vector<float> y(n + 1);
+        double expected = 0.0;
+        for (int i = 0; i < n; ++i) {
+            const uint8_t code = (uint8_t) (i % 254 + (i % 254 >= 127));
+            x[i + 1] = code;
+            y[i + 1] = (i % 7 - 3) * 0.125f;
+            expected += std::copysign(F8_E4M3_VALUES[code & 0x7F], code & 0x80 ? -1.0f : 1.0f) * y[i + 1];
+        }
+        float actual;
+        traits_cpu->vec_dot(n, &actual, 0, x.data() + 1, 0, y.data() + 1, 0, 1);
+        const bool failed = std::fabs(actual - expected) > 1e-5 * std::max(1.0, std::fabs(expected));
+        num_failed += failed;
+        if (verbose || failed) {
+            printf("f8_e4m3 dot n=%d:                  %s (ref=%f got=%f)\n", n, RESULT_STR[failed], expected, actual);
+        }
+    }
+
+    for (uint8_t code : {0x7F, 0xFF}) {
+        std::vector<uint8_t> x(65, 0);
+        std::vector<float> y(65, 1.0f);
+        x[0] = x.back() = code;
+        float actual;
+        traits_cpu->vec_dot(x.size(), &actual, 0, x.data(), 0, y.data(), 0, 1);
+        num_failed += !std::isnan(actual);
+    }
+
+    if (verbose || num_failed) {
+        printf("f8_e4m3 exhaustive conversion:      %s (%d failures)\n", RESULT_STR[num_failed != 0], num_failed);
     }
     return num_failed;
 }
@@ -243,6 +390,42 @@ static int test_vec_dot_q(bool verbose) {
     return num_failed;
 }
 
+// In every group, all values with importance are equal, and the max (0) has none.
+// The scale search in make_qkx3_quants then fits min == max and passes inf/nan to nearest_int (#29804).
+static int test_quantize_imatrix_degenerate(bool verbose) {
+    const int64_t n = 256;
+    std::vector<float> x(n);
+    std::vector<float> imatrix(n);
+    std::vector<float> out(n);
+    int num_failed = 0;
+
+    printf("Testing degenerate imatrix:\n");
+    for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q4_1, GGML_TYPE_Q5_1}) {
+        const int64_t group = type == GGML_TYPE_Q2_K ? 16 : 32;
+        for (int64_t i = 0; i < n; ++i) {
+            const int64_t g = i / group;
+            const int64_t p = i % group;
+            const bool important = p % 3 == 1;
+            x[i] = important ? -0.02f*(g + 1) : (p % 2 ? -1.0f : 0.0f);
+            imatrix[i] = important ? 1.0f : 0.0f;
+        }
+        printf("  - %s\n", ggml_type_name(type));
+
+        std::vector<uint8_t> q(ggml_row_size(type, n));
+        ggml_quantize_init(type);
+        ggml_quantize_chunk(type, x.data(), q.data(), 0, 1, n, imatrix.data());
+        ggml_get_type_traits(type)->to_float(q.data(), out.data(), n);
+
+        const bool failed = !std::all_of(out.begin(), out.end(), [](float v) { return std::isfinite(v); });
+        num_failed += failed;
+        if (failed || verbose) {
+            printf("%5s imatrix degenerate groups:      %s\n", ggml_type_name(type), RESULT_STR[failed]);
+        }
+    }
+
+    return num_failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -263,7 +446,9 @@ int main(int argc, char * argv[]) {
     int num_failed = 0;
 
     num_failed += test_vec_dot_f32(verbose);
+    num_failed += test_f8_e4m3(verbose);
     num_failed += test_vec_dot_q(verbose);
+    num_failed += test_quantize_imatrix_degenerate(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);

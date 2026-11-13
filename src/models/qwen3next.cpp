@@ -35,9 +35,9 @@ void llama_model_qwen3next::load_arch_tensors(llama_model_loader & ml) {
         throw std::runtime_error(arch_name() + " model cannot have zero experts");
     }
 
-    const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
-    int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0;
+    const auto nf = nextn_flags(ml);
+    const int trunk_flags = nf.trunk;
+    const int mtp_flags   = nf.mtp;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
@@ -130,13 +130,13 @@ void llama_model_qwen3next::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_qwen3next::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_qwen3next::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -168,7 +168,7 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
             cur = build_layer_attn(inp->get_attn(), cur, inp_pos, il);
         }
 
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -206,7 +206,7 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -218,8 +218,6 @@ llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_p
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
 
 ggml_tensor * llama_model_qwen3next::graph::build_norm_gated(
@@ -275,15 +273,8 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
     Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
     cb(Kcur, "Kcur_normed", il);
 
-    Qcur = ggml_rope_ext(
-            ctx0, Qcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-
-    Kcur = ggml_rope_ext(
-            ctx0, Kcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base,
-            freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
@@ -296,7 +287,6 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
 
-    // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
     gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
 
     gate = ggml_sigmoid(ctx0, gate);
@@ -324,11 +314,11 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen3next::graph::build_qkvz
 
     if (model.layers[il].wqkv) {
         // optimized path
-        ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input);
+        ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
         qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
         cb(qkv_mixed, "linear_attn_qkv_mixed", il);
 
-        ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input);
+        ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
         cb(z, "z", il);
 
         return { qkv_mixed, z };
@@ -436,9 +426,6 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
                                    mixed_ba_reshaped->nb[1], mixed_ba_reshaped->nb[2], mixed_ba_reshaped->nb[3],
                                    split_sizes_ba[0] * ggml_element_size(mixed_ba_reshaped));
     cb(a, "a", il);
-
-    // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
-    b = ggml_cont(ctx0, b);
 
     ggml_tensor * beta = ggml_sigmoid(ctx0, b);
 
@@ -548,16 +535,13 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
     // Apply gated normalization: self.norm(core_attn_out, z)
     ggml_tensor * attn_out_norm = build_norm_gated(output, model.layers[il].ssm_norm, z_2d, il);
 
-    // Final reshape: [head_dim, n_heads, n_tokens, n_seqs] -> [n_tokens, n_seqs, n_heads * head_dim]
-    ggml_tensor * final_output = ggml_reshape_3d(ctx0, attn_out_norm, head_v_dim * num_v_heads, n_seq_tokens, n_seqs);
+    // Final reshape: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * head_dim , n_tokens * n_seqs ]
+    ggml_tensor * final_output = ggml_reshape_2d(ctx0, attn_out_norm, head_v_dim * num_v_heads, n_seq_tokens * n_seqs);
     cb(final_output, "final_output", il);
 
     // Output projection
     cur = build_lora_mm(model.layers[il].ssm_out, final_output);
     cb(cur, "linear_attn_out", il);
-
-    // Reshape back to original dimensions
-    cur = ggml_reshape_2d(ctx0, cur, n_embd, n_seq_tokens * n_seqs);
 
     return cur;
 }
@@ -625,7 +609,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
 }
 
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for Qwen3-Next
-llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_qwen3next::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "QWEN3NEXT MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "QWEN3NEXT MTP currently only supports a single MTP block");
@@ -642,7 +626,7 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
     GGML_ASSERT(layer.ffn_gate_inp     && "MTP block missing ffn_gate_inp");
 
     // TODO: extract in a common llm_graph_context::build_inp_embd_h()
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
@@ -653,6 +637,7 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
     // TODO: make static using `ggml_build_forward_select()`
     //       see llm_graph_context::build_inp_embd() for reference
     ggml_tensor * tok_embd;
+    ASSERT_EMBD_OR_TOKEN(ubatch);
     if (ubatch.token) {
         ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
 
@@ -662,9 +647,7 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
     }
     cb(tok_embd, "mtp_tok_embd", il);
 
-    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->h);
-    ggml_set_name(inp->h, "mtp_h_input");
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
 
     ggml_tensor * h_embd = inp->h;
 
@@ -713,12 +696,8 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);
@@ -738,7 +717,6 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
             ggml_element_size(Qcur_full) * n_embd_head * 2 * n_head,
             ggml_element_size(Qcur_full) * n_embd_head);
 
-    // TODO: CUDA is missing non-contiguous unary ops. when implemented: remove this cont
     gate = ggml_cont_2d(ctx0, gate, n_embd_head * n_head, n_tokens);
     cb(gate, "mtp_gate", il);
 
@@ -818,5 +796,4 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }

@@ -23,6 +23,7 @@
 #else
 #define A_TYPE float
 #endif
+#define A_TYPE_PACKED64 vec2
 #endif
 
 #if defined(DATA_A_F16)
@@ -1875,7 +1876,11 @@ const int8_t kvalues_iq4nl_const[16] = {
     int8_t(1), int8_t(13), int8_t(25), int8_t(38), int8_t(53), int8_t(69), int8_t(89), int8_t(113)
 };
 
+#ifdef KVALUES_IQ4NL_I8
+shared int8_t kvalues_iq4nl[16];
+#else
 shared FLOAT_TYPE kvalues_iq4nl[16];
+#endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 #define NEEDS_INIT_IQ_SHMEM
@@ -1883,10 +1888,25 @@ void init_iq_shmem(uvec3 wgsize)
 {
     // copy the table into shared memory and sync
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
+#ifdef KVALUES_IQ4NL_I8
+        kvalues_iq4nl[i] = kvalues_iq4nl_const[i];
+#else
         kvalues_iq4nl[i] = FLOAT_TYPE(kvalues_iq4nl_const[i]);
+#endif
     }
     barrier();
 }
+
+#ifdef KVALUES_IQ4NL_I8
+i32vec2 iq4nl_to_i8x8(uint32_t vui) {
+    const u8vec4 i0 = unpack8( vui       & 0x0F0F0F0F);
+    const u8vec4 i1 = unpack8((vui >> 4) & 0x0F0F0F0F);
+
+    return i32vec2(
+        pack32(i8vec4(kvalues_iq4nl[i0.x], kvalues_iq4nl[i0.y], kvalues_iq4nl[i0.z], kvalues_iq4nl[i0.w])),
+        pack32(i8vec4(kvalues_iq4nl[i1.x], kvalues_iq4nl[i1.y], kvalues_iq4nl[i1.z], kvalues_iq4nl[i1.w])));
+}
+#endif
 #endif
 #endif
 
@@ -1901,8 +1921,9 @@ shared int8_t kvalues_mxfp4[16];
 #endif
 
 #if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
-// UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
-shared float ue4m3_fp32_lut[128];
+// Cover all scale bytes accepted by ggml_validate_row_data.
+// ue4m3_to_fp32_build() masks the exponent and mantissa, but checks the full byte for 0 and 0x7F.
+shared float ue4m3_fp32_lut[256];
 
 float ue4m3_to_fp32_build(uint u) {
     if (u == 0u || u == 127u) {
@@ -1927,7 +1948,7 @@ void init_iq_shmem(uvec3 wgsize)
         kvalues_mxfp4[i] = kvalues_mxfp4_const[i];
     }
 #if defined(DATA_A_NVFP4)
-    for (uint i = gl_LocalInvocationIndex.x; i < 128u; i += wgsize.x) {
+    for (uint i = gl_LocalInvocationIndex.x; i < 256u; i += wgsize.x) {
         ue4m3_fp32_lut[i] = ue4m3_to_fp32_build(i);
     }
 #endif

@@ -920,7 +920,7 @@ static void * ggml_backend_cann_buffer_get_base(ggml_backend_buffer_t buffer) {
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform_q4_0(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform_q4_0(const ggml_tensor * tensor, const void * src, void * dst) {
     int64_t n_elems     = ggml_nelements(tensor);
     int64_t groups      = n_elems / QK4_0;
     size_t  quant_bytes = n_elems * sizeof(uint8_t) / 2;
@@ -1014,7 +1014,7 @@ static void ggml_backend_cann_transform_back_q4_0(const ggml_tensor * tensor, vo
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform_q8_0(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform_q8_0(const ggml_tensor * tensor, const void * src, void * dst) {
     int64_t n_elems     = ggml_nelements(tensor);
     int64_t groups      = n_elems / QK8_0;
     size_t  quant_bytes = n_elems * sizeof(uint8_t);
@@ -1075,7 +1075,7 @@ static void ggml_backend_cann_transform_back_q8_0(const ggml_tensor * tensor, co
  * @param dst Pointer to the destination buffer where transformed data will be
  * stored.
  */
-static void ggml_backend_cann_transform(ggml_tensor * tensor, const void * src, void * dst) {
+static void ggml_backend_cann_transform(const ggml_tensor * tensor, const void * src, void * dst) {
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             ggml_backend_cann_transform_q4_0(tensor, src, dst);
@@ -1398,34 +1398,35 @@ static void ggml_backend_cann_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static bool ggml_backend_cann_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *   src,
                                                 ggml_tensor *         dst) {
-    if (ggml_backend_buft_is_cann(src->buffer->buft)) {
-        ggml_backend_cann_buffer_context * src_ctx = (ggml_backend_cann_buffer_context *) src->buffer->context;
-        ggml_backend_cann_buffer_context * dst_ctx = (ggml_backend_cann_buffer_context *) buffer->context;
+    if (!ggml_backend_buft_is_cann(src->buffer->buft)) {
+        return false;
+    }
 
-        size_t memcpy_size = ggml_nbytes(src);
-        // Same device.
-        if (src_ctx->device == dst_ctx->device) {
-            ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
-                                  ACL_MEMCPY_DEVICE_TO_DEVICE));
-            return true;
-        } else {
+    ggml_backend_cann_buffer_context * src_ctx = (ggml_backend_cann_buffer_context *) src->buffer->context;
+    ggml_backend_cann_buffer_context * dst_ctx = (ggml_backend_cann_buffer_context *) buffer->context;
+
+    size_t memcpy_size = ggml_nbytes(src);
+    // Same device.
+    if (src_ctx->device == dst_ctx->device) {
+        ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
+                                ACL_MEMCPY_DEVICE_TO_DEVICE));
+        return true;
+    } else {
 #ifdef ASCEND_310P
-            // TODO: Support 310p P2P copy
-            return false;
+        // TODO: Support 310p P2P copy
+        return false;
 #endif
-            // Different device but can access by peer.
-            int32_t canAccessPeer = 0;
-            ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device, dst_ctx->device));
-            if (canAccessPeer) {
-                ggml_cann_set_device(src_ctx->device);
-                ACL_CHECK(aclrtDeviceEnablePeerAccess(dst_ctx->device, 0));
-                ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
-                                      ACL_MEMCPY_DEVICE_TO_DEVICE));
-                return true;
-            }
+        // Different device but can access by peer.
+        int32_t canAccessPeer = 0;
+        ACL_CHECK(aclrtDeviceCanAccessPeer(&canAccessPeer, src_ctx->device, dst_ctx->device));
+        if (canAccessPeer) {
+            ggml_cann_set_device(src_ctx->device);
+            ACL_CHECK(aclrtDeviceEnablePeerAccess(dst_ctx->device, 0));
+            ACL_CHECK(aclrtMemcpy((char *) dst->data, memcpy_size, (const char *) src->data, memcpy_size,
+                                    ACL_MEMCPY_DEVICE_TO_DEVICE));
+            return true;
         }
     }
-    return false;
 }
 
 /**
@@ -1478,6 +1479,9 @@ static const ggml_backend_buffer_i ggml_backend_cann_buffer_interface = {
     /* .cpy_tensor      = */ ggml_backend_cann_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_cann_buffer_clear,
     /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
 };
 
 /**
@@ -1595,12 +1599,14 @@ static bool ggml_backend_cann_buffer_type_is_host(ggml_backend_buffer_type_t buf
  * memory for CANN buffer types in the GGML backend.
  */
 static const ggml_backend_buffer_type_i ggml_backend_cann_buffer_type_interface = {
-    /* .get_name         = */ ggml_backend_cann_buffer_type_name,
-    /* .alloc_buffer     = */ ggml_backend_cann_buffer_type_alloc_buffer,
-    /* .get_alignment    = */ ggml_backend_cann_buffer_type_get_alignment,
-    /* .get_max_size     = */ NULL,  // defaults to SIZE_MAX
-    /* .get_alloc_size   = */ ggml_backend_cann_buffer_type_get_alloc_size,
-    /* .is_host          = */ ggml_backend_cann_buffer_type_is_host,
+    /* .get_name            = */ ggml_backend_cann_buffer_type_name,
+    /* .alloc_buffer        = */ ggml_backend_cann_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n      = */ NULL,
+    /* .get_alignment       = */ ggml_backend_cann_buffer_type_get_alignment,
+    /* .get_max_size        = */ NULL,  // defaults to SIZE_MAX
+    /* .get_alloc_size      = */ ggml_backend_cann_buffer_type_get_alloc_size,
+    /* .get_alloc_size_n    = */ NULL,
+    /* .is_host             = */ ggml_backend_cann_buffer_type_is_host,
 };
 
 /**
@@ -1742,12 +1748,14 @@ static ggml_backend_buffer_t ggml_backend_cann_host_buffer_type_alloc_buffer(ggm
 ggml_backend_buffer_type_t ggml_backend_cann_host_buffer_type() {
     static struct ggml_backend_buffer_type ggml_backend_cann_buffer_type_host = {
         /* .iface    = */ {
-                           /* .get_name         = */ ggml_backend_cann_host_buffer_type_name,
-                           /* .alloc_buffer     = */ ggml_backend_cann_host_buffer_type_alloc_buffer,
-                           /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
-                           /* .get_max_size     = */ NULL,  // defaults to SIZE_MAX
-            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
-                           /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
+                           /* .get_name             = */ ggml_backend_cann_host_buffer_type_name,
+                           /* .alloc_buffer         = */ ggml_backend_cann_host_buffer_type_alloc_buffer,
+                           /* .alloc_buffer_n       = */ NULL,
+                           /* .get_alignment        = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
+                           /* .get_max_size         = */ NULL,  // defaults to SIZE_MAX
+                           /* .get_alloc_size       = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
+                           /* .get_alloc_size_n     = */ NULL,
+                           /* .is_host              = */ ggml_backend_cpu_buffer_type()->iface.is_host,
                            },
         /* .device   = */
         ggml_backend_reg_dev_get(ggml_backend_cann_reg(), 0),
@@ -2439,6 +2447,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_MUL_MAT:
             {
+                if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                    return false;
+                }
                 switch (op->src[0]->type) {
 #ifndef ASCEND_310P
                     case GGML_TYPE_BF16:
@@ -2451,9 +2462,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                         // Q4 && Q8 per group is not support on 310p device
                         return false;
-#endif
+#else
                         // only support contiguous for quantized types.
                         return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
                     default:
                         return false;
                 }
@@ -2468,9 +2480,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                     // Q4 && Q8 per group is not support on 310p device
                     return false;
-#endif
+#else
                     // only support contiguous for quantized types.
                     return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
                 default:
                     return false;
             }
@@ -2538,6 +2551,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_ROPE:
             {
+                if (!ggml_rope_get_truncate(op)) {
+                    return false;
+                }
                 if (((const int32_t *) op->op_params)[15] != 0) {
                     return false; // FIXME: support ggml_rope_set_offset
                 }
@@ -2637,7 +2653,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                 // Ger is not supported on 310p device
                 return false;
-#endif
+#else
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
@@ -2645,6 +2661,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     default:
                         return false;
                 }
+#endif
             }
         case GGML_OP_CONV_TRANSPOSE_1D:
             return true;
@@ -2660,10 +2677,14 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                // K/V row lists (ggml_flash_attn_ext_rows) are not supported
+                if (op->src[5] != nullptr) {
+                    return false;
+                }
 #ifdef ASCEND_310P
                 // FA not support on 310p device
                 return false;
-#endif
+#else
                 // derived from [ggml-cuda.cu]
                 if (op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16) {
                     return false;
@@ -2689,6 +2710,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     return false;
                 }
                 return true;
+#endif
             }
         case GGML_OP_SSM_CONV:
             return true;
@@ -2846,12 +2868,13 @@ static ggml_backend_t ggml_backend_cann_device_init(ggml_backend_dev_t dev, cons
  *              otherwise false.
  */
 static bool ggml_backend_cann_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    if (ggml_backend_buft_is_cann(buft)) {
-        ggml_backend_cann_device_context *      dev_ctx  = (ggml_backend_cann_device_context *) dev->context;
-        ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
-        return buft_ctx->device == dev_ctx->device;
+    if (!ggml_backend_buft_is_cann(buft)) {
+        return false;
     }
-    return false;
+
+    ggml_backend_cann_device_context *      dev_ctx  = (ggml_backend_cann_device_context *) dev->context;
+    ggml_backend_cann_buffer_type_context * buft_ctx = (ggml_backend_cann_buffer_type_context *) buft->context;
+    return buft_ctx->device == dev_ctx->device;
 }
 
 static ggml_backend_buffer_type_t ggml_backend_cann_device_get_buffer_type(ggml_backend_dev_t dev) {

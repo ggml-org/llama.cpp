@@ -91,7 +91,6 @@ static __global__ void flash_attn_ext_banded_f32(
     const int64_t q_offset = n_kv - n_q;
 
     for (int64_t ik = 0; ik < n_kv; ++ik) {
-        // skip masked positions before touching K/V
         if (mask && __half2float(*(const half *) (mask + uint64_t(ik)*sizeof(half) +
                 uint64_t(iq)*m_nb1 + uint64_t(ih % mask_ne2)*m_nb2 +
                 uint64_t(ib % mask_ne3)*m_nb3)) == -INFINITY) {
@@ -175,7 +174,7 @@ bool ggml_cuda_flash_attn_ext_banded_supported(int device, const ggml_tensor * d
     const ggml_tensor * k   = dst->src[1];
     const ggml_tensor * v   = dst->src[2];
     const ggml_tensor * m   = dst->src[3];
-    const ggml_tensor * rel = dst->src[5];
+    const ggml_tensor * rel = dst->src[6];
     if (!q || !k || !v || !rel || q->type != GGML_TYPE_F32) {
         return false;
     }
@@ -213,9 +212,9 @@ void ggml_cuda_flash_attn_ext_banded(ggml_backend_cuda_context & ctx, ggml_tenso
     const ggml_tensor * k   = dst->src[1];
     const ggml_tensor * v   = dst->src[2];
     const ggml_tensor * m   = dst->src[3];
-    const ggml_tensor * rel = dst->src[5];
+    const ggml_tensor * rel = dst->src[6];
 
-    // only the MMA kernel reads src[5]; delegating otherwise drops the bias
+    // only the MMA kernel reads src[6]; delegating otherwise drops the bias
     if (ggml_cuda_flash_attn_ext_banded_use_mma(ctx.device, dst)) {
         ggml_cuda_flash_attn_ext(ctx, dst);
         return;

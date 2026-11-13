@@ -33,6 +33,10 @@ on:
       'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -46,7 +50,7 @@ env:
 
 jobs:
   ubuntu-webgpu:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
 
     steps:
       - name: Clone
@@ -56,7 +60,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: webgpu-ubuntu-24.04-arm-wasm
+          restore: false
           save: false
 
       - name: Install Emscripten
@@ -80,7 +84,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
         with:
-          key: webgpu-ubuntu-24.04-arm-wasm
+          key: webgpu-ubuntu-26.04-arm-wasm
           folder: llama.cpp
           hf_bucket: ggml-org/cache
 
@@ -103,7 +107,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: webgpu-ubuntu-24.04-arm-wasm
+          key: webgpu-ubuntu-26.04-arm-wasm
           folder: llama.cpp
           evict-old-files: 1d
           hf_bucket: ggml-org/cache

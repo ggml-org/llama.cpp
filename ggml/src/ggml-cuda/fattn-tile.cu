@@ -53,8 +53,7 @@ void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor 
             GGML_ASSERT(V->ne[0] == 512);
             ggml_cuda_flash_attn_ext_tile_case<576, 512>(ctx, dst);
         } break;
-        default: {
+        default:
             GGML_ABORT("Unsupported head size");
-        } break;
     }
 }
