@@ -12025,6 +12025,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 256, n, 256, {1, 1}, {1, 1}));
         }
     }
+    // CUDA few-row MMQ
+    for (ggml_type type_a : {GGML_TYPE_IQ2_NL, GGML_TYPE_IQ3_NL}) {
+        for (int64_t k : {4608, 2304}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000,  8, k, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 6170, 13, k, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000, 21, k, {1, 1}, {1, 1}));
+        }
+    }
 
 #if 0
     {
