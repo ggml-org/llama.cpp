@@ -1130,6 +1130,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             sparams.no_perf  = false;
             sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+            // Inkling2 uses host sampling to keep the first-maximum tie rule.
             if (has_rnn_context) {
                 sparams.temp = 0.0f;
                 sparams.samplers = { COMMON_SAMPLER_TYPE_TEMPERATURE };
@@ -1137,7 +1138,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             s.reset(common_sampler_init(model_dft, sparams));
         }
 
-        // Inkling2 uses host sampling to keep the first-maximum tie rule.
+        // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
         if (this->params.backend_sampling && !is_dflash2 && !is_lilicorr && !has_rnn_context) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
@@ -1314,6 +1315,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     return false;
                 }
                 if (is_lilicorr || has_rnn_context) {
+                    // Ordinary DFlash can write to the KV cache, but LiliCorr needs to store embeddings across sequences.
                     // Keep the committed boundary when the target rejects part of a verification batch.
                     const float * projected = llama_get_embeddings_nextn(ctx_dft);
                     if (projected) {
@@ -1364,6 +1366,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             for (int32_t i = 0; i < n_block_tokens; ++i) {
                 const int32_t idx = batch.add(i == 0 ? dp.id_last : mask_token_id, n + i, seq_id, !is_dflash2 && !is_lilicorr);
                 if (is_lilicorr || has_rnn_context) {
+                    // For LiliCorr drafting batch, set state embeddings for use in the associated transformer head.
                     const llama_pos pos = dp.pos0 - 1;
                     const size_t slot = (size_t) seq_id * context_rows + (size_t) pos % context_rows;
                     if (has_rnn_context && (pos < 0 || context_pos[slot] != pos)) {
@@ -1379,6 +1382,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         const bool sample_rnn = has_rnn_context && params.probabilistic;
+        // decode all sequence's noise block in a single batch
         int ret = sample_rnn ? llama_draft_backbone(ctx_dft, batch.get())
                              : llama_process(ctx_dft, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (ret != 0) {

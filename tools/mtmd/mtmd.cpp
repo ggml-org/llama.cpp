@@ -1702,6 +1702,7 @@ struct mtmd_tokenizer {
                     video_frames.push_back(std::move(img_u8));
                     continue;
                 }
+                // preprocess image
                 mtmd_image_preproc_out tmp_preproc_out = ctx->image_preproc->preprocess(img_u8);
 
                 // move entries and grid dimensions to the "global" preproc_out
