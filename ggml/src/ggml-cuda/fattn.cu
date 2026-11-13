@@ -677,7 +677,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     if (mask && mask->ne[2] != 1) {
-        return BEST_FATTN_KERNEL_NONE;
+        // Only VEC indexes the mask head plane; TILE/MMA and kv_rows require a shared mask.
+        const bool can_use_vector_mask = !kv_rows && (Q->ne[0] == 64 || Q->ne[0] == 128 || Q->ne[0] == 256) &&
+            K->ne[1] % FATTN_KQ_STRIDE == 0;
+        float logit_softcap;
+        memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+        return can_use_vector_mask && (logit_softcap == 0.0f || Q->ne[0] != 64) ?
+            BEST_FATTN_KERNEL_VEC : BEST_FATTN_KERNEL_NONE;
     }
 
     // only the MMA kernel reads K/V through kv_rows
