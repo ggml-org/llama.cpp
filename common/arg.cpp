@@ -2758,6 +2758,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_CPU_SHARE"));
     add_opt(common_arg(
+        {"--moe-router-export"}, "PATH",
+        "export MoE router top-k expert selections to a shared-memory ring at PATH (e.g. /dev/shm/moe_ring.bin) for external profiling/prefetch daemons; empty = disabled (default: empty)",
+        [](common_params & params, const std::string & value) {
+            params.moe_router_export_path = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_ROUTER_EXPORT"));
+    add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"
         "(dense models; for MoE expert weights use --n-cpu-moe)",
