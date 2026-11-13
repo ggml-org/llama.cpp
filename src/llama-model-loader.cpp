@@ -1694,7 +1694,7 @@ bool llama_model_loader::load_all_data(
     }
 
     // staging buffer for non-host buffers without async uploads, reused because a fresh allocation per tensor page faults on every load
-    // a CPU buffer rather than a std::vector: on Apple platforms it comes from vm_allocate, so freed staging memory leaves the process footprint at once
+    // allocated from the CPU buffer type, which uses vm_allocate on Apple platforms, so freeing it returns its pages to the OS right away
     ggml_backend_buffer_ptr read_buf;
     for (struct ggml_tensor * cur : tensors) {
         const auto * weight = get_weight(ggml_get_name(cur));
