@@ -334,9 +334,13 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         auto start = p.rule("start", p.optional(p.literal("<|turn>model\n")));
 
         if (extract_reasoning) {
-            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+            // The thought channel is normally closed with <channel|>, but the model may
+            // open it and go straight to a tool call without closing it. Stop the
+            // reasoning at <channel|> OR <|tool_call> and make the closing tag optional,
+            // so an unclosed thought does not swallow the following tool call.
+            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until_one_of({"<channel|>", "<|tool_call>"})) + p.optional(p.literal("<channel|>")));
         } else {
-            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
+            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until_one_of({"<channel|>", "<|tool_call>"}) + p.optional(p.literal("<channel|>"))));
         }
 
         auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(p.literal("thought"))), "");
