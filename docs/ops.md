@@ -131,3 +131,7 @@ Legend:
 |                            TRUNC | ❌ | ❌ | ✅ | 🟡 | 🟡 | ❌ | ✅ | 🟡 | ✅ | ✅ | ✅ | ❌ | ❌ |
 |                          UPSCALE | ❌ | 🟡 | ✅ | ✅ | ❌ | ❌ | ✅ | 🟡 | ✅ | ✅ | ✅ | ❌ | ❌ |
 |                            XIELU | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
+
+### CUDA/HIP flash attention masks
+
+Per-head masks (`mask.ne[2] > 1`) use the VEC kernel for equal K/V head sizes 64, 128, or 256 and KV lengths divisible by 256. Head size 64 requires zero logit softcap. The mask head index broadcasts modulo `mask.ne[2]`. This route supports vector sinks and disables the shared-head mask scan. TILE, MMA, sparse MMA, and `kv_rows` do not support per-head masks; unsupported shapes are rejected by `supports_op` for scheduler fallback. Shared-head masks keep their existing dispatch.
