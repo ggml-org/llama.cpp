@@ -1703,7 +1703,18 @@ class TensorNameMap:
             "encoder.fc", # dflash (transformers MuseGlimmerAssistant)
         ),
 
+        MODEL_TENSOR.DSPARK_FUSE: ("fuse_weight",),
+        MODEL_TENSOR.DSPARK_NORM: ("markov_head.dflare_norm",),
+        MODEL_TENSOR.DSPARK_HIDDEN_OUT: ("markov_head.hidden_out",),
+        MODEL_TENSOR.DSPARK_JOINT_PROJ: ("markov_head.rnn_proj",),
+        MODEL_TENSOR.DSPARK_MASK_EMBD: ("mask_embed",),
+        MODEL_TENSOR.ATTN_K_CTX: ("layers.{bid}.self_attn.k_proj_ctx",),
+        MODEL_TENSOR.ATTN_V_CTX: ("layers.{bid}.self_attn.v_proj_ctx",),
+        MODEL_TENSOR.ATTN_K_CTX_NORM: ("layers.{bid}.self_attn.k_norm_ctx",),
+        MODEL_TENSOR.DFLARE_NORM: ("layers.{bid}.dflare_norm",),
+
         MODEL_TENSOR.DSPARK_MARKOV_W1: (
+            "markov_head.markov_w1",
             "model.markov_head.markov_w1", # dspark
         ),
 
