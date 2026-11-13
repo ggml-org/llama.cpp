@@ -599,6 +599,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
 
+`priority`: Priority of the request when it has to wait for a slot. When a slot becomes free, the waiting request with the highest `priority` is served first; requests with the same `priority` are served in arrival order. Running requests are never interrupted. Default: `0`
+
 `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 
 `return_tokens`: Return the raw generated token ids in the `tokens` field. Otherwise `tokens` remains empty. Default: `false`

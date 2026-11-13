@@ -89,24 +89,22 @@ int server_queue::get_new_id() {
 
 void server_queue::pop_deferred_task(int id_slot) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
-    if (!queue_tasks_deferred.empty()) {
-        // try to find a task that uses the specified slot
-        bool found = false;
-        for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end(); ++it) {
-            if (it->id_slot == id_slot) {
-                QUE_DBG("pop deferred task (use slot %d), id_task = %d\n", id_slot, it->id);
-                queue_tasks.emplace_front(std::move(*it));
-                queue_tasks_deferred.erase(it);
-                found = true;
-                break;
-            }
+    // pick the highest priority task that can use this slot, then prefer the one pinned to it, then the oldest
+    auto best = queue_tasks_deferred.end();
+    for (auto it = queue_tasks_deferred.begin(); it != queue_tasks_deferred.end(); ++it) {
+        if (it->id_slot != -1 && it->id_slot != id_slot) {
+            continue;
         }
-        // if not tasks found using the slot, just pop the first deferred task (default behavior)
-        if (!found) {
-            QUE_DBG("pop deferred task, id_task = %d\n", queue_tasks_deferred.front().id);
-            queue_tasks.emplace_front(std::move(queue_tasks_deferred.front()));
-            queue_tasks_deferred.pop_front();
+        if (best == queue_tasks_deferred.end() ||
+                it->priority > best->priority ||
+                (it->priority == best->priority && it->id_slot == id_slot && best->id_slot != id_slot)) {
+            best = it;
         }
+    }
+    if (best != queue_tasks_deferred.end()) {
+        QUE_DBG("pop deferred task (slot %d), id_task = %d, priority = %d\n", id_slot, best->id, best->priority);
+        queue_tasks.emplace_front(std::move(*best));
+        queue_tasks_deferred.erase(best);
     }
     time_last_task = ggml_time_ms();
     condition_tasks.notify_one();

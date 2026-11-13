@@ -3,6 +3,7 @@
 #include "../tools/server/server-chat.h"
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
+#include "../tools/server/server-queue.h"
 #include "../tools/server/server-schema.h"
 
 #include <algorithm>
@@ -740,6 +741,67 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+//
+// server_queue (deferred task selection)
+//
+
+struct deferred_spec {
+    int id;
+    int id_slot  = -1;
+    int priority = 0;
+};
+
+// defer the tasks, then free the given slots one by one
+// returns the id of the task picked for each slot, or -1 if no task could use that slot
+static std::vector<int> pick_deferred(const std::vector<deferred_spec> & specs, const std::vector<int> & slots) {
+    server_queue queue;
+    for (const auto & spec : specs) {
+        server_task task(SERVER_TASK_TYPE_COMPLETION);
+        task.id       = spec.id;
+        task.id_slot  = spec.id_slot;
+        task.priority = spec.priority;
+        queue.defer(std::move(task));
+    }
+
+    std::vector<int> picked;
+    size_t i_slot = 0;
+    queue.on_new_task([&](server_task && task, bool) {
+        picked.push_back(task.id);
+        return true;
+    });
+    queue.on_update_slots([&]() {
+        while (i_slot < slots.size()) {
+            const size_t n_before = queue.queue_tasks_deferred_size();
+            queue.pop_deferred_task(slots[i_slot++]);
+            if (queue.queue_tasks_deferred_size() < n_before) {
+                return; // the picked task is processed next
+            }
+            picked.push_back(-1);
+        }
+        queue.terminate();
+    });
+    queue.start_loop();
+    return picked;
+}
+
+static void test_server_queue_deferred(testing & t) {
+    using ids = std::vector<int>;
+
+    t.assert_true("fifo without priority",   pick_deferred({{0}, {1}, {2}}, {0, 0, 0}) == ids({0, 1, 2}));
+    t.assert_true("fifo with same priority", pick_deferred({{0, -1, 5}, {1, -1, 5}}, {0, 0}) == ids({0, 1}));
+    t.assert_true("higher priority first",   pick_deferred({{0, -1, 0}, {1, -1, 10}, {2, -1, 5}}, {0, 0, 0}) == ids({1, 2, 0}));
+    t.assert_true("negative priority last",  pick_deferred({{0, -1, -1}, {1, -1, 0}}, {0, 0}) == ids({1, 0}));
+
+    // on equal priority, prefer the task pinned to the released slot
+    t.assert_true("pinned wins a tie",       pick_deferred({{0}, {1, 1}}, {1, 1}) == ids({1, 0}));
+    t.assert_true("priority beats pinned",   pick_deferred({{0, 1, 0}, {1, -1, 5}}, {1, 1}) == ids({1, 0}));
+
+    // a task pinned to another slot must not be picked, and must not block the others
+    t.assert_true("skip other slot",         pick_deferred({{0, 1}, {1}}, {0, 0, 1}) == ids({1, -1, 0}));
+    t.assert_true("only other slot",         pick_deferred({{0, 1, 10}}, {0, 1}) == ids({-1, 0}));
+    t.assert_true("empty queue",             pick_deferred({}, {0}) == ids({-1}));
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -767,6 +829,7 @@ int main(int argc, char ** argv) {
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("server_queue_deferred", test_server_queue_deferred);
 
     return t.summary();
 }
