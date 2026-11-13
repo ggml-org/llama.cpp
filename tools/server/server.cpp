@@ -44,6 +44,7 @@ static inline void signal_handler(int signal) {
 struct server_run_opts {
     bool install_signal_handlers = true; // off when embedded in llama-cli, which handles them itself
     bool resolve_model           = true; // download / resolve -hf and docker models; off when the caller did it already
+    bool can_restart             = true; // exec() itself for --sleep-mode rst; off when embedded in llama-cli
 };
 
 // satisfies -Wmissing-declarations (used by llama command)
@@ -635,7 +636,7 @@ static int server_run_router(common_params & params, int argc, char ** argv, con
 // instance
 //
 
-static int server_run_instance(common_params & params, server_role & role, common_models_handler & models_handler, const server_run_opts & opts) {
+static int server_run_instance(common_params & params, int argc, char ** argv, server_role & role, common_models_handler & models_handler, const server_run_opts & opts) {
     // -hf / docker: download if needed and resolve the local path. a child resolves what the router downloaded
     if (opts.resolve_model) {
         try {
@@ -651,6 +652,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
 
     // struct that contains llama context and inference
     server_context ctx_server;
+    ctx_server.init(argc, opts.can_restart ? argv : nullptr); // before routes, which restore the state of a restarted process
     server_routes  routes(params, ctx_server);
     server_tools   tools;
 
@@ -702,10 +704,7 @@ static int server_run_instance(common_params & params, server_role & role, commo
         return 1;
     }
 
-    routes.update_meta(ctx_server);
     ctx_http.is_ready.store(true);
-
-    SRV_INF("%s", "model loaded\n");
 
     shutdown_handler = [&](int) {
         mcp_mgr.shutdown();
@@ -729,12 +728,13 @@ static int server_run_instance(common_params & params, server_role & role, commo
     std::thread monitor_thread;
     if (role.is_managed_by_router()) {
         monitor_thread = role.setup(shutdown_handler);
-        json info = routes.get_model_info();
-        // the router tracks device memory from these reports
+        // if no model is loaded, the process restarted into sleeping state and the router knows it
         if (const auto * ll_ctx = ctx_server.get_llama_context()) {
+            json info = routes.get_model_info();
+            // the router tracks device memory from these reports
             info["memory"] = server_model_memory(llama_n_ctx(ll_ctx), common_memory_breakdown_rows(ll_ctx)).to_json();
+            role.notify_to_router(server_state_to_str(SERVER_STATE_READY), info);
         }
-        role.notify_to_router(server_state_to_str(SERVER_STATE_READY), info);
     }
 
     // this call blocks the main thread until queue_tasks.terminate() is called
@@ -779,7 +779,8 @@ static int server_run(common_params & params, int argc, char ** argv, server_rol
 
     // only an instance loads a model; the others must not touch the GPU, so skip the
     // device enumeration for them and the CUDA primary context stays uncreated
-    common_params_print_info(params, role_type == SERVER_ROLE_INSTANCE);
+    // a process restarted into sleeping state does not touch the GPU either, see --sleep-mode rst
+    common_params_print_info(params, role_type == SERVER_ROLE_INSTANCE && !server_sleep_rst::is_boot_to_sleep());
 
     if (!server_prepare_params(params, role_type)) {
         return 1;
@@ -789,7 +790,7 @@ static int server_run(common_params & params, int argc, char ** argv, server_rol
         case SERVER_ROLE_DOWNLOAD: return server_run_download(params, role);
         case SERVER_ROLE_MEASURE:  return server_run_measure(params, role, models_handler);
         case SERVER_ROLE_ROUTER:   return server_run_router(params, argc, argv, opts);
-        case SERVER_ROLE_INSTANCE: return server_run_instance(params, role, models_handler, opts);
+        case SERVER_ROLE_INSTANCE: return server_run_instance(params, argc, argv, role, models_handler, opts);
     }
 
     GGML_ABORT("invalid server role");
@@ -820,8 +821,11 @@ int llama_server(int argc, char ** argv) {
 
     SRV_INF("%s", "initializing ...\n");
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
+    // a process restarted into sleeping state inits the backends only when loading the model, see --sleep-mode rst
+    if (!server_sleep_rst::is_boot_to_sleep()) {
+        llama_backend_init();
+        llama_numa_init(params.numa);
+    }
 
     const int result = server_run(params, argc, argv, role, server_run_opts{});
     common_log_flush(common_log_main());
@@ -833,6 +837,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     server_run_opts opts;
     opts.install_signal_handlers = false;
     opts.resolve_model           = false;
+    opts.can_restart             = false;
 
     server_role role;
     return server_run(params, argc, argv, role, opts);
