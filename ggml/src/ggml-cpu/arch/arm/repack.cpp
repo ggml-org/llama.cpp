@@ -119,7 +119,7 @@ static inline void ggml_dot2_2x2x8_s32(int32x4_t * r0,
     r0[1] = vpadalq_s16(r0[1], vmlal_high_s8(vmull_high_s8(w0, as0), w1, as1));
 }
 
-// Sum each of 4 int16 accumulators into one int32 lane, the lanes must be below 8192
+// Sum each of 4 int16 accumulators into one int32 lane, the lanes must be below 16384
 static inline int32x4_t ggml_hsum_4x_s16(const int16x8_t * acc) {
     return vpaddq_s32(vpaddlq_s16(vpaddq_s16(acc[0], acc[1])), vpaddlq_s16(vpaddq_s16(acc[2], acc[3])));
 }
