@@ -1,6 +1,6 @@
-# Inkling 2 text backbone
+# Inkling 2
 
-`inkling2` supports `Inkling2ForCausalLM` and the text backbone of `Inkling2ForConditionalGeneration`. The implementation follows Transformers revision `109a7d19bf667168837f32929e00b791e195d14d`; the original checkpoint name mapping was checked against `thinkingmachines/Inkling-2-Small` revision `e242a97e271095c11bc33ddb3850d37e22917343`.
+`inkling2` supports `Inkling2ForCausalLM` and still-image input for `Inkling2ForConditionalGeneration` with a separate mmproj GGUF. The implementation follows Transformers revision `109a7d19bf667168837f32929e00b791e195d14d`; the original checkpoint name mapping was checked against `thinkingmachines/Inkling-2-Small` revision `e242a97e271095c11bc33ddb3850d37e22917343`.
 
 ## Conversion
 
@@ -51,12 +51,59 @@ Attention uses the existing unfused path because flash attention does not accept
 
 The existing hybrid SWA memory holds KV and recurrent state in every layer. Each recurrent row packs the K, V, post-attention and post-MLP convolution histories. The standard recurrent copy, save/load and snapshot mechanisms apply to those histories. Block-attention residual states are per-position graph tensors; they do not use a persistent cache. The expert activation reuses SITU with the gate and up softcaps.
 
+## Vision
+
+Convert the same checkpoint separately for text and vision. The normal invocation above writes only text; `--mmproj` writes only the vision encoder and merger:
+
+```sh
+python3 convert_hf_to_gguf.py /path/to/hf-checkpoint --mmproj --outtype f32 --outfile /path/to/model-store/mmproj-inkling2.gguf
+```
+
+Original `model.visual.*` names and Transformers `model.vision_tower.*` names are accepted. All 422 synthetic vision tensor names match the saved real checkpoint index and map identically to the HF-saved names. The mmproj carries patch size, encoder width, heads, layers, feed-forward width, LayerNorm epsilon, spatial merge size, position-grid side, RoPE base, projector hidden/output widths, projector bias policy and image mean/std. Text GGUF contents are unaffected by the separate vision conversion. The stored patch projection keeps HWC flattening order and has no temporal factor.
+
+The encoder uses the generic ViT graph, with pre-LayerNorm, biased Q/K/V/output projections, noncausal attention, learned residual layer scales and exact GELU. It prepends the sum of the class token and its position vector. Learned grid positions use bilinear interpolation with half-pixel centers and no antialiasing. Axial RoPE uses adjacent channel pairs, width in the first half and height in the second; patch coordinates start at one and CLS is at zero. After removing CLS, consecutive native patch features are concatenated directly, then projected through GELU to the text width. The real configuration has 23 layers, width 1024, 16 heads, and a 4096-hidden projector to width 4608.
+
+Preprocessing keeps the original image resolution and pads on the right and bottom to a multiple of `native_patch_size * adapter_merge_size` (40 pixels in the public checkpoint). Padding is float -1 on the raw 0-255 scale, before rescaling and normalization. The reference fuses these as `(raw - 127.5) / 127.5`, so padding becomes approximately -1.00784314. There is no resize, overview crop or independent attention per cell: the complete padded image goes through one encoder sequence. The grid is `[1, ceil(height / 40), ceil(width / 40)]`.
+
+Merged cells follow row-major order. Within each cell, native patches are top-left, top-right, bottom-left, bottom-right; each patch is flattened as row, column, RGB channel. The merger retains that patch-major feature order. RGBA image files are composited before padding onto an 8-pixel checkerboard, with 204 at even `(row / 8 + column / 8)` parity and 153 at odd parity. Each channel uses integer rounding `(channel * alpha + background * (255 - alpha) + 127) / 255`. The public RGB bitmap API expects callers to supply already-composited RGB; the mtmd image-file helpers handle RGBA compositing.
+
+The regular CLI accepts `--mmproj` and `--image`:
+
+```sh
+llama-cli -m /path/to/model-store/inkling2.gguf --mmproj /path/to/model-store/mmproj-inkling2.gguf --image image.png --no-mmproj-offload -ngl 0 -fa off -p "Describe this image." -st
+```
+
+`llama-mtmd-cli` accepts the same model/image flags. `llama-server -m ... --mmproj ... --no-mmproj-offload -ngl 0 -fa off` accepts image content through `/v1/chat/completions`, including base64 PNG data URLs. The synthetic CLI/server checks used `--chat-template chatml` because their byte-only test vocabulary has no checkpoint chat template. The real checkpoint's chat template has not been exercised with vision.
+
+### Vision verification
+
+The gates were fixed before comparison: bit-exact F32 preprocessing, and maximum absolute error <= 1e-5 plus relative L2 <= 1e-5 for every vision checkpoint and end-to-end feature comparison. All stages passed in order on CPU with flash attention disabled. No real weights were downloaded.
+
+The deterministic synthetic checkpoint uses the original `model.visual.*` names, all 23 layers, encoder width 32, four heads, native patch 20, merge 2, learned position-grid side 32, projector hidden width 4096 and output width 4608. The text fixture has width 4608, two layers and a byte-only test vocabulary of 256 entries; the fixture generator supplies that tokenizer metadata directly to avoid a large 200k-vocabulary random embedding table. The vision GGUF uses the standard `--mmproj` command. Synthetic tensors and fixtures are not real-model validation.
+
+Four PNG cases cover RGB 61x43, RGBA 83x45, aligned RGB 40x40 and wide RGBA 161x21, with grid shapes `[1,2,2]`, `[1,2,3]`, `[1,1,1]` and `[1,1,5]`. All 76,800 preprocessed channel values match element-wise, including normalized padding and alpha values 0, 1, 127, 128, 254 and 255. The C++ native-patch input buffers also match the HF patch order bit-for-bit.
+
+| Checkpoint | Worst max absolute error | Worst relative L2 |
+|---|---:|---:|
+| Linear patch projection | 1.31130219e-6 | 3.19121364e-7 |
+| Patches with positions and CLS | 1.31130219e-6 | 3.18810928e-7 |
+| First encoder layer | 1.19209290e-6 | 3.21497431e-7 |
+| Final encoder, all 23 layers | 1.37090683e-6 | 3.32171539e-7 |
+| Merger into width 4608 | 1.43051147e-6 | 6.91625568e-7 |
+| Image file through mtmd into width 4608 | 1.43051147e-6 | 6.91625568e-7 |
+
+Each metric is the maximum across the four cases, so the two columns can refer to different images. Each case also ran with its image prepended through the actual multimodal prompt path, producing 256 finite logits. The regular CLI and multimodal CLI generated two tokens; the server image request returned HTTP 200 with two completion tokens. F16 and BF16 mmproj conversion/loading also produced finite CPU image-conditioned logits; numerical parity is claimed only for F32.
+
+The original text regressions still pass: both float fixtures, the packed fixture, all 74 original-name roundtrip tensors, text-only loading without mmproj, and `test-llama-archs -a inkling2 -b CPU`. The converter suite has 22 passing tests; gguf-py has 9; mtmd has 15 tests with 196 assertions. Changed Python files pass the scoped type check. The whole-repository type check remains incomplete because optional dependencies for unrelated tools are absent.
+
+Real weights, production encoder width/head dimensions, the real 640x640 input grid (1024 patches plus CLS), multiple images in one prompt, video, GPU/NPU execution, flash attention, real-model quality and the real chat template with images remain unverified. Video is explicitly unsupported.
+
 ## Deliberately unsupported
 
-- Vision: `model.visual.*` and `vision_tower.*` tensors are skipped. An image processor, vision graph, projector and multimodal integration remain separate work.
+- Video: the vision path supports still images only. Video frames are rejected; temporal patch size 2 does not add a temporal factor to the still-image linear patch projection.
 - MTP: MTP and Markov-head tensors are skipped. The main text model does not implement the speculative predictor; the pinned Transformers reference does not implement it either.
 
-The converter emits one warning for skipping vision and MTP. It never silently interprets packed expert bytes as floating-point weights.
+Text conversion still emits one warning for skipping vision and MTP; `--mmproj` converts the vision tensors separately. It never silently interprets packed expert bytes as floating-point weights.
 
 ## Validation
 
