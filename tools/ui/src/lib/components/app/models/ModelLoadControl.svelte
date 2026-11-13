@@ -31,7 +31,29 @@
 
 <div class={['flex w-5 shrink-0 items-center justify-center', className]}>
 	{#if isLoading}
-		<MODEL_LOAD_ICONS.loading class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
+		<MODEL_LOAD_ICONS.loading
+			class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground {showAction && revealOnHover
+				? 'group-hover:hidden [@media(pointer:coarse)]:hidden'
+				: ''}"
+		/>
+
+		<div
+			class={!showAction
+				? 'hidden'
+				: revealOnHover
+					? 'hidden group-hover:flex [@media(pointer:coarse)]:flex'
+					: 'flex'}
+		>
+			<ActionIcon
+				class="h-5 w-5 hover:text-foreground"
+				icon={MODEL_LOAD_ICONS.cancel}
+				iconSize="h-4 w-4"
+				onclick={() => modelsStore.status.cancelLoad(option.model)}
+				stopPropagationOnClick
+				tooltip="Cancel loading model"
+				tooltipAsTitle
+			/>
+		</div>
 	{:else}
 		<!-- the state dot is what the row shows at rest; the action takes its place on hover -->
 		{#if showAction && revealOnHover}
