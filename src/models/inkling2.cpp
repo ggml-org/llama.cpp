@@ -260,12 +260,21 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
         const int64_t streams = mask->ne[3];
         bias = ggml_reshape_4d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0,
                 ggml_reshape_4d(ctx0, bias, n_kv, n_tokens/streams, streams, nh), 0, 1, 3, 2)), n_kv, n_tokens/streams, nh, streams);
-        // build_attn scales the bias along with QK.
-        bias = ggml_scale(ctx0, bias, sqrtf(hd));
         auto * sinks = build_lora_mm(l.attn_sink_proj, inputs[0]);
         sinks = ggml_reshape_4d(ctx0, ggml_cont(ctx0, ggml_permute(ctx0,
                 ggml_reshape_3d(ctx0, sinks, nh, n_tokens/streams, streams), 1, 0, 2, 3)), 1, n_tokens/streams, nh, streams);
-        cur = build_attn(attn, nullptr, nullptr, nullptr, q, k, v, bias, sinks, nullptr, 1.0f/sqrtf(hd), il);
+        ggml_tensor * fa_mask = nullptr;
+        if (cparams.flash_attn) {
+            // exp(s - t)/(1 + sum(exp(s - t))) = exp(s)/(exp(t) + sum(exp(s))).
+            fa_mask = ggml_add(ctx0, ggml_sub(ctx0, bias, sinks), ggml_cast(ctx0, mask, GGML_TYPE_F32));
+            fa_mask = ggml_cast(ctx0, fa_mask, GGML_TYPE_F16);
+            sinks = ggml_fill(ctx0, ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, nh), 0.0f);
+            bias = nullptr;
+        } else {
+            // build_attn scales the bias along with QK; FA adds the mask after scaling QK.
+            bias = ggml_scale(ctx0, bias, sqrtf(hd));
+        }
+        cur = build_attn(attn, nullptr, nullptr, nullptr, q, k, v, bias, sinks, nullptr, 1.0f/sqrtf(hd), il, fa_mask);
         cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(l.wqkv_gate, inputs[0])));
         cur = convolve(build_lora_mm(l.wo, cur), l.attn_post_conv, nullptr, state, history, recr, 2*kv);
         if (il % hparams.attn_res_block_size == 0) {
