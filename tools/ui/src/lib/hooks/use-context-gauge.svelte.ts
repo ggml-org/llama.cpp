@@ -5,10 +5,15 @@
  */
 
 import { useProcessingState } from './use-processing-state.svelte';
-import { colorLevelFromPercent } from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
+import { page } from '$app/state';
+import {
+	colorLevelFromPercent,
+	hasProcessedTokens
+} from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
 import { STATS_UNITS } from '$lib/constants';
 import { ColorLevel } from '$lib/enums';
-import { contextStatsStore, modelsStore } from '$lib/stores';
+import { chatStore, contextStatsStore, conversationsStore, modelsStore } from '$lib/stores';
+import type { DatabaseMessage } from '$lib/types';
 
 export interface UseContextGaugeReturn {
 	readonly activeModelId: string | null;
@@ -44,6 +49,23 @@ function filterTransientDetails(raw: string[]): string[] {
 
 		return !detail.includes(STATS_UNITS.TOKENS_PER_SECOND);
 	});
+}
+
+/** Whether the open conversation has spent any tokens yet, which is when the gauge shows. */
+export function useShowContextGauge(): { readonly current: boolean } {
+	const show = $derived(
+		Boolean(page.params.id) &&
+			hasProcessedTokens(
+				conversationsStore.activeMessages as DatabaseMessage[],
+				chatStore.isLoading || chatStore.isStreaming() ? chatStore.processing.activeState : null
+			)
+	);
+
+	return {
+		get current() {
+			return show;
+		}
+	};
 }
 
 export function useContextGauge(): UseContextGaugeReturn {

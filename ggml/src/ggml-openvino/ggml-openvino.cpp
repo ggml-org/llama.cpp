@@ -1455,6 +1455,12 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         }
         break;
     }
+    case GGML_OP_RMS_NORM: {
+        if (op->type == GGML_TYPE_BF16) {
+            return {false, "RMS_NORM with BF16 type is not supported"};
+        }
+        break;
+    }
     case GGML_OP_ADD_ID: {
         // Keep support aligned with the CPU backend implementation, which only handles f32 inputs/output and i32 ids.
         if (op->type != GGML_TYPE_F32 || op->src[0]->type != GGML_TYPE_F32 || op->src[1]->type != GGML_TYPE_F32 ||
@@ -1581,6 +1587,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT: {
+        if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+            return {false, "MUL_MAT with a BF16 or F32 src1 precision is not supported"};
+        }
         if (ggml_openvino_is_gpu() && op->src[0] != nullptr && op->src[1] != nullptr &&
             ggml_is_quantized(op->src[0]->type) && strcmp(op->src[0]->name, "a") == 0 &&
             strcmp(op->src[1]->name, "b") == 0 && op->src[0]->ne[1] == 1 && op->src[1]->ne[1] == 64 &&
@@ -1636,9 +1645,6 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_ROPE: {
-        if (!ggml_rope_get_truncate(op)) {
-            return {false, "ROPE without YaRN truncation is not supported"};
-        }
         if (op->view_src != nullptr && !ggml_is_contiguous(op->src[0])) {
             return {false, "ROPE on VIEW / non-contiguous input is not supported"};
         }

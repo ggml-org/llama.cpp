@@ -47,6 +47,7 @@ namespace syclexp = sycl::ext::oneapi::experimental;
 #if GGML_SYCL_DNNL
 #include "dnnl.hpp"
 #include "dnnl_sycl.hpp"
+#include "oneapi/dnnl/dnnl_graph.hpp"
 #endif
 
 #define GGML_COMMON_DECL_SYCL
@@ -92,9 +93,17 @@ enum ggml_sycl_xmx_gather_type {
     GGML_SYCL_XMX_GATHER_Q4_K     = 1 << 10,
     GGML_SYCL_XMX_GATHER_Q5_K     = 1 << 11,
     GGML_SYCL_XMX_GATHER_Q6_K     = 1 << 12,
+    GGML_SYCL_XMX_GATHER_Q2_K     = 1 << 13,
+    GGML_SYCL_XMX_GATHER_Q3_K     = 1 << 14,
 };
 static constexpr int GGML_SYCL_XMX_GATHER_TYPES_DEFAULT = ~0;
 extern int g_ggml_sycl_xmx_gather_types;
+
+enum ggml_sycl_mmid_sched_bit {
+    GGML_SYCL_MMID_SCHED_DEVICE    = 1 << 0,
+    GGML_SYCL_MMID_SCHED_UNBOUNDED = 1 << 1,
+};
+extern int g_ggml_sycl_mmid_sched;
 // Which joint_matrix combinations the XMX dequant-GEMM paths may use, one bit each (see fused-gemm.cpp).
 // GGML_SYCL_DYNAMIC_PRECISION picks the operand type, this mask the combinations of that type.
 static constexpr int GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT = 0xff;
@@ -121,7 +130,7 @@ extern int g_ggml_sycl_dynamic_required_precision;
 // [TAG_GGML_PREC] src1 precision request of the MUL_MAT/MUL_MAT_ID op dst
 static inline int32_t ggml_sycl_src1_prec(const ggml_tensor * dst) {
     return g_ggml_sycl_dynamic_required_precision == GGML_SYCL_DYNAMIC_PRECISION_F16 ? GGML_PREC_UNDEFINED :
-                                                                                       dst->op_params[3];
+                                                                                       ggml_prec_get_src(dst, 1);
 }
 
 // [TAG_GGML_PREC] the library GEMM and dmmv may convert src1 of the MUL_MAT/MUL_MAT_ID op dst to f16
@@ -229,9 +238,9 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
-#if defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
+#if defined(GGML_SYCL_SUPPORT_XMX) && defined(__INTEL_LLVM_COMPILER) && __has_include(<sycl/ext/intel/esimd/xmx/dpas.hpp>)
 #    define GGML_SYCL_MMVQ_HAS_XMX
-#endif // __INTEL_LLVM_COMPILER
+#endif // GGML_SYCL_SUPPORT_XMX && __INTEL_LLVM_COMPILER
 
 // default of the most columns the XMX mul_mat_vec_q handles (GGML_SYCL_XMX_MAX_COLS), wider batches use other kernels
 #define GGML_SYCL_XMX_MAX_COLS_DEFAULT 80
@@ -283,6 +292,10 @@ static size_t g_scratch_offset = 0;
   (void)bad_arch; // suppress unused function warning
 }
 
+// thread-local copy of dpct's per-thread selected device, -1 until first read.
+// Select devices only through ggml_sycl_set_device so the copy stays in sync.
+extern thread_local int g_sycl_current_device_id;
+
 int get_current_device_id();
 
 inline int ggml_sycl_get_device() {
@@ -290,16 +303,14 @@ inline int ggml_sycl_get_device() {
 }
 
 inline dpct::err0 ggml_sycl_set_device(const int device) try {
-  int current_device_id;
-  SYCL_CHECK(CHECK_TRY_ERROR(current_device_id = get_current_device_id()));
-
-  // GGML_SYCL_DEBUG("ggml_sycl_set_device device_id=%d,
-  // current_device_id=%d\n", device, current_device);
-  if (device == current_device_id) {
+  if (device == g_sycl_current_device_id) {
     return 0;
   }
-
-  return CHECK_TRY_ERROR(dpct::select_device(device));
+  const dpct::err0 err = CHECK_TRY_ERROR(dpct::select_device(device));
+  if (err == dpct::success) {
+    g_sycl_current_device_id = device;
+  }
+  return err;
 } catch (sycl::exception const& exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
             << ", line:" << __LINE__ << std::endl;
@@ -428,6 +439,8 @@ struct ggml_tensor_extra_gpu {
 };
 
 extern int g_ggml_sycl_use_level_zero_api;
+extern int g_ggml_sycl_bmg_vram_check;
+bool sycl_get_mem_info(int device, size_t * free, size_t * total);
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q,
                                ggml_sycl_mem_type type = GGML_SYCL_MEM_DIRECT);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);
@@ -439,7 +452,7 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
-struct ggml_sycl_gg_tile {
+struct ggml_sycl_grouped_gemm_tile {
     int32_t expert;
     int32_t n0;
     int32_t n1;
@@ -470,6 +483,16 @@ struct ggml_sycl_graph {
 };
 
 static_assert(std::is_trivial<ggml_sycl_graph::node_properties>::value, "node_properties must be trivial");
+#endif
+
+#if GGML_SYCL_DNNL
+struct sdpa_partition {
+    dnnl::graph::compiled_partition          cp;
+    std::vector<dnnl::graph::logical_tensor> ins;
+    dnnl::graph::logical_tensor              out;
+    size_t id_q = 0, id_k = 0, id_v = 0, id_scale = 0, id_mask = 0;
+    bool   ok = false;
+};
 #endif
 
 struct ggml_backend_sycl_context {
@@ -540,6 +563,8 @@ struct ggml_backend_sycl_context {
     dnnl::stream stream_dnnl() {
         return stream_dnnl(device, 0);
     }
+
+    std::unordered_map<std::string, sdpa_partition> sdpa_partitions;
 #endif
 
     // pool
@@ -548,7 +573,7 @@ struct ggml_backend_sycl_context {
     std::unique_ptr<ggml_sycl_pool> host_pools[GGML_SYCL_MAX_DEVICES];
 
     std::vector<mmid_row_mapping> mmid_row_mapping_host;
-    std::vector<ggml_sycl_gg_tile> mmid_tile_schedule_host;
+    std::vector<ggml_sycl_grouped_gemm_tile> mmid_tile_schedule_host;
 
     static std::unique_ptr<ggml_sycl_pool> new_pool_for_device(queue_ptr qptr, int device);
 

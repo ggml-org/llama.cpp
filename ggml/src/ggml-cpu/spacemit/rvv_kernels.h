@@ -62,6 +62,8 @@ void forward_rms_norm_f32(ggml_compute_params * params, ggml_tensor * op);
 
 void forward_norm_f32(ggml_compute_params * params, ggml_tensor * op);
 
+void forward_gated_delta_net_f32(ggml_compute_params * params, ggml_tensor * op);
+
 void forward_cont_with_permute(ggml_compute_params * params, ggml_tensor * op);
 
 void forward_cpy_with_permute(ggml_compute_params * params, ggml_tensor * op);
