@@ -4,6 +4,9 @@
 
 #include "llama-memory-recurrent.h"
 
+#include <cmath>
+#include <limits>
+
 void llama_model_raon1_nano::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,       hparams.n_embd_head_k_mla_impl);
@@ -32,6 +35,7 @@ void llama_model_raon1_nano::load_arch_hparams(llama_model_loader & ml) {
     // RDA layers have head_count_kv 0, MLA layers one latent KV head
     uint32_t n_rda = 0;
     for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
+        require(hparams.n_head(i) > 0, format("layer %u has no attention heads", i));
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
         n_rda += hparams.is_recr_impl[i];
         require(hparams.is_recr_impl[i] || hparams.n_head_kv(i) == 1, format("MLA layer %u has %u KV heads, not 1", i, hparams.n_head_kv(i)));
@@ -52,9 +56,16 @@ void llama_model_raon1_nano::load_arch_hparams(llama_model_loader & ml) {
     require(hparams.f_norm_rms_eps_latent > 0 && hparams.dsv4_hc_eps > 0, "a normalization epsilon is not positive");
     require(hparams.hc_magnitude > 0, "hyper_connection.magnitude is not positive");
     require(hparams.n_embd_per_layer > 0, "embedding_length_per_layer_input is 0");
-    require(hparams.kda_gate_lower_bound < 0, "kda.gate_lower_bound is not negative");
+    require(std::isfinite(hparams.kda_gate_lower_bound) && hparams.kda_gate_lower_bound < 0,
+            "kda.gate_lower_bound must be finite and negative");
     require(hparams.n_embd_head_kda == 16 || hparams.n_embd_head_kda == 32 || hparams.n_embd_head_kda == 64 || hparams.n_embd_head_kda == 128,
             format("RDA head dimension %u is not 16, 32, 64 or 128", hparams.n_embd_head_kda));
+
+    // The recurrent cache helpers return uint32_t sizes.
+    const uint64_t rda_width = uint64_t(hparams.n_head()) * hparams.n_embd_head_kda;
+    const uint64_t state_size_max = std::numeric_limits<uint32_t>::max();
+    require(3 * (hparams.ssm_d_conv - 1) * rda_width <= state_size_max &&
+            rda_width * hparams.n_embd_head_kda <= state_size_max, "RDA state size exceeds uint32_t");
 
     type = LLM_TYPE_UNKNOWN;
 }
@@ -268,11 +279,14 @@ ggml_tensor * llama_model_raon1_nano::graph::build_rda_layer(
     g1 = ggml_scale(ctx0, ggml_sigmoid(ctx0, g1), hparams.kda_gate_lower_bound);
     g1 = ggml_reshape_4d(ctx0, g1, head_dim, n_head, n_seq_tokens, n_seqs);
 
-    ggml_tensor * beta  = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, fab, n_head, n_tokens, fab->nb[1], rank*fab->nb[0]));
-    ggml_tensor * write = ggml_sigmoid(ctx0, ggml_view_2d(ctx0, fab, n_head, n_tokens, fab->nb[1], (rank + n_head)*fab->nb[0]));
-    ggml_tensor * ratio = ggml_reshape_4d(ctx0, ggml_div(ctx0, write, beta), 1, n_head, n_seq_tokens, n_seqs);
+    ggml_tensor * erase_logit = ggml_view_2d(ctx0, fab, n_head, n_tokens, fab->nb[1], rank*fab->nb[0]);
+    ggml_tensor * write_logit = ggml_view_2d(ctx0, fab, n_head, n_tokens, fab->nb[1], (rank + n_head)*fab->nb[0]);
+    // Use the log ratio as in Raon-1 mini so two saturated sigmoids cannot produce 0/0.
+    ggml_tensor * log_ratio = ggml_sub(ctx0, ggml_softplus(ctx0, ggml_neg(ctx0, erase_logit)),
+                                           ggml_softplus(ctx0, ggml_neg(ctx0, write_logit)));
+    ggml_tensor * ratio = ggml_reshape_4d(ctx0, ggml_exp(ctx0, log_ratio), 1, n_head, n_seq_tokens, n_seqs);
     Vcur = ggml_mul(ctx0, Vcur, ratio);
-    beta = ggml_reshape_4d(ctx0, beta, 1, n_head, n_seq_tokens, n_seqs);
+    ggml_tensor * beta = ggml_reshape_4d(ctx0, ggml_sigmoid(ctx0, erase_logit), 1, n_head, n_seq_tokens, n_seqs);
     cb(g1, "rda_g1", il);
     cb(Vcur, "rda_v_scaled", il);
     cb(beta, "rda_beta", il);
@@ -389,7 +403,10 @@ llama_model_raon1_nano::graph::graph(const llama_model & model, const llm_graph_
         cur = build_hc_pre(inp, layer.hc_ffn_fn, layer.hc_ffn_base, layer.hc_ffn_chart, layer.ffn_norm, &post, &comb, il);
         cb(cur, "ffn_norm", il);
         cur = build_ffn(cur, layer.ffn_up, nullptr, nullptr, nullptr, nullptr, nullptr,
-                layer.ffn_down, nullptr, nullptr, nullptr, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+                nullptr, nullptr, nullptr, nullptr, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+        cur = build_lora_mm(layer.ffn_down, cur);
+        // The last layers can exceed the F16 accumulator range.
+        ggml_prec_set_acc(cur, GGML_PREC_BF16);
         inp = build_hc_post(inp, cur, post, comb, il);
 
         // per-layer input: streams += RMSNorm(proj(gelu_tanh(gate(stream sum)) * ple_il)), on every stream;

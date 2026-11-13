@@ -142,7 +142,7 @@ static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[]
     { "ssm_a",        fill_ssm_a        },
     { "_resid_",      fill_resid_gate   },
     { "hc_attn_chart", fill_hc_chart     },
-    { "hc_ffn_chart",       fill_hc_chart     },
+    { "hc_ffn_chart",  fill_hc_chart     },
     { "exp_probs_b",  fill_exp_probs_b  },
     { "ffn.act",      fill_ffn_act      },
     { "rope_freqs",   fill_rope_factors },

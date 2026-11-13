@@ -928,16 +928,19 @@ class TensorNameMap:
 
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (
             "model.embed_tokens_per_layer",  # gemma3n
+            "model.per_layer_inputs.table",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_MODEL_PROJ: (
             "model.per_layer_model_projection",  # gemma3n
             "ple.per_layer_model_projection",    # embeddinggemma2
+            "model.per_layer_inputs.embedding_projection",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_PROJ_NORM: (
             "model.per_layer_projection_norm",  # gemma3n
             "ple.per_layer_projection_norm",    # embeddinggemma2
+            "model.per_layer_inputs.projection_norm",  # raon1nano
         ),
 
         MODEL_TENSOR.ALTUP_PROJ: (
@@ -951,16 +954,19 @@ class TensorNameMap:
         MODEL_TENSOR.PER_LAYER_INP_GATE: (
             "model.layers.{bid}.per_layer_input_gate",  # gemma3n
             "layers.{bid}.ple_block.per_layer_input_gate",  # embeddinggemma2
+            "model.layers.{bid}.per_layer_input_gate.gate",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_PROJ: (
             "model.layers.{bid}.per_layer_projection",  # gemma3n
             "layers.{bid}.ple_block.per_layer_projection",  # embeddinggemma2
+            "model.layers.{bid}.per_layer_input_gate.projection",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_POST_NORM: (
             "model.layers.{bid}.post_per_layer_input_norm",  # gemma3n
             "layers.{bid}.ple_block.post_per_layer_input_norm",  # embeddinggemma2
+            "model.layers.{bid}.per_layer_input_gate.output_norm",  # raon1nano
         ),
 
         MODEL_TENSOR.ALTUP_CORRECT_COEF: (
