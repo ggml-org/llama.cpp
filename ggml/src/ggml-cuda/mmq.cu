@@ -169,7 +169,7 @@ void ggml_cuda_mul_mat_q(
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     // Fused gate/up/GLU: src0 is the up weight, dst the GLU output.
-    // Fused scale (no gate): dst is the MUL that applies the weight scale to the MUL_MAT.
+    // Fused scale (no gate): dst is the MUL_MAT whose attached weight scale is applied.
     const ggml_tensor * gate = fusion ? fusion->gate : nullptr;
     ggml_cuda_mm_fusion_args_device fusion_device = {};
     if (fusion) {
@@ -237,7 +237,7 @@ void ggml_cuda_mul_mat_q(
 
     const bool fallback = ggml_cuda_mmq_needs_fallback(ne01);
 
-    // With fusion dst is the GLU output or the scale node, not a MUL_MAT; the src1 precision requested by the fused MUL_MATs is in the fusion args.
+    // With fusion dst can be the GLU output, not a MUL_MAT; the src1 precision requested by the fused MUL_MATs is in the fusion args.
     const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, fusion ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
