@@ -817,7 +817,6 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
     if (ids) {
         GGML_ASSERT(ids->type == GGML_TYPE_I32);
         GGML_ASSERT(ids->nb[0] == ggml_type_size(ids->type));
-        GGML_ASSERT(ids->ne[1] <= MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS);
         GGML_ASSERT(ne1 == ids->ne[0] && ne13 == 1 && ne3 == 1);
 
         const int64_t n_expert_used = ids->ne[0];

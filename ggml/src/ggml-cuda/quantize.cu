@@ -658,13 +658,13 @@ static __global__ void quantize_mmq_few_q8_1(
     quantize_mmq_few_store<ds_layout>(xi, yg, i0 % QK_K, g);
 }
 
-// MUL_MAT_ID: block x is the (token, slot) entry, ids are as in mm_ids_helper. Each block finds the pair of its entry in shared memory, block 0 also writes all pairs.
+// MUL_MAT_ID: block x is the (token, slot) entry, ids are as in mm_ids_helper. Each block finds the pair of its entry in shared memory, block (0, 0) also writes all pairs.
 // Entry rank r = number of earlier tokens with the same expert, pair = first pair of the expert + r/MMQ_FEW_NCOLS, column = r % MMQ_FEW_NCOLS.
 template <mmq_q8_1_ds_layout ds_layout>
 static __global__ void quantize_mmq_few_id_q8_1(
         const float * x_ptr, const int32_t * ids, void * vy_ptr, int * pairs, const int64_t ne00, const int64_t s11, const int64_t s12,
         const int ne11, const int n_experts, const int n_expert_used, const int64_t si1, const int npairs_max) {
-    // per expert: bit t set if token t uses it, then the index of its first pair, then the number of pairs
+    // per expert: bit t set if token t uses it and the index of its first pair; then the total number of pairs
     extern __shared__ unsigned int data_mmq_few_id[];
     unsigned int * tokens = data_mmq_few_id;
     int          * pair0  = (int *) (tokens + n_experts);
@@ -694,8 +694,8 @@ static __global__ void quantize_mmq_few_id_q8_1(
     __syncthreads();
     if (threadIdx.x < WARP_SIZE) {
         const int per_lane = (n_experts + WARP_SIZE - 1) / WARP_SIZE;
-        const int e0 = min(int(threadIdx.x)*per_lane, n_experts);
-        const int e1 = min(e0 + per_lane, n_experts);
+        const int e0       = min(int(threadIdx.x)*per_lane, n_experts);
+        const int e1       = min(e0 + per_lane, n_experts);
         int n = 0;
         for (int e = e0; e < e1; ++e) {
             n += (__popc(tokens[e]) + MMQ_FEW_NCOLS - 1) / MMQ_FEW_NCOLS;
