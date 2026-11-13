@@ -17,6 +17,8 @@ __all__ = [
 
 
 TEXT_MODEL_MAP: dict[str, str] = {
+    "Inkling2ForConditionalGeneration": "inkling2",
+    "Inkling2ForCausalLM": "inkling2",
     "NEOChatModel": "sensenova_u1",
     "AfmoeForCausalLM": "afmoe",
     "LagunaForCausalLM": "laguna",
