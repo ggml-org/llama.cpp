@@ -36,7 +36,7 @@ class InternLM2Model(TextModel):
             logger.error(f'Error: Missing {tokenizer_path}')
             sys.exit(1)
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
         add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
 

@@ -457,16 +457,9 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn_linear(
     q_conv = build_gdn_l2_norm(ctx0, q_conv, hparams.f_norm_rms_eps);
     k_conv = build_gdn_l2_norm(ctx0, k_conv, hparams.f_norm_rms_eps);
 
-    // note: need explicit repeat only if we are not using the fused GDN
-    if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {
-        GGML_ASSERT(num_v_heads % num_k_heads == 0);
-        q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_tokens, n_seqs);
-        k_conv = ggml_repeat_4d(ctx0, k_conv, head_k_dim, num_v_heads, n_tokens, n_seqs);
-    }
-
     ggml_tensor * state = ggml_fill(ctx0, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, head_v_dim, head_v_dim, num_v_heads, n_seqs), 0.0f);
 
-    ggml_tensor * output = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state, il).first;
+    ggml_tensor * output = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state).first;
     cb(output, "attn_output", il);
 
     // gated normalization

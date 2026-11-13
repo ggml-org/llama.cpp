@@ -6,7 +6,7 @@ version = "0.0.0"
 dynamic = ["classifiers"]
 readme = "README.md"
 authors = [{name = "GGML", email = "ggml@ggml.ai"}]
-requires-python = '>=3.10,<3.15'
+requires-python = '>=3.10,<3.16'
 dependencies = [
     'numpy (>=2.2.6,<3.0.0); python_version < "3.14"',
     'numpy (>=2.3.0,<3.0.0); python_version >= "3.14"',
@@ -40,9 +40,12 @@ packages = [
 
 [tool.poetry.dependencies]
 torch = [
-    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'darwin'" },
-    { version = "==2.11.0+cpu", source = "pytorch", markers = "sys_platform == 'linux'" },
-    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'win32'" },
+    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'darwin' and python_version < '3.15'" },
+    { version = "==2.11.0+cpu", source = "pytorch", markers = "sys_platform == 'linux' and python_version < '3.15'" },
+    { version = "==2.11.0", source = "pypi", markers = "sys_platform == 'win32' and python_version < '3.15'" },
+    { version = "==2.15.0", source = "pypi", markers = "sys_platform == 'darwin' and python_version >= '3.15'" },
+    { version = "==2.15.0+cpu", source = "pytorch", markers = "sys_platform == 'linux' and python_version >= '3.15'" },
+    { version = "==2.15.0", source = "pypi", markers = "sys_platform == 'win32' and python_version >= '3.15'" },
 ]
 
 [tool.poetry.group.dev.dependencies]

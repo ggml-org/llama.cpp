@@ -1,5 +1,6 @@
 // direct imports, not via the barrel, to avoid circular deps
 import { conversationsStore } from './conversations/index.svelte';
+import { groupsStore } from './groups.svelte';
 import { permissionsStore } from './permissions.svelte';
 import { settingsStore } from './settings/index.svelte';
 import { tabsStore } from './tabs.svelte';
@@ -34,6 +35,7 @@ export function initStores(): Promise<void> {
 		permissionsStore.initialize();
 		toolsStore.initialize();
 		void versionStore.initialize();
+		void groupsStore.initialize();
 
 		// the full conversation list loads in the background; once it is back,
 		// prune persisted tabs against the conversations that still exist

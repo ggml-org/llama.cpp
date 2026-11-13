@@ -60,7 +60,8 @@ class BeamModel(TextModel):
         # otherwise EOT is guessed from a hash-ordered scan
         from transformers import AutoTokenizer
         tok = AutoTokenizer.from_pretrained(self.dir_model)
-        ret_id = tok.convert_tokens_to_ids("<|return|>")  # ty: ignore[unresolved-attribute]
+        assert tok is not None
+        ret_id = tok.convert_tokens_to_ids("<|return|>")
         if isinstance(ret_id, int) and ret_id >= 0:
             self.gguf_writer.add_eot_token_id(ret_id)
 
