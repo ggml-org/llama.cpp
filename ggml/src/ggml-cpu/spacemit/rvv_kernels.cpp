@@ -1199,13 +1199,15 @@ void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(const ggml_compute_param
                                     (iq3 % mask->ne[3]) * mask->nb[3]) :
                    NULL;
 
-        const bool mp_equal_2 = iq1_1 == iq1 && (iq2 % mask->ne[2]) == (iq2_1 % mask->ne[2]) &&
-                                (iq3 % mask->ne[3]) == (iq3_1 % mask->ne[3]);
+        // the multi-row kernels share one mask row and one ALiBi slope across the grouped q rows
+        const bool mp_equal_2 =
+            max_bias == 0.0f && iq1_1 == iq1 &&
+            (!mask || ((iq2 % mask->ne[2]) == (iq2_1 % mask->ne[2]) && (iq3 % mask->ne[3]) == (iq3_1 % mask->ne[3])));
 
-        const bool mp_equal_4 = mp_equal_2 && iq1_2 == iq1 && (iq2 % mask->ne[2]) == (iq2_2 % mask->ne[2]) &&
-                                (iq3 % mask->ne[3]) == (iq3_2 % mask->ne[3]) && iq1_3 == iq1 &&
-                                (iq2 % mask->ne[2]) == (iq2_3 % mask->ne[2]) &&
-                                (iq3 % mask->ne[3]) == (iq3_3 % mask->ne[3]);
+        const bool mp_equal_4 =
+            mp_equal_2 && iq1_2 == iq1 && iq1_3 == iq1 &&
+            (!mask || ((iq2 % mask->ne[2]) == (iq2_2 % mask->ne[2]) && (iq3 % mask->ne[3]) == (iq3_2 % mask->ne[3]) &&
+                       (iq2 % mask->ne[2]) == (iq2_3 % mask->ne[2]) && (iq3 % mask->ne[3]) == (iq3_3 % mask->ne[3])));
 
         // k indices
         const int ik3 = iq3 / rk3;
@@ -1514,17 +1516,17 @@ void forward_flash_attn_ext_f16_tiled_vlen1024_vf16(const ggml_compute_params * 
                 }
             }
 
-            // Set padded KQ entries to -inf so softmax gives them zero weight
+            if (logit_softcap != 0.0f) {
+                rvv_softcap_tanh_inplace_f32(KQ, KV_TILE_SZ, tile_rows, KV_TILE_SZ, logit_softcap);
+            }
+
+            // Set padded KQ entries to -inf so softmax gives them zero weight (after softcap, which would make them finite)
             if (kv_tile < KV_TILE_SZ) {
                 for (int tq = 0; tq < tile_rows; tq++) {
                     for (int tk = kv_tile; tk < KV_TILE_SZ; tk++) {
                         KQ[tq * KV_TILE_SZ + tk] = -INFINITY;
                     }
                 }
-            }
-
-            if (logit_softcap != 0.0f) {
-                rvv_softcap_tanh_inplace_f32(KQ, KV_TILE_SZ, tile_rows, KV_TILE_SZ, logit_softcap);
             }
 
             if (mask) {
