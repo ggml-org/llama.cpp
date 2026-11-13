@@ -2264,6 +2264,7 @@ static bool htp_kparams_solve_ssm_scan(
     }
 
     const uint32_t d_state  = (uint32_t) s->ne[0];
+    const uint32_t n_a      = (uint32_t) A->ne[0];
     const uint32_t head_dim = (uint32_t) x->ne[0];
     const uint32_t n_head   = (uint32_t) x->ne[1];
     const uint32_t n_tokens = (uint32_t) x->ne[2];
@@ -2271,12 +2272,14 @@ static bool htp_kparams_solve_ssm_scan(
     const uint32_t n_group  = (uint32_t) B->ne[1];
     const uint32_t K        = (uint32_t) ggml_get_op_params_i32(op, 0);
 
-    if (n_head % n_group != 0) {
+    if (n_head % n_group != 0 || (n_a != 1 && n_a != d_state)) {
         return false;
     }
 
-    const uint32_t sess_hvx = htp_session_n_hvx(sess);
-    uint32_t       row_tile = (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT;
+    const uint32_t sess_hvx   = htp_session_n_hvx(sess);
+    const size_t   vtcm_size  = htp_session_vtcm_size(sess);
+    uint32_t       row_tile   = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
+    uint32_t       token_tile = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
 
     struct htp_ssm_scan_vtcm_layout layout;
     for (;;) {
@@ -2287,8 +2290,9 @@ static bool htp_kparams_solve_ssm_scan(
         }
 
         kparams->row_tile        = (uint16_t) row_tile;
-        kparams->token_tile      = (uint16_t) (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+        kparams->token_tile      = (uint16_t) token_tile;
         kparams->d_state         = d_state;
+        kparams->n_a             = n_a;
         kparams->head_dim        = head_dim;
         kparams->n_head          = n_head;
         kparams->n_tokens        = n_tokens;
@@ -2301,36 +2305,24 @@ static bool htp_kparams_solve_ssm_scan(
         kparams->total_units     = (uint32_t) total_units;
         kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
 
-        htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, n_tokens, kparams->n_hvx);
-        if (layout.total_bytes <= htp_session_vtcm_size(sess) || row_tile <= HTP_SSM_SCAN_ROW_TILE_DEFAULT) {
+        htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, n_tokens, K, kparams->n_hvx);
+        if (layout.total_bytes <= vtcm_size) {
             break;
         }
-        row_tile = HTP_SSM_SCAN_ROW_TILE_DEFAULT;
+        if (row_tile > 1) {
+            row_tile = (row_tile > 4) ? ((row_tile / 2) & ~3U) : 1U;
+        } else if (token_tile > 1) {
+            token_tile /= 2;
+        } else {
+            return false;
+        }
     }
 
-    // Fixed DMA packages need one native descriptor per push. Use v73 16-bit field limits on all targets.
-    const size_t dma_max        = 0xFFFF;
-    const size_t y_token_stride = (size_t) n_head * head_dim * sizeof(float);
-    const bool   dma_fits_16b   = d_state * sizeof(float) <= dma_max && layout.xy_row_stride <= dma_max &&
-                                  (n_tokens == 1 || (y_token_stride <= dma_max && x->nb[2] <= dma_max && dt->nb[1] <= dma_max &&
-                                                     B->nb[2] <= dma_max && C->nb[2] <= dma_max));
-
-    const bool use_vtcm = A->ne[0] == 1 && K == 1 && d_state % 32 == 0 && head_dim % 4 == 0 && dma_fits_16b &&
-                          layout.total_bytes <= htp_session_vtcm_size(sess);
-
-    if (use_vtcm) {
-        kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM;
-        kparams->vtcm_per_hvx    = (uint32_t) layout.bytes_per_hvx;
-        kparams->vtcm_size       = (uint32_t) layout.total_bytes;
-    } else {
-        kparams->kernel_type = HTP_SSM_SCAN_KERNEL_FALLBACK;
-        kparams->n_hvx       = (uint16_t) (std::min)(sess_hvx, n_head);
-    }
-
-    kparams->div_units_per_seq   = init_fastdiv_values(kparams->units_per_seq);
-    kparams->div_group_units     = init_fastdiv_values(kparams->group_units);
-    kparams->div_n_row_blocks    = init_fastdiv_values(kparams->n_row_blocks);
-    kparams->div_heads_per_group = init_fastdiv_values(kparams->heads_per_group);
+    kparams->vtcm_per_hvx      = (uint32_t) layout.bytes_per_hvx;
+    kparams->vtcm_size         = (uint32_t) layout.total_bytes;
+    kparams->div_units_per_seq = init_fastdiv_values(kparams->units_per_seq);
+    kparams->div_group_units   = init_fastdiv_values(kparams->group_units);
+    kparams->div_n_row_blocks  = init_fastdiv_values(kparams->n_row_blocks);
 
     return true;
 }

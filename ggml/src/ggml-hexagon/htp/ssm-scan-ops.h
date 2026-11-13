@@ -11,18 +11,13 @@
 #define HTP_SSM_SCAN_ROW_TILE_DEFAULT   32U
 #define HTP_SSM_SCAN_TOKEN_TILE_DEFAULT 32U
 
-enum htp_ssm_scan_kernel_type {
-    HTP_SSM_SCAN_KERNEL_FALLBACK    = 0,
-    HTP_SSM_SCAN_KERNEL_MAMBA2_VTCM = 1,
-};
-
 struct htp_ssm_scan_kernel_params {
-    uint8_t  kernel_type;
     uint16_t row_tile;
     uint16_t token_tile;
     uint16_t n_hvx;
 
     uint32_t d_state;
+    uint32_t n_a;
     uint32_t head_dim;
     uint32_t n_head;
     uint32_t n_tokens;
@@ -41,7 +36,6 @@ struct htp_ssm_scan_kernel_params {
     struct fastdiv_values div_units_per_seq;
     struct fastdiv_values div_group_units;
     struct fastdiv_values div_n_row_blocks;
-    struct fastdiv_values div_heads_per_group;
 };
 
 #if defined(__cplusplus)
@@ -62,6 +56,7 @@ struct htp_ssm_scan_vtcm_layout {
     size_t off_A[2];
     size_t off_y[2];
 
+    size_t state_row_stride;
     size_t xy_row_stride;
     size_t bytes_per_hvx;
     size_t total_bytes;
@@ -73,14 +68,17 @@ static inline void htp_ssm_scan_vtcm_layout_build(
     uint32_t row_tile,
     uint32_t token_tile,
     uint32_t n_tokens,
+    uint32_t K,
     uint32_t n_hvx
 ) {
     const bool   decode            = n_tokens == 1;
-    const size_t state_slot_bytes  = hex_align_up((size_t) row_tile * d_state * sizeof(float), 128);
-    const size_t bc_slot_bytes     = hex_align_up((size_t) token_tile * d_state * sizeof(float), 128);
+    const size_t state_row_stride  = hex_align_up((size_t) d_state * sizeof(float), 128);
+    const size_t state_slot_bytes  = (size_t) row_tile * state_row_stride;
+    const size_t bc_slot_bytes     = (size_t) token_tile * state_row_stride;
     const size_t xy_row_stride     = hex_align_up((size_t) row_tile * sizeof(float), 128);
     const size_t xy_slot_bytes     = (size_t) token_tile * xy_row_stride;
     const size_t scalar_slot_bytes = hex_align_up((size_t) token_tile * sizeof(float), 128);
+    const size_t a_slot_bytes      = state_row_stride;
 
     size_t off = 0;
     if (decode) {
@@ -91,17 +89,20 @@ static inline void htp_ssm_scan_vtcm_layout_build(
             layout->off_C[i]         = off; off += bc_slot_bytes;
             layout->off_x[i]         = off; off += xy_slot_bytes;
             layout->off_dt[i]        = off; off += scalar_slot_bytes;
-            layout->off_A[i]         = off; off += 128;
+            layout->off_A[i]         = off; off += a_slot_bytes;
             layout->off_y[i]         = off; off += xy_slot_bytes;
         }
     } else {
-        layout->off_state[0]     = off; off += state_slot_bytes;
-        layout->off_state[1]     = layout->off_state[0];
-        layout->off_state_out[0] = layout->off_state[0];
-        layout->off_state_out[1] = layout->off_state[0];
-        layout->off_A[0]         = off; off += 128;
-        layout->off_A[1]         = layout->off_A[0];
+        layout->off_state[0] = off; off += state_slot_bytes;
+        layout->off_state[1] = layout->off_state[0];
+        layout->off_A[0]     = off; off += a_slot_bytes;
+        layout->off_A[1]     = layout->off_A[0];
         for (uint32_t i = 0; i < 2; ++i) {
+            if (K > 1) {
+                layout->off_state_out[i] = off; off += state_slot_bytes;
+            } else {
+                layout->off_state_out[i] = layout->off_state[0];
+            }
             layout->off_B[i]  = off; off += bc_slot_bytes;
             layout->off_C[i]  = off; off += bc_slot_bytes;
             layout->off_x[i]  = off; off += xy_slot_bytes;
@@ -110,9 +111,10 @@ static inline void htp_ssm_scan_vtcm_layout_build(
         }
     }
 
-    layout->xy_row_stride = xy_row_stride;
-    layout->bytes_per_hvx = off;
-    layout->total_bytes   = off * n_hvx;
+    layout->state_row_stride = state_row_stride;
+    layout->xy_row_stride    = xy_row_stride;
+    layout->bytes_per_hvx    = off;
+    layout->total_bytes      = off * n_hvx;
 }
 
 #endif // HTP_SSM_SCAN_OPS_H
