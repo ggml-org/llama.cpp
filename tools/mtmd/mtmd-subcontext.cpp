@@ -1329,6 +1329,18 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 set_input_f32("mimovl_idx_col",       idx_col);
                 set_input_attn_mask(mask);
             } break;
+        case PROJECTOR_TYPE_INKLING2:
+            {
+                GGML_ASSERT(n_pos == num_patches + 1);
+                std::vector<int> rows(n_pos, 0);
+                std::vector<int> cols(n_pos, 0);
+                for (int i = 0; i < num_patches; i++) {
+                    rows[i + 1] = i / pos_w + 1;
+                    cols[i + 1] = i % pos_w + 1;
+                }
+                set_input_i32("pos_h", rows);
+                set_input_i32("pos_w", cols);
+            } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:

@@ -18,6 +18,11 @@ struct mtmd_graph_siglip : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+struct mtmd_graph_inkling2 : mtmd_graph {
+    mtmd_graph_inkling2(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct mtmd_graph_inkling : mtmd_graph {
     mtmd_graph_inkling(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;

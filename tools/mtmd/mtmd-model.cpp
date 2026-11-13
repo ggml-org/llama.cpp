@@ -293,6 +293,15 @@ struct mtmd_model_loader {
 
             // model-specific params
             switch (model.proj_type) {
+                case PROJECTOR_TYPE_INKLING2:
+                    {
+                        hparams.ffn_op = FFN_GELU_ERF;
+                        log_ffn_op = "gelu_erf";
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
+                        hparams.image_resize_pad  = PAD_NONE;
+                        hparams.warmup_image_size = 640;
+                    } break;
                 case PROJECTOR_TYPE_INKLING:
                     {
                         if (is_vision) {
@@ -1680,6 +1689,13 @@ struct mtmd_model_loader {
         };
 
         switch (model.proj_type) {
+            case PROJECTOR_TYPE_INKLING2:
+                {
+                    GGML_ASSERT(model.class_embedding && model.position_embeddings && model.patch_embeddings_0);
+                    model.inkling2_cls_pos = get_tensor(TN_INKLING2_CLS_POS);
+                    model.mm_ffn_up_w      = get_tensor(mtmd_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_down_w    = get_tensor(mtmd_format(TN_MM_DOWN, "weight"));
+                } break;
             case PROJECTOR_TYPE_INKLING:
                 {
                     if (model.modality == MTMD_MODALITY_VISION) {
@@ -4004,6 +4020,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_KIMIK31:
+        case PROJECTOR_TYPE_INKLING2:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * hparams.n_merge;
@@ -4288,6 +4305,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLING2:
             return mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return mm_model_mlp_3_w->ne[1];

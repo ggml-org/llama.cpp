@@ -598,6 +598,11 @@ bool ggml_cuda_flash_attn_ext_banded_use_mma(const int device, const ggml_tensor
         return false;
     }
 
+    // the MMA ABI carries rel in the sinks slot
+    if (dst->src[4]) {
+        return false;
+    }
+
     // the MMA ABI indexes rel linearly and by Q's batch
     if (rel->type != GGML_TYPE_F32 || !ggml_is_contiguous(rel) ||
         rel->ne[3] != Q->ne[3] || rel->ne[0] > (1 << 20)) {

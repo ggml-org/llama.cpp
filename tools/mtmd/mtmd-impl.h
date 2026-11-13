@@ -429,6 +429,8 @@
 #define TN_INKLING_DMEL_EMBD       "a.dmel.embedding.weight"
 #define TN_INKLING_DMEL_FINAL_NORM "a.dmel.final_norm.weight"
 
+#define TN_INKLING2_CLS_POS        "v.class_pos_embd"
+
 // mobilenetv5 (gemma3n) definitions
 #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
 #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
@@ -501,6 +503,7 @@
 
 enum projector_type {
     PROJECTOR_TYPE_INKLING,
+    PROJECTOR_TYPE_INKLING2,
     PROJECTOR_TYPE_MLP,
     PROJECTOR_TYPE_MLP_NORM,
     PROJECTOR_TYPE_LDP,
@@ -590,6 +593,7 @@ enum projector_type {
 
 static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_INKLING,           "inkling" },
+    { PROJECTOR_TYPE_INKLING2,          "inkling2" },
     { PROJECTOR_TYPE_MLP,               "mlp" },
     { PROJECTOR_TYPE_LDP,               "ldp" },
     { PROJECTOR_TYPE_LDPV2,             "ldpv2"},

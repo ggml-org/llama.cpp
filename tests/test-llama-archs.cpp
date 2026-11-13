@@ -794,6 +794,22 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_INKLING_UNPADDED_VOCAB_SIZE, n_vocab);
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,        1.0f);
     }
+    if (arch == LLM_ARCH_INKLING2) {
+        ms.add_kv(LLM_KV_INKLING_D_REL,                     uint32_t(16));
+        ms.add_kv(LLM_KV_INKLING_REL_EXTENT,                uint32_t(8));
+        ms.add_kv(LLM_KV_INKLING_REL_EXTENT_SWA,            uint32_t(4));
+        ms.add_kv(LLM_KV_INKLING_SHORTCONV_KERNEL,          uint32_t(3));
+        ms.add_kv(LLM_KV_INKLING_UNPADDED_VOCAB_SIZE,       n_vocab);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,              8.0f);
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,           30.0f);
+        ms.add_kv(LLM_KV_INKLING2_QK_CLIP_THRESHOLD,        22.627f);
+        ms.add_kv(LLM_KV_INKLING2_REL_CLIP_THRESHOLD,       8.0f);
+        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,               uint32_t(2));
+        ms.add_kv(LLM_KV_INKLING2_ATTN_RES_NORMALIZE_VALUES, true);
+        ms.add_kv(LLM_KV_INKLING2_MLP_GATE_SOFTCAP,         4.0f);
+        ms.add_kv(LLM_KV_INKLING2_MLP_UP_SOFTCAP,           25.0f);
+        ms.add_kv(LLM_KV_INKLING2_VALUE_NORM,               true);
+    }
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
     ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
@@ -1010,6 +1026,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_QWEN3VLMOE:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_INKLING:
+        case LLM_ARCH_INKLING2:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_QWEN4EXP:
         case LLM_ARCH_PHIMOE:

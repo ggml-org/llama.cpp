@@ -8940,7 +8940,8 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
         // sinks - apply only on the first kv-chunk
         if (sinks && ic_start == 0) {
-            const float s = ((float *)((char *) sinks->data))[h];
+            const float s = *(const float *)((const char *) sinks->data + h*sinks->nb[0] +
+                (sinks->ne[1] > 1 ? iq1*sinks->nb[1] : 0) + (sinks->ne[2] > 1 ? iq3*sinks->nb[2] : 0));
 
             float ms = 1.0f;
             float vs = 1.0f;

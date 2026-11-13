@@ -813,6 +813,11 @@ struct mtmd_context {
                     img_beg = "<|content_image|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_inkling>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_INKLING2:
+                {
+                    img_beg = "<|content_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_MLP:
             case PROJECTOR_TYPE_MLP_NORM:
             case PROJECTOR_TYPE_LDP:
