@@ -64,6 +64,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_CONV_2D_DW:      return HTP_OP_CONV_2D_DW;
         case GGML_OP_CONV_3D:         return HTP_OP_CONV_3D;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
+        case GGML_OP_TIMESTEP_EMBEDDING: return HTP_OP_TIMESTEP_EMBEDDING;
         case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
         case GGML_OP_LIGHTNING_INDEXER: return HTP_OP_LIGHTNING_INDEXER;
 
@@ -3654,6 +3655,53 @@ static bool htp_kparams_solve_fill(
     return true;
 }
 
+static bool htp_kparams_solve_timestep_embedding(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_timestep_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int32_t dim        = ggml_get_op_params_i32(op, 0);
+    const int32_t max_period = ggml_get_op_params_i32(op, 1);
+
+    if (dim <= 0 || max_period <= 0) {
+        return false;
+    }
+    if (src0->ne[1] != 1 || src0->ne[2] != 1 || src0->ne[3] != 1 ||
+        dst->ne[0] != dim || dst->ne[1] != src0->ne[0] || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const uint32_t n_rows = (uint32_t) src0->ne[0];
+    const uint32_t half   = (uint32_t) dim / 2;
+    const uint32_t n_blocks = (half + 31) / 32;
+    if ((uint64_t) n_rows * n_blocks > UINT32_MAX) {
+        return false;
+    }
+
+    const uint32_t total_blocks = n_blocks * n_rows;
+
+    kparams->n_hvx        = (std::min)(htp_session_n_hvx(sess), (std::max)(1u, total_blocks));
+    kparams->n_rows       = n_rows;
+    kparams->dim          = (uint32_t) dim;
+    kparams->half         = half;
+    kparams->total_blocks = total_blocks;
+    kparams->div_rows     = init_fastdiv_values((std::max)(1u, n_rows));
+
+    return true;
+}
+
 static bool htp_kparams_solve_roll(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -5505,6 +5553,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_ROLL:
             return htp_kparams_invoke<htp_kparams_solve_roll>(sess, op, kparams);
+
+        case HTP_OP_TIMESTEP_EMBEDDING:
+            return htp_kparams_invoke<htp_kparams_solve_timestep_embedding>(sess, op, kparams);
 
         case HTP_OP_LIGHTNING_INDEXER:
             return htp_kparams_invoke<htp_kparams_solve_lightning_indexer>(sess, op, kparams);
