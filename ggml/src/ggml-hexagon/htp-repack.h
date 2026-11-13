@@ -60,9 +60,6 @@ static inline size_t htp_tiled_row_size(enum ggml_type type, int64_t ne0) {
     return ggml_row_size(type, ne0);
 }
 
-static inline bool htp_is_hmx_weight_type(enum ggml_type type) {
-    return htp_is_tiled_weight_type(type);
-}
 void htp_repack_tensor_tiled(struct ggml_tensor * t, const void * data, size_t size);
 void htp_unpack_tensor_tiled(void * data, const struct ggml_tensor * t, size_t offset, size_t size);
 

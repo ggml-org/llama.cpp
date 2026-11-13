@@ -580,7 +580,7 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
         return true;
     }
 
-    const size_t fixed_bytes = L.src0_bytes + L.bias_bytes + L.dst_bytes;
+    const size_t fixed_bytes = L.src0_bytes + L.bias_bytes + L.dst_bytes + L.lut_bytes;
     if (vtcm_budget <= fixed_bytes) {
         return false;
     }

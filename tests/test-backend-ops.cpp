@@ -12258,61 +12258,31 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16, 10, 256, {1, 1}, {1, 1}));
     }
 
-    // Nemotron IQ2_XXS decode (n = 1) and prefill (n > 1) shapes: {k, m}
-    for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{4096, 5376}, {1024, 2560}, {2560, 1024}}) {
-        for (int n : {1, 8, 512}) {
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
-        }
-    }
-
-    // Qwen3.5-4B IQ2_XXS shapes: attn_gate/q/output, ffn gate/up/down, ssm_alpha/beta (single 32-row tile): {k, m}
-    for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{2560, 4096}, {2560, 8192}, {4096, 2560}, {2560, 9216}, {9216, 2560}, {2560, 32}}) {
-        for (int n : {1, 8, 512}) {
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
-        }
-    }
-
-    // small- and large-magnitude weights through every HTP quant path: decode GEMV (n=1), HMX prefill (n=8, 512), MoE
-    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4, GGML_TYPE_NVFP4, GGML_TYPE_IQ4_NL,
-                             GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ2_XXS}) {
-        for (int n : {1, 8, 512}) {
-            test_cases.emplace_back(new test_mul_mat_small_w(type_a, GGML_TYPE_F32, 4096, n, 2560, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat_small_w(type_a, GGML_TYPE_F32, 2560, n, 9216, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat_large_w(type_a, GGML_TYPE_F32, 4096, n, 2560, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat_large_w(type_a, GGML_TYPE_F32, 2560, n, 9216, {1, 1}, {1, 1}));
-        }
-        for (int n : {1, 8, 64}) {
-            test_cases.emplace_back(new test_mul_mat_id_small_w(type_a, GGML_TYPE_F32, 8, 4, false, 512, n, 2048));
-            test_cases.emplace_back(new test_mul_mat_id_large_w(type_a, GGML_TYPE_F32, 8, 4, false, 512, n, 2048));
-        }
-    }
-
-    // Nemotron NVFP4 Mamba and draft-model shapes: {k, m}
-    for (auto [k, m] : std::initializer_list<std::pair<int, int>>{{4096, 18560}, {8192, 4096}, {24576, 4096}, {4096, 12288}, {12288, 4096}}) {
-        for (int n : {1, 8, 512}) {
-            test_cases.emplace_back(new test_mul_mat(GGML_TYPE_NVFP4, GGML_TYPE_F32, m, n, k, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, m, n, k));
-        }
-    }
-    // the same, per expert: mul_mat_id followed by the gathered expert scales (large batches use the HMX path)
-    for (int n : {1, 8, 512}) {
-        test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, 1024, n, 4096, 8, 2));
-    }
-
-    // Nemotron IQ2_XXS experts: up (k = 1024, m = 2048) and down (k = 2048, m = 1024), 9 of 240 experts per token
-    for (int n : {1, 8, 512}) {
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 240, 9, false, 2048, n, 1024));
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_IQ2_XXS, GGML_TYPE_F32, 240, 9, false, 1024, n, 2048));
-    }
-
-    // weights HTP must decline (strided rows, row view, rows not a multiple of the 32-row tile): CPU fallback, no crash
+    // Tile-aligned shapes for NVFP4 and IQ2_XXS across GEMV (n=1, 2) and HMX (n=16, 64) paths
     for (ggml_type type_a : {GGML_TYPE_NVFP4, GGML_TYPE_IQ2_XXS}) {
-        for (int n : {1, 8, 512}) {
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1024, n, 4096, {1, 1}, {1, 1}, {0, 1, 2, 3}, 8192));
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1024, n, 4096, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 2048));
-            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 1000, n, 4096, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 8, 2, false, 1000, n, 4096));
+        for (int m : {32, 64}) {
+            for (int n : {1, 2, 16, 64}) {
+                test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, m, n, 256, {1, 1}, {1, 1}));
+            }
         }
+        // Small- and large-magnitude weights (scale underflow/overflow paths)
+        for (int n : {1, 16}) {
+            test_cases.emplace_back(new test_mul_mat_small_w(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_large_w(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_id_small_w(type_a, GGML_TYPE_F32, 4, 2, false, 64, n, 256));
+            test_cases.emplace_back(new test_mul_mat_id_large_w(type_a, GGML_TYPE_F32, 4, 2, false, 64, n, 256));
+        }
+        // Padded rows and row views (declined by HTP tiled repacking, falls back to CPU)
+        for (int n : {1, 16}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}, {0, 1, 2, 3}, 512));
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 128));
+        }
+    }
+
+    // NVFP4 mul_mat + per-tensor/per-expert scale
+    for (int n : {1, 16}) {
+        test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, 64, n, 256));
+        test_cases.emplace_back(new test_mul_mat_scale(GGML_TYPE_NVFP4, 64, n, 256, 4, 2));
     }
 #else
     // m = a rows

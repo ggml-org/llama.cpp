@@ -1937,13 +1937,6 @@ static inline void iq2xxs_decode_expand(const HVX_Vector * restrict v_c, HVX_Vec
     *v_ls = Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwR(Q6_Vuw_vlsr_VuwR(v_sgn, IQ2XXS_SCALE_SHIFT), 1), v_one);
 }
 
-static inline void iq2xxs_decode_tile(const uint8_t * restrict tile, HVX_Vector * restrict v_w, HVX_Vector * restrict v_ls) {
-    HVX_Vector v_sgn = iq2xxs_gather_issue(tile);
-    HVX_Vector v_c[2];
-    iq2xxs_gather_wait(tile, v_c);
-    iq2xxs_decode_expand(v_c, v_sgn, v_w, v_ls);
-}
-
 // IQ2_XXS: fp16 d of the 32 rows of a super-block (8 tiles) in halfword lanes 0..31
 static inline HVX_Vector iq2xxs_gather_d(const uint8_t * restrict sb) {
     const uint32_t padded = htp_tensor_get_tile_padded_size(HTP_TYPE_IQ2_XXS);
