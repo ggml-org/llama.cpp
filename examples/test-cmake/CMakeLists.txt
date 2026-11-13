@@ -8,7 +8,7 @@ option(LLAMA_TEST_USE_SUBDIR "Use add_subdirectory instead of find_package" OFF)
 if(LLAMA_TEST_USE_SUBDIR)
     add_subdirectory(../../ llama.cpp)
 else()
-    find_package(llama 0.1.0 REQUIRED)
+    find_package(llama 1.0.0 REQUIRED)
 endif()
 
 add_executable(test-cmake test-cmake.cpp)
