@@ -18507,7 +18507,7 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
         GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32);
         if (bcast_row) {
             kernel = backend_ctx->kernel_add_row;
-            const int ne = ne00 / 4;
+            const int ne = ne10 / 4;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra1->data_device));
@@ -18555,7 +18555,7 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
         const int type_src1 = (src1->type == GGML_TYPE_F32);
         if (bcast_row) {
             kernel = backend_ctx->kernel_add_row_f16;
-            const int ne = ne00 / 4;
+            const int ne = ne10 / 4;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra1->data_device));
@@ -18755,7 +18755,7 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
         GGML_ASSERT(ne11 == 1);
 
         bcast_row = true;
-        int ne = ne00 / 4;
+        int ne = ne10 / 4;
 
         if (src0->type == GGML_TYPE_F32) {
             kernel = backend_ctx->kernel_mul_row;
