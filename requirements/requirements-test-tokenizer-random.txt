@@ -1,1 +1,2 @@
-cffi~=1.16.0
+cffi~=1.16.0; python_version < "3.15"
+cffi~=2.1.0; python_version >= "3.15"
