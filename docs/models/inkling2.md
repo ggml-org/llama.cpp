@@ -1,6 +1,6 @@
 # Inkling 2
 
-`inkling2` supports `Inkling2ForCausalLM`, still-image input for `Inkling2ForConditionalGeneration` with a separate mmproj GGUF, and an optional DSpark block drafter with a separate draft GGUF. The implementation follows Transformers revision `109a7d19bf667168837f32929e00b791e195d14d`; the original checkpoint name mapping was checked against `thinkingmachines/Inkling-2-Small` revision `e242a97e271095c11bc33ddb3850d37e22917343`.
+`inkling2` supports `Inkling2ForCausalLM`, still-image and decoded-video-frame input for `Inkling2ForConditionalGeneration` with a separate mmproj GGUF, and an optional DSpark block drafter with a separate draft GGUF. The implementation follows Transformers revision `109a7d19bf667168837f32929e00b791e195d14d`; the original checkpoint name mapping was checked against `thinkingmachines/Inkling-2-Small` revision `e242a97e271095c11bc33ddb3850d37e22917343`.
 
 ## Conversion
 
@@ -96,7 +96,17 @@ Each metric is the maximum across the four cases, so the two columns can refer t
 
 The original text regressions still pass: both float fixtures, the packed fixture, all 74 original-name roundtrip tensors, text-only loading without mmproj, and `test-llama-archs -a inkling2 -b CPU`. The converter suite has 24 passing tests; gguf-py has 9; mtmd has 15 tests with 196 assertions. Changed Python files pass the scoped type check. The whole-repository type check remains incomplete because optional dependencies for unrelated tools are absent.
 
-Real weights, production encoder width/head dimensions, the real 640x640 input grid (1024 patches plus CLS), multiple images in one prompt, video, GPU/NPU execution, flash attention, real-model quality and the real chat template with images remain unverified. Video is explicitly unsupported.
+Real weights, production encoder width/head dimensions, the real 640x640 input grid (1024 patches plus CLS), GPU/NPU execution, real-model quality and the real chat template with images remain unverified. The decoded-frame checks below extend this synthetic validation.
+
+### Decoded video frames
+
+Inkling2 accepts consecutive decoded RGB frames through mtmd's existing mergeable bitmap and lazy bitmap paths. Set both `mtmd_bitmap_set_mergeable(frame, true)` and `mtmd_bitmap_set_is_video(frame, true)` on each frame. Adjacent frames of the same dimensions form groups of two, corresponding to `temporal_patch_size = 2`. Text or a dimension change ends a group. Each pair is averaged on the raw RGB scale in F32, preserving half-integer pixel values, before the existing padding, normalization and still-image encoder. Each group produces one image-feature sequence. Ordinary still images keep their original preprocessing arithmetic.
+
+An unpaired final frame is retained unchanged, equivalent to repeating it before the mean. This avoids losing the end of a clip and preserves the single-frame behavior. Distinct still-image inputs are not implicitly video; callers must mark video frames explicitly. RGBA compositing happens separately on each frame before the RGB mean.
+
+There is no reference video preprocessing to match: pinned Transformers `image_processing_inkling2.py` and `processing_inkling2.py` process still images only, and the patch projection has input width `num_channels * patch_size**2`, without a temporal factor. The pinned vLLM `vision.py` explains that identical still frames have the frame itself as their mean. This implementation therefore supplies the config-implied temporal-pair-mean semantics, validated by duplicate-frame equivalence; it is not a reference-matched video pipeline. Real video codec decoding, frame-rate and frame-sampling policy, timestamps and per-model video prompt formatting are outside this support contract. Feed already decoded frames with the intended grouping and prompt boundaries.
+
+The four existing image fixtures pass duplicate-frame bit identity at all 76,800 preprocessed channel values and all 73,728 merged feature values, including the public mtmd path. Distinct-frame pair means match an independent float64 raw mean followed by F32 still-image preprocessing bit-for-bit, and the same C++ still-image encoder produces identical merged features. The pinned Torch still-image encoder on those means has worst merger error 1.56462193e-6 absolute and 6.89512069e-7 relative L2. Four nine-frame sequences each produce five groups and 256 finite downstream logits. The original still-image preprocessing and merger numbers above are unchanged.
 
 ## MTP / DSpark block drafter
 
@@ -127,7 +137,11 @@ The graph always evaluates the trained block of eight positions, even when the r
 
 ### Numerical and sampling differences
 
-The reference supports conditioning each RNN step on a probabilistically sampled draft token. This implementation provides greedy draft conditioning only; the in-graph recurrence cannot consume a later host sample. Target sampling may still use a temperature under the existing token-match verifier. Changing target temperature does not change how the draft RNN conditions itself.
+`--spec-draft-sampling greedy` retains the in-graph recurrence and first-maximum tie rule. `--spec-draft-sampling probabilistic` evaluates the full noncausal backbone once, retains its hidden columns and base logits, then evaluates a reusable head-only graph for each proposal. The host samples that step's logits and feeds the actual proposed token into the following recurrence. Rank state starts at zero for each block; the committed-context ring and KV rollback remain separate and unchanged.
+
+Probabilistic proposals use softmax over the full exposed vocabulary at the target temperature, or temperature 1 when the target is greedy. Target top-k, top-p, grammar and penalty filters do not restrict this proposal distribution. Each sampled step records its actual distribution in `result_q`, allowing the target's existing rejection sampler to preserve its own filtered distribution. A greedy target uses token matching and remains output-preserving. The proposal RNG follows the existing DFlash2 per-sequence seed handling and is reset at request boundaries.
+
+The initial implementation retains hidden columns, base logits and rank state in host F32 buffers, copying the selected inputs into the head graph and its updated rank state back to the host. It performs one backbone plus D head evaluations for D proposals, without replaying the backbone. Head steps do not update KV. It does not claim device-resident state or improved throughput; device-buffer retention is a possible later optimization.
 
 The reference folds `hidden_out` into the shared LM head in F64 and stores the result in BF16. This graph evaluates the two projections separately. The CPU parity reference performs the fold in F64 then stores F32, so it also checks the graph's algebraic equivalence across those evaluation orders. F32 validation does not reproduce the source's explicit BF16 rounding of fusion weights, residuals, RoPE, logits, gates and recurrent state. No BF16-runtime or activation-quantized vLLM parity is claimed.
 
@@ -147,10 +161,19 @@ Text float/packed prefill, chunk and decode parity, the 74-tensor original-name 
 
 Real checkpoint conversion/inference, production hidden/head dimensions together, real-model acceptance/quality, the source's BF16 execution, TP/distributed execution, multiple active sequences, combined image-plus-draft requests, GPU/NPU execution and contexts beyond the synthetic 1025-token boundary remain unverified. The real maximum context is 1,048,576; this work does not qualify that limit. The predictor reference remains an unmerged PR at the stated pin.
 
-## Deliberately unsupported
+### Probabilistic CPU verification
 
-- Video: the vision path supports still images only. Video frames are rejected; temporal patch size 2 does not add a temporal factor to the still-image linear patch projection.
-- Probabilistic DSpark draft conditioning: the predictor graph currently conditions on greedy previous draft tokens. `--spec-draft-sampling probabilistic` is rejected for this variant.
+The existing 35/35 greedy draft-ID matches and 48/48 output identities reproduce. Driving the eager reference with the actual host-sampled IDs passes all seven logit and state rows at context lengths 3, 8, 21, 33 and 1025. Worst sampled logit error is 6.89923763e-6 absolute and 2.49604781e-6 relative L2; worst rank-state error is 2.74181366e-6 and 2.03142392e-6. Of the 35 sampled proposals, 34 differ from the per-step greedy token. Recorded `result_q` differs from an independent softmax by at most 1.39698386e-9.
+
+With a greedy target, probabilistic drafting preserves all 48 output tokens on every prompt in the five-length set, with CPU flash attention both off and on. The 48-layer, literal-tap 1025-token fixture also preserves 48/48 with FA on. Sampled-target runs at temperature 1.7 repeat exactly with a fixed seed.
+
+Distribution tests use the actual DSpark driver and target rejection sampler at one fixed continuation position, a 256-token fixture, and target temperature 1.1 with top-k 32. An independent replication has 65,536 draws per arm per condition. Speculation-on versus speculation-off chi-square statistics (31 degrees of freedom) are 21.3987, 32.0891 and 25.5529 for proposal temperatures 1.1, 0.1 and 1000, with p-values 0.9010, 0.4124 and 0.7425. The deliberately overconfident proposal changes measured acceptance from 14.9399% to 7.2739%, versus theoretical overlaps 15.1912% and 7.2977%. Near-uniform proposals accept 12.4771%, versus 12.5026% expected. A deliberately incorrect uniform `result_q` for the overconfident sampler is rejected strongly by the distribution test.
+
+The preliminary 8,192-draw ordinary-proposal comparison gave p=0.00509 and triggered that larger independent replication; it is retained in the report. A secondary exact-target goodness-of-fit check for the replication's overconfident condition gives p=0.00905, while its primary two-sample comparison gives p=0.4124. These finite Monte Carlo checks support output preservation but do not prove equality of distributions, and the single-position test does not qualify a real checkpoint's full generated-sequence distribution.
+
+## Scope and remaining limits
+
+Decoded-frame temporal means and probabilistic DSpark conditioning are supported. Codec decoding, sampling cadence and model-specific video prompts are not qualified. The probabilistic head currently uses host F32 buffers and is qualified on CPU synthetic fixtures only; real-checkpoint behavior, source BF16 rounding, distributed execution and device-resident state remain unverified.
 
 Text conversion emits one warning that directs users to `--mmproj` for vision and `--dspark` for `mtp.safetensors`. Each conversion writes only its selected component. It never silently interprets packed expert bytes as floating-point weights.
 
