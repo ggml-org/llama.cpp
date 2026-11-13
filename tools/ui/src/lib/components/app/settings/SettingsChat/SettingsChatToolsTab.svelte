@@ -5,7 +5,7 @@
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ToolSource } from '$lib/enums/tools.enums';
-	import { mcpStore, permissionsStore, toolsStore } from '$lib/stores';
+	import { conversationsStore, mcpStore, permissionsStore, toolsStore } from '$lib/stores';
 	import { getToolUi } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -26,7 +26,11 @@
 {:else}
 	<div class="space-y-2">
 		<p class="text-sm text-muted-foreground">
-			Applies to new conversations. Tool picks inside a chat only affect that chat.
+			{#if conversationsStore.activeConversation}
+				Applies to this conversation.
+			{:else}
+				Applies to new conversations. Tool picks inside a chat only affect that chat.
+			{/if}
 		</p>
 
 		{#each groups as group (group.key)}
@@ -41,19 +45,9 @@
 						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 
-					{@const groupToggleKey =
-						group.source === ToolSource.MCP && group.serverId
-							? toolsStore.getMcpServerToolsKey(group.serverId)
-							: null}
-
 					<Checkbox
-						checked={groupToggleKey
-							? toolsStore.isToolEnabled(groupToggleKey)
-							: toolsStore.isCategoryEnabled(group.source)}
-						onCheckedChange={() =>
-							groupToggleKey
-								? toolsStore.toggleTool(groupToggleKey)
-								: toolsStore.toggleCategory(group.source)}
+						checked={conversationsStore.preferences.isGroupChecked(group)}
+						onCheckedChange={() => void conversationsStore.preferences.toggleGroup(group)}
 						onclick={(e) => e.stopPropagation()}
 					/>
 
@@ -97,7 +91,7 @@
 									: null}
 							{@const displayLabel = toolUi?.label ?? toolName}
 							{@const IconComponent = toolUi?.icon ?? null}
-							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
+							{@const isEnabled = conversationsStore.preferences.isToolEnabled(entry.key)}
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
@@ -114,7 +108,7 @@
 									<Checkbox
 										checked={isEnabled}
 										class={ICON_CLASS_DEFAULT}
-										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
+										onCheckedChange={() => void conversationsStore.preferences.toggleTool(entry.key)}
 									/>
 								</div>
 
