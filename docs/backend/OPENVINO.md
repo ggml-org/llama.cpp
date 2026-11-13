@@ -3,7 +3,7 @@
 > [!NOTE]
 > Performance and memory optimizations, accuracy validation, broader quantization coverage, broader operator and model support are work in progress.
 
-[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for AI inference on Intel hardware. The [OpenVINO backend](../../ggml/src/ggml-openvino) runs the same GGUF model files on **Intel® CPUs, GPUs (integrated and discrete) and NPUs**, without changes to the model or the rest of llama.cpp.
+[OpenVINO](https://docs.openvino.ai/) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs (integrated and discrete), and NPUs, in the cloud, on-premises, and on the edge. The [OpenVINO backend](../../ggml/src/ggml-openvino) runs the same GGUF model files on **Intel® CPUs, GPUs and NPUs**, without changes to the model or the rest of llama.cpp.
 
 When a `ggml_cgraph` is dispatched to the OpenVINO backend, it:
 
@@ -295,7 +295,7 @@ cmake --build build\ReleaseOV --parallel
 
 #### Ubuntu Build Script
 
-For Ubuntu 24.04 users, the following shell script automates the prerequisite installs (build tools, OpenCL ICD), the OpenVINO Runtime download/extract/setup, and the Ninja-based llama.cpp build.
+For Ubuntu users, the following shell script automates the prerequisite installs (build tools, OpenCL ICD), the OpenVINO Runtime download/extract/setup, and the Ninja-based llama.cpp build.
 Save the following as `build-llamacpp-ov.sh` next to where you want the `llama.cpp` folder to land, then run it:
 
 ```bash
@@ -1009,6 +1009,9 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 - Lunar Lake NPU: `gemma-4-12B` does not run. The first inference fails with `ZE_RESULT_ERROR_UNINITIALIZED` from the NPU driver. The model runs on CPU and GPU.
 - The first load of a model on the NPU compiles it for the device, which can take minutes for large models.
   - **Workaround:** Use the [compiled model cache](#compiled-model-cache).
+
+> [!NOTE]
+> The OpenVINO backend is actively under development. Fixes and improvements are underway, and this document will continue to be updated.
 
 ## Work in Progress
 
