@@ -1,8 +1,11 @@
 @import 'tailwindcss';
 @source '.';
+/* stories may use classes the app does not, so tailwind scans them too */
+@source '../tests/stories';
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
+@import './lib/styles/safe-area.css';
 
 @custom-variant dark (&:is(.dark *));
 
@@ -35,6 +38,15 @@
 
 :root {
 	--radius: 0.625rem;
+	/* the page runs under the status bar and over the home indicator
+	   (viewport-fit=cover); what is pinned to a screen edge keeps clear of them
+	   with the pt-safe / pb-safe utilities (see lib/styles/safe-area.css) */
+	--safe-area-top: env(safe-area-inset-top, 0px);
+	--safe-area-bottom: env(safe-area-inset-bottom, 0px);
+	/* where the phone's corner controls (menu toggle, context gauge, sidebar logo) sit */
+	--corner-control-top: calc(1rem + var(--safe-area-top));
+	/* where a phone page's title starts: a row below the corner controls */
+	--page-top: calc(var(--corner-control-top) + 3.75rem);
 	/* expanded desktop sidebar width, overridden once the user drags its edge */
 	--sidebar-width: 18rem;
 	--background: oklch(1 0 0);
@@ -70,6 +82,20 @@
 	--sidebar-ring: oklch(0.708 0 0);
 	--code-background: oklch(0.985 0 0);
 	--code-foreground: oklch(0.145 0 0);
+	/* phone sidebar width, which the page slides aside to reveal */
+	--sidebar-reveal: min(80dvw, 20rem);
+	/* the desktop sidebar's muted/60 over the page, made opaque so the slid page's corners can match it */
+	--sidebar-reveal-tint: color-mix(in oklab, var(--muted) 60%, var(--background));
+	/* how far the phone sidebar is open, 0 to 1, stepped every frame by useSidebarReveal */
+	--sidebar-reveal-progress: 0;
+	/* the same on a log curve: the sidebar's contents hold on until the page nearly covers them */
+	--sidebar-reveal-ease: calc(log(1 + 9 * var(--sidebar-reveal-progress)) / log(10));
+	/* the page background, blending into the sidebar tint as the phone sidebar opens */
+	--sidebar-reveal-bg: color-mix(
+		in oklab,
+		var(--sidebar-reveal-tint) calc(var(--sidebar-reveal-progress) * 100%),
+		var(--background)
+	);
 	--font-mono:
 		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
 		'Liberation Mono', Menlo, monospace;
@@ -78,7 +104,40 @@
 	--chat-form-area-height: 8rem;
 	--chat-form-area-offset: 2rem;
 	--chat-form-padding-top: 6rem;
+
+	/* Nested surfaces, outermost first: the page, the sidebar on it, a group inset in the
+	   sidebar (its footer) and a row in the group. A row keeps its corners concentric with the
+	   group's: its radius is the group's less the padding between their edges. The sidebar's
+	   actions above the footer share the row radius, so every action row rounds alike. See "Nested
+	   surfaces" in the README; tests/client/nested-surfaces.svelte.test.ts holds the rule */
+	--surface-group-radius: 1rem;
+	--surface-group-padding: 0.25rem;
+	--surface-row-radius: calc(var(--surface-group-radius) - var(--surface-group-padding));
+
+	/* the chat form card holding one line of text, as it rests on a new chat */
+	--chat-form-collapsed-height: 6.375rem;
+	/* the empty chat form card, its text and actions in one row: a new chat centers its top edge */
+	--chat-form-resting-height: 3.375rem;
+	/* the chat form's corners while its text and actions share one row */
+	--chat-form-single-row-radius: 1.25rem;
+	/* the card's translucent fill over the page, made opaque: the phone sheet, and the page and Safari's bars around it */
+	--chat-form-sheet-fill: color-mix(in oklab, var(--muted) 60%, var(--background));
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));
+}
+
+/* iOS 26 gives an installed app with viewport-fit=cover and a translucent status bar a
+   viewport short of that bar (WebKit bug 301108), but only while the page is shorter than
+   the screen. A page that reaches past it gets the full screen, after which this is 100%,
+   capped at the screen so it never scrolls; elsewhere the inset is 0 and it is 100% too. */
+@media (display-mode: standalone) {
+	/* the installed app's status bar already sets them apart from the screen's edge */
+	:root {
+		--corner-control-top: calc(0.25rem + var(--safe-area-top));
+	}
+
+	html {
+		min-height: min(100lvh, calc(100% + var(--safe-area-top)));
+	}
 }
 
 @media (min-width: 640px) {
@@ -90,6 +149,7 @@
 }
 
 .dark {
+	--chat-form-sheet-fill: color-mix(in oklab, var(--muted) 75%, var(--background));
 	--background: oklch(0.16 0 0);
 	--foreground: oklch(0.985 0 0);
 	--card: oklch(0.205 0 0);
@@ -169,9 +229,19 @@
 	}
 
 	body {
-		@apply bg-background text-foreground antialiased;
+		@apply bg-(--sidebar-reveal-bg) text-foreground antialiased;
 		scrollbar-width: thin;
 		scrollbar-gutter: stable;
+	}
+
+	/* While the chat form is a full-screen sheet on a phone, the page around it takes the
+	   sheet's fill: iOS paints the installed app's status bar and home indicator areas, and
+	   Safari tints its bars, from this background */
+	@media (width < 48rem) {
+		html[data-chat-form-sheet],
+		html[data-chat-form-sheet] body {
+			background-color: var(--chat-form-sheet-fill);
+		}
 	}
 
 	/* no elastic bounce past the ends of the page: it drags the sticky and
@@ -179,6 +249,30 @@
 	html,
 	body {
 		overscroll-behavior: none;
+	}
+
+	/* no gray flash over a tapped control, which has its own press state, and
+	   no text inflation when a phone turns to landscape */
+	html {
+		-webkit-tap-highlight-color: transparent;
+		-webkit-text-size-adjust: 100%;
+		text-size-adjust: 100%;
+	}
+
+	/* a tap clicks at once rather than waiting to see if it is a double-tap zoom */
+	button,
+	a,
+	[role='button'] {
+		touch-action: manipulation;
+	}
+
+	/* holding a control does not select its label or pop the link callout;
+	   links stay selectable, as in a message they are content */
+	button,
+	[role='button'] {
+		-webkit-touch-callout: none;
+		-webkit-user-select: none;
+		user-select: none;
 	}
 
 	/* same for dialogs, whose panels and lists scroll on their own with sticky
@@ -198,7 +292,7 @@
 	}
 
 	*:hover {
-		scrollbar-color: hsl(var(--muted-foreground) / 0.3) transparent;
+		scrollbar-color: color-mix(in oklch, var(--muted-foreground) 30%, transparent) transparent;
 	}
 
 	*::-webkit-scrollbar {
@@ -217,11 +311,11 @@
 	}
 
 	*:hover::-webkit-scrollbar-thumb {
-		background: hsl(var(--muted-foreground) / 0.3);
+		background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
 	}
 
 	*::-webkit-scrollbar-thumb:hover {
-		background: hsl(var(--muted-foreground) / 0.5);
+		background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
 	}
 
 	:where(code, pre, kbd, samp) {
@@ -249,6 +343,125 @@
 			color-mix(in srgb, var(--background) 40%, transparent) 75%,
 			transparent 100%
 		);
+	}
+
+	/* The same fade at the top of a phone's screen: solid behind the status bar and the row of
+	   corner controls under it (the menu key, the chat's header), fading out below them, so the
+	   page scrolls away under them instead of into them. It rides on the page as it slides aside
+	   for the sidebar and stays as it is: the rounded frame over the slid page clips it. */
+	.status-bar-fade {
+		/* down to where a page's content starts (--page-top): solid to the middle of the corner
+		   row, then a long, even fade over its lower half and on to the content */
+		height: var(--page-top);
+		background: linear-gradient(
+			to bottom,
+			var(--background) calc(var(--corner-control-top) + 1.25rem),
+			color-mix(in srgb, var(--background) 55%, transparent)
+				calc(var(--corner-control-top) + 2.5rem),
+			transparent 100%
+		);
+	}
+
+	/* iOS Safari colours the screen's top, above the page, from a solid fixed element at the
+	   page's top edge (theme-color no longer), and shows the page through it otherwise. The
+	   fade above is a gradient, which it does not take, so this strip under it carries the
+	   page's colour there, as the installed app has. Safari finds it by hit-testing the top
+	   edge, so it takes taps (pointer-events: none would hide it) and is thicker than the
+	   10px Safari ignores; what it covers sits under the fade's solid part anyway */
+	.status-bar-edge {
+		height: 0.75rem;
+		background-color: var(--background);
+	}
+
+	/* The bottom edge's counterpart, which Safari takes for its bottom toolbar the same way:
+	   without it, it finds the chat form there and takes the form's colour */
+	.screen-bottom-edge {
+		height: 0.75rem;
+		background-color: var(--background);
+	}
+
+	/* The same fade at the bottom of a phone's screen: solid behind the home indicator and
+	   fading out above it, so the page ends softly at the screen's edge and under the chat
+	   form instead of running out under it. It stays through the slide as the top one does */
+	.screen-bottom-fade {
+		height: calc(var(--safe-area-bottom) + 3rem);
+		background: linear-gradient(
+			to top,
+			var(--background) var(--safe-area-bottom),
+			color-mix(in srgb, var(--background) 60%, transparent) calc(var(--safe-area-bottom) + 1.5rem),
+			transparent 100%
+		);
+	}
+
+	/* The sidebar's "Show more" row, stuck to its bottom: an opaque copy of the
+	   panel's translucent muted tint, and a fade above it, like the one under
+	   the tab bar, so the rows scrolling beneath end softly */
+	.sidebar-show-more {
+		--sidebar-surface: color-mix(in oklab, var(--muted) 60%, var(--background));
+		background: var(--sidebar-surface);
+
+		&::before {
+			content: '';
+			position: absolute;
+			inset-inline: 0;
+			bottom: 100%;
+			height: 1rem;
+			pointer-events: none;
+			background: linear-gradient(
+				to top,
+				var(--sidebar-surface) 0%,
+				color-mix(in srgb, var(--sidebar-surface) 60%, transparent) 50%,
+				transparent 100%
+			);
+		}
+	}
+
+	/* An opaque copy of the sidebar panel's translucent tint, under what moves
+	   over the other sections while dragged */
+	.sidebar-drag-surface,
+	.sidebar-drag-overlay {
+		background: color-mix(in oklab, var(--muted) 60%, var(--background));
+	}
+
+	/* the copy of a chat row that follows the pointer, raised above the page */
+	.sidebar-drag-overlay {
+		box-shadow:
+			0 10px 30px -10px rgb(0 0 0 / 0.35),
+			0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent);
+	}
+
+	/* While something is dragged, what it passes over takes no hover: only the
+	   sections themselves stay targets, for the drop */
+	body[data-sidebar-dragging] [data-sidebar-section] * {
+		pointer-events: none;
+	}
+
+	.sidebar-drag-overlay {
+		position: fixed;
+		z-index: 1000;
+		border-radius: 0.5rem;
+		pointer-events: none;
+	}
+
+	/* the phone sidebar's contents zoom out and fade as the page slides back over them */
+	.sidebar-reveal-content {
+		opacity: var(--sidebar-reveal-ease);
+		scale: calc(0.98 + 0.02 * var(--sidebar-reveal-ease));
+	}
+
+	/* the slid page's fixed bars, held where they sit on screen, see useSidebarReveal */
+	.sidebar-reveal-pin-top {
+		translate: 0 var(--sidebar-reveal-pin-top, 0px);
+	}
+
+	.sidebar-reveal-pin-bottom {
+		translate: 0 calc(-1 * var(--sidebar-reveal-pin-bottom, 0px));
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.sidebar-reveal-content {
+			scale: none;
+		}
 	}
 
 	.shimmer-text {

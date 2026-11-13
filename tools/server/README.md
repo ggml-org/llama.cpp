@@ -862,7 +862,9 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
-`top_k`, `top_p`: Sampling params for the acoustic code predictor. Optional, model-dependent defaults apply.
+`top_k`, `top_p`: Sampling params for both the backbone sampler and the acoustic code predictor. Optional, `0` or absent keeps the server `--top-k`/`--top-p` for the backbone and the model defaults for the code predictor.
+
+`temperature`: Temperature for the backbone sampler and the audio frames, for models that support it. `0` is greedy sampling. Optional, absent keeps the server `--temp` for the backbone and the model defaults for the audio.
 
 `repeat_penalty`: Repetition penalty applied to the backbone sampler over the whole generation (default `1.05`). Without this, the backbone can loop and re-generate the same utterance.
 
@@ -870,7 +872,7 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
 
-`response_format`: `wav` (default) or `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`).
+`response_format`: `wav` (default), `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`) or `pcm16` (same, as signed 16-bit samples, e.g. `audio/pcm;rate=24000;encoding=signed-int;bits=16`).
 
 `stream`: If `true`, the response is streamed as audio becomes available instead of waiting for the full generation to finish. WAV streaming writes an RFC-noncompliant header with an unknown (`0xFFFFFFFF`) size field, since the final length isn't known up front; most players and decoders (ffmpeg, VLC, ...) handle this by reading until EOF.
 
@@ -1444,7 +1446,7 @@ Given a ChatML-formatted json description in `messages`, it returns the predicte
 
 See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
-The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
+The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers. The OpenAI wrapper form `{"type": "json_schema", "json_schema": {"name": ..., "strict": ..., "schema": {...}}}` is also accepted.
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
 
@@ -1594,11 +1596,11 @@ Models that write the text while they listen use this endpoint: Voxtral Realtime
 
 Live ASR models can also hold a conversation, so they transcribe live only in sessions opened with `/v1/realtime?intent=transcription`, as OpenAI transcription sessions are; other sessions are a [realtime conversation](#realtime-conversation).
 
-Audio must be PCM16, mono, at the model sample rate. The sample rate is returned in `session.created` as `audio.input.format.rate`. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
+Audio must be PCM16, mono. By default it is at the model sample rate, returned in `session.created` as `audio.input.format.rate`. A client can send another rate (8000 to 192000 Hz) by setting `audio.input.format.rate` with `session.update`, the server then resamples it. Each `input_audio_buffer.append` carries a base64-encoded chunk of PCM16 samples.
 
 *Client events:*
 
-- `session.update`: accepted for compatibility, the server replies with `session.updated`
+- `session.update`: only `audio.input.format.rate` is used, the server replies with `session.updated`
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: flushes the audio received so far, so the words still held back by the model's delay are produced. The server replies with `input_audio_buffer.committed` and starts a new item. With `"final": true`, the input ends instead and the last item is completed once the stream drains.
 - `input_audio_buffer.clear`: accepted for compatibility, audio already sent cannot be discarded
@@ -1617,7 +1619,7 @@ Note that words held back by the model's delay at the time of a commit are attri
 
 #### Realtime conversation
 
-Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono at the model sample rate (`audio.input.format.rate` of `session.created`), audio output is PCM16 mono at `audio.output.format.rate`.
+Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conversation on the same endpoint (with an `asr` template, unless the session is opened with `?intent=transcription`). The audio is prefilled as it arrives, so the response starts right after the last chunk. Audio input is PCM16 mono, by default at the model sample rate (`audio.input.format.rate` of `session.created`); another rate set with `session.update` is resampled by the server. Audio output is PCM16 mono at `audio.output.format.rate`.
 
 `session.type` selects the session, it can be changed with `session.update` before the first audio or message:
 
@@ -1626,7 +1628,7 @@ Models that answer after the audio, like LFM3-Audio and LFM3-Omni, hold a conver
 
 *Client events:*
 
-- `session.update`: `type`, `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
+- `session.update`: `type`, `audio.input.format.rate` (8000 to 192000 Hz), `instructions` (the system prompt, before the first audio or message), `output_modalities`, `max_output_tokens` (an integer or `"inf"`, the default), `tools` (functions with `name`, `description` and `parameters`, before the first audio or message) and `tool_choice` (`"auto"`, the default, `"none"` or `"required"`)
 - `input_audio_buffer.append`: `audio` holds base64 PCM16 samples
 - `input_audio_buffer.commit`: ends the audio of the user turn, in a transcription session the transcript follows
 - `conversation.item.create`: a user message with `input_text` content, or a `function_call_output` with the `call_id` and `output` of a tool call of the last response
@@ -1649,6 +1651,33 @@ LFM3-Omni is not trained to reason, run it with `--reasoning off` so that its tu
 Tools go into the system prompt with the chat template, and the tool calls are parsed as in `/v1/chat/completions`. The client runs the calls of a response, sends their results as `function_call_output` items, then asks for the next response.
 
 See [examples/realtime_client.py](../../examples/realtime_client.py) for a client with the `openai` library.
+
+### POST `/v1/audio/speech`: OpenAI-compatible Speech API
+
+Generates speech from text, for models that can generate audio. The request is converted to a [`/tts`](#post-tts-generate-speech-audio-from-text) request, so the `/tts` options such as `lang`, `seed` or `speaker_ref_b64` can also be used.
+
+*Options:*
+
+`input`: The text to speak.
+
+`voice`: One of the `voices` listed by `GET /props`, as a name or as `{"id": "..."}`. OpenAI voice names such as `alloy` are not mapped: a model with predefined voices rejects them.
+
+`response_format`: `wav` or `pcm` (raw signed 16-bit little-endian mono samples, no header). Defaults to `wav`, unlike the `mp3` of the OpenAI API. Other formats are rejected. The sample rate is the one of the model and is not resampled to the 24 kHz of the OpenAI API, the response `Content-Type` carries it.
+
+`stream_format`: `audio` streams the response as it becomes available, see `stream` in `/tts` for the WAV header it writes. `sse` is rejected. The response is not streamed when omitted.
+
+`speed`: Only `1.0` is accepted.
+
+`instructions`: Ignored.
+
+*Examples:*
+
+```shell
+curl http://127.0.0.1:8080/v1/audio/speech \
+    -H "Content-Type: application/json" \
+    -d '{"model": "tts", "input": "Hello, this is a test."}' \
+    -o output.wav
+```
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
@@ -2477,7 +2506,7 @@ To pause a download, send an event to `/models/unload`: it keeps its partial fil
 Download procedure:
 - Send POST request to `/models`
 - Subscribe to `/models/sse` for updates
-- On downloading completed, you will receive either `download_finished` or `download_failed` event
+- On downloading completed, you will receive either `download_finished` or `download_failed` event. A download that stopped because a client paused or cancelled it fails with `{"stopped": true}` as its data
 - Call GET `/models` to trigger model list update. If the download success, you should see the new model in the list
 
 Payload:

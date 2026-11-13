@@ -356,4 +356,8 @@ export interface ChatFormActionsContext {
 	readonly hasVisionModality: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
+	/** Opens the working directory picker; set where the + menu offers it. */
+	onWorkingDirectoryClick?: () => void;
+	/** The working directory's name in the + menu, or what sets one. */
+	readonly workingDirectoryLabel: string;
 }

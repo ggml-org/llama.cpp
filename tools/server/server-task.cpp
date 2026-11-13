@@ -1513,7 +1513,7 @@ json server_task_result_rerank::to_json() {
 //
 json server_task_result_realtime::to_json() {
     return json {
-        {"text",          text},
+        {"text",          content.text},
         {"n_samples",     audio.size()},
         {"response_done", response_done},
         {"cancelled",     cancelled},

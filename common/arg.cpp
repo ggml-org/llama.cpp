@@ -282,6 +282,7 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_F32,
     GGML_TYPE_F16,
     GGML_TYPE_BF16,
+    GGML_TYPE_F8_E4M3,
     GGML_TYPE_Q8_0,
     GGML_TYPE_Q4_0,
     GGML_TYPE_Q4_1,
@@ -3033,6 +3034,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
+        {"--ple", "--shard"}, "FNAME,...",
+        "extra GGUF shards for the model, comma separated; may be given more than once\n"
+        "paths may live anywhere, including on different drives; --ple is an alias for --shard",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : parse_csv_row(value)) {
+                params.model.shards.push_back(item);
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMMON}).set_env("LLAMA_ARG_SHARD"));
+    add_opt(common_arg(
         {"-mu", "--model-url"}, "MODEL_URL",
         "model download url (default: unused)",
         [](common_params & params, const std::string & value) {
@@ -4481,7 +4492,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.tts_lang = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--tts-voice"}, "VOICE",
         "voice for audio generation (model-dependent)\n"
@@ -4489,7 +4500,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.tts_voice = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"--tts-speaker-file"}, "FNAME",
         "speaker file path for audio generation",

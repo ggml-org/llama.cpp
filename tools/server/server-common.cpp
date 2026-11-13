@@ -9,6 +9,8 @@
 
 #include "server-common.h"
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <random>
 #include <sstream>
@@ -198,6 +200,19 @@ const char * get_media_marker() {
         return std::string("<__media_") + random_string() + "__>";
     }();
     return marker.c_str();
+}
+
+//
+// audio utils
+//
+
+std::string pcm_f32_to_s16(const float * samples, size_t n) {
+    std::string bytes(n * sizeof(int16_t), '\0');
+    for (size_t i = 0; i < n; i++) {
+        const int16_t v = (int16_t) std::lround(std::max(-1.0f, std::min(1.0f, samples[i])) * 32767.0f);
+        memcpy(&bytes[2 * i], &v, sizeof(v));
+    }
+    return bytes;
 }
 
 //
@@ -1390,10 +1405,14 @@ json oaicompat_chat_params_parse(
                 json_schema = json_value(response_format, "schema", json::object());
             }
         } else if (response_type == "json_schema") {
-            auto schema_wrapper = json_value(response_format, "json_schema", json::object());
-            json_schema = json_value(schema_wrapper, "schema", json::object());
+            if (response_format.contains("json_schema")) {
+                auto schema_wrapper = json_value(response_format, "json_schema", json::object());
+                json_schema = json_value(schema_wrapper, "schema", json::object());
+            } else {
+                json_schema = json_value(response_format, "schema", json::object());
+            }
         } else if (!response_type.empty() && response_type != "text") {
-            throw std::invalid_argument("response_format type must be one of \"text\" or \"json_object\", but got: " + response_type);
+            throw std::invalid_argument("response_format type must be one of \"text\", \"json_object\" or \"json_schema\", but got: " + response_type);
         }
     }
 

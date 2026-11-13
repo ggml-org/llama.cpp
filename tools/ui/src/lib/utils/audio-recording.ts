@@ -1,3 +1,4 @@
+import { MICROPHONE_UNAVAILABLE_MESSAGE } from '$lib/constants';
 import { MimeTypeAudio } from '$lib/enums';
 
 /**
@@ -65,7 +66,8 @@ export class AudioRecorder {
 		} catch (error) {
 			console.error('Failed to start recording:', error);
 
-			throw new Error('Failed to access microphone. Please check permissions.');
+			// the browser's own error, which says why: see describeMicrophoneError
+			throw error;
 		}
 	}
 
@@ -260,4 +262,38 @@ export function isAudioRecordingSupported(): boolean {
 		typeof window !== 'undefined' &&
 		window.MediaRecorder
 	);
+}
+
+/**
+ * Why this page can't record at all, or null when it can: a reason no tap will fix. Browsers
+ * only expose the microphone to a secure context, HTTPS or localhost, so a llama-server
+ * opened over plain HTTP on the local network or over Tailscale can't record.
+ */
+export function microphoneUnavailableReason(): string | null {
+	if (typeof window === 'undefined') return null;
+
+	if (!window.isSecureContext) return MICROPHONE_UNAVAILABLE_MESSAGE.insecure;
+
+	if (!isAudioRecordingSupported()) return MICROPHONE_UNAVAILABLE_MESSAGE.unsupported;
+
+	return null;
+}
+
+/** Why the microphone would not start, from the error the browser raised. */
+export function describeMicrophoneError(error: unknown): string {
+	switch (error instanceof DOMException ? error.name : '') {
+		case 'NotAllowedError':
+		case 'SecurityError':
+			return MICROPHONE_UNAVAILABLE_MESSAGE.denied;
+		case 'NotFoundError':
+		case 'OverconstrainedError':
+			return MICROPHONE_UNAVAILABLE_MESSAGE.notFound;
+		case 'AbortError':
+		case 'NotReadableError':
+			return MICROPHONE_UNAVAILABLE_MESSAGE.busy;
+		default:
+			return error instanceof Error && error.message
+				? `${MICROPHONE_UNAVAILABLE_MESSAGE.failed} ${error.message}`
+				: MICROPHONE_UNAVAILABLE_MESSAGE.failed;
+	}
 }

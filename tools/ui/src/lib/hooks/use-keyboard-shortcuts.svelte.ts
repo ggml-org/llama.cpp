@@ -42,7 +42,7 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		) {
 			event.preventDefault();
 
-			void conversationsStore.openNewChat();
+			void conversationsStore.openNewChat({ inNewTab: true });
 		}
 
 		if (

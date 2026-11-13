@@ -178,7 +178,7 @@ private:
             // bool has_caller_args = false;
             if (is(token::open_paren)) {
                 // Optional caller arguments, e.g. {% call(user) dump_users(...) %}
-                caller_args = parse_args();
+                caller_args = parse_args(false);
                 // has_caller_args = true;
             }
             auto callee = parse_primary_expression();
@@ -283,7 +283,7 @@ private:
 
     statement_ptr parse_macro_statement(size_t start_pos) {
         auto name = parse_primary_expression();
-        auto args = parse_args();
+        auto args = parse_args(false);
         expect(token::close_statement, "Expected %}");
         statements body;
         // Keep going until we hit {% endmacro
@@ -397,11 +397,13 @@ private:
 
     statement_ptr parse_comparison_expression() {
         // NOTE: membership has same precedence as comparison
-        // e.g., ('a' in 'apple' == 'b' in 'banana') evaluates as ('a' in ('apple' == ('b' in 'banana')))
-        auto left = parse_additive_expression();
+        // e.g., ('a' in 'apple' == 'b' in 'banana') evaluates as ('a' in 'apple' and 'apple' == 'b' and 'b' in 'banana')
+        statements operands;
+        std::vector<token> ops;
+        operands.push_back(parse_additive_expression());
+        size_t pos = current;
         while (true) {
             token op;
-            size_t start_pos = current;
             if (is_identifier("not") && peek(1).t == token::identifier && peek(1).value == "in") {
                 op = {token::identifier, "not in", tokens[current].pos};
                 ++current; // consume 'not'
@@ -411,9 +413,17 @@ private:
             } else if (is(token::comparison_binary_operator)) {
                 op = next();
             } else break;
-            left = mk_stmt<binary_expression>(start_pos, op, std::move(left), parse_additive_expression());
+            ops.push_back(std::move(op));
+            operands.push_back(parse_additive_expression());
         }
-        return left;
+        if (ops.empty()) {
+            return std::move(operands[0]);
+        }
+        if (ops.size() == 1) {
+            return mk_stmt<binary_expression>(pos, ops[0], std::move(operands[0]), std::move(operands[1]));
+        }
+        // chained comparison, e.g. 1 <= x <= 100
+        return mk_stmt<comparison_chain_expression>(pos, std::move(operands), std::move(ops));
     }
 
     statement_ptr parse_additive_expression() {
@@ -500,17 +510,22 @@ private:
         return parse_call_expression(std::move(member)); // foo.x()()
     }
 
-    statements parse_args() {
+    statements parse_args(bool allow_spread = true) {
         // comma-separated arguments list
         expect(token::open_paren, "Expected (");
         statements args;
         while (!is(token::close_paren)) {
             statement_ptr arg;
-            // unpacking: *expr
-            if (peek().t == token::multiplicative_binary_operator && peek().value == "*") {
+            // unpacking: *expr or **expr
+            const auto & t = peek();
+            if (t.t == token::power_operator || (t.t == token::multiplicative_binary_operator && t.value == "*")) {
+                if (!allow_spread) {
+                    throw std::runtime_error("Unexpected token: " + t.value + " of type " + std::to_string(t.t));
+                }
                 size_t start_pos = current;
-                ++current; // consume *
-                arg = mk_stmt<spread_expression>(start_pos, parse_expression());
+                ++current; // consume * or **
+                bool is_kwargs = t.t == token::power_operator;
+                arg = mk_stmt<spread_expression>(start_pos, parse_expression(), is_kwargs);
             } else {
                 arg = parse_expression();
                 if (is(token::equals)) {
