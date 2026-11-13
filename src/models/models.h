@@ -37,44 +37,13 @@ struct llm_build_delta_net_base : public llm_graph_context {
     virtual ~llm_build_delta_net_base() = default;
 
     // returns pair of output and new state
-    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_chunking(
-                ggml_tensor * q,
-                ggml_tensor * k,
-                ggml_tensor * v,
-                ggml_tensor * g,
-                ggml_tensor * b,
-                ggml_tensor * s,
-                        int   il);
-
-    // returns pair of output and new state
-    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_autoregressive(
-                ggml_tensor * q,
-                ggml_tensor * k,
-                ggml_tensor * v,
-                ggml_tensor * g,
-                ggml_tensor * b,
-                ggml_tensor * s,
-                int           il);
-
-    // use the ggml_gated_delta_net fused operator (K=1; state has shape [S_v, S_v, H_v, n_seqs])
-    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_fused(
-                ggml_tensor * q,
-                ggml_tensor * k,
-                ggml_tensor * v,
-                ggml_tensor * g,
-                ggml_tensor * b,
-                ggml_tensor * s,
-                        int   il);
-
-    // choose one of two implementations above based on the number of tokens
     std::pair<ggml_tensor *, ggml_tensor *> build_delta_net(
                 ggml_tensor * q,
                 ggml_tensor * k,
                 ggml_tensor * v,
                 ggml_tensor * g,
                 ggml_tensor * b,
-                ggml_tensor * s,
-                        int   il);
+                ggml_tensor * s);
 
     // read conv state from cache, concat with qkv_mixed, write back (single slot or per-token)
     // qkv_mixed: (qkv_dim, n_seq_tokens, n_seqs); returns conv_input: (kernel_size + n_seq_tokens - 1, channels, n_seqs)
@@ -1500,6 +1469,12 @@ struct llama_model_deepseek41 : public llama_model_deepseek4 {
         std::map<std::pair<int32_t, int32_t>, ggml_tensor *> gather_k_of;
         std::map<int32_t, ggml_tensor *> gather_sel_of;
         std::map<int32_t, ggml_tensor *> gather_mask_of;
+
+        // the rows of the attention masks of each token chunk (see build_attention41)
+        // the views are made once per graph: each view of a host input is a separate upload
+        std::vector<ggml_tensor *> chunks_raw_mask;
+        std::vector<ggml_tensor *> chunks_csa_mask;
+        std::vector<ggml_tensor *> chunks_hca_mask;
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -2762,11 +2737,11 @@ struct llama_model_qwen4exp : public llama_model_base {
 
         // the indexer query of all tokens and the pooled keys of all blocks
         struct qsa_idx {
-            ggml_tensor * q;
-            ggml_tensor * pooled;
+            ggml_tensor * q      = nullptr;
+            ggml_tensor * pooled = nullptr;
         };
 
-        // dense self-attention over the cells the QSA mask keeps, one query chunk at a time
+        // dense self-attention over the cells the QSA mask keeps, per token chunk of inp_kpool
         ggml_tensor * build_attn_qsa(
         llm_graph_input_attn_kv * inp,
           llm_graph_input_kpool * inp_kpool,
@@ -2788,7 +2763,7 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * inp_pos,
                             int   il);
 
-        // QSA: the additive mask [n_kv, n] of the top blocks and the tail for the query chunk ic
+        // QSA: the additive mask [n_kv, chunk.n] of the top blocks and the tail for the token chunk ic of inp_kpool
         ggml_tensor * build_qsa_sel(
           llm_graph_input_kpool * inp_kpool,
                   const qsa_idx & idx,
@@ -3003,13 +2978,14 @@ struct llama_model_kimi_k31 : public llama_model_base {
 
         struct dsa_out {
             ggml_tensor * out;
-            ggml_tensor * sel;
+            std::vector<ggml_tensor *> picks; // the top-k cells of each token chunk
         };
 
         dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                 const llama_kv_cache_context * mctx_idx,
                                 llm_graph_input_attn_k * inp_attn,
-                                ggml_tensor * prev_sel,
+                                const std::vector<ggml_tensor *> & chunks_kq_mask,
+                                const std::vector<ggml_tensor *> & prev_picks,
                                 int64_t n_embd_head_k_mla, int64_t kv_lora_rank,
                                 int64_t n_embd_head_qk_rope,
                                 int64_t n_embd_head_qk_nope, float kq_scale, int il);
@@ -3082,18 +3058,35 @@ struct llama_model_glm5_next : public llama_model_base {
                                        int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
                                        int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs);
 
-        ggml_tensor * build_kpool_select(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
-                                         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
+        // the indexer state that the selection of every token chunk reads
+        struct kpool_idx {
+            ggml_tensor * cur    = nullptr; // [n_embd, n_tokens]                         the layer input
+            ggml_tensor * iq     = nullptr; // [n_embd_indexer, n_indexer_head, n_tokens] the indexer queries
+            ggml_tensor * pooled = nullptr; // [n_embd_indexer, 1, n_pool]                the pooled keys
+        };
 
-        // attention output (cur) and the selection to carry to the next shared layer (sel)
+        kpool_idx build_kpool_idx(ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
+                                  const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il);
+
+        // the pools that the tokens of a chunk picked
+        struct kpool_picks {
+            ggml_tensor * top_k = nullptr; // I32 [n_top_pool, n_tokens]
+            ggml_tensor * score = nullptr; // F32 [n_pool, n_tokens] -inf for a pool that a token cannot see, nullptr if top_k has no dead picks to skip by score
+        };
+
+        kpool_picks   build_kpool_picks(const llama_layer & layer, llm_graph_input_kpool * inp_kpool, const kpool_idx & idx, size_t ic, int il);
+        ggml_tensor * build_kpool_picks_shared(const kpool_picks & picks);
+        ggml_tensor * build_kpool_mask(llm_graph_input_kpool * inp_kpool, const kpool_picks & picks, size_t ic, int il);
+
+        // attention output (cur) and the picks of each token chunk, for the next shared layer (picks)
         struct dsa_out {
             ggml_tensor * cur;
-            ggml_tensor * sel;
+            std::vector<ggml_tensor *> picks;
         };
 
         dsa_out build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                 const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
-                                llm_graph_input_kpool * inp_kpool, ggml_tensor * prev_sel, int il);
+                                llm_graph_input_kpool * inp_kpool, const std::vector<ggml_tensor *> & prev_picks, int il);
 
     };
 
