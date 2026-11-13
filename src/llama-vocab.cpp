@@ -2965,6 +2965,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             { LLM_KV_TOKENIZER_MIDDLE_ID, special_fim_mid_id },
         };
 
+        if (ml.get_arch() == LLM_ARCH_INKLING2) {
+            special_bos_id = LLAMA_TOKEN_NULL;
+        }
+
         for (const auto & it : special_token_types) {
             const std::string & key = kv(std::get<0>(it));
             int32_t & id = std::get<1>(it);

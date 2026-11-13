@@ -2349,6 +2349,21 @@ struct llama_model_falcon_h1 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_inkling2 : public llama_model_base {
+    llama_model_inkling2(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_graph_context {
+        graph(const llm_graph_params & params);
+        ggml_tensor * mix(const std::vector<ggml_tensor *> & blocks, ggml_tensor * cur, ggml_tensor * query);
+        ggml_tensor * clip(ggml_tensor * cur, ggml_tensor * scale, float threshold);
+        ggml_tensor * convolve(ggml_tensor * cur, ggml_tensor * weight, ggml_tensor * dynamic, ggml_tensor * state, ggml_tensor * history, llm_graph_input_rs * inp, int64_t offset);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_lfm2 : public llama_model_base {
     llama_model_lfm2(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

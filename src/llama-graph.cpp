@@ -2285,7 +2285,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (probs_in == nullptr) {
         logits = build_lora_mm(gate_inp, cur); // [n_expert, n_tokens]
-        if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+        if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS || arch == LLM_ARCH_INKLING2) {
             // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
             ggml_prec_set_acc(logits, GGML_PREC_F32);
         }
@@ -2400,7 +2400,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
 
-        if (arch == LLM_ARCH_DEEPSEEK41) {
+        if (arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_INKLING2) {
             // model.py Gate.forward: weights / (sum + 1e-20); the sum can fall below the F16 clamp below
             weights_sum = ggml_scale_bias(ctx0, weights_sum, 1.0f, 1e-20f);
         } else {
@@ -3032,7 +3032,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
     ggml_tensor * cur;
 
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr && (!sinks || ggml_is_vector(sinks));
     GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
@@ -3115,8 +3115,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cb(kq, "kq_plus_kq_b", il);
         }
 
-        kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
-        ggml_soft_max_add_sinks(kq, sinks);
+        if (sinks && !ggml_is_vector(sinks)) {
+            // Per-query sinks are extra logits with zero values.
+            const int64_t n_kv = kq->ne[0];
+            kq = ggml_add(ctx0, ggml_scale(ctx0, kq, kq_scale), ggml_cast(ctx0, kq_mask, GGML_TYPE_F32));
+            kq = ggml_soft_max(ctx0, ggml_concat(ctx0, kq, sinks, 0));
+            kq = ggml_cont(ctx0, ggml_view_4d(ctx0, kq, n_kv, kq->ne[1], kq->ne[2], kq->ne[3], kq->nb[1], kq->nb[2], kq->nb[3], 0));
+        } else {
+            kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+            ggml_soft_max_add_sinks(kq, sinks);
+        }
         cb(kq, "kq_soft_max", il);
 
         if (!v_trans) {
