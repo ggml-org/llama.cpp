@@ -35,17 +35,11 @@ auto align_up(size_t value, size_t alignment) {
 }
 
 static inline bool flash_attn_ext_supported_d_vlen1024_vf16(int64_t d) {
-    return d > 0 && d <= 128;
+    return d > 0 && d <= 256;
 }
 
 static inline bool flash_attn_ext_supported_shape_vlen1024_vf16(int64_t DK, int64_t DV) {
     return flash_attn_ext_supported_d_vlen1024_vf16(DK) && flash_attn_ext_supported_d_vlen1024_vf16(DV);
-}
-
-static inline float reduce_sum_f32m4_vlen1024(vfloat32m4_t v, size_t vl) {
-    vfloat32m1_t s_v = __riscv_vfmv_v_f_f32m1(0.0f, 1);
-    s_v              = __riscv_vfredusum_vs_f32m4_f32m1(v, s_v, vl);
-    return __riscv_vfmv_f_s_f32m1_f32(s_v);
 }
 
 static inline float reduce_sum_f32m2_vlen1024(vfloat32m2_t v, size_t vl) {
@@ -647,7 +641,61 @@ static void permute_transpose_impl(const ggml_tensor * src0,
     }
 }
 
-template <size_t QLEN>
+// Register groups for the row kernels, which keep a whole DK / DV row in one register group:
+// m2 / m4 covers 128 elements at VLEN=1024, m4 / m8 covers 256. Use the narrow one when it fits.
+#define FA_ROW_REGS(NAME, MAXD, L16, L32)                                         \
+    struct NAME {                                                                 \
+        static constexpr int64_t max_d = MAXD;                                    \
+        using f16                      = vfloat16##L16##_t;                       \
+        using f32                      = vfloat32##L32##_t;                       \
+        static f16 le16(const _Float16 * p, size_t vl) {                          \
+            return __riscv_vle16_v_f16##L16(p, vl);                               \
+        }                                                                         \
+        static f32 le32(const float * p, size_t vl) {                             \
+            return __riscv_vle32_v_f32##L32(p, vl);                               \
+        }                                                                         \
+        static void se16(_Float16 * p, f16 v, size_t vl) {                        \
+            __riscv_vse16_v_f16##L16(p, v, vl);                                   \
+        }                                                                         \
+        static void se32(float * p, f32 v, size_t vl) {                           \
+            __riscv_vse32_v_f32##L32(p, v, vl);                                   \
+        }                                                                         \
+        static void sse16(_Float16 * p, ptrdiff_t st, f16 v, size_t vl) {         \
+            __riscv_vsse16_v_f16##L16(p, st, v, vl);                              \
+        }                                                                         \
+        static f16 splat_f16(_Float16 x, size_t vl) {                             \
+            return __riscv_vfmv_v_f_f16##L16(x, vl);                              \
+        }                                                                         \
+        static f16 ncvt(f32 v, size_t vl) {                                       \
+            return __riscv_vfncvt_f_f_w_f16##L16(v, vl);                          \
+        }                                                                         \
+        static f32 wcvt(f16 v, size_t vl) {                                       \
+            return __riscv_vfwcvt_f_f_v_f32##L32(v, vl);                          \
+        }                                                                         \
+        static f32 wmul(f16 a, f16 b, size_t vl) {                                \
+            return __riscv_vfwmul_vv_f32##L32(a, b, vl);                          \
+        }                                                                         \
+        static f16 fmul_f16(f16 v, _Float16 x, size_t vl) {                       \
+            return __riscv_vfmul_vf_f16##L16(v, x, vl);                           \
+        }                                                                         \
+        static f32 fmul_f32(f32 v, float x, size_t vl) {                          \
+            return __riscv_vfmul_vf_f32##L32(v, x, vl);                           \
+        }                                                                         \
+        static f16 fmacc_f16(f16 acc, _Float16 x, f16 v, size_t vl) {             \
+            return __riscv_vfmacc_vf_f16##L16(acc, x, v, vl);                     \
+        }                                                                         \
+        static float reduce_sum(f32 v, size_t vl) {                               \
+            vfloat32m1_t s_v = __riscv_vfmv_v_f_f32m1(0.0f, 1);                   \
+            s_v              = __riscv_vfredusum_vs_f32##L32##_f32m1(v, s_v, vl); \
+            return __riscv_vfmv_f_s_f32m1_f32(s_v);                               \
+        }                                                                         \
+    };
+
+FA_ROW_REGS(fa_row_regs_128, 128, m2, m4)
+FA_ROW_REGS(fa_row_regs_256, 256, m4, m8)
+#undef FA_ROW_REGS
+
+template <size_t QLEN, typename R>
 static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **            pq,
                                                                   const char *        k_data_row,
                                                                   const char *        v_data_row,
@@ -665,6 +713,7 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
                                                                   void *              tcm_buffer,
                                                                   size_t              tcm_buffer_size) {
     GGML_ASSERT(flash_attn_ext_supported_shape_vlen1024_vf16(DK, DV));
+    GGML_ASSERT(DK <= R::max_d && DV <= R::max_d);
     float S[QLEN] = { 0.0f };       // sum
     float M[QLEN] = { -INFINITY };  // maximum KQ value
 
@@ -674,11 +723,11 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
     char *       kv_tile_buffer       = (char *) (qv_buffer + QLEN * DK);
 
     {
-        vfloat16m2_t VKQ16_v = __riscv_vfmv_v_f_f16m2(0.0f, DV);
+        auto VKQ16_v = R::splat_f16(0.0f, DV);
         for (int64_t i = 0; i < QLEN; ++i) {
-            __riscv_vse16_v_f16m2(kq16_buffer + i * DV, VKQ16_v, DV);
-            vfloat16m2_t Q_q_v = __riscv_vfncvt_f_f_w_f16m2(__riscv_vle32_v_f32m4(pq[i], DK), DK);
-            __riscv_vse16_v_f16m2(qv_buffer + i * DK, Q_q_v, DK);
+            R::se16(kq16_buffer + i * DV, VKQ16_v, DV);
+            auto Q_q_v = R::ncvt(R::le32(pq[i], DK), DK);
+            R::se16(qv_buffer + i * DK, Q_q_v, DK);
         }
     }
 
@@ -713,10 +762,10 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
                 const _Float16 * k_data = (const _Float16 *) (k_data_row + ic * nbk1);
                 const _Float16 * v_data = (const _Float16 *) (v_data_row + ic * nbv1);
 
-                const vfloat16m2_t k_data_v = __riscv_vle16_v_f16m2(k_data, DK);
-                const vfloat16m2_t v_data_v = __riscv_vle16_v_f16m2(v_data, DV);
-                __riscv_vsse16_v_f16m2(k_tile_pack + ic_step, k_tile_byte_stride, k_data_v, DK);
-                __riscv_vse16_v_f16m2(v_tile_pack + ic_step * DV, v_data_v, DV);
+                const auto k_data_v = R::le16(k_data, DK);
+                const auto v_data_v = R::le16(v_data, DV);
+                R::sse16(k_tile_pack + ic_step, k_tile_byte_stride, k_data_v, DK);
+                R::se16(v_tile_pack + ic_step * DV, v_data_v, DV);
                 mv_tile_pack[ic_step] = mv;
                 ic_step++;
             }
@@ -778,51 +827,45 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
                         M[i]           = tile_max;
                         S[i] *= ms;
 
-                        vfloat16m2_t VKQ16_v = __riscv_vle16_v_f16m2(kq16_buffer + i * DV, DV);
-                        VKQ16_v              = __riscv_vfmul_vf_f16m2(VKQ16_v, (_Float16) ms, DV);
-                        __riscv_vse16_v_f16m2(kq16_buffer + i * DV, VKQ16_v, DV);
+                        auto VKQ16_v = R::le16(kq16_buffer + i * DV, DV);
+                        VKQ16_v      = R::fmul_f16(VKQ16_v, (_Float16) ms, DV);
+                        R::se16(kq16_buffer + i * DV, VKQ16_v, DV);
                     }
 
                     S[i] += rvv_softmax_exp_inplace_f32(row_ptr, ic_step, M[i]);
                 }
 
                 if constexpr (QLEN == 4) {
-                    vfloat16m2_t pv_acc0 = __riscv_vle16_v_f16m2(kq16_buffer + 0 * DV, DV);
-                    vfloat16m2_t pv_acc1 = __riscv_vle16_v_f16m2(kq16_buffer + 1 * DV, DV);
-                    vfloat16m2_t pv_acc2 = __riscv_vle16_v_f16m2(kq16_buffer + 2 * DV, DV);
-                    vfloat16m2_t pv_acc3 = __riscv_vle16_v_f16m2(kq16_buffer + 3 * DV, DV);
+                    auto pv_acc0 = R::le16(kq16_buffer + 0 * DV, DV);
+                    auto pv_acc1 = R::le16(kq16_buffer + 1 * DV, DV);
+                    auto pv_acc2 = R::le16(kq16_buffer + 2 * DV, DV);
+                    auto pv_acc3 = R::le16(kq16_buffer + 3 * DV, DV);
 
                     for (int64_t tk = 0; tk < ic_step; ++tk) {
-                        const vfloat16m2_t v16 = __riscv_vle16_v_f16m2(v_tile_pack + tk * DV, DV);
-                        pv_acc0 =
-                            __riscv_vfmacc_vf_f16m2(pv_acc0, (_Float16) kq_tile_buffer[0 * ic_tile_step + tk], v16, DV);
-                        pv_acc1 =
-                            __riscv_vfmacc_vf_f16m2(pv_acc1, (_Float16) kq_tile_buffer[1 * ic_tile_step + tk], v16, DV);
-                        pv_acc2 =
-                            __riscv_vfmacc_vf_f16m2(pv_acc2, (_Float16) kq_tile_buffer[2 * ic_tile_step + tk], v16, DV);
-                        pv_acc3 =
-                            __riscv_vfmacc_vf_f16m2(pv_acc3, (_Float16) kq_tile_buffer[3 * ic_tile_step + tk], v16, DV);
+                        const auto v16 = R::le16(v_tile_pack + tk * DV, DV);
+                        pv_acc0 = R::fmacc_f16(pv_acc0, (_Float16) kq_tile_buffer[0 * ic_tile_step + tk], v16, DV);
+                        pv_acc1 = R::fmacc_f16(pv_acc1, (_Float16) kq_tile_buffer[1 * ic_tile_step + tk], v16, DV);
+                        pv_acc2 = R::fmacc_f16(pv_acc2, (_Float16) kq_tile_buffer[2 * ic_tile_step + tk], v16, DV);
+                        pv_acc3 = R::fmacc_f16(pv_acc3, (_Float16) kq_tile_buffer[3 * ic_tile_step + tk], v16, DV);
                     }
 
-                    __riscv_vse16_v_f16m2(kq16_buffer + 0 * DV, pv_acc0, DV);
-                    __riscv_vse16_v_f16m2(kq16_buffer + 1 * DV, pv_acc1, DV);
-                    __riscv_vse16_v_f16m2(kq16_buffer + 2 * DV, pv_acc2, DV);
-                    __riscv_vse16_v_f16m2(kq16_buffer + 3 * DV, pv_acc3, DV);
+                    R::se16(kq16_buffer + 0 * DV, pv_acc0, DV);
+                    R::se16(kq16_buffer + 1 * DV, pv_acc1, DV);
+                    R::se16(kq16_buffer + 2 * DV, pv_acc2, DV);
+                    R::se16(kq16_buffer + 3 * DV, pv_acc3, DV);
                 } else {
                     static_assert(QLEN == 2, "unsupported QLEN");
-                    vfloat16m2_t pv_acc0 = __riscv_vle16_v_f16m2(kq16_buffer + 0 * DV, DV);
-                    vfloat16m2_t pv_acc1 = __riscv_vle16_v_f16m2(kq16_buffer + 1 * DV, DV);
+                    auto pv_acc0 = R::le16(kq16_buffer + 0 * DV, DV);
+                    auto pv_acc1 = R::le16(kq16_buffer + 1 * DV, DV);
 
                     for (int64_t tk = 0; tk < ic_step; ++tk) {
-                        const vfloat16m2_t v16 = __riscv_vle16_v_f16m2(v_tile_pack + tk * DV, DV);
-                        pv_acc0 =
-                            __riscv_vfmacc_vf_f16m2(pv_acc0, (_Float16) kq_tile_buffer[0 * ic_tile_step + tk], v16, DV);
-                        pv_acc1 =
-                            __riscv_vfmacc_vf_f16m2(pv_acc1, (_Float16) kq_tile_buffer[1 * ic_tile_step + tk], v16, DV);
+                        const auto v16 = R::le16(v_tile_pack + tk * DV, DV);
+                        pv_acc0 = R::fmacc_f16(pv_acc0, (_Float16) kq_tile_buffer[0 * ic_tile_step + tk], v16, DV);
+                        pv_acc1 = R::fmacc_f16(pv_acc1, (_Float16) kq_tile_buffer[1 * ic_tile_step + tk], v16, DV);
                     }
 
-                    __riscv_vse16_v_f16m2(kq16_buffer + 0 * DV, pv_acc0, DV);
-                    __riscv_vse16_v_f16m2(kq16_buffer + 1 * DV, pv_acc1, DV);
+                    R::se16(kq16_buffer + 0 * DV, pv_acc0, DV);
+                    R::se16(kq16_buffer + 1 * DV, pv_acc1, DV);
                 }
 
                 ic_step = 0;
@@ -835,20 +878,20 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
             const char * k_data = k_data_row + ic * nbk1;
             const char * v_data = v_data_row + ic * nbv1;
 
-            vfloat16m2_t k_data_v;
-            vfloat16m2_t v_data_v;
+            typename R::f16 k_data_v;
+            typename R::f16 v_data_v;
 
             if (mv != -INFINITY) {
-                k_data_v = __riscv_vle16_v_f16m2((_Float16 *) k_data, DK);
-                v_data_v = __riscv_vle16_v_f16m2((_Float16 *) v_data, DV);
+                k_data_v = R::le16((_Float16 *) k_data, DK);
+                v_data_v = R::le16((_Float16 *) v_data, DV);
             } else {
                 continue;
             }
 
             for (int i = 0; i < QLEN; ++i) {
-                vfloat16m2_t Q_q_v    = __riscv_vle16_v_f16m2(qv_buffer + i * DK, DK);
-                vfloat32m4_t qk_acc_v = __riscv_vfwmul_vv_f32m4(k_data_v, Q_q_v, DK);
-                float        s        = reduce_sum_f32m4_vlen1024(qk_acc_v, DK);
+                auto  Q_q_v           = R::le16(qv_buffer + i * DK, DK);
+                auto  qk_acc_v        = R::wmul(k_data_v, Q_q_v, DK);
+                float s               = R::reduce_sum(qk_acc_v, DK);
                 s                     = s * scale;
                 if (logit_softcap != 0.0f) {
                     s = logit_softcap * tanhf(s);
@@ -860,28 +903,28 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
                 float ms = 1.0f;  // upon new higher max val, scale VKQ and KQ sum with this value
                 float vs = 1.0f;  // post-softmax KQ value, expf(s - M)
 
-                vfloat16m2_t VKQ16_v = __riscv_vle16_v_f16m2(kq16_buffer + i * DV, DV);
+                auto VKQ16_v = R::le16(kq16_buffer + i * DV, DV);
                 if (s > M[i]) {
                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M[i] = s;
                     ms   = expf(Mold - M[i]);
 
                     // V = V*expf(Mold - M)
-                    VKQ16_v = __riscv_vfmul_vf_f16m2(VKQ16_v, ms, DV);
+                    VKQ16_v = R::fmul_f16(VKQ16_v, ms, DV);
                 } else {
                     // no new maximum, ms == 1.0f, vs != 1.0f
                     vs = expf(s - M[i]);
                 }
-                VKQ16_v = __riscv_vfmacc_vf_f16m2(VKQ16_v, vs, v_data_v, DV);
-                __riscv_vse16_v_f16m2(kq16_buffer + i * DV, VKQ16_v, DV);
+                VKQ16_v = R::fmacc_f16(VKQ16_v, vs, v_data_v, DV);
+                R::se16(kq16_buffer + i * DV, VKQ16_v, DV);
                 S[i] = S[i] * ms + vs;  // scale and increment sum with partial sum
             }
         }
     }
 
     for (int i = 0; i < QLEN; ++i) {
-        vfloat16m2_t VKQ16_v = __riscv_vle16_v_f16m2(kq16_buffer + i * DV, DV);
-        vfloat32m4_t VKQ32_v = __riscv_vfwcvt_f_f_v_f32m4(VKQ16_v, DV);
+        auto VKQ16_v = R::le16(kq16_buffer + i * DV, DV);
+        auto VKQ32_v = R::wcvt(VKQ16_v, DV);
 
         // sinks
         if (sinks[i]) {
@@ -893,7 +936,7 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
             if (s > M[i]) {
                 ms      = expf(M[i] - s);
                 M[i]    = s;
-                VKQ32_v = __riscv_vfmul_vf_f32m4(VKQ32_v, ms, DV);
+                VKQ32_v = R::fmul_f32(VKQ32_v, ms, DV);
             } else {
                 vs = expf(s - M[i]);
             }
@@ -904,12 +947,13 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow(float **      
         // V /= S
         const float S_inv = S[i] == 0.0f ? 0.0f : 1.0f / S[i];
 
-        VKQ32_v = __riscv_vfmul_vf_f32m4(VKQ32_v, S_inv, DV);
+        VKQ32_v = R::fmul_f32(VKQ32_v, S_inv, DV);
 
-        __riscv_vse32_v_f32m4(dst[i], VKQ32_v, DV);
+        R::se32(dst[i], VKQ32_v, DV);
     }
 }
 
+template <typename R>
 static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *       pq,
                                                                 const char *        k_data_row,
                                                                 const char *        v_data_row,
@@ -925,13 +969,14 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *   
                                                                 int64_t             DV,
                                                                 int64_t             DK) {
     GGML_ASSERT(flash_attn_ext_supported_shape_vlen1024_vf16(DK, DV));
+    GGML_ASSERT(DK <= R::max_d && DV <= R::max_d);
 
     float S = 0.0f;       // sum
     float M = -INFINITY;  // maximum KQ value
 
-    vfloat16m2_t VKQ16_v = __riscv_vfmv_v_f_f16m2(0.0f, DV);
+    auto VKQ16_v = R::splat_f16(0.0f, DV);
 
-    vfloat16m2_t Q_q_v = __riscv_vfncvt_f_f_w_f16m2(__riscv_vle32_v_f32m4(pq, DK), DK);
+    auto Q_q_v = R::ncvt(R::le32(pq, DK), DK);
 
     for (int64_t ic = 0; ic < nek1; ++ic) {
         const float mv = mp ? slope * ((_Float16 *) mp)[ic] : 0.0f;
@@ -941,10 +986,10 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *   
 
         const char * k_data = k_data_row + ic * nbk1;
 
-        vfloat16m2_t k_data_v = __riscv_vle16_v_f16m2((_Float16 *) k_data, DK);
+        auto k_data_v = R::le16((_Float16 *) k_data, DK);
 
-        vfloat32m4_t qk_acc_v = __riscv_vfwmul_vv_f32m4(k_data_v, Q_q_v, DK);
-        float        s        = reduce_sum_f32m4_vlen1024(qk_acc_v, DK);
+        auto  qk_acc_v = R::wmul(k_data_v, Q_q_v, DK);
+        float s        = R::reduce_sum(qk_acc_v, DK);
 
         s = s * scale;  // scale KQ value
 
@@ -961,7 +1006,7 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *   
 
         const char * v_data = v_data_row + ic * nbv1;
 
-        vfloat16m2_t v_data_v = __riscv_vle16_v_f16m2((_Float16 *) v_data, DV);
+        auto v_data_v = R::le16((_Float16 *) v_data, DV);
 
         if (s > M) {
             // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
@@ -969,18 +1014,18 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *   
             ms = expf(Mold - M);
 
             // V = V*expf(Mold - M)
-            VKQ16_v = __riscv_vfmul_vf_f16m2(VKQ16_v, ms, DV);
+            VKQ16_v = R::fmul_f16(VKQ16_v, ms, DV);
         } else {
             // no new maximum, ms == 1.0f, vs != 1.0f
             vs = expf(s - M);
         }
 
-        VKQ16_v = __riscv_vfmacc_vf_f16m2(VKQ16_v, vs, v_data_v, DV);
+        VKQ16_v = R::fmacc_f16(VKQ16_v, vs, v_data_v, DV);
 
         S = S * ms + vs;  // scale and increment sum with partial sum
     }
 
-    vfloat32m4_t VKQ32_v = __riscv_vfwcvt_f_f_v_f32m4(VKQ16_v, DV);
+    auto VKQ32_v = R::wcvt(VKQ16_v, DV);
 
     // sinks
     if (sinks) {
@@ -992,7 +1037,7 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *   
         if (s > M) {
             ms      = expf(M - s);
             M       = s;
-            VKQ32_v = __riscv_vfmul_vf_f32m4(VKQ32_v, ms, DV);
+            VKQ32_v = R::fmul_f32(VKQ32_v, ms, DV);
         } else {
             vs = expf(s - M);
         }
@@ -1003,9 +1048,9 @@ static void flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(const float *   
     // V /= S
     const float S_inv = S == 0.0f ? 0.0f : 1.0f / S;
 
-    VKQ32_v = __riscv_vfmul_vf_f32m4(VKQ32_v, S_inv, DV);
+    VKQ32_v = R::fmul_f32(VKQ32_v, S_inv, DV);
 
-    __riscv_vse32_v_f32m4(dst, VKQ32_v, DV);
+    R::se32(dst, VKQ32_v, DV);
 }
 
 }  // namespace
@@ -1118,12 +1163,13 @@ void memcpy2d(void * dst, int64_t dst_stride, const void * src, int64_t src_stri
     }
 }
 
-void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(const ggml_compute_params * params,
-                                                        ggml_tensor *               dst,
-                                                        int                         ir0,
-                                                        int                         ir1,
-                                                        void *                      tcm_buffer,
-                                                        size_t                      tcm_buffer_size) {
+template <typename R>
+static void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16_impl(const ggml_compute_params * params,
+                                                                    ggml_tensor *               dst,
+                                                                    int                         ir0,
+                                                                    int                         ir1,
+                                                                    void *                      tcm_buffer,
+                                                                    size_t                      tcm_buffer_size) {
     const ggml_tensor * q     = dst->src[0];
     const ggml_tensor * k     = dst->src[1];
     const ggml_tensor * v     = dst->src[2];
@@ -1261,13 +1307,13 @@ void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(const ggml_compute_param
             dst_buffer[2] = (float *) ((char *) dst->data + (iq3_2 * ne2 * ne1 + iq2_2 + iq1_2 * ne1) * nb1);
             dst_buffer[3] = (float *) ((char *) dst->data + (iq3_3 * ne2 * ne1 + iq2_3 + iq1_3 * ne1) * nb1);
 
-            flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow<4>(  //
-                pq_buffer.data(),                                      //
-                (const char *) k->data + (ik2 * nbk2 + ik3 * nbk3),    //
-                (const char *) v->data + (iv2 * nbv2 + iv3 * nbv3),    //
-                mp,                                                    //
-                sinks_buffer.data(),                                   //
-                dst_buffer.data(),                                     //
+            flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow<4, R>(  //
+                pq_buffer.data(),                                         //
+                (const char *) k->data + (ik2 * nbk2 + ik3 * nbk3),       //
+                (const char *) v->data + (iv2 * nbv2 + iv3 * nbv3),       //
+                mp,                                                       //
+                sinks_buffer.data(),                                      //
+                dst_buffer.data(),                                        //
                 scale, logit_softcap, slope, nek1, nbk1, nbv1, DV, DK, tcm_buffer, tcm_buffer_size);
         } else if (tcm_buffer != nullptr && 2 * KV_row_size < tcm_buffer_size && ir < (ir1 - 1) && mp_equal_2 &&
                    ik3_1 == ik3 && ik2_1 == ik2 && iv3_1 == iv3 && iv2_1 == iv2) {
@@ -1282,17 +1328,17 @@ void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(const ggml_compute_param
             dst_buffer[0] = (float *) ((char *) dst->data + (iq3 * ne2 * ne1 + iq2 + iq1 * ne1) * nb1);
             dst_buffer[1] = (float *) ((char *) dst->data + (iq3_1 * ne2 * ne1 + iq2_1 + iq1_1 * ne1) * nb1);
 
-            flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow<2>(  //
-                pq_buffer.data(),                                      //
-                (const char *) k->data + (ik2 * nbk2 + ik3 * nbk3),    //
-                (const char *) v->data + (iv2 * nbv2 + iv3 * nbv3),    //
-                mp,                                                    //
-                sinks_buffer.data(),                                   //
-                dst_buffer.data(),                                     //
+            flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_mrow<2, R>(  //
+                pq_buffer.data(),                                         //
+                (const char *) k->data + (ik2 * nbk2 + ik3 * nbk3),       //
+                (const char *) v->data + (iv2 * nbv2 + iv3 * nbv3),       //
+                mp,                                                       //
+                sinks_buffer.data(),                                      //
+                dst_buffer.data(),                                        //
                 scale, logit_softcap, slope, nek1, nbk1, nbv1, DV, DK, tcm_buffer, tcm_buffer_size);
         } else {
             ir_step = 1;
-            flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1(                             //
+            flash_attn_ext_f16_one_chunk_inner_vlen1024_vf16_m1<R>(                          //
                 pq,                                                                          //
                 (const char *) k->data + (ik2 * nbk2 + ik3 * nbk3),                          //
                 (const char *) v->data + (iv2 * nbv2 + iv3 * nbv3),                          //
@@ -1301,6 +1347,23 @@ void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(const ggml_compute_param
                 (float *) ((char *) dst->data + (iq3 * ne2 * ne1 + iq2 + iq1 * ne1) * nb1),  //
                 scale, logit_softcap, slope, nek1, nbk1, nbv1, DV, DK);
         }
+    }
+}
+
+void forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(const ggml_compute_params * params,
+                                                        ggml_tensor *               dst,
+                                                        int                         ir0,
+                                                        int                         ir1,
+                                                        void *                      tcm_buffer,
+                                                        size_t                      tcm_buffer_size) {
+    const int64_t DK = dst->src[1]->ne[0];
+    const int64_t DV = dst->src[2]->ne[0];
+    if (DK <= fa_row_regs_128::max_d && DV <= fa_row_regs_128::max_d) {
+        forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16_impl<fa_row_regs_128>(params, dst, ir0, ir1, tcm_buffer,
+                                                                                 tcm_buffer_size);
+    } else {
+        forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16_impl<fa_row_regs_256>(params, dst, ir0, ir1, tcm_buffer,
+                                                                                 tcm_buffer_size);
     }
 }
 
