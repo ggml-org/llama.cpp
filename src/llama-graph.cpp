@@ -2179,8 +2179,9 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
-        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2 || arch == LLM_ARCH_RAON1_NANO) {
             // GLM4, GLM4_MOE, and JAIS2 have numerical issues with F16 accumulators
+            // Raon-1 nano: the FFN down projection of the last layers exceeds the F16 range
             ggml_prec_set_acc(cur, GGML_PREC_BF16);
         }
     }

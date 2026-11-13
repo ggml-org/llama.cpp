@@ -168,6 +168,7 @@ enum llm_arch {
     LLM_ARCH_KIMI_K3,
     LLM_ARCH_KIMI_K31,
     LLM_ARCH_RAON1_MINI,
+    LLM_ARCH_RAON1_NANO,
     LLM_ARCH_GLM5_NEXT,
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
@@ -735,6 +736,8 @@ enum llm_tensor {
     LLM_TENSOR_HC_FFN_FN,
     LLM_TENSOR_HC_FFN_BASE,
     LLM_TENSOR_HC_FFN_SCALE,
+    LLM_TENSOR_HC_ATTN_CHART,  // raon1nano
+    LLM_TENSOR_HC_FFN_CHART,   // raon1nano
     LLM_TENSOR_HC_ATTN_NORM,   // qwen4exp
     LLM_TENSOR_HC_ATTN_DOWN,   // qwen4exp
     LLM_TENSOR_HC_ATTN_UP,     // qwen4exp

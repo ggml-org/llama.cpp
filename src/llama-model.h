@@ -559,6 +559,8 @@ struct llama_layer {
     struct ggml_tensor * hc_ffn_fn    = nullptr;
     struct ggml_tensor * hc_ffn_base  = nullptr;
     struct ggml_tensor * hc_ffn_scale = nullptr;
+    struct ggml_tensor * hc_attn_chart = nullptr; // raon1nano
+    struct ggml_tensor * hc_ffn_chart  = nullptr;
     struct ggml_tensor * attn_comp_wkv   = nullptr;
     struct ggml_tensor * attn_comp_wgate = nullptr;
     struct ggml_tensor * attn_comp_ape   = nullptr;

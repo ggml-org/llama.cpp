@@ -130,10 +130,19 @@ static void fill_exp_probs_b(std::vector<float> & dst, const char *, const tenso
     }
 }
 
+// Raon-1 nano mHC chart [K | r | c0] with 4 streams: r = 0 keeps the comb denominator 1 + max(e * r) at 1
+static void fill_hc_chart(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    const size_t hc2 = 16;
+    fill_normal(dst, name, params);
+    std::fill(dst.end() - 2*hc2, dst.end() - hc2, 0.0f);
+}
+
 // a tensor whose values hold a property of their own, matched on a substring of its name, first match wins
 static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[] = {
     { "ssm_a",        fill_ssm_a        },
     { "_resid_",      fill_resid_gate   },
+    { "hc_attn_chart", fill_hc_chart     },
+    { "hc_ffn_chart",       fill_hc_chart     },
     { "exp_probs_b",  fill_exp_probs_b  },
     { "ffn.act",      fill_ffn_act      },
     { "rope_freqs",   fill_rope_factors },
@@ -301,6 +310,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
             || arch == LLM_ARCH_RAON1_MINI
+            || arch == LLM_ARCH_RAON1_NANO
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
@@ -405,6 +415,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
+    } else if (arch == LLM_ARCH_RAON1_NANO) {
+        // RDA layer 0 (head_count_kv 0), then an MLA layer with more heads and one latent KV head
+        std::vector<uint32_t> n_head_per_layer;
+        std::vector<uint32_t> n_head_kv_per_layer;
+        for (uint32_t il = 0; il < n_layer; il++) {
+            n_head_per_layer.push_back(il % 2 == 0 ? n_head : 2*n_head);
+            n_head_kv_per_layer.push_back(il % 2 == 0 ? 0 : 1);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT,    n_head_per_layer);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(1) : n_head_kv);
@@ -424,6 +444,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
             || arch == LLM_ARCH_RAON1_MINI
+            || arch == LLM_ARCH_RAON1_NANO
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_MISTRAL4
@@ -529,6 +550,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT, uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON, 1e-5f);
         ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
+    }
+
+    if (arch == LLM_ARCH_RAON1_NANO) {
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1e-5f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 1.0f);
+        ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, uint32_t(32));
     }
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the

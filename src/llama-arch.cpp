@@ -170,6 +170,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_KIMI_K3,          "kimi-k3"          },
     { LLM_ARCH_KIMI_K31,         "kimi-k31"         },
     { LLM_ARCH_RAON1_MINI,       "raon1"            },
+    { LLM_ARCH_RAON1_NANO,       "raon1nano"        },
     { LLM_ARCH_GLM5_NEXT,        "glm5-next"        },
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
@@ -691,6 +692,8 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_HC_FFN_FN,                              "blk.%d.hc_ffn_fn" },
     { LLM_TENSOR_HC_FFN_BASE,                            "blk.%d.hc_ffn_base" },
     { LLM_TENSOR_HC_FFN_SCALE,                           "blk.%d.hc_ffn_scale" },
+    { LLM_TENSOR_HC_ATTN_CHART,                          "blk.%d.hc_attn_chart" },
+    { LLM_TENSOR_HC_FFN_CHART,                           "blk.%d.hc_ffn_chart" },
     { LLM_TENSOR_HC_ATTN_NORM,                           "blk.%d.hc_attn_norm" },
     { LLM_TENSOR_HC_ATTN_DOWN,                           "blk.%d.hc_attn_down" },
     { LLM_TENSOR_HC_ATTN_UP,                             "blk.%d.hc_attn_up" },
@@ -971,6 +974,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_HC_FFN_FN,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_HC_FFN_BASE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_ADD}},
     {LLM_TENSOR_HC_FFN_SCALE,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_HC_ATTN_CHART,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_HC_FFN_CHART,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_HC_ATTN_NORM,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_HC_ATTN_DOWN,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_HC_ATTN_UP,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1371,6 +1376,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_RAON1_MINI:
+        case LLM_ARCH_RAON1_NANO:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
@@ -1402,6 +1408,7 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_RAON1_MINI:
+        case LLM_ARCH_RAON1_NANO:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_CLOVER_MOE:
@@ -1476,6 +1483,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_RAON1_MINI:
+        case LLM_ARCH_RAON1_NANO:
         case LLM_ARCH_QWEN3TTS:
         case LLM_ARCH_LIMITE:
             return false;

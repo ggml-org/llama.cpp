@@ -2977,6 +2977,31 @@ struct llama_model_kimi_k31 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// Raon-1 nano: Raon-1 RDA/MLA hybrid with mHC, dense FFNs and per-layer embeddings, on a folded tensor layout
+struct llama_model_raon1_nano : public llama_model_base {
+    llama_model_raon1_nano(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // returns the branch input already RMS-normed with norm_w
+        ggml_tensor * build_hc_pre(ggml_tensor * x, ggml_tensor * fn, ggml_tensor * base, ggml_tensor * chart,
+                                   ggml_tensor * norm_w, ggml_tensor ** post, ggml_tensor ** comb, int il);
+
+        ggml_tensor * build_hc_post(ggml_tensor * x, ggml_tensor * branch,
+                                    ggml_tensor * post, ggml_tensor * comb, int il);
+
+        ggml_tensor * build_rda_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_rs * inp_rs, int il);
+
+        ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_attn_k * inp_attn_k, int il);
+    };
+};
+
 struct llama_model_raon1_mini : public llama_model_base {
     llama_model_raon1_mini(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

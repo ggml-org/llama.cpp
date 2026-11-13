@@ -402,13 +402,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("hc_") == std::string::npos;
     }
 
-    // raon1_mini: mHC selectors and small RDA gate projections
-    if (arch == LLM_ARCH_RAON1_MINI) {
+    // Raon mHC selectors and small RDA gate projections
+    if (arch == LLM_ARCH_RAON1_MINI || arch == LLM_ARCH_RAON1_NANO) {
         quantize &= name.find("hc_")             == std::string::npos;
         quantize &= name.find("ssm_f_a.weight")  == std::string::npos;
         quantize &= name.find("ssm_f_b.weight")  == std::string::npos;
-        quantize &= name.find("ssm_beta.weight") == std::string::npos;
-        quantize &= name.find("ssm_rda.weight")  == std::string::npos;
+        if (arch == LLM_ARCH_RAON1_MINI) {
+            quantize &= name.find("ssm_beta.weight") == std::string::npos;
+            quantize &= name.find("ssm_rda.weight")  == std::string::npos;
+        }
     }
 
     // the decision head of vllm-decision2 is small and computed in F32
@@ -559,9 +561,9 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
     }
 
-    // raon1_mini: at Q6_K and Q8_0, where the floors below do not apply, keep the MLA latent projections at source precision:
-    // quantizing them costs +5.8% mean KL in Q8_0 for 44 MB. --pure and --tensor-type bypass this, as for the floors
-    if (arch == LLM_ARCH_RAON1_MINI && (ftype == LLAMA_FTYPE_MOSTLY_Q6_K || ftype == LLAMA_FTYPE_MOSTLY_Q8_0) && (
+    // Preserve Raon MLA latent projections in Q6_K and Q8_0.
+    if ((arch == LLM_ARCH_RAON1_MINI || arch == LLM_ARCH_RAON1_NANO) &&
+        (ftype == LLAMA_FTYPE_MOSTLY_Q6_K || ftype == LLAMA_FTYPE_MOSTLY_Q8_0) && (
         name.find("attn_kv_a_mqa.weight") != std::string::npos ||
         name.find("attn_k_b.weight")      != std::string::npos ||
         name.find("attn_v_b.weight")      != std::string::npos)) {
@@ -798,9 +800,9 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         ++qs.i_ffn_up;
     }
 
-    // raon1_mini: the dense attention projections and the shared expert carry most of the low-bit loss, attn_output and attn_gate most of all
+    // Raon attention output and gate projections are sensitive to low-bit quantization.
     // only raise to a floor, after the counters above are updated, so the rest of the mixture does not change
-    if (arch == LLM_ARCH_RAON1_MINI && ggml_is_quantized(new_type)) {
+    if ((arch == LLM_ARCH_RAON1_MINI || arch == LLM_ARCH_RAON1_NANO) && ggml_is_quantized(new_type)) {
         const bool k_4_5 = ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M ||
                            ftype == LLAMA_FTYPE_MOSTLY_Q5_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M;
         // IQ4_XS/NL and the 1-3 bit K and IQ mixtures (not Q2_0, TQ1_0, TQ2_0 or Q1_0)
@@ -815,14 +817,19 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             floor_type = k_4_5 ? GGML_TYPE_Q8_0 : low ? GGML_TYPE_Q6_K : GGML_TYPE_COUNT;
         } else if (name.find("attn_q_a.weight") != std::string::npos || name.find("attn_q_b.weight")      != std::string::npos ||
                    name.find("attn_k_b.weight") != std::string::npos || name.find("attn_kv_a_mqa.weight") != std::string::npos ||
-                   name.find("attn_v_b.weight") != std::string::npos || name.find("_shexp.weight")        != std::string::npos) {
+                   name.find("attn_v_b.weight") != std::string::npos || (arch == LLM_ARCH_RAON1_MINI && name.find("_shexp.weight") != std::string::npos)) {
             floor_type = k_4_5 || low ? GGML_TYPE_Q6_K : GGML_TYPE_COUNT;
-        } else if (category == tensor_category::ATTENTION_Q || category == tensor_category::ATTENTION_K ||
-                   category == tensor_category::ATTENTION_V || name.find("ssm_g.weight") != std::string::npos) {
+        } else if ((arch == LLM_ARCH_RAON1_NANO && category == tensor_category::ATTENTION_QKV) ||
+                   (arch == LLM_ARCH_RAON1_MINI && (category == tensor_category::ATTENTION_Q || category == tensor_category::ATTENTION_K ||
+                   category == tensor_category::ATTENTION_V || name.find("ssm_g.weight") != std::string::npos))) {
             floor_type = k_4_5 ? GGML_TYPE_Q6_K : GGML_TYPE_COUNT;
         }
         if (floor_type != GGML_TYPE_COUNT && bits_per_weight(new_type) < bits_per_weight(floor_type)) {
             new_type = floor_type;
+        }
+        // the per-layer embedding table (1.6B parameters, one row read per token) stays Q4_K in Q4_K_M
+        if (arch == LLM_ARCH_RAON1_NANO && ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M && std::strcmp(tensor->name, "per_layer_token_embd.weight") == 0) {
+            new_type = GGML_TYPE_Q4_K;
         }
     }
 
