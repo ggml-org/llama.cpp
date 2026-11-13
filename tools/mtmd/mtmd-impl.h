@@ -59,6 +59,10 @@
 #define KEY_PREPROC_IMAGE_SIZE      "clip.vision.preproc_image_size"
 #define KEY_PREPROC_TILE_SIZE       "clip.vision.preproc_tile_size"
 #define KEY_PREPROC_MAX_PIXELS_TOLERANCE "clip.vision.preproc_max_pixels_tolerance"
+#define KEY_POSITION_GRID_SIZE     "clip.vision.position_grid_size"
+#define KEY_V_ROPE_FREQ_BASE        "clip.vision.rope.freq_base"
+#define KEY_PROJ_HIDDEN_SIZE        "clip.vision.projector.hidden_size"
+#define KEY_PROJ_USE_BIAS           "clip.vision.projector.use_bias"
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
@@ -571,6 +575,7 @@ enum projector_type {
     PROJECTOR_TYPE_SOPRANO,
     PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_DRAMA3_GEN,
+    PROJECTOR_TYPE_INKLING2,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
@@ -658,6 +663,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
+    { PROJECTOR_TYPE_INKLING2,          "inkling2"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},

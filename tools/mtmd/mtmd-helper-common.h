@@ -170,3 +170,6 @@ struct decode_embd_batch {
         return batch.get();
     }
 };
+
+// Internal image-loader bridge; the public bitmap API accepts RGB.
+mtmd_bitmap * mtmd_bitmap_init_from_rgba(const mtmd_context * ctx, uint32_t nx, uint32_t ny, const unsigned char * data);

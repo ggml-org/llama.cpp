@@ -624,6 +624,11 @@ private:
     ggml_tensor * build_anyres_assembly(ggml_tensor * cur, int out_side);
 };
 
+struct mtmd_graph_inkling2 : mtmd_graph {
+    using mtmd_graph::mtmd_graph;
+    ggml_cgraph * build() override;
+};
+
 struct mtmd_graph_muse_glimmer : mtmd_graph {
     mtmd_graph_muse_glimmer(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
