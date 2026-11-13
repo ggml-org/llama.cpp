@@ -286,6 +286,7 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     }
     cur = ggml_reshape_2d(ctx0, mix(blocks, cur, model.output_res_query), n_embd, n_tokens);
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    res->t_layer_inp[n_layer] = cur;
     if (out_ids) {
         cur = ggml_get_rows(ctx0, cur, out_ids);
     }

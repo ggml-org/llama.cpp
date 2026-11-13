@@ -1538,6 +1538,10 @@ struct llama_model_dflash : public llama_model_base {
         graph_dsv41(const llm_graph_params & params);
     };
 
+    struct graph_inkling2 : public llm_graph_context {
+        graph_inkling2(const llm_graph_params & params);
+    };
+
     // Mistral Large 4 DSpark: dense MLA stages, non-causal, rnn markov head
     struct graph_mistral_large4 : public llm_graph_context {
         graph_mistral_large4(const llm_graph_params & params);
