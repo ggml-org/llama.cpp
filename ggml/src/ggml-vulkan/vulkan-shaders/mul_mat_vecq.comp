@@ -29,6 +29,40 @@ vec2 cache_b_ds;
 
 #include "mul_mat_vecq_funcs.glsl"
 
+#if defined(MMVQ_REUSE_A)
+#if !defined(DATA_A_Q8_0) || K_PER_ITER != 8
+#error MMVQ_REUSE_A is implemented for Q8_0 only
+#endif
+// Load each row's A values once and reuse them for every column; mmvq_dot_product reloads A per column because
+// data_d may alias data_a. Same integer sums and float accumulation order as the generic iter() below.
+void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint col, const uint b_qs_idx) {
+    int32_t a_qs0[NUM_ROWS];
+    int32_t a_qs1[NUM_ROWS];
+    float a_d[NUM_ROWS];
+    uint ibi = first_row*p.ncols;
+    [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+        const uint a_block_idx = (ibi + col)/QUANT_K_Q8_1 + a_offset;
+        ibi += p.ncols;
+        a_qs0[n] = repack(a_block_idx, b_qs_idx * 2);
+        a_qs1[n] = repack(a_block_idx, b_qs_idx * 2 + 1);
+        a_d[n] = get_dm(a_block_idx);
+    }
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
+        const uint b_block_idx_outer = b_block_idx / 4;
+        const uint b_block_idx_inner = b_block_idx % 4;
+        const vec2 b_ds = vec2(data_b[b_block_idx_outer].ds[b_block_idx_inner]);
+        const int32_t b_qs0 = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + b_qs_idx * 2];
+        const int32_t b_qs1 = data_b[b_block_idx_outer].qs[b_block_idx_inner * 8 + b_qs_idx * 2 + 1];
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            int32_t q_sum = 0;
+            q_sum += dotPacked4x8EXT(a_qs0[n], b_qs0);
+            q_sum += dotPacked4x8EXT(a_qs1[n], b_qs1);
+            temp[j][n] += mul_q8_1(q_sum, a_d[n], b_ds, 4);
+        }
+    }
+}
+#else
 void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint col, const uint b_qs_idx) {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
         // Preload data_b block
@@ -73,6 +107,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         }
     }
 }
+#endif
 
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
     const uint tid = gl_LocalInvocationID.x;
