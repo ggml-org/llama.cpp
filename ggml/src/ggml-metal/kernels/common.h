@@ -20,7 +20,9 @@ using namespace metal;
 
 #define FOR_UNROLL(x) _Pragma("clang loop unroll(full)") for (x)
 
-#define N_SIMDWIDTH 32 // assuming SIMD group size is 32
+#ifndef N_SIMDWIDTH
+#define N_SIMDWIDTH 32 // default; ggml_metal_device overrides it with the real simdgroup width
+#endif
 
 // ref: https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
 //

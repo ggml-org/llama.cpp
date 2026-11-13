@@ -141,6 +141,14 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
 
         res->use_concurrency = getenv("GGML_METAL_CONCURRENCY_DISABLE") == nil;
 
+        // Non-Apple Metal drivers (AMD/Intel) do not guarantee cross-command-buffer ordering when several command buffers are committed from different threads on the same queue. That races the graph and silently corrupts results (observed with LFM3 on an AMD RX 580). Keep concurrency for Apple GPUs only.
+        if (res->use_concurrency && ![[device name] hasPrefix:@"Apple "] &&
+            getenv("GGML_METAL_CONCURRENCY_ENABLE") == NULL) {
+            GGML_LOG_INFO("%s: disabling concurrency on non-Apple GPU: %s\n",
+                          __func__, [[device name] UTF8String]);
+            res->use_concurrency = false;
+        }
+
         {
             const char * val = getenv("GGML_METAL_GRAPH_DEBUG");
             res->debug_graph = val ? atoi(val) : 0;
@@ -254,7 +262,8 @@ const char * ggml_metal_get_name(ggml_metal_t ctx) {
 void ggml_metal_synchronize(ggml_metal_t ctx) {
     // wait for any backend operations to finish
     if (ctx->cmd_buf_last) {
-        [ctx->cmd_buf_last waitUntilCompleted];
+        id<MTLCommandBuffer> cb = ctx->cmd_buf_last;
+        [cb waitUntilCompleted];
         ctx->cmd_buf_last = nil;
     }
 
@@ -606,9 +615,6 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
 
         dispatch_apply(n_cb, ctx->d_queue, ctx->encode_async);
 
-        // for debugging: block until graph is computed
-        //[ctx->cmd_buf_last waitUntilCompleted];
-
         // enter here only when capturing in order to wait for all computation to finish
         // otherwise, we leave the graph to compute asynchronously
         if (use_capture && ctx->capture_started) {
@@ -732,6 +738,11 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     // counters are race-free; override whatever the caller requested
     if (ggml_metal_fusion_info_stats(ctx->finfo)) {
         n_cb = 0;
+    }
+
+    // GGML_METAL_N_CB overrides the requested value; on eGPUs a single command buffer is often faster for large graphs (each commit costs a fixed round trip), while small graphs prefer the encode overlap of a second buffer
+    if (getenv("GGML_METAL_N_CB")) {
+        n_cb = atoi(getenv("GGML_METAL_N_CB"));
     }
 
     if (ctx->n_cb != n_cb) {

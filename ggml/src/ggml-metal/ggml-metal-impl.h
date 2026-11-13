@@ -54,13 +54,13 @@
 #define N_R0_Q3_K 2
 #define N_SG_Q3_K 2
 
-#define N_R0_Q4_K 2
+#define N_R0_Q4_K 8
 #define N_SG_Q4_K 2
 
-#define N_R0_Q5_K 1
+#define N_R0_Q5_K 8
 #define N_SG_Q5_K 2
 
-#define N_R0_Q6_K 2
+#define N_R0_Q6_K 8
 #define N_SG_Q6_K 2
 
 #define N_R0_IQ1_S 4
@@ -1278,6 +1278,18 @@ typedef struct {
     float    bias;
     float    scale;
 } ggml_metal_kargs_topk_moe;
+
+typedef struct {
+    int32_t  ne01;          // n_tokens
+    uint64_t nb01;          // logits row stride
+    uint64_t nb1_ids;       // ids row stride
+    int32_t  n_expert;
+    int32_t  n_group;
+    int32_t  n_grp_used;
+    int32_t  n_expert_used;
+    float    clamp;
+    float    scale;
+} ggml_metal_kargs_topk_moe_grouped;
 
 typedef struct {
     int32_t ne00; // n_embd
