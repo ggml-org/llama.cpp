@@ -242,9 +242,9 @@
 #define RDNA2
 #endif
 
-#if defined(__gfx1010__) || defined(__gfx1012__)
+#if defined(__gfx1010__) || defined(__gfx1012__) || defined(__gfx1013__)
 #define RDNA1
-#endif // defined(__gfx1010__) || defined(__gfx1012__)
+#endif // defined(__gfx1010__) || defined(__gfx1012__) || defined(__gfx1013__)
 
 #if defined(RDNA4) || defined(RDNA4_M) || defined(RDNA3) || defined(RDNA2) || defined(RDNA1)
 #define RDNA // For the entire family
