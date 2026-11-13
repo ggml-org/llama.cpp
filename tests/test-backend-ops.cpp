@@ -9211,6 +9211,31 @@ struct test_flash_attn_ext_banded : public test_case {
     }
 };
 
+struct test_flash_attn_ext_banded_sinks : public test_flash_attn_ext_banded {
+    const int sinks;
+
+    std::string vars() override {
+        return test_flash_attn_ext_banded::vars() + ",sinks=" + std::to_string(sinks);
+    }
+
+    test_flash_attn_ext_banded_sinks(int64_t d, int64_t n_head, int64_t n_head_kv, int64_t n_q, int64_t n_kv, int64_t rel_extent,
+            int mask_kind, ggml_type kv_type, ggml_type rel_type, int sinks, bool strided = false)
+        : test_flash_attn_ext_banded(d, n_head, n_head_kv, n_q, n_kv, rel_extent, mask_kind, kv_type, rel_type, strided), sinks(sinks) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * out = test_flash_attn_ext_banded::build_graph(ctx);
+        ggml_tensor * s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_head, sinks == 2 ? n_q : 1);
+        ggml_set_name(s, "sinks");
+        ggml_flash_attn_ext_add_sinks(out, s);
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext_banded::initialize_tensors(ctx);
+        init_tensor_uniform(ggml_get_tensor(ctx, "sinks"), -4.0f, 4.0f);
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -13183,6 +13208,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 2, 64, 64,   8, 2, GGML_TYPE_BF16, GGML_TYPE_BF16));
     test_cases.emplace_back(new test_flash_attn_ext_banded( 64, 8, 1, 64, 64, 512, 1, GGML_TYPE_F16,  GGML_TYPE_F32));
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 2, 17, 33,   8, 1, GGML_TYPE_F16,  GGML_TYPE_F16, true));
+    for (int sinks : {1, 2}) {
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks( 64, 8, 2,  1,  64,  8, 1, GGML_TYPE_F32, GGML_TYPE_F32, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128, 8, 2, 33,  64, 16, 2, GGML_TYPE_F16, GGML_TYPE_F32, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128, 8, 1, 64, 256, 32, 2, GGML_TYPE_F32, GGML_TYPE_F32, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128, 48, 8, 1, 4096, 1024, 2, GGML_TYPE_F32, GGML_TYPE_F32, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128, 48, 8, 4, 2048, 1024, 2, GGML_TYPE_F16, GGML_TYPE_F32, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks( 64,  8, 2, 1, 1000,    8, 1, GGML_TYPE_F32, GGML_TYPE_F32, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  8, 2,   16,    16,   8, 1, GGML_TYPE_F16,  GGML_TYPE_F32,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks( 64,  4, 1,   77,  1000,   8, 1, GGML_TYPE_F16,  GGML_TYPE_F16,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  4, 2,   64,   300,  16, 0, GGML_TYPE_F16,  GGML_TYPE_F32,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  8, 2,  100,   100,  64, 1, GGML_TYPE_BF16, GGML_TYPE_BF16, sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  8, 2,   65,   333,  32, 2, GGML_TYPE_F16,  GGML_TYPE_F32,  sinks, true));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  6, 1,   17, 16403, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128, 48, 8,  512,  4096, 1024, 2, GGML_TYPE_F16, GGML_TYPE_F32,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  8, 2,  512,  4096, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  8, 1, 2048,  2048, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32,  sinks));
+        test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128,  8, 1,  511, 16403, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32,  sinks));
+    }
+    test_cases.emplace_back(new test_flash_attn_ext_banded_sinks(128, 8, 1, 512, 32768, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32, 2));
+    test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1, 1, 4096, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1, 512,  8192, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1, 512, 16384, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_flash_attn_ext_banded(128, 8, 1, 512, 16403, 1024, 1, GGML_TYPE_F16, GGML_TYPE_F32));

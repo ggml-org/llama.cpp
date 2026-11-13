@@ -5742,10 +5742,12 @@ void ggml_flash_attn_ext_add_sinks(
         return;
     }
 
-    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT || a->op == GGML_OP_FLASH_ATTN_EXT_BANDED);
     GGML_ASSERT(a->src[4] == NULL);
     GGML_ASSERT(a->src[0]->ne[2] == sinks->ne[0]);
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nelements(sinks) == sinks->ne[0] || (a->op == GGML_OP_FLASH_ATTN_EXT_BANDED &&
+                sinks->ne[1] == a->src[0]->ne[1] && (sinks->ne[2] == 1 || sinks->ne[2] == a->src[0]->ne[3])));
 
     a->src[4] = sinks;
 }

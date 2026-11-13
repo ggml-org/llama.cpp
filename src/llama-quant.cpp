@@ -368,6 +368,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("shortconv_mlp.weight")  == std::string::npos;
         quantize &= name.find("attn_rel_proj.weight")  == std::string::npos;
     }
+    if (arch == LLM_ARCH_INKLING2) {
+        quantize &= name.find("shortconv_")            == std::string::npos;
+        quantize &= name.find("attn_rel_proj.weight")  == std::string::npos;
+        quantize &= name.find("_clip.weight")          == std::string::npos;
+        quantize &= name.find("_res_score.weight")     == std::string::npos;
+        quantize &= name.find("attn_sink_proj.weight") == std::string::npos;
+    }
 
     // metis16: small control tensors that steer every layer; the stream and hc_ tables (ne[0] = 4) would fall back to F16
     if (arch == LLM_ARCH_METIS16) {

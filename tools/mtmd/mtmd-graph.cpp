@@ -756,6 +756,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_inkling>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_INKLING2:
+            {
+                builder = std::make_unique<mtmd_graph_inkling2>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_COHERE2V:

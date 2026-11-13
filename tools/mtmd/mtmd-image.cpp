@@ -936,6 +936,56 @@ mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const mtmd_im
     return output;
 }
 
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess(const mtmd_image_u8 & img) const {
+    const int cell = hparams.patch_size * hparams.n_merge;
+    GGML_ASSERT(cell == 40);
+
+    const auto size = img.get_size();
+    const int rows = (size.height + cell - 1) / cell;
+    const int cols = (size.width  + cell - 1) / cell;
+    const mtmd_image_size padded = { cols * cell, rows * cell };
+
+    mtmd_image_f32 out;
+    out.set_size(padded, img.is_placeholder(), false);
+    mtmd_image_preproc_out output;
+    if (img.is_placeholder()) {
+        output.entries.push_back(std::move(out));
+        return output;
+    }
+
+    constexpr float proc_mean[3] = { 0.48145466f, 0.4578275f,  0.40821073f };
+    constexpr float proc_std[3]  = { 0.26862954f, 0.2613026f,  0.2757771f  };
+    constexpr float enc_mean[3]  = { 0.48145466f, 0.4578275f,  0.40821073f };
+    constexpr float enc_std[3]   = { 0.26862954f, 0.26130258f, 0.27577711f };
+    const auto bf16_round = [](float v) {
+        return ggml_bf16_to_fp32(ggml_fp32_to_bf16(v));
+    };
+    float lut[3][257];
+    for (int c = 0; c < 3; ++c) {
+        const float m = bf16_round(enc_mean[c]);
+        const float sd = bf16_round(enc_std[c]);
+        for (int v = -1; v <= 255; ++v) {
+            const float x = bf16_round(((float) v / 255.0f - proc_mean[c]) / proc_std[c]);
+            lut[c][v + 1] = bf16_round(2.0f * (x * sd + m) - 1.0f);
+        }
+    }
+
+    std::vector<float> buf((size_t) padded.width * padded.height * 3);
+    for (int y = 0; y < padded.height; ++y) {
+        for (int x = 0; x < padded.width; ++x) {
+            const size_t off = ((size_t) y * padded.width + x) * 3;
+            const bool in_image = y < size.height && x < size.width;
+            const auto rgb = in_image ? img.get_pixel(x, y) : std::array<uint8_t, 3>{ 0, 0, 0 };
+            for (int c = 0; c < 3; ++c) {
+                buf[off + c] = lut[c][in_image ? rgb[c] + 1 : 0];
+            }
+        }
+    }
+    out.cpy_buf(buf);
+    output.entries.push_back(std::move(out));
+    return output;
+}
+
 //
 // mtmd_image_preprocessor_dyn_size
 //

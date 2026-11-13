@@ -382,6 +382,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_spark2_5(params);
         case LLM_ARCH_INKLING:
             return new llama_model_inkling(params);
+        case LLM_ARCH_INKLING2:
+            return new llama_model_inkling2(params);
         case LLM_ARCH_K2_HORIZON:
             return new llama_model_k2_horizon(params);
         case LLM_ARCH_KOLIBRI1:
@@ -3313,6 +3315,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         // all layers have both an attention KV cache and a recurrent (conv) state
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
+                    } else if (arch == LLM_ARCH_INKLING2) {
+                        filter_attn = [&](uint32_t) { return true; };
+                        filter_recr = [&](uint32_t) { return true; };
                     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
                         filter_attn = [&](uint32_t il) {
                             return !hparams.is_recr(il) && hparams.n_ff(il) == 0;
@@ -3691,6 +3696,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_INKLING:
+        case LLM_ARCH_INKLING2:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
             return LLAMA_ROPE_TYPE_NONE;

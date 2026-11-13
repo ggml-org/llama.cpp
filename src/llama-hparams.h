@@ -119,6 +119,13 @@ struct llama_hparams {
     float    inkling_log_alpha      = 0.0f;
     uint32_t inkling_unpadded_n_vocab = 0; // 0 = no padded-vocab masking
 
+    float    inkling2_qk_clip            = 0.0f;
+    float    inkling2_rel_clip           = 0.0f;
+    bool     inkling2_attn_res_norm_vals = false;
+    float    inkling2_mlp_gate_softcap   = 0.0f;
+    float    inkling2_mlp_up_softcap     = 0.0f;
+    bool     inkling2_value_norm         = false;
+
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;

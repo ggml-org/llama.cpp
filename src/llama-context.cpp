@@ -396,6 +396,9 @@ llama_context::llama_context(
         if (model.arch == LLM_ARCH_INKLING) {
             cparams.auto_fkvr = false;
         }
+        if (model.arch == LLM_ARCH_INKLING2) {
+            cparams.auto_fkvr = false;
+        }
     }
 
     // initialized later
@@ -2930,6 +2933,7 @@ uint32_t llama_context::graph_max_nodes() const {
         model.arch == LLM_ARCH_XING4_0 ||
         (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
+        model.arch == LLM_ARCH_INKLING2 ||
         model.arch == LLM_ARCH_MINIMAX_01 ||
         model.arch == LLM_ARCH_MINIMAX_M3 ||
         model.arch == LLM_ARCH_HY_V4) {
@@ -4516,6 +4520,11 @@ llama_context * llama_init_from_model(
 
     // quantized V forces the dense path, which transposes V - invalid for a block-quantized tensor
     if (model->arch == LLM_ARCH_INKLING && ggml_is_quantized(params.type_v)) {
+        LLAMA_LOG_ERROR("%s: model does not support a quantized V cache (%s)\n",
+            __func__, ggml_type_name(params.type_v));
+        return nullptr;
+    }
+    if (model->arch == LLM_ARCH_INKLING2 && ggml_is_quantized(params.type_v)) {
         LLAMA_LOG_ERROR("%s: model does not support a quantized V cache (%s)\n",
             __func__, ggml_type_name(params.type_v));
         return nullptr;

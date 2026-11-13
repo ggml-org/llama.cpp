@@ -2726,6 +2726,9 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.op_params[0] = dst->op_params[0];
         dst_slice.op_params[2] = dst->op_params[2];
         dst_slice.op_params[3] = dst->op_params[3];
+        // ggml_prec_get_acc / ggml_prec_get_src only read these for a MUL_MAT op, so give the slice that op
+        dst_slice.op = GGML_OP_MUL_MAT;
+        dst_slice.op_params[1] = GGML_HINT_NONE;
 
         ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
         CUDA_CHECK(cudaGetLastError());
