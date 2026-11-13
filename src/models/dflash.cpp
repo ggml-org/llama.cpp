@@ -515,7 +515,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
             ggml_tensor * hidden_i = ggml_view_2d(ctx0, hidden, hidden->ne[0], n_blocks,
                                                   (size_t) block_drafts * hidden->nb[1], i*hidden->nb[1]);
             ggml_tensor * joint = ggml_concat(ctx0, ggml_concat(ctx0, state, w1_prev, 0), ggml_cont(ctx0, hidden_i), 0);
-            joint = ggml_add(ctx0, ggml_mul_mat(ctx0, model.dspark_joint_proj, joint), model.dspark_joint_proj_b); // [3R, n_blocks]
+            joint = ggml_add(ctx0, g.build_lora_mm(model.dspark_joint_proj, joint), model.dspark_joint_proj_b); // [3R, n_blocks]
 
             const auto chunk = [&](int64_t k) {
                 return ggml_cont(ctx0, ggml_view_2d(ctx0, joint, rank, n_blocks, joint->nb[1], k*rank*ggml_element_size(joint)));
@@ -1522,7 +1522,7 @@ llama_model_dflash::graph_dsv41::graph_dsv41(const llm_graph_params & params) :
 
             out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, n_tokens);
             out = ggml_permute(ctx0, out, 0, 2, 1, 3);
-            ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+            ggml_tensor * oa = build_lora_mm(layer.wo_a, out);
             cb(oa, "attn_wo_a", il);
             oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
             oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, n_tokens);
@@ -1626,7 +1626,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
     const auto build_kv = [&](ggml_tensor * x, int il) -> std::pair<ggml_tensor *, ggml_tensor *> {
         const auto & layer = model.layers[il];
 
-        ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, x);
+        ggml_tensor * kv_cmpr_pe = build_lora_mm(layer.wkv_a_mqa, x);
         cb(kv_cmpr_pe, "kv_cmpr_pe", il);
 
         ggml_tensor * kv_cmpr = ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
@@ -1723,7 +1723,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
         cb(cur, "attn_norm", il);
 
         {
-            ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq, cur);
+            ggml_tensor * q = build_lora_mm(layer.wq, cur);
             cb(q, "q", il);
 
             // {n_embd_head_nope, n_tokens, n_head}
@@ -1733,7 +1733,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
             q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
 
             // {kv_lora_rank, n_head, n_tokens}
-            ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+            ggml_tensor * q_nope_absorbed = build_lora_mm(layer.wk_b, q_nope);
             q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
             cb(q_nope_absorbed, "q_nope_absorbed", il);
 
@@ -1760,7 +1760,7 @@ llama_model_dflash::graph_mistral_large4::graph_mistral_large4(const llm_graph_p
 
             // {kv_lora_rank, n_tokens, n_head} -> {n_embd_head_v_mla, n_tokens, n_head}
             out = ggml_reshape_3d(ctx0, out, kv_lora_rank, n_head, n_tokens);
-            out = ggml_mul_mat(ctx0, layer.wv_b, ggml_permute(ctx0, out, 0, 2, 1, 3));
+            out = build_lora_mm(layer.wv_b, ggml_permute(ctx0, out, 0, 2, 1, 3));
             out = ggml_cont_2d(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3), n_embd_head_v_mla*n_head, n_tokens);
 
             cur = build_lora_mm(layer.wo, out);

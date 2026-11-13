@@ -239,7 +239,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
                 ggml_tensor * indexer_q = build_norm(cur, layer.indexer_q_norm, layer.indexer_q_norm_b, LLM_NORM, il);
                 cb(indexer_q, "indexer_q_norm", il);
 
-                indexer_q = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, indexer_q);
+                indexer_q = build_lora_mm(layer.indexer_attn_q_b, indexer_q);
                 cb(indexer_q, "indexer_q", il);
 
                 // {n_embd_indexer_head, n_indexer_head, n_tokens}
@@ -247,7 +247,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
                 indexer_q = ggml_mul(ctx0, indexer_q, build_ssmax(layer.indexer_ssmax_s, layer.indexer_ssmax_b, n_indexer_head));
                 cb(indexer_q, "indexer_q_ssmax", il);
 
-                ggml_tensor * indexer_k = ggml_mul_mat(ctx0, layer.indexer_attn_k, cur);
+                ggml_tensor * indexer_k = build_lora_mm(layer.indexer_attn_k, cur);
                 cb(indexer_k, "indexer_k", il);
 
                 indexer_k = build_norm(indexer_k, layer.indexer_k_norm, layer.indexer_k_norm_b, LLM_NORM, il);
@@ -275,7 +275,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
                 const auto & k_idxs_lid = inp_attn_dsa->get_k_idxs_lid();
                 ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, indexer_k, k_idxs_lid, il));
 
-                ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
+                ggml_tensor * indexer_weights = build_lora_mm(layer.indexer_proj, cur);
                 cb(indexer_weights, "indexer_weights", il);
 
                 // get cached indexer keys
@@ -342,7 +342,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
                 cb(top_k, "top_k", il);
             }
 
-            ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq, cur);
+            ggml_tensor * q = build_lora_mm(layer.wq, cur);
             cb(q, "q", il);
 
             // {n_embd_head_qk_nope, n_head, n_tokens}
@@ -356,7 +356,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
             cb(q_nope, "q_nope_perm", il);
 
             // {n_embd_head_qk_nope, kv_lora_rank, n_head} x {n_embd_head_qk_nope, n_tokens, n_head}
-            ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+            ggml_tensor * q_nope_absorbed = build_lora_mm(layer.wk_b, q_nope);
             cb(q_nope_absorbed, "q_nope_absorbed", il);
 
             // {kv_lora_rank, n_head, n_tokens}
@@ -388,7 +388,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
             ggml_tensor * Vcur = nullptr;
 
             if (hparams.has_kv(il)) {
-                ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+                ggml_tensor * kv_cmpr_pe = build_lora_mm(layer.wkv_a_mqa, cur);
                 cb(kv_cmpr_pe, "kv_cmpr_pe", il);
 
                 // {kv_lora_rank, n_tokens}
@@ -492,7 +492,7 @@ llama_model_mistral_large4::graph::graph(const llm_graph_params & params) :
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cur = build_lora_mm(model.output, cur);
 
     if (hparams.f_final_logit_softcapping) {
         cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
