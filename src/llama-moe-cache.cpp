@@ -346,6 +346,7 @@ struct llama_moe_cache::impl {
         std::vector<ggml_tensor *> banks; // device storage of all slots, one per expert tensor
         std::vector<std::array<int64_t, LLAMA_MOE_CACHE_SCALE_COUNT>> scale_rows;
         std::vector<llama_moe_cache_scales> scale_banks;
+        size_t n_scalar = 0; // per-tensor scales of all layers
         size_t host_bytes = 0;
         int32_t n_slots = 0;
         moe_cache_lru lru;
@@ -437,6 +438,7 @@ struct llama_moe_cache::impl {
                 continue;
             }
             std::vector<std::array<int64_t, LLAMA_MOE_CACHE_SCALE_COUNT>> scale_rows(experts.size(), { 0, 0 });
+            size_t n_scalar = 0;
             for (size_t ip = 0; ip < experts.size(); ++ip) {
                 for (int k = 0; k < LLAMA_MOE_CACHE_SCALE_COUNT; ++k) {
                     const ggml_tensor * s = scales[ip][k];
@@ -446,6 +448,8 @@ struct llama_moe_cache::impl {
                             GGML_ASSERT((s->ne[0] == experts[ip]->ne[2] && s->ne[1] == 1) ||
                                         (s->ne[0] == experts[ip]->ne[1] && s->ne[1] == experts[ip]->ne[2]));
                             scale_rows[ip][k] = ggml_nelements(s)/experts[ip]->ne[2];
+                        } else {
+                            n_scalar++;
                         }
                     }
                 }
@@ -464,6 +468,7 @@ struct llama_moe_cache::impl {
                 it->scale_rows = scale_rows;
             }
             it->layers.push_back(il);
+            it->n_scalar += n_scalar;
             for (size_t ip = 0; ip < experts.size(); ++ip) {
                 const size_t bytes = ggml_nbytes(experts[ip]) + (scale_rows[ip][0] + scale_rows[ip][1])*experts[ip]->ne[2]*sizeof(float);
                 it->host_bytes         += bytes;
@@ -489,6 +494,7 @@ struct llama_moe_cache::impl {
                     }
                 }
             }
+            res += g.n_scalar*GGML_PAD(sizeof(float), alignment);
             return res;
         };
 
@@ -551,7 +557,7 @@ struct llama_moe_cache::impl {
             for (const auto & rows : g.scale_rows) {
                 n_scales += std::count_if(rows.begin(), rows.end(), [](int64_t r) { return r > 0; });
             }
-            n_tensors[g.id] += (g.ref.size() + n_scales)*(1 + g.layers.size());
+            n_tensors[g.id] += (g.ref.size() + n_scales)*(1 + g.layers.size()) + g.n_scalar;
             n_tensors_host  += g.layers.size()*(n_zero > 0 ? 3 : 1); // slot maps and CPU map
         }
         if (n_tensors_host == 0) {
@@ -577,6 +583,8 @@ struct llama_moe_cache::impl {
         }
         ctx_host  = init_ctx(n_tensors_host);
         ctx_views = init_ctx(2);
+
+        std::vector<std::pair<ggml_tensor *, const ggml_tensor *>> scalar_scales; // device copy, model tensor
 
         ggml_backend_buffer_type_t buft_host = ggml_backend_cpu_buffer_type();
         const size_t alignment_host = ggml_backend_buft_get_alignment(buft_host);
@@ -617,6 +625,11 @@ struct llama_moe_cache::impl {
                         ggml_tensor * scale      = scales[ip][k];
                         ggml_tensor * scale_bank = g.scale_banks[ip][k];
                         if (scale_bank == nullptr) {
+                            if (scale != nullptr) {
+                                bound[k] = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                                ggml_format_name(bound[k], "moe_cache.%s", scale->name);
+                                scalar_scales.emplace_back(bound[k], scale);
+                            }
                             continue;
                         }
                         if (!no_alloc) {
@@ -671,6 +684,12 @@ struct llama_moe_cache::impl {
                         ggml_backend_tensor_set(bank, ones.data(), 0, ggml_nbytes(bank));
                     }
                 }
+            }
+
+            for (const auto & [dst, src] : scalar_scales) {
+                float v;
+                ggml_backend_tensor_get(src, &v, 0, sizeof(v));
+                ggml_backend_tensor_set(dst, &v, 0, sizeof(v));
             }
 
             for (group & g : groups) {
