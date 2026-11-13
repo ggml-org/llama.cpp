@@ -199,7 +199,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_conv1d(
     const int64_t conv_state_size = (d_conv - 1) * d_inner;
     const int64_t n_embd_r_total  = 3 * conv_state_size;
 
-    ggml_tensor * x_proj = ggml_mul_mat(ctx0, proj_w, x);
+    ggml_tensor * x_proj = build_lora_mm(proj_w, x);
     ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
 
     ggml_tensor * conv_x = nullptr;
