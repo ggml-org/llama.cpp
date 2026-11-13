@@ -1480,7 +1480,6 @@ static void ssm_scan_run_hmx_chunked(struct htp_ssm_scan_context * scctx) {
 static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * s   = octx->src[0];
     const struct htp_tensor * ids = octx->src[6];
-    const struct htp_tensor * dst = octx->dst;
 
     const struct htp_ssm_scan_kernel_params * kparams =
         (const struct htp_ssm_scan_kernel_params *) octx->kernel_params;
@@ -1503,9 +1502,8 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     uint32_t nunits     = kparams->total_units;
 
     if (octx->ctx->mdev.count > 1) {
-        const uint32_t units_per_chunk = htp_tensor_mdev_data_aligned(dst) ? 1 : 0;
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
-            nunits, units_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+            nunits, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         unit_start = range.start;
         nunits     = range.count;
     }
