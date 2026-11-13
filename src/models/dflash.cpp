@@ -51,9 +51,12 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("DFlash model requires 'target_layers' in GGUF metadata");
     }
 
-    if (target_layer_ids.empty() || target_layer_ids.size() > LLAMA_MAX_LAYERS + 1 ||
-            target_layer_ids.size() * (uint64_t) hparams.n_embd > UINT32_MAX) {
-        throw std::runtime_error("invalid DFlash target feature dimensions");
+    ml.get_key(LLM_KV_DSPARK_MARKOV_RANK, hparams.dspark_markov_rank, false);
+    if (hparams.dspark_markov_rank) {
+        if (target_layer_ids.empty() || target_layer_ids.size() > LLAMA_MAX_LAYERS + 1 ||
+                target_layer_ids.size() * (uint64_t) hparams.n_embd > UINT32_MAX) {
+            throw std::runtime_error("invalid DFlash target feature dimensions");
+        }
     }
     hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * hparams.n_embd;
 
@@ -66,7 +69,6 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     }
     LLAMA_LOG_INFO("%s: DFlash extract_layers = [%s]\n", __func__, layers.c_str());
 
-    ml.get_key(LLM_KV_DSPARK_MARKOV_RANK, hparams.dspark_markov_rank, false);
     if (hparams.dspark_markov_rank) {
         ml.get_key(LLM_KV_VOCAB_SIZE, hparams.n_vocab_padded);
         ml.get_key(LLM_KV_VOCAB_SIZE_UNPADDED, hparams.n_vocab_unpadded);

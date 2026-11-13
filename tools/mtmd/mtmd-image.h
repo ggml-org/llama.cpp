@@ -146,6 +146,7 @@ struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
 struct mtmd_image_preprocessor_inkling2 : mtmd_image_preprocessor {
     using mtmd_image_preprocessor::mtmd_image_preprocessor;
     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+    [[noreturn]]
     mtmd_image_preproc_out preprocess_video_frame(const mtmd_image_u8 & img) const override;
 };
 
