@@ -17,7 +17,7 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     data.supports_thinking = true;
 
     data.preserved_tokens = {
-        "<|start|>", "<|message|>", "<|eom|>", "<|eot|>",
+        "<|start|>", "<|message|>", "<|eom|>",
         // ATEM tool-call markup emitted on " to=<tool>" turns.
         "<atem:function_calls>", "<atem:invoke", "<atem:parameter", "</atem:parameter>",
         "</atem:invoke>", "</atem:function_calls>",
@@ -48,37 +48,38 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     // Constrained grammar whenever tools are offered or a response format is requested.
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
-    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto start = p.rule("start", p.literal("<|start|>assistant"));
+    data.parser = build_chat_peg_parser(inputs.specials, [&](common_chat_peg_builder & p) {
+        auto start_token = p.token("<|start|>");
+        auto message     = p.token("<|message|>");
+        auto eom         = p.token("<|eom|>");
+        auto start       = p.rule("start", start_token + p.literal("assistant"));
 
         if (!extract_reasoning && !include_grammar) {
             return start + p.content(p.rest());
         }
 
         if (extract_reasoning) {
-            p.rule("analysis", p.literal(" to=self<|message|>") + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
+            p.rule("analysis", p.literal(" to=self") + message + p.reasoning(p.until(eom)) + eom);
         } else {
-            p.rule("analysis", p.literal(" to=self<|message|>") + p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
+            p.rule("analysis", p.literal(" to=self") + message + p.content(p.until(eom)) + eom);
         }
         auto analysis = p.ref("analysis");
 
         auto recipient  = p.optional(p.literal(" to=user"));
-        auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") +
-                                              p.content(p.until_one_of({ "<|eot|>", "<|eom|>" })));
+        auto final_msg  = p.rule("final", recipient + message + p.content(p.until(eom)));
 
         if (has_response_format) {
             auto response_json   = p.content(p.schema(p.json(), "response-format-schema", inputs.json_schema));
             auto response_format = p.rule("response-format",
-                recipient + p.literal("<|message|>") +
+                recipient + message +
                 ((p.literal("```json") + p.space() + response_json + p.space() + p.literal("```")) | response_json));
 
             return p.zero_or_more(start + analysis) + start + response_format;
         }
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
-            auto string_value = p.ac(
-                p.tool_arg_string_value(p.until("</atem:parameter>")) + p.tool_arg_close(p.literal("</atem:parameter>")),
-                "</atem:parameter>");
+            auto string_value = p.through(p.tool_arg_string_value(p.until("</atem:parameter>")),
+                                        p.tool_arg_close(p.literal("</atem:parameter>")));
 
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
@@ -106,40 +107,35 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
                     args = p.zero_or_more(p.choice(arg_rules) + p.space());
                 }
 
-                auto tool_parser = p.tool(
-                    p.tool_open(p.literal(" to=") + p.until("<|message|>") +
-                                p.literal("<|message|><atem:function_calls>") + p.space() +
-                                p.literal("<atem:invoke name=\"") + p.tool_name(p.literal(name)) + p.literal("\">") + p.space())
+                auto open = p.tool_open(start_token + p.literal("assistant to=") + p.tool_name(p.literal(name)) + message);
+                auto body = p.rule("tool-" + std::to_string(tool_index),
+                    p.literal("<atem:function_calls>") + p.space() + p.literal("<atem:invoke name=\"" + name + "\">") + p.space()
                     << p.tool_args(args)
                     << p.tool_close(p.literal("</atem:invoke>") + p.space() + p.literal("</atem:function_calls>")));
 
-                tool_choice |= p.rule("tool-" + std::to_string(tool_index), tool_parser);
+                tool_choice |= open + body;
             });
 
-            auto tool_calls = inputs.parallel_tool_calls
-                ? p.trigger_rule("tool-call", tool_choice + p.zero_or_more(p.literal("<|eom|>") + start + tool_choice))
-                : p.trigger_rule("tool-call", tool_choice);
-
+            auto more       = inputs.parallel_tool_calls ? p.zero_or_more(eom + tool_choice) : p.eps();
+            auto tool_calls = p.rule("tool-calls", tool_choice + more);
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-                return p.zero_or_more(start + analysis) + start + tool_calls;
+                return p.zero_or_more(start + analysis) + tool_calls;
             }
-            auto trailing_calls = p.optional(p.literal("<|eom|>") + start + tool_calls);
-            return p.zero_or_more(start + analysis) + start + (tool_calls | (final_msg + trailing_calls));
+            auto trailing_calls = p.optional(eom + tool_calls);
+            return p.zero_or_more(start + analysis) + (tool_calls | (start + final_msg + trailing_calls));
         }
 
         return p.zero_or_more(start + analysis) + start + final_msg;
     });
 
     if (include_grammar) {
-        data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
+        // Every message opens with a recipient header, so the grammar constrains the whole turn from the first token
+        // and a recipient that is not self, user, or a tool cannot be generated
+        data.grammar_lazy = false;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            data.parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder);
         });
-        data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-              "(?:^|<\\|start\\|>assistant)( to=(?!self<\\|message\\|>)(?!user<\\|message\\|>)[^<]*?<\\|message\\|>)" },
-        };
     }
 
     return data;

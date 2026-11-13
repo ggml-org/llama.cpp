@@ -315,6 +315,7 @@ struct common_chat_templates {
     bool add_bos;
     bool add_eos;
     bool has_explicit_template;  // Model had builtin template or template overridden was specified.
+    common_peg_tokens specials;
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
@@ -801,6 +802,10 @@ void common_chat_templates_free(struct common_chat_templates * tmpls) {
     delete tmpls;
 }
 
+void common_chat_templates_set_specials(struct common_chat_templates * tmpls, common_peg_tokens specials) {
+    tmpls->specials = std::move(specials);
+}
+
 bool common_chat_templates_was_explicit(const struct common_chat_templates * tmpls) {
     return tmpls->has_explicit_template;
 }
@@ -971,6 +976,7 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
     std::string token_eos = eos_token_override;
     bool        add_bos   = false;
     bool        add_eos   = false;
+    common_peg_tokens specials;
     if (model) {
         const auto * vocab     = llama_model_get_vocab(model);
         const auto   get_token = [&](llama_token token, const char * name, const char * jinja_variable_name) {
@@ -990,11 +996,13 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
         token_eos = get_token(llama_vocab_eos(vocab), "EOS", "eos_token");
         add_bos   = llama_vocab_get_add_bos(vocab);
         add_eos   = llama_vocab_get_add_eos(vocab);
+        specials  = common_peg_tokens(vocab);
     }
     common_chat_templates_ptr tmpls(new common_chat_templates());
     tmpls->has_explicit_template = has_explicit_template;
     tmpls->add_bos               = add_bos;
     tmpls->add_eos               = add_eos;
+    tmpls->specials              = std::move(specials);
     try {
         tmpls->template_default = std::make_unique<common_chat_template>(default_template_src, token_bos, token_eos);
     } catch (const std::exception & e) {
@@ -1511,6 +1519,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.add_bos               = tmpls->add_bos;
     params.add_eos               = tmpls->add_eos;
+    params.specials              = tmpls->specials;
 
     params.continue_final_message = inputs.continue_final_message;
     if (params.continue_final_message != COMMON_CHAT_CONTINUATION_NONE) {
@@ -1793,6 +1802,7 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
     }
     if (input.text != text) {
         // the pieces do not give back the same text, keep the text without tokens
+        LOG_WRN("%s: token pieces do not match the text, parsing without token ids\n", __func__);
         return common_chat_input(text);
     }
     return input;
@@ -1903,10 +1913,16 @@ common_chat_session::common_chat_session(const common_chat_templates *        tm
     thinking_ends          = std::move(applied.thinking_end_tags);
 
     parser_params.format            = applied.format;
-    parser_params.generation_prompt = vocab ? common_chat_input_tokenize(vocab, applied.generation_prompt)
-                                            : common_chat_input(applied.generation_prompt);
     parser_params.debug             = params.debug;
     parser_params.parser            = std::move(applied.parser);
+
+    if (vocab) {
+        parser_params.generation_prompt = common_chat_input_tokenize(vocab, applied.generation_prompt);
+    } else if (params.tokenize) {
+        parser_params.generation_prompt = params.tokenize(applied.generation_prompt);
+    } else {
+        parser_params.generation_prompt = common_chat_input(applied.generation_prompt);
+    }
 
     delimiters = std::move(applied.message_delimiters);
 
