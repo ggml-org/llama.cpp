@@ -1,6 +1,6 @@
 # Inkling 2
 
-`inkling2` supports `Inkling2ForCausalLM` and still-image input for `Inkling2ForConditionalGeneration` with a separate mmproj GGUF. The implementation follows Transformers revision `109a7d19bf667168837f32929e00b791e195d14d`; the original checkpoint name mapping was checked against `thinkingmachines/Inkling-2-Small` revision `e242a97e271095c11bc33ddb3850d37e22917343`.
+`inkling2` supports `Inkling2ForCausalLM`, still-image input for `Inkling2ForConditionalGeneration` with a separate mmproj GGUF, and an optional DSpark block drafter with a separate draft GGUF. The implementation follows Transformers revision `109a7d19bf667168837f32929e00b791e195d14d`; the original checkpoint name mapping was checked against `thinkingmachines/Inkling-2-Small` revision `e242a97e271095c11bc33ddb3850d37e22917343`.
 
 ## Conversion
 
@@ -45,7 +45,7 @@ The tokenizer reuses GPT-4o BPE preprocessing. EOS/EOT is the configured EOS tok
 
 ## Execution
 
-There is no RoPE. Both attention types use input-dependent relative logits; sliding layers use `sliding_window_size` as the relative extent, while full layers use `rel_extent`. Only full layers apply logarithmic scaling to the clipped Q and relative states.
+The text backbone has no RoPE. Both attention types use input-dependent relative logits; sliding layers use `sliding_window_size` as the relative extent, while full layers use `rel_extent`. Only full layers apply logarithmic scaling to the clipped Q and relative states.
 
 Attention uses the existing unfused path because flash attention does not accept the dense KQ bias and per-query sinks through this tree's attention helper. The sink is included in softmax and has zero value. Flash attention is disabled for this architecture, including when requested explicitly. Quantized V cache requires flash attention in the current runtime and is not supported here.
 
@@ -94,16 +94,65 @@ Four PNG cases cover RGB 61x43, RGBA 83x45, aligned RGB 40x40 and wide RGBA 161x
 
 Each metric is the maximum across the four cases, so the two columns can refer to different images. Each case also ran with its image prepended through the actual multimodal prompt path, producing 256 finite logits. The regular CLI and multimodal CLI generated two tokens; the server image request returned HTTP 200 with two completion tokens. F16 and BF16 mmproj conversion/loading also produced finite CPU image-conditioned logits; numerical parity is claimed only for F32.
 
-The original text regressions still pass: both float fixtures, the packed fixture, all 74 original-name roundtrip tensors, text-only loading without mmproj, and `test-llama-archs -a inkling2 -b CPU`. The converter suite has 22 passing tests; gguf-py has 9; mtmd has 15 tests with 196 assertions. Changed Python files pass the scoped type check. The whole-repository type check remains incomplete because optional dependencies for unrelated tools are absent.
+The original text regressions still pass: both float fixtures, the packed fixture, all 74 original-name roundtrip tensors, text-only loading without mmproj, and `test-llama-archs -a inkling2 -b CPU`. The converter suite has 24 passing tests; gguf-py has 9; mtmd has 15 tests with 196 assertions. Changed Python files pass the scoped type check. The whole-repository type check remains incomplete because optional dependencies for unrelated tools are absent.
 
 Real weights, production encoder width/head dimensions, the real 640x640 input grid (1024 patches plus CLS), multiple images in one prompt, video, GPU/NPU execution, flash attention, real-model quality and the real chat template with images remain unverified. Video is explicitly unsupported.
+
+## MTP / DSpark block drafter
+
+The predictor follows [vLLM PR #67325's unmerged implementation](https://github.com/WoosukKwon/vllm/blob/d664cd1e96052857aea2aa844eeba571c24758b4/vllm/models/inkling2/dspark.py), pinned to `d664cd1e96052857aea2aa844eeba571c24758b4`. There is no Transformers predictor implementation. This is an eight-position parallel block decoder followed by a recurrent Markov head, not five chained NextN predictors.
+
+Convert `mtp.safetensors` from the same checkpoint directory separately:
+
+```sh
+python3 convert_hf_to_gguf.py /path/to/hf-checkpoint --dspark --outtype f32 --outfile /path/to/model-store/inkling2-dspark.gguf
+llama-cli -m /path/to/model-store/inkling2.gguf --spec-type draft-dspark --spec-draft-model /path/to/model-store/inkling2-dspark.gguf --spec-draft-n-max 7 --spec-draft-p-min 0 --spec-draft-sampling greedy -ngl 0 --spec-draft-ngl 0 --temp 0 -p "Hello" -st
+```
+
+The draft GGUF uses the existing `dflash` architecture and common `draft-dspark` driver. It contains all 84 MTP tensors and no duplicate target embedding or output weights; the draft context shares those with the target. The bounded checkpoint header and `hf_quant_config.json` agree on the exact 84 BF16 source names. `markov_w1` has no bias. Normal text conversion/loading still works when `mtp.safetensors` is absent; requesting `--dspark` without that file is an error. F32/F16/BF16 output conversion is supported, with `fuse_weight` retained in F32 for softmax.
+
+The real predictor has five dense layers, width 4608, 48 Q heads, eight KV heads, head dimension 128, SwiGLU width 18432, RMSNorm epsilon 1e-6 and ordinary NEOX RoPE with theta 1e6. Layers 0, 1, 3 and 4 attend to the last 1024 committed context positions plus the entire block; layer 2 attends to all context plus the block. All block positions see the same context window. These values use existing GGUF layer/head/FFN/RoPE/SWA keys; `dflash.dspark.markov_rank` selects the Inkling 2 variant and records rank 256.
+
+### Target features and recurrence
+
+The feature order is exactly `[5, 11, 17, 23, 29, 35, 41, 48]`. For the first seven IDs, the feature is the running AttnRes partial block at entry to the zero-based target layer, before that layer's attention mix and norm. These are the partial blocks after layers 4, 10, 16, 22, 28, 34 and 40. With six layers per residual block, each contains the first five layers of its block. Feature 48 is the final output mix followed by the final norm after layer 47. It is not the raw last partial block. The final feature is exported before selecting output rows, so context injection retains every processed token.
+
+The existing layer-input extraction API supplies these taps. Every draft layer softmaxes its own `fuse_weight` row, sums the raw tap values, applies its own `dflare_norm`, and projects context K/V with `k_proj_ctx` and `v_proj_ctx`. Context K uses `k_norm_ctx` and RoPE. The sixth mixture has a separate norm and supplies `f_rnn` from the last committed target token.
+
+Position zero is the normalized shared target embedding of the anchor; the other seven positions use the same `mask_embed`. After the five layers and final norm, each of the seven RNN steps consumes `[state, markov_w1(previous_token), hidden_i, f_rnn]`. It splits the projection into gate, candidate and output latent, updates the state with `sigmoid(gate)*state + (1-sigmoid(gate))*tanh(candidate)`, and projects `tanh(latent)` through `hidden_out` and the shared target head. The final logits are `cap*tanh((base+bias)/cap)`, sliced to the exposed vocabulary. State starts at zero for each block.
+
+The graph exports all eight state rows through the existing nextn output: the anchor row is zero, subsequent rows contain the rank-sized state followed by zero padding to model width. During context injection, that same output carries the separate `f_rnn` mixture. The common driver's per-sequence ring retains nine committed-feature rows so rejection can select the correct boundary, and the driver's existing state-save API serializes the ring. Draft KV removal and restoration use the existing cache APIs.
+
+The graph always evaluates the trained block of eight positions, even when the requested proposal limit is smaller. It proposes at most seven tokens, does not sample from the anchor, and has no confidence head. The first maximal logit wins ties in both the graph and host sampler. Backend sampling is bypassed for this variant because backend argmax tie rules differ. The proposed token is the actual sampler return and is the token used for the next RNN step.
+
+### Numerical and sampling differences
+
+The reference supports conditioning each RNN step on a probabilistically sampled draft token. This implementation provides greedy draft conditioning only; the in-graph recurrence cannot consume a later host sample. Target sampling may still use a temperature under the existing token-match verifier. Changing target temperature does not change how the draft RNN conditions itself.
+
+The reference folds `hidden_out` into the shared LM head in F64 and stores the result in BF16. This graph evaluates the two projections separately. The CPU parity reference performs the fold in F64 then stores F32, so it also checks the graph's algebraic equivalence across those evaluation orders. F32 validation does not reproduce the source's explicit BF16 rounding of fusion weights, residuals, RoPE, logits, gates and recurrent state. No BF16-runtime or activation-quantized vLLM parity is claimed.
+
+### CPU synthetic verification
+
+The standalone Torch transcription replaces TP collectives with a single rank, paged/FlashInfer attention with dense attention using the same visible keys, and fused GPU kernels with F32 operations. Source-by-source correspondence and every simplification are retained in the local `dspark-reference-map.md` beside the harness. The thresholds were fixed before comparison: maximum absolute error <= 1e-4, relative L2 <= 1e-5 per logit/state row, and identical greedy draft IDs.
+
+A width-32 text fixture with eight layers and eight taps feeds a five-layer, rank-eight drafter. It uses a 16-token sliding window, 260 stored vocabulary rows and 256 exposed tokens. Context lengths 3, 8, 21 and 33 pass all feature, RNN-context, seven-position logit and chain-state checks. Worst logit error is 6.95884228e-6 absolute and 2.49064251e-6 relative L2; worst state error is 2.76044011e-6 and 1.997992e-6. All 28 draft IDs agree. A second width-32 fixture uses 48 target layers, the literal production tap IDs, six-layer AttnRes blocks and the 1024-token window. At context length 1025, all seven draft IDs agree, logit error is 2.83122063e-6 and state error is 1.49384141e-6.
+
+The first-draft and target-next-token logit RMS values are 0.596-0.648 and 0.596-0.664 respectively. Their cosine similarity is 0.00145-0.30345 and their argmax IDs differ, as expected for independent random weights. This checks finite scale, not trained prediction quality. Direct tap parity is the stronger contract check: exchanging two taps changes logits by 0.194-0.740, and replacing every tap with the final norm changes them by 0.827-1.888.
+
+`llama-cli` generates 48 identical token IDs with and without the drafter for prompts `abc` (3 tokens), `abcdefgh` (8), `abcdefghijklmnopqrstu` (21), `abcdefghijklmnopqrstuvwxyz0123456` (33), and 1025 repetitions of `a`. The 21-token prompt also matches with target temperature 1.7 and fixed seed 1234. Each random-weight run proposes 301 tokens and accepts zero; rejected draft KV/state therefore does not alter target output. The 48-layer/1024-window fixture also matches all 48 outputs for the 1025-token prompt. Repeating the 33-token case produces the same tokens.
+
+An all-zero shared-head control tests exact ties and accepted tokens: with a temperature-only target sampler, all 41 proposed tokens are accepted and all 48 output IDs still match. A proposal limit of three also preserves output. An explicit save/overwrite/restore test restores the 1188-byte context ring exactly, reproduces seven draft IDs, and keeps chain-state error below 3.58e-7. F16 and BF16 draft GGUFs run with identical target output; a synthetic head-dimension-128 draft with Q8_0 K/V cache and CPU flash attention does too. These are execution/output-preservation checks, not reduced-precision logit parity.
+
+Text float/packed prefill, chunk and decode parity, the 74-tensor original-name roundtrip, the vision preprocessing/encoder/end-to-end/prompt fixtures, all 15 mtmd tests (196 assertions), `test-llama-archs -a inkling2 -b CPU`, all 24 conversion tests and all nine gguf-py tests pass. Text-only fixtures without MTP still load and run. No GPU/NPU or performance measurement was used.
+
+Real checkpoint conversion/inference, production hidden/head dimensions together, real-model acceptance/quality, the source's BF16 execution, TP/distributed execution, multiple active sequences, combined image-plus-draft requests, GPU/NPU execution and contexts beyond the synthetic 1025-token boundary remain unverified. The real maximum context is 1,048,576; this work does not qualify that limit. The predictor reference remains an unmerged PR at the stated pin.
 
 ## Deliberately unsupported
 
 - Video: the vision path supports still images only. Video frames are rejected; temporal patch size 2 does not add a temporal factor to the still-image linear patch projection.
-- MTP: MTP and Markov-head tensors are skipped. The main text model does not implement the speculative predictor; the pinned Transformers reference does not implement it either.
+- Probabilistic DSpark draft conditioning: the predictor graph currently conditions on greedy previous draft tokens. `--spec-draft-sampling probabilistic` is rejected for this variant.
 
-Text conversion still emits one warning for skipping vision and MTP; `--mmproj` converts the vision tensors separately. It never silently interprets packed expert bytes as floating-point weights.
+Text conversion emits one warning that directs users to `--mmproj` for vision and `--dspark` for `mtp.safetensors`. Each conversion writes only its selected component. It never silently interprets packed expert bytes as floating-point weights.
 
 ## Validation
 
