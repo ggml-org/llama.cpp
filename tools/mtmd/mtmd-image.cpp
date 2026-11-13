@@ -2175,6 +2175,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess(const mtmd_i
     return result;
 }
 
+[[noreturn]]
 mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess_video_frame(const mtmd_image_u8 &) const {
     throw std::runtime_error("inkling2: video is not supported");
 }

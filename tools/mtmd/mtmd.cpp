@@ -3415,11 +3415,15 @@ const char * mtmd_get_marker(const mtmd_context * ctx) {
 
 // mtmd_bitmap
 
+bool mtmd_image_needs_alpha(const mtmd_context * ctx) {
+    return ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2;
+}
+
 mtmd_bitmap * mtmd_bitmap_init_from_rgba(const mtmd_context * ctx, uint32_t nx, uint32_t ny, const unsigned char * data) {
     if (!data) {
         return mtmd_bitmap_init(nx, ny, nullptr);
     }
-    const bool checkerboard = ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2;
+    const bool checkerboard = mtmd_image_needs_alpha(ctx);
     std::vector<unsigned char> rgb(size_t(nx) * ny * 3);
     for (uint32_t y = 0; y < ny; ++y) {
         for (uint32_t x = 0; x < nx; ++x) {
