@@ -352,6 +352,8 @@ static size_t gbnf_escape_length(const std::string & pattern, size_t pos) {
     return 2 + n_hex;
 }
 
+static constexpr size_t ANY_ORDER_MAX_KEYS = 8;
+
 class common_chat_schema_converter {
 private:
     friend std::string build_grammar(const std::function<void(const common_grammar_builder &)> & cb, const common_grammar_options & options);
@@ -767,6 +769,10 @@ private:
             return "\"{\" space \"}\"";
         }
 
+        if (!additional_properties && required_props.size() + optional_props.size() <= ANY_ORDER_MAX_KEYS) {
+            return _build_any_order_object_rule(required_props, optional_props, prop_kv_rule_names, name);
+        }
+
         std::string rule = "\"{\" space ";
         for (size_t i = 0; i < required_props.size(); i++) {
             if (i > 0) {
@@ -818,6 +824,46 @@ private:
         rule += " space \"}\"";
 
         return rule;
+    }
+
+    // keys in any order, each at most once: one rule per set of keys already seen
+    std::string _build_any_order_object_rule(
+        const std::vector<std::string> & required_props,
+        const std::vector<std::string> & optional_props,
+        const std::unordered_map<std::string, std::string> & prop_kv_rule_names,
+        const std::string & name)
+    {
+        const std::string prefix = name + (name.empty() ? "" : "-");
+        std::vector<std::string> keys = required_props;
+        keys.insert(keys.end(), optional_props.begin(), optional_props.end());
+        const size_t all_seen = (size_t(1) << keys.size()) - 1;
+        const size_t required_mask = (size_t(1) << required_props.size()) - 1;
+
+        std::vector<std::string> rest_names(all_seen + 1);
+        auto next_kvs = [&](size_t seen) {
+            std::vector<std::string> alts;
+            for (size_t i = 0; i < keys.size(); i++) {
+                const size_t seen_after = seen | (size_t(1) << i);
+                if (seen_after != seen) {
+                    const std::string & rest = rest_names[seen_after];
+                    alts.push_back(prop_kv_rule_names.at(keys[i]) + (rest.empty() ? "" : " " + rest));
+                }
+            }
+            return alts;
+        };
+        auto group = [](const std::vector<std::string> & alts) {
+            return alts.size() == 1 ? alts[0] : "( " + string_join(alts, " | ") + " )";
+        };
+
+        // larger sets first, so every rule refers only to rules already added
+        for (size_t seen = all_seen - 1; seen > 0; seen--) {
+            const std::string body = "\",\" space " + group(next_kvs(seen));
+            const bool done = (seen & required_mask) == required_mask;
+            rest_names[seen] = _add_rule(prefix + "rest-" + std::to_string(seen), done ? "( " + body + " )?" : body);
+        }
+
+        const auto firsts = next_kvs(0);
+        return "\"{\" space " + (required_mask == 0 ? "( " + string_join(firsts, " | ") + " )?" : group(firsts)) + " space \"}\"";
     }
 
     std::string _add_primitive(const std::string & name, const BuiltinRule & rule) {
