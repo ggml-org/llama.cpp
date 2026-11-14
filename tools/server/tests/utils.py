@@ -136,6 +136,7 @@ class ServerProcess:
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
     llama_cache: str | None = None
+    share_console: bool = False  # Windows: console control events only reach a server on the console of the tests
 
     # session variables
     process: subprocess.Popen | None = None
@@ -333,9 +334,10 @@ class ServerProcess:
 
         flags = 0
         if "nt" == os.name:
-            flags |= subprocess.DETACHED_PROCESS
             flags |= subprocess.CREATE_NEW_PROCESS_GROUP
-            flags |= subprocess.CREATE_NO_WINDOW
+            if not self.share_console:
+                flags |= subprocess.DETACHED_PROCESS
+                flags |= subprocess.CREATE_NO_WINDOW
 
         if self.log_path:
             self._log = open(self.log_path, "w")
