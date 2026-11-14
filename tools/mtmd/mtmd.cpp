@@ -3415,29 +3415,6 @@ const char * mtmd_get_marker(const mtmd_context * ctx) {
 
 // mtmd_bitmap
 
-// TODO @ngxson : alpha is only composited when the image is loaded with mtmd_helper_bitmap_init_from_buf; mtmd_bitmap_init takes RGB only, other callers lose it
-bool mtmd_image_needs_alpha(const mtmd_context * ctx) {
-    return ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2V;
-}
-
-mtmd_bitmap * mtmd_bitmap_init_from_rgba(uint32_t nx, uint32_t ny, const unsigned char * data) {
-    if (!data) {
-        return mtmd_bitmap_init(nx, ny, nullptr);
-    }
-    std::vector<unsigned char> rgb(size_t(nx) * ny * 3);
-    for (uint32_t y = 0; y < ny; ++y) {
-        for (uint32_t x = 0; x < nx; ++x) {
-            const size_t i = size_t(y) * nx + x;
-            const int alpha = data[4 * i + 3];
-            const int background = ((y / 8 + x / 8) % 2 == 0) ? 204 : 153;
-            for (int c = 0; c < 3; ++c) {
-                rgb[3 * i + c] = (data[4 * i + c] * alpha + background * (255 - alpha) + 127) / 255;
-            }
-        }
-    }
-    return mtmd_bitmap_init(nx, ny, rgb.data());
-}
-
 mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
                                uint32_t ny,
                                const unsigned char * data) {

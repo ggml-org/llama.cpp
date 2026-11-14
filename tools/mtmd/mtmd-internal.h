@@ -26,8 +26,3 @@ struct mtmd_image_preprocessor;
 mtmd_video_config mtmd_video_config_init(mtmd_video_template tmpl, const mtmd_image_preprocessor * preproc,
                                          int32_t src_width, int32_t src_height,
                                          int32_t src_n_frames, float src_fps);
-
-// Internal image-loader bridge; the public bitmap API accepts RGB.
-bool mtmd_image_needs_alpha(const mtmd_context * ctx);
-// composites RGBA on the checkerboard background of the models that need alpha
-mtmd_bitmap * mtmd_bitmap_init_from_rgba(uint32_t nx, uint32_t ny, const unsigned char * data);
