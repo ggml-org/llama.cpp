@@ -1921,6 +1921,37 @@ static void test_convert_responses_to_chatcmpl() {
         assert_equals(false, result.at("stream").get<bool>());
     }
 
+    // Test input messages without the optional "type", for every role
+    {
+        json input = json::parse(R"({
+            "input": [
+                { "role": "system",    "content": "be brief" },
+                { "role": "developer", "content": "use plain text" },
+                { "role": "user",      "content": "hi" },
+                { "role": "assistant", "content": "hello" }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        const auto & messages = result.at("messages");
+        assert_equals((size_t)4, messages.size());
+
+        auto check = [&](size_t i, const std::string & role, const std::string & text) {
+            const auto & msg  = messages[i];
+            const auto & part = msg.at("content")[0];
+            assert_equals(role, msg.at("role").get<std::string>());
+            assert_equals(false, msg.contains("type"));
+            assert_equals(std::string("text"), part.at("type").get<std::string>());
+            assert_equals(text, part.at("text").get<std::string>());
+        };
+        check(0, "system",    "be brief");
+        check(1, "developer", "use plain text");
+        check(2, "user",      "hi");
+        check(3, "assistant", "hello");
+    }
+
     // Test string input
     {
         json input = json::parse(R"({
