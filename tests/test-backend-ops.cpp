@@ -7270,7 +7270,12 @@ struct test_argsort : public test_case {
                 for (int64_t r = 0; r < ggml_nrows(t); r++) {
                     std::vector<float> data(t->ne[0]);
                     for (int i = 0; i < t->ne[0]; i++) {
-                        data[i] = r * t->ne[0] + i;
+                        if (view != 0) {
+                            // unique values across rows: a transposed row mixes values from several base rows
+                            data[i] = r * t->ne[0] + i;
+                        } else {
+                            data[i] = i;
+                        }
                     }
                     std::shuffle(data.begin(), data.end(), rng);
                     ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
