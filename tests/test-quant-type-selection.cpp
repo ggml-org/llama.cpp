@@ -228,6 +228,7 @@ static const remote_model_spec model_specs[] = {
     { "bartowski/deepseek-ai_DeepSeek-V3.1-GGUF",     "IQ1_M"  },
   //{ "bartowski/Qwen_Qwen3.5-397B-A17B-GGUF",        "IQ1_S"  }, // TODO: swap with ggml-org if/when it's released
     { "ggml-org/Qwen3.6-27B-GGUF",                    "Q8_0"   },
+    { "KRAFTON/Raon-1-mini-preview-gguf",             "Q4_K_M" },
 };
 
 static const int n_model_specs = (int) (sizeof(model_specs) / sizeof(model_specs[0]));
