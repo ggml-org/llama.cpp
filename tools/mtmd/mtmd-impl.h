@@ -106,6 +106,7 @@
 #define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
 // name of the weight variant, for settings that are not in the checkpoint
 #define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+#define KEY_GEN_AUDIO_DEFAULT_VOICE "clip.gen.audio.default_voice"
 // sampling defaults of the generated audio, like general.sampling.* for text
 #define KEY_GEN_AUDIO_TEMP           "clip.gen.audio.sampling.temp"
 #define KEY_GEN_AUDIO_TOP_K          "clip.gen.audio.sampling.top_k"
@@ -571,6 +572,8 @@ enum projector_type {
     PROJECTOR_TYPE_SOPRANO,
     PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_DRAMA3_GEN,
+    PROJECTOR_TYPE_ZONOS3_GEN,
+    PROJECTOR_TYPE_ZONOS3_SPKENC,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
@@ -658,6 +661,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
+    { PROJECTOR_TYPE_ZONOS3_GEN,        "zonos3_gen"},
+    { PROJECTOR_TYPE_ZONOS3_SPKENC,     "zonos3_spkenc"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},

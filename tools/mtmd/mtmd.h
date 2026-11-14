@@ -472,6 +472,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_LFM3A,
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
     MTMD_GEN_AUDIO_TYPE_DRAMA3,
+    MTMD_GEN_AUDIO_TYPE_ZONOS3,
 };
 
 struct mtmd_gen_audio_info {
@@ -485,7 +486,7 @@ MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context *
 
 // read a named tensor of the gen audio model as F32, returns the element count (0 if not found), out may be null to query the size
 MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max);
-// name of the idx-th predefined voice, nullptr when idx is out of range
+// name of the idx-th predefined voice, nullptr when idx is out of range; idx 0 is the default voice
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
 
 // predefined voice with this name as a voice bitmap, to pass as speaker reference
@@ -516,6 +517,7 @@ struct mtmd_gen_inp {
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     int32_t * codes;
     size_t    n_codes;
     const float * feats;

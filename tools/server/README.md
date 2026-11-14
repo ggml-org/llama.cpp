@@ -874,6 +874,10 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `seed`: RNG seed for both the backbone sampler and the codec/vocoder (`-1` = random, the default). Set to a fixed value for reproducible output.
 
+`speed`: Speaking speed relative to a typical pace, `> 0` (default `1.0`, the model's own pace). Only for models that support it, others reject a value other than `1.0` with a 400 error.
+
+`loudness`: Target loudness in LUFS, `< 0` (default `0.0`, the model's own loudness). Only for models that support it, others reject a value other than `0.0` with a 400 error.
+
 `n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
 
 `response_format`: `wav` (default), `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`) or `pcm16` (same, as signed 16-bit samples, e.g. `audio/pcm;rate=24000;encoding=signed-int;bits=16`).
@@ -1668,7 +1672,7 @@ Generates speech from text, for models that can generate audio. The request is c
 
 `stream_format`: `audio` streams the response as it becomes available, see `stream` in `/tts` for the WAV header it writes. `sse` is rejected. The response is not streamed when omitted.
 
-`speed`: Only `1.0` is accepted.
+`speed`: Speaking speed, see `speed` in `/tts`. Only models that support it accept a value other than `1.0`. `loudness` of `/tts` can be used as well.
 
 `instructions`: Ignored.
 

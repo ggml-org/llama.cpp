@@ -713,9 +713,9 @@ static void test_speech_convert(testing & t) {
     t.assert_true ("audio streams",     out.at("stream").get<bool>());
     t.assert_true ("rejects sse",       rejected("stream_format", "sse"));
 
-    // speed
-    t.assert_true ("speed 1.0",         !rejected("speed", 1.0));
-    t.assert_true ("rejects speed 1.5", rejected("speed", 1.5));
+    // speed is forwarded, the model decides whether it is supported
+    out = convert_speech_to_tts(with("speed", 1.5));
+    t.assert_equal("speed forwarded",   1.5, out.at("speed").get<double>());
 
     // instructions are ignored
     t.assert_true ("instructions",      !rejected("instructions", "whisper"));

@@ -956,6 +956,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_qwen3tts_spkenc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_zonos3_spkenc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             {
                 builder = std::make_unique<mtmd_graph_pockettts_spkenc>(ctx, img);
@@ -1010,6 +1014,16 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                     }
                 }
                 builder = std::make_unique<mtmd_graph_lfm3a_gen>(ctx, img, gen_process, all_known, n_frames);
+            } break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            {
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int64_t n_cb = mtmd_graph_zonos3_gen::n_codebooks;
+                // GEN_CODE with codes: only the backbone row of that frame is needed
+                const bool all_known = params && params->codes && gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int  n_frames  = params && params->codes && gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV
+                                     ? (int) (params->codes->size() / n_cb) : 1;
+                builder = std::make_unique<mtmd_graph_zonos3_gen>(ctx, img, gen_process, all_known, n_frames);
             } break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
             {

@@ -392,6 +392,7 @@ static std::vector<c2w_state_slot> list_gen_state_slots(const mtmd_hparams & hpa
         case PROJECTOR_TYPE_DRAMA3_GEN:    return list_drama3_state_slots(hparams, model);
         case PROJECTOR_TYPE_POCKETTTS_GEN: return list_pockettts_state_slots(hparams, model);
         case PROJECTOR_TYPE_LFM3A_GEN:     return list_lfm3a_gen_state_slots(hparams, model);
+        case PROJECTOR_TYPE_ZONOS3_GEN:    return list_zonos3_gen_state_slots(hparams, model);
         default:                           return {};
     }
 }
@@ -1663,6 +1664,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_GEMMA4UA:
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
+        case PROJECTOR_TYPE_ZONOS3_SPKENC:
             {
                 // do nothing
             } break;
@@ -1676,6 +1678,54 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 segfix[(size_t) S - 1] = 100.0f / (float) last;
                 set_input_f32("inp_segfix", segfix);
             } break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+                // frame-major codes -> codebook-major rows; a residual code of -1 is missing and left out
+                const int64_t n_cb     = mtmd_graph_zonos3_gen::n_codebooks;
+                const int64_t n_codes  = mtmd_graph_zonos3_gen::n_cb_vocab;
+                GGML_ASSERT(params->codes != nullptr && params->codes->size() % n_cb == 0);
+                const int64_t n_frames = (int64_t) params->codes->size() / n_cb;
+                std::vector<int32_t> rows(params->codes->size());
+                std::vector<float>   keep((size_t) n_frames * (n_cb - 1), 1.0f);
+                for (int64_t t = 0; t < n_frames; t++) {
+                    for (int64_t c = 0; c < n_cb; c++) {
+                        int32_t code = (*params->codes)[t * n_cb + c];
+                        if (code == -1 && c > 0) {
+                            keep[(c - 1) * n_frames + t] = 0.0f;
+                            code = 0;
+                        }
+                        if (code < 0 || code >= n_codes) {
+                            LOG_ERR("%s: code out of range (%d, codebook size %lld)\n", __func__, code, (long long) n_codes);
+                            return false;
+                        }
+                        rows[c * n_frames + t] = code + (int32_t) (c == 0 ? 0 : (c - 1) * n_codes);
+                    }
+                }
+                set_input_i32("inp_codes", rows);
+                set_input_f32("inp_keep", keep);
+                set_gen_state_in();
+            } else {
+                const int64_t n_cb    = mtmd_graph_zonos3_gen::n_codebooks;
+                const int64_t n_vocab = model.gen_code_out_embd_w->ne[1] / n_cb;
+                // no codes: logits only, the row of codes 0 is ignored
+                std::vector<int32_t> codes(n_cb, 0);
+                if (params->codes) {
+                    if (params->codes->size() != (size_t) n_cb) {
+                        LOG_ERR("%s: expected %lld codes, got %zu\n", __func__, (long long) n_cb, params->codes->size());
+                        return false;
+                    }
+                    codes = *params->codes;
+                }
+                for (int64_t i = 0; i < n_cb; i++) {
+                    if (codes[i] < 0 || codes[i] >= n_vocab) {
+                        LOG_ERR("%s: code out of range (%d, vocab %lld)\n", __func__, codes[i], (long long) n_vocab);
+                        return false;
+                    }
+                    codes[i] += (int32_t) (i * n_vocab);
+                }
+                set_input_i32("inp_codes", codes);
+            }
+            break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {
                 const int64_t n_cb    = model.gen_code_embd_w->ne[2];
