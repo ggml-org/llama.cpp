@@ -484,7 +484,6 @@ class Keys:
         WINDOW_SIZE           = "clip.vision.window_size"
         FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
         IMAGE_GRID_PINPOINTS  = "clip.vision.image_grid_pinpoints" # Granite4 Vision
-        POSITION_GRID_SIZE    = "clip.vision.position_grid_size"
         ROPE_FREQ_BASE        = "clip.vision.rope.freq_base"
 
         class Attention:
@@ -498,8 +497,6 @@ class Keys:
             QUERY_SIDE      = "clip.vision.projector.query_side"
             WINDOW_SIDE     = "clip.vision.projector.window_side"
             SPATIAL_OFFSETS = "clip.vision.projector.spatial_offsets"
-            HIDDEN_SIZE     = "clip.vision.projector.hidden_size"
-            USE_BIAS        = "clip.vision.projector.use_bias"
 
         class SAM:
             BLOCK_COUNT         = "clip.vision.sam.block_count"

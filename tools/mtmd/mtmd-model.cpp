@@ -789,18 +789,7 @@ struct mtmd_model_loader {
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf";
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
-                        get_u32(KEY_POSITION_GRID_SIZE, hparams.position_grid_size);
-                        get_u32(KEY_PROJ_HIDDEN_SIZE, hparams.projection_hidden_size);
-                        get_bool(KEY_PROJ_USE_BIAS, hparams.projector_bias);
                         get_f32(KEY_V_ROPE_FREQ_BASE, hparams.rope_theta);
-                        if (hparams.n_merge < 1 || hparams.n_merge > 16 || hparams.patch_size < 1 || hparams.patch_size > 256 ||
-                            hparams.position_grid_size < 1 || hparams.position_grid_size > 1024 || hparams.projection_hidden_size < 1 ||
-                            hparams.n_layer < 1 || hparams.n_ff < 1 || hparams.projection_dim < 1 ||
-                            hparams.n_head < 1 || hparams.n_head_kv != hparams.n_head || hparams.n_embd % hparams.n_head || (hparams.n_embd / hparams.n_head) % 4 ||
-                            (hparams.n_embd_head != 0 && hparams.n_embd_head != hparams.n_embd / hparams.n_head) ||
-                            !std::isfinite(hparams.eps) || hparams.eps <= 0.0f || !std::isfinite(hparams.rope_theta) || hparams.rope_theta <= 0.0f) {
-                            throw std::runtime_error("inkling2: invalid vision dimensions or RoPE base");
-                        }
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(4);
                     } break;
@@ -1926,41 +1915,11 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_INKLING2:
                 {
-                    auto require_shape = [&](const std::string & name, int64_t n0, int64_t n1 = 1) {
-                        auto * t = ggml_get_tensor(model.ctx_data.get(), name.c_str());
-                        if (!t) {
-                            t = get_tensor(name);
-                        }
-                        if (t->ne[0] != n0 || t->ne[1] != n1 || t->ne[2] != 1 || t->ne[3] != 1) {
-                            throw std::runtime_error("inkling2: invalid tensor shape: " + name);
-                        }
-                        return t;
-                    };
-                    const int64_t hidden = hparams.n_embd;
-                    const int64_t merged = hidden * hparams.n_merge * hparams.n_merge;
-                    model.class_embedding = require_shape(TN_CLASS_EMBD, hidden);
-                    model.class_position_embedding = require_shape("v.class_position_embd.weight", hidden);
-                    model.position_embeddings = require_shape("v.position_embd.weight", hidden, int64_t(hparams.position_grid_size) * hparams.position_grid_size);
-                    model.patch_embeddings_0 = require_shape(TN_PATCH_EMBD, 3LL * hparams.patch_size * hparams.patch_size, hidden);
-                    model.pre_ln_w = require_shape("v.pre_ln.weight", hidden);
-                    model.pre_ln_b = require_shape("v.pre_ln.bias", hidden);
-                    for (int il = 0; il < hparams.n_layer; ++il) {
-                        for (const char * name : {"attn_q", "attn_k", "attn_v", "attn_out", "ffn_up", "ffn_down"}) {
-                            const int64_t n0 = std::strcmp(name, "ffn_down") == 0 ? hparams.n_ff : hidden;
-                            const int64_t n1 = std::strcmp(name, "ffn_up") == 0 ? hparams.n_ff : hidden;
-                            require_shape(mtmd_format("v.blk.%d.%s.weight", il, name), n0, n1);
-                            require_shape(mtmd_format("v.blk.%d.%s.bias", il, name), n1);
-                        }
-                        for (const char * name : {"ln1.weight", "ln1.bias", "ln2.weight", "ln2.bias", "ls1.weight", "ls2.weight"}) {
-                            require_shape(mtmd_format("v.blk.%d.%s", il, name), hidden);
-                        }
-                    }
-                    model.mm_1_w = require_shape("mm.1.weight", merged, hparams.projection_hidden_size);
-                    model.mm_2_w = require_shape("mm.2.weight", hparams.projection_hidden_size, hparams.projection_dim);
-                    if (hparams.projector_bias) {
-                        model.mm_1_b = require_shape("mm.1.bias", hparams.projection_hidden_size);
-                        model.mm_2_b = require_shape("mm.2.bias", hparams.projection_dim);
-                    }
+                    model.class_position_embedding = get_tensor(TN_CLASS_POS_EMBD);
+                    model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
+                    model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {

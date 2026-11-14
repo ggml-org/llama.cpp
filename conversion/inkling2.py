@@ -301,9 +301,6 @@ class Inkling2VisionModel(MmprojModel):
         w.add_clip_vision_projector_type(gguf.VisionProjectorType.INKLING2)
         w.add_vision_attention_layernorm_eps(config["layer_norm_eps"])
         w.add_vision_spatial_merge_size(config["spatial_merge_size"])
-        w.add_uint32(gguf.Keys.ClipVision.POSITION_GRID_SIZE, config["posemb_grid_size"])
-        w.add_uint32(gguf.Keys.ClipVision.Projector.HIDDEN_SIZE, config["projection_hidden_dim"])
-        w.add_bool(gguf.Keys.ClipVision.Projector.USE_BIAS, config.get("projector_bias", False))
         w.add_float32(gguf.Keys.ClipVision.ROPE_FREQ_BASE, float(rope["rope_theta"]))
 
     @classmethod
@@ -321,6 +318,10 @@ class Inkling2VisionModel(MmprojModel):
         if module in self._projector_layers:
             yield self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, self._projector_layers[module], "." + suffix), data_torch
             return
+        # lay out the linear patch embedding (HWC patches) as a conv2d for build_inp()
+        if name.endswith(".patch_embedding.weight"):
+            ps = self.hparams["patch_size"]
+            data_torch = data_torch.reshape(data_torch.shape[0], ps, ps, 3).permute(0, 3, 1, 2)
         # these are bare parameters, they have no .weight
         if name.endswith(("position_embedding", ".lambda_1", ".lambda_2", ".gamma")):
             name = name.removesuffix(".gamma") + ".weight"

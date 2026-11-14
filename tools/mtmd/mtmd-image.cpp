@@ -2152,25 +2152,20 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
 mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess(const mtmd_image_u8 & input) const {
     const int align = hparams.patch_size * hparams.n_merge;
     auto size = input.get_size();
-    if (size.width <= 0 || size.height <= 0 || size.width > INT_MAX - align || size.height > INT_MAX - align) {
-        throw std::runtime_error("inkling2: invalid image size");
-    }
-    int width = ((size.width + align - 1) / align) * align;
-    int height = ((size.height + align - 1) / align) * align;
     mtmd_image_u8 resized;
-    const bool too_large = hparams.image_max_pixels > 0 && int64_t(width) * height > hparams.image_max_pixels;
+    const bool too_large = hparams.image_max_pixels > 0 &&
+        int64_t(MTMD_ALIGN(size.width, align)) * MTMD_ALIGN(size.height, align) > hparams.image_max_pixels;
     if (too_large) {
         // the reference does not resize; this only bounds the number of image tokens
-        const double scale = std::sqrt(double(hparams.image_max_pixels) / (double(width) * height));
-        width = std::max(1, int(width * scale) / align) * align;
-        height = std::max(1, int(height * scale) / align) * align;
-        const double fit = std::min(double(width) / size.width, double(height) / size.height);
-        size = {std::max(1, int(size.width * fit)), std::max(1, int(size.height * fit))};
+        img_tool::calc_size_opt opts;
+        opts.align_size = align;
+        opts.max_pixels = hparams.image_max_pixels;
+        size = img_tool::calc_size_preserved_ratio(size, opts);
         img_tool::resize(input, resized, size, hparams.image_resize_algo, PAD_NONE);
-        width = ((size.width + align - 1) / align) * align;
-        height = ((size.height + align - 1) / align) * align;
     }
     const mtmd_image_u8 & img = too_large ? resized : input;
+    const int width  = MTMD_ALIGN(size.width,  align);
+    const int height = MTMD_ALIGN(size.height, align);
     mtmd_image_f32 padded;
     padded.set_size({width, height}, img.is_placeholder(), false);
     if (!img.is_placeholder()) {

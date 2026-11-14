@@ -701,27 +701,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     };
 
     // set input pixel values
-    if (!imgs.is_audio && model.proj_type == PROJECTOR_TYPE_INKLING2) {
-        GGML_ASSERT(n_batch_cur == 1);
-        const auto & image = imgs.entries[0];
-        const auto & data = image.get_ro_buf();
-        std::vector<float> pixels;
-        pixels.reserve(data.size());
-        const int merge = hparams.n_merge;
-        for (int by = 0; by < pos_h; by += merge) {
-            for (int bx = 0; bx < pos_w; bx += merge) {
-                for (int dy = 0; dy < merge; ++dy) {
-                    for (int dx = 0; dx < merge; ++dx) {
-                        for (int y = 0; y < patch_size; ++y) {
-                            const size_t offset = 3 * ((size_t((by + dy) * patch_size + y) * image.nx()) + (bx + dx) * patch_size);
-                            pixels.insert(pixels.end(), data.begin() + offset, data.begin() + offset + 3 * patch_size);
-                        }
-                    }
-                }
-            }
-        }
-        set_input_f32("inp_raw", pixels);
-    } else if (!imgs.is_audio) {
+    if (!imgs.is_audio) {
         size_t nelem = 0;
         for (const auto & img : imgs.entries) {
             nelem += img.nx() * img.ny() * 3;
@@ -822,21 +802,14 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_INKLING2:
             {
-                std::vector<int32_t> indices;
+                // CLS is at position 0, the patches are 1-indexed
                 std::vector<int32_t> positions_w{0}, positions_h{0};
-                const int merge = hparams.n_merge;
-                for (int by = 0; by < pos_h; by += merge) {
-                    for (int bx = 0; bx < pos_w; bx += merge) {
-                        for (int dy = 0; dy < merge; ++dy) {
-                            for (int dx = 0; dx < merge; ++dx) {
-                                indices.push_back((by + dy) * pos_w + bx + dx);
-                                positions_w.push_back(bx + dx + 1);
-                                positions_h.push_back(by + dy + 1);
-                            }
-                        }
+                for (int y = 0; y < pos_h; ++y) {
+                    for (int x = 0; x < pos_w; ++x) {
+                        positions_w.push_back(x + 1);
+                        positions_h.push_back(y + 1);
                     }
                 }
-                set_input_i32("patch_indices", indices);
                 set_input_i32("pos_w", positions_w);
                 set_input_i32("pos_h", positions_h);
             } break;

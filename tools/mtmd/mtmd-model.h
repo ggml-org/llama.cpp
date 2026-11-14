@@ -148,11 +148,6 @@ struct mtmd_hparams {
     int32_t muse_glimmer_patch_temporal = 0;
     int32_t muse_glimmer_sparse_factor  = 0;
 
-    // Inkling2 vision (learned position grid, projector MLP)
-    int32_t position_grid_size     = 0;
-    int32_t projection_hidden_size = 0;
-    bool    projector_bias         = false;
-
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox

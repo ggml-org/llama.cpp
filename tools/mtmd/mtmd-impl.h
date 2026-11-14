@@ -67,11 +67,8 @@
 #define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
 #define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
-#define KEY_PROJ_HIDDEN_SIZE        "clip.vision.projector.hidden_size"
-#define KEY_PROJ_USE_BIAS           "clip.vision.projector.use_bias"
 #define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
 #define KEY_SWIGLU_CLAMP            "clip.vision.swiglu_clamp"
-#define KEY_POSITION_GRID_SIZE      "clip.vision.position_grid_size"
 #define KEY_V_ROPE_FREQ_BASE        "clip.vision.rope.freq_base"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
@@ -128,6 +125,7 @@
 
 #define TN_POS_EMBD        "%s.position_embd.weight"
 #define TN_CLASS_EMBD      "v.class_embd"
+#define TN_CLASS_POS_EMBD  "v.class_position_embd.weight"
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backward compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
