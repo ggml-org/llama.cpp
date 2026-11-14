@@ -3856,7 +3856,7 @@ private:
         std::vector<server_slot *> generating;
         std::vector<server_slot *> drafting;
 
-        // determine which slots are generating and drafting
+        // determine which slots are generating
         iterate(slots, [&](server_slot & slot) {
             if (slot.state != SLOT_STATE_GENERATING || slot.task->type == SERVER_TASK_TYPE_TTS || slot.task->type == SERVER_TASK_TYPE_REALTIME) {
                 return;
@@ -3874,14 +3874,27 @@ private:
             }
 
             generating.push_back(&slot);
+        });
 
+        // the batch holds one token per generating slot, plus one draft per drafted token, so the drafts
+        // have to share whatever space is left - otherwise the batch overflows and the decode aborts (#9949)
+        int32_t n_draft_avail = batch.n_tokens_alloc - (int32_t) generating.size();
+
+        // drafts left over from a previous partial draft (replay) are submitted as well, account for them first
+        for (auto * slot : generating) {
+            n_draft_avail -= (int32_t) slot->spec_draft.size();
+        }
+
+        // determine which slots are drafting
+        iterate(generating, [&](server_slot & slot) {
             if (spec) {
                 common_speculative_get_draft_params(spec.get(), slot.id).drafting = false;
 
                 const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
                 const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
-                const int n_draft_max = slot.get_n_draft_max();
+                // the slots are visited in order, so a slot only gets the space that the previous ones did not reserve
+                const int n_draft_max = std::min(slot.get_n_draft_max(), n_draft_avail);
 
                 if (n_draft_max > 0) {
                     GGML_ASSERT(slot.can_speculate());
@@ -3923,6 +3936,7 @@ private:
                         };
 
                         drafting.push_back(&slot);
+                        n_draft_avail -= n_draft_max;
                     }
                 }
             }
