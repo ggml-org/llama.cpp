@@ -3,16 +3,25 @@
 #endif
 
 #include "sampling.h"
+#include "parsers/parsers.h"
+#include "flint-golden.h"
+#include "gguf.h"
 
+#include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 static const llama_vocab * vocab;
+static bool parse_special_tokens = false;
 
-static bool match_string(const std::string & input, llama_sampler * grammar) {
+static bool match_tokens(const std::vector<llama_token> & tokens, llama_sampler * grammar, size_t * rejected_at = nullptr) {
     llama_sampler_reset(grammar);
-    auto tokens = common_tokenize(vocab, input, false, false);
+    if (rejected_at) {
+        *rejected_at = std::string::npos;
+    }
 
     auto n_vocab = llama_vocab_n_tokens(vocab);
 
@@ -23,12 +32,16 @@ static bool match_string(const std::string & input, llama_sampler * grammar) {
     }
     auto tok_arr = llama_token_data_array{ cur.data(), cur.size(), -1, false };
 
-    for (const auto token : tokens) {
+    for (size_t index = 0; index < tokens.size(); ++index) {
+        const auto token = tokens[index];
         for (llama_token token_id = 0; token_id < (llama_token) n_vocab; token_id++) {
             cur[token_id].logit = 0.0f;
         }
         llama_sampler_apply(grammar, &tok_arr);
         if (cur[token].logit < 0.0f) {
+            if (rejected_at) {
+                *rejected_at = index;
+            }
             return false;
         }
         llama_sampler_accept(grammar, token);
@@ -45,6 +58,10 @@ static bool match_string(const std::string & input, llama_sampler * grammar) {
     llama_sampler_apply(grammar, &tok_arr);
 
     return cur[tok_eos].logit >= 0.0f;
+}
+
+static bool match_string(const std::string & input, llama_sampler * grammar) {
+    return match_tokens(common_tokenize(vocab, input, false, parse_special_tokens), grammar);
 }
 
 static void test(const std::string & test_desc, const std::string & grammar_str,
@@ -1110,7 +1127,7 @@ start: /[A-Z ]*/)";
     llama_sampler_chain_add(sampler, llama_sampler_init_dist(42));
 
     auto input  = "ALL YOUR BASE ARE BELONG TO US";
-    auto tokens = common_tokenize(vocab, input, false, false);
+    auto tokens = common_tokenize(vocab, input, false, parse_special_tokens);
 
     auto n_vocab = llama_vocab_n_tokens(vocab);
 
@@ -1144,10 +1161,284 @@ start: /[A-Z ]*/)";
     assert(cur[tok_arr.selected].id == tok_eos);
 }
 
+static void test_flint_grammar() {
+    parse_special_tokens = true;
+    common_chat_template tmpl("<|end_of_text|><|assistant|><|observation|><arg_key><arg_value>", "", "");
+    autoparser::generation_params inputs;
+    inputs.vocab = vocab;
+    inputs.messages = json::array();
+    inputs.tools = json::parse(R"([
+        {"type":"function","function":{"name":"view","parameters":{
+            "type":"object","properties":{"path":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1}},
+            "required":["path"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"create","parameters":{
+            "type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},
+            "required":["path","content"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"typed","parameters":{
+            "type":"object","properties":{"mode":{"type":"string","enum":["fast","safe"]},"data":{"type":"array","items":{"type":"integer"}}},
+            "required":["mode","data"],"additionalProperties":false}}}
+    ])");
+    auto call = [](const std::string & name, const std::vector<std::pair<std::string, std::string>> & args) {
+        std::string out = "<tool_call>" + name;
+        for (const auto & arg : args) {
+            out += "<arg_key>" + arg.first + "</arg_key><arg_value>" + arg.second + "</arg_value>";
+        }
+        return out + "</tool_call>";
+    };
+    const std::string stop = "<|observation|>";
+    const auto read = call("read", {{"path", "a.py"}});
+    const auto view = call("view", {{"path", "a.py"}, {"limit", "3"}});
+    const auto write = call("write", {{"path", "b.py"}, {"content", "line 1\nline 2"}});
+    auto grammar = [&] { return common_chat_params_init_flint(tmpl, inputs).grammar; };
+    test_grammar("Flint auto, schemas, aliases and stop tokens", grammar(), {
+        "hello<|user|>", "<think>inspect first</think>" + read + stop,
+        view + stop, read + write + stop, call("typed", {{"mode", "safe"}, {"data", "[1, 2]"}}) + stop,
+        "<|end_of_text|>",
+    }, {
+        "<tool_call>read", call("read", {}) + stop, call("read", {{"path", ""}}) + stop,
+        call("read", {{"path", "a"}, {"path", "b"}}) + stop,
+        call("read", {{"path", "a"}, {"limit", "banana"}}) + stop,
+        call("read", {{"path", "a"}, {"limit", "0"}}) + stop,
+        call("read", {{"unknown", "a"}}) + stop,
+        call("unknown", {{"path", "a"}}) + stop,
+        call("read", {{"path", "a<tool_call>b"}}) + stop,
+        call("typed", {{"mode", "bad"}, {"data", "[1]"}}) + stop,
+        call("typed", {{"mode", "safe"}, {"data", "[true]"}}) + stop,
+        read + "text after calls" + stop,
+    });
+    inputs.tools.push_back(json::parse(R"({"type":"function","function":{"name":"complex","parameters":{
+        "type":"object","$defs":{"positive":{"type":"integer","minimum":1}},
+        "properties":{
+            "label":{"type":"string","minLength":2,"maxLength":3},
+            "path":{"type":"string","pattern":"^[a-z/]+$"},
+            "count":{"$ref":"#/$defs/positive"},
+            "payload":{"type":"object","properties":{"items":{"type":"array","items":{"type":"string"}},"enabled":{"type":"boolean"}},"required":["items","enabled"]}},
+        "required":["label","path","count","payload"],"additionalProperties":false}}})"));
+    const auto complex = [&](const std::string & label, const std::string & path, const std::string & count, const std::string & payload) {
+        return call("complex", {{"label", label}, {"path", path}, {"count", count}, {"payload", payload}}) + stop;
+    };
+    const std::string payload = R"({"items": ["hello"], "enabled": true})";
+    test_grammar("Flint length, pattern, references and nested JSON", grammar(), {
+        complex("abc", "a/b", "2", payload), complex("ab", "a", "1", payload),
+    }, {
+        complex("a", "a", "2", payload), complex("abcd", "a", "2", payload),
+        complex("ab", "a1", "2", payload), complex("ab", "a", "0", payload),
+        complex("ab", "a", "2", R"({"items": [1], "enabled": true})"),
+        complex("ab", "a", "2", R"({"items": ["<tool_call>"], "enabled": true})"),
+    });
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    inputs.parallel_tool_calls = false;
+    test_grammar("Flint required single call", grammar(), {read + stop, view + stop}, {
+        "hello<|user|>", read + write + stop, "<think>thinking</think><|user|>",
+    });
+    inputs.tool_choice_name = "view";
+    inputs.parallel_tool_calls = true;
+    test_grammar("Flint named choice permits only selected aliases", grammar(), {read + stop, view + stop}, {
+        write + stop, read + read + stop,
+    });
+    common_chat_template prefixed(
+        "{# <|end_of_text|><|observation|><arg_key><arg_value> #}{% if add_generation_prompt %}<|assistant|>{% endif %}", "", "");
+    inputs.add_generation_prompt = true;
+    const auto prefixed_params = common_chat_params_init_flint(prefixed, inputs);
+    assert(prefixed_params.generation_prompt == "<|assistant|>");
+    test_grammar("Flint eager grammar consumes assistant prefill", prefixed_params.grammar, {
+        "<|assistant|>" + read + stop,
+    }, {read + stop, "<|assistant|>" + write + stop});
+    inputs.add_generation_prompt = false;
+    inputs.tool_choice_name.clear();
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+    test_grammar("Flint none", grammar(), {"hello<|user|>"}, {read + stop, write + stop});
+    bool rejected = false;
+    try {
+        auto * invalid = llama_sampler_init_llg(vocab, "lark", "%llguidance {}\nstart: missing_rule");
+        llama_sampler_free(invalid);
+    } catch (const std::invalid_argument &) {
+        rejected = true;
+    }
+    assert(rejected);
+    fprintf(stdout, "Flint grammar tests passed.\n");
+}
+
+static void test_flint_python_golden() {
+    const auto golden = json::parse(flint_python_golden);
+    const bool previous_special_tokens = parse_special_tokens;
+    parse_special_tokens = true;
+    common_chat_template tmpl("<|end_of_text|><|assistant|><|observation|><arg_key><arg_value>", "", "");
+    autoparser::generation_params inputs;
+    inputs.vocab = vocab;
+    inputs.messages = json::array();
+    const std::string stop = "<|observation|>";
+    auto grammar = [&] { return common_chat_params_init_flint(tmpl, inputs).grammar; };
+    auto call = [](const std::string & name, const std::string & key, const std::string & value) {
+        return "<tool_call>" + name + "<arg_key>" + key + "</arg_key><arg_value>" + value +
+               "</arg_value></tool_call>";
+    };
+    for (bool strict : {false, true}) {
+        inputs.tools = json::array();
+        for (const auto & item : golden.at("tools").items()) {
+            inputs.tools.push_back({{"type", "function"}, {"function", {
+                {"name", item.key()}, {"parameters", item.value()}, {"strict", strict}}}});
+        }
+        const auto compiled = grammar();
+        auto * matcher = llama_sampler_init_llg(vocab, "lark", compiled.c_str());
+        for (const auto & group : {"valid", "invalid"}) {
+            for (const auto & example : golden.at(group)) {
+                fprintf(stderr, "Flint Python golden: %s strict=%d\n",
+                        example.at("id").get<std::string>().c_str(), strict);
+                const auto sample = example.at("text").get<std::string>() + stop;
+                size_t rejected_at;
+                const auto tokens = common_tokenize(vocab, sample, false, parse_special_tokens);
+                const bool accepted = match_tokens(tokens, matcher, &rejected_at);
+                if (accepted != (std::string(group) == "valid")) {
+                    fprintf(stderr, "Golden mismatch: rejected_at=%zu/%zu sample=%s\n", rejected_at, tokens.size(), sample.c_str());
+                    if (rejected_at != std::string::npos) {
+                        fprintf(stderr, "Rejected token piece: %s\n", common_token_to_piece(vocab, tokens[rejected_at], true).c_str());
+                    }
+                }
+                assert(accepted == (std::string(group) == "valid"));
+                if (std::string(group) == "invalid") {
+                    assert(rejected_at != std::string::npos);
+                }
+            }
+        }
+        for (const auto & value : {"", "a < b", "</arg_valu", "x</arg_value", "<tool_cal", "<|use"}) {
+            assert(match_string(call("read", "filePath", value) + stop, matcher));
+        }
+        for (const auto & marker : golden.at("markers")) {
+            assert(!match_string(call("read", "filePath", "x" + marker.get<std::string>() + "y") + stop, matcher));
+        }
+        for (const auto & value : {"</arg_value>", "a<tool_call>b", "<|user|>", "<<tool_call>"}) {
+            assert(!match_string(call("read", "filePath", value) + stop, matcher));
+        }
+        {
+            for (const auto & example : golden.at("ordinary_markers")) {
+                const auto marker = example.at("marker").get<std::string>();
+                auto tokens = common_tokenize(vocab, example.at("prefix").get<std::string>(), false, true);
+                auto pieces = common_tokenize(vocab, marker.substr(0, 2), false, true);
+                auto rest = common_tokenize(vocab, marker.substr(2), false, true);
+                pieces.insert(pieces.end(), rest.begin(), rest.end());
+                const auto special = common_tokenize(vocab, marker, false, true);
+                assert(special.size() == 1);
+                assert(std::find(pieces.begin(), pieces.end(), special[0]) == pieces.end());
+                tokens.insert(tokens.end(), pieces.begin(), pieces.end());
+                size_t rejected_at;
+                match_tokens(tokens, matcher, &rejected_at);
+                assert(rejected_at != std::string::npos);
+            }
+        }
+        llama_sampler_free(matcher);
+    }
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    test_grammar("Python golden required choice", grammar(), {call("read", "filePath", "a") + stop}, {"Done." + stop});
+    inputs.tool_choice_name = "read";
+    test_grammar("Python golden named choice", grammar(), {call("read", "filePath", "a") + stop}, {
+        "Done." + stop, call("run_commands", "commands", "[\"ls\"]") + stop,
+        call("read", "filePath", "a") + call("read", "filePath", "a") + stop,
+    });
+    inputs.tool_choice_name.clear();
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    inputs.parallel_tool_calls = false;
+    test_grammar("Python golden no parallel calls", grammar(), {call("read", "filePath", "a") + stop}, {
+        call("read", "filePath", "a") + call("read", "filePath", "a") + stop,
+    });
+    inputs.tools = json::parse(R"([{"type":"function","function":{"name":"now","parameters":null}}])");
+    test_grammar("Python golden parameters omitted", grammar(), {
+        "<tool_call>now</tool_call>" + stop, call("now", "tz", "UTC") + stop,
+    }, {"<tool_call>later</tool_call>" + stop});
+    inputs.tools = json::parse(R"([
+        {"type":"function","function":{"name":"view","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+        {"type":"function","function":{"name":"read_bash","parameters":{"type":"object","properties":{"shellId":{"type":"string"}},"required":["shellId"]}}}
+    ])");
+    auto applied = common_chat_params_init_flint(tmpl, inputs);
+    assert(applied.tool_aliases.at("read") == "view");
+    test_grammar("Python golden read versus read_bash", grammar(), {
+        call("read", "path", "a") + stop, call("view", "path", "a") + stop,
+    }, {call("read", "shellId", "1") + stop});
+    inputs.tools.push_back({{"type", "function"}, {"function", {
+        {"name", "read"}, {"parameters", golden.at("tools").at("read")}}}});
+    assert(common_chat_params_init_flint(tmpl, inputs).tool_aliases.empty());
+    test_grammar("Python golden offered native name is not aliased", grammar(), {
+        call("read", "filePath", "a") + stop, call("view", "path", "a") + stop,
+    }, {call("read", "path", "a") + stop});
+    parse_special_tokens = previous_special_tokens;
+    fprintf(stdout, "Flint Python golden grammar cases passed.\n");
+}
+
+// Mirror the Python fixture's single-token protocol markers in the CI vocabulary.
+static void test_flint_golden_with_vocab_fixture(const char * vocab_file) {
+    namespace fs = std::filesystem;
+    const auto folder = fs::temp_directory_path() / ("llama-flint-golden-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    if (!fs::create_directory(folder)) {
+        throw std::runtime_error("Failed to create Flint golden fixture directory");
+    }
+    const auto path = (folder / "vocab.gguf").string();
+    auto * metadata = gguf_init_from_file(vocab_file, {true, nullptr});
+    assert(metadata);
+    const auto tokens_key = gguf_find_key(metadata, "tokenizer.ggml.tokens");
+    const auto types_key = gguf_find_key(metadata, "tokenizer.ggml.token_type");
+    const auto scores_key = gguf_find_key(metadata, "tokenizer.ggml.scores");
+    assert(tokens_key >= 0 && types_key >= 0);
+    const size_t count = gguf_get_arr_n(metadata, tokens_key);
+    assert(gguf_get_arr_type(metadata, types_key) == GGUF_TYPE_INT32);
+    assert(gguf_get_arr_n(metadata, types_key) == count);
+    const auto * type_data = static_cast<const int32_t *>(gguf_get_arr_data(metadata, types_key));
+    std::vector<int32_t> types(type_data, type_data + count);
+    std::vector<float> scores;
+    if (scores_key >= 0) {
+        assert(gguf_get_arr_type(metadata, scores_key) == GGUF_TYPE_FLOAT32);
+        assert(gguf_get_arr_n(metadata, scores_key) == count);
+        const auto * data = static_cast<const float *>(gguf_get_arr_data(metadata, scores_key));
+        scores.assign(data, data + count);
+    }
+    std::vector<std::string> tokens;
+    for (size_t i = 0; i < count; ++i) {
+        tokens.emplace_back(gguf_get_arr_str(metadata, tokens_key, i));
+    }
+    const auto golden = json::parse(flint_python_golden);
+    for (const auto & marker : golden.at("markers")) {
+        const auto text = marker.get<std::string>();
+        auto found = std::find(tokens.begin(), tokens.end(), text);
+        if (found == tokens.end()) {
+            tokens.push_back(text);
+            types.push_back(LLAMA_TOKEN_TYPE_CONTROL);
+            if (scores_key >= 0) {
+                scores.push_back(0.0f);
+            }
+        } else {
+            types[found - tokens.begin()] = LLAMA_TOKEN_TYPE_CONTROL;
+        }
+    }
+    std::vector<const char *> strings;
+    for (const auto & token : tokens) {
+        strings.push_back(token.c_str());
+    }
+    gguf_set_arr_str(metadata, "tokenizer.ggml.tokens", strings.data(), strings.size());
+    gguf_set_arr_data(metadata, "tokenizer.ggml.token_type", GGUF_TYPE_INT32, types.data(), types.size());
+    if (scores_key >= 0) {
+        gguf_set_arr_data(metadata, "tokenizer.ggml.scores", GGUF_TYPE_FLOAT32, scores.data(), scores.size());
+    }
+    if (gguf_find_key(metadata, "llama.vocab_size") >= 0) {
+        gguf_set_val_u32(metadata, "llama.vocab_size", tokens.size());
+    }
+    const bool written = gguf_write_to_file(metadata, path.c_str(), true);
+    gguf_free(metadata);
+    assert(written);
+    auto params = llama_model_default_params();
+    params.vocab_only = true;
+    auto * model = llama_model_load_from_file(path.c_str(), params);
+    assert(model);
+    const auto * saved_vocab = vocab;
+    vocab = llama_model_get_vocab(model);
+    test_flint_python_golden();
+    vocab = saved_vocab;
+    llama_model_free(model);
+    fs::remove_all(folder);
+}
+
 int main(int argc, const char ** argv) {
     fprintf(stdout, "Running llguidance integration tests...\n");
 
-    if (argc != 2) {
+    if (argc != 2 && !(argc == 3 && std::string(argv[2]) == "--flint")) {
         fprintf(stderr, "Usage: %s <vocab-file>\n", argv[0]);
         return 1;
     }
@@ -1174,6 +1465,14 @@ int main(int argc, const char ** argv) {
             return 1;
         }
 
+        if (argc == 3) {
+            vocab = llama_model_get_vocab(model);
+            test_flint_grammar();
+            test_flint_python_golden();
+            llama_model_free(model);
+            return 0;
+        }
+
         // needed?
         auto cparams = llama_context_default_params();
 
@@ -1195,6 +1494,7 @@ int main(int argc, const char ** argv) {
     test_json_schema();
 
     test_sampler_chain();
+    test_flint_golden_with_vocab_fixture(vocab_file);
 
     llama_free(ctx);
     llama_model_free(model);

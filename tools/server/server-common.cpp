@@ -1422,7 +1422,27 @@ json oaicompat_chat_params_parse(
     auto tools = json_value(body, "tools", json());
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
+    auto tool_choice_json = json_value(body, "tool_choice", json("auto"));
+    std::string tool_choice_name;
+    std::string tool_choice;
+    if (tool_choice_json.is_object()) {
+        if (tool_choice_json.value("type", "") != "function" ||
+            !tool_choice_json.contains("function") ||
+            !tool_choice_json.at("function").is_object() ||
+            !tool_choice_json.at("function").contains("name") ||
+            !tool_choice_json.at("function").at("name").is_string()) {
+            throw std::invalid_argument("Invalid named tool_choice");
+        }
+        tool_choice_name = tool_choice_json.at("function").at("name").get<std::string>();
+        if (tool_choice_name.empty()) {
+            throw std::invalid_argument("Named tool_choice requires a nonempty name");
+        }
+        tool_choice = "required";
+    } else if (tool_choice_json.is_string()) {
+        tool_choice = tool_choice_json.get<std::string>();
+    } else {
+        throw std::invalid_argument("Invalid tool_choice");
+    }
 
     if (!opt.use_jinja) {
         if (has_tools) {
@@ -1510,6 +1530,7 @@ json oaicompat_chat_params_parse(
     inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    inputs.tool_choice_name       = tool_choice_name;
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;

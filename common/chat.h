@@ -260,6 +260,7 @@ enum common_chat_continuation {
 };
 
 struct common_chat_templates_inputs {
+    std::string                          tool_choice_name;
     std::vector<common_chat_msg>          messages;
     std::string                           grammar;
     std::string                           json_schema;
@@ -302,6 +303,7 @@ struct common_chat_prompt {
 };
 
 struct common_chat_params {
+    std::map<std::string, std::string>   tool_aliases;
     common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     common_chat_prompt                  prompt;
     std::string                         grammar;
@@ -345,12 +347,14 @@ common_chat_input common_chat_input_tokenize(const llama_vocab * vocab, const st
 // per-message parsing syntax
 // should be derived from common_chat_params
 struct common_chat_parser_params {
+    std::map<std::string, std::string> tool_aliases;
     common_chat_format format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     common_chat_input  generation_prompt;
     bool               debug  = false; // Enable debug output for PEG parser
     common_peg_arena   parser = {};
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
+        tool_aliases = chat_params.tool_aliases;
         format  = chat_params.format;
         generation_prompt = common_chat_input(chat_params.generation_prompt);
     }
@@ -376,7 +380,8 @@ bool        common_chat_templates_was_explicit(const struct common_chat_template
 std::string common_chat_templates_source(const struct common_chat_templates * tmpls, const std::string & variant = "");
 
 struct common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
-                                                      const struct common_chat_templates_inputs & inputs);
+                                                      const struct common_chat_templates_inputs & inputs,
+                                                      const llama_vocab * vocab = nullptr);
 
 // Format single message, while taking into account the position of that message in chat history
 std::string common_chat_format_single(const struct common_chat_templates * tmpls,

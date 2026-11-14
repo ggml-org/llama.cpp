@@ -209,7 +209,6 @@ struct common_sampler * common_sampler_init(
 
     llama_sampler * grmr = nullptr;
     llama_sampler * rbudget = nullptr;
-    llama_sampler * chain = llama_sampler_chain_init(lparams);
 
     std::vector<llama_sampler *> samplers;
 
@@ -325,6 +324,8 @@ struct common_sampler * common_sampler_init(
             LOG_DBG("%s: reasoning-budget accepted prefill token (%d)\n", __func__, token);
         }
     }
+
+    llama_sampler * chain = llama_sampler_chain_init(lparams);
 
     // logit bias: user biases + model suppress tokens (-INFINITY)
     {
