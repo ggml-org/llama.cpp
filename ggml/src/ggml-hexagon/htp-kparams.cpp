@@ -65,6 +65,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_CONV_2D_DW:      return HTP_OP_CONV_2D_DW;
         case GGML_OP_CONV_3D:         return HTP_OP_CONV_3D;
         case GGML_OP_ROLL:            return HTP_OP_ROLL;
+        case GGML_OP_TIMESTEP_EMBEDDING: return HTP_OP_TIMESTEP_EMBEDDING;
         case GGML_OP_UPSCALE:         return HTP_OP_UPSCALE;
         case GGML_OP_LIGHTNING_INDEXER: return HTP_OP_LIGHTNING_INDEXER;
 
@@ -3808,6 +3809,94 @@ static bool htp_kparams_solve_fill(
     return true;
 }
 
+static bool htp_kparams_solve_timestep_embedding(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_timestep_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const int32_t dim        = ggml_get_op_params_i32(op, 0);
+    const int32_t max_period = ggml_get_op_params_i32(op, 1);
+
+    if (dim <= 0 || max_period <= 0) {
+        return false;
+    }
+    if (src0->ne[1] != 1 || src0->ne[2] != 1 || src0->ne[3] != 1 ||
+        dst->ne[0] != dim || dst->ne[1] != src0->ne[0] || dst->ne[2] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(dst)) {
+        return false;
+    }
+
+    if (src0->ne[0] <= 0 || src0->ne[0] > INT32_MAX || dim < 2) {
+        return false;
+    }
+
+    // below this many output elements threading costs more than it saves
+    constexpr uint32_t min_split_elems = 1024;
+    // target size of one VTCM output buffer per thread
+    constexpr size_t out_buf_budget = 16 * 1024;
+
+    const uint32_t n_rows   = (uint32_t) src0->ne[0];
+    const uint32_t half     = (uint32_t) dim / 2;
+    const uint32_t n_blocks = (half + HTP_TIMESTEP_BLOCK - 1) / HTP_TIMESTEP_BLOCK;
+
+    // split rows or freq blocks, whichever keeps more threads busy
+    const uint32_t max_hvx    = (uint64_t) n_rows * (uint32_t) dim < min_split_elems ? 1 : htp_session_n_hvx(sess);
+    const uint32_t hvx_rows   = (std::min)(max_hvx, n_rows);
+    const uint32_t hvx_cols   = (std::min)(max_hvx, n_blocks);
+    const bool     split_cols = hvx_cols > hvx_rows;
+
+    uint32_t rows_per_hvx   = n_rows;
+    uint32_t blocks_per_hvx = n_blocks;
+    uint32_t n_hvx          = 1;
+    if (split_cols) {
+        blocks_per_hvx = (n_blocks + hvx_cols - 1) / hvx_cols;
+        n_hvx          = (n_blocks + blocks_per_hvx - 1) / blocks_per_hvx;
+    } else {
+        rows_per_hvx = (n_rows + hvx_rows - 1) / hvx_rows;
+        n_hvx        = (n_rows + rows_per_hvx - 1) / rows_per_hvx;
+    }
+
+    struct htp_timestep_vtcm_layout layout;
+    htp_timestep_vtcm_layout_build(&layout, (uint32_t) dim, blocks_per_hvx, 1, n_hvx);
+
+    const size_t row_bytes  = layout.out_buf_size; // one [cos | sin] row
+    uint32_t     chunk_rows = (uint32_t) (std::max)((size_t) 1, (std::min)((size_t) rows_per_hvx, out_buf_budget / row_bytes));
+
+    htp_timestep_vtcm_layout_build(&layout, (uint32_t) dim, blocks_per_hvx, chunk_rows, n_hvx);
+    while (layout.total_bytes > htp_session_vtcm_size(sess) && chunk_rows > 1) {
+        chunk_rows /= 2;
+        htp_timestep_vtcm_layout_build(&layout, (uint32_t) dim, blocks_per_hvx, chunk_rows, n_hvx);
+    }
+    if (layout.total_bytes > htp_session_vtcm_size(sess)) {
+        return false;
+    }
+
+    kparams->n_hvx          = n_hvx;
+    kparams->n_rows         = n_rows;
+    kparams->dim            = (uint32_t) dim;
+    kparams->half           = half;
+    kparams->n_blocks       = n_blocks;
+    kparams->split_cols     = split_cols ? 1 : 0;
+    kparams->rows_per_hvx   = rows_per_hvx;
+    kparams->blocks_per_hvx = blocks_per_hvx;
+    kparams->chunk_rows     = chunk_rows;
+    kparams->vtcm_size      = (uint32_t) layout.total_bytes;
+    kparams->freq_scale     = -logf((float) max_period) / (float) half;
+
+    return true;
+}
+
 static bool htp_kparams_solve_roll(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -5662,6 +5751,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_ROLL:
             return htp_kparams_invoke<htp_kparams_solve_roll>(sess, op, kparams);
+
+        case HTP_OP_TIMESTEP_EMBEDDING:
+            return htp_kparams_invoke<htp_kparams_solve_timestep_embedding>(sess, op, kparams);
 
         case HTP_OP_LIGHTNING_INDEXER:
             return htp_kparams_invoke<htp_kparams_solve_lightning_indexer>(sess, op, kparams);
