@@ -222,6 +222,19 @@ Use exactly one of these options:
 - `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
 - `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
 
+### Reduced Draft Vocabulary
+
+`--spec-draft-vocab FNAME` makes the draft compute only the token ids in `FNAME` (JSON array or one id per line) and the end-of-generation ids. Their LM head rows are copied at load, so each draft token reads a smaller head. Unlisted ids are never drafted; the target still verifies every token, so the output distribution does not change. A draft without a full-vocabulary LM head ignores the option with a warning.
+
+Build the list from text like the expected requests, ideally the target model's own outputs:
+
+```bash
+python scripts/build-draft-vocab.py -m model.gguf --tokenize build/bin/llama-tokenize \
+    --text-file outputs.jsonl --num-tokens 32768 -o draft-vocab.json
+
+llama-server -m model.gguf --spec-type draft-mtp --spec-draft-vocab draft-vocab.json
+```
+
 ### General Speculative Parameters
 
 ```
@@ -257,6 +270,9 @@ Use exactly one of these options:
 --spec-draft-p-min, --draft-p-min       P
                                         minimum speculative decoding probability (greedy) (default: 0.00)
                                         (env: LLAMA_ARG_SPEC_DRAFT_P_MIN)
+--spec-draft-vocab                      FNAME
+                                        draft LM head computes only the token ids in FNAME (JSON array or one id per line) and the end-of-generation ids, build the list with scripts/build-draft-vocab.py (default: full LM head)
+                                        (env: LLAMA_ARG_SPEC_DRAFT_VOCAB)
 --spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft  N
                                         max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)
                                         (env: LLAMA_ARG_N_GPU_LAYERS_DRAFT)
