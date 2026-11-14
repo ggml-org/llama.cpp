@@ -7,6 +7,8 @@ ggml_add_backend_library(${TARGET_NAME}
                           ggml-opencl.cpp
                           Conv3D_GMEM.cpp
                           Conv3D_GMEM.h
+                          MM_GMEM.cpp
+                          MM_GMEM.h
                           cl-recordable-queue.h
                           cl-program-cache.cpp
                           cl-program-cache.h
