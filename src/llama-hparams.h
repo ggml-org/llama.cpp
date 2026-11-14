@@ -299,12 +299,12 @@ struct llama_hparams {
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
-    uint32_t dspark_markov_rank       = 0;
     uint32_t dflash_block_size       = 0;
     uint32_t dflash_conv_kernel_size = 0;
     uint32_t dflash_conv_group_size  = 0;
     uint32_t dflash_selector_rank    = 0;
     uint32_t dflash_selector_top_k   = 0;
+    uint32_t dspark_markov_rank      = 0;
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
     uint32_t lilicorr_num_heads      = 0;
