@@ -6,6 +6,7 @@
 #include "mtmd-helper.h"
 #include "chat.h"
 #include "base64.hpp"
+#include "hash/hash.h"
 
 #include "server-common.h"
 
@@ -899,44 +900,38 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     return max_idx; // all tokens are equal
 }
 
-static uint64_t hash_fnv1a(uint64_t h, const void * data, size_t len) {
-    const uint8_t * bytes = (const uint8_t *) data;
-    for (size_t i = 0; i < len; i++) {
-        h ^= bytes[i];
-        h *= 0x100000001b3ULL;
-    }
-    return h;
-}
-
 void server_tokens::update_hashes() {
     const size_t n_blocks = tokens.size() / hash_block_size;
 
+    std::string buf;
+    const auto append = [&buf](const void * data, size_t len) {
+        buf.append((const char *) data, len);
+    };
+
     for (size_t k = hashes.size(); k < n_blocks; k++) {
-        uint64_t h = k > 0 ? hashes[k - 1] : 0xcbf29ce484222325ULL;
+        const size_t i_begin = k * hash_block_size;
+        const size_t i_end   = i_begin + hash_block_size;
 
-        for (size_t i = k * hash_block_size; i < (k + 1) * hash_block_size; i++) {
-            const llama_token tok = tokens[i];
-            h = hash_fnv1a(h, &tok, sizeof(tok));
+        // the previous hash comes first, zeros for the first block
+        const prefix_hash prev = k > 0 ? hashes[k - 1] : prefix_hash{};
 
-            if (tok != LLAMA_TOKEN_NULL) {
-                continue;
-            }
+        buf.clear();
+        append(prev.data(), prev.size());
+        append(tokens.data() + i_begin, hash_block_size * sizeof(llama_token));
 
-            // a media chunk is hashed at its first token, it can span over many blocks
-            const auto it = map_idx_to_media.find(i);
-            if (it != map_idx_to_media.end()) {
-                const char *   id       = mtmd_input_chunk_get_id(it->second.get());
-                const uint64_t n_tokens = mtmd_input_chunk_get_n_tokens(it->second.get());
-                h = hash_fnv1a(h, &n_tokens, sizeof(n_tokens));
-                h = hash_fnv1a(h, id, strlen(id));
-            }
+        // a media chunk is hashed in the block of its first token, it can span over many blocks
+        for (auto it = map_idx_to_media.lower_bound(i_begin); it != map_idx_to_media.end() && it->first < i_end; ++it) {
+            const std::string_view id = mtmd_input_chunk_get_id(it->second.get());
+            const uint64_t fields[]   = { it->first, mtmd_input_chunk_get_n_tokens(it->second.get()), id.size() };
+            append(fields, sizeof(fields));
+            append(id.data(), id.size());
         }
 
-        hashes.push_back(h);
+        hashes.push_back(hash_sha256(buf.data(), buf.size()));
     }
 }
 
-size_t server_tokens::get_common_prefix_lower(const std::vector<uint64_t> & b_hashes) const {
+size_t server_tokens::get_common_prefix_lower(const std::vector<prefix_hash> & b_hashes) const {
     const auto & a_hashes = hashes;
 
     // a hash covers all the tokens before it, so the equal entries come first
