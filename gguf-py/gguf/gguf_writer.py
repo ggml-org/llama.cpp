@@ -881,6 +881,9 @@ class GGUFWriter:
     def add_router_logit_softcapping(self, value: float) -> None:
         self.add_float32(Keys.LLM.ROUTER_LOGIT_SOFTCAPPING.format(arch=self.arch), value)
 
+    def add_router_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ROUTER_HIDDEN_SIZE.format(arch=self.arch), value)
+
     def add_final_logit_softcapping(self, value: float) -> None:
         self.add_float32(Keys.LLM.FINAL_LOGIT_SOFTCAPPING.format(arch=self.arch), value)
 
