@@ -65,6 +65,7 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
 //
 
 typedef void * ggml_metal_cmd_buf_t;
+typedef struct ggml_metal_event * ggml_metal_event_t;
 
 //
 // MTLComputeCommandEncoder wrapper
@@ -90,6 +91,11 @@ void ggml_metal_encoder_dispatch_threadgroups(ggml_metal_encoder_t encoder, int 
 void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder);
 
 void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder);
+void ggml_metal_encoder_signal_and_wait_for_event(
+        ggml_metal_encoder_t encoder,
+        ggml_metal_event_t event,
+        uint64_t signal_value,
+        uint64_t wait_value);
 
 //
 // MTLLibrary wrapper
@@ -181,6 +187,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_sgd      (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_memset            (ggml_metal_library_t lib, const struct ggml_tensor * op);
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal       (ggml_metal_library_t lib, const struct ggml_tensor * op);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_moe_cache_copy_ids(ggml_metal_library_t lib);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_pad(
         ggml_metal_library_t lib,
@@ -317,10 +324,10 @@ struct ggml_metal_device_props {
     int op_offload_min_batch_size;
 };
 
-typedef struct ggml_metal_event * ggml_metal_event_t;
-
 void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
 void ggml_metal_event_encode_wait  (ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf);
+void ggml_metal_event_cpu_signal   (ggml_metal_event_t ev, uint64_t value);
+uint64_t ggml_metal_event_value    (ggml_metal_event_t ev);
 
 ggml_metal_device_t ggml_metal_device_init(int device, int n_devices);
 void ggml_metal_device_free(ggml_metal_device_t dev);

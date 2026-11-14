@@ -43,6 +43,7 @@ extern "C" {
 GGML_BACKEND_API ggml_backend_t ggml_backend_metal_init(void);
 
 GGML_BACKEND_API bool ggml_backend_is_metal(ggml_backend_t backend);
+GGML_BACKEND_API bool ggml_backend_metal_buffer_is_shared(ggml_backend_buffer_t buffer);
 
 GGML_BACKEND_API void ggml_backend_metal_set_abort_callback(ggml_backend_t backend, ggml_abort_callback abort_callback, void * user_data);
 
@@ -55,6 +56,45 @@ GGML_BACKEND_API bool ggml_backend_metal_supports_family(ggml_backend_t backend,
 GGML_BACKEND_API void ggml_backend_metal_capture_next_compute(ggml_backend_t backend);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_metal_reg(void);
+
+GGML_BACKEND_API void ggml_backend_metal_event_signal(ggml_backend_event_t event, uint64_t value);
+GGML_BACKEND_API uint64_t ggml_backend_metal_event_value(ggml_backend_event_t event);
+
+// Remap routed expert ids through a host-managed cache. The message tensor must use shared Metal memory.
+enum {
+    GGML_METAL_MOE_CACHE_MAX_IDS = 4096,
+};
+
+struct ggml_metal_moe_cache_message {
+    int32_t layer;
+    int32_t n_ids;
+    int32_t n_expert_used;
+    int32_t selected[GGML_METAL_MOE_CACHE_MAX_IDS];  // GPU request
+    int32_t remapped[GGML_METAL_MOE_CACHE_MAX_IDS];  // CPU response
+};
+
+struct ggml_metal_moe_cache_request {
+    uint64_t seq;  // GPU signals event value 2*seq - 1, CPU responds with 2*seq
+    int32_t layer;
+    bool reuse;
+};
+
+typedef bool (*ggml_metal_moe_cache_query_fn)(
+        void * user_data,
+        const struct ggml_tensor * src0,
+        const struct ggml_tensor * ids,
+        struct ggml_metal_moe_cache_request * out);
+
+struct ggml_metal_moe_cache_handler {
+    ggml_metal_moe_cache_query_fn fn;
+    void * user_data;
+    const struct ggml_tensor * message;
+    ggml_backend_event_t event;
+};
+
+GGML_BACKEND_API void ggml_backend_metal_set_moe_cache_handler(
+        ggml_backend_t backend,
+        struct ggml_metal_moe_cache_handler handler);
 
 #ifdef __cplusplus
 }

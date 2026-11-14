@@ -22,6 +22,14 @@ static int g_devices = 1;
 // forward declaration
 static bool ggml_backend_buffer_is_metal(ggml_backend_buffer_t buffer);
 
+bool ggml_backend_metal_buffer_is_shared(ggml_backend_buffer_t buffer) {
+    if (buffer == nullptr || !ggml_backend_buffer_is_metal(buffer)) {
+        return false;
+    }
+
+    return ggml_metal_buffer_is_shared((ggml_metal_buffer_t) buffer->context);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // backend interface
 ////////////////////////////////////////////////////////////////////////////////
@@ -655,6 +663,23 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
     ggml_metal_t ctx = (ggml_metal_t)backend->context;
 
     ggml_metal_set_n_cb(ctx, n_cb);
+}
+
+void ggml_backend_metal_set_moe_cache_handler(ggml_backend_t backend, struct ggml_metal_moe_cache_handler handler) {
+    GGML_ASSERT(ggml_backend_is_metal(backend));
+
+    ggml_metal_t ctx = (ggml_metal_t) backend->context;
+    ggml_metal_set_moe_cache_handler(ctx, handler);
+}
+
+void ggml_backend_metal_event_signal(ggml_backend_event_t event, uint64_t value) {
+    GGML_ASSERT(event != nullptr && event->device->reg == ggml_backend_metal_reg());
+    ggml_metal_event_cpu_signal((ggml_metal_event_t) event->context, value);
+}
+
+uint64_t ggml_backend_metal_event_value(ggml_backend_event_t event) {
+    GGML_ASSERT(event != nullptr && event->device->reg == ggml_backend_metal_reg());
+    return ggml_metal_event_value((ggml_metal_event_t) event->context);
 }
 
 static ggml_backend_i ggml_backend_metal_i = {
