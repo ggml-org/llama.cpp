@@ -5404,6 +5404,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.apply_chat_session(chat_session);
 
             task.id_slot = json_value(data, "id_slot", -1);
+            task.priority = json_value(data, "priority", 0);
             sse_ping_interval = task.params.sse_ping_interval;
 
             // OAI-compat

@@ -173,6 +173,9 @@ struct server_task {
     int id_target = -1;
     int id_slot   = -1;
 
+    // higher value is served first when picking from the deferred queue
+    int priority  = 0;
+
     // used by parallel sampling (multiple completions from same prompt)
     int id_parent  = -1;
     // temporary store of child tasks for scheduling
