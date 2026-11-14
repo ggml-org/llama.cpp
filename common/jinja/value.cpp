@@ -276,7 +276,7 @@ static value tojson(const func_args & args) {
     if (args.ctx.is_get_stats) {
         // mark as used (recursively) for stats
         auto val_input = args.get_pos(0);
-        value_t::stats_t::mark_used(const_cast<value&>(val_input), true);
+        value_t::stats_t::mark_used(val_input, true);
     }
     if (is_val<value_int>(val_indent)) {
         indent = static_cast<int>(val_indent->as_int());
@@ -507,7 +507,12 @@ const func_builtins & global_builtins() {
         }},
         {"test_is_divisibleby", [](const func_args & args) -> value {
             args.ensure_vals<value_int, value_int>();
-            bool res = args.get_pos(0)->val_int % args.get_pos(1)->val_int == 0;
+            const int64_t a = args.get_pos(0)->as_int();
+            const int64_t b = args.get_pos(1)->as_int();
+            if (b == 0) {
+                throw std::runtime_error("divisibleby: division by zero");
+            }
+            bool res = b == -1 || a % b == 0; // avoid INT64_MIN % -1 overflow
             return mk_val<value_bool>(res);
         }},
         {"test_is_string", test_type_fn<value_string>},
@@ -519,11 +524,11 @@ const func_builtins & global_builtins() {
         {"test_is_mapping", test_type_fn<value_object>},
         {"test_is_lower", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
-            return mk_val<value_bool>(args.get_pos(0)->val_str.is_lowercase());
+            return mk_val<value_bool>(cast_val<value_string>(args.get_pos(0))->val_str.is_lowercase());
         }},
         {"test_is_upper", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
-            return mk_val<value_bool>(args.get_pos(0)->val_str.is_uppercase());
+            return mk_val<value_bool>(cast_val<value_string>(args.get_pos(0))->val_str.is_uppercase());
         }},
         {"test_is_none", test_type_fn<value_none>},
         {"test_is_defined", [](const func_args & args) -> value {
@@ -571,7 +576,7 @@ const func_builtins & global_builtins() {
         {"test_is_test", [](const func_args & args) -> value {
             args.ensure_vals<value_string>();
             auto & builtins = global_builtins();
-            std::string test_name = args.get_pos(0)->val_str.str();
+            std::string test_name = cast_val<value_string>(args.get_pos(0))->val_str.str();
             auto it = builtins.find("test_is_" + test_name);
             bool res = it != builtins.end();
             return mk_val<value_bool>(res);
@@ -613,17 +618,25 @@ const func_builtins & global_builtins() {
     return builtins;
 }
 
-value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing) {
+value find_builtin_func(context & ctx, const std::string & name, value & input) {
     JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
     if (ctx.is_get_stats) {
         value_t::stats_t::mark_used(input);
         input->stats.ops.insert(name);
     }
-    auto builtins = input->get_builtins();
+    const auto & builtins = input->get_builtins();
     auto it = builtins.find(name);
     if (it != builtins.end()) {
         JJ_DEBUG("Binding built-in '%s'", name.c_str());
         return mk_val<value_func>(name, it->second, input);
+    }
+    return nullptr;
+}
+
+value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing) {
+    value func = find_builtin_func(ctx, name, input);
+    if (func) {
+        return func;
     }
     if (undef_on_missing) {
         return mk_val<value_undefined>(name);
@@ -831,7 +844,7 @@ const func_builtins & value_string_t::get_builtins() const {
                 --maxsplit;
             }
             auto res = mk_val<value_string>(str);
-            res->val_str.mark_input_based_on(args.get_pos(0)->val_str);
+            res->val_str.mark_input_based_on(cast_val<value_string>(args.get_pos(0))->val_str);
             result->push_back(std::move(res));
             return result;
         }},
@@ -858,7 +871,7 @@ const func_builtins & value_string_t::get_builtins() const {
                 --maxsplit;
             }
             auto res = mk_val<value_string>(str);
-            res->val_str.mark_input_based_on(args.get_pos(0)->val_str);
+            res->val_str.mark_input_based_on(cast_val<value_string>(args.get_pos(0))->val_str);
             result->push_back(std::move(res));
             result->reverse();
             return result;
@@ -891,7 +904,7 @@ const func_builtins & value_string_t::get_builtins() const {
                 }
             }
             auto res = mk_val<value_string>(str);
-            res->val_str.mark_input_based_on(args.get_pos(0)->val_str);
+            res->val_str.mark_input_based_on(cast_val<value_string>(args.get_pos(0))->val_str);
             return res;
         }},
         {"format", [](const func_args & args) -> value {
@@ -1191,7 +1204,7 @@ const func_builtins & value_array_t::get_builtins() const {
             if (args.ctx.is_get_stats) {
                 // mark as used (recursively) for stats
                 auto val_input = args.get_pos(0);
-                value_t::stats_t::mark_used(const_cast<value&>(val_input), true);
+                value_t::stats_t::mark_used(val_input, true);
             }
             return mk_val<value_string>(args.get_pos(0)->as_string());
         }},
@@ -1439,7 +1452,7 @@ const func_builtins & value_object_t::get_builtins() const {
             if (args.ctx.is_get_stats) {
                 // mark as used (recursively) for stats
                 auto val_input = args.get_pos(0);
-                value_t::stats_t::mark_used(const_cast<value&>(val_input), true);
+                value_t::stats_t::mark_used(val_input, true);
             }
             return mk_val<value_string>(args.get_pos(0)->as_string());
         }},
@@ -1833,18 +1846,18 @@ std::string value_to_string_repr(const value & val) {
 }
 
 // stats utility
-void value_t::stats_t::mark_used(value & val, bool deep, int depth) {
+void value_t::stats_t::mark_used(const value & val, bool deep, int depth) {
     val->stats.used = true;
     if (deep && (is_val<value_array>(val) || is_val<value_object>(val)) && depth >= JINJA_RECURSIVE_LIMIT) {
         throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     }
     if (deep) {
         if (is_val<value_array>(val)) {
-            for (auto & item : val->val_arr) {
+            for (auto & item : val->as_array()) {
                 mark_used(item, deep, depth + 1);
             }
         } else if (is_val<value_object>(val)) {
-            for (auto & pair : val->val_obj) {
+            for (auto & pair : val->as_ordered_object()) {
                 mark_used(pair.first, deep, depth + 1);
                 mark_used(pair.second, deep, depth + 1);
             }
