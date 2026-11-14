@@ -11,6 +11,7 @@
 #include "ggml-cuda/argmax.cuh"
 #include "ggml-cuda/argsort.cuh"
 #include "ggml-cuda/batch-get.cuh"
+#include "ggml-cuda/batch-set.cuh"
 #include "ggml-cuda/binbcast.cuh"
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/col2im-1d.cuh"
@@ -1040,6 +1041,11 @@ static void ggml_backend_cuda_buffer_set_tensor_n(ggml_backend_buffer_t buffer, 
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+
+    if (!ggml_cuda_pinned_memory_disabled() &&
+            ggml_cuda_set_tensor_n(ctx->device, tensors, data, offsets, sizes, n_tensors)) {
+        return;
+    }
 
     for (size_t i = 0; i < n_tensors; i++) {
         if (sizes[i] == 0) {
