@@ -362,7 +362,7 @@ static __global__ void mul_mat_vec_f(
         }
 
         if (block_size > warp_size) {
-            // avoid data race
+            // one write per warp
             if (tid % warp_size == 0) {
                 buf_iw[tid/warp_size] = sumf[j];
                 if constexpr (has_fusion) {
