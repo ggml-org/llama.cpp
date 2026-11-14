@@ -71,6 +71,9 @@ struct llama_hparams {
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer_all;
+    // looped models: the weights of the first n_layer_shared layers are reused by every loop,
+    // n_layer_all counts each (loop, layer) pair (0 = not a looped model)
+    uint32_t n_layer_shared = 0;
     uint32_t n_layer_nextn = 0;
     uint32_t n_layer_decision = 0; // trailing blocks that form the decision head
 
