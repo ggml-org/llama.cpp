@@ -10730,7 +10730,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
             for (float alpha : {.5f, 1.702f}) {
                 for (float limit : {2.0f, 7.0f}) {
@@ -10740,7 +10740,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
             for (float limit : {2.0f, 10.0f}) {
                 test_cases.emplace_back(new test_swiglu_clamp(type, { 128, 2, 2, 2 }, v, limit));
@@ -11528,6 +11528,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {10, 10, 10, 10}, 2.0f, 1.0f));
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {100, 10, 10, 10}, 0.5f, 0.0f));
+    test_cases.emplace_back(new test_scale(GGML_TYPE_F16, {10, 10, 10, 10}, 2.0f, 1.0f));
+    test_cases.emplace_back(new test_scale(GGML_TYPE_F16, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
+    test_cases.emplace_back(new test_scale(GGML_TYPE_F16, {100, 10, 10, 10}, 0.5f, 0.0f));
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 0.0f, false, 1)); // view test
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, false, 1)); // view test
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true, 1));  // view test, inplace
@@ -11638,6 +11641,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, { 256, 4, 1, 1 }, 1e-6f, false, false, false, true));
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, false, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, false, GGML_TYPE_F32, GGML_TYPE_BF16));
     // the ADD operand is the BF16 input itself, added in place
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true, false, GGML_TYPE_F32));
 
@@ -12415,7 +12419,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
-    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
         test_cases.emplace_back(new test_sqr       (type));
         test_cases.emplace_back(new test_sqrt      (type));
         test_cases.emplace_back(new test_log       (type));
@@ -12884,10 +12888,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_xielu(GGML_TYPE_F16, { 512, 16, 1, 1 }));
     test_cases.emplace_back(new test_xielu(GGML_TYPE_BF16, { 512, 16, 1, 1 }));
 
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER));
-    test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG));
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER, type));
+        test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_LOWER_DIAG, type));
+        test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER, type));
+        test_cases.emplace_back(new test_tri(GGML_TRI_TYPE_UPPER_DIAG, type));
+    }
     test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_LOWER));
     test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_LOWER_DIAG));
     test_cases.emplace_back(new test_tri_special(GGML_TRI_TYPE_UPPER));
@@ -12901,9 +12907,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_fill(-152.0f, GGML_TYPE_F16, { 800, 600, 4, 4 }));
     test_cases.emplace_back(new test_fill(3.5f, GGML_TYPE_F16, { 2048, 512, 2, 2 }));
 
-    test_cases.emplace_back(new test_diag());
-    test_cases.emplace_back(new test_diag(GGML_TYPE_F32, { 79, 1, 19, 13 }));
-    test_cases.emplace_back(new test_diag(GGML_TYPE_F32, { 256, 1, 8, 16 }));
+    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
+        test_cases.emplace_back(new test_diag(type));
+        test_cases.emplace_back(new test_diag(type, { 79, 1, 19, 13 }));
+        test_cases.emplace_back(new test_diag(type, { 256, 1, 8, 16 }));
+    }
 
     test_cases.emplace_back(new test_solve_tri());
     test_cases.emplace_back(new test_solve_tri(GGML_TYPE_F32, { 11, 11, 1, 1 }, { 5, 11, 1, 1 }));

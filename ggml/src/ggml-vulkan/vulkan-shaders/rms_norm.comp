@@ -39,7 +39,7 @@ layout (binding = 6) readonly buffer R_I {uvec2 rope_data_i[];}; // indices for 
 
 #elif RMS_NORM_ADD_FUSION
 
-layout (binding = 3) readonly buffer C {float data_c[];};
+layout (binding = 3) readonly buffer C {C_TYPE data_c[];};
 layout (binding = 4) readonly buffer E {float data_e[];};
 
 #elif RMS_NORM_SET_ROWS_FUSION
@@ -88,7 +88,7 @@ void rms_norm(uint num_iters) {
             [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
                 FLOAT_TYPE xi = FLOAT_TYPE(0);
                 if (col < ncols) {
-                    xi = FLOAT_TYPE(data_a[a_offset + col]);
+                    xi = FLOAT_TYPE(A_TO_FLOAT(data_a[a_offset + col]));
                 }
                 sum += xi * xi;
             }
@@ -135,28 +135,28 @@ void rms_norm(uint num_iters) {
                         if (col >= ncols) {
                             continue;
                         }
-                        FLOAT_TYPE value = scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + fastmod(col, p.ne10)]);
+                        FLOAT_TYPE value = scale * FLOAT_TYPE(A_TO_FLOAT(data_a[a_offset + col])) * FLOAT_TYPE(B_TO_FLOAT(data_b[b_offset + fastmod(col, p.ne10)]));
 #if RMS_NORM_ADD_FUSION
-                        value += FLOAT_TYPE(data_c[d_offset + col]);
+                        value += FLOAT_TYPE(C_TO_FLOAT(data_c[d_offset + col]));
                         if (do_post_multiply) {
                             value *= FLOAT_TYPE(data_e[0]);
                         }
 #endif
-                        data_d[d_offset + col] = D_TYPE(value);
+                        data_d[d_offset + col] = FLOAT_TO_D(value);
                     }
                 } else {
                     [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
                         if (col >= ncols) {
                             continue;
                         }
-                        FLOAT_TYPE value = scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + col]);
+                        FLOAT_TYPE value = scale * FLOAT_TYPE(A_TO_FLOAT(data_a[a_offset + col])) * FLOAT_TYPE(B_TO_FLOAT(data_b[b_offset + col]));
 #if RMS_NORM_ADD_FUSION
-                        value += FLOAT_TYPE(data_c[d_offset + col]);
+                        value += FLOAT_TYPE(C_TO_FLOAT(data_c[d_offset + col]));
                         if (do_post_multiply) {
                             value *= FLOAT_TYPE(data_e[0]);
                         }
 #endif
-                        data_d[d_offset + col] = D_TYPE(value);
+                        data_d[d_offset + col] = FLOAT_TO_D(value);
                     }
                 }
             } else {
@@ -164,7 +164,7 @@ void rms_norm(uint num_iters) {
                     if (col >= ncols) {
                         continue;
                     }
-                    data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]));
+                    data_d[d_offset + col] = FLOAT_TO_D(scale * FLOAT_TYPE(A_TO_FLOAT(data_a[a_offset + col])));
                 }
             }
 #if RMS_NORM_ROPE_FUSION

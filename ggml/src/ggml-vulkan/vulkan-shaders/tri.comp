@@ -34,8 +34,7 @@ void main() {
     }
 
     if (pass) {
-        const float val = float(data_a[get_aoffset() + src0_idx(idx)]);
-        data_d[get_doffset() + dst_idx(idx)] = D_TYPE(val);
+        data_d[get_doffset() + dst_idx(idx)] = D_TYPE(data_a[get_aoffset() + src0_idx(idx)]);
     } else {
         data_d[get_doffset() + dst_idx(idx)] = D_TYPE(0);
     }

@@ -3462,10 +3462,16 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     for (uint32_t i = 0; i < 3; ++i) {
         const uint32_t block_size = 128u << i;
         const std::string suffix = "_" + std::to_string(block_size);
-        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_f32[i], "rms_norm_f32" + suffix, RMS_SHADER(rms_norm_f32), "main", 4, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 0, 0, block_size}, 1, true, rms_subgroups);
-        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_mul_f32[i], "rms_norm_mul_f32" + suffix, RMS_SHADER(rms_norm_f32), "main", 4, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 0, block_size}, 1, true, rms_subgroups);
-        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_mul_add_f32[i], "rms_norm_mul_add_f32" + suffix, RMS_SHADER(rms_norm_mul_add_f32), "main", 5, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 0, block_size}, 1, true, rms_subgroups);
-        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_mul_add_mul_f32[i], "rms_norm_mul_add_mul_f32" + suffix, RMS_SHADER(rms_norm_mul_add_f32), "main", 5, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 1, block_size}, 1, true, rms_subgroups);
+        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm[0][0][i], "rms_norm_f32" + suffix, RMS_SHADER(rms_norm_f32), "main", 4, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 0, 0, block_size}, 1, true, rms_subgroups);
+        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm[0][1][i], "rms_norm_mul_f32" + suffix, RMS_SHADER(rms_norm_f32), "main", 4, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 0, block_size}, 1, true, rms_subgroups);
+        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm[1][0][i], "rms_norm_bf16" + suffix, RMS_SHADER(rms_norm_bf16), "main", 4, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 0, 0, block_size}, 1, true, rms_subgroups);
+        ggml_vk_create_pipeline2(device, device->pipeline_rms_norm[1][1][i], "rms_norm_mul_bf16" + suffix, RMS_SHADER(rms_norm_bf16), "main", 4, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 0, block_size}, 1, true, rms_subgroups);
+        for (uint32_t pm : {0, 1}) {
+            const std::string name = pm ? "rms_norm_mul_add_mul" : "rms_norm_mul_add";
+            ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_mul_add[0][0][pm][i], name + "_f32" + suffix, RMS_SHADER(rms_norm_mul_add_f32), "main", 5, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, pm, block_size}, 1, true, rms_subgroups);
+            ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_mul_add[1][0][pm][i], name + "_bf16_f32" + suffix, RMS_SHADER(rms_norm_mul_add_bf16_f32), "main", 5, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, pm, block_size}, 1, true, rms_subgroups);
+            ggml_vk_create_pipeline2(device, device->pipeline_rms_norm_mul_add[1][1][pm][i], name + "_bf16_bf16" + suffix, RMS_SHADER(rms_norm_mul_add_bf16_bf16), "main", 5, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, pm, block_size}, 1, true, rms_subgroups);
+        }
     }
     ggml_vk_create_pipeline(device, device->pipeline_rms_norm_mul_add_partials_f32, "rms_norm_mul_add_partials_f32", rms_norm_mul_add_partials_f32_len, rms_norm_mul_add_partials_f32_data, "main", 6, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 0}, 1, true);
     ggml_vk_create_pipeline(device, device->pipeline_rms_norm_mul_add_mul_partials_f32, "rms_norm_mul_add_mul_partials_f32", rms_norm_mul_add_partials_f32_len, rms_norm_mul_add_partials_f32_data, "main", 6, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1, 1}, 1, true);
@@ -3576,6 +3582,22 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     CREATE_BINARY(add_rms, _norepeat, {1}, 4)
 #undef CREATE_BINARY
 
+#define CREATE_BINARY_BF16(name, namemod, spec, bindings) \
+    ggml_vk_create_pipeline2(device, device->pipeline_ ## name ## namemod[2][0][2], #name "_bf16_f32_bf16" #namemod, name ## _bf16_f32_bf16_len, name ## _bf16_f32_bf16_data, \
+                            "main", (bindings), sizeof(vk_op_binary_push_constants), {512, 1, 1}, spec, 1); \
+    ggml_vk_create_pipeline2(device, device->pipeline_ ## name ## namemod[2][2][2], #name "_bf16_bf16_bf16" #namemod, name ## _bf16_bf16_bf16_len, name ## _bf16_bf16_bf16_data, \
+                            "main", (bindings), sizeof(vk_op_binary_push_constants), {512, 1, 1}, spec, 1);
+
+    CREATE_BINARY_BF16(add, , {0}, 4)
+    CREATE_BINARY_BF16(add, _norepeat, {1}, 4)
+    CREATE_BINARY_BF16(sub, , {0}, 3)
+    CREATE_BINARY_BF16(sub, _norepeat, {1}, 3)
+    CREATE_BINARY_BF16(mul, , {0}, 3)
+    CREATE_BINARY_BF16(mul, _norepeat, {1}, 3)
+    CREATE_BINARY_BF16(div, , {0}, 3)
+    CREATE_BINARY_BF16(div, _norepeat, {1}, 3)
+#undef CREATE_BINARY_BF16
+
     if (device->multi_add) {
         for (uint32_t i = 0; i < MAX_FUSED_ADDS; ++i) {
             ggml_vk_create_pipeline2(device, device->pipeline_multi_add[i],     "multi_add_f32_"     + std::to_string(i+1), multi_add_f32_len,     multi_add_f32_data,     "main", MAX_PARAMETER_COUNT, sizeof(vk_op_multi_add_push_constants), {512, 1, 1}, {i+2}, 1);
@@ -3601,17 +3623,6 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_upscale_bicubic_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BICUBIC}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_upscale_bilinear_antialias_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_scale_f32, "scale_f32", scale_f32_len, scale_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-
-    ggml_vk_create_pipeline(device, device->pipeline_log[0], "log_f32", log_f32_len, log_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_log[1], "log_f16", log_f16_len, log_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-
-    ggml_vk_create_pipeline(device, device->pipeline_tri[0], "tri_f32", tri_f32_len, tri_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_tri[1], "tri_f16", tri_f16_len, tri_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-
-    ggml_vk_create_pipeline(device, device->pipeline_diag[0], "diag_f32", diag_f32_len, diag_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_diag[1], "diag_f16", diag_f16_len, diag_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
-
     ggml_vk_create_pipeline(device, device->pipeline_pad_f32, "pad_f32", pad_f32_len, pad_f32_data, "main", 2, sizeof(vk_op_pad_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_pad_reflect_1d_f32, "pad_reflect_1d_f32", pad_reflect_1d_f32_len, pad_reflect_1d_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -3624,44 +3635,63 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
 #define CREATE_UNARY(name)  \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);  \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [2], #name "_bf16", name ## _bf16_len, name ## _bf16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
-    CREATE_UNARY(elu)
-    CREATE_UNARY(gelu)
-    CREATE_UNARY(gelu_erf)
-    CREATE_UNARY(gelu_quick)
-    CREATE_UNARY(silu)
-    CREATE_UNARY(relu)
+    CREATE_UNARY(scale)
+    CREATE_UNARY(log)
     CREATE_UNARY(sqr)
     CREATE_UNARY(sqrt)
     CREATE_UNARY(sin)
     CREATE_UNARY(cos)
     CREATE_UNARY(clamp)
     CREATE_UNARY(leaky_relu)
-    CREATE_UNARY(xielu)
-    CREATE_UNARY(neg)
-    CREATE_UNARY(tanh)
-    CREATE_UNARY(sigmoid)
-    CREATE_UNARY(hardsigmoid)
-    CREATE_UNARY(hardswish)
-    CREATE_UNARY(abs)
-    CREATE_UNARY(softplus)
-    CREATE_UNARY(step)
-    CREATE_UNARY(round)
-    CREATE_UNARY(ceil)
-    CREATE_UNARY(floor)
-    CREATE_UNARY(trunc)
-    CREATE_UNARY(sgn)
-    CREATE_UNARY(exp)
-    CREATE_UNARY(expm1)
 #undef CREATE_UNARY
+
+#define CREATE_COPY_OP(name)  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_32", name ## _32_len, name ## _32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_16", name ## _16_len, name ## _16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);  \
+    device->pipeline_ ## name [2] = device->pipeline_ ## name [1];
+
+    CREATE_COPY_OP(tri)
+    CREATE_COPY_OP(diag)
+#undef CREATE_COPY_OP
+
+#define CREATE_UNARY_OP(name, op)  \
+    ggml_vk_create_pipeline(device, device->pipeline_unary[GGML_UNARY_OP_ ## op][0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);  \
+    ggml_vk_create_pipeline(device, device->pipeline_unary[GGML_UNARY_OP_ ## op][1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);  \
+    ggml_vk_create_pipeline(device, device->pipeline_unary[GGML_UNARY_OP_ ## op][2], #name "_bf16", name ## _bf16_len, name ## _bf16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+
+    CREATE_UNARY_OP(elu, ELU)
+    CREATE_UNARY_OP(gelu, GELU)
+    CREATE_UNARY_OP(gelu_erf, GELU_ERF)
+    CREATE_UNARY_OP(gelu_quick, GELU_QUICK)
+    CREATE_UNARY_OP(silu, SILU)
+    CREATE_UNARY_OP(relu, RELU)
+    CREATE_UNARY_OP(xielu, XIELU)
+    CREATE_UNARY_OP(neg, NEG)
+    CREATE_UNARY_OP(tanh, TANH)
+    CREATE_UNARY_OP(sigmoid, SIGMOID)
+    CREATE_UNARY_OP(hardsigmoid, HARDSIGMOID)
+    CREATE_UNARY_OP(hardswish, HARDSWISH)
+    CREATE_UNARY_OP(abs, ABS)
+    CREATE_UNARY_OP(softplus, SOFTPLUS)
+    CREATE_UNARY_OP(step, STEP)
+    CREATE_UNARY_OP(round, ROUND)
+    CREATE_UNARY_OP(ceil, CEIL)
+    CREATE_UNARY_OP(floor, FLOOR)
+    CREATE_UNARY_OP(trunc, TRUNC)
+    CREATE_UNARY_OP(sgn, SGN)
+    CREATE_UNARY_OP(exp, EXP)
+    CREATE_UNARY_OP(expm1, EXPM1)
+#undef CREATE_UNARY_OP
 
 // spec constants: {norepeat, op_on_b}
 #define CREATE_UNARY_MUL(name, idx) \
-    for (int dt = 0; dt < 2; ++dt) { \
-        const size_t len_ = dt ? name ## _mul_f16_len : name ## _mul_f32_len; \
-        const unsigned char * data_ = dt ? name ## _mul_f16_data : name ## _mul_f32_data; \
-        const std::string dts_ = dt ? "f16" : "f32"; \
+    for (int dt = 0; dt < 3; ++dt) { \
+        const size_t len_ = dt == 2 ? name ## _mul_bf16_len : dt ? name ## _mul_f16_len : name ## _mul_f32_len; \
+        const unsigned char * data_ = dt == 2 ? name ## _mul_bf16_data : dt ? name ## _mul_f16_data : name ## _mul_f32_data; \
+        const std::string dts_ = dt == 2 ? "bf16" : dt ? "f16" : "f32"; \
         for (int ob = 0; ob < 2; ++ob) \
             for (int nr = 0; nr < 2; ++nr) \
                 ggml_vk_create_pipeline(device, device->pipeline_unary_mul[(idx)][dt][nr][ob], \
@@ -3681,17 +3711,18 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_fill_f32, "fill_f32", fill_f32_len, fill_f32_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_fill_f16, "fill_f16", fill_f16_len, fill_f16_data, "main", 1, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
-#define CREATE_GLU(name)  \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);
+#define CREATE_GLU(name, op)  \
+    ggml_vk_create_pipeline(device, device->pipeline_glu[GGML_GLU_OP_ ## op][0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
+    ggml_vk_create_pipeline(device, device->pipeline_glu[GGML_GLU_OP_ ## op][1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
+    ggml_vk_create_pipeline(device, device->pipeline_glu[GGML_GLU_OP_ ## op][2], #name "_bf16", name ## _bf16_len, name ## _bf16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);
 
-    CREATE_GLU(geglu)
-    CREATE_GLU(reglu)
-    CREATE_GLU(swiglu)
-    CREATE_GLU(swiglu_oai)
-    CREATE_GLU(swiglu_clamp)
-    CREATE_GLU(geglu_erf)
-    CREATE_GLU(geglu_quick)
+    CREATE_GLU(geglu, GEGLU)
+    CREATE_GLU(reglu, REGLU)
+    CREATE_GLU(swiglu, SWIGLU)
+    CREATE_GLU(swiglu_oai, SWIGLU_OAI)
+    CREATE_GLU(swiglu_clamp, SWIGLU_CLAMP)
+    CREATE_GLU(geglu_erf, GEGLU_ERF)
+    CREATE_GLU(geglu_quick, GEGLU_QUICK)
 #undef CREATE_GLU
 
     ggml_vk_create_pipeline(device, device->pipeline_silu_back_f32, "silu_back_f32", silu_back_f32_len, silu_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
@@ -9170,6 +9201,33 @@ static bool ggml_vk_concat_is_transposed(const vk_device & device, const ggml_te
     return src0->ne[1] == src1->ne[1] && dst->ne[1] == src1->ne[1];
 }
 
+static bool ggml_vk_is_float_type(ggml_type type) {
+    return type == GGML_TYPE_F32 || type == GGML_TYPE_F16 || type == GGML_TYPE_BF16;
+}
+
+static uint32_t ggml_vk_float_type_idx(ggml_type type) {
+    return type == GGML_TYPE_BF16 ? 2 : type == GGML_TYPE_F16 ? 1 : 0;
+}
+
+static bool ggml_vk_is_float_elementwise(const ggml_tensor * op) {
+    return ggml_vk_is_float_type(op->type) && op->src[0]->type == op->type;
+}
+
+// bf16: bf16 src0/dst, f32 or bf16 src1
+static bool ggml_vk_binary_types_supported(ggml_type src0, ggml_type src1, ggml_type dst) {
+    if (src0 == GGML_TYPE_BF16 || src1 == GGML_TYPE_BF16 || dst == GGML_TYPE_BF16) {
+        return src0 == GGML_TYPE_BF16 && dst == GGML_TYPE_BF16 && (src1 == GGML_TYPE_BF16 || src1 == GGML_TYPE_F32);
+    }
+    return ggml_vk_is_float_type(src0) && ggml_vk_is_float_type(src1) && ggml_vk_is_float_type(dst);
+}
+
+static vk_pipeline ggml_vk_float_pipeline(const vk_pipeline (&pipelines)[3], const ggml_tensor * src0, const ggml_tensor * dst) {
+    if (src0->type != dst->type || !ggml_vk_is_float_type(dst->type)) {
+        return nullptr;
+    }
+    return pipelines[ggml_vk_float_type_idx(dst->type)];
+}
+
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * dst, ggml_op op) {
     switch (op) {
     case GGML_OP_GET_ROWS:
@@ -9206,14 +9264,19 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_SUB:
     case GGML_OP_MUL:
     case GGML_OP_DIV:
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
-            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16)) {
+    {
+        if (!ggml_vk_binary_types_supported(src0->type, src1->type, dst->type)) {
             return nullptr;
         }
+        const uint32_t s0 = ggml_vk_float_type_idx(src0->type);
+        const uint32_t s1 = ggml_vk_float_type_idx(src1->type);
+        const uint32_t d = ggml_vk_float_type_idx(dst->type);
         switch (op) {
         case GGML_OP_ADD:
         {
+            if ((ctx->num_additional_fused_ops > 0 || ctx->do_add_rms_partials) && (s0 == 2 || s1 == 2 || d == 2)) {
+                return nullptr;
+            }
             if (ctx->num_additional_fused_ops > 0) {
                 if (ctx->do_add_rms_partials) {
                     return ctx->device->pipeline_multi_add_rms[ctx->num_additional_fused_ops];
@@ -9226,28 +9289,29 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return pipelines[src0->type == GGML_TYPE_F16][src1->type == GGML_TYPE_F16][dst->type == GGML_TYPE_F16];
             } else {
                 auto pipelines = ggml_are_same_shape(src0, src1) ? ctx->device->pipeline_add_norepeat : ctx->device->pipeline_add;
-                return pipelines[src0->type == GGML_TYPE_F16][src1->type == GGML_TYPE_F16][dst->type == GGML_TYPE_F16];
+                return pipelines[s0][s1][d];
             }
         }
         case GGML_OP_SUB:
         {
             auto pipelines = ggml_are_same_shape(src0, src1) ? ctx->device->pipeline_sub_norepeat : ctx->device->pipeline_sub;
-            return pipelines[src0->type == GGML_TYPE_F16][src1->type == GGML_TYPE_F16][dst->type == GGML_TYPE_F16];
+            return pipelines[s0][s1][d];
         }
         case GGML_OP_MUL:
         {
             auto pipelines = ggml_are_same_shape(src0, src1) ? ctx->device->pipeline_mul_norepeat : ctx->device->pipeline_mul;
-            return pipelines[src0->type == GGML_TYPE_F16][src1->type == GGML_TYPE_F16][dst->type == GGML_TYPE_F16];
+            return pipelines[s0][s1][d];
         }
         case GGML_OP_DIV:
         {
             auto pipelines = ggml_are_same_shape(src0, src1) ? ctx->device->pipeline_div_norepeat : ctx->device->pipeline_div;
-            return pipelines[src0->type == GGML_TYPE_F16][src1->type == GGML_TYPE_F16][dst->type == GGML_TYPE_F16];
+            return pipelines[s0][s1][d];
         }
         default:
             break;
         }
         return nullptr;
+    }
     case GGML_OP_ADD_ID:
         if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_I32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_add_id_f32;
@@ -9305,58 +9369,23 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_SCALE:
-        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_scale_f32;
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_scale, src0, dst);
     case GGML_OP_SQR:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_sqr[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_sqr, src0, dst);
     case GGML_OP_SQRT:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_sqrt[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_sqrt, src0, dst);
     case GGML_OP_SIN:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_sin[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_sin, src0, dst);
     case GGML_OP_COS:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_cos[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_cos, src0, dst);
     case GGML_OP_LOG:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_log[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_log, src0, dst);
     case GGML_OP_TRI:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_tri[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_tri, src0, dst);
     case GGML_OP_DIAG:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_diag[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_diag, src0, dst);
     case GGML_OP_CLAMP:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_clamp[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_clamp, src0, dst);
     case GGML_OP_PAD:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_pad_f32;
@@ -9422,7 +9451,10 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             if (ctx->do_add_rms_partials) {
                 return ctx->fused_rms_norm_mode == RMS_NORM_MUL ? ctx->device->pipeline_rms_norm_mul_partials_f32 : ctx->device->pipeline_rms_norm_partials_f32;
             }
-            return ggml_vk_rms_norm_pipeline(ctx->fused_rms_norm_mode == RMS_NORM_MUL ? ctx->device->pipeline_rms_norm_mul_f32 : ctx->device->pipeline_rms_norm_f32, src0->ne[0]);
+            return ggml_vk_rms_norm_pipeline(ctx->device->pipeline_rms_norm[0][ctx->fused_rms_norm_mode == RMS_NORM_MUL], src0->ne[0]);
+        }
+        if (src0->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16 && !ctx->do_add_rms_partials) {
+            return ggml_vk_rms_norm_pipeline(ctx->device->pipeline_rms_norm[1][ctx->fused_rms_norm_mode == RMS_NORM_MUL], src0->ne[0]);
         }
         return nullptr;
     case GGML_OP_RMS_NORM_BACK:
@@ -9436,87 +9468,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_UNARY:
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) ||
-            (src0->type != dst->type)) {
-            return nullptr;
-        }
-
-        switch (ggml_get_unary_op(dst)) {
-            case GGML_UNARY_OP_EXP:
-                return ctx->device->pipeline_exp[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_EXPM1:
-                return ctx->device->pipeline_expm1[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_ELU:
-                return ctx->device->pipeline_elu[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_SILU:
-                return ctx->device->pipeline_silu[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_GELU:
-                return ctx->device->pipeline_gelu[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_GELU_ERF:
-                return ctx->device->pipeline_gelu_erf[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_GELU_QUICK:
-                return ctx->device->pipeline_gelu_quick[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_RELU:
-                return ctx->device->pipeline_relu[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_XIELU:
-                return ctx->device->pipeline_xielu[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_NEG:
-                return ctx->device->pipeline_neg[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_TANH:
-                return ctx->device->pipeline_tanh[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_SIGMOID:
-                return ctx->device->pipeline_sigmoid[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_HARDSIGMOID:
-                return ctx->device->pipeline_hardsigmoid[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_HARDSWISH:
-                return ctx->device->pipeline_hardswish[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_ABS:
-                return ctx->device->pipeline_abs[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_SOFTPLUS:
-                return ctx->device->pipeline_softplus[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_STEP:
-                return ctx->device->pipeline_step[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_ROUND:
-                return ctx->device->pipeline_round[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_CEIL:
-                return ctx->device->pipeline_ceil[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_FLOOR:
-                return ctx->device->pipeline_floor[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_TRUNC:
-                return ctx->device->pipeline_trunc[dst->type == GGML_TYPE_F16];
-            case GGML_UNARY_OP_SGN:
-                return ctx->device->pipeline_sgn[dst->type == GGML_TYPE_F16];
-            default:
-                break;
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_unary[ggml_get_unary_op(dst)], src0, dst);
     case GGML_OP_GLU:
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) ||
-            (src0->type != dst->type)) {
-            return nullptr;
-        }
-
-        switch (ggml_get_glu_op(dst)) {
-            case GGML_GLU_OP_GEGLU:
-                return ctx->device->pipeline_geglu[dst->type == GGML_TYPE_F16];
-            case GGML_GLU_OP_REGLU:
-                return ctx->device->pipeline_reglu[dst->type == GGML_TYPE_F16];
-            case GGML_GLU_OP_SWIGLU:
-                return ctx->device->pipeline_swiglu[dst->type == GGML_TYPE_F16];
-            case GGML_GLU_OP_SWIGLU_OAI:
-                return ctx->device->pipeline_swiglu_oai[dst->type == GGML_TYPE_F16];
-            case GGML_GLU_OP_SWIGLU_CLAMP:
-                return ctx->device->pipeline_swiglu_clamp[dst->type == GGML_TYPE_F16];
-            case GGML_GLU_OP_GEGLU_ERF:
-                return ctx->device->pipeline_geglu_erf[dst->type == GGML_TYPE_F16];
-            case GGML_GLU_OP_GEGLU_QUICK:
-                return ctx->device->pipeline_geglu_quick[dst->type == GGML_TYPE_F16];
-            default:
-                break;
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_glu[ggml_get_glu_op(dst)], src0, dst);
     case GGML_OP_SOFT_MAX:
         GGML_ASSERT(!src1 || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
         GGML_ASSERT(!src2 || src2->type == GGML_TYPE_F32);
@@ -9761,11 +9715,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_LEAKY_RELU:
-        if (src0->type == dst->type &&
-            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
-            return ctx->device->pipeline_leaky_relu[dst->type == GGML_TYPE_F16];
-        }
-        return nullptr;
+        return ggml_vk_float_pipeline(ctx->device->pipeline_leaky_relu, src0, dst);
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -10574,13 +10524,12 @@ void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const 
     const ggml_tensor * src1 = op_on_b ? unary->src[0] :
         ((mul->src[0] == unary) ? mul->src[1] : mul->src[0]);
 
-    const bool f16 = src0->type == GGML_TYPE_F16;
     const bool norepeat = ggml_are_same_shape(src0, src1);
     const int oi = ggml_vk_unary_mul_op_index(ggml_get_unary_op(unary));
     if (oi < 0) {
         GGML_ABORT("fatal error");
     }
-    vk_pipeline pipeline = ctx->device->pipeline_unary_mul[oi][f16][norepeat][op_on_b];
+    vk_pipeline pipeline = ctx->device->pipeline_unary_mul[oi][ggml_vk_float_type_idx(src0->type)][norepeat][op_on_b];
 
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
@@ -11361,11 +11310,13 @@ void ggml_vk_rms_norm(ggml_backend_vk_context * ctx, vk_context& subctx, const s
 
         vk_pipeline pipeline;
         if (ctx->do_add_rms_partials) {
+            GGML_ASSERT(src0->type == GGML_TYPE_F32);
             pipeline = do_post_multiply ?
                 ctx->device->pipeline_rms_norm_mul_add_mul_partials_f32 : ctx->device->pipeline_rms_norm_mul_add_partials_f32;
         } else {
-            pipeline = ggml_vk_rms_norm_pipeline(do_post_multiply ?
-                ctx->device->pipeline_rms_norm_mul_add_mul_f32 : ctx->device->pipeline_rms_norm_mul_add_f32, src0->ne[0]);
+            const bool src0_bf16 = src0->type == GGML_TYPE_BF16;
+            const bool residual_bf16 = residual->type == GGML_TYPE_BF16;
+            pipeline = ggml_vk_rms_norm_pipeline(ctx->device->pipeline_rms_norm_mul_add[src0_bf16][residual_bf16][do_post_multiply], src0->ne[0]);
         }
         ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         if (ctx->do_add_rms_partials) {
@@ -12763,6 +12714,8 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
         if (next_node_idx < cgraph->n_nodes &&
             cgraph->nodes[next_node_idx]->op == GGML_OP_RMS_NORM &&
             cgraph->nodes[next_node_idx]->src[0] == cgraph->nodes[next_node_idx - 1] &&
+            cgraph->nodes[next_node_idx]->type == GGML_TYPE_F32 &&
+            node->type == GGML_TYPE_F32 &&
             ggml_nrows(cgraph->nodes[next_node_idx]) == 1 &&
             ctx->device->add_rms_fusion && !ctx->device->disable_fusion) {
             uint32_t size = ggml_vk_rms_partials_size(ctx, cgraph->nodes[node_idx]);
@@ -14061,7 +14014,7 @@ static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int un
     if (ggml_vk_unary_mul_op_index(ggml_get_unary_op(unary)) < 0) {
         return false;
     }
-    if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
+    if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16 && unary->type != GGML_TYPE_BF16) {
         return false;
     }
     if (unary->type != mul->type) {
@@ -14119,12 +14072,24 @@ bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgr
         const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor *mul = cgraph->nodes[node_idx + 1];
 
-        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
-        // rms_norm only supports f32
-        if (mul->src[0]->type != GGML_TYPE_F32 ||
-            mul->src[1]->type != GGML_TYPE_F32 ||
-            mul->type != GGML_TYPE_F32) {
+        const ggml_type t = rms_norm->type;
+        if (t == GGML_TYPE_F32) {
+            if (mul->src[0]->type != GGML_TYPE_F32 ||
+                mul->src[1]->type != GGML_TYPE_F32 ||
+                mul->type != GGML_TYPE_F32) {
+                return false;
+            }
+        } else if (t == GGML_TYPE_BF16) {
+            // bf16 activations, f32 weights
+            if (mul->src[0] != rms_norm ||
+                mul->src[1]->type != GGML_TYPE_F32 ||
+                mul->type != GGML_TYPE_BF16) {
+                return false;
+            }
+            if (ops.size() >= 3 && ops.begin()[2] != GGML_OP_ADD) {
+                return false;
+            }
+        } else {
             return false;
         }
         // if rms_norm is the B operand, then we don't handle broadcast
@@ -14143,7 +14108,7 @@ bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgr
             if (add->src[0] != mul && add->src[1] != mul) {
                 return false;
             }
-            if (residual->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 ||
+            if ((residual->type != GGML_TYPE_F32 && residual->type != t) || add->type != t ||
                 !ggml_are_same_shape(add, residual) || !ggml_is_contiguous(residual) ||
                 !ggml_is_contiguous(add) || get_misalign_bytes(ctx, residual) != 0) {
                 return false;
@@ -14161,7 +14126,7 @@ bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgr
                     return false;
                 }
                 // The shader reads data_e[0], so the final multiply must use a scalar.
-                if (scale->type != GGML_TYPE_F32 || post_mul->type != GGML_TYPE_F32 ||
+                if (scale->type != GGML_TYPE_F32 || post_mul->type != t ||
                     ggml_nelements(scale) != 1 || !ggml_is_contiguous(post_mul) ||
                     get_misalign_bytes(ctx, scale) != 0) {
                     return false;
@@ -14701,6 +14666,10 @@ bool ggml_vk_can_fuse_rms_norm_mul_rope(ggml_backend_vk_context * ctx, const str
     const ggml_tensor *rope = cgraph->nodes[node_idx + 2];
 
     const int mode = ((const int32_t *) rope->op_params)[2];
+
+    if (rms->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) {
+        return false;
+    }
 
     // noncontig tensors aren't tested, and don't seem common in practice
     if (!ggml_is_contiguous(rms) ||
@@ -16026,9 +15995,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_UNARY_OP_FLOOR:
                 case GGML_UNARY_OP_TRUNC:
                 case GGML_UNARY_OP_SGN:
-                    return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                           (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
-                           (op->src[0]->type == op->type);
+                    return ggml_vk_is_float_elementwise(op);
                 default:
                     return false;
             }
@@ -16041,10 +16008,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
                 case GGML_GLU_OP_SWIGLU_CLAMP:
-                    return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                           (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
-                           (op->src[0]->type == op->type) &&
-                           (!op->src[1] || op->src[1]->type == op->src[0]->type);
+                    return ggml_vk_is_float_elementwise(op) && (!op->src[1] || op->src[1]->type == op->type);
                 default:
                     return false;
             }
@@ -16317,16 +16281,15 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_NORM:
-        case GGML_OP_RMS_NORM:
         case GGML_OP_L2_NORM:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_RMS_NORM:
+            return ggml_vk_is_float_elementwise(op) && op->type != GGML_TYPE_F16;
         case GGML_OP_ADD:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
-                   (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
+            return ggml_vk_binary_types_supported(op->src[0]->type, op->src[1]->type, op->type);
         case GGML_OP_ADD_ID:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->src[2]->type == GGML_TYPE_I32 &&
                    op->type == GGML_TYPE_F32;
@@ -16337,10 +16300,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
+        case GGML_OP_LOG:
         case GGML_OP_CLAMP:
         case GGML_OP_LEAKY_RELU:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                   op->type == op->src[0]->type;
+        case GGML_OP_TRI:
+        case GGML_OP_DIAG:
+            return ggml_vk_is_float_elementwise(op);
         case GGML_OP_OPT_STEP_ADAMW:
         case GGML_OP_OPT_STEP_SGD:
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
@@ -16348,11 +16313,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32
                 && ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32
                 && op->type == GGML_TYPE_F32;
-        case GGML_OP_LOG:
-        case GGML_OP_TRI:
-        case GGML_OP_DIAG:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                   op->type == op->src[0]->type;
         case GGML_OP_ARGSORT:
             {
                 if (!ggml_is_contiguous(op) || !ggml_is_contiguous(op->src[0])) {
@@ -16398,7 +16358,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_FILL:
             return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
         case GGML_OP_SCALE:
-            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+            return ggml_is_contiguous(op->src[0]) && ggml_vk_is_float_elementwise(op);
         case GGML_OP_PAD:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ROLL:
