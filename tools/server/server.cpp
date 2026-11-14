@@ -493,7 +493,9 @@ static int server_run_measure(common_params & params, server_role & role, common
 //
 
 static int server_run_router(common_params & params, int argc, char ** argv, const server_run_opts & opts) {
-    SRV_INF("%s", "starting server in router mode. models will be automatically loaded on-demand\n");
+    SRV_INF("starting server in router mode. %s\n",
+        params.models_autoload ? "models will be automatically loaded on-demand"
+                               : "model autoloading is disabled, can be enabled per-request with ?autoload=true");
 
     // note: this is guaranteed to out-live ctx_http and tools
     server_mcp mcp_mgr;
