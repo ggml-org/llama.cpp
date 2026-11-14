@@ -186,7 +186,15 @@ private: // disallow accessing these members directly, risking out-of-sync
     // pos  0   1   2   3   4   5      5      5      7      7      7
     // map_idx_to_media will contain: {5, img0}, {8, img1}
 
+    // chained hashes: entry k covers the first (k + 1) * hash_block_size tokens
+    // set_token() drops the entries after the change, they come back when the next block is complete
+    std::vector<uint64_t> hashes;
+
+    void update_hashes();
+
 public:
+    static constexpr size_t hash_block_size = 64;
+
     server_tokens() = default;
     ~server_tokens() = default;
 
@@ -254,6 +262,7 @@ public:
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();
+        hashes.clear();
     }
 
     void keep_first(size_t n);
@@ -261,6 +270,12 @@ public:
     std::string detokenize(const llama_context * ctx, bool special) const;
 
     size_t get_common_prefix(const server_tokens & b) const;
+
+    const std::vector<uint64_t> & get_prefix_hashes() const { return hashes; }
+
+    // lower bound of get_common_prefix(), b is known only by its prefix hashes
+    // the result is less than one block plus one media chunk below the exact value
+    size_t get_common_prefix_lower(const std::vector<uint64_t> & b_hashes) const;
 
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;

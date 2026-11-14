@@ -525,6 +525,7 @@ server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : 
 }
 
 server_tokens::server_tokens(const llama_tokens & tokens, bool has_mtmd) : has_mtmd(has_mtmd), tokens(tokens) {
+    update_hashes();
 }
 
 llama_pos server_tokens::pos_next(int64_t n_tokens) const {
@@ -641,6 +642,7 @@ void server_tokens::push_back(llama_token tok) {
         throw std::runtime_error("Invalid token");
     }
     tokens.emplace_back(tok);
+    update_hashes();
 }
 
 void server_tokens::push_back(const mtmd_input_chunk * chunk) {
@@ -654,6 +656,7 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
         }
         mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         size_t n_tokens;
         const auto * text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
@@ -677,6 +680,7 @@ void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
             tokens.emplace_back(LLAMA_TOKEN_NULL);
         }
         map_idx_to_media[start_idx] = std::move(new_chunk);
+        update_hashes();
     } else {
         push_back(chunk);
     }
@@ -701,6 +705,7 @@ void server_tokens::push_back(server_tokens & tokens) {
 
 void server_tokens::insert(const llama_tokens & inp_tokens) {
     tokens.insert(tokens.end(), inp_tokens.begin(), inp_tokens.end());
+    update_hashes();
 }
 
 const llama_tokens & server_tokens::get_tokens() const {
@@ -768,6 +773,10 @@ server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_m
         result.map_idx_to_media[start_idx] = std::move(chunk);
     }
 
+    // the hashes from the constructor do not include the media chunks
+    result.hashes.clear();
+    result.update_hashes();
+
     if (reader.remaining() >= sizeof(llama_token)) {
         throw std::runtime_error("Trailing data in server tokens state");
     }
@@ -789,6 +798,7 @@ llama_tokens server_tokens::get_text_tokens() const {
 void server_tokens::set_token(llama_pos pos, llama_token id) {
     GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     tokens[pos] = id;
+    hashes.resize(std::min(hashes.size(), (size_t) pos / hash_block_size));
 }
 
 void server_tokens::keep_first(size_t n) {
@@ -822,6 +832,7 @@ void server_tokens::keep_first(size_t n) {
         }
     }
     tokens.resize(n);
+    hashes.resize(std::min(hashes.size(), n / hash_block_size));
 }
 
 std::string server_tokens::detokenize(const llama_context * ctx, bool special) const {
@@ -838,8 +849,11 @@ std::string server_tokens::detokenize(const llama_context * ctx, bool special) c
 size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     const size_t max_idx = std::min(tokens.size(), b.tokens.size());
 
+    // the blocks with equal hashes are not compared again
+    const size_t min_idx = get_common_prefix_lower(b.get_prefix_hashes());
+
     if (!has_mtmd) {
-        for (size_t i = 0; i < max_idx; ++i) {
+        for (size_t i = min_idx; i < max_idx; ++i) {
             if (tokens[i] == b.tokens[i]) {
                 continue;
             }
@@ -850,7 +864,7 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
         return max_idx;
     }
 
-    for (size_t i = 0; i < max_idx; ++i) {
+    for (size_t i = min_idx; i < max_idx; ++i) {
         const llama_token ai =   tokens[i];
         const llama_token bi = b.tokens[i];
 
@@ -883,6 +897,72 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     }
 
     return max_idx; // all tokens are equal
+}
+
+static uint64_t hash_fnv1a(uint64_t h, const void * data, size_t len) {
+    const uint8_t * bytes = (const uint8_t *) data;
+    for (size_t i = 0; i < len; i++) {
+        h ^= bytes[i];
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+void server_tokens::update_hashes() {
+    const size_t n_blocks = tokens.size() / hash_block_size;
+
+    for (size_t k = hashes.size(); k < n_blocks; k++) {
+        uint64_t h = k > 0 ? hashes[k - 1] : 0xcbf29ce484222325ULL;
+
+        for (size_t i = k * hash_block_size; i < (k + 1) * hash_block_size; i++) {
+            const llama_token tok = tokens[i];
+            h = hash_fnv1a(h, &tok, sizeof(tok));
+
+            if (tok != LLAMA_TOKEN_NULL) {
+                continue;
+            }
+
+            // a media chunk is hashed at its first token, it can span over many blocks
+            const auto it = map_idx_to_media.find(i);
+            if (it != map_idx_to_media.end()) {
+                const char *   id       = mtmd_input_chunk_get_id(it->second.get());
+                const uint64_t n_tokens = mtmd_input_chunk_get_n_tokens(it->second.get());
+                h = hash_fnv1a(h, &n_tokens, sizeof(n_tokens));
+                h = hash_fnv1a(h, id, strlen(id));
+            }
+        }
+
+        hashes.push_back(h);
+    }
+}
+
+size_t server_tokens::get_common_prefix_lower(const std::vector<uint64_t> & b_hashes) const {
+    const auto & a_hashes = hashes;
+
+    // a hash covers all the tokens before it, so the equal entries come first
+    size_t lo = 0;
+    size_t hi = std::min(a_hashes.size(), b_hashes.size());
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        if (a_hashes[mid] == b_hashes[mid]) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    size_t n = lo * hash_block_size;
+
+    // do not cut a media chunk, go back to its start
+    auto it = map_idx_to_media.upper_bound(n);
+    if (it != map_idx_to_media.begin()) {
+        --it;
+        if (it->first < n && n < it->first + mtmd_input_chunk_get_n_tokens(it->second.get())) {
+            n = it->first;
+        }
+    }
+
+    return n;
 }
 
 common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
@@ -933,6 +1013,7 @@ server_tokens server_tokens::clone() const {
     server_tokens res;
     res.has_mtmd = has_mtmd;
     res.tokens   = tokens;
+    res.hashes   = hashes;
     for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
         size_t idx = it->first;
         const mtmd::input_chunk_ptr & chunk = it->second;
