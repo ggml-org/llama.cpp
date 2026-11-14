@@ -301,13 +301,45 @@ struct common_sampler * common_sampler_init(
     if (grmr && !params.grammar_lazy && common_grammar_needs_prefill(params.grammar)) {
         try {
             for (const auto & token : prefill_tokens) {
+                // Chat-template role/turn markers (e.g. ChatML's `<|im_start|>assistant`, or a model's own
+                // custom control token such as Nemotron's `<SPECIAL_11>`) are template structure, not grammar
+                // content - matching them against the grammar's rules (which only describe the output format,
+                // e.g. a JSON schema) throws "Unexpected empty grammar stack after accepting piece", since
+                // they're not valid under the grammar's root rule. Skip control tokens here; only real
+                // (non-control) prefill tokens - e.g. partial assistant content from --continue-final-message -
+                // should actually be matched against the grammar, matching this loop's own "advances past
+                // tokens the template already placed" comment's stated intent (advancing past = skipping it,
+                // not grammar-matching it).
+                if (vocab && llama_vocab_is_control(vocab, token)) {
+                    LOG_DBG("%s: skipping control prefill token (%d), not grammar-matched\n", __func__, token);
+                    continue;
+                }
                 llama_sampler_accept(grmr, token);
                 LOG_DBG("%s: grammar accepted prefill token (%d)\n", __func__, token);
             }
-        } catch (std::exception &e) {
-            LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
-                common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
-            throw e;
+        } catch (const std::exception & e) {
+            // Beyond control tokens, some templates' generation-prompt text also contains plain literal
+            // words that are pure template boilerplate (e.g. a role-name string like "Assistant" rendered
+            // into the prompt by the template itself, not part of any real assistant content) and are
+            // likewise not valid grammar content - the control-token skip above isn't sufficient for those.
+            // Once a prefill token fails to match, the grammar's internal stack is permanently empty (by
+            // llama_grammar_accept_token's own design - that's what the exception means), so the sampler
+            // object is now unusable; the correct recovery is to reinitialize it fresh rather than treat a
+            // non-continuation template's own boilerplate as a fatal error. Only genuine continuation content
+            // (--continue-final-message) is expected to always need prefill to succeed; for a normal (fresh)
+            // turn, generation_prompt is pure template structure and prefilling it was only ever a best-effort
+            // optimization, not a correctness requirement - so fall back to a freshly (re-)initialized grammar
+            // sampler instead of aborting generation entirely.
+            LOG_WRN("%s: grammar prefill of generation-prompt tokens failed (%s) - this is expected for plain "
+                "template boilerplate (e.g. a literal role-name word) rather than real continuation content; "
+                "reinitializing the grammar sampler fresh instead of treating it as fatal.\n", __func__, e.what());
+            llama_sampler_free(grmr);
+            grmr = llama_sampler_init_grammar(vocab, grammar_str.c_str(), "root");
+            if (!grmr) {
+                LOG_ERR("%s: failed to reinitialize grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
+                    common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
+                throw e;
+            }
         }
     }
 
