@@ -305,7 +305,8 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
     data.format            = COMMON_CHAT_FORMAT_PEG_GEMMA4;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<|channel>thought";
-    data.thinking_end_tags  = {"<channel|>"};
+    // a tool call may start before the thought channel is closed; <channel|> stays first, the budget sampler forces it
+    data.thinking_end_tags  = {"<channel|>", "<|tool_call>"};
 
     data.preserved_tokens = {
         "<|channel>",
@@ -337,11 +338,14 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
         auto channel_start = p.token("<|channel>");
         auto channel_end = p.token("<channel|>");
         auto think_start = channel_start + p.literal("thought");
+        auto tool_call_start = p.token("<|tool_call>");
+        // the model may start a tool call before closing the thought channel
+        auto think_end = channel_end | p.peek(tool_call_start);
 
         if (extract_reasoning) {
-            p.rule("thought", think_start + p.space() + p.reasoning(p.until(channel_end)) + channel_end);
+            p.rule("thought", think_start + p.space() + p.reasoning(p.until(channel_end | tool_call_start)) + think_end);
         } else {
-            p.rule("thought", p.content(think_start + p.space() + p.until(channel_end) + channel_end));
+            p.rule("thought", p.content(think_start + p.space() + p.until(channel_end | tool_call_start) + think_end));
         }
 
         auto consume_empty_channels = p.gbnf(p.zero_or_more(channel_start + p.negate(p.literal("thought"))), "");
@@ -381,10 +385,9 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
                 })));
             });
 
-            auto tool_call_start = p.token("<|tool_call>");
-            auto tool_call_rest  = p.literal("call:") + tool_choice + p.token("<tool_call|>");
-            auto tool_call       = p.rule("tool-call", tool_call_start + tool_call_rest);
-            auto more            = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
+            auto tool_call_rest = p.literal("call:") + tool_choice + p.token("<tool_call|>");
+            auto tool_call      = p.rule("tool-call", tool_call_start + tool_call_rest);
+            auto more           = inputs.parallel_tool_calls ? p.zero_or_more(tool_call) : p.eps();
 
             auto tool_calls = p.trigger_rule("tool-calls", tool_call_start, tool_call_rest + more);
 

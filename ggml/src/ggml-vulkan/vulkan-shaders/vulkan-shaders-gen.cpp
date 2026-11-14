@@ -738,6 +738,11 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
                 string_to_spv("flash_attn_f32_f16", "flash_attn_cm1.comp",
                     merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
+
+                std::map<std::string, std::string> fa_flip_dict = fa_base_dict;
+                fa_flip_dict.erase("DATA_A_IQ4_NL");
+                string_to_spv("flash_attn_f32_f16_flip", "flash_attn_cm1_flip.comp",
+                    merge_maps(fa_flip_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}), fp16, true, false, f16acc);
 #endif
             }
 
@@ -768,6 +773,9 @@ void process_shaders() {
 
 #if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm1.comp",
+        merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}),
+        true, true, false, false);
+    string_to_spv("flash_attn_f32_f16_bf16_flip", "flash_attn_cm1_flip.comp",
         merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"COOPMAT", "1"}}),
         true, true, false, false);
 #endif

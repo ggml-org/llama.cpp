@@ -562,7 +562,8 @@ common_peg_parser common_chat_peg_builder::python_or_json_value() {
 common_peg_parser common_chat_peg_builder::python_style_tool_calls(
     const ordered_json & tools,
     bool                 parallel_tool_calls,
-    bool                 allow_json_literals) {
+    bool                 allow_json_literals,
+    bool                 allow_undeclared) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -618,6 +619,18 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
         );
 
         tool_choices |= rule("tool-" + std::to_string(i), tool_parser);
+    }
+
+    // last, so declared tools win when parsing
+    if (allow_undeclared) {
+        auto ident = rule("tool-undeclared-ident", chars("[a-zA-Z_]", 1, 1) + chars("[a-zA-Z0-9_.]", 0, -1));
+        auto value = tool_arg_value(allow_json_literals ? python_or_json_value() : python_value());
+        auto arg   = tool_arg(tool_arg_open(tool_arg_name(ident) + literal("=")) + value + tool_arg_close(eps()));
+        auto args  = optional(arg + zero_or_more("," + space() + arg));
+
+        tool_choices |= rule("tool-undeclared", tool(tool_open(tool_name(ident) + literal("(")) +
+            space() + tool_args(args) + space() + tool_close(literal(")"))
+        ));
     }
 
     if (parallel_tool_calls) {
