@@ -680,10 +680,21 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
-    // only the MMA kernel reads K/V through kv_rows
+    // only the MMA and vec kernels read K/V through kv_rows
     if (kv_rows) {
-        return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
-            BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
+        if (!(GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        float logit_softcap = 0.0f;
+        memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+
+        // the vec kernel reads quantized K/V in place, the MMA kernel would convert the whole cache to f16
+        const bool vec_rows = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && n_kv % FATTN_KQ_STRIDE == 0 &&
+            (ggml_is_quantized(K->type) || ggml_is_quantized(V->type)) && Q->ne[1] == 1 && logit_softcap == 0.0f;
+        if (vec_rows) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return Q->ne[0] != 40 && Q->ne[0] != 72 ? BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
     }
 
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:

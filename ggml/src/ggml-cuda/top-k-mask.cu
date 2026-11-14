@@ -139,3 +139,108 @@ void ggml_cuda_op_top_k_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
             GGML_ABORT("unsupported type");
     }
 }
+
+// one thread per list entry, blockIdx.x is the row: the cell of a live pick or an extra cell, else -1
+template <typename T>
+static __global__ void top_k_rows_kernel(
+        const int32_t * top_k, const float * score, const int32_t * blocks, const int32_t * extra, T * dst,
+        const int64_t n_res, const int64_t ne1, const int64_t ne2, const int32_t n_kv,
+        const int64_t n_top, const int64_t n_pick, const int64_t n_blk, const int64_t n_extra,
+        const int64_t sd1, const int64_t sd2, const int64_t sd3,
+        const int64_t sk0, const int64_t sk1, const int64_t sk2, const int64_t sk3,
+        const int64_t ss0, const int64_t ss1, const int64_t ss2, const int64_t ss3,
+        const int64_t sb0, const int64_t sb1,
+        const int64_t se0, const int64_t se1, const int64_t se2, const int64_t se3) {
+    ggml_cuda_pdl_lc();
+
+    const int64_t ir = blockIdx.x;
+    const int64_t i1 = ir % ne1;
+    const int64_t i2 = (ir / ne1) % ne2;
+    const int64_t i3 = ir / (ne1*ne2);
+
+    T             * dst_row   = dst   + i1*sd1 + i2*sd2 + i3*sd3;
+    const int32_t * top_k_row = top_k + i1*sk1 + i2*sk2 + i3*sk3;
+
+    ggml_cuda_pdl_sync();
+
+    const int64_t e = int64_t(blockIdx.y)*blockDim.x + threadIdx.x;
+    if (e < n_res) {
+        int32_t c = -1;
+        if (e < n_top*n_blk) {
+            const int32_t p = top_k_row[(e / n_blk)*sk0];
+            bool live = p >= 0 && p < n_pick;
+            if (live && score) {
+                live = score[p*ss0 + i1*ss1 + i2*ss2 + i3*ss3] > -INFINITY;
+            }
+            if (live) {
+                c = blocks ? blocks[(e % n_blk)*sb0 + p*sb1] : p;
+            }
+        } else if (e < n_top*n_blk + n_extra) {
+            c = extra[(e - n_top*n_blk)*se0 + i1*se1 + i2*se2 + i3*se3];
+        }
+        if (c < 0 || c >= n_kv) {
+            c = -1;
+        }
+
+        if constexpr (std::is_same_v<T, int32_t>) {
+            dst_row[e] = c;
+        } else {
+            dst_row[e] = ggml_cuda_cast<T>(c >= 0 ? 0.0f : -INFINITY);
+        }
+    }
+}
+
+template <typename T>
+static void top_k_rows_cuda(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * top_k  = dst->src[0];
+    const ggml_tensor * score  = dst->src[1];
+    const ggml_tensor * blocks = dst->src[2];
+    const ggml_tensor * extra  = dst->src[3];
+
+    const int32_t n_kv  = ggml_get_op_params_i32(dst, 0);
+    const int64_t n_res = dst->ne[0];
+
+    GGML_ASSERT(dst->nb[0] == sizeof(T));
+
+    const int64_t n_pick = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+
+    const size_t si = sizeof(int32_t);
+    const size_t sf = sizeof(float);
+
+    const int block_size = 256;
+
+    GGML_ASSERT((n_res + block_size - 1)/block_size <= 65535);
+    const dim3 block_dims(block_size, 1, 1);
+    const dim3 grid_dims(ggml_nrows(dst), (n_res + block_size - 1)/block_size, 1);
+    const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(grid_dims, block_dims, 0, ctx.stream());
+
+    ggml_cuda_kernel_launch(top_k_rows_kernel<T>, launch_params,
+            (const int32_t *) top_k->data,
+            score  ? (const float   *) score->data  : nullptr,
+            blocks ? (const int32_t *) blocks->data : nullptr,
+            extra  ? (const int32_t *) extra->data  : nullptr,
+            (T *) dst->data,
+            n_res, dst->ne[1], dst->ne[2], n_kv,
+            top_k->ne[0], n_pick, blocks ? blocks->ne[0] : 1, extra ? extra->ne[0] : 0,
+            dst->nb[1]/sizeof(T), dst->nb[2]/sizeof(T), dst->nb[3]/sizeof(T),
+            top_k->nb[0]/si, top_k->nb[1]/si, top_k->nb[2]/si, top_k->nb[3]/si,
+            score  ? score->nb[0]/sf  : 0, score ? score->nb[1]/sf : 0, score ? score->nb[2]/sf : 0, score ? score->nb[3]/sf : 0,
+            blocks ? blocks->nb[0]/si : 0, blocks ? blocks->nb[1]/si : 0,
+            extra  ? extra->nb[0]/si  : 0, extra ? extra->nb[1]/si : 0, extra ? extra->nb[2]/si : 0, extra ? extra->nb[3]/si : 0);
+}
+
+void ggml_cuda_op_top_k_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    switch (dst->type) {
+        case GGML_TYPE_I32:
+            top_k_rows_cuda<int32_t>(ctx, dst);
+            break;
+        case GGML_TYPE_F16:
+            top_k_rows_cuda<half>(ctx, dst);
+            break;
+        case GGML_TYPE_F32:
+            top_k_rows_cuda<float>(ctx, dst);
+            break;
+        default:
+            GGML_ABORT("unsupported type");
+    }
+}
