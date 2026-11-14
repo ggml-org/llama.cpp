@@ -12351,7 +12351,7 @@
 "WebGPU: WebGPU","ARANGE","type=f32,start=-1.000000,stop=255.000000,step=0.250000","support","1","yes","WebGPU"
 "WebGPU: WebGPU","ARANGE","type=f32,start=-1.000000,stop=255.250000,step=0.250000","support","1","yes","WebGPU"
 "WebGPU: WebGPU","ARANGE","type=f32,start=0.000000,stop=1048576.000000,step=1.000000","support","1","yes","WebGPU"
-"WebGPU: WebGPU","TIMESTEP_EMBEDDING","type=f32,ne_a=[2,1,1,1],dim=320,max_period=10000","support","0","no","WebGPU"
+"WebGPU: WebGPU","TIMESTEP_EMBEDDING","type=f32,ne_a=[2,1,1,1],dim=320,max_period=10000","support","1","yes","WebGPU"
 "WebGPU: WebGPU","LEAKY_RELU","type=f32,ne_a=[10,5,4,3],negative_slope=0.100000","support","0","no","WebGPU"
 "WebGPU: WebGPU","CUMSUM","type=f32,ne=[10,5,4,3]","support","1","yes","WebGPU"
 "WebGPU: WebGPU","CUMSUM","type=f32,ne=[127,5,4,3]","support","1","yes","WebGPU"

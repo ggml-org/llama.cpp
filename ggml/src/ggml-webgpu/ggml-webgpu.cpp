@@ -3357,6 +3357,44 @@ static webgpu_encoded_op ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
 }
 
+static webgpu_encoded_op ggml_webgpu_timestep_embedding(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    const int dim        = ggml_get_op_params_i32(dst, 0);
+    const int max_period = ggml_get_op_params_i32(dst, 1);
+    GGML_ASSERT(dim >= 1);
+    GGML_ASSERT(max_period > 0);
+
+    std::vector<uint32_t> params = {
+        (uint32_t) dim,
+        ggml_webgpu_u32_from_f32((float) max_period),
+        (uint32_t) src->ne[0],
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
+        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst),
+    };
+
+    ggml_webgpu_shader_lib_context shader_lib_ctx = {};
+    shader_lib_ctx.src0                           = src;
+    shader_lib_ctx.dst                            = dst;
+    shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
+
+    webgpu_pipeline pipeline = ctx->shader_lib->get_timestep_embedding_pipeline(shader_lib_ctx);
+
+    // Each thread calculates both sin and cos for a given frequency,
+    // so divide params.dim by 2.
+    const uint32_t invocation_count = (uint32_t) src->ne[0] * (dim == 1 ? 1 : dim / 2);
+    const uint32_t workgroups       = CEIL_DIV(invocation_count, shader_lib_ctx.max_wg_size);
+
+    uint32_t wg_x, wg_y;
+    compute_2d_workgroups(workgroups, ctx->global_ctx->capabilities.limits.maxComputeWorkgroupsPerDimension, wg_x,
+                          wg_y);
+
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, wg_y);
+}
+
 static webgpu_encoded_op ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
     bool                  total_sum = dst->op == GGML_OP_SUM;
     std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
@@ -3650,6 +3688,8 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_encode(webgpu_context ctx,
             return ggml_webgpu_im2col(ctx, src0, src1, node);
         case GGML_OP_UPSCALE:
             return ggml_webgpu_upscale(ctx, src0, node);
+        case GGML_OP_TIMESTEP_EMBEDDING:
+            return ggml_webgpu_timestep_embedding(ctx, src0, node);
         default:
             return std::nullopt;
     }
@@ -5183,6 +5223,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_CUMSUM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type;
+            break;
+        case GGML_OP_TIMESTEP_EMBEDDING:
+            supports_op = src0->type == GGML_TYPE_F32 && ggml_is_contiguous(src0);
             break;
         case GGML_OP_SUM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguously_allocated(src0);
