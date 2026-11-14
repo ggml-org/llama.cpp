@@ -1515,3 +1515,48 @@ RTF 依次为原始 FP32 1.162、优化 FP32 1.052、INT8 0.768。
 `codec_bench` 现拒绝短输入而不补零；多轮测试按输入名识别 recurrent
 state 并在每轮恢复初始形状。新试听源文件在
 `~/m5-assets/htp-quality/recheck-*.wav`。线上服务没有切换。
+
+### INT8 移除 depth 占位 logits 的 A/B
+
+SM6650 shell，INT8 Snake codec，首块 2 帧、后续 4 帧，固定同一条 9.86 s
+长句和种子。用同一实验 libllama，仅给 depth stage 设置
+`M5_SKIP_DUMMY_LOGITS=1` 来跳过单词表输出投影。保留原自回归图、KV cache
+和 embedding 回读。基线 4 次、实验 3 次，codes 与 WAV 哈希全部一致。
+
+RTF 中位数 0.776 → 0.769（约 0.8%），整句约省 62 ms，样本区间重叠。
+depth stage 调用累计中位数 5.580 → 5.514 s。实验仍需等待 embedding
+就绪，省掉的是占位投影及其读取，无法消除 step 间等待。实验补丁、脚本
+和日志保存在 `~/m5-assets/htp-quality/dummy-logits*`，默认路径未启用。
+
+### Depth core 与图尾投影同批提交
+
+用现有 llama.cpp backend sampler，在 depth GGUF 加入真实 book 1 的 Q8_0
+输出权重。保持 Q4_0 core、FP32 KV cache 和 HTP0。单帧形状为一次
+2-row decode 加 14 次 1-row decode，使用冻结合成输入。实验只使用
+greedy argmax 来确认 4 字节 token 的设备回传路径，未替换生产采样逻辑。
+
+三轮交替，每轮每配置 30 帧取中位数。原图分别为 34.20/34.44/34.27
+ms/frame，图尾采样版为 35.22/35.23/35.20 ms/frame。独立 profile 的
+352 个包含 ARGMAX 的 batch 均同时包含第一层与输出投影。Q8_0 输出投影
+和 argmax 中位 71 us、6 us。图尾合入同批可行，15 个自回归提交仍在。
+约 0.95 ms/frame 的 DSP 侧额外耗时需要与生产 CPU heads 成本对比，
+同时计入真实采样、动态切换 codebook 与并行 codec 的干扰。尚无端到端 RTF
+或音质结论。原始日志位于 `~/m5-assets/htp-quality/depth-graph*.log`。
+
+### Depth 图尾 top-10 加噪采样
+
+`M5_BENCH_SAMPLED=1 M5_BENCH_NOISY=1` 启用图尾温度 0.9、top-10、
+减 log-noise 和 argmax。计时包含主机生成指数噪声、取 log 和上传，
+固定 book 1 投影及输入轨迹。两轮每配置 20 帧，基线 34.15/34.22、
+加噪采样 37.39/37.42 ms/frame，同轮 greedy 35.10 ms/frame。
+Profile 中 118 个 TOP_K_MASK 批次全部包含 core、投影和 ARGMAX。
+这是每帧约 3.22 ms 的额外成本门槛；未计入移除 CPU heads 的收益，
+也未接入生产 RNG、动态码本头和 codec 并行路径。
+日志：`~/m5-assets/htp-quality/depth-noisy-ab.log`。
+
+## backbone Q4_0 结论（2026-11-15 凌晨）
+
+Q4_0 量化（32.4→17.1 MB）实测 backbone 快 21%、总耗时 -0.7 s，但音频短 16%
+（语速/韵律漂移），人工试听判定不可接受。**决定保持 Q8_0**（默认命令不变），
+Q4 模型仅作为 `--backbone` 显式指定时的实验选项。质量验收口径补充：
+ASR 全对 + 指标同族不足以代表听感，TTS 的韵律自然度必须人耳确认。

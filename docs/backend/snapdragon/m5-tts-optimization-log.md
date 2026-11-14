@@ -215,3 +215,101 @@
    或分块权重驻留。
 3. 文档化之外的持续项：`M5_HEADS_INT4`（4-bit 权重带宽再减半）可作 int8 的
    后续 A/B，代价是量化误差再升一档，门禁同 §4.2。
+
+## 8. 二次 review（2026-11-14 23:35，int8 上线后）
+
+### 8.1 新鲜账目（三条长度句子，CLI 分项）
+
+| 句子 | 帧 | 音频 | 墙钟 | backbone | depth | codec | RTF |
+|------|----:|-----:|-----:|---------:|------:|------:|----:|
+| 7 字 | 23 | 1.74 s | 1.60 | 0.293 | 1.236 | 1.182 | 0.918 |
+| 19 字 | 45 | 3.50 s | 2.93 | 0.428 | 2.389 | 1.956 | 0.837 |
+| 24 字 | 75 | 5.90 s | 4.38 | 0.633 | 3.651 | 3.015 | 0.742 |
+
+线性拟合：**prefill ≈152 ms（固定）+ backbone 6.1 ms/帧 + depth 48.6 ms/帧 +
+codec 33 ms/帧（被 overlap 隐藏）**。24 字句里 depth 占墙钟 **83%**。
+
+### 8.2 本轮复验关闭的门
+
+- **codec prime 已有跨请求缓存**（`Codec::restore_prime` 按 voice codes 命中即跳过）——
+  同音色第二次请求起不付 8 帧 prime；CLI 单次进程的 0.42 s 截距只影响首次。
+- **--depth-chain 在 int8 后仍略慢**（2 轮交替：RTF 0.7605/0.7575 vs legacy
+  0.7493/0.7417）——pipe 往返不是瓶颈，维持 legacy。
+- **GGML_HEXAGON_NHMX=1 全链路无差**（RTF 0.7510/0.7496，backbone 0.63 不变）。
+- **depth 低位量化不可行**（既有证据：Q8_0 21 MB 对 Q4_0 10.7 MB 只慢 9%，
+  若带宽受限应翻倍 → 每次调用是提交开销+计算主导，非权重带宽）。
+
+### 8.3 剩余方向（按 ROI 排序）
+
+| 优先级 | 方向 | 预期收益 | 成本/风险 | 说明 |
+|--------|------|----------|-----------|------|
+| A | **学习型草稿**（蒸馏 code[b]←(hidden, code[b-1])，批量 verify） | depth 2.1× → RTF ~0.55 | 高（需生成训练数据+训练+verify 回退逻辑） | 唯一大杠杆；六条精确路径已排除，只剩这一条 |
+| B | **backbone Q4_0** | 每帧 -2~3 ms，总 -3~5% | 低-中（需 host 构建 llama-quantize，ASR 门禁） | 33 MB→18 MB，per-token decode 或受益 · **已实测，听感不过 → 保持 Q8（§9）** |
+| C | **heads int4** | 每帧 -2~3 ms，总 -2~3% | 低（project8 加 q4 解包，门禁同 int8） | 17 MB→8.5 MB 流量；量化误差再升一档 |
+| D | **prefill 前缀 KV 缓存**（caption+reference 固定段） | 省 60~100 ms/请求（短句 4-6%） | 中（stage 协议加 state save/restore） | **已上线（§9），实测省 ~45-50 ms/请求** |
+| E | **server 启动预热**（启动后跑一句短合成） | 首请求 -150~200 ms 首包 | 极低（~10 行） | **已上线（§9）** |
+| F | **pcm 首块 1 帧**（first_frames 2→1） | 首包 -40 ms | 极低 | **已实测：1 帧反而更慢（0.51 vs 0.285 s）→ 维持 2 帧（§9）** |
+| G | 多段文本 KV 复用 | 长文每段省 prefill | 中（D 的延伸） | 段落之间共享同一音色前缀 |
+| H | /metrics 汇总 X-M5 统计 | 可观测性 | 低 | 便于回归对比，不影响性能 |
+
+**不建议做**：
+- codec 再压缩——被 overlap 隐藏（codec 3.0 s < depth 3.65 s），除非 depth 提速；
+- codec 卸载到 CPU——比 HTP 慢一倍以上，会击穿 overlap；
+- 跨帧 KV 保留——改变每帧 reset 的语义，模型行为风险大，且深度图小 KV 非瓶颈；
+- depth 换更低量化——见 8.2 证据（非带宽瓶颈）；
+- 并发/render_mutex 改造——单用户场景无收益。
+
+**另一个观察**：depth 在 codec 并发时慢 ~20%（port notes：35.9→42.9 ms/帧），
+这是 DSP/内存竞争；overlap 的净收益仍远大于损失（codec 全暴露要 +2.5 s）。
+
+## 9. E/F/B/D 落地（2026-11-14 深夜）
+
+### E：server 启动预热（已上线）
+
+- 设计：`engine.open()` 后立即用 "你好，世界。" 跑一次丢弃模式合成
+  （`render_text(text, "", nullptr, ...)`），把 backbone prefill、15 步 depth、
+  codec 图、ORT kernel 全部热身；同时把共享前缀（见 D）预先载入 stage 的 KV。
+- 收益：消除部署后首请求惩罚（此前 First-Pcm 0.58 s vs 稳态 0.33-0.45 s）；
+  启动多花 ~1.5 s，日志打印 `warmup 1.50s (rtf=0.949 frames=21)`。
+
+### F：pcm 首块调优（结论：维持 2 帧）
+
+- 假设：首块 1 帧（80 ms 音频）能再省一个 depth step。
+- 实测：1 帧首包 **0.51 s**，2 帧 **0.285 s**——codec 单帧调用的固定开销更大。
+  维持 `set_chunking(2, 4)`；E+F 后短句首包 0.285 s、7 字句总耗时 1.44 s。
+
+### B：backbone Q4_0（试听后决定：**保持 Q8**）
+
+- 工具链：host 构建 `llama-quantize`（`~/m5-assets/host-build`），
+  `--allow-requantize backbone-Q8_0.gguf backbone-Q4_0.gguf Q4_0` → 32.4→17.1 MB。
+- A/B（同轮交替 ×2，24 字句）：backbone_s **0.632/0.619 → 0.495/0.498**（-21%），
+  depth 3.65→3.10 s（-15%，DDR 竞争减少），**音频 5.90→4.94 s（-16%，语速变快）**。
+- 质量：两版 ASR 全对；时长变化来自韵律漂移，需人工试听定夺（样本见
+  `~/m5-assets/quant/samples/backbone-Q8.wav` / `backbone-Q4.wav`）。
+- 状态：Q4 文件已上设备（`backbone-Q4_0.gguf`），未改默认命令。
+- **决定（人工试听）**：保持 **Q8_0**。Q4 虽然 backbone 快 21%、总耗时 -0.7 s，
+  但语速/韵律漂移（音频短 16%）在听感上不可接受——TTS 的音质与自然度优先于
+  这部分 RTF 收益，且 backbone 仅占墙钟 14%（大头 depth 不受影响）。
+  `m5_engine.h` 默认命令维持 `backbone-Q8_0.gguf`；Q4 仅在显式 `--backbone` 时可用。
+  教训：**量化收益必须用耳朵验收**，ASR 全对 + 指标同族不等于听感可接受。
+
+### D：prefill 前缀 KV 缓存（已上线）
+
+- 结构：每段 prefix 行 = [条件标记+参考文本 token][本段文本 token][参考音频 codes]。
+  前两段共享（同音色同 caption），但 BPE 会在参考尾字与文本首字间合并，
+  因此**共享边界固定为「共享 token 数 - 2」**（只依赖音色，不依赖文本，hash 稳定）。
+- 协议：新增 `count == -1` 预填充消息 `[shared_rows][hash][rest_rows][rows...]`；
+  子进程在 hash 命中时 `llama_memory_seq_rm(seq, shared, -1)` 只保留共享段 KV，
+  否则 clear 后重放；引擎对 ring 传输自动回退到全量预填充。
+- 收益（同音色不同文本，server）：Backbone-S **0.603 冷 → 0.555-0.572 命中**，
+  短句 0.237-0.329；即每请求省 ~45-50 ms 预填充。预热后首个请求即命中。
+- 质量：多段长文本 ASR 全对；token 序列与全量预填充一致（仅批形状不同）。
+- 坑：**缓存命中时子进程必须读掉共享段字节**，否则管道错位、下一条消息头读出
+  垃圾 count（表现为 "embedding message exceeds remaining context" 后服务崩溃）。
+
+### 环境坑：8080 上出现过两个监听进程
+
+- 早前会话遗留的 `m5-server-cockpit` 与新 `m5-server` 同时监听 0.0.0.0:8080，
+  连接被随机分发 → 表现为「wav 一半 500、pcm 正常」的假回归。
+  `deploy.sh` 的 pidof 停止逻辑只杀 `m5-server`，不动其他名字。
+  排查此类问题时先 `netstat -tlnp | grep 8080` 确认监听者唯一。

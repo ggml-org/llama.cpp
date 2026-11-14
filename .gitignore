@@ -153,3 +153,6 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# WorkBuddy local project data (memory, session state)
+.workbuddy/

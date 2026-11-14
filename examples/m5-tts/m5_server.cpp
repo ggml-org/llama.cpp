@@ -886,6 +886,21 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "open failed: %s\n", error.c_str());
         return 1;
     }
+    // Warm every stage (backbone prefill, 15-step depth chain, codec graph, ORT
+    // kernels) so the first real request does not pay one-off costs - the first
+    // request after a restart measured First-Pcm 0.58 s vs 0.33-0.45 s steady
+    // state. Discard mode: nothing is written, the voice selection is untouched.
+    {
+        m5::Stats warm;
+        std::string warm_error;
+        st.engine.clear_stop();
+        if (st.engine.render_text("你好，世界。", "", nullptr, warm, warm_error)) {
+            fprintf(stderr, "[m5-server] warmup %.2fs (rtf=%.3f frames=%d)\n",
+                    warm.elapsed, warm.rtf, warm.frames);
+        } else {
+            fprintf(stderr, "[m5-server] warmup skipped: %s\n", warm_error.c_str());
+        }
+    }
     fprintf(stderr, "[m5-server] model=%s voices=%s listening on %s:%d\n",
             options.model_dir.c_str(), st.voices_path.c_str(), host.c_str(), port);
 
@@ -982,7 +997,9 @@ int main(int argc, char ** argv) {
                         if (stream->cancelled) { st.engine.stop(); return; }
                         stream->push(floats_to_s16(samples, count));
                     };
-                    // Small batches keep the first packet short for streaming.
+                    // Two frames per first chunk measured best: one frame is
+                    // the smallest batch the codec takes but its fixed call
+                    // overhead pushes First-Pcm to ~0.51 s versus ~0.29 s.
                     st.engine.set_chunking(2, 4);
                     m5::Stats stats;
                     std::string err2;

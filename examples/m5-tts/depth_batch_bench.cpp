@@ -12,16 +12,54 @@
 //   28x1  twenty-eight decodes of 1  (worst case)
 //   1x2   one decode of 2 rows       (fixed-cost baseline)
 #include "llama.h"
+#include "m5_depth_heads.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <random>
 #include <vector>
 
 namespace {
+
+struct noisy_sampler {
+    std::vector<ggml_tensor *> inputs;
+    std::mt19937 rng{1234};
+};
+
+llama_sampler_i noisy_sampler_ops = [] {
+    llama_sampler_i ops{};
+    ops.name = [](const llama_sampler *) { return "m5-top10-noisy"; };
+    ops.free = [](llama_sampler * smpl) { delete static_cast<noisy_sampler *>(smpl->ctx); };
+    ops.backend_init = [](llama_sampler *, ggml_backend_buffer_type_t, uint32_t) { return true; };
+    ops.backend_reset = [](llama_sampler * smpl) {
+        static_cast<noisy_sampler *>(smpl->ctx)->inputs.clear();
+    };
+    ops.backend_apply = [](llama_sampler * smpl, ggml_context * ctx, ggml_cgraph *, llama_sampler_data * data) {
+        auto * noise = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, data->logits->ne[0]);
+        ggml_set_input(noise);
+        static_cast<noisy_sampler *>(smpl->ctx)->inputs.push_back(noise);
+        auto * scaled = ggml_scale(ctx, data->logits, 1.0f / 0.9f);
+        auto * picks = ggml_top_k(ctx, scaled, 10);
+        auto * scores = ggml_sub(ctx, scaled, noise);
+        data->sampled = ggml_argmax(ctx, ggml_top_k_mask(ctx, scores, picks, nullptr, nullptr, nullptr));
+        data->logits = nullptr;
+    };
+    ops.backend_set_input = [](llama_sampler * smpl) {
+        auto & state = *static_cast<noisy_sampler *>(smpl->ctx);
+        std::exponential_distribution<float> noise;
+        for (auto * input : state.inputs) {
+            float values[m5::heads::kVocab];
+            GGML_ASSERT(input->ne[0] == m5::heads::kVocab);
+            for (auto & value : values) value = std::log(std::max(noise(state.rng), 1e-38f));
+            ggml_backend_tensor_set(input, values, 0, sizeof(values));
+        }
+    };
+    return ops;
+}();
 
 double now_ms() {
     using namespace std::chrono;
@@ -71,6 +109,20 @@ int main(int argc, char ** argv) {
     params.n_ctx = 256;
     params.n_batch = 64;
     params.n_ubatch = 64;
+    const bool sampled = std::getenv("M5_BENCH_SAMPLED") != nullptr;
+    const bool noisy = sampled && std::getenv("M5_BENCH_NOISY") != nullptr;
+    std::unique_ptr<llama_sampler, decltype(&llama_sampler_free)> sampler(nullptr, llama_sampler_free);
+    llama_sampler_seq_config sampler_config{};
+    if (sampled) {
+        sampler.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+        llama_sampler_chain_add(sampler.get(), noisy ? new llama_sampler{&noisy_sampler_ops, new noisy_sampler}
+                                                     : llama_sampler_init_greedy());
+        sampler_config = {0, sampler.get()};
+        params.embeddings = false;
+        params.n_outputs_max_per_seq = 1;
+        params.samplers = &sampler_config;
+        params.n_samplers = 1;
+    }
     llama_context * ctx = llama_init_from_model(model, params);
     if (!ctx) {
         std::fprintf(stderr, "cannot init context\n");
@@ -90,17 +142,20 @@ int main(int argc, char ** argv) {
     std::vector<llama_seq_id *> seqs(64, seq.data());
     std::vector<int32_t> counts(64, 1);
 
-    auto run = [&](int calls, int rows_per_call) -> double {
+    auto run = [&](int calls, int rows_per_call, bool depth_frame) -> double {
         llama_memory_clear(llama_get_memory(ctx), false);
         std::vector<llama_pos> pos(rows_per_call);
         std::vector<int8_t> want(rows_per_call, 0);
         want[rows_per_call - 1] = 1;
         const double t0 = now_ms();
+        int row_offset = 0;
         for (int c = 0; c < calls; ++c) {
-            for (int i = 0; i < rows_per_call; ++i) pos[i] = c * rows_per_call + i;
+            const int rows = depth_frame && c > 0 ? 1 : rows_per_call;
+            for (int i = 0; i < rows; ++i) pos[i] = row_offset + i;
+            want[0] = rows == 1;
             llama_batch batch{};
-            batch.n_tokens = rows_per_call;
-            batch.embd = embd.data() + (size_t) c * rows_per_call * width;
+            batch.n_tokens = rows;
+            batch.embd = embd.data() + (size_t) row_offset * width;
             batch.pos = pos.data();
             batch.n_seq_id = counts.data();
             batch.seq_id = seqs.data();
@@ -109,27 +164,33 @@ int main(int argc, char ** argv) {
                 std::fprintf(stderr, "decode failed\n");
                 std::exit(1);
             }
+            if (sampled && llama_get_sampled_token_ith(ctx, -1) == LLAMA_TOKEN_NULL) {
+                std::fprintf(stderr, "backend did not return a sampled token\n");
+                std::exit(1);
+            }
+            row_offset += rows;
         }
         return now_ms() - t0;
     };
 
-    struct Scenario { const char * name; int calls; int rows; };
+    struct Scenario { const char * name; int calls; int rows; bool depth_frame = false; };
     const Scenario scenarios[] = {
         {"1x28", 1, 28},
         {"14x2", 14, 2},
         {"28x1", 28, 1},
         {"1x2", 1, 2},
+        {"depth", 15, 2, true},
     };
 
-    for (const auto & s : scenarios) run(s.calls, s.rows);   // warmup
+    for (const auto & s : scenarios) run(s.calls, s.rows, s.depth_frame);
 
     std::fprintf(stderr, "\n%-8s %10s %10s %12s\n", "shape", "median_ms", "ms/call", "ms/row");
     for (const auto & s : scenarios) {
         std::vector<double> samples;
-        for (int r = 0; r < reps; ++r) samples.push_back(run(s.calls, s.rows));
+        for (int r = 0; r < reps; ++r) samples.push_back(run(s.calls, s.rows, s.depth_frame));
         const double ms = median(samples);
         std::fprintf(stderr, "%-8s %10.2f %10.3f %12.3f\n", s.name, ms,
-                     ms / s.calls, ms / s.rows);
+                     ms / s.calls, ms / (s.depth_frame ? 16 : s.calls * s.rows));
     }
 
     llama_free(ctx);

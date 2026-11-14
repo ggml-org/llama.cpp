@@ -258,6 +258,9 @@ int main(int argc, char ** argv) {
         int decode_calls = 0;
         int wait_calls = 0;
         int frames = 0;
+        // Prefix-cache state for the -1 prefill message (pipe transport only).
+        int cached_shared = 0;
+        uint32_t cached_hash = 0;
 #ifdef M5_STAGE_TIMING
         double decode_api_ms = 0;
         double embedding_api_ms = 0;
@@ -290,6 +293,82 @@ int main(int argc, char ** argv) {
             wait_ms += std::chrono::duration<double, std::milli>(
                 std::chrono::steady_clock::now() - wait_started).count();
             ++wait_calls;
+            if (getenv("M5_STAGE_DEBUG"))
+                std::fprintf(stderr, "m5-stage msg count=%u start=%d\n", count, start);
+            if constexpr (!kRing) {
+                if (count == (uint32_t) -1) {
+                    // Prefix-cached prefill: [shared_rows][hash][rest_rows] then
+                    // shared rows and rest rows. The shared block's KV is kept
+                    // across requests when the hash matches, so only the new
+                    // text plus reference codes get decoded again.
+                    int32_t sh = 0, rs = 0;
+                    uint32_t hash = 0;
+                    if (!input.read(reinterpret_cast<char *>(&sh), sizeof(sh)) ||
+                        !input.read(reinterpret_cast<char *>(&hash), sizeof(hash)) ||
+                        !input.read(reinterpret_cast<char *>(&rs), sizeof(rs))) {
+                        throw std::runtime_error("incomplete prefill header");
+                    }
+                    if (sh < 0 || rs <= 0 || (size_t) (sh + rs) > (size_t) prefix) {
+                        throw std::runtime_error("prefill exceeds context");
+                    }
+                    llama_memory_t mem = llama_get_memory(context.get());
+                    const bool hit = sh > 0 && sh == cached_shared && hash == cached_hash;
+                    if (hit) {
+                        // Keep [0, sh) and drop everything the last request
+                        // appended; the shared block is unchanged (causal).
+                        llama_memory_seq_rm(mem, sequence, sh, -1);
+                    } else {
+                        llama_memory_clear(mem, false);
+                        cached_shared = 0;
+                        cached_hash = 0;
+                    }
+                    auto decode_block = [&](int n, int pos) {
+                        if (!input.read(reinterpret_cast<char *>(embeddings.data()),
+                                        (size_t) n * row_bytes)) {
+                            throw std::runtime_error("cannot read prefill rows");
+                        }
+                        for (int i = 0; i < n; ++i) {
+                            positions[i] = pos + i;
+                            requested[i] = i == n - 1;
+                        }
+                        llama_batch batch{};
+                        batch.n_tokens = n;
+                        batch.embd = embeddings.data();
+                        batch.pos = positions.data();
+                        batch.n_seq_id = sequence_counts.data();
+                        batch.seq_id = sequence_ids.data();
+                        batch.logits = requested.data();
+                        if (llama_decode(context.get(), batch) != 0) {
+                            throw std::runtime_error("backbone decode failed");
+                        }
+                    };
+                    if (sh > 0) {
+                        if (hit) {
+                            // The engine always sends the shared block; on a hit
+                            // its bytes still have to be consumed or the next
+                            // message header reads garbage.
+                            if (!input.read(reinterpret_cast<char *>(embeddings.data()),
+                                            (size_t) sh * row_bytes)) {
+                                throw std::runtime_error("cannot read prefill rows");
+                            }
+                        } else {
+                            decode_block(sh, 0);
+                            cached_shared = sh;
+                            cached_hash = hash;
+                        }
+                    }
+                    decode_block(rs, sh);
+                    const auto * hidden = llama_get_embeddings_ith(context.get(), -1);
+                    if (!hidden) {
+                        throw std::runtime_error("cannot read backbone hidden");
+                    }
+                    if (!output.write(reinterpret_cast<const char *>(hidden), row_bytes).flush()) {
+                        throw std::runtime_error("cannot write prefill reply");
+                    }
+                    start = sh + rs;
+                    continue;
+                }
+            }
             if (count == 0) {
                 if (depth && start != 0) {
                     std::fprintf(stderr, "m5-depth frame=%d core_ms=%.3f\n", frames++, prefill_ms + decode_ms);

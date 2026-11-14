@@ -320,9 +320,10 @@ public:
 
     bool run(const float * rows_data, int rows, float * out) {
         int32_t count = rows;
-        if (!write_all(&count, sizeof(count))) return false;
-        if (!write_all(rows_data, sizeof(float) * kWidth * (size_t) rows)) return false;
-        return read_all(out, sizeof(float) * kWidth);
+        if (!write_all(&count, sizeof(count))) { fprintf(stderr, "[m5] stage count write failed rows=%d\n", rows); return false; }
+        if (!write_all(rows_data, sizeof(float) * kWidth * (size_t) rows)) { fprintf(stderr, "[m5] stage rows write failed rows=%d\n", rows); return false; }
+        if (!read_all(out, sizeof(float) * kWidth)) { fprintf(stderr, "[m5] stage reply read failed rows=%d\n", rows); return false; }
+        return true;
     }
 
     // Multi-row variant for the --depth-chain protocol: one request of
@@ -332,6 +333,23 @@ public:
         if (!write_all(&count, sizeof(count))) return false;
         if (!write_all(rows_data, sizeof(float) * kWidth * (size_t) in_rows)) return false;
         return read_all(out, sizeof(float) * kWidth * (size_t) out_rows);
+    }
+
+    // Prefix-cached prefill: [shared rows][rest rows] with a hash of the shared
+    // block. The stage keeps the shared block's KV across requests and answers
+    // with the hidden of the last rest row. count == -1 marks the variant.
+    bool run_prefill(const float * shared, int shared_rows, uint32_t hash,
+                     const float * rest, int rest_rows, float * out) {
+        int32_t magic = -1, sh = shared_rows, rs = rest_rows;
+        if (!write_all(&magic, sizeof(magic))) return false;
+        if (!write_all(&sh, sizeof(sh))) return false;
+        if (!write_all(&hash, sizeof(hash))) return false;
+        if (!write_all(&rs, sizeof(rs))) return false;
+        if (shared_rows > 0 &&
+            !write_all(shared, sizeof(float) * kWidth * (size_t) shared_rows)) return false;
+        if (rest_rows > 0 &&
+            !write_all(rest, sizeof(float) * kWidth * (size_t) rest_rows)) return false;
+        return read_all(out, sizeof(float) * kWidth);
     }
 
     void close() {
@@ -404,6 +422,15 @@ public:
     bool run_rows(const float * data, int in_rows, float * out, int out_rows) {
         return process_.run_rows(data, in_rows, out, out_rows);
     }
+
+    // Prefix-cached prefill (pipe only; the ring protocol carries one row at a
+    // time and has no notion of a retained prefix).
+    bool prefill(const float * shared, int shared_rows, uint32_t hash,
+                 const float * rest, int rest_rows, float * out) {
+        if (ring_) return false;
+        return process_.run_prefill(shared, shared_rows, hash, rest, rest_rows, out);
+    }
+    bool supports_prefill() const { return !ring_; }
 
     bool reset() {
         if (!ring_) { process_.reset(); return true; }
@@ -1046,14 +1073,48 @@ bool Engine::Impl::segment(const std::vector<long> & tokens, WavWriter & wav, co
         return false;
     }
 
-    std::vector<float> prefix((size_t) length * kWidth, 0.0f);
+    // The conditioning prefix (markers + caption + reference text) is identical
+    // for every request on this voice. When the byte-level BPE splits cleanly -
+    // the shared ids are a prefix of the full sequence - the stage can keep that
+    // block's KV and only prefill the new text plus the reference audio codes.
+    std::string shared_text = std::string("<|caption_begin|>") + trim(options.caption) +
+                              "<|caption_end|><|accent_begin|><|accent_end|>"
+                              "<|speaker_start|>None<|speaker_end|><|lang_begin|>Chinese<|lang_end|>" +
+                              trim(voice.reference);
+    int shared_len = 0;
+    if (backbone.supports_prefill()) {
+        // Byte-level BPE can merge the reference's last characters with the
+        // first character of the text, so the shared boundary is pinned two
+        // tokens before the end of the reference block: those ids depend only
+        // on the voice (left context), not on the text, so the hash is stable
+        // across requests and the warmup primed block keeps hitting.
+        const std::vector<long> shared_ids = tokenizer.encode(shared_text);
+        const size_t want = shared_ids.size() >= 3 ? shared_ids.size() - 2 : 0;
+        size_t n = 0;
+        while (n < want && n < tokens.size() && shared_ids[n] == tokens[n]) n++;
+        shared_len = (int) n;
+        if (getenv("M5_PREFIX_STATS"))
+            fprintf(stderr, "[m5] prefix shared=%zu of %zu (full %zu)\n",
+                    n, shared_ids.size(), tokens.size());
+    }
+
+    // Row layout: [shared text][segment text][reference audio codes].
+    const size_t rest_text = tokens.size() - (size_t) shared_len;
+    if (getenv("M5_PREFIX_STATS"))
+        fprintf(stderr, "[m5] prefix shared=%d text=%zu codes=%zu\n",
+                shared_len, rest_text, voice.codes.size());
+    std::vector<float> shared_rows((size_t) shared_len * kWidth, 0.0f);
+    std::vector<float> rest_rows((rest_text + voice.codes.size()) * kWidth, 0.0f);
     for (size_t i = 0; i < tokens.size(); i++) {
         const long id = tokens[i];
         if (id < 0 || id >= text_emb.rows) { error = "token id out of range"; return false; }
-        memcpy(prefix.data() + i * kWidth, text_emb.data + (size_t) id * kWidth, sizeof(float) * kWidth);
+        float * dst = i < (size_t) shared_len
+                          ? shared_rows.data() + i * kWidth
+                          : rest_rows.data() + (i - (size_t) shared_len) * kWidth;
+        memcpy(dst, text_emb.data + (size_t) id * kWidth, sizeof(float) * kWidth);
     }
     for (size_t r = 0; r < voice.codes.size(); r++) {
-        float * dst = prefix.data() + (tokens.size() + r) * kWidth;
+        float * dst = rest_rows.data() + (rest_text + r) * kWidth;
         for (int j = 0; j < kBooks; j++) {
             const long row = voice.codes[r][j] + 1 + j * kVocab;
             if (row < 0 || row >= audio_emb.rows) { error = "audio token out of range"; return false; }
@@ -1062,8 +1123,8 @@ bool Engine::Impl::segment(const std::vector<long> & tokens, WavWriter & wav, co
         }
     }
 
-    // Every segment restarts both recurrent streams.
-    if (!backbone.reset()) { error = "backbone reset failed"; return false; }
+    // Every segment restarts the codec stream; the backbone runs the
+    // prefix-cached prefill below, which doubles as its reset.
     codec.reset_stream();
 
     std::mutex m;
@@ -1148,17 +1209,44 @@ bool Engine::Impl::segment(const std::vector<long> & tokens, WavWriter & wav, co
     float next_hidden[kWidth] = {0};
     std::vector<float> noise((size_t) kNoiseBooks * kVocab);
 
+    // Prefix-cached prefill: the stage keeps the shared block's KV when the
+    // hash matches, so repeat requests on the same voice only prefill the new
+    // text and the reference audio codes.
+    {
+        const double b0 = now_s();
+        bool primed = false;
+        const int rest_len = (int) (rest_text + voice.codes.size());
+        if (backbone.supports_prefill()) {
+            uint32_t hash = 2166136261u;
+            const uint8_t * bytes = reinterpret_cast<const uint8_t *>(shared_rows.data());
+            for (size_t i = 0; i < shared_rows.size() * sizeof(float); i++) {
+                hash = (hash ^ bytes[i]) * 16777619u;
+            }
+            primed = backbone.prefill(shared_rows.data(), shared_len, hash,
+                                      rest_rows.data(), rest_len, hidden);
+        } else {
+            if (!backbone.reset()) { error = "backbone reset failed"; return false; }
+            std::vector<float> all;
+            all.reserve(shared_rows.size() + rest_rows.size());
+            all.insert(all.end(), shared_rows.begin(), shared_rows.end());
+            all.insert(all.end(), rest_rows.begin(), rest_rows.end());
+            primed = backbone.run(all.data(), (int) (shared_len + rest_len), hidden);
+        }
+        timings.backbone.store(timings.backbone.load() + (now_s() - b0));
+        if (!primed) { error = "backbone stage failed"; return false; }
+    }
+
     FILE * codes_file = nullptr;
     if (!dump_codes_path.empty()) codes_file = fopen(dump_codes_path.c_str(), "ab");
 
     bool ok = true;
     for (long step = 0; step < kMaxFrames; step++) {
         if (stopped.load()) { error = "cancelled"; ok = false; break; }
-        const float * input = step == 0 ? prefix.data() : next_hidden;
-        const int rows = step == 0 ? length : 1;
-        const double b0 = now_s();
-        if (!backbone.run(input, rows, hidden)) { error = "backbone stage failed"; ok = false; break; }
-        timings.backbone.store(timings.backbone.load() + (now_s() - b0));
+        if (step > 0) {
+            const double b0 = now_s();
+            if (!backbone.run(next_hidden, 1, hidden)) { error = "backbone stage failed"; ok = false; break; }
+            timings.backbone.store(timings.backbone.load() + (now_s() - b0));
+        }
 
         for (auto & n : noise) {
             const double u = 1.0 - rng->next_double();
