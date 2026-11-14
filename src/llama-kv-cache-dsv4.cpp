@@ -1227,6 +1227,8 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
                      bool   no_alloc,
                 ggml_type   type_k,
                 ggml_type   type_v,
+                ggml_type   type_k_swa,
+                ggml_type   type_v_swa,
                      bool   v_trans,
                      bool   offload,
                      bool   swa_full,
@@ -1269,7 +1271,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     dsv4_make_k_only(hparams_raw);
 
     kv_raw = std::make_unique<llama_kv_cache_iswa>(
-            model, no_alloc, hparams_raw, type_k, type_v,
+            model, no_alloc, hparams_raw, type_k, type_v, type_k_swa, type_v_swa,
             v_trans, offload, swa_full, unified_raw, kv_size, n_seq_max, n_ubatch,
             nullptr, filter_raw, reuse, nullptr);
 

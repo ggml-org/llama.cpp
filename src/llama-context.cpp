@@ -531,9 +531,11 @@ llama_context::llama_context(
     // init the memory module
     if (!hparams.vocab_only) {
         llama_memory_params params_mem = {
-            /*.type_k    =*/ params.type_k,
-            /*.type_v    =*/ params.type_v,
-            /*.swa_full  =*/ params.swa_full,
+            /*.type_k     =*/ params.type_k,
+            /*.type_v     =*/ params.type_v,
+            /*.type_k_swa =*/ params.type_k_swa,
+            /*.type_v_swa =*/ params.type_v_swa,
+            /*.swa_full   =*/ params.swa_full,
             /*.ctx_type  =*/ cparams.ctx_type,
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
             /*.no_alloc  =*/ model.no_alloc(),
@@ -613,7 +615,9 @@ llama_context::llama_context(
         sched_reserve();
 
         if (!cparams.flash_attn) {
-            if (ggml_is_quantized(params.type_v)) {
+            const bool quant_v = ggml_is_quantized(params.type_v) ||
+                (model.hparams.is_swa_any() && ggml_is_quantized(params.type_v_swa));
+            if (quant_v) {
                 throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
             }
         }
@@ -4439,6 +4443,8 @@ llama_context_params llama_context_default_params() {
         /*.cb_eval_user_data           =*/ nullptr,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
+        /*.type_k_swa                  =*/ GGML_TYPE_COUNT,
+        /*.type_v_swa                  =*/ GGML_TYPE_COUNT,
         /*.moe_cache_size              =*/ 0,
         /*.moe_cache_cpu_share         =*/ 0.0f,
         /*.abort_callback              =*/ nullptr,
@@ -4494,12 +4500,26 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41) && params.type_k != params.type_v) {
+    // GGML_TYPE_COUNT: sliding-window cache uses the same type as the full-attention cache
+    if (params.type_k_swa == GGML_TYPE_COUNT) {
+        params.type_k_swa = params.type_k;
+    }
+    if (params.type_v_swa == GGML_TYPE_COUNT) {
+        params.type_v_swa = params.type_v;
+    }
+
+    const bool mla_kv = model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4 || model->arch == LLM_ARCH_DEEPSEEK41;
+    if (mla_kv && params.type_k != params.type_v) {
         LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
         return nullptr;
     }
+    if (mla_kv && model->hparams.is_swa_any() && params.type_k_swa != params.type_v_swa) {
+        LLAMA_LOG_ERROR("%s: model does not support different SWA K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k_swa), ggml_type_name(params.type_v_swa));
+        return nullptr;
+    }
 
-    const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3;
+    const bool fp8_cache = params.type_k == GGML_TYPE_F8_E4M3 || params.type_v == GGML_TYPE_F8_E4M3 ||
+        (model->hparams.is_swa_any() && (params.type_k_swa == GGML_TYPE_F8_E4M3 || params.type_v_swa == GGML_TYPE_F8_E4M3));
     // Direct cache consumers do not use the shared attention scaling helpers.
     if (fp8_cache && (model->hparams.is_mla() ||
             model->arch == LLM_ARCH_DEEPSEEK32 ||
@@ -4538,7 +4558,9 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+    const bool quant_v = ggml_is_quantized(params.type_v) ||
+        (model->hparams.is_swa_any() && ggml_is_quantized(params.type_v_swa));
+    if (quant_v && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
             LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);
             params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
@@ -4549,23 +4571,37 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
-        const uint32_t blck_size = ggml_blck_size(params.type_k);
+    // swa_sel: 0 = every layer, 1 = SWA layers, 2 = full-attention layers
+    const auto type_divides_heads = [&](ggml_type type, bool is_k, int swa_sel) {
+        if (!ggml_is_quantized(type)) {
+            return true;
+        }
+        const uint32_t blck_size = ggml_blck_size(type);
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
-            if (model->hparams.n_embd_head_k(il) % blck_size != 0) {
-                LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_head_k=%u\n",
-                    __func__, ggml_type_name(params.type_k), blck_size, model->hparams.n_embd_head_k(il));
-                return nullptr;
+            const bool swa = model->hparams.is_swa(il);
+            if ((swa_sel == 1 && !swa) || (swa_sel == 2 && swa)) {
+                continue;
+            }
+            const uint32_t n_embd = is_k ? model->hparams.n_embd_head_k(il) : model->hparams.n_embd_head_v(il);
+            if (n_embd % blck_size != 0) {
+                LLAMA_LOG_ERROR("%s: %s cache type %s with block size %u does not divide n_embd_head_%s=%u\n",
+                    __func__, is_k ? "K" : "V", ggml_type_name(type), blck_size, is_k ? "k" : "v", n_embd);
+                return false;
             }
         }
-    }
+        return true;
+    };
 
-    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
-        const uint32_t blck_size = ggml_blck_size(params.type_v);
-        for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
-            if (model->hparams.n_embd_head_v(il) % blck_size != 0) {
-                LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_head_v=%u\n",
-                    __func__, ggml_type_name(params.type_v), blck_size, model->hparams.n_embd_head_v(il));
+    if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED) {
+        const bool split = model->hparams.is_swa_any() &&
+            (params.type_k != params.type_k_swa || params.type_v != params.type_v_swa);
+        if (!split) {
+            if (!type_divides_heads(params.type_k, true, 0) || !type_divides_heads(params.type_v, false, 0)) {
+                return nullptr;
+            }
+        } else {
+            if (!type_divides_heads(params.type_k, true, 2) || !type_divides_heads(params.type_v, false, 2) ||
+                !type_divides_heads(params.type_k_swa, true, 1) || !type_divides_heads(params.type_v_swa, false, 1)) {
                 return nullptr;
             }
         }

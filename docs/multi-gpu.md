@@ -43,6 +43,8 @@ Set with `--split-mode` / `-sm`.
 | `-fa` | `--flash-attn` | `on` \| `off` \| `auto` | `auto` | Required when using `--split-mode tensor` and/or quantized V cache. Supported (and therefore enabled by default) for most combinations of models and backends. |
 | `-ctk` | `--cache-type-k` | `f32` \| `f16` \| `bf16` \| `q8_0` \| `q4_0` \| ... | `f16` | KV cache type for K. |
 | `-ctv` | `--cache-type-v` | same as `-ctk` | `f16` | KV cache type for V. |
+| | `--cache-type-k-swa` | same as `-ctk` | same as `-ctk` | KV cache type for K of the sliding-window cache. No effect unless the model keeps that cache separate. |
+| | `--cache-type-v-swa` | same as `-ctv` | same as `-ctv` | KV cache type for V of the sliding-window cache. No effect unless the model keeps that cache separate. |
 | `-fit` | `--fit` | `on` \| `off` | `on` | Auto-fit unset args to device memory. **Not supported with `tensor`. You may need to manually set the `--ctx-size` to make the model fit.**  |
 
 As for any CUDA program, the environment variable `CUDA_VISIBLE_DEVICES` can be used to control which GPUs to use for the CUDA backend: if you set it, llama.cpp only sees the specified GPUs. Use `--device` for selecting GPUs from among those visible to llama.cpp, this works for any backend.
