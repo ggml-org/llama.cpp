@@ -182,10 +182,10 @@ ggml_tensor * llama_model_metis16::graph::hc_read(ggml_tensor * x, ggml_tensor *
     ggml_tensor * x2 = ggml_reshape_2d(ctx0, x, n_s, x->ne[1]*x->ne[2]);
 
     ggml_tensor * m = ggml_view_2d(ctx0, mix, n_s, n_s, mix->nb[1], p*mix->nb[2]);
-    *mixed = ggml_mul_mat(ctx0, m, x2);
+    *mixed = build_lora_mm(m, x2);
 
     ggml_tensor * r   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, read, n_s, p*read->nb[1]), n_s, 1);
-    ggml_tensor * src = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, r, x2), x->ne[1], x->ne[2]);
+    ggml_tensor * src = ggml_reshape_2d(ctx0, build_lora_mm(r, x2), x->ne[1], x->ne[2]);
     return build_norm(src, norm, NULL, LLM_NORM_RMS, il);
 }
 
@@ -193,7 +193,7 @@ ggml_tensor * llama_model_metis16::graph::hc_write(ggml_tensor * mixed, ggml_ten
     const int64_t n_s = mixed->ne[0];
     ggml_tensor * w   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, write, n_s, p*write->nb[1]), 1, n_s);
     ggml_tensor * u   = ggml_reshape_2d(ctx0, update, 1, update->ne[0]*update->ne[1]);
-    ggml_tensor * out = ggml_add(ctx0, mixed, ggml_mul_mat(ctx0, w, u));
+    ggml_tensor * out = ggml_add(ctx0, mixed, build_lora_mm(w, u));
     return ggml_reshape_3d(ctx0, out, n_s, update->ne[0], update->ne[1]);
 }
 
