@@ -1191,10 +1191,10 @@ class tensor_traits_common : public tensor_traits_base {
 
         const bool supported_prec  = (ggml_prec_get_acc(dst) == GGML_PREC_F32 || ggml_prec_get_acc(dst) == GGML_PREC_BF16 || ggml_prec_get_acc(dst) == GGML_PREC_UNDEFINED);
         const bool supported_types = (q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16);
-        const bool supported_shape = (DK > 0 && DK <= 128 && DV > 0 && DV <= 128);
+        const bool supported_shape = (DK > 0 && DK <= 256 && DV > 0 && DV <= 256);
         const bool supported_vlen  = (__riscv_vlenb() == 128);
 
-        if (!(supported_prec && supported_types && supported_shape && supported_vlen)) {
+        if (params->use_ref || !(supported_prec && supported_types && supported_shape && supported_vlen)) {
             ggml_compute_forward_flash_attn_ext(params, dst);
             return;
         }
@@ -1240,7 +1240,8 @@ class tensor_traits_common : public tensor_traits_base {
             if (use_tiled) {
                 spacemit_kernels::rvv::forward_flash_attn_ext_f16_tiled_vlen1024_vf16(
                     params, dst, ir0, ir1, ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer,
-                    ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer_size);
+                    ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer_size,
+                    ggml::cpu::riscv64_spacemit::global_spine_env_info.use_ime2);
             } else {
                 spacemit_kernels::rvv::forward_flash_attn_ext_f16_one_chunk_vlen1024_vf16(
                     params, dst, ir0, ir1, ggml::cpu::riscv64_spacemit::tls_context.tcm_buffer,
