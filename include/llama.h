@@ -993,6 +993,8 @@ extern "C" {
     //
     // Extended batch API
     //
+    // To migrate from llama_batch, see docs/development/migrate-to-llama-batch-ext.md
+    //
 
     struct llama_batch_ext;
 
