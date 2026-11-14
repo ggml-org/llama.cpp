@@ -861,7 +861,113 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
     return ggml_cuda_is_aligned(src0, x_alignment) && ggml_cuda_is_aligned(src1, 16);
 }
 
-#else // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+#elif defined(GGML_USE_HIP)
+
+static __device__ __forceinline__ float vec_dot_q4_K_q8_1_few(
+        const int (&v0)[QR4_K], const int (&v1)[QR4_K], const uint8_t * sc, const uint8_t * m,
+        const float2 dm, const block_q8_1 * y, const int bq8_offset, const int iqs8) {
+    float sumf_d = 0.0f;
+    float sumf_m = 0.0f;
+#pragma unroll
+    for (int i = 0; i < QR4_K; ++i) {
+        const block_q8_1 * yb = y + bq8_offset + i;
+        const float d8 = __low2float(yb->ds);
+        const int * q8 = (const int *) yb->qs + iqs8;
+        const int u0 = q8[0];
+        const int u1 = q8[4];
+        const int dot1 = ggml_cuda_dp4a(v1[i], u1, ggml_cuda_dp4a(v0[i], u0, 0));
+        const int dot2 = ggml_cuda_dp4a(0x01010101, u1, ggml_cuda_dp4a(0x01010101, u0, 0));
+        sumf_d += d8 * (dot1 * sc[i]);
+        sumf_m += d8 * (dot2 * m[i]);
+    }
+    return dm.x*sumf_d - dm.y*sumf_m;
+}
+
+static __global__ void mul_mat_q_few_gcn(
+        const block_q4_K * x, const block_q8_1 * y, float * dst,
+        const int64_t nblocks, const int64_t stride_y, const int64_t stride_dst, const int ncols) {
+    constexpr int ncols_tile = 4;
+    constexpr int vdr = VDR_Q4_K_Q8_1_MMVQ;
+    constexpr int qi = ggml_cuda_type_traits<GGML_TYPE_Q4_K>::qi;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int64_t row = blockIdx.x;
+    const int col = ncols_tile*blockIdx.y;
+    const int tid = threadIdx.x;
+    const int iqs = vdr*(tid % (qi/vdr));
+    float sum[ncols_tile] = {0.0f};
+
+    const int bq8_offset = QR4_K*((iqs/2)/(QI8_1/2));
+    const int iqs8 = (iqs/2)%4;
+    const int scale_idx = (bq8_offset/2) & 1;
+    const uint32_t hi = (uint32_t) -(int32_t) (bq8_offset/2 >= 2);
+    for (int64_t kbx = tid/(qi/vdr); kbx < nblocks; kbx += vdr*warp_size/qi) {
+        const block_q4_K * bx = x + row*nblocks + kbx;
+        const int * q4 = (const int *) (bx->qs + 16*bq8_offset + 4*iqs8);
+        const int q0 = q4[0];
+        const int q1 = q4[4];
+        int v0[QR4_K];
+        int v1[QR4_K];
+#pragma unroll
+        for (int i = 0; i < QR4_K; ++i) {
+            v0[i] = (q0 >> (4*i)) & 0x0F0F0F0F;
+            v1[i] = (q1 >> (4*i)) & 0x0F0F0F0F;
+        }
+        const uint16_t * scales = (const uint16_t *) bx->scales;
+        const uint32_t s0 = scales[scale_idx + 0];
+        const uint32_t s2 = scales[scale_idx + 2];
+        const uint32_t s4 = scales[scale_idx + 4];
+        uint16_t aux[2];
+        aux[0] = (uint16_t) (((s0 & 0x3f3f) & ~hi) | (((s4 & 0x0f0f) | ((s0 & 0xc0c0) >> 2)) & hi));
+        aux[1] = (uint16_t) (((s2 & 0x3f3f) & ~hi) | ((((s4 >> 4) & 0x0f0f) | ((s2 & 0xc0c0) >> 2)) & hi));
+        const uint8_t * sc = (const uint8_t *) aux;
+        const uint8_t * m = sc + 2;
+        const float2 dm = __half22float2(bx->dm);
+#pragma unroll
+        for (int j = 0; j < ncols_tile; ++j) {
+            if (col + j < ncols) {
+                sum[j] += vec_dot_q4_K_q8_1_few(v0, v1, sc, m, dm,
+                    y + (col + j)*stride_y + kbx*(QK_K/QK8_1), bq8_offset, iqs8);
+            }
+        }
+    }
+
+#pragma unroll
+    for (int j = 0; j < ncols_tile; ++j) {
+        sum[j] = warp_reduce_sum<warp_size>(sum[j]);
+        if (tid == 0 && col + j < ncols) {
+            dst[(col + j)*stride_dst + row] = sum[j];
+        }
+    }
+}
+
+void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    cudaStream_t stream = ctx.stream();
+    const int64_t k_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
+    ggml_cuda_pool_alloc<block_q8_1> y(ctx.pool(), src1->ne[1]*k_padded/QK8_1);
+    quantize_row_q8_1_cuda((const float *) src1->data, y.get(), src1->ne[0], src1->nb[1]/sizeof(float),
+        src1->nb[2]/sizeof(float), src1->nb[3]/sizeof(float), k_padded, src1->ne[1], 1, 1, stream);
+
+    const dim3 blocks(src0->ne[1], (src1->ne[1] + 3)/4);
+    const dim3 threads(ggml_cuda_info().devices[ctx.device].warp_size);
+    const ggml_cuda_kernel_launch_params params(blocks, threads, 0, stream);
+    ggml_cuda_kernel_launch(mul_mat_q_few_gcn, params, (const block_q4_K *) src0->data, y.get(), (float *) dst->data,
+        src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+}
+
+bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
+#ifdef GGML_CUDA_FORCE_CUBLAS
+    GGML_UNUSED_VARS(src0, src1, cc);
+    return false;
+#else
+    return cc == GGML_CUDA_CC_VEGA20 && src0->type == GGML_TYPE_Q4_K && src1->type == GGML_TYPE_F32 &&
+        src1->ne[1] >= 9 && src1->ne[1] <= 24 && ggml_is_matrix(src0) && ggml_is_matrix(src1) &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_cuda_is_aligned(src0, 4) &&
+        ggml_cuda_is_aligned(src1, 4) && src0->ne[0] % QK_K == 0 &&
+        src0->ne[0] >= 2048 && src0->ne[0] <= INT_MAX && src0->ne[1] <= 1024;
+#endif // GGML_CUDA_FORCE_CUBLAS
+}
+
+#else // defined(GGML_USE_MUSA)
 
 void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_UNUSED_VARS(ctx, src0, src1, dst);
