@@ -105,6 +105,9 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
             foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
                 const auto & function = tool.at("function");
                 std::string  name     = function.at("name");
+                if (!inputs.tool_choice_function.empty() && name != inputs.tool_choice_function) {
+                    return;
+                }
 
                 std::vector<common_peg_parser> required_args;
                 std::vector<common_peg_parser> optional_args;
