@@ -1,0 +1,138 @@
+# llama.cpp on Elbrus (e2k) — optimization results
+
+Hardware: Elbrus E16C (8 cores, e2k-v6, @2 GHz), 62 GB RAM, ALT Linux 11, lcc 1.29.16.
+
+## Problem
+Upstream cmake classifies e2k as `GGML_SYSTEM_ARCH=UNKNOWN` -> scalar fallback for
+quantized dot/gemm kernels and repack tables. Baseline Qwen3-8B: pp512 ~2 t/s.
+
+## Fix (this branch)
+1. `ggml/cmake/common.cmake`: map `CMAKE_SYSTEM_PROCESSOR=e2k` to the x86 arch path.
+2. `ggml/src/ggml-cpu/arch-fallback.h`: add `__e2k__` to the x86 rename-macro branch.
+
+lcc 1.29 natively defines `__SSE2__`/`__AVX__`/`__AVX2__` and translates x86
+SSE2/AVX2 intrinsics into native e2k-v6 vector operations
+(`qpmaddubsh`, `qpshufb`, `qppermb` visible in disassembly). This activates the
+full x86 SIMD path: arch/x86 quants dot kernels, repack, sgemm dispatch.
+
+## Benchmarks (llama-bench, Qwen3-8B Q4_K_M, t8)
+| Build                  | pp512  | tg128 |
+|------------------------|--------|-------|
+| Baseline (scalar)      | 1.96   | 0.90  |
+| x86-SIMD (repack on)   | 17.89  | 1.78  |
+| x86-SIMD (`--repack 0`)| 14.06  | 2.14  |
+| x86-SIMD + LTO         | 17.63  | 2.05  |
+
+Speedup: pp x9.1, tg x2.4. Repack tables hurt tg on e2k -> use `--repack 0` for chat.
+Qwen3-32B Q4_K_M: pp256=2.81, tg ~0.7 t/s (memory-bandwidth bound; STREAM ~56 GB/s).
+
+
+## Qwen3.8-27B (qwen35 arch) Q4_K_M, E16C t8
+| Config                       | pp512 | tg64 |
+|------------------------------|-------|------|
+| repack on (default)          | 4.07  | 0.68 |
+| `--repack 0`                 | 3.58  | 0.76 |
+| `--repack 0 -fa on`          | 3.58  | 0.75 |
+| `--repack 0 -ctk/q8_0`       |   -   | 0.75 |
+| `-lm mlock`                  |   -   | 0.75 |
+| `-ub 128`                    | 3.31  |    - |
+| `--poll 100`                 | 4.07  | 0.76 |
+| GGML_CPU_TILED_MM_FORCE=1    | 4.05  |    - |
+
+15.32 GiB model on ~56 GB/s STREAM machine: tg is memory-bound, 0.68-0.76 t/s is
+the physical ceiling (15.3 GiB/tok -> ~3.7 GB/token of weight traffic ~ theoretical 3.7).
+For chat prefer `--repack 0` (tg +12%, pp -12%); for long prompts keep repack on.
+flash-attn / KV q8_0 / mlock / ubatch / poll / tiled-mm: no measurable effect on this backend.
+
+## clang 19 build (e2k)
+clang-19 (ALT) with lcc's x86 intrinsic headers compiles the same x86 SIMD path and
+fixes the libomp `llama-cli` SIGILL seen in lcc builds. BUT it is much slower:
+Qwen3.8-27B Q4_K_M: clang pp512=0.95/tg64=0.49 vs lcc pp512=4.07/tg64=0.68.
+lcc 1.29 e2k-v6 codegen is the right compiler; keep lcc build, workaround cli SIGILL
+with llama-server or OMP_NUM_THREADS=1.
+
+## Limitations
+- PGO unusable: `ecf_opt64` hangs with `-fprofile-generate` on `arch/x86/repack.cpp`.
+- LTO: no significant gain.
+
+## Recommended run (noomp build, Qwen3.8-27B)
+```
+llama-server -m Qwen3.8-27B-Q4_K_M.gguf -t 8 -nr          # chat: tg 1.12 t/s
+llama-server -m Qwen3.8-27B-Q4_K_M.gguf -t 8              # long prompts: pp 4.07 t/s
+```
+
+## Build
+```
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF -DGGML_OPENMP=OFF
+cmake --build build -j8 --target llama-server llama-cli llama-bench
+```
+
+## Threading discovery: libomp sleep-barriers (the real tg bottleneck)
+Token generation scales only 0.16 -> 0.31 -> 0.55 -> 0.69 -> 0.75 t/s for
+t=1..8 (x4.7), while an 8-thread kernel harness on the same file reaches x7.3.
+The gap is NOT the kernels: the production `ggml_vec_dot_q4_K_q8_K` streams a
+real GGUF mmap at 12.4 G weights/s/core, and libomp barrier microbenchmarks on
+lcc/e2k show sleep-based barriers (~90-167 us each, thread-pool has one per
+graph node). With `OMP_WAIT_POLICY=active` (+ OMP_PROC_BIND=spread,
+OMP_PLACES=cores):
+
+| config                          | tg64  | pp512 |
+|---------------------------------|-------|-------|
+| libomp default                  | 0.73  | 3.54  |
+| libomp WAIT_POLICY=active       | 1.09  | 3.54  |
+| libomp active + bind            | 1.11  | 3.54  |
+| noomp build (GGML_OPENMP=OFF)   | 1.12  | 3.47  |
+
+**+52% tg, pp unchanged.** Root cause: lcc's libomp ports a blocking (condvar)
+barrier; on Elbrus the futex wake latency dominates since every node sync
+costs ~2x a core's work slice at 8 threads.
+
+## Final build: GGML_OPENMP=OFF (installed)
+
+The compile-time fix matches the runtime env fix, with no env dependencies:
+
+```
+cmake -B build-noomp -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF -DGGML_OPENMP=OFF
+```
+
+With repack on, noomp also lifts tg64 from 0.68 to 0.96 t/s (+41%).
+
+Bonus: it also fixes the multi-threaded `llama-cli` SIGILL. That crash was
+inside lcc's libomp (`__omp_parallel_start`); with noomp there is no libomp in
+the dependency graph at all and `llama-cli -t 8 --single-turn` runs clean
+(RC=0, Qwen3.8-27B, verified on E16C). The clang-19 workaround is no longer
+needed. `~/bin/*` binaries now come from build-noomp; `~/lib` holds the noomp
+libraries. `llama-e2k` wrapper execs build-noomp/llama-server directly.
+
+## Model selection for E16C: MoE beats dense (Qwen3-30B-A3B)
+
+Dense 27B Q4_K_M is memory-read-bound *by its own weight bytes*: tg scales
+with active-bytes/token, and the effective read rate on this box is ~17 GB/s
+(16.5 GiB / 1.12 t/s), well under the 56 GB/s STREAM ceiling. An MoE model
+only touches its active experts per token, so it reads ~6x less per token:
+
+| model (installed noomp build, t8)  | size    | tg64        | pp512  |
+|------------------------------------|---------|-------------|--------|
+| Qwen3-30B-A3B Q4_K_S (qwen3moe)    | 16.25G  | 6.81 (nr) / 6.90 (rp) | 21.26 |
+| Qwen3.8-27B Q4_K_M (qwen35 dense)  | 15.32G  | 1.12        | 4.07   |
+
+**x6.1 generation, x5.2 prompt throughput at 30B-class quality.**
+Repack makes no difference on the MoE (6.81 vs 6.90 within noise) - unlike
+dense 27B - because gemv over active experts is tiny relative to overhead.
+
+Quality smoke (4 prompts: bat-and-ball, microwave physics, two_sum code,
+average-speed problem, thinking disabled):
+- 30B-A3B: 4/4 correct (10; correct dielectric-heating physics; optimal
+  hash-map two_sum; 355 km / 5 h setup correct).
+- 27B dense: 2/4 (answered 5 cents on bat-and-ball; speed problem 74 km/h
+  correct; physics and code correct). The 27B GGUF appears mid-quantization
+  in quality; MoE was strictly better on reasoning prompts in this sample.
+
+Recommendation: keep `Qwen3-30B-A3B-Instruct-2507-Q4_K_S.gguf` (UD-quant) as
+the daily driver on E16C:
+
+```
+llama-server -m ~/models/Qwen3-30B-A3B-Q4_K_S.gguf -t 8 --port 8080
+```
+
+6.8 t/s is interactive-fast; pp512 21 t/s handles RAG-length prompts.

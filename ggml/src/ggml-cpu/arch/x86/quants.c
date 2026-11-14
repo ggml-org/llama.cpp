@@ -2122,6 +2122,19 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const __m256i m4 = _mm256_set1_epi8(0xF);
 
+#if defined(__e2k__)
+    // e2k (lcc): keep the eight k4 shuffle vectors in vector registers for the
+    // whole kernel; lcc schedules the unrolled inner loop far better this way.
+    const __m256i e2k_sk0 = get_scale_shuffle_k4(0);
+    const __m256i e2k_sk1 = get_scale_shuffle_k4(1);
+    const __m256i e2k_sk2 = get_scale_shuffle_k4(2);
+    const __m256i e2k_sk3 = get_scale_shuffle_k4(3);
+    const __m256i e2k_sk4 = get_scale_shuffle_k4(4);
+    const __m256i e2k_sk5 = get_scale_shuffle_k4(5);
+    const __m256i e2k_sk6 = get_scale_shuffle_k4(6);
+    const __m256i e2k_sk7 = get_scale_shuffle_k4(7);
+#endif
+
     __m256 acc = _mm256_setzero_ps();
     __m128 acc_m = _mm_setzero_ps();
 
@@ -2152,6 +2165,30 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
         __m256i sumi = _mm256_setzero_si256();
 
+#if defined(__e2k__)
+        // Full unroll (QK_K/64 == 4): lets lcc interleave all eight
+        // shuffle/madd chains and keep sk0..sk7 register-resident.
+#define E2K_DOT_K4_STEP(SKL, SCH, QOFF, Q8OFF)                                  \
+        {                                                                       \
+            const __m256i q4bits = _mm256_loadu_si256((const __m256i*)(q4 + (QOFF)));   \
+            const __m256i q4l = _mm256_and_si256(q4bits, m4);                   \
+            const __m256i q4h = _mm256_and_si256(_mm256_srli_epi16(q4bits, 4), m4);     \
+            const __m256i q8l = _mm256_loadu_si256((const __m256i*)(q8 + (Q8OFF)));     \
+            __m256i p16l = _mm256_maddubs_epi16(q4l, q8l);                      \
+            p16l = _mm256_madd_epi16(_mm256_shuffle_epi8(scales, SKL), p16l);   \
+            const __m256i q8h = _mm256_loadu_si256((const __m256i*)(q8 + (Q8OFF) + 32));\
+            __m256i p16h = _mm256_maddubs_epi16(q4h, q8h);                      \
+            p16h = _mm256_madd_epi16(_mm256_shuffle_epi8(scales, SCH), p16h);   \
+            sumi = _mm256_add_epi32(sumi, _mm256_add_epi32(p16l, p16h));        \
+        }
+        E2K_DOT_K4_STEP(e2k_sk0, e2k_sk1,  0,   0)
+        E2K_DOT_K4_STEP(e2k_sk2, e2k_sk3, 32,  64)
+        E2K_DOT_K4_STEP(e2k_sk4, e2k_sk5, 64, 128)
+        E2K_DOT_K4_STEP(e2k_sk6, e2k_sk7, 96, 192)
+#undef E2K_DOT_K4_STEP
+        q4 += QK_K/2;
+        q8 += QK_K;
+#else
         for (int j = 0; j < QK_K/64; ++j) {
 
             const __m256i scale_l = _mm256_shuffle_epi8(scales, get_scale_shuffle_k4(2*j+0));
@@ -2172,6 +2209,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
             sumi = _mm256_add_epi32(sumi, sumj);
         }
+#endif
 
         __m256 vd = _mm256_set1_ps(d);
         acc = _mm256_fmadd_ps(vd, _mm256_cvtepi32_ps(sumi), acc);
