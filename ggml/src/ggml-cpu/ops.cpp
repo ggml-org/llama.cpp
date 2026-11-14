@@ -11788,6 +11788,8 @@ void ggml_compute_forward_top_k_rows(
     const int ith = params->ith;
     const int nth = params->nth;
 
+    std::vector<int32_t> picks(n_top);
+
     for (int64_t ir = ith; ir < n_rows; ir += nth) {
         const int64_t i1 = ir % ne1;
         const int64_t i2 = (ir / ne1) % ne2;
@@ -11798,10 +11800,16 @@ void ggml_compute_forward_top_k_rows(
         const char * top_k_row = (const char *) top_k->data + i1*top_k->nb[1] + i2*top_k->nb[2] + i3*top_k->nb[3];
         const char * extra_row = extra ? (const char *) extra->data + i1*extra->nb[1] + i2*extra->nb[2] + i3*extra->nb[3] : nullptr;
 
+        // the picks in index order: the order of top_k is arbitrary, the attention over the list depends on it
+        for (int64_t k = 0; k < n_top; ++k) {
+            picks[k] = *(const int32_t *) (top_k_row + k*top_k->nb[0]);
+        }
+        std::sort(picks.begin(), picks.end());
+
         for (int64_t e = 0; e < n_res; ++e) {
             int32_t c = -1;
             if (e < n_top*n_blk) {
-                const int32_t p = *(const int32_t *) (top_k_row + (e / n_blk)*top_k->nb[0]);
+                const int32_t p = picks[e / n_blk];
                 bool live = p >= 0 && p < n_pick;
                 if (live && score) {
                     const float s = *(const float *) ((const char *) score->data

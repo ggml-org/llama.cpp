@@ -165,9 +165,20 @@ static __global__ void top_k_rows_kernel(
 
     const int64_t e = int64_t(blockIdx.y)*blockDim.x + threadIdx.x;
     if (e < n_res) {
-        int32_t c = -1;
+        int32_t c    = -1;
+        int64_t slot = e;
         if (e < n_top*n_blk) {
-            const int32_t p = top_k_row[(e / n_blk)*sk0];
+            const int64_t t = e / n_blk;
+            const int32_t p = top_k_row[t*sk0];
+
+            // the pick goes to its rank in index order: the order of top_k is arbitrary, the attention over the list depends on it
+            int64_t r = 0;
+            for (int64_t q = 0; q < n_top; ++q) {
+                const int32_t pq = top_k_row[q*sk0];
+                r += pq < p || (pq == p && q < t);
+            }
+            slot = r*n_blk + e % n_blk;
+
             bool live = p >= 0 && p < n_pick;
             if (live && score) {
                 live = score[p*ss0 + i1*ss1 + i2*ss2 + i3*ss3] > -INFINITY;
@@ -183,9 +194,9 @@ static __global__ void top_k_rows_kernel(
         }
 
         if constexpr (std::is_same_v<T, int32_t>) {
-            dst_row[e] = c;
+            dst_row[slot] = c;
         } else {
-            dst_row[e] = ggml_cuda_cast<T>(c >= 0 ? 0.0f : -INFINITY);
+            dst_row[slot] = ggml_cuda_cast<T>(c >= 0 ? 0.0f : -INFINITY);
         }
     }
 }
