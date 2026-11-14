@@ -37,6 +37,7 @@ struct mtmd_image_preprocessor {
     virtual mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const = 0;
     // frames of a video, which the video helper may have already sized
     virtual mtmd_image_preproc_out preprocess_video_frame(const mtmd_image_u8 & img) const { return preprocess(img); }
+    virtual mtmd_image_preproc_out preprocess_video_frames(const std::vector<mtmd_image_u8> & frames) const;
     // frame size of a video with n_frames sampled frames, as the reference video processor; false if none
     virtual bool get_video_frame_size(int /*n_frames*/, int /*width*/, int /*height*/, mtmd_image_size & /*out*/) const { return false; }
 };
@@ -141,6 +142,15 @@ struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     static mtmd_image_size get_target_size(const mtmd_hparams & hparams, const mtmd_image_size & original_size);
     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
     virtual mtmd_image_size target_size(const mtmd_image_size & original_size) const { return get_target_size(hparams, original_size); }
+};
+
+struct mtmd_image_preprocessor_inkling2 : mtmd_image_preprocessor {
+    using mtmd_image_preprocessor::mtmd_image_preprocessor;
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+    mtmd_image_preproc_out preprocess_video_frames(const std::vector<mtmd_image_u8> & frames) const override;
+
+private:
+    mtmd_image_preproc_out preprocess_pair(const mtmd_image_u8 & img, const mtmd_image_u8 * next) const;
 };
 
 // Kimi-K2.5 / K3.1 navit_resize_image: scale down to the patch limits, then pad bottom-right with black to a multiple of patch_size*n_merge

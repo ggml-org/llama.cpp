@@ -112,7 +112,7 @@ static __global__ void flash_attn_ext_vec(
     K += nb13*sequence + nb12*(head / gqa_ratio);
     V += nb23*sequence + nb22*(head / gqa_ratio);
 
-    const half * maskh  = (const half  *) (mask + nb33*(sequence % ne33) + nb31*ic0);
+    const half * maskh  = mask ? (const half  *) (mask + nb33*(sequence % ne33) + int64_t(nb32)*(head % ne32) + nb31*ic0) : nullptr;
 
     const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 

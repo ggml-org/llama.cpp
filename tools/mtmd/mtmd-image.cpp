@@ -2145,6 +2145,80 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
     return output;
 }
 
+mtmd_image_preproc_out mtmd_image_preprocessor::preprocess_video_frames(const std::vector<mtmd_image_u8> & frames) const {
+    mtmd_image_preproc_out result;
+    for (const auto & frame : frames) {
+        auto output = preprocess_video_frame(frame);
+        for (auto & entry : output.entries) {
+            result.entries.push_back(std::move(entry));
+        }
+        if (output.has_overview() || (output.grid_x > 0 && output.grid_y > 0)) {
+            GGML_ASSERT(frames.size() == 1);
+            result.grid_x = output.grid_x;
+            result.grid_y = output.grid_y;
+            result.overview = std::move(output.overview);
+        }
+    }
+    return result;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess(const mtmd_image_u8 & img) const {
+    return preprocess_pair(img, nullptr);
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess_pair(const mtmd_image_u8 & img, const mtmd_image_u8 * next) const {
+    const auto size = img.get_size();
+    const int align = hparams.patch_size * hparams.n_merge;
+    if (size.width <= 0 || size.height <= 0 || size.width > INT_MAX - align || size.height > INT_MAX - align) {
+        throw std::runtime_error("inkling2: invalid image size");
+    }
+    const int width = ((size.width + align - 1) / align) * align;
+    const int height = ((size.height + align - 1) / align) * align;
+    mtmd_image_f32 padded;
+    padded.set_size({width, height}, img.is_placeholder(), false);
+    if (!img.is_placeholder()) {
+        std::vector<float> pixels(size_t(width) * height * 3, -1.0f);
+        const auto & src = img.get_ro_buf();
+        for (int y = 0; y < size.height; ++y) {
+            auto dst = pixels.begin() + size_t(y) * width * 3;
+            const size_t offset = size_t(y) * size.width * 3;
+            if (next) {
+                const auto & other = next->get_ro_buf();
+                for (size_t x = 0; x < size_t(size.width) * 3; ++x) {
+                    dst[x] = (float(src[offset + x]) + float(other[offset + x])) * 0.5f;
+                }
+            } else {
+                std::copy_n(src.begin() + offset, size_t(size.width) * 3, dst);
+            }
+        }
+        padded.cpy_buf(pixels);
+        // Match the reference's fused rescale and normalization, including negative padding.
+        float mean[3], std[3];
+        for (int c = 0; c < 3; ++c) {
+            mean[c] = hparams.image_mean[c] * 255.0f;
+            std[c] = hparams.image_std[c] * 255.0f;
+        }
+        padded.normalize(mean, std);
+    }
+    mtmd_image_preproc_out result;
+    result.append(hparams, padded, false);
+    return result;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess_video_frames(const std::vector<mtmd_image_u8> & frames) const {
+    if (frames.empty() || frames.size() > 2) {
+        throw std::runtime_error("inkling2: expected one temporal group of one or two frames");
+    }
+    if (frames.size() == 1) {
+        return preprocess(frames[0]);
+    }
+    if (frames[0].get_size().width != frames[1].get_size().width || frames[0].get_size().height != frames[1].get_size().height || frames[0].is_placeholder() != frames[1].is_placeholder()) {
+        throw std::runtime_error("inkling2: temporal frames must have matching sizes and placeholder status");
+    }
+    // No reference video preprocessor exists; mean raw RGB before the verified still-image path.
+    return preprocess_pair(frames[0], &frames[1]);
+}
+
 //#define MTMD_DEBUG_FUNCTIONS
 
 #ifdef MTMD_DEBUG_FUNCTIONS

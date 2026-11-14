@@ -7,6 +7,8 @@ from .constants import MODEL_ARCH, MODEL_TENSOR, MODEL_TENSORS, TENSOR_NAMES
 
 class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.OUTPUT_RES_QUERY: ("model.final_input.query",),
+
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
             "gpt_neox.embed_in",                         # gptneox
@@ -55,6 +57,7 @@ class TensorNameMap:
 
         # Normalization of token embeddings
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
+            "model.embed_tokens.embed_norm",
             "word_embeddings_layernorm",  # bloom
             "embeddings.LayerNorm",       # bert
             "embeddings.norm",            # modern-bert
@@ -223,6 +226,23 @@ class TensorNameMap:
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
+        MODEL_TENSOR.ATTN_REL: ("model.layers.{bid}.self_attn.r_proj",),
+        MODEL_TENSOR.ATTN_REL_BIAS: ("model.layers.{bid}.self_attn.rel_logits_proj.proj",),
+        MODEL_TENSOR.ATTN_Q_CLIP: ("model.layers.{bid}.self_attn.q_l2_clip.scale",),
+        MODEL_TENSOR.ATTN_REL_CLIP: ("model.layers.{bid}.self_attn.rel_l2_clip.scale",),
+        MODEL_TENSOR.ATTN_SINK_PROJ: ("model.layers.{bid}.self_attn.sink_proj",),
+        MODEL_TENSOR.ATTN_Q_INP_NORM: ("model.layers.{bid}.q_input_layernorm",),
+        MODEL_TENSOR.ATTN_K_INP_NORM: ("model.layers.{bid}.k_input_layernorm",),
+        MODEL_TENSOR.ATTN_V_INP_NORM: ("model.layers.{bid}.v_input_layernorm",),
+        MODEL_TENSOR.ATTN_K_CONV: ("model.layers.{bid}.self_attn.k_sconv.conv1d",),
+        MODEL_TENSOR.ATTN_V_CONV: ("model.layers.{bid}.self_attn.v_sconv.conv1d",),
+        MODEL_TENSOR.ATTN_K_CONV_PROJ: ("model.layers.{bid}.self_attn.k_sconv.weight_proj",),
+        MODEL_TENSOR.ATTN_V_CONV_PROJ: ("model.layers.{bid}.self_attn.v_sconv.weight_proj",),
+        MODEL_TENSOR.ATTN_POST_CONV: ("model.layers.{bid}.post_attention_convolution.conv1d",),
+        MODEL_TENSOR.FFN_POST_CONV: ("model.layers.{bid}.post_mlp_convolution.conv1d",),
+        MODEL_TENSOR.ATTN_RES_QUERY: ("model.layers.{bid}.attention_input.query",),
+        MODEL_TENSOR.FFN_RES_QUERY: ("model.layers.{bid}.mlp_input.query",),
+
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
             "layers.{bid}.mixer_connection.norm",                   # metis16
@@ -1853,7 +1873,12 @@ class TensorNameMap:
             "model.mm_projector.peg.peg.{bid}",
         ),
 
+        MODEL_TENSOR.V_ENC_EMBD_CLS_POS: (
+            "model.vision_tower.embeddings.cls_position_embedding",
+        ),
+
         MODEL_TENSOR.V_ENC_EMBD_CLS: (
+            "model.vision_tower.embeddings.class_embedding", # inkling2
             "vision_tower.vision_model.embeddings.class_embedding",
             "model.vision_tower.embeddings.cls_token", # Intern-S1
             "vision_model.class_embedding", # llama 4
@@ -2035,6 +2060,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
+            "model.vision_tower.layers.{bid}.layernorm_before", # inkling2
             "visual.encoder.layers.{bid}.layer_norm1", # mage-vl
             "vision_model.encoder.layer.{bid}.norm1", # Nemotron Omni
             "vision.blocks.{bid}.norm1", # deepseek4v
@@ -2099,6 +2125,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
+            "model.vision_tower.layers.{bid}.layernorm_after", # inkling2
             "visual.encoder.layers.{bid}.layer_norm2", # mage-vl
             "vision_model.encoder.layer.{bid}.norm2", # Nemotron Omni
             "vision.blocks.{bid}.norm2", # deepseek4v
@@ -2231,6 +2258,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
+            "model.vision_tower.layers.{bid}.lambda_1", # inkling2
             "vision_model.encoder.layer.{bid}.layer_scale1", # Nemotron Omni
             "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_1", # Intern-S1
@@ -2238,6 +2266,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_2: (
+            "model.vision_tower.layers.{bid}.lambda_2", # inkling2
             "vision_model.encoder.layer.{bid}.layer_scale2", # Nemotron Omni
             "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
             "model.vision_tower.encoder.layer.{bid}.lambda_2", # Intern-S1
@@ -2249,6 +2278,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
+            "model.vision_tower.pre_layernorm", # inkling2
             "visual.layernorm_pre", # mage-vl
             "vision_tower.vision_model.pre_layrnorm",
             "vision_tower.ln_pre", # pixtral-hf

@@ -905,6 +905,10 @@ struct mtmd_context {
                     img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_INKLING2:
+                {
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
                     img_beg = "<|image_start|>";
@@ -1675,6 +1679,7 @@ struct mtmd_tokenizer {
             // TODO @ngxson : this is quite hacky because preprocessor only support batch with one single element, that need to be fixed in the future (e.g. by changing the preprocessor interface always take single input)
 
             mtmd_image_preproc_out preproc_out;
+            std::vector<mtmd_image_u8> video_frames;
 
             for (const auto * bmp : bitmaps) {
                 // sanity check
@@ -1693,10 +1698,12 @@ struct mtmd_tokenizer {
                     bmp->is_placeholder());
                 img_u8.cpy_buf(bmp->get_ro_buf());
 
+                if (bmp->is_video_frame()) {
+                    video_frames.push_back(std::move(img_u8));
+                    continue;
+                }
                 // preprocess image
-                mtmd_image_preproc_out tmp_preproc_out = bmp->is_video_frame()
-                    ? ctx->image_preproc->preprocess_video_frame(img_u8)
-                    : ctx->image_preproc->preprocess(img_u8);
+                mtmd_image_preproc_out tmp_preproc_out = ctx->image_preproc->preprocess(img_u8);
 
                 // move entries and grid dimensions to the "global" preproc_out
                 for (auto & entry : tmp_preproc_out.entries) {
@@ -1712,6 +1719,13 @@ struct mtmd_tokenizer {
                     preproc_out.grid_y = tmp_preproc_out.grid_y;
                     preproc_out.overview = std::move(tmp_preproc_out.overview);
                 }
+            }
+
+            if (!video_frames.empty()) {
+                if (video_frames.size() != bitmaps.size()) {
+                    throw std::runtime_error("cannot merge video frames with still images");
+                }
+                preproc_out = ctx->image_preproc->preprocess_video_frames(video_frames);
             }
 
             LOG_DBG("%s: preproc_out has %zu entries, grid_x = %d, grid_y = %d, has_overview = %d\n",
@@ -3410,6 +3424,29 @@ const char * mtmd_get_marker(const mtmd_context * ctx) {
 //
 
 // mtmd_bitmap
+
+bool mtmd_image_needs_alpha(const mtmd_context * ctx) {
+    return ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2;
+}
+
+mtmd_bitmap * mtmd_bitmap_init_from_rgba(const mtmd_context * ctx, uint32_t nx, uint32_t ny, const unsigned char * data) {
+    if (!data) {
+        return mtmd_bitmap_init(nx, ny, nullptr);
+    }
+    const bool checkerboard = mtmd_image_needs_alpha(ctx);
+    std::vector<unsigned char> rgb(size_t(nx) * ny * 3);
+    for (uint32_t y = 0; y < ny; ++y) {
+        for (uint32_t x = 0; x < nx; ++x) {
+            const size_t i = size_t(y) * nx + x;
+            const int alpha = data[4 * i + 3];
+            const int background = ((y / 8 + x / 8) % 2 == 0) ? 204 : 153;
+            for (int c = 0; c < 3; ++c) {
+                rgb[3 * i + c] = checkerboard ? (data[4 * i + c] * alpha + background * (255 - alpha) + 127) / 255 : data[4 * i + c];
+            }
+        }
+    }
+    return mtmd_bitmap_init(nx, ny, rgb.data());
+}
 
 mtmd_bitmap * mtmd_bitmap_init(uint32_t nx,
                                uint32_t ny,

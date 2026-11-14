@@ -321,6 +321,12 @@ llama_context::llama_context(
 
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
+    if (model.arch == LLM_ARCH_INKLING2) {
+        if (!cparams.flash_attn && ggml_is_quantized(params.type_v)) {
+            throw std::runtime_error("Inkling2 requires an unquantized V cache for its unfused attention path");
+        }
+        LLAMA_LOG_INFO("%s: Inkling2 folds per-query bias and sinks into the mask when Flash Attention is enabled\n", __func__);
+    }
 
     // the KV cache is shared with ctx_other, so follow its flash attention setting instead of resolving it here:
     // the probe disables it when the layers and the shared KV are on different devices, which breaks a quantized V cache
@@ -2902,7 +2908,8 @@ uint32_t llama_context::graph_max_nodes() const {
     if (model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
         model.arch == LLM_ARCH_HRM_TEXT) {
         res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
-    } else if (model.arch == LLM_ARCH_QWEN3NEXT ||
+    } else if (model.arch == LLM_ARCH_INKLING2 ||
+        model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
         model.arch == LLM_ARCH_METIS16 ||
         model.arch == LLM_ARCH_BAILINGMOE3 ||

@@ -17,6 +17,8 @@ __all__ = [
 
 
 TEXT_MODEL_MAP: dict[str, str] = {
+    "Inkling2ForConditionalGeneration": "inkling2",
+    "Inkling2ForCausalLM": "inkling2",
     "NEOChatModel": "sensenova_u1",
     "AfmoeForCausalLM": "afmoe",
     "LagunaForCausalLM": "laguna",
@@ -335,6 +337,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
 
 
 MMPROJ_MODEL_MAP: dict[str, str] = {
+    "Inkling2ForConditionalGeneration": "inkling2",
     "AudioFlamingo3ForConditionalGeneration": "ultravox",
     "ChatterboxModel": "chatterbox",
     "ClefModel": "clef",
@@ -473,8 +476,11 @@ def get_model_class(name: str, mmproj: bool = False) -> Type[ModelBase]:
 def print_registered_models() -> None:
     load_all_models()
     logger.error("TEXT models:")
-    for name in sorted(TEXT_MODEL_MAP.keys()):
+    for name in sorted(TEXT_MODEL_MAP.keys() - MMPROJ_MODEL_MAP.keys()):
+        logger.error(f"  - {name}")
+    logger.error("TEXT and MMPROJ models:")
+    for name in sorted(TEXT_MODEL_MAP.keys() & MMPROJ_MODEL_MAP.keys()):
         logger.error(f"  - {name}")
     logger.error("MMPROJ models:")
-    for name in sorted(MMPROJ_MODEL_MAP.keys()):
+    for name in sorted(MMPROJ_MODEL_MAP.keys() - TEXT_MODEL_MAP.keys()):
         logger.error(f"  - {name}")

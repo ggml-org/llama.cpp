@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -51,6 +52,69 @@ struct test_registry {
 //
 // mtmd_image
 //
+
+MAKE_TEST(test_image_preprocessor_inkling2) {
+    mtmd_hparams hparams;
+    hparams.patch_size = 20;
+    hparams.n_merge = 2;
+    for (int c = 0; c < 3; ++c) {
+        hparams.image_mean[c] = hparams.image_std[c] = 0.5f;
+    }
+    mtmd_image_preprocessor_inkling2 preproc(hparams);
+    for (const auto & size : std::vector<mtmd_image_size>{{1, 1}, {40, 40}, {61, 43}, {83, 45}, {161, 21}}) {
+        mtmd_image_u8 image;
+        image.set_size(size, false);
+        for (int y = 0; y < size.height; ++y) {
+            for (int x = 0; x < size.width; ++x) {
+                image.set_pixel(x, y, {uint8_t(x % 256), uint8_t(y % 256), 255});
+            }
+        }
+        const auto result = preproc.preprocess(image);
+        t.assert_equal("one image", size_t(1), result.entries.size());
+        const auto & output = result.entries[0];
+        t.assert_equal("width ceil", ((size.width + 39) / 40) * 40, output.nx());
+        t.assert_equal("height ceil", ((size.height + 39) / 40) * 40, output.ny());
+        const auto & pixels = output.get_ro_buf();
+        bool exact = true;
+        for (int y = 0; y < output.ny(); ++y) {
+            for (int x = 0; x < output.nx(); ++x) {
+                const bool pad = x >= size.width || y >= size.height;
+                const float rgb[3] = {float(x % 256), float(y % 256), 255.0f};
+                for (int c = 0; c < 3; ++c) {
+                    const float expected = ((pad ? -1.0f : rgb[c]) - 127.5f) / 127.5f;
+                    exact = exact && pixels[3 * (size_t(y) * output.nx() + x) + c] == expected;
+                }
+            }
+        }
+        t.assert_true("pixels and negative padding", exact);
+        image.set_size(size, true);
+        const auto placeholder = preproc.preprocess(image);
+        t.assert_true("placeholder", placeholder.entries[0].is_placeholder());
+        t.assert_equal("placeholder width", output.nx(), placeholder.entries[0].nx());
+        t.assert_equal("placeholder height", output.ny(), placeholder.entries[0].ny());
+    }
+    mtmd_image_u8 first, second;
+    first.set_size({61, 43}, false);
+    second.set_size({61, 43}, false);
+    first.cpy_buf(std::vector<uint8_t>(61 * 43 * 3, 17));
+    second.cpy_buf(std::vector<uint8_t>(61 * 43 * 3, 28));
+    const auto still = preproc.preprocess(first);
+    const auto duplicate = preproc.preprocess_video_frames({first, first});
+    const auto odd = preproc.preprocess_video_frames({first});
+    const auto mean = preproc.preprocess_video_frames({first, second});
+    t.assert_true("duplicate frames bit exact", !std::memcmp(still.entries[0].get_ro_buf().data(), duplicate.entries[0].get_ro_buf().data(), still.entries[0].get_ro_buf().size()*sizeof(float)));
+    t.assert_true("odd frame retained", still.entries[0].get_ro_buf() == odd.entries[0].get_ro_buf());
+    t.assert_equal("fractional raw mean", (22.5f - 127.5f) / 127.5f, mean.entries[0].get_ro_buf()[0]);
+    t.assert_equal("mean padding unchanged", still.entries[0].get_ro_buf().back(), mean.entries[0].get_ro_buf().back());
+    second.set_size({40, 40}, false);
+    bool rejected = false;
+    try {
+        preproc.preprocess_video_frames({first, second});
+    } catch (const std::runtime_error &) {
+        rejected = true;
+    }
+    t.assert_true("reject unequal frame sizes", rejected);
+}
 
 MAKE_TEST(test_image_preprocessor_longest_edge) {
     mtmd_hparams hparams;

@@ -107,6 +107,15 @@ struct llama_hparams {
     struct llama_hparams_convnext convnext;
 
     uint32_t n_shortconv_l_cache  = 0;
+    uint32_t n_sconv_channels = 0;
+    uint32_t n_relative = 0;
+    uint32_t n_relative_extent = 0;
+    uint32_t n_vocab_unpadded = 0;
+    uint32_t n_vocab_padded = 0;
+    uint32_t n_log_scale_floor = 0;
+    float f_log_scale_alpha = 0.0f;
+    float f_qk_clip = 0.0f;
+    float f_relative_clip = 0.0f;
 
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
