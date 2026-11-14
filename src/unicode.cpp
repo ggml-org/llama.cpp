@@ -1216,6 +1216,178 @@ static std::vector<size_t> unicode_regex_split_custom_newlines(const std::string
     return bpe_offsets;
 }
 
+// regex:  ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\p{L})\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\p{L})\p{M}*)+)*|\p{N}{1,3}(?=(?:\p{N}{3})*(?!\p{N}))| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+
+// Raon-1 mini: CJK runs are split from other letters, letter runs keep marks and can span one space, digits are grouped by 3 from the right
+static std::vector<size_t> unicode_regex_split_custom_raon(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        static const uint32_t OUT_OF_RANGE = 0xFFFFFFFF;
+        auto _get_cpt = [&] (const size_t pos) -> uint32_t {
+            return (offset_ini <= pos && pos < offset_end) ? cpts[pos] : OUT_OF_RANGE;
+        };
+
+        auto _get_flags = [&] (const size_t pos) -> unicode_cpt_flags {
+            return (offset_ini <= pos && pos < offset_end) ? unicode_cpt_flags_from_cpt(cpts[pos]) : unicode_cpt_flags{};
+        };
+
+        // [\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]
+        auto _is_cjk = [&] (const size_t pos) -> bool {
+            const uint32_t cpt = _get_cpt(pos);
+            return (0x4e00 <= cpt && cpt <= 0x9fa5) || (0x3040 <= cpt && cpt <= 0x30ff);
+        };
+
+        // (?![CJK])\p{L}
+        auto _is_letter = [&] (const size_t pos) -> bool {
+            return _get_flags(pos).is_letter && !_is_cjk(pos);
+        };
+
+        // [^\s\p{L}\p{N}]
+        auto _is_punct = [&] (const size_t pos) -> bool {
+            if (pos < offset_ini || offset_end <= pos) {
+                return false;
+            }
+            const auto flags = _get_flags(pos);
+            return !flags.is_whitespace && !flags.is_letter && !flags.is_number;
+        };
+
+        size_t _prev_end = offset_ini;
+        auto _add_token = [&] (const size_t end) -> size_t {
+            assert(_prev_end <= end && end <= offset_end);
+            size_t len = end - _prev_end;
+            if (len > 0) {
+                bpe_offsets.push_back(len);
+            }
+            _prev_end = end;
+            return len;
+        };
+
+        for (size_t pos = offset_ini; pos < offset_end; ) {
+            const uint32_t cpt = _get_cpt(pos);
+            const auto flags = _get_flags(pos);
+
+            // the CJK, letter and punctuation alternatives accept one optional leading space
+            size_t pos2 = pos + (cpt == ' ');
+
+            // regex: ' ?[CJK]+'
+            if (_is_cjk(pos2)) {
+                do {
+                    pos2++;
+                } while (_is_cjk(pos2));
+                pos += _add_token(pos2);
+                continue;
+            }
+
+            // regex: ' ?(?:(?:(?![CJK])\p{L})\p{M}*)+(?: (?:(?:(?![CJK])\p{L})\p{M}*)+)*'
+            if (_is_letter(pos2)) {
+                while (true) {
+                    pos2++;
+                    while (_get_flags(pos2).is_accent_mark) {
+                        pos2++;
+                    }
+                    if (_is_letter(pos2)) {
+                        continue;
+                    }
+                    // a single space joins two letter runs
+                    if (_get_cpt(pos2) == ' ' && _is_letter(pos2 + 1)) {
+                        pos2++;
+                        continue;
+                    }
+                    break;
+                }
+                pos += _add_token(pos2);
+                continue;
+            }
+
+            // regex: '\p{N}{1,3}(?=(?:\p{N}{3})*(?!\p{N}))' - groups of three from the right
+            if (flags.is_number) {
+                size_t digit_start = pos;
+                size_t digit_count = 0;
+
+                // Count consecutive digits
+                while (_get_flags(pos).is_number && pos < offset_end) {
+                    digit_count++;
+                    pos++;
+                }
+
+                // Split based on total length modulo 3
+                size_t remainder = digit_count % 3;
+                size_t current = digit_start;
+
+                // Emit leading 1-2 digits if needed
+                if (remainder > 0) {
+                    _add_token(current + remainder);
+                    current += remainder;
+                }
+
+                // Emit groups of 3
+                while (current < digit_start + digit_count) {
+                    _add_token(current + 3);
+                    current += 3;
+                }
+                continue;
+            }
+
+            // regex: ' ?[^\s\p{L}\p{N}]+[\r\n/]*'
+            if (_is_punct(pos2)) {
+                do {
+                    pos2++;
+                } while (_is_punct(pos2));
+                uint32_t cpt2 = _get_cpt(pos2);
+                while (cpt2 == '\r' || cpt2 == '\n' || cpt2 == '/') {
+                    cpt2 = _get_cpt(++pos2);
+                }
+                pos += _add_token(pos2);
+                continue;
+            }
+
+            // regex: '\s*[\r\n]+'
+            size_t num_whitespaces = 0;
+            size_t last_end_r_or_n = 0;
+            while (_get_flags(pos + num_whitespaces).is_whitespace) {
+                const uint32_t cpt2 = _get_cpt(pos + num_whitespaces);
+                if (cpt2 == '\r' || cpt2 == '\n') {
+                    last_end_r_or_n = pos + num_whitespaces + 1;
+                }
+                num_whitespaces++;
+            }
+            if (last_end_r_or_n > 0) {
+                pos = last_end_r_or_n;
+                _add_token(pos);
+                continue;
+            }
+
+            // regex: '\s+(?!\S)'
+            if (num_whitespaces > 1 && _get_cpt(pos + num_whitespaces) != OUT_OF_RANGE) {
+                pos += num_whitespaces - 1;
+                _add_token(pos);
+                continue;
+            }
+
+            // regex: '\s+'
+            if (num_whitespaces > 0) {
+                pos += num_whitespaces;
+                _add_token(pos);
+                continue;
+            }
+
+            // no matches
+            _add_token(++pos);
+        }
+    }
+
+    return bpe_offsets;
+}
+
 static std::vector<size_t> unicode_regex_split_custom(const std::string & text, const std::string & regex_expr, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
 
@@ -1250,6 +1422,9 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
         // Splits digits into groups of 3 from the right (e.g., 1234567 -> 1, 234, 567)
         // TODO: Revisit this regex, in case there are any subtle tokenization differences with the original regex.
         bpe_offsets = unicode_regex_split_custom_afmoe(text, offsets);
+    } else if (regex_expr == " ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
+        // Raon-1 mini: must match the LLAMA_VOCAB_PRE_TYPE_RAON regex in llama-vocab.cpp byte for byte
+        bpe_offsets = unicode_regex_split_custom_raon(text, offsets);
     }
 
     return bpe_offsets;
