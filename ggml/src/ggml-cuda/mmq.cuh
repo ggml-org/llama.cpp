@@ -1519,7 +1519,9 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     GGML_ASSERT(ntiles_dst * blocks_per_ne00_fd.z < (1 << 30)); // Assert that variable kbc will not overflow.
 
     const int nwork = ntiles_dst * ((args.ncols_x + config.K_vram - 1) / config.K_vram); // Maximum number of CUDA blocks that can do useful work.
-    const dim3 block_nums_stream_k(GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst : std::min(nsm, nwork), 1, 1);
+    // With batch invariance each block computes one whole tile, so the K split does not depend on the batch size.
+    const bool one_tile_per_block = (GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90) || ctx.batch_invariant;
+    const dim3 block_nums_stream_k(one_tile_per_block ? ntiles_dst : std::min(nsm, nwork), 1, 1);
 
     const bool fixup_needed = ntiles_dst % block_nums_stream_k.x != 0;
 

@@ -41,7 +41,8 @@ struct ggml_metal_op {
         int  idx_end,
         bool use_concurrency,
         bool use_capture,
-        int  debug_graph) {
+        int  debug_graph,
+        bool batch_invariant) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
         this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
@@ -52,6 +53,7 @@ struct ggml_metal_op {
         this->use_concurrency = use_concurrency;
         this->use_capture     = use_capture;
         this->debug_graph     = debug_graph;
+        this->batch_invariant = batch_invariant;
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
@@ -114,6 +116,8 @@ struct ggml_metal_op {
 
     int debug_graph;
 
+    bool batch_invariant;
+
 private:
     ggml_cgraph * gf;
 
@@ -133,7 +137,8 @@ ggml_metal_op_t ggml_metal_op_init(
         int idx_end,
         bool use_concurrency,
         bool use_capture,
-        int debug_graph) {
+        int debug_graph,
+        bool batch_invariant) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
@@ -143,7 +148,8 @@ ggml_metal_op_t ggml_metal_op_init(
         idx_end,
         use_concurrency,
         use_capture,
-        debug_graph);
+        debug_graph,
+        batch_invariant);
 
     return res;
 }
@@ -2737,6 +2743,12 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     if (ggml_metal_op_mul_mat_use_fwht(op, props_dev->max_theadgroup_memory_size)) {
         return ggml_metal_op_fwht(ctx, idx);
+    }
+
+    if (ctx->batch_invariant) {
+        // force the same kernel regardless of batch size (ne11), so that the reduction order
+        // for a given row is identical whether it is computed alone or as part of a larger batch
+        return ggml_metal_op_mul_mat_mv(ctx, idx);
     }
 
     if (props_dev->has_simdgroup_mm && ggml_metal_op_mul_mat_use_mma(op)) {

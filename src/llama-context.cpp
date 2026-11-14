@@ -378,6 +378,7 @@ llama_context::llama_context(
     cparams.kv_unified     = params.kv_unified;
     cparams.moe_cache_size      = params.moe_cache_size;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
+    cparams.batch_invariant     = params.batch_invariant;
 
     // resolved after flash attention, see resolve_fused_ops()
     {
@@ -432,6 +433,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: causal_attn           = %d\n",   __func__, cparams.causal_attn);
     LLAMA_LOG_INFO("%s: flash_attn            = %s\n",   __func__, llama_flash_attn_type_name(params.flash_attn_type));
     LLAMA_LOG_INFO("%s: kv_unified            = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
+    LLAMA_LOG_INFO("%s: batch_invariant       = %s\n",   __func__, cparams.batch_invariant ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
@@ -510,6 +512,21 @@ llama_context::llama_context(
                 auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
                 if (ggml_backend_set_n_threads_fn) {
                     set_n_threads_fns.emplace_back(backend.get(), ggml_backend_set_n_threads_fn);
+                }
+            }
+        }
+
+        if (cparams.batch_invariant) {
+            for (auto & backend : backends) {
+                ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+                ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+                auto set_batch_invariant_fn = reg ?
+                    (ggml_backend_set_batch_invariant_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_batch_invariant") : nullptr;
+                if (set_batch_invariant_fn) {
+                    set_batch_invariant_fn(backend.get(), true);
+                    LLAMA_LOG_INFO("%s: batch invariance enabled for %s\n", __func__, ggml_backend_name(backend.get()));
+                } else if (dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    LLAMA_LOG_WARN("%s: %s does not support batch invariance\n", __func__, ggml_backend_name(backend.get()));
                 }
             }
         }
@@ -4449,6 +4466,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.batch_invariant             =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.ctx_other                   =*/ nullptr,

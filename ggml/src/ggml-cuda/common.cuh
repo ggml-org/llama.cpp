@@ -1364,6 +1364,10 @@ struct ggml_backend_cuda_context {
 
     int curr_stream_no = 0;
 
+    // force a single batch size independent kernel path for ops whose reduction
+    // order would otherwise vary with batch size (see ggml_backend_cuda_set_batch_invariant)
+    bool batch_invariant = false;
+
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
     // when the computation is split across CPU/GPU (e.g., with --n-cpu-moe)

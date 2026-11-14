@@ -1674,6 +1674,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
+        {"--batch-invariant"},
+        "[EXPERIMENTAL] make results independent of the batch size, on backends that support it (default: disabled)",
+        [](common_params & params) {
+            params.batch_invariant = true;
+        }
+    ).set_env("LLAMA_ARG_BATCH_INVARIANT"));
+    add_opt(common_arg(
         {"-ctxcp", "--ctx-checkpoints", "--swa-checkpoints"}, "N",
         string_format("max number of context checkpoints to create per slot (default: %d)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)", params.n_ctx_checkpoints),
