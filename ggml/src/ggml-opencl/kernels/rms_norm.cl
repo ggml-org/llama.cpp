@@ -73,7 +73,7 @@ kernel void kernel_rms_norm(
     }
     if (get_local_id(0) == 0) {
         for (int i = 4 * (ne00 / 4); i < ne00; i++) {
-            sum[0] += x_scalar[i];
+            sum[0] += x_scalar[i] * x_scalar[i];
         }
         sum[0] /= ne00;
     }
