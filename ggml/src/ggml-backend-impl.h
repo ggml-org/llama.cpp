@@ -124,6 +124,15 @@ extern "C" {
         // keep `tensor` allocated at least until `until` (a node of the same graph) has been computed
         // can be called multiple times for the same tensor: the longest lifetime applies
         void (*add_alloc_dep)(void * user_data, struct ggml_tensor * tensor, struct ggml_tensor * until);
+
+        // reserve `nbytes` of memory in the compute buffer of the backend, e.g. for data that several nodes share
+        // the memory is reserved from before `first` is computed until `last` has been computed: outside of that range the
+        // allocator can give it to other tensors, so its contents do not carry over between evaluations of the graph
+        // `first` and `last` are nodes of the same graph, and `last` must not come before `first` in the optimized graph
+        // returns a 1-d GGML_TYPE_I8 tensor that is not a node of the graph, its data is set when the graph is allocated
+        // the backend can keep references to the tensor itself until the scheduler splits the next graph
+        struct ggml_tensor * (*add_scratch)(void * user_data, size_t nbytes, struct ggml_tensor * first, struct ggml_tensor * last);
+
         void * user_data;
     };
 

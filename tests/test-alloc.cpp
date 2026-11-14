@@ -677,6 +677,71 @@ static void test_graph_optimize_alloc_dep() {
     GGML_ASSERT(!graph_reuses_allocation(true));
 }
 
+// scratch tensors requested by test_backend_graph_optimize_scratch
+static ggml_tensor * test_scratch[2];
+
+static void test_backend_graph_optimize_scratch(ggml_backend_t /*backend*/, ggml_cgraph * graph, ggml_backend_graph_optimize_params * params) {
+    // nodes: x1 = cont(x0), x2 = scale(x1), x3 = scale(x2), x4 = scale(x3)
+    GGML_ASSERT(graph->n_nodes == 4);
+    // live from before x1 is computed until x2 has been computed
+    test_scratch[0] = params->add_scratch(params->user_data, 32, graph->nodes[0], graph->nodes[1]);
+    // live only while x3 is computed
+    test_scratch[1] = params->add_scratch(params->user_data, 64, graph->nodes[2], graph->nodes[2]);
+}
+
+static bool tensors_overlap(const ggml_tensor * a, const ggml_tensor * b) {
+    const uint8_t * a0 = (const uint8_t *) a->data;
+    const uint8_t * b0 = (const uint8_t *) b->data;
+    return a->buffer == b->buffer && a0 < b0 + ggml_nbytes(b) && b0 < a0 + ggml_nbytes(a);
+}
+
+static void test_graph_optimize_scratch() {
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    // x1 is not computed in place, so x0 is freed once x1 has been computed:
+    // a scratch tensor allocated too late would take the memory of x0
+    ggml_tensor * x[5];
+    x[0] = make_input_with_size(ctx, 32);
+    x[1] = ggml_cont(ctx, x[0]);
+    for (int i = 2; i < 5; i++) {
+        x[i] = ggml_scale(ctx, x[i - 1], 2.0f);
+    }
+    assign_names(ctx);
+
+    ggml_set_output(x[4]);
+    ggml_build_forward_expand(graph, x[4]);
+
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+    backend.context->backend.iface.graph_optimize = test_backend_graph_optimize_scratch;
+
+    ggml_backend_t             backend_ptr = &backend.context->backend;
+    ggml_backend_buffer_type_t buft        = &backend.buffer_type;
+    ggml_backend_sched_ptr     sched(ggml_backend_sched_new(&backend_ptr, &buft, 1, 8, false, true));
+    GGML_ASSERT(ggml_backend_sched_reserve(sched.get(), graph));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+    check_all_allocated(graph);
+
+    ggml_tensor * s0 = test_scratch[0];
+    ggml_tensor * s1 = test_scratch[1];
+    GGML_ASSERT(s0 && s1 && s0 != s1);
+    GGML_ASSERT(s0->type == GGML_TYPE_I8 && ggml_nbytes(s0) == 32);
+    GGML_ASSERT(s1->type == GGML_TYPE_I8 && ggml_nbytes(s1) == 64);
+    GGML_ASSERT(s0->data != nullptr && s0->buffer != nullptr);
+    GGML_ASSERT(s1->data != nullptr && s1->buffer != nullptr);
+
+    // tensors that are live at some point between `first` and `last` must not share memory with the scratch
+    for (int i : { 0, 1, 2 }) {
+        GGML_ASSERT(!tensors_overlap(s0, x[i]));
+    }
+    for (int i : { 2, 3 }) {
+        GGML_ASSERT(!tensors_overlap(s1, x[i]));
+    }
+
+    // s0 is freed once x2 has been computed: x2-x4 are computed in place over x1,
+    // and s1 only fits into the memory that x0 and s0 leave free
+    GGML_ASSERT(tensors_overlap(s0, s1));
+}
+
 // Check that the size reported by ggml_backend_alloc_ctx_tensors_from_buft_size
 // matches the actual size of the buffer allocated for the ctx tensors
 static ggml_backend_buffer_ptr check_size_matches(ggml_backend_buffer_type_t buft, ggml_context * ctx) {
@@ -1121,6 +1186,7 @@ int main() {
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
     run("test_graph_optimize_alloc_dep", test_graph_optimize_alloc_dep);
+    run("test_graph_optimize_scratch", test_graph_optimize_scratch);
     run("test_buft_alloc_buffer_n_single_buffer", test_buft_alloc_buffer_n_single_buffer);
     run("test_buft_alloc_buffer_n_multi_buffer", test_buft_alloc_buffer_n_multi_buffer);
     run("test_buft_alloc_buffer_n_zero_size", test_buft_alloc_buffer_n_zero_size);
