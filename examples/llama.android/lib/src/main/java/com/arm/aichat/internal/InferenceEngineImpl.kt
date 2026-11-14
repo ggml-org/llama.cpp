@@ -139,7 +139,11 @@ internal class InferenceEngineImpl private constructor(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load native library", e)
-                throw e
+                _state.value = InferenceEngine.State.Error(e)
+            } catch (e: UnsatisfiedLinkError) {
+                val failure = RuntimeException("Failed to load native library", e)
+                Log.e(TAG, "Failed to load native library", e)
+                _state.value = InferenceEngine.State.Error(failure)
             }
         }
     }
@@ -212,6 +216,38 @@ internal class InferenceEngineImpl private constructor(
         }
 
     /**
+     * Starts a fresh native conversation while keeping the loaded model alive.
+     *
+     * The native system-prompt processing resets the active conversation state.
+     * This is not secure memory erasure.
+     */
+    override suspend fun resetConversation(systemPrompt: String) =
+        withContext(llamaDispatcher) {
+            require(systemPrompt.isNotBlank()) {
+                "Cannot process empty system prompt!"
+            }
+            check(_state.value is InferenceEngine.State.ModelReady) {
+                "Cannot reset conversation in ${_state.value.javaClass.simpleName}!"
+            }
+
+            Log.i(TAG, "Resetting native conversation...")
+            _readyForSystemPrompt = false
+            _state.value = InferenceEngine.State.ProcessingSystemPrompt
+
+            processSystemPrompt(systemPrompt).let { result ->
+                if (result != 0) {
+                    val error = RuntimeException(
+                        "Failed to reset conversation: $result"
+                    )
+                    _state.value = InferenceEngine.State.Error(error)
+                    throw error
+                }
+            }
+
+            _state.value = InferenceEngine.State.ModelReady
+        }
+
+    /**
      * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]
      */
     override fun sendUserPrompt(
@@ -230,8 +266,10 @@ internal class InferenceEngineImpl private constructor(
 
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
-                    Log.e(TAG, "Failed to process user prompt: $result")
-                    return@flow
+                    val error = RuntimeException("Failed to process user prompt: $result")
+                    Log.e(TAG, "Failed to process user prompt: $result", error)
+                    _state.value = InferenceEngine.State.Error(error)
+                    throw error
                 }
             }
 
