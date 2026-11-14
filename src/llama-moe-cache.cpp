@@ -3,18 +3,31 @@
 #include "llama-graph.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
+#include "llama-mmap.h"
 #include "llama-model.h"
 
 #include "ggml-cpp.h"
+#ifdef GGML_USE_METAL
+#include "ggml-metal.h"
+#endif
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cinttypes>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
+#include <thread>
 #include <unordered_map>
 #include <vector>
+
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+#include <dispatch/dispatch.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -287,6 +300,20 @@ struct moe_cache_lru {
     }
 };
 
+template <typename F>
+static void llama_moe_cache_for_each_fill_run(const std::vector<moe_cache_lru::fill> & fills, F && fn) {
+    for (size_t i = 0; i < fills.size();) {
+        size_t n = 1;
+        while (i + n < fills.size() &&
+                fills[i + n].expert == fills[i].expert + (int32_t) n &&
+                fills[i + n].slot == fills[i].slot + (int32_t) n) {
+            n++;
+        }
+        fn(fills[i], n);
+        i += n;
+    }
+}
+
 // gate, up, down or gate_up, down
 static std::vector<ggml_tensor *> llama_moe_cache_layer_experts(const llama_layer & layer) {
     std::vector<ggml_tensor *> res;
@@ -316,9 +343,76 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
         ggml_backend_buffer_is_host(t->buffer);
 }
 
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+struct moe_cache_disk_read {
+    const llama_file * file;
+    size_t offset;
+    size_t size;
+    void * dst;
+};
+
+static int moe_cache_pread(const moe_cache_disk_read & read) {
+    uint8_t * dst = static_cast<uint8_t *>(read.dst);
+    size_t done = 0;
+    while (done < read.size) {
+        const ssize_t n = pread(read.file->file_id(), dst + done, read.size - done, (off_t) (read.offset + done));
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+        if (n < 0) {
+            return errno;
+        }
+        if (n == 0) {
+            return EIO;
+        }
+        done += (size_t) n;
+    }
+    return 0;
+}
+
+struct moe_cache_disk_batch {
+    const std::vector<moe_cache_disk_read> * reads;
+    std::atomic<int> error { 0 };
+};
+
+static void moe_cache_pread_one(void * context, size_t i) {
+    auto * batch = static_cast<moe_cache_disk_batch *>(context);
+    const int error = moe_cache_pread((*batch->reads)[i]);
+    if (error != 0) {
+        int expected = 0;
+        batch->error.compare_exchange_strong(expected, error, std::memory_order_relaxed);
+    }
+}
+
+static int moe_cache_pread_all(const std::vector<moe_cache_disk_read> & reads) {
+    if (reads.empty()) {
+        return 0;
+    }
+    moe_cache_disk_batch batch { &reads };
+    dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
+    dispatch_apply_f(reads.size(), queue, &batch, moe_cache_pread_one);
+    return batch.error.load(std::memory_order_relaxed);
+}
+#endif
+
 }
 
 struct llama_moe_cache::impl {
+#ifdef GGML_USE_METAL
+    struct disk_backend {
+        ggml_context_ptr ctx;
+        ggml_backend_buffer_ptr buf;
+        size_t buf_size = 0;
+        ggml_tensor * message = nullptr;
+        ggml_metal_moe_cache_message * message_data = nullptr;
+        ggml_backend_event_ptr event;
+        uint64_t next_seq = 0;
+        int32_t last_layer = -1;
+        const ggml_tensor * last_ids = nullptr;
+        size_t last_uses = 0;
+    };
+#endif
+
     // a GPU with its own budget and banks, it caches the layers assigned to it
     struct device {
         ggml_backend_t backend;
@@ -330,6 +424,9 @@ struct llama_moe_cache::impl {
         ggml_context_ptr ctx;
         ggml_backend_buffer_ptr buf;
         size_t buf_size = 0;
+#ifdef GGML_USE_METAL
+        std::unique_ptr<disk_backend> disk;
+#endif
     };
 
     // layers of the same device with the same expert tensor layout share the banks and the LRU of a group
@@ -344,6 +441,11 @@ struct llama_moe_cache::impl {
     };
 
     struct layer {
+        struct source {
+            const llama_file * file = nullptr;
+            size_t offset = 0;
+        };
+
         int32_t ig = -1;                    // -1 if the layer is not cached
         ggml_tensor * slot_map = nullptr;   // I32 [1, n_expert] in host memory
         ggml_tensor * slot_map_cpu = nullptr; // looked up in place of slot_map by the graphs with a CPU part, if cpu_share > 0, its data is not used
@@ -351,6 +453,7 @@ struct llama_moe_cache::impl {
         std::vector<int32_t> cpu_experts;   // experts set in cpu_map
         uint32_t cpu_acc = 0;               // fraction of a miss carried over to the next plan, in 1/65536
         std::vector<ggml_tensor *> experts; // host expert tensors, in the order of the banks
+        std::vector<source> sources;        // GGUF sources of disk-backed experts, in the order of the banks
     };
 
     struct binding {
@@ -369,6 +472,8 @@ struct llama_moe_cache::impl {
     static constexpr int64_t max_batch = 32;
 
     int32_t n_expert_used;
+    const bool disk_backed;
+    const uint32_t n_ubatch;
 
     stats stats_small; // up to 8 tokens per ubatch
     stats stats_large;
@@ -379,6 +484,11 @@ struct llama_moe_cache::impl {
     std::vector<layer> layers;
     std::unordered_map<const ggml_tensor *, binding> bindings; // host experts -> cached experts
     std::unordered_map<const ggml_tensor *, std::pair<int32_t, bool>> layer_of; // slot map -> layer, and if the graph that looks it up has a CPU part
+#ifdef GGML_USE_METAL
+    std::unordered_map<const ggml_tensor *, int32_t> disk_layer_of; // cached experts -> disk-backed layer
+    std::atomic<bool> disk_worker_run { false };
+    std::thread disk_worker_thread;
+#endif
 
     std::vector<int32_t> ids;
     std::vector<moe_cache_lru::fill> fills;
@@ -399,8 +509,22 @@ struct llama_moe_cache::impl {
     // views used by copy_experts
     ggml_context_ptr ctx_views;
 
-    impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
-            n_expert_used(model.hparams.n_expert_used_max()), layers(model.layers.size()), cpu_share(std::clamp(cpu_share, 0.0f, 1.0f)) {
+    static ggml_context_ptr init_context(size_t n_tensors) {
+        ggml_init_params params = {
+            /*.mem_size   =*/ n_tensors*ggml_tensor_overhead(),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr res(ggml_init(params));
+        if (!res) {
+            throw std::runtime_error("failed to create the MoE cache context");
+        }
+        return res;
+    }
+
+    impl(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share, uint32_t n_ubatch) :
+            n_expert_used(model.hparams.n_expert_used_max()), disk_backed(model.moe_cache_disk()), n_ubatch(n_ubatch),
+            layers(model.layers.size()), cpu_share(std::clamp(cpu_share, 0.0f, 1.0f)) {
         for (size_t i = 0; i < backends.size(); ++i) {
             const auto dev_type = ggml_backend_dev_type(ggml_backend_get_device(backends[i]));
             if (dev_type == GGML_BACKEND_DEVICE_TYPE_GPU || dev_type == GGML_BACKEND_DEVICE_TYPE_IGPU) {
@@ -418,15 +542,32 @@ struct llama_moe_cache::impl {
         if (model.hparams.n_expert == 0 || n_expert_used == 0) {
             throw std::runtime_error("MoE cache requires a MoE model");
         }
+        if (disk_backed && cpu_share > 0.0f) {
+            throw std::runtime_error("disk-backed MoE cache does not support CPU miss execution");
+        }
+#if !defined(__APPLE__) || !defined(GGML_USE_METAL)
+        if (disk_backed) {
+            throw std::runtime_error("disk-backed MoE cache requires Metal on macOS");
+        }
+#endif
 
         // only cache layers that keep all of their experts in host memory, on the device the layer is assigned to
         for (size_t il = 0; il < model.layers.size(); ++il) {
             auto experts = llama_moe_cache_layer_experts(model.layers[il]);
-            if (experts.empty() || !std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
+            if (experts.empty()) {
+                continue;
+            }
+            if (!std::all_of(experts.begin(), experts.end(), llama_moe_cache_is_host_weight)) {
+                if (disk_backed) {
+                    throw std::runtime_error("disk-backed MoE cache requires routed expert tensors in host buffers");
+                }
                 continue;
             }
             const auto it_dev = std::find_if(devices.begin(), devices.end(), [&](const device & d) { return ggml_backend_get_device(d.backend) == model.dev_layer(il); });
             if (it_dev == devices.end()) {
+                if (disk_backed) {
+                    throw std::runtime_error("disk-backed MoE cache requires every routed expert layer to be offloaded");
+                }
                 continue;
             }
             const int32_t id = (int32_t) (it_dev - devices.begin());
@@ -444,6 +585,9 @@ struct llama_moe_cache::impl {
             }
         }
         if (groups.empty()) {
+            if (disk_backed) {
+                throw std::runtime_error("disk-backed MoE cache found no routed expert layers");
+            }
             LLAMA_LOG_WARN("%s: no layer has all of its experts in host memory, MoE cache is disabled\n", __func__);
             return;
         }
@@ -501,6 +645,14 @@ struct llama_moe_cache::impl {
         }
         std::vector<size_t> n_tensors(devices.size(), 0);
         size_t n_tensors_host = 0;
+        const int64_t n_ids_max = (int64_t) n_ubatch*n_expert_used;
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+        if (disk_backed && n_ids_max > GGML_METAL_MOE_CACHE_MAX_IDS) {
+            throw std::runtime_error(format(
+                "MoE disk cache ubatch has %" PRId64 " ids, the Metal message holds at most %d",
+                n_ids_max, GGML_METAL_MOE_CACHE_MAX_IDS));
+        }
+#endif
         for (group & g : groups) {
             const device & d = devices[g.id];
             const int32_t n_expert  = g.ref[0]->ne[2];
@@ -510,9 +662,20 @@ struct llama_moe_cache::impl {
                 g.n_slots++;
             }
             if (g.n_slots < n_expert_used) {
+                if (disk_backed) {
+                    throw std::runtime_error("disk-backed MoE cache is too small to hold the experts of one token");
+                }
                 LLAMA_LOG_WARN("%s: MoE cache budget is too small for %zu layers, they are not cached\n", __func__, g.layers.size());
                 g.n_slots = 0;
                 continue;
+            }
+            if (disk_backed) {
+                const int64_t n_distinct_max = std::min<int64_t>(n_ids_max, n_expert);
+                if (n_distinct_max > g.n_slots) {
+                    throw std::runtime_error(format(
+                        "MoE disk cache ubatch may need %" PRId64 " distinct experts, the cache has %d slots",
+                        n_distinct_max, g.n_slots));
+                }
             }
             g.lru.init(model.layers.size(), n_expert, g.n_slots);
             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
@@ -522,25 +685,13 @@ struct llama_moe_cache::impl {
             throw std::runtime_error("MoE cache is too small to hold the experts of one token");
         }
 
-        auto init_ctx = [](size_t n_tensors) {
-            ggml_init_params params = {
-                /*.mem_size   =*/ n_tensors*ggml_tensor_overhead(),
-                /*.mem_buffer =*/ nullptr,
-                /*.no_alloc   =*/ true,
-            };
-            ggml_context_ptr res(ggml_init(params));
-            if (!res) {
-                throw std::runtime_error("failed to create the MoE cache context");
-            }
-            return res;
-        };
         for (size_t id = 0; id < devices.size(); ++id) {
             if (n_tensors[id] > 0) {
-                devices[id].ctx = init_ctx(n_tensors[id]);
+                devices[id].ctx = init_context(n_tensors[id]);
             }
         }
-        ctx_host  = init_ctx(n_tensors_host);
-        ctx_views = init_ctx(2);
+        ctx_host  = init_context(n_tensors_host);
+        ctx_views = init_context(2);
 
         ggml_backend_buffer_type_t buft_host = ggml_backend_cpu_buffer_type();
         const size_t alignment_host = ggml_backend_buft_get_alignment(buft_host);
@@ -561,11 +712,25 @@ struct llama_moe_cache::impl {
                 layer & l = layers[il];
                 l.ig      = (int32_t) ig;
                 l.experts = llama_moe_cache_layer_experts(model.layers[il]);
+                if (disk_backed && !no_alloc) {
+                    for (const ggml_tensor * expert : l.experts) {
+                        const auto source = model.moe_disk_source(expert);
+                        if (source.first == nullptr) {
+                            throw std::runtime_error("disk-backed MoE cache could not bind every routed expert tensor to its model file");
+                        }
+                        l.sources.push_back({ source.first, source.second });
+                    }
+                }
                 for (size_t ip = 0; ip < l.experts.size(); ++ip) {
                     ggml_tensor * bank   = g.banks[ip];
                     ggml_tensor * cached = ggml_view_3d(ctx, bank, bank->ne[0], bank->ne[1], g.n_slots + n_zero, bank->nb[1], bank->nb[2], 0);
                     ggml_format_name(cached, "moe_cache.%s", l.experts[ip]->name);
                     bindings[l.experts[ip]] = { il, (int32_t) ip, cached };
+#ifdef GGML_USE_METAL
+                    if (disk_backed && !no_alloc) {
+                        disk_layer_of[cached] = il;
+                    }
+#endif
                 }
                 l.slot_map = ggml_new_tensor_2d(ctx_host.get(), GGML_TYPE_I32, 1, g.ref[0]->ne[2]);
                 ggml_format_name(l.slot_map, "moe_cache.slot_map-%d", il);
@@ -595,6 +760,10 @@ struct llama_moe_cache::impl {
                 d.buf_size = ggml_backend_buffer_get_size(d.buf.get());
             }
         }
+
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+        init_disk_backends(no_alloc);
+#endif
         buf_host = llama_memory_bufs::alloc_buf(ctx_host.get(), buft_host, no_alloc, "MoE cache slot maps");
         if (!no_alloc) {
             ggml_backend_buffer_clear(buf_host.get(), 0xff); // the CPU maps are -1
@@ -634,12 +803,216 @@ struct llama_moe_cache::impl {
                 }
             }
         }
+
+#ifdef GGML_USE_METAL
+        if (disk_backed && !no_alloc) {
+            start_disk_worker();
+        }
+#endif
     }
 
     // the device that caches layer il
     ggml_backend_t backend(int32_t il) const {
         return devices[groups[layers[il].ig].id].backend;
     }
+
+#if defined(__APPLE__) && defined(GGML_USE_METAL)
+    void init_disk_backends(bool no_alloc) {
+        if (!disk_backed) {
+            return;
+        }
+
+        for (const group & g : groups) {
+            device & d = devices[g.id];
+            if (!ggml_backend_is_metal(d.backend)) {
+                throw std::runtime_error("disk-backed MoE cache requires every cached layer to use Metal");
+            }
+            if (!no_alloc) {
+                for (const ggml_tensor * bank : g.banks) {
+                    if (!ggml_backend_metal_buffer_is_shared(bank->buffer)) {
+                        throw std::runtime_error("disk-backed MoE cache requires shared Metal buffers");
+                    }
+                }
+            }
+            if (d.disk != nullptr) {
+                continue;
+            }
+
+            d.disk = std::make_unique<disk_backend>();
+            d.disk->ctx = init_context(1);
+            d.disk->message = ggml_new_tensor_1d(
+                d.disk->ctx.get(), GGML_TYPE_I8, sizeof(ggml_metal_moe_cache_message));
+            ggml_format_name(d.disk->message, "moe_cache.disk_message-%d", g.id);
+            d.disk->buf = llama_memory_bufs::alloc_buf(
+                d.disk->ctx.get(), d.buft, no_alloc, "MoE disk cache message");
+            d.disk->buf_size = no_alloc ?
+                GGML_PAD(sizeof(ggml_metal_moe_cache_message), ggml_backend_buft_get_alignment(d.buft)) :
+                ggml_backend_buffer_get_size(d.disk->buf.get());
+            if (no_alloc) {
+                continue;
+            }
+
+            d.disk->message_data = (ggml_metal_moe_cache_message *) d.disk->message->data;
+            d.disk->event.reset(ggml_backend_event_new(ggml_backend_get_device(d.backend)));
+            GGML_ASSERT(d.disk->event != nullptr);
+        }
+    }
+#endif
+
+    bool is_disk_layer(int32_t il) const {
+        return disk_backed && il >= 0 && il < (int32_t) layers.size() && layers[il].ig >= 0;
+    }
+
+#ifdef GGML_USE_METAL
+    size_t read_disk_fills(layer & l, group & g, const std::vector<moe_cache_lru::fill> & disk_fills) {
+        size_t bytes = 0;
+        std::vector<moe_cache_disk_read> reads;
+        reads.reserve(disk_fills.size()*l.sources.size());
+
+        for (size_t ip = 0; ip < l.sources.size(); ++ip) {
+            ggml_tensor * bank = g.banks[ip];
+            const size_t expert_size = l.experts[ip]->nb[2];
+            llama_moe_cache_for_each_fill_run(disk_fills, [&](const moe_cache_lru::fill & fill, size_t n) {
+                reads.push_back({
+                    l.sources[ip].file,
+                    l.sources[ip].offset + (size_t) fill.expert*expert_size,
+                    n*expert_size,
+                    (uint8_t *) bank->data + (size_t) fill.slot*expert_size,
+                });
+                bytes += n*expert_size;
+            });
+        }
+
+        const int error = moe_cache_pread_all(reads);
+        if (error != 0) {
+            GGML_ABORT("failed to read a disk-backed MoE expert: %s", strerror(error));
+        }
+        return bytes;
+    }
+
+    static bool query_moe_cache(
+            void * user_data,
+            const ggml_tensor * src0,
+            const ggml_tensor * selected,
+            ggml_metal_moe_cache_request * out) {
+        auto * self = static_cast<impl *>(user_data);
+        const auto it = self->disk_layer_of.find(src0);
+        if (it == self->disk_layer_of.end()) {
+            return false;
+        }
+
+        const int32_t il = it->second;
+        layer & l = self->layers[il];
+        disk_backend & disk = *self->devices[self->groups[l.ig].id].disk;
+
+        out->layer = il;
+
+        const size_t expected_uses = l.experts.size();
+        if (disk.last_layer == il && disk.last_ids == selected && disk.last_uses < expected_uses) {
+            out->reuse = true;
+            disk.last_uses++;
+        } else {
+            out->reuse = false;
+            out->seq = ++disk.next_seq;
+            disk.last_layer = il;
+            disk.last_ids = selected;
+            disk.last_uses = 1;
+        }
+
+        return true;
+    }
+
+    void resolve_disk(int32_t il, const int32_t * selected, size_t n_ids, int32_t n_used, int32_t * remapped) {
+        layer & l = layers[il];
+        group & g = groups[l.ig];
+
+        size_t n_hit = 0;
+
+        if (!g.lru.plan(
+                il,
+                selected,
+                n_ids,
+                n_ids/n_used,
+                n_used,
+                0,
+                [](size_t) { return (size_t) 0; },
+                fills,
+                cpu,
+                n_hit)) {
+            GGML_ABORT("the MoE disk cache is too small for the experts selected in layer %d", il);
+        }
+        const size_t bytes = read_disk_fills(l, g, fills);
+        if (trace != nullptr) {
+            write_trace(il, n_used, selected, n_ids);
+        }
+
+        const int32_t * slots = g.lru.slot_map[il];
+        for (size_t i = 0; i < n_ids; ++i) {
+            remapped[i] = slots[selected[i]];
+        }
+
+        stats & st = n_ids <= (size_t) 8*n_expert_used ? stats_small : stats_large;
+        st.hits += n_hit;
+        st.misses += fills.size();
+        st.bytes += bytes;
+    }
+
+    void disk_worker_loop() {
+        for (;;) {
+            bool any = false;
+
+            for (size_t id = 0; id < devices.size(); ++id) {
+                device & d = devices[id];
+                if (d.disk == nullptr) {
+                    continue;
+                }
+                disk_backend & disk = *d.disk;
+                // Odd event values are GPU requests; even values are CPU responses.
+                const uint64_t value = ggml_backend_metal_event_value(disk.event.get());
+                if ((value & 1) == 0) {
+                    continue;
+                }
+                const uint64_t seq = (value + 1)/2;
+
+                const int32_t n_ids = disk.message_data->n_ids;
+                const int32_t n_used = disk.message_data->n_expert_used;
+                const int32_t il = disk.message_data->layer;
+                GGML_ASSERT(n_ids > 0 && n_ids <= GGML_METAL_MOE_CACHE_MAX_IDS);
+                GGML_ASSERT(n_used > 0 && n_ids % n_used == 0);
+                GGML_ASSERT(is_disk_layer(il));
+                GGML_ASSERT(groups[layers[il].ig].id == (int32_t) id);
+
+                resolve_disk(il, disk.message_data->selected, n_ids, n_used, disk.message_data->remapped);
+
+                ggml_backend_metal_event_signal(disk.event.get(), 2*seq);
+                any = true;
+            }
+
+            if (!disk_worker_run.load(std::memory_order_relaxed)) {
+                break;
+            }
+            if (!any) {
+                usleep(10);
+            }
+        }
+    }
+
+    void start_disk_worker() {
+        disk_worker_run.store(true, std::memory_order_relaxed);
+        disk_worker_thread = std::thread([this] { disk_worker_loop(); });
+        for (device & d : devices) {
+            if (d.disk != nullptr) {
+                ggml_backend_metal_set_moe_cache_handler(
+                    d.backend, { query_moe_cache, this, d.disk->message, d.disk->event.get() });
+            }
+        }
+    }
+
+    void stop_disk_worker() {
+        disk_worker_run.store(false, std::memory_order_relaxed);
+        disk_worker_thread.join();
+    }
+#endif
 
     // trace format, little endian: "MCT1", then u32 n_layer, n_expert_used, n_group
     // per group: u32 device, n_expert, n_layers, the layers (u32), f64 split, split_sum, u64 group host bytes, device host bytes, alignment,
@@ -673,13 +1046,24 @@ struct llama_moe_cache::impl {
         }
     }
 
-    void write_trace(int32_t il, int32_t n_used) {
-        const int32_t rec[3] = { il, n_used, (int32_t) ids.size() };
+    void write_trace(int32_t il, int32_t n_used, const int32_t * trace_ids, size_t n_ids) {
+        const int32_t rec[3] = { il, n_used, (int32_t) n_ids };
         fwrite(rec, sizeof(int32_t), 3, trace);
-        fwrite(ids.data(), sizeof(int32_t), ids.size(), trace);
+        fwrite(trace_ids, sizeof(int32_t), n_ids, trace);
     }
 
     ~impl() {
+#ifdef GGML_USE_METAL
+        if (disk_worker_thread.joinable()) {
+            for (device & d : devices) {
+                if (d.disk != nullptr) {
+                    ggml_backend_synchronize(d.backend);
+                    ggml_backend_metal_set_moe_cache_handler(d.backend, {});
+                }
+            }
+            stop_disk_worker();
+        }
+#endif
         log_stats();
         if (trace != nullptr) {
             fclose(trace);
@@ -694,8 +1078,16 @@ struct llama_moe_cache::impl {
         }
         const layer & l = layers[il];
 
-        // large batches use most experts of a layer, so they gain little from the cache and would evict the experts used in generation
-        if (n_tokens == 0 || n_tokens > max_batch || std::min(n_tokens*n_expert_used, l.slot_map->ne[1]) > groups[l.ig].n_slots) {
+        if (n_tokens == 0) {
+            return nullptr;
+        }
+        const bool disk = is_disk_layer(il);
+        const int64_t n_ids = n_tokens*n_expert_used;
+        const int64_t n_distinct_max = std::min(n_ids, l.slot_map->ne[1]);
+        if (disk) {
+            GGML_ASSERT(n_tokens <= n_ubatch);
+            GGML_ASSERT(n_distinct_max <= groups[l.ig].n_slots);
+        } else if (n_tokens > max_batch || n_distinct_max > groups[l.ig].n_slots) {
             return nullptr;
         }
         GGML_ASSERT(!cpu_part || l.slot_map_cpu != nullptr);
@@ -806,7 +1198,7 @@ struct llama_moe_cache::impl {
         ggml_backend_synchronize(backend);
 
         if (trace != nullptr) {
-            write_trace(il, n_used);
+            write_trace(il, n_used, ids.data(), ids.size());
         }
 
         // part of the misses is computed on the CPU once the cache is full, the carry keeps the share right on average
@@ -838,15 +1230,13 @@ struct llama_moe_cache::impl {
             const ggml_tensor * w    = l.experts[ip];
             ggml_tensor       * bank = g.banks[ip];
             const size_t expert_size = w->nb[2];
-            for (size_t i = 0; i < fills.size();) {
-                size_t n = 1;
-                while (i + n < fills.size() && fills[i + n].expert == fills[i].expert + (int32_t) n && fills[i + n].slot == fills[i].slot + (int32_t) n) {
-                    n++;
-                }
-                ggml_backend_tensor_set_async(backend, bank, (const uint8_t *) w->data + fills[i].expert*expert_size, fills[i].slot*expert_size, n*expert_size);
+            llama_moe_cache_for_each_fill_run(fills, [&](const moe_cache_lru::fill & fill, size_t n) {
+                ggml_backend_tensor_set_async(backend, bank,
+                    (const uint8_t *) w->data + fill.expert*expert_size,
+                    fill.slot*expert_size,
+                    n*expert_size);
                 bytes += n*expert_size;
-                i += n;
-            }
+            });
         }
 
         stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
@@ -878,8 +1268,8 @@ struct llama_moe_cache::impl {
     }
 };
 
-llama_moe_cache::llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share) :
-    pimpl(new impl(model, no_alloc, backends, bufts, size, cpu_share)) {
+llama_moe_cache::llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share, uint32_t n_ubatch) :
+    pimpl(new impl(model, no_alloc, backends, bufts, size, cpu_share, n_ubatch)) {
 }
 
 llama_moe_cache::~llama_moe_cache() = default;
@@ -891,9 +1281,10 @@ ggml_tensor * llama_moe_cache::get_experts(const ggml_tensor * w) const {
 llama_moe_cache_lookup llama_moe_cache::build_lookup(const llm_graph_context & g, const llama_moe_cache_layer & layer, ggml_tensor * selected_experts) const {
     const int32_t il = layer.il;
     ggml_context * ctx0 = g.ctx0;
+    const bool disk = pimpl->is_disk_layer(il);
 
     // part of the misses may be computed from the host experts, but not with weights before the FFN, LoRAs or rotated experts
-    bool cpu_part = !layer.weight_before_ffn && g.loras->empty();
+    bool cpu_part = !disk && !layer.weight_before_ffn && g.loras->empty();
     for (ggml_tensor * w : { layer.up_exps, layer.gate_exps, layer.down_exps, layer.gate_up_exps }) {
         cpu_part = cpu_part && !(w != nullptr && g.hdmd != nullptr && g.hdmd->rot.count(w) > 0);
     }
@@ -923,6 +1314,11 @@ llama_moe_cache_lookup llama_moe_cache::build_lookup(const llm_graph_context & g
         ids = ggml_cont(ctx0, ids);
     }
     ids = ggml_reshape_1d(ctx0, ids, ggml_nelements(ids));
+
+    if (disk) {
+        ggml_tensor * slots = ggml_reshape_2d(ctx0, ids, selected_experts->ne[0], selected_experts->ne[1]);
+        return { il, slots, nullptr };
+    }
 
     // the slot map is a host weight, so the scheduler starts a new split here and copies it with the copy callback
     // the callback reads the selected experts, uploads the missing ones and updates the slot map
@@ -980,5 +1376,12 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
     if (pimpl->buf_host) {
         res[ggml_backend_buffer_get_type(pimpl->buf_host.get())] += pimpl->buf_host_size;
     }
+#ifdef GGML_USE_METAL
+    for (const auto & d : pimpl->devices) {
+        if (d.disk != nullptr && d.disk->buf) {
+            res[ggml_backend_buffer_get_type(d.disk->buf.get())] += d.disk->buf_size;
+        }
+    }
+#endif
     return res;
 }

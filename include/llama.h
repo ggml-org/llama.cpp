@@ -355,6 +355,7 @@ extern "C" {
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
         bool load_mtp;        // whether to load MTP layers
+        bool moe_cache_disk;  // keep routed MoE expert weights on disk for the MoE cache [EXPERIMENTAL]
     };
 
     struct llama_sampler_seq_config {

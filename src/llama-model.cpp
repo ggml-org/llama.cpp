@@ -1364,6 +1364,10 @@ struct llama_model::impl {
     // model memory mapped files
     llama_mmaps mappings;
 
+    // files and offsets retained for disk-backed routed MoE experts
+    llama_files moe_files;
+    std::unordered_map<const ggml_tensor *, std::pair<const llama_file *, size_t>> moe_sources;
+
     // objects representing data potentially being locked in memory
     llama_mlocks mlock_bufs;
     llama_mlocks mlock_mmaps;
@@ -2168,6 +2172,10 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     load_tensors_hadamard();
 
+    if (params.moe_cache_disk) {
+        pimpl->moe_files = std::move(ml.files);
+    }
+
     return true;
 }
 
@@ -2508,9 +2516,33 @@ ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM
         // blocks that are not model layers (e.g. the blocks of a head) go with the output
         buft_list_layer = (size_t) tn.bid < pimpl->dev_layer.size() ? pimpl->dev_layer.at(tn.bid).buft_list : pimpl->dev_output.buft_list;
     }
-    return ml.create_tensor(
+    const bool routed_expert =
+        tn.tensor == LLM_TENSOR_FFN_GATE_EXPS ||
+        tn.tensor == LLM_TENSOR_FFN_UP_EXPS ||
+        tn.tensor == LLM_TENSOR_FFN_DOWN_EXPS ||
+        tn.tensor == LLM_TENSOR_FFN_GATE_UP_EXPS;
+    const bool disk = params.moe_cache_disk && routed_expert && tn.suffix != nullptr &&
+        strcmp(tn.suffix, "weight") == 0 && !(flags & (TENSOR_SKIP | TENSOR_DUPLICATED));
+
+    if (disk) {
+        flags |= TENSOR_READ_LAZY;
+    }
+
+    const auto lazy_mode = ml.lazy.mode;
+    if (disk) {
+        ml.lazy.mode = LLAMA_LAZY_MODE_ON;
+    }
+    ggml_tensor * tensor = ml.create_tensor(
         hparams, &pimpl->cpu_buft_list, pimpl->dev_input.buft_list, pimpl->dev_output.buft_list, buft_list_layer,
         tn, ne, flags);
+    ml.lazy.mode = lazy_mode;
+
+    if (disk && tensor != nullptr && !ml.no_alloc) {
+        const auto & weight = ml.require_weight(tn.str().c_str());
+        pimpl->moe_sources[tensor] = { ml.files.at(weight.idx).get(), weight.offs };
+    }
+
+    return tensor;
 }
 
 std::string llama_model::arch_name() const {
@@ -2556,6 +2588,10 @@ llama_split_mode llama_model::split_mode() const {
 
 bool llama_model::no_alloc() const {
     return params.no_alloc;
+}
+
+bool llama_model::moe_cache_disk() const {
+    return params.moe_cache_disk;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
@@ -2866,6 +2902,14 @@ ggml_backend_buffer_type_t llama_model::select_buft(int il) const {
 
 bool llama_model::has_tensor_overrides() const {
     return pimpl->has_tensor_overrides;
+}
+
+std::pair<const llama_file *, size_t> llama_model::moe_disk_source(const ggml_tensor * tensor) const {
+    const auto it = pimpl->moe_sources.find(tensor);
+    if (it == pimpl->moe_sources.end()) {
+        return { nullptr, 0 };
+    }
+    return it->second;
 }
 
 const ggml_tensor * llama_model::get_tensor(const char * name) const {
@@ -3569,6 +3613,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.moe_cache_disk              =*/ false,
     };
 
     return result;
