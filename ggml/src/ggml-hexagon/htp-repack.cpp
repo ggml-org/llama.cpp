@@ -1681,6 +1681,142 @@ static void repack_tiled_q1_0(void * data, const ggml_tensor * t, size_t offset,
     }
 }
 
+// --- IQ2_XXS (lossless 264 B tile: 32 rows x 8 B of qs + 4 FP16 d for rows 4*kt_local..4*kt_local+3) ---
+
+#define IQ2_XXS_QS_PER_KT   4
+#define IQ2_XXS_QS_PL_BYTES 256
+#define IQ2_XXS_D_PER_KT    4
+
+static void repack_iq2_xxs_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
+    repack_kquant_to_tiled_grid<block_iq2_xxs>(t, data, offset, size, HTP_TENSOR_TILE_SIZE_IQ2_XXS,
+        [](uint8_t * tile, const block_iq2_xxs * b, int row, int kt_local) {
+            ggml_half * dd_pl = (ggml_half *) (tile + IQ2_XXS_QS_PL_BYTES);
+            memcpy(tile + row * sizeof(uint16_t) * IQ2_XXS_QS_PER_KT, &b->qs[kt_local * IQ2_XXS_QS_PER_KT],
+                   sizeof(uint16_t) * IQ2_XXS_QS_PER_KT);
+            if (row / IQ2_XXS_D_PER_KT == kt_local) {
+                dd_pl[row % IQ2_XXS_D_PER_KT] = b->d;
+            }
+        });
+}
+
+static void repack_tiled_iq2_xxs(void * data, const ggml_tensor * t, size_t offset, size_t size) {
+    unpack_kquant_from_tiled_grid<block_iq2_xxs>(data, t, offset, size, HTP_TENSOR_TILE_SIZE_IQ2_XXS,
+        [](block_iq2_xxs * b, const uint8_t * sb_tiles, size_t tile_size, int row) {
+            for (int kt_local = 0; kt_local < QK_K / 32; kt_local++) {
+                const uint8_t *   tile  = sb_tiles + kt_local * tile_size;
+                const ggml_half * dd_pl = (const ggml_half *) (tile + IQ2_XXS_QS_PL_BYTES);
+                memcpy(&b->qs[kt_local * IQ2_XXS_QS_PER_KT], tile + row * sizeof(uint16_t) * IQ2_XXS_QS_PER_KT,
+                       sizeof(uint16_t) * IQ2_XXS_QS_PER_KT);
+                if (row / IQ2_XXS_D_PER_KT == kt_local) {
+                    b->d = dd_pl[row % IQ2_XXS_D_PER_KT];
+                }
+            }
+        });
+}
+
+// --- NVFP4 (576 B tile: Q4_0-style nibble transpose + 2 UE4M3 scales per row, one block-64 = 2 k-tiles) ---
+
+#define NVFP4_TILE_NIBBLE_BYTES 512
+#define NVFP4_KT_PER_BLOCK      (QK_NVFP4 / 32)
+#define NVFP4_SUB_PER_KT        (32 / QK_NVFP4_SUB)
+
+// element e (0..31) of k-tile kt_half lives in sub-block 2*kt_half + e/16, low nibble if (e%16) < 8
+static inline uint8_t nvfp4_get_nibble(const block_nvfp4 & b, int kt_half, int e) {
+    const int sub = kt_half * NVFP4_SUB_PER_KT + e / QK_NVFP4_SUB;
+    const int j   = e % (QK_NVFP4_SUB / 2);
+    const uint8_t q = b.qs[sub * (QK_NVFP4_SUB / 2) + j];
+    return (e % QK_NVFP4_SUB) < QK_NVFP4_SUB / 2 ? (q & 0x0F) : (q >> 4);
+}
+
+static inline void nvfp4_set_nibble(block_nvfp4 & b, int kt_half, int e, uint8_t v) {
+    const int sub = kt_half * NVFP4_SUB_PER_KT + e / QK_NVFP4_SUB;
+    const int j   = e % (QK_NVFP4_SUB / 2);
+    uint8_t & q   = b.qs[sub * (QK_NVFP4_SUB / 2) + j];
+    q |= (e % QK_NVFP4_SUB) < QK_NVFP4_SUB / 2 ? v : (uint8_t) (v << 4);
+}
+
+static void repack_nvfp4_tiled(ggml_tensor * t, const void * data, size_t offset, size_t size) {
+    GGML_ASSERT(offset == 0);
+    GGML_ASSERT(t->ne[0] % QK_NVFP4 == 0);
+    GGML_UNUSED(size);
+
+    const block_nvfp4 * src = (const block_nvfp4 *) data;
+    const int64_t blocks_per_row = t->ne[0] / QK_NVFP4;
+    const int64_t n_k_tiles      = blocks_per_row * NVFP4_KT_PER_BLOCK;
+    const int64_t n_col_tiles    = hex_round_up(t->ne[1], 32) / 32;
+    const size_t  matrix_size    = (size_t) n_col_tiles * n_k_tiles * HTP_TENSOR_TILE_SIZE_NVFP4;
+    const size_t  ct_bytes       = (size_t) n_k_tiles * HTP_TENSOR_TILE_SIZE_NVFP4;
+
+    for (int64_t slice = 0; slice < t->ne[2] * t->ne[3]; ++slice) {
+        const block_nvfp4 * src_slice = src + slice * t->ne[1] * blocks_per_row;
+        uint8_t * dst_slice = (uint8_t *) t->data + slice * matrix_size;
+
+        repack_parallel_for_ct(matrix_size, (int) n_col_tiles, [&](int ct0, int ct1) {
+            // Padding rows and OR-ed nibbles require zeroed tiles
+            memset(dst_slice + (size_t) ct0 * ct_bytes, 0, (size_t) (ct1 - ct0) * ct_bytes);
+
+            const int64_t r0 = (int64_t) ct0 * 32;
+            const int64_t r1 = (std::min)((int64_t) ct1 * 32, t->ne[1]);
+            for (int64_t r = r0; r < r1; ++r) {
+                const int64_t ct  = r / 32;
+                const int     row = (int) (r % 32);
+                for (int64_t blk = 0; blk < blocks_per_row; ++blk) {
+                    const block_nvfp4 & b = src_slice[r * blocks_per_row + blk];
+                    for (int h = 0; h < NVFP4_KT_PER_BLOCK; ++h) {
+                        uint8_t * tile = dst_slice + (ct * n_k_tiles + blk * NVFP4_KT_PER_BLOCK + h) * HTP_TENSOR_TILE_SIZE_NVFP4;
+                        for (int e = 0; e < 32; ++e) {
+                            tile[(e / 2) * 32 + row] |= (uint8_t) (nvfp4_get_nibble(b, h, e) << (4 * (e & 1)));
+                        }
+                        for (int u = 0; u < NVFP4_SUB_PER_KT; ++u) {
+                            tile[NVFP4_TILE_NIBBLE_BYTES + u * 32 + row] = b.d[h * NVFP4_SUB_PER_KT + u];
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+static void repack_tiled_nvfp4(void * data, const ggml_tensor * t, size_t offset, size_t size) {
+    GGML_ASSERT(t->ne[0] % QK_NVFP4 == 0);
+    GGML_ASSERT(offset + size <= ggml_nbytes(t));
+
+    const size_t blocks_per_row   = t->ne[0] / QK_NVFP4;
+    const size_t blocks_per_slice = t->ne[1] * blocks_per_row;
+    const size_t n_k_tiles        = blocks_per_row * NVFP4_KT_PER_BLOCK;
+    const size_t n_col_tiles      = hex_round_up(t->ne[1], 32) / 32;
+    const size_t matrix_size      = n_col_tiles * n_k_tiles * HTP_TENSOR_TILE_SIZE_NVFP4;
+
+    const size_t first_block = offset / sizeof(block_nvfp4);
+    const size_t end_block   = (offset + size + sizeof(block_nvfp4) - 1) / sizeof(block_nvfp4);
+
+    for (size_t block_index = first_block; block_index < end_block; ++block_index) {
+        const size_t slice    = block_index / blocks_per_slice;
+        const size_t in_slice = block_index % blocks_per_slice;
+        const size_t r        = in_slice / blocks_per_row;
+        const size_t blk      = in_slice % blocks_per_row;
+        const size_t ct       = r / 32;
+        const int    row      = (int) (r % 32);
+
+        block_nvfp4 b = {};
+        for (int h = 0; h < NVFP4_KT_PER_BLOCK; ++h) {
+            const uint8_t * tile = (const uint8_t *) t->data + slice * matrix_size +
+                (ct * n_k_tiles + blk * NVFP4_KT_PER_BLOCK + h) * HTP_TENSOR_TILE_SIZE_NVFP4;
+            for (int e = 0; e < 32; ++e) {
+                nvfp4_set_nibble(b, h, e, (tile[(e / 2) * 32 + row] >> (4 * (e & 1))) & 0x0F);
+            }
+            for (int u = 0; u < NVFP4_SUB_PER_KT; ++u) {
+                b.d[h * NVFP4_SUB_PER_KT + u] = tile[NVFP4_TILE_NIBBLE_BYTES + u * 32 + row];
+            }
+        }
+
+        const size_t block_begin = block_index * sizeof(block_nvfp4);
+        const size_t copy_begin  = (std::max)(block_begin, offset);
+        const size_t copy_end    = (std::min)(block_begin + sizeof(block_nvfp4), offset + size);
+        memcpy((uint8_t *) data + copy_begin - offset, (const uint8_t *) &b + copy_begin - block_begin, copy_end - copy_begin);
+    }
+}
+
 // --- Top-level Repack / Unpack Dispatchers ---
 
 void htp_repack_tensor_tiled(ggml_tensor * tensor, const void * data, size_t size) {
@@ -1706,6 +1842,12 @@ void htp_repack_tensor_tiled(ggml_tensor * tensor, const void * data, size_t siz
             break;
         case GGML_TYPE_MXFP4:
             repack_mxfp4_tiled(tensor, data, 0, size);
+            break;
+        case GGML_TYPE_NVFP4:
+            repack_nvfp4_tiled(tensor, data, 0, size);
+            break;
+        case GGML_TYPE_IQ2_XXS:
+            repack_iq2_xxs_tiled(tensor, data, 0, size);
             break;
         case GGML_TYPE_Q2_0:
             repack_q2_0_tiled(tensor, data, 0, size);
@@ -1767,6 +1909,12 @@ void htp_unpack_tensor_tiled(void * data, const ggml_tensor * tensor, size_t off
             break;
         case GGML_TYPE_MXFP4:
             repack_tiled_mxfp4(data, tensor, offset, size);
+            break;
+        case GGML_TYPE_NVFP4:
+            repack_tiled_nvfp4(data, tensor, offset, size);
+            break;
+        case GGML_TYPE_IQ2_XXS:
+            repack_tiled_iq2_xxs(data, tensor, offset, size);
             break;
         case GGML_TYPE_Q2_0:
             repack_tiled_q2_0(data, tensor, offset, size);

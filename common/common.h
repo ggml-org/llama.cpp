@@ -174,18 +174,20 @@ enum common_params_sampling_config : uint64_t {
 };
 
 enum common_speculative_type {
-    COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
-    COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,  // standalone draft model speculative decoding
-    COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
-    COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
-    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
-    COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
-    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
-    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+    COMMON_SPECULATIVE_TYPE_NONE,           // no speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE,   // standalone draft model speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,   // Eagle3 speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_MTP,      // Multi-token prediction
+    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,   // DFlash speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,   // DSpark speculative decoding (DFlash + Markov head)
+    COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2,  // DFlash2 speculative decoding (DFlash + selector)
+    COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR, // LiliCorr speculative decoding (DFlash + scorer)
+    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,   // simple self-speculative decoding based on n-grams
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,    // self-speculative decoding with n-gram keys only
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,  // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
-    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
-    COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,    // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_COUNT           // number of types, unknown type
 };
 
 // Grammar type enumeration
@@ -414,7 +416,12 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP     ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3  ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH  ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK  ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2 ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;

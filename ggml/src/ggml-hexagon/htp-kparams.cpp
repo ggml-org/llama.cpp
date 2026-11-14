@@ -46,6 +46,7 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
         case GGML_OP_LOG:             return HTP_OP_UNARY_LOG;
         case GGML_OP_SOFT_MAX:        return HTP_OP_SOFTMAX;
         case GGML_OP_SSM_CONV:        return HTP_OP_SSM_CONV;
+        case GGML_OP_SSM_SCAN:        return HTP_OP_SSM_SCAN;
         case GGML_OP_GATED_DELTA_NET: return HTP_OP_GATED_DELTA_NET;
         case GGML_OP_ROPE:            return HTP_OP_ROPE;
         case GGML_OP_REPEAT:          return HTP_OP_REPEAT;
@@ -684,11 +685,14 @@ static bool htp_kparams_solve_hmx_mm(
     int m_for_solver        = ne11;
     int m_for_solver_padded = ne11_padded;
     if (!is_matmul_id && mdev_count > 1 && ((uint32_t) ne11 >= mdev_count)) {
-        const bool dst_row_split = dst ? htp_can_row_partition(dst) : true;
-        const bool act_row_split = htp_can_row_partition(act);
-        if (dst_row_split && act_row_split) {
-            m_for_solver        = (ne11 + (int) mdev_count - 1) / (int) mdev_count;
-            m_for_solver_padded = hex_round_up(std::max(m_for_solver, 32), 32);
+        const uint32_t rows_per_chunk = dst ? htp_mdev_rows_per_chunk(dst) : 1;
+        const uint32_t total_chunks   = rows_per_chunk ? ((uint32_t) ne11 / rows_per_chunk) : 0;
+        if (total_chunks >= mdev_count) {
+            const uint32_t chunks_per_mdev = (total_chunks + mdev_count - 1) / mdev_count;
+            const uint32_t m_dev0          = chunks_per_mdev * rows_per_chunk;
+            const uint32_t m_last          = (uint32_t) ne11 > (mdev_count - 1) * m_dev0 ? (uint32_t) ne11 - (mdev_count - 1) * m_dev0 : 0;
+            m_for_solver                   = (int) std::max(m_dev0, m_last);
+            m_for_solver_padded            = hex_round_up(std::max(m_for_solver, 32), 32);
         }
     }
     const bool pipeline       = is_matmul_id ? false : htp_mm_hmx_pipeline(m_for_solver);
@@ -958,6 +962,8 @@ static bool htp_matmul_check_types(
             case GGML_TYPE_Q8_0:
             case GGML_TYPE_IQ4_NL:
             case GGML_TYPE_MXFP4:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_NVFP4:
             case GGML_TYPE_Q4_K:
             case GGML_TYPE_Q5_K:
             case GGML_TYPE_Q6_K:
@@ -1002,6 +1008,8 @@ static bool htp_matmul_check_types(
         case GGML_TYPE_Q8_0:
         case GGML_TYPE_IQ4_NL:
         case GGML_TYPE_MXFP4:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_NVFP4:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
@@ -2241,6 +2249,152 @@ static bool htp_kparams_solve_ssm_conv(
     kparams->div_d_inner_tile = init_fastdiv_values(kparams->d_inner_tile);
 
     return L.total_bytes <= vtcm_size;
+}
+
+static bool htp_kparams_solve_ssm_scan(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * op,
+    struct htp_ssm_scan_kernel_params * kparams
+) {
+    if (opt_ssm_select < 1) {
+        return false;
+    }
+
+    memset(kparams, 0, sizeof(*kparams));
+
+    const struct ggml_tensor * s  = op->src[0];
+    const struct ggml_tensor * x  = op->src[1];
+    const struct ggml_tensor * dt = op->src[2];
+    const struct ggml_tensor * A  = op->src[3];
+    const struct ggml_tensor * B  = op->src[4];
+    const struct ggml_tensor * C  = op->src[5];
+
+    if (s->type != GGML_TYPE_F32 || x->type != GGML_TYPE_F32 || dt->type != GGML_TYPE_F32 || A->type != GGML_TYPE_F32 ||
+        B->type != GGML_TYPE_F32 || C->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    const uint32_t d_state  = (uint32_t) s->ne[0];
+    const uint32_t n_a      = (uint32_t) A->ne[0];
+    const uint32_t head_dim = (uint32_t) x->ne[0];
+    const uint32_t n_head   = (uint32_t) x->ne[1];
+    const uint32_t n_tokens = (uint32_t) x->ne[2];
+    const uint32_t n_seqs   = (uint32_t) x->ne[3];
+    const uint32_t n_group  = (uint32_t) B->ne[1];
+    const uint32_t K        = (uint32_t) ggml_get_op_params_i32(op, 0);
+
+    if (n_head % n_group != 0 || (n_a != 1 && n_a != d_state)) {
+        return false;
+    }
+
+    const uint8_t  fast_step4  = (n_a == 1 && (d_state & 31U) == 0) ? 1 : 0;
+    const uint32_t sess_hvx    = htp_session_n_hvx(sess);
+    const size_t   vtcm_size   = htp_session_vtcm_size(sess);
+
+    const uint64_t y_token_stride = (uint64_t) n_head * head_dim * sizeof(float);
+    const uint64_t y_seq_stride   = (uint64_t) n_tokens * y_token_stride;
+    const uint64_t y_bytes        = (uint64_t) n_seqs * y_seq_stride;
+    if (y_bytes > UINT32_MAX) {
+        return false;
+    }
+
+    const bool can_use_hmx = (opt_ssm_select >= 2) &&
+                             (htp_session_n_hmx(sess) > 0) &&
+                             (n_tokens >= HTP_SSM_SCAN_HMX_TOKEN_TILE) &&
+                             (n_a == 1) &&
+                             (K == 1) &&
+                             (d_state >= 32U && d_state <= HTP_SSM_SCAN_HMX_MAX_DIM && (d_state & 31U) == 0) &&
+                             (head_dim >= 32U && head_dim <= HTP_SSM_SCAN_HMX_MAX_DIM && (head_dim & 31U) == 0);
+
+    struct htp_ssm_scan_vtcm_layout layout;
+    bool hmx_selected = false;
+
+    if (can_use_hmx) {
+        const uint64_t total_units = (uint64_t) n_seqs * n_head;
+        if (total_units <= UINT32_MAX) {
+            const uint32_t n_hvx = (std::min)(sess_hvx, (uint32_t) total_units);
+            htp_ssm_scan_vtcm_layout_build(&layout, d_state, head_dim, HTP_SSM_SCAN_HMX_TOKEN_TILE, n_hvx, true);
+            if (layout.total_bytes <= vtcm_size) {
+                kparams->kernel_type     = HTP_SSM_SCAN_KERNEL_HMX;
+                kparams->fast_step4      = fast_step4;
+                kparams->row_tile        = (uint16_t) head_dim;
+                kparams->token_tile      = (uint16_t) HTP_SSM_SCAN_HMX_TOKEN_TILE;
+                kparams->n_chunks        = (n_tokens + HTP_SSM_SCAN_HMX_TOKEN_TILE - 1) / HTP_SSM_SCAN_HMX_TOKEN_TILE;
+                kparams->d_state         = d_state;
+                kparams->n_a             = n_a;
+                kparams->head_dim        = head_dim;
+                kparams->n_tokens        = n_tokens;
+                kparams->n_seqs          = n_seqs;
+                kparams->K               = K;
+                kparams->heads_per_group = n_head / n_group;
+                kparams->n_row_blocks    = 1;
+                kparams->group_units     = kparams->heads_per_group;
+                kparams->units_per_seq   = n_head;
+                kparams->total_units     = (uint32_t) total_units;
+                kparams->n_hvx           = (uint16_t) n_hvx;
+                kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
+                hmx_selected             = true;
+            }
+        }
+    }
+
+    if (!hmx_selected) {
+        const uint8_t kernel_type = (n_tokens == 1) ? HTP_SSM_SCAN_KERNEL_HVX_DECODE : HTP_SSM_SCAN_KERNEL_HVX_PREFILL;
+        uint32_t      row_tile    = (std::min)(head_dim, (n_tokens > 1 && head_dim >= 64) ? 64U : HTP_SSM_SCAN_ROW_TILE_DEFAULT);
+        uint32_t      token_tile  = (K > 1) ? 1U : (std::min)(n_tokens, HTP_SSM_SCAN_TOKEN_TILE_DEFAULT);
+
+        for (;;) {
+            const uint32_t n_row_blocks = (head_dim + row_tile - 1) / row_tile;
+            const uint64_t total_units  = (uint64_t) n_seqs * n_head * n_row_blocks;
+            if (total_units > UINT32_MAX) {
+                return false;
+            }
+
+            kparams->kernel_type     = kernel_type;
+            kparams->fast_step4      = fast_step4;
+            kparams->row_tile        = (uint16_t) row_tile;
+            kparams->token_tile      = (uint16_t) token_tile;
+            kparams->n_chunks        = (n_tokens + token_tile - 1) / token_tile;
+            kparams->d_state         = d_state;
+            kparams->n_a             = n_a;
+            kparams->head_dim        = head_dim;
+            kparams->n_tokens        = n_tokens;
+            kparams->n_seqs          = n_seqs;
+            kparams->K               = K;
+            kparams->heads_per_group = n_head / n_group;
+            kparams->n_row_blocks    = n_row_blocks;
+            kparams->group_units     = kparams->heads_per_group * n_row_blocks;
+            kparams->units_per_seq   = n_head * n_row_blocks;
+            kparams->total_units     = (uint32_t) total_units;
+            kparams->n_hvx           = (uint16_t) (std::min)(sess_hvx, kparams->total_units);
+            kparams->units_per_hvx   = (kparams->total_units + kparams->n_hvx - 1) / kparams->n_hvx;
+
+            htp_ssm_scan_vtcm_layout_build(&layout, d_state, kparams->row_tile, kparams->token_tile, kparams->n_hvx, false);
+            if (layout.total_bytes <= vtcm_size) {
+                break;
+            }
+            if (row_tile > 1) {
+                row_tile = (row_tile > 4) ? ((row_tile / 2) & ~3U) : 1U;
+            } else if (token_tile > 1) {
+                token_tile /= 2;
+            } else {
+                kparams->kernel_type = HTP_SSM_SCAN_KERNEL_UNSUPPORTED;
+                return false;
+            }
+        }
+    }
+
+    kparams->y_token_stride    = (uint32_t) y_token_stride;
+    kparams->y_seq_stride      = (uint32_t) y_seq_stride;
+    kparams->y_bytes           = (uint32_t) y_bytes;
+    kparams->vtcm_per_hvx      = (uint32_t) layout.bytes_per_hvx;
+    kparams->vtcm_size         = (uint32_t) layout.total_bytes;
+    kparams->div_units_per_seq = init_fastdiv_values(kparams->units_per_seq);
+    kparams->div_group_units   = init_fastdiv_values(kparams->group_units);
+    kparams->div_n_row_blocks  = init_fastdiv_values(kparams->n_row_blocks);
+    kparams->div_n_hvx         = init_fastdiv_values(kparams->n_hvx);
+
+    return true;
 }
 
 static bool htp_kparams_solve_sort(
@@ -5446,6 +5600,9 @@ bool htp_kparams_solve(
 
         case HTP_OP_SSM_CONV:
             return htp_kparams_invoke<htp_kparams_solve_ssm_conv>(sess, op, kparams);
+
+        case HTP_OP_SSM_SCAN:
+            return htp_kparams_invoke<htp_kparams_solve_ssm_scan>(sess, op, kparams);
 
         case HTP_OP_SOFTMAX:
             return htp_kparams_invoke<htp_kparams_solve_softmax>(sess, op, kparams);

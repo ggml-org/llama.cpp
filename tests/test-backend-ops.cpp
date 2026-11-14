@@ -12122,6 +12122,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 16, 10, 256, {1, 1}, {1, 1}));
     }
+
+    // Tile-aligned shapes for NVFP4 and IQ2_XXS across GEMV (n=1, 2) and HMX (n=16, 64) paths
+    for (ggml_type type_a : {GGML_TYPE_NVFP4, GGML_TYPE_IQ2_XXS}) {
+        for (int n : {1, 2, 16, 64}) {
+            test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 64, n, 256, {1, 1}, {1, 1}));
+        }
+    }
 #else
     // m = a rows
     // n = b rows
@@ -14023,6 +14030,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, 1,   1)); // generate
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B prefill
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 1,   1)); // Nemotron-9B generate
+
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 512, 1));	// Mamba-2 prefill
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2,   1, 1));	// Mamba-2 generate
+
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 64, 8, 512, 1));	// Nemotron-3.5-Lightning prefill
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 64, 8,   1, 1));	// Nemotron-3.5-Lightning generate
 
     // acc
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 1, 1}, {256, 16, 1, 1}, -1));

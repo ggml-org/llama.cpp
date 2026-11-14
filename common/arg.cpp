@@ -349,6 +349,14 @@ common_models_handler common_models_handler_init(const common_params & params, l
                                            params.speculative.types.end(),
                                            COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
 
+    const bool spec_type_draft_dflash2 = std::find(params.speculative.types.begin(),
+                                            params.speculative.types.end(),
+                                            COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2) != params.speculative.types.end();
+
+    const bool spec_type_draft_lilicorr = std::find(params.speculative.types.begin(),
+                                             params.speculative.types.end(),
+                                             COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR) != params.speculative.types.end();
+
     const bool spec_type_draft_eagle3 = std::find(params.speculative.types.begin(),
                                            params.speculative.types.end(),
                                            COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3) != params.speculative.types.end();
@@ -373,7 +381,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
     opts.offline         = params.offline;
     opts.download_mtp    = spec_type_draft_mtp;
     opts.download_eagle3 = spec_type_draft_eagle3;
-    opts.download_dflash = spec_type_draft_dflash;
+    opts.download_dflash = spec_type_draft_dflash || spec_type_draft_dflash2 || spec_type_draft_lilicorr;
     opts.download_dspark = spec_type_draft_dspark;
     opts.download_mmproj = use_mmproj && !params.no_mmproj
                         && params.mmproj.path.empty() && params.mmproj.url.empty();
