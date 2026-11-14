@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <sycl/sycl.hpp>
 
+#include "convert.hpp"
 #include "ggml.h"
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
@@ -45,7 +46,9 @@ static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
     for (int i0 = i0s; i0 < ne0;
          i0 += item_ct1.get_local_range(2) * item_ct1.get_group_range(2)) {
         const int i10 = i0 % ne10;
-        dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
+        const float a = src0 ? ggml_sycl_cast<float>(src0_row[i0*s00]) : 0.0f;
+        const float b = ggml_sycl_cast<float>(src1_row[i10*s10]);
+        dst_row[i0] = ggml_sycl_cast<dst_t>(bin_op(a, b));
     }
 }
 
@@ -83,7 +86,9 @@ static void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t 
     dst_t * dst_row = dst + i_dst;
 
     const int i10 = i0 % ne10;
-    dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
+    const float a = src0 ? ggml_sycl_cast<float>(src0_row[i0*s00]) : 0.0f;
+    const float b = ggml_sycl_cast<float>(src1_row[i10*s10]);
+    dst_row[i0] = ggml_sycl_cast<dst_t>(bin_op(a, b));
 }
 
 
@@ -288,6 +293,11 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
              ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0, nb1, nb2,
              nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_permuted(src0), ggml_is_permuted(src1),
              main_stream);
+    } else if (src0->type == GGML_TYPE_F8_E4M3 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F8_E4M3) {
+        op()((const ggml_fp8_e4m3_t *) src0->data, (const float *) src1->data, (ggml_fp8_e4m3_t *) dst->data, ne00, ne01,
+             ne02, ne03, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb0,
+             nb1, nb2, nb3, ggml_is_contiguous(src0), ggml_is_contiguous(src1), ggml_is_permuted(src0),
+             ggml_is_permuted(src1), main_stream);
 #ifdef GGML_SYCL_HAS_BF16
     } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
         op()((const sycl::ext::oneapi::bfloat16 *) src0->data, (const sycl::ext::oneapi::bfloat16 *) src1->data,

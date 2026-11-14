@@ -1,6 +1,7 @@
 #include "set_rows.hpp"
 #include "cpy.hpp"
 
+#include "convert.hpp"
 #include "ggml-quants.h"
 
 #include <vector>
@@ -12,6 +13,7 @@ static constexpr bool is_arithmetic_v() {
 #ifdef GGML_SYCL_HAS_BF16
         || std::is_same_v<T, sycl::ext::oneapi::bfloat16>
 #endif
+        || std::is_same_v<T, ggml_fp8_e4m3_t>
         ;
 }
 }
@@ -20,8 +22,13 @@ template<typename TIn, typename TOut>
 static inline std::enable_if_t<utils::is_arithmetic_v<TIn>() && utils::is_arithmetic_v<TOut>(), void>
 convert (const char* src, char* dst) {
     auto src_val = *reinterpret_cast<const TIn*>(src);
-    auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut, sycl::rounding_mode::automatic>()[0];
-   *reinterpret_cast<TOut*>(dst) = dst_val;
+    if constexpr (std::is_same_v<TIn, ggml_fp8_e4m3_t> || std::is_same_v<TOut, ggml_fp8_e4m3_t>) {
+        // sycl::vec does not support ggml_fp8_e4m3_t, so f8 uses ggml_sycl_cast
+        *reinterpret_cast<TOut*>(dst) = ggml_sycl_cast<TOut>(src_val);
+    } else {
+        auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut, sycl::rounding_mode::automatic>()[0];
+        *reinterpret_cast<TOut*>(dst) = dst_val;
+    }
 }
 
 #ifdef GGML_SYCL_HAS_BF16
@@ -355,6 +362,19 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             );
             break;
 #endif
+        case GGML_TYPE_F8_E4M3:
+            dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+            set_rows_sycl<TIn, TIdx, ggml_fp8_e4m3_t>(
+                src0_d, src1_d, (char *)dst->data,
+                ne00, ne01, ne02, ne03,
+                ne11, ne12,
+                nb01, nb02, nb03,
+                nb10, nb11, nb12,
+                nb1, nb2, nb3,
+                sizeof(TIn), sizeof(ggml_fp8_e4m3_t),
+                stream
+            );
+            break;
         case GGML_TYPE_Q8_0:
             set_rows_sycl_q<TIn, TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(
                 src0_d, src1_d, (block_q8_0 *) dst->data, ne00, ne01, ne02, ne03,

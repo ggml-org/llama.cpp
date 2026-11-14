@@ -626,7 +626,7 @@ static void convert_unary_nc(const void * __restrict__ vx, dst_t * __restrict__ 
 
 #pragma unroll
     for (int64_t i00 = global_id; i00 < ne00; i00 += work_group_size * item_ct1.get_group_range(2)) {
-        y[iy + i00] = static_cast<dst_t>(x[ix + i00]);
+        y[iy + i00] = ggml_sycl_cast<dst_t>(x[ix + i00]);
     }
 }
 
@@ -767,6 +767,8 @@ static to_t_sycl_t<dst_t> ggml_get_dequant_sycl(ggml_type type, ggml_tensor * ds
         case GGML_TYPE_BF16:
             return convert_unary_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
+        case GGML_TYPE_F8_E4M3:
+            return convert_unary_sycl<ggml_fp8_e4m3_t>;
         default:
             break;
     }
