@@ -761,14 +761,16 @@ public:
 
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
-    llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
-        samplers(std::move(samplers)) { }
+    llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers, ggml_backend_sched_t sched) :
+        samplers(std::move(samplers)), sched(sched) { }
     virtual ~llm_graph_input_sampling() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
     bool can_reuse(const llm_graph_params & params) override;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
+    std::map<llama_seq_id, std::vector<bool>> usable;
+    ggml_backend_sched_t sched;
 };
 
 //
@@ -976,6 +978,7 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+    ggml_tensor * t_sampling    = nullptr; // first node of the backend sampling chains
 
     std::vector<ggml_tensor *> t_layer_inp;
 

@@ -19,6 +19,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
+#include "../ggml/src/ggml-token-mask.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1341,6 +1342,11 @@ struct test_case {
         return 0;
     }
 
+    virtual bool compare_tensors(ggml_tensor * a, ggml_tensor * b, bool & ok) {
+        GGML_UNUSED(a); GGML_UNUSED(b); GGML_UNUSED(ok);
+        return false;
+    }
+
     virtual bool run_whole_graph() { return false; }
     // the output must be the same in each run on the same backend
     virtual bool deterministic(ggml_backend_t backend) {
@@ -1578,6 +1584,12 @@ struct test_case {
                     ud->ok = false;
                     return true;
                 }
+            }
+
+            bool custom_ok = true;
+            if (ud->tc->compare_tensors(t1, t2, custom_ok)) {
+                ud->ok = ud->ok && custom_ok;
+                return true;
             }
 
             std::vector<float> f1 = tensor_to_float(t1);
@@ -2494,6 +2506,190 @@ struct test_swiglu_clamp : public test_case {
         return type == GGML_TYPE_F16 ? 5e-6 : 1e-7;
     }
 };
+
+struct test_token_mask : public test_case {
+    const int vocab, candidates, rows, encoding, layout, variant;
+    const bool strided, special;
+    std::vector<uint32_t> input, expected;
+    std::vector<int32_t> ids_data, desc_data, payload_data;
+    ggml_tensor * logits_base = nullptr;
+    ggml_tensor * ids_base = nullptr;
+    ggml_tensor * desc_base = nullptr;
+    ggml_tensor * payload = nullptr;
+
+    test_token_mask(int vocab, int candidates, int rows, int encoding, int layout, int variant,
+                    bool strided = false, bool special = false)
+        : vocab(vocab), candidates(candidates), rows(rows), encoding(encoding), layout(layout), variant(variant),
+          strided(strided), special(special) {}
+
+    std::string vars() override {
+        return VARS_TO_STR8(vocab, candidates, rows, encoding, layout, variant, strided, special);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int padding = strided ? 3 : 0;
+        logits_base = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, candidates + padding, rows);
+        ids_base = layout == 0 ? nullptr : ggml_new_tensor_2d(ctx, GGML_TYPE_I32, candidates + padding, rows);
+        desc_base = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 4 + padding, rows);
+        const bool empty_payload = rows == 1 && (encoding < 2 || (encoding < 4 && variant == 0));
+        payload = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, empty_payload ? 0 : (int64_t) rows*(vocab + 2) + 1);
+        ggml_tensor * logits = strided ? ggml_view_2d(ctx, logits_base, candidates, rows, logits_base->nb[1], sizeof(float)) : logits_base;
+        ggml_tensor * ids = ids_base;
+        if (strided && ids) {
+            ids = ggml_view_2d(ctx, ids_base, candidates, rows, ids_base->nb[1], sizeof(int32_t));
+        }
+        ggml_tensor * desc = strided ? ggml_view_2d(ctx, desc_base, 4, rows, desc_base->nb[1], sizeof(int32_t)) : desc_base;
+        return ggml_token_mask(ctx, logits, ids, payload, desc);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_case::initialize_tensors(ctx);
+        const int stride = candidates + (strided ? 3 : 0);
+        const int desc_stride = 4 + (strided ? 3 : 0);
+        const int start = strided ? 1 : 0;
+        input.assign((size_t) stride*rows, UINT32_C(0x42f60000));
+        ids_data.assign(input.size(), -1);
+        desc_data.assign((size_t) desc_stride*rows, -1);
+        payload_data.assign(ggml_nelements(payload), 0);
+        expected.resize((size_t) candidates*rows);
+        size_t offset = payload_data.empty() ? 0 : 1;
+        for (int row = 0; row < rows; ++row) {
+            const int mode = encoding < 0 ? row % 5 : encoding;
+            const int kind = (row + variant) % 5;
+            std::vector<bool> members(vocab, false);
+            for (int id = 0; id < vocab; ++id) {
+                members[id] = kind == 1 ? id == vocab - 1 :
+                              kind == 2 ? id % 2 == 0 :
+                              kind == 3 ? true :
+                              kind == 4 ? (id == 0 || id == 31 || id == 32 || id == vocab - 1) : false;
+            }
+            const size_t begin = offset;
+            if (mode == GGML_TOKEN_MASK_BITSET) {
+                const int words = (vocab + 31)/32;
+                for (int id = 0; id < vocab; ++id) {
+                    if (members[id]) {
+                        payload_data[offset + id/32] = (int32_t) ((uint32_t) payload_data[offset + id/32] | (UINT32_C(1) << (id % 32)));
+                    }
+                }
+                if (vocab % 32) {
+                    payload_data[offset + words - 1] = (int32_t) ((uint32_t) payload_data[offset + words - 1] | (UINT32_MAX << (vocab % 32)));
+                }
+                offset += words;
+            } else if (mode == GGML_TOKEN_MASK_ALLOW_IDS || mode == GGML_TOKEN_MASK_DENY_IDS) {
+                for (int id = 0; id < vocab; ++id) {
+                    if (members[id]) {
+                        payload_data[offset++] = id;
+                    }
+                }
+            }
+            int32_t * d = desc_data.data() + row*desc_stride + start;
+            d[0] = mode; d[1] = (int32_t) (offset - begin); d[2] = (int32_t) begin; d[3] = vocab;
+            ++offset;
+            for (int col = 0; col < candidates; ++col) {
+                int id = col;
+                switch (layout) {
+                    case 2: id = vocab - 1 - col; break;
+                    case 3: id = (col/2 + row) % vocab; break;
+                    case 4: id = (2*col + row) % vocab; break;
+                    case 5:
+                        id = col % 5 == 0 ? -1 : col % 5 == 1 ? vocab : col % 5 == 2 ? INT32_MAX : col % 5 == 3 ? INT32_MIN : col % vocab;
+                        break;
+                    default: break;
+                }
+                const size_t index = (size_t) row*stride + col + start;
+                ids_data[index] = id;
+                const float value = (float) ((col % 101) - 50)/8.0f;
+                memcpy(&input[index], &value, sizeof(value));
+                if (special) {
+                    const uint32_t bits[] = {0x7fc12345, 0x7f800000, 0xff800000, 0x80000000, 0x00000000, 0x3fa00000};
+                    input[index] = bits[(col + row) % 6];
+                }
+                bool allowed = false;
+                if (id >= 0 && id < vocab) {
+                    allowed = mode == GGML_TOKEN_MASK_ALL ||
+                              (mode == GGML_TOKEN_MASK_DENY_IDS && !members[id]) ||
+                              ((mode == GGML_TOKEN_MASK_ALLOW_IDS || mode == GGML_TOKEN_MASK_BITSET) && members[id]);
+                }
+                expected[(size_t) row*candidates + col] = allowed ? input[index] : UINT32_C(0xff800000);
+            }
+        }
+        ggml_backend_tensor_set(logits_base, input.data(), 0, input.size()*sizeof(uint32_t));
+        if (ids_base) {
+            ggml_backend_tensor_set(ids_base, ids_data.data(), 0, ids_data.size()*sizeof(int32_t));
+        }
+        ggml_backend_tensor_set(desc_base, desc_data.data(), 0, desc_data.size()*sizeof(int32_t));
+        ggml_backend_tensor_set(payload, payload_data.data(), 0, payload_data.size()*sizeof(int32_t));
+    }
+
+    bool compare_tensors(ggml_tensor * a, ggml_tensor * b, bool & ok) override {
+        if (a->op != GGML_OP_TOKEN_MASK) {
+            return false;
+        }
+        for (ggml_tensor * out : {a, b}) {
+            std::vector<uint32_t> result(expected.size());
+            ggml_backend_tensor_get(out, result.data(), 0, result.size()*sizeof(uint32_t));
+            if (result != expected) {
+                printf("TOKEN_MASK: output differs from bit-exact oracle ");
+                ok = false;
+            }
+            ggml_tensor * source = out->src[0]->view_src ? out->src[0]->view_src : out->src[0];
+            std::vector<uint32_t> original(input.size());
+            ggml_backend_tensor_get(source, original.data(), 0, original.size()*sizeof(uint32_t));
+            if (original != input || out->data == out->src[0]->data) {
+                printf("TOKEN_MASK: source logits changed or aliased ");
+                ok = false;
+            }
+        }
+        return true;
+    }
+};
+
+static void test_token_mask_validation() {
+    ggml_init_params params = {ggml_tensor_overhead()*8, nullptr, true};
+    ggml_context_ptr ctx(ggml_init(params));
+    ggml_tensor * logits = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, 33, 2);
+    ggml_tensor * ids = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 33, 2);
+    ggml_tensor * payload = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, 4);
+    ggml_tensor * desc = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, 4, 2);
+    GGML_ASSERT(ggml_token_mask_valid_layout(logits, ids, payload, desc));
+    for (int field = 0; field < 13; ++field) {
+        ggml_tensor l = *logits, i = *ids, p = *payload, d = *desc;
+        switch (field) {
+            case 0: l.type = GGML_TYPE_F16; break;
+            case 1: i.type = GGML_TYPE_F32; break;
+            case 2: p.type = GGML_TYPE_I16; break;
+            case 3: d.type = GGML_TYPE_F32; break;
+            case 4: d.ne[0] = 3; break;
+            case 5: d.ne[1] = 1; break;
+            case 6: i.ne[0] = 32; break;
+            case 7: l.nb[0] = 8; break;
+            case 8: d.nb[1] = 4; break;
+            case 9: l.nb[1] = SIZE_MAX - 3; break;
+            case 10: l.ne[1] = INT64_MAX; d.ne[1] = INT64_MAX; i.ne[1] = INT64_MAX; break;
+            case 11: p.ne[1] = 2; break;
+            case 12: i.nb[0] = 8; break;
+        }
+        GGML_ASSERT(!ggml_token_mask_valid_layout(&l, &i, &p, &d));
+    }
+    const int32_t bad[][4] = {
+        {-1, 0, 0, 33}, {5, 0, 0, 33}, {0, 1, 0, 33}, {1, 1, 0, 33},
+        {2, -1, 0, 33}, {2, 1, -1, 33}, {2, 2, 3, 33}, {2, 0, 5, 33},
+        {2, 0, 0, 0}, {2, 0, 0, -1}, {2, INT32_MAX, 1, 33}, {2, 2, 0, 1},
+        {4, 1, 0, 33}, {4, 3, 0, 33}, {4, 2, INT32_MAX, 33},
+    };
+    for (const auto & d : bad) {
+        GGML_ASSERT(!ggml_token_mask_valid_desc(d, 4, 33, false));
+    }
+    const int32_t d[] = {2, 2, 0, 33};
+    const int32_t bad_ids[][2] = {{-1, 1}, {1, 33}, {1, 1}, {2, 1}};
+    for (const auto & list : bad_ids) {
+        GGML_ASSERT(!ggml_token_mask_valid_payload(d, list));
+    }
+    GGML_ASSERT(!ggml_token_mask_valid_desc(d, 4, 34, true));
+    const int32_t last_vocab[] = {4, 67108864, 0, INT32_MAX};
+    GGML_ASSERT(ggml_token_mask_valid_desc(last_vocab, 67108864, 33, true));
+    printf("TOKEN_MASK: malformed layout/descriptor/payload validation passed\n");
+}
 
 // GGML_OP_GET_ROWS
 struct test_get_rows : public test_case {
@@ -10574,6 +10770,37 @@ static const ggml_type other_types[] = {
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (int vocab : {1, 31, 32, 33, 65, 257}) {
+        for (int encoding = 0; encoding < 5; ++encoding) {
+            for (int variant : {0, 1, 2, 3, 4}) {
+                test_cases.emplace_back(new test_token_mask(vocab, vocab, 1, encoding, 0, variant));
+            }
+        }
+    }
+    for (int encoding = 0; encoding < 5; ++encoding) {
+        for (int variant = 0; variant < 5; ++variant) {
+            test_cases.emplace_back(new test_token_mask(65, 65, 1, encoding, 2, variant, true, true));
+        }
+    }
+    for (int layout = 0; layout < 6; ++layout) {
+        for (bool strided : {false, true}) {
+            for (bool special : {false, true}) {
+                const int candidates = layout == 4 ? 17 : 65;
+                test_cases.emplace_back(new test_token_mask(65, candidates, 10, -1, layout, 0, strided, special));
+            }
+        }
+    }
+    test_cases.emplace_back(new test_token_mask(33, 33, 65537, -1, 0, 0));
+    for (int encoding : {GGML_TOKEN_MASK_ALLOW_IDS, GGML_TOKEN_MASK_DENY_IDS}) {
+        for (int variant = 0; variant < 5; ++variant) {
+            test_cases.emplace_back(new test_token_mask(8193, 8193, 3, encoding, 0, variant, true, true));
+            test_cases.emplace_back(new test_token_mask(8193, 4096, 1, encoding, 0, variant, false, true));
+            test_cases.emplace_back(new test_token_mask(8193, 4096, 3, encoding, 3, variant, true, true));
+        }
+    }
+    test_cases.emplace_back(new test_token_mask(4096, 4096, 10, -1, 0, 1, true, true));
+
     std::default_random_engine rng(0);
 
     // unary ops
@@ -12685,6 +12912,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2049, 2, 1, 3}, order));
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2, 8, 8192, 1}, order)); // bailingmoe2 (group selection)
         test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {2048, 512, 1, 1}, order)); // test CUDA dispatching to radix sort for nrows > = 1 in graph mode
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {131072, 1, 1, 1}, order));
+        test_cases.emplace_back(new test_argsort(GGML_TYPE_F32, {131072, 2, 1, 1}, order));
     }
 
     for (int n = 1; n < 5; ++n) {
@@ -12777,6 +13006,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 1, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32769, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 65537, 1, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32, 1, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32, 256, 1, 1 }));
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 32768, 1, 1, 1 }));
@@ -13487,6 +13717,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    for (int vocab : {32000, 128001}) {
+        for (int rows : {1, 32}) {
+            for (int encoding = 0; encoding < 5; ++encoding) {
+                test_cases.emplace_back(new test_token_mask(vocab, vocab, rows, encoding, 0, 1));
+            }
+        }
+    }
+
 
     for (float n : {128.0f, 4096.0f, 32768.0f, 1048576.0f}) {
         test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, n, 1.0f));
@@ -14642,6 +14881,10 @@ int main(int argc, char ** argv) {
             usage(argv);
             return 1;
         }
+    }
+
+    if (mode == MODE_TEST && op_names_filter_selects(op_names_filter, "TOKEN_MASK")) {
+        test_token_mask_validation();
     }
 
     // load and enumerate backends

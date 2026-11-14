@@ -278,6 +278,7 @@ struct common_params_sampling {
     };
 
     common_grammar                      grammar;          // optional grammar constraint (user / output-format / tool-calls)
+    bool                                grammar_first = false; // establish grammar-first policy before decode; required for backend masking
     bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
     std::set<llama_token>               preserved_tokens;
@@ -301,6 +302,7 @@ struct common_params_sampling {
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
     bool backend_sampling = false;
+    bool backend_sampling_candidates = false; // retain candidates for speculative sampling
 
     // print the parameters into a string
     std::string print() const;

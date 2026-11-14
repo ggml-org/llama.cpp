@@ -50,4 +50,10 @@ See [LLGuidance syntax docs](https://github.com/guidance-ai/llguidance/blob/main
 
 ## Error Handling
 
-Errors are currently printed to `stderr`, and generation continues. Improved error handling may be added in the future.
+Invalid grammars fail sampler initialization. Matcher errors during mask computation, token acceptance, or reset raise an error instead of disabling grammar constraints. A matcher in an error state must be replaced; cloning it preserves the error.
+
+## Backend Sampling
+
+With backend sampling enabled, LLGuidance computes token bitmasks on the CPU and applies them through the generic GGML `TOKEN_MASK` operation. It does not use the GBNF compiler or its state cache. Candidate IDs remain vocabulary IDs after reordering or compaction.
+
+Both grammar-first sampling and the existing sample-then-retry policy are supported. Speculative rows use cloned matchers for their explicit token prefixes; preparing masks does not advance committed history. Invalid provisional prefixes disable sampling for that row. Graph rebuilds preserve matcher state, while sampler reset clears accepted history. Reasoning-budget combinations retain the common sampler's CPU fallback.
