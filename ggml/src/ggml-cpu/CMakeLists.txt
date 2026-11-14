@@ -635,7 +635,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         set(GGML_CPU_KLEIDIAI_AARCH64 OFF)
         if (GGML_SYSTEM_ARCH STREQUAL "ARM" AND
-            (APPLE OR WIN32 OR CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$") AND
+            # Allow OHOS (HarmonyOS): it is an AArch64 target too, but the
+            # upstream whitelist below otherwise rejects the OHOS toolchain.
+            (APPLE OR WIN32 OR CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android|OHOS)$") AND
             (CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64|arm64-v8a)$" OR
              CMAKE_OSX_ARCHITECTURES MATCHES "arm64" OR
              CMAKE_GENERATOR_PLATFORM_LWR STREQUAL "arm64" OR
