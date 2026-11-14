@@ -106,7 +106,7 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 - `Q5_0` tensors are converted to `Q4_0_64`.
 
 **GPU:**
-- `Q4_K`, `Q5_K` and `Q6_K` MoE expert tensors are converted to `Q4_1_64`. This lets the GPU plugin use its fused MoE op, which is much faster for prompt processing. `GGML_OPENVINO_REQUANT_KQUANT` does not change this.
+- `Q4_K`, `Q5_K` and `Q6_K` MoE expert tensors are converted to `Q4_1_64`. This lets the GPU plugin use its fused MoE op, which is much faster for prompt processing. `GGML_OPENVINO_REQUANT_KQUANT` does not change this. `GGML_OPENVINO_MOE_OP=0` turns the fused MoE op off.
 
 **NPU:**
 - All other quantized tensors are requantized to `Q4_0_128`.
@@ -993,6 +993,11 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
   - `-sm tensor` is not supported.
   - Copies between GPUs go through host memory. There is no asynchronous copy and no peer-to-peer copy.
   - Only GPUs can be combined. A list with several NPUs, or with a GPU and the CPU or the NPU, is rejected.
+- MoE models use the GPU plugin's fused MoE op, which runs in f16 only:
+  - granitemoe models (e.g. `granite-3.1-1b-a400m`) give wrong output.
+    - **Workaround:** `GGML_OPENVINO_MOE_OP=0`. Output is correct, but prompt processing is much slower.
+  - `GGML_OPENVINO_GPU_CONFIG="INFERENCE_PRECISION_HINT=f32"` fails to compile.
+- `llama-perplexity` with MoE models: set `-b` to the same value as `-c`, so that each batch holds one sequence.
 
 **NPU-specific**
 
