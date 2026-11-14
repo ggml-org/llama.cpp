@@ -18,6 +18,7 @@
 
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_dev_debug;
+extern int g_ggml_sycl_fa_tile_debug;
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches
@@ -38,6 +39,12 @@ extern int g_ggml_sycl_dev_debug;
     do {                                  \
         if (UNLIKELY(g_ggml_sycl_dev_debug))  \
             fprintf(stderr, __VA_ARGS__); \
+    } while (0)
+
+#define GGML_SYCL_FA_TILE_DEBUG(...)          \
+    do {                                      \
+        if (UNLIKELY(g_ggml_sycl_fa_tile_debug))  \
+            fprintf(stderr, __VA_ARGS__);     \
     } while (0)
 
 #endif  // GGML_SYCL_BASE_HPP
