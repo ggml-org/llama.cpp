@@ -25,6 +25,8 @@ This project is made possible through a collaborative effort by Arm's **CT-ML**,
 
 [Termux](https://termux.dev/en/) is an Android terminal emulator and Linux environment app (no root required). As of writing, Termux is available experimentally in the Google Play Store; otherwise, it may be obtained directly from the project repo or on F-Droid.
 
+The Vulkan backend is now supported on Termux. Check [README.md](./backend/termux-vulkan/README.md) for target-specific build and run info.
+
 With Termux, you can install and run `llama.cpp` as if the environment were Linux. Once in the Termux shell:
 
 ```
