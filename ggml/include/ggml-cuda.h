@@ -42,6 +42,11 @@ GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
+GGML_BACKEND_API void ggml_cuda_set_fa_kernel_override(int kernel);
+GGML_BACKEND_API int  ggml_cuda_get_fa_kernel_override(void);
+GGML_BACKEND_API int  ggml_cuda_get_last_fa_kernel(void);
+
 #ifdef  __cplusplus
 }
 #endif
+

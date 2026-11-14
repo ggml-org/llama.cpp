@@ -519,6 +519,9 @@ struct common_params {
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
     enum llama_flash_attn_type   flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_AUTO; // whether to use Flash Attention
 
+    // CUDA FlashAttention kernel override: -1 = auto, 0 = none, 100 = vec, 200 = tile, 400 = mma_f16
+    int cuda_fa_kernel = -1;
+
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_diffusion   diffusion;

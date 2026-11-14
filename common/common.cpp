@@ -1,4 +1,5 @@
 #include "ggml.h"
+#include "ggml-cuda.h"
 #include "ggml-cpp.h"
 #include "gguf.h"
 
@@ -1275,6 +1276,9 @@ void common_fit_apply(common_params & params, llama_model_params & mparams, llam
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    if (params.cuda_fa_kernel >= 0) {
+        ggml_cuda_set_fa_kernel_override(params.cuda_fa_kernel);
+    }
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 

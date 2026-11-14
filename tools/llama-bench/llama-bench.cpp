@@ -25,6 +25,7 @@
 #include "download.h"
 #include "fit.h"
 #include "ggml.h"
+#include "ggml-cuda.h"
 #include "llama.h"
 #include "log.h"
 
@@ -358,6 +359,7 @@ struct cmd_params {
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<llama_flash_attn_type> flash_attn;
+    std::vector<int>                   cuda_fa_kernel;
     std::vector<std::vector<ggml_backend_dev_t>> devices;
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
@@ -404,6 +406,7 @@ static const cmd_params cmd_params_defaults = {
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
+    /* cuda_fa_kernel       */ { -1 },
     /* devices              */ { {} },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
@@ -476,6 +479,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -mg, --main-gpu <i>                               (default: %s)\n", join(cmd_params_defaults.main_gpu, ",").c_str());
     printf("  -nkvo, --no-kv-offload <0|1>                      (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <on|off|auto>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
+    printf("  -cfk, --cuda-fa-kernel <none|vec|tile|mma_f16|mma> (force CUDA FA kernel; default: auto-selected)\n");
     printf("  -dev, --device <dev0/dev1/...>                    (default: auto)\n");
     printf("  -lm, --load-mode <auto|none|mmap|mlock|mmap+mlock|dio> (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
     printf("  -lzm, --lazy-mode <on|auto|off>                   (default: %s)\n", join(transform_to_str(cmd_params_defaults.lazy_mode, lazy_mode_str), ",").c_str());
@@ -891,6 +895,24 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     break;
                 }
                 params.flash_attn.insert(params.flash_attn.end(), types.begin(), types.end());
+            } else if (arg == "-cfk" || arg == "--cuda-fa-kernel") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<std::string>(argv[i], split_delim);
+                std::vector<int> vals;
+                for (const auto & v : p) {
+                    int val = -1;
+                    if (v == "none") val = 0;
+                    else if (v == "vec") val = 100;
+                    else if (v == "tile") val = 200;
+                    else if (v == "mma_f16" || v == "mma") val = 400;
+                    else { invalid_param = true; break; }
+                    vals.push_back(val);
+                }
+                if (invalid_param) break;
+                params.cuda_fa_kernel.insert(params.cuda_fa_kernel.end(), vals.begin(), vals.end());
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1168,6 +1190,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.flash_attn.empty()) {
         params.flash_attn = cmd_params_defaults.flash_attn;
     }
+    if (params.cuda_fa_kernel.empty()) {
+        params.cuda_fa_kernel = cmd_params_defaults.cuda_fa_kernel;
+    }
     if (params.devices.empty()) {
         params.devices = cmd_params_defaults.devices;
     }
@@ -1241,6 +1266,7 @@ struct cmd_params_instance {
     bool               repack;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
+    int                cuda_fa_kernel;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1389,6 +1415,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
+                /* .cuda_fa_kernel        = */ -1,
             };
             instances.push_back(instance);
         }
@@ -1427,6 +1454,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
+                /* .cuda_fa_kernel        = */ -1,
             };
             instances.push_back(instance);
         }
@@ -1465,6 +1493,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .repack                = */ rpk,
                 /* .fit_target            = */ fpt,
                 /* .fit_min_ctx           = */ fpc,
+                /* .cuda_fa_kernel        = */ -1,
             };
             instances.push_back(instance);
         }
@@ -1511,6 +1540,7 @@ struct test {
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
+    int                      fa_kernel;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
 
@@ -1552,6 +1582,7 @@ struct test {
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
+        fa_kernel      = -1;
         // RFC 3339 date-time format
         time_t t       = time(NULL);
         std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
@@ -1604,7 +1635,7 @@ struct test {
             "model_filename", "model_type",     "model_size",    "model_n_params", "n_batch",
             "n_ubatch",       "n_threads",      "cpu_mask",      "cpu_strict",     "poll",
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
-            "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
+            "main_gpu",       "no_kv_offload",  "flash_attn",    "fa_kernel",      "devices",        "tensor_split",
             "tensor_buft_overrides",            "load_mode",     "lazy_mode",
             "embeddings",
             "no_op_offload",  "no_host",        "repack",        "fit_target",    "fit_min_ctx",
@@ -1697,6 +1728,15 @@ struct test {
                                             std::to_string(main_gpu),
                                             std::to_string(no_kv_offload),
                                             std::to_string((int) flash_attn),
+                                            [&]() {
+                                                switch (fa_kernel) {
+                                                    case 0:   return std::string("none");
+                                                    case 100: return std::string("vec");
+                                                    case 200: return std::string("tile");
+                                                    case 400: return std::string("mma_f16");
+                                                    default:  return std::string("n/a");
+                                                }
+                                            }(),
                                             devices_to_string(devices),
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
@@ -1887,6 +1927,9 @@ struct markdown_printer : public printer {
         if (field == "flash_attn") {
             return 3;
         }
+        if (field == "fa_kernel") {
+            return 7;
+        }
         if (field == "devices") {
             return -12;
         }
@@ -1926,6 +1969,9 @@ struct markdown_printer : public printer {
         }
         if (field == "flash_attn") {
             return "fa";
+        }
+        if (field == "fa_kernel") {
+            return "fa_kern";
         }
         if (field == "load_mode") {
             return "lm";
@@ -2011,6 +2057,7 @@ struct markdown_printer : public printer {
         if (params.flash_attn.size() > 1 || params.flash_attn != cmd_params_defaults.flash_attn) {
             fields.emplace_back("flash_attn");
         }
+        fields.emplace_back("fa_kernel");
         if (params.devices.size() > 1 || params.devices != cmd_params_defaults.devices) {
             fields.emplace_back("devices");
         }
@@ -2310,6 +2357,10 @@ int llama_bench(int argc, char ** argv) {
         p_err->print_header(params);
     }
 
+    if (!params.cuda_fa_kernel.empty() && params.cuda_fa_kernel[0] >= 0) {
+        ggml_cuda_set_fa_kernel_override(params.cuda_fa_kernel[0]);
+    }
+
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
     llama_model *               lmodel    = nullptr;
@@ -2328,6 +2379,9 @@ int llama_bench(int argc, char ** argv) {
         }
         auto mparams = inst.to_llama_mparams();
         auto cparams = inst.to_llama_cparams();
+        if (inst.cuda_fa_kernel >= 0) {
+            ggml_cuda_set_fa_kernel_override(inst.cuda_fa_kernel);
+        }
 
         bool do_fit = inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
                       inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
@@ -2516,6 +2570,8 @@ int llama_bench(int argc, char ** argv) {
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
         }
+
+        t.fa_kernel = ggml_cuda_get_last_fa_kernel();
 
         if (p) {
             p->print_test(t);
