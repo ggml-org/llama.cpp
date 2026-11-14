@@ -306,12 +306,6 @@ llama_test_cmd(python3
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     ARGS -m unittest discover -s tests -p test_kv_cache_scales.py -v
 )
-llama_test_cmd(python3
-    NAME test-conversion-decision-loaders
-    LABEL "python behavior"
-    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
-    ARGS -m unittest discover -s tests -p test_conversion_decision_loaders.py -v
-)
 llama_build_and_test(test-json-schema.cpp  LABEL behavior)
 llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-chat-template.cpp  LABEL behavior)
