@@ -34,6 +34,8 @@ static constexpr __host__ __device__ int mmq_few_unit_size(const ggml_type type)
         case GGML_TYPE_IQ3_S:  return mmq_few_unit_size_of<GGML_TYPE_IQ3_S>();
         case GGML_TYPE_IQ4_NL: return mmq_few_unit_size_of<GGML_TYPE_IQ4_NL>();
         case GGML_TYPE_IQ4_XS: return mmq_few_unit_size_of<GGML_TYPE_IQ4_XS>();
+        case GGML_TYPE_IQ2_NL: return mmq_few_unit_size_of<GGML_TYPE_IQ2_NL>();
+        case GGML_TYPE_IQ3_NL: return mmq_few_unit_size_of<GGML_TYPE_IQ3_NL>();
         default:               return 0;
     }
 }
@@ -77,7 +79,8 @@ static constexpr __host__ __device__ int mmq_few_nbytes_shared(const ggml_type t
 // With Q6_K and Q8_0 two CUDA blocks with 32-row tiles would not fit into an SM.
 static constexpr __host__ __device__ bool mmq_few_tall_supported(const ggml_type type) {
     return type == GGML_TYPE_Q3_K || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K ||
-           type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ4_XS;
+           type == GGML_TYPE_IQ3_S || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_IQ4_XS ||
+           type == GGML_TYPE_IQ2_NL || type == GGML_TYPE_IQ3_NL;
 }
 
 #if defined(CP_ASYNC_AVAILABLE)
@@ -425,6 +428,57 @@ static __device__ __forceinline__ void mmq_few_vec_dot_q8_0_iq4_nl(const char * 
     }
 }
 
+// The table bytes at the 3 bit indices in the 4 bytes of q.
+static __device__ __forceinline__ int mmq_few_get_int_from_table_8(const int q, const uint32_t (&table)[2]) {
+    const int q2 = q | (q >> 4); // indices 0 and 1 in byte 0, indices 2 and 3 in byte 2
+    return __byte_perm(table[0], table[1], (q2 & 0x00FF) | ((q2 >> 8) & 0xFF00));
+}
+
+// IQ2_NL and IQ3_NL have a block with its own scale per 32 values. Value j + 8*g is bit pair g of qs[j], for IQ3_NL with bit j of qh[g] as bit 2.
+// The lane values come from qs[4*(t%2)] .. qs[4*(t%2) + 3]: bit pair t/2 for [4t, 4t + 4), bit pair 2 + t/2 for [16 + 4t, 16 + 4t + 4).
+template <ggml_type type, int ncg>
+static __device__ __forceinline__ void mmq_few_vec_dot_iq2_nl_iq3_nl(const char * const (&x)[2], const mmq_few_y_frag (&yf)[ncg], float (&sum)[ncg][4]) {
+    const int t = threadIdx.x % 4;
+    const int g = t / 2;
+
+    const int8_t * values = type == GGML_TYPE_IQ2_NL ? kvalues_iq2nl : kvalues_iq3nl;
+    uint32_t table[2] = {0, 0};
+#pragma unroll
+    for (int i = 0; i < (type == GGML_TYPE_IQ2_NL ? 4 : 8); ++i) {
+        table[i/4] |= uint32_t(uint8_t(values[i])) << (8*(i % 4));
+    }
+
+#pragma unroll
+    for (int s = 0; s < 8; ++s) {
+        int   lo[2];
+        int   hi[2];
+        float d[2];
+#pragma unroll
+        for (int r = 0; r < 2; ++r) {
+            int q_lo;
+            int q_hi;
+            if constexpr (type == GGML_TYPE_IQ2_NL) {
+                const block_iq2_nl * bx = (const block_iq2_nl *) x[r] + s;
+                const int qs = get_int_b2(bx->qs, t % 2);
+                q_lo = (qs >> (2*g + 0)) & 0x03030303;
+                q_hi = (qs >> (2*g + 4)) & 0x03030303;
+                d[r] = __half2float(bx->d);
+            } else {
+                const block_iq3_nl * bx = (const block_iq3_nl *) x[r] + s;
+                const int qs = get_int_b2(bx->qs, t % 2);
+                const int qh = get_int_b2(bx->qh, 0) >> (4*(t % 2));
+                // multiplying by 0x00204081 moves bit k of the 4 qh bits to bit 8*k
+                q_lo = ((qs >> (2*g + 0)) & 0x03030303) | ((((qh >> (8*g + 0))  & 0x0F) * 0x00204081 & 0x01010101) << 2);
+                q_hi = ((qs >> (2*g + 4)) & 0x03030303) | ((((qh >> (8*g + 16)) & 0x0F) * 0x00204081 & 0x01010101) << 2);
+                d[r] = __half2float(bx->d);
+            }
+            lo[r] = mmq_few_get_int_from_table_8(q_lo, table);
+            hi[r] = mmq_few_get_int_from_table_8(q_hi, table);
+        }
+        mmq_few_mma_add<type>(lo, hi, d, yf, s, sum);
+    }
+}
+
 template <int ncg>
 static __device__ __forceinline__ void mmq_few_vec_dot_iq3_s(const char * const (&x)[2], const mmq_few_y_frag (&yf)[ncg], float (&sum)[ncg][4]) {
     const int t = threadIdx.x % 4;
@@ -477,6 +531,8 @@ static __device__ __forceinline__ void mmq_few_vec_dot(const char * const (&x)[2
         mmq_few_vec_dot_iq3_s<ncg>(x, yf, sum);
     } else if constexpr (type == GGML_TYPE_IQ4_XS) {
         mmq_few_vec_dot_iq4_xs<ncg>(x, yf, sum);
+    } else if constexpr (type == GGML_TYPE_IQ2_NL || type == GGML_TYPE_IQ3_NL) {
+        mmq_few_vec_dot_iq2_nl_iq3_nl<type, ncg>(x, yf, sum);
     } else {
         static_assert(type == GGML_TYPE_COUNT, "unsupported type");
     }
@@ -805,6 +861,12 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
         case GGML_TYPE_IQ4_XS:
             launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ4_XS>(src0, src1, dst, src1_q.get(), ncg, stream);
             break;
+        case GGML_TYPE_IQ2_NL:
+            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ2_NL>(src0, src1, dst, src1_q.get(), ncg, stream);
+            break;
+        case GGML_TYPE_IQ3_NL:
+            launch_mul_mat_q_few_switch_ncg<GGML_TYPE_IQ3_NL>(src0, src1, dst, src1_q.get(), ncg, stream);
+            break;
         default:
             GGML_ABORT("unsupported type for few-row MMQ");
     }
@@ -827,6 +889,10 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
     // with fewer than 8 units of 256 values per row the warps idle, MMVQ and MMQ are better there
     if (mmq_few_unit_size(type) == 0 || ne00 < 8*QK_K) {
         return 0;
+    }
+    // IQ2_NL and IQ3_NL use the IQ4_NL values
+    if (type == GGML_TYPE_IQ2_NL || type == GGML_TYPE_IQ3_NL) {
+        return ggml_cuda_mmq_few_min_ncols(GGML_TYPE_IQ4_NL, cc, ne00);
     }
     if (cc == GGML_CUDA_CC_DGX_SPARK) { // tuned on DGX Spark GB10
         return type == GGML_TYPE_IQ4_XS || type == GGML_TYPE_IQ4_NL ? 8 : 2;
