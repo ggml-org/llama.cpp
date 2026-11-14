@@ -142,6 +142,8 @@ m5-server is up.
                 codec prime LRU (4 entries, ~1 MB each), wav chunking 2/4
                 (override with M5_KV_PAD / M5_HVX_DIRECT_V / M5_PRIME_CACHE /
                  M5_WAV_FIRST + M5_WAV_CHUNK for A/B;
+                 M5_CODEC_EP=XNNPACK|NNAPI to switch the codec EP - measured
+                 no faster than CPU here, and it changes no output bytes;
                  M5_KV_PAD=256 restores the old backbone pad, =1 the old
                  single-entry prime cache, =0 disables it)
   warmup voice: ${M5_DEFAULT_VOICE:-(none)}  (codec prime cached for this voice)

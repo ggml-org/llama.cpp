@@ -627,6 +627,25 @@ public:
         if (!m5::snake::register_ops(api_, so_)) {
             fprintf(stderr, "ort: cannot register m5::Snake\n");
         }
+        // The shipped libonnxruntime.so also carries XNNPACK, which the engine
+        // has never selected. M5_CODEC_EP=XNNPACK|NNAPI switches the codec's
+        // execution provider for A/B; unset (or CPU) keeps the default. Any EP
+        // other than CPU changes float summation order, so the equivalence gate
+        // for those runs is ASR + listening, not byte-identical WAV.
+        const char * ep = getenv("M5_CODEC_EP");
+        if (ep && *ep && std::strcmp(ep, "CPU") != 0 && std::strcmp(ep, "cpu") != 0) {
+            OrtStatus * ep_status = api_->SessionOptionsAppendExecutionProvider(
+                so_, ep, nullptr, nullptr, 0);
+            if (ep_status) {
+                fprintf(stderr, "[m5] codec: EP '%s' rejected: %s\n",
+                        ep, api_->GetErrorMessage(ep_status));
+                api_->ReleaseStatus(ep_status);
+            } else {
+                fprintf(stderr, "[m5] codec: EP %s\n", ep);
+            }
+        } else {
+            fprintf(stderr, "[m5] codec: EP CPU (default)\n");
+        }
         // M5_CODEC_PROFILE=<prefix> writes an ORT op-level profile on close().
         const char * prof = getenv("M5_CODEC_PROFILE");
         fprintf(stderr, "[m5] codec open: M5_CODEC_PROFILE=%s\n", prof ? prof : "(unset)");
