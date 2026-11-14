@@ -163,6 +163,9 @@ struct llama_model_loader {
 
     std::map<ctx_key, ggml_context_ptr, ctx_key_comparator> ctx_map;
 
+    // buffer types of the matmul weights, their scales are placed with them
+    std::unordered_map<std::string, ggml_backend_buffer_type_t> matmul_weight_bufts;
+
     // track tensors that had to be moved for debugging:
     size_t n_tensors_moved = 0;
     std::string first_tensor_moved_name;
