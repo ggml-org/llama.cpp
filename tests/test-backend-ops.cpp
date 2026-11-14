@@ -7274,6 +7274,7 @@ struct test_conv_3d : public test_case {
     // Types
     const ggml_type type_kernel;
     const int kernel_offset;
+    const int input_offset;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -7282,11 +7283,16 @@ struct test_conv_3d : public test_case {
 
     std::string vars() override {
         return VARS_TO_STR11(N, IC, ID, IH, IW, OC, KD, KH, KW, s0, s1) + "," +
-               VARS_TO_STR9(s2, p0, p1, p2, d0, d1, d2, type_kernel, kernel_offset);
+               VARS_TO_STR10(s2, p0, p1, p2, d0, d1, d2, type_kernel, kernel_offset, input_offset);
     }
 
     double max_nmse_err() override {
         return 5e-4;
+    }
+
+    bool deterministic(ggml_backend_t backend) override {
+        const char * name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
+        return strcmp(name, "OpenCL") == 0;
     }
 
     uint64_t op_flops(ggml_tensor * t) override {
@@ -7307,18 +7313,26 @@ struct test_conv_3d : public test_case {
         int s0, int s1, int s2,
         int p0, int p1, int p2,
         int d0, int d1, int d2,
-        ggml_type type_kernel, int kernel_offset = 0
+        ggml_type type_kernel, int kernel_offset = 0, int input_offset = 0
     ) : N(N), IC(IC), ID(ID), IH(IH), IW(IW),
         OC(OC), KD(KD), KH(KH), KW(KW),
         s0(s0), s1(s1), s2(s2),
         p0(p0), p1(p1), p2(p2),
         d0(d0), d1(d1), d2(d2),
-        type_kernel(type_kernel), kernel_offset(kernel_offset) {}
+        type_kernel(type_kernel), kernel_offset(kernel_offset), input_offset(input_offset) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         // GGML input tensor is packed as [W, H, D, C*N]
         const int64_t ne_input[] = {IW, IH, ID, IC * N};
-        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input);
+        ggml_tensor * input;
+        if (input_offset == 0) {
+            input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input);
+        } else {
+            ggml_tensor * storage = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, IW * IH * ID * IC * N + input_offset);
+            input = ggml_view_4d(ctx, storage, IW, IH, ID, IC * N,
+                                IW * sizeof(float), IW * IH * sizeof(float), IW * IH * ID * sizeof(float),
+                                input_offset * sizeof(float));
+        }
         ggml_set_name(input, "input");
 
         // GGML kernel tensor is packed as [KW, KH, KD, IC*OC]
@@ -11165,6 +11179,20 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
         // Case with kernel size 1
         test_cases.emplace_back(new test_conv_3d(1, 4, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+        for (int OC : {1, 16, 17, 32, 33, 64, 65}) {
+            for (int IC : {8, 24}) {
+                test_cases.emplace_back(new test_conv_3d(1, IC, 3, 5, 7, OC, 3, 3, 3, 1, 1, 1, 2, 1, 0, 1, 1, 1, kernel_type));
+                test_cases.emplace_back(new test_conv_3d(1, IC, 5, 7, 9, OC, 3, 3, 3, 2, 2, 2, 2, 1, 3, 2, 2, 2, kernel_type));
+                test_cases.emplace_back(new test_conv_3d(1, IC, 1, 2, 1, OC, 1, 1, 1, 1, 1, 1, 3, 4, 2, 1, 1, 1, kernel_type));
+            }
+        }
+        for (int IC : {5, 7, 9, 15, 17}) {
+            test_cases.emplace_back(new test_conv_3d(1, IC, 3, 5, 7, 33, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type));
+        }
+        test_cases.emplace_back(new test_conv_3d(1, 8, 3, 5, 7, 65, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type, 1024));
+        test_cases.emplace_back(new test_conv_3d(1, 8, 3, 5, 7, 65, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type, 1));
+        test_cases.emplace_back(new test_conv_3d(1, 8, 3, 5, 7, 65, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type, 1024, 1024));
+        test_cases.emplace_back(new test_conv_3d(1, 8, 3, 5, 7, 65, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type, 0, 1));
         test_cases.emplace_back(new test_conv_3d(2, 8, 5, 11, 9, 65, 3, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, kernel_type));
         test_cases.emplace_back(new test_conv_3d(2, 5, 7, 9, 13, 17, 2, 3, 4, 2, 1, 3, 3, 2, 2, 2, 1, 2, kernel_type));
         test_cases.emplace_back(new test_conv_3d(3, 16, 3, 7, 9, 33, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
