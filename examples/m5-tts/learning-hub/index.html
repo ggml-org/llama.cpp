@@ -1,0 +1,1490 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M5-TTS Inference Lab · 推理加速研学</title>
+<style>
+  :root {
+    --bg: #f4f7fb; --card: #ffffff; --panel: #eef3f9; --ink: #17202e;
+    --sub: #5d6d82; --line: #dce5ef; --acc: #2563eb; --acc2: #7c3aed;
+    --acc-soft: #e4edff; --ok: #16803c; --ok-soft: #e3f5e9;
+    --warn: #b45309; --warn-soft: #fdf0d9; --bad: #c23131; --bad-soft: #fde8e8;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --shadow: 0 1px 3px rgba(15,23,42,.07), 0 8px 28px rgba(15,23,42,.05);
+  }
+  html[data-theme="dark"] {
+    --bg: #0e131a; --card: #171f2a; --panel: #1e2836; --ink: #e9eef6;
+    --sub: #93a4ba; --line: #2b3747; --acc: #5b95ff; --acc2: #a98bff;
+    --acc-soft: #1d3556; --ok: #4ade80; --ok-soft: #143522;
+    --warn: #fbbf24; --warn-soft: #3a2b12; --bad: #f87171; --bad-soft: #3a1919;
+    --shadow: 0 1px 3px rgba(0,0,0,.35), 0 8px 28px rgba(0,0,0,.25);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.75 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  a { color: var(--acc); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: var(--mono); }
+  :not(pre) > code {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+    padding: 1px 5px; font-size: 12.5px;
+  }
+
+  /* ---------- layout ---------- */
+  #progressTop {
+    position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 90;
+    background: linear-gradient(90deg, var(--acc), var(--acc2)); transition: width .1s linear;
+  }
+  aside {
+    position: fixed; inset: 0 auto 0 0; width: 272px; z-index: 40;
+    background: var(--card); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .brand { padding: 22px 20px 14px; border-bottom: 1px solid var(--line); }
+  .brand b { display: block; font-size: 16px; letter-spacing: .2px; }
+  .brand span { font-size: 11.5px; color: var(--sub); font-family: var(--mono); }
+  .sideTools { padding: 12px 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .sideTools input[type=search] {
+    flex: 1; min-width: 130px; padding: 7px 10px; font: 12px var(--mono);
+    border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); outline: none;
+  }
+  .miniBtn {
+    padding: 7px 10px; font-size: 12px; border: 1px solid var(--line);
+    border-radius: 8px; background: var(--bg); color: var(--sub); cursor: pointer;
+  }
+  .miniBtn:hover { border-color: var(--acc); color: var(--acc); }
+  nav { flex: 1; overflow-y: auto; padding: 6px 10px 20px; }
+  nav .navGroup { font-size: 11px; color: var(--sub); letter-spacing: .08em; padding: 12px 10px 5px; font-family: var(--mono); }
+  nav a {
+    display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 8px;
+    color: var(--sub); font-size: 13px; line-height: 1.4;
+  }
+  nav a:hover { background: var(--panel); text-decoration: none; color: var(--ink); }
+  nav a.active { background: var(--acc-soft); color: var(--acc); font-weight: 600; }
+  nav a .num {
+    flex: 0 0 22px; height: 22px; border-radius: 6px; background: var(--panel);
+    display: inline-flex; align-items: center; justify-content: center;
+    font: 11px var(--mono); color: var(--sub);
+  }
+  nav a.active .num { background: var(--acc); color: #fff; }
+  nav a .tick { margin-left: auto; color: var(--ok); font-size: 12px; }
+  .sideFoot { padding: 12px 18px 16px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--sub); }
+  .sideFoot .bar { height: 5px; border-radius: 4px; background: var(--panel); margin: 7px 0 5px; overflow: hidden; }
+  .sideFoot .bar i { display: block; height: 100%; width: 0; background: var(--acc); transition: width .25s; }
+
+  main { margin-left: 272px; padding: 0 0 100px; }
+  .content { max-width: 980px; margin: 0 auto; padding: 0 34px; }
+  header.hero {
+    padding: 64px 0 40px; border-bottom: 1px solid var(--line); margin-bottom: 12px;
+    background: radial-gradient(900px 260px at 15% 0%, var(--acc-soft), transparent 70%);
+  }
+  .eyebrow { font: 12px var(--mono); color: var(--acc); letter-spacing: .1em; text-transform: uppercase; }
+  h1 { font-size: 38px; line-height: 1.25; margin: 12px 0 14px; letter-spacing: -.5px; }
+  .lede { font-size: 16.5px; color: var(--sub); max-width: 720px; margin: 0 0 26px; }
+  .heroChips { display: flex; flex-wrap: wrap; gap: 9px; }
+  .chip {
+    border: 1px solid var(--line); background: var(--card); border-radius: 999px;
+    padding: 7px 14px; font: 12.5px var(--mono); color: var(--sub);
+  }
+  .chip b { color: var(--ink); font-size: 14px; }
+
+  section.chapter { padding: 44px 0 26px; border-bottom: 1px solid var(--line); scroll-margin-top: 18px; }
+  section.chapter:last-of-type { border-bottom: 0; }
+  .chapHead { display: flex; align-items: baseline; gap: 14px; margin-bottom: 6px; }
+  .chapHead .idx { font: 13px var(--mono); color: var(--acc); border: 1px solid var(--acc); border-radius: 7px; padding: 3px 9px; }
+  h2 { font-size: 27px; margin: 0 0 6px; letter-spacing: -.3px; }
+  h3 { font-size: 19px; margin: 34px 0 10px; letter-spacing: -.2px; }
+  h4 { font-size: 15.5px; margin: 22px 0 8px; }
+  p { margin: 10px 0; }
+  ul, ol { padding-left: 22px; margin: 10px 0; }
+  li { margin: 5px 0; }
+  .subtitle { color: var(--sub); margin: 0 0 18px; font-size: 14px; }
+  .objectives {
+    background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--acc);
+    border-radius: 10px; padding: 13px 18px; margin: 18px 0 26px; font-size: 13.5px;
+  }
+  .objectives b { display: block; margin-bottom: 4px; }
+  .objectives ul { margin: 6px 0 0; }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 9px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--panel); font-weight: 600; font-size: 12.5px; }
+  td.num, th.num { text-align: right; font-family: var(--mono); }
+  tr:nth-child(even) td { background: color-mix(in srgb, var(--panel) 35%, transparent); }
+  .tableWrap { overflow-x: auto; }
+
+  .callout { border-radius: 11px; padding: 14px 18px; margin: 18px 0; font-size: 13.8px; border: 1px solid var(--line); }
+  .callout .tagline { font: 11.5px var(--mono); letter-spacing: .06em; display: block; margin-bottom: 4px; }
+  .callout.key { background: var(--acc-soft); border-color: color-mix(in srgb, var(--acc) 35%, transparent); }
+  .callout.key .tagline { color: var(--acc); }
+  .callout.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+  .callout.warn .tagline { color: var(--warn); }
+  .callout.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+  .callout.ok .tagline { color: var(--ok); }
+  .callout.bad { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 35%, transparent); }
+  .callout.bad .tagline { color: var(--bad); }
+
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; overflow-x: auto; font-size: 12.5px; line-height: 1.65; margin: 14px 0;
+    color: var(--ink);
+  }
+  pre .cm { color: var(--sub); }
+  pre .kw { color: var(--acc2); }
+  pre .st { color: var(--ok); }
+
+  figure { margin: 24px 0 8px; }
+  .figureBox {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px; box-shadow: var(--shadow); overflow-x: auto;
+  }
+  .figureBox svg { display: block; width: 100%; min-width: 640px; height: auto; }
+  figcaption { font-size: 12.5px; color: var(--sub); margin-top: 9px; line-height: 1.6; }
+  /* SVG theme classes - explicit fills so both themes stay readable */
+  .dg-box { fill: var(--card); stroke: var(--line); stroke-width: 1.3; }
+  .dg-panel { fill: var(--panel); stroke: var(--line); stroke-width: 1.2; }
+  .dg-accent { fill: var(--acc-soft); stroke: var(--acc); stroke-width: 1.5; }
+  .dg-accent2 { fill: color-mix(in srgb, var(--acc2) 16%, var(--card)); stroke: var(--acc2); stroke-width: 1.5; }
+  .dg-ok { fill: var(--ok-soft); stroke: var(--ok); stroke-width: 1.4; }
+  .dg-bad { fill: var(--bad-soft); stroke: var(--bad); stroke-width: 1.4; }
+  .dg-warn { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 1.4; }
+  .dg-t { fill: var(--ink); font: 12.5px -apple-system, "PingFang SC", system-ui, sans-serif; }
+  .dg-ts { fill: var(--sub); font: 11px var(--mono); }
+  .dg-tb { fill: var(--ink); font: 600 13px -apple-system, "PingFang SC", system-ui, sans-serif; }
+  .dg-tacc { fill: var(--acc); font: 600 12px var(--mono); }
+  .dg-line { stroke: var(--line); stroke-width: 1.2; fill: none; }
+  .dg-flow { stroke: var(--acc); stroke-width: 2; fill: none; marker-end: url(#arrow); }
+  .dg-flow2 { stroke: var(--acc2); stroke-width: 1.8; fill: none; stroke-dasharray: 5 4; marker-end: url(#arrow2); }
+  .dg-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 3 4; }
+  .dg-bar { fill: var(--acc); }
+  .dg-bar2 { fill: var(--acc2); }
+  .dg-bar3 { fill: var(--ok); }
+  .dg-bar4 { fill: var(--bad); }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 16px 0; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; }
+  .tile b { display: block; font-size: 14px; margin-bottom: 5px; }
+  .tile p { font-size: 13px; color: var(--sub); margin: 4px 0 0; }
+  .tile .big { font: 600 22px var(--mono); color: var(--acc); }
+
+  details.qa { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin: 12px 0; padding: 0 16px; }
+  details.qa summary { cursor: pointer; padding: 13px 0; font-weight: 600; font-size: 14px; }
+  details.qa[open] summary { border-bottom: 1px solid var(--line); }
+  details.qa .answer { padding: 4px 0 15px; font-size: 13.8px; color: var(--sub); }
+  details.qa .answer b { color: var(--ink); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 11px; margin: 16px 0; }
+  .optCard { background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; font-size: 13px; }
+  .optCard .hd { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+  .optCard .hd b { font-size: 13.5px; }
+  .optCard .metric { font: 600 12.5px var(--mono); color: var(--acc); margin: 6px 0; }
+  .optCard p { color: var(--sub); margin: 5px 0 0; font-size: 12.8px; }
+  .badge { font: 10.5px var(--mono); padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line); }
+  .badge.ok { color: var(--ok); border-color: var(--ok); }
+  .badge.no { color: var(--bad); border-color: var(--bad); }
+  .badge.wait { color: var(--warn); border-color: var(--warn); }
+  .filters button.on { border-color: var(--acc); color: var(--acc); background: var(--acc-soft); }
+  .dg-onbar { fill: #ffffff; }
+  html[data-theme="dark"] .dg-onbar { fill: #0b1220; }
+  .filters { display: flex; gap: 7px; flex-wrap: wrap; margin: 16px 0 4px; }
+
+  .calc { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 18px 0; }
+  .calc .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+  .calc label { font-size: 12px; color: var(--sub); display: block; }
+  .calc input[type=range] { width: 100%; accent-color: var(--acc); }
+  .calc .val { font: 600 13px var(--mono); color: var(--ink); }
+  .calc .out { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .calc .out div { background: var(--panel); border-radius: 9px; padding: 10px 12px; }
+  .calc .out span { display: block; font-size: 11.5px; color: var(--sub); }
+  .calc .out b { font: 600 19px var(--mono); color: var(--acc); }
+
+  .chapterDone { display: flex; align-items: center; gap: 10px; margin: 28px 0 0; font-size: 13px; color: var(--sub); }
+  .doneBtn { border: 1px solid var(--line); background: var(--card); color: var(--sub); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 12.5px; }
+  .doneBtn.on { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
+
+  footer { color: var(--sub); font-size: 12.5px; padding: 30px 0 0; }
+  #menuBtn { display: none; position: fixed; top: 12px; left: 12px; z-index: 60; }
+  @media (max-width: 900px) {
+    aside { transform: translateX(-100%); transition: transform .2s; box-shadow: var(--shadow); }
+    aside.open { transform: translateX(0); }
+    main { margin-left: 0; }
+    #menuBtn { display: block; }
+    .content { padding: 0 20px; }
+    header.hero { padding-top: 70px; }
+    h1 { font-size: 30px; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+</style>
+</head>
+<body>
+<div id="progressTop"></div>
+<svg width="0" height="0" style="position:absolute;overflow:hidden" aria-hidden="true"><defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--acc)"/></marker>
+  <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="var(--acc2)"/></marker>
+</defs></svg>
+
+<button id="menuBtn" class="miniBtn">☰ 目录</button>
+
+<aside id="sidebar">
+  <div class="brand">
+    <b>M5-TTS Inference Lab</b>
+    <span>llama.cpp · Snapdragon HTP · 案例研学</span>
+  </div>
+  <div class="sideTools">
+    <input type="search" id="navSearch" placeholder="筛选章节…" aria-label="筛选章节">
+    <button class="miniBtn" id="themeBtn" title="切换明暗主题">◐ 主题</button>
+  </div>
+  <nav id="nav"></nav>
+  <div class="sideFoot">
+    <div>学习进度 <span id="pctText">0%</span></div>
+    <div class="bar"><i id="pctBar"></i></div>
+    <div id="seenText">已浏览 0 / 8 章</div>
+  </div>
+</aside>
+
+<main>
+<div class="content">
+
+<header class="hero" id="top">
+  <div class="eyebrow">A case study in inference systems engineering</div>
+  <h1>把一次 TTS 合成，拆成一堂推理加速课</h1>
+  <p class="lede">以 M5-TTS 在 Snapdragon HTP 上的 llama.cpp 移植为标本：从一帧音频的生成路径出发，
+  学会测量、建立成本模型、识别瓶颈、做带质量门禁的优化，并理解"音色"究竟是怎么被模型学会的。
+  所有数字都来自这个仓库里的真实实验，包含被否定的方案。</p>
+  <div class="heroChips">
+    <span class="chip"><b>0.898 → 0.717</b> RTF 演进</span>
+    <span class="chip"><b>15</b> 步串行 depth decode</span>
+    <span class="chip"><b>16 × 2051</b> codebook</span>
+    <span class="chip"><b>83%</b> 墙钟在 depth</span>
+    <span class="chip"><b>2.1×</b> 批量化理论上限（未解锁）</span>
+    <span class="chip"><b>0 次</b> 梯度更新也能换音色</span>
+  </div>
+</header>
+
+<!-- ============ CHAPTER 0 ============ -->
+<section class="chapter" id="ch0" data-title="导读与学习路线">
+  <div class="chapHead"><span class="idx">00</span><h2>导读：这门课想让你带走什么</h2></div>
+  <p class="subtitle">不是"某模型怎么调快"的流水账，而是一套可迁移的推理系统思维。</p>
+  <div class="objectives">
+    <b>学完你应该能回答</b>
+    <ul>
+      <li>一个自回归音频模型，为什么它的瓶颈和文本 LLM 完全不同？</li>
+      <li>看到 "RTF 0.9" 这个数字，你会追问哪三个问题？</li>
+      <li>"把 15 次调用合成 1 次" 听起来必然更快，为什么实测结论是完全不能做？</li>
+      <li>量化后 codes 翻转 90%，为什么还算"正确"？什么情况下又必须否决一个量化？</li>
+      <li>Serena 的音色是怎样从 Qwen3-TTS 迁移到 M5 的？有没有训练发生？</li>
+    </ul>
+  </div>
+
+  <h3>三条并行的线索</h3>
+  <div class="grid2">
+    <div class="tile"><b>① 系统：端到端流水线</b><p>文本 → conditioning 序列 → backbone → 16-book depth 链 → codec → PCM。理解数据形状与单位，是所有优化的前提。</p></div>
+    <div class="tile"><b>② 框架：llama.cpp 提供了什么</b><p>GGUF 模型加载、ggml 计算图与后端调度、llama_batch / llama_decode、KV cache 管理、量化。M5 是在这些原语上"借壳"运行的自定义模型。</p></div>
+    <div class="tile"><b>③ 方法：性能工程</b><p>测量 → 分解 → 建模 → 假设 → 同轮 A/B → 质量门禁 → 记录（包括负结果）。这才是能带走的东西。</p></div>
+    <div class="tile"><b>④ 专题：音色与情感</b><p>离散音频 token 如何承载说话人身份；零样本克隆的两条机制；为什么 caption 控制情感是弱训练槽。</p></div>
+  </div>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 210" role="img" aria-label="本教程的学习路径图：认识对象、测量、建模、优化、抽象、音色专题">
+        <rect class="dg-panel" x="0" y="0" width="880" height="210" rx="12"/>
+        <g>
+          <rect class="dg-box" x="24" y="42" width="118" height="62" rx="10"/>
+          <text class="dg-tb" x="83" y="68" text-anchor="middle">认识对象</text>
+          <text class="dg-ts" x="83" y="87" text-anchor="middle">Ch 1 · 帧</text>
+          <rect class="dg-box" x="166" y="42" width="118" height="62" rx="10"/>
+          <text class="dg-tb" x="225" y="68" text-anchor="middle">学会测量</text>
+          <text class="dg-ts" x="225" y="87" text-anchor="middle">Ch 2 · RTF</text>
+          <rect class="dg-accent" x="308" y="42" width="118" height="62" rx="10"/>
+          <text class="dg-tb" x="367" y="68" text-anchor="middle">成本模型</text>
+          <text class="dg-ts" x="367" y="87" text-anchor="middle">Ch 3 · F+R</text>
+          <rect class="dg-box" x="450" y="42" width="118" height="62" rx="10"/>
+          <text class="dg-tb" x="509" y="68" text-anchor="middle">逐项优化</text>
+          <text class="dg-ts" x="509" y="87" text-anchor="middle">Ch 4-5</text>
+          <rect class="dg-box" x="592" y="42" width="118" height="62" rx="10"/>
+          <text class="dg-tb" x="651" y="68" text-anchor="middle">抽象迁移</text>
+          <text class="dg-ts" x="651" y="87" text-anchor="middle">Ch 6 · 通用</text>
+          <rect class="dg-accent2" x="734" y="42" width="122" height="62" rx="10"/>
+          <text class="dg-tb" x="795" y="68" text-anchor="middle">音色专题</text>
+          <text class="dg-ts" x="795" y="87" text-anchor="middle">Ch 7 · Qwen</text>
+          <path class="dg-flow" d="M142 73 H164"/><path class="dg-flow" d="M284 73 H306"/>
+          <path class="dg-flow" d="M426 73 H448"/><path class="dg-flow" d="M568 73 H590"/>
+          <path class="dg-flow" d="M710 73 H732"/>
+        </g>
+        <text class="dg-ts" x="24" y="140">下层支撑：llama.cpp / ggml / HTP backend · ONNX Runtime codec · HTTP 服务与可观测性</text>
+        <text class="dg-ts" x="24" y="164">贯穿纪律：同轮 A/B · 质量门禁（codes 确定性 / ASR / 音频统计 / 人耳）· 负结果也要记录</text>
+        <text class="dg-ts" x="24" y="188">Ch 8 提供实验命令、思考题与术语表</text>
+      </svg>
+    </div>
+    <figcaption>图 0-1　课程结构：前三章建立"看得懂数字"的能力，四、五章复盘真实优化，六章抽象成通用方法，七章专题讲音色。</figcaption>
+  </figure>
+
+  <div class="callout key"><span class="tagline">口径约定</span>
+    本文所有 RTF = 端到端生成耗时 ÷ 生成音频时长（越小越好）。不同章节的数据来自不同长度的测试句与不同设备热状态，
+    <b>跨章节的绝对数字不可直接比较</b>；每个结论都标注了它的对照实验。测试约定：同轮交替 A/B、固定种子/文本/音色、
+    质量门禁 = codes 确定性 + ASR 转写 + 音频统计族（RMS / 过零率 / 峰值）+ 必要时人耳试听。
+  </div>
+  <h3>资料来源</h3>
+  <ul>
+    <li>项目主台账：<code>docs/backend/snapdragon/m5-tts-optimization-log.md</code>（时间线细节见 <code>m5-tts-port-notes.md</code>）</li>
+    <li>代码：<code>examples/m5-tts/</code>（<code>m5_engine.cpp</code>, <code>m5_depth_heads.h</code>, <code>backbone.cpp</code>, <code>m5_server.cpp</code>）</li>
+    <li>Qwen3-TTS：<a href="https://github.com/QwenLM/Qwen3-TTS" target="_blank" rel="noopener">QwenLM/Qwen3-TTS 技术报告</a>、仓库内 <code>tools/tts/README.md</code> 与 <code>conversion/qwen3tts.py</code></li>
+  </ul>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch0">标记本章已学完</button><span>左侧目录会记录进度（保存在本浏览器）。</span></div>
+</section>
+
+<!-- ============ CHAPTER 1 ============ -->
+<section class="chapter" id="ch1" data-title="M5-TTS 与 llama.cpp">
+  <div class="chapHead"><span class="idx">01</span><h2>认识被优化的对象：一帧音频是怎么来的</h2></div>
+  <p class="subtitle">先把数据形状和计算图钉死，否则后面所有"优化"都是猜。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能画出 M5-TTS 的三阶段流水线，并说出每个张量的形状与单位</li>
+    <li>理解 conditioning 序列为什么是"示范"，而不只是"条件"</li>
+    <li>知道 llama.cpp 在这个工程里被复用了哪些原语、又绕开了哪些</li>
+  </ul></div>
+
+  <h3>1.1 三级火箭：backbone → depth → codec</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 300" role="img" aria-label="M5-TTS 三阶段流水线：条件序列、backbone、16 book depth 链、codec 解码到 PCM">
+        <rect class="dg-panel" x="0" y="0" width="880" height="300" rx="12"/>
+        <text class="dg-ts" x="20" y="24">STEP 0 · 构造条件序列（一次 prefill）</text>
+        <rect class="dg-box" x="20" y="36" width="250" height="62" rx="10"/>
+        <text class="dg-tb" x="145" y="60" text-anchor="middle">文本 token 行</text>
+        <text class="dg-ts" x="145" y="80" text-anchor="middle">[markers | 参考文本 | 目标文本]</text>
+        <rect class="dg-box" x="284" y="36" width="250" height="62" rx="10"/>
+        <text class="dg-tb" x="409" y="60" text-anchor="middle">参考音频 codes 行</text>
+        <text class="dg-ts" x="409" y="80" text-anchor="middle">[T 帧 × 16 book] → 16 embedding 求和</text>
+        <text class="dg-ts" x="548" y="60">每行 = 512 float（text_emb / audio_emb）</text>
+        <text class="dg-ts" x="548" y="80">沿时间轴拼接，不是相加</text>
+        <path class="dg-flow" d="M270 67 H282"/>
+
+        <text class="dg-ts" x="20" y="124">STEP 1-2 · 每一帧（12.5 fps，即 80 ms 音频 / 1920 samples @24 kHz）</text>
+        <rect class="dg-accent" x="20" y="136" width="150" height="70" rx="10"/>
+        <text class="dg-tb" x="95" y="162" text-anchor="middle">backbone</text>
+        <text class="dg-ts" x="95" y="181" text-anchor="middle">decode → hidden[512]</text>
+        <rect class="dg-accent2" x="200" y="136" width="290" height="70" rx="10"/>
+        <text class="dg-tb" x="345" y="160" text-anchor="middle">depth transformer · 16 book 链</text>
+        <text class="dg-ts" x="345" y="180" text-anchor="middle">project → top-k/Gumbel → code → 下一步</text>
+        <rect class="dg-ok" x="520" y="136" width="150" height="70" rx="10"/>
+        <text class="dg-tb" x="595" y="162" text-anchor="middle">codes[16]</text>
+        <text class="dg-ts" x="595" y="181" text-anchor="middle">+ next_hidden[512]</text>
+        <rect class="dg-box" x="700" y="136" width="160" height="70" rx="10"/>
+        <text class="dg-tb" x="780" y="162" text-anchor="middle">codec decoder</text>
+        <text class="dg-ts" x="780" y="181" text-anchor="middle">ORT · 分块 → PCM</text>
+        <path class="dg-flow" d="M170 171 H198"/><path class="dg-flow" d="M490 171 H518"/>
+        <path class="dg-flow" d="M670 171 H698"/>
+        <path class="dg-flow2" d="M595 206 V236 H95 V208"/>
+        <rect class="dg-panel" x="252" y="222" width="380" height="22" rx="5"/>
+        <text class="dg-tacc" x="442" y="237" text-anchor="middle">next_hidden 反馈回 backbone（帧间自回归）</text>
+
+        <text class="dg-ts" x="20" y="266">数字字典：hidden 512 · vocab 2051（含 EOS） · 16 books · hop 1920 · 24 kHz · 单段上限 500 帧 · 输入 ≤ 2000 字</text>
+        <text class="dg-ts" x="20" y="286">backbone-Q8_0.gguf ≈ 32 MB（HTP0） · depth-Q4_0.gguf ≈ 10.7 MB（HTP0） · codec_decoder_cached.onnx（CPU / ORT）</text>
+      </svg>
+    </div>
+    <figcaption>图 1-1　M5-TTS 推理流水线。关键在"两个自回归环"：帧内 16 个 book 串行、帧间通过 <code>next_hidden</code> 串行——后面所有批量化尝试都撞在这两环上。</figcaption>
+  </figure>
+
+  <p>把一段文本交给 M5，引擎先按标点切成若干段（每段 ≤80 字，总长 ≤2000 字），每段单独做一次
+  <b>prefill</b>：由控制标记、参考文本、目标文本、以及参考音频的 codec codes 拼成若干行 512 维 embedding，
+  一次性喂给 backbone。之后进入逐帧循环：backbone 走一步得到 hidden；depth 链用 15 次串行 decode
+  采出 16 个 code；codec 把攒够的若干帧解码成 PCM；<code>next_hidden</code> 再反馈给 backbone 开启下一帧。</p>
+
+  <div class="callout key"><span class="tagline">与文本 LLM 的类比</span>
+    prefill ↔ 读 prompt；逐帧 decode ↔ 逐 token decode；KV cache ↔ backbone 的上下文状态；
+    sampler ↔ top-k 10 + 温度 0.9 + Gumbel-style 噪声采样；EOS ↔ 16 个 code 全 0（且前 6 帧禁止 EOS）。
+    <b>不同点</b>：LLM 一步采样 1 个 token，M5 一"步"要串行采 16 个 book，而且每个 book 的输入依赖上一个 book 的采样结果。
+  </div>
+
+  <h3>1.2 conditioning：把"示范"写进 prompt</h3>
+  <pre><span class="cm">// m5_engine.cpp:1392 condition() —— 实际渲染路径</span>
+&lt;|caption_begin|&gt;{caption}&lt;|caption_end|&gt;&lt;|accent_begin|&gt;&lt;|accent_end|&gt;
+&lt;|speaker_start|&gt;None&lt;|speaker_end|&gt;&lt;|lang_begin|&gt;Chinese&lt;|lang_end|&gt;
+{voice.reference_text}{input_text}
+
+<span class="cm">// prefix 行布局（segment() :1101）</span>
+[ 控制标记 + 参考文本 token ][ 本段文本 token ][ 参考音频 codes 行 ]
+   每行 = text_emb[id]              每行 = Σ_j audio_emb[code + 1 + j*2051]</pre>
+  <p>注意 <code>voice.reference_text</code> 与 <code>input_text</code> 之间<b>没有分隔符</b>，参考文本在前。
+  参考音频 codes 的每一行是 16 个 codebook embedding 的<b>逐元素求和</b>（<code>row = code + 1 + book*2051</code>，
+  <code>+1</code> 因为 0 是 EOS）。换句话说：模型在 prompt 里同时看到了"这句话该说什么"和"用谁的声音、什么韵律说过一遍类似的话"。
+  这就是 <b>in-context learning</b> 式的音色条件，不是把说话人向量注入到某一层。</p>
+
+  <h3>1.3 llama.cpp 在这个工程里的角色</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 260" role="img" aria-label="llama.cpp 分层架构与 M5 的复用点">
+        <rect class="dg-panel" x="0" y="0" width="880" height="260" rx="12"/>
+        <rect class="dg-box" x="24" y="24" width="200" height="46" rx="9"/>
+        <text class="dg-tb" x="124" y="45" text-anchor="middle">应用：m5-engine / m5-server</text>
+        <text class="dg-ts" x="124" y="62" text-anchor="middle">分段、采样、codec、HTTP</text>
+        <rect class="dg-accent" x="252" y="24" width="200" height="46" rx="9"/>
+        <text class="dg-tb" x="352" y="45" text-anchor="middle">llama_model / llama_context</text>
+        <text class="dg-ts" x="352" y="62" text-anchor="middle">GGUF 权重 + KV memory</text>
+        <rect class="dg-box" x="480" y="24" width="176" height="46" rx="9"/>
+        <text class="dg-tb" x="568" y="45" text-anchor="middle">ggml graph / sched</text>
+        <text class="dg-ts" x="568" y="62" text-anchor="middle">算子切分与调度</text>
+        <rect class="dg-ok" x="684" y="24" width="172" height="46" rx="9"/>
+        <text class="dg-tb" x="770" y="45" text-anchor="middle">backend: HTP0 / CPU</text>
+        <text class="dg-ts" x="770" y="62" text-anchor="middle">HVX / QNN / NEON</text>
+        <path class="dg-flow" d="M224 47 H250"/><path class="dg-flow" d="M452 47 H478"/><path class="dg-flow" d="M656 47 H682"/>
+
+        <text class="dg-ts" x="24" y="98">M5 复用的原语（backbone.cpp / docker_build_stage.sh）</text>
+        <rect class="dg-panel" x="24" y="108" width="832" height="52" rx="8"/>
+        <text class="dg-t" x="38" y="130">llama_model_load_from_file · llama_init_from_model · <tspan class="dg-tacc">llama_batch{embd,pos,seq_id,logits}</tspan> · llama_decode</text>
+        <text class="dg-t" x="38" y="149">llama_get_embeddings_ith(ctx,-1) · llama_memory_clear / llama_memory_seq_rm · ggml_backend_load_all</text>
+        <text class="dg-ts" x="24" y="184">M5 绕开的部分：不使用 token id 输入与 lm_head 采样，而是直接注入 512 维 embedding 行、读取最后一层 hidden，再在外部做 16-book 投影与采样</text>
+        <text class="dg-ts" x="24" y="208">权重格式：GGUF Q8_0 / Q4_0；编译：-march=armv8.2-a+fp16+fp16fml，静态链接 libllama / libggml / libggml-hexagon</text>
+        <text class="dg-ts" x="24" y="232">部署形态：backbone-resident 与 depth-resident 两个常驻子进程（同一份二进制、argv 决定角色），父进程经匿名管道交换 float 行</text>
+      </svg>
+    </div>
+    <figcaption>图 1-2　llama.cpp 分层与 M5 的复用点。这里最有教学价值的一招是 <code>llama_batch.embd</code>：把自定义向量直接喂进标准 decode 路径，从而免费获得 KV cache、后端调度与量化支持。</figcaption>
+  </figure>
+
+  <p><code>backbone.cpp</code> 用 <code>llama_model_load_from_file()</code> 载入 GGUF，检查 <code>n_embd == 512</code>，
+  用 <code>llama_context_default_params()</code> 设 <code>embeddings=true</code>、<code>type_k/type_v=F32</code>、
+  <code>n_ctx=2048</code>（depth 子进程 256），然后构造一个<b>不带 token 字段</b>的 <code>llama_batch</code>：
+  只填 <code>embd</code>（512 维浮点行）、<code>pos</code>、<code>seq_id</code> 和 <code>logits</code>（只请求最后一行）。
+  <code>llama_decode()</code> 之后用 <code>llama_get_embeddings_ith(ctx, -1)</code> 取回最后一层 hidden。</p>
+
+  <div class="callout warn"><span class="tagline">工程约束</span>
+    Snapdragon HTP 的 <code>/dev/adsprpc-smd</code> 对普通 App uid 返回 EACCES，只有 shell 域进程能用 DSP。
+    所以服务端形态（adb shell 启动的 m5-server）能跑 HTP，而 Android App 形态只能退到 native CPU。
+    这也是为什么 backbone/depth 被拆成常驻子进程：HTP 上下文初始化昂贵，且需要隔离崩溃域。
+  </div>
+
+  <h3>1.4 depth 链：16 个 book 为什么必须一个一个来</h3>
+  <pre><span class="cm">// m5_depth_heads.h: chain() 的骨架</span>
+proj(book0, hidden)  → logits[2051] → <span class="kw">sample</span>(T=0.9, top-k=10, noise=-log u) → code[0]
+proj(projection, hidden) → projected_hidden
+<span class="kw">for</span> book = 1..15:
+    rows = (book==1) ? [projected_hidden, transform(code[0])] : [transform(code[book-1])]
+    decoded = <span class="kw">depth_decode</span>(rows)          <span class="cm">// 一次 llama_decode 调用，HTP 提交</span>
+    proj(book, decoded) → sample → code[book]     <span class="cm">// 下一步的输入依赖这一步的采样结果</span>
+next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// 反馈给下一帧</span></pre>
+  <p>权重布局（<code>m5_depth_heads.h: layout()</code>）：<code>projection</code> 块
+  <code>16×2051×512</code> floats ≈ 67 MB（f32），<code>projected</code> 块 <code>512×512</code>，
+  <code>audio</code> 块再来 <code>16×2051×512</code>。每帧要对 book 投影矩阵做 16 次 GEMV，
+  <b>流式读取权重</b>正是后面 f16 / int8 量化的用武之地。采样是 Gumbel 技巧：
+  噪声 <code>n = -log(1-u)</code> 由 JavaRandom LCG 生成，取 <code>argmax(prob / noise)</code>；
+  它要求按 book 顺序消耗随机数，因此"预生成噪声并向量化"也受到位精确约束。</p>
+
+  <div class="callout key"><span class="tagline">本章要点</span>
+    一帧 = 1 次 backbone decode + 15 次 depth 提交 + 16 次投影/采样 + 一批 codec 解码。
+    <b>串行依赖有三层</b>：book 内链、帧间 next_hidden、以及采样器随机数顺序。优化前先问：我要动的是哪一层依赖？
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch1">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 2 ============ -->
+<section class="chapter" id="ch2" data-title="性能分析的方法论">
+  <div class="chapHead"><span class="idx">02</span><h2>先学会测量：RTF、分层埋点与质量门禁</h2></div>
+  <p class="subtitle">大多数"优化失败"，其实是一开始就量错了。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>知道 RTF 什么时候会骗人，并能用"固定成本 + 每帧成本"拆解它</li>
+    <li>能搭出端到端 / 分项 / 微基准三层可观测性</li>
+    <li>理解为什么 TTS 优化必须带质量门禁，以及门禁各自的盲区</li>
+  </ul></div>
+
+  <h3>2.1 RTF 的定义与三个陷阱</h3>
+  <p><code>RTF = 生成耗时 ÷ 生成音频时长</code>。小于 1 表示"比实时快"。它直观、便于对比，但有三个坑：</p>
+  <ol>
+    <li><b>短句惩罚</b>：模型有固定的 prefill / codec 预热 / 首批调度成本，音频越短摊不掉。实测 7 字句 RTF 0.918，19 字 0.837，24 字 0.742——同一份代码，只因为句子长度不同。</li>
+    <li><b>热漂移</b>：连续压测让 SoC 升温，同一代码 RTF 从 0.75 慢慢漂到 0.87、0.91。跨轮绝对值不可比，必须<b>同轮交替 A/B</b>（A→B→A→B）。</li>
+    <li><b>口径不一致</b>：CLI 单次进程 vs server 常驻进程、wav 全量 vs pcm 流式、是否包含首次 codec prime，都会改变分子。</li>
+  </ol>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 250" role="img" aria-label="三条长度句子的耗时分解，展示固定成本被摊薄导致 RTF 下降">
+        <rect class="dg-panel" x="0" y="0" width="880" height="250" rx="12"/>
+        <text class="dg-ts" x="22" y="24">同一份代码、同一设备，只改句子长度（CLI 分项实测）</text>
+        <line class="dg-grid" x1="70" y1="60" x2="70" y2="196"/>
+        <line class="dg-grid" x1="70" y1="196" x2="620" y2="196"/>
+        <text class="dg-ts" x="22" y="64">5.0 s</text>
+        <text class="dg-ts" x="22" y="130">2.5 s</text>
+        <text class="dg-ts" x="22" y="198">0</text>
+        <text class="dg-ts" x="70" y="216">7 字 / 23 帧</text>
+        <text class="dg-ts" x="250" y="216">19 字 / 45 帧</text>
+        <text class="dg-ts" x="460" y="216">24 字 / 75 帧</text>
+        <!-- bars: fixed 152ms + backbone 6.1ms/f + depth 48.6ms/f -->
+        <g>
+          <rect class="dg-bar2" x="96" y="180" width="58" height="16" rx="3"/>
+          <rect class="dg-bar" x="96" y="164" width="58" height="16" rx="3"/>
+          <rect class="dg-bar3" x="96" y="112" width="58" height="52" rx="3"/>
+          <text class="dg-tacc" x="125" y="104" text-anchor="middle">RTF 0.918</text>
+          <text class="dg-ts" x="125" y="174" text-anchor="middle">1.60 s</text>
+
+          <rect class="dg-bar2" x="276" y="180" width="58" height="16" rx="3"/>
+          <rect class="dg-bar" x="276" y="164" width="58" height="16" rx="3"/>
+          <rect class="dg-bar3" x="276" y="74" width="58" height="90" rx="3"/>
+          <text class="dg-tacc" x="305" y="66" text-anchor="middle">RTF 0.837</text>
+          <text class="dg-ts" x="305" y="174" text-anchor="middle">2.93 s</text>
+
+          <rect class="dg-bar2" x="486" y="180" width="58" height="16" rx="3"/>
+          <rect class="dg-bar" x="486" y="164" width="58" height="16" rx="3"/>
+          <rect class="dg-bar3" x="486" y="44" width="58" height="120" rx="3"/>
+          <text class="dg-tacc" x="515" y="36" text-anchor="middle">RTF 0.742</text>
+          <text class="dg-ts" x="515" y="174" text-anchor="middle">4.38 s</text>
+        </g>
+        <text class="dg-ts" x="640" y="62">拟合结果：</text>
+        <text class="dg-t" x="640" y="86">prefill ≈ 152 ms（固定）</text>
+        <text class="dg-t" x="640" y="108">backbone 6.1 ms/帧</text>
+        <text class="dg-t" x="640" y="130">depth 48.6 ms/帧</text>
+        <text class="dg-t" x="640" y="152">codec 33 ms/帧（被重叠隐藏）</text>
+        <text class="dg-ts" x="640" y="180">■ depth　■ backbone　■ 固定</text>
+      </svg>
+    </div>
+    <figcaption>图 2-1　RTF 随句长下降不是"模型变快了"，而是 152 ms 固定成本被更多帧摊薄。长句时 depth 占墙钟约 83%，这才是真正该盯的地方。</figcaption>
+  </figure>
+
+  <div class="callout key"><span class="tagline">可迁移的做法</span>
+    拿到一条耗时曲线，先做<b>线性拟合</b>：<code>T(N) = 固定开销 + 每单位成本 × N</code>。
+    截距指向冷启动 / prefill / 图初始化，斜率指向真正的逐 token（逐帧）热路径。
+    优化截距只对短请求有意义，优化斜率才对长请求有意义——两者 often 需要完全不同的手段。
+  </div>
+
+  <h3>2.2 三层可观测性</h3>
+  <div class="tableWrap"><table>
+    <tr><th>层</th><th>工具 / 接口</th><th>回答什么问题</th><th>本项目实例</th></tr>
+    <tr><td>端到端</td><td><code>X-M5-RTF / Elapsed-S / First-Pcm-S / Frames</code>、<code>GET /metrics</code></td><td>用户实际感受到多快？分布如何？</td><td>wav 响应带头；pcm 流式头提前定稿，只能靠 <code>/metrics</code> 与客户端实测</td></tr>
+    <tr><td>分项</td><td><code>X-M5-Backbone-S / Depth-S / Codec-S</code>、<code>M5_HEAD_STATS=1</code></td><td>时间花在哪个阶段？</td><td>发现 <code>g_heads_s</code> 双计 bug；测出 heads 13.4 ms/帧</td></tr>
+    <tr><td>微基准</td><td><code>depth_batch_bench.cpp</code>、<code>--dump-codes</code>、<code>M5_ZERO_TRANSFORM=1</code></td><td>机制是什么？依赖有多强？</td><td>拟合提交成本模型；量化"串行依赖敏感度"</td></tr>
+  </table></div>
+  <p>这里有个值得记住的设计细节：HTTP chunked 响应在第一个分块发出时就已经把 headers 定稿，
+  而合成统计要等整段结束才知道，<b>所以流式响应天生无法把最终统计放在响应头里</b>。
+  本项目为此加了 <code>/metrics</code>：服务端留存最近 64 次请求的 JSON 明细与分位数，
+  并提供 Prometheus 文本格式；控制台在合成完成后拉取一次，用 <code>last.id</code> 认领本次记录，
+  把 <code>≈</code> 估算值替换为服务端权威值。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 220" role="img" aria-label="性能优化决策循环：测量、分解、建模、假设、同轮 A/B、质量门禁、记录">
+        <rect class="dg-panel" x="0" y="0" width="880" height="220" rx="12"/>
+        <g>
+          <rect class="dg-box" x="22" y="42" width="120" height="56" rx="9"/>
+          <text class="dg-tb" x="82" y="66" text-anchor="middle">1 测量</text><text class="dg-ts" x="82" y="84" text-anchor="middle">同轮 / 固定输入</text>
+          <rect class="dg-box" x="166" y="42" width="120" height="56" rx="9"/>
+          <text class="dg-tb" x="226" y="66" text-anchor="middle">2 分解</text><text class="dg-ts" x="226" y="84" text-anchor="middle">截距 vs 斜率</text>
+          <rect class="dg-accent" x="310" y="42" width="120" height="56" rx="9"/>
+          <text class="dg-tb" x="370" y="66" text-anchor="middle">3 建模</text><text class="dg-ts" x="370" y="84" text-anchor="middle">F + R·rows</text>
+          <rect class="dg-box" x="454" y="42" width="120" height="56" rx="9"/>
+          <text class="dg-tb" x="514" y="66" text-anchor="middle">4 假设</text><text class="dg-ts" x="514" y="84" text-anchor="middle">瓶颈属于哪类</text>
+          <rect class="dg-box" x="598" y="42" width="120" height="56" rx="9"/>
+          <text class="dg-tb" x="658" y="66" text-anchor="middle">5 A/B</text><text class="dg-ts" x="658" y="84" text-anchor="middle">交替跑 &gt;1 轮</text>
+          <rect class="dg-ok" x="742" y="42" width="116" height="56" rx="9"/>
+          <text class="dg-tb" x="800" y="66" text-anchor="middle">6 门禁</text><text class="dg-ts" x="800" y="84" text-anchor="middle">正确性 + 听感</text>
+          <path class="dg-flow" d="M142 70 H164"/><path class="dg-flow" d="M286 70 H308"/>
+          <path class="dg-flow" d="M430 70 H452"/><path class="dg-flow" d="M574 70 H596"/>
+          <path class="dg-flow" d="M718 70 H740"/>
+          <path class="dg-flow2" d="M800 98 V132 H82 V100"/>
+          <text class="dg-tacc" x="440" y="128" text-anchor="middle">7 记录：成功项、负结果、复活条件 → 回到 1</text>
+        </g>
+        <text class="dg-ts" x="22" y="166">门禁三件套：codes 确定性 / 翻转率　·　ASR 转写　·　音频统计族（RMS、过零率、峰值）＋ 人耳试听</text>
+        <text class="dg-ts" x="22" y="190">反模式：只看构建日志就说"优化生效"；跨轮比绝对值；只信 ASR；把"能改"当成"该改"；不记录被否定的方案</text>
+      </svg>
+    </div>
+    <figcaption>图 2-2　本项目反复使用的决策循环。第 7 步最容易被跳过，却决定了下一次不会重走死路。</figcaption>
+  </figure>
+
+  <h3>2.3 质量门禁：为什么"codes 不一样"不等于"错了"</h3>
+  <p>自回归生成是<b>混沌系统</b>：任何 1-ulp 的数值扰动都可能让采样落在另一个 token 上，之后轨迹完全分叉。
+  因此门禁不是"逐位一致"，而是分层：</p>
+  <div class="grid2">
+    <div class="tile"><b>① 数值正确性</b><p>看<b>首帧</b>。改动若引入系统性误差，第 0 帧就会翻。heads int8 首帧 0/16 翻转，说明量化无偏。</p></div>
+    <div class="tile"><b>② 轨迹分叉可解释</b><p>帧 2 起通过 <code>next_hidden</code> 反馈放大到 ~90% 翻转——这是"同分布另一条采样轨迹"，同级于换随机种子。</p></div>
+    <div class="tile"><b>③ 语义与听感</b><p>ASR 两句全对、RMS/过零率/峰值同族、模式内确定性 0% 翻转。必要时再加人耳试听。</p></div>
+    <div class="tile"><b>④ 什么时候必须否决</b><p>backbone Q4_0 让音频短 16%（语速变快），ASR 依然全对——只有耳朵能抓到韵律漂移，最终保持 Q8。</p></div>
+  </div>
+
+  <h3>2.4 瓶颈分类学（后面所有优化都对应其中一类）</h3>
+  <div class="tableWrap"><table>
+    <tr><th>类型</th><th>典型症状</th><th>本项目对应</th><th>有效手段</th></tr>
+    <tr><td>带宽受限</td><td>耗时 ∝ 权重字节数，算力没吃满</td><td>heads 每帧 34 MB 流式读取</td><td>f16 → int8 量化、权重驻留</td></tr>
+    <tr><td>提交开销</td><td>同样行数，调用次数越多越慢</td><td>depth 1.25 ms/次固定成本</td><td>批量化、算子融合、忙轮询</td></tr>
+    <tr><td>串行依赖</td><td>并行/批量会改变输出语义</td><td>15 步 book 链、帧间 next_hidden</td><td>改模型 / 学习型草稿（不能硬凑）</td></tr>
+    <tr><td>冷启动</td><td>第一个请求特别慢</td><td>prefill / ORT kernel / codec 图初始化</td><td>启动预热、跨请求状态缓存</td></tr>
+    <tr><td>重复计算</td><td>同音色每次都重算同一段</td><td>共享 conditioning 前缀、codec primer</td><td>KV 前缀缓存、prime 状态复用</td></tr>
+    <tr><td>资源竞争</td><td>两个任务并发时都变慢</td><td>codec 与 depth 同时跑，depth 慢 ~20%</td><td>评估净收益，而非单任务最优</td></tr>
+  </table></div>
+  <div class="callout warn"><span class="tagline">判别技巧</span>
+    想知道是不是带宽瓶颈，<b>改权重的字节数看看耗时是否按比例变</b>。
+    depth 权重 Q8_0(21 MB) → Q4_0(10.7 MB) 只快 9%，若真是带宽受限应该接近翻倍——由此判定 depth 是"提交开销 + 计算主导"，
+    于是"继续降位量化"这条路被直接关掉。这个判别法比看 profiler 百分比更可靠。
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch2">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 3 ============ -->
+<section class="chapter" id="ch3" data-title="成本模型与 15 步串行">
+  <div class="chapHead"><span class="idx">03</span><h2>成本模型：把 15 步串行看透</h2></div>
+  <p class="subtitle">本章是整门课的核心——用一个微基准，把"能不能批量化"变成可计算、可证伪的问题。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>会用 bench 数据拟合"固定提交成本 + 每行成本"，并算出理论加速上限</li>
+    <li>理解为什么理论 2.1× 拿不到，以及六条压缩路径各自是怎么被排除的</li>
+    <li>能把这里的推理迁移到 LLM 的投机解码 / Jacobi decoding 讨论</li>
+  </ul></div>
+
+  <h3>3.1 一次调用多少钱</h3>
+  <p><code>depth_batch_bench.cpp</code> 在 HTP0 上把 28 行输入拆成四种形状，各跑多轮取中位数：</p>
+  <div class="tableWrap"><table>
+    <tr><th>形状</th><th class="num">总耗时</th><th>含义</th></tr>
+    <tr><td>1 × 28（一次提交 28 行）</td><td class="num">26.7 ms</td><td>批量的理想情况</td></tr>
+    <tr><td>14 × 2（14 次提交，每次 2 行）</td><td class="num">42.6 ms</td><td>接近现状</td></tr>
+    <tr><td>28 × 1（28 次提交，每次 1 行）</td><td class="num">60.4 ms</td><td>最碎的提交方式</td></tr>
+    <tr><td>1 × 2（单次 2 行基线）</td><td class="num">3.07 ms</td><td>校准固定开销</td></tr>
+  </table></div>
+  <p>用 <code>T = F·调用次数 + R·行数</code> 拟合，得到 <b>F ≈ 1.25 ms/次提交，R ≈ 0.91 ms/行</b>。
+  于是现状（一帧 15 次调用、16 行）≈ <code>15×1.25 + 16×0.91 ≈ 33 ms</code>；
+  理想批量（1 次调用、16 行）≈ <code>1.25 + 16×0.91 ≈ 16 ms</code>。
+  <b>理论上限约 2.1×</b>，对应整句 RTF 从 ~0.75 降到 ~0.55。这是值得认真追查的收益。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 240" role="img" aria-label="批量形状柱状图与成本模型公式">
+        <rect class="dg-panel" x="0" y="0" width="880" height="240" rx="12"/>
+        <text class="dg-ts" x="24" y="24">28 行输入的不同提交方式（HTP0 实测，ms）</text>
+        <line class="dg-grid" x1="80" y1="46" x2="80" y2="178"/>
+        <line class="dg-grid" x1="80" y1="178" x2="520" y2="178"/>
+        <text class="dg-ts" x="30" y="50">60</text><text class="dg-ts" x="30" y="112">30</text><text class="dg-ts" x="30" y="180">0</text>
+        <rect class="dg-bar4" x="110" y="119" width="62" height="59" rx="3"/><text class="dg-tacc" x="141" y="112" text-anchor="middle">60.4</text>
+        <rect class="dg-bar" x="212" y="136" width="62" height="42" rx="3"/><text class="dg-tacc" x="243" y="129" text-anchor="middle">42.6</text>
+        <rect class="dg-bar3" x="314" y="152" width="62" height="26" rx="3"/><text class="dg-tacc" x="345" y="145" text-anchor="middle">26.7</text>
+        <rect class="dg-bar2" x="416" y="175" width="62" height="3" rx="1"/><text class="dg-tacc" x="447" y="168" text-anchor="middle">3.07</text>
+        <text class="dg-ts" x="110" y="198">28×1</text><text class="dg-ts" x="212" y="198">14×2</text>
+        <text class="dg-ts" x="314" y="198">1×28</text><text class="dg-ts" x="416" y="198">1×2</text>
+        <rect class="dg-accent" x="546" y="42" width="310" height="128" rx="10"/>
+        <text class="dg-tb" x="566" y="70">T = F · calls + R · rows</text>
+        <text class="dg-t" x="566" y="96">F = 1.25 ms / 次提交</text>
+        <text class="dg-t" x="566" y="118">R = 0.91 ms / 行</text>
+        <text class="dg-tacc" x="566" y="146">现状 33 ms/帧 → 理想 16 ms/帧</text>
+        <text class="dg-ts" x="24" y="220">注意：固定成本 F 在 DSP 后端里是"提交一次图 + 等完成"的开销，与行数几乎无关 —— 这正是小 batch 的税。</text>
+      </svg>
+    </div>
+    <figcaption>图 3-1　提交次数比行数更贵。把 28 行拆成 28 次提交，比一次提交慢 2.3 倍。</figcaption>
+  </figure>
+
+  <h3>3.2 动手：自己推一遍理论上限</h3>
+  <div class="calc" id="costCalc">
+    <p style="margin-top:0;font-size:13px;color:var(--sub)">拖动滑块，观察"调用次数"如何支配总耗时。默认值来自本项目实测。</p>
+    <div class="row">
+      <div><label>帧数 <span class="val" id="framesVal"></span></label><input type="range" id="frames" min="10" max="200" step="5" value="70" data-unit=" 帧"></div>
+      <div><label>每帧提交次数 <span class="val" id="callsVal"></span></label><input type="range" id="calls" min="1" max="30" value="15" data-unit=" 次"></div>
+      <div><label>固定提交成本 F <span class="val" id="FVal"></span></label><input type="range" id="F" min="0" max="4" step="0.05" value="1.25" data-unit=" ms"></div>
+      <div><label>每行成本 R <span class="val" id="RVal"></span></label><input type="range" id="R" min="0.2" max="2" step="0.01" value="0.91" data-unit=" ms"></div>
+      <div><label>每帧总行数 <span class="val" id="rowsTotalVal"></span></label><input type="range" id="rowsTotal" min="8" max="32" value="16" data-unit=" 行"></div>
+    </div>
+    <div class="out">
+      <div><span>现状 depth 总耗时</span><b id="calcNow">–</b></div>
+      <div><span>理想 1 次提交</span><b id="calcIdeal">–</b></div>
+      <div><span>估算整句 RTF</span><b id="calcRtf">–</b></div>
+      <div><span>理论加速上限</span><b id="calcSpeedup">–</b></div>
+    </div>
+    <p style="font-size:12px;color:var(--sub);margin-bottom:0">RTF 估算含 152 ms prefill + 6.1 ms/帧 backbone，codec 视为被 overlap 隐藏；音频按 12.5 fps 换算。它是教学模型，不是实测值。</p>
+  </div>
+
+  <h3>3.3 六条"精确压缩"路径，逐条被实验关掉</h3>
+  <div class="tableWrap"><table>
+    <tr><th>路径</th><th>想法</th><th>证伪证据</th><th>结论</th></tr>
+    <tr><td>① 哑输入批量</td><td>把 15 步合成 1 次，transform 行先用零占位</td><td><code>M5_ZERO_TRANSFORM=1</code> 让 codes 翻转 <b>99.6%</b>（首帧 15/15 全翻），音频 70→500 帧发散不终止</td><td>❌ transform 行承载语义与 EOS 决策</td></tr>
+    <tr><td>② 投机草稿</td><td>用上一帧 codes 做草稿，一次批量 verify</td><td>帧间 codes 匹配率仅 <b>0~1.5%</b>（lag 1-5 都是），近似随机</td><td>❌ codec codes 没有时间局部性</td></tr>
+    <tr><td>③ Jacobi 迭代</td><td>并行猜 15 步再迭代收敛</td><td>依赖沿 15 步链传播，收敛需 O(15) 轮</td><td>❌ 比串行更差（分析排除）</td></tr>
+    <tr><td>④ 跨帧批量</td><td>把多帧一起 decode</td><td><code>next_hidden</code> 反馈给下一帧 backbone 输入</td><td>❌ 帧间被自回归锁死</td></tr>
+    <tr><td>⑤ 后端算子融合</td><td>减少 op 数量</td><td>OPFUSION 0 vs 1 只差 5%（44.6 vs 42.5 ms），深度图太小</td><td>❌ 已见底</td></tr>
+    <tr><td>⑥ 减少 IPC 往返</td><td><code>--depth-chain</code>：16 次 pipe 往返 → 1 次</td><td>逐位一致（宿主 200 组随机输入 0 mismatch）；但实测 depth 4.15 vs 4.08 s（<b>-1.5%</b>）</td><td>⚠ 正确但没收益：瓶颈不是往返</td></tr>
+  </table></div>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 230" role="img" aria-label="LLM 投机解码与 M5 推测批量的对比：草稿有没有预测力">
+        <rect class="dg-panel" x="0" y="0" width="880" height="230" rx="12"/>
+        <rect class="dg-ok" x="20" y="20" width="410" height="188" rx="10"/>
+        <text class="dg-tb" x="40" y="46">文本 LLM · 投机解码成立</text>
+        <text class="dg-t" x="40" y="72">草稿：小模型 / n-gram 猜后续 token</text>
+        <text class="dg-t" x="40" y="94">语言有强局部性：常见搭配可预测</text>
+        <text class="dg-t" x="40" y="116">一次批量 verify，接受前缀 → 省 decode 步数</text>
+        <text class="dg-ts" x="40" y="146">本质：草稿命中率足够高，验证开销被摊薄</text>
+        <text class="dg-tacc" x="40" y="176">接受率是关键指标</text>
+
+        <rect class="dg-bad" x="450" y="20" width="410" height="188" rx="10"/>
+        <text class="dg-tb" x="470" y="46">M5 · 用上一帧 codes 做草稿</text>
+        <text class="dg-t" x="470" y="72">codes 是 RVQ 残差码本索引，不是语言单元</text>
+        <text class="dg-t" x="470" y="94">帧间匹配率 1.5%（≈ 随机猜 2051 个码字）</text>
+        <text class="dg-t" x="470" y="116">verify 几乎必然在第 1 个 book 就拒绝</text>
+        <text class="dg-ts" x="470" y="146">本质：没有可预测的时间局部性</text>
+        <text class="dg-tacc" x="470" y="176">复活条件：训练一个学习型 draft（code[b] ← code[b-1]）</text>
+      </svg>
+    </div>
+    <figcaption>图 3-2　同样是"草稿 + 批量验证"，在 LLM 上成立、在 codec codes 上不成立。差别不在工程，而在数据分布是否有可预测性。</figcaption>
+  </figure>
+
+  <div class="callout bad"><span class="tagline">最重要的结论</span>
+    <b>理论上限 ≠ 可达上限</b>。2.1× 的收益是真的，但拿不到它的原因是<b>模型语义</b>：15 步串行是训练出来的依赖结构，不是实现偷懒。
+    任何"把 15 次合成 1 次"的精确方案都必须先回答：transform 行里的 code 依赖怎么办？
+    到目前为止的答案是：要么训练一个小草稿模型做预测（学习型），要么重训 depth 头支持并行出多 book。
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch3">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 4 ============ -->
+<section class="chapter" id="ch4" data-title="优化复盘（上）：数据搬运">
+  <div class="chapHead"><span class="idx">04</span><h2>优化复盘（上）：让数据搬运变便宜</h2></div>
+  <p class="subtitle">量化、算子融合、编译期验证——这一组优化的共同敌人是"字节数"和"扫描次数"。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>会用"权重流量 × 带宽"估算 GEMV 耗时，并据此判断量化能省多少</li>
+    <li>理解 f16 宏事故、int8 混沌分叉、Q4 被耳朵否决这三件事各自的方法论含义</li>
+    <li>区分钟算式优化与提交开销型优化</li>
+  </ul></div>
+
+  <h3>4.1 f16：一个"优化了但根本没编译进去"的故事</h3>
+  <p>depth heads 每帧要做 16 次 <code>512×2051</code> 的 GEMV，权重是流式读取的。
+  最初的 f16 内核守卫写成了 GCC 风格宏 <code>__ARM_FEATURE_FP16</code>，而 NDK clang 19 实际定义的是
+  <code>__ARM_FEATURE_FP16_VECTOR_ARITHMETIC</code> / <code>__ARM_FEATURE_FP16_FML</code>。
+  结果宏从未匹配、f16 是死代码，而构建日志与一次 objdump 检查都误报"已生效"，于是留下"RTF 持平"的假象。</p>
+  <p>修复动作有两步：改对宏名，并在 CMakeLists 里全局加 <code>-march=armv8.2-a+fp16+fp16fml</code>；
+  验证方式是<b>反汇编数指令</b>（确认 128 条 <code>fmlal</code> 真的出现），再做同种子交替 A/B：
+  每帧 57.3 → 48.3 ms（<b>-16%</b>），5/5 测试句 RTF 改善 11~13%。</p>
+  <div class="callout warn"><span class="tagline">教训</span>
+    编译期优化必须以<b>产物</b>为准（反汇编 / 符号 / 计时），不能以构建日志或"代码写对了"为准。
+    宏名要按实际编译器的特性宏写；跨平台 SIMD 路径尤其容易静默回退到标量实现。
+  </div>
+
+  <h3>4.2 heads int8：带宽减半，heads 快 2.5 倍</h3>
+  <p>埋点显示 heads 每帧约 13.4 ms，而每帧要流过约 34 MB f16 权重（投影 + projected 块），
+  折算带宽约 2.5 GB/s —— <b>这是典型的内存带宽瓶颈，算力几乎没参与</b>。
+  于是做 per-row 对称量化：每行 512 个 float 求 <code>max|w|</code>，<code>scale = max/127</code>，
+  存成 int8 + 一个 float scale；GEMV 用 NEON 把 int8 解包后以 f32 累加，最后乘回 scale。
+  注意 <b>只量化权重、输入仍保持 f32</b>，避免激活量化的误差叠加。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 226" role="img" aria-label="权重流量与 heads 耗时的对应关系">
+        <rect class="dg-panel" x="0" y="0" width="880" height="226" rx="12"/>
+        <text class="dg-ts" x="24" y="24">每帧 heads 权重流量 vs 实测耗时（24 字句，70+ 帧平均）</text>
+        <line class="dg-grid" x1="120" y1="48" x2="120" y2="174"/>
+        <text class="dg-ts" x="24" y="52">34 MB</text><text class="dg-ts" x="24" y="110">17 MB</text>
+        <rect class="dg-bar4" x="130" y="56" width="300" height="24" rx="5"/>
+        <text class="dg-t" x="442" y="74">f16 · 34 MB/帧</text>
+        <rect class="dg-bar3" x="130" y="96" width="150" height="24" rx="5"/>
+        <text class="dg-t" x="292" y="114">int8 · 17 MB/帧</text>
+        <rect class="dg-bar2" x="130" y="136" width="75" height="24" rx="5"/>
+        <text class="dg-t" x="217" y="154">int4 · 8.5 MB（候选，未做）</text>
+        <text class="dg-ts" x="580" y="62">heads_s（整句）　f16 0.94 s → int8 0.38 s</text>
+        <text class="dg-tacc" x="580" y="88">2.5× · RTF 0.86 → 0.75（-13%）</text>
+        <text class="dg-ts" x="580" y="118">带宽估算：34 MB / 13.4 ms ≈ 2.5 GB/s</text>
+        <text class="dg-ts" x="580" y="140">符合 DDR 流式读特征 → 减字节数直接见效</text>
+        <text class="dg-ts" x="24" y="196">对比：depth 权重 Q8(21 MB) → Q4(10.7 MB) 只快 9% ⇒ depth 不是带宽瓶颈（见 §2.4 判别法）</text>
+      </svg>
+    </div>
+    <figcaption>图 4-1　同一个"量化"动作，在 heads 上是特效药，在 depth 上却几乎无效。判别依据是耗时是否随字节数按比例变化。</figcaption>
+  </figure>
+
+  <p>量化还带来一个必须讲清楚的现象：<b>codes 从第 2 帧起翻转 ~90%</b>。别急着判死刑——见下面这张图。</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 196" role="img" aria-label="量化引起的自回归轨迹混沌分叉">
+        <rect class="dg-panel" x="0" y="0" width="880" height="196" rx="12"/>
+        <text class="dg-ts" x="24" y="24">f16 轨迹（上）与 int8 轨迹（下）：首帧相同，之后分叉</text>
+        <rect class="dg-accent" x="60" y="44" width="86" height="34" rx="7"/><text class="dg-tb" x="103" y="66" text-anchor="middle">frame 0</text>
+        <rect class="dg-box" x="190" y="44" width="86" height="34" rx="7"/><text class="dg-ts" x="233" y="66" text-anchor="middle">frame 1</text>
+        <rect class="dg-box" x="320" y="44" width="86" height="34" rx="7"/><text class="dg-ts" x="363" y="66" text-anchor="middle">frame 2</text>
+        <rect class="dg-box" x="450" y="44" width="86" height="34" rx="7"/><text class="dg-ts" x="493" y="66" text-anchor="middle">… 70 帧</text>
+        <rect class="dg-accent" x="60" y="116" width="86" height="34" rx="7"/><text class="dg-tb" x="103" y="138" text-anchor="middle">frame 0</text>
+        <rect class="dg-box" x="190" y="116" width="86" height="34" rx="7"/><text class="dg-ts" x="233" y="138" text-anchor="middle">frame 1′</text>
+        <rect class="dg-bad" x="320" y="116" width="86" height="34" rx="7"/><text class="dg-ts" x="363" y="138" text-anchor="middle">frame 2′</text>
+        <rect class="dg-bad" x="450" y="116" width="86" height="34" rx="7"/><text class="dg-ts" x="493" y="138" text-anchor="middle">… 75 帧</text>
+        <path class="dg-flow2" d="M146 61 H188"/><path class="dg-flow2" d="M276 61 H318"/><path class="dg-flow2" d="M406 61 H448"/>
+        <path class="dg-flow2" d="M146 133 H188"/><path class="dg-flow2" d="M276 133 H318"/><path class="dg-flow2" d="M406 133 H448"/>
+        <text class="dg-tacc" x="570" y="66">首帧 0/16 翻转 ⇒ 无系统性误差</text>
+        <text class="dg-tacc" x="570" y="92">next_hidden 反馈放大 1-ulp 差异</text>
+        <text class="dg-t" x="570" y="120">ASR 全对 · RMS/ZCR/峰值同族</text>
+        <text class="dg-t" x="570" y="144">模式内确定性 0% 翻转</text>
+        <text class="dg-ts" x="24" y="178">判定：这是"换随机种子"级别的同分布轨迹分叉，不是误差累积。质量门禁应检验分布，而非逐位一致。</text>
+      </svg>
+    </div>
+    <figcaption>图 4-2　自回归系统的数值扰动会被反馈环放大。门禁要看首帧（数值正确性）与最终听感（语义正确性），中间 codes 逐位相等既不可能也不必要。</figcaption>
+  </figure>
+
+  <h3>4.3 什么时候量化必须被否决：backbone Q4_0</h3>
+  <p>用 host 端 <code>llama-quantize --allow-requantize</code> 把 backbone 从 Q8_0(32.4 MB) 压到 Q4_0(17.1 MB)，
+  同轮交替 A/B 的数据很漂亮：<code>backbone_s 0.632 → 0.495（-21%）</code>，depth 也因 DDR 竞争减少快了 15%，
+  <b>两版 ASR 全对</b>。但音频时长从 5.90 s 缩到 4.94 s（<b>-16%，语速变快</b>）——这是韵律漂移。
+  人工试听后决定<b>保持 Q8_0</b>：TTS 的自然度优先于这部分 RTF，且 backbone 只占墙钟约 14%。</p>
+  <div class="callout key"><span class="tagline">方法论</span>
+    ASR 检查的是"说了什么"，韵律检查的是"怎么说"。生成式任务的指标天然偏向内容，
+    <b>凡是改动会影响采样分布的优化，都要有感知层验收</b>（这里是人耳；图像任务里是视觉检查/感知指标）。
+    同时要算清收益占比：为了 14% 的环节去牺牲全局听感，通常不划算。
+  </div>
+
+  <h3>4.4 codec：三步量化 + 一次"反直觉"的算子融合</h3>
+  <div class="tableWrap"><table>
+    <tr><th>动作</th><th>效果</th><th>原理</th></tr>
+    <tr><td>CT → MatMul 改写、权重动态 int8</td><td>模型 362 → 141 MB；codec 7.49 → 4.68 s（115 帧句）</td><td>让算子落到 ORT 的量化快速路径</td></tr>
+    <tr><td>融合 Snake 激活为自定义算子</td><td>RTF 0.898 → 0.837</td><td><code>snake(x)=x+c·sin(αx)²</code> 原图是 Mul→Sin→Pow→Mul→Add 五遍全量扫描，Sin 单核占 codec ~14%；融合后用 9 次多项式正弦单遍算完（误差 ~2e-6）</td></tr>
+    <tr><td>ORT 线程数 A/B</td><td>2/3/4 线程 = 3.56 / 2.84 / 3.20 s → 3 最优</td><td>核数继续增加会因调度/缓存竞争变慢</td></tr>
+  </table></div>
+  <div class="callout warn"><span class="tagline">反直觉但已实测</span>
+    把 Snake 链用<b>图级多项式展开</b>成 13+ 个标准算子反而更慢——每多一个算子就多一次全张量读写。
+    "算子数量少"不总等于快，<b>内存扫描次数</b>才是这里的成本。融合成单个自定义算子才能同时省扫描和 Sin。
+  </div>
+  <p>另外两个死胡同也值得记：尾部 ConvTranspose 保留 fp32 只有 12.78 vs 12.75 dB 的无差别收益；
+  对 QK^T / AV 这类"激活 × 激活"的 MatMul 做量化会掉 1.3 dB（Softmax 敏感），因此动态量化时必须把 17 个这样的节点排除。</p>
+
+  <h3>4.5 小结：怎么判断"该不该量化"</h3>
+  <ol>
+    <li>先测<b>流量与耗时是否成比例</b>（改权重的位宽做 A/B），确认是带宽瓶颈；</li>
+    <li>若是，优先量化<b>流式读取的大权重块</b>，且尽量只量化权重、保留激活精度；</li>
+    <li>用首帧一致性 + ASR + 感知验收三层门禁，别用逐位 codes 当标准；</li>
+    <li>算清该环节在总墙钟的占比，收益天花板 = 占比 × 提速比例；</li>
+    <li>如果环节被流水线重叠隐藏（codec），现在优化它<b>不会</b>反映在端到端 RTF 上——等主瓶颈降下来再做。</li>
+  </ol>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch4">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 5 ============ -->
+<section class="chapter" id="ch5" data-title="优化复盘（下）：时间与重复">
+  <div class="chapHead"><span class="idx">05</span><h2>优化复盘（下）：让时间重叠、让重复消失</h2></div>
+  <p class="subtitle">这一组优化不改变数学，只改变"什么时候做、做几次"。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>理解后端轮询模式为什么能带来 2×，以及系统化调参的正确姿势</li>
+    <li>会用流水线重叠、分块策略、冷启动预热分析首包延迟</li>
+    <li>理解 KV 前缀缓存的协议设计与"字节对齐"这类系统级 bug</li>
+    <li>能一眼说出本项目每个成功项 / 负结果属于哪类杠杆</li>
+  </ul></div>
+
+  <h3>5.1 后端旋钮：一次环境变量值 2.2 倍</h3>
+  <p><code>ggml/src/ggml-hexagon/ggml-hexagon.cpp</code> 暴露了一组 HTP 后端参数，默认值并不适配这个
+  "每帧 15 次极小图提交"的工作负载。其中 <code>GGML_HEXAGON_OPPOLL</code>（默认 0）决定是否<b>忙轮询</b>
+  DSP 队列完成：设为 1 时 <code>dspqueue_read</code> 超时为 0（不睡眠等中断），
+  设 0 时阻塞等待 <code>DSPQUEUE_TIMEOUT</code>。小图高频提交下，阻塞等待的代价被放大：</p>
+  <div class="tableWrap"><table>
+    <tr><th>配置（depth-bench, ms）</th><th class="num">28×1</th><th class="num">14×2</th><th class="num">1×28</th><th>结论</th></tr>
+    <tr><td><b>baseline OPPOLL=1 / NHMX=0</b></td><td class="num"><b>60.6</b></td><td class="num"><b>42.6</b></td><td class="num"><b>26.8</b></td><td>基准</td></tr>
+    <tr><td>OPPOLL=0</td><td class="num">111.3</td><td class="num">69.7</td><td class="num">31.4</td><td>慢 ~1.8×，必须保留</td></tr>
+    <tr><td>NHMX=1</td><td class="num">61.4</td><td class="num">42.8</td><td class="num">26.8</td><td>无差</td></tr>
+    <tr><td>OPBATCH=16 / 64</td><td class="num">76.3 / 64.6</td><td class="num">52.6 / 44.7</td><td class="num">27.1 / 26.7</td><td>更慢</td></tr>
+    <tr><td>OPQUEUE=1 / 2</td><td class="num">60.6 / 61.0</td><td class="num">42.7 / 42.9</td><td class="num">26.7 / 26.7</td><td>无差</td></tr>
+    <tr><td>OPFUSION=0</td><td class="num">64.6</td><td class="num">44.7</td><td class="num">27.1</td><td>略慢（默认 1 正确）</td></tr>
+  </table></div>
+  <p>端到端实测同句 <b>RTF 1.62 → 0.75（2.2×）</b>。更重要的是运维结论：这类"隐式配置"丢了会
+  <b>静默慢一倍</b>，且不会报错。因此项目把 <code>GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1</code>
+  写死进 <code>deploy.sh</code> 的启动环境，而不是靠某次终端里的 <code>export</code>。</p>
+  <div class="callout key"><span class="tagline">可迁移的做法</span>
+    后端旋钮要<b>成表扫描、同轮对照、把赢家固化到部署脚本</b>。
+    单参数调优很容易把噪声当收益；这里连 <code>POWER_MODE / HOSTBUF / NHVX / OPQUEUE 1-32</code> 都扫过，
+    结论落在 ±1% 噪声内，才敢说"当前配置已最优"。
+  </div>
+
+  <h3>5.2 流水线重叠：把 codec 藏在 depth 后面</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 216" role="img" aria-label="depth 与 codec 双线程重叠的时间线">
+        <rect class="dg-panel" x="0" y="0" width="880" height="216" rx="12"/>
+        <text class="dg-ts" x="24" y="24">24 字句（75 帧）两条泳道，墙钟约 4.38 s</text>
+        <text class="dg-t" x="24" y="62">depth 主线程</text>
+        <text class="dg-t" x="24" y="132">codec worker</text>
+        <line class="dg-grid" x1="140" y1="44" x2="820" y2="44"/>
+        <line class="dg-grid" x1="140" y1="114" x2="820" y2="114"/>
+        <rect class="dg-accent" x="140" y="48" width="30" height="26" rx="4"/>
+        <text class="dg-ts" x="140" y="42">prefill 152ms</text>
+        <rect class="dg-bar" x="172" y="48" width="580" height="26" rx="4"/>
+        <text class="dg-t" x="460" y="66" text-anchor="middle" class="dg-t dg-onbar">75 帧 × 48.6 ms ≈ 3.65 s（15 步串行）</text>
+        <rect class="dg-bar3" x="212" y="118" width="470" height="26" rx="4"/>
+        <text class="dg-t" x="447" y="136" text-anchor="middle" class="dg-t dg-onbar">codec ≈ 3.0 s，分块边生成边解码</text>
+        <text class="dg-tacc" x="760" y="66">墙钟只付 depth</text>
+        <text class="dg-ts" x="760" y="136">codec 被隐藏</text>
+        <text class="dg-ts" x="24" y="176">并发代价：DDR / DSP 竞争让 depth 慢 ~20%（35.9 → 42.9 ms/帧）；但 codec 若完全串行要额外 +2.5 s，净收益仍很大。</text>
+        <text class="dg-ts" x="24" y="198">推论：在 depth 提速前，继续优化 codec 不会反映到端到端 RTF —— 优化的是"被隐藏的时间"。</text>
+      </svg>
+    </div>
+    <figcaption>图 5-1　重叠（overlap）是系统工程里最划算的一招：不改变任何计算量，只让两条依赖链并行。判断它是否值得，要比较的是净墙钟，而不是单条泳道的速度。</figcaption>
+  </figure>
+
+  <h3>5.3 分块策略与"固定开销"的第二次出现</h3>
+  <p>codec 是带递归状态的 ONNX 会话，按 chunk 批量解码。chunk 越小首包越早，但每次 ORT Run 有固定开销；
+  于是按请求类型分策略：</p>
+  <div class="grid2">
+    <div class="tile"><b>流式 pcm：first=2, chunk=4</b><p>首包 0.285 s。曾试过 1 帧首块，期望再省一个 depth step，实测<b>首包 0.51 s 反而更慢</b>——codec 单帧调用的固定开销盖过了收益。</p></div>
+    <div class="tile"><b>完整 wav：first=4, chunk=16</b><p>反正听不到过程，大 batch 把 ONNX 调用从 18 次降到 5 次。</p></div>
+    <div class="tile"><b>启动预热</b><p>服务启动后跑一句丢弃模式的短合成，把 backbone prefill、depth 图、ORT kernel 全部热身；首请求首包 0.58 → 0.29 s。启动多花 ~1.5 s，一次付清。</p></div>
+    <div class="tile"><b>WavWriter 三模式</b><p>文件 / 内存 / 丢弃。wav 响应直接在内存拼 RIFF 头，pcm 流式只计数不落盘——去掉白做的磁盘 I/O。</p></div>
+  </div>
+  <div class="callout warn"><span class="tagline">规律</span>
+    "更小的块 = 更低延迟"只在<b>固定开销小</b>时成立。任何带会话初始化、图提交、DMA 的调用都要先量它的固定成本，
+    再决定分块粒度。这与 §3.1 的 <code>F</code> 是同一个概念，只是发生在 codec 层。
+  </div>
+
+  <h3>5.4 prefill 前缀 KV 缓存：一个协议级优化</h3>
+  <p>同一音色的每次请求，prefix 的前半段（控制标记 + caption + 参考文本）完全一样，只有目标文本与参考 codes 后面的部分不同。
+  既然 backbone 是标准 llama.cpp context，就可以<b>保留共享段的 KV，只重算新增部分</b>。</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 252" role="img" aria-label="prefill 前缀 KV 缓存协议：共享段保留，重算余段">
+        <rect class="dg-panel" x="0" y="0" width="880" height="252" rx="12"/>
+        <text class="dg-ts" x="24" y="24">请求 A（第一次）与请求 B（同音色、不同文本）</text>
+        <text class="dg-t" x="24" y="58">prefix 行</text>
+        <rect class="dg-ok" x="120" y="42" width="230" height="30" rx="6"/>
+        <text class="dg-tb" x="235" y="62" text-anchor="middle">共享段 sh：markers + 参考文本</text>
+        <rect class="dg-box" x="352" y="42" width="160" height="30" rx="6"/>
+        <text class="dg-ts" x="432" y="62" text-anchor="middle">本段文本</text>
+        <rect class="dg-box" x="514" y="42" width="180" height="30" rx="6"/>
+        <text class="dg-ts" x="604" y="62" text-anchor="middle">参考音频 codes 行</text>
+
+        <text class="dg-t" x="24" y="106">count == -1 消息</text>
+        <rect class="dg-accent" x="120" y="90" width="574" height="30" rx="6"/>
+        <text class="dg-ts" x="140" y="110">[magic=-1][sh][FNV-1a hash][rs] + sh 行 + rs 行　（父进程 → 子进程管道）</text>
+
+        <text class="dg-t" x="24" y="156">子进程命中</text>
+        <rect class="dg-ok" x="120" y="140" width="230" height="30" rx="6"/>
+        <text class="dg-ts" x="235" y="160" text-anchor="middle">KV 保留 [0, sh)</text>
+        <rect class="dg-accent" x="352" y="140" width="342" height="30" rx="6"/>
+        <text class="dg-ts" x="523" y="160" text-anchor="middle">llama_memory_seq_rm(seq, sh, -1) → 只 decode 余段</text>
+        <path class="dg-flow" d="M694 120 V136"/>
+
+        <text class="dg-ts" x="24" y="200">边界：共享 token 数 − 2（byte-level BPE 会把参考末字与正文首字合并，退 2 个 token 让 hash 只依赖音色）</text>
+        <text class="dg-ts" x="24" y="222">收益：Backbone-S 0.603 s（冷）→ 0.555-0.572 s（命中），约省 45-50 ms/请求；预热后首个请求即命中</text>
+        <text class="dg-ts" x="24" y="242">坑：命中时也<b>必须读掉</b> shared 块字节，否则管道错位、下一条消息头读出垃圾 count，服务崩溃</text>
+      </svg>
+    </div>
+    <figcaption>图 5-2　<code>count == -1</code> 预填充消息与 <code>llama_memory_seq_rm</code>。这是"用框架原生 KV 能力做应用级缓存"的典型范例。</figcaption>
+  </figure>
+  <p>还有两个同类的"别重复做"：<code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，
+  同音色第二次请求起跳过一次 primer ORT Run；<code>voices.json</code> 按 mtime 缓存，避免每请求重读解析。</p>
+
+  <h3>5.5 传输与并发：正确 ≠ 更快</h3>
+  <div class="tableWrap"><table>
+    <tr><th>尝试</th><th>结果</th><th>为什么值得记</th></tr>
+    <tr><td><code>--depth-chain</code>：16 次 pipe 往返 → 1 次</td><td>逐位一致，但慢 1.5%</td><td>证明瓶颈是权重带宽 / 提交开销，不是 IPC 延迟；协议仍保留为未来批量化落点</td></tr>
+    <tr><td><code>m5_ring</code> 共享内存环</td><td>比匿名管道慢</td><td>futex 等待让 HTP 提交路径退化；"零拷贝"不必然更快</td></tr>
+    <tr><td>噪声预生成向量化</td><td>占比 ≤2%，且 JavaRandom 顺序敏感</td><td>收益不足以打破位精确约束；先量占比再决定要不要动</td></tr>
+    <tr><td>跨请求 KV / voice embedding 预计算</td><td>&lt;2 ms</td><td>文本不同无法复用；小项不值得增加复杂度</td></tr>
+    <tr><td>并发改造 <code>render_mutex</code></td><td>单用户场景无收益</td><td>优化要匹配真实负载，别为假想流量设计</td></tr>
+  </table></div>
+
+  <h3>5.6 全量卡片：每一个优化尝试</h3>
+  <div class="filters">
+    <button class="miniBtn on" data-filter="all">全部</button>
+    <button class="miniBtn" data-filter="ok">✅ 已上线</button>
+    <button class="miniBtn" data-filter="no">❌ 实测排除</button>
+    <button class="miniBtn" data-filter="wait">🔬 待研究</button>
+  </div>
+  <div class="cards" id="optCards">
+    <div class="optCard" data-status="ok"><div class="hd"><b>HTP env 固化</b><span class="badge ok">2.2×</span></div><div class="metric">RTF 1.62 → 0.75</div><p>OPPOLL=1 / NHMX=0 写进 deploy.sh，避免隐式配置丢失。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>codec 三步量化 + Snake 融合</b><span class="badge ok">上线</span></div><div class="metric">RTF 0.898 → 0.837 · 362→141 MB</div><p>减扫描次数，融合 Sin 单遍多项式。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>f16 heads（含宏事故修复）</b><span class="badge ok">-16%/帧</span></div><div class="metric">57.3 → 48.3 ms/帧</div><p>用反汇编验证编译期优化真的生效。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>heads int8</b><span class="badge ok">2.5×</span></div><div class="metric">RTF 0.86 → 0.75（-13%）</div><p>带宽瓶颈；混沌分叉但 ASR 干净。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>ORT 线程 = 3</b><span class="badge ok">定值</span></div><div class="metric">2/3/4 = 3.56/2.84/3.20 s</div><p>线程数不是越多越好。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>按请求 chunk 策略</b><span class="badge ok">上线</span></div><div class="metric">wav 4/16 · pcm 2/4</div><p>首包 0.285 s；wav ONNX 调用 18→5。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>WavWriter 三模式</b><span class="badge ok">上线</span></div><div class="metric">零磁盘 I/O</div><p>内存拼 wav、流式只计数。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>deploy.sh 一键部署</b><span class="badge ok">运维</span></div><div class="metric">env 固化 + 模型备份</div><p>设备重启后一条命令恢复。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>启动预热</b><span class="badge ok">上线</span></div><div class="metric">首包 0.58 → 0.285 s</div><p>丢弃模式合成一句，一次付清冷启动。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>prefill 前缀 KV 缓存</b><span class="badge ok">上线</span></div><div class="metric">省 45-50 ms/请求</div><p>-1 协议 + seq_rm + BPE 边界 −2。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>X-M5 分项头 + /metrics</b><span class="badge ok">可观测</span></div><div class="metric">JSON + Prometheus</div><p>流式路径的唯一权威统计来源。</p></div>
+    <div class="optCard" data-status="ok"><div class="hd"><b>工程小项集合</b><span class="badge ok">上线</span></div><div class="metric">mtime 缓存 / CORS / 错误处理</div><p>voices.json、Expose-Headers、pcm 预校验。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>depth 15 步批量化（六路径）</b><span class="badge no">排除</span></div><div class="metric">理论 2.1×，实际不可达</div><p>transform 依赖 99.6% 翻转；帧间相关 1.5%。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>HTP 旋钮 sweep</b><span class="badge no">已最优</span></div><div class="metric">OPPOLL 之外无增益</div><p>OPBATCH 更慢、OPQUEUE 无差。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>backbone Q4_0</b><span class="badge no">否决</span></div><div class="metric">快 21% 但音频短 16%</div><p>人耳抓到韵律漂移 → 保持 Q8。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>depth 换更低量化</b><span class="badge no">排除</span></div><div class="metric">Q8→Q4 只快 9%</div><p>证明非带宽瓶颈。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>m5_ring 共享内存</b><span class="badge no">更慢</span></div><div class="metric">futex 等待</div><p>零拷贝不等于低延迟。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>噪声向量化 / 跨请求 KV</b><span class="badge no">收益 &lt;2%</span></div><div class="metric">位精确约束 / &lt;2 ms</div><p>先量占比，再决定复杂度。</p></div>
+    <div class="optCard" data-status="wait"><div class="hd"><b>学习型草稿</b><span class="badge wait">唯一大杠杆</span></div><div class="metric">depth 2.1× → RTF ~0.55</div><p>需训练 code[b]←(hidden, code[b-1]) 映射器 + 批量 verify。</p></div>
+    <div class="optCard" data-status="wait"><div class="hd"><b>重训 depth 头</b><span class="badge wait">需训练</span></div><div class="metric">一次前向出多 book</div><p>从根上移除串行依赖。</p></div>
+    <div class="optCard" data-status="wait"><div class="hd"><b>heads int4 / codec 权重 int8 快路径</b><span class="badge wait">候选</span></div><div class="metric">流量再减半</div><p>门禁同 int8；depth 提速后 codec 才会浮出水面。</p></div>
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch5">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 6 ============ -->
+<section class="chapter" id="ch6" data-title="抽象成通用方法">
+  <div class="chapHead"><span class="idx">06</span><h2>从案例到方法论：llama.cpp 推理加速通用套路</h2></div>
+  <p class="subtitle">把上面 20 多次尝试压缩成一张可以带到别的项目里的检查表。</p>
+
+  <h3>6.1 八个杠杆，按"先问什么"排序</h3>
+  <div class="tableWrap"><table>
+    <tr><th>#</th><th>杠杆</th><th>先问的问题</th><th>llama.cpp / 后端对应</th><th>M5 案例</th></tr>
+    <tr><td>1</td><td>可观测性</td><td>我量的是哪个口径？分项在哪？</td><td><code>llama_perf_context_print</code>、自定义 timers / headers</td><td>X-M5-* + /metrics</td></tr>
+    <tr><td>2</td><td>prefill / decode 分离</td><td>固定成本与每 token 成本各多少？</td><td><code>n_batch / n_ubatch</code>、prompt 复用</td><td>线性拟合 152 ms + 48.6 ms/帧</td></tr>
+    <tr><td>3</td><td>KV 复用</td><td>有没有跨请求/跨段共享前缀？</td><td><code>llama_memory_seq_rm</code>、prefix cache、<code>seq_id</code></td><td>count == -1 协议</td></tr>
+    <tr><td>4</td><td>批处理 / 提交合并</td><td>依赖是否允许？F 有多大？</td><td><code>llama_batch.n_tokens</code>、ubatch、continuous batching</td><td>depth-bench 15→1（被依赖否决）</td></tr>
+    <tr><td>5</td><td>量化 / 权重布局</td><td>是不是带宽瓶颈？</td><td>GGUF <code>Q4_0/Q8_0</code>、<code>llama-quantize</code>、f16/f32 KV</td><td>heads int8 生效、backbone Q4 否决</td></tr>
+    <tr><td>6</td><td>算子融合 / 后端旋钮</td><td>扫描次数与提交次数能否减少？</td><td>ggml graph fusion、backend env、flash attention</td><td>Snake 融合、OPPOLL=1</td></tr>
+    <tr><td>7</td><td>异步重叠</td><td>哪两条链互不依赖？</td><td>多 stream / async、pipeline parallel</td><td>codec worker 藏在 depth 后</td></tr>
+    <tr><td>8</td><td>冷启动 / I/O / 状态</td><td>首请求为什么慢？状态能留吗？</td><td>model warmup、mmap、session 复用</td><td>预热、restore_prime、WavWriter 内存模式</td></tr>
+  </table></div>
+
+  <h3>6.2 llama.cpp 的旋钮怎么映射到本案例</h3>
+  <pre><span class="cm"># 通用 llama.cpp 参数 → 在 M5 里的对应物</span>
+n_ctx / n_batch / n_ubatch   →  <span class="kw">backbone.cpp</span> n_ctx=2048（depth=256）, n_batch=n_ubatch=prefix
+type_k / type_v              →  GGML_TYPE_F32（depth 图小，KV 非瓶颈，不为省内存冒险）
+embeddings=true, pooling=NONE→  需要 llama_get_embeddings_ith(ctx, -1) 取 hidden
+llama_batch.embd             →  自定义 512 维输入，绕开 token id 与 lm_head
+llama_memory_seq_rm          →  前缀 KV 缓存命中时保留 [0, sh)
+GGUF Q8_0 / Q4_0            →  backbone / depth 权重；host 用 llama-quantize 转
+ggml_backend_load_all        →  选择 HTP0（shell 域）或 CPU（App 域）
+GGML_HEXAGON_*               →  DSP 提交/轮询/融合策略，按工作负载扫参</pre>
+  <p>可以看到一条很实用的"借壳"路径：<b>把自定义模型的权重导成 GGUF、把自定义输入塞进 <code>llama_batch.embd</code>，
+  就能复用 llama.cpp 的 KV cache、后端调度、量化与图优化</b>；只有采样头和辅助模块留在外面自己写。
+  这比从头写一套推理引擎便宜得多，代价是必须遵守框架对 <code>n_embd</code>、batch、位置编码的约定。</p>
+
+  <h3>6.3 性能问题诊断模板（可直接抄）</h3>
+  <ol>
+    <li><b>锁定口径</b>：固定输入、固定种子、设备冷却到同一状态；记录 RTF、墙钟、首包、帧数。</li>
+    <li><b>画泳道</b>：把 prefill / 主 decode / 辅助解码 / I/O 画在时间线上，标出哪些重叠、哪些串行。</li>
+    <li><b>拟合</b>：<code>T(N) = 截距 + 斜率 × N</code>；截距归冷启动，斜率归热路径。</li>
+    <li><b>分类瓶颈</b>：改字节数（带宽）、改调用次数（提交）、改并发（竞争）、改输入长度（依赖），一次只动一个变量。</li>
+    <li><b>算天花板</b>：该环节占墙钟百分之几 × 最多提速几倍。占比 &lt;10% 的环节先别碰。</li>
+    <li><b>做 A/B</b>：同轮交替、至少两轮；把负结果和复活条件一起写进文档。</li>
+    <li><b>过门禁</b>：数值正确性 → 生成分布 → 语义/感知 → 必要时人耳/人眼。</li>
+    <li><b>固化</b>：把赢下来的配置写进部署脚本与监控，防止下次重启静默回退。</li>
+  </ol>
+
+  <h3>6.4 五个反模式</h3>
+  <div class="grid2">
+    <div class="tile"><b>看构建日志判断优化生效</b><p>宏名不匹配让 f16 成了死代码；要以产物为准。</p></div>
+    <div class="tile"><b>跨轮比较绝对值</b><p>热漂移能让同代码 RTF 0.75→0.91。</p></div>
+    <div class="tile"><b>把 ASR 正确当音质正确</b><p>Q4 韵律漂移，只有试听能发现。</p></div>
+    <div class="tile"><b>盲目批处理 / 盲目换后端</b><p>依赖不允许时，批量只会毁输出；ring 比 pipe 慢。</p></div>
+    <div class="tile"><b>优化被隐藏的时间</b><p>codec 被 depth 重叠盖住，压缩它当时不改善 RTF。</p></div>
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch6">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 7 ============ -->
+<section class="chapter" id="ch7" data-title="音色怎么学会的：Qwen3-TTS">
+  <div class="chapHead"><span class="idx">07</span><h2>音色是怎么"学"来的：从 Qwen3-TTS 到 M5</h2></div>
+  <p class="subtitle">这一章回答一个特别容易误解的问题：换音色到底有没有训练？</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能复述本仓库里 <code>serena</code> 音色从 Qwen3-TTS 迁移到 M5 的完整链路</li>
+    <li>理解离散多码本 token 为什么能承载说话人身份</li>
+    <li>区分零样本克隆的两条机制（speaker embedding / in-context learning）</li>
+    <li>知道 Qwen3-TTS 的双轨 + MTP 架构，以及 llama.cpp 里的落地方式</li>
+  </ul></div>
+
+  <h3>7.1 先澄清：仓库里有两条独立的 TTS 线</h3>
+  <div class="grid2">
+    <div class="tile"><b>① examples/m5-tts（本教程主角）</b><p>Android/HTP 移植的 M5 引擎。运行时<b>只用自身的 codec codes</b>，conditioning 用 <code>&lt;|caption_begin|&gt;…</code> 系列标记。Qwen 只出现在<b>离线生成参考 WAV</b> 的脚本里。</p></div>
+    <div class="tile"><b>② tools/tts + src/models/qwen3tts（llama.cpp 原生）</b><p><code>llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF</code>，经 libmtmd 跑完整 Qwen3-TTS，用 ChatML wrap 与 <code>&lt;|codec_*|&gt;</code> 特殊 token。</p></div>
+  </div>
+  <p>用户问的"TTS 怎么学 Qwen3-TTS 的音色"，在这个项目里指的是第 ① 条线：
+  <b>用 Qwen3-TTS 的 CustomVoice 预设音色 Serena 合成一句参考音频，再把这段音频转换成 M5 能理解的 codec codes，
+  作为"示范"写进 M5 的 prompt</b>。下面把这条链路拆开。</p>
+
+  <h3>7.2 Serena 的诞生：五步，零梯度</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 272" role="img" aria-label="Qwen3-TTS 生成参考音频，经 codec encoder 变为 codes 存入 voices.json，M5 运行时只读取 codes">
+        <rect class="dg-panel" x="0" y="0" width="880" height="272" rx="12"/>
+        <text class="dg-ts" x="24" y="24">离线阶段（在 PC / Python 环境，一次完成）</text>
+        <g>
+          <rect class="dg-accent2" x="24" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="100" y="62" text-anchor="middle">Qwen3-TTS</text>
+          <text class="dg-ts" x="100" y="80" text-anchor="middle">CustomVoice · Serena</text>
+          <text class="dg-ts" x="100" y="95" text-anchor="middle">0.6B / 1.7B</text>
+          <rect class="dg-box" x="200" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="276" y="62" text-anchor="middle">参考 WAV</text>
+          <text class="dg-ts" x="276" y="80" text-anchor="middle">"下过雨的早晨…"</text>
+          <text class="dg-ts" x="276" y="95" text-anchor="middle">+ 逐字转写 .txt</text>
+          <rect class="dg-box" x="376" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="452" y="62" text-anchor="middle">clone_voice.py</text>
+          <text class="dg-ts" x="452" y="80" text-anchor="middle">24 kHz / 归一化</text>
+          <text class="dg-ts" x="452" y="95" text-anchor="middle">静音切分</text>
+          <rect class="dg-ok" x="552" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="628" y="62" text-anchor="middle">codec_encoder.onnx</text>
+          <text class="dg-ts" x="628" y="80" text-anchor="middle">audio[1,T] → codes[1,16,F]</text>
+          <text class="dg-ts" x="628" y="95" text-anchor="middle">65 帧 × 16 book</text>
+          <rect class="dg-box" x="728" y="38" width="128" height="66" rx="9"/>
+          <text class="dg-tb" x="792" y="62" text-anchor="middle">voices.json</text>
+          <text class="dg-ts" x="792" y="80" text-anchor="middle">name: serena</text>
+          <text class="dg-ts" x="792" y="95" text-anchor="middle">reference_text</text>
+          <path class="dg-flow" d="M176 71 H198"/><path class="dg-flow" d="M352 71 H374"/>
+          <path class="dg-flow" d="M528 71 H550"/><path class="dg-flow" d="M704 71 H726"/>
+        </g>
+        <text class="dg-ts" x="24" y="136">在线阶段（设备端 m5-server，每次请求）</text>
+        <g>
+          <rect class="dg-box" x="24" y="150" width="180" height="60" rx="9"/>
+          <text class="dg-tb" x="114" y="174" text-anchor="middle">用户文本 + voice=serena</text>
+          <text class="dg-ts" x="114" y="193" text-anchor="middle">POST /v1/audio/speech</text>
+          <rect class="dg-accent" x="228" y="150" width="230" height="60" rx="9"/>
+          <text class="dg-tb" x="343" y="174" text-anchor="middle">conditioning 前缀</text>
+          <text class="dg-ts" x="343" y="193" text-anchor="middle">参考文本 + 目标文本 + codes 行</text>
+          <rect class="dg-ok" x="482" y="150" width="180" height="60" rx="9"/>
+          <text class="dg-tb" x="572" y="174" text-anchor="middle">M5 自回归续写</text>
+          <text class="dg-ts" x="572" y="193" text-anchor="middle">backbone + depth + codec</text>
+          <rect class="dg-box" x="686" y="150" width="170" height="60" rx="9"/>
+          <text class="dg-tb" x="771" y="174" text-anchor="middle">Serena 音色的语音</text>
+          <text class="dg-ts" x="771" y="193" text-anchor="middle">任意新文本</text>
+          <path class="dg-flow" d="M204 180 H226"/><path class="dg-flow" d="M458 180 H480"/>
+          <path class="dg-flow" d="M662 180 H684"/>
+        </g>
+        <text class="dg-tacc" x="24" y="238">关键：M5 运行时不加载 Qwen、不做微调、不更新任何权重 —— "学会"的是 prompt 里的示范，不是模型参数。</text>
+        <text class="dg-ts" x="24" y="260">generate_qwen_reference.py --speaker Serena --seed 1234  ·  clone_voice.py ref.wav "$(cat ref.txt)" --name serena</text>
+      </svg>
+    </div>
+    <figcaption>图 7-1　Serena 音色的迁移链路。训练只发生在 Qwen3-TTS 自己被训练时；跨模型迁移靠的是<b>共同可表示的离散音频 token</b>，是一次纯推理时的 in-context 迁移。</figcaption>
+  </figure>
+
+  <h3>7.3 为什么一堆整数 codes 能带音色</h3>
+  <p>神经音频 codec（如 RVQ / 多码本量化）把波形压成 <code>[帧, 码本层]</code> 的整数序列。
+  M5 与 Qwen3-TTS-12Hz 都是 <b>12.5 Hz、16 层码本</b> 的设定；Qwen3-TTS 技术报告明确：
+  第一层码本偏向语义内容，后续层逐层补充声学细节（音色、气息、环境、韵律），
+  因此容量足够用轻量级因果 ConvNet 直接重建波形，<b>不需要单独抽取说话人向量，也不需要扩散模型</b>。</p>
+  <div class="grid2">
+    <div class="tile"><b>离散化带来的好处</b><p>说话人身份被编码成 token 序列后，语言模型可以像处理文本一样"读"它；于是音色变成了上下文，而不是某个需要注入的向量。</p></div>
+    <div class="tile"><b>为什么必须带逐字转写</b><p>M5 的 prompt 里参考文本与 codes 是配套的：模型需要知道这段声音"说的是哪句话"，才能把音色与内容解耦，续写新文本时沿用前者、替换后者。</p></div>
+    <div class="tile"><b>为什么 3-30 秒就够</b><p>零样本克隆不更新权重，只需要足够覆盖音素与韵律的上下文。本项目的 serena 参考约 65 帧（≈5.2 s），服务端上限 375 帧（30 s）。</p></div>
+    <div class="tile"><b>情感也在这里</b><p>语气、语速、停顿同样留在 codes 里。所以"换一段带情绪的参考音频"比写 caption 更可靠（见 §7.7）。</p></div>
+  </div>
+
+  <h3>7.4 零样本克隆的两条机制</h3>
+  <div class="tableWrap"><table>
+    <tr><th>机制</th><th>做法</th><th>优点</th><th>局限</th><th>本案例</th></tr>
+    <tr><td><b>Speaker embedding</b></td><td>说话人编码器把参考音频压成固定维向量，注入 LM 的每一步</td><td>实时、与文本无关、便于跨语言</td><td>容易丢韵律细节；需要联合训练编码器</td><td>Qwen3-TTS 的实时克隆路径；llama.cpp 里映射为 mtmd audio encoder</td></tr>
+    <tr><td><b>Text–speech pair / in-context</b></td><td>把「参考文本 + 参考音频 codes」直接拼进 prompt，让模型续写</td><td><b>更好地保留韵律</b>；无需额外编码器</td><td>占上下文长度；依赖 tokenizer 与训练格式</td><td><b>M5 走这条</b>：voices.json 里的 codes 作为前缀行</td></tr>
+  </table></div>
+  <div class="callout key"><span class="tagline">一句话回答"怎么学的"</span>
+    没有梯度下降、没有 LoRA、没有微调。Qwen3-TTS 生成的一段音频被<b>重新编码成 M5 自己词表里的离散 token</b>，
+    作为 few-shot 示范放在 prompt 前面；M5 在自回归续写时把这段示范的统计特征（音色、语速、韵律）延续下去。
+    这在机器学习里叫 <b>in-context learning（上下文学习）</b>，是推理时行为，不是训练时行为。
+  </div>
+
+  <h3>7.5 Qwen3-TTS 本身：为什么能 97 ms 出第一个音包</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 240" role="img" aria-label="Qwen3-TTS 双轨自回归与 16 码本 MTP 架构">
+        <rect class="dg-panel" x="0" y="0" width="880" height="240" rx="12"/>
+        <text class="dg-ts" x="24" y="24">Qwen3-TTS-12Hz：dual-track LM + MTP（Multi-Token Prediction）</text>
+        <rect class="dg-box" x="24" y="40" width="160" height="52" rx="9"/>
+        <text class="dg-tb" x="104" y="62" text-anchor="middle">文本 token 流</text>
+        <text class="dg-ts" x="104" y="80" text-anchor="middle">Qwen tokenizer</text>
+        <rect class="dg-accent2" x="24" y="108" width="160" height="52" rx="9"/>
+        <text class="dg-tb" x="104" y="130" text-anchor="middle">说话人 / 参考</text>
+        <text class="dg-ts" x="104" y="148" text-anchor="middle">speaker encoder / ICL</text>
+        <rect class="dg-accent" x="216" y="60" width="180" height="80" rx="10"/>
+        <text class="dg-tb" x="306" y="88" text-anchor="middle">Dual-Track LM</text>
+        <text class="dg-ts" x="306" y="108" text-anchor="middle">收到 1 个文本 token 即预测声学帧</text>
+        <text class="dg-ts" x="306" y="126" text-anchor="middle">文本轨与声学轨并行</text>
+        <rect class="dg-ok" x="428" y="60" width="180" height="80" rx="10"/>
+        <text class="dg-tb" x="518" y="84" text-anchor="middle">backbone → codec_0</text>
+        <text class="dg-ts" x="518" y="104" text-anchor="middle">MTP → 其余 15 个残差码本</text>
+        <text class="dg-ts" x="518" y="124" text-anchor="middle">单帧一次出齐，避免 16 步串行</text>
+        <rect class="dg-box" x="640" y="60" width="216" height="80" rx="10"/>
+        <text class="dg-tb" x="748" y="84" text-anchor="middle">Code2Wav（因果 ConvNet）</text>
+        <text class="dg-ts" x="748" y="104" text-anchor="middle">轻量、只看左侧上下文</text>
+        <text class="dg-ts" x="748" y="124" text-anchor="middle">首个 codec 帧即可出声</text>
+        <path class="dg-flow" d="M184 66 H214"/><path class="dg-flow" d="M184 134 H214"/>
+        <path class="dg-flow" d="M396 100 H426"/><path class="dg-flow" d="M608 100 H638"/>
+        <text class="dg-ts" x="24" y="192">Tokenizer-12Hz = 12.5 Hz × 16 层多码本；第一层语义、其余声学 → 可省略 speaker vector 与扩散解码</text>
+        <text class="dg-ts" x="24" y="214">首包延迟 97 ms（0.6B）/ 101 ms（1.7B）；训练数据 &gt;500 万小时、10 种语言；VoiceDesign 用自然语言描述创造新音色</text>
+      </svg>
+    </div>
+    <figcaption>图 7-2　对照 M5 看很有意思：Qwen3-TTS 用 <b>MTP 模块一次预测 15 个残差码本</b>，从架构上绕开了本教程 §3 里那个 15 步串行地狱——这是"训练侧改架构"与"推理侧硬优化"的分野。</figcaption>
+  </figure>
+
+  <h3>7.6 llama.cpp 怎么把 Qwen3-TTS 塞进现有框架</h3>
+  <p>仓库的 <code>conversion/qwen3tts.py</code> 与 <code>tools/mtmd/mtmd-helper-gen.cpp</code> 展示了一组很聪明的映射：</p>
+  <div class="tableWrap"><table>
+    <tr><th>Qwen3-TTS 组件</th><th>映射到 llama.cpp</th><th>关键技巧</th></tr>
+    <tr><td>codec token</td><td>扩展词表，追加 <code>&lt;|codec_0|&gt;…&lt;|codec_1023|&gt;</code>、<code>&lt;|codec_bos|&gt;</code>(2149)、<code>&lt;|codec_eos_token|&gt;</code>(2150)、<code>&lt;|codec_language_chinese|&gt;</code>(2055)</td><td>把音频码字当成"词"，复用 embedding 表</td></tr>
+    <tr><td>text projection MLP</td><td>折进 embedding 表</td><td>减少一层计算，保持标准 decode 路径</td></tr>
+    <tr><td>codec_head</td><td>输出张量比词表小，推理时 pad logits</td><td>兼容 llama.cpp 的 logits 布局</td></tr>
+    <tr><td>speaker reference encoder</td><td>mtmd audio encoder</td><td>复用多模态音频编码通路</td></tr>
+    <tr><td>backbone</td><td>标准 libllama 自回归文本模型</td><td>采样时 <code>suppress_tokens</code> 限制只出语义码本或 EOS</td></tr>
+    <tr><td>code_predictor / code2wav</td><td><code>MTMD_GEN_PROCESS_TYPE_GEN_CODE</code> / <code>GEN_WAV</code></td><td>把"预测其余 15 码本"和"解码波形"作为生成流水线的两个阶段</td></tr>
+    <tr><td>输入格式</td><td>ChatML wrap + <code>sum_row()</code> 把文本 embedding 与 codec/speaker embedding 相加</td><td><code>&lt;|im_start|&gt;assistant\n…&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n</code> 后切片</td></tr>
+  </table></div>
+  <p>把这张表和 §1.3 并排看，就是本教程最想让你体会的一点：
+  <b>llama.cpp 不关心你的 token 是字还是声音，它只关心 embedding 行、位置、序列 id 与计算图</b>。
+  M5 与 Qwen3-TTS 两条实现，一个用 <code>llama_batch.embd</code> 直接注入，一个把音频码字扩进词表——
+  两条不同的"借壳"路线，共享同一套 KV / 后端 / 量化基础设施。</p>
+
+  <h3>7.7 情感控制为什么难：一个弱训练槽的案例</h3>
+  <p>M5 的 conditioning 里有 <code>&lt;|caption_begin|&gt;…&lt;|caption_end|&gt;</code> 风格槽，但官方推理把它硬编码为空。
+  项目做过 7 档 caption（NONE / happy / sad / angry / gentle / 开心 / 悲伤）× 同句同种子，再用 4 个种子做噪声基线：</p>
+  <div class="tableWrap"><table>
+    <tr><th>路径</th><th>实测证据</th><th>难度</th></tr>
+    <tr><td>caption 风格槽</td><td>非空 caption 让时长 +0~42%，但 F0 / 能量变化落在种子噪声 ±8% 内 → 弱训练槽，无可靠语义情感控制</td><td>接线低，效果不可靠</td></tr>
+    <tr><td>情感参考音频克隆</td><td>codes 强烈迁移音色与韵律；录一段带目标情绪的参考即可</td><td><b>低</b>，但情感与音色绑定</td></tr>
+    <tr><td>DSP 后处理</td><td>变调 / 变速 / EQ 可预测但机械</td><td>低</td></tr>
+    <tr><td>训练侧（情感标注 CPT / SFT）</td><td>模型卡注明改动 delimiter 需要继续预训练；稀疏训练导致 caption 无效</td><td><b>高</b></td></tr>
+  </table></div>
+  <div class="callout warn"><span class="tagline">实验纪律</span>
+    种子带来的 F0 采样噪声本身就有 ±8%，所以任何 &lt;10% 的"情感差异"都不可信——
+    <b>验证情感/风格效果必须多种子平均</b>。这与 §2.1 的热漂移是同一类问题：先量噪声底，再谈信号。
+    相比之下 Qwen3-TTS 的 VoiceDesign 变体是专门用自然语言描述 + instruction 训练过的，属于"训练侧把槽位填满"。
+  </div>
+
+  <h3>7.8 想自己做一个音色？五步 recipe</h3>
+  <pre><span class="cm"># 1) 用 Qwen3-TTS 生成参考音频与逐字稿（离线，PC / Python 3.12）</span>
+python generate_qwen_reference.py serena.wav --speaker Serena
+<span class="cm">#    可换 --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --instruct '语气轻柔温暖…'</span>
+
+<span class="cm"># 2) 检查 WAV 内容与 .txt 逐字一致（不一致要手工改稿）</span>
+
+<span class="cm"># 3) 用与部署模型配套的 encoder 转成 codes（16 book × T 帧，值域 0..2047）</span>
+python clone_voice.py serena.wav "$(cat serena.txt)" --name serena --voices model/voices.json
+
+<span class="cm"># 4) 部署到设备，服务端只在 /v1/voices 里看到 name + reference_text + codes</span>
+./deploy.sh
+
+<span class="cm"># 5) 用一句与参考不同的文本试听，验证音色迁移而非内容复述</span>
+curl -s -X POST localhost:18080/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"明天下午的会议需要准备哪些材料呢？","voice":"serena","response_format":"wav"}' -o out.wav</pre>
+  <p>Web 控制台里也可以直接录音克隆：<code>/v1/voices/encode</code> 跑 <code>codec_encoder.onnx</code>
+  返回 codes，但<b>只保存在浏览器 localStorage</b>，服务端不落盘——这正是"零样本克隆不需要训练"的另一个体现：
+  换一段参考音频，只是换一段 prompt。</p>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch7">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 8 ============ -->
+<section class="chapter" id="ch8" data-title="实验手册与思考题">
+  <div class="chapHead"><span class="idx">08</span><h2>实验手册、思考题与术语表</h2></div>
+  <p class="subtitle">把教程变成可复现的动作。</p>
+
+  <h3>8.1 命令速查</h3>
+  <pre><span class="cm"># 端到端 / 分项统计</span>
+curl -s -D - -o out.wav -X POST 127.0.0.1:18080/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"今天天气不错，我们一起去公园散步吧。","voice":"serena","response_format":"wav"}' \
+  | grep -i x-m5
+curl -s '127.0.0.1:18080/metrics?format=prometheus' | grep m5_p50
+
+<span class="cm"># 微基准：depth 提交成本模型</span>
+adb shell 'cd /data/local/tmp/llama-m5-htp-v73 &amp;&amp; \
+  LD_LIBRARY_PATH=$PWD ADSP_LIBRARY_PATH=$PWD GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1 \
+  ./depth-bench depth-Q4_0.gguf HTP0 7'
+
+<span class="cm"># 依赖消融 / codes 逐帧 dump / heads 分项</span>
+M5_ZERO_TRANSFORM=1 ./m5-engine model --text "…" --voice 0 --out /tmp/a.wav
+./m5-engine model --text "…" --voice 0 --dump-codes /tmp/a.codes --out /tmp/a.wav
+M5_HEAD_STATS=1 ./m5-engine model --text "…" --voice 0 --out /tmp/a.wav
+
+<span class="cm"># 量化 A/B（同轮交替，避免热漂移）</span>
+for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
+./llama-quantize --allow-requantize backbone-Q8_0.gguf backbone-Q4_0.gguf Q4_0
+
+<span class="cm"># 一键部署（固定 env、推二进制/控制台、预热、forward）</span>
+./deploy.sh</pre>
+
+  <h3>8.2 思考题（先自己算，再展开）</h3>
+  <details class="qa"><summary>Q1　为什么 7 字句 RTF 0.918 而 24 字句 0.742？这算优化成功吗？</summary>
+    <div class="answer"><b>不算。</b>同一份代码，只是固定成本被摊薄。用 <code>T(N)=截距+斜率×N</code> 拟合：截距 ≈152 ms（prefill / 图初始化 / codec prime），斜率 ≈54.7 ms/帧（backbone 6.1 + depth 48.6，codec 被重叠）。
+    短句 23 帧摊 152 ms 固定开销，每帧多背 6.6 ms；长句 75 帧只多 2 ms。所以看性能必须固定输入长度，或同时报告截距与斜率。</div></details>
+  <details class="qa"><summary>Q2　depth 权重从 21 MB 降到 10.7 MB 只快 9%，你能推出什么？若改成 heads 权重减半呢？</summary>
+    <div class="answer">若瓶颈是权重带宽，字节数减半应接近 2×；只有 9% 说明 <b>depth 是提交开销 / 计算主导</b>，继续降位量化没有意义。
+    而 heads 每帧流式读 34 MB、耗时 13.4 ms ≈ 2.5 GB/s，符合带宽特征；f16→int8 减半后 heads_s 0.94→0.38 s（2.5×），验证了判别。<b>同一个动作效果相反，因为瓶颈类型不同。</b></div></details>
+  <details class="qa"><summary>Q3　流式首块从 2 帧改成 1 帧，为什么首包反而从 0.285 s 涨到 0.51 s？</summary>
+    <div class="answer">少了一个 depth step 省下的时间，小于 codec 多一次 ORT Run 的固定开销 + 该会话的调度/状态准备成本。
+    这是 §3.1 的 <code>F</code> 在 codec 层的翻版：<b>分块越碎，固定成本占比越高</b>。结论是维持 2 帧，并把"1 帧更慢"写进代码注释防止后人重试。</div></details>
+  <details class="qa"><summary>Q4　int8 让 codes 翻转 90%，为什么还能上线？什么情况下你必须否决一个量化？</summary>
+    <div class="answer">首帧 0/16 翻转证明没有系统性数值误差；之后是 <code>next_hidden</code> 反馈放大 1-ulp 差异造成的混沌分叉，等价换随机种子。
+    门禁看 ASR（语义）、音频统计族（分布）、模式内确定性 0% 翻转、人耳。
+    <b>否决条件</b>是感知层面的系统性偏移：backbone Q4 让音频短 16%、语速变快，ASR 全对也不行；或 codec 激活×激活量化掉 1.3 dB。</div></details>
+  <details class="qa"><summary>Q5　"用 Qwen3-TTS 的音色"这句话里，梯度更新发生在哪里？</summary>
+    <div class="answer"><b>迁移过程里一次都没有。</b>Qwen3-TTS 自己的音色能力来自它预训练 / 后训练（含 speaker fine-tuning）时学到的映射；
+    M5 只是把 Qwen 生成的一段音频重新编码成自己词表里的 codec codes，作为 prompt 前缀做 in-context learning。
+    运行时既不加载 Qwen 也不更新权重。真正"把槽位训练出来"的例子是 Qwen3-TTS 的 VoiceDesign（自然语言描述控制），
+    M5 的 caption 槽因训练稀疏而弱——这正是"槽位存在 ≠ 槽位可用"。</div></details>
+  <details class="qa"><summary>Q6　如果让你继续把 RTF 从 0.75 往下压，下一步做什么？</summary>
+    <div class="answer">先算天花板：depth 占 83%，其余环节全砍掉也只有 ~17%。而六条精确压缩路径已被排除，
+    所以只剩<b>改变依赖结构</b>：训练学习型草稿（code[b]←(hidden, code[b-1])）做批量 verify，或重训 depth 头一次出多 book，理论 2.1×。
+    其次等 depth 降下来后，codec 的 3.0 s 才会从 overlap 里浮出成为新瓶颈，那时再做 codec 权重快路径 / int4 heads。
+    不建议先动被隐藏的 codec，也不建议为单用户场景改并发。</div></details>
+
+  <h3>8.3 术语表</h3>
+  <div class="tableWrap"><table>
+    <tr><th>术语</th><th>在本项目里的含义</th></tr>
+    <tr><td>RTF</td><td>Real-Time Factor = 生成耗时 / 音频时长；&lt;1 表示快于实时</td></tr>
+    <tr><td>frame / hop</td><td>一帧 = 1920 samples @24 kHz = 80 ms；12.5 fps</td></tr>
+    <tr><td>codebook / book</td><td>每帧 16 个离散码本索引，词表 2051（含 EOS）；M5 的 book 链必须串行采样</td></tr>
+    <tr><td>prefill / decode</td><td>一次性处理 conditioning 序列 / 逐帧（逐 token）自回归生成</td></tr>
+    <tr><td>KV cache</td><td>llama.cpp 保存的注意力历史；<code>llama_memory_seq_rm</code> 可保留指定前缀</td></tr>
+    <tr><td>Gumbel-style 采样</td><td><code>argmax(prob / -log(1-u))</code>，配合 T=0.9 与 top-k 10；随机数顺序敏感</td></tr>
+    <tr><td>overlap</td><td>codec worker 与 depth 主线程并发，隐藏 codec 墙钟</td></tr>
+    <tr><td>primer / restore_prime</td><td>参考 codes 最后 8 帧用于推进 codec 递归状态，可在同音色请求间复用</td></tr>
+    <tr><td>zero-shot voice clone</td><td>不更新权重，靠参考音频的 speaker embedding 或 text–speech pair 上下文迁移音色</td></tr>
+    <tr><td>MTP</td><td>Multi-Token Prediction：Qwen3-TTS 一次生成 15 个残差码本，避开 16 步串行</td></tr>
+    <tr><td>dual-track</td><td>Qwen3-TTS 文本轨与声学轨并行自回归，收到文本即刻出声学帧</td></tr>
+  </table></div>
+
+  <h3>8.4 延伸阅读</h3>
+  <ul>
+    <li><code>docs/backend/snapdragon/m5-tts-optimization-log.md</code> —— 本教程的数据主台账（含负结果与复活条件）</li>
+    <li><code>docs/backend/snapdragon/m5-tts-port-notes.md</code> —— 按时间线的完整实验日志</li>
+    <li><code>examples/m5-tts/m5_engine.cpp</code> / <code>m5_depth_heads.h</code> / <code>backbone.cpp</code> —— 流水线、采样、llama.cpp 协议</li>
+    <li><code>examples/m5-tts/depth_batch_bench.cpp</code> —— 自己复现 F + R 成本模型</li>
+    <li><a href="https://github.com/QwenLM/Qwen3-TTS" target="_blank" rel="noopener">Qwen3-TTS Technical Report</a> —— 12Hz/25Hz tokenizer、dual-track、MTP、VoiceDesign、3 秒克隆</li>
+    <li><code>tools/tts/README.md</code>、<code>conversion/qwen3tts.py</code>、<code>tools/mtmd/mtmd-helper-gen.cpp</code> —— llama.cpp 原生 Qwen3-TTS 实现</li>
+    <li><code>examples/m5-tts/README.md</code> 的 "Bring a voice from another TTS model" 章节 —— Serena 迁移的原始 recipe</li>
+  </ul>
+  <div class="callout ok"><span class="tagline">结课</span>
+    这个案例最值钱的不是某个 RTF 数字，而是三条判断：
+    <b>① 先量清楚再动手；② 依赖结构决定优化天花板，工程技巧不能突破它；③ 生成式系统的正确性要有感知层验收。</b>
+    把这三句带到下一个模型、下一个后端，教程就没白写。
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch8">标记本章已学完</button></div>
+</section>
+
+
+<footer>
+  <p>M5-TTS Inference Lab · 基于 <code>llama.cpp</code> 仓库内 <code>examples/m5-tts/</code> 的真实实验整理。
+  数据口径与出处见各章表格与 <code>docs/backend/snapdragon/m5-tts-optimization-log.md</code>。</p>
+  <p>进度与主题偏好保存在本浏览器 localStorage，不会上传。页面完全离线可用。</p>
+  <p>本页全部原理图均为内联 SVG（随明暗主题变色、可无损缩放），无外部字体、图片或脚本依赖；
+  直接用浏览器打开 <code>index.html</code> 即可学习，也可按 <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>P</kbd> 打印成讲义。</p>
+</footer>
+</div>
+</main>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const $$ = s => [...document.querySelectorAll(s)];
+  const LS = { theme: 'm5lab-theme', done: 'm5lab-done', seen: 'm5lab-seen' };
+  const read = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
+  const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+  // theme
+  const savedTheme = localStorage.getItem(LS.theme);
+  const sysDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = savedTheme || (sysDark ? 'dark' : 'light');
+  $('#themeBtn').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem(LS.theme, next);
+  });
+
+  // nav generated from the chapters (no duplicated table of contents)
+  const chapters = $$('section.chapter');
+  const nav = $('#nav');
+  const navLinks = [];
+  const group = document.createElement('div');
+  group.className = 'navGroup';
+  group.textContent = '课程目录';
+  nav.appendChild(group);
+  chapters.forEach((sec, i) => {
+    const title = sec.dataset.title;
+    const a = document.createElement('a');
+    a.href = '#' + sec.id;
+    a.dataset.target = sec.id;
+    a.innerHTML = '<span class="num">' + String(i).padStart(2, '0') + '</span><span class="label"></span><span class="tick"></span>';
+    a.querySelector('.label').textContent = title;
+    nav.appendChild(a);
+    navLinks.push(a);
+  });
+  const tools = document.createElement('div');
+  tools.className = 'navGroup';
+  tools.textContent = '快捷操作';
+  nav.appendChild(tools);
+  const jumpTop = document.createElement('a');
+  jumpTop.href = '#top';
+  jumpTop.innerHTML = '<span class="num">↑</span><span class="label">回到顶部</span>';
+  nav.appendChild(jumpTop);
+
+  // progress state
+  let done = new Set(read(LS.done, []));
+  let seen = new Set(read(LS.seen, []));
+  function renderProgress() {
+    navLinks.forEach(a => {
+      const id = a.dataset.target;
+      a.querySelector('.tick').textContent = done.has(id) ? '✓' : (seen.has(id) ? '·' : '');
+    });
+    $$('.doneBtn').forEach(b => {
+      const on = done.has(b.dataset.ch);
+      b.classList.toggle('on', on);
+      b.textContent = on ? '✓ 已学完（点击取消）' : '标记本章已学完';
+    });
+    const pct = Math.round(done.size / chapters.length * 100);
+    $('#pctText').textContent = pct + '%';
+    $('#pctBar').style.width = pct + '%';
+    $('#seenText').textContent = `已浏览 ${seen.size} / ${chapters.length} 章 · 已学完 ${done.size} 章`;
+  }
+  $$('.doneBtn').forEach(b => b.addEventListener('click', () => {
+    done.has(b.dataset.ch) ? done.delete(b.dataset.ch) : done.add(b.dataset.ch);
+    write(LS.done, [...done]);
+    renderProgress();
+  }));
+
+  // scroll spy + reading progress + auto-seen
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      const id = e.target.id;
+      if (!seen.has(id)) { seen.add(id); write(LS.seen, [...seen]); renderProgress(); }
+    });
+  }, { rootMargin: '-12% 0px -70% 0px', threshold: 0 });
+  chapters.forEach(s => io.observe(s));
+
+  function onScroll() {
+    const h = document.documentElement;
+    const max = h.scrollHeight - h.clientHeight;
+    $('#progressTop').style.width = (max > 0 ? h.scrollTop / max * 100 : 0) + '%';
+    // Scroll-based active state is steadier than IntersectionObserver's band:
+    // the chapter whose top is above the upper quarter of the viewport wins.
+    const y = h.scrollTop + h.clientHeight * 0.25;
+    let active = chapters[0].id;
+    for (const s of chapters) if (s.offsetTop <= y) active = s.id;
+    navLinks.forEach(a => a.classList.toggle('active', a.dataset.target === active));
+  }
+  addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+
+  // sidebar search
+  $('#navSearch').addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    navLinks.forEach(a => {
+      const hit = !q || a.textContent.toLowerCase().includes(q);
+      a.style.display = hit ? '' : 'none';
+    });
+  });
+
+  // mobile drawer
+  $('#menuBtn').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
+  navLinks.concat([jumpTop]).forEach(a => a.addEventListener('click', () => $('#sidebar').classList.remove('open')));
+
+  // optimisation card filter
+  $$('.filters button').forEach(b => b.addEventListener('click', () => {
+    $$('.filters button').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    const want = b.dataset.filter;
+    $$('.optCard').forEach(c => c.hidden = !(want === 'all' || c.dataset.status === want));
+  }));
+
+  // cost-model calculator
+  const calc = $('#costCalc');
+  if (calc) {
+    const sliders = $$('#costCalc input[type=range]');
+    const out = id => $('#' + id);
+    const fmt = (n, d = 2) => n.toFixed(d);
+    function update() {
+      const v = {};
+      sliders.forEach(s => {
+        v[s.id] = Number(s.value);
+        $('#' + s.id + 'Val').textContent = s.value + (s.dataset.unit || '');
+      });
+      const rows = v.rowsTotal || 16;
+      const perFrame = v.calls * v.F + rows * v.R;          // ms
+      const ideal = v.F + rows * v.R;                        // 1 call
+      const depthMs = v.frames * perFrame;
+      const backboneMs = 152 + v.frames * 6.1;
+      const wallMs = backboneMs + depthMs;                  // codec overlapped
+      const audioS = v.frames * 0.08;                       // 12.5 fps
+      out('calcNow').textContent = fmt(depthMs / 1000) + ' s';
+      out('calcIdeal').textContent = fmt(v.frames * ideal / 1000) + ' s';
+      out('calcRtf').textContent = fmt(wallMs / 1000 / audioS, 3);
+      out('calcSpeedup').textContent = fmt(perFrame / ideal, 2) + '×';
+    }
+    sliders.forEach(s => s.addEventListener('input', update));
+    update();
+  }
+
+  renderProgress();
+})();
+</script>
+</body>
+</html>
