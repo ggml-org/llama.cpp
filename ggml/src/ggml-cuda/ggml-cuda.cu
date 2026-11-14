@@ -2466,8 +2466,9 @@ static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst, scale_fold ? &fusion : nullptr);
         return scale_fold;
     }
-    if (src0->type == GGML_TYPE_F8_E4M3) {
-        const ggml_tensor * weight_scale = ggml_get_src_scale(dst, 0) && ggml_nelements(ggml_get_src_scale(dst, 0)) == 1 ? ggml_get_src_scale(dst, 0) : nullptr;
+    if (src0->type == GGML_TYPE_F8_E4M3 && ggml_prec_get_acc(dst) != GGML_PREC_F32) {
+        const ggml_tensor * w_scale      = ggml_get_src_scale(dst, 0);
+        const ggml_tensor * weight_scale = w_scale && ggml_nelements(w_scale) == 1 ? w_scale : nullptr;
         if (ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst, weight_scale)) {
             return weight_scale != nullptr;
         }
