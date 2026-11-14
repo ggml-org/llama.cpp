@@ -170,6 +170,11 @@ mtmd_image_f32_batch mtmd_subcontext::get_dummy_batch() const {
         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
     }
     batch.entries.push_back(img);
+    // One logical Inkling vision patch always contains two adjacent temporal slices (including warmup reserve).
+    if (model.modality == MTMD_MODALITY_VISION &&
+            model.proj_type == PROJECTOR_TYPE_INKLING) {
+        batch.entries.push_back(img);
+    }
     return batch;
 }
 
@@ -323,6 +328,9 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         cur = ggml_add(ctx0,
                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
+        if (config.power_floor > 0.0f) {
+            cur = ggml_clamp(ctx0, cur, config.power_floor, FLT_MAX);
+        }
         if (config.use_magnitude) {
             cur = ggml_sqrt(ctx0, cur);
         }
@@ -1321,6 +1329,18 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 set_input_f32("mimovl_idx_col",       idx_col);
                 set_input_attn_mask(mask);
             } break;
+        case PROJECTOR_TYPE_INKLING2:
+            {
+                GGML_ASSERT(n_pos == num_patches + 1);
+                std::vector<int> rows(n_pos, 0);
+                std::vector<int> cols(n_pos, 0);
+                for (int i = 0; i < num_patches; i++) {
+                    rows[i + 1] = i / pos_w + 1;
+                    cols[i + 1] = i % pos_w + 1;
+                }
+                set_input_i32("pos_h", rows);
+                set_input_i32("pos_w", cols);
+            } break;
         case PROJECTOR_TYPE_PIXTRAL:
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
@@ -1643,6 +1663,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_INKLING: // inp_raw is the only graph input
         case PROJECTOR_TYPE_COHERE2V:
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:

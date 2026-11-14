@@ -26,6 +26,20 @@ struct mtmd_image_preproc_out {
     }
 };
 
+// Inkling hMLP preprocessing; pixel_values_bthwc is row-major BTHWC [n_patches, 2, 40, 40, 3].
+struct mtmd_inkling_image_preproc_out {
+    mtmd_image_size source_size;
+    mtmd_image_size resized_size;
+    int patch_rows = 0;
+    int patch_cols = 0;
+    std::vector<uint8_t> resized_rgb;
+    std::vector<float> pixel_values_bthwc;
+};
+
+mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
+        const mtmd_image_u8 & img,
+        resize_algo algo = RESIZE_ALGO_LANCZOS);
+
 // base class, models must inherit from this class
 struct mtmd_image_preprocessor {
     const mtmd_hparams & hparams;
@@ -129,6 +143,17 @@ private:
 // downscale or upscale the input image to fixed size
 struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_fixed_size(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+};
+
+// Inkling: split an image into 40x40 hMLP patches, each duplicated across a fixed temporal dimension of two.
+struct mtmd_image_preprocessor_inkling : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_inkling(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+};
+
+struct mtmd_image_preprocessor_inkling2 : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_inkling2(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 

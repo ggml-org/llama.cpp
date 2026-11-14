@@ -1325,6 +1325,132 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     return result;
 }
 
+uint32_t llama_kv_cache::get_n_kv_pos_contiguous(const slot_info & sinfo, const llama_ubatch & ubatch) const {
+    if (sinfo.n_stream() != 1 || ubatch.n_seqs_unq != 1 || ubatch.n_tokens == 0 ||
+        ubatch.pos == nullptr || ubatch.n_seq_id == nullptr ||
+        ubatch.seq_id == nullptr || ubatch.seq_id[0] == nullptr) {
+        return 0;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id[0][0];
+    if (seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return 0;
+    }
+
+    const uint32_t stream = seq_to_stream[seq_id];
+    if (sinfo.strm[0] < 0 || (uint32_t) sinfo.strm[0] != stream || stream >= v_cells.size()) {
+        return 0;
+    }
+
+    const auto & cells = v_cells[stream];
+    const llama_pos pos_max = cells.seq_pos_max(seq_id);
+
+    if (pos_max < 0 || pos_max >= (llama_pos) cells.size()) {
+        return 0;
+    }
+
+    // the banded op aligns Q to the tail of K: the ubatch must be that monotonic tail, else dense bias
+    if ((uint32_t) pos_max + 1 < ubatch.n_tokens) {
+        return 0;
+    }
+    const llama_pos pos_start = pos_max + 1 - ubatch.n_tokens;
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.pos[i] != pos_start + (llama_pos) i ||
+            ubatch.n_seq_id[i] < 1 || ubatch.seq_id[i] == nullptr || ubatch.seq_id[i][0] != seq_id) {
+            return 0;
+        }
+    }
+
+    for (llama_pos pos = 0; pos <= pos_max; ++pos) {
+        if (cells.is_empty(pos) || cells.pos_get(pos) != pos || !cells.seq_has(pos, seq_id)) {
+            return 0;
+        }
+    }
+
+    return pos_max + 1;
+}
+
+bool llama_kv_cache::can_pos_gather() const {
+    return n_stream == 1 && ((n_swa > 0 && swa_type != LLAMA_SWA_TYPE_NONE) || n_seq_max > 1);
+}
+
+bool llama_kv_cache::get_pos_gather_cells(const llama_ubatch & ubatch, std::vector<int32_t> & res) const {
+    res.clear();
+
+    if (n_stream != 1 || ubatch.n_seqs_unq != 1 || ubatch.n_tokens == 0 || ubatch.is_pos_2d() ||
+        ubatch.pos == nullptr || ubatch.n_seq_id == nullptr ||
+        ubatch.seq_id == nullptr || ubatch.seq_id[0] == nullptr) {
+        return false;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id[0][0];
+    if (seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return false;
+    }
+
+    const auto & cells = v_cells[seq_to_stream[seq_id]];
+    const llama_pos pos_max = cells.seq_pos_max(seq_id);
+
+    // the banded op aligns Q to the tail of K: the ubatch must be that monotonic tail
+    if (pos_max < 0 || (uint32_t) pos_max + 1 < ubatch.n_tokens) {
+        return false;
+    }
+    const llama_pos pos_start = pos_max + 1 - ubatch.n_tokens;
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.pos[i] != pos_start + (llama_pos) i ||
+            ubatch.n_seq_id[i] < 1 || ubatch.seq_id[i] == nullptr || ubatch.seq_id[i][0] != seq_id) {
+            return false;
+        }
+    }
+
+    // the cells below the window of the first token are masked for every token of the ubatch
+    llama_pos p_lo = cells.seq_pos_min(seq_id);
+    if (swa_type == LLAMA_SWA_TYPE_STANDARD && n_swa > 0) {
+        p_lo = std::max(p_lo, pos_start - (llama_pos) n_swa + 1);
+    }
+    if (p_lo < 0 || p_lo > pos_start) {
+        return false;
+    }
+
+    res.assign(pos_max - p_lo + 1, -1);
+
+    for (uint32_t j = 0; j < cells.used_max_p1(); ++j) {
+        if (cells.is_empty(j) || !cells.seq_has(j, seq_id)) {
+            continue;
+        }
+        const llama_pos p = cells.pos_get(j);
+        if (p < p_lo || p > pos_max) {
+            continue;
+        }
+        if (res[p - p_lo] >= 0) {
+            return false;
+        }
+        res[p - p_lo] = (int32_t) j;
+    }
+
+    for (const int32_t c : res) {
+        if (c < 0) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+uint32_t llama_kv_cache::get_n_kv_pos_gather(const slot_info & sinfo, const llama_ubatch & ubatch) const {
+    if (sinfo.n_stream() != 1) {
+        return 0;
+    }
+
+    std::vector<int32_t> rows;
+    if (!get_pos_gather_cells(ubatch, rows)) {
+        return 0;
+    }
+
+    // padded like n_kv so that the graph shape changes rarely; the padding rows lead and are masked
+    return std::min<uint32_t>(get_size(), GGML_PAD((uint32_t) rows.size(), 256u));
+}
+
 uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
     if (ubatch.n_seqs_unq == 1) {
         return 1;
@@ -2013,6 +2139,78 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
 
                 data[h*(n_kv*n_tokens) + i*n_kv + j] = llama_relative_position_bucket(p0, ubatch->pos[i], hparams.n_rel_attn_bkts, false);
             }
+        }
+    }
+}
+
+void llama_kv_cache::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
+    const int64_t n_tokens = ubatch->n_tokens;
+
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+
+    int32_t * data = (int32_t *) dst->data;
+
+    const int64_t n_kv = dst->ne[0];
+    GGML_ASSERT(dst->ne[1] == n_tokens);
+
+    // [n_kv, n_tokens] in GLOBAL token order (stream-major, same as the KQ mask)
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const llama_seq_id seq_id = ubatch->seq_id[i][0];
+
+        const auto & cells = v_cells[seq_to_stream[seq_id]];
+
+        const llama_pos p1 = ubatch->pos[i];
+
+        for (int64_t j = 0; j < n_kv; ++j) {
+            // use the ACTUAL absolute position in the KV cell; physical slot order is not monotonic
+            int32_t rel = (int32_t) extent;
+            if (!cells.is_empty(j)) {
+                const llama_pos d = p1 - cells.pos_get(j);
+                if (d >= 0 && d < (llama_pos) extent) {
+                    rel = (int32_t) d;
+                }
+            }
+
+            data[i*n_kv + j] = (int32_t) (i*(extent + 1)) + rel;
+        }
+    }
+}
+
+void llama_kv_cache::set_input_pos_gather(ggml_tensor * idx, ggml_tensor * mask, const llama_ubatch * ubatch) const {
+    GGML_ASSERT(ggml_backend_buffer_is_host(idx->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
+    GGML_ASSERT(idx->type == GGML_TYPE_I32 && mask->type == GGML_TYPE_F16);
+
+    std::vector<int32_t> rows;
+    const bool ok = get_pos_gather_cells(*ubatch, rows);
+    GGML_ASSERT(ok && "the gathered layout changed between graph build and input");
+
+    const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t n_kv     = idx->ne[0];
+    const int64_t n_rows   = (int64_t) rows.size();
+    const int64_t n_lead   = n_kv - n_rows;
+
+    GGML_ASSERT(n_lead >= 0);
+    GGML_ASSERT(mask->ne[0] == n_kv && mask->ne[1] == n_tokens && ggml_is_contiguous(mask));
+
+    int32_t * di = (int32_t *) idx->data;
+    for (int64_t j = 0; j < n_kv; ++j) {
+        di[j] = rows[std::max<int64_t>(j - n_lead, 0)];
+    }
+
+    // row j holds position p_lo + j - n_lead
+    const llama_pos p_lo = ubatch->pos[n_tokens - 1] - (llama_pos) (n_rows - 1);
+
+    const ggml_fp16_t keep = ggml_fp32_to_fp16(0.0f);
+    const ggml_fp16_t drop = ggml_fp32_to_fp16(-INFINITY);
+
+    ggml_fp16_t * dm = (ggml_fp16_t *) mask->data;
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const llama_pos p1 = ubatch->pos[i];
+        for (int64_t j = 0; j < n_kv; ++j) {
+            const llama_pos p0 = p_lo + (llama_pos) (j - n_lead);
+            const bool masked = j < n_lead || p0 > p1 || llama_hparams::is_masked_swa(n_swa, swa_type, p0, p1);
+            dm[i*n_kv + j] = masked ? drop : keep;
         }
     }
 }
@@ -3053,6 +3251,37 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
 }
 
+uint32_t llama_kv_cache_context::get_n_kv_pos_contiguous() const {
+    if (ubatches.empty() || sinfos.empty() || i_cur >= ubatches.size() || i_cur >= sinfos.size()) {
+        // reserve the banded path; the dense fallback is unallocatable at large n_ctx
+        if (kv != nullptr && lctx == nullptr && kv->get_n_stream() == 1) {
+            return n_kv;
+        }
+        return 0;
+    }
+
+    const uint32_t result = kv->get_n_kv_pos_contiguous(sinfos[i_cur], ubatches[i_cur]);
+    return result <= (uint32_t) n_kv ? result : 0;
+}
+
+uint32_t llama_kv_cache_context::get_n_kv_pos_gather() const {
+    if (ubatches.empty() || sinfos.empty() || i_cur >= ubatches.size() || i_cur >= sinfos.size()) {
+        // worst case for graph reservation: wherever the cells can stop being position-contiguous, the gathered path
+        // (a superset of the banded one) is what the reserve has to cover
+        if (kv != nullptr && lctx == nullptr && kv->can_pos_gather()) {
+            return n_kv;
+        }
+        return 0;
+    }
+
+    // a position-contiguous layout takes the banded path directly
+    if (get_n_kv_pos_contiguous() > 0) {
+        return 0;
+    }
+
+    return kv->get_n_kv_pos_gather(sinfos[i_cur], ubatches[i_cur]);
+}
+
 uint32_t llama_kv_cache_context::get_n_kv_rows() const {
     return n_kv_rows;
 }
@@ -3123,6 +3352,14 @@ void llama_kv_cache_context::set_input_attn_mask(const llm_attn_mask & attn_mask
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+void llama_kv_cache_context::set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const {
+    kv->set_input_pos_rel_flat(dst, ubatch, extent);
+}
+
+void llama_kv_cache_context::set_input_pos_gather(ggml_tensor * idx, ggml_tensor * mask, const llama_ubatch * ubatch) const {
+    kv->set_input_pos_gather(idx, mask, ubatch);
 }
 
 void llama_kv_cache_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {

@@ -501,7 +501,7 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
             } else {
                 GGML_UNUSED(y_scale_used);
             }
-            dst[ids_dst[j]*stride + i] = value * scale;
+            dst[(int64_t) ids_dst[j]*stride + i] = value * scale;
         }
     }
 }
@@ -573,7 +573,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
                     } else {
                         GGML_UNUSED(y_scale_used);
                     }
-                    dst[ids_dst[j]*stride + i] = value * scale_up;
+                    dst[(int64_t) ids_dst[j]*stride + i] = value * scale_up;
                 }
             }
         }
@@ -1087,7 +1087,7 @@ static __global__ void mul_mat_q(
         int col_high       = min(col_low + J, ncols_dst);
         int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
         int offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
-        int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
 
         if (ids_dst) {
             const ggml_cuda_mm_id_tile_spec tsj = tile_spec[jt];
@@ -1169,7 +1169,7 @@ static __global__ void mul_mat_q(
         int col_high       = min(col_low + J, ncols_dst);
         int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
         int offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
-        int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
 
         if (ids_dst) {
             const ggml_cuda_mm_id_tile_spec tsj = tile_spec[jt];
@@ -1250,7 +1250,7 @@ static __global__ void mul_mat_q(
     int col_high       = min(col_low + J, ncols_dst);
     int offset_y       = wt*stride_sample_y   + zt*stride_channel_y;
     int offset_y_scale = wt*nchannels_y.z*ncols_y + zt*ncols_y;
-    int offset_dst     = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+    int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
 
     if (ids_dst) {
         const ggml_cuda_mm_id_tile_spec tsj = tile_spec[jt];
@@ -1385,7 +1385,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int it = tmp2.x;
 
     if (!ids_dst) {
-        const int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst + it*I;
+        const int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst + (int64_t) it*I;
         dst += offset_dst;
 
         const int i_max = nrows_x   - it*I - 1;
