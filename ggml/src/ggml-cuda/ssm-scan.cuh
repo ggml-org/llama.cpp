@@ -2,7 +2,7 @@
 
 // fused-kernel recurrent-state output; strides in elements (per-seq stride is always the state row size, set in-kernel)
 struct ggml_cuda_ssm_scan_fused_cache {
-    float * data;        // rollback slot 0
+    void *  data;        // rollback slot 0, same type as the input state
     int64_t slot_stride; // between rollback slots
 };
 
