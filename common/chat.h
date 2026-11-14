@@ -230,6 +230,9 @@ struct common_chat_tool {
 
     // withheld from the system prompt, a tool_reference reveals it later in the conversation
     bool defer_loading = false;
+
+    // OpenAI "strict": only true constrains calls to the declared tools (not rendered into the prompt)
+    bool strict = false;
 };
 
 enum common_chat_tool_choice {

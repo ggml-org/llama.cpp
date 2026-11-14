@@ -161,9 +161,11 @@ class common_chat_peg_builder : public common_peg_parser_builder {
 
     // Helper for Python-style function call format: name(arg1="value1", arg2=123)
     // Used by LFM2 and similar templates
+    // allow_undeclared: also accept calls to names not in tools (any identifier, any arguments)
     common_peg_parser python_style_tool_calls(const common_json & tools,
                                               bool                           parallel_tool_calls,
-                                              bool                           allow_json_literals);
+                                              bool                           allow_json_literals,
+                                              bool                           allow_undeclared = false);
 
   private:
     // Python values plus JSON true/false/null.
