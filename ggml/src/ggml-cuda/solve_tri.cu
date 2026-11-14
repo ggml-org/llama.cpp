@@ -3,7 +3,7 @@
 #include "solve_tri.cuh"
 
 #define MAX_N_FAST 64
-#define MAX_K_FAST 32
+#define MAX_K_TILE 32
 
 static __global__ void get_batch_pointers(const float *  A,
                                           float *        X,
@@ -77,9 +77,9 @@ static void solve_tri_f32_cublas(ggml_backend_cuda_context & ctx,
 }
 
 // ======================
-// Fast Kernel (n <= 64, k <= 32) - Warp-based parallel reduction
+// Fast Kernel (n <= 64, up to 32 RHS columns per block) - Warp-based parallel reduction
 // ======================
-// When ncols_template == 0 the bounds for the loops in this function are not
+// When n_template == 0 the bounds for the loops in this function are not
 // known and can't be unrolled. As we want to keep pragma unroll for all other
 // cases we suppress the clang transformation warning here.
 #ifdef __clang__
@@ -102,13 +102,10 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int n = n_template == 0 ? n_arg : n_template;
     const int k = k_template == 0 ? k_arg : k_template;
 
-    const int batch_idx = blockIdx.x;
-    const int lane      = threadIdx.x;
-    const int col_idx   = threadIdx.y;
-
-    if (col_idx >= k) {
-        return;
-    }
+    const int  batch_idx = blockIdx.x;
+    const int  lane      = threadIdx.x;
+    const int  col_idx   = blockIdx.y * blockDim.y + threadIdx.y;
+    const bool col_valid = col_idx < k;
 
     const uint2   i02_i03 = fast_div_modulo(batch_idx, ne02);
     const int64_t i02     = i02_i03.y;
@@ -123,7 +120,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
     const int offset = threadIdx.x + threadIdx.y * blockDim.x;
 
 #pragma unroll
-    for (int i = 0; i < n * n; i += k * WARP_SIZE) {
+    for (int i = 0; i < n * n; i += blockDim.x * blockDim.y) {
         const int i0 = i + offset;
         if (i0 < n * n) {
             sA[i0] = A_batch[i0];
@@ -132,8 +129,8 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 
     __syncthreads();
 
-    float x_low  = (lane < n) ? B_batch[lane * k + col_idx] : 0.0f;
-    float x_high = (WARP_SIZE + lane < n) ? B_batch[(WARP_SIZE + lane) * k + col_idx] : 0.0f;
+    float x_low  = (col_valid && lane < n) ? B_batch[lane * k + col_idx] : 0.0f;
+    float x_high = (col_valid && WARP_SIZE + lane < n) ? B_batch[(WARP_SIZE + lane) * k + col_idx] : 0.0f;
 
     const int half      = WARP_SIZE;
     const int nrows_low = (n < half) ? n : half;
@@ -168,7 +165,7 @@ static __global__ void solve_tri_f32_fast(const float * __restrict__ A,
 #pragma unroll
     for (int rr = 0; rr < 2; ++rr) {
         const int row = rr * WARP_SIZE + lane;
-        if (row < n) {
+        if (col_valid && row < n) {
             const float val            = (row < half) ? x_low : x_high;
             X_batch[row * k + col_idx] = val;
         }
@@ -193,8 +190,9 @@ static void solve_tri_f32_cuda(const float * A,
                                size_t        nb3,
                                cudaStream_t  stream) {
     const uint3 ne02_fd = init_fastdiv_values((uint32_t) ne02);
-    dim3        threads(WARP_SIZE, k);
-    dim3        grid(ne02 * ne03);
+    const int   tile_k = k < MAX_K_TILE ? k : MAX_K_TILE;
+    dim3        threads(WARP_SIZE, tile_k);
+    dim3        grid(ne02 * ne03, (k + tile_k - 1) / tile_k);
     if (n == 64) {
         switch (k) {
             case 32:
@@ -238,7 +236,7 @@ static void solve_tri_f32_cuda(const float * A,
                     <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, 0, 0);
                 break;
             default:
-                solve_tri_f32_fast<0, 0>
+                solve_tri_f32_fast<64, 0>
                     <<<grid, threads, 0, stream>>>(A, B, X, ne02_fd, nb02, nb03, nb12, nb13, nb2, nb3, n, k);
         }
     } else {  // run general case
@@ -259,7 +257,7 @@ void ggml_cuda_op_solve_tri(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int64_t ne02 = src0->ne[2];
     const int64_t ne03 = src0->ne[3];
 
-    if (n <= MAX_N_FAST && k <= MAX_K_FAST) {
+    if (n <= MAX_N_FAST) {
         solve_tri_f32_cuda((const float *) src0->data, (const float *) src1->data, (float *) dst->data, n, k,
                            src0->ne[2], src0->ne[3], src0->nb[2] / sizeof(float), src0->nb[3] / sizeof(float),
                            src1->nb[2] / sizeof(float), src1->nb[3] / sizeof(float), dst->nb[2] / sizeof(float),
