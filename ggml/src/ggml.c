@@ -3369,9 +3369,9 @@ struct ggml_tensor * ggml_mul_mat(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b) {
-    if (ggml_needs_scale(a->type) || ggml_needs_scale(b->type)) {
-        GGML_LOG_ERROR("%s: tensor types %s or %s requires explicit dequantization scales; use ggml_mul_mat_ext instead\n",
-                __func__, ggml_type_name(a->type), ggml_type_name(b->type));
+    if (ggml_needs_scale(a->type)) {
+        GGML_LOG_ERROR("%s: tensor type %s requires a weight scale; use ggml_mul_mat_ext instead\n",
+                __func__, ggml_type_name(a->type));
         GGML_ABORT("fatal error");
     }
 
@@ -3447,7 +3447,11 @@ struct ggml_tensor * ggml_mul_mat_id(
         struct ggml_tensor  * as,
         struct ggml_tensor  * b,
         struct ggml_tensor  * ids) {
-    GGML_ASSERT(!ggml_needs_scale(as->type) && !ggml_needs_scale(b->type));
+    if (ggml_needs_scale(as->type)) {
+        GGML_LOG_ERROR("%s: tensor type %s requires a weight scale; use ggml_mul_mat_id_ext instead\n",
+                __func__, ggml_type_name(as->type));
+        GGML_ABORT("fatal error");
+    }
 
     return ggml_mul_mat_id_ext(ctx, as, b, ids, NULL, NULL);
 }
@@ -3461,7 +3465,11 @@ struct ggml_tensor * ggml_mul_mat_id_ext(
         struct ggml_tensor  * scale_activations) {
     GGML_ASSERT(!ggml_is_transposed(as));
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
-    GGML_ASSERT(!ggml_needs_scale(b->type));
+    if (ggml_needs_scale(b->type)) {
+        GGML_LOG_ERROR("%s: scaled tensor type %s currently cannot be used as the activation tensor\n",
+                __func__, ggml_type_name(b->type));
+        GGML_ABORT("fatal error");
+    }
     GGML_ASSERT(!ggml_needs_scale(as->type) || scale_weight != NULL);
     GGML_ASSERT(scale_weight == NULL || scale_weight->type == GGML_TYPE_F32);
     GGML_ASSERT(scale_activations == NULL || scale_activations->type == GGML_TYPE_F32);
