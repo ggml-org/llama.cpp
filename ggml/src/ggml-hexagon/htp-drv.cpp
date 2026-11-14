@@ -433,6 +433,33 @@ int htpdrv_get_arch(int domain, int * arch) {
     return 0;
 }
 
+int htpdrv_get_hmx_support(int domain, int * depth, int * spatial) {
+    if (!remote_handle_control_pfn) {
+        return AEE_EUNSUPPORTEDAPI;
+    }
+
+    // Some devices report Arch v73 but have no HMX unit at all.
+    struct remote_dsp_capability cap;
+    cap.domain     = (uint32_t) domain;
+    cap.capability = 0;
+
+    cap.attribute_ID = HMX_SUPPORT_DEPTH;
+    int err = remote_handle_control(DSPRPC_GET_DSP_INFO, &cap, sizeof(cap));
+    if (err != AEE_SUCCESS) {
+        return err;
+    }
+    *depth = (int) cap.capability;
+
+    cap.attribute_ID = HMX_SUPPORT_SPATIAL;
+    cap.capability   = 0;
+    err = remote_handle_control(DSPRPC_GET_DSP_INFO, &cap, sizeof(cap));
+    if (err != AEE_SUCCESS) {
+        return err;
+    }
+    *spatial = (int) cap.capability;
+    return 0;
+}
+
 // Directory of the HTP library as a path with a trailing slash, or empty if it cannot be resolved.
 // Checks GGML_HEXAGON_LIBHTP_DIR first, then the module directory and ../lib.
 // On Windows, non-ASCII directories or paths with spaces use the 8.3 short name.

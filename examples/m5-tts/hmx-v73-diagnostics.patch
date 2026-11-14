@@ -1,0 +1,68 @@
+diff --git a/ggml/src/ggml-hexagon/htp/hmx-mm-kernels-tiled.h b/ggml/src/ggml-hexagon/htp/hmx-mm-kernels-tiled.h
+index a828012dd..550d2fa5f 100644
+--- a/ggml/src/ggml-hexagon/htp/hmx-mm-kernels-tiled.h
++++ b/ggml/src/ggml-hexagon/htp/hmx-mm-kernels-tiled.h
+@@ -1092,6 +1092,23 @@ static void core_dot_chunk_fp16_short(__fp16 *restrict output, const __fp16 *res
+ static void core_dot_chunk_fp16(__fp16 *restrict output, const __fp16 *restrict activation,
+                           const __fp16 *restrict weight, const __fp16 *restrict scales,
+                           uint32_t n_row_tiles, uint32_t n_col_tiles, uint32_t n_dot_tiles) {
++#if __HEXAGON_ARCH__ == 73
++    asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)scales));
++    const size_t stride = n_dot_tiles * HTP_MM_HMX_TILE_N_ELMS;
++    for (uint32_t r = 0; r < n_row_tiles; ++r) {
++        for (uint32_t c = 0; c < n_col_tiles; ++c) {
++            asm volatile(HMX_CLRACC_F16());
++            for (uint32_t k = 0; k < n_dot_tiles; ++k) {
++                const __fp16 * a = activation + r * stride + k * HTP_MM_HMX_TILE_N_ELMS;
++                const __fp16 * b = weight + c * stride + k * HTP_MM_HMX_TILE_N_ELMS;
++                asm volatile(HMX_LOAD_MPY_F16("%0", "%1", "%2") :: "r"(a), "r"(b), "r"(2047));
++            }
++            __fp16 * out = output + (r * n_col_tiles + c) * HTP_MM_HMX_TILE_N_ELMS;
++            asm volatile(HMX_STORE_AFTER_F16("%0", "%1") :: "r"(out), "r"(0) : "memory");
++        }
++    }
++    return;
++#endif
+     if (n_dot_tiles <= 32) {
+         core_dot_chunk_fp16_short(output, activation, weight, scales, n_row_tiles, n_col_tiles, n_dot_tiles);
+         return;
+diff --git a/ggml/src/ggml-hexagon/htp/hmx-queue.c b/ggml/src/ggml-hexagon/htp/hmx-queue.c
+index e40a28bed..a082af6c4 100644
+--- a/ggml/src/ggml-hexagon/htp/hmx-queue.c
++++ b/ggml/src/ggml-hexagon/htp/hmx-queue.c
+@@ -17,7 +17,9 @@
+ static inline void hmx_lock(hmx_queue_t q)
+ {
+     if (!q->hmx_locked) {
+-        HAP_compute_res_hmx_lock(q->hap_rctx);
++        const int result = HAP_compute_res_hmx_lock(q->hap_rctx);
++        FARF(ERROR, "M5 HMX lock result %d context %u", result, q->hap_rctx);
++        if (result != 0) abort();
+         q->hmx_locked = true;
+     }
+ }
+diff --git a/ggml/src/ggml-hexagon/htp/matmul-ops.c b/ggml/src/ggml-hexagon/htp/matmul-ops.c
+index 2d0750954..2ce585ba5 100644
+--- a/ggml/src/ggml-hexagon/htp/matmul-ops.c
++++ b/ggml/src/ggml-hexagon/htp/matmul-ops.c
+@@ -2587,6 +2587,20 @@ static void hmx_matmul_worker_fn(const htp_thread_t * th, void * data) {
+     hmx_matmul_job_t * job = (hmx_matmul_job_t *) data;
+     FARF(HIGH, "hmx-mm-job: n_row_tiles %u n_col_tiles %u n_dot_tiles %u", job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
+     core_dot_chunk_fp16(job->output, job->activation, job->weight, job->scales, job->n_row_tiles, job->n_col_tiles, job->n_dot_tiles);
++    // Diagnostic only: check the first input and output tiles.
++    const volatile uint16_t * a = (const volatile uint16_t *) job->activation;
++    const volatile uint16_t * b = (const volatile uint16_t *) job->weight;
++    const volatile uint16_t * y = (const volatile uint16_t *) job->output;
++    unsigned na = 0, nb = 0, ny = 0;
++    for (unsigned i = 0; i < HTP_MM_HMX_TILE_N_ELMS; ++i) {
++        na += (a[i] & 0x7fff) != 0;
++        nb += (b[i] & 0x7fff) != 0;
++        ny += (y[i] & 0x7fff) != 0;
++    }
++    FARF(ALWAYS, "M5 HMX tiles %u %u %u", na, nb, ny);
++    if (!na || !nb) abort();
++    if (ny) abort();
++
+ }
+ 
+ static inline void hmx_matmul_job_init(hmx_matmul_job_t * job,

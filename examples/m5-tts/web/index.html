@@ -1,0 +1,599 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>M5 离线语音合成控制台</title>
+<style>
+  :root {
+    --bg: #f4f6fa; --card: #ffffff; --ink: #17202e; --sub: #64748b;
+    --line: #e2e8f0; --acc: #2563eb; --acc-soft: #dbeafe; --acc-ink: #ffffff;
+    --ok: #16a34a; --ok-soft: #dcfce7; --bad: #dc2626; --bad-soft: #fee2e2;
+    --rec: #ef4444;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 4px 16px rgba(15, 23, 42, .05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f141b; --card: #1a212c; --ink: #e9eef5; --sub: #8fa0b5;
+      --line: #2a3442; --acc: #3b82f6; --acc-soft: #1e3a5f; --acc-ink: #ffffff;
+      --ok: #22c55e; --ok-soft: #14351f; --bad: #f87171; --bad-soft: #3b1818;
+      --rec: #f87171;
+      --shadow: 0 1px 3px rgba(0, 0, 0, .4), 0 8px 24px rgba(0, 0, 0, .25);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 18px 64px;
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.65 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; display: grid; gap: 18px; }
+  header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  h1 { font-size: 21px; margin: 0; }
+  h2 { font-size: 15px; margin: 0 0 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  section {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px 22px; box-shadow: var(--shadow);
+  }
+  .tag { color: var(--sub); font-size: 12.5px; font-weight: 400; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid var(--line); color: var(--sub); background: var(--card);
+  }
+  .pill.click { cursor: pointer; }
+  .pill.click:hover { border-color: var(--acc); color: var(--acc); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--sub); }
+  .dot.ok { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+  .dot.bad { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+  textarea, input[type=text], select {
+    width: 100%; padding: 11px 13px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--bg); color: var(--ink); font: inherit; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  textarea:focus, input[type=text]:focus, select:focus {
+    border-color: var(--acc); box-shadow: 0 0 0 3px var(--acc-soft);
+  }
+  textarea { min-height: 96px; resize: vertical; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 14px; }
+  .row > .grow { flex: 1; min-width: 200px; }
+  label.f { font-size: 12.5px; color: var(--sub); display: block; margin-bottom: 6px; font-weight: 500; }
+  button {
+    padding: 11px 20px; border-radius: 10px; border: 1px solid transparent;
+    background: var(--acc); color: var(--acc-ink); font: inherit; font-weight: 600;
+    cursor: pointer; transition: transform .06s, opacity .15s;
+  }
+  button:hover { opacity: .92; }
+  button:active { transform: scale(.97); }
+  button.ghost { background: transparent; color: var(--ink); border-color: var(--line); font-weight: 500; }
+  button.ghost:hover { border-color: var(--acc); color: var(--acc); opacity: 1; }
+  button:disabled { opacity: .45; cursor: default; transform: none; }
+  button.recording { background: var(--rec); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--rec) 45%, transparent); }
+    50% { box-shadow: 0 0 0 12px transparent; }
+  }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .seg button {
+    border: 0; border-radius: 0; background: transparent; color: var(--sub); font-weight: 500;
+    padding: 10px 18px;
+  }
+  .seg button.on { background: var(--acc); color: var(--acc-ink); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; margin-top: 16px; }
+  .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 18px; font-family: var(--mono); }
+  .stat span { font-size: 11.5px; color: var(--sub); }
+  .bar { height: 5px; border-radius: 3px; background: var(--line); margin-top: 16px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--acc), #60a5fa); transition: width .3s; }
+  audio { width: 100%; margin-top: 16px; border-radius: 10px; }
+  #log {
+    margin: 0; padding: 13px 15px; border-radius: 10px; background: var(--bg);
+    border: 1px solid var(--line); font: 12.5px/1.75 var(--mono);
+    max-height: 220px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;
+  }
+  #toasts { position: fixed; right: 18px; bottom: 18px; display: grid; gap: 8px; z-index: 50; }
+  .toast {
+    background: var(--card); color: var(--ink); border: 1px solid var(--line);
+    border-left: 4px solid var(--acc); border-radius: 10px; padding: 11px 16px;
+    box-shadow: var(--shadow); font-size: 13.5px; max-width: 340px;
+    animation: slidein .22s ease;
+  }
+  .toast.ok { border-left-color: var(--ok); }
+  .toast.bad { border-left-color: var(--bad); }
+  @keyframes slidein { from { opacity: 0; transform: translateY(8px); } }
+  #waveform { width: 100%; height: 44px; margin-top: 12px; border-radius: 8px; background: var(--bg); }
+  .hint { font-size: 12px; color: var(--sub); margin-top: 8px; line-height: 1.55; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>M5 离线语音合成</h1>
+    <span class="pill"><span class="dot" id="healthDot"></span><span id="healthText">连接中…</span></span>
+    <span class="pill">HTP 服务 · 完全离线</span>
+  </header>
+
+  <section>
+    <h2>合成</h2>
+    <label class="f" for="text">要合成的文字</label>
+    <textarea id="text">今天的天气很好，我们一起去公园散步，看看路边的花，听听树上的鸟叫。</textarea>
+    <div class="row">
+      <div class="grow">
+        <label class="f" for="voice">音色</label>
+        <select id="voice"></select>
+      </div>
+      <div>
+        <label class="f">输出</label>
+        <div class="seg" id="fmtSeg">
+          <button data-fmt="wav" class="on">完整 wav</button>
+          <button data-fmt="pcm">流式 pcm</button>
+        </div>
+      </div>
+    </div>
+    <div class="row">
+      <div class="grow">
+        <label class="f" for="caption">风格 / 情感描述 <span class="tag">（beta · 效果有限，详见说明）</span></label>
+        <input type="text" id="caption" placeholder="如：温柔、活泼（留空为默认风格）">
+      </div>
+    </div>
+    <div class="row">
+      <button id="goBtn">生成语音</button>
+      <button id="stopBtn" class="ghost" disabled>停止</button>
+    </div>
+    <div class="bar"><i id="bar"></i></div>
+    <div class="stats" id="stats" hidden>
+      <div class="stat" title="RTF = 生成耗时 / 音频时长。音频越短，模型预热等固定开销占比越高，短句 RTF 会明显偏大甚至超过 1；长句才反映真实速度"><b id="sRtf">–</b><span>RTF（越小越快）</span></div>
+      <div class="stat"><b id="sAudio">–</b><span>音频时长</span></div>
+      <div class="stat" title="从点击生成到第一段音频可播放。优先取服务端统计，缺失时为客户端实测（≈ 标记）"><b id="sFirst">–</b><span>首包延迟</span></div>
+      <div class="stat" title="合成的声学帧数（12.5 帧/秒）。优先取服务端统计"><b id="sFrames">–</b><span>帧数</span></div>
+      <div class="stat"><b id="sWall">–</b><span>墙钟耗时</span></div>
+    </div>
+    <audio id="player" controls hidden></audio>
+  </section>
+
+  <section>
+    <h2>录音克隆 <span class="tag">克隆结果只保存在本浏览器（localStorage），不写入服务端</span></h2>
+    <div class="row">
+      <button id="recBtn">开始录音</button>
+      <button id="recPlayBtn" class="ghost" disabled>试听录音</button>
+      <span class="pill" id="recTime">未录音</span>
+      <label class="pill click">
+        或选音频文件<input type="file" id="recFile" accept="audio/*" hidden>
+      </label>
+    </div>
+    <canvas id="waveform" hidden></canvas>
+    <audio id="recPlayer" controls hidden></audio>
+    <div class="row">
+      <div class="grow">
+        <label class="f" for="recName">音色名称</label>
+        <input type="text" id="recName" placeholder="例如：我的声音">
+      </div>
+      <div class="grow">
+        <label class="f" for="recText">录音内容的逐字转写（必填）</label>
+        <input type="text" id="recText" placeholder="录音里说的每一句话，一字不差最好">
+      </div>
+    </div>
+    <div class="row">
+      <button id="recCloneBtn">克隆这个声音</button>
+      <span class="tag">建议 5–20 秒 · 安静环境 · 自然说话 · 最长 30 秒</span>
+    </div>
+    <div class="row">
+      <label class="pill click">
+        导入 .m5voice 音色包<input type="file" id="vfile" accept=".json,.m5voice,application/json" hidden>
+      </label>
+    </div>
+    <div class="hint">
+      本机音色带「本机」标记；在下拉框中双击本机音色可删除。服务端仅保留内置音色，
+      换浏览器或清缓存后本机音色会丢失（.m5voice 文件可再导入）。
+    </div>
+  </section>
+
+  <section>
+    <h2>日志</h2>
+    <pre id="log"></pre>
+  </section>
+</div>
+<div id="toasts"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const defaultApi = (location.protocol === 'http:' || location.protocol === 'https:')
+    ? location.origin : 'http://127.0.0.1:18080';
+  const api = () => defaultApi.replace(/\/+$/, '');
+
+  const LS_KEY = 'm5-voices-v2';
+  const loadLocal = () => {
+    try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); }
+    catch { return []; }
+  };
+  const saveLocal = list => localStorage.setItem(LS_KEY, JSON.stringify(list));
+
+  function log(msg) {
+    const t = new Date().toTimeString().slice(0, 8);
+    $('log').textContent += `[${t}] ${msg}\n`;
+    $('log').scrollTop = $('log').scrollHeight;
+  }
+  function toast(msg, kind = '') {
+    const el = document.createElement('div');
+    el.className = 'toast ' + kind;
+    el.textContent = msg;
+    $('toasts').appendChild(el);
+    setTimeout(() => el.remove(), 4200);
+    log(msg);
+  }
+
+  function health(ok, text) {
+    $('healthDot').className = 'dot ' + (ok ? 'ok' : 'bad');
+    $('healthText').textContent = text;
+  }
+  async function ping() {
+    try {
+      const r = await fetch(api() + '/health', { signal: AbortSignal.timeout(4000) });
+      const j = await r.json();
+      health(true, '服务在线 · ' + j.status);
+    } catch {
+      health(false, '无法连接 API');
+    }
+  }
+
+  let serverVoices = [];
+  async function loadVoices() {
+    try {
+      const r = await fetch(api() + '/v1/voices');
+      serverVoices = (await r.json()).data || [];
+    } catch { serverVoices = []; }
+    const sel = $('voice');
+    const keep = sel.value;
+    sel.innerHTML = '';
+    for (const v of serverVoices) {
+      const o = document.createElement('option');
+      o.value = 'srv:' + v.name;
+      o.textContent = `${v.name}（${v.frames} 帧）`;
+      sel.appendChild(o);
+    }
+    for (const v of loadLocal()) {
+      const o = document.createElement('option');
+      o.value = 'loc:' + v.name;
+      o.textContent = `${v.name} · 本机（${v.frames} 帧）`;
+      sel.appendChild(o);
+    }
+    if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
+    log(`音色：${serverVoices.length} 个服务端 + ${loadLocal().length} 个本机`);
+  }
+
+  function selectedVoice() {
+    const raw = $('voice').value;
+    const i = raw.indexOf(':');
+    const kind = raw.slice(0, i), name = raw.slice(i + 1);
+    if (kind === 'loc') return loadLocal().find(v => v.name === name) || null;
+    return { name, server: true };
+  }
+
+  let fmt = 'wav';
+  $('fmtSeg').addEventListener('click', e => {
+    const b = e.target.closest('button[data-fmt]');
+    if (!b) return;
+    fmt = b.dataset.fmt;
+    [...$('fmtSeg').children].forEach(x => x.classList.toggle('on', x === b));
+  });
+
+  let abort = null;
+  $('stopBtn').addEventListener('click', () => {
+    if (abort) abort.abort();
+    $('stopBtn').disabled = true;
+  });
+
+  async function generate() {
+    const text = $('text').value.trim();
+    const voice = selectedVoice();
+    if (!text) { toast('文字为空', 'bad'); return; }
+    if (!voice) { toast('请选择音色', 'bad'); return; }
+    $('goBtn').disabled = true; $('stopBtn').disabled = false;
+    $('player').hidden = true; $('stats').hidden = true;
+    $('bar').style.width = fmt === 'pcm' ? '15%' : '40%';
+    abort = new AbortController();
+    const t0 = performance.now();
+
+    const payload = { input: text, response_format: fmt };
+    const caption = $('caption').value.trim();
+    if (caption) payload.caption = caption;
+    if (voice.server) payload.voice = voice.name;
+    else { payload.codes = voice.codes; payload.reference_text = voice.reference_text; }
+    log(`POST /v1/audio/speech  voice=${voice.name}${voice.server ? '' : '（本机）'} fmt=${fmt}${caption ? ' caption=' + caption : ''}`);
+    try {
+      const resp = await fetch(api() + '/v1/audio/speech', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload), signal: abort.signal,
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status + ' ' + (await resp.text()));
+      const hdr = n => resp.headers.get(n);
+      const hdrNum = n => { const v = hdr(n); return (v == null || v === '') ? null : Number(v); };
+      const ttfb = (performance.now() - t0) / 1000;
+      let audioSeconds = 0, samples = 0, firstClient = null;
+      if (fmt === 'wav') {
+        $('bar').style.width = '80%';
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        audioSeconds = await new Promise(res => {
+          const a = new Audio(url);
+          a.onloadedmetadata = () => res(a.duration || 0);
+          setTimeout(() => res(0), 1500);
+        });
+        samples = Math.max(0, Math.floor((blob.size - 44) / 2)); // s16le mono, 44B wav header
+        if (!audioSeconds && samples) audioSeconds = samples / 24000;
+        firstClient = ttfb;
+        $('player').src = url;
+        $('player').hidden = false;
+        $('player').play().catch(() => {});
+        $('bar').style.width = '100%';
+      } else {
+        const r = await playPcmStream(resp, t0);
+        audioSeconds = r.seconds;
+        samples = r.samples;
+        firstClient = r.firstS;
+      }
+      const wall = (performance.now() - t0) / 1000;
+      // 服务端统计头优先（wav 模式带 X-M5-*）；pcm 流式响应无统计头，用客户端实测兜底，
+      // 估算值带 ≈ 前缀。这样任何浏览环境（含跨域代理过滤响应头）都能看到数值。
+      const rtfSrv = hdrNum('X-M5-RTF');
+      const firstSrv = hdrNum('X-M5-First-Pcm-S');
+      const framesSrv = hdrNum('X-M5-Frames');
+      const rtf = rtfSrv != null ? rtfSrv : (audioSeconds ? wall / audioSeconds : null);
+      const first = firstSrv != null ? firstSrv : firstClient;
+      const frames = framesSrv != null ? framesSrv
+        : (samples ? Math.round(samples / 1920) : (audioSeconds ? Math.round(audioSeconds * 12.5) : null));
+      $('sRtf').textContent = rtf != null ? (rtfSrv != null ? '' : '≈') + rtf.toFixed(3) : '–';
+      $('sAudio').textContent = audioSeconds ? audioSeconds.toFixed(2) + ' s' : '–';
+      $('sFirst').textContent = first != null ? (firstSrv != null ? '' : '≈') + first.toFixed(2) + ' s' : '–';
+      $('sFrames').textContent = frames != null ? (framesSrv != null ? '' : '≈') + String(frames) : '–';
+      $('sWall').textContent = wall.toFixed(2) + ' s';
+      $('stats').hidden = false;
+      toast(`完成：音频 ${audioSeconds.toFixed(2)}s · RTF ${rtf != null ? rtf.toFixed(3) : '?'}`, 'ok');
+    } catch (e) {
+      if (e.name === 'AbortError') toast('已停止');
+      else toast('失败：' + e.message, 'bad');
+    } finally {
+      $('goBtn').disabled = false; $('stopBtn').disabled = true;
+      abort = null;
+      setTimeout(() => { $('bar').style.width = '0'; }, 700);
+    }
+  }
+  $('goBtn').addEventListener('click', generate);
+
+  async function playPcmStream(resp, t0) {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    await ctx.resume();
+    const reader = resp.body.getReader();
+    let nextTime = ctx.currentTime + 0.12;
+    let rest = new Uint8Array(0);
+    let samples = 0;
+    let firstMs = null;
+    $('bar').style.width = '25%';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const buf = new Uint8Array(rest.length + value.length);
+      buf.set(rest); buf.set(value, rest.length);
+      const usable = buf.length - (buf.length % 2);
+      rest = buf.slice(usable);
+      const n = usable / 2;
+      if (!n) continue;
+      if (firstMs == null) firstMs = performance.now();
+      const view = new DataView(buf.buffer, 0, usable);
+      const frame = ctx.createBuffer(1, n, 24000);
+      const ch = frame.getChannelData(0);
+      for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+      const src = ctx.createBufferSource();
+      src.buffer = frame; src.connect(ctx.destination);
+      if (nextTime < ctx.currentTime) nextTime = ctx.currentTime + 0.05;
+      src.start(nextTime);
+      nextTime += frame.duration;
+      samples += n;
+      $('bar').style.width = Math.min(95, 25 + samples / 24000 * 12) + '%';
+    }
+    return {
+      seconds: samples / 24000,
+      samples,
+      firstS: firstMs != null ? (firstMs - t0) / 1000 : null,
+    };
+  }
+
+  let recStream = null, recorder = null, recBlob = null, recTimer = null, recStart = 0, audioCtx = null;
+
+  function setRecUi(recording) {
+    $('recBtn').textContent = recording ? '停止录音' : (recBlob ? '重新录音' : '开始录音');
+    $('recBtn').classList.toggle('recording', recording);
+    $('recPlayBtn').disabled = !recBlob;
+    $('waveform').hidden = !recording;
+    if (!recording && audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+  }
+
+  function drawWave(stream) {
+    const canvas = $('waveform');
+    const ctx2d = canvas.getContext('2d');
+    audioCtx = new AudioContext();
+    const src = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 256;
+    src.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    (function tick() {
+      if (!audioCtx) return;
+      requestAnimationFrame(tick);
+      analyser.getByteFrequencyData(data);
+      const w = canvas.width = canvas.clientWidth * devicePixelRatio;
+      const h = canvas.height = 44 * devicePixelRatio;
+      ctx2d.clearRect(0, 0, w, h);
+      const bars = 48, step = Math.floor(data.length / bars);
+      for (let i = 0; i < bars; i++) {
+        const v = data[i * step] / 255;
+        const bh = Math.max(3 * devicePixelRatio, v * h * 0.9);
+        ctx2d.fillStyle = getComputedStyle(document.body).getPropertyValue('--acc');
+        ctx2d.globalAlpha = 0.35 + v * 0.65;
+        ctx2d.fillRect(i * (w / bars) + 2, (h - bh) / 2, w / bars - 4, bh);
+      }
+    })();
+  }
+
+  $('recBtn').addEventListener('click', async () => {
+    if (recorder && recorder.state === 'recording') { recorder.stop(); return; }
+    try {
+      recStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+    } catch (e) {
+      toast('麦克风不可用：' + e.message + '（可改用音频文件）', 'bad');
+      return;
+    }
+    recBlob = null;
+    const mime = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(
+      m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+    recorder = new MediaRecorder(recStream, mime ? { mimeType: mime } : undefined);
+    const chunks = [];
+    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    recorder.onstop = () => {
+      clearInterval(recTimer);
+      recStream.getTracks().forEach(t => t.stop());
+      recBlob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+      $('recPlayer').src = URL.createObjectURL(recBlob);
+      $('recPlayer').hidden = false;
+      $('recTime').textContent = ((performance.now() - recStart) / 1000).toFixed(1) + ' s';
+      setRecUi(false);
+      toast('录音完成，可试听或直接克隆', 'ok');
+    };
+    recorder.start();
+    recStart = performance.now();
+    setRecUi(true);
+    drawWave(recStream);
+    log('录音中…（最长 30 秒自动停止）');
+    recTimer = setInterval(() => {
+      const s = (performance.now() - recStart) / 1000;
+      $('recTime').textContent = s.toFixed(1) + ' s · 录音中';
+      if (s >= 30 && recorder.state === 'recording') recorder.stop();
+    }, 200);
+  });
+
+  $('recPlayBtn').addEventListener('click', () => $('recPlayer').play());
+
+  $('recFile').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    recBlob = f;
+    $('recPlayer').src = URL.createObjectURL(f);
+    $('recPlayer').hidden = false;
+    try {
+      const ac = new AudioContext();
+      const audio = await ac.decodeAudioData(await f.arrayBuffer());
+      $('recTime').textContent = audio.duration.toFixed(1) + ' s · 文件';
+      ac.close();
+    } catch { $('recTime').textContent = '文件已选'; }
+    setRecUi(false);
+    toast('已选择音频文件：' + f.name);
+    e.target.value = '';
+  });
+
+  async function blobToWavBase64(blob) {
+    const ac = new AudioContext();
+    const decoded = await ac.decodeAudioData(await blob.arrayBuffer());
+    const frames = Math.round(decoded.duration * 24000);
+    const off = new OfflineAudioContext(1, frames, 24000);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    const rendered = await off.startRendering();
+    ac.close();
+    const pcm = rendered.getChannelData(0);
+    const wav = new ArrayBuffer(44 + pcm.length * 2);
+    const v = new DataView(wav);
+    const ascii = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+    ascii(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); ascii(8, 'WAVE');
+    ascii(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 24000, true); v.setUint32(28, 48000, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    ascii(36, 'data'); v.setUint32(40, pcm.length * 2, true);
+    for (let i = 0; i < pcm.length; i++) {
+      const s = Math.max(-1, Math.min(1, pcm[i]));
+      v.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    const u8 = new Uint8Array(wav);
+    let bin = '';
+    for (let i = 0; i < u8.length; i += 0x8000) bin += String.fromCharCode(...u8.subarray(i, i + 0x8000));
+    return btoa(bin);
+  }
+
+  $('recCloneBtn').addEventListener('click', async () => {
+    const name = $('recName').value.trim();
+    const text = $('recText').value.trim();
+    if (!recBlob) { toast('请先录音或选择音频文件', 'bad'); return; }
+    if (!name) { toast('请填写音色名称', 'bad'); return; }
+    if (!text) { toast('请填写录音内容的逐字转写（决定克隆质量）', 'bad'); return; }
+    $('recCloneBtn').disabled = true;
+    toast('正在编码参考音频…');
+    try {
+      const wavBase64 = await blobToWavBase64(recBlob);
+      const r = await fetch(api() + '/v1/voices/encode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, reference_text: text, wav_base64: wavBase64 }),
+      });
+      const body = await r.text();
+      if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + body);
+      const doc = JSON.parse(body);
+      const list = loadLocal().filter(v => v.name !== name);
+      list.push({
+        name, reference_text: doc.reference_text || text,
+        encoder_sha256: doc.encoder_sha256, frames: doc.frames,
+        codes: doc.codes, created: Date.now(),
+      });
+      saveLocal(list);
+      await loadVoices();
+      $('voice').value = 'loc:' + name;
+      toast(`克隆成功：${name}（${doc.frames} 帧 · 保存在本浏览器）`, 'ok');
+    } catch (e) {
+      toast('克隆失败：' + e.message, 'bad');
+    } finally {
+      $('recCloneBtn').disabled = false;
+    }
+  });
+
+  $('vfile').addEventListener('change', async e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    e.target.value = '';
+    let doc;
+    try { doc = JSON.parse(await f.text()); }
+    catch (err) { toast('文件不是合法 JSON：' + err.message, 'bad'); return; }
+    if (!doc.codes || !doc.name) { toast('缺少 name 或 codes 字段', 'bad'); return; }
+    const frames = doc.codes.length;
+    if (!frames || doc.codes.some(r => !Array.isArray(r) || r.length !== 16)) {
+      toast('codes 格式应为 [T][16]', 'bad');
+      return;
+    }
+    const list = loadLocal().filter(v => v.name !== doc.name);
+    list.push({
+      name: doc.name, reference_text: doc.reference_text || '',
+      encoder_sha256: doc.encoder_sha256 || '', frames,
+      codes: doc.codes, created: Date.now(),
+    });
+    saveLocal(list);
+    await loadVoices();
+    $('voice').value = 'loc:' + doc.name;
+    toast(`已导入本机音色：${doc.name}（${frames} 帧）`, 'ok');
+  });
+
+  $('voice').addEventListener('dblclick', () => {
+    const v = selectedVoice();
+    if (!v || v.server) return;
+    if (!confirm(`删除本机音色「${v.name}」？`)) return;
+    saveLocal(loadLocal().filter(x => x.name !== v.name));
+    loadVoices();
+    toast('已删除本机音色 ' + v.name);
+  });
+
+  ping().then(loadVoices);
+})();
+</script>
+</body>
+</html>

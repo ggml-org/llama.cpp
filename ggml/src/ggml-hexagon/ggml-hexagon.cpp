@@ -2907,13 +2907,28 @@ static void ggml_backend_hexagon_set_tensor_async(ggml_backend_t backend, struct
 
 static void ggml_backend_hexagon_get_tensor_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
+    static const bool timing = getenv("M5_HTP_READBACK_TIMING") != nullptr;
+    const int64_t start = timing ? ggml_time_us() : 0;
     HEX_VERBOSE("ggml-hex: %s get-tensor-async %s : data %p offset %zu size %zu usage %d\n",
                 sess->c_name(), tensor->name, data, offset, size, tensor->buffer ? (int) tensor->buffer->usage : -1);
     sess->flush_sync();
+    const int64_t ready = timing ? ggml_time_us() : 0;
     if (sess->last_error > HTP_STATUS_OK) {
         GGML_ABORT("ggml-hex: %s get-tensor-async failed : dsp-error %s\n", sess->c_name(), status_to_str(sess->last_error));
     }
     ggml_backend_tensor_get(tensor, data, offset, size);
+    if (timing) {
+        const int64_t end = ggml_time_us();
+        thread_local int calls = 0;
+        thread_local int64_t flush_us = 0;
+        thread_local int64_t copy_us = 0;
+        flush_us += ready - start;
+        copy_us += end - ready;
+        if (++calls % 100 == 0) {
+            GGML_LOG_INFO("ggml-hex: readback calls=%d flush_us=%lld copy_us=%lld\n",
+                          calls, (long long) flush_us, (long long) copy_us);
+        }
+    }
 }
 
 static void ggml_backend_hexagon_set_tensor_2d_async(ggml_backend_t backend,
@@ -3533,6 +3548,19 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     }
     opt_nhvx      = str_nhvx     ? strtoul(str_nhvx, NULL, 0)             : opt_nhvx;
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : opt_nhmx;
+    {
+        int hmx_depth = 0, hmx_spatial = 0;
+        if (htpdrv_get_hmx_support(CDSP_DOMAIN_ID, &hmx_depth, &hmx_spatial) == 0) {
+            if (hmx_depth == 0 && hmx_spatial == 0) {
+                if (opt_nhmx != 0) {
+                    GGML_LOG_WARN("ggml-hex: CDSP reports no HMX support, falling back to HVX\n");
+                }
+                opt_nhmx = 0;
+            } else {
+                GGML_LOG_INFO("ggml-hex: CDSP HMX depth %d spatial %d\n", hmx_depth, hmx_spatial);
+            }
+        }
+    }
     opt_vtcm_size = str_vtcm_size ? parse_size(str_vtcm_size)                 : opt_vtcm_size;
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;

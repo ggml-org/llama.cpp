@@ -116,6 +116,17 @@ HTPDRV_API domain * htpdrv_get_domain(int domain_id);
  */
 HTPDRV_API int htpdrv_get_arch(int domain, int * arch);
 
+/**
+ * htpdrv_get_hmx_support API: query the CDSP HMX depth and spatial capabilities
+ *
+ * @param[in]   domain value of a domain
+ * @param[out]  depth HMX_SUPPORT_DEPTH capability
+ * @param[out]  spatial HMX_SUPPORT_SPATIAL capability
+ * @return      0 if both queries succeeded.
+ *
+ */
+HTPDRV_API int htpdrv_get_hmx_support(int domain, int * depth, int * spatial);
+
 HTPDRV_API int remote_system_request(system_req_payload * req);
 
 #ifdef __cplusplus

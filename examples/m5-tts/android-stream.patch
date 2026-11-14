@@ -1,0 +1,555 @@
+diff --git a/android/app/src/main/java/com/m5/offline/M5Engine.java b/android/app/src/main/java/com/m5/offline/M5Engine.java
+index 02d8f53..cee1ca7 100644
+--- a/android/app/src/main/java/com/m5/offline/M5Engine.java
++++ b/android/app/src/main/java/com/m5/offline/M5Engine.java
+@@ -6,9 +6,10 @@ import java.io.*;
+ import java.nio.*;
+ import java.nio.file.Files;
+ import java.util.*;
++import java.util.concurrent.*;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ 
+-/** CPU-only, non-streaming port of m5_onnx/runtime.py. Single worker owns an instance. */
++/** CPU streaming port of m5_onnx/runtime.py. Single worker owns an instance. */
+ public final class M5Engine implements AutoCloseable {
+     public interface Progress { void update(String message); }
+     public interface NoiseSource { void fill(FloatBuffer buffer) throws IOException; }
+@@ -37,17 +38,49 @@ public final class M5Engine implements AutoCloseable {
+     public static final class Synthesis {
+         public final double elapsedSeconds, audioSeconds;
+         public final int segments;
+-        Synthesis(double elapsed, double audio, int count) { elapsedSeconds = elapsed; audioSeconds = audio; segments = count; }
++        public final double backboneSeconds, depthSeconds, codecSeconds, firstPcmSeconds;
++        Synthesis(double elapsed, double audio, int count, Timings timings) {
++            elapsedSeconds = elapsed;
++            audioSeconds = audio;
++            segments = count;
++            backboneSeconds = timings.backboneNs / 1e9;
++            depthSeconds = timings.depthNs / 1e9;
++            codecSeconds = timings.codecNs / 1e9;
++            firstPcmSeconds = timings.firstPcmNs / 1e9;
++        }
++    }
++
++    private static final class Timings {
++        final long startNs = System.nanoTime();
++        long backboneNs, depthNs, codecNs, firstPcmNs;
+     }
+ 
+     private final OrtEnvironment env = OrtEnvironment.getEnvironment();
+     private OrtSession backbone, depth, codec;
++    private NativeDepth nativeDepth;
++    private NativeBackbone nativeBackbone;
++    private final List<String> backboneCommand;
++    private final int firstChunkFrames, chunkFrames;
+     private NpyMatrix textEmbedding, audioEmbedding;
+     private Tokenizer tokenizer;
+     private JSONObject meta, codecMeta;
+     private final List<Voice> voices = new ArrayList<>();
+ 
+     public M5Engine(File root, int threads, Progress progress) throws Exception {
++        this(root, threads, progress, Collections.emptyList());
++    }
++
++    M5Engine(File root, int threads, Progress progress, List<String> backboneCommand) throws Exception {
++        this(root, threads, progress, backboneCommand, 4, 4, "depth_frame.onnx");
++    }
++
++    M5Engine(File root, int threads, Progress progress, List<String> backboneCommand,
++             int firstChunkFrames, int chunkFrames, String depthModel) throws Exception {
++        if (firstChunkFrames < 1 || firstChunkFrames > 32 || chunkFrames < 1 || chunkFrames > 32)
++            throw new IllegalArgumentException("chunk sizes must be between 1 and 32");
++        this.firstChunkFrames = firstChunkFrames;
++        this.chunkFrames = chunkFrames;
++        this.backboneCommand = new ArrayList<>(backboneCommand);
+         if (threads < 1 || threads > 8) throw new IllegalArgumentException("线程数需要为 1–8");
+         try {
+             meta = json(new File(root, "manifest.json")); codecMeta = json(new File(root, "codec_cached.json"));
+@@ -73,14 +106,50 @@ public final class M5Engine implements AutoCloseable {
+                 options.addConfigEntry("session.intra_op.allow_spinning", "0");
+                 options.addConfigEntry("session.inter_op.allow_spinning", "0");
+                 progress.update("正在加载语音生成模型…");
+-                backbone = env.createSession(new File(root, "backbone.onnx").getPath(), options);
+-                depth = env.createSession(new File(root, "depth_frame.onnx").getPath(), options);
++                if (backboneCommand.isEmpty()) {
++                    backbone = env.createSession(new File(root, "backbone.onnx").getPath(), options);
++                } else {
++                    nativeBackbone = new NativeBackbone(backboneCommand);
++                }
++                String runner = System.getenv("M5_NATIVE_DEPTH");
++                if (runner == null) {
++                    depth = stageSession(new File(root, depthModel), options, threads, "depth");
++                } else {
++                    nativeDepth = new NativeDepth(new File(root, "depth-weights.f32"),
++                        Arrays.asList(runner, new File(root, depthModel).getPath(), "HTP0", "--depth-pipe"));
++                }
+                 progress.update("正在加载声音解码器…");
+-                codec = env.createSession(new File(root, "codec_decoder_cached.onnx").getPath(), options);
++                codec = stageSession(new File(root, System.getenv().getOrDefault("M5_CODEC_MODEL", "codec_decoder_cached.onnx")), options, threads, "codec");
+             }
+         } catch (Exception | OutOfMemoryError e) { close(); throw e; }
+     }
+ 
++    private OrtSession stageSession(File model, OrtSession.SessionOptions defaults, int threads, String stage)
++            throws OrtException {
++        String profile = System.getenv("M5_PROFILE_DIR");
++        boolean xnnpack = stage.equals(System.getenv("M5_XNNPACK_STAGE"));
++        String codecThreads = stage.equals("codec") ? System.getenv("M5_CODEC_THREADS") : null;
++        if (profile == null && !xnnpack && codecThreads == null) return env.createSession(model.getPath(), defaults);
++        int stageThreads = codecThreads == null ? threads : Integer.parseInt(codecThreads);
++        if (stageThreads < 1 || stageThreads > 8) throw new IllegalArgumentException("invalid stage thread count");
++        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
++            options.setIntraOpNumThreads(xnnpack ? 1 : stageThreads);
++            options.setInterOpNumThreads(1);
++            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
++            options.addConfigEntry("session.intra_op.allow_spinning", "0");
++            options.addConfigEntry("session.inter_op.allow_spinning", "0");
++            if (xnnpack) options.addXnnpack(Collections.singletonMap("intra_op_num_threads", Integer.toString(stageThreads)));
++            if (profile != null) options.enableProfiling(new File(profile, stage).getPath());
++            return env.createSession(model.getPath(), options);
++        }
++    }
++
++    void finishProfiles() throws OrtException {
++        if (System.getenv("M5_PROFILE_DIR") == null) return;
++        if (depth != null) System.err.println("depth profile " + depth.endProfiling());
++        System.err.println("codec profile " + codec.endProfiling());
++    }
++
+     public List<Voice> voices() { return Collections.unmodifiableList(voices); }
+     public static JSONObject json(File path) throws IOException, JSONException {
+         return new JSONObject(new String(Files.readAllBytes(path.toPath()), java.nio.charset.StandardCharsets.UTF_8));
+@@ -117,26 +186,30 @@ public final class M5Engine implements AutoCloseable {
+                                 Progress progress, NoiseSource noiseSource) throws Exception {
+         if (voice == null) throw new IllegalArgumentException("请选择音色");
+         List<String> segments = splitText(text);
+-        long start = System.nanoTime(); double duration;
++        Timings timings = new Timings();
++        double duration;
+         boolean success = false;
+         try (WavWriter wav = new WavWriter(output)) {
+             for (int i = 0; i < segments.size(); i++) {
+                 check(cancelled);
+                 final String prefix = "第 " + (i + 1) + "/" + segments.size() + " 段：";
+-                long[][] generated = generate(segments.get(i), voice, cancelled,
+-                    message -> progress.update(prefix + message), noiseSource);
+-                progress.update(prefix + "正在转换成声音…");
+-                decode(voice.codes, generated, wav, cancelled);
++                try (StreamingCodec stream = new StreamingCodec(wav, timings)) {
++                    int firstReference = Math.max(0, voice.codes.length - 8);
++                    stream.prime(voice.codes, firstReference);
++                    generate(segments.get(i), voice, cancelled,
++                        message -> progress.update(prefix + message), noiseSource, timings, stream);
++                    stream.finish();
++                }
+             }
+             duration = wav.duration();
+             if (duration <= 0) throw new IOException("模型没有生成有效音频");
+             success = true;
+         } finally { if (!success) Files.deleteIfExists(output.toPath()); }
+-        return new Synthesis((System.nanoTime() - start) / 1e9, duration, segments.size());
++        return new Synthesis((System.nanoTime() - timings.startNs) / 1e9, duration, segments.size(), timings);
+     }
+ 
+-    private long[][] generate(String text, Voice voice, AtomicBoolean cancelled,
+-                              Progress progress, NoiseSource source) throws Exception {
++    private void generate(String text, Voice voice, AtomicBoolean cancelled,
++                              Progress progress, NoiseSource source, Timings timings, StreamingCodec stream) throws Exception {
+         long[] ids = tokenizer.encode(conditioned(voice.referenceText, text));
+         int maxFrames = 500, length = ids.length + voice.codes.length;
+         if (length + maxFrames > meta.getInt("max_sequence")) throw new IOException("文本或参考音色过长，请缩短后重试");
+@@ -148,41 +221,61 @@ public final class M5Engine implements AutoCloseable {
+             prefix.put(sum);
+         }
+         prefix.rewind();
+-        List<long[]> generated = new ArrayList<>();
+         OrtSession.Result previousBackbone = null, previousDepth = null;
+         FloatBuffer noise = floats(16 * 2051);
+-        try (OnnxTensor initialHidden = OnnxTensor.createTensor(env, prefix, new long[]{1, length, 512});
++        FloatBuffer nativeHidden = floats(512);
++        FloatBuffer nextHidden = floats(512);
++        if (nativeBackbone != null) nativeBackbone.reset();
++        try (OnnxTensor nativeOutput = nativeBackbone == null ? null : OnnxTensor.createTensor(env, nativeHidden, new long[]{1, 512});
++             OnnxTensor nativeNext = nativeDepth == null ? null : OnnxTensor.createTensor(env, nextHidden, new long[]{1, 1, 512});
++             OnnxTensor initialHidden = OnnxTensor.createTensor(env, prefix, new long[]{1, length, 512});
+              OnnxTensor initialPast = zeros(new long[]{8, 2, 1, 2, 0, 64});
+              OnnxTensor noiseTensor = OnnxTensor.createTensor(env, noise, new long[]{16, 1, 2051})) {
+             for (int step = 0; step < maxFrames; step++) {
+                 check(cancelled);
+                 long[] positions = step == 0 ? new long[length] : new long[]{length + step - 1L};
+                 if (step == 0) for (int i = 0; i < length; i++) positions[i] = i;
+-                try (OnnxTensor position = longs(positions, new long[]{1, positions.length})) {
++                if (nativeBackbone != null) {
++                    long before = System.nanoTime();
++                    nativeBackbone.run(step == 0 ? prefix : nativeDepth != null ? nextHidden : tensor(previousDepth, "next_hidden").getFloatBuffer(), nativeHidden);
++                    timings.backboneNs += System.nanoTime() - before;
++                } else try (OnnxTensor position = longs(positions, new long[]{1, positions.length})) {
+                     Map<String, OnnxTensor> feed = new HashMap<>();
+-                    feed.put("hidden", previousDepth == null ? initialHidden : tensor(previousDepth, "next_hidden"));
++                    feed.put("hidden", step == 0 ? initialHidden : nativeDepth != null ? nativeNext : tensor(previousDepth, "next_hidden"));
+                     feed.put("past", previousBackbone == null ? initialPast : tensor(previousBackbone, "present"));
+                     feed.put("positions", position);
++                    long before = System.nanoTime();
+                     OrtSession.Result next = backbone.run(feed);
++                    timings.backboneNs += System.nanoTime() - before;
+                     if (previousBackbone != null) previousBackbone.close(); previousBackbone = next;
+                 }
+                 if (previousDepth != null) { previousDepth.close(); previousDepth = null; }
+                 source.fill(noise);
+-                try (OnnxTensor allowEos = OnnxTensor.createTensor(env, new boolean[]{step > meta.getInt("min_frames")})) {
++                LongBuffer codes;
++                boolean allowEnd = step > meta.getInt("min_frames");
++                if (nativeDepth != null) {
++                    long before = System.nanoTime();
++                    FloatBuffer hidden = nativeBackbone == null
++                        ? tensor(previousBackbone, "last_hidden").getFloatBuffer() : nativeHidden;
++                    codes = LongBuffer.wrap(nativeDepth.run(hidden, noise, allowEnd, nextHidden));
++                    timings.depthNs += System.nanoTime() - before;
++                } else try (OnnxTensor allowEos = OnnxTensor.createTensor(env, new boolean[]{allowEnd})) {
+                     Map<String, OnnxTensor> feed = new HashMap<>();
+-                    feed.put("hidden", tensor(previousBackbone, "last_hidden"));
++                    feed.put("hidden", nativeBackbone == null ? tensor(previousBackbone, "last_hidden") : nativeOutput);
+                     feed.put("noise", noiseTensor); feed.put("allow_eos", allowEos);
++                    long before = System.nanoTime();
+                     previousDepth = depth.run(feed);
++                    timings.depthNs += System.nanoTime() - before;
++                    codes = tensor(previousDepth, "codes").getLongBuffer();
+                 }
+-                LongBuffer codes = tensor(previousDepth, "codes").getLongBuffer();
+                 long[] frame = new long[16]; boolean eos = true;
+                 for (int j = 0; j < 16; j++) { long v = codes.get(j); eos &= v == 0; frame[j] = Math.max(0, Math.min(2047, v - 1)); }
+                 if (eos) {
+-                    if (generated.isEmpty()) throw new IOException("模型提前结束，没有生成语音");
+-                    return generated.toArray(new long[0][]);
++                    if (step == 0) throw new IOException("模型提前结束，没有生成语音");
++                    return;
+                 }
+-                generated.add(frame);
+-                if (step % 8 == 0) progress.update(String.format(Locale.CHINA, "已生成 %.1f 秒语音", generated.size() * 0.08));
++                stream.add(frame);
++                if (step % 8 == 0) progress.update(String.format(Locale.CHINA, "已生成 %.1f 秒语音", (step + 1) * 0.08));
+             }
+             throw new IOException("此段超过 40 秒生成上限，请缩短文本后重试");
+         } finally {
+@@ -191,19 +284,101 @@ public final class M5Engine implements AutoCloseable {
+         }
+     }
+ 
+-    private void decode(long[][] reference, long[][] generated, WavWriter wav, AtomicBoolean cancelled) throws Exception {
+-        try (CodecState state = new CodecState()) {
+-            for (int start = 0; start < reference.length; start += 16) {
+-                check(cancelled); state.run(reference, start, Math.min(16, reference.length - start));
++    private final class StreamingCodec implements AutoCloseable {
++        private static final int TAIL_SAMPLES = 2400;
++        private final CodecState state;
++        private final WavWriter wav;
++        private final Timings timings;
++        private final long[][] frames = new long[Math.max(firstChunkFrames, chunkFrames)][];
++        private boolean firstChunk = true;
++        private final ExecutorService worker;
++        private Future<?> pending;
++        private final float[] tail = new float[TAIL_SAMPLES];
++        private int frameCount, tailCount;
++
++        StreamingCodec(WavWriter wav, Timings timings) throws Exception {
++            this.wav = wav;
++            this.timings = timings;
++            state = new CodecState(timings);
++            worker = "1".equals(System.getenv("M5_OVERLAP_CODEC"))
++                ? Executors.newSingleThreadExecutor() : null;
++        }
++
++        void prime(long[][] reference, int start) throws Exception {
++            int count = reference.length - start;
++            if (worker == null || !"1".equals(System.getenv("M5_OVERLAP_PRIME"))) {
++                state.run(reference, start, count);
++            } else {
++                pending = worker.submit(() -> { state.run(reference, start, count); return null; });
+             }
+-            int remaining = generated.length * 1920 - 2400; // Same 100 ms tail trim as Python.
+-            for (int start = 0; start < generated.length; start += 32) {
+-                check(cancelled);
+-                FloatBuffer pcm = state.run(generated, start, Math.min(32, generated.length - start));
+-                int count = Math.max(0, Math.min(remaining, pcm.remaining()));
+-                wav.append(pcm, count); remaining -= count;
++        }
++
++        void add(long[] frame) throws Exception {
++            frames[frameCount++] = frame;
++            if (frameCount == (firstChunk ? firstChunkFrames : chunkFrames)) flush();
++        }
++
++        private void awaitPending() throws Exception {
++            if (pending == null) return;
++            boolean interrupted = false;
++            try {
++                for (;;) {
++                    try {
++                        pending.get();
++                        break;
++                    } catch (InterruptedException e) {
++                        interrupted = true;
++                    }
++                }
++            } catch (ExecutionException e) {
++                throw new IOException("streaming codec failed", e.getCause());
++            } finally {
++                pending = null;
++                if (interrupted) Thread.currentThread().interrupt();
++            }
++        }
++
++        void finish() throws Exception {
++            flush();
++            awaitPending();
++        }
++
++        private void flush() throws Exception {
++            if (frameCount == 0) return;
++            awaitPending();
++            long[][] batch = Arrays.copyOf(frames, frameCount);
++            frameCount = 0;
++            firstChunk = false;
++            if (worker == null) {
++                write(batch);
++            } else {
++                pending = worker.submit(() -> { write(batch); return null; });
++            }
++        }
++
++        private void write(long[][] batch) throws Exception {
++            FloatBuffer pcm = state.run(batch, 0, batch.length);
++            if (pcm.remaining() != batch.length * 1920) throw new IOException("声音解码器返回的长度不符");
++            float[] joined = new float[tailCount + pcm.remaining()];
++            System.arraycopy(tail, 0, joined, 0, tailCount);
++            pcm.get(joined, tailCount, pcm.remaining());
++            int count = Math.max(0, joined.length - TAIL_SAMPLES);
++            if (count > 0) {
++                wav.append(FloatBuffer.wrap(joined), count);
++                if (timings.firstPcmNs == 0) timings.firstPcmNs = System.nanoTime() - timings.startNs;
++            }
++            tailCount = joined.length - count;
++            System.arraycopy(joined, count, tail, 0, tailCount);
++        }
++
++        @Override
++        public void close() throws Exception {
++            try {
++                awaitPending();
++            } finally {
++                if (worker != null) worker.shutdown();
++                state.close();
+             }
+-            if (remaining > 0) throw new IOException("声音解码器返回的长度不足");
+         }
+     }
+ 
+@@ -211,7 +386,9 @@ public final class M5Engine implements AutoCloseable {
+         private final List<OnnxTensor> initial = new ArrayList<>();
+         private OrtSession.Result previous;
+         private int offset;
+-        CodecState() throws Exception {
++        private final Timings timings;
++        CodecState(Timings timings) throws Exception {
++            this.timings = timings;
+             try {
+                 initial.add(zeros(new long[]{8, 2, 1, 16, 0, 64}));
+                 JSONArray states = codecMeta.getJSONArray("states");
+@@ -232,7 +409,9 @@ public final class M5Engine implements AutoCloseable {
+                 feed.put("past", previous == null ? initial.get(0) : tensor(previous, "present"));
+                 for (int i = 1; i < initial.size(); i++)
+                     feed.put("conv_" + (i - 1), previous == null ? initial.get(i) : tensor(previous, "next_conv_" + (i - 1)));
++                long before = System.nanoTime();
+                 OrtSession.Result next = codec.run(feed);
++                timings.codecNs += System.nanoTime() - before;
+                 if (previous != null) previous.close(); previous = next; offset += count;
+                 return tensor(previous, "audio").getFloatBuffer();
+             }
+@@ -271,6 +450,14 @@ public final class M5Engine implements AutoCloseable {
+         if (result.isEmpty()) throw new IllegalArgumentException("请输入有效文字"); return result;
+     }
+     public void close() {
++        if (nativeBackbone != null) {
++            try { nativeBackbone.close(); } catch (IOException ignored) {}
++            nativeBackbone = null;
++        }
++        if (nativeDepth != null) {
++            try { nativeDepth.close(); } catch (IOException ignored) {}
++            nativeDepth = null;
++        }
+         for (OrtSession session : new OrtSession[]{codec, depth, backbone})
+             if (session != null) try { session.close(); } catch (OrtException ignored) { }
+         for (NpyMatrix matrix : new NpyMatrix[]{textEmbedding, audioEmbedding})
+diff --git a/android/app/src/main/java/com/m5/offline/MainActivity.java b/android/app/src/main/java/com/m5/offline/MainActivity.java
+index fe88c05..26d1d7e 100644
+--- a/android/app/src/main/java/com/m5/offline/MainActivity.java
++++ b/android/app/src/main/java/com/m5/offline/MainActivity.java
+@@ -421,6 +421,10 @@ public final class MainActivity extends Activity {
+                 synchronized (diagnostics) {
+                     diagnostics.put("elapsed_s", synthesis.elapsedSeconds); diagnostics.put("audio_s", synthesis.audioSeconds);
+                     diagnostics.put("rtf", synthesis.elapsedSeconds / synthesis.audioSeconds); diagnostics.put("segments", synthesis.segments);
++                    diagnostics.put("backbone_s", synthesis.backboneSeconds);
++                    diagnostics.put("depth_s", synthesis.depthSeconds);
++                    diagnostics.put("codec_s", synthesis.codecSeconds);
++                    diagnostics.put("first_pcm_s", synthesis.firstPcmSeconds);
+                 }
+                 ui(() -> {
+                     result.setText(String.format(Locale.CHINA, "语音 %.1f 秒 · 合成耗时 %.1f 秒", synthesis.audioSeconds, synthesis.elapsedSeconds));
+diff --git a/android/app/src/main/java/com/m5/offline/NativeBackbone.java b/android/app/src/main/java/com/m5/offline/NativeBackbone.java
+new file mode 100644
+index 0000000..6c48d76
+--- /dev/null
++++ b/android/app/src/main/java/com/m5/offline/NativeBackbone.java
+@@ -0,0 +1,55 @@
++package com.m5.offline;
++
++import java.io.DataInputStream;
++import java.io.DataOutputStream;
++import java.io.IOException;
++import java.nio.ByteBuffer;
++import java.nio.ByteOrder;
++import java.nio.FloatBuffer;
++import java.util.List;
++
++final class NativeBackbone implements AutoCloseable {
++    private static final int WIDTH = 512;
++    private final Process process;
++    private final DataOutputStream input;
++    private final DataInputStream output;
++    private final byte[] response = new byte[WIDTH * Float.BYTES];
++
++    NativeBackbone(List<String> command) throws IOException {
++        process = new ProcessBuilder(command).redirectError(ProcessBuilder.Redirect.INHERIT).start();
++        input = new DataOutputStream(process.getOutputStream());
++        output = new DataInputStream(process.getInputStream());
++    }
++
++    void reset() throws IOException { input.writeInt(0); }
++
++    void run(FloatBuffer hidden, FloatBuffer result) throws IOException {
++        FloatBuffer source = hidden.duplicate();
++        if (source.remaining() == 0 || source.remaining() % WIDTH != 0) {
++            throw new IOException("Invalid native backbone input size");
++        }
++        int rows = source.remaining() / WIDTH;
++        ByteBuffer payload = ByteBuffer.allocate(source.remaining() * Float.BYTES).order(ByteOrder.LITTLE_ENDIAN);
++        payload.asFloatBuffer().put(source);
++        input.writeInt(Integer.reverseBytes(rows));
++        input.write(payload.array());
++        input.flush();
++        output.readFully(response);
++        result.clear();
++        result.put(ByteBuffer.wrap(response).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer());
++        result.flip();
++    }
++
++    @Override
++    public void close() throws IOException {
++        try {
++            input.close();
++        } finally {
++            try {
++                output.close();
++            } finally {
++                process.destroy();
++            }
++        }
++    }
++}
+diff --git a/android/app/src/main/java/com/m5/offline/NativeDepth.java b/android/app/src/main/java/com/m5/offline/NativeDepth.java
+new file mode 100644
+index 0000000..afb7227
+--- /dev/null
++++ b/android/app/src/main/java/com/m5/offline/NativeDepth.java
+@@ -0,0 +1,91 @@
++package com.m5.offline;
++
++import java.io.*;
++import java.nio.*;
++import java.nio.channels.FileChannel;
++import java.util.*;
++
++final class NativeDepth implements Closeable {
++    private static final int WIDTH = 512, VOCAB = 2051, BOOKS = 16;
++    private final NativeBackbone core;
++    private final ByteBuffer mappedWeights;
++    private final FloatBuffer weights;
++    private final float[] input = new float[WIDTH];
++    private final float[] projectedHidden = new float[WIDTH];
++    private static native void project(ByteBuffer weights, int offset, float[] hidden, float[] output);
++    static { System.loadLibrary("m5_depth_heads"); }
++    private final FloatBuffer local = FloatBuffer.allocate(2 * WIDTH);
++    private final FloatBuffer decoded = FloatBuffer.allocate(WIDTH);
++    private final float[] logits = new float[VOCAB];
++    private final float[] ranked = new float[VOCAB];
++
++    NativeDepth(File weightsFile, List<String> command) throws IOException {
++        try (RandomAccessFile file = new RandomAccessFile(weightsFile, "r")) {
++            long bytes = (BOOKS * VOCAB * WIDTH * 3L + WIDTH * WIDTH) * Float.BYTES;
++            if (file.length() != bytes) throw new IOException("Invalid depth weight size");
++            mappedWeights = file.getChannel().map(FileChannel.MapMode.READ_ONLY, 0, bytes).order(ByteOrder.LITTLE_ENDIAN);
++            weights = mappedWeights.asFloatBuffer();
++        }
++        core = new NativeBackbone(command);
++    }
++
++    private int sample(FloatBuffer hidden, FloatBuffer noise, int book, boolean allowEos) {
++        hidden.duplicate().get(input);
++        project(mappedWeights, book * VOCAB * WIDTH, input, logits);
++        float max = Float.NEGATIVE_INFINITY;
++        for (int i = 0; i < VOCAB; i++) {
++            logits[i] = (i == 0 && !allowEos ? -1e5f : logits[i]) / 0.9f;
++            max = Math.max(max, logits[i]);
++        }
++        System.arraycopy(logits, 0, ranked, 0, VOCAB);
++        Arrays.sort(ranked);
++        float cutoff = ranked[VOCAB - 10];
++        float sum = 0;
++        for (int i = 0; i < VOCAB; i++) {
++            logits[i] = logits[i] >= cutoff ? (float) Math.exp(logits[i] - max) : 0;
++            sum += logits[i];
++        }
++        int selected = 0;
++        float best = -1;
++        for (int i = 0; i < VOCAB; i++) {
++            float score = (logits[i] / sum) / noise.get(book * VOCAB + i);
++            if (score > best) {
++                best = score;
++                selected = i;
++            }
++        }
++        return selected;
++    }
++
++    long[] run(FloatBuffer hidden, FloatBuffer noise, boolean allowEos, FloatBuffer next) throws IOException {
++        final int projection = BOOKS * VOCAB * WIDTH;
++        final int projected = projection + WIDTH * WIDTH;
++        final int audio = projected + BOOKS * VOCAB * WIDTH;
++        core.reset();
++        long[] codes = new long[BOOKS];
++        codes[0] = sample(hidden, noise, 0, allowEos);
++        local.clear();
++        project(mappedWeights, projection, input, projectedHidden);
++        local.put(projectedHidden);
++        for (int book = 1; book < BOOKS; book++) {
++            int offset = projected + ((book - 1) * VOCAB + (int) codes[book - 1]) * WIDTH;
++            for (int j = 0; j < WIDTH; j++) local.put(weights.get(offset + j));
++            local.flip();
++            core.run(local, decoded);
++            codes[book] = sample(decoded, noise, book, true);
++            local.clear();
++        }
++        next.clear();
++        for (int j = 0; j < WIDTH; j++) {
++            float total = 0;
++            for (int book = 0; book < BOOKS; book++) {
++                total += weights.get(audio + (book * VOCAB + (int) codes[book]) * WIDTH + j);
++            }
++            next.put(total);
++        }
++        next.flip();
++        return codes;
++    }
++
++    public void close() throws IOException { core.close(); }
++}
