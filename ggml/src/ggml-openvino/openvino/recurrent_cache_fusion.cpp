@@ -55,6 +55,7 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
             const auto node = graph->nodes[j];
             if (GgmlOvDecoder::is_recurrent_cache_reset(node) &&
                 node->view_src == root && decoder->get_op_case(j) == 1) {
+                // SCALE stores (scale, bias); FILL stores its value first and leaves the second parameter 0.
                 float scale, bias;
                 memcpy(&scale, node->op_params, sizeof(float));
                 memcpy(&bias, node->op_params + 1, sizeof(float));
