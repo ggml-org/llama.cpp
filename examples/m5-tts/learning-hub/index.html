@@ -253,7 +253,7 @@
   <div class="sideFoot">
     <div>学习进度 <span id="pctText">0%</span></div>
     <div class="bar"><i id="pctBar"></i></div>
-    <div id="seenText">已浏览 0 / 11 章</div>
+    <div id="seenText">已浏览 0 / 12 章</div>
   </div>
 </aside>
 
@@ -1535,8 +1535,95 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
   <p>把 FP32 V 的 128/256 个标量改为在 DSP 上按索引直接写入，V 写入时间约从 164 µs 降到 28 µs，两个测试文本的 codes 和 WAV 与基线一致。按权重与缓存名分组后，QK/AV 与 FFN 各约 0.7 ms/步；QKV 和 gate/up 已经融合。按算子名统计只能发现大类，按实际张量名才能决定下一处优化。</p>
   <p>保持 FP32 KV 与普通注意力，把短序列 KV 的读取范围从 256 改为按 32 对齐，保留原 cache 容量和全部有效位置。两组 codes 和 WAV 逐字节一致，端到端减少约 10%。这是利用模型真实形状减少被掩蔽计算的例子。用单行 decode profile 归因，再用独立 A/B 验收墙钟。</p>
   <p><b>转正：从实验开关变成编译期默认。</b>实验阶段它只存在于一个隔离 runtime 目录里，靠部署脚本给 depth 子进程注入 <code>M5_KV_PAD32=1</code> 才生效，源码默认仍是 256。转正时把 <code>get_n_kv()</code> 的 pad 默认改为 32（<code>M5_KV_PAD=256</code> 可回退），并让 backbone 分支显式保留 256——因为它的 prefill prefix 会随整句增长，而且原实验只有 depth 用了 32，必须严格复现实验条件。V 直接散写同时转为默认（<code>M5_HVX_DIRECT_V=0</code> 关闭）。部署脚本不再需要特殊目录和 env 注入，并补上了原本缺失的 stage 库推送。12 次交替 A/B：默认 3.775 s / RTF 0.710，pad 256 为 4.163 s / 0.783，关 direct-V 为 3.894 s / 0.732；12 次 codes 与 WAV 的哈希全部相同，backbone 耗时无退化。</p>
-  <p><b>提速成功后，瓶颈结构会改变。</b>转正前 depth 4.53 s、codec 3.62 s，之间有 25% 余量；转正后 depth 2.853 s、codec 2.820 s，<b>只差 1.15%</b>。流水线的墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，于是单独把 depth 再降 27%（Flash 级）只剩 -0.9%，哪怕把 depth 降到零也只是 -0.9%；单独把 codec 降 20% 是 <b>0%</b>。只有两者一起降 20% 才有约 -15%。这正是第 3 章「先看天花板再动手」的实战版：一个成功的优化会把旧的余量吃光，让此前划算的方向突然变得不划算。所以下一步不是继续追 Flash 的速度，而是先用 <code>flash-f32</code>（FP32 KV + 融合 kernel）把音质问题归因清楚，再转向不受 <code>max()</code> 约束的首包、热漂移与听感。</p>
+  <p><b>提速成功后，瓶颈结构会改变。</b>转正前 depth 4.53 s、codec 3.62 s，之间有 25% 余量；转正后 depth 2.853 s、codec 2.820 s，<b>只差 1.15%</b>。流水线的墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，于是单独把 depth 再降 27%（Flash 级）只剩 -0.9%，哪怕把 depth 降到零也只是 -0.9%；单独把 codec 降 20% 是 <b>0%</b>。只有两者一起降 20% 才有约 -15%。这正是第 3 章「先看天花板再动手」的实战版：一个成功的优化会把旧的余量吃光，让此前划算的方向突然变得不划算。后续 P0 归因实验（§17）确认：即使 KV 保持 FP32，融合 kernel 也会改变 codes 与帧数，单帧只快 6.9% 而整句墙钟反而 +5.1%，这条线判死。方法沉淀见下一章。</p>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch10">标记本章已学完</button></div>
+</section>
+
+
+<section class="chapter" id="ch11" data-title="性能分析方法论：从分项到判死">
+  <h2>性能分析方法论：从分项到判死</h2>
+  <p>前面十章讲的是「这个模型怎么加速」。这一章把过程中反复用到的判断方式抽出来：它们不依赖 M5-TTS，换一个推理引擎、换一块 NPU 也成立。核心只有一句——<b>先算清楚这个优化能兑现多少，再决定要不要动手</b>。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 340" role="img" aria-label="性能分析的四道决策门，以及每道门在本仓库中的实证">
+      <title>性能分析的四道决策门</title>
+      <desc>建墙钟模型、算可兑现收益、交替 A/B 加等价性门禁、判死或转正并重算余量；右侧对应本仓库的实测案例。</desc>
+      <text class="dg-tb" x="40" y="26">决策步骤</text>
+      <text class="dg-tb" x="360" y="26">本仓库的实证</text>
+
+      <rect class="dg-accent" x="40" y="40" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="61">① 建墙钟模型</text>
+      <text class="dg-ts" x="54" y="80">wall = bb + max(depth,codec) + 固定</text>
+      <rect class="dg-box" x="360" y="40" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="61">§16 残差稳定在 0.197 s</text>
+      <text class="dg-ts" x="374" y="80">模型可证伪，不是事后解释</text>
+      <path class="dg-grid" d="M320 67 H360"/>
+
+      <rect class="dg-accent" x="40" y="108" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="129">② 算可兑现收益</text>
+      <text class="dg-ts" x="54" y="148">非瓶颈分支的收益恒为 0</text>
+      <rect class="dg-box" x="360" y="108" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="129">codec 单独 -20% → 0%</text>
+      <text class="dg-ts" x="374" y="148">depth 降到 0 也只有 -0.9%</text>
+      <path class="dg-grid" d="M320 135 H360"/>
+
+      <rect class="dg-accent" x="40" y="176" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="197">③ 交替 A/B + 等价性</text>
+      <text class="dg-ts" x="54" y="216">elapsed_s · 逐字节 · 盲听</text>
+      <rect class="dg-box" x="360" y="176" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="197">flash-f32 墙钟 +5.1%</text>
+      <text class="dg-ts" x="374" y="216">而 RTF 显示 -4.9%（分母变了）</text>
+      <path class="dg-grid" d="M320 203 H360"/>
+
+      <rect class="dg-accent" x="40" y="244" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="265">④ 判死或转正</text>
+      <text class="dg-ts" x="54" y="284">重算余量，重排优先级</text>
+      <rect class="dg-box" x="360" y="244" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="265">KV32 转正：余量 25% → 1.15%</text>
+      <text class="dg-ts" x="374" y="284">Flash 从最大杠杆变不值得</text>
+      <path class="dg-grid" d="M320 271 H360"/>
+
+      <path class="dg-flow" d="M180 94 V106"/>
+      <path class="dg-flow" d="M180 162 V174"/>
+      <path class="dg-flow" d="M180 230 V242"/>
+      <text class="dg-ts" x="40" y="322">先做便宜的判死实验，再投入训练；每次转正后回到第 ① 步重算余量。</text>
+      </svg>
+    </div>
+    <figcaption>图 11-1　四道决策门。每个「不做了」的结论都必须能追到某一道门，而不是凭感觉。</figcaption>
+  </figure>
+
+  <h3>11.1 为什么先建模型</h3>
+  <p>分项统计（<code>backbone_s / depth_s / codec_s</code>）本身不是模型，把它们的<b>结构关系</b>写出来才是。本项目的两条分支并行重叠，所以墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，不是三者相加。用残差检验：不同配置下减出来的固定项都约 0.197 s，说明模型抓住了结构。有了它，动刀之前就能算出「codec 降 20% 值多少」——在 §13 的答案是 0，在 §16 的答案仍是 0。省下的是一整轮无用的量化实验。</p>
+
+  <h3>11.2 十条速查判据</h3>
+  <ol>
+    <li>先写可证伪的墙钟模型，用它算<b>可兑现收益</b>，不要用单项耗时当目标。</li>
+    <li>区分「组件变快」与「端到端变快」；<code>max()</code> 结构下优化非瓶颈分支收益为 0。</li>
+    <li>每次成功优化后重算余量、重排优先级：KV32 把 25% 余量吃到 1.15%，旧结论立即失效。</li>
+    <li>同轮正逆序交替 A/B，固定文本与 seed、取中位数；判据是 <code>elapsed_s</code>。热漂移能让同代码 RTF 从 0.75 变 0.91。</li>
+    <li>RTF 只在输出不变时可用。分母 <code>audio_s</code> 会随生成轨迹变化，必须同时看墙钟、每帧成本、输出长度。</li>
+    <li>等价性分层：① codes/WAV 逐字节；② ASR + 音频统计；③ 多文本人耳盲听。heads int8 与 B/Q4 都证明「指标全对 ≠ 听感通过」。</li>
+    <li>归因实验一次只改一个变量（KV 精度 × kernel 实现），并用 profile 数算子证明改动真的生效，别靠 env 名猜。</li>
+    <li>算子形状比墙钟推测更接近机制：<code>SOFT_MAX 256:32:8:1</code> 直接解释融合 kernel 为何只剩 7%。</li>
+    <li>负结果写清机制与复活条件：α 上界 0.18、反压是固定税、可预测性沿链衰减、kernel 改变轨迹。</li>
+    <li>先做便宜的判死实验，再投入训练或改图。960 帧离线数据判死草稿，16 次合成判死 Flash 线。</li>
+  </ol>
+
+  <h3>11.3 三个反复出现的陷阱</h3>
+  <div class="grid2">
+    <div class="tile"><b>分母会变</b><p><code>flash-f32</code> 的 RTF 从 0.700 降到 0.666，看似快 5%；实际帧数 69→76、音频长 10.5%、墙钟 <b>+5.1%</b>。只看 RTF 会得到完全相反的结论。</p></div>
+    <div class="tile"><b>只看单边指标</b><p><code>--threads 3</code>、<code>chunk (2,4)</code>、<code>OPPOLL=1</code> 都是按「codec 单独耗时」「首包最短」定的。§13 用端到端墙钟重扫 48 次，没有任何配置快于默认。</p></div>
+    <div class="tile"><b>把近似当等价</b><p>codes 分叉、帧数漂移时，两条轨迹已经不是同一个任务；此时比速度没有意义，先过门禁再谈性能。</p></div>
+    <div class="tile"><b>沿用旧基线</b><p>「Flash 是最大杠杆（-17%）」在 KV32 之前成立；转正后它只剩 ~0.9%。每条结论都要带上它的基线。</p></div>
+  </div>
+
+  <h3>11.4 把负结果变成资产</h3>
+  <p>§12–§14、§17 四条线全部判死，但留下的是可复用的机制：α 上界、固定税、可预测性衰减、kernel 轨迹漂移。写清楚「为什么不行」和「什么条件下复活」，比记录「试过没收益」有价值得多——它让下一个人不必重跑一遍，也让自己不会在换基线后重复投入。</p>
+
+  <details class="qa"><summary>Q8　某候选把 RTF 从 0.700 降到 0.666，能上线吗？</summary>
+    <div class="answer">不能只看这个数。本例中帧数 69→76，音频 5.32→5.88 s，墙钟 3.724→3.914 s（<b>+5.1%</b>），RTF 下降纯粹因为分母变长。而且四条文本/seed 的 codes 与 WAV <b>全部不一致</b>，已经不是同一个任务。正确顺序：先看过没过等价性门禁（逐字节 → ASR → 盲听），再看 <code>elapsed_s</code> 与每帧成本，最后才算 RTF。这个候选是 §17 的 <code>flash-f32</code>，结论是判死。</div></details>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch11">标记本章已学完</button></div>
 </section>
 
 <footer>
