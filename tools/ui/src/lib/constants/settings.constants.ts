@@ -64,7 +64,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		icon: SlidersVertical,
 		settings: [
 			{
-				defaultValue: ColorMode.SYSTEM,
+				defaultValue: ColorMode.LIGHT,
 				help: 'Choose the color theme for the interface. You can choose between System (follows your device settings), Light, or Dark.',
 				key: SETTINGS_KEYS.THEME,
 				label: 'Theme',
