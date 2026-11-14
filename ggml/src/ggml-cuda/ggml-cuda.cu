@@ -2203,7 +2203,7 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
     }
 }
 
-// returns true if a scaled matmul applied its weight scale in-kernel (mmvq/mmq epilogue fold),
+// returns true if a scaled matmul applied its weight scale in-kernel (mmvq/mmq epilogue or cuBLASLt fp8 fold),
 // so the caller can skip the separate ggml_cuda_op_mul_mat_scale pass
 static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -2274,8 +2274,11 @@ static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst, scale_fold ? &fusion : nullptr);
         return scale_fold;
     }
-    if (src0->type == GGML_TYPE_F8_E4M3 && ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst)) {
-        return false;
+    if (src0->type == GGML_TYPE_F8_E4M3) {
+        const ggml_tensor * weight_scale = dst->src[2] && ggml_nelements(dst->src[2]) == 1 ? dst->src[2] : nullptr;
+        if (ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst, weight_scale)) {
+            return weight_scale != nullptr;
+        }
     }
     ggml_cuda_mul_mat_cublas(ctx, src0, src1, dst);
     return false;
