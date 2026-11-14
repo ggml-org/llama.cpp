@@ -139,6 +139,12 @@ internal class InferenceEngineImpl private constructor(
 
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load native library", e)
+                _state.value = InferenceEngine.State.Error(e)
+                throw e
+            } catch (e: UnsatisfiedLinkError) {
+                val failure = RuntimeException("Failed to load native library", e)
+                Log.e(TAG, "Failed to load native library", e)
+                _state.value = InferenceEngine.State.Error(failure)
                 throw e
             }
         }
