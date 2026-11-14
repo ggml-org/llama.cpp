@@ -2606,7 +2606,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
 
     std::vector<int32_t> ids_to_sorted_host;
     ids_to_sorted_host.reserve(2*ne_get_rows);
-    std::vector<int32_t> ids_from_sorted_host(ne_get_rows);
+    std::vector<int32_t> ids_from_sorted_host(ne_get_rows, -1);
 
     ggml_cuda_pool_alloc<int32_t> ids_buf_dev(ctx.pool(), 2*ne_get_rows);
 
@@ -2623,7 +2623,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         for (int64_t i12 = 0; i12 < ne12; ++i12) { // tokens
             for (int64_t iex = 0; iex < n_expert_used; ++iex) {
                 const int32_t expert_to_use = *(const int32_t *)(ids_host.data() + i12*ids->nb[1] + iex*ids->nb[0]);
-                assert(expert_to_use >= 0 && expert_to_use < ne02);
+                assert(expert_to_use >= -1 && expert_to_use < ne02);
                 if (expert_to_use == i02) {
                     ids_from_sorted_host[i12*n_expert_used + iex] = ids_to_sorted_host.size();
                     ids_to_sorted_host.push_back(i12*ne11 + iex % ne11);
@@ -2633,7 +2633,21 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             }
         }
     }
-    GGML_ASSERT(ids_to_sorted_host.size() == size_t(ne_get_rows));
+
+    // A slot with id -1 gathers the dst_sorted row after the last valid row, which is set to zero.
+    const int64_t n_valid   = ids_to_sorted_host.size();
+    int64_t       n_skipped = 0;
+    for (int64_t i12 = 0; i12 < ne12; ++i12) {
+        for (int64_t iex = 0; iex < n_expert_used; ++iex) {
+            n_skipped += *(const int32_t *)(ids_host.data() + i12*ids->nb[1] + iex*ids->nb[0]) == -1;
+        }
+    }
+    GGML_ASSERT(n_valid + n_skipped == ne_get_rows);
+    if (n_skipped > 0) {
+        std::replace(ids_from_sorted_host.begin(), ids_from_sorted_host.end(), -1, int32_t(n_valid));
+        ids_to_sorted_host.resize(ne_get_rows, 0);
+        CUDA_CHECK(cudaMemsetAsync(dst_sorted.ptr + n_valid*ne0*ts_dst_sorted, 0, ne0*ts_dst_sorted, stream));
+    }
 
     ids_to_sorted_host.insert(ids_to_sorted_host.end(), ids_from_sorted_host.begin(), ids_from_sorted_host.end());
 
