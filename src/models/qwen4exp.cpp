@@ -911,6 +911,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
                 inp_kpool->n_kv, n_res, type_mask); // [n_res, n_tokens]
         cb(sel, "indexer_sel", il);
 
+        // probed with the row-list attention: a backend without the op keeps the mask path
+        res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN_KV_ROWS, *sel_rows, il});
+        res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN_KV_ROWS, sel,       il});
+
         return sel;
     }
 
