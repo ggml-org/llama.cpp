@@ -204,6 +204,38 @@ def test_anthropic_messages_streaming():
     assert "timings" not in message_stop, "Anthropic streaming should not include timings"
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_anthropic_verbose(stream):
+    """Test verbose debug output"""
+    server.start()
+
+    for verbose in [True, False]:
+        data = {
+            "model": "test",
+            "max_tokens": 8,
+            "system": "Book",
+            "messages": [
+                {"role": "user", "content": "What is the best book"}
+            ],
+            "stream": stream,
+            "extra_params": {"verbose": verbose},
+        }
+        if stream:
+            events = list(server.make_stream_request("POST", "/v1/messages", data=data))
+        else:
+            res = server.make_request("POST", "/v1/messages", data=data)
+            assert res.status_code == 200
+            events = [res.body]
+
+        debug = [e["__verbose"] for e in events if "__verbose" in e]
+        if verbose:
+            assert len(debug) == 1, "__verbose should be sent once"
+            assert "__verbose" in events[-1], "__verbose should be on the final event"
+            assert "Book" in debug[0]["prompt"]
+        else:
+            assert debug == []
+
+
 # Token counting tests
 
 def test_anthropic_count_tokens():
