@@ -4174,13 +4174,13 @@ void llm_graph_context::build_dense_out(
     GGML_ASSERT(cur != nullptr && "missing t_embd_pooled/t_embd");
 
     if (dense_2) {
-        cur = ggml_mul_mat(ctx0, dense_2, cur);
+        cur = build_lora_mm(dense_2, cur);
     }
     if (dense_2_b) {
         cur = ggml_add(ctx0, cur, dense_2_b);
     }
     if (dense_3) {
-        cur = ggml_mul_mat(ctx0, dense_3, cur);
+        cur = build_lora_mm(dense_3, cur);
     }
     cb(cur, "result_embd_pooled", -1);
     res->t_embd_pooled = cur;
@@ -4251,7 +4251,7 @@ void llm_graph_context::build_pooling(
                 // classification head
                 // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
                 if (cls) {
-                    cur = ggml_mul_mat(ctx0, cls, cur);
+                    cur = build_lora_mm(cls, cur);
                     if (cls_b) {
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
@@ -4267,7 +4267,7 @@ void llm_graph_context::build_pooling(
                 // Single layer classification head (direct projection)
                 // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
                 if (cls_out) {
-                    cur = ggml_mul_mat(ctx0, cls_out, cur);
+                    cur = build_lora_mm(cls_out, cur);
                     if (cls_out_b) {
                         cur = ggml_add(ctx0, cur, cls_out_b);
                     }

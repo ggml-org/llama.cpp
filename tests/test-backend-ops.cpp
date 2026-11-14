@@ -11986,6 +11986,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 16, 16, 64, {1, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 17, 0, offset_a));
     }
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 16, 16, 64, {2, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 17, 4));
+    // scaled weights sliced out of a larger tensor
+    for (ggml_type type : {GGML_TYPE_F8_E4M3, GGML_TYPE_NVFP4}) {
+        for (int scale_gran : {1, 2}) {
+            for (int64_t n : {1, 16}) {
+                for (int64_t bs : {1, 2}) {
+                    test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 16, n, 64, {bs, 1}, {1, 1}, {0, 1, 2, 3}, 0, 1, false, 20, 0, 3*ggml_row_size(type, 64), false, scale_gran));
+                }
+            }
+        }
+    }
 
     // testing very large N
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 16, 2105344, 32, {1, 1}, {1, 1}));

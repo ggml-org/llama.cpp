@@ -446,7 +446,7 @@ llama_model_glm5_next::graph::build_hc_pre(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);

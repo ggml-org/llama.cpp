@@ -202,8 +202,8 @@ ggml_tensor * llama_model_granite_switch::graph::build_switched_lora_delta(
     ggml_tensor * x    = ggml_reshape_3d(ctx0, cur, n_in, 1, n_tokens);
     ggml_tensor * ids2 = ggml_reshape_2d(ctx0, ids, 1, n_tokens);
 
-    ggml_tensor * a = ggml_mul_mat_id(ctx0, lora_a, x, ids2); // {max_rank, 1, n_tokens}
-    ggml_tensor * d = ggml_mul_mat_id(ctx0, lora_b, a, ids2); // {n_out,    1, n_tokens}
+    ggml_tensor * a = build_lora_mm_id(lora_a, x, ids2); // {max_rank, 1, n_tokens}
+    ggml_tensor * d = build_lora_mm_id(lora_b, a, ids2); // {n_out,    1, n_tokens}
 
     return ggml_reshape_2d(ctx0, d, d->ne[0], n_tokens);
 }

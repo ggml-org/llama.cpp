@@ -60,8 +60,8 @@ ggml_tensor * llm_build_rwkv6_base::build_rwkv6_time_mix(llm_graph_input_rs * in
 
     xxx = ggml_cont(ctx0, ggml_permute(ctx0, xxx, 0, 1, 3, 2));
 
-    xxx = ggml_mul_mat(
-        ctx0, ggml_reshape_4d(ctx0, layer.time_mix_w2, layer.time_mix_w2->ne[0], layer.time_mix_w2->ne[1], 1, 5), xxx);
+    xxx = build_lora_mm(
+        ggml_reshape_4d(ctx0, layer.time_mix_w2, layer.time_mix_w2->ne[0], layer.time_mix_w2->ne[1], 1, 5), xxx);
 
     ggml_tensor *xw, *xk, *xv, *xr, *xg;
     if (layer.time_mix_lerp_fused) {

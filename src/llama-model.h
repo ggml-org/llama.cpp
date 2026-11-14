@@ -689,12 +689,22 @@ struct llama_weight_scales {
     std::unordered_map<const ggml_tensor *, ggml_tensor *> input_scale;
 
     ggml_tensor * get(const ggml_tensor * w) const {
-        const auto it = scale.find(w);
+        auto it = scale.find(w);
+        if (it == scale.end() && w->view_src) {
+            it = scale.find(w->view_src);
+            // only per-tensor scales are supported for views of a weight
+            GGML_ASSERT(it == scale.end() || ggml_nelements(it->second) == 1);
+        }
         return it == scale.end() ? nullptr : it->second;
     }
 
     ggml_tensor * get_input(const ggml_tensor * w) const {
-        const auto it = input_scale.find(w);
+        auto it = input_scale.find(w);
+        if (it == input_scale.end() && w->view_src) {
+            it = input_scale.find(w->view_src);
+            // only per-tensor scales are supported for views of a weight
+            GGML_ASSERT(it == input_scale.end() || ggml_nelements(it->second) == 1);
+        }
         return it == input_scale.end() ? nullptr : it->second;
     }
 };
