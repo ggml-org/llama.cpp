@@ -104,6 +104,17 @@
   @keyframes slidein { from { opacity: 0; transform: translateY(8px); } }
   #waveform { width: 100%; height: 44px; margin-top: 12px; border-radius: 8px; background: var(--bg); }
   .hint { font-size: 12px; color: var(--sub); margin-top: 8px; line-height: 1.55; }
+  .scenes { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+  .scenes button { text-align: left; transition: background .18s, transform .18s; }
+  .scenes button[aria-pressed="true"] { background: var(--acc-soft); color: var(--ink); }
+  .scenes button:active { transform: scale(.97); }
+  #speechState { display: block; margin-top: 8px; color: var(--sub); }
+  .bar.busy i { width: 35%; animation: speech-progress 1.4s ease-in-out infinite alternate; }
+  @keyframes speech-progress { to { transform: translateX(180%); } }
+  @media (prefers-reduced-motion: reduce) {
+    .bar.busy i { animation: none; }
+    .scenes button { transition: none; }
+  }
 </style>
 </head>
 <body>
@@ -116,6 +127,11 @@
 
   <section>
     <h2>合成</h2>
+    <div class="scenes" id="scenes" role="group" aria-label="座舱播报示例">
+      <button type="button" class="ghost" data-scene="vehicle" aria-pressed="false">车控</button>
+      <button type="button" class="ghost" data-scene="navigation" aria-pressed="false">导航</button>
+      <button type="button" class="ghost" data-scene="chat" aria-pressed="false">闲聊</button>
+    </div>
     <label class="f" for="text">要合成的文字</label>
     <textarea id="text">今天的天气很好，我们一起去公园散步，看看路边的花，听听树上的鸟叫。</textarea>
     <div class="row">
@@ -141,7 +157,8 @@
       <button id="goBtn">生成语音</button>
       <button id="stopBtn" class="ghost" disabled>停止</button>
     </div>
-    <div class="bar"><i id="bar"></i></div>
+    <div class="bar" id="speechProgress"><i id="bar"></i></div>
+    <output id="speechState" role="status">等待生成</output>
     <div class="stats" id="stats" hidden>
       <div class="stat" title="RTF = 生成耗时 / 音频时长。音频越短，模型预热等固定开销占比越高，短句 RTF 会明显偏大甚至超过 1；长句才反映真实速度"><b id="sRtf">–</b><span>RTF（越小越快）</span></div>
       <div class="stat"><b id="sAudio">–</b><span>音频时长</span></div>
@@ -265,6 +282,7 @@
 
   function selectedVoice() {
     const raw = $('voice').value;
+    if (!raw) return null;
     const i = raw.indexOf(':');
     const kind = raw.slice(0, i), name = raw.slice(i + 1);
     if (kind === 'loc') return loadLocal().find(v => v.name === name) || null;
@@ -279,9 +297,41 @@
     [...$('fmtSeg').children].forEach(x => x.classList.toggle('on', x === b));
   });
 
+  const cockpitScenes = {
+    vehicle: ['serena', '车窗已关闭。'],
+    navigation: ['serena', '前方三百米右转，随后靠左行驶。'],
+    chat: ['serena-calm', '辛苦啦，路上不用着急。等到了，我们再慢慢聊。'],
+  };
+  function selectScene(key) {
+    $('scenes').querySelectorAll('button').forEach(button => {
+      button.setAttribute('aria-pressed', String(button.dataset.scene === key));
+    });
+  }
+  $('scenes').addEventListener('click', event => {
+    const button = event.target.closest('button[data-scene]');
+    if (!button) return;
+    const [voice, line] = cockpitScenes[button.dataset.scene];
+    $('text').value = line;
+    const id = 'srv:' + voice;
+    if ([...$('voice').options].some(option => option.value === id)) {
+      $('voice').value = id;
+      $('caption').value = '';
+    } else {
+      toast('此场景的 Serena 音色尚未导入，已保留当前音色');
+    }
+    selectScene(button.dataset.scene);
+    $('text').focus();
+  });
+  $('text').addEventListener('input', () => selectScene(null));
+  $('voice').addEventListener('change', () => selectScene(null));
+
+  let playerUrl = null;
+  let streamContext = null;
   let abort = null;
   $('stopBtn').addEventListener('click', () => {
     if (abort) abort.abort();
+    if (streamContext && streamContext.state !== 'closed') streamContext.close().catch(() => {});
+    $('player').pause();
     $('stopBtn').disabled = true;
   });
 
@@ -290,18 +340,30 @@
     const voice = selectedVoice();
     if (!text) { toast('文字为空', 'bad'); return; }
     if (!voice) { toast('请选择音色', 'bad'); return; }
+    if (abort) return;
+    const requestFormat = fmt;
+    const player = $('player');
+    player.pause();
+    player.removeAttribute('src');
+    player.load();
+    if (playerUrl) URL.revokeObjectURL(playerUrl);
+    playerUrl = null;
+    if (streamContext && streamContext.state !== 'closed') streamContext.close().catch(() => {});
+    streamContext = null;
+    $('speechState').textContent = '正在合成…';
+    $('speechProgress').classList.add('busy');
     $('goBtn').disabled = true; $('stopBtn').disabled = false;
     $('player').hidden = true; $('stats').hidden = true;
-    $('bar').style.width = fmt === 'pcm' ? '15%' : '40%';
+    $('bar').style.width = '';
     abort = new AbortController();
     const t0 = performance.now();
 
-    const payload = { input: text, response_format: fmt };
+    const payload = { input: text, response_format: requestFormat };
     const caption = $('caption').value.trim();
     if (caption) payload.caption = caption;
     if (voice.server) payload.voice = voice.name;
     else { payload.codes = voice.codes; payload.reference_text = voice.reference_text; }
-    log(`POST /v1/audio/speech  voice=${voice.name}${voice.server ? '' : '（本机）'} fmt=${fmt}${caption ? ' caption=' + caption : ''}`);
+    log(`POST /v1/audio/speech  voice=${voice.name}${voice.server ? '' : '（本机）'} fmt=${requestFormat}${caption ? ' caption=' + caption : ''}`);
     try {
       const resp = await fetch(api() + '/v1/audio/speech', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -312,10 +374,10 @@
       const hdrNum = n => { const v = hdr(n); return (v == null || v === '') ? null : Number(v); };
       const ttfb = (performance.now() - t0) / 1000;
       let audioSeconds = 0, samples = 0, firstClient = null;
-      if (fmt === 'wav') {
-        $('bar').style.width = '80%';
+      if (requestFormat === 'wav') {
+        $('speechState').textContent = '正在接收 WAV…';
         const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
+        const url = playerUrl = URL.createObjectURL(blob);
         audioSeconds = await new Promise(res => {
           const a = new Audio(url);
           a.onloadedmetadata = () => res(a.duration || 0);
@@ -350,20 +412,23 @@
       $('sFrames').textContent = frames != null ? (framesSrv != null ? '' : '≈') + String(frames) : '–';
       $('sWall').textContent = wall.toFixed(2) + ' s';
       $('stats').hidden = false;
+      $('speechState').textContent = '合成完成';
       toast(`完成：音频 ${audioSeconds.toFixed(2)}s · RTF ${rtf != null ? rtf.toFixed(3) : '?'}`, 'ok');
     } catch (e) {
-      if (e.name === 'AbortError') toast('已停止');
+      $('speechState').textContent = abort.signal.aborted ? '已停止' : '合成失败';
+      if (abort.signal.aborted) toast('已停止');
       else toast('失败：' + e.message, 'bad');
     } finally {
       $('goBtn').disabled = false; $('stopBtn').disabled = true;
       abort = null;
-      setTimeout(() => { $('bar').style.width = '0'; }, 700);
+      $('speechProgress').classList.remove('busy');
+      $('bar').style.width = '0';
     }
   }
   $('goBtn').addEventListener('click', generate);
 
   async function playPcmStream(resp, t0) {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+    const ctx = streamContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
     await ctx.resume();
     const reader = resp.body.getReader();
     let nextTime = ctx.currentTime + 0.12;
@@ -380,7 +445,10 @@
       rest = buf.slice(usable);
       const n = usable / 2;
       if (!n) continue;
-      if (firstMs == null) firstMs = performance.now();
+      if (firstMs == null) {
+        firstMs = performance.now();
+        $('speechState').textContent = '正在流式播放…';
+      }
       const view = new DataView(buf.buffer, 0, usable);
       const frame = ctx.createBuffer(1, n, 24000);
       const ch = frame.getChannelData(0);
@@ -393,6 +461,11 @@
       samples += n;
       $('bar').style.width = Math.min(95, 25 + samples / 24000 * 12) + '%';
     }
+    const closeDelay = Math.max(0, nextTime - ctx.currentTime) * 1000;
+    setTimeout(() => {
+      if (ctx.state !== 'closed') ctx.close().catch(() => {});
+      if (streamContext === ctx) streamContext = null;
+    }, closeDelay);
     return {
       seconds: samples / 24000,
       samples,
