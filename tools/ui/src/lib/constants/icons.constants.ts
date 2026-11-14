@@ -23,7 +23,8 @@ import {
 	RotateCw as RetryIcon,
 	Sparkles as PromptCommandIcon,
 	Video as VideoIcon,
-	Wrench as ToolUseIcon
+	Wrench as ToolUseIcon,
+	X as CancelLoadIcon
 } from '@lucide/svelte';
 import {
 	ChatFormCommandAction,
@@ -119,6 +120,7 @@ export const MODEL_DOWNLOAD_ICONS = {
 
 /** Icons the model load control shows for its states and actions. */
 export const MODEL_LOAD_ICONS = {
+	cancel: CancelLoadIcon,
 	failed: LoadFailedIcon,
 	load: LoadIcon,
 	loading: LoadingIcon,
