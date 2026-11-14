@@ -607,7 +607,7 @@ llama_context::llama_context(
         }
 
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share);
+            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share, cparams.n_threads);
         }
 
         sched_reserve();
@@ -1858,11 +1858,21 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             return nullptr;
         }
 
+        // the CPU parts that the MoE cache computes while the graph runs
+        if (moe_cache) {
+            moe_cache->check_graph(gf, res->moe_cache.publish);
+            for (const auto & p : res->moe_cache.cpu_parts) {
+                moe_cache->set_cpu_graph(p.il, p.input, p.selected, p.ids, p.result);
+            }
+        }
+
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
+
+        res->moe_cache.main = moe_cache && moe_cache->main_ok(sched.get(), gf, backend_cpu);
 
         gf_res_prev_active = res;
     }
@@ -1877,7 +1887,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    moe_cache_main    = res->moe_cache.main;
+    moe_cache_publish = &res->moe_cache.publish;
+
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    moe_cache_publish = nullptr;
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
@@ -3140,10 +3154,17 @@ ggml_status llama_context::graph_compute(
     }
 
     copy_experts.reset();
+    if (moe_cache && !moe_cache->begin(gf, moe_cache_main, moe_cache_publish)) {
+        return GGML_STATUS_FAILED;
+    }
 
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+    }
+
+    if (moe_cache) {
+        moe_cache->serve(backend_cpu);
     }
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
