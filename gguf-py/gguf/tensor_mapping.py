@@ -603,6 +603,18 @@ class TensorNameMap:
             "model.layers.{bid}.controllers.mlp.forget_weight",  # inkling2_loop
         ),
 
+        MODEL_TENSOR.ATTN_K_CTX: (
+            "layers.{bid}.self_attn.k_proj_ctx",  # inkling2 dspark
+        ),
+
+        MODEL_TENSOR.ATTN_V_CTX: (
+            "layers.{bid}.self_attn.v_proj_ctx",  # inkling2 dspark
+        ),
+
+        MODEL_TENSOR.ATTN_K_CTX_NORM: (
+            "layers.{bid}.self_attn.k_norm_ctx",  # inkling2 dspark
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "layers.{bid}.moe_connection.norm",                              # metis16
@@ -1848,19 +1860,9 @@ class TensorNameMap:
             "encoder.fc", # dflash (transformers MuseGlimmerAssistant)
         ),
 
-        MODEL_TENSOR.DSPARK_FUSE: ("fuse_weight",),
-        MODEL_TENSOR.DSPARK_NORM: ("markov_head.dflare_norm",),
-        MODEL_TENSOR.DSPARK_HIDDEN_OUT: ("markov_head.hidden_out",),
-        MODEL_TENSOR.DSPARK_JOINT_PROJ: ("markov_head.rnn_proj",),
-        MODEL_TENSOR.DSPARK_MASK_EMBD: ("mask_embed",),
-        MODEL_TENSOR.ATTN_K_CTX: ("layers.{bid}.self_attn.k_proj_ctx",),
-        MODEL_TENSOR.ATTN_V_CTX: ("layers.{bid}.self_attn.v_proj_ctx",),
-        MODEL_TENSOR.ATTN_K_CTX_NORM: ("layers.{bid}.self_attn.k_norm_ctx",),
-        MODEL_TENSOR.DFLARE_NORM: ("layers.{bid}.dflare_norm",),
-
         MODEL_TENSOR.DSPARK_MARKOV_W1: (
-            "markov_head.markov_w1",
             "model.markov_head.markov_w1", # dspark
+            "markov_head.markov_w1",       # inkling2
         ),
 
         MODEL_TENSOR.DSPARK_MARKOV_W2: (
@@ -1869,6 +1871,30 @@ class TensorNameMap:
 
         MODEL_TENSOR.DSPARK_CONF_PROJ: (
             "model.confidence_head.proj", # dspark
+        ),
+
+        MODEL_TENSOR.DSPARK_JOINT_PROJ: (
+            "markov_head.rnn_proj", # inkling2
+        ),
+
+        MODEL_TENSOR.DSPARK_MASK_EMBD: (
+            "mask_embed", # inkling2
+        ),
+
+        MODEL_TENSOR.DSPARK_FUSE: (
+            "fuse_weight", # inkling2
+        ),
+
+        MODEL_TENSOR.DSPARK_NORM: (
+            "markov_head.dflare_norm", # inkling2
+        ),
+
+        MODEL_TENSOR.DSPARK_HIDDEN_OUT: (
+            "markov_head.hidden_out", # inkling2
+        ),
+
+        MODEL_TENSOR.DFLARE_NORM: (
+            "layers.{bid}.dflare_norm", # inkling2
         ),
 
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE: (
