@@ -144,6 +144,20 @@ void ggml_zdnn_load_tensor_q(ggml_backend_zdnn_buffer * buffer, const ggml_tenso
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&buffer->ztensor, false, -127, 127, q.data()));
 }
 
+void ggml_zdnn_load_weights(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor) {
+    std::lock_guard<std::mutex> lock(buffer->mutex);
+
+    if (buffer->ztensor.is_transformed) {
+        return;
+    }
+
+    if (ggml_is_quantized(tensor->type)) {
+        ggml_zdnn_load_tensor_q(buffer, tensor);
+    } else {
+        ggml_zdnn_load_tensor(buffer->ztensor, tensor->data);
+    }
+}
+
 void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor) {
     if (ggml_is_quantized(tensor->type)) {
         GGML_ASSERT(ggml_is_matrix(tensor));

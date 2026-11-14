@@ -61,9 +61,7 @@ void ggml_zdnn_mul_mat_f(
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim2 == weights->ne[1] && "weights_extra->pre_tfm_desc.dim2 must match weights->ne[1]");
 
     // weights read straight into a host buffer skip set_tensor, so transform them on first use
-    if (!weights_extra->ztensor.is_transformed) {
-        ggml_zdnn_load_tensor(weights_extra->ztensor, weights->data);
-    }
+    ggml_zdnn_load_weights(weights_extra, weights);
 
     // the inputs can be in any host buffer or be a view, so transform them from their data on every call
     {
