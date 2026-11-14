@@ -419,6 +419,15 @@ class ModelBase:
 
                 return weight.float() * scale
 
+            def dequant_mxfp8(weight: Tensor, scale: Tensor, block_size: Sequence[int]) -> Tensor:
+                # OCP Microscaling: one E8M0 scale (a biased power-of-two exponent byte) per block,
+                # value * 2**(byte - 127); the fp32 product is exact, as in the HF modeling code
+                if scale.dtype == torch.uint8:
+                    scale = torch.exp2(scale.float() - 127)
+                else:
+                    scale = scale.float()  # float8_e8m0fnu decodes to the same power of two
+                return dequant_simple(weight, scale, block_size)
+
             # ref: https://github.com/ModelCloud/GPTQModel/blob/037c5c0f6c9e33c500d975b038d02e7ca437546d/gptqmodel/nn_modules/qlinear/__init__.py#L437-L476
             def dequant_gptq(g_idx: Tensor, qweight: Tensor, qzeros: Tensor, scales: Tensor) -> Tensor:
                 bits = quant_config["bits"]
@@ -564,6 +573,17 @@ class ModelBase:
                             self._fp8_dequantized.add(weight_name)
                     if name.endswith(".qscale_act"):
                         tensors_to_remove.append(name)
+            elif quant_method == "mxfp8":
+                block_size = quant_config.get("weight_block_size") or [1, 32]
+                for name in self.model_tensors.keys():
+                    if name.endswith(".weight_scale_inv"):
+                        weight_name = name.removesuffix("_scale_inv")
+                        w = self.model_tensors[weight_name]
+                        s = self.model_tensors[name]
+                        self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_mxfp8(w(), s(), bs)
+                        tensors_to_remove.append(name)
+                        if self._fp8_as_q8:
+                            self._fp8_dequantized.add(weight_name)
             elif quant_method == "gptq":
                 for name in self.model_tensors.keys():
                     if name.endswith(".qweight"):
@@ -2198,6 +2218,9 @@ class TextModel(ModelBase):
         if chkhsh == "1f9825a388f700a6b591722f17d470cbbcf10973ece35d2fd14239a14110ae1a":
             # ref: https://huggingface.co/IFM/K2-Horizon-0.9B
             res = "k2-horizon"
+        if chkhsh == "ffdae2f611dc6903980be2fbb108467cb97376d7d03cd332bb7e2602f87fa1f1":
+            # ref: https://huggingface.co/KRAFTON/Raon-1-mini-preview
+            res = "raon"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"

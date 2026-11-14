@@ -565,6 +565,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.gate.e_score_correction",          # nemotron-h-moe
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
+            "model.layers.{bid}.moe.gate.e_score_correction",               # raon1_mini
             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
             "model.layers.{bid}.mlp.experts.e_score_correction",       # laguna
         ),
@@ -637,6 +638,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w3",                        # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.up_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.up_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.up_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.up_proj",               # step3.5
         ),
 
@@ -689,6 +691,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
             "layers.{bid}.shared_experts.w1",                          # mistral-large
             "model.layers.{bid}.block_sparse_moe.shared_experts.gate_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.gate_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.gate_proj",               # step3.5
         ),
 
@@ -860,6 +863,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w2",                          # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.down_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.down_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.down_proj",               # step3.5
             "layers.{bid}.moe.shared_expert.down",                     # metis16
         ),
@@ -924,16 +928,19 @@ class TensorNameMap:
 
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (
             "model.embed_tokens_per_layer",  # gemma3n
+            "model.per_layer_inputs.table",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_MODEL_PROJ: (
             "model.per_layer_model_projection",  # gemma3n
             "ple.per_layer_model_projection",    # embeddinggemma2
+            "model.per_layer_inputs.embedding_projection",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_PROJ_NORM: (
             "model.per_layer_projection_norm",  # gemma3n
             "ple.per_layer_projection_norm",    # embeddinggemma2
+            "model.per_layer_inputs.projection_norm",  # raon1nano
         ),
 
         MODEL_TENSOR.ALTUP_PROJ: (
@@ -947,16 +954,19 @@ class TensorNameMap:
         MODEL_TENSOR.PER_LAYER_INP_GATE: (
             "model.layers.{bid}.per_layer_input_gate",  # gemma3n
             "layers.{bid}.ple_block.per_layer_input_gate",  # embeddinggemma2
+            "model.layers.{bid}.per_layer_input_gate.gate",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_PROJ: (
             "model.layers.{bid}.per_layer_projection",  # gemma3n
             "layers.{bid}.ple_block.per_layer_projection",  # embeddinggemma2
+            "model.layers.{bid}.per_layer_input_gate.projection",  # raon1nano
         ),
 
         MODEL_TENSOR.PER_LAYER_POST_NORM: (
             "model.layers.{bid}.post_per_layer_input_norm",  # gemma3n
             "layers.{bid}.ple_block.post_per_layer_input_norm",  # embeddinggemma2
+            "model.layers.{bid}.per_layer_input_gate.output_norm",  # raon1nano
         ),
 
         MODEL_TENSOR.ALTUP_CORRECT_COEF: (
@@ -1120,6 +1130,10 @@ class TensorNameMap:
             "layers.{bid}.linear_attn.in_proj_b",        # qwen3.5 text
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
             "model.layers.{bid}.attention.b_proj",       # bailingmoe3
+        ),
+        # Raon-1 mini RDA: per-head write-gate offset
+        MODEL_TENSOR.SSM_RDA: (
+            "model.layers.{bid}.self_attn.rda_w_proj",
         ),
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (

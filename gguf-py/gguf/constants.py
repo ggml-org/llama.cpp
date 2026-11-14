@@ -196,6 +196,7 @@ class Keys:
         VALUE_LENGTH                 = "{arch}.attention.value_length"
         LAYERNORM_EPS                = "{arch}.attention.layer_norm_epsilon"
         LAYERNORM_RMS_EPS            = "{arch}.attention.layer_norm_rms_epsilon"
+        LATENT_NORM_RMS_EPS          = "{arch}.attention.latent_norm_rms_epsilon"
         GROUPNORM_EPS                = "{arch}.attention.group_norm_epsilon"
         GROUPNORM_GROUPS             = "{arch}.attention.group_norm_groups"
         CAUSAL                       = "{arch}.attention.causal"
@@ -753,6 +754,8 @@ class MODEL_ARCH(IntEnum):
     KIMI_LINEAR      = auto()
     KIMI_K3          = auto()
     KIMI_K31         = auto()
+    RAON1_NANO       = auto()
+    RAON1_MINI       = auto()
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
@@ -918,6 +921,7 @@ class MODEL_TENSOR(IntEnum):
     SSM_F_A              = auto() # Kimi Linear
     SSM_F_B              = auto() # Kimi Linear
     SSM_BETA             = auto() # Kimi Linear qwen3.5
+    SSM_RDA              = auto() # Raon-1 mini
     SSM_G_A              = auto() # Kimi Linear
     SSM_G_B              = auto() # Kimi Linear
     SSM_G                = auto() # Kimi K3 (full-rank KDA gate, replaces SSM_G_A/SSM_G_B)
@@ -988,6 +992,8 @@ class MODEL_TENSOR(IntEnum):
     HC_FFN_FN            = auto()
     HC_FFN_BASE          = auto()
     HC_FFN_SCALE         = auto()
+    HC_ATTN_CHART        = auto() # raon1nano
+    HC_FFN_CHART         = auto() # raon1nano
     HC_ATTN_NORM         = auto() # qwen4exp
     HC_ATTN_DOWN         = auto() # qwen4exp
     HC_ATTN_UP           = auto() # qwen4exp
@@ -1672,6 +1678,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.KIMI_K3:          "kimi-k3",
     MODEL_ARCH.KIMI_K31:         "kimi-k31",
+    MODEL_ARCH.RAON1_NANO:       "raon1nano",
+    MODEL_ARCH.RAON1_MINI:       "raon1",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
@@ -1835,6 +1843,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_F_A:                   "blk.{bid}.ssm_f_a",              # Kimi Linear
     MODEL_TENSOR.SSM_F_B:                   "blk.{bid}.ssm_f_b",              # Kimi Linear
     MODEL_TENSOR.SSM_BETA:                  "blk.{bid}.ssm_beta",             # Kimi Linear qwen3.5
+    MODEL_TENSOR.SSM_RDA:                   "blk.{bid}.ssm_rda",              # Raon-1 mini
     MODEL_TENSOR.SSM_G_A:                   "blk.{bid}.ssm_g_a",              # Kimi Linear
     MODEL_TENSOR.SSM_G_B:                   "blk.{bid}.ssm_g_b",              # Kimi Linear
     MODEL_TENSOR.SSM_G:                     "blk.{bid}.ssm_g",                # Kimi K3
@@ -1905,6 +1914,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_FFN_FN:                 "blk.{bid}.hc_ffn_fn",
     MODEL_TENSOR.HC_FFN_BASE:               "blk.{bid}.hc_ffn_base",
     MODEL_TENSOR.HC_FFN_SCALE:              "blk.{bid}.hc_ffn_scale",
+    MODEL_TENSOR.HC_ATTN_CHART:             "blk.{bid}.hc_attn_chart",
+    MODEL_TENSOR.HC_FFN_CHART:              "blk.{bid}.hc_ffn_chart",
     MODEL_TENSOR.HC_ATTN_NORM:              "blk.{bid}.hc_attn_norm",         # qwen4exp
     MODEL_TENSOR.HC_ATTN_DOWN:              "blk.{bid}.hc_attn_down",         # qwen4exp
     MODEL_TENSOR.HC_ATTN_UP:                "blk.{bid}.hc_attn_up",           # qwen4exp
@@ -6596,6 +6607,97 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_ROUTED_DOWN,
         MODEL_TENSOR.FFN_ROUTED_UP,
         MODEL_TENSOR.FFN_ROUTED_NORM,
+    ],
+    MODEL_ARCH.RAON1_NANO: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        # MLA (full-attention layers)
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        # RDA (linear-attention layers)
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_F_A,
+        MODEL_TENSOR.SSM_F_B,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        # mHC
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_CHART,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_CHART,
+        # FFN
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        # per-layer embeddings
+        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+        MODEL_TENSOR.PER_LAYER_MODEL_PROJ,
+        MODEL_TENSOR.PER_LAYER_PROJ_NORM,
+        MODEL_TENSOR.PER_LAYER_INP_GATE,
+        MODEL_TENSOR.PER_LAYER_PROJ,
+        MODEL_TENSOR.PER_LAYER_POST_NORM,
+    ],
+    MODEL_ARCH.RAON1_MINI: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        # MLA (full-attention layers)
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        # RDA (linear-attention layers)
+        MODEL_TENSOR.SSM_CONV1D_Q,
+        MODEL_TENSOR.SSM_CONV1D_K,
+        MODEL_TENSOR.SSM_CONV1D_V,
+        MODEL_TENSOR.SSM_F_A,
+        MODEL_TENSOR.SSM_F_B,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_RDA,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_G,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_ATTN_BASE,
+        MODEL_TENSOR.HC_ATTN_SCALE,
+        MODEL_TENSOR.HC_FFN_FN,
+        MODEL_TENSOR.HC_FFN_BASE,
+        MODEL_TENSOR.HC_FFN_SCALE,
+        # FFN
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     MODEL_ARCH.TALKIE: [
         MODEL_TENSOR.TOKEN_EMBD,
