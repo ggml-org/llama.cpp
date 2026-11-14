@@ -336,3 +336,52 @@ codec 33 ms/帧（被 overlap 隐藏）**。24 字句里 depth 占墙钟 **83%**
   `last_*` 正确跳过末尾那次 404。
 - 回归用法：`curl -s .../metrics?format=prometheus | grep m5_p50`，
   不再需要 `adb shell tail` 抓日志。
+
+## 11. Web 控制台：默认值 + 音频动画 + 交互细节（2026-11-15 00:3x）
+
+### 默认值：Serena + 流式 pcm
+
+- 音色默认 `serena`（服务端内置），用户选择写入 `localStorage.m5-voice`，
+  下次打开优先恢复；找不到时按 saved → Serena → 首个服务端音色 → 任意 依次回退。
+- 输出格式默认 **流式 pcm**（`localStorage.m5-fmt`），选择持久化；切到 wav 时
+  按钮旁提示改为「完整 wav · 生成后可拖动进度」。
+
+### 音频动画（#viz，单 canvas 两种模式）
+
+- **流式 pcm**：每个 `AudioBufferSourceNode` 汇入 `AnalyserNode` → destination，
+  rAF 按 log-spaced 频段取 44 根柱，上升 0.45 / 下降 0.16 做非对称平滑，
+  语音能量集中在低频，线性 bin 会让右侧整片死平。播放结束柱体自然衰减后循环自停。
+- **wav**：`decodeAudioData` 取整段包络（每柱取窗口峰值，按最大值归一化后
+  取 0.75 次幂），画「包络 + 播放游标」：已播部分 0.92 透明度、未播 0.28，
+  游标由 `audio.currentTime / duration` 驱动。**音频路由完全不碰**——曾经想用
+  `MediaElementSource` 复用分析器，但该节点创建后无法撤销，若 AudioContext 被
+  自动播放策略挂起就会静音，风险不可接受。
+- 状态行加 4 根 CSS 动画横条（`#eq`），流式播放期间显示，结束/停止即隐藏。
+
+### 其它交互
+
+- `Ctrl/⌘ + Enter` 生成、`Esc` 停止；中文输入法组词时不误触（由 keydown 的 Enter 判定）。
+- 字数计数 `n / 2000`，超限变红并拒绝提交（服务端同样有 2000 上限）。
+- **下载 wav**：wav 模式直接用原 blob；pcm 模式保留整段 s16 采样，点击时现拼 RIFF 头。
+- **流式结果可回放**：pcm 播完后（等尾部排空）把整段 PCM 交给原生 `<audio>`，
+  可重播/拖动进度——否则流式结果只能重新合成才能再听。
+- 统计卡片入场动画、focus-visible 焦点环、`prefers-reduced-motion` 下全部动画关闭。
+- pcm 的统计改为**服务端权威值**：流结束后拉 `/metrics`，按 `last.id` 递增判定
+  本次记录并取其 rtf/first_pcm/frames，不再显示 `≈` 估算（客户端测量仅作兜底）。
+
+### 本轮踩到的坑
+
+1. `.eq { display: inline-flex }` 这类类选择器会压过浏览器的 `[hidden]{display:none}`，
+   导致「合成完成」旁边还挂着动画条、`.stats` 初始也可见。加全局
+   `[hidden] { display: none !important; }` 一次解决。
+2. `/metrics` 字段是 `elapsed_s`，前端误写 `elapsed` → `undefined.toFixed()` 崩掉整个
+   metrics 行（静默失败，只有浏览器控制台能看到）。渲染函数改为数值兜底。
+3. 波形用固定增益（`peak * 1.7`）会把所有窗口削顶成等高方块，看不出包络 → 按峰值归一化。
+4. 截图里的统计卡片发灰不是配色问题，是 `rise` 入场动画被截在 0.26s 内——等待后正常。
+
+### 验证方式（新）
+
+无头 Chrome + 手写 WebSocket 客户端走 CDP，真实点击而不是读代码：
+`/tmp/cdp_test.py` 断言语义（默认音色/格式、状态机到「合成完成」、五张卡片数值、
+下载可用、canvas 像素数证明动画真的画了、`/metrics` 行同步），并支持 `M5_FMT=wav`
+与 `M5_DARK=1` 组合截图。pcm 与 wav 两条路径均通过；Esc 中止、回放挂载单独验证。

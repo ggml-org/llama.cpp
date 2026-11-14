@@ -23,6 +23,9 @@
     }
   }
   * { box-sizing: border-box; }
+  /* Class rules such as .eq{display:inline-flex} outrank the UA [hidden] rule,
+     so hidden elements would keep rendering without this. */
+  [hidden] { display: none !important; }
   body {
     margin: 0; padding: 28px 18px 64px;
     background: var(--bg); color: var(--ink);
@@ -105,16 +108,46 @@
   @keyframes slidein { from { opacity: 0; transform: translateY(8px); } }
   #waveform { width: 100%; height: 44px; margin-top: 12px; border-radius: 8px; background: var(--bg); }
   .hint { font-size: 12px; color: var(--sub); margin-top: 8px; line-height: 1.55; }
+  .metaRow { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+  .metaRow .hint { margin-top: 0; font-size: 11.5px; }
+  .metaRow #count.over { color: var(--bad); font-weight: 600; }
+  kbd {
+    font: 11px/1 var(--mono); padding: 2px 5px; border-radius: 5px;
+    border: 1px solid var(--line); border-bottom-width: 2px; background: var(--bg); color: var(--sub);
+  }
+  .statusLine { display: flex; align-items: center; gap: 9px; margin-top: 10px; }
+  .statusLine #speechState { margin: 0; }
+  .eq { display: inline-flex; align-items: flex-end; gap: 2.5px; height: 14px; }
+  .eq i {
+    display: block; width: 3px; height: 40%; border-radius: 2px; background: var(--acc);
+    animation: eq .9s ease-in-out infinite;
+  }
+  .eq i:nth-child(2) { animation-delay: -.66s; }
+  .eq i:nth-child(3) { animation-delay: -.33s; }
+  .eq i:nth-child(4) { animation-delay: -.8s; }
+  @keyframes eq { 0%, 100% { height: 25%; opacity: .55; } 50% { height: 100%; opacity: 1; } }
+  #viz {
+    display: block; width: 100%; height: 54px; margin-top: 10px;
+    border-radius: 10px; background: var(--bg); border: 1px solid var(--line);
+  }
+  #stats:not([hidden]) { animation: rise .26s ease both; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible {
+    outline: 2px solid var(--acc); outline-offset: 2px;
+  }
   .scenes { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
   .scenes button { text-align: left; transition: background .18s, transform .18s; }
   .scenes button[aria-pressed="true"] { background: var(--acc-soft); color: var(--ink); }
   .scenes button:active { transform: scale(.97); }
-  #speechState { display: block; margin-top: 8px; color: var(--sub); }
+  #speechState { display: block; color: var(--sub); }
   .bar.busy i { width: 35%; animation: speech-progress 1.4s ease-in-out infinite alternate; }
   @keyframes speech-progress { to { transform: translateX(180%); } }
   @media (prefers-reduced-motion: reduce) {
     .bar.busy i { animation: none; }
     .scenes button { transition: none; }
+    .eq i { animation: none; height: 60%; }
+    #stats:not([hidden]) { animation: none; }
+    .toast { animation: none; }
   }
 </style>
 </head>
@@ -135,6 +168,10 @@
     </div>
     <label class="f" for="text">要合成的文字</label>
     <textarea id="text">今天的天气很好，我们一起去公园散步，看看路边的花，听听树上的鸟叫。</textarea>
+    <div class="metaRow">
+      <span class="hint" id="count">0 / 2000 字</span>
+      <span class="hint"><kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> 生成 · <kbd>Esc</kbd> 停止</span>
+    </div>
     <div class="row">
       <div class="grow">
         <label class="f" for="voice">音色</label>
@@ -143,8 +180,8 @@
       <div>
         <label class="f">输出</label>
         <div class="seg" id="fmtSeg">
-          <button data-fmt="wav" class="on">完整 wav</button>
-          <button data-fmt="pcm">流式 pcm</button>
+          <button data-fmt="wav">完整 wav</button>
+          <button data-fmt="pcm" class="on">流式 pcm</button>
         </div>
       </div>
     </div>
@@ -157,9 +194,15 @@
     <div class="row">
       <button id="goBtn">生成语音</button>
       <button id="stopBtn" class="ghost" disabled>停止</button>
+      <button id="dlBtn" class="ghost" disabled>下载 wav</button>
+      <span class="tag" id="fmtTag">流式 pcm · 边生成边播放</span>
     </div>
     <div class="bar" id="speechProgress"><i id="bar"></i></div>
-    <output id="speechState" role="status">等待生成</output>
+    <div class="statusLine">
+      <span class="eq" id="eq" hidden aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <output id="speechState" role="status">等待生成</output>
+    </div>
+    <canvas id="viz" aria-hidden="true"></canvas>
     <div class="stats" id="stats" hidden>
       <div class="stat" title="RTF = 生成耗时 / 音频时长。音频越短，模型预热等固定开销占比越高，短句 RTF 会明显偏大甚至超过 1；长句才反映真实速度"><b id="sRtf">–</b><span>RTF（越小越快）</span></div>
       <div class="stat"><b id="sAudio">–</b><span>音频时长</span></div>
@@ -222,21 +265,156 @@
     ? location.origin : 'http://127.0.0.1:18080';
   const api = () => defaultApi.replace(/\/+$/, '');
 
+  const LS_VOICE = 'm5-voice', LS_FMT = 'm5-fmt';
+  const DEFAULT_VOICE = 'serena';   // the voice the console ships with
+  const MAX_CHARS = 2000;           // server-side hard limit
+
   // Server-side aggregate from GET /metrics. It is the only view of the pcm
   // path, whose chunked response commits headers before the X-M5-* numbers
-  // exist - here the cards above fall back to client-side timing instead.
-  async function refreshServerStats() {
+  // exist - the cards above fall back to client-side timing only if the server
+  // record is not there yet.
+  let lastStatId = 0;
+  async function fetchMetrics() {
     try {
       const r = await fetch(api() + '/metrics', { signal: AbortSignal.timeout(4000) });
-      if (!r.ok) return;
-      const m = await r.json();
-      const warm = m.warmup ? m.warmup.elapsed.toFixed(2) + ' s' : '无';
-      $('srvNote').textContent =
-        `服务端累计 ${m.requests} 次（失败 ${m.failed}） · 均值 RTF ${m.avg_rtf.toFixed(3)}` +
-        ` · 首包中位 ${m.p50_first_pcm_s.toFixed(2)} s · 启动预热 ${warm}`;
-      $('srvNote').hidden = false;
-    } catch { /* metrics are a nice-to-have; never break synthesis over them */ }
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }   // metrics are a nice-to-have, never fatal
   }
+
+  function renderServerNote(m) {
+    if (!m) return;
+    if (m.last && m.last.id > lastStatId) lastStatId = m.last.id;
+    const num = v => (typeof v === 'number' && isFinite(v) ? v : 0);
+    const warm = m.warmup ? num(m.warmup.elapsed_s).toFixed(2) + ' s' : '无';
+    $('srvNote').textContent =
+      `服务端累计 ${num(m.requests)} 次（失败 ${num(m.failed)}） · 均值 RTF ${num(m.avg_rtf).toFixed(3)}` +
+      ` · 首包中位 ${num(m.p50_first_pcm_s).toFixed(2)} s · 启动预热 ${warm}`;
+    $('srvNote').hidden = false;
+  }
+  const refreshServerStats = async () => renderServerNote(await fetchMetrics());
+
+  // ---- audio visualiser ---------------------------------------------------
+  // One canvas serves both formats: the pcm stream fans every scheduled buffer
+  // into an AnalyserNode, and wav playback taps the <audio> element once via a
+  // MediaElementSource. Levels decay smoothly, so the scope falls back to its
+  // idle baseline after playback and the animation loop stops by itself.
+  const BARS = 44;
+  const vizCanvas = $('viz');
+  const viz2d = vizCanvas.getContext('2d');
+  const vizLevels = new Float32Array(BARS);
+  let vizRaf = 0, vizAnalyser = null, vizData = null;
+  // wav mode knows the whole utterance up front, so it draws the full envelope
+  // with a playhead instead of live bands. Decoded audio is never routed
+  // through WebAudio - the <audio> element keeps owning playback.
+  let vizWave = null;
+
+  function vizPaint() {
+    const dpr = window.devicePixelRatio || 1;
+    const cw = vizCanvas.clientWidth || 600, ch = vizCanvas.clientHeight || 54;
+    if (vizCanvas.width !== Math.round(cw * dpr)) vizCanvas.width = Math.round(cw * dpr);
+    if (vizCanvas.height !== Math.round(ch * dpr)) vizCanvas.height = Math.round(ch * dpr);
+    const w = vizCanvas.width, h = vizCanvas.height;
+    if (vizAnalyser) vizAnalyser.getByteFrequencyData(vizData);
+    const acc = getComputedStyle(document.body).getPropertyValue('--acc').trim() || '#2563eb';
+    viz2d.clearRect(0, 0, w, h);
+    const gap = 3 * dpr;
+    const barW = Math.max(2 * dpr, (w - gap * (BARS + 1)) / BARS);
+    const player = $('player');
+    const duration = player.duration;
+    const progress = vizWave && isFinite(duration) && duration > 0
+      ? Math.min(1, player.currentTime / duration) : 0;
+    let moving = false;
+    for (let i = 0; i < BARS; i++) {
+      let target = 0, played = true;
+      if (vizWave) {
+        target = vizWave[i];
+        played = (i + 0.5) / BARS <= progress;
+      } else if (vizAnalyser) {
+        // Log-spaced bins: speech energy sits at the low end, linear FFT bins
+        // would leave most of the scope dead flat.
+        const from = Math.floor(Math.pow(i / BARS, 1.7) * vizData.length);
+        const to = Math.max(from + 1, Math.floor(Math.pow((i + 1) / BARS, 1.7) * vizData.length));
+        let sum = 0;
+        for (let k = from; k < to; k++) sum += vizData[k];
+        target = Math.pow(sum / (to - from) / 255, 1.5);
+      }
+      vizLevels[i] += (target - vizLevels[i]) * (target > vizLevels[i] ? 0.45 : 0.16);
+      if (vizLevels[i] > 0.004) moving = true;
+      const bh = Math.max(2 * dpr, vizLevels[i] * (h - 10 * dpr));
+      const x = gap + i * (barW + gap), y = (h - bh) / 2;
+      viz2d.globalAlpha = vizWave
+        ? (played ? 0.92 : 0.28)
+        : 0.2 + Math.min(1, vizLevels[i] * 1.6) * 0.8;
+      viz2d.fillStyle = acc;
+      const r = Math.min(barW / 2, 3 * dpr);
+      viz2d.beginPath();
+      if (viz2d.roundRect) viz2d.roundRect(x, y, barW, bh, r);
+      else viz2d.rect(x, y, barW, bh);
+      viz2d.fill();
+    }
+    viz2d.globalAlpha = 1;
+    const playing = vizAnalyser || (vizWave && !player.paused && !player.ended);
+    vizRaf = (playing || moving) ? requestAnimationFrame(vizPaint) : 0;
+  }
+
+  function vizStart(analyser) {
+    if (!analyser) return;
+    vizWave = null;
+    vizAnalyser = analyser;
+    if (!vizData || vizData.length !== analyser.frequencyBinCount) {
+      vizData = new Uint8Array(analyser.frequencyBinCount);
+    }
+    if (!vizRaf) vizRaf = requestAnimationFrame(vizPaint);
+  }
+  function vizStop() {
+    vizAnalyser = null;
+    if (!vizRaf) vizRaf = requestAnimationFrame(vizPaint);  // let the bars fall
+  }
+
+  // Peak envelope of a finished wav, one value per bar. decodeAudioData works
+  // on a suspended context, so this needs no user gesture and no routing.
+  let decodeCtx = null;
+  async function peaksFromBlob(blob) {
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      decodeCtx = decodeCtx || new Ctx();
+      const buf = await decodeCtx.decodeAudioData(await blob.arrayBuffer());
+      const data = buf.getChannelData(0);
+      const peaks = new Float32Array(BARS);
+      const step = Math.max(1, Math.floor(data.length / BARS));
+      let maxPeak = 0;
+      for (let i = 0; i < BARS; i++) {
+        let peak = 0;
+        const end = Math.min(data.length, (i + 1) * step);
+        for (let k = i * step; k < end; k++) {
+          const v = Math.abs(data[k]);
+          if (v > peak) peak = v;
+        }
+        peaks[i] = peak;
+        if (peak > maxPeak) maxPeak = peak;
+      }
+      // Normalise to the loudest bar: a fixed gain clips every window to the
+      // top and the envelope degenerates into identical blocks.
+      for (let i = 0; i < BARS; i++) {
+        peaks[i] = maxPeak > 0 ? Math.min(1, Math.pow(peaks[i] / maxPeak, 0.75)) : 0;
+      }
+      return peaks;
+    } catch (e) {
+      log('波形解析失败：' + e.message);
+      return null;
+    }
+  }
+
+  function vizShowWave(peaks) {
+    vizWave = peaks;
+    vizAnalyser = null;
+    vizLevels.fill(0);
+    if (!vizRaf) vizRaf = requestAnimationFrame(vizPaint);
+  }
+
+  vizPaint();  // idle baseline
+  window.addEventListener('resize', () => { if (!vizRaf) vizRaf = requestAnimationFrame(vizPaint); });
 
   const LS_KEY = 'm5-voices-v2';
   const loadLocal = () => {
@@ -295,7 +473,19 @@
       sel.appendChild(o);
     }
     if (keep && [...sel.options].some(o => o.value === keep)) sel.value = keep;
-    log(`音色：${serverVoices.length} 个服务端 + ${loadLocal().length} 个本机`);
+    else {
+      // Prefer the saved choice, then the shipped default (Serena), then the
+      // first server voice, then anything at all.
+      const saved = localStorage.getItem(LS_VOICE);
+      const options = [...sel.options];
+      const pick =
+        options.find(o => o.value === saved) ||
+        options.find(o => o.value.toLowerCase() === 'srv:' + DEFAULT_VOICE) ||
+        options.find(o => o.value.startsWith('srv:')) ||
+        options[0];
+      if (pick) sel.value = pick.value;
+    }
+    log(`音色：${serverVoices.length} 个服务端 + ${loadLocal().length} 个本机 · 当前 ${sel.value}`);
   }
 
   function selectedVoice() {
@@ -307,13 +497,20 @@
     return { name, server: true };
   }
 
-  let fmt = 'wav';
+  // Streaming pcm is the default: audio starts as soon as the first chunk
+  // lands instead of after the whole file is rendered.
+  let fmt = localStorage.getItem(LS_FMT) === 'wav' ? 'wav' : 'pcm';
+  function setFmt(next) {
+    fmt = next === 'wav' ? 'wav' : 'pcm';
+    [...$('fmtSeg').children].forEach(x => x.classList.toggle('on', x.dataset.fmt === fmt));
+    $('fmtTag').textContent = fmt === 'pcm' ? '流式 pcm · 边生成边播放' : '完整 wav · 生成后可拖动进度';
+    localStorage.setItem(LS_FMT, fmt);
+  }
   $('fmtSeg').addEventListener('click', e => {
     const b = e.target.closest('button[data-fmt]');
-    if (!b) return;
-    fmt = b.dataset.fmt;
-    [...$('fmtSeg').children].forEach(x => x.classList.toggle('on', x === b));
+    if (b) setFmt(b.dataset.fmt);
   });
+  setFmt(fmt);
 
   const cockpitScenes = {
     vehicle: ['serena', '车窗已关闭。'],
@@ -340,25 +537,84 @@
     selectScene(button.dataset.scene);
     $('text').focus();
   });
-  $('text').addEventListener('input', () => selectScene(null));
-  $('voice').addEventListener('change', () => selectScene(null));
+  $('text').addEventListener('input', () => { selectScene(null); updateCount(); });
+  $('voice').addEventListener('change', () => {
+    localStorage.setItem(LS_VOICE, $('voice').value);
+    selectScene(null);
+  });
+
+  const charCount = s => [...s].length;   // count code points, not UTF-16 units
+  function updateCount() {
+    const n = charCount($('text').value.trim());
+    $('count').textContent = `${n} / ${MAX_CHARS} 字`;
+    $('count').classList.toggle('over', n > MAX_CHARS);
+  }
+
+  // ---- download: keep the last utterance so it can be saved as wav --------
+  let lastAudio = null;   // { blob } for wav, { pcm: Int16Array } for streaming
+  function int16ToWav(int16) {
+    const buf = new ArrayBuffer(44 + int16.length * 2);
+    const v = new DataView(buf);
+    const ascii = (at, s) => { for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i)); };
+    ascii(0, 'RIFF'); v.setUint32(4, 36 + int16.length * 2, true); ascii(8, 'WAVE');
+    ascii(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 24000, true); v.setUint32(28, 48000, true);
+    v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+    ascii(36, 'data'); v.setUint32(40, int16.length * 2, true);
+    new Int16Array(buf, 44).set(int16);
+    return new Blob([buf], { type: 'audio/wav' });
+  }
+  function setDownload(audio) {
+    lastAudio = audio;
+    $('dlBtn').disabled = !audio;
+  }
+  $('dlBtn').addEventListener('click', () => {
+    if (!lastAudio) return;
+    const blob = lastAudio.blob || int16ToWav(lastAudio.pcm);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `m5-tts-${new Date().toISOString().slice(11, 19).replace(/:/g, '')}.wav`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('已保存 wav', 'ok');
+  });
+
+  // Keyboard: Ctrl/⌘+Enter runs, Esc stops - the two things you reach for
+  // while iterating on a sentence.
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      if (!$('goBtn').disabled) { e.preventDefault(); generate(); }
+    } else if (e.key === 'Escape' && !$('stopBtn').disabled) {
+      e.preventDefault();
+      $('stopBtn').click();
+    }
+  });
 
   let playerUrl = null;
   let streamContext = null;
   let abort = null;
+  let runSeq = 0;   // bumped per run, and on stop, to invalidate late callbacks
   $('stopBtn').addEventListener('click', () => {
+    runSeq++;
     if (abort) abort.abort();
     if (streamContext && streamContext.state !== 'closed') streamContext.close().catch(() => {});
     $('player').pause();
+    vizStop();
+    $('eq').hidden = true;
     $('stopBtn').disabled = true;
   });
+
+  $('player').addEventListener('ended', () => { $('eq').hidden = true; });
+  $('player').addEventListener('pause', () => { $('eq').hidden = true; });
 
   async function generate() {
     const text = $('text').value.trim();
     const voice = selectedVoice();
     if (!text) { toast('文字为空', 'bad'); return; }
     if (!voice) { toast('请选择音色', 'bad'); return; }
+    if (charCount(text) > MAX_CHARS) { toast(`文字超过 ${MAX_CHARS} 字`, 'bad'); return; }
     if (abort) return;
+    const runId = ++runSeq;
     const requestFormat = fmt;
     const player = $('player');
     player.pause();
@@ -368,6 +624,9 @@
     playerUrl = null;
     if (streamContext && streamContext.state !== 'closed') streamContext.close().catch(() => {});
     streamContext = null;
+    vizWave = null;
+    vizStop();
+    setDownload(null);
     $('speechState').textContent = '正在合成…';
     $('speechProgress').classList.add('busy');
     $('goBtn').disabled = true; $('stopBtn').disabled = false;
@@ -404,8 +663,11 @@
         samples = Math.max(0, Math.floor((blob.size - 44) / 2)); // s16le mono, 44B wav header
         if (!audioSeconds && samples) audioSeconds = samples / 24000;
         firstClient = ttfb;
+        setDownload({ blob });
         $('player').src = url;
         $('player').hidden = false;
+        const peaks = await peaksFromBlob(blob);
+        if (peaks) vizShowWave(peaks);
         $('player').play().catch(() => {});
         $('bar').style.width = '100%';
       } else {
@@ -413,13 +675,43 @@
         audioSeconds = r.seconds;
         samples = r.samples;
         firstClient = r.firstS;
+        if (r.pcm && r.pcm.length) {
+          setDownload({ pcm: r.pcm });
+          // Once the streamed tail has played out, hand the finished utterance
+          // to the native player: otherwise a streamed result can only be
+          // re-heard by synthesising again.
+          const blob = int16ToWav(r.pcm);
+          setTimeout(async () => {
+            if (runId !== runSeq) return;          // superseded or stopped
+            const peaks = await peaksFromBlob(blob);
+            if (runId !== runSeq) return;
+            playerUrl = URL.createObjectURL(blob);
+            player.src = playerUrl;
+            player.hidden = false;
+            if (peaks) vizShowWave(peaks);
+            log('本次音频已保留，可重播或拖动进度');
+          }, Math.ceil(r.tailS * 1000) + 200);
+        }
       }
       const wall = (performance.now() - t0) / 1000;
-      // 服务端统计头优先（wav 模式带 X-M5-*）；pcm 流式响应无统计头，用客户端实测兜底，
-      // 估算值带 ≈ 前缀。这样任何浏览环境（含跨域代理过滤响应头）都能看到数值。
-      const rtfSrv = hdrNum('X-M5-RTF');
-      const firstSrv = hdrNum('X-M5-First-Pcm-S');
-      const framesSrv = hdrNum('X-M5-Frames');
+      // wav carries authoritative numbers in X-M5-* headers. A pcm stream
+      // commits its headers before the numbers exist, so the server record is
+      // read from /metrics instead; client-side timing is only the fallback.
+      let rtfSrv = hdrNum('X-M5-RTF');
+      let firstSrv = hdrNum('X-M5-First-Pcm-S');
+      let framesSrv = hdrNum('X-M5-Frames');
+      if (requestFormat === 'pcm') {
+        const m = await fetchMetrics();
+        const s = m && m.last;
+        if (s && s.ok && s.format === 'pcm' && s.id > lastStatId) {
+          rtfSrv = s.rtf;
+          firstSrv = s.first_pcm_s;
+          framesSrv = s.frames;
+        }
+        renderServerNote(m);
+      } else {
+        refreshServerStats();
+      }
       const rtf = rtfSrv != null ? rtfSrv : (audioSeconds ? wall / audioSeconds : null);
       const first = firstSrv != null ? firstSrv : firstClient;
       const frames = framesSrv != null ? framesSrv
@@ -449,7 +741,14 @@
   async function playPcmStream(resp, t0) {
     const ctx = streamContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
     await ctx.resume();
+    // Every scheduled buffer fans into the analyser, which drives the scope and
+    // passes the audio on to the speakers.
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.7;
+    analyser.connect(ctx.destination);
     const reader = resp.body.getReader();
+    const chunks = [];         // kept so the utterance can be saved as wav
     let nextTime = ctx.currentTime + 0.12;
     let rest = new Uint8Array(0);
     let samples = 0;
@@ -467,27 +766,42 @@
       if (firstMs == null) {
         firstMs = performance.now();
         $('speechState').textContent = '正在流式播放…';
+        $('eq').hidden = false;
+        vizStart(analyser);
       }
       const view = new DataView(buf.buffer, 0, usable);
       const frame = ctx.createBuffer(1, n, 24000);
       const ch = frame.getChannelData(0);
-      for (let i = 0; i < n; i++) ch[i] = view.getInt16(i * 2, true) / 32768;
+      const pcm = new Int16Array(n);
+      for (let i = 0; i < n; i++) {
+        pcm[i] = view.getInt16(i * 2, true);
+        ch[i] = pcm[i] / 32768;
+      }
+      chunks.push(pcm);
       const src = ctx.createBufferSource();
-      src.buffer = frame; src.connect(ctx.destination);
+      src.buffer = frame;
+      src.connect(analyser);
       if (nextTime < ctx.currentTime) nextTime = ctx.currentTime + 0.05;
       src.start(nextTime);
       nextTime += frame.duration;
       samples += n;
       $('bar').style.width = Math.min(95, 25 + samples / 24000 * 12) + '%';
     }
+    $('eq').hidden = true;
     const closeDelay = Math.max(0, nextTime - ctx.currentTime) * 1000;
     setTimeout(() => {
+      vizStop();
       if (ctx.state !== 'closed') ctx.close().catch(() => {});
       if (streamContext === ctx) streamContext = null;
     }, closeDelay);
+    const all = new Int16Array(samples);
+    let at = 0;
+    for (const c of chunks) { all.set(c, at); at += c.length; }
     return {
       seconds: samples / 24000,
       samples,
+      pcm: all,
+      tailS: closeDelay / 1000,   // audio still queued when the stream ended
       firstS: firstMs != null ? (firstMs - t0) / 1000 : null,
     };
   }
@@ -684,7 +998,10 @@
     toast('已删除本机音色 ' + v.name);
   });
 
-  ping().then(loadVoices);
+  updateCount();
+  // Seed lastStatId from the server so the first pcm request cannot pick up a
+  // stat that belonged to an earlier session.
+  ping().then(loadVoices).then(refreshServerStats);
 })();
 </script>
 </body>
