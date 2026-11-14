@@ -2890,7 +2890,9 @@ bool rpc_server::get_device_supports_op(const std::vector<uint8_t> & input, std:
             return t;
         }
         linked[i] = true;
-        auto it = tensors[i].view_src != 0 ? index.find(tensors[i].view_src) : index.end();
+        // rpc_tensor is packed: copy the id out before binding it to a reference
+        const uint64_t view_src_id = tensors[i].view_src;
+        auto it = view_src_id != 0 ? index.find(view_src_id) : index.end();
         if (it != index.end()) {
             ggml_tensor * view_src = it->second == i ? nullptr : get_root(it->second);
             const uint64_t view_offs = tensors[i].view_offs;
@@ -2929,7 +2931,8 @@ bool rpc_server::get_device_supports_op(const std::vector<uint8_t> & input, std:
                 }
                 continue;
             }
-            auto it = index.find(t.src[i]);
+            const uint64_t src_id = t.src[i];
+            auto it = index.find(src_id);
             if (it == index.end() || (op->src[i] = get_tensor(it->second)) == nullptr) {
                 LOG_ERROR("[%s] invalid src[%d] tensor\n", __func__, i);
                 valid = false;
