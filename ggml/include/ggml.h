@@ -2791,7 +2791,7 @@ extern "C" {
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
         bool                     is_quantized; // whether it's a block-quantized data-type
-        bool                     needs_scale; // whether the quantization type needs a scale factor for valid dequantization
+        bool                     needs_scale; // whether the type is only valid with an external scale tensor (see ggml_mul_mat_ext)
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
     };
