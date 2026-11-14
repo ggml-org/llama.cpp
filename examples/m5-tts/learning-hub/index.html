@@ -1841,7 +1841,70 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
   <p>32 行（64 KB）的<b>传输加丢弃只要 2–4 ms</b>：占 prefill 往返（约 105 ms）的 3%，占命中首包（0.41 s）的 <b>不到 1%</b>。大头是 <code>wait</code> 段，也就是 backbone 对 rest 行做的真实 decode——那是算力，不是搬运。</p>
   <p>算一下风险收益：省 2–4 ms，换一次管道错位崩溃的可能（这条协议以前踩过，错配时 stage 会读垃圾 header）。<b>不成比例，直接判死。</b>更重要的是它留下一条判据：<b>凡是「优化传输」的提案，先问它在端到端里占几个百分点</b>；单看「省了一半数据量」没有意义。</p>
 
-  <h3>12.5 本轮新基线</h3>
+  <h3>12.5 量化：把模型砍掉一半，为什么时间没动</h3>
+  <p>backbone 剩下的候选只有「降精度」了。直觉上：Q8 31 MB → Q4 16 MB，每帧少读一半权重，该快。实测不是——五组权重精度、三轮交替，backbone 一动不动：</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="五组权重量化：权重体积腰斩而 backbone 耗时几乎不变">
+      <title>权重体积与 backbone 耗时脱钩</title>
+      <desc>Q8_0 到 Q4_0 权重从 30.85 MiB 降到 16 MiB（减半），但 backbone 耗时从 0.687 秒到 0.666 秒，仅差 3%，落在组间噪声内；Q5_K_M 甚至更慢。</desc>
+      <text class="dg-tb" x="24" y="26">同一句文本，只换 backbone 的 gguf（3 轮 × 5 组）</text>
+
+      <text class="dg-ts" x="44" y="52">权重体积 / MiB</text>
+      <text class="dg-ts" x="376" y="52">backbone_s / s</text>
+
+      <path class="dg-grid" d="M24 230 H656"/>
+
+      <rect class="dg-bar" x="44" y="120" width="40" height="110" rx="3"/>
+      <text class="dg-ts" x="52" y="112">30.9</text>
+      <rect class="dg-bar" x="99" y="145" width="40" height="85" rx="3"/>
+      <text class="dg-ts" x="107" y="137">23.8</text>
+      <rect class="dg-bar" x="154" y="155" width="40" height="75" rx="3"/>
+      <text class="dg-ts" x="162" y="147">21.0</text>
+      <rect class="dg-bar" x="209" y="159" width="40" height="71" rx="3"/>
+      <text class="dg-ts" x="217" y="151">20.0</text>
+      <rect class="dg-bar" x="264" y="173" width="40" height="57" rx="3"/>
+      <text class="dg-ts" x="272" y="165">16.0</text>
+
+      <rect class="dg-bar3" x="376" y="125" width="40" height="105" rx="3"/>
+      <text class="dg-ts" x="384" y="117">0.687</text>
+      <rect class="dg-bar3" x="431" y="126" width="40" height="104" rx="3"/>
+      <text class="dg-ts" x="439" y="118">0.681</text>
+      <rect class="dg-bar3" x="486" y="123" width="40" height="107" rx="3"/>
+      <text class="dg-ts" x="494" y="115">0.701</text>
+      <rect class="dg-bar3" x="541" y="127" width="40" height="103" rx="3"/>
+      <text class="dg-ts" x="549" y="119">0.673</text>
+      <rect class="dg-bar3" x="596" y="128" width="40" height="102" rx="3"/>
+      <text class="dg-ts" x="604" y="120">0.666</text>
+
+      <text class="dg-ts" x="44" y="250">Q8_0</text>
+      <text class="dg-ts" x="99" y="250">Q6_K</text>
+      <text class="dg-ts" x="154" y="250">Q5_K_M</text>
+      <text class="dg-ts" x="209" y="250">mix4</text>
+      <text class="dg-ts" x="264" y="250">Q4_0</text>
+      <text class="dg-ts" x="376" y="250">Q8_0</text>
+      <text class="dg-ts" x="431" y="250">Q6_K</text>
+      <text class="dg-ts" x="486" y="250">Q5_K_M</text>
+      <text class="dg-ts" x="541" y="250">mix4</text>
+      <text class="dg-ts" x="596" y="250">Q4_0</text>
+
+      <text class="dg-tacc" x="44" y="278">−48% 体积</text>
+      <text class="dg-tacc" x="376" y="278" style="fill:var(--warn)">−3% 时间（噪声内）</text>
+      <text class="dg-ts" x="24" y="296">mix4 = 首末层保 Q8_0、中间 6 层 Q4_0 的分层混合精度，同样没有收益</text>
+      </svg>
+    </div>
+    <figcaption>图 12-4　权重体积腰斩，耗时几乎不动。当「更小的模型」不换时间时，瓶颈不是字节搬运，而是<b>调用次数</b>。</figcaption>
+  </figure>
+
+  <p>为什么不吃带宽？把 <code>backbone_s</code> 拆开看：<code>0.687 s ≈ prefill 0.19 s + 69 帧 × 7.2 ms</code>。每帧只送 1 行（hidden 512）进去，8 层权重 Q8 约 13 MB，摊到 7.2 ms 上只有约 <b>1.9 GB/s</b>——远低于这块 LPDDR5X 的可用带宽。反过来算：每层约 0.86 ms、每层约 9 个算子，即 <b>每算子 0.1 ms</b>，正好是 NPU 的 dispatch / 同步固定成本。<b>69 次「1 行 decode」= 69 次独立调用，成本由调用次数决定，不由权重字节数决定。</b></p>
+
+  <p>这次实验还附赠两个必须记住的坑。第一，<b>所有量化都改变了输出</b>：帧数 69 → 71/73/74，音频 5.32 → 5.48/5.64/5.72 s（长 3~7.5%）。分层混合（首末层保 Q8）也没救回来，帧数反而最多。第二，因此 <b>RTF 全部「变好」</b>（0.702 → 0.685），而墙钟全部变慢（+2.2~5.5%）——分母又被做大了，这是同一个陷阱的第三次出现。</p>
+
+  <div class="callout bad"><span class="tagline">判死</span>
+    backbone 中间档量化（Q6_K / Q5_K_M）与分层混合精度在端到端上一律负收益，且都以韵律漂移为代价。<strong>复活条件</strong>只有一个：先让 69 次单行 decode 不再是 69 次独立调用（改图合并、或降低每层 dispatch 成本），单次调用变大后带宽才会重新成为限制——<b>先改调用形状，再谈精度</b>。</div>
+
+  <h3>12.6 本轮新基线</h3>
   <table>
     <thead><tr><th>项</th><th>pad 256（旧）</th><th>pad 128（新）</th></tr></thead>
     <tbody>
@@ -1853,12 +1916,14 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
   <p><code>wall ≈ 0.677 + max(depth, codec) + 0.197</code>。<code>max</code> 两侧没动，所以「稳态下一个杠杆是捆绑（−15%，需重训）」的结论不变；剩余项只剩 backbone 分层混合精度（预期 −2~4%，必须过盲听）和热漂移/温控（要的是稳定性，不是 RTF）。</p>
   <p>还有一件比压模型更值钱的事：<b>同一份代码连续跑，RTF 会从 0.75 漂到 0.91（+21%）</b>，比本章所有剩余优化加起来都大。如果目标是「稳定 &lt;1」而不是「再快 1%」，真问题在温控与长时降频，不在模型推理。</p>
 
-  <h3>12.6 方法论补充</h3>
+  <h3>12.7 方法论补充</h3>
   <ol>
     <li><b>转正后立刻重算矩阵</b>：KV32 转正让 depth 不再是瓶颈，「间接加速 depth」的历史收益（Q4 曾 −18%）换基线后只剩 −4.6%。旧数字必须带上它的基线。</li>
     <li><b>在等价收益里挑最保守的配置</b>：pad 32/64/128 差异在噪声内时选 128，因为它图重建次数减半，长句更稳。</li>
     <li><b>append 模式的 dump 是 A/B 地雷</b>：<code>--dump-codes</code> 用追加写，冒烟轮与正式轮共用同名 tag 会静默叠加，产出假性 SHA 不一致（WAV 是截断写，不受影响，且 <code>sha256sum</code> 输出里 wav 在前）。<b>A/B 脚本每轮先 <code>rm -rf</code> 结果目录，冒烟用独立 tag。</b></li>
     <li><b>测量类实验别改会崩的代码</b>：分段计时加一次对照就能定案，不必为 2–4 ms 去动协议。</li>
+    <li><b>「模型变小」≠「变快」</b>：先判断受限类型。判别实验只要两档极端值（Q8 对 Q4，体积差 2×）；2× 体积差换不来时间，就说明不是带宽问题，别逐档试精度。</li>
+    <li><b>分层的价值前提是「有收益可分」</b>：mix4 这种边缘层保精度的做法，只在量化本身能加速时才有意义；加速为 0 时它只是「更慢 + 输出不一样」。</li>
     <li><b>先做零成本的那一个</b>：本章第一项零重编译、门禁现成，跑 16 次就拿到 −2.3%；另外两项各花了半天证明不该做——<b>判死也是产出</b>。</li>
   </ol>
 
