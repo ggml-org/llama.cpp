@@ -6,7 +6,7 @@
 
 #include <type_traits>
 
-// mul_mat_q_few for NVIDIA uses the int8 MMA fragment layout and cp.async, mul_mat_q_few_wmma for RDNA3 the WMMA layout. Not on MUSA.
+// mul_mat_q_few for NVIDIA uses the int8 MMA fragment layout and cp.async, mul_mat_q_few_wmma for RDNA the WMMA layout. Not on MUSA.
 #if !defined(GGML_USE_MUSA)
 
 using namespace ggml_cuda_mma;
@@ -688,10 +688,10 @@ static __global__ void mul_mat_q_few(
 #endif // defined(CP_ASYNC_AVAILABLE)
 }
 
-// RDNA3 version with WMMA for up to 16 src1 columns. A WMMA multiplies 16x16 int8 matrices and both half-warps must hold the same A and B data:
-//   A = src1, lane l holds 16 consecutive values of column l%16.
-//   B = src0, lane l holds 16 consecutive values of row l%16.
-//   C: lane l holds the columns 2v + l/16, v = 0..7, of row l%16.
+// RDNA version with WMMA for up to 16 src1 columns. A WMMA multiplies 16x16 int8 matrices, see mma.cuh:
+//   A = src1, B = src0, C = A @ B.
+//   A and B: lane l holds the column resp. row l%16, the values [16k, 16k + 16) on RDNA3 and [8*(l/16), 8*(l/16) + 8) on RDNA4.
+//   C: lane l holds the src1 columns 2v + l/16 (RDNA3) resp. 8*(l/16) + v (RDNA4) of the src0 row l%16.
 // So the src0 scales of a row stay in the lane that decodes it, the src1 scales of the C columns come with the layout in quantize.cuh.
 // The lanes decode their rows straight from global memory. A ring as in mul_mat_q_few, filled through registers without cp.async, was slower.
 // A second group of 16 columns spills registers with ROCm 7.2.
@@ -703,34 +703,68 @@ static constexpr __host__ __device__ bool mmq_few_wmma_supported(const ggml_type
 // the reduction over the warps
 static constexpr int MMQ_FEW_WMMA_NBYTES_SHARED = (MMQ_FEW_NWARPS - 1)*8*WARP_SIZE*sizeof(float);
 
-#if defined(RDNA3)
+#if defined(AMD_WMMA_AVAILABLE)
 
-typedef int mmq_few_int32x4_t __attribute__((__vector_size__(4*sizeof(int))));
-typedef int mmq_few_int32x8_t __attribute__((__vector_size__(8*sizeof(int))));
+// The A and B tiles of a lane for one WMMA, MIRRORED on RDNA3 where both half-warps hold the same data.
+#if defined(AMD_WMMA_256B_AVAILABLE)
+using mmq_few_tile_ab = tile<16, 4, int, DATA_LAYOUT_I_MAJOR_MIRRORED>;
+#else
+using mmq_few_tile_ab = tile<16, 4, int, DATA_LAYOUT_I_MAJOR>;
+#endif
+using mmq_few_tile_c = tile<16, 16, int, DATA_LAYOUT_J_MAJOR>;
+
+// int32 per lane and WMMA, 4 on RDNA3 and 2 on RDNA4
+static constexpr int MMQ_FEW_WMMA_NE = mmq_few_tile_ab::ne;
 
 // The src1 fragments of a lane for one sub-block, see quantize.cuh.
 struct mmq_few_wmma_y {
-    int4 qs[2];
-    int  ds[8];
+    int qs[2][MMQ_FEW_WMMA_NE]; // [hh] holds the values [16*hh, 16*hh + 16) of the WMMA
+    int ds[8];                  // d (D4) resp. (d, sum) (DS4) of the C columns, ds[v] of C.x[v]
 };
 
-// half: only the first 8 columns are used, the others are zero and the C values v >= 4 are not needed.
+// The C registers of a lane, on RDNA3 the ones with v >= 4 hold only the columns >= 8.
+template <bool half>
+static constexpr int mmq_few_wmma_nv() {
+    return half && MMQ_FEW_WMMA_NE == 4 ? 4 : 8;
+}
+
+// half: only the first 8 columns are used, the others are zero.
 template <bool half>
 static __device__ __forceinline__ mmq_few_wmma_y mmq_few_wmma_load_y(const int4 * y, const int s) {
     const int m = threadIdx.x % 16;
     const int h = threadIdx.x / 16;
+
     mmq_few_wmma_y yf;
-    if (half && m >= MMQ_FEW_WMMA_NCOLS/2) {
-        yf.qs[0] = make_int4(0, 0, 0, 0);
-        yf.qs[1] = make_int4(0, 0, 0, 0);
+    if constexpr (MMQ_FEW_WMMA_NE == 2) {
+        // RDNA4: the lane holds the values [16*hh + 8*h, 16*hh + 8*h + 8) of column m.
+        // The src1 quantize kernel zeroes the columns beyond ne1, a branch to skip the unused ones is more expensive than the loads.
+        const int2 * y2 = (const int2 *) y;
+        const int2 q0 = y2[(s*MMQ_FEW_WMMA_NCOLS + m)*4 + 0 + h];
+        const int2 q1 = y2[(s*MMQ_FEW_WMMA_NCOLS + m)*4 + 2 + h];
+        yf.qs[0][0] = q0.x; yf.qs[0][1] = q0.y;
+        yf.qs[1][0] = q1.x; yf.qs[1][1] = q1.y;
+    } else if (half && m >= MMQ_FEW_WMMA_NCOLS/2) {
+        yf.qs[0][0] = 0; yf.qs[0][1] = 0; yf.qs[0][2] = 0; yf.qs[0][3] = 0;
+        yf.qs[1][0] = 0; yf.qs[1][1] = 0; yf.qs[1][2] = 0; yf.qs[1][3] = 0;
     } else {
-        yf.qs[0] = y[(s*MMQ_FEW_WMMA_NCOLS + m)*2 + 0];
-        yf.qs[1] = y[(s*MMQ_FEW_WMMA_NCOLS + m)*2 + 1];
+        const int4 q0 = y[(s*MMQ_FEW_WMMA_NCOLS + m)*2 + 0];
+        const int4 q1 = y[(s*MMQ_FEW_WMMA_NCOLS + m)*2 + 1];
+        yf.qs[0][0] = q0.x; yf.qs[0][1] = q0.y; yf.qs[0][2] = q0.z; yf.qs[0][3] = q0.w;
+        yf.qs[1][0] = q1.x; yf.qs[1][1] = q1.y; yf.qs[1][2] = q1.z; yf.qs[1][3] = q1.w;
     }
-    const int4 ds0 = y[8*MMQ_FEW_WMMA_NCOLS*2 + (s*2 + h)*2 + 0];
-    const int4 ds1 = half ? make_int4(0, 0, 0, 0) : y[8*MMQ_FEW_WMMA_NCOLS*2 + (s*2 + h)*2 + 1];
-    yf.ds[0] = ds0.x; yf.ds[1] = ds0.y; yf.ds[2] = ds0.z; yf.ds[3] = ds0.w;
-    yf.ds[4] = ds1.x; yf.ds[5] = ds1.y; yf.ds[6] = ds1.z; yf.ds[7] = ds1.w;
+
+    if constexpr (MMQ_FEW_WMMA_NE == 2) {
+        // RDNA4: C.x[v] is the column 8*h + v
+        const int4 d0 = y[8*MMQ_FEW_WMMA_NCOLS*2 + 4*s + 0 + h];
+        const int4 d1 = y[8*MMQ_FEW_WMMA_NCOLS*2 + 4*s + 2 + h];
+        yf.ds[0] = d0.x; yf.ds[1] = d1.x; yf.ds[2] = d0.y; yf.ds[3] = d1.y;
+        yf.ds[4] = d0.z; yf.ds[5] = d1.z; yf.ds[6] = d0.w; yf.ds[7] = d1.w;
+    } else {
+        const int4 ds0 = y[8*MMQ_FEW_WMMA_NCOLS*2 + (s*2 + h)*2 + 0];
+        const int4 ds1 = half ? make_int4(0, 0, 0, 0) : y[8*MMQ_FEW_WMMA_NCOLS*2 + (s*2 + h)*2 + 1];
+        yf.ds[0] = ds0.x; yf.ds[1] = ds0.y; yf.ds[2] = ds0.z; yf.ds[3] = ds0.w;
+        yf.ds[4] = ds1.x; yf.ds[5] = ds1.y; yf.ds[6] = ds1.z; yf.ds[7] = ds1.w;
+    }
     return yf;
 }
 
@@ -767,14 +801,20 @@ static __device__ __forceinline__ void mmq_few_wmma_get_ints_b2(const char * p, 
     }
 }
 
-static __device__ __forceinline__ mmq_few_int32x8_t mmq_few_wmma(const int4 a, const int * b, const mmq_few_int32x8_t c) {
-    const mmq_few_int32x4_t va = {a.x, a.y, a.z, a.w};
-    const mmq_few_int32x4_t vb = {b[0], b[1], b[2], b[3]};
-    return __builtin_amdgcn_wmma_i32_16x16x16_iu8_w32(true, va, true, vb, c, false);
+static __device__ __forceinline__ void mmq_few_wmma(mmq_few_tile_c & C, const int * a, const int * b) {
+    mmq_few_tile_ab A;
+    mmq_few_tile_ab B;
+#pragma unroll
+    for (int l = 0; l < MMQ_FEW_WMMA_NE; ++l) {
+        A.x[l] = a[l];
+        B.x[l] = b[l];
+    }
+    mma(C, A, B);
 }
 
 // vec_dot: one unit of 256 values of row l%16, x points to its data, y to the src1 fragments of the unit.
-// b[8] is sub-block s of the row: b[0..3] are the values [0, 16), b[4..7] the values [16, 32).
+// The decoders write sub-block s of the row to b[8], the int32 at index i holds the values [4i, 4i + 4).
+// One WMMA uses b + 4*hh + i0, with i0 = (4 - MMQ_FEW_WMMA_NE)*(l/16) the offset of the values of the lane.
 
 template <ggml_type type, bool half>
 static __device__ __forceinline__ void mmq_few_wmma_vec_dot_q45_K(const char * x, const int4 * y, float (&sum)[8]) {
@@ -797,6 +837,7 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot_q45_K(const char * x
 
     float sum_d[8] = {0.0f};
     float sum_m[8] = {0.0f};
+    const int i0 = (4 - MMQ_FEW_WMMA_NE)*(threadIdx.x / 16);
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
         int qs[8];
@@ -818,12 +859,12 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot_q45_K(const char * x
             const float m  = (mn[s/4] >> (8*(s % 4))) & 0xFF;
 
             const mmq_few_wmma_y yf = mmq_few_wmma_load_y<half>(y, s);
-            mmq_few_int32x8_t C = {0};
-            C = mmq_few_wmma(yf.qs[0], b + 0, C);
-            C = mmq_few_wmma(yf.qs[1], b + 4, C);
+            mmq_few_tile_c C;
+            mmq_few_wmma(C, yf.qs[0], b + i0 + 0);
+            mmq_few_wmma(C, yf.qs[1], b + i0 + 4);
 #pragma unroll
-            for (int v = 0; v < (half ? 4 : 8); ++v) {
-                sum_d[v] += mmq_few_wmma_get_d<MMQ_Q8_1_DS_LAYOUT_DS4>(yf, v) * float(C[v]*ls);
+            for (int v = 0; v < mmq_few_wmma_nv<half>(); ++v) {
+                sum_d[v] += mmq_few_wmma_get_d<MMQ_Q8_1_DS_LAYOUT_DS4>(yf, v) * float(C.x[v]*ls);
                 sum_m[v] += m * mmq_few_wmma_get_sum(yf, v);
             }
         }
@@ -841,6 +882,7 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot_q6_K(const char * x,
     const float d = __half2float(bx->d);
 
     float sum_d[8] = {0.0f};
+    const int i0 = (4 - MMQ_FEW_WMMA_NE)*(threadIdx.x / 16);
 #pragma unroll
     for (int n = 0; n < 2; ++n) {
         int ql[2][8]; // [ql offset 0 or 32]
@@ -864,12 +906,13 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot_q6_K(const char * x,
             const int sc_hi = (int8_t) (sc[j/2] >> (16*(j % 2) + 8)); // scale of the values [16, 32)
 
             const mmq_few_wmma_y yf = mmq_few_wmma_load_y<half>(y, s);
-            const mmq_few_int32x8_t zero = {0};
-            const mmq_few_int32x8_t C_lo = mmq_few_wmma(yf.qs[0], b + 0, zero);
-            const mmq_few_int32x8_t C_hi = mmq_few_wmma(yf.qs[1], b + 4, zero);
+            mmq_few_tile_c C_lo;
+            mmq_few_tile_c C_hi;
+            mmq_few_wmma(C_lo, yf.qs[0], b + i0 + 0);
+            mmq_few_wmma(C_hi, yf.qs[1], b + i0 + 4);
 #pragma unroll
-            for (int v = 0; v < (half ? 4 : 8); ++v) {
-                sum_d[v] += mmq_few_wmma_get_d<MMQ_Q8_1_DS_LAYOUT_D4>(yf, v) * float(C_lo[v]*sc_lo + C_hi[v]*sc_hi);
+            for (int v = 0; v < mmq_few_wmma_nv<half>(); ++v) {
+                sum_d[v] += mmq_few_wmma_get_d<MMQ_Q8_1_DS_LAYOUT_D4>(yf, v) * float(C_lo.x[v]*sc_lo + C_hi.x[v]*sc_hi);
             }
         }
     }
@@ -882,6 +925,7 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot_q6_K(const char * x,
 // IQ4_NL has a block with its own scale per 32 values.
 template <bool half>
 static __device__ __forceinline__ void mmq_few_wmma_vec_dot_iq4_nl(const char * x, const int4 * y, float (&sum)[8]) {
+    const int i0 = (4 - MMQ_FEW_WMMA_NE)*(threadIdx.x / 16);
 #pragma unroll
     for (int s = 0; s < 8; ++s) {
         // a unit starts 16 byte aligned, the qs of every second block 2 bytes off a 4 byte boundary
@@ -898,12 +942,12 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot_iq4_nl(const char * 
         const float d = __half2float(((const block_iq4_nl *) xa + s)->d);
 
         const mmq_few_wmma_y yf = mmq_few_wmma_load_y<half>(y, s);
-        mmq_few_int32x8_t C = {0};
-        C = mmq_few_wmma(yf.qs[0], b + 0, C);
-        C = mmq_few_wmma(yf.qs[1], b + 4, C);
+        mmq_few_tile_c C;
+        mmq_few_wmma(C, yf.qs[0], b + i0 + 0);
+        mmq_few_wmma(C, yf.qs[1], b + i0 + 4);
 #pragma unroll
-        for (int v = 0; v < (half ? 4 : 8); ++v) {
-            sum[v] += d*mmq_few_wmma_get_d<MMQ_Q8_1_DS_LAYOUT_D4>(yf, v) * float(C[v]);
+        for (int v = 0; v < mmq_few_wmma_nv<half>(); ++v) {
+            sum[v] += d*mmq_few_wmma_get_d<MMQ_Q8_1_DS_LAYOUT_D4>(yf, v) * float(C.x[v]);
         }
     }
 }
@@ -921,7 +965,7 @@ static __device__ __forceinline__ void mmq_few_wmma_vec_dot(const char * x, cons
     }
 }
 
-#endif // defined(RDNA3)
+#endif // defined(AMD_WMMA_AVAILABLE)
 
 // The warps split K in units of 256 values, a block has 16 src0 rows. half: at most 8 src1 columns.
 template <ggml_type type, bool half>
@@ -931,7 +975,7 @@ static __global__ void mul_mat_q_few_wmma(
         const int nunits, const int nrows_x, const int ncols_dst, const int64_t stride_row_x, const int stride_col_dst,
         const int channel_ratio, const int64_t stride_channel_x, const int stride_channel_dst,
         const int sample_ratio, const int64_t stride_sample_x, const int stride_sample_dst) {
-#if defined(RDNA3)
+#if defined(AMD_WMMA_AVAILABLE)
     constexpr int nwarps    = MMQ_FEW_NWARPS;
     constexpr int warp_size = WARP_SIZE;
     constexpr int unit_size = mmq_few_unit_size(type);
@@ -975,10 +1019,10 @@ static __global__ void mul_mat_q_few_wmma(
         }
     }
 
-    const int i = row0 + threadIdx.x % 16;
+    const int i = row0 + mmq_few_tile_c::get_j(0);
 #pragma unroll
-    for (int v = 0; v < (half ? 4 : 8); ++v) {
-        const int j = 2*v + threadIdx.x/16;
+    for (int v = 0; v < mmq_few_wmma_nv<half>(); ++v) {
+        const int j = mmq_few_tile_c::get_i(v);
         if (i < nrows_x && j < ncols_dst) {
             dst[int64_t(j)*stride_col_dst + i] = sum[v];
         }
@@ -988,7 +1032,7 @@ static __global__ void mul_mat_q_few_wmma(
         channel_ratio, stride_channel_x, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_dst);
     NO_DEVICE_CODE;
-#endif // defined(RDNA3)
+#endif // defined(AMD_WMMA_AVAILABLE)
 }
 
 // ggml_is_constant (static in ggml.c) on the tensor that a view points to
@@ -1089,10 +1133,28 @@ static void launch_mul_mat_q_few_wmma_switch_ncols(const ggml_tensor * src0, con
     }
 }
 
-// Min. and max. number of src1 columns for RDNA3, 0 if the type is not supported. Tuned on the Radeon 8060S (gfx1151).
+// Min. and max. number of src1 columns for RDNA3 and RDNA4, 0 if the type is not supported.
 // Below the min. MMVQ is faster, above the max. MMQ. Q8_0 would need more than 16 columns to beat MMQ.
-static int2 mmq_few_wmma_ncols_range(const ggml_type type) {
-    switch (type) {
+static int2 mmq_few_wmma_ncols_range(const ggml_type type, const int cc) {
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) { // tuned on the Radeon RX 9070 XT (gfx1201)
+        switch (type) {
+            case GGML_TYPE_Q4_K:   return make_int2(3, 16);
+            case GGML_TYPE_Q5_K:   return make_int2(3, 16);
+            case GGML_TYPE_Q6_K:   return make_int2(5, 16);
+            case GGML_TYPE_IQ4_NL: return make_int2(6, 16);
+            default:               return make_int2(0,  0);
+        }
+    }
+    if (GGML_CUDA_CC_IS_RDNA3_0(cc)) { // tuned on the Radeon RX 7900 XTX (gfx1100)
+        switch (type) {
+            case GGML_TYPE_Q4_K:   return make_int2(2, 16);
+            case GGML_TYPE_Q5_K:   return make_int2(2, 16);
+            case GGML_TYPE_Q6_K:   return make_int2(5, 16);
+            case GGML_TYPE_IQ4_NL: return make_int2(5, 16);
+            default:               return make_int2(0,  0);
+        }
+    }
+    switch (type) { // tuned on the Radeon 8060S (gfx1151)
         case GGML_TYPE_Q4_K:   return make_int2(3, 16);
         case GGML_TYPE_Q5_K:   return make_int2(3,  8);
         case GGML_TYPE_Q6_K:   return make_int2(6, 16);
@@ -1101,9 +1163,8 @@ static int2 mmq_few_wmma_ncols_range(const ggml_type type) {
     }
 }
 
-// The kernel also runs on RDNA3.0, but it was only tuned on RDNA3.5.
 static bool mmq_few_use_wmma(const int cc) {
-    return GGML_CUDA_CC_IS_RDNA3_5(cc);
+    return GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc);
 }
 
 static void ggml_cuda_mul_mat_q_few_wmma(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -1200,7 +1261,7 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
 #endif // GGML_CUDA_FORCE_CUBLAS
 
     if (mmq_few_use_wmma(cc)) {
-        return !mmq_few_wmma_supported(type) || ne00 < 8*QK_K ? 0 : mmq_few_wmma_ncols_range(type).x;
+        return !mmq_few_wmma_supported(type) || ne00 < 8*QK_K ? 0 : mmq_few_wmma_ncols_range(type, cc).x;
     }
 
     // NVIDIA Ampere to Blackwell
@@ -1237,7 +1298,7 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
         return false;
     }
     if (mmq_few_use_wmma(cc)) {
-        if (src1->ne[1] > mmq_few_wmma_ncols_range(src0->type).y) {
+        if (src1->ne[1] > mmq_few_wmma_ncols_range(src0->type, cc).y) {
             return false;
         }
         // the decoders read whole 4 byte values from 16 byte aligned units, Q6_K values 2 bytes at a time
