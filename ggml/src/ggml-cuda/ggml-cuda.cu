@@ -2213,11 +2213,11 @@ static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     }
 
     // mmvq and mmq can fold the weight scale (src[2]) into their epilogue for NVFP4 per-tensor scales
-    const bool scale_fold = dst->src[2] != NULL &&
-        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[2]) == 1;
+    const bool scale_fold = ggml_get_src_scale(dst, 0) != NULL &&
+        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(ggml_get_src_scale(dst, 0)) == 1;
     ggml_cuda_mm_fusion_args_host fusion = {};
     if (scale_fold) {
-        fusion.x_scale   = dst->src[2];
+        fusion.x_scale   = ggml_get_src_scale(dst, 0);
         fusion.prec_src1 = ggml_prec_get_src(dst, 1);
     }
 
@@ -2275,7 +2275,7 @@ static bool ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return scale_fold;
     }
     if (src0->type == GGML_TYPE_F8_E4M3) {
-        const ggml_tensor * weight_scale = dst->src[2] && ggml_nelements(dst->src[2]) == 1 ? dst->src[2] : nullptr;
+        const ggml_tensor * weight_scale = ggml_get_src_scale(dst, 0) && ggml_nelements(ggml_get_src_scale(dst, 0)) == 1 ? ggml_get_src_scale(dst, 0) : nullptr;
         if (ggml_cuda_mul_mat_fp8(ctx, src0, src1, dst, weight_scale)) {
             return weight_scale != nullptr;
         }
@@ -2335,12 +2335,12 @@ static bool ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
     // mmvq and mmq can fold the per-expert weight scale (src[3]) into their epilogue for NVFP4
-    const bool scale_fold = dst->src[3] != NULL &&
-        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(dst->src[3]) == src0->ne[2] &&
-        ggml_is_contiguous(dst->src[3]);
+    const bool scale_fold = ggml_get_src_scale(dst, 0) != NULL &&
+        src0->type == GGML_TYPE_NVFP4 && ggml_nelements(ggml_get_src_scale(dst, 0)) == src0->ne[2] &&
+        ggml_is_contiguous(ggml_get_src_scale(dst, 0));
     ggml_cuda_mm_fusion_args_host fusion = {};
     if (scale_fold) {
-        fusion.x_scale   = dst->src[3];
+        fusion.x_scale   = ggml_get_src_scale(dst, 0);
         fusion.prec_src1 = ggml_prec_get_src(dst, 1);
     }
 
@@ -2538,7 +2538,7 @@ static __global__ void mul_mat_scale_id(float * dst, const float * scale, const 
 
 static void ggml_cuda_op_mul_mat_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const bool is_id = dst->op == GGML_OP_MUL_MAT_ID;
-    const ggml_tensor * scale = is_id ? dst->src[3] : dst->src[2];
+    const ggml_tensor * scale = ggml_get_src_scale(dst, 0);
     GGML_ASSERT(scale != NULL && scale->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_is_contiguous(dst));
 
@@ -2765,13 +2765,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_MUL_MAT: {
                 const bool scale_folded = ggml_cuda_mul_mat(ctx, dst->src[0], dst->src[1], dst);
-                if (dst->src[2] != NULL && !scale_folded) {
+                if (ggml_get_src_scale(dst, 0) != NULL && !scale_folded) {
                     ggml_cuda_op_mul_mat_scale(ctx, dst);
                 }
             } break;
         case GGML_OP_MUL_MAT_ID: {
                 const bool scale_folded = ggml_cuda_mul_mat_id(ctx, dst);
-                if (dst->src[3] != NULL && !scale_folded) {
+                if (ggml_get_src_scale(dst, 0) != NULL && !scale_folded) {
                     ggml_cuda_op_mul_mat_scale(ctx, dst);
                 }
             } break;
