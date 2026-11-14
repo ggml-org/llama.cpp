@@ -818,7 +818,8 @@ static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr,
+        bool moe_cache_disk = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -827,6 +828,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.moe_cache_disk = moe_cache_disk;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -842,8 +844,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
-    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0,
+        bool moe_cache_disk = false) {
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides, moe_cache_disk);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -1223,9 +1226,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
         llama_split_mode                split_mode;
         bool                            host_experts; // keep the experts in host memory, see host_experts_test
         size_t                          moe_cache_size;
+        bool                            moe_cache_disk;
 
-        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0)
-            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size) {}
+        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode, bool host_experts = false, size_t moe_cache_size = 0, bool moe_cache_disk = false)
+            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode), host_experts(host_experts), moe_cache_size(moe_cache_size), moe_cache_disk(moe_cache_disk) {}
     };
 
     const llama_model_tensor_buft_override host_experts_overrides[] = {
@@ -1274,6 +1278,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 // each GPU caches the layers assigned to it
                 if (devices_meta.size() > 1) {
                     dev_configs.emplace_back(devices_meta, "MoE cache, layer split", LLAMA_SPLIT_MODE_LAYER, true, 1536*1024);
+                    max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
+                }
+                if (strcmp(ggml_backend_reg_name(ggml_backend_dev_backend_reg(devices_meta[0])), "MTL") == 0) {
+                    dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{devices_meta[0]}, "MoE cache, disk", LLAMA_SPLIT_MODE_LAYER, false, 1536*1024, true);
                     max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
                 }
             }
@@ -1330,7 +1338,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_cpu;
             std::vector<float> logits_cpu;
             for (device_config & dc : dev_configs) {
-                if (dc.host_experts && (!moe || !host_experts_test(arch))) {
+                if ((dc.host_experts || dc.moe_cache_disk) && (!moe || !host_experts_test(arch))) {
                     continue;
                 }
                 const llama_model_tensor_buft_override * overrides = dc.host_experts ? host_experts_overrides : nullptr;
@@ -1357,7 +1365,17 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
+                        std::string disk_path;
+                        FILE * disk_file = nullptr;
+                        if (dc.moe_cache_disk) {
+                            disk_path = get_tmp_gguf_path();
+                            llama_model_save_to_file(model_and_ctx_cpu.first.get(), disk_path.c_str());
+                            disk_file = fopen(disk_path.c_str(), "rb");
+                            GGML_ASSERT(disk_file != nullptr);
+                        }
+                        model_and_ctx_dev = get_model_and_ctx(
+                            dc.moe_cache_disk ? nullptr : gguf_ctx.get(), disk_file, seed, stdev, dc.devs, dc.split_mode,
+                            encode, overrides, dc.moe_cache_size, dc.moe_cache_disk);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
@@ -1409,9 +1427,15 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                             }
                             test_ok = false;
                         }
+                        if (dc.moe_cache_disk) {
+                            model_and_ctx_dev.second.reset();
+                            model_and_ctx_dev.first.reset();
+                            fclose(disk_file);
+                            std::filesystem::remove(disk_path);
+                        }
                     }
 
-                    if (llama_arch_supports_save(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                    if (llama_arch_supports_save(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR && !dc.moe_cache_disk) {
                         test_executed = true;
                         GGML_ASSERT(model_and_ctx_dev.first && model_and_ctx_dev.second);
                         // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
