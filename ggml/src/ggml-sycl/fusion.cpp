@@ -121,6 +121,28 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         return ggml_sycl_should_fuse_mul_mat_glu(gate, up, glu);
     }
 
+    // the residual sum stays materialised (a later residual add reads it), so ggml_can_fuse cannot
+    // express this either: the add and the mul are the subgraph's outputs
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_RMS_NORM &&
+        ops.begin()[2] == GGML_OP_MUL) {
+        if (!ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx, node_idx + 2 })) {
+            return false;
+        }
+
+        const ggml_tensor * add = cgraph->nodes[node_idx];
+        if (cgraph->nodes[node_idx + 1]->src[0] != add) {
+            return false;
+        }
+
+        // the fused kernel does not broadcast the add
+        if (add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32 ||
+            !ggml_are_same_shape(add->src[0], add) || !ggml_are_same_shape(add->src[1], add)) {
+            return false;
+        }
+
+        return ggml_sycl_can_fuse(cgraph, node_idx + 1, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {});
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
