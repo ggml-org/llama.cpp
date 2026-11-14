@@ -126,6 +126,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "GlmOcrForConditionalGeneration": "glm",
     "GptOssForCausalLM": "gpt_oss",
     "GraniteForCausalLM": "granite",
+    "Granite4VisionForConditionalGeneration": "granite",
     "GraniteMoeForCausalLM": "granite",
     "GraniteMoeHybridForCausalLM": "granite",
     "GraniteMoeSharedForCausalLM": "granite",
