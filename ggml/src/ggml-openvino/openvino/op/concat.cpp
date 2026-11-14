@@ -2,6 +2,7 @@
 #include "../op_table.h"
 #include "../utils.h"
 
+#include <algorithm>
 #include <memory>
 #include <openvino/frontend/exception.hpp>
 #include <openvino/op/concat.hpp>
@@ -36,7 +37,16 @@ OutputVector translate_concat(const NodeContext & context) {
         input_1 = std::make_shared<ov::op::v0::Convert>(input_1, output_type);
     }
 
-    const auto axis = static_cast<int64_t>(rank - 1 - ggml_dim);
+    const auto & ps_0 = input_0.get_partial_shape();
+    const auto & ps_1 = input_1.get_partial_shape();
+    int64_t concat_rank = rank;
+    if (ps_0.rank().is_static() && ps_1.rank().is_static()) {
+        concat_rank = std::max(ps_0.rank().get_length(), ps_1.rank().get_length());
+        input_0 = lift_to_rank(input_0, concat_rank);
+        input_1 = lift_to_rank(input_1, concat_rank);
+    }
+
+    const auto axis = static_cast<int64_t>(concat_rank - 1 - ggml_dim);
     auto res = std::make_shared<ov::op::v0::Concat>(OutputVector{input_0, input_1}, axis);
 
     return rename_outputs_with_suffix({res}, context.get_name());

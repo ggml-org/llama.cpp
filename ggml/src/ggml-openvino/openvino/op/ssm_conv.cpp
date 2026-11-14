@@ -29,9 +29,15 @@ OutputVector translate_ssm_conv(const NodeContext & context) {
     int64_t d_conv  = c_shape[3];
     // int64_t n_t  = ncs - d_conv + 1;
 
-    // Reshape sx from [1, n_s, d_inner, ncs] to [n_s, d_inner, ncs] for 1D GroupConvolution
-    auto sx_reshaped =
-        std::make_shared<ov::op::v0::Squeeze>(sx, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+    // Reshape sx from [1, n_s, d_inner, ncs] to [n_s, d_inner, ncs] for 1D GroupConvolution.
+    const auto sx_rank = sx.get_partial_shape().rank();
+    FRONT_END_OP_CONVERSION_CHECK(sx_rank.is_static() && sx_rank.get_length() >= 3,
+                                  "SSM_CONV expects a rank-3 or rank-4 input, got ", sx.get_partial_shape());
+    const bool sx_has_batch_axis = sx_rank.get_length() == 4;
+    ov::Output<ov::Node> sx_reshaped = sx_has_batch_axis ?
+                                           ov::Output<ov::Node>(std::make_shared<ov::op::v0::Squeeze>(
+                                               sx, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}))) :
+                                           sx;
 
     // Reshape c from [1, 1, d_inner, d_conv] to [d_inner, 1, 1, d_conv]
     // GroupConvolution filter: [groups, out_channels/groups, in_channels/groups, kernel_size]
@@ -48,9 +54,11 @@ OutputVector translate_ssm_conv(const NodeContext & context) {
     auto perm = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{0, 2, 1});
     auto transposed = std::make_shared<ov::op::v1::Transpose>(conv, perm);
 
-    // Reshape to output shape [1, n_s, n_t, d_inner]
-    auto res =
-        std::make_shared<ov::op::v0::Unsqueeze>(transposed, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+    // Restore the batch axis only if it was dropped above, so the output rank matches the input's.
+    ov::Output<ov::Node> res = sx_has_batch_axis ?
+                                   ov::Output<ov::Node>(std::make_shared<ov::op::v0::Unsqueeze>(
+                                       transposed, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}))) :
+                                   ov::Output<ov::Node>(transposed);
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }
