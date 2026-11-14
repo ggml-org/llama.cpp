@@ -27,8 +27,16 @@
 static inline int ctz64(uint64_t x) {
 #if defined(_MSC_VER)
     unsigned long i;
+#if defined(_WIN64)
     _BitScanForward64(&i, x);
     return (int) i;
+#else
+    if (_BitScanForward(&i, (unsigned long) x)) {
+        return (int) i;
+    }
+    _BitScanForward(&i, (unsigned long) (x >> 32));
+    return (int) i + 32;
+#endif
 #else
     return __builtin_ctzll(x);
 #endif

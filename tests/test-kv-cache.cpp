@@ -16,6 +16,11 @@ static void init_model(llama_model & model, uint32_t n_layer) {
 }
 
 int main() {
+    for (int bit = 0; bit < 64; ++bit) {
+        GGML_ASSERT(ctz64(uint64_t{1} << bit) == bit);
+        GGML_ASSERT(ctz64(UINT64_MAX << bit) == bit);
+    }
+
     llama_backend_init();
 
     {
