@@ -20,6 +20,7 @@
 #include <map>
 #include <queue>
 #include <set>
+#include <string_view>
 #include <unordered_map>
 
 //
@@ -1474,9 +1475,16 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         to_suffix_id_.clear();
         table_.clear();
 
-        // Build token list and byte mapping
-        std::unordered_map<std::string, float> suffix_to_score;
-        std::unordered_map<std::string, llama_token> token_to_id;
+        // Suffixes and pieces are views into the token texts of the vocab, so no strings are built
+        std::unordered_map<std::string_view, float> suffix_to_score;
+        std::unordered_map<std::string_view, llama_token> token_to_id;
+        suffix_to_score.reserve(vocab.n_tokens() * 4);
+        token_to_id.reserve(vocab.n_tokens());
+
+        // Byte offset of the next code point
+        auto next_cpt = [](std::string_view s, size_t offset) -> size_t {
+            return offset + std::min(s.size() - offset, unicode_len_utf8(s[offset]));
+        };
 
         for (size_t token_id = 0; token_id < vocab.n_tokens(); ++token_id) {
             const auto & entry = vocab.get_token_data(token_id);
@@ -1496,18 +1504,10 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
             }
 
             // Add token and all its suffixes to suffix_to_score
-            suffix_to_score[entry.text] = entry.score;
-
-            // Extract suffixes character by character (UTF-8 aware)
-            std::vector<uint32_t> cpts = unicode_cpts_from_utf8(entry.text);
-            for (size_t i = 1; i < cpts.size(); ++i) {
-                std::string suffix;
-                for (size_t j = i; j < cpts.size(); ++j) {
-                    suffix += unicode_cpt_to_utf8(cpts[j]);
-                }
-                if (suffix_to_score.find(suffix) == suffix_to_score.end()) {
-                    suffix_to_score[suffix] = std::numeric_limits<float>::quiet_NaN();
-                }
+            const std::string_view text = entry.text;
+            suffix_to_score[text] = entry.score;
+            for (size_t i = text.empty() ? 0 : next_cpt(text, 0); i < text.size(); i = next_cpt(text, i)) {
+                suffix_to_score.try_emplace(text.substr(i), std::numeric_limits<float>::quiet_NaN());
             }
         }
 
@@ -1519,44 +1519,47 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
         }
 
         // Build suffix list in lexicographical order of reversed strings
-        std::vector<std::string> suffixes;
+        std::vector<std::string_view> suffixes;
         suffixes.reserve(suffix_to_score.size() + 1);
         for (const auto & pair : suffix_to_score) {
             suffixes.push_back(pair.first);
         }
         suffixes.push_back("");  // Empty suffix
 
-        std::sort(suffixes.begin(), suffixes.end(), [](const std::string & a, const std::string & b) {
-            std::string rev_a(a.rbegin(), a.rend());
-            std::string rev_b(b.rbegin(), b.rend());
-            return rev_a < rev_b;
+        std::sort(suffixes.begin(), suffixes.end(), [](std::string_view a, std::string_view b) {
+            return std::lexicographical_compare(a.rbegin(), a.rend(), b.rbegin(), b.rend(), [](char x, char y) {
+                return static_cast<unsigned char>(x) < static_cast<unsigned char>(y);
+            });
         });
 
+        // Byte length of each prefix of the suffix, by code point
+        std::vector<size_t> prefix_ends;
+        auto get_prefix_ends = [&](std::string_view suffix) {
+            prefix_ends.clear();
+            for (size_t i = 0; i < suffix.size();) {
+                i = next_cpt(suffix, i);
+                prefix_ends.push_back(i);
+            }
+        };
+
         // Build suffix_to_id and to_suffix_id_
-        std::unordered_map<std::string, int32_t> suffix_to_id;
+        std::unordered_map<std::string_view, int32_t> suffix_to_id;
+        suffix_to_id.reserve(suffixes.size());
         int32_t num_pieces = 0;
 
         for (const auto & suffix : suffixes) {
             suffix_to_id[suffix] = num_pieces;
             if (!suffix.empty()) {
-                std::vector<uint32_t> cpts = unicode_cpts_from_utf8(suffix);
+                get_prefix_ends(suffix);
+                const uint32_t first_cpt = unicode_cpts_from_utf8(std::string(suffix.substr(0, prefix_ends[0])))[0];
 
-                std::string remaining;
-                for (size_t i = 1; i < cpts.size(); ++i) {
-                    remaining += unicode_cpt_to_utf8(cpts[i]);
-                }
-
-                int64_t piece_code = (static_cast<int64_t>(cpts[0]) << 32) | suffix_to_id[remaining];
+                int64_t piece_code = (static_cast<int64_t>(first_cpt) << 32) | suffix_to_id[suffix.substr(prefix_ends[0])];
                 to_suffix_id_[piece_code] = num_pieces;
 
                 // Count number of pieces for this suffix
                 int32_t pieces_for_suffix = 1; // sentinel row
-                for (int32_t piece_length = static_cast<int32_t>(cpts.size()); piece_length > 0; --piece_length) {
-                    std::string piece;
-                    for (int32_t i = 0; i < piece_length; ++i) {
-                        piece += unicode_cpt_to_utf8(cpts[i]);
-                    }
-                    if (suffix_to_score.find(piece) != suffix_to_score.end()) {
+                for (size_t end : prefix_ends) {
+                    if (suffix_to_score.find(suffix.substr(0, end)) != suffix_to_score.end()) {
                         pieces_for_suffix++;
                     }
                 }
@@ -1572,12 +1575,9 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
 
         for (const auto & suffix : suffixes) {
             // Add all prefixes of the suffix to the table (in decreasing order of length)
-            std::vector<uint32_t> cpts = unicode_cpts_from_utf8(suffix);
-            for (int32_t piece_length = static_cast<int32_t>(cpts.size()); piece_length > 0; --piece_length) {
-                std::string piece;
-                for (int32_t i = 0; i < piece_length; ++i) {
-                    piece += unicode_cpt_to_utf8(cpts[i]);
-                }
+            get_prefix_ends(suffix);
+            for (int32_t piece_length = static_cast<int32_t>(prefix_ends.size()); piece_length > 0; --piece_length) {
+                const std::string_view piece = suffix.substr(0, prefix_ends[piece_length - 1]);
 
                 auto score_it = suffix_to_score.find(piece);
                 if (score_it == suffix_to_score.end()) {
