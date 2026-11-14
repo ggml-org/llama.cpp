@@ -16,6 +16,10 @@ namespace op {
 OutputVector translate_fill(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
+    if (is_recurrent_cache_reset_case(context)) {
+        return translate_recurrent_cache_reset(context);
+    }
+
     float c;
     memcpy(&c, context.get_output_op_params(), sizeof(float));
 

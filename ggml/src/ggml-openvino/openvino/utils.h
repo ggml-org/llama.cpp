@@ -75,6 +75,10 @@ ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_i
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
 
+bool is_recurrent_cache_reset_case(const NodeContext & context);
+
+OutputVector translate_recurrent_cache_reset(const NodeContext & context);
+
 // A KQ mask input. Stateful execution reads the mask parameters through the masks rebuilt from the positions (see
 // add_sliced_mask_stateful); any other input, e.g. the mask rows gemma-4 gathers for its KV-shared layers, as is.
 ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index);

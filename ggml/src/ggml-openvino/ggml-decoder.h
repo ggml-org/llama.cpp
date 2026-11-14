@@ -506,10 +506,15 @@ public:
         return op->op == GGML_OP_ROPE && tensor == op->src[2];
     }
 
-    inline static bool is_recurrent_cache(const ggml_tensor * tensor) {
+    static bool is_recurrent_cache(const ggml_tensor * tensor) {
         return tensor != nullptr && (strncmp(tensor->name, "cache_r_l", strlen("cache_r_l")) == 0 ||
                                      strncmp(tensor->name, "cache_s_l", strlen("cache_s_l")) == 0 ||
                                      strncmp(tensor->name, "cache_ple_r_l", strlen("cache_ple_r_l")) == 0);
+    }
+
+    static bool is_recurrent_cache_reset(const ggml_tensor * node) {
+        const bool is_scale_or_fill = node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL;
+        return is_scale_or_fill && node->view_src != nullptr && is_recurrent_cache(node->view_src);
     }
 
     static bool is_gdn_snapshot_writeback(const ggml_tensor * node) {
