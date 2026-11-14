@@ -85,8 +85,18 @@ kernel void kernel_gemm_moe_q6_k_q8_1_dp4a(
     const uint ne00_u = ne00 >> 2;
     const uint ne00_b = ne00 >> 5;
 
+#ifdef MOE_LM_PAD
+    __local uint sh_qa_store[TILESIZE_N * 8 + 2 * MOE_LM_PAD];
+    __local uint (*sh_qa)[8] = (__local uint (*)[8])(sh_qa_store + 2 * MOE_LM_PAD);
+#else
     __local uint sh_qa[TILESIZE_N][8];
+#endif
+#ifdef MOE_LM_PAD
+    __local half sh_d_store[TILESIZE_N + 4 * MOE_LM_PAD];
+    __local half * sh_d = sh_d_store + 4 * MOE_LM_PAD;
+#else
     __local half sh_d[TILESIZE_N];
+#endif
 
     // Real token count for this tile
     __local uint sh_src2[TILESIZE_N];

@@ -186,7 +186,15 @@ kernel void kernel_gemm_moe_q4_1_f32_ns(
 
     __private half16 reg_a;
     __private float32 reg_c = (float32)(0);
+#ifdef MOE_LM_PAD
+    // E17 (Adreno 850) returns wrong values for the first element of this tile, which
+    // corrupts output column 0 of every tile; starting the tile MOE_LM_PAD elements in
+    // avoids it.
+    __local half4 shared_b_store[128 + MOE_LM_PAD];
+    __local half4 * shared_b = shared_b_store + MOE_LM_PAD;
+#else
     __local half4 shared_b[128];
+#endif
 
     const ushort expert_id = src2_emap[block_id_n];
 
