@@ -55,10 +55,10 @@ RecurrentCacheFusion::RecurrentCacheFusion(const std::shared_ptr<GgmlDecoder> & 
             const auto node = graph->nodes[j];
             if (GgmlOvDecoder::is_recurrent_cache_reset(node) &&
                 node->view_src == root && decoder->get_op_case(j) == 1) {
-                // SCALE (scale, bias) or FILL (value, unused 0)
-                float params[2];
-                memcpy(params, node->op_params, sizeof(params));
-                if (params[0] == 0 && params[1] == 0) {
+                float scale, bias;
+                memcpy(&scale, node->op_params, sizeof(float));
+                memcpy(&bias, node->op_params + 1, sizeof(float));
+                if (scale == 0 && bias == 0) {
                     group.reset = j;
                 }
             }
