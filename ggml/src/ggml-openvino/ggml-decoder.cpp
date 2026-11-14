@@ -110,7 +110,8 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph, std::map<std::string, std::sh
 
 namespace {
 bool is_inplace_op(const ggml_tensor * node) {
-    return node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_CPY || (node->op == GGML_OP_SCALE && node->view_src);
+    const bool is_scale_or_fill = node->op == GGML_OP_SCALE || node->op == GGML_OP_FILL;
+    return node->op == GGML_OP_SET_ROWS || node->op == GGML_OP_CPY || (is_scale_or_fill && node->view_src);
 }
 
 bool is_same_shape(const ggml_tensor * a, const ggml_tensor * b) {
@@ -633,7 +634,8 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
         }
         break;
     }
-    case GGML_OP_SCALE: {
+    case GGML_OP_SCALE:
+    case GGML_OP_FILL: {
         if (node->view_src && node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
             op_case = node->view_src->ne[1] == 1 ? 2 : 1;
         }
@@ -989,14 +991,14 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         if (node->op == GGML_OP_GATED_DELTA_NET) {
             model_params.state_size = node->src[0]->ne[0];
         }
-        if (node->op == GGML_OP_SCALE && node->view_src != nullptr && is_recurrent_cache(node->view_src)) {
+        if (is_recurrent_cache_reset(node)) {
             if (model_params.n_rs_slots == -1) {
                 model_params.n_rs_slots = node->view_src->ne[1];
             } else {
                 GGML_ASSERT(model_params.n_rs_slots == node->view_src->ne[1]);
             }
             compute_params.cache_rs_reset_len = ggml_nelements(node) / node->view_src->ne[0];
-            compute_params.cache_rs_reset_idx = node->src[0]->view_offs / node->view_src->ne[0];
+            compute_params.cache_rs_reset_idx = node->src[0]->view_offs / node->view_src->nb[1];
         }
         // Capture the destination slot block of every recurrent state cache writeback, plus the
         // source window needed by conv state and packed GDN rollback writes. The active sequences
@@ -1252,7 +1254,7 @@ void GgmlOvDecoder::add_extra_inputs() {
         // Whether/which cache slot to reset varies per compute call (e.g. a new sequence starting
         // vs. continued decoding). can_reuse_statically() does not invalidate the cached static
         // model on ComputeParams changes, so these must stay runtime Parameters even when static
-        // (scale.cpp op_case 1 only uses them in value comparisons, never as Slice bounds, so this
+        // (translate_recurrent_cache_reset only uses them in value comparisons, never as Slice bounds, so this
         // does not reintroduce dynamic shapes).
         create_1d_input("cache_rs_reset_idx", m_compute_params.cache_rs_reset_idx, /*force_parameter=*/true);
         create_1d_input("cache_rs_reset_len", m_compute_params.cache_rs_reset_len, /*force_parameter=*/true);

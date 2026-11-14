@@ -364,7 +364,7 @@ static void reset_single_slot_recurrent_cache(ggml_cgraph * cgraph,
     std::set<ggml_backend_buffer_t> buffers;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
-        if (node->op == GGML_OP_SCALE && GgmlOvDecoder::is_recurrent_cache(node->view_src) &&
+        if (GgmlOvDecoder::is_recurrent_cache_reset(node) &&
             node->view_src->ne[1] == 1 && node->view_src->buffer != nullptr) {
             buffers.insert(node->view_src->buffer);
         }
@@ -593,7 +593,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(const std::shared_ptr<GgmlOvDecode
     if (chunk_index > 0 && param_name == "cache_rs_reset_len") {
         // The recurrent-state clear belongs to the start of the sequence. Re-applying it on every
         // chunk would wipe the state accumulated by the preceding chunks, so disable it (a zero
-        // length makes scale.cpp's keep-mask select every slot) after the first chunk.
+        // length makes translate_recurrent_cache_reset keep every slot) after the first chunk.
         ov::Tensor input_tensor(ov::element::i64, ov::Shape{1});
         *input_tensor.data<int64_t>() = 0;
         return input_tensor;
