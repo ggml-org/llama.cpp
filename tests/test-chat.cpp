@@ -2214,6 +2214,21 @@ static void test_lfm2_parser(const std::string & template_path, bool detailed_de
         .expect(simple_assist_msg("", "", "empty_args", "{}"))
         .run();
 
+    // undeclared names stay tool calls instead of being forced onto a declared tool
+    tst.test("<|tool_call_start|>[reseat_sim_card()]<|tool_call_end|>")
+        .tools({ special_function_tool })
+        .expect(simple_assist_msg("", "", "reseat_sim_card", "{}"))
+        .run();
+
+    tst.test("<|tool_call_start|>[set_sim_lock(mode='pin', force=True)]<|tool_call_end|>")
+        .tools({ special_function_tool })
+        .expect_tool_calls({ { "set_sim_lock", R"({"mode": "pin", "force": true})", "" } })
+        .run();
+
+    tst.test("<|tool_call_start|>[special_function(arg1=1)]<|tool_call_end|>")
+        .tools({ special_function_tool })
+        .expect(message_assist_call)
+        .run();
 }
 
 static void test_template_output_peg_parsers(bool detailed_debug) {
