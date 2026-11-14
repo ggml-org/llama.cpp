@@ -230,7 +230,7 @@ struct mtmd_helper_cap {
     // input capabilities
     bool vision;
     bool audio;
-    bool video; // also depending on MTMD_VIDEO build option
+    bool video; // also depending on MTMD_VIDEO build option; a custom mtmd_helper_video_decoder is not accounted for
 
     // realtime capabilities
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
