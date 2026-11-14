@@ -84,6 +84,14 @@ std::filesystem::path get_server_exec_path() {
         }
         throw std::runtime_error("_NSGetExecutablePath failed after buffer resize");
     }
+#elif defined(HAVE_GETEXECPATH)
+    char path[PATH_MAX];
+    
+    int result = getexecpath(path, sizeof(path));
+    if (result == -1) {
+        throw std::runtime_error("failed to determine execpath");
+    }
+    return std::filesystem::path(path);
 #else
     char path[FILENAME_MAX];
     ssize_t count = readlink("/proc/self/exe", path, FILENAME_MAX);
