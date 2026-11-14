@@ -262,12 +262,21 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         v128_t v0_0 = wasm_v128_load(x0->qs);
         v128_t v0_0l = wasm_v128_and(v0_0, m4b);
         v128_t v0_0h = wasm_u8x16_shr(v0_0, 4);
-        v128_t v0_0ls = wasm_i8x16_sub(v0_0l, s8b);
-        v128_t v0_0hs = wasm_i8x16_sub(v0_0h, s8b);
 
         // Load y0 vectors
         v128_t y0_l = wasm_v128_load(y0->qs);
         v128_t y0_h = wasm_v128_load(y0->qs + 16);
+
+#   if defined(__wasm_relaxed_simd__)
+        // unsigned nibbles (0..15) in the 7-bit operand, then subtract 8*sum(y)
+        v128_t dp0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y0_l, v0_0l, wasm_i32x4_splat(0));
+        dp0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y0_h, v0_0h, dp0);
+        v128_t ys0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y0_l, s8b, wasm_i32x4_splat(0));
+        ys0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y0_h, s8b, ys0);
+        dp0 = wasm_i32x4_sub(dp0, ys0);
+#   else
+        v128_t v0_0ls = wasm_i8x16_sub(v0_0l, s8b);
+        v128_t v0_0hs = wasm_i8x16_sub(v0_0h, s8b);
 
         // Extend to i16x8 and compute dot products
         v128_t dx0l = wasm_i16x8_extend_low_i8x16(v0_0ls);
@@ -290,18 +299,27 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i32x4_dot_i16x8(dx0hh, dy0hh)
             )
         );
+#   endif
 
         // Load and process x1
         v128_t v0_1 = wasm_v128_load(x1->qs);
         v128_t v0_1l = wasm_v128_and(v0_1, m4b);
         v128_t v0_1h = wasm_u8x16_shr(v0_1, 4);
-        v128_t v0_1ls = wasm_i8x16_sub(v0_1l, s8b);
-        v128_t v0_1hs = wasm_i8x16_sub(v0_1h, s8b);
 
         // Load y1 vectors
         v128_t y1_l = wasm_v128_load(y1->qs);
         v128_t y1_h = wasm_v128_load(y1->qs + 16);
 
+#   if defined(__wasm_relaxed_simd__)
+        // unsigned nibbles (0..15) in the 7-bit operand, then subtract 8*sum(y)
+        v128_t dp1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y1_l, v0_1l, wasm_i32x4_splat(0));
+        dp1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y1_h, v0_1h, dp1);
+        v128_t ys1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y1_l, s8b, wasm_i32x4_splat(0));
+        ys1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(y1_h, s8b, ys1);
+        dp1 = wasm_i32x4_sub(dp1, ys1);
+#   else
+        v128_t v0_1ls = wasm_i8x16_sub(v0_1l, s8b);
+        v128_t v0_1hs = wasm_i8x16_sub(v0_1h, s8b);
         // Extend to i16x8 and compute dot products
         v128_t dx1l = wasm_i16x8_extend_low_i8x16(v0_1ls);
         v128_t dx1h = wasm_i16x8_extend_high_i8x16(v0_1ls);
@@ -323,6 +341,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i32x4_dot_i16x8(dx1hh, dy1hh)
             )
         );
+#   endif
 
         // Accumulate results with scaling
         float scale0 = GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d);
@@ -461,10 +480,18 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         // extract the 5th bit
         memcpy(&qh_, x0->qh, sizeof(qh_));
 
+#   if defined(__wasm_relaxed_simd__)
+        // the high bit as is: unsigned 5-bit quants for the 7-bit operand
+        tmp[0] = table_b2b_0[(qh_ >>  0) & 0xFF];
+        tmp[1] = table_b2b_0[(qh_ >>  8) & 0xFF];
+        tmp[2] = table_b2b_0[(qh_ >> 16) & 0xFF];
+        tmp[3] = table_b2b_0[(qh_ >> 24)       ];
+#   else
         tmp[0] = table_b2b_1[(qh_ >>  0) & 0xFF];
         tmp[1] = table_b2b_1[(qh_ >>  8) & 0xFF];
         tmp[2] = table_b2b_1[(qh_ >> 16) & 0xFF];
         tmp[3] = table_b2b_1[(qh_ >> 24)       ];
+#   endif
 
         const v128_t qhl = wasm_v128_load(tmp + 0);
         const v128_t qhh = wasm_v128_load(tmp + 2);
@@ -475,13 +502,28 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t v0l = wasm_v128_and (v0, m4b);
         const v128_t v0h = wasm_u8x16_shr(v0, 4);
 
-        // add high bit and sub 16 (equivalent to sub 0x10 when bit is zero)
-        const v128_t v0lf = wasm_i8x16_sub(v0l, qhl);
-        const v128_t v0hf = wasm_i8x16_sub(v0h, qhh);
-
         // load y
         const v128_t v1l = wasm_v128_load(y0->qs);
         const v128_t v1h = wasm_v128_load(y0->qs + 16);
+
+#   if defined(__wasm_relaxed_simd__)
+        // unsigned 5-bit quants (0..31) in the 7-bit operand, then subtract 16*sum(y)
+        const v128_t s16b = wasm_i8x16_splat(0x10);
+        const v128_t v0lu = wasm_v128_or(v0l, qhl);
+        const v128_t v0hu = wasm_v128_or(v0h, qhh);
+
+        v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1l, v0lu, wasm_i32x4_splat(0));
+        dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1h, v0hu, dp);
+        v128_t ys = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1l, s16b, wasm_i32x4_splat(0));
+        ys = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1h, s16b, ys);
+        dp = wasm_i32x4_sub(dp, ys);
+
+        sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp),
+                    wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
+#   else
+        // add high bit and sub 16 (equivalent to sub 0x10 when bit is zero)
+        const v128_t v0lf = wasm_i8x16_sub(v0l, qhl);
+        const v128_t v0hf = wasm_i8x16_sub(v0h, qhh);
 
         // int8x16 -> int16x8
         const v128_t v0lfl = wasm_i16x8_extend_low_i8x16 (v0lf);
@@ -502,6 +544,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
                             wasm_i32x4_add(wasm_i32x4_dot_i16x8(v0hfl, v1hl),
                                            wasm_i32x4_dot_i16x8(v0hfh, v1hh)))),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
+#   endif
     }
 
     sumf = wasm_f32x4_extract_lane(sumv, 0) + wasm_f32x4_extract_lane(sumv, 1) +
@@ -578,6 +621,13 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t v1l = wasm_v128_load(y0->qs);
         const v128_t v1h = wasm_v128_load(y0->qs + 16);
 
+#   if defined(__wasm_relaxed_simd__)
+        v128_t dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1l, v0lf, wasm_i32x4_splat(0));
+        dp = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(v1h, v0hf, dp);
+        
+        sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(dp),
+                    wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
+#   else
         // int8x16 -> int16x8
         const v128_t v0lfl = wasm_i16x8_extend_low_i8x16 (v0lf);
         const v128_t v0lfh = wasm_i16x8_extend_high_i8x16(v0lf);
@@ -597,6 +647,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
                             wasm_i32x4_add(wasm_i32x4_dot_i16x8(v0hfl, v1hl),
                                            wasm_i32x4_dot_i16x8(v0hfh, v1hh)))),
                     wasm_f32x4_splat(GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d))));
+#   endif
     }
 
     sumf = wasm_f32x4_extract_lane(sumv, 0) + wasm_f32x4_extract_lane(sumv, 1) +
@@ -642,6 +693,17 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const v128_t y0_0 = wasm_v128_load(y0->qs);
         const v128_t y0_1 = wasm_v128_load(y0->qs + 16);
 
+#   if defined(__wasm_relaxed_simd__)
+        // |x| (0..127) in the 7-bit operand and y*sign(x) in the other; relies on
+        // q8_0 values being in -127..127, as ggml's quantizers produce
+        const v128_t zero = wasm_i8x16_splat(0);
+        const v128_t sx0 = wasm_i8x16_lt(x0_0, zero);
+        const v128_t sx1 = wasm_i8x16_lt(x0_1, zero);
+        const v128_t ys0 = wasm_i8x16_sub(wasm_v128_xor(y0_0, sx0), sx0);
+        const v128_t ys1 = wasm_i8x16_sub(wasm_v128_xor(y0_1, sx1), sx1);
+        v128_t sum_dots = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(ys0, wasm_i8x16_abs(x0_0), wasm_i32x4_splat(0));
+        sum_dots = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(ys1, wasm_i8x16_abs(x0_1), sum_dots);
+#   else
         // Extend 8-bit to 16-bit
         const v128_t x0_0l = wasm_i16x8_extend_low_i8x16(x0_0);
         const v128_t x0_0h = wasm_i16x8_extend_high_i8x16(x0_0);
@@ -661,7 +723,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
         // Sum all dot products
         const v128_t sum_dots = wasm_i32x4_add(wasm_i32x4_add(dx0_0, dx0_1), wasm_i32x4_add(dx1_0, dx1_1));
-
+#   endif
         // Convert to float and accumulate
         const float scale = GGML_CPU_FP16_TO_FP32(x0->d) * GGML_CPU_FP16_TO_FP32(y0->d);
         sumv = wasm_f32x4_add(sumv, wasm_f32x4_mul(wasm_f32x4_convert_i32x4(sum_dots), wasm_f32x4_splat(scale)));
@@ -750,6 +812,10 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 v128_t q2_shift_1 = wasm_u8x16_shr(q2_1, shift);
                 v128_t q2_bits_1 = wasm_v128_and(q2_shift_1, wasm_i8x16_splat(0x03));
 
+#   if defined(__wasm_relaxed_simd__)
+                v128_t p_sum0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q8_0, q2_bits_0, wasm_i32x4_splat(0));
+                v128_t p_sum1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q8_1, q2_bits_1, wasm_i32x4_splat(0));
+#   else
                 // Calculate dot products
                 v128_t p0 = wasm_i32x4_dot_i16x8(
                     wasm_i16x8_extend_low_i8x16(q8_0),
@@ -767,11 +833,15 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     wasm_i16x8_extend_high_i8x16(q8_1),
                     wasm_i16x8_extend_high_i8x16(q2_bits_1)
                 );
+               
+                v128_t p_sum0 = wasm_i32x4_add(p0, p1);
+                v128_t p_sum1 = wasm_i32x4_add(p2, p3);
+#   endif
 
                 // Accumulate scaled results
                 v128_t scaled = wasm_i32x4_add(
-                    wasm_i32x4_mul(wasm_i32x4_add(p0, p1), wasm_i32x4_splat(d0)),
-                    wasm_i32x4_mul(wasm_i32x4_add(p2, p3), wasm_i32x4_splat(d1))
+                    wasm_i32x4_mul(p_sum0, wasm_i32x4_splat(d0)),
+                    wasm_i32x4_mul(p_sum1, wasm_i32x4_splat(d1))
                 );
 
                 isum_vec = wasm_i32x4_add(isum_vec, scaled);
@@ -817,7 +887,84 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#if defined __wasm_simd128__
+#if defined(__wasm_relaxed_simd__)
+    // Unsigned 3-bit quants (0..7) in the relaxed dot's 7-bit operand, q8 in
+    // the other; the -4 offset is taken off with the q8 block sums.
+    const v128_t m3 = wasm_i8x16_splat(0x03);
+    const v128_t m1 = wasm_i8x16_splat(0x01);
+    const v128_t zero = wasm_i32x4_splat(0);
+    uint32_t auxs[4];
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+
+        const uint8_t * GGML_RESTRICT q3 = x[i].qs;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        // Extract scales
+        memcpy(auxs, x[i].scales, 12);
+        uint32_t tmp = auxs[2];
+        auxs[2] = ((auxs[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        auxs[3] = ((auxs[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        auxs[0] = (auxs[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        auxs[1] = (auxs[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+
+        const v128_t vsc = wasm_i8x16_sub(wasm_v128_load(auxs), wasm_i8x16_splat(32));
+        const v128_t vsc_l = wasm_i16x8_extend_low_i8x16(vsc);
+        const v128_t vsc_h = wasm_i16x8_extend_high_i8x16(vsc);
+
+        // sum(scale * bsum), for the -4 offset
+        const v128_t vmins = wasm_i32x4_add(
+            wasm_i32x4_dot_i16x8(wasm_v128_load(y[i].bsums), vsc_l),
+            wasm_i32x4_dot_i16x8(wasm_v128_load(y[i].bsums + 8), vsc_h));
+
+        const v128_t hm0 = wasm_v128_load(x[i].hmask);
+        const v128_t hm1 = wasm_v128_load(x[i].hmask + 16);
+
+        v128_t acc = zero;
+        v128_t acc2 = zero;
+
+        for (int j = 0; j < QK_K/128; ++j) {
+            const v128_t q3_0 = wasm_v128_load(q3);
+            const v128_t q3_1 = wasm_v128_load(q3 + 16);
+            q3 += 32;
+
+            const v128_t s32a = wasm_i32x4_extend_low_i16x8(j == 0 ? vsc_l : vsc_h);
+            const v128_t s32b = wasm_i32x4_extend_high_i16x8(j == 0 ? vsc_l : vsc_h);
+            const v128_t s32[2] = { s32a, s32b };
+
+            for (int g = 0; g < 4; ++g) {
+                // 2 low bits at shift 2g, high bit 4j+g of hmask moved to bit 2
+                // (16-bit shifts are safe on masked bytes)
+                const int hb = 4*j + g;
+                const v128_t u0 = wasm_v128_or(wasm_v128_and(wasm_u16x8_shr(q3_0, 2*g), m3),
+                                               wasm_i16x8_shl(wasm_v128_and(wasm_u16x8_shr(hm0, hb), m1), 2));
+                const v128_t u1 = wasm_v128_or(wasm_v128_and(wasm_u16x8_shr(q3_1, 2*g), m3),
+                                               wasm_i16x8_shl(wasm_v128_and(wasm_u16x8_shr(hm1, hb), m1), 2));
+
+                const v128_t p0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8),      u0, zero);
+                const v128_t p1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 + 16), u1, zero);
+                q8 += 32;
+
+                const v128_t sv = s32[g >> 1];
+                const v128_t sc0 = (g & 1) ? wasm_i32x4_shuffle(sv, sv, 2, 2, 2, 2) : wasm_i32x4_shuffle(sv, sv, 0, 0, 0, 0);
+                const v128_t sc1 = (g & 1) ? wasm_i32x4_shuffle(sv, sv, 3, 3, 3, 3) : wasm_i32x4_shuffle(sv, sv, 1, 1, 1, 1);
+                acc  = wasm_i32x4_add(acc,  wasm_i32x4_mul(p0, sc0));
+                acc2 = wasm_i32x4_add(acc2, wasm_i32x4_mul(p1, sc1));
+            }
+        }
+
+        acc = wasm_i32x4_sub(wasm_i32x4_add(acc, acc2), wasm_i32x4_shl(vmins, 2));
+        const int32_t isum = wasm_i32x4_extract_lane(acc, 0) + wasm_i32x4_extract_lane(acc, 1) +
+                             wasm_i32x4_extract_lane(acc, 2) + wasm_i32x4_extract_lane(acc, 3);
+        sumf += d * isum;
+    }
+
+    *s = sumf;
+
+#elif defined __wasm_simd128__
     int8_t  aux8[QK_K];
     float   sums[8] = {0};
     uint32_t auxs[4];
@@ -986,6 +1133,14 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             q8 += 64;
 
             // Low nibble products
+#   if defined(__wasm_relaxed_simd__)
+            v128_t vacc1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
+                q8x0, q4l0, wasm_i32x4_splat(0)
+            );
+            vacc1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
+                q8x1, q4l1, vacc1
+            );
+#   else
             v128_t vacc1 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q4l0),
                 wasm_i16x8_extend_low_i8x16(q8x0)
@@ -1002,8 +1157,17 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q4l1),
                 wasm_i16x8_extend_high_i8x16(q8x1)
             ));
+#   endif
 
             // High nibble products
+#   if defined(__wasm_relaxed_simd__)
+            v128_t vacc2 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
+                q8x2, q4h0, wasm_i32x4_splat(0)
+            );
+            vacc2 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(
+                q8x3, q4h1, vacc2
+            );
+#   else
             v128_t vacc2 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q4h0),
                 wasm_i16x8_extend_low_i8x16(q8x2)
@@ -1020,6 +1184,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q4h1),
                 wasm_i16x8_extend_high_i8x16(q8x3)
             ));
+#   endif
 
             // Accumulate scaled results
             int32_t vacc1_sum = wasm_i32x4_extract_lane(vacc1, 0) + wasm_i32x4_extract_lane(vacc1, 1) +
@@ -1127,6 +1292,11 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
             v128_t q8_3 = wasm_v128_load(q8 + 48);
             q8 += 64;
 
+#   if defined(__wasm_relaxed_simd__)
+            // Process low quants using relaxed SIMD
+            v128_t sum_low = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q8_0, q5l_0, wasm_i32x4_splat(0));
+            sum_low = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q8_1, q5l_1, sum_low);
+#   else
             // Process low quants
             v128_t pl0 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q5l_0),
@@ -1145,7 +1315,13 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q8_1)
             ));
             v128_t sum_low = wasm_i32x4_add(pl0, pl1);
+#   endif
 
+#   if defined(__wasm_relaxed_simd__)
+            // Process high quants using relaxed SIMD
+            v128_t sum_high = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q8_2, q5h_0, wasm_i32x4_splat(0));
+            sum_high = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(q8_3, q5h_1, sum_high);
+#   else
             // Process high quants
             v128_t ph0 = wasm_i32x4_dot_i16x8(
                 wasm_i16x8_extend_low_i8x16(q5h_0),
@@ -1164,6 +1340,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                 wasm_i16x8_extend_high_i8x16(q8_3)
             ));
             v128_t sum_high = wasm_i32x4_add(ph0, ph1);
+#   endif
 
             // Accumulate with scale factors
             int32_t sl = wasm_i32x4_extract_lane(sum_low, 0) + wasm_i32x4_extract_lane(sum_low, 1) +
@@ -1204,7 +1381,78 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     const int nb = n / QK_K;
 
-#if defined __wasm_simd128__
+#if defined(__wasm_relaxed_simd__)
+    const v128_t m4 = wasm_i8x16_splat(0x0F);
+    const v128_t m2 = wasm_i8x16_splat(0x03);
+    const v128_t zero = wasm_i32x4_splat(0);
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint8_t * GGML_RESTRICT ql = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        const v128_t vsc = wasm_v128_load(x[i].scales);
+        const v128_t vsc_l = wasm_i16x8_extend_low_i8x16(vsc);
+        const v128_t vsc_h = wasm_i16x8_extend_high_i8x16(vsc);
+        const v128_t vmins = wasm_i32x4_add(
+            wasm_i32x4_dot_i16x8(wasm_v128_load(y[i].bsums), vsc_l),
+            wasm_i32x4_dot_i16x8(wasm_v128_load(y[i].bsums + 8), vsc_h));
+
+        v128_t acc = zero;
+        v128_t acc2 = zero;
+        for (int j = 0; j < QK_K/128; ++j) {
+            const v128_t ql0 = wasm_v128_load(ql);
+            const v128_t ql1 = wasm_v128_load(ql + 16);
+            const v128_t ql2 = wasm_v128_load(ql + 32);
+            const v128_t ql3 = wasm_v128_load(ql + 48);
+            const v128_t qh0 = wasm_v128_load(qh);
+            const v128_t qh1 = wasm_v128_load(qh + 16);
+            ql += 64;
+            qh += 32;
+
+            const v128_t q6_0 = wasm_v128_or(wasm_v128_and(ql0, m4), wasm_i16x8_shl(wasm_v128_and(qh0, m2), 4));
+            const v128_t q6_1 = wasm_v128_or(wasm_v128_and(ql1, m4), wasm_i16x8_shl(wasm_v128_and(qh1, m2), 4));
+            const v128_t q6_2 = wasm_v128_or(wasm_v128_and(ql2, m4), wasm_i16x8_shl(wasm_v128_and(qh0, wasm_i8x16_splat(0x0C)), 2));
+            const v128_t q6_3 = wasm_v128_or(wasm_v128_and(ql3, m4), wasm_i16x8_shl(wasm_v128_and(qh1, wasm_i8x16_splat(0x0C)), 2));
+            const v128_t q6_4 = wasm_v128_or(wasm_v128_and(wasm_u16x8_shr(ql0, 4), m4), wasm_v128_and(qh0, wasm_i8x16_splat(0x30)));
+            const v128_t q6_5 = wasm_v128_or(wasm_v128_and(wasm_u16x8_shr(ql1, 4), m4), wasm_v128_and(qh1, wasm_i8x16_splat(0x30)));
+            const v128_t q6_6 = wasm_v128_or(wasm_v128_and(wasm_u16x8_shr(ql2, 4), m4), wasm_u16x8_shr(wasm_v128_and(qh0, wasm_i8x16_splat((int8_t)0xC0)), 2));
+            const v128_t q6_7 = wasm_v128_or(wasm_v128_and(wasm_u16x8_shr(ql3, 4), m4), wasm_u16x8_shr(wasm_v128_and(qh1, wasm_i8x16_splat((int8_t)0xC0)), 2));
+
+            const v128_t p0 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +   0), q6_0, zero);
+            const v128_t p1 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +  16), q6_1, zero);
+            const v128_t p2 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +  32), q6_2, zero);
+            const v128_t p3 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +  48), q6_3, zero);
+            const v128_t p4 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +  64), q6_4, zero);
+            const v128_t p5 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +  80), q6_5, zero);
+            const v128_t p6 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 +  96), q6_6, zero);
+            const v128_t p7 = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(wasm_v128_load(q8 + 112), q6_7, zero);
+            q8 += 128;
+
+            const v128_t s32a = wasm_i32x4_extend_low_i16x8(j == 0 ? vsc_l : vsc_h);
+            const v128_t s32b = wasm_i32x4_extend_high_i16x8(j == 0 ? vsc_l : vsc_h);
+            acc  = wasm_i32x4_add(acc,  wasm_i32x4_mul(p0, wasm_i32x4_shuffle(s32a, s32a, 0, 0, 0, 0)));
+            acc2 = wasm_i32x4_add(acc2, wasm_i32x4_mul(p1, wasm_i32x4_shuffle(s32a, s32a, 1, 1, 1, 1)));
+            acc  = wasm_i32x4_add(acc,  wasm_i32x4_mul(p2, wasm_i32x4_shuffle(s32a, s32a, 2, 2, 2, 2)));
+            acc2 = wasm_i32x4_add(acc2, wasm_i32x4_mul(p3, wasm_i32x4_shuffle(s32a, s32a, 3, 3, 3, 3)));
+            acc  = wasm_i32x4_add(acc,  wasm_i32x4_mul(p4, wasm_i32x4_shuffle(s32b, s32b, 0, 0, 0, 0)));
+            acc2 = wasm_i32x4_add(acc2, wasm_i32x4_mul(p5, wasm_i32x4_shuffle(s32b, s32b, 1, 1, 1, 1)));
+            acc  = wasm_i32x4_add(acc,  wasm_i32x4_mul(p6, wasm_i32x4_shuffle(s32b, s32b, 2, 2, 2, 2)));
+            acc2 = wasm_i32x4_add(acc2, wasm_i32x4_mul(p7, wasm_i32x4_shuffle(s32b, s32b, 3, 3, 3, 3)));
+        }
+
+        acc = wasm_i32x4_sub(wasm_i32x4_add(acc, acc2), wasm_i32x4_shl(vmins, 5));
+        const int32_t isum = wasm_i32x4_extract_lane(acc, 0) + wasm_i32x4_extract_lane(acc, 1) +
+                             wasm_i32x4_extract_lane(acc, 2) + wasm_i32x4_extract_lane(acc, 3);
+        sumf += d * isum;
+    }
+
+    *s = sumf;
+
+#elif defined __wasm_simd128__
     int8_t aux8[QK_K] __attribute__((aligned(16)));
     int32_t aux32[8] __attribute__((aligned(16))) = {0};
     float sums[8] __attribute__((aligned(16))) = {0};
