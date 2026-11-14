@@ -353,6 +353,7 @@ struct llama_memory_hybrid_idx_context::kpool_state {
     uint32_t generation = 0;
 
     uint32_t n_pool_real = 0;
+    uint32_t n_pool_ub   = 0; // pools of the ubatch's sequences, the only ones the indexer scores
     uint32_t n_new       = 0;
     uint32_t n_new_g     = 1; // graph size of the new pool list, stable across decode steps
 };
@@ -484,6 +485,7 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(llama_memory_hy
         const uint64_t n_pool_max = uint64_t(idx->get_size() / mem->get_kpool()) * idx->get_n_seq_max();
         GGML_ASSERT(n_pool_max <= UINT32_MAX - 64);
         st.n_pool_real = std::max(st.n_pool_real, uint32_t(n_pool_max));
+        st.n_pool_ub   = st.n_pool_real;
         st.n_new   = st.n_pool_real;
         st.n_new_g = std::max(st.n_new, 1u);
         kpool_st = std::make_unique<kpool_state>(std::move(st));
@@ -675,6 +677,12 @@ void llama_memory_hybrid_idx_context::kpool_build_state(const llama_ubatch & uba
     }
     GGML_ASSERT(ip == st.is_new.size());
 
+    // the indexer scores only the pools of the ubatch's sequences
+    st.n_pool_ub = 0;
+    for (uint32_t i = 0; i < ubatch.n_seqs_unq; ++i) {
+        st.n_pool_ub += (uint32_t) lay.seqs[ubatch.seq_id_unq[i]].pools.size();
+    }
+
     // in order mode a token's cell gives its rank, and the rank its pool: positions cannot, as an image shares one
     const bool by_order = mem->get_kpool_by_order();
     const auto *   sinfo = by_order ? &sinfos_kpool[i_cur] : nullptr;
@@ -719,7 +727,7 @@ const llama_memory_hybrid_idx_context::kpool_state & llama_memory_hybrid_idx_con
 }
 
 uint32_t llama_memory_hybrid_idx_context::get_n_kpool() const {
-    return kpool_pad(kpool_cur().n_pool_real);
+    return kpool_pad(kpool_cur().n_pool_ub);
 }
 
 uint32_t llama_memory_hybrid_idx_context::get_n_kpool_new() const {
@@ -749,7 +757,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
 
     const bool by_order = mem->get_kpool_by_order();
 
-    GGML_ASSERT(n_pool == kpool_pad(st.n_pool_real));
+    GGML_ASSERT(n_pool == kpool_pad(st.n_pool_ub));
     GGML_ASSERT(st.is_new.size() == st.n_pool_real);
     GGML_ASSERT(pool_mask->ne[0] == (int64_t) n_pool && pool_mask->ne[1] == (int64_t) n_tokens);
     GGML_ASSERT(tail_idxs->ne[0] == (int64_t) kpool - 1 && tail_idxs->ne[1] == (int64_t) n_tokens);
@@ -771,7 +779,7 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
         return (int64_t) sq.strm*kv_size + cell;
     };
 
-    // Sequences present in this ubatch, pools of absent sequences must fall on the scatter sentinel row.
+    // Sequences present in this ubatch, only their pools are scored.
     std::vector<uint8_t> seq_in_ub(LLAMA_MAX_SEQ, 0);
     for (uint32_t i = 0; i < n_tokens; ++i) {
         for (int32_t k = 0; k < ubatch->n_seq_id[i]; ++k) {
@@ -834,27 +842,26 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
         std::fill(npos, npos + 4*n_new_g, 0);
     }
 
-    uint32_t i_new = 0;
+    // the reps of all pools, the padded new entries must not write them
+    const int64_t n_cells = (int64_t) kv_size*n_stream_kv;
+    std::vector<uint8_t> is_rep(n_new_g > n_new ? n_cells : 0, 0);
+
+    uint32_t i_new  = 0;
+    uint32_t ip_all = 0;
     for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
         const auto & sq = lay.seqs[s];
         seq_pool_start[s] = (uint32_t) pool_end.size();
 
-        const bool inert = n_stream_kv > 1 && !seq_in_ub[s];
-
-        for (size_t pi = 0; pi < sq.pools.size(); ++pi) {
-            const uint32_t j  = sq.pools[pi];
-            const uint32_t ip = (uint32_t) pool_end.size();
-            GGML_ASSERT(ip + 1 < n_pool);
+        for (size_t pi = 0; pi < sq.pools.size(); ++pi, ++ip_all) {
+            const uint32_t j = sq.pools[pi];
 
             // The pooled key lives in the last member's row.
             const uint32_t rep = sq.cells[j + kpool - 1].second;
-            pcell[ip] = (int32_t) gcell(sq, rep);
-
-            for (uint32_t k = 0; k < kpool; ++k) {
-                pidx[(size_t) ip*kpool + k] = inert ? sentinel : (int32_t) sq.cells[j + k].second;
+            if (!is_rep.empty()) {
+                is_rep[gcell(sq, rep)] = 1;
             }
 
-            if (st.is_new[ip] == st.generation) {
+            if (st.is_new[ip_all] == st.generation) {
                 GGML_ASSERT(i_new < n_new);
                 for (uint32_t k = 0; k < kpool; ++k) {
                     nidx[(size_t) i_new*kpool + k] = (int32_t) gcell(sq, sq.cells[j + k].second);
@@ -872,23 +879,33 @@ void llama_memory_hybrid_idx_context::set_input_kpool(ggml_tensor * pool_cells, 
                 ++i_new;
             }
 
+            if (!seq_in_ub[s]) {
+                continue;
+            }
+
+            const uint32_t ip = (uint32_t) pool_end.size();
+            GGML_ASSERT(ip + 1 < n_pool);
+
+            pcell[ip] = (int32_t) gcell(sq, rep);
+            for (uint32_t k = 0; k < kpool; ++k) {
+                pidx[(size_t) ip*kpool + k] = (int32_t) sq.cells[j + k].second;
+            }
+
             pool_end.push_back(sq.cells[j + kpool - 1].first);
         }
     }
     GGML_ASSERT(i_new == n_new);
+    GGML_ASSERT(ip_all == st.n_pool_real && pool_end.size() == st.n_pool_ub);
 
     // Padded entries re-pool cells whose pooled slot is never read: only the reps of complete pools are read.
     // Each entry takes its own cell, entries sharing one would write it from several threads in the scatter.
     if (n_new_g > n_new) {
-        std::vector<int64_t> reps(pcell, pcell + pool_end.size());
-        std::sort(reps.begin(), reps.end());
-
         int64_t pad_cell = 0;
         for (uint32_t i = n_new; i < n_new_g; ++i, ++pad_cell) {
-            while (std::binary_search(reps.begin(), reps.end(), pad_cell)) {
+            while (pad_cell < n_cells && is_rep[pad_cell]) {
                 ++pad_cell;
             }
-            GGML_ASSERT(pad_cell < (int64_t) kv_size*n_stream_kv);
+            GGML_ASSERT(pad_cell < n_cells);
             for (uint32_t k = 0; k < kpool; ++k) {
                 nidx[(size_t) i*kpool + k] = (int32_t) pad_cell;
             }
