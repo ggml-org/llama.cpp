@@ -129,6 +129,7 @@ llama_model_kolibri1::graph::graph(const llm_graph_params & params)
         cb(selection, "ffn_moe_logits_biased", il);
 
         ggml_tensor * selected = ggml_argsort_top_k(ctx0, selection, n_expert_used);
+        ggml_format_name(selected, "ffn_moe_topk.%d", il);
         cb(selected, "ffn_moe_topk", il);
 
         ggml_tensor * moe_out = build_moe_ffn(cur,
