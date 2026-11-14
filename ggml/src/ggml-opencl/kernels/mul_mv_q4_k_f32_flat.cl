@@ -145,7 +145,7 @@ kernel void kernel_mul_mv_q4_K_f32_flat(
         global half   * d  = blk_d + ib;
         global half   * dm = blk_dm + ib;
 
-        for (int row = 0; row < N_DST; row++) {
+        for (int row = 0; row < N_DST && first_row + row < ne01; row++) {
             sc16[0] = sc[0] & kmask1;
             sc16[1] = sc[2] & kmask1;
             sc16[2] = ((sc[4] >> 0) & kmask2) | ((sc[0] & kmask3) >> 2);
