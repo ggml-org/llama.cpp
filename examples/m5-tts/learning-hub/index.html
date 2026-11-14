@@ -1626,12 +1626,57 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
   <h3>11.5 案例：把 0.398 s 首包拆开</h3>
   <p>稳态 RTF 被 <code>max()</code> 锁死（§16），但<b>首包由固定项主导，是另一本账</b>。扫 <code>--first 1/2/3/4/6/8</code> 两轮交替，拟合出 <code>first_pcm = 0.234 s + 74.6 ms/帧</code>（残差 &lt;21 ms）；斜率恰好等于 depth 单帧 31.7 ms 加 codec 单帧 40 ms。再用 <code>--no-overlap</code> 把并行项暴露：codec prime 0.230 s、backbone prefill 0.190 s，overlap 下取 <code>max</code>，所以固定项其实是 <b>codec prime，不是 prefill</b>。斜率/截距加隔离开关，比逐个埋点更省事。</p>
   <p><code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，命中就跳过那 0.23 s。查出的问题是缓存条件错配：warmup 用的是 voice 0（官方样例），而 Web 默认 Serena，于是<b>每个用户的第一次请求都在给用不到的音色付冷启动</b>。部署层加一个 <code>--voice serena</code> 让默认音色对齐，首次 pcm 从 0.346 降到 0.280 s（wav 0.507→0.420），零引擎改动、稳态不退化。<b>先查缓存命中条件，往往比写更快的 kernel 更划算。</b></p>
-  <p>剩余方向：prime 缓存目前是单条目，换音色立即失效（切回仍要 0.49 s）；改成小 LRU 可让来回切换也命中。命中路径仍要发送 32 行共享 prefix，属协议改动、风险较高。<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
+  <p>那次优化留了个尾巴：prime 缓存是<b>单条目</b>，换音色立即失效（切回仍要 0.49 s）。下一节把这条最后的冷启动路径关掉，并顺带说明一个极易算错的账：被跳过的操作值 0.23 s，实际能省下的只有约 0.04 s。命中路径仍要发送 32 行共享 prefix，属协议改动、风险较高；<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
 
   <details class="qa"><summary>Q8　某候选把 RTF 从 0.700 降到 0.666，能上线吗？</summary>
     <div class="answer">不能只看这个数。本例中帧数 69→76，音频 5.32→5.88 s，墙钟 3.724→3.914 s（<b>+5.1%</b>），RTF 下降纯粹因为分母变长。而且四条文本/seed 的 codes 与 WAV <b>全部不一致</b>，已经不是同一个任务。正确顺序：先看过没过等价性门禁（逐字节 → ASR → 盲听），再看 <code>elapsed_s</code> 与每帧成本，最后才算 RTF。这个候选是 §17 的 <code>flash-f32</code>，结论是判死。</div></details>
   <details class="qa"><summary>Q9　把首块从 2 帧减到 1 帧，首包为什么反而从 0.398 s 涨到 0.616 s？</summary>
     <div class="answer">因为 <code>kTail = 2400</code> 个样本大于单帧 <code>kHop = 1920</code>：第一个 chunk 的输出被全部留作 overlap tail，<code>drop = 0</code>，根本没有 PCM 写出。首包只能等第二个 chunk（4 帧），等于等 5 帧——<code>0.234 + 5 × 0.0746 = 0.607 s</code>，与实测 0.616 s 吻合。<b>减小批次不一定降低延迟，要先看输出阈值。</b>另外把 prime 的输出接进 tail 虽然能让 1 帧发出声音，但会把参考音色原声混进开头，不能这么修。</div></details>
+  <h3>11.6 案例：把单条目缓存换成 LRU，以及「跳过 ≠ 省下」</h3>
+  <p>§19 留下的冷启动尾巴，改法只有约 25 行：把 <code>prime_codes_ / prime_inputs_ / prime_offset_</code> 换成 <code>vector&lt;PrimeEntry&gt;</code>，命中移到 front、新条目插 front、超出容量裁尾。关键是 <b>key 取「真正决定状态的最小输入」</b>——这里就是参考 codes 的最后 8 帧，而不是音色名字或索引。于是换文本不失效、同名不同内容不误命中，浏览器内联的临时音色（请求里带 <code>codes</code>）也自动纳入同一缓存。容量 4、每条目 1.04 MB，约 4.4 MB 上限；<code>M5_PRIME_CACHE=1</code> 复现旧行为、<code>=0</code> 禁用缓存，<code>M5_PRIME_STATS=1</code> 打印 hit/miss/save。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 250" role="img" aria-label="冷启动与命中缓存时 prime 和 prefill 并行结构的对比，说明可兑现收益只是两者之差">
+      <title>缓存收益被并行结构吃掉</title>
+      <desc>冷启动时 codec prime 0.230 秒与 backbone prefill 0.190 秒并行，固定项取 max 为 0.234 秒；命中后 prime 消失，固定项退化为 0.190 秒，因此只省约 0.044 秒。</desc>
+      <text class="dg-tb" x="24" y="26">冷启动（未命中）</text>
+      <text class="dg-tb" x="352" y="26">命中缓存</text>
+
+      <rect class="dg-accent" x="24" y="40" width="296" height="158" rx="10"/>
+      <text class="dg-t" x="38" y="64">codec prime　0.230 s</text>
+      <rect class="dg-box" x="38" y="74" width="248" height="14" rx="4"/>
+      <text class="dg-t" x="38" y="110">backbone prefill　0.190 s</text>
+      <rect class="dg-box" x="38" y="120" width="205" height="14" rx="4"/>
+      <text class="dg-ts" x="38" y="158">两条分支并行，不是相加</text>
+      <text class="dg-tacc" x="38" y="182">固定项 = max = 0.234 s</text>
+
+      <path class="dg-flow" d="M322 119 H348"/>
+      <rect class="dg-accent2" x="352" y="40" width="304" height="158" rx="10"/>
+      <text class="dg-t" x="366" y="64">codec prime　已跳过</text>
+      <path class="dg-grid" d="M366 82 H630"/>
+      <text class="dg-t" x="366" y="110">backbone prefill　0.190 s</text>
+      <rect class="dg-box" x="366" y="120" width="205" height="14" rx="4"/>
+      <text class="dg-ts" x="366" y="158">prefill 成为新的下界</text>
+      <text class="dg-tacc" x="366" y="182">固定项 = 0.190 s</text>
+
+      <text class="dg-tb" x="24" y="226">可兑现收益 ≈ 0.234 − 0.190 = 0.044 s（pcm 实测 0.058 s），不是 0.230 s</text>
+      </svg>
+    </div>
+    <figcaption>图 11-2　稳态里 <code>max(depth, codec)</code> 吃掉单侧优化，首包里 <code>max(prime, prefill)</code> 吃掉大部分缓存收益。跳过一个操作之前，先重画一遍并行结构。</figcaption>
+  </figure>
+
+  <p><b>怎么验收</b>：容量按 <code>0,1,4,4,1,0</code> 交替重启 server，每轮固定序列「serena → 官方样例 → serena → 官方样例 → serena → pcm」，共 36 次请求。服务端日志给出的 prime 调用统计是 <code>0/13</code>、<code>8/13</code>、<code>11/13</code> 次命中：容量 4 多出的 3 次正好是三个「切回音色」请求。切回三请求首包中位数 <b>0.500 → 0.463 s（-7.5%）</b>；用永远冷的 cap=0 轮做热漂移基线（s1→s3 <code>+0.032 s</code>）校正后，单条目的冷启动惩罚 <code>+0.044 s</code> 被压到 <code>+0.005 s</code>。更硬的门禁是 <b>30 份 WAV 跨容量、跨冷热、跨 6 次重启全部同一哈希</b>；用 6 个不同的内联临时音色逼出 LRU 驱逐，被驱逐后重算的两个音色哈希也与首次完全相同。</p>
+
+  <div class="grid2">
+    <div class="tile"><b>Key 取最小决定输入</b><p>prime 状态是 8 帧 codes 的纯函数，就别用音色名字当 key。缓存语义由<b>被缓存的计算</b>决定，不由请求身份决定。</p></div>
+    <div class="tile"><b>先让缓存可观测</b><p>hit/miss/save 日志比「首包看起来快了」可靠得多；它还能给出每条目字节数，让容量选择有依据。</p></div>
+    <div class="tile"><b>禁用缓存一物两用</b><p><code>cap=0</code> 既是「命中省多少」的冷基线，又是同轮热漂移的校正量——不必另跑一轮漂移实验。</p></div>
+    <div class="tile"><b>等价性跨命中状态</b><p>不只验证「同配置两次一样」，要覆盖冷、热、驱逐后重算、不同容量、不同进程；否则缓存可能悄悄改变输出。</p></div>
+  </div>
+
+  <details class="qa"><summary>Q10　缓存命中跳过了一个 0.23 s 的操作，首包为什么只快了约 0.04 s？</summary>
+    <div class="answer">因为 prime 与 backbone prefill <b>并行</b>：冷启动固定项是 <code>max(0.230, 0.190) = 0.234 s</code>，命中后 prime 消失，固定项退化成 prefill 的 <code>0.190 s</code>，省下的只是两者<b>差值</b>约 0.044 s（pcm 路径实测 0.058 s）。稳态章节里 <code>max(depth, codec)</code> 让「codec 单独 -33%」收益为零，是同一个结构在首包维度的翻版。<b>算收益要重画并行结构，不能拿组件耗时直接相减</b>；同理，也不要因为收益比预估小就判定优化无效——它仍然消除了换音色时用户能感知的那一次卡顿。</div></details>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch11">标记本章已学完</button></div>
 </section>
 

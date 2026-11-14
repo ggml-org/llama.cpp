@@ -665,6 +665,13 @@ public:
         for (size_t i = 0; i < inputs_.size(); i++) names_[i] = inputs_[i].name.c_str();
         output_cstr_.resize(output_names_.size());
         for (size_t i = 0; i < output_names_.size(); i++) output_cstr_[i] = output_names_[i].c_str();
+        const char * cap = getenv("M5_PRIME_CACHE");
+        prime_capacity_ = cap ? (size_t) std::max(0, atoi(cap)) : 4;
+        prime_stats_ = getenv("M5_PRIME_STATS") != nullptr;
+        prime_cache_.clear();
+        prime_hits_ = prime_misses_ = 0;
+        fprintf(stderr, "[m5] prime cache: capacity=%zu (M5_PRIME_CACHE=1 restores the old single-entry cache)\n",
+                prime_capacity_);
         opened_ = true;
         return true;
     }
@@ -683,22 +690,53 @@ public:
         *reinterpret_cast<int64_t *>(inputs_[offset_].buffer.data()) = 0;
     }
 
+    // The prime state is a pure function of the eight reference frames, so
+    // keying the cache by their codes (not by a voice name/index) also covers
+    // the browser's inline temporary voices and makes a repeated clone free.
+    // The server serialises renders and both calls run on the codec worker,
+    // so the cache needs no lock of its own.
     bool restore_prime(const std::vector<long> & codes) {
-        if (prime_codes_ != codes || prime_inputs_.empty()) return false;
+        auto it = std::find_if(prime_cache_.begin(), prime_cache_.end(),
+                               [&](const PrimeEntry & e) { return e.codes == codes; });
+        if (it == prime_cache_.end() || it->inputs.size() != inputs_.size()) {
+            prime_misses_++;
+            if (prime_stats_) fprintf(stderr, "[m5] prime miss entries=%zu\n", prime_cache_.size());
+            return false;
+        }
+        const PrimeEntry entry = *it;  // copy before rotating the LRU
+        prime_cache_.erase(it);
+        prime_cache_.insert(prime_cache_.begin(), entry);
         for (size_t i = 0; i < inputs_.size(); ++i) {
             if ((int) i == codes_ || (int) i == offset_) continue;
-            inputs_[i].dims = prime_inputs_[i].dims;
-            inputs_[i].elems = prime_inputs_[i].elems;
-            inputs_[i].buffer = prime_inputs_[i].buffer;
+            inputs_[i].dims = entry.inputs[i].dims;
+            inputs_[i].elems = entry.inputs[i].elems;
+            inputs_[i].buffer = entry.inputs[i].buffer;
         }
-        offset_value_ = prime_offset_;
+        offset_value_ = entry.offset;
+        prime_hits_++;
+        if (prime_stats_) fprintf(stderr, "[m5] prime hit entries=%zu hits=%llu\n",
+                                  prime_cache_.size(), prime_hits_);
         return true;
     }
 
     void save_prime(const std::vector<long> & codes) {
-        prime_inputs_ = inputs_;
-        prime_codes_ = codes;
-        prime_offset_ = offset_value_;
+        if (prime_capacity_ == 0) return;  // M5_PRIME_CACHE=0 disables the cache
+        auto it = std::find_if(prime_cache_.begin(), prime_cache_.end(),
+                               [&](const PrimeEntry & e) { return e.codes == codes; });
+        if (it != prime_cache_.end()) prime_cache_.erase(it);
+        PrimeEntry entry;
+        entry.codes = codes;
+        entry.inputs = inputs_;
+        entry.offset = offset_value_;
+        prime_cache_.insert(prime_cache_.begin(), std::move(entry));
+        if (prime_cache_.size() > prime_capacity_) prime_cache_.resize(prime_capacity_);
+        if (prime_stats_) {
+            size_t bytes = 0;
+            for (const auto & e : prime_cache_)
+                for (const auto & in : e.inputs) bytes += in.buffer.size();
+            fprintf(stderr, "[m5] prime save entries=%zu bytes=%zu misses=%llu\n",
+                    prime_cache_.size(), bytes, prime_misses_);
+        }
     }
 
     // Runs one chunk and fills `pcm` with its samples.
@@ -777,9 +815,11 @@ public:
         if (so_) { api_->ReleaseSessionOptions(so_); so_ = nullptr; }
         if (mem_) { api_->ReleaseMemoryInfo(mem_); mem_ = nullptr; }
         if (env_) { api_->ReleaseEnv(env_); env_ = nullptr; }
+        if (prime_stats_)
+            fprintf(stderr, "[m5] prime cache final: hits=%llu misses=%llu entries=%zu\n",
+                    prime_hits_, prime_misses_, prime_cache_.size());
         inputs_.clear();
-        prime_inputs_.clear();
-        prime_codes_.clear();
+        prime_cache_.clear();
         outputs_.clear();
         opened_ = false;
     }
@@ -838,6 +878,13 @@ private:
         std::vector<char> buffer;
     };
 
+    // One completed prime state. front() is most-recently-used.
+    struct PrimeEntry {
+        std::vector<long> codes;
+        std::vector<Input> inputs;
+        int64_t offset = 0;
+    };
+
     const OrtApi * api_ = nullptr;
     OrtEnv * env_ = nullptr;
     OrtSessionOptions * so_ = nullptr;
@@ -845,8 +892,10 @@ private:
     OrtAllocator * alloc_ = nullptr;
     OrtMemoryInfo * mem_ = nullptr;
     std::vector<Input> inputs_;
-    std::vector<Input> prime_inputs_;
-    std::vector<long> prime_codes_;
+    std::vector<PrimeEntry> prime_cache_;
+    size_t prime_capacity_ = 4;  // M5_PRIME_CACHE=<n>; 1 reproduces the old single-entry behaviour
+    unsigned long long prime_hits_ = 0, prime_misses_ = 0;
+    bool prime_stats_ = false;   // M5_PRIME_STATS=1 logs hit/miss/size
     std::vector<std::string> output_names_;
     std::vector<const char *> output_cstr_;
     std::vector<int> out_to_in_;
@@ -854,7 +903,6 @@ private:
     std::vector<const char *> names_;
     int codes_ = -1, offset_ = -1;
     int64_t offset_value_ = 0;
-    int64_t prime_offset_ = 0;
     bool profiling_ = false;
     bool opened_ = false;
 };
