@@ -713,7 +713,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     30.0f);
         ms.add_kv(LLM_KV_EXPERT_COUNT,                uint32_t(4));
         ms.add_kv(LLM_KV_EXPERT_USED_COUNT,           uint32_t(2));
-        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,    uint32_t(4));
         std::vector<bool> pattern(n_layer);
         for (uint32_t i = 0; i < n_layer; ++i) {
             pattern[i] = i % 2 == 0;
