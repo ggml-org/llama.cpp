@@ -497,6 +497,75 @@ static bool log_mel_spectrogram(
     return true;
 }
 
+void mtmd_audio_preprocessor_inkling::initialize() {
+    GGML_ASSERT(hparams.n_mel_bins == 80);
+    GGML_ASSERT(hparams.audio_n_fft == 1600);
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(
+        hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
+        0.0f, -1.0f, true, 1.0f, false);
+
+    mel_config.n_mel            = hparams.n_mel_bins;
+    mel_config.n_fft_bins       = 1 + hparams.audio_n_fft / 2;
+    mel_config.hann_window_size = hparams.audio_window_len;
+    mel_config.hop_length       = hparams.audio_hop_len;
+    mel_config.sample_rate      = hparams.audio_sample_rate;
+    mel_config.no_padding       = true; // padding applied in process()
+    mel_config.use_natural_log  = false;
+    mel_config.use_magnitude    = true;
+    mel_config.mel_floor        = 1e-10f;
+    mel_config.power_floor      = 1e-10f; // reference clamps |X|^2 before sqrt
+    mel_config.cache            = &cache;
+}
+
+bool mtmd_audio_preprocessor_inkling::process(const float *                 samples,
+                                              size_t                        n_samples,
+                                              std::vector<mtmd_audio_mel> & output,
+                                              bool                          shape_only) const {
+    if (n_samples == 0) {
+        return false;
+    }
+    GGML_ASSERT(hparams.audio_hop_len == 800);
+    GGML_ASSERT(hparams.audio_window_len == 1600);
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    // Reference behavior: left pad by n_fft-hop, then right pad to a whole hop.
+    const size_t left_pad = static_cast<size_t>(hparams.audio_n_fft - hparams.audio_hop_len);
+    const size_t right_pad =
+        (static_cast<size_t>(hparams.audio_hop_len) - n_samples % hparams.audio_hop_len)
+        % hparams.audio_hop_len;
+    std::vector<float> padded(left_pad + n_samples + right_pad, 0.0f);
+    std::copy(samples, samples + n_samples, padded.begin() + left_pad);
+
+    mtmd_audio_mel dmel;
+    if (!log_mel_spectrogram(padded.data(), static_cast<int>(padded.size()), mel_config, shape_only, dmel)) {
+        return false;
+    }
+    dmel.n_len_org = static_cast<int64_t>(n_samples);
+
+    if (!shape_only) {
+        // nearest of 16 float64 centers over [-7,2]; strict '<' keeps the lower bin on midpoints (torch.argmin)
+        for (float & value_f32 : dmel.data) {
+            const double value = std::max(-7.0, std::min(2.0, static_cast<double>(value_f32)));
+            int best = 0;
+            double best_dist = INFINITY;
+            for (int bin = 0; bin < 16; ++bin) {
+                const double center = -7.0 + 9.0 * static_cast<double>(bin) / 15.0;
+                const double dist = std::abs(value - center);
+                if (dist < best_dist) {
+                    best = bin;
+                    best_dist = dist;
+                }
+            }
+            value_f32 = static_cast<float>(best);
+        }
+    }
+
+    output.push_back(std::move(dmel));
+    return true;
+}
+
 //
 // mtmd_audio_preprocessor_whisper
 //

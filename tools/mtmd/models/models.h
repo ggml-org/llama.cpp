@@ -18,6 +18,17 @@ struct mtmd_graph_siglip : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+struct mtmd_graph_inkling : mtmd_graph {
+    mtmd_graph_inkling(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+    ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
+    bool support_batch() const override { return true; }
+
+private:
+    ggml_cgraph * build_vision();
+    ggml_cgraph * build_audio();
+};
+
 struct mtmd_graph_gemma4v : mtmd_graph {
     mtmd_graph_gemma4v(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;

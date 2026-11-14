@@ -67,6 +67,7 @@ struct mtmd_audio_mel_config {
     bool    norm_per_feature = false;
     bool    use_magnitude    = false;  // |X| instead of |X|^2
     float   mel_floor        = 5.960464477539063e-08f;
+    float   power_floor      = 0.0f;   // clamp |X|^2 to this before sqrt (0 = disabled)
     bool    mel_floor_add    = false;  // log(x + floor) instead of log(max(x, floor))
     bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
     int     n_threads        = 1;
@@ -118,6 +119,16 @@ struct mtmd_audio_preprocessor_whisper : mtmd_audio_preprocessor {
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
   private:
+    mtmd_audio_cache cache;
+};
+
+// Inkling dMel: 100 ms Slaney-mel magnitude windows at a 50 ms hop, quantized to 16 bins.
+struct mtmd_audio_preprocessor_inkling : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_inkling(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+private:
     mtmd_audio_cache cache;
 };
 
