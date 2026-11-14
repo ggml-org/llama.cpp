@@ -1372,10 +1372,8 @@ class tinyBLAS_Q0_VXE {
 
   private:
     static int32x4_t dot_s8_wide(int8x16_t v_x, int8x16_t v_y) {
-        const int16x8_t v_even = vec_mule(v_x, v_y);
-        const int16x8_t v_odd  = vec_mulo(v_x, v_y);
-        // Two (-128) * (-128) products can overflow a signed 16-bit sum.
-        return vec_unpackh(v_even) + vec_unpackl(v_even) + vec_unpackh(v_odd) + vec_unpackl(v_odd);
+        // v_y is never -128, so the sum of two products fits in 16 bits
+        return vec_paddl_s16(vec_meadd(v_x, v_y, vec_mulo(v_x, v_y)));
     }
 
     const TA * const A;
