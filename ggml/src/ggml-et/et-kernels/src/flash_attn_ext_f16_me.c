@@ -358,9 +358,12 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     const int is_hart1     = hart_id & 1;
     uint64_t  local_minion = (hart_id >> 1) & 0x1F;
 
-    struct ggml_tensor * q        = &params->src0;
-    struct ggml_tensor * k        = &params->src1;
-    struct ggml_tensor * v        = &params->src2;
+    struct ggml_tensor * q = &params->src0;
+    evict_region_past_l2(q->data, tensor_bytes_fa(q));
+    struct ggml_tensor * k = &params->src1;
+    evict_region_past_l2(k->data, tensor_bytes_fa(k));
+    struct ggml_tensor * v = &params->src2;
+    evict_region_past_l2(v->data, tensor_bytes_fa(v));
     struct ggml_tensor * dst      = &params->dst;
     const int32_t        has_mask = params->has_mask;
     struct ggml_tensor * mask     = has_mask ? &params->mask : (struct ggml_tensor *) 0;
@@ -371,13 +374,13 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     char *       dst_data = (char *) dst->data;
 
     // et_barrier(ET_BARRIER_GLOBAL);
-    evict_region_past_l2(q->data, tensor_bytes_fa(q));
-    evict_region_past_l2(k->data, tensor_bytes_fa(k));
-    evict_region_past_l2(v->data, tensor_bytes_fa(v));
-    if (mask) {
-        evict_region_past_l2(mask->data, tensor_bytes_fa(mask));
-    }
-    et_barrier(ET_BARRIER_GLOBAL);
+    // evict_region_past_l2(q_data,   tensor_bytes_fa(q));
+    // evict_region_past_l2(k_data,   tensor_bytes_fa(k));
+    // evict_region_past_l2(v_data,   tensor_bytes_fa(v));
+    // if (mask) {
+    // evict_region_past_l2(mask->data, tensor_bytes_fa(mask));
+    // }
+    // et_barrier(ET_BARRIER_GLOBAL);
 
     const int64_t dk  = q->ne[0];
     const int64_t nq  = q->ne[1];
@@ -462,9 +465,14 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     // All teams in a shire must iterate the same number of times so the
     // per-iter shire barriers stay balanced. Teams whose assigned row is
     // past total_rows still call the barriers but skip the packing work.
+
     et_barrier(ET_BARRIER_SHIRE);
     // et_barrier(ET_BARRIER_GLOBAL);
+
     if (is_hart1) {
+        // et_barrier(ET_BARRIER_GLOBAL);
+        // et_barrier(ET_BARRIER_SHIRE);
+
         uint32_t      chunk_id = 0;
         const int64_t row_base = (int64_t) shire_id + local_tile_idx * NUM_COMPUTE_SHIRES;
 
@@ -548,10 +556,10 @@ int entry_point(struct ggml_et_flash_attn_ext_params * params, void * env) {
     }
 
     // Hart 0: tensor engine compute
-#ifndef UBERKERNEL_SUPPRESS_SCP_SETUP
-    setup_cache_scp();
-#endif
-    CLEAR_TENSOR_ERROR;
+    // #ifndef UBERKERNEL_SUPPRESS_SCP_SETUP
+    //     setup_cache_scp();
+    // #endif
+    // CLEAR_TENSOR_ERROR;
 
     // Q converted to F16 (one row at a time)
     et_fp16_t q_f16[FA_DK_MAX] __attribute__((aligned(64)));
