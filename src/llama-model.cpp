@@ -3578,10 +3578,6 @@ const llama_vocab * llama_model_get_vocab(const llama_model * model) {
     return &model->vocab;
 }
 
-void llama_free_model(llama_model * model) {
-    llama_model_free(model);
-}
-
 void llama_model_free(llama_model * model) {
     delete model;
 }
@@ -3608,6 +3604,22 @@ int32_t llama_model_n_layer(const llama_model * model) {
 
 int32_t llama_model_n_layer_nextn(const llama_model * model) {
     return model->hparams.n_layer_nextn;
+}
+
+llama_dflash_variant llama_model_dflash_variant(const llama_model * model) {
+    const auto * dflash = dynamic_cast<const llama_model_dflash *>(model);
+    if (dflash == nullptr) {
+        return LLAMA_DFLASH_VARIANT_NONE;
+    }
+
+    switch (dflash->variant) {
+        case llama_model_dflash::VARIANT_DFLASH:   return LLAMA_DFLASH_VARIANT_DFLASH;
+        case llama_model_dflash::VARIANT_DFLASH2:  return LLAMA_DFLASH_VARIANT_DFLASH2;
+        case llama_model_dflash::VARIANT_DSPARK:   return LLAMA_DFLASH_VARIANT_DSPARK;
+        case llama_model_dflash::VARIANT_LILICORR: return LLAMA_DFLASH_VARIANT_LILICORR;
+    }
+
+    return LLAMA_DFLASH_VARIANT_NONE;
 }
 
 int32_t llama_model_dflash_selector_top_k(const llama_model * model) {
@@ -3650,26 +3662,6 @@ const char * llama_model_decision_label(const struct llama_model * model, uint32
     }
 
     return nullptr;
-}
-
-// deprecated
-int32_t llama_n_ctx_train(const llama_model * model) {
-    return llama_model_n_ctx_train(model);
-}
-
-// deprecated
-int32_t llama_n_embd(const llama_model * model) {
-    return llama_model_n_embd(model);
-}
-
-// deprecated
-int32_t llama_n_layer(const llama_model * model) {
-    return llama_model_n_layer(model);
-}
-
-// deprecated
-int32_t llama_n_head(const llama_model * model) {
-    return llama_model_n_head(model);
 }
 
 llama_rope_type llama_model_rope_type(const llama_model * model) {

@@ -39,6 +39,9 @@ def create_server():
     global server
     os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
     server = ServerPreset.tinygemma3()
+    # the test images are on huggingface.co, which resolves to a private address on runners inside the HF network
+    # test_vision_image_url_private_address covers the private address check
+    server.media_allow_private_urls = True
 
 def test_models_supports_multimodal_capability():
     global server
