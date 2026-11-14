@@ -92,6 +92,7 @@ class ServerProcess:
     server_metrics: bool | None = False
     kv_unified: bool | None = False
     swa_full: bool | None = False
+    cache_reuse: int | None = None
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
@@ -224,6 +225,8 @@ class ServerProcess:
             server_args.append("--kv-unified")
         if self.swa_full:
             server_args.append("--swa-full")
+        if self.cache_reuse is not None:
+            server_args.extend(["--cache-reuse", self.cache_reuse])
         if self.server_slots:
             server_args.append("--slots")
         else:
