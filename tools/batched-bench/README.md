@@ -22,6 +22,8 @@ There are 2 modes of operation:
 ./llama-batched-bench -m ./models/llama-7b/ggml-model-q8_0.gguf -c 2048 -b 512 -ub 512 -ngl 999 -npp 128,256,512 -ntg 128,256 -npl 1,2,4,8,16,32
 ```
 
+For scattered unified KV cache tests, add `-kvu --kvu-cache-state FNAME`. The first run fills unused KV cells with idle histories and saves `FNAME.idleN`, where `N` is the idle token count. Later runs load that file. Warming and loading are outside the PP and TG timers.
+
 ## Sample results
 
 - `PP` - prompt tokens per batch
