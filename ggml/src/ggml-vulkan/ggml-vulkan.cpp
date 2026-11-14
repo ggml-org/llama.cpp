@@ -1258,8 +1258,12 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
 
     result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
 
-    if (!reduce_block_rows && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc, k_type, v_type)) {
+    if (!reduce_block_rows && result.block_rows > 1 && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc, k_type, v_type)) {
         result.block_rows /= 2;
+    }
+
+    if (result.shmem_staging && !ggml_vk_flash_attn_scalar_shmem_support(device, result, hsk, hsv, f32acc, k_type, v_type)) {
+        result.shmem_staging = 0;
     }
 
     // With head sizes above 128, 16 rows per workgroup spill registers on Qualcomm and run about
@@ -8399,7 +8403,9 @@ bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_f
         kblocksh_size = 0;
     }
 
-    const uint32_t total_size = tmpsh + tmpshv4 + masksh + iq_shmem + Qf + kvsh + kblocksh_size;
+    const uint32_t occupancy_limiter = std::max(params.limit_occupancy_shmem, 1u) * 4 * sizeof(float);
+
+    const uint32_t total_size = tmpsh + tmpshv4 + masksh + iq_shmem + Qf + kvsh + kblocksh_size + occupancy_limiter;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
 
     VK_LOG_DEBUG("ggml_vk_flash_attn_scalar_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", mmq=" << mmq << ", total_size=" << total_size << ", supported=" << supported);
