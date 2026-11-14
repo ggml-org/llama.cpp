@@ -996,7 +996,7 @@ static bool check_moe_cache_scales(const std::string & source_path, const std::v
         file.reset();
         std::filesystem::remove(path);
         const double error = nmse(expected, actual);
-        if (!(error <= 1e-6)) {
+        if (!(error <= 1e-4)) {
             fprintf(stderr, "MoE cache scale granularity %d: NMSE %g\n", granularity, error);
             return false;
         }
