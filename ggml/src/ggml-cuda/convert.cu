@@ -5,6 +5,46 @@
 
 #define CUDA_Q8_0_NE_ALIGN 2048
 
+static __global__ void reduce_f32_amax(const float * x, float * amax, const int64_t k) {
+    __shared__ float shared_values[32];
+    float value = 0.0f;
+    for (int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x; i < k; i += (int64_t) blockDim.x * gridDim.x) {
+        value = fmaxf(value, fabsf(x[i]));
+    }
+    value = block_reduce<block_reduce_method::MAX>(value, shared_values);
+    if (threadIdx.x == 0) {
+        atomicMax((unsigned int *) amax, __float_as_uint(value));
+    }
+}
+
+static __global__ void finalize_f32_scale(float * scale) {
+    const float amax = *scale;
+    float value = 1.0f;
+    if (isfinite(amax)) {
+        while (amax > 32768.0f * value) {
+            value *= 2.0f;
+        }
+    }
+    *scale = value;
+}
+
+static __global__ void convert_f32_to_fp16_scaled(const float * x, half * y, const int64_t k, const float * scale) {
+    const float inv_scale = 1.0f / *scale;
+    for (int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x; i < k; i += (int64_t) blockDim.x * gridDim.x) {
+        y[i] = __float2half(x[i] * inv_scale);
+    }
+}
+
+void ggml_cuda_f32_to_fp16_scaled(const float * x, half * y, const int64_t k, float * gemm_scalars, cudaStream_t stream) {
+    constexpr int block_size = 256;
+    const int num_blocks = std::min<int64_t>((k + block_size - 1) / block_size, 1024);
+    CUDA_CHECK(cudaMemsetAsync(gemm_scalars, 0, 2*sizeof(float), stream));
+    reduce_f32_amax<<<num_blocks, block_size, 0, stream>>>(x, gemm_scalars, k);
+    finalize_f32_scale<<<1, 1, 0, stream>>>(gemm_scalars);
+    convert_f32_to_fp16_scaled<<<num_blocks, block_size, 0, stream>>>(x, y, k, gemm_scalars);
+    CUDA_CHECK(cudaGetLastError());
+}
+
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __restrict__ y,
         const int64_t ne00, const int64_t ne01,
