@@ -1,3 +1,4 @@
+
 package com.arm.aichat
 
 import com.arm.aichat.InferenceEngine.State
@@ -23,17 +24,15 @@ interface InferenceEngine {
     /**
      * Sends a system prompt to the loaded model
      */
-    suspend fun setSystemPrompt(systemPrompt: String
-                                
-suspend fun resetConversation(systemPrompt: String)
-    /**
-        suspend fun setSystemPrompt(systemPrompt: String)
+    suspend fun setSystemPrompt(systemPrompt: String)
 
     /**
      * Atomically resets the previous native conversation state and applies
      * a fresh system prompt for the next independent AVA turn.
      */
     suspend fun resetConversation(systemPrompt: String)
+
+    /**
      * Sends a user prompt to the loaded model and returns a Flow of generated tokens.
      */
     fun sendUserPrompt(message: String, predictLength: Int = DEFAULT_PREDICT_LENGTH): Flow<String>
