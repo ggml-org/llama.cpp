@@ -82,3 +82,42 @@ A zero-row pipe message resets the context position and KV metadata between
 requests. The host keeps the process alive. The reported first PCM includes
 codec priming and production of the first nonempty PCM. Warm-run RTF excludes
 the first run. Review the WAV for content and quality when generated lengths differ.
+
+## Bring a voice from another TTS model
+
+Generate a short reference WAV and keep its exact spoken transcript in a
+UTF-8 text file. For Qwen3-TTS CustomVoice, install `qwen-tts` in a separate
+Python 3.12 environment and run:
+
+```sh
+python generate_qwen_reference.py serena-reference.wav --speaker Serena
+```
+
+The adapter writes mono PCM16 and a matching `.txt` file. Use `--model`,
+`--speaker`, `--text`, and `--language` to select another Qwen reference.
+If the generated WAV differs from the supplied text, correct the transcript
+before encoding. For other TTS models, supply their WAV and transcript
+directly at the next step.
+
+In the M5 Python environment (NumPy and ONNX Runtime), encode the reference
+using the encoder and identity that match your deployed M5 model:
+
+```sh
+python clone_voice.py serena-reference.wav "$(cat serena-reference.txt)" \
+    --model "$M5_ENCODER_DIR" --voices serena-voices.json --name serena
+```
+
+Point the Android engine at the resulting cache with
+`--voices serena-voices.json --voice serena`. Use a different sentence for the
+first listening test. The M5 engine uses only its own codec codes at runtime.
+
+For a prompted Serena preset, use the instruction-capable checkpoint:
+
+```sh
+python generate_qwen_reference.py serena-calm-reference.wav \
+    --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --speaker Serena \
+    --instruct '语气轻柔温暖，语速略慢，句尾自然放轻。'
+```
+
+Give the new reference a distinct name when encoding it. This keeps the
+original Serena preset available for same-text listening comparisons.
