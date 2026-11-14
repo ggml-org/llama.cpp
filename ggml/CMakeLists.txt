@@ -194,6 +194,30 @@ option(GGML_ACCELERATE                      "ggml: enable Accelerate framework" 
 option(GGML_BLAS                            "ggml: use BLAS"                                  ${GGML_BLAS_DEFAULT})
 set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
+# GGML_BLAS is the master switch. CMake preserves a cached opt-in while BLAS
+# is disabled, but its effective value is OFF and no MKL lookup/linking occurs.
+include(CMakeDependentOption)
+cmake_dependent_option(GGML_MKL_FP16
+    "ggml: convert CPU FP16 matmul inputs and use oneMKL SGEMM"
+    OFF "GGML_BLAS" OFF)
+if (GGML_MKL_FP16)
+    if (NOT GGML_BLAS_VENDOR MATCHES "^Intel")
+        message(FATAL_ERROR "GGML_MKL_FP16 requires an Intel MKL GGML_BLAS_VENDOR (for example Intel10_64_dyn)")
+    endif()
+    if (NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+        message(FATAL_ERROR "GGML_MKL_FP16 requires Linux x86-64")
+    endif()
+    find_path(GGML_MKL_FP16_INCLUDE_DIR mkl.h
+        HINTS "${MKLROOT}" "$ENV{MKLROOT}" /opt/intel/oneapi/mkl/latest PATH_SUFFIXES include)
+    find_library(GGML_MKL_FP16_LIBRARY NAMES mkl_rt
+        HINTS "${MKLROOT}" "$ENV{MKLROOT}" /opt/intel/oneapi/mkl/latest PATH_SUFFIXES lib lib/intel64)
+    if (NOT GGML_MKL_FP16_INCLUDE_DIR OR NOT GGML_MKL_FP16_LIBRARY)
+        message(FATAL_ERROR "GGML_MKL_FP16 requires mkl.h and libmkl_rt; set MKLROOT or the GGML_MKL_FP16_* paths")
+    endif()
+    find_package(Threads REQUIRED)
+    message(STATUS "GGML FP16 MKL: ${GGML_MKL_FP16_LIBRARY}; runtime opt-in: GGML_FP16_MKL_MODE=auto")
+endif()
+
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
 
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
