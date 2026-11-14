@@ -1191,6 +1191,7 @@ struct ggml_backend_sched {
 
     ggml_backend_t backends[GGML_SCHED_MAX_BACKENDS];
     ggml_backend_buffer_type_t bufts[GGML_SCHED_MAX_BACKENDS];
+    ggml_backend_dev_supports_op_prefetch_t supports_op_prefetch[GGML_SCHED_MAX_BACKENDS];
     ggml_gallocr_t galloc;
 
     // hash map of the nodes in the graph
@@ -1500,6 +1501,13 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     graph->uid = ggml_graph_next_uid();
+
+    // devices that answer supports_op over the network can answer for the whole graph in one round trip
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->supports_op_prefetch[b] != NULL) {
+            sched->supports_op_prefetch[b](ggml_backend_get_device(sched->backends[b]), graph);
+        }
+    }
 
     // pass 1: assign backends to ops with pre-allocated inputs
     for (int i = 0; i < graph->n_leafs; i++) {
@@ -2353,6 +2361,11 @@ ggml_backend_sched_t ggml_backend_sched_new(
         sched->backends[b] = backends[b];
         sched->bufts[b] = bufts ? bufts[b] : ggml_backend_get_default_buffer_type(backends[b]);
         GGML_ASSERT(ggml_backend_supports_buft(backends[b], sched->bufts[b]));
+
+        ggml_backend_dev_t dev = ggml_backend_get_device(backends[b]);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : NULL;
+        sched->supports_op_prefetch[b] = reg ? (ggml_backend_dev_supports_op_prefetch_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_supports_op_prefetch") : NULL;
 
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {
