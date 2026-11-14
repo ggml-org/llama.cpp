@@ -2585,6 +2585,141 @@ static void test_bailing_v3_tool_format(testing & t) {
         "</tool_call>";
     common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
     t.assert_true("multi-argument tool call", parser.parse(ctx).success());
+
+    // Verify required and optional arguments can appear in any order and repetition is bounded by total_params
+    generation_params mixed_inputs;
+    mixed_inputs.tools = json::array({
+        {
+            { "type", "function" },
+            { "function", {
+                { "name", "write" },
+                { "parameters", {
+                    { "type", "object" },
+                    { "properties", {
+                        { "content", { { "type", "string" } } },
+                        { "i",       { { "type", "string" } } },
+                        { "path",    { { "type", "string" } } },
+                    } },
+                    { "required", json::array({ "path", "i" }) },
+                } },
+            } },
+        },
+    });
+    mixed_inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    auto mixed_parser = analysis.build_parser(mixed_inputs, "");
+
+    const std::string out_of_order_output =
+        "<tool_call>write\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>db.py</arg_value>\n"
+        "<arg_key>content</arg_key>\n"
+        "<arg_value>print(1)</arg_value>\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Write db module</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_ooo(out_of_order_output);
+    auto res_ooo = mixed_parser.parse(ctx_ooo);
+    t.assert_true("out-of-order required and optional tagged arguments", res_ooo.success());
+
+    const std::string duplicate_arg_output =
+        "<tool_call>write\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>db.py</arg_value>\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Write db</arg_value>\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Duplicate intent</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_dup(duplicate_arg_output);
+    t.assert_true("rejects duplicate argument even within total_params count", !mixed_parser.parse(ctx_dup).success());
+
+    const std::string missing_req_output =
+        "<tool_call>write\n"
+        "<arg_key>path</arg_key>\n"
+        "<arg_value>db.py</arg_value>\n"
+        "<arg_key>content</arg_key>\n"
+        "<arg_value>print(1)</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_missing(missing_req_output);
+    t.assert_true("rejects tool call missing a required argument", !mixed_parser.parse(ctx_missing).success());
+
+    // Verify >COMMON_CHAT_MAX_PERMUTE fallback still enforces required arguments while bounding optional ones
+    generation_params large_inputs;
+    large_inputs.tools = json::array({
+        {
+            { "type", "function" },
+            { "function", {
+                { "name", "bash" },
+                { "parameters", {
+                    { "type", "object" },
+                    { "properties", {
+                        { "async",   { { "type", "string" } } },
+                        { "command", { { "type", "string" } } },
+                        { "cwd",     { { "type", "string" } } },
+                        { "env",     { { "type", "string" } } },
+                        { "host",    { { "type", "string" } } },
+                        { "i",       { { "type", "string" } } },
+                        { "name",    { { "type", "string" } } },
+                        { "pty",     { { "type", "string" } } },
+                        { "timeout", { { "type", "string" } } },
+                    } },
+                    { "required", json::array({ "command", "i" }) },
+                } },
+            } },
+        },
+    });
+    large_inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    auto large_parser = analysis.build_parser(large_inputs, "");
+
+    const std::string large_valid_output =
+        "<tool_call>bash\n"
+        "<arg_key>i</arg_key>\n"
+        "<arg_value>Run build</arg_value>\n"
+        "<arg_key>command</arg_key>\n"
+        "<arg_value>make -j</arg_value>\n"
+        "<arg_key>cwd</arg_key>\n"
+        "<arg_value>/tmp</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_large_valid(large_valid_output);
+    t.assert_true("9-param tool accepts required args in any order plus optional arg", large_parser.parse(ctx_large_valid).success());
+
+    const std::string large_missing_req_output =
+        "<tool_call>bash\n"
+        "<arg_key>cwd</arg_key>\n"
+        "<arg_value>/tmp</arg_value>\n"
+        "<arg_key>timeout</arg_key>\n"
+        "<arg_value>30</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_large_missing(large_missing_req_output);
+    t.assert_true("9-param tool rejects call missing required arguments", !large_parser.parse(ctx_large_missing).success());
+
+    // Verify >COMMON_CHAT_MAX_PERMUTE required args (7 required) still separates args with space
+    generation_params many_req_inputs = large_inputs;
+    many_req_inputs.tools[0]["function"]["parameters"]["required"] =
+        json::array({ "async", "command", "cwd", "env", "host", "i", "name" });
+    auto many_req_parser = analysis.build_parser(many_req_inputs, "");
+
+    const std::string many_req_valid_output =
+        "<tool_call>bash\n"
+        "<arg_key>async</arg_key>\n<arg_value>false</arg_value>\n"
+        "<arg_key>command</arg_key>\n<arg_value>ls</arg_value>\n"
+        "<arg_key>cwd</arg_key>\n<arg_value>/tmp</arg_value>\n"
+        "<arg_key>env</arg_key>\n<arg_value>A=1</arg_value>\n"
+        "<arg_key>host</arg_key>\n<arg_value>localhost</arg_value>\n"
+        "<arg_key>i</arg_key>\n<arg_value>List tmp</arg_value>\n"
+        "<arg_key>name</arg_key>\n<arg_value>job1</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx_many_req_valid(many_req_valid_output);
+    t.assert_true("tool with 7 required args parses ordered sequence with whitespace", many_req_parser.parse(ctx_many_req_valid).success());
+
+    // Verify >COMMON_CHAT_MAX_PERMUTE with zero required args accepts empty and subset calls
+    generation_params all_opt_inputs = large_inputs;
+    all_opt_inputs.tools[0]["function"]["parameters"]["required"] = json::array();
+    auto all_opt_parser = analysis.build_parser(all_opt_inputs, "");
+
+    const std::string all_opt_empty_output = "<tool_call>bash\n</tool_call>";
+    common_peg_parse_context ctx_all_opt_empty(all_opt_empty_output);
+    t.assert_true("9-param all-optional tool accepts zero arguments", all_opt_parser.parse(ctx_all_opt_empty).success());
 }
 
 // Test that reproduces the Seed-OSS template issue with embedded quotes

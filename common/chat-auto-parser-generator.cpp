@@ -367,9 +367,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         const auto & func = tool.at("function");
         std::string  name = func.at("name");
 
-        // Build parser for each argument, separating required and optional
+        // Build parser for each argument, tracking required mask for exact subset permutation
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
+        std::vector<common_peg_parser> all_parsers;
+        uint32_t                       required_mask = 0;
         foreach_parameter(func, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
@@ -383,6 +385,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
             auto named_arg = p.rule("tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index), arg);
+            if (all_parsers.size() < COMMON_CHAT_MAX_PERMUTE && param.required) {
+                required_mask |= (1u << all_parsers.size());
+            }
+            all_parsers.push_back(named_arg);
             if (param.required) {
                 required_parsers.push_back(named_arg);
             } else {
@@ -390,22 +396,19 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
             }
         });
 
-        // Build required arg sequence in definition order
-        common_peg_parser args_seq = p.eps();
-        for (size_t i = 0; i < required_parsers.size(); i++) {
-            if (i > 0) {
-                args_seq = args_seq + p.space();
+        // Exact memoized bitmask permutation up to COMMON_CHAT_MAX_PERMUTE parameters:
+        // every required argument must appear once, optional arguments at most once in any position.
+        // Beyond COMMON_CHAT_MAX_PERMUTE, enforce all required arguments followed by bounded optional arguments.
+        const std::string args_rule_prefix = "tool-" + std::to_string(tool_index) + "-args";
+        common_peg_parser args_seq         = p.eps();
+        if (all_parsers.size() <= COMMON_CHAT_MAX_PERMUTE) {
+            args_seq = p.permute(args_rule_prefix, all_parsers, required_mask, p.space());
+        } else {
+            args_seq = p.permute(args_rule_prefix, required_parsers, ~0u, p.space());
+            if (!optional_parsers.empty()) {
+                auto opt_repeat = p.repeat(p.space() + p.choice(optional_parsers), 0, static_cast<int>(optional_parsers.size()));
+                args_seq        = required_parsers.empty() ? opt_repeat : (args_seq + opt_repeat);
             }
-            args_seq = args_seq + required_parsers[i];
-        }
-
-        // Build optional args with flexible ordering
-        if (!optional_parsers.empty()) {
-            common_peg_parser any_opt = p.choice();
-            for (const auto & opt : optional_parsers) {
-                any_opt |= opt;
-            }
-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
         }
 
         if (!arguments.start.empty()) {
