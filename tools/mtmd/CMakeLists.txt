@@ -51,7 +51,6 @@ add_library(mtmd
             models/granite4-vision.cpp
             models/hunyuanvl.cpp
             models/inkling2v.cpp
-            models/inklinga.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp

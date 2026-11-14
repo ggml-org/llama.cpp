@@ -580,7 +580,6 @@ enum projector_type {
     PROJECTOR_TYPE_CHATTERBOX,
     PROJECTOR_TYPE_CHATTERBOX_SPKENC,
     PROJECTOR_TYPE_INKLING2V,
-    PROJECTOR_TYPE_INKLINGA,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -669,7 +668,6 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_CHATTERBOX,        "chatterbox"},
     { PROJECTOR_TYPE_CHATTERBOX_SPKENC, "chatterbox_spkenc"},
     { PROJECTOR_TYPE_INKLING2V,         "inkling2v"},
-    { PROJECTOR_TYPE_INKLINGA,          "inklinga"},
 };
 
 static projector_type projector_type_from_string(const std::string & str) {

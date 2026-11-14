@@ -793,14 +793,6 @@ struct mtmd_model_loader {
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
                     } break;
-                case PROJECTOR_TYPE_INKLINGA:
-                    {
-                        hparams.audio_chunk_len   = 0;
-                        hparams.audio_sample_rate = 16000;
-                        hparams.audio_n_fft       = 1600;
-                        hparams.audio_window_len  = 1600;
-                        hparams.audio_hop_len     = 800;
-                    } break;
                 case PROJECTOR_TYPE_MUSE_GLIMMER:
                     {
                         hparams.n_merge = 2; // pixel-shuffle downsample after the ViT
@@ -1928,10 +1920,6 @@ struct mtmd_model_loader {
                     model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);
                     model.mm_2_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_2_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"), false);
-                } break;
-            case PROJECTOR_TYPE_INKLINGA:
-                {
-                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
@@ -4155,10 +4143,6 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
             {
                 n_patches = img->nx();  // no downsampling: one token per raw waveform frame
             } break;
-        case PROJECTOR_TYPE_INKLINGA:
-            {
-                n_patches = img->nx(); // one token per mel frame
-            } break;
         case PROJECTOR_TYPE_MIMO_AUDIO:
             {
                 // conv1(s=1) + conv2(s=2) -> RVQ-encoder downsample conv(k=2,s=2)
@@ -4330,7 +4314,6 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
-        case PROJECTOR_TYPE_INKLINGA:
             return mm_fc_w->ne[1];
         case PROJECTOR_TYPE_QWEN3A:
             return mm_2_w->ne[1];

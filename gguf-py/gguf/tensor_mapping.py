@@ -2789,7 +2789,6 @@ class TensorNameMap:
             "perception.encoder.asr_encoder.final_norm", # nemotron-transcribe
             "encoder.layer_norm", # mimo-audio-tokenizer
             "encoder.lfm.lfm.embedding_norm", # lfm3a
-            "model.audio.final_norm", # inkling
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
@@ -3033,7 +3032,6 @@ class TensorNameMap:
             "audio.multi_modal_projector.linear", # qwen2audio
             "audio_tower.proj", # qwen2omni
             "model.audio_tower.output_proj", # gemma4
-            "model.audio.encoder", # inkling
             "speaker_encoder.fc", # qwen3tts speaker encoder: final speaker embedding projection
             "perception.proj", # nemotron-transcribe
         ),

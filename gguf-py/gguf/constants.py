@@ -7175,7 +7175,6 @@ class VisionProjectorType:
     D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector
     MUSE_SPARK_AUDIO = "muse-spark-audio"
     INKLING2V      = "inkling2v"
-    INKLINGA       = "inklinga"
 
 
 # Items here are (block size, type size)

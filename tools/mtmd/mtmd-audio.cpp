@@ -1523,50 +1523,6 @@ bool mtmd_audio_preprocessor_lfm3a::process(const float *                 sample
 }
 
 //
-// mtmd_audio_preprocessor_inklinga
-//
-
-void mtmd_audio_preprocessor_inklinga::initialize() {
-    cache.fill_sin_cos_table(hparams.audio_n_fft);
-    cache.fill_hann_window(hparams.audio_window_len, true);
-    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
-
-    mel_config.n_mel            = hparams.n_mel_bins;
-    mel_config.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
-    mel_config.hann_window_size = hparams.audio_window_len;
-    mel_config.hop_length       = hparams.audio_hop_len;
-    mel_config.sample_rate      = hparams.audio_sample_rate;
-    mel_config.no_padding       = true;
-    mel_config.use_magnitude    = true;
-    mel_config.power_floor      = 1e-10f;
-    mel_config.mel_floor        = 1e-10f;
-    mel_config.cache            = &cache;
-}
-
-bool mtmd_audio_preprocessor_inklinga::process(const float *                 samples,
-                                               size_t                        n_samples,
-                                               std::vector<mtmd_audio_mel> & output,
-                                               bool                          shape_only) const {
-    if (n_samples == 0) {
-        return false;
-    }
-
-    // one frame per hop: the first window ends at the first hop, the last hop is zero-padded
-    const size_t hop = hparams.audio_hop_len;
-    std::vector<float> padded(hparams.audio_n_fft - hop, 0.0f);
-    padded.insert(padded.end(), samples, samples + n_samples);
-    padded.resize(padded.size() + (hop - n_samples % hop) % hop, 0.0f);
-
-    mtmd_audio_mel out;
-    if (!log_mel_spectrogram(padded.data(), (int) padded.size(), mel_config, shape_only, out)) {
-        return false;
-    }
-
-    output.push_back(std::move(out));
-    return true;
-}
-
-//
 // mtmd_audio_preprocessor_granite_speech
 //
 

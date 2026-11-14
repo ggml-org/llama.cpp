@@ -66,7 +66,6 @@ struct mtmd_audio_mel_config {
     bool    use_natural_log  = false;
     bool    norm_per_feature = false;
     bool    use_magnitude    = false;  // |X| instead of |X|^2
-    float   power_floor      = 0.0f;   // lower bound of |X|^2, 0 = disabled
     float   mel_floor        = 5.960464477539063e-08f;
     bool    mel_floor_add    = false;  // log(x + floor) instead of log(max(x, floor))
     bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
@@ -146,15 +145,6 @@ struct mtmd_audio_preprocessor_d1omni : mtmd_audio_preprocessor_conformer {
 
 struct mtmd_audio_preprocessor_lfm3a : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_lfm3a(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
-    void initialize() override;
-    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
-
-  private:
-    mtmd_audio_cache cache;
-};
-
-struct mtmd_audio_preprocessor_inklinga : mtmd_audio_preprocessor {
-    mtmd_audio_preprocessor_inklinga(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 
