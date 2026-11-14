@@ -20233,12 +20233,20 @@ static void ggml_opencl_op_group_norm_fused(ggml_backend_t backend, ggml_tensor 
     memcpy(&eps, (char *)gn_tensor->op_params + sizeof(int), sizeof(float));
 
     cl_kernel kernel = backend_ctx->kernel_group_norm_mul_add;
-    int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
-    int ne = ggml_nelements(src0);
+    int ne = src0->ne[0] * src0->ne[1] * src0->ne[2];
     int group_size = ne / groups;
 
-    size_t lws[] = { (size_t)MIN(max_workgroup_size, group_size) };
-    size_t gws[] = { (size_t)groups * lws[0] };
+    size_t sgs = 64;
+    if (backend_ctx->gpu_family == ADRENO) {
+        sgs = 64;
+    } else if (backend_ctx->gpu_family == INTEL) {
+        sgs = 32;
+    } else {
+        GGML_ASSERT(false && "Unsupported GPU");
+    }
+
+    size_t lws[] = { sgs, 1 };
+    size_t gws[] = { (size_t)groups * sgs, (size_t)src0->ne[3] };
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &extra0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
@@ -20252,7 +20260,7 @@ static void ggml_opencl_op_group_norm_fused(ggml_backend_t backend, ggml_tensor 
     CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int), &group_size));
     CL_CHECK(clSetKernelArg(kernel, 10, sizeof(float), &eps));
 
-    backend_ctx->enqueue_ndrange_kernel(kernel, 1, gws, lws, dst);
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, dst);
 }
 
 static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -20299,7 +20307,7 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
     CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &group_size));
     CL_CHECK(clSetKernelArg(kernel, 6, sizeof(float),    &eps));
 
-    size_t global_work_size[] = {(size_t)n_groups*sgs, 1, 1};
+    size_t global_work_size[] = {(size_t)n_groups*sgs, (size_t)src0->ne[3], 1};
     size_t local_work_size[] = {(size_t)sgs, 1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
