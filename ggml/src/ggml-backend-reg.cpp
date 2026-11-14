@@ -23,6 +23,9 @@
 #else
 #    include <dlfcn.h>
 #    include <unistd.h>
+#    if defined(_AIX)
+#        include <procinfo.h>
+#    endif
 #endif
 
 // Backend registry
@@ -456,6 +459,23 @@ static fs::path get_executable_path() {
         base_path = base_path.substr(0, last_slash);
     }
     return base_path + L"\\";
+#elif defined(_AIX)
+    struct procentry64 procs;
+    pid_t pid = getpid();
+    if (getprocs64(&procs, sizeof(procs), NULL, 0, &pid, 1) > 0) {
+        char args[4096] = {0};
+        if (getargs(&procs, sizeof(procs), args, sizeof(args)) == 0) {
+            char resolved[PATH_MAX];
+            if (realpath(args, resolved) != nullptr) {
+                std::string base_path = resolved;
+                auto last_slash = base_path.find_last_of('/');
+                if (last_slash != std::string::npos) {
+                    return base_path.substr(0, last_slash) + "/";
+                }
+            }
+        }
+    }
+    return {};
 #else
     return {};
 #endif
