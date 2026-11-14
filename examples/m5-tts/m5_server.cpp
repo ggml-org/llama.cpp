@@ -323,7 +323,7 @@ struct PcmStream {
     std::condition_variable cv;
     std::deque<std::vector<short>> chunks;
     bool done = false;
-    bool cancelled = false;
+    std::atomic<bool> cancelled{false};
     std::thread worker;
 
     // The worker must be joined even if the client disconnects before the
@@ -968,7 +968,8 @@ int main(int argc, char ** argv) {
             }
             auto stream = std::make_shared<PcmStream>();
             const std::string body = req.body;
-            stream->worker = std::thread([&st, stream, text, voice, body] {
+            // The HTTP provider owns the stream and joins this worker on release.
+            stream->worker = std::thread([&st, stream = stream.get(), text, voice, body] {
                 {
                     std::lock_guard<std::mutex> lock(st.render_mutex);
                     std::string err;
@@ -1006,10 +1007,7 @@ int main(int argc, char ** argv) {
                     lock.unlock();
                     const bool more = sink.write((const char *) chunk.data(),
                                                  chunk.size() * sizeof(short));
-                    if (!more) {
-                        std::lock_guard<std::mutex> g(stream->m);
-                        stream->cancelled = true;
-                    }
+                    if (!more) stream->cancelled = true;
                     return more;
                 }
                 lock.unlock();
