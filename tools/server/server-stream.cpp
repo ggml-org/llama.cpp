@@ -16,7 +16,12 @@ enum class stream_read_status {
 namespace {
 constexpr int64_t STREAM_SESSION_TTL_SECONDS         = 300;
 constexpr size_t  STREAM_SESSION_MAX_BYTES           = 4 * 1024 * 1024;
+// cap live sessions: the map is keyed on the client-controlled X-Conversation-Id, so without a bound a client can grow it without limit
+constexpr size_t  STREAM_SESSION_MAX_SESSIONS        = 1024;
 constexpr int64_t STREAM_SESSION_GC_INTERVAL_SECONDS = 60;
+
+// monotonic creation order for cap eviction (started_ts is one-second granularity, too coarse to order a burst)
+std::atomic<uint64_t> g_stream_session_seq{0};
 constexpr int64_t STREAM_READ_WAKE_INTERVAL_MS       = 200;
 
 int64_t now_seconds() {
@@ -75,6 +80,7 @@ void server_stream_session_manager_stop() {
 struct stream_session {
     std::string conversation_id;
     int64_t     started_ts; // unix seconds at construction
+    uint64_t    seq;        // monotonic creation order, for age-based cap eviction
 
     stream_session(std::string conversation_id_, size_t max_bytes_);
     stream_session(const stream_session &)             = delete;
@@ -111,6 +117,7 @@ private:
 stream_session::stream_session(std::string conversation_id_, size_t max_bytes_)
     : conversation_id(std::move(conversation_id_))
     , started_ts(now_seconds())
+    , seq(g_stream_session_seq.fetch_add(1, std::memory_order_relaxed))
     , prefix_dropped(0)
     , cap_bytes(max_bytes_)
     , done(false)
@@ -236,6 +243,7 @@ stream_session_ptr stream_session_manager::create_or_replace(const std::string &
     // evict any previous session on the same conv, this guarantees the invariant
     // "one conv = at most one live session" and propagates cancel to its producer
     stream_session_ptr previous;
+    std::vector<stream_session_ptr> evicted;
     auto fresh = std::make_shared<stream_session>(conversation_id, STREAM_SESSION_MAX_BYTES);
     {
         std::unique_lock<std::shared_mutex> lock(map_mu);
@@ -244,12 +252,32 @@ stream_session_ptr stream_session_manager::create_or_replace(const std::string &
             previous = it->second;
             it->second = fresh;
         } else {
+            // at the cap, evict the stalest session (completed before live, then oldest seq) before inserting
+            while (sessions.size() >= STREAM_SESSION_MAX_SESSIONS) {
+                auto victim = sessions.begin();
+                for (auto i = sessions.begin(); i != sessions.end(); ++i) {
+                    const bool i_completed = i->second->completed_at() != 0;
+                    const bool v_completed = victim->second->completed_at() != 0;
+                    const bool better = (i_completed && !v_completed) ||
+                        (i_completed == v_completed && i->second->seq < victim->second->seq);
+                    if (better) {
+                        victim = i;
+                    }
+                }
+                evicted.push_back(victim->second);
+                sessions.erase(victim);
+            }
             sessions.emplace(conversation_id, fresh);
         }
     }
     if (previous) {
         previous->cancel();
         previous->finalize();
+    }
+    // cancel + finalize evicted sessions outside the map lock so any pending readers wake and exit
+    for (auto & s : evicted) {
+        s->cancel();
+        s->finalize();
     }
     return fresh;
 }
