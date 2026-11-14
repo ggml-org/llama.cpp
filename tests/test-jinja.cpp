@@ -691,6 +691,31 @@ static void test_expressions(testing & t) {
         "{{ " + std::string(1000, '(') + "1" + std::string(1000, ')') + " }}",
         "template is nested more than 128 levels deep"
     );
+
+    test_template_error(t, "undefined hint: missing object key (attr)",
+        "{% set m = {'a': 1} %}{{ m.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: missing object key (subscript)",
+        "{% set m = {'a': 1} %}{{ m['missing_key']() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: unknown array attribute",
+        "{% set a = [1] %}{{ a.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: unknown string attribute",
+        "{% set s = 'x' %}{{ s.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
+
+    test_template_error(t, "undefined hint: unknown int attribute",
+        "{% set n = 1 %}{{ n.missing_key() }}",
+        "Callee is not a function: got Undefined (hint: 'missing_key')"
+    );
 }
 
 static void test_set_statement(testing & t) {

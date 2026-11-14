@@ -890,7 +890,7 @@ value member_expression::execute_impl(context & ctx) const {
         // while obj['prop'] returns the property value.
         // example: {"obj": {"items": 123}} -> obj.items is the built-in function, obj['items'] is 123
 
-        value val = try_builtin_func(ctx, prop, object, true);
+        value val = find_builtin_func(ctx, prop, object);
         if (val) {
             return val;
         }

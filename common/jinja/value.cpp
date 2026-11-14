@@ -613,7 +613,7 @@ const func_builtins & global_builtins() {
     return builtins;
 }
 
-value try_builtin_func(context & ctx, const std::string & name, value & input, bool allow_missing) {
+value find_builtin_func(context & ctx, const std::string & name, value & input) {
     JJ_DEBUG("Trying built-in function '%s' for type %s", name.c_str(), input->type().c_str());
     if (ctx.is_get_stats) {
         value_t::stats_t::mark_used(input);
@@ -625,8 +625,16 @@ value try_builtin_func(context & ctx, const std::string & name, value & input, b
         JJ_DEBUG("Binding built-in '%s'", name.c_str());
         return mk_val<value_func>(name, it->second, input);
     }
-    if (allow_missing) {
-        return {};
+    return nullptr;
+}
+
+value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing) {
+    value func = find_builtin_func(ctx, name, input);
+    if (func) {
+        return func;
+    }
+    if (undef_on_missing) {
+        return mk_val<value_undefined>(name);
     }
     throw std::runtime_error("Unknown (built-in) filter '" + name + "' for type " + input->type());
 }
