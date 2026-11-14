@@ -373,6 +373,7 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
                     }
                 }
                 if (!supported) {
+                    GGML_ASSERT(llama_init_from_model(model, params) == nullptr);
                     continue;
                 }
             }
