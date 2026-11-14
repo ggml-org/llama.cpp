@@ -1783,6 +1783,26 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
             return {cpu_dev, &pimpl->cpu_buft_list};
         }
+        if (params.tensor_buft_overrides) {
+            const std::string probe_name = (il < n_layer_all)
+                ? ("blk." + std::to_string(il) + ".attn_norm.weight")
+                : "output.weight";
+            for (const auto * overrides = params.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
+                std::regex pattern(overrides->pattern);
+                if (std::regex_search(probe_name, pattern) && overrides->buft) {
+                    ggml_backend_dev_t ov_dev = ggml_backend_buft_get_device(overrides->buft);
+                    if (ov_dev && pimpl->gpu_buft_list.find(ov_dev) != pimpl->gpu_buft_list.end()) {
+                        LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to overridden device %s, is_swa = %d\n", il, ggml_backend_dev_name(ov_dev), is_swa);
+                        return {ov_dev, &pimpl->gpu_buft_list.at(ov_dev)};
+                    }
+                }
+            }
+        }
+        if (ml.load_mtp && il >= int(hparams.n_layer()) && !devices.empty()) {
+            auto * dev0 = devices.at(0).dev;
+            LLAMA_LOG_DEBUG("load_tensors: MTP/output layer %3d assigned to primary device %s\n", il, ggml_backend_dev_name(dev0));
+            return {dev0, &pimpl->gpu_buft_list.at(dev0)};
+        }
         const int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + n_devices(), float(il - i_gpu_start)/act_gpu_layers) - splits.begin();
         auto * dev = devices.at(layer_gpu).dev;
         LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
