@@ -473,26 +473,52 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
+template<typename T, int width>
+static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
+#if defined(GGML_USE_HIP)
+    if constexpr (width <= 64 && width <= ggml_cuda_get_physical_warp_size()) {
+        x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_1032>(x);
+        if constexpr (width >= 4) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_2301>(x);
+        }
+        if constexpr (width >= 8) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_4>(x);
+        }
+        if constexpr (width >= 16) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
+        }
+        if constexpr (width == 64) {
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_15>(x);
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_BCAST_31>(x);
+            return __shfl_sync(0xffffffff, x, 63, 64);
+        }
+        if constexpr (width == 32) {
+            return x + __shfl_xor_sync(0xffffffff, x, 16, 32);
+        }
+        return x;
+    } else
+#endif // defined(GGML_USE_HIP)
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x += __shfl_xor_sync(0xffffffff, x, offset, width);
+        }
+        return x;
+    }
+}
+
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(0xffffffff, x);
 #else
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<int, width>(x);
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 }
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<float, width>(x);
 }
 
 template<int width = WARP_SIZE>

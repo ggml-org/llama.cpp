@@ -343,3 +343,20 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
     return __builtin_amdgcn_perm(hi, lo, sel);
 #endif // __has_builtin(__builtin_amdgcn_is_invocable)
 }
+
+// DPP control codes.
+#define GGML_HIP_DPP_QUAD_PERM_1032 0x0b1 // quad_perm:[1,0,3,2]
+#define GGML_HIP_DPP_QUAD_PERM_2301 0x04e // quad_perm:[2,3,0,1]
+#define GGML_HIP_DPP_ROW_ROR_4      0x124 // row_ror:4
+#define GGML_HIP_DPP_ROW_ROR_8      0x128 // row_ror:8
+#define GGML_HIP_DPP_ROW_BCAST_15   0x142 // row_bcast:15, GCN/CDNA only
+#define GGML_HIP_DPP_ROW_BCAST_31   0x143 // row_bcast:31, GCN/CDNA only
+
+template <int dpp_ctrl, typename T>
+static __device__ __forceinline__ T ggml_hip_dpp_move(T x) {
+    static_assert(sizeof(T) == 4, "dpp moves 32 bit values");
+    union { T t; int i; } value;
+    value.t = x;
+    value.i = __builtin_amdgcn_mov_dpp(value.i, dpp_ctrl, 0xf, 0xf, true);
+    return value.t;
+}
