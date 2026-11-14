@@ -47,7 +47,7 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share) : unified(unified) {
+    const  layer_share_cb & share) : unified(unified), n_swa(swa_full ? 0 : hparams.n_swa) {
 
     // chain filters
     const layer_filter_cb filter_base = [&](int32_t il) {
@@ -111,6 +111,15 @@ void llama_kv_cache_iswa::clear(bool data) {
 }
 
 bool llama_kv_cache_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+    // the SWA cache reuses the cells of masked positions (swa_full == false), so after a cut at p0 the next token
+    // needs the positions [p0 - n_swa + 1, p0) to still be present - otherwise the removal cannot be satisfied
+    if (n_swa > 0 && seq_id >= 0 && p0 > 0 && (p1 < 0 || p1 > kv_swa->seq_pos_max(seq_id))) {
+        const llama_pos pos_min = kv_swa->seq_pos_min(seq_id);
+        if (pos_min >= 0 && pos_min > std::max<llama_pos>(0, p0 - (llama_pos) n_swa + 1)) {
+            return false;
+        }
+    }
+
     bool res = true;
 
     res = res & kv_base->seq_rm(seq_id, p0, p1);
