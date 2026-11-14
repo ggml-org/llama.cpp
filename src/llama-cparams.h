@@ -55,6 +55,8 @@ struct llama_cparams {
     bool pipeline_parallel;
     bool training;           // set by llama_opt_init()
 
+    uint32_t n_chunk;        // the most tokens of a chunk of a ubatch (llm_graph_context::build_chunked), 0 = no chunks
+
     size_t moe_cache_size;
     float  moe_cache_cpu_share;
 

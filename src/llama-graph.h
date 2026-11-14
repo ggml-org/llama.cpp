@@ -1031,6 +1031,19 @@ struct llm_graph_amax_src1 {
     ggml_tensor * scale_s; // scale to undo on the matmul result, or nullptr
 };
 
+// the tokens [t0, t0 + n) of a ubatch
+struct llm_graph_chunk {
+    int64_t t0;
+    int64_t n;
+};
+
+using llm_graph_chunk_fn = std::function<ggml_tensor * (size_t ic, const llm_graph_chunk & chunk)>;
+
+// the default of llama_cparams::n_chunk
+// a tensor that a graph builds with n_ctx elements per token, such as a score or a selection, then has at most
+// 1 GiB of F32 elements; an input of the graph keeps the size of the ubatch
+uint32_t llm_graph_n_chunk(const llama_cparams & cparams);
+
 struct llm_graph_context {
     const llama_model & model;
 
@@ -1086,6 +1099,9 @@ struct llm_graph_context {
     ggml_tensor * layer_inp_src;
     ggml_tensor * h_nextn_dev;
     ggml_tensor * h_nextn_src;
+
+    // the token chunks of the ubatch for build_chunked, see llama_cparams::n_chunk
+    const std::vector<llm_graph_chunk> chunks;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1243,6 +1259,21 @@ struct llm_graph_context {
              ggml_tensor * selected_experts_in = nullptr,
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
+
+    // token chunks: a block whose rows do not depend on each other can be built once per chunk of tokens,
+    // its tensors then have the size of a chunk and not of the ubatch
+
+    // fn builds the rows [ne0, chunk.n] of the tokens of chunk ic, the result is [ne0, n_tokens]
+    // with one chunk the result is the result of fn
+    // fn runs once per chunk: a tensor that fn names (cb) exists once per chunk, with the rows of that chunk
+    ggml_tensor * build_chunked(const llm_graph_chunk_fn & fn) const;
+
+    // one part of the result of build_chunked: the rows of chunk ic and of the next chunks, as many as one tensor
+    // with ggml_set can have; sets ic to the first chunk after the part
+    ggml_tensor * build_chunked_part(const llm_graph_chunk_fn & fn, size_t & ic) const;
+
+    // the tokens of chunk in dimension dim (1 or 2) of t: t if the chunk has all the tokens of the ubatch, nullptr if t is nullptr
+    ggml_tensor * build_chunk_view(ggml_tensor * t, int dim, const llm_graph_chunk & chunk) const;
 
     //
     // inputs

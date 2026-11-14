@@ -424,6 +424,17 @@ llama_context::llama_context(
         }
     }
 
+    {
+        cparams.n_chunk = llm_graph_n_chunk(cparams);
+
+        // for tests: the models of the tests are too small for chunks
+        const char * LLAMA_GRAPH_CHUNK = getenv("LLAMA_GRAPH_CHUNK");
+        if (LLAMA_GRAPH_CHUNK && cparams.n_chunk > 0) {
+            cparams.n_chunk = std::max(0, atoi(LLAMA_GRAPH_CHUNK));
+            LLAMA_LOG_INFO("%s: LLAMA_GRAPH_CHUNK set, token chunks of %u\n", __func__, cparams.n_chunk);
+        }
+    }
+
     LLAMA_LOG_INFO("%s: n_seq_max             = %u\n",   __func__, cparams.n_seq_max);
     LLAMA_LOG_INFO("%s: n_ctx                 = %u\n",   __func__, cparams.n_ctx);
     LLAMA_LOG_INFO("%s: n_ctx_seq             = %u\n",   __func__, cparams.n_ctx_seq);
@@ -2929,6 +2940,15 @@ uint32_t llama_context::graph_max_nodes() const {
         for (const auto & lora : model.loras) {
             res += lora->get_n_nodes();
         }
+    }
+
+    // the archs that use llm_graph_context::build_chunked: each token chunk of a layer has its own nodes
+    // 96 is above the most nodes that a chunk adds to a layer: test-llama-archs --chunk counts at most 93,
+    // for all the layers of deepseek41 with flash attention
+    if (model.arch == LLM_ARCH_QWEN4EXP &&
+            cparams.n_chunk > 0 && cparams.n_chunk < cparams.n_ubatch) {
+        const uint32_t n_chunks = (cparams.n_ubatch + cparams.n_chunk - 1)/cparams.n_chunk;
+        res += model.layers.size()*n_chunks*96;
     }
 
     // every sampler builds n_outputs_max_per_seq chains, see llm_graph_context::build_sampling
