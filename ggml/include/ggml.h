@@ -429,6 +429,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_TOKEN_MASK,
+
         GGML_OP_COUNT,
     };
 
@@ -1556,6 +1558,21 @@ extern "C" {
             struct ggml_tensor  * a,  // gradients of ggml_get_rows result
             struct ggml_tensor  * b,  // row indices
             struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
+
+    enum ggml_token_mask_mode {
+        GGML_TOKEN_MASK_ALL,
+        GGML_TOKEN_MASK_NONE,
+        GGML_TOKEN_MASK_ALLOW_IDS,
+        GGML_TOKEN_MASK_DENY_IDS,
+        GGML_TOKEN_MASK_BITSET,
+    };
+
+    GGML_API struct ggml_tensor * ggml_token_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * logits,
+            struct ggml_tensor  * candidate_ids,
+            struct ggml_tensor  * mask_payload,
+            struct ggml_tensor  * mask_desc);
 
     // a TD  [n_embd, ne1,    ne2,    ne3]
     // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3

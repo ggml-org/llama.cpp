@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-cpp.h"
 #include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
@@ -59,11 +60,12 @@ struct llama_context {
     void sched_reserve();
 
     void synchronize();
+    void synchronize_outputs();
 
     const llama_model   & get_model()   const;
     const llama_cparams & get_cparams() const;
 
-    ggml_backend_sched_t get_sched() const;
+    ggml_backend_sched_t get_sched() const { return sched.get(); }
 
     uint32_t n_ctx()     const;
     uint32_t n_ctx_seq() const;
@@ -83,6 +85,10 @@ struct llama_context {
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
+    bool apply_grammar(llama_sampler * grammar, int32_t idx, float * logits_out);
+    bool sample_retry(llama_sampler * grammar, llama_sampler * chain, int32_t idx, llama_token & token);
+    bool prepare_sampler(llama_seq_id seq_id, const llama_sampler_row * rows, size_t n_rows);
+    bool sampler_row_usable(int32_t idx);
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -367,6 +373,14 @@ private:
         // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
 
+        struct row_prefix {
+            int32_t idx;
+            llama_sampler_prefix_type type;
+            std::vector<llama_token> prefix;
+        };
+        std::map<llama_seq_id, std::vector<row_prefix>> pending;
+        std::vector<uint8_t> usable;
+
         buffer_view<float>       logits     = {nullptr, 0};
         buffer_view<llama_token> sampled    = {nullptr, 0};
         buffer_view<float>       probs      = {nullptr, 0};
@@ -381,6 +395,23 @@ private:
     };
 
     sampling_info sampling;
+
+    struct retained_logits {
+        ggml_context_ptr source_ctx;
+        ggml_context_ptr ctx;
+        ggml_backend_buffer_ptr buffer;
+        ggml_tensor * tensor = nullptr;
+        ggml_backend_t backend = nullptr;
+        bool valid = false;
+        bool host_loaded = false;
+        llama_sampler * sampler = nullptr;
+        bool committed = false;
+    };
+    std::vector<retained_logits> logits_retained;
+    void retain_logits(ggml_tensor * tensor, uint32_t row, uint32_t output_row);
+    void load_retained_logits(size_t row);
+    void synchronize_retained_logits();
+    bool retained_logits_pending = false;
 
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
@@ -406,6 +437,8 @@ private:
     sched_params sched_params_cur;
 
     bool sched_need_reserve = true;
+    std::map<llama_seq_id, std::vector<uint64_t>> sched_sampler_config;
+    bool outputs_ready = false;
 
     // whether the reserve graph has a logits tensor, set in sched_reserve()
     // true until then, because the first output_reserve() runs before any graph is reserved
@@ -433,6 +466,20 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+
+    struct sampler_retry_graph {
+        llama_sampler_ptr grammar;
+        llama_sampler_ptr chain;
+        std::vector<llama_sampler *> sources;
+        ggml_context_ptr ctx;
+        ggml_backend_buffer_ptr buffer;
+        ggml_cgraph * graph = nullptr;
+        ggml_tensor * logits = nullptr;
+        ggml_tensor * sampled = nullptr;
+        ggml_backend_t backend = nullptr;
+        llama_sampler * source_grammar = nullptr;
+    };
+    std::map<llama_sampler *, sampler_retry_graph> sampler_retries;
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;

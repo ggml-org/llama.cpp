@@ -18771,3 +18771,8 @@
 "CUDA0","CROSS_ENTROPY_LOSS_BACK","type=f32,ne=[30000,1,1,1]","support","1","yes","CUDA"
 "CUDA0","OPT_STEP_ADAMW","type=f32,ne=[10,5,4,3]","support","1","yes","CUDA"
 "CUDA0","OPT_STEP_SGD","type=f32,ne=[10,5,4,3]","support","1","yes","CUDA"
+"CUDA (source check)","TOKEN_MASK","source-check=ggml_backend_cuda_device_supports_op,logits=f32,candidate_ids=i32_or_identity,mode=0,row_padding=1","support","1","yes","CUDA"
+"CUDA (source check)","TOKEN_MASK","source-check=ggml_backend_cuda_device_supports_op,logits=f32,candidate_ids=i32_or_identity,mode=1,row_padding=1","support","1","yes","CUDA"
+"CUDA (source check)","TOKEN_MASK","source-check=ggml_backend_cuda_device_supports_op,logits=f32,candidate_ids=i32_or_identity,mode=2,row_padding=1","support","1","yes","CUDA"
+"CUDA (source check)","TOKEN_MASK","source-check=ggml_backend_cuda_device_supports_op,logits=f32,candidate_ids=i32_or_identity,mode=3,row_padding=1","support","1","yes","CUDA"
+"CUDA (source check)","TOKEN_MASK","source-check=ggml_backend_cuda_device_supports_op,logits=f32,candidate_ids=i32_or_identity,mode=4,row_padding=1","support","1","yes","CUDA"

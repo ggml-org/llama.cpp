@@ -387,7 +387,7 @@ The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enab
 ## HIP
 
 This provides GPU acceleration on HIP-supported AMD GPUs.
-Make sure to have ROCm installed.
+Make sure to have ROCm installed, including the hipBLAS, rocBLAS, hipCUB and rocPRIM development packages.
 You can download it from your Linux distro's package manager or from here: [ROCm Quick Start (Linux)](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html#rocm-install-quick).
 
 - Using `CMake` for Linux (assuming a gfx1030-compatible AMD GPU):

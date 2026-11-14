@@ -302,6 +302,7 @@ struct mock_config {
     int  set_n_calls;
     int  get_n_calls;
     int  cpy_n_calls;
+    int  sync_calls;
 };
 
 static mock_config g_mock = {};
@@ -599,13 +600,80 @@ static bool test_mock_grouping() {
     return true;
 }
 
+static bool test_scheduler_input_batch(bool with_hook, bool parallel) {
+    mock_config_reset(with_hook, false, false, true);
+    auto * cpu_device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!cpu_device) {
+        printf("scheduler input batch SKIPPED: no CPU backend\n");
+        return true;
+    }
+    ggml_backend_ptr cpu(ggml_backend_dev_init(cpu_device, nullptr));
+    ggml_backend_ptr dst(ggml_backend_dev_init(cpu_device, nullptr));
+    auto device = *ggml_backend_get_device(dst.get());
+    device.iface.get_buffer_type = [](ggml_backend_dev_t) { return mock_buft(); };
+    device.iface.supports_buft = [](ggml_backend_dev_t, ggml_backend_buffer_type_t buft) { return buft == mock_buft(); };
+    dst->device = &device;
+    dst->iface.synchronize = [](ggml_backend_t) { ++g_mock.sync_calls; };
+    if (parallel) {
+        device.iface.event_new = [](ggml_backend_dev_t dev) { return new ggml_backend_event {dev, nullptr}; };
+        device.iface.event_free = [](ggml_backend_dev_t, ggml_backend_event_t event) { delete event; };
+        device.iface.event_synchronize = [](ggml_backend_dev_t, ggml_backend_event_t) { ++g_mock.sync_calls; };
+        dst->iface.event_record = [](ggml_backend_t, ggml_backend_event_t) {};
+        dst->iface.event_wait = [](ggml_backend_t, ggml_backend_event_t) {};
+    }
+    ggml_backend_t backends[] = {dst.get(), cpu.get()};
+    ggml_backend_buffer_type_t bufts[] = {mock_buft(), ggml_backend_cpu_buffer_type()};
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, bufts, 2, 128, parallel, true));
+    ggml_context_ptr ctx(ggml_init({16*ggml_tensor_overhead() + ggml_graph_overhead_custom(128, false), nullptr, true}));
+    std::vector<ggml_tensor *> inputs;
+    auto buffer = alloc_tensors(ctx.get(), ggml_backend_cpu_buffer_type(), {4, 4, 4}, inputs);
+    GGML_ASSERT(buffer);
+    for (auto * input : inputs) {
+        ggml_set_input(input);
+    }
+    auto * sum = ggml_add(ctx.get(), ggml_add(ctx.get(), inputs[0], inputs[1]), inputs[2]);
+    ggml_set_output(sum);
+    auto * graph = ggml_new_graph_custom(ctx.get(), 128, false);
+    ggml_build_forward_expand(graph, sum);
+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
+        ggml_backend_sched_set_tensor_backend(sched.get(), ggml_graph_node(graph, i), dst.get());
+    }
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(sched.get(), graph));
+    for (int run = 0; run < 3; ++run) {
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            const float values[] = {float(run + i), float(run + i), float(run + i), float(run + i)};
+            ggml_backend_tensor_set(inputs[i], values, 0, sizeof(values));
+        }
+        g_mock.set_n_calls = 0;
+        g_mock.sync_calls = 0;
+        GGML_ASSERT(ggml_backend_sched_graph_compute_async(sched.get(), graph) == GGML_STATUS_SUCCESS);
+        GGML_ASSERT(g_mock.sync_calls == 1);
+        GGML_ASSERT(g_mock.set_n_calls == (with_hook ? 1 : 0));
+        for (auto * input : inputs) {
+            ggml_backend_tensor_memset(input, 0, 0, ggml_nbytes(input));
+        }
+        float result[4];
+        ggml_backend_tensor_get(sum, result, 0, sizeof(result));
+        for (float value : result) {
+            GGML_ASSERT(value == 3*run + 3);
+        }
+    }
+    ggml_backend_sched_synchronize(sched.get());
+    printf("scheduler input batch hook=%d parallel=%d PASSED\n", with_hook, parallel);
+    return true;
+}
+
 static bool test_mock() {
     return
         test_mock_set_get_n(true)  &&
         test_mock_set_get_n(false) &&
         test_mock_copy_n(true)     &&
         test_mock_copy_n(false)    &&
-        test_mock_grouping();
+        test_mock_grouping()      &&
+        test_scheduler_input_batch(true, false) &&
+        test_scheduler_input_batch(false, false) &&
+        test_scheduler_input_batch(true, true) &&
+        test_scheduler_input_batch(false, true);
 }
 
 int main() {

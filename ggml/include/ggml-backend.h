@@ -387,6 +387,13 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Set a one-shot host callback for the next graph compute: the nodes before `node` in its split are submitted
+    // asynchronously, then the callback runs on the calling thread, then `node` and the rest of the graph are submitted.
+    // Lets the host prepare inputs that are first read by `node` while the device computes the nodes before it.
+    // If `node` is not in the graph, the callback runs before the first split.
+    typedef void (*ggml_backend_sched_barrier_callback)(void * user_data);
+    GGML_API void                 ggml_backend_sched_set_barrier(ggml_backend_sched_t sched, struct ggml_tensor * node, ggml_backend_sched_barrier_callback callback, void * user_data);
+
     // Set a callback to be called when the inputs weights of a split are being copied
     GGML_API void                 ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
 

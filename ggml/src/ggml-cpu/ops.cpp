@@ -2,6 +2,7 @@
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-token-mask.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -5228,6 +5229,32 @@ void ggml_compute_forward_cont(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
     ggml_compute_forward_dup(params, dst);
+}
+
+void ggml_compute_forward_token_mask(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * logits = dst->src[0];
+    const ggml_tensor * ids     = dst->src[1];
+    const ggml_tensor * payload = dst->src[2];
+    const ggml_tensor * desc    = dst->src[3];
+    GGML_ASSERT(ggml_token_mask_valid_layout(logits, ids, payload, desc));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 && ggml_are_same_shape(logits, dst) && ggml_is_contiguous(dst));
+    const int32_t * data = (const int32_t *) payload->data;
+
+    for (int64_t row = params->ith; row < logits->ne[1]; row += params->nth) {
+        const int32_t * d = (const int32_t *) ((const char *) desc->data + row*desc->nb[1]);
+        GGML_ASSERT(ggml_token_mask_valid_desc(d, payload->ne[0], logits->ne[0], ids == nullptr));
+        GGML_ASSERT(ggml_token_mask_valid_payload(d, data));
+    }
+    ggml_barrier(params->threadpool);
+
+    const int64_t n = ggml_nelements(logits);
+    for (int64_t i = params->ith; i < n; i += params->nth) {
+        const int64_t row = i/logits->ne[0], col = i % logits->ne[0];
+        const int32_t * d = (const int32_t *) ((const char *) desc->data + row*desc->nb[1]);
+        const int32_t id = ids ? ((const int32_t *) ((const char *) ids->data + row*ids->nb[1]))[col] : (int32_t) col;
+        const float * src = (const float *) ((const char *) logits->data + row*logits->nb[1]);
+        ((float *) dst->data)[i] = ggml_token_mask_allowed(d, data, id) ? src[col] : -INFINITY;
+    }
 }
 
 // ggml_compute_forward_get_rows

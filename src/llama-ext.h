@@ -12,6 +12,29 @@
 #include <string>
 #include <vector>
 
+enum llama_sampler_prefix_type {
+    LLAMA_SAMPLER_PREFIX_UNSPECIFIED = 0,
+    LLAMA_SAMPLER_PREFIX_COMMITTED,
+    LLAMA_SAMPLER_PREFIX_LINEAR,
+    LLAMA_SAMPLER_PREFIX_TEACHER_FORCED,
+    LLAMA_SAMPLER_PREFIX_TREE,
+};
+
+struct llama_sampler_row {
+    int32_t idx; // index in the next decode batch, not the compact output index
+    enum llama_sampler_prefix_type type;
+    const llama_token * prefix; // tokens after committed history, before this row's prediction
+    size_t n_prefix;
+};
+
+LLAMA_API bool llama_sampler_prepare(struct llama_context * ctx, llama_seq_id seq_id, const struct llama_sampler_row * rows, size_t n_rows);
+LLAMA_API bool llama_sampler_row_usable(struct llama_context * ctx, int32_t idx);
+
+LLAMA_API bool llama_sampler_grammar_prepare_rows(struct llama_sampler * grammar, const struct llama_sampler_row * rows, size_t n_rows, bool mask);
+LLAMA_API bool llama_sampler_sample_retry(struct llama_context * ctx, struct llama_sampler * grammar, struct llama_sampler * chain, int32_t idx, llama_token * token);
+
+LLAMA_API void llama_sampler_backend_replay(struct llama_sampler * smpl, bool retry);
+
 //
 // llama architecture queries
 //

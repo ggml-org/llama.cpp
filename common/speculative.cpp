@@ -59,6 +59,7 @@ static void spec_retune(
     cur.seed = seed;
 
     common_params_sampling sparams;
+    sparams.backend_sampling_candidates = true;
     sparams.no_perf  = false;
     sparams.top_k    = 10;
     sparams.temp     = cur.temp;
@@ -275,6 +276,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         smpls.resize(n_seq);
         for (auto & smpl : smpls) {
             common_params_sampling params;
+            params.backend_sampling_candidates = true;
             params.no_perf = false;
             params.top_k = 10;
             params.samplers.assign(1, COMMON_SAMPLER_TYPE_TOP_K);
@@ -576,6 +578,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         smpls.resize(n_seq);
         for (auto & s : smpls) {
             common_params_sampling sparams;
+            sparams.backend_sampling_candidates = true;
             sparams.no_perf  = false;
             sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
@@ -1092,6 +1095,7 @@ protected:
         smpls.resize(n_seq);
         for (auto & s : smpls) {
             common_params_sampling sparams;
+            sparams.backend_sampling_candidates = true;
             sparams.no_perf  = false;
             sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
@@ -1863,6 +1867,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         smpls.resize(n_seq);
         for (auto & s : smpls) {
             common_params_sampling sparams;
+            sparams.backend_sampling_candidates = true;
             sparams.no_perf  = false;
             sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
