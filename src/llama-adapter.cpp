@@ -220,6 +220,14 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
 
         adapter.alpha = get_kv_f32(llm_kv(LLM_KV_ADAPTER_LORA_ALPHA));
 
+        const int kid_rslora = gguf_find_key(ctx_gguf.get(), llm_kv(LLM_KV_ADAPTER_LORA_USE_RSLORA).c_str());
+        if (kid_rslora >= 0) {
+            if (gguf_get_kv_type(ctx_gguf.get(), kid_rslora) != GGUF_TYPE_BOOL) {
+                throw std::runtime_error("invalid gguf type for " + llm_kv(LLM_KV_ADAPTER_LORA_USE_RSLORA));
+            }
+            adapter.use_rslora = gguf_get_val_bool(ctx_gguf.get(), kid_rslora);
+        }
+
         // parse alora invocation sequence vector
         const auto & key = llm_kv(LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS);
         const int kid = gguf_find_key(ctx_gguf.get(), key.c_str());

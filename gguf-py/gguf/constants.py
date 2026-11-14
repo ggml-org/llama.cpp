@@ -429,6 +429,7 @@ class Keys:
     class Adapter:
         TYPE                    = "adapter.type"
         LORA_ALPHA              = "adapter.lora.alpha"
+        LORA_USE_RSLORA         = "adapter.lora.use_rslora"
         LORA_TASK_NAME          = "adapter.lora.task_name"
         LORA_PROMPT_PREFIX      = "adapter.lora.prompt_prefix"
         ALORA_INVOCATION_TOKENS = "adapter.alora.invocation_tokens"

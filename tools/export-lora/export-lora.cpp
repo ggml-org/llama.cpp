@@ -6,6 +6,7 @@
 #include "common.h"
 
 #include <clocale>
+#include <cmath>
 #include <map>
 #include <vector>
 #include <string>
@@ -65,6 +66,7 @@ struct file_input {
     std::ifstream f_in;
     std::map<std::string, ggml_tensor *> tensors;
     float alpha;
+    bool use_rslora = false;
     float scale;
 
     file_input(std::string & fname, float scale): f_in(fname, std::ios::binary), scale(scale) {
@@ -74,6 +76,13 @@ struct file_input {
 
         ctx_gguf = load_gguf(fname, &ctx_meta);
         alpha = get_kv_f32(ctx_gguf, "adapter.lora.alpha");
+        const int kid_rslora = gguf_find_key(ctx_gguf, "adapter.lora.use_rslora");
+        if (kid_rslora >= 0) {
+            if (gguf_get_kv_type(ctx_gguf, kid_rslora) != GGUF_TYPE_BOOL) {
+                throw std::runtime_error("invalid gguf type for adapter.lora.use_rslora");
+            }
+            use_rslora = gguf_get_val_bool(ctx_gguf, kid_rslora);
+        }
         printf("%s: loaded gguf from %s\n", __func__, fname.c_str());
 
         for (ggml_tensor * cur = ggml_get_first_tensor(ctx_meta); cur; cur = ggml_get_next_tensor(ctx_meta, cur)) {
@@ -366,7 +375,7 @@ struct lora_merge_ctx {
                 // scale
                 const float alpha = adapters[i]->alpha;
                 const float rank  = (float) inp_b[i]->ne[0];
-                const float scale = alpha ? adapters[i]->scale * alpha / rank : adapters[i]->scale;
+                const float scale = alpha ? adapters[i]->scale * alpha / (adapters[i]->use_rslora ? std::sqrt(rank) : rank) : adapters[i]->scale;
                 delta = ggml_scale(ctx0, delta, scale);
                 cur = ggml_add(ctx0, delta, cur);
                 printf("%s :   + merging from adapter[%zu] type=%s\n", __func__, i, ggml_type_name(inp_a[i]->type));

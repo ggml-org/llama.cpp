@@ -429,6 +429,8 @@ if __name__ == '__main__':
             def set_gguf_parameters(self):
                 logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                if lparams.get("use_rslora", False):
+                    self.gguf_writer.add_bool(gguf.Keys.Adapter.LORA_USE_RSLORA, True)
                 alora_invocation_tokens = lparams.get("alora_invocation_tokens")
                 invocation_string = lparams.get("invocation_string")
                 if invocation_string and not alora_invocation_tokens:
