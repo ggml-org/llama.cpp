@@ -698,6 +698,32 @@ def test_anthropic_stop_sequences():
     assert res.body["type"] == "message"
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_anthropic_stop_reason_stop_sequence(stream):
+    server.start()
+
+    data = {
+        "model": "test",
+        "max_tokens": 100,
+        "temperature": 0,
+        "stop_sequences": ["."],
+        "messages": [
+            {"role": "user", "content": "Tell me a story"}
+        ],
+    }
+    if stream:
+        data["stream"] = True
+        events = list(server.make_stream_request("POST", "/v1/messages", data=data))
+        result = next(e for e in events if e["type"] == "message_delta")["delta"]
+    else:
+        res = server.make_request("POST", "/v1/messages", data=data)
+        assert res.status_code == 200
+        result = res.body
+
+    assert result["stop_sequence"] == "."
+    assert result["stop_reason"] == "stop_sequence"
+
+
 def test_anthropic_temperature():
     """Test temperature parameter"""
     server.start()
