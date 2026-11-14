@@ -1,18 +1,20 @@
-#include "chat-tts-norm.h"
-#include "jinja/caps.h"
-#include "jinja/lexer.h"
-#include "jinja/parser.h"
-#include "jinja/runtime.h"
-#include "jinja/utils.h"
-#include "json.h"
-#include "subproc.h"
-#include "testing.h"
-
-#include <cstdlib>
-#include <future>
+#include <string>
 #include <iostream>
 #include <random>
-#include <string>
+#include <cstdlib>
+#include <future>
+
+#include "chat-tts-norm.h"
+#include "json.h"
+#include "subproc.h"
+
+#include "jinja/runtime.h"
+#include "jinja/parser.h"
+#include "jinja/lexer.h"
+#include "jinja/utils.h"
+#include "jinja/caps.h"
+
+#include "testing.h"
 
 using json = common_json;
 
@@ -93,10 +95,8 @@ int main(int argc, char *argv[]) {
 
 static void test_shared_render(testing & t) {
     t.test("shared AST with stats and input marking", [](testing & t) {
-        const std::string source =
-            "{% macro emit(x) %}{{ x }}{% endmacro %}{% for i in range(2) %}{{ emit(prefix) }}{{ i }}{% endfor %}{% "
-            "filter upper %}{{ body }}{% endfilter %}|{{ 'literal' is string }}|{{ obj.value }}";
-        const auto                     program = jinja::parse_from_tokens(jinja::lexer().tokenize(source));
+        const std::string source = "{% macro emit(x) %}{{ x }}{% endmacro %}{% for i in range(2) %}{{ emit(prefix) }}{{ i }}{% endfor %}{% filter upper %}{{ body }}{% endfilter %}|{{ 'literal' is string }}|{{ obj.value }}";
+        const auto program = jinja::parse_from_tokens(jinja::lexer().tokenize(source));
         std::vector<std::future<bool>> workers;
         for (int worker = 0; worker < 8; ++worker) {
             workers.push_back(std::async(std::launch::async, [&, worker] {

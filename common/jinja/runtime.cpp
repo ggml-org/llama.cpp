@@ -89,21 +89,22 @@ value statement::execute(context & ctx) const {
 }
 
 value identifier::execute_impl(context & ctx) const {
-    auto         it       = ctx.find_val(val);
-    const auto & builtins = global_builtins();
+    auto it = ctx.find_val(key);
     if (it && !it->is_undefined()) {
         if (ctx.is_get_stats) {
             value_t::stats_t::mark_used(it);
         }
         JJ_DEBUG("Identifier '%s' found, type = %s", val.c_str(), it->type().c_str());
         return it;
-    } else if (builtins.find(val) != builtins.end()) {
-        JJ_DEBUG("Identifier '%s' found in builtins", val.c_str());
-        return mk_val<value_func>(val, builtins.at(val));
-    } else {
-        JJ_DEBUG("Identifier '%s' not found, returning undefined", val.c_str());
-        return mk_val<value_undefined>(val);
     }
+    const auto & builtins = global_builtins();
+    auto builtin = builtins.find(val);
+    if (builtin != builtins.end()) {
+        JJ_DEBUG("Identifier '%s' found in builtins", val.c_str());
+        return mk_val<value_func>(val, builtin->second);
+    }
+    JJ_DEBUG("Identifier '%s' not found, returning undefined", val.c_str());
+    return mk_val<value_undefined>(val);
 }
 
 value object_literal::execute_impl(context & ctx) const {
@@ -693,7 +694,7 @@ value set_statement::execute_impl(context & ctx) const {
         }
         auto obj_ptr = cast_val<value_object>(object);
         JJ_DEBUG("Setting object property '%s' with value type %s", prop_name.c_str(), rhs->type().c_str());
-        obj_ptr->insert(ctx.is_get_stats ? mk_val<value_string>(prop_name) : member->static_property, rhs);
+        obj_ptr->insert(cached_val<value_string>(ctx, member->static_property), rhs);
 
     } else {
         throw std::runtime_error("Invalid LHS inside assignment expression: " + assignee->type());
@@ -821,9 +822,7 @@ member_expression::member_expression(statement_ptr && object, statement_ptr && p
     chk_type<expression>(this->property);
     if (!computed) {
         if (const auto * id = cast_stmt<identifier>(this->property)) {
-            static_property = mk_val<value_string>(id->val);
-        } else if (const auto * index = cast_stmt<integer_literal>(this->property)) {
-            static_property = index->constant;
+            static_property = id->key;
         }
     }
 }
@@ -839,17 +838,9 @@ value member_expression::execute_impl(context & ctx) const {
         if (is_stmt<slice_expression>(this->property)) {
             int64_t arr_size = 0;
             if (is_val<value_array>(object)) {
-                auto count = object->as_array().size();
-                if (count > INT64_MAX) {
-                    throw std::length_error("array length exceeds int64");
-                }
-                arr_size = static_cast<int64_t>(count);
+                arr_size = static_cast<int64_t>(object->as_array().size());
             } else if (is_val<value_string>(object)) {
-                auto count = cast_val<value_string>(object)->val_str.length();
-                if (count > INT64_MAX) {
-                    throw std::length_error("string length exceeds int64");
-                }
-                arr_size = static_cast<int64_t>(count);
+                arr_size = static_cast<int64_t>(cast_val<value_string>(object)->val_str.length());
             }
             auto s = cast_stmt<slice_expression>(this->property);
             value step_val  = s->step_expr  ? s->step_expr->execute(ctx)  : mk_val<value_int>(1);
@@ -872,7 +863,7 @@ value member_expression::execute_impl(context & ctx) const {
         }
     } else if (is_stmt<integer_literal>(this->property)) {
         // syntax: obj.index
-        property = ctx.is_get_stats ? mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val) : static_property;
+        property = this->property->execute(ctx);
         if (property->as_int() < 0) {
             throw std::runtime_error("Static member property cannot be negative");
         }
@@ -881,7 +872,7 @@ value member_expression::execute_impl(context & ctx) const {
         if (!is_stmt<identifier>(this->property)) {
             throw std::runtime_error("Static member property must be an identifier");
         }
-        property = ctx.is_get_stats ? mk_val<value_string>(cast_stmt<identifier>(this->property)->val) : static_property;
+        property = cached_val<value_string>(ctx, static_property);
         const auto & prop = cast_stmt<identifier>(this->property)->val;
         JJ_DEBUG("Member expression, object type %s, static property '%s'", object->type().c_str(), prop.c_str());
 
@@ -916,8 +907,7 @@ value member_expression::execute_impl(context & ctx) const {
         if (!val || is_val<value_undefined>(val)) {
             val = try_builtin_func(ctx, property->as_string().str(), object, true);
         }
-        JJ_DEBUG("Accessed property '%s' value, got type: %s", property->as_string().str().c_str(),
-                 val ? val->type().c_str() : "Undefined");
+        JJ_DEBUG("Accessed property '%s' value, got type: %s", property->as_string().str().c_str(), val->type().c_str());
 
     } else if (is_val<value_array>(object) || is_val<value_string>(object)) {
         if (is_val<value_int>(property) || is_val<value_bool>(property)) {

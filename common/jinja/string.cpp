@@ -60,16 +60,6 @@ bool string::empty() const {
     return true;
 }
 
-bool string::equals(std::string_view other) const {
-    for (const auto & part : parts) {
-        if (other.substr(0, part.val.size()) != part.val) {
-            return false;
-        }
-        other.remove_prefix(part.val.size());
-    }
-    return other.empty();
-}
-
 std::optional<char> string::byte_at(size_t index) const {
     for (const auto & part : parts) {
         if (index < part.val.size()) {
@@ -93,7 +83,7 @@ bool string::equals(const string & other) const {
                 return false;
             }
             const auto & right = other.parts[part].val;
-            const auto   count = std::min(text.size(), right.size() - offset);
+            const auto count = std::min(text.size(), right.size() - offset);
             if (text.substr(0, count) != std::string_view(right).substr(offset, count)) {
                 return false;
             }

@@ -127,7 +127,7 @@ struct value_t {
         // ops can be builtin calls or operators: "array_access", "object_access"
         std::set<std::string> ops;
         // utility to recursively mark value and its children as used
-        static void           mark_used(const value & val, bool deep = false, int depth = 0);
+        static void mark_used(const value & val, bool deep = false, int depth = 0);
     } stats;
 
     explicit value_t(value_kind kind) : kind(kind) {}
@@ -235,9 +235,8 @@ struct value_equality {
 
 struct value_int_t : public value_t {
     static constexpr auto kind_id = value_kind::INTEGER;
-    int64_t               val_int;
-    double                val_flt;
-
+    int64_t val_int;
+    double val_flt;
     value_int_t(int64_t v) : value_t(kind_id) {
         val_int = v;
         val_flt = static_cast<double>(v);
@@ -273,9 +272,8 @@ using value_int = std::shared_ptr<value_int_t>;
 
 struct value_float_t : public value_t {
     static constexpr auto kind_id = value_kind::REAL;
-    int64_t               val_int;
-    double                val_flt;
-
+    int64_t val_int;
+    double val_flt;
     value_float_t(double v) : value_t(kind_id) {
         val_flt = v;
         val_int = std::isfinite(v) ? static_cast<int64_t>(v) : 0;
@@ -317,14 +315,10 @@ using value_float = std::shared_ptr<value_float_t>;
 
 struct value_string_t : public value_t {
     static constexpr auto kind_id = value_kind::STRING;
-    string                val_str;
-
+    string val_str;
     value_string_t() : value_t(kind_id) {}
-
     value_string_t(const std::string & v) : value_t(kind_id), val_str(v) {}
-
     value_string_t(const string & v) : value_t(kind_id), val_str(v) {}
-
     value_string_t(string && v) : value_t(kind_id), val_str(std::move(v)) {}
     virtual std::string type() const override { return "String"; }
     virtual string as_string() const override { return val_str; }
@@ -335,8 +329,9 @@ struct value_string_t : public value_t {
         }
         return ss.str();
     }
-
-    virtual bool as_bool() const override { return !val_str.empty(); }
+    virtual bool as_bool() const override {
+        return !val_str.empty();
+    }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override { return true; }
     virtual hasher unique_hash() const noexcept override {
@@ -359,27 +354,23 @@ using value_string = std::shared_ptr<value_string_t>;
 
 struct value_bool_t : public value_t {
     static constexpr auto kind_id = value_kind::BOOLEAN;
-    int64_t               val_int;
-    double                val_flt;
-
+    int64_t val_int;
+    double val_flt;
     value_bool_t(bool v) : value_t(kind_id) {
         val_int = static_cast<int64_t>(v);
         val_flt = static_cast<double>(v);
     }
     virtual std::string type() const override { return "Boolean"; }
-
     virtual int64_t as_int() const override { return val_int; }
-
     virtual double as_float() const override { return val_flt; }
     virtual bool as_bool() const override { return val_int; }
     virtual string as_string() const override { return std::string(val_int ? "True" : "False"); }
     virtual const func_builtins & get_builtins() const override;
-
     virtual bool is_numeric() const override { return true; }
-
     virtual bool is_hashable() const override { return true; }
-
-    virtual hasher unique_hash() const noexcept override { return value_int_t(val_int).unique_hash(); }
+    virtual hasher unique_hash() const noexcept override {
+        return value_int_t(val_int).unique_hash();
+    }
 protected:
     virtual bool equivalent(const value_t & other) const override {
         return other.is_numeric() && val_int == other.as_int() && val_flt == other.as_float();
@@ -499,7 +490,7 @@ protected:
     explicit value_array_t(value_kind kind) : value_t(kind) {}
 
     virtual bool equivalent(const value_t & other) const override {
-        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.as_array().begin(), other.as_array().end(), value_equivalence());
+        return kind == other.kind && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.as_array().begin(), other.as_array().end(), value_equivalence());
     }
 };
 using value_array = std::shared_ptr<value_array_t>;
@@ -507,13 +498,15 @@ using value_array = std::shared_ptr<value_array_t>;
 
 struct value_tuple_t : public value_array_t {
     static constexpr auto kind_id = value_kind::TUPLE;
-
-    value_tuple_t(value & v) : value_array_t(kind_id) { val_arr = v->as_array(); }
-
-    value_tuple_t(std::vector<value> && arr) : value_array_t(kind_id) { val_arr = std::move(arr); }
-
-    value_tuple_t(const std::vector<value> & arr) : value_array_t(kind_id) { val_arr = arr; }
-
+    value_tuple_t(value & v) : value_array_t(kind_id) {
+        val_arr = v->as_array();
+    }
+    value_tuple_t(std::vector<value> && arr) : value_array_t(kind_id) {
+        val_arr = std::move(arr);
+    }
+    value_tuple_t(const std::vector<value> & arr) : value_array_t(kind_id) {
+        val_arr = arr;
+    }
     value_tuple_t(const std::pair<value, value> & pair) : value_array_t(kind_id) {
         val_arr.push_back(pair.first);
         val_arr.push_back(pair.second);
@@ -525,27 +518,22 @@ using value_tuple = std::shared_ptr<value_tuple_t>;
 
 
 struct value_object_t : public value_t {
-    static constexpr auto                kind_id = value_kind::OBJECT;
+    static constexpr auto kind_id = value_kind::OBJECT;
     std::vector<std::pair<value, value>> val_obj;
-
-    std::unordered_map<value, value, value_hasher, value_equivalence> unordered;
-    bool has_builtins = true;  // context and loop objects do not have builtins
-
+    std::unordered_map<value, size_t, value_hasher, value_equivalence> key_index; // key -> index in val_obj
+    bool has_builtins = true; // context and loop objects do not have builtins
     value_object_t() : value_t(kind_id) {}
-
     value_object_t(value & v) : value_t(kind_id) {
         val_obj = v->as_ordered_object();
-        for (const auto & pair : val_obj) {
-            unordered[pair.first] = pair.second;
+        for (size_t i = 0; i < val_obj.size(); i++) {
+            key_index[val_obj[i].first] = i;
         }
     }
-
     value_object_t(const std::map<value, value> & obj) : value_t(kind_id) {
         for (const auto & pair : obj) {
             insert(pair.first, pair.second);
         }
     }
-
     value_object_t(const std::vector<std::pair<value, value>> & obj) : value_t(kind_id) {
         for (const auto & pair : obj) {
             insert(pair.first, pair.second);
@@ -569,15 +557,14 @@ struct value_object_t : public value_t {
         return ss.str();
     }
     virtual bool as_bool() const override {
-        return !unordered.empty();
+        return !val_obj.empty();
     }
     virtual bool has_key(const value & key) override {
         if (!key->is_immutable() || !key->is_hashable()) {
             throw std::runtime_error("Object key of unhashable type: " + key->type());
         }
-        return unordered.find(key) != unordered.end();
+        return key_index.find(key) != key_index.end();
     }
-
     virtual void insert(const value & key, const value & val) override {
         if (is_immutable()) {
             throw std::runtime_error("Attempting to modify immutable type");
@@ -585,32 +572,25 @@ struct value_object_t : public value_t {
         if (!key->is_immutable() || !key->is_hashable()) {
             throw std::runtime_error("Object key of unhashable type: " + key->type());
         }
-        const auto entry = unordered.try_emplace(key, val);
+        const auto entry = key_index.try_emplace(key, val_obj.size());
         if (entry.second) {
-            val_obj.push_back({ key, val });
+            val_obj.push_back({key, val});
         } else {
-            entry.first->second = val;
-            for (auto & pair : val_obj) {
-                if (*(pair.first) == *key) {
-                    pair.second = val;
-                    break;
-                }
-            }
+            val_obj[entry.first->second].second = val;
         }
     }
-
     virtual value & at(const value & key, value & default_val) override {
         if (!key->is_immutable() || !key->is_hashable()) {
             throw std::runtime_error("Object key of unhashable type: " + key->type());
         }
-        const auto found = unordered.find(key);
-        return found == unordered.end() ? default_val : found->second;
+        const auto found = key_index.find(key);
+        return found == key_index.end() ? default_val : val_obj[found->second].second;
     }
     virtual value & at(const value & key) override {
         if (!has_key(key)) {
             throw std::runtime_error("Key '" + key->as_string().str() + "' not found in value of type " + type());
         }
-        return unordered.at(key);
+        return val_obj[key_index.at(key)].second;
     }
     virtual value & at(const std::string & key, value & default_val) override {
         value key_val = mk_val<value_string>(key);
@@ -644,9 +624,7 @@ struct value_object_t : public value_t {
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return typeid(*this) == typeid(other) && is_hashable() && other.is_hashable() &&
-               std::equal(val_obj.begin(), val_obj.end(), other.as_ordered_object().begin(),
-                          other.as_ordered_object().end(), value_equivalence());
+        return kind == other.kind && is_hashable() && other.is_hashable() && std::equal(val_obj.begin(), val_obj.end(), other.as_ordered_object().begin(), other.as_ordered_object().end(), value_equivalence());
     }
 };
 using value_object = std::shared_ptr<value_object_t>;
@@ -657,9 +635,7 @@ using value_object = std::shared_ptr<value_object_t>;
 
 struct value_none_t : public value_t {
     static constexpr auto kind_id = value_kind::NONE;
-
     value_none_t() : value_t(kind_id) {}
-
     virtual std::string type() const override { return "None"; }
     virtual bool is_none() const override { return true; }
     virtual bool as_bool() const override { return false; }
@@ -672,16 +648,14 @@ struct value_none_t : public value_t {
     }
 protected:
     virtual bool equivalent(const value_t & other) const override {
-        return typeid(*this) == typeid(other);
+        return kind == other.kind;
     }
 };
 using value_none = std::shared_ptr<value_none_t>;
 
 struct value_undefined_t : public value_t {
     static constexpr auto kind_id = value_kind::UNDEFINED;
-
-    std::string hint;  // for debugging, to indicate where undefined came from
-
+    std::string hint; // for debugging, to indicate where undefined came from
     value_undefined_t(const std::string & h = "") : value_t(kind_id), hint(h) {}
     virtual std::string type() const override { return hint.empty() ? "Undefined" : "Undefined (hint: '" + hint + "')"; }
     virtual bool is_undefined() const override { return true; }
@@ -760,19 +734,13 @@ private:
 
 struct value_func_t : public value_t {
     static constexpr auto kind_id = value_kind::FUNCTION;
-    func_handler          val_func;
-
+    func_handler val_func;
     std::string name;
-    value       arg0;  // bound "this" argument, if any
-
+    value arg0; // bound "this" argument, if any
     value_func_t(const std::string & name, const func_handler & func) : value_t(kind_id), name(name) {
         val_func = func;
     }
-
-    value_func_t(const std::string & name, const func_handler & func, const value & arg_this) :
-        value_t(kind_id),
-        name(name),
-        arg0(arg_this) {
+    value_func_t(const std::string & name, const func_handler & func, const value & arg_this) : value_t(kind_id), name(name), arg0(arg_this) {
         val_func = func;
     }
     virtual value invoke(const func_args & args) const override {
@@ -797,12 +765,12 @@ protected:
         // Note: this is unused for now, we don't support function as object keys
         // compare function pointers
         // (val_func == other.val_func does not work as std::function::operator== is only used for nullptr check)
-        const auto target_this  = this->val_func.target<func_hptr>();
         if (kind != other.kind) {
             return false;
         }
+        const auto target_this  = this->val_func.target<func_hptr>();
         const auto target_other = static_cast<const value_func_t &>(other).val_func.target<func_hptr>();
-        return typeid(*this) == typeid(other) && target_this == target_other;
+        return target_this == target_other;
     }
 };
 using value_func = std::shared_ptr<value_func_t>;
@@ -810,10 +778,8 @@ using value_func = std::shared_ptr<value_func_t>;
 // special value for kwarg
 struct value_kwarg_t : public value_t {
     static constexpr auto kind_id = value_kind::KEYWORD;
-
     std::string key;
-    value       val;
-
+    value val;
     value_kwarg_t(const std::string & k, const value & v) : value_t(kind_id), key(k), val(v) {}
     virtual std::string type() const override { return "KwArg"; }
     virtual std::string as_repr() const override { return type(); }
@@ -828,7 +794,7 @@ struct value_kwarg_t : public value_t {
 protected:
     virtual bool equivalent(const value_t & other) const override {
         const value_kwarg_t & other_val = static_cast<const value_kwarg_t &>(other);
-        return typeid(*this) == typeid(other) && key == other_val.key && val == other_val.val;
+        return kind == other.kind && key == other_val.key && val == other_val.val;
     }
 };
 using value_kwarg = std::shared_ptr<value_kwarg_t>;
