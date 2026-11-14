@@ -629,14 +629,17 @@ class TestInkling2TextNames(unittest.TestCase):
     ))
 
     def convert(self, tensors):
-        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": 8, "layer_types": ["hybrid_sliding", "hybrid"]}
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)
-            (path / "config.json").write_text(json.dumps(hp))
-            save_file(tensors, path / "model.safetensors")
-            model = Inkling2Model(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf", hparams=hp)
-            model.prepare_tensors()
-            return {name: gguf.LazyNumpyTensor.to_eager(info.tensor) for name, info in model.gguf_writer.tensors[0].items()}
+            return self._convert(Path(directory), tensors)
+
+    def _convert(self, path, tensors):
+        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": 8, "layer_types": ["hybrid_sliding", "hybrid"]}
+        (path / "config.json").write_text(json.dumps(hp))
+        save_file(tensors, path / "model.safetensors")
+        model = Inkling2Model(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf", hparams=hp)
+        model.prepare_tensors()
+        # copy: the tensors are views of the mmapped checkpoint, which must be closed before the directory is removed
+        return {name: gguf.LazyNumpyTensor.to_eager(info.tensor).copy() for name, info in model.gguf_writer.tensors[0].items()}
 
     def test_checkpoint_and_transformers_names(self):
         checkpoint, transformers = {}, {}
@@ -702,15 +705,18 @@ class TestInkling2VisionConversion(unittest.TestCase):
             "num_attention_heads": 2, "mlp_ratio": 4.0, "posemb_grid_size": 3, "projection_hidden_dim": 12,
             "projector_bias": False, "layer_norm_eps": 1e-5, "temporal_patch_size": 2}}
 
+        def convert_in(path, tensors):
+            (path / "config.json").write_text(json.dumps(config))
+            save_file(tensors, path / "model.safetensors")
+            model = Inkling2VisionModel(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf", hparams=config)
+            model.set_gguf_parameters()
+            model.prepare_tensors()
+            # copy: the tensors are views of the mmapped checkpoint, which must be closed before the directory is removed
+            return {name: gguf.LazyNumpyTensor.to_eager(info.tensor).copy() for name, info in model.gguf_writer.tensors[0].items()}, model.gguf_writer.kv_data[0]
+
         def convert(tensors):
             with tempfile.TemporaryDirectory() as directory:
-                path = Path(directory)
-                (path / "config.json").write_text(json.dumps(config))
-                save_file(tensors, path / "model.safetensors")
-                model = Inkling2VisionModel(path, gguf.LlamaFileType.ALL_F32, path / "unused.gguf", hparams=config)
-                model.set_gguf_parameters()
-                model.prepare_tensors()
-                return {name: gguf.LazyNumpyTensor.to_eager(info.tensor) for name, info in model.gguf_writer.tensors[0].items()}, model.gguf_writer.kv_data[0]
+                return convert_in(Path(directory), tensors)
 
         actual, kv = convert(tensors)
         self.assertEqual(len(actual), len(shapes))
