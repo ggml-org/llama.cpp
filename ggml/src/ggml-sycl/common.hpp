@@ -322,6 +322,7 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 struct optimize_feature {
     bool reorder=false;
     bool onednn_optimized_gemm=false;
+    bool onednn_q4_0_u4_gemm=false;
 };
 
 struct sycl_device_info {
@@ -821,6 +822,11 @@ bool gpu_has_xmx(sycl::device &dev);
 // reference kernels, which are much slower than the SYCL kernels here.
 inline bool ggml_sycl_dnnl_has_optimized_gemm(int device) {
     return ggml_sycl_info().devices[device].opt_feature.onednn_optimized_gemm;
+}
+
+// oneDNN can have a fast f16 matmul but no fast u4 matmul for a device (e.g. iGPUs), so u4 is probed separately
+inline bool ggml_sycl_dnnl_has_q4_0_u4_gemm(int device) {
+    return ggml_sycl_info().devices[device].opt_feature.onednn_q4_0_u4_gemm;
 }
 #endif
 
