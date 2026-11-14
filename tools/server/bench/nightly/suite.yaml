@@ -1,0 +1,145 @@
+# Nightly llama.cpp perf benchmark on DGX Spark.
+# Engine on M1-M4; the other LLM suites on M2 and M3; the decision suite on M5.
+
+build:
+  repo: ggml-org/llama.cpp
+  # shell patterns: the release job moves to new CUDA minor versions (13.4 -> 13.5) without notice
+  assets:
+    - llama-{tag}-bin-ubuntu-cuda-*-arm64.tar.gz
+    - cudart-llama-{tag}-bin-ubuntu-cuda-*-arm64.tar.gz
+  keep: 3
+
+server:
+  port: 18080
+  health_timeout_s: 600
+  # idle wait before every llama-server, llama-bench and llama-perplexity start, the first one included
+  cooldown_s: 60
+  # every llama-server except decision's; -ub 2048 matches llama-bench and vLLM's --max-num-batched-tokens 2048 (weekly.yaml)
+  args: [-ngl, "999", -fa, "on", -ub, "2048", --backend-sampling, --jinja, --metrics, --alias, bench]
+
+models:
+  M3:
+    repo: unsloth/Qwen3.8-27B-GGUF
+    revision: 4ca720788d1e01f1bff70c033e0d0028fd02e502
+    file: Qwen3.8-27B-UD-Q4_K_M.gguf
+    tokenizer:
+      repo: Qwen/Qwen3.8-27B
+      revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+    extras:
+      dflash:
+        repo: incoai/Qwen3.8-27B-DFlash2-GGUF
+        revision: 144eb06583b4fb0b6e54bc814b16a206a240f4d2
+        file: Qwen3.8-27B-DFlash2-Q4_K_M.gguf
+    # flags from the RTX Spark recipes; {name} is replaced by the path of extras.<name>
+    spec:
+      mtp: [--spec-type, draft-mtp, --spec-draft-n-max, "3", --spec-draft-backend-sampling]
+      dflash: [-md, "{dflash}", --spec-type, draft-dflash, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
+    suites: [engine, speedbench, serving, agentic, quality]
+
+  M5:
+    repo: ggml-org/Laya-GGUF
+    revision: 845f314dd047fc2444a5289a4d50c1e1d59e27e1
+    file: Laya-Q8_0.gguf
+    suites: [decision]
+
+  M1:
+    repo: unsloth/Qwen3.6-35B-A3B-MTP-GGUF
+    revision: 5bc3e238d916f48a861bac2f8a1990a0e9b7e98d
+    file: Qwen3.6-35B-A3B-UD-Q4_K_M.gguf
+    suites: [engine]
+
+  M2:
+    repo: unsloth/Qwen3.8-Flash-Next-GGUF
+    revision: 766911a6b7369840a91dbcd95f9f997acaab6cd6
+    # split GGUF: llama.cpp loads the first shard and finds the others next to it
+    file: UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf
+    tokenizer:
+      repo: Qwen/Qwen3.8-Flash-Next
+      revision: de4b8e4d43b917e7706784d8bb445c9af86a3540
+    extras:
+      shard2:
+        repo: unsloth/Qwen3.8-Flash-Next-GGUF
+        revision: 766911a6b7369840a91dbcd95f9f997acaab6cd6
+        file: UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf
+      shard3:
+        repo: unsloth/Qwen3.8-Flash-Next-GGUF
+        revision: 766911a6b7369840a91dbcd95f9f997acaab6cd6
+        file: UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf
+      mtp:
+        repo: ggml-org/Qwen3.8-Flash-Next-GGUF
+        revision: 91fb00353e766eb43944ed223665ea4fb87dad47
+        file: mtp-Qwen3.8-Flash-Next-Q8_0.gguf
+      dflash:
+        repo: ggml-org/Qwen3.8-Flash-Next-GGUF
+        revision: 91fb00353e766eb43944ed223665ea4fb87dad47
+        file: dflash-Qwen3.8-Flash-Next-Q8_0.gguf
+    # MTP comes as a separate head, unlike M3's built-in one
+    spec:
+      mtp: [-md, "{mtp}", --spec-type, draft-mtp, --spec-draft-n-max, "3", --spec-draft-backend-sampling]
+      dflash: [-md, "{dflash}", --spec-type, draft-dflash, --spec-draft-n-max, "7", --spec-draft-backend-sampling]
+    suites: [engine, speedbench, serving, agentic, quality]
+
+  M4:
+    repo: unsloth/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-GGUF
+    revision: f2d3fe3694501008786e81e5f20360cbf715496a
+    file: NVIDIA-Nemotron-3.5-Lightning-30B-A3B-UD-Q4_K_M.gguf
+    suites: [engine]
+
+suites:
+  engine:
+    args: [-p, "2048", -n, "128", -d, "0,8192,32768", -r, "5", -fa, "1", -ub, "2048"]
+    timeout_s: 2400
+
+  speedbench:
+    bench: qualitative
+    limit: 4
+    osl: 256
+    ctx_per_slot: 16384
+    spec: [none, mtp, dflash]
+    concurrency: [1, 4]
+    extra_inputs: {temperature: 1.0, top_p: 0.95, top_k: 20, seed: 42}
+    # no host prompt cache, no context checkpoints
+    server_args: [-cram, "0", -ctxcp, "0"]
+    timeout_s: 1800
+
+  serving:
+    shapes:
+      - {isl: 2048, depth: 0}
+      - {isl: 8192, depth: 0}
+      - {isl: 2048, depth: 32768}
+    osl: 256
+    concurrency: [1, 4, 8]
+    requests: {1: 16, 4: 16, 8: 32}
+    warmup: 2
+    # caches off on both engines: every request processes its whole prompt, the 32k shared prefix included
+    server_args: [-cram, "0", -ctxcp, "0"]
+    vllm_args: [--no-enable-prefix-caching]
+    # with no prefix reuse, the 32k-depth configs take far longer
+    timeout_s: 3600
+
+  # Mooncake trace replay, one turn after the other (timestamps are ignored)
+  agentic:
+    traces:
+      - traces/T01_mooncake_trace.jsonl
+      - traces/T02_mooncake_trace.jsonl
+    # some turns ask for 35k output tokens; cap them so one night stays in budget
+    max_output_tokens: 256
+    block_size: 512
+    # both traces are one agent session (each turn extends the previous), so one slot keeps the prefix cached;
+    # caches stay on here, since prefix reuse is what this suite measures
+    slots: 1
+    timeout_s: 3600
+
+  quality:
+    ctx: 512
+    chunks: 10
+    timeout_s: 900
+
+  decision:
+    # Laya evaluates the whole prompt in one batch: -ub must hold the longest prompt
+    args: [-ngl, "999", -np, "16", -ub, "8192", -b, "8192", -c, "65536", --backend-sampling, --metrics]
+    state_tokens: [64, 512, 2048]
+    concurrency: [1, 4, 16]
+    warmup: 8
+    requests: 64
+    timeout_s: 900

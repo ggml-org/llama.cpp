@@ -1,0 +1,152 @@
+# Weekly vLLM comparison on DGX Spark.
+# vLLM only: the llama.cpp side of each comparison is the paired model's rows in that day's nightly.
+# Images and flags follow NVIDIA's DGX Spark recipes, with these deviations, all for parity with the
+# nightly's llama.cpp serving and agentic runs:
+#   - no --speculative-config (the recipes use DFlash / MTP; the llama.cpp runs use no drafting)
+#   - no reasoning / tool-call parsers (AIPerf counts tokens from the server's usage)
+#   - --max-num-seqs and --max-model-len follow each config, as llama.cpp's -np and per-slot context do
+#   - --max-num-batched-tokens 2048, as llama.cpp's -ub 2048 (vLLM's default was 8192 on GB10, Flash-Next's recipe 4096)
+#   - serving runs with --no-enable-prefix-caching (suite.yaml serving.vllm_args), as llama.cpp runs it with -cram 0 -ctxcp 0
+# Not a deviation, but a difference: the recipes use an FP8 KV cache, llama.cpp uses f16.
+
+kind: weekly
+suites_from: suite.yaml
+
+server:
+  port: 18080
+  # first start of an image compiles and autotunes; later starts reuse the mounted caches
+  health_timeout_s: 1800
+  cooldown_s: 60
+
+recipes:
+  # the image of each column follows what this catalog names today; `image` below is the fallback
+  url: https://nvidia.github.io/local-ai-inference-recipes/hardware/dgx-spark/index.html
+
+x-ngc-docker: &ngc-docker [--shm-size=16g, --ulimit, memlock=-1, --ulimit, stack=67108864]
+x-qwen27-tokenizer: &qwen27-tokenizer
+  repo: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0
+
+models:
+  M3-vllm-nvfp4:
+    engine: vllm
+    pair: M3
+    repo: nvidia/Qwen3.8-27B-NVFP4
+    revision: 482ca0f3832238542f8f5295dde86b5f22711d80
+    tokenizer: *qwen27-tokenizer
+    recipe: qwen/qwen3.8-27b/dgx-spark/linux/vllm/128gb/nvfp4
+    # date of the recipe validation the flags below were copied from; prefetch warns when the recipe is newer
+    recipe_validated_at: "2026-10-19"
+    image: nvcr.io/nvidia/vllm:26.10.pre1-py3
+    docker_args: *ngc-docker
+    # the NGC image ships prebuilt kernel and autotune caches under /root/.cache: mount only the HF cache
+    mounts: []
+    args:
+      - --kv-cache-dtype
+      - fp8
+      - --async-scheduling
+      - --enable-flashinfer-autotune
+      # 0.60 on purpose (recipe): 0.85 hung the node during startup autotune, 0.70 took nodes down
+      - --gpu-memory-utilization
+      - "0.60"
+      - --kernel-config
+      - '{"linear_backend":"nvfp4_dynamic","nvfp4_dynamic_max_tokens":16,"unquantized_linear_backend":"flashinfer_cudnn","linear_backend_per_quant":{"fp8_w8a8":"cutlass"}}'
+      - --compilation-config
+      - '{"pass_config":{"fuse_act_quant":true},"max_cudagraph_capture_size":64}'
+      - --max-num-batched-tokens
+      - "2048"
+    suites: [serving, agentic]
+
+  # no NVIDIA recipe for INT4: the 27B recipe's image and flags, minus the NVFP4 --kernel-config,
+  # so this column differs from the NVFP4 one only by quantization
+  M3-vllm-int4:
+    engine: vllm
+    pair: M3
+    repo: RedHatAI/Qwen3.8-27B-INT4
+    revision: e45c27e8f463817db788d141a73a3c235a0a7c0c
+    tokenizer: *qwen27-tokenizer
+    recipe: qwen/qwen3.8-27b/dgx-spark/linux/vllm/128gb/nvfp4
+    recipe_validated_at: "2026-10-19"
+    image: nvcr.io/nvidia/vllm:26.10.pre1-py3
+    docker_args: *ngc-docker
+    mounts: []
+    args:
+      - --kv-cache-dtype
+      - fp8
+      - --async-scheduling
+      - --enable-flashinfer-autotune
+      - --gpu-memory-utilization
+      - "0.60"
+      - --compilation-config
+      - '{"pass_config":{"fuse_act_quant":true},"max_cudagraph_capture_size":64}'
+      - --max-num-batched-tokens
+      - "2048"
+    suites: [serving, agentic]
+
+  M2-vllm-fp4local:
+    engine: vllm
+    pair: M2
+    repo: nvidia/Qwen3.8-Flash-Next-FP4-Local
+    revision: b9ce18a6887e18c089fdea8509a33e63429a3300
+    tokenizer:
+      repo: Qwen/Qwen3.8-Flash-Next
+      revision: de4b8e4d43b917e7706784d8bb445c9af86a3540
+    recipe: qwen/qwen3.8-flash-next/dgx-spark/linux/vllm/fp4-local
+    recipe_validated_at: "2026-10-15"
+    # community image (upstream vLLM cannot read this checkpoint's compressed NVFP4 scales yet)
+    image: eugr/spark-vllm-b12x:nightly-20261015
+    docker_args: [--shm-size=16g, --ulimit, memlock=-1, --ulimit, stack=67108864,
+                  --security-opt, seccomp=unconfined, --security-opt, apparmor=unconfined]
+    mounts: [vllm, flashinfer, triton, b12x]
+    env:
+      # the 51B-parameter n-gram embedding table stays on disk
+      VLLM_PLE_TABLE_MEMORY: disk
+      B12X_DISK_BACKEND: io_uring
+      CUTE_DSL_ARCH: sm_121a
+      SAFETENSORS_FAST_GPU: "1"
+      VLLM_WORKER_MULTIPROC_METHOD: spawn
+      VLLM_SSM_CONV_STATE_LAYOUT: DS
+      VLLM_USE_AOT_COMPILE: "1"
+      VLLM_USE_MEGA_AOT_ARTIFACT: "1"
+      VLLM_USE_V2_MODEL_RUNNER: "1"
+      B12X_POLICY_MODE: auto
+      VLLM_MXFP8_LM_HEAD: "1"
+      VLLM_B12X_MOE_FP4_LAYER_MAX_INPUT_SCALE: w13
+      VLLM_B12X_MOE_FP4_FORCE_A16: "1"
+      B12X_W4A16_A4_PREFILL: "1"
+    args:
+      - --tensor-parallel-size
+      - "1"
+      - --pipeline-parallel-size
+      - "1"
+      - --mamba-cache-mode
+      - align
+      - --enable-prefix-caching
+      - --enable-chunked-prefill
+      - --dtype
+      - bfloat16
+      - --kv-cache-dtype
+      - fp8
+      - --quantization
+      - modelopt_mixed
+      - --block-size
+      - "16"
+      - --load-format
+      - b12x
+      # recipe: 4096
+      - --max-num-batched-tokens
+      - "2048"
+      - --gdn-decode-kernel
+      - b12x
+      - --linear-backend
+      - b12x
+      - --moe-backend
+      - b12x
+      - --no-enable-flashinfer-autotune
+      - --mm-encoder-tp-mode
+      - data
+      - --compilation-config
+      - '{"pass_config":{"fuse_act_quant":true}}'
+      - --gpu-memory-utilization
+      - "0.8"
+    suites: [serving, agentic]
