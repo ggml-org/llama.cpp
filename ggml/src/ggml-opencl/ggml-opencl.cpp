@@ -1220,6 +1220,8 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_f32_f32_mc;  // multi-column (small-N) f32 GEMV for spec/MTP verify
     cl_kernel kernel_mul_mm_f16_f32_l4_lm;
     cl_kernel kernel_mul_mm_f16_f32_l4_lm_n8;
+    cl_kernel kernel_mul_mm_f16_f32_skinny_n9_direct_img = nullptr;
+    cl_kernel kernel_mul_mm_f16_f32_skinny_n10_direct_img = nullptr;
     cl_kernel kernel_mul_mm_q1_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_0_f32_l4_lm;
     cl_kernel kernel_mul_mm_q4_1_f32_l4_lm;
@@ -3798,6 +3800,26 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         backend_ctx->program_mul_mm_f16_f32_l4_lm_n8 =
             build_program_from_source(backend_ctx, kernel_src.c_str(), narrow_opts);
         CL_CHECK((backend_ctx->kernel_mul_mm_f16_f32_l4_lm_n8 = clCreateKernel(backend_ctx->program_mul_mm_f16_f32_l4_lm_n8, "kernel_mul_mm_f16_f32_l4_lm_n8", &err), err));
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E) {
+            auto create_skinny_direct = [&](const char * name) -> cl_kernel {
+                cl_int kernel_err = CL_SUCCESS;
+                cl_kernel kernel = clCreateKernel(backend_ctx->program_mul_mm_f16_f32_l4_lm, name, &kernel_err);
+                size_t max_wg = 0;
+                if (kernel_err != CL_SUCCESS ||
+                    clGetKernelWorkGroupInfo(kernel, backend_ctx->device, CL_KERNEL_WORK_GROUP_SIZE, sizeof(max_wg), &max_wg, nullptr) != CL_SUCCESS ||
+                    max_wg < 256) {
+                    if (kernel != nullptr) {
+                        CL_CHECK(clReleaseKernel(kernel));
+                    }
+                    return nullptr;
+                }
+                return kernel;
+            };
+            backend_ctx->kernel_mul_mm_f16_f32_skinny_n9_direct_img = create_skinny_direct("kernel_mul_mm_f16_f32_skinny_n9_direct_img");
+            backend_ctx->kernel_mul_mm_f16_f32_skinny_n10_direct_img = create_skinny_direct("kernel_mul_mm_f16_f32_skinny_n10_direct_img");
+        }
+#endif
         GGML_LOG_CONT(".");
     }
 
@@ -32001,6 +32023,55 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                     return;
                 }
 #endif
+                cl_kernel skinny_direct = ne11 == 9 ? backend_ctx->kernel_mul_mm_f16_f32_skinny_n9_direct_img :
+                                          ne11 == 10 ? backend_ctx->kernel_mul_mm_f16_f32_skinny_n10_direct_img : nullptr;
+                const size_t src1_bytes = ggml_nbytes(src1);
+                if (skinny_direct != nullptr && src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32 &&
+                    ne00 >= 256 && ne01 >= 64 && ne00 % 128 == 0 &&
+                    ne02 == 1 && ne03 == 1 && ne12 == 1 && ne13 == 1 && ne2 == 1 && ne3 == 1 &&
+                    ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+                    offset0 % sizeof(cl_half4) == 0 && offset1 % backend_ctx->alignment == 0 && offsetd % sizeof(cl_float) == 0 &&
+                    src1_bytes > 0 && src1_bytes % sizeof(cl_float4) == 0 &&
+                    src1_bytes / sizeof(cl_float4) <= backend_ctx->image_max_buffer_size) {
+                    cl_int image_err = CL_SUCCESS;
+                    cl_buffer_region region = { (size_t) offset1, src1_bytes };
+                    cl_mem src1_sub = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &image_err);
+                    cl_mem src1_img = nullptr;
+                    if (image_err == CL_SUCCESS) {
+                        cl_image_format format = { CL_RGBA, CL_FLOAT };
+                        cl_image_desc desc = {};
+                        desc.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+                        desc.image_width = src1_bytes / sizeof(cl_float4);
+                        desc.buffer = src1_sub;
+                        src1_img = clCreateImage(backend_ctx->context, CL_MEM_READ_ONLY, &format, &desc, nullptr, &image_err);
+                    }
+                    if (image_err == CL_SUCCESS) {
+                        const cl_ulong image_offset = 0;
+                        const int stride_a = ne00;
+                        const int stride_b = ne00;
+                        const int stride_d = ne01;
+                        CL_CHECK(clSetKernelArg(skinny_direct,  0, sizeof(cl_mem),   &extra0->data_device));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  1, sizeof(cl_ulong), &offset0));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  2, sizeof(cl_mem),   &src1_img));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  3, sizeof(cl_ulong), &image_offset));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  4, sizeof(cl_mem),   &extrad->data_device));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  5, sizeof(cl_ulong), &offsetd));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  6, sizeof(int),      &ne00));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  7, sizeof(int),      &ne01));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  8, sizeof(int),      &ne11));
+                        CL_CHECK(clSetKernelArg(skinny_direct,  9, sizeof(int),      &stride_a));
+                        CL_CHECK(clSetKernelArg(skinny_direct, 10, sizeof(int),      &stride_b));
+                        CL_CHECK(clSetKernelArg(skinny_direct, 11, sizeof(int),      &stride_d));
+                        size_t global_work_size[] = { (size_t) CEIL_DIV(ne01, 16) * 256, 1, 1 };
+                        size_t local_work_size[]  = { 256, 1, 1 };
+                        backend_ctx->enqueue_ndrange_kernel(skinny_direct, 3, global_work_size, local_work_size, dst);
+                        CL_CHECK(clReleaseMemObject(src1_img));
+                        CL_CHECK(clReleaseMemObject(src1_sub));
+                        return;
+                    }
+                    if (src1_img != nullptr) { CL_CHECK(clReleaseMemObject(src1_img)); }
+                    if (src1_sub != nullptr) { CL_CHECK(clReleaseMemObject(src1_sub)); }
+                }
                 static const char * mm_narrow_n_env = getenv("GGML_OPENCL_MM_NARROW_N");
                 const bool use_narrow_n = (mm_narrow_n_env == nullptr || mm_narrow_n_env[0] != '0') && ne11 >= 2 && ne11 <= 8;
                 kernel = use_narrow_n ? backend_ctx->kernel_mul_mm_f16_f32_l4_lm_n8 : backend_ctx->kernel_mul_mm_f16_f32_l4_lm;
