@@ -225,8 +225,8 @@ llama_token common_peg_tokens::token_id(const std::string & text) const {
     return it != ids.end() ? it->second : LLAMA_TOKEN_NULL;
 }
 
-// Insert every delimiter a parser matches into the trie, starting from each node in from, and return the nodes
-// they end at. A choice adds the delimiters of each branch and a sequence joins every combination of its children.
+// Insert every delimiter the parser matches into the trie, starting from each node in from. Returns the end nodes.
+// A choice adds the delimiters of each branch. A sequence joins every combination of its children.
 static std::set<size_t> insert_delimiter(common_trie & trie, const common_peg_arena & arena, common_peg_parser_id id,
                                          std::set<size_t> from = { 0 }) {
     return std::visit([&](const auto & p) -> std::set<size_t> {
@@ -1324,7 +1324,6 @@ common_peg_parser common_peg_parser_builder::through(const common_peg_parser & c
 common_peg_parser common_peg_parser_builder::token(const std::string & piece) {
     auto token = arena_.tokens_.token_id(piece);
     if (token == LLAMA_TOKEN_NULL) {
-        // Return a literal if the token is not registered with the builder
         return literal(piece);
     }
     return add(common_peg_token_parser{token, piece});
@@ -1817,8 +1816,7 @@ static std::string gbnf_ac_grammar(
         } else {
             fallback = specific.chars.empty() ? "." : gbnf_char_class(specific.chars, true);
 
-            // A token named by a token rule never matches a char rule, so the other named tokens are let
-            // through by name
+            // Char rules never match a token named by a token rule, so allow the other named tokens by name
             std::vector<uint32_t> others;
             for (auto token : opaque) {
                 if (std::find(specific.tokens.begin(), specific.tokens.end(), token) == specific.tokens.end()) {
@@ -1852,8 +1850,7 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
            const std::map<size_t, gbnf_ac_symbols> & buckets,
            const std::string & fallback,
            const std::function<std::string(size_t)> & state_name) {
-            // every state is accepting and completing symbols get no
-            // alternative, so a forbidden string can never be matched
+            // every state accepts and completing symbols get no alternative, so a forbidden string never matches
             std::string rhs = "|";
             for (const auto & [d, symbols] : buckets) {
                 for (const auto & alt : symbols.alternatives(state_name(d))) {
@@ -2012,7 +2009,6 @@ static void collect_reachable(
 
 // GBNF generation implementation
 void common_peg_arena::build_grammar(const common_grammar_builder & builder, bool lazy) const {
-    // The rules to emit and the tokens the grammar names, filled in once the entry points are known
     common_peg_reachable reachable;
 
     // A raw string value is parsed by the child rather than constrained by the schema
@@ -2208,18 +2204,15 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
     }
 
     if (lazy && scans) {
-        // Collect what the starts and rests reach
         for (const auto * rule : trigger_rules) {
             collect_reachable(*this, rule->start, reachable);
             collect_reachable(*this, rule->rest, reachable);
         }
     } else if (lazy) {
-        // Collect what the trigger rules reach
         for (const auto * rule : trigger_rules) {
             collect_reachable(*this, rules_.at(rule->name), reachable);
         }
     } else {
-        // Collect what the root reaches
         collect_reachable(*this, root_, reachable);
     }
 

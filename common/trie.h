@@ -60,7 +60,7 @@ struct common_trie {
 
     enum match_result { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH };
 
-    // Read the symbol at pos, a token in the trie up to the next token or else a UTF-8 codepoint
+    // Read the symbol at pos. It is a token if a pattern uses the token at pos, else a UTF-8 codepoint.
     step next(std::string_view sv, const std::vector<int32_t> & token_map, size_t pos) const;
 
     // Check if a delimiter starts at the given position
@@ -70,15 +70,14 @@ struct common_trie {
     // Insert a word as a sequence of Unicode codepoints, returns its pattern index
     int32_t insert(const std::string & word);
 
-    // Insert a symbol sequence, returns its pattern index (insertion order,
-    // duplicates keep the first index)
+    // Insert a symbol sequence, returns its pattern index (insertion order, duplicates keep the first index)
     int32_t insert(const std::vector<symbol> & symbols);
 
     // Child of node on a symbol, created if missing
     size_t extend(size_t node, symbol ch);
 
-    // Mark node as the end of a pattern with a caller-chosen value, returns the value already there or
-    // value if the node had none. A trie should take its values either from here or from insert, not both
+    // Mark node as the end of a pattern with a value from the caller. Returns the value already there, or value if the node had none.
+    // A trie must take its values from mark or from insert, not both.
     int32_t mark(size_t node, int32_t value);
 
   private:

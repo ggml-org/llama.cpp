@@ -156,9 +156,8 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
                 tool_choice |= p.rule("tool-" + std::to_string(tool_index), p.tool(opener + body));
 
                 if (is_qwen3_coder) {
-                    // Qwen3-Coder models may occasionally omit the <tool_call> token, so the complete <function=name>
-                    // opener is a trigger as well. The model may hallucinate a tool name, but it is preferable over
-                    // constraining on <function which may occur in valid content generation, e.g. #include <functional>
+                    // Qwen3-Coder models sometimes omit <tool_call>, so the full <function=name> opener is also a trigger.
+                    // Do not trigger on <function alone, it occurs in normal content, e.g. #include <functional>.
                     tool_calls |= p.trigger_rule("tool-calls-" + std::to_string(tool_index), opener, body + p.token("</tool_call>") + p.space() + more);
                     starts     |= opener;
                 }

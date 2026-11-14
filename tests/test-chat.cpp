@@ -329,7 +329,7 @@ static std::vector<fake_token> fake_tokenize(const common_peg_tokens & specials,
     return result;
 }
 
-// The tokens from byte offset pos on, a token that pos splits keeps the rest of its piece as text
+// Returns the tokens from byte offset pos. A token split by pos keeps the rest of its piece as text.
 static std::vector<fake_token> fake_tokens_from(const std::vector<fake_token> & tokens, size_t pos) {
     std::vector<fake_token> result;
     size_t start = 0;
@@ -1279,8 +1279,8 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                 while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
                     msg_accum.tool_calls.push_back({ "", "", "" });
                 }
-                // The name and id are set once the delta carries them; a name that was already set must not change,
-                // since clients concatenate name deltas
+                // The name and id are set once the delta carries them.
+                // A name that is already set must not change, clients concatenate name deltas.
                 if (!diff.tool_call_delta.name.empty()) {
                     auto & name = msg_accum.tool_calls[diff.tool_call_index].name;
                     if (!name.empty() && name != diff.tool_call_delta.name) {
@@ -2330,7 +2330,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     })";
 
     // Special tokens of the templates that use the Qwen3-Coder format.
-    // Check a model's vocab defines them before reusing these, a model can share the syntax without the tokens.
+    // Check that the vocab of a model defines them before reuse. A model can share the syntax without the tokens.
     const std::vector<std::string> qwen3_coder_specials = {
         "<|im_start|>", "<|im_end|>", "<think>", "</think>",
         "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>",

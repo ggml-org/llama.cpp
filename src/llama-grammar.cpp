@@ -1038,8 +1038,7 @@ static void llama_grammar_advance_stack(
             break;
         default:
             // end of alternate (LLAMA_GRETYPE_END, LLAMA_GRETYPE_ALT) or middle of char range
-            // (LLAMA_GRETYPE_CHAR_ALT, LLAMA_GRETYPE_CHAR_RNG_UPPER) or token set (LLAMA_GRETYPE_TOKEN_ALT,
-            // LLAMA_GRETYPE_TOKEN_RNG_UPPER); stack should never be left on those
+            // (LLAMA_GRETYPE_CHAR_ALT, LLAMA_GRETYPE_CHAR_RNG_UPPER) or token set (LLAMA_GRETYPE_TOKEN_ALT, LLAMA_GRETYPE_TOKEN_RNG_UPPER); stack should never be left on those
             GGML_ABORT("fatal error");
         }
     }
@@ -1177,8 +1176,8 @@ static bool llama_grammar_reject_step(
         for (const uint32_t i : cur) {
             const auto & tok = candidates[i];
             if (depth > 0) {
-                // char rules already consumed part of this token, so it cannot be matched by id;
-                // accept it only if they consumed all of it without ending in a partial sequence
+                // char rules already consumed part of this token, so it cannot match by id.
+                // accept it only if they consumed all of it and did not end in a partial sequence.
                 if (tok.code_points[depth] != 0 || tok.partial_utf8.n_remain != 0) {
                     rejects.push_back(i);
                 }

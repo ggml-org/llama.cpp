@@ -93,7 +93,7 @@ static std::vector<token_and_piece> parse_tokens(const std::string & input) {
     return result;
 }
 
-// Whether the sampler's mask lets the token through, it is masked only when every stack rejects it
+// Returns true if the sampler mask allows the token. The mask rejects a token only when every stack rejects it.
 static bool mask_allows(llama_grammar * grammar, const token_and_piece & in) {
     const auto decoded = llama_grammar_decode_utf8(in.piece, grammar->partial_utf8);
 

@@ -43,12 +43,10 @@ enum llama_gretype {
     // inverse token (!<[token-id]>, !<[token-id,token-id-token-id]>)
     LLAMA_GRETYPE_TOKEN_NOT      = 9,
 
-    // modifies a preceding LLAMA_GRETYPE_TOKEN, LLAMA_GRETYPE_TOKEN_NOT, or LLAMA_GRETYPE_TOKEN_ALT to
-    // be an inclusive range (<[1-5]>)
+    // modifies a preceding LLAMA_GRETYPE_TOKEN, LLAMA_GRETYPE_TOKEN_NOT, or LLAMA_GRETYPE_TOKEN_ALT to be an inclusive range (<[1-5]>)
     LLAMA_GRETYPE_TOKEN_RNG_UPPER = 10,
 
-    // modifies a preceding LLAMA_GRETYPE_TOKEN, LLAMA_GRETYPE_TOKEN_NOT, or
-    // LLAMA_GRETYPE_TOKEN_RNG_UPPER to add an alternate token to match (<[1,5]>, <[1-5,9]>)
+    // modifies a preceding LLAMA_GRETYPE_TOKEN, LLAMA_GRETYPE_TOKEN_NOT, or LLAMA_GRETYPE_TOKEN_RNG_UPPER to add an alternate token to match (<[1,5]>, <[1-5,9]>)
     LLAMA_GRETYPE_TOKEN_ALT       = 11,
 };
 

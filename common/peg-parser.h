@@ -306,8 +306,8 @@ struct common_peg_until_branch {
 struct common_peg_until_parser {
     std::vector<common_peg_until_branch> branches;
     bool                                 include  = false; // consume the first delimiter and parse the rest of its branch
-    bool                                 optional = false; // include only: may end before any delimiter completes
-    common_peg_parser_id                 content  = COMMON_PEG_INVALID_PARSER_ID; // include only: parsed up to the delimiter
+    bool                                 optional = false; // with include, the input may end before any delimiter
+    common_peg_parser_id                 content  = COMMON_PEG_INVALID_PARSER_ID; // with include, parsed up to the delimiter
     common_trie                          matcher;          // each pattern valued by its branch
 };
 
@@ -325,7 +325,7 @@ struct common_peg_rule_parser {
     std::string name;
     common_peg_parser_id child;
     bool trigger;
-    // set when the rule was built from a start and rest: the lazy grammar scans for the start
+    // set when the rule has a start and rest, the lazy grammar scans for the start
     common_peg_parser_id start = COMMON_PEG_INVALID_PARSER_ID;
     common_peg_parser_id rest  = COMMON_PEG_INVALID_PARSER_ID;
 };
@@ -441,12 +441,12 @@ class common_peg_parser_builder {
     //   S -> "hello"
     common_peg_parser literal(const std::string & literal) { return add(common_peg_literal_parser{literal}); }
 
-    // Matches a token or fallback to literal if the token is not registered with the builder.
+    // Matches a token. Falls back to a literal if the token is not registered with the builder.
     //   S -> <[token-id]>
     common_peg_parser token(const std::string & piece);
 
-    // Matches one of the tokens, or with negate one token that is not one of them. A negated set may only
-    // name tokens registered with the builder.
+    // Matches one of the tokens. With negate, matches one token that is not in the set.
+    // A negated set may only name tokens registered with the builder.
     //   S -> <[id1]> | <[id2]> | ...  or  !<[id1,id2,...]>
     common_peg_parser token(const std::vector<std::string> & pieces, bool negate = false);
     common_peg_parser token(std::initializer_list<std::string> pieces, bool negate = false) { return token(std::vector<std::string>(pieces), negate); }
@@ -513,8 +513,8 @@ class common_peg_parser_builder {
     //   S -> (!delim .)*
     common_peg_parser until_one_of(const std::vector<std::string> & delimiters);
 
-    // Matches all characters until the delimiter is found (delimiter not consumed). The delimiter may only be
-    // a sequence of literals, tokens, and choices of them, possibly wrapped in tags and atomics.
+    // Matches all characters until the delimiter is found (delimiter not consumed).
+    // The delimiter may only be a sequence of literals, tokens, and choices of them. Tags and atomics may wrap them.
     //   S -> (!delim .)*
     common_peg_parser until(const common_peg_parser & delimiter);
 
@@ -522,8 +522,8 @@ class common_peg_parser_builder {
     //   S -> .*
     common_peg_parser rest() { return until_one_of({}); }
 
-    // Matches content, then the first delimiter, then the rest of that delimiter's branch. No two branches may
-    // share a delimiter, and with optional the input may end before any delimiter.
+    // Matches content, then the first delimiter, then the rest of the branch of that delimiter.
+    // Branches must not share a delimiter. With optional, the input may end before any delimiter.
     //   S -> C (D1 R1 | D2 R2 | ...)
     common_peg_parser through(const common_peg_parser & content, const std::vector<common_peg_until_branch> & branches, bool optional = false);
     common_peg_parser through(const common_peg_parser & content, std::initializer_list<common_peg_until_branch> branches, bool optional = false) { return through(content, std::vector<common_peg_until_branch>(branches), optional); }
@@ -600,9 +600,8 @@ class common_peg_parser_builder {
     common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & p) { return rule(name, p, true); }
     common_peg_parser trigger_rule(const std::string & name, const std::function<common_peg_parser()> & builder) { return rule(name, builder, true); }
 
-    // Creates a trigger rule matching start followed by rest. A lazy grammar scans for the start of any such
-    // rule and then only allows its rest. A start may only be a sequence of literals, tokens, and choices of
-    // them, possibly wrapped in tags and atomics.
+    // Creates a trigger rule that matches start followed by rest. A lazy grammar scans for the start of any such rule, then only allows its rest.
+    // The start has the same limits as an until() delimiter.
     common_peg_parser trigger_rule(const std::string & name, const common_peg_parser & start, const common_peg_parser & rest);
 
     // Creates an atomic parser. Atomic parsers do not create an AST node if

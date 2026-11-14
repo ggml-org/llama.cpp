@@ -130,8 +130,8 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
     });
 
     if (include_grammar) {
-        // Every message opens with a recipient header, so the grammar constrains the whole turn from the first token
-        // and a recipient that is not self, user, or a tool cannot be generated
+        // Every message starts with a recipient header, so the grammar is not lazy.
+        // The model cannot generate a recipient that is not self, user, or a tool.
         data.grammar_lazy = false;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             data.parser.build_grammar(builder);
