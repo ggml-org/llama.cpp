@@ -557,6 +557,7 @@ private:
 
     std::mutex graph_mutex;
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> graph_uids;
+    std::unordered_map<uint32_t, std::unordered_map<uint64_t, uint64_t>> seq_to_content_uid;
 
     rpc_msg_queue queue;
     socket_ptr    sock;
@@ -1272,28 +1273,55 @@ void rpc_dispatcher::graph_compute(uint32_t device, const ggml_cgraph * cgraph) 
     std::lock_guard<std::mutex> lock(graph_mutex);
     GGML_ASSERT(cgraph->n_nodes > 0);
     auto & device_graph_uids = graph_uids[device];
-    bool reuse = cgraph->uid != 0 && device_graph_uids.count(cgraph->uid) > 0;
-    LOG_DBG("[%s] device: %u, uid: %" PRIu64 ", n_nodes: %u, reuse: %s\n", __func__, device, cgraph->uid, cgraph->n_nodes, reuse ? "yes" : "no");
-    if (reuse) {
-        auto request = std::make_shared<rpc_msg_graph_recompute_req>();
-        request->device = device;
-        request->uid    = cgraph->uid;
-        send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
-    } else {
-        if (cgraph->uid != 0) {
-            if (device_graph_uids.size() >= GRAPH_CACHE_MAX) {
-                LOG_DBG("[%s] clearing graph cache for device %u (%zu entries)\n",
-                        __func__, device, device_graph_uids.size());
-                device_graph_uids.clear();
-            }
-            device_graph_uids.insert(cgraph->uid);
+    auto & seq_map = seq_to_content_uid[device];
+
+    if (cgraph->uid != 0) {
+        auto it = seq_map.find(cgraph->uid);
+        if (it != seq_map.end() && device_graph_uids.count(it->second) > 0) {
+            auto request = std::make_shared<rpc_msg_graph_recompute_req>();
+            request->device = device;
+            request->uid    = it->second;
+            send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
+            return;
         }
-        size_t input_size = 0;
-        uint8_t * input = serialize_graph(device, cgraph, this, &input_size);
-        LOG_DBG2("[%s] serialized graph: %s\n", __func__, rpc_log_format_size(input_size).c_str());
-        std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
-        send_async(RPC_CMD_GRAPH_COMPUTE, input_ptr, input_size);
     }
+
+    size_t input_size = 0;
+    uint8_t * input = serialize_graph(device, cgraph, this, &input_size);
+    const size_t hdr_bytes = sizeof(uint32_t) + sizeof(uint64_t);
+
+    if (cgraph->uid != 0 && input_size > hdr_bytes) {
+        uint64_t content_uid = fnv_hash(input + hdr_bytes, input_size - hdr_bytes);
+        if (content_uid == 0) {
+            content_uid = 1;
+        }
+        seq_map[cgraph->uid] = content_uid;
+
+        if (device_graph_uids.count(content_uid) > 0) {
+            delete[] input;
+            LOG_DBG("[%s] device: %u, seq_uid: %" PRIu64 " -> content_uid: 0x%" PRIx64 " (cross-turn cache hit)\n",
+                    __func__, device, cgraph->uid, content_uid);
+            auto request = std::make_shared<rpc_msg_graph_recompute_req>();
+            request->device = device;
+            request->uid    = content_uid;
+            send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
+            return;
+        }
+
+        if (device_graph_uids.size() >= GRAPH_CACHE_MAX) {
+            LOG_DBG("[%s] clearing graph cache for device %u (%zu entries)\n",
+                    __func__, device, device_graph_uids.size());
+            device_graph_uids.clear();
+            seq_map.clear();
+            seq_map[cgraph->uid] = content_uid;
+        }
+        device_graph_uids.insert(content_uid);
+        memcpy(input + sizeof(uint32_t), &content_uid, sizeof(content_uid));
+    }
+
+    LOG_DBG2("[%s] serialized graph: %s\n", __func__, rpc_log_format_size(input_size).c_str());
+    std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
+    send_async(RPC_CMD_GRAPH_COMPUTE, input_ptr, input_size);
 }
 
 static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
