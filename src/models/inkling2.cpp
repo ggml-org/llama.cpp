@@ -104,6 +104,7 @@ void llama_model_inkling2::load_arch_tensors(llama_model_loader &) {
         l.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
         l.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, TENSOR_NOT_REQUIRED);
         l.ffn_gate_up_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", i), {n_embd, 2*hparams.n_ff(i), n_expert}, 0);
+        l.ffn_gate_up_exps_s = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "scale", i), {n_expert}, TENSOR_NOT_REQUIRED);
         l.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {hparams.n_ff(i), n_embd, n_expert}, 0);
     }
 }
@@ -208,7 +209,10 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     auto * tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, positions, GGML_TYPE_F32), 1.0f, 1.0f);
     tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
     tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
-    auto * cur = build_norm(build_inp_embd(model.tok_embd), model.tok_norm, nullptr, LLM_NORM_RMS, -1);
+    auto * cur = build_inp_embd(model.tok_embd);
+    if (ubatch.token) {
+        cur = build_norm(cur, model.tok_norm, nullptr, LLM_NORM_RMS, -1);
+    }
     std::vector<ggml_tensor *> blocks;
     for (int il = 0; il < n_layer; ++il) {
         const auto & l = model.layers[il];
@@ -288,7 +292,8 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
         cur = build_norm(cur, l.ffn_norm, nullptr, LLM_NORM_RMS, il);
         cur = build_moe_ffn(cur, l.ffn_gate_inp, nullptr, nullptr, l.ffn_down_exps, l.ffn_exp_probs_b,
                 hparams.n_expert, hparams.n_expert_used(il), LLM_FFN_SITU, true, hparams.expert_weights_scale,
-                LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID, il, nullptr, l.ffn_gate_up_exps);
+                LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID, il, nullptr, l.ffn_gate_up_exps,
+                l.ffn_gate_up_exps_s, nullptr, l.ffn_down_exps_s);
         cur = convolve(cur, l.ffn_post_conv, nullptr, state, history, recr, 2*kv + n_embd);
         cur = ggml_add(ctx0, residual, cur);
         cb(cur, "l_out", il);
