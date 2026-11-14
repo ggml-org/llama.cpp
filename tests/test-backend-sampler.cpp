@@ -737,6 +737,69 @@ static void test_top_p(const test_params & params) {
     printf("top-p sampling test PASSED\n");
 }
 
+static uint32_t count_kept_logits(test_context & test_ctx, int32_t batch_idx) {
+    float * logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), batch_idx);
+    uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), batch_idx);
+    if (logits == nullptr) {
+        return n_logits;
+    }
+    uint32_t n_kept = 0;
+    for (uint32_t i = 0; i < n_logits; ++i) {
+        if (logits[i] > -1e9f) {
+            n_kept++;
+        }
+    }
+    return n_kept;
+}
+
+static void test_min_p_max(const test_params & params) {
+    // min_p = 1.0 keeps only the most likely token(s), it must not drop them
+    const int seq_id = 0;
+    struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+    llama_sampler_ptr backend_sampler_chain(llama_sampler_chain_init(backend_chain_params));
+    llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_min_p(1.0f, 0));
+    std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
+
+    test_context test_ctx(params, backend_sampler_configs);
+
+    if (!test_ctx.decode({{seq_id, "Hello"}})) {
+        GGML_ASSERT(false && "Failed to decode token");
+    }
+
+    const uint32_t n_kept = count_kept_logits(test_ctx, test_ctx.idx_for_seq(seq_id));
+    printf("min-p 1.0 kept %u logits\n", n_kept);
+    GGML_ASSERT(n_kept >= 1);
+
+    printf("min-p max sampling test PASSED\n");
+}
+
+static void test_min_keep(const test_params & params) {
+    const int seq_id = 0;
+    const size_t min_keep = 5;
+
+    auto check = [&](const char * name, llama_sampler * smpl) {
+        struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
+        llama_sampler_ptr backend_sampler_chain(llama_sampler_chain_init(backend_chain_params));
+        llama_sampler_chain_add(backend_sampler_chain.get(), smpl);
+        std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
+
+        test_context test_ctx(params, backend_sampler_configs);
+
+        if (!test_ctx.decode({{seq_id, "Hello"}})) {
+            GGML_ASSERT(false && "Failed to decode token");
+        }
+
+        const uint32_t n_kept = count_kept_logits(test_ctx, test_ctx.idx_for_seq(seq_id));
+        printf("%s with min_keep=%zu kept %u logits\n", name, min_keep, n_kept);
+        GGML_ASSERT(n_kept == 0 || n_kept >= min_keep);
+    };
+
+    check("top-p", llama_sampler_init_top_p(0.01f, min_keep));
+    check("min-p", llama_sampler_init_min_p(0.99f, min_keep));
+
+    printf("min_keep sampling test PASSED\n");
+}
+
 static void test_multi_sequence(const test_params & params) {
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     llama_sampler_ptr sampler_chain_0(llama_sampler_chain_init(chain_params_0));
@@ -2077,6 +2140,8 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_top_k",                  test_top_k,                  true },
     { "test_top_p",                  test_top_p,                  true },
     { "test_min_p",                  test_min_p,                  true },
+    { "test_min_p_max",              test_min_p_max,              true },
+    { "test_min_keep",               test_min_keep,               true },
     { "test_logit_bias",             test_logit_bias,             true },
     { "test_penalties",              test_penalties,              true },
     // multiple sequences
