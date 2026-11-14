@@ -138,9 +138,10 @@ m5-server is up.
   web console : http://127.0.0.1:$FORWARD_PORT
   log         : $VDIR/m5-server.log   (adb shell tail -f)
   env pinned  : GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1
-  compiled-in : KV pad 32 (depth) / 256 (backbone), direct V scatter,
+  compiled-in : KV pad 32 (depth) / 128 (backbone), direct V scatter,
                 codec prime LRU (4 entries, ~1 MB each)
                 (override with M5_KV_PAD / M5_HVX_DIRECT_V / M5_PRIME_CACHE for A/B;
-                 M5_PRIME_CACHE=1 restores the old single-entry cache, =0 disables)
+                 M5_KV_PAD=256 restores the old backbone pad, =1 the old
+                 single-entry prime cache, =0 disables it)
   warmup voice: ${M5_DEFAULT_VOICE:-(none)}  (codec prime cached for this voice)
 EOF

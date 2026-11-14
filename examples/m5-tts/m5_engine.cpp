@@ -340,16 +340,34 @@ public:
     // with the hidden of the last rest row. count == -1 marks the variant.
     bool run_prefill(const float * shared, int shared_rows, uint32_t hash,
                      const float * rest, int rest_rows, float * out) {
+        // M5_PREFIX_STATS splits the prefill round trip by segment: the header,
+        // the shared block (still sent on a cache hit), the rest rows, and the
+        // wait for the stage reply. This measures whether changing the stage
+        // protocol to skip the shared block is worth the risk (doc 21.6 #3).
+        const bool stats = getenv("M5_PREFIX_STATS") != nullptr;
+        const double t0 = now_s();
         int32_t magic = -1, sh = shared_rows, rs = rest_rows;
         if (!write_all(&magic, sizeof(magic))) return false;
         if (!write_all(&sh, sizeof(sh))) return false;
         if (!write_all(&hash, sizeof(hash))) return false;
         if (!write_all(&rs, sizeof(rs))) return false;
+        const double t1 = now_s();
         if (shared_rows > 0 &&
             !write_all(shared, sizeof(float) * kWidth * (size_t) shared_rows)) return false;
+        const double t2 = now_s();
         if (rest_rows > 0 &&
             !write_all(rest, sizeof(float) * kWidth * (size_t) rest_rows)) return false;
-        return read_all(out, sizeof(float) * kWidth);
+        const double t3 = now_s();
+        const bool ok = read_all(out, sizeof(float) * kWidth);
+        const double t4 = now_s();
+        if (stats) {
+            std::fprintf(stderr,
+                         "[m5] prefix-xfer sh=%d rs=%d hdr=%.2f shared=%.2f rest=%.2f "
+                         "wait=%.2f total=%.2f ms\n",
+                         shared_rows, rest_rows, (t1 - t0) * 1e3, (t2 - t1) * 1e3,
+                         (t3 - t2) * 1e3, (t4 - t3) * 1e3, (t4 - t0) * 1e3);
+        }
+        return ok;
     }
 
     void close() {
@@ -1183,6 +1201,20 @@ bool Engine::Impl::segment(const std::vector<long> & tokens, WavWriter & wav, co
     std::vector<float> tail;
     bool first_chunk = true;
 
+    // Doc 21.6 #2: kTail samples are held back from every chunk, so a one-frame
+    // first chunk (1920 samples) emits no PCM at all and the first audible
+    // bytes come from the second chunk (i.e. after 5 frames). M5_FIRST_TAIL
+    // lets the first emitted chunk keep fewer samples. This only moves the
+    // output boundary - the concatenated PCM stream is unchanged - but it
+    // changes chunk boundaries, so codes/WAV hashes are the go/no-go gate.
+    // Unset (or = kTail) reproduces the original behaviour exactly.
+    int first_tail_keep = kTail;
+    if (const char * ft = getenv("M5_FIRST_TAIL")) {
+        const int value = atoi(ft);
+        if (value >= 0 && value <= kTail) first_tail_keep = value;
+    }
+    std::atomic<bool> first_emit{true};
+
     std::mutex failure_mutex;
     std::string failure_text;
     std::atomic<int> failure{0};
@@ -1213,7 +1245,9 @@ bool Engine::Impl::segment(const std::vector<long> & tokens, WavWriter & wav, co
         }
         std::vector<float> joined(tail);
         joined.insert(joined.end(), pcm.begin(), pcm.end());
-        const size_t drop = joined.size() > (size_t) kTail ? joined.size() - kTail : 0;
+        const size_t keep = first_emit.exchange(false)
+                                ? (size_t) first_tail_keep : (size_t) kTail;
+        const size_t drop = joined.size() > keep ? joined.size() - keep : 0;
         if (drop > 0) {
             wav.append(joined.data(), drop);
             if (sink) sink(joined.data(), drop);

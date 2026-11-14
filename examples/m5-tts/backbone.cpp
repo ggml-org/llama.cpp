@@ -111,12 +111,15 @@ int main(int argc, char ** argv) {
         }
 
         // The depth/chain stages keep a 16-row in-frame KV chain, so they use
-        // the 32-wide pad default in llama-kv-cache.cpp. The backbone's prefill
-        // prefix cache grows across the whole utterance: keep the upstream
-        // 256-wide pad there (this is also the exact A/B configuration that
-        // produced the -9% wall-time result). M5_KV_PAD set by the caller wins.
+        // the 32-wide pad default in llama-kv-cache.cpp. The backbone opts
+        // into 128: its prefix grows over the utterance, so a smaller pad
+        // trades more graph rebuilds for a smaller QK/AV read span. SM6650
+        // A/B (doc 22): 69-frame sentence backbone -7.7% / wall -2.3%,
+        // 170-frame sentence backbone -2.6% / wall -0.75%, WAV bit-identical
+        // at both lengths. M5_KV_PAD set by the caller wins (256 restores the
+        // old upstream behaviour).
         if (!(depth || chain)) {
-            ::setenv("M5_KV_PAD", "256", 0);
+            ::setenv("M5_KV_PAD", "128", 0);
         }
 
         auto params = llama_context_default_params();
@@ -367,10 +370,17 @@ int main(int argc, char ** argv) {
                         if (hit) {
                             // The engine always sends the shared block; on a hit
                             // its bytes still have to be consumed or the next
-                            // message header reads garbage.
+                            // message header reads garbage. Time that dead
+                            // transfer under M5_PREFIX_STATS (doc 21.6 #3).
+                            const auto discard_start = std::chrono::steady_clock::now();
                             if (!input.read(reinterpret_cast<char *>(embeddings.data()),
                                             (size_t) sh * row_bytes)) {
                                 throw std::runtime_error("cannot read prefill rows");
+                            }
+                            if (getenv("M5_PREFIX_STATS")) {
+                                const double ms = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - discard_start).count();
+                                std::fprintf(stderr, "m5-stage prefix hit sh=%d discard_ms=%.3f\n", sh, ms);
                             }
                         } else {
                             decode_block(sh, 0);
