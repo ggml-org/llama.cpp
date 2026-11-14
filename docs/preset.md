@@ -26,7 +26,7 @@ ctx-size             = 0
 mmap                 = 1
 kv-unified           = 1
 parallel             = 4
-spec-default         = 1
+no-spec-type         = ngram-mod
 
 [Qwen3.5-4B]
 hf                   = unsloth/Qwen3.5-4B-GGUF:Q4_K_M
@@ -51,6 +51,9 @@ chat-template-kwargs = {"reasoning_effort": "high"}
 ```
 
 The preset will be loaded similarly to the `--models-preset` option. Therefore, you can also override certain params via CLI arguments:
+
+> [!NOTE]
+> A default speculative decoding is enabled by default for the server and CLI.
 
 ```sh
 # Force temp = 0.1, overriding the preset value
