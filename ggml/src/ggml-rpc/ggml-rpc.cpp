@@ -115,7 +115,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
 }
 
 // Try RPC_CMD_SET_TENSOR_HASH first when data size is larger than this threshold
-const size_t HASH_THRESHOLD = 10 * 1024 * 1024;
+const size_t HASH_THRESHOLD = 65536;
 
 // Maximum number of graphs cached per device; client and server must use the same value
 // so that both sides clear their caches at the same point in the message stream
@@ -395,7 +395,7 @@ static bool send_rpc_cmd_payload(socket_ptr sock, enum rpc_cmd cmd, const void *
     if (payload_size > 0 && !sock->send_data(payload, payload_size)) {
         return false;
     }
-    return sock->flush();
+    return true;
 }
 
 static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
@@ -557,6 +557,7 @@ private:
 
     std::mutex graph_mutex;
     std::unordered_map<uint32_t, std::unordered_set<uint64_t>> graph_uids;
+    std::unordered_map<uint32_t, std::unordered_map<uint64_t, uint64_t>> seq_to_content_uid;
 
     rpc_msg_queue queue;
     socket_ptr    sock;
@@ -673,18 +674,31 @@ bool rpc_dispatcher::start(const std::string & endpoint) {
 
 void rpc_dispatcher::work() {
     auto last_cmd = std::chrono::steady_clock::now();
+    bool has_unflushed_tx = false;
     while (running) {
         rpc_msg_ptr msg_ptr;
-        // spin only while commands keep coming, so an idle dispatcher does not keep a core busy
-        const bool spin = busy_spin_users.load(std::memory_order_relaxed) != 0 &&
-                          std::chrono::steady_clock::now() - last_cmd < RPC_BUSY_SPIN_IDLE_TIME;
-        if (spin) {
+        if (has_unflushed_tx) {
             if (!queue.try_pop(&msg_ptr)) {
-                rpc_cpu_relax();
+                if (std::chrono::steady_clock::now() - last_cmd >= std::chrono::microseconds(250)) {
+                    RPC_STATUS_ASSERT(sock->flush());
+                    has_unflushed_tx = false;
+                } else {
+                    rpc_cpu_relax();
+                }
                 continue;
             }
-        } else if (!queue.pop(&msg_ptr)) {
-            break;
+        } else {
+            // spin only while commands keep coming, so an idle dispatcher does not keep a core busy
+            const bool spin = busy_spin_users.load(std::memory_order_relaxed) != 0 &&
+                              std::chrono::steady_clock::now() - last_cmd < RPC_BUSY_SPIN_IDLE_TIME;
+            if (spin) {
+                if (!queue.try_pop(&msg_ptr)) {
+                    rpc_cpu_relax();
+                    continue;
+                }
+            } else if (!queue.pop(&msg_ptr)) {
+                break;
+            }
         }
         if (msg_ptr->cmd != RPC_CMD_NONE) {
             LOG_DBG2("[%s] %s (in: %s, out: %s)\n", __func__, rpc_cmd_name(msg_ptr->cmd),
@@ -694,9 +708,11 @@ void rpc_dispatcher::work() {
             if (msg_ptr->output) {
                 bool status = send_rpc_cmd(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->output, msg_ptr->output_size);
                 RPC_STATUS_ASSERT(status);
+                has_unflushed_tx = false;
             } else {
                 bool status = send_rpc_cmd_payload(sock, msg_ptr->cmd, msg_ptr->input.get(), msg_ptr->input_size, msg_ptr->payload, msg_ptr->payload_size);
                 RPC_STATUS_ASSERT(status);
+                has_unflushed_tx = true;
             }
             if (trace) {
                 const std::chrono::duration<double, std::milli> elapsed = std::chrono::steady_clock::now() - t0;
@@ -707,6 +723,9 @@ void rpc_dispatcher::work() {
         }
         msg_ptr->completion.set_value();
         last_cmd = std::chrono::steady_clock::now();
+    }
+    if (sock && has_unflushed_tx) {
+        sock->flush();
     }
 }
 
@@ -823,7 +842,7 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
         LOG_DBG2("[%s] tensor: %s\n", __func__, rpc_log_format_tensor(tensor).c_str());
         auto request = std::make_shared<rpc_msg_init_tensor_req>();
         request->tensor = serialize_tensor(tensor);
-        ctx->dispatcher->send(RPC_CMD_INIT_TENSOR, request, sizeof(*request), nullptr, 0, nullptr, 0);
+        ctx->dispatcher->send_async(RPC_CMD_INIT_TENSOR, request, sizeof(*request));
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -838,7 +857,7 @@ static void ggml_backend_rpc_buffer_memset_tensor(
     request->value  = value;
     LOG_DBG2("[%s] tensor: %s, offset: %zu, size: %s, value: %u\n", __func__, rpc_log_format_tensor(tensor).c_str(), offset,
              rpc_log_format_size(size).c_str(), value);
-    ctx->dispatcher->send(RPC_CMD_MEMSET_TENSOR, request, sizeof(*request), nullptr, 0, nullptr, 0);
+    ctx->dispatcher->send_async(RPC_CMD_MEMSET_TENSOR, request, sizeof(*request));
 }
 
 // input serialization format: | rpc_tensor | cache_flag (1 byte) | offset (8 bytes) | data (size bytes)
@@ -887,9 +906,15 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
         // the server has no cache entry for this tensor - ask it to save one
         cache_flag = 1;
     }
-    size_t header_size;
-    auto header = serialize_set_tensor(rpc_tensor, cache_flag, offset, nullptr, 0, header_size);
-    ctx->dispatcher->send(RPC_CMD_SET_TENSOR, header, header_size, data, size, nullptr, 0);
+    if (cache_flag == 0 && size <= 4 * 1024 * 1024) {
+        size_t input_size;
+        auto input = serialize_set_tensor(rpc_tensor, cache_flag, offset, data, size, input_size);
+        ctx->dispatcher->send_async(RPC_CMD_SET_TENSOR, input, input_size);
+    } else {
+        size_t header_size;
+        auto header = serialize_set_tensor(rpc_tensor, cache_flag, offset, nullptr, 0, header_size);
+        ctx->dispatcher->send(RPC_CMD_SET_TENSOR, header, header_size, data, size, nullptr, 0);
+    }
 }
 
 static void ggml_backend_rpc_buffer_set_tensor_2d(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data,
@@ -1058,16 +1083,21 @@ static size_t ggml_backend_rpc_get_max_size(ggml_backend_buffer_type_t buft) {
 }
 
 static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    // should we query the remote server for the actual size
+    // Exact local formula for CUDA 512-element quantized row padding (zero network round-trips)
+    if (ggml_is_quantized(tensor->type) && (tensor->ne[0] % 512 != 0) && (tensor->view_src == nullptr)) {
+        return ggml_nbytes(tensor) + ggml_row_size(tensor->type, 512 - tensor->ne[0] % 512);
+    }
+
+    // On CUDA backends, only FLASH_ATTN_EXT with non-F16 K/V caches ever expands alloc_size beyond ggml_nbytes(tensor)
     bool rpc_get = false;
-
-    // See comments in init_tensor.
-    rpc_get |= ggml_is_quantized(tensor->type) && (tensor->ne[0] % 512 != 0) && (tensor->view_src == nullptr);
-
-    // [TAG_ALLOC_SIZE_EXPAND]
-    // ops that may require additional memory for fleeting data on certain backends
-    // ref: https://github.com/ggml-org/llama.cpp/pull/15966
-    rpc_get |= ggml_op_alloc_size_may_expand(tensor->op);
+    static const bool full_query = std::getenv("GGML_RPC_FULL_ALLOC_SIZE_QUERY") != nullptr;
+    if (full_query) {
+        rpc_get |= ggml_op_alloc_size_may_expand(tensor->op);
+    } else if (tensor->op == GGML_OP_FLASH_ATTN_EXT) {
+        const ggml_tensor * k = tensor->src[1];
+        const ggml_tensor * v = tensor->src[2];
+        rpc_get = (k && k->type != GGML_TYPE_F16) || (v && v->type != GGML_TYPE_F16);
+    }
 
     if (rpc_get) {
         ggml_backend_rpc_buffer_type_context * buft_ctx = (ggml_backend_rpc_buffer_type_context *)buft->context;
@@ -1272,28 +1302,55 @@ void rpc_dispatcher::graph_compute(uint32_t device, const ggml_cgraph * cgraph) 
     std::lock_guard<std::mutex> lock(graph_mutex);
     GGML_ASSERT(cgraph->n_nodes > 0);
     auto & device_graph_uids = graph_uids[device];
-    bool reuse = cgraph->uid != 0 && device_graph_uids.count(cgraph->uid) > 0;
-    LOG_DBG("[%s] device: %u, uid: %" PRIu64 ", n_nodes: %u, reuse: %s\n", __func__, device, cgraph->uid, cgraph->n_nodes, reuse ? "yes" : "no");
-    if (reuse) {
-        auto request = std::make_shared<rpc_msg_graph_recompute_req>();
-        request->device = device;
-        request->uid    = cgraph->uid;
-        send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
-    } else {
-        if (cgraph->uid != 0) {
-            if (device_graph_uids.size() >= GRAPH_CACHE_MAX) {
-                LOG_DBG("[%s] clearing graph cache for device %u (%zu entries)\n",
-                        __func__, device, device_graph_uids.size());
-                device_graph_uids.clear();
-            }
-            device_graph_uids.insert(cgraph->uid);
+    auto & seq_map = seq_to_content_uid[device];
+
+    if (cgraph->uid != 0) {
+        auto it = seq_map.find(cgraph->uid);
+        if (it != seq_map.end() && device_graph_uids.count(it->second) > 0) {
+            auto request = std::make_shared<rpc_msg_graph_recompute_req>();
+            request->device = device;
+            request->uid    = it->second;
+            send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
+            return;
         }
-        size_t input_size = 0;
-        uint8_t * input = serialize_graph(device, cgraph, this, &input_size);
-        LOG_DBG2("[%s] serialized graph: %s\n", __func__, rpc_log_format_size(input_size).c_str());
-        std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
-        send_async(RPC_CMD_GRAPH_COMPUTE, input_ptr, input_size);
     }
+
+    size_t input_size = 0;
+    uint8_t * input = serialize_graph(device, cgraph, this, &input_size);
+    const size_t hdr_bytes = sizeof(uint32_t) + sizeof(uint64_t);
+
+    if (cgraph->uid != 0 && input_size > hdr_bytes) {
+        uint64_t content_uid = fnv_hash(input + hdr_bytes, input_size - hdr_bytes);
+        if (content_uid == 0) {
+            content_uid = 1;
+        }
+        seq_map[cgraph->uid] = content_uid;
+
+        if (device_graph_uids.count(content_uid) > 0) {
+            delete[] input;
+            LOG_DBG("[%s] device: %u, seq_uid: %" PRIu64 " -> content_uid: 0x%" PRIx64 " (cross-turn cache hit)\n",
+                    __func__, device, cgraph->uid, content_uid);
+            auto request = std::make_shared<rpc_msg_graph_recompute_req>();
+            request->device = device;
+            request->uid    = content_uid;
+            send_async(RPC_CMD_GRAPH_RECOMPUTE, request, sizeof(*request));
+            return;
+        }
+
+        if (device_graph_uids.size() >= GRAPH_CACHE_MAX) {
+            LOG_DBG("[%s] clearing graph cache for device %u (%zu entries)\n",
+                    __func__, device, device_graph_uids.size());
+            device_graph_uids.clear();
+            seq_map.clear();
+            seq_map[cgraph->uid] = content_uid;
+        }
+        device_graph_uids.insert(content_uid);
+        memcpy(input + sizeof(uint32_t), &content_uid, sizeof(content_uid));
+    }
+
+    LOG_DBG2("[%s] serialized graph: %s\n", __func__, rpc_log_format_size(input_size).c_str());
+    std::shared_ptr<uint8_t> input_ptr(input, std::default_delete<uint8_t[]>());
+    send_async(RPC_CMD_GRAPH_COMPUTE, input_ptr, input_size);
 }
 
 static enum ggml_status ggml_backend_rpc_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
