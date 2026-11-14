@@ -19,7 +19,8 @@ public:
         cl_uint stride, cl_uint dilation, cl_uint pad_w, cl_uint pad_h, cl_uint pad_d, const ggml_tensor * tensor);
 
 private:
-    Conv3D_GMEM(cl_context context, cl_device_id device, cl_command_queue queue, cl_kernel kernel_conv, cl_kernel kernel_relayout, ProfilingInfo & profiling_info, const ggml_tensor * op);
+    Conv3D_GMEM(cl_context context, cl_kernel kernel_conv, cl_kernel kernel_relayout, ProfilingInfo & profiling_info, const ggml_tensor * op);
+    bool init(cl_device_id device, cl_command_queue queue);
     static bool has_extension(cl_device_id device, const char * extension);
     static bool multiply(size_t lhs, size_t rhs, size_t * result);
     static cl_uint tile_n_for(cl_uint output_channels);

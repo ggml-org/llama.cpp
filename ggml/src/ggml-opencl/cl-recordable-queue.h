@@ -1,5 +1,7 @@
 #pragma once
 
+#include "opencl_profiling_info.h"
+
 #include <CL/cl.h>
 #include <CL/cl_ext_qcom.h>
 
@@ -30,21 +32,35 @@ public:
         return false;
     }
 
-    cl_recordable_queue(cl_context context, cl_device_id device, cl_command_queue queue)
-        : queue(queue) {
+    cl_recordable_queue() = default;
+
+    bool init(cl_context context, cl_device_id device, cl_command_queue queue) {
+        this->queue = queue;
         cl_platform_id platform = nullptr;
-        CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_PLATFORM, sizeof(platform), &platform, nullptr));
+        if (clGetDeviceInfo(device, CL_DEVICE_PLATFORM, sizeof(platform), &platform, nullptr) != CL_SUCCESS) {
+            return false;
+        }
 
         new_recording = (clNewRecordingQCOM_fn) clGetExtensionFunctionAddressForPlatform(platform, "clNewRecordingQCOM");
         end_recording = (clEndRecordingQCOM_fn) clGetExtensionFunctionAddressForPlatform(platform, "clEndRecordingQCOM");
         release_recording = (clReleaseRecordingQCOM_fn) clGetExtensionFunctionAddressForPlatform(platform, "clReleaseRecordingQCOM");
         enqueue_recording = (clEnqueueRecordingQCOM_fn) clGetExtensionFunctionAddressForPlatform(platform, "clEnqueueRecordingQCOM");
-        GGML_ASSERT(new_recording && end_recording && release_recording && enqueue_recording);
+        if (!new_recording || !end_recording || !release_recording || !enqueue_recording) {
+            return false;
+        }
 
+        cl_int status = CL_SUCCESS;
         const cl_queue_properties properties[] = { CL_QUEUE_PROPERTIES, CL_QUEUE_RECORDABLE_QCOM, 0 };
-        CL_CHECK((recording_queue = clCreateCommandQueueWithProperties(context, device, properties, &status), status));
-        CL_CHECK((recording = new_recording(recording_queue, &status), status));
+        recording_queue = clCreateCommandQueueWithProperties(context, device, properties, &status);
+        if (status != CL_SUCCESS) {
+            return false;
+        }
+        recording = new_recording(recording_queue, &status);
+        if (status != CL_SUCCESS) {
+            return false;
+        }
         recording_in_progress = true;
+        return true;
     }
 
     void set_arg(cl_kernel kernel, cl_uint arg_index, size_t arg_size, const void * arg_value) {
@@ -105,7 +121,6 @@ private:
     cl_command_queue recording_queue = nullptr;
     cl_recording_qcom recording = nullptr;
     bool recording_in_progress = false;
-    cl_int status = CL_SUCCESS;
 
     clNewRecordingQCOM_fn new_recording = nullptr;
     clEndRecordingQCOM_fn end_recording = nullptr;

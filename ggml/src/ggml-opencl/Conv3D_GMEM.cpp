@@ -146,15 +146,19 @@ Conv3D_GMEM * Conv3D_GMEM::create(cl_context context, cl_device_id device, cl_co
         CL_CHECK(clReleaseKernel(conv));
         return nullptr;
     }
-    return new Conv3D_GMEM(context, device, queue, conv, relayout, profiling_info, op);
+    Conv3D_GMEM * result = new Conv3D_GMEM(context, conv, relayout, profiling_info, op);
+    if (!result->init(device, queue)) {
+        delete result;
+        return nullptr;
+    }
+    return result;
 }
 
-Conv3D_GMEM::Conv3D_GMEM(cl_context context, cl_device_id device, cl_command_queue queue, cl_kernel kernel_conv, cl_kernel kernel_relayout, ProfilingInfo & profiling_info, const ggml_tensor * op)
+Conv3D_GMEM::Conv3D_GMEM(cl_context context, cl_kernel kernel_conv, cl_kernel kernel_relayout, ProfilingInfo & profiling_info, const ggml_tensor * op)
     : context(context),
       oc((cl_uint) op->op_params[11]), ic((cl_uint) op->op_params[9]),
       fd((cl_uint) op->src[0]->ne[2]), fh((cl_uint) op->src[0]->ne[1]), fw((cl_uint) op->src[0]->ne[0]),
-      tile_n(tile_n_for(oc)), padded_oc((oc + tile_n - 1) / tile_n * tile_n), weight_type(op->src[0]->type),
-      recordable_queue(context, device, queue)
+      tile_n(tile_n_for(oc)), padded_oc((oc + tile_n - 1) / tile_n * tile_n), weight_type(op->src[0]->type)
 #ifdef GGML_OPENCL_PROFILING
       , profiling_info(profiling_info)
 #endif
@@ -162,19 +166,29 @@ Conv3D_GMEM::Conv3D_GMEM(cl_context context, cl_device_id device, cl_command_que
 #ifndef GGML_OPENCL_PROFILING
     GGML_UNUSED(profiling_info);
 #endif
+}
+
+bool Conv3D_GMEM::init(cl_device_id device, cl_command_queue queue) {
     cl_int status = CL_SUCCESS;
 
     const size_t element_size = ggml_type_size(weight_type);
     const size_t weight_size = (size_t) padded_oc * fd * fh * fw * ic * element_size;
     const cl_mem_properties properties[] = { CL_MEM_ONCHIP_GLOBAL_QCOM, 1, CL_MEM_ONCHIP_GLOBAL_OFFSET_QCOM, 0, 0 };
-    CL_CHECK((gmem_weight = clCreateBufferWithProperties(context, properties, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, weight_size, nullptr, &status), status));
+    gmem_weight = clCreateBufferWithProperties(context, properties, CL_MEM_READ_WRITE | CL_MEM_HOST_NO_ACCESS, weight_size, nullptr, &status);
+    if (status != CL_SUCCESS) {
+        return false;
+    }
 
     const cl_image_format format = { CL_R, weight_type == GGML_TYPE_F16 ? (cl_channel_type) CL_HALF_FLOAT : (cl_channel_type) CL_FLOAT };
     cl_image_desc description = {};
     description.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
     description.image_width = (size_t) padded_oc * fd * fh * fw * ic;
     description.buffer = gmem_weight;
-    CL_CHECK((gmem_weight_image = clCreateImage(context, CL_MEM_READ_ONLY, &format, &description, nullptr, &status), status));
+    gmem_weight_image = clCreateImage(context, CL_MEM_READ_ONLY, &format, &description, nullptr, &status);
+    if (status != CL_SUCCESS) {
+        return false;
+    }
+    return recordable_queue.init(context, device, queue);
 }
 
 void Conv3D_GMEM::enqueue(cl_mem weight, cl_ulong weight_offset, cl_mem input, cl_ulong input_offset, cl_mem output, cl_ulong output_offset,
@@ -268,7 +282,11 @@ void Conv3D_GMEM::enqueue(cl_mem weight, cl_ulong weight_offset, cl_mem input, c
 Conv3D_GMEM::~Conv3D_GMEM() {
     CL_CHECK(clReleaseKernel(kernel_relayout));
     CL_CHECK(clReleaseKernel(kernel_conv));
-    CL_CHECK(clReleaseMemObject(gmem_weight_image));
-    CL_CHECK(clReleaseMemObject(gmem_weight));
+    if (gmem_weight_image) {
+        CL_CHECK(clReleaseMemObject(gmem_weight_image));
+    }
+    if (gmem_weight) {
+        CL_CHECK(clReleaseMemObject(gmem_weight));
+    }
 }
 #endif
