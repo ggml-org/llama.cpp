@@ -195,7 +195,7 @@ llama_model_hy_v4::graph::build_hc_pre(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc * n_embd, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, hparams.f_norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm); // [2*hc, nt]
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm); // [2*hc, nt]
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = hy_v4_view_1d(ctx0, hc_scale, 1, 0);
@@ -264,7 +264,7 @@ ggml_tensor * llama_model_hy_v4::graph::build_hc_head(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc * n_embd, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, hparams.f_norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm); // [hc, nt]
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm); // [hc, nt]
     cb(mixes, "hc_head_mixes", -1);
 
     ggml_tensor * pre = ggml_mul(ctx0, mixes, hc_scale);

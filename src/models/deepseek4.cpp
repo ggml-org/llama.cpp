@@ -370,7 +370,7 @@ llama_model_deepseek4::graph::build_hc_mixes(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
@@ -458,7 +458,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_head(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_head_mixes", -1);
 
     ggml_tensor * pre = dsv4_hc_affine(ctx0, mixes, hc_scale, hc_base);
