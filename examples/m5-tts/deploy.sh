@@ -20,6 +20,11 @@
 # libraries (no separate runtime dir / env injection). Override the depth
 # command with M5_DEPTH_CMD='env M5_KV_PAD=256 ... depth-resident ...' for A/B.
 #
+# The startup warmup primes the codec state (restore_prime) for default_voice.
+# The web console defaults to Serena, so align default_voice with it: otherwise
+# the very first Serena request misses the prime cache and pays ~0.08 s of extra
+# First-Pcm. Set M5_DEFAULT_VOICE to another cached voice (or empty) to override.
+#
 # The device keeps the model package (model/ dir + codec_encoder.onnx) on its
 # own; --no-models skips the backup pull. /data/local/tmp is wiped on device
 # reboot, so re-run this script after one.
@@ -45,6 +50,11 @@ FORWARD_PORT=${FORWARD_PORT:-18080}
 # 32-wide KV pad and the direct V scatter as compiled-in defaults, so no
 # separate runtime directory or env injection is needed.
 M5_DEPTH_CMD=${M5_DEPTH_CMD:-}
+M5_DEFAULT_VOICE=${M5_DEFAULT_VOICE-serena}
+VOICE_ARGS=""
+if [ -n "$M5_DEFAULT_VOICE" ]; then
+    VOICE_ARGS="--voice $M5_DEFAULT_VOICE"
+fi
 
 ADB=${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/adb")}
 [ -x "$ADB" ] || { echo "adb not found; set ADB=" >&2; exit 1; }
@@ -111,7 +121,7 @@ $ADB shell "cd $VDIR && D=\$PWD; \
     export LD_LIBRARY_PATH=\$D ADSP_LIBRARY_PATH=\$D \
            GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1; \
     nohup ./m5-server model --port $PORT --cwd \$D --threads 3 \
-        $DEPTH_ARGS \
+        $DEPTH_ARGS $VOICE_ARGS \
         --voice-encoder \$D/codec_encoder.onnx > \$D/m5-server.log 2>&1 &"
 sleep 3
 $ADB shell "pidof m5-server" >/dev/null || { echo "server did not start; see $VDIR/m5-server.log" >&2; exit 1; }
@@ -130,4 +140,5 @@ m5-server is up.
   env pinned  : GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1
   compiled-in : KV pad 32 (depth) / 256 (backbone), direct V scatter
                 (override with M5_KV_PAD / M5_HVX_DIRECT_V for A/B)
+  warmup voice: ${M5_DEFAULT_VOICE:-(none)}  (codec prime cached for this voice)
 EOF

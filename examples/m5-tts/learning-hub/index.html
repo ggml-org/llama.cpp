@@ -1536,6 +1536,7 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
   <p>保持 FP32 KV 与普通注意力，把短序列 KV 的读取范围从 256 改为按 32 对齐，保留原 cache 容量和全部有效位置。两组 codes 和 WAV 逐字节一致，端到端减少约 10%。这是利用模型真实形状减少被掩蔽计算的例子。用单行 decode profile 归因，再用独立 A/B 验收墙钟。</p>
   <p><b>转正：从实验开关变成编译期默认。</b>实验阶段它只存在于一个隔离 runtime 目录里，靠部署脚本给 depth 子进程注入 <code>M5_KV_PAD32=1</code> 才生效，源码默认仍是 256。转正时把 <code>get_n_kv()</code> 的 pad 默认改为 32（<code>M5_KV_PAD=256</code> 可回退），并让 backbone 分支显式保留 256——因为它的 prefill prefix 会随整句增长，而且原实验只有 depth 用了 32，必须严格复现实验条件。V 直接散写同时转为默认（<code>M5_HVX_DIRECT_V=0</code> 关闭）。部署脚本不再需要特殊目录和 env 注入，并补上了原本缺失的 stage 库推送。12 次交替 A/B：默认 3.775 s / RTF 0.710，pad 256 为 4.163 s / 0.783，关 direct-V 为 3.894 s / 0.732；12 次 codes 与 WAV 的哈希全部相同，backbone 耗时无退化。</p>
   <p><b>提速成功后，瓶颈结构会改变。</b>转正前 depth 4.53 s、codec 3.62 s，之间有 25% 余量；转正后 depth 2.853 s、codec 2.820 s，<b>只差 1.15%</b>。流水线的墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，于是单独把 depth 再降 27%（Flash 级）只剩 -0.9%，哪怕把 depth 降到零也只是 -0.9%；单独把 codec 降 20% 是 <b>0%</b>。只有两者一起降 20% 才有约 -15%。这正是第 3 章「先看天花板再动手」的实战版：一个成功的优化会把旧的余量吃光，让此前划算的方向突然变得不划算。后续 P0 归因实验（§17）确认：即使 KV 保持 FP32，融合 kernel 也会改变 codes 与帧数，单帧只快 6.9% 而整句墙钟反而 +5.1%，这条线判死。方法沉淀见下一章。</p>
+  <p><b>盲听复核。</b>三条文本各出两份音频，a/b 顺序打乱，映射表在反馈前不揭晓。用户指出第 3 组（车站播报）的 <code>3a</code> 有点差；揭晓后 <code>3a</code> 正是融合 kernel 版，<code>3b</code> 是基线。这是独立于 codes/WAV 哈希、ASR 和 RTF 的<b>人耳证据</b>：KV 精度没变，只换 attention 实现也能被听出来。按等价性分层的第 ③ 层，不通过即否决。样本量小（3 组、仅 1 组被明确指出），所以结论是「不进入生产」，不是「所有文本都能听出差异」。</p>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch10">标记本章已学完</button></div>
 </section>
 
@@ -1610,19 +1611,27 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
     <li>先做便宜的判死实验，再投入训练或改图。960 帧离线数据判死草稿，16 次合成判死 Flash 线。</li>
   </ol>
 
-  <h3>11.3 三个反复出现的陷阱</h3>
+  <h3>11.3 四个反复出现的陷阱</h3>
   <div class="grid2">
     <div class="tile"><b>分母会变</b><p><code>flash-f32</code> 的 RTF 从 0.700 降到 0.666，看似快 5%；实际帧数 69→76、音频长 10.5%、墙钟 <b>+5.1%</b>。只看 RTF 会得到完全相反的结论。</p></div>
     <div class="tile"><b>只看单边指标</b><p><code>--threads 3</code>、<code>chunk (2,4)</code>、<code>OPPOLL=1</code> 都是按「codec 单独耗时」「首包最短」定的。§13 用端到端墙钟重扫 48 次，没有任何配置快于默认。</p></div>
     <div class="tile"><b>把近似当等价</b><p>codes 分叉、帧数漂移时，两条轨迹已经不是同一个任务；此时比速度没有意义，先过门禁再谈性能。</p></div>
     <div class="tile"><b>沿用旧基线</b><p>「Flash 是最大杠杆（-17%）」在 KV32 之前成立；转正后它只剩 ~0.9%。每条结论都要带上它的基线。</p></div>
+    <div class="tile"><b>冷 / 热口径混用</b><p>CLI 每次都是新进程，codec prime 缓存必然空；常驻 server 同音色第二次起就命中，首包差约 0.08 s。之前所有分项实验用 CLI，报的都是冷启动数。延迟必须标明是「重启后首次」还是「稳态」。</p></div>
   </div>
 
   <h3>11.4 把负结果变成资产</h3>
   <p>§12–§14、§17 四条线全部判死，但留下的是可复用的机制：α 上界、固定税、可预测性衰减、kernel 轨迹漂移。写清楚「为什么不行」和「什么条件下复活」，比记录「试过没收益」有价值得多——它让下一个人不必重跑一遍，也让自己不会在换基线后重复投入。</p>
 
+  <h3>11.5 案例：把 0.398 s 首包拆开</h3>
+  <p>稳态 RTF 被 <code>max()</code> 锁死（§16），但<b>首包由固定项主导，是另一本账</b>。扫 <code>--first 1/2/3/4/6/8</code> 两轮交替，拟合出 <code>first_pcm = 0.234 s + 74.6 ms/帧</code>（残差 &lt;21 ms）；斜率恰好等于 depth 单帧 31.7 ms 加 codec 单帧 40 ms。再用 <code>--no-overlap</code> 把并行项暴露：codec prime 0.230 s、backbone prefill 0.190 s，overlap 下取 <code>max</code>，所以固定项其实是 <b>codec prime，不是 prefill</b>。斜率/截距加隔离开关，比逐个埋点更省事。</p>
+  <p><code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，命中就跳过那 0.23 s。查出的问题是缓存条件错配：warmup 用的是 voice 0（官方样例），而 Web 默认 Serena，于是<b>每个用户的第一次请求都在给用不到的音色付冷启动</b>。部署层加一个 <code>--voice serena</code> 让默认音色对齐，首次 pcm 从 0.346 降到 0.280 s（wav 0.507→0.420），零引擎改动、稳态不退化。<b>先查缓存命中条件，往往比写更快的 kernel 更划算。</b></p>
+  <p>剩余方向：prime 缓存目前是单条目，换音色立即失效（切回仍要 0.49 s）；改成小 LRU 可让来回切换也命中。命中路径仍要发送 32 行共享 prefix，属协议改动、风险较高。<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
+
   <details class="qa"><summary>Q8　某候选把 RTF 从 0.700 降到 0.666，能上线吗？</summary>
     <div class="answer">不能只看这个数。本例中帧数 69→76，音频 5.32→5.88 s，墙钟 3.724→3.914 s（<b>+5.1%</b>），RTF 下降纯粹因为分母变长。而且四条文本/seed 的 codes 与 WAV <b>全部不一致</b>，已经不是同一个任务。正确顺序：先看过没过等价性门禁（逐字节 → ASR → 盲听），再看 <code>elapsed_s</code> 与每帧成本，最后才算 RTF。这个候选是 §17 的 <code>flash-f32</code>，结论是判死。</div></details>
+  <details class="qa"><summary>Q9　把首块从 2 帧减到 1 帧，首包为什么反而从 0.398 s 涨到 0.616 s？</summary>
+    <div class="answer">因为 <code>kTail = 2400</code> 个样本大于单帧 <code>kHop = 1920</code>：第一个 chunk 的输出被全部留作 overlap tail，<code>drop = 0</code>，根本没有 PCM 写出。首包只能等第二个 chunk（4 帧），等于等 5 帧——<code>0.234 + 5 × 0.0746 = 0.607 s</code>，与实测 0.616 s 吻合。<b>减小批次不一定降低延迟，要先看输出阈值。</b>另外把 prime 的输出接进 tail 虽然能让 1 帧发出声音，但会把参考音色原声混进开头，不能这么修。</div></details>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch11">标记本章已学完</button></div>
 </section>
 
