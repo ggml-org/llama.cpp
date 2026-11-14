@@ -12,10 +12,10 @@ Notice: The overall process of model inference for both **MobileVLM** and **Mobi
 
 Build the `llama-mtmd-cli` binary.
 
-After building, run: `./llama-mtmd-cli` to see the usage. For example:
+After building, run: `./build/bin/llama-mtmd-cli` to see the usage. For example:
 
 ```sh
-./llama-mtmd-cli -m MobileVLM-1.7B/ggml-model-q4_k.gguf \
+./build/bin/llama-mtmd-cli -m MobileVLM-1.7B/ggml-model-q4_k.gguf \
     --mmproj MobileVLM-1.7B/mmproj-model-f16.gguf \
     --chat-template deepseek
 ```
@@ -33,13 +33,13 @@ git clone https://huggingface.co/openai/clip-vit-large-patch14-336
 2. Use `llava_surgery.py` to split the LLaVA model to LLaMA and multimodel projector constituents:
 
 ```sh
-python ./tools/mtmd/llava_surgery.py -m path/to/MobileVLM-1.7B
+python ./tools/mtmd/legacy-models/llava_surgery.py -m path/to/MobileVLM-1.7B
 ```
 
 3. Use `convert_image_encoder_to_gguf.py` with `--projector-type ldp` (for **V2** please use `--projector-type ldpv2`) to convert the LLaVA image encoder to GGUF:
 
 ```sh
-python ./tools/mtmd/convert_image_encoder_to_gguf.py \
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py \
     -m path/to/clip-vit-large-patch14-336 \
     --llava-projector path/to/MobileVLM-1.7B/llava.projector \
     --output-dir path/to/MobileVLM-1.7B \
@@ -47,7 +47,7 @@ python ./tools/mtmd/convert_image_encoder_to_gguf.py \
 ```
 
 ```sh
-python ./tools/mtmd/convert_image_encoder_to_gguf.py \
+python ./tools/mtmd/legacy-models/convert_image_encoder_to_gguf.py \
     -m path/to/clip-vit-large-patch14-336 \
     --llava-projector path/to/MobileVLM-1.7B_V2/llava.projector \
     --output-dir path/to/MobileVLM-1.7B_V2 \
@@ -57,12 +57,12 @@ python ./tools/mtmd/convert_image_encoder_to_gguf.py \
 4. Use `examples/convert_legacy_llama.py` to convert the LLaMA part of LLaVA to GGUF:
 
 ```sh
-python ./examples/convert_legacy_llama.py path/to/MobileVLM-1.7B --skip-unknown
+python ./examples/convert_legacy_llama.py path/to/MobileVLM-1.7B --skip-unknown --outtype f32 --outfile path/to/MobileVLM-1.7B/ggml-model-f32.gguf
 ```
 
 5. Use `quantize` to convert LLaMA part's DataType from `fp32` to `q4_k`
 ```sh
-./llama-quantize path/to/MobileVLM-1.7B/ggml-model-F32.gguf path/to/MobileVLM-1.7B/ggml-model-q4_k.gguf q4_k_s
+./build/bin/llama-quantize path/to/MobileVLM-1.7B/ggml-model-f32.gguf path/to/MobileVLM-1.7B/ggml-model-q4_k.gguf q4_k_s
 ```
 
 Now both the LLaMA part and the image encoder is in the `MobileVLM-1.7B` directory.
