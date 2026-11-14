@@ -1097,6 +1097,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
     "TOP_K_MASK",
+    "TOP_K_ROWS",
 
     "UNARY",
 
@@ -1114,7 +1115,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
+static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1210,6 +1211,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
     "top_k_mask(mask, top_k, score, blocks, extra)",
+    "top_k_rows(top_k, score, blocks, extra)",
 
     "unary(x)",
 
@@ -1227,7 +1229,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
+static_assert(GGML_OP_COUNT == 100, "GGML_OP_COUNT != 100");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6583,6 +6585,54 @@ struct ggml_tensor * ggml_top_k_mask(
     result->src[2] = score;
     result->src[3] = blocks;
     result->src[4] = extra;
+
+    return result;
+}
+
+// ggml_top_k_rows
+
+struct ggml_tensor * ggml_top_k_rows(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * top_k,
+        struct ggml_tensor  * score,
+        struct ggml_tensor  * blocks,
+        struct ggml_tensor  * extra,
+        int64_t               n_kv,
+        int64_t               n_res,
+        enum ggml_type        type) {
+    GGML_ASSERT(type == GGML_TYPE_I32 || type == GGML_TYPE_F16 || type == GGML_TYPE_F32);
+    GGML_ASSERT(top_k->type == GGML_TYPE_I32);
+    GGML_ASSERT(n_kv > 0 && n_kv <= INT32_MAX);
+
+    if (score) {
+        GGML_ASSERT(score->type == GGML_TYPE_F32);
+        GGML_ASSERT(score->ne[1] == top_k->ne[1] && score->ne[2] == top_k->ne[2] && score->ne[3] == top_k->ne[3]);
+    }
+
+    if (blocks) {
+        GGML_ASSERT(blocks->type == GGML_TYPE_I32);
+        GGML_ASSERT(blocks->ne[2] == 1 && blocks->ne[3] == 1);
+        GGML_ASSERT(!score || blocks->ne[1] == score->ne[0]);
+    }
+
+    if (extra) {
+        GGML_ASSERT(extra->type == GGML_TYPE_I32);
+        GGML_ASSERT(extra->ne[1] == top_k->ne[1] && extra->ne[2] == top_k->ne[2] && extra->ne[3] == top_k->ne[3]);
+    }
+
+    const int64_t n_blk   = blocks ? blocks->ne[0] : 1;
+    const int64_t n_extra = extra  ? extra->ne[0]  : 0;
+    GGML_ASSERT(n_res >= top_k->ne[0]*n_blk + n_extra);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, n_res, top_k->ne[1], top_k->ne[2], top_k->ne[3]);
+
+    ggml_set_op_params_i32(result, 0, (int32_t) n_kv);
+
+    result->op     = GGML_OP_TOP_K_ROWS;
+    result->src[0] = top_k;
+    result->src[1] = score;
+    result->src[2] = blocks;
+    result->src[3] = extra;
 
     return result;
 }

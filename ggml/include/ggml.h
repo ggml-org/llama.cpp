@@ -413,6 +413,7 @@ extern "C" {
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
         GGML_OP_TOP_K_MASK,
+        GGML_OP_TOP_K_ROWS,
 
         GGML_OP_UNARY,
 
@@ -2517,6 +2518,25 @@ extern "C" {
             struct ggml_tensor  * score,
             struct ggml_tensor  * blocks,
             struct ggml_tensor  * extra);
+
+    // the cells that ggml_top_k_mask keeps as one list per row, for ggml_flash_attn_ext_rows
+    //
+    // top_k, score, blocks, extra: as in ggml_top_k_mask
+    // res: [n_res, ne1, ne2, ne3] i32: the cells of the live picks (n_blk per pick), then the extra cells, then padding
+    //      entries of dead picks, cells out of [0, n_kv) and the padding are -1
+    //      f16 or f32: the matching mask, 0 for a listed cell and -inf for a -1 entry
+    //
+    // a cell that is listed twice is attended twice, the picks and the extra cells must not overlap
+    //
+    GGML_API struct ggml_tensor * ggml_top_k_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * top_k,
+            struct ggml_tensor  * score,
+            struct ggml_tensor  * blocks,
+            struct ggml_tensor  * extra,
+            int64_t               n_kv,
+            int64_t               n_res,
+            enum ggml_type        type);
 
     // custom operators
 
