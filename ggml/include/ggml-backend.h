@@ -161,6 +161,8 @@ extern "C" {
         bool events;
         // mmap is supported for loading
         bool mmap_support;
+        // set_tensor_async from host memory is ordered with the graph computes and cheaper than a blocking write
+        bool async_host_input;
     };
 
     // all the device properties
