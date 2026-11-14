@@ -449,6 +449,7 @@ struct mtmd_helper_video_seq {
     std::string id;
 
     bool    src_alive     = false;
+    bool    src_error     = false;
     int32_t current_frame = 0;
 
     std::string prompt_start         = "Video:";
@@ -482,6 +483,7 @@ struct mtmd_helper_video_seq {
     virtual ~mtmd_helper_video_seq();
 
     virtual bool read_raw_frame() = 0;
+    virtual bool finish_raw_frames() { return true; }
 
     void configure(const mtmd_video_config & cfg, const mtmd_helper_video_src & src, float fps_target_arg);
 
