@@ -67,6 +67,7 @@ export {
 	getMessageCount,
 	getConversationModel,
 	buildConversationTree,
+	collectForkFamily,
 	type ConversationTreeItem
 } from './conversation-utils';
 
@@ -98,6 +99,7 @@ export {
 	formatNumber,
 	formatJsonPretty,
 	formatTime,
+	formatLocalIso,
 	formatPerformanceTime,
 	formatRelativeTime,
 	formatAttachmentText
@@ -132,10 +134,14 @@ export {
 // Portal utilities
 export { portalToBody } from './portal-to-body';
 
+// Haptic utilities
+export { hapticTap } from './haptics';
+
 // Precision utilities
 export { normalizeFloatingPoint, normalizeNumber } from './precision';
 
 // Syntax highlighting utilities
+export { loadHighlightTheme } from './highlight-theme';
 export { getLanguageFromFilename } from './syntax-highlight-language';
 
 // Text file utilities
@@ -235,26 +241,7 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Tokenization for the ChatFormInputRich (mention links + code spans <-> chip DOM)
-export {
-	tokenizeContent,
-	containsCodeSpan,
-	isOffsetInCodeBlock,
-	domMatchesTokens,
-	syncCodeBlockHatches,
-	stripBlockBoundaryLineBreaks,
-	serializeContent,
-	buildFragment,
-	rangeToTextOffset,
-	textOffsetToRange,
-	badgeAwareWordJump,
-	leadingBadgeEdgeOffset
-} from './chat-form-input-rich-tokenizer';
-
-// Source-space undo/redo history for the ChatFormInputRich
-export { SourceHistory, type SourceHistoryEntry } from './source-history';
-
-// Mention-badge visual contract (used by the ChatFormInputRich / rehype
+// Mention-badge visual contract (used by the chat form input / rehype
 // DOM paths that build the same chip without a Svelte mount)
 export {
 	containsFileMentionLink,
@@ -379,6 +366,9 @@ export { detectToolUseSupport } from './chat-template-tool-detector';
 
 // Model memory estimation
 export { minMemoryTierGb } from './model-compatibility';
+
+// GGUF file metadata, e.g. which encoders an mmproj carries
+export { type GgufMetadata, type GgufValue, readGgufMetadata } from './gguf-metadata';
 
 // Cryptography utilities
 

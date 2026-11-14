@@ -5,7 +5,7 @@ import sys
 import os
 import argparse
 from pathlib import Path
-from common import get_model_name_from_env_path  # type: ignore[import-not-found, ty:unresolved-import]
+from common import get_model_name_from_env_path  # ty: ignore[import-not-found]
 
 def calculate_nmse(reference, test):
     mse = np.mean((test - reference) ** 2)
