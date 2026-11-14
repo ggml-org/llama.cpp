@@ -800,7 +800,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 tail.resize(hparams.n_embd, 0.0f);
                 set_input_f32("inp_stem_tail", tail);
             } break;
-        case PROJECTOR_TYPE_INKLING2:
+        case PROJECTOR_TYPE_INKLING2V:
             {
                 // CLS is at position 0, the patches are 1-indexed
                 std::vector<int32_t> positions_w{0}, positions_h{0};

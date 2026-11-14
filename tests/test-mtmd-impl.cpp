@@ -267,14 +267,14 @@ MAKE_TEST(test_image_preprocessor_lfm2_torch_resize) {
     }
 }
 
-MAKE_TEST(test_image_preprocessor_inkling2) {
+MAKE_TEST(test_image_preprocessor_inkling2v) {
     mtmd_hparams hparams;
     hparams.patch_size = 20;
     hparams.n_merge = 2;
     for (int c = 0; c < 3; ++c) {
         hparams.image_mean[c] = hparams.image_std[c] = 0.5f;
     }
-    mtmd_image_preprocessor_inkling2 preproc(hparams);
+    mtmd_image_preprocessor_inkling2v preproc(hparams);
     for (const auto & size : std::vector<mtmd_image_size>{{1, 1}, {40, 40}, {61, 43}, {83, 45}, {161, 21}}) {
         mtmd_image_u8 image;
         image.set_size(size, false);

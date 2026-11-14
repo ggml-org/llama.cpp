@@ -1,7 +1,7 @@
 #include "models.h"
 
 // ViT with a CLS token, learned position embeddings and 2D RoPE; the patches are merged before the projector
-ggml_cgraph * mtmd_graph_inkling2::build() {
+ggml_cgraph * mtmd_graph_inkling2v::build() {
     const int n_pos = n_patches + 1;
     auto * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
     ggml_set_name(pos_w, "pos_w");

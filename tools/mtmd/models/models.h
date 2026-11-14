@@ -629,7 +629,7 @@ struct mtmd_graph_muse_glimmer : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
-struct mtmd_graph_inkling2 : mtmd_graph {
+struct mtmd_graph_inkling2v : mtmd_graph {
     using mtmd_graph::mtmd_graph;
     ggml_cgraph * build() override;
 };

@@ -905,9 +905,9 @@ struct mtmd_context {
                     img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
-            case PROJECTOR_TYPE_INKLING2:
+            case PROJECTOR_TYPE_INKLING2V:
                 {
-                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2>(models.v.get());
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2v>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
@@ -3417,7 +3417,7 @@ const char * mtmd_get_marker(const mtmd_context * ctx) {
 
 // TODO @ngxson : alpha is only composited when the image is loaded with mtmd_helper_bitmap_init_from_buf; mtmd_bitmap_init takes RGB only, other callers lose it
 bool mtmd_image_needs_alpha(const mtmd_context * ctx) {
-    return ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2;
+    return ctx && ctx->models.v && ctx->models.v->proj_type == PROJECTOR_TYPE_INKLING2V;
 }
 
 mtmd_bitmap * mtmd_bitmap_init_from_rgba(uint32_t nx, uint32_t ny, const unsigned char * data) {

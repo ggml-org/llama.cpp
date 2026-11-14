@@ -2146,10 +2146,10 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
 }
 
 //
-// mtmd_image_preprocessor_inkling2
+// mtmd_image_preprocessor_inkling2v
 //
 
-mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess(const mtmd_image_u8 & input) const {
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling2v::preprocess(const mtmd_image_u8 & input) const {
     const int align = hparams.patch_size * hparams.n_merge;
     auto size = input.get_size();
     mtmd_image_u8 resized;

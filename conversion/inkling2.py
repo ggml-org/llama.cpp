@@ -298,7 +298,7 @@ class Inkling2VisionModel(MmprojModel):
         if rope["rope_type"] != "axial":
             raise ValueError("Inkling2 vision requires axial RoPE")
         w = self.gguf_writer
-        w.add_clip_vision_projector_type(gguf.VisionProjectorType.INKLING2)
+        w.add_clip_vision_projector_type(gguf.VisionProjectorType.INKLING2V)
         w.add_vision_attention_layernorm_eps(config["layer_norm_eps"])
         w.add_vision_spatial_merge_size(config["spatial_merge_size"])
         w.add_float32(gguf.Keys.ClipVision.ROPE_FREQ_BASE, float(rope["rope_theta"]))
