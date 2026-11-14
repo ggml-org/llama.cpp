@@ -15,6 +15,7 @@
 // max workgroup size is usually 1024, this covers various subgroups sizes
 #define MAX_SUBGROUPS 128
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 #ifdef INTEL_GPU
 REQD_SUBGROUP_SIZE_32
 #elif defined (ADRENO_GPU)
@@ -98,7 +99,9 @@ kernel void kernel_cumsum_blk(
         tmp_row[ib] = s;
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 kernel void kernel_cumsum_add(
         global char * tmp,
         global char * dst,
@@ -137,3 +140,4 @@ kernel void kernel_cumsum_add(
         dst_row[i00 + tid] += tmp_row[ib - 1];
     }
 }
+#endif

@@ -20,6 +20,7 @@
 
 #define N_F32_F32 4
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 1
 #ifdef ADRENO_GPU
 REQD_SUBGROUP_SIZE_64
 #endif
@@ -116,7 +117,9 @@ kernel void kernel_mul_mat_f32_f32(
         }
     }
 }
+#endif
 
+#if !defined(GGML_CL_ONLY) || GGML_CL_ONLY == 2
 // Each group computes two rows and four columns, with 32 lanes per row.
 kernel void kernel_mul_mv_f32_f32_r2(
         global const char * src0,
@@ -183,3 +186,4 @@ kernel void kernel_mul_mv_f32_f32_r2(
         if (col + 3 < ne11) dst[im*ne1*ne0 + (col + 3)*ne0 + row] = part[lid].s3;
     }
 }
+#endif
