@@ -2171,9 +2171,6 @@ class TextModel(ModelBase):
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
-        if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
-            # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
-            res = "inkling2"
         if chkhsh == "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc":
             # ref: https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B
             res = "gpt-4o"
@@ -2435,6 +2432,9 @@ class TextModel(ModelBase):
         if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
             # ref: https://huggingface.co/IFM/K2-Horizon-36B
             res = "k2-horizon"
+        if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
+            # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
+            res = "inkling2"
 
         if res is None:
             logger.warning("\n")
