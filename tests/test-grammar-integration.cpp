@@ -348,6 +348,79 @@ static void test_simple_grammar() {
         }
     );
     test_schema(
+        "min with more digits than the default length",
+        // Schema
+        R"""({
+            "type": "integer",
+            "minimum": 12345678912345678
+        })""",
+        // Passing strings
+        {
+            "12345678912345678",
+            "12345678912345679",
+            "99999999999999999",
+        },
+        // Failing strings
+        {
+            "12345678912345677",
+            "0",
+            "-12345678912345678",
+        }
+    );
+    test_schema(
+        "max with more digits than the default length",
+        // Schema
+        R"""({
+            "type": "integer",
+            "maximum": -12345678912345678
+        })""",
+        // Passing strings
+        {
+            "-12345678912345678",
+            "-99999999999999999",
+        },
+        // Failing strings
+        {
+            "-12345678912345677",
+            "0",
+        }
+    );
+    test_schema(
+        "max beyond int64",
+        // Schema
+        R"""({
+            "type": "integer",
+            "maximum": 9223372036854775808
+        })""",
+        // Passing strings
+        {
+            "-5",
+            "0",
+            "9999999999999999",
+        },
+        // Failing strings
+        {
+            "1.5",
+        }
+    );
+    test_schema(
+        "min beyond int64",
+        // Schema
+        R"""({
+            "type": "integer",
+            "minimum": -9223372036854775809
+        })""",
+        // Passing strings
+        {
+            "-5",
+            "0",
+        },
+        // Failing strings
+        {
+            "1.5",
+        }
+    );
+    test_schema(
         "min 5 max 30",
         // Schema
         R"""({
