@@ -22,6 +22,12 @@
 #    error "RISCV64_SPACEMIT_IME1 not defined"
 #endif
 
+#if defined(RISCV_BINUTILS_NEED_SPACEMIT_PREFIX)
+#define SMT_INSTR(instr) "smt."#instr
+#else
+#define SMT_INSTR(instr) #instr
+#endif
+
 // clang-format off
 #if defined(__GNUC__)
 #pragma GCC diagnostic ignored "-Woverlength-strings"
@@ -302,14 +308,14 @@ void quantize_a_row_i8(size_t BlkLen, const float * A, size_t CountK, uint8_t * 
 
 namespace {
 #define SQ4BIT_KERNEL_COMP_1x8x2_4X8X4          \
-    "vmadot       v16, v14, v0            \n\t" \
-    "vmadot       v18, v14, v1            \n\t" \
-    "vmadot       v20, v14, v2            \n\t" \
-    "vmadot       v22, v14, v3            \n\t" \
-    "vmadot       v16, v15, v4            \n\t" \
-    "vmadot       v18, v15, v5            \n\t" \
-    "vmadot       v20, v15, v6            \n\t" \
-    "vmadot       v22, v15, v7            \n\t"
+    SMT_INSTR(vmadot)"       v16, v14, v0            \n\t" \
+    SMT_INSTR(vmadot)"       v18, v14, v1            \n\t" \
+    SMT_INSTR(vmadot)"       v20, v14, v2            \n\t" \
+    SMT_INSTR(vmadot)"       v22, v14, v3            \n\t" \
+    SMT_INSTR(vmadot)"       v16, v15, v4            \n\t" \
+    SMT_INSTR(vmadot)"       v18, v15, v5            \n\t" \
+    SMT_INSTR(vmadot)"       v20, v15, v6            \n\t" \
+    SMT_INSTR(vmadot)"       v22, v15, v7            \n\t"
 
 #define SQ4BIT_KERNEL_ACC_1X4X4                 \
     "vfcvt.f.x.v  v16,  v16               \n\t" \
@@ -513,14 +519,14 @@ namespace {
     "vmv.v.v      v31, v30                \n\t"
 
 #define SQ4BIT_KERNEL_COMP_4x16x16              \
-    "vmadot       v16, v10, v2            \n\t" \
-    "vmadot       v18, v10, v3            \n\t" \
-    "vmadot       v20, v10, v4            \n\t" \
-    "vmadot       v22, v10, v5            \n\t" \
-    "vmadot       v16, v11, v6            \n\t" \
-    "vmadot       v18, v11, v7            \n\t" \
-    "vmadot       v20, v11, v8            \n\t" \
-    "vmadot       v22, v11, v9            \n\t"
+    SMT_INSTR(vmadot)"       v16, v10, v2            \n\t" \
+    SMT_INSTR(vmadot)"       v18, v10, v3            \n\t" \
+    SMT_INSTR(vmadot)"       v20, v10, v4            \n\t" \
+    SMT_INSTR(vmadot)"       v22, v10, v5            \n\t" \
+    SMT_INSTR(vmadot)"       v16, v11, v6            \n\t" \
+    SMT_INSTR(vmadot)"       v18, v11, v7            \n\t" \
+    SMT_INSTR(vmadot)"       v20, v11, v8            \n\t" \
+    SMT_INSTR(vmadot)"       v22, v11, v9            \n\t"
 
 #define SAVE_RESULT_4x16                        \
     "addi         a1, %[C], 0             \n\t" \
