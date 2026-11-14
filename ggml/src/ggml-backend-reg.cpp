@@ -584,7 +584,12 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("metal",    silent, dir_path);
     ggml_backend_load_best("rpc",      silent, dir_path);
     ggml_backend_load_best("sycl",     silent, dir_path);
-    ggml_backend_load_best("vulkan",   silent, dir_path);
+    // GGML_DISABLE_VULKAN is honoured for the static registration above, so honour it here
+    // too: in a GGML_BACKEND_DL build the Vulkan backend arrives through this call instead,
+    // and the variable otherwise has no effect at all.
+    if (getenv("GGML_DISABLE_VULKAN") == nullptr) {
+        ggml_backend_load_best("vulkan", silent, dir_path);
+    }
     ggml_backend_load_best("virtgpu",  silent, dir_path);
     ggml_backend_load_best("opencl",   silent, dir_path);
     ggml_backend_load_best("hexagon",  silent, dir_path);
