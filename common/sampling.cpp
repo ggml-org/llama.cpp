@@ -255,7 +255,8 @@ struct common_sampler * common_sampler_init(
                     break;
                 }
                 default:
-                    GGML_ASSERT(false && "unknown trigger type");
+                    throw std::runtime_error(
+                        "unknown grammar trigger type: " + std::to_string(trigger.type));
             }
         }
 
