@@ -159,3 +159,7 @@ struct llama_memory_i {
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;
+
+// Select the shared attention pool with the lowest free fraction; false means an unknown layout.
+// Null and pure recurrent memory have no attention cells and return true with zero counts.
+LLAMA_API bool llama_memory_get_attention_cells(llama_memory_t mem, uint64_t & free, uint64_t & total);
