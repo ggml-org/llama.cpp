@@ -10,6 +10,7 @@
 #include "simd-mappings.h"
 #include "quants.h"
 #include "ggml-quants.h"
+#include <cstring>
 #include <algorithm>
 #include <type_traits>
 
@@ -202,11 +203,10 @@ struct tile_config_t{
 //
 
 inline void ggml_tile_config_init(void) {
-    static thread_local bool done = false;
-
-    if (done) {
-        return;
-    }
+    // Tile shapes are process state rather than instruction operands, so a second
+    // palette must be able to displace the first. Track what is loaded instead of
+    // latching on first use.
+    static thread_local tile_config_t loaded = {};
 
     alignas(64) tile_config_t tc = {};
     tc.palette_id = 1;
@@ -220,8 +220,12 @@ inline void ggml_tile_config_init(void) {
     tc.rows[6] = 16;  tc.colsb[6] = 64;
     tc.rows[7] = 16;  tc.colsb[7] = 64;
 
+    if (memcmp(&loaded, &tc, sizeof(tc)) == 0) {
+        return;
+    }
+
     _tile_loadconfig(&tc);
-    done = true;
+    loaded = tc;
 }
 
 // we need an extra 16 * 4B (TILE_N * int32_t) for each NB/KB block for compensation.
