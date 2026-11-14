@@ -218,6 +218,7 @@ struct ffmpeg_video {
 
         probe_sp.stop();
 
+        // TODO: this is the encoded size, it is wrong for a rotated video (ffmpeg rotates the frames)
         src_width  = info.width;
         src_height = info.height;
         return info.width > 0 && info.height > 0 && info.fps > 0.0f;
@@ -397,11 +398,11 @@ void ffmpeg_close(void * state) {
 const mtmd_helper_video_decoder * mtmd_helper_video_decoder_ffmpeg() {
     static const mtmd_helper_video_decoder decoder = {
         /* open       */ ffmpeg_open,
+        /* start      */ ffmpeg_start,
         /* read_frame */ ffmpeg_read_frame,
         /* read_audio */ ffmpeg_read_audio,
         /* close      */ ffmpeg_close,
         /* user_data  */ nullptr,
-        /* start      */ ffmpeg_start,
     };
     return &decoder;
 }

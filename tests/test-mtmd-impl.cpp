@@ -412,17 +412,17 @@ MAKE_TEST(test_video_sequence_qwen3vl) {
     const mtmd_image_preprocessor_qwen3vl preproc(hparams);
 
     // { source video, expected frame size and sequence from Qwen3VLProcessor (transformers 4.57.1) }
-    const std::vector<std::tuple<mtmd_helper_video_src, mtmd_image_size, std::string>> cases = {
-        { {  720, 358, 24.0f, 240 }, { 704, 352 },
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, mtmd_image_size, std::string>> cases = {
+        { {  720, 358, 24.0f, 240, -1.0f }, { 704, 352 },
             "<0.3 seconds>[0][13]<1.3 seconds>[25][38]<2.4 seconds>[50][63]<3.4 seconds>[75][88]<4.5 seconds>[101][113]"
             "<5.5 seconds>[126][138]<6.6 seconds>[151][164]<7.6 seconds>[176][189]<8.6 seconds>[201][214]<9.7 seconds>[226][239]" },
         // odd frame count: the last group repeats its last frame
-        { {  640, 480, 10.0f,  35 }, { 640, 480 },
+        { {  640, 480, 10.0f,  35, -1.0f }, { 640, 480 },
             "<0.3 seconds>[0][6]<1.4 seconds>[11][17]<2.5 seconds>[23][28]<3.4 seconds>[34]" },
         // fewer frames than the minimum of 4
-        { {  320, 240, 30.0f,   3 }, { 320, 256 },
+        { {  320, 240, 30.0f,   3, -1.0f }, { 320, 256 },
             "<0.0 seconds>[0][1]<0.1 seconds>[2]" },
-        { { 1280, 720, 30000.0f / 1001.0f, 300 }, { 1280, 704 },
+        { { 1280, 720, 30000.0f / 1001.0f, 300, -1.0f }, { 1280, 704 },
             "<0.3 seconds>[0][16]<1.3 seconds>[31][47]<2.4 seconds>[63][79]<3.4 seconds>[94][110]<4.5 seconds>[126][142]"
             "<5.5 seconds>[157][173]<6.6 seconds>[189][205]<7.6 seconds>[220][236]<8.7 seconds>[252][268]<9.7 seconds>[283][299]" },
     };
@@ -445,7 +445,7 @@ MAKE_TEST(test_video_sequence_lfm3_omni) {
     hparams.n_merge = 2;
     const mtmd_image_preprocessor_lfm3vl preproc(hparams);
 
-    const mtmd_helper_video_src src = { 64, 64, 2.0f, 9 };
+    const mtmd_helper_video_stream_info src = { 64, 64, 2.0f, 9, -1.0f };
     const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_LFM3_OMNI, &preproc, src.width, src.height, src.n_frames, src.fps);
     test_video_source video(src.n_frames);
     video.configure(cfg, src, 0.0f);

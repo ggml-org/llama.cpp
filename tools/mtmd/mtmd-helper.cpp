@@ -580,7 +580,7 @@ int32_t mtmd_helper_video_seq::ts_per_n_frames() const {
     return tmpl == MTMD_VIDEO_TEMPLATE_LFM3 || tmpl == MTMD_VIDEO_TEMPLATE_LFM3_OMNI || tmpl == MTMD_VIDEO_TEMPLATE_QWEN3VL ? 2 : 0;
 }
 
-void mtmd_helper_video_seq::configure(const mtmd_video_config & cfg, const mtmd_helper_video_src & src, float fps_target_arg) {
+void mtmd_helper_video_seq::configure(const mtmd_video_config & cfg, const mtmd_helper_video_stream_info & src, float fps_target_arg) {
     tmpl = cfg.tmpl;
     uint32_t width  = src.width;
     uint32_t height = src.height;
@@ -629,7 +629,7 @@ void mtmd_helper_video_seq::configure(const mtmd_video_config & cfg, const mtmd_
     frame_buf.resize((size_t)width * height * 3);
 }
 
-void mtmd_helper_video_seq::sample_by_index(const mtmd_helper_video_src & src) {
+void mtmd_helper_video_seq::sample_by_index(const mtmd_helper_video_stream_info & src) {
     if (!frame_indices.empty() || src.fps <= 0.0f) {
         return;
     }
@@ -650,11 +650,12 @@ void mtmd_helper_video_seq::sample_by_index(const mtmd_helper_video_src & src) {
 }
 
 void mtmd_helper_video_seq::set_soundtrack(const float * pcm, size_t n, int rate) {
-    const size_t len = (size_t) std::nearbyint((double) n_src_frames / src_fps * rate);
     if (!pcm || n == 0) {
         LOG_WRN("%s: the video has no soundtrack\n", __func__);
         return;
     }
+    // keep only the span of the video stream: n_frames / fps seconds from its first frame
+    const size_t len = (size_t) std::nearbyint((double) n_src_frames / src_fps * rate);
     audio_rate = rate;
     soundtrack.assign(pcm, pcm + std::min(n, len));
 }
@@ -823,7 +824,7 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         return dec.read_frame(state, nullptr, info.width, info.height);
     }
 
-    bool start(const mtmd_helper_video_src & src, float fps) {
+    bool start(const mtmd_helper_video_stream_info & src, float fps) {
         bool fps_picked = false;
         if (dec.start && !dec.start(state, info.width, info.height, fps, &fps_picked)) {
             LOG_ERR("%s: the video decoder failed to start\n", __func__);
@@ -856,7 +857,7 @@ static const mtmd_helper_video_decoder * video_builtin_decoder() {
 
 static std::unique_ptr<mtmd_helper_video> video_open(const char * path, const unsigned char * buf, size_t len,
                                                      const mtmd_helper_video_init_params & params,
-                                                     mtmd_helper_video_src & src) {
+                                                     mtmd_helper_video_stream_info & src) {
     const mtmd_helper_video_decoder * dec = params.decoder;
     void * user_data = dec ? dec->user_data : nullptr;
     if (!dec) {
@@ -868,22 +869,26 @@ static std::unique_ptr<mtmd_helper_video> video_open(const char * path, const un
         user_data = const_cast<char *>(params.ffmpeg_bin_dir);
     }
 
+    if (!dec->open || !dec->read_frame || !dec->close) {
+        LOG_ERR("%s: the video decoder must have open, read_frame and close\n", __func__);
+        return nullptr;
+    }
+
     auto ctx = std::make_unique<mtmd_helper_video>();
     ctx->dec = *dec;
 
-    mtmd_helper_video_stream_info si = {0, 0, 0.0f, -1, -1.0f};
-    ctx->state = ctx->dec.open(user_data, path, buf, len, &si);
-    if (!ctx->state || si.width == 0 || si.height == 0 || si.fps <= 0.0f) {
+    src = {0, 0, 0.0f, -1, -1.0f};
+    ctx->state = ctx->dec.open(user_data, path, buf, len, &src);
+    if (!ctx->state || src.width == 0 || src.height == 0 || src.fps <= 0.0f) {
         LOG_ERR("%s: the video decoder failed to open the video\n", __func__);
         return nullptr;
     }
-    src = {si.width, si.height, si.fps, si.n_frames, si.duration};
     return ctx;
 }
 
 static mtmd_helper_video * video_init(const mtmd_context * mctx, const char * path, const unsigned char * buf, size_t len,
                                       const mtmd_helper_video_init_params & params) {
-    mtmd_helper_video_src src;
+    mtmd_helper_video_stream_info src;
     auto ctx = video_open(path, buf, len, params, src);
     if (!ctx) {
         return nullptr;
@@ -908,7 +913,7 @@ static mtmd_bitmap * decode_still_image(const char * path, const unsigned char *
     if (video_builtin_decoder()) {
         still_params.decoder = nullptr;
     }
-    mtmd_helper_video_src src;
+    mtmd_helper_video_stream_info src;
     auto vctx = video_open(path, buf, len, still_params, src);
     if (!vctx) {
         return nullptr;
@@ -916,6 +921,7 @@ static mtmd_bitmap * decode_still_image(const char * path, const unsigned char *
     if (placeholder) {
         return mtmd_bitmap_init(src.width, src.height, nullptr);
     }
+    // still image: the fps filter would output no frame, so disable it
     vctx->configure({MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0}, src, 0.0f);
     if (!vctx->start(src, 0.0f)) {
         return nullptr;

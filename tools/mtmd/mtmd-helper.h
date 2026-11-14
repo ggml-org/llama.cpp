@@ -38,6 +38,9 @@ struct mtmd_helper_video_decoder {
     // returns the decoder state, NULL on failure
     void * (*open)(void * user_data, const char * path, const unsigned char * buf, size_t len,
                    struct mtmd_helper_video_stream_info * info);
+    // optional: called once with the size read_frame() will ask for
+    // if fps > 0, a decoder that resamples to fps itself sets *fps_picked; otherwise the helper picks frames by index
+    bool (*start)(void * state, uint32_t width, uint32_t height, float fps, bool * fps_picked);
     // next frame in presentation order, as RGB24 scaled to width x height (same on every call)
     // rgb == NULL skips the frame; returns false at the end of the stream or on error
     bool (*read_frame)(void * state, unsigned char * rgb, uint32_t width, uint32_t height);
@@ -46,9 +49,6 @@ struct mtmd_helper_video_decoder {
     const float * (*read_audio)(void * state, int sample_rate, size_t * n_samples);
     void (*close)(void * state);
     void * user_data;
-    // optional: called once with the size read_frame() will ask for
-    // if fps > 0, a decoder that resamples to fps itself sets *fps_picked; otherwise the helper picks frames by index
-    bool (*start)(void * state, uint32_t width, uint32_t height, float fps, bool * fps_picked);
 };
 
 struct mtmd_helper_video_init_params {
@@ -93,7 +93,7 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
 //     image: formats supported by stb_image: jpg, png, bmp, gif, etc.
-//            webp is decoded via ffmpeg, requires MTMD_VIDEO build with ffmpeg in PATH
+//            webp is decoded via ffmpeg (MTMD_VIDEO build with ffmpeg in PATH), or via opt.video_params.decoder if ffmpeg is not built in
 //     audio: formats supported by miniaudio: wav, mp3, flac
 // note:
 //   - for now, video input is only supported via C++ helper functions
@@ -230,7 +230,7 @@ struct mtmd_helper_cap {
     // input capabilities
     bool vision;
     bool audio;
-    bool video; // also depending on MTMD_VIDEO build option; a custom mtmd_helper_video_decoder is not accounted for
+    bool video; // built-in decoder only (MTMD_VIDEO), a custom decoder is not counted
 
     // realtime capabilities
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
@@ -462,14 +462,6 @@ inline std::vector<llama_logit_bias> audio_stream_logit_bias(const mtmd_context 
 // internals of mtmd_helper_video, do not use in applications
 //
 
-struct mtmd_helper_video_src {
-    uint32_t width    = 0;
-    uint32_t height   = 0;
-    float    fps      = 0.0f;
-    int32_t  n_frames = -1;
-    float    duration = -1.0f;
-};
-
 struct mtmd_helper_video_seq {
     float fps_target = 0.0f;
     mtmd_helper_video_info info = {};
@@ -511,10 +503,10 @@ struct mtmd_helper_video_seq {
     virtual bool read_raw_frame() = 0;
     virtual bool skip_raw_frame() { return read_raw_frame(); }
 
-    void configure(const mtmd_video_config & cfg, const mtmd_helper_video_src & src, float fps_target_arg);
+    void configure(const mtmd_video_config & cfg, const mtmd_helper_video_stream_info & src, float fps_target_arg);
 
     // pick the frames of fps_target by index, for a source that yields every frame
-    void sample_by_index(const mtmd_helper_video_src & src);
+    void sample_by_index(const mtmd_helper_video_stream_info & src);
     // pcm: mono, starting at the first video frame
     void set_soundtrack(const float * pcm, size_t n, int rate);
 

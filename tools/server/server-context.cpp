@@ -1028,7 +1028,6 @@ public:
     mtmd_context * mctx = nullptr;
     mtmd_helper_cap mtmd_cap = {};
     // note: video_params.ffmpeg_bin_dir points into params_base, which outlives this struct
-    //       video_params.decoder is set by server_context::set_video_decoder()
     mtmd_helper_init_opt init_opt = mtmd_helper_init_opt_default();
     const llama_vocab * vocab = nullptr;
 
