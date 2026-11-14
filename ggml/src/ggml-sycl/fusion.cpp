@@ -137,6 +137,13 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
         GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
         GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
 
+        // a 2-input rms_norm carries its weight in src[1]; the fused kernel only models the
+        // 1-input form, so decline anything else (the unfused path handles it).
+        // null-check instead of n_src: this ggml revision has no n_src member
+        if (rms_norm->src[1] != nullptr) {
+            return false;
+        }
+
         if (mul->src[0]->type != GGML_TYPE_F32 ||
             mul->src[1]->type != GGML_TYPE_F32 ||
             mul->type != GGML_TYPE_F32) {
@@ -172,6 +179,58 @@ bool ggml_sycl_can_fuse(const ggml_cgraph * cgraph, int node_idx, std::initializ
             }
 
             if (!ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous_rows(add->src[1])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Residual add BEFORE the norm - the tensor-parallel allreduce epilogue shape
+    // {ADD(residual), RMS_NORM, MUL(weight)}. The rms_norm+mul(+add) case above normalizes first and
+    // cannot match this order.
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_RMS_NORM &&
+        ops.begin()[2] == GGML_OP_MUL) {
+        const ggml_tensor * add      = cgraph->nodes[node_idx];
+        const ggml_tensor * rms_norm = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * mul      = cgraph->nodes[node_idx + 2];
+
+        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
+        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
+
+        if (add->src[0]->type != GGML_TYPE_F32 || add->src[1]->type != GGML_TYPE_F32 ||
+            add->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        // the fused kernel indexes both addends as full rows and does not broadcast either
+        if (!ggml_are_same_shape(add->src[0], add) || !ggml_are_same_shape(add->src[1], add)) {
+            return false;
+        }
+
+        if (mul->src[0]->type != GGML_TYPE_F32 || mul->src[1]->type != GGML_TYPE_F32 ||
+            mul->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        const ggml_tensor * mul_w = (mul->src[0] == rms_norm) ? mul->src[1] : mul->src[0];
+        // the fused kernel indexes the weight as mul[col], so it must span ncols contiguously
+        if (mul_w->ne[0] != rms_norm->ne[0] || mul_w->nb[0] != ggml_type_size(mul_w->type)) {
+            return false;
+        }
+
+        if (!ggml_is_contiguous_rows(add) || !ggml_is_contiguous_rows(add->src[0]) ||
+            !ggml_is_contiguous_rows(add->src[1]) || !ggml_is_contiguous_rows(rms_norm) ||
+            !ggml_is_contiguous_rows(mul_w)) {
+            return false;
+        }
+
+        // the fused kernel materializes the ADD result (dst2) and the MUL result, but NOT the raw
+        // RMS_NORM output buffer - so nothing besides `mul` may consume it. (The ADD itself is safe
+        // with multiple consumers: its sum is written back for them.)
+        for (int j = 0; j < cgraph->n_nodes; ++j) {
+            const ggml_tensor * n = cgraph->nodes[j];
+            if ((n->src[0] == rms_norm || n->src[1] == rms_norm) && n != mul) {
                 return false;
             }
         }

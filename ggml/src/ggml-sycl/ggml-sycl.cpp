@@ -192,6 +192,19 @@ static bool ggml_sycl_dnnl_detect_optimized_gemm(int device) {
 }
 #endif
 
+// Vector engines per Xe-core, by architecture (nsm counts Xe-cores = CUs / xve):
+//   1st-gen Xe : 16 @ SIMD8
+//   2nd-gen Xe2:  8 @ SIMD16 (2x throughput per clock)
+// BMG-G31 verified on Arc Pro B70; BMG-G21 and Xe2-LPG are also SIMD16/8-engine parts -
+// add them here once tested and verified.
+static int xve_engines_per_core(gpu_arch arch) {
+    return (     (arch == gpu_arch::intel_gpu_bmg_g31)  // Tested and validated
+           // || (arch == gpu_arch::intel_gpu_bmg_g21)  // NEEDS testing and validation
+           // || (arch == gpu_arch::intel_gpu_lnl_m)    // NEEDS testing and validation
+           // || (arch == anything else appropriate)    // NEEDS testing and validation
+           ) ? 8 : 16;
+}
+
 static ggml_sycl_device_info ggml_sycl_init() {
     GGML_SYCL_DEBUG("[SYCL] call ggml_sycl_init\n");
     ggml_sycl_device_info info = {};
@@ -248,7 +261,6 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
         info.devices[i].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
-        info.devices[i].nsm = prop.get_max_compute_units() / 16; //16: Number of Xe Cores
         info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
 #if GGML_SYCL_DNNL
         info.devices[i].opt_feature.onednn_optimized_gemm = ggml_sycl_dnnl_detect_optimized_gemm(i);
@@ -265,6 +277,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
         info.devices[i].max_wg_per_cu = info.max_work_group_sizes[i] / prop.get_max_compute_units();
         info.devices[i].hw_info = get_device_hw_info(&device);
+        // nsm from the LOCAL struct (not ggml_sycl_info()/is_bmg_g31_arch): we are inside
+        // ggml_sycl_init(), which initializes that global's static local - re-entering it is UB,
+        // and devices[i].hw_info.arch would not be in the global yet anyway.
+        info.devices[i].nsm = prop.get_max_compute_units() / xve_engines_per_core(info.devices[i].hw_info.arch);
 
         // Only check GPU devices; CPU devices use OpenCL and would otherwise
         // disable Level Zero for the GPUs on systems without ONEAPI_DEVICE_SELECTOR set.
@@ -6705,6 +6721,15 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 continue;
             }
         }
+        // The tensor-parallel allreduce epilogue shape - T_ar = local + peer is followed by
+        // {ADD(residual), RMS_NORM, MUL(weight)}; normalize AFTER the residual add. The existing
+        // rms_norm+mul(+add) fusion below normalizes first and cannot match this order.
+        if (node->op == GGML_OP_ADD &&
+            ggml_sycl_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+            ggml_sycl_op_add_rms_norm_mul_fused(*sycl_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+            i += 2;
+            continue;
+        }
         if (node->op == GGML_OP_RMS_NORM &&
             ggml_sycl_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD }, {})) {
             ggml_sycl_op_rms_norm_fused_add(*sycl_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
@@ -7874,6 +7899,15 @@ static ggml_backend_dev_t ggml_backend_sycl_reg_get_device(ggml_backend_reg_t re
 // butterfly all-reduce fallback.
 // ==========================================================================
 
+// Result of an async exchange: per-device event signalling that this device's H2D into its dst has
+// completed. The allreduce submits its add kernels with depends_on() on these.
+// The fast path currently host-waits on D2H completion (Step 2) as a workaround for the Intel event-leak
+// bug; the returned events keep the adds ordered and make a future wait-free interlock a one-line change.
+struct ggml_sycl_comm_xchg {
+    sycl::event e[2]; // [0] = q0 side done, [1] = q1 side done
+    int fast = 0;
+};
+
 struct ggml_backend_sycl_comm_context {
     std::vector<ggml_backend_t> backends;
     // ONE persistent per-device byte buffer, 4*nelem bytes.  Both the
@@ -7883,86 +7917,156 @@ struct ggml_backend_sycl_comm_context {
     std::unique_ptr<ggml_sycl_pool_alloc<uint8_t>> buf1;
     int64_t buf_nelem = 0;
 
-    // pinned host staging per device context, reused across calls (queues are in-order)
-    uint8_t * host_out[2] = { nullptr, nullptr };
-    uint8_t * host_in[2]  = { nullptr, nullptr };  // only used by the 4-buffer path (separate SYCL contexts)
-    size_t    host_bytes  = 0;
+    // Pinned host staging. The FAST path (shared SYCL context, Linux) uses a ring of XCHG_SLOTS
+    // slots per direction: allreduce calls are strictly serial on the host thread, but
+    // the host may run up to a full layer ahead of the GPUs, so a slot can be reused (D2H write)
+    // while the peer's H2D read from K-1 calls ago is still in flight. Each slot therefore carries
+    // marker events recorded on the PEER queue after its last read; reuse waits on them device-side
+    // (no host block, ~free when complete). The SLOW path (separate contexts / Windows) uses only
+    // slot 0: its host waits already serialize reuse, and it must keep the original single-pair +
+    // host_in topology (own-context-only DMA invariant — see ggml_sycl_comm_exchange).
+    static constexpr int XCHG_SLOTS = 4;
+    struct xchg_slot {
+        sycl::event read_done_by_q0; // q1's D2H write of host_out[1][s] must wait for this
+        sycl::event read_done_by_q1; // q0's D2H write of host_out[0][s] must wait for this
+        bool armed[2] = { false, false }; // [0]: read_done_by_q0 recorded, [1]: read_done_by_q1
+    };
+    uint8_t * host_out[2][XCHG_SLOTS] = {};
+    xchg_slot slots[XCHG_SLOTS];
+    int       next_slot  = 0;
+
+    // only used by the slow 4-buffer path (separate SYCL contexts / Windows)
+    uint8_t * host_in[2]  = { nullptr, nullptr };
+    size_t    host_bytes  = 0; // per-slot size; all allocated slots are equal
 
     // SYCL_ENABLE_DEFAULT_CONTEXTS=1 sets comm_exchange_fast on Linux - PR #30956
-    using exchange_fn_t = void (*)(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
-                                   void * dst0, const void * src1, void * dst1, const void * src0,
-                                   size_t nbytes);
+    using exchange_fn_t = ggml_sycl_comm_xchg (*)(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
+                                       void * dst0, const void * src1, void * dst1, const void * src0,
+                                       size_t nbytes);
     exchange_fn_t comm_exchange = nullptr; // Moves same context check out of hot path; tests only once
 
     void free_host() {
         for (int i = 0; i < 2; ++i) {
             const sycl::context sctx = ((ggml_backend_sycl_context *) backends[i]->context)->stream()->get_context();
-            if (host_out[i]) { sycl::free(host_out[i], sctx); host_out[i] = nullptr; }
-            if (host_in[i])  { sycl::free(host_in[i],  sctx); host_in[i]  = nullptr; }
+            for (int s = 0; s < XCHG_SLOTS; ++s) {
+                if (host_out[i][s]) { sycl::free(host_out[i][s], sctx); host_out[i][s] = nullptr;
+                }
+            }
+            if (host_in[i]) { sycl::free(host_in[i], sctx); host_in[i] = nullptr; }
         }
+        for (auto & sl : slots) { sl.armed[0] = false; sl.armed[1] = false; }
+        next_slot  = 0;
         host_bytes = 0;
     }
 };
 
-// dst0 <- src1 and dst1 <- src0 through pinned host memory.
-static void ggml_sycl_comm_exchange_fast(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
-                                         void * dst0, const void * src1, void * dst1, const void * src0,
-                                         size_t nbytes) {
-
-    // Increases Linux tensor split prompt eval speeds on par with layer split speeds
-    // Reallocate host buffers if they are too small
+// dst0 <- src1 and dst1 <- src0 through pinned host memory. Async: returns the per-device H2D
+// completion events instead of waiting on them. The caller submits dependent work with
+// depends_on(); in-order queues already order same-queue work, so that is a no-op today but keeps
+// the code correct if the exchange moves to a dedicated comm queue later.
+// NOTE: only selected by comm_init when both backends share one SYCL context — cross-buffer DMA
+// (q0 reading host_out[1][s]) relies on that. Do not use this function for separate contexts.
+static ggml_sycl_comm_xchg ggml_sycl_comm_exchange_fast(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
+                                             void * dst0, const void * src1, void * dst1, const void * src0,
+                                             size_t nbytes) {
+    // Reallocate host buffers if they are too small. Drain both queues first: in-flight work may
+    // still reference slots from up to XCHG_SLOTS-1 calls ago.
     if (comm->host_bytes < nbytes) {
         q0->wait();
         q1->wait();
         comm->free_host();
-        comm->host_out[0] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
-        comm->host_out[1] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
-
-        GGML_ASSERT(comm->host_out[0] && comm->host_out[1]);
+        for (int s = 0; s < ggml_backend_sycl_comm_context::XCHG_SLOTS; ++s) {
+            comm->host_out[0][s] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
+            comm->host_out[1][s] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
+        }
+        GGML_ASSERT(comm->host_out[0][0] && comm->host_out[0][ggml_backend_sycl_comm_context::XCHG_SLOTS - 1]);
+        GGML_ASSERT(comm->host_out[1][0] && comm->host_out[1][ggml_backend_sycl_comm_context::XCHG_SLOTS - 1]);
         comm->host_bytes = nbytes;
+    }
+
+    const int s = comm->next_slot;
+    comm->next_slot = (comm->next_slot + 1) % ggml_backend_sycl_comm_context::XCHG_SLOTS;
+
+    // Reuse guard: wait device-side for the peer's last read of this slot's buffers. ~Free when the
+    // marker is already complete; otherwise just a dependency edge. No host blocking.
+    if (comm->slots[s].armed[1]) {
+        q0->ext_oneapi_submit_barrier({ comm->slots[s].read_done_by_q1 }); // before q0 D2H-writes host_out[0][s]
+    }
+    if (comm->slots[s].armed[0]) {
+        q1->ext_oneapi_submit_barrier({ comm->slots[s].read_done_by_q0 }); // before q1 D2H-writes host_out[1][s]
     }
 
     // Step 1: Concurrently copy from GPUs into host buffers (Asynchronous)
-    sycl::event e_d2h_0 = q0->memcpy(comm->host_out[0], src0, nbytes);
-    sycl::event e_d2h_1 = q1->memcpy(comm->host_out[1], src1, nbytes);
+    sycl::event e_d2h_0 = q0->memcpy(comm->host_out[0][s], src0, nbytes);
+    sycl::event e_d2h_1 = q1->memcpy(comm->host_out[1][s], src1, nbytes);
 
+#if 1 // Remove hot-path checks
+    // Step 2: Interlock - host-wait on both D2H completions before the cross-upload. The
+    // device-side form (ext_oneapi_submit_barrier on the peer's memcpy events) leaks L0 events
+    // on current Intel runtimes (zeEventCreate/Destroy imbalance, reported to Intel); no-arg
+    // marker barriers are clean and are used for the slot reuse guards below.
+    e_d2h_0.wait();
+    e_d2h_1.wait();
+#else
     // Step 2: Asynchronous Barrier Interlocking (NO HOST BLOCKING), wait() causes MTP conflicts
+    // Pending Intel oneAPI bug report resolution:
+    // ext_oneapi_submit_barrier() has slow memory leak - verified out of tree with 100,000 iteration loop
+    //      zeEventCreate = 400007 \--->    zeEventDestroy = 200007 ---> LEAK = 200000
+    // https://github.com/oneapi-src/level-zero/issues/556
     q0->ext_oneapi_submit_barrier({e_d2h_1}); // q0 waits for q1's device-to-host copy
     q1->ext_oneapi_submit_barrier({e_d2h_0}); // q1 waits for q0's device-to-host copy
+#endif
 
     // Step 3: Cross-upload directly from the opposing host buffer.
-    sycl::event e_h2d_0 = q0->memcpy(dst0, comm->host_out[1], nbytes); // q0 pulls from host_out[1]
-    sycl::event e_h2d_1 = q1->memcpy(dst1, comm->host_out[0], nbytes); // q1 pulls from host_out[0]
+    sycl::event e_h2d_0 = q0->memcpy(dst0, comm->host_out[1][s], nbytes); // q0 pulls from host_out[1]
+    sycl::event e_h2d_1 = q1->memcpy(dst1, comm->host_out[0][s], nbytes); // q1 pulls from host_out[0]
 
-    // Step 4: Finalize the exchange before returning to host code
-    e_h2d_0.wait();
-    e_h2d_1.wait();
+    // Step 4: Record peer-consumed markers for the next reuse of this slot. Zero-cost queue
+    // markers; in-order placement puts them after the H2D reads above.
+    comm->slots[s].read_done_by_q0 = q0->ext_oneapi_submit_barrier();
+    comm->slots[s].armed[0]        = true;
+    comm->slots[s].read_done_by_q1 = q1->ext_oneapi_submit_barrier();
+    comm->slots[s].armed[1]        = true;
+
+    return { e_h2d_0, e_h2d_1, 1 };
 }
 
-// dst0 <- src1 and dst1 <- src0 through pinned host memory, with a single host wait
-static void ggml_sycl_comm_exchange(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
-                                    void * dst0, const void * src1, void * dst1, const void * src0,
-                                    size_t nbytes) {
+// dst0 <- src1 and dst1 <- src0 through pinned host memory. Separate-SYCL-contexts / Windows
+// fallback. Invariant — do not "simplify": each queue only ever DMAs to/from buffers allocated in
+// ITS OWN SYCL context; cross-context data movement happens exclusively via host std::memcpy. On
+// Windows (and some separate-context systems) a queue touching another context's USM-host buffer
+// crashes, which is why this 4-buffer path exists at all (see comm_init). The D2H side therefore
+// still blocks the host (no device-side cross-queue wait across contexts); only the H2D events are
+// returned. Pinned footprint is unchanged from the original: 1 pair + host_in, slot 0.
+static ggml_sycl_comm_xchg ggml_sycl_comm_exchange(ggml_backend_sycl_comm_context * comm, queue_ptr q0, queue_ptr q1,
+                                        void * dst0, const void * src1, void * dst1, const void * src0,
+                                        size_t nbytes) {
     if (comm->host_bytes < nbytes) {
         q0->wait();
         q1->wait();
         comm->free_host();
-        comm->host_out[0] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
-        comm->host_in[0]  = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
-        comm->host_out[1] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
-        comm->host_in[1]  = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
-        GGML_ASSERT(comm->host_out[0] && comm->host_in[0] && comm->host_out[1] && comm->host_in[1]);
+        // single pair only: this path's host waits below already serialize reuse, so the fast-path
+        // ring is not needed here (and would waste 4x pinned memory on Windows)
+        comm->host_out[0][0] = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
+        comm->host_out[1][0] = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
+        comm->host_in[0]     = sycl::malloc_host<uint8_t>(nbytes, q0->get_context());
+        comm->host_in[1]     = sycl::malloc_host<uint8_t>(nbytes, q1->get_context());
+        GGML_ASSERT(comm->host_out[0][0] && comm->host_in[0] && comm->host_out[1][0] && comm->host_in[1]);
         comm->host_bytes = nbytes;
     }
 
-    sycl::event e0 = q0->memcpy(comm->host_out[0], src0, nbytes);
-    sycl::event e1 = q1->memcpy(comm->host_out[1], src1, nbytes);
+    sycl::event e0 = q0->memcpy(comm->host_out[0][0], src0, nbytes); // q0 ctx -> q0-ctx buffer
+    sycl::event e1 = q1->memcpy(comm->host_out[1][0], src1, nbytes); // q1 ctx -> q1-ctx buffer
+    // host wait also drains each queue's previous H2D read of its host_in[], so the std::memcpy
+    // below cannot race a stale consumer (in-order queues)
     e0.wait();
     e1.wait();
-    std::memcpy(comm->host_in[0], comm->host_out[1], nbytes);
-    std::memcpy(comm->host_in[1], comm->host_out[0], nbytes);
-    q0->memcpy(dst0, comm->host_in[0], nbytes);
-    q1->memcpy(dst1, comm->host_in[1], nbytes);
+    std::memcpy(comm->host_in[0], comm->host_out[1][0], nbytes); // host: q1-ctx buf -> q0-ctx buf
+    std::memcpy(comm->host_in[1], comm->host_out[0][0], nbytes); // host: q0-ctx buf -> q1-ctx buf
+    sycl::event e_h2d_0 = q0->memcpy(dst0, comm->host_in[0], nbytes); // q0 ctx <- q0-ctx buffer
+    sycl::event e_h2d_1 = q1->memcpy(dst1, comm->host_in[1], nbytes); // q1 ctx <- q1-ctx buffer
+
+    return { e_h2d_0, e_h2d_1, 0 };
 }
 
 void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends) try {
@@ -8059,13 +8163,23 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
     queue_ptr q1 = ctx1->stream();
 
     // Grow per-device byte buffers if needed (4 * nelem bytes each).
+    // Rare (size growth); drain first so an in-flight H2D cannot still reference the old allocation.
     if (comm_ctx->buf_nelem < nelem) {
+        q0->wait();
+        q1->wait();
         comm_ctx->buf0->realloc(nelem * 4);
         comm_ctx->buf1->realloc(nelem * 4);
         comm_ctx->buf_nelem = nelem;
     }
     uint8_t * buf0 = comm_ctx->buf0->get();
     uint8_t * buf1 = comm_ctx->buf1->get();
+
+    // The exchange returns per-device H2D completion events. The add kernels below depend
+    // on them; in-order queues already order same-queue work, so this only matters if the exchange
+    // later moves to a dedicated comm queue.
+    // The fast path currently host-waits on D2H completion (Step 2) as a workaround for the Intel event-leak
+    // bug; the returned events keep the adds ordered and make a future wait-free interlock a one-line change.
+    // https://github.com/oneapi-src/level-zero/issues/556
 
     // F16 native path: direct 2-byte cross-device copy + add, skipping the
     // F32 round-trip the meta-backend fallback would force. The devices are in separate SYCL
@@ -8076,14 +8190,16 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
         sycl::half * f16_tmp0 = (sycl::half *) buf0;
         sycl::half * f16_tmp1 = (sycl::half *) buf1;
 
-        comm_ctx->comm_exchange(comm_ctx, q0, q1, f16_tmp0, tensors[1]->data, f16_tmp1, tensors[0]->data, nbytes);
+        ggml_sycl_comm_xchg x = comm_ctx->comm_exchange(comm_ctx, q0, q1, f16_tmp0, tensors[1]->data, f16_tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
+            if (x.fast) { h.depends_on(x.e[0]); }
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
                 f16_out0[i] = (sycl::half) ((float) f16_out0[i] + (float) f16_tmp0[i]);
             });
         });
         q1->submit([&](sycl::handler & h) {
+            if (x.fast) { h.depends_on(x.e[1]); }
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
                 f16_out1[i] = (sycl::half) ((float) f16_out1[i] + (float) f16_tmp1[i]);
             });
@@ -8101,19 +8217,20 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
     static constexpr int64_t BF16_THRESHOLD = 32768;
 
     if (nelem < BF16_THRESHOLD) {
-        // FP32 small path: 4 SYCL submissions per allreduce.
+        // FP32 small path: exchange + one add kernel per device.
         float * tmp0 = (float *) buf0;
         float * tmp1 = (float *) buf1;
 
-        // separate SYCL contexts: a raw peer-USM q->memcpy is a silent no-op, so stage through host memory
-        comm_ctx->comm_exchange(comm_ctx, q0, q1, tmp0, tensors[1]->data, tmp1, tensors[0]->data, nbytes);
+        ggml_sycl_comm_xchg x = comm_ctx->comm_exchange(comm_ctx, q0, q1, tmp0, tensors[1]->data, tmp1, tensors[0]->data, nbytes);
 
         q0->submit([&](sycl::handler & h) {
+            if (x.fast) { h.depends_on(x.e[0]); }
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
                 out0[i] += tmp0[i];
             });
         });
         q1->submit([&](sycl::handler & h) {
+            if (x.fast) { h.depends_on(x.e[1]); }
             h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
                 out1[i] += tmp1[i];
             });
@@ -8140,16 +8257,18 @@ bool ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx_v, struct ggml_tens
 
     // Phase B: exchange the compressed bytes (in-order queues keep this after the compress kernels).
     const size_t bf16_bytes = nelem * sizeof(uint16_t);
-    comm_ctx->comm_exchange(comm_ctx, q0, q1, inbox0, outbox1, inbox1, outbox0, bf16_bytes);
+    ggml_sycl_comm_xchg x = comm_ctx->comm_exchange(comm_ctx, q0, q1, inbox0, outbox1, inbox1, outbox0, bf16_bytes);
 
     // Phase C: decompress + add into local FP32 partial.
     q0->submit([&](sycl::handler & h) {
+        if (x.fast) { h.depends_on(x.e[0]); }
         h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
             out0[i] += sycl::bit_cast<float>(((uint32_t) inbox0[i]) << 16);
         });
     });
 
     q1->submit([&](sycl::handler & h) {
+        if (x.fast) { h.depends_on(x.e[1]); }
         h.parallel_for(sycl::range<1>(nelem), [=](sycl::id<1> i) {
             out1[i] += sycl::bit_cast<float>(((uint32_t) inbox1[i]) << 16);
         });
