@@ -13065,6 +13065,32 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // small-batch decode with quantized and bf16 KV: power-of-two and non-power-of-two GQA
+    // (on a native tile launch, HIP gfx1201 today, the latter is padded to the next ncols2)
+    for (int hs : { 128, 256, }) {
+        for (int nr2 : { 4, 6, 8, }) {
+            for (int nb : { 1, 2, }) {
+                for (ggml_type type_KV : { GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_BF16, }) {
+                    test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 2, {nr2, 1}, 512, nb, true, false, 0, 0, GGML_PREC_F32, type_KV, type_KV));
+                }
+            }
+        }
+    }
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {6, 1}, 512, 2, true, true,  0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {6, 1}, 512, 1, true, true,  0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {6, 1}, 512, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}));
+    // GQA 2 at batch 1 (1 column, 2 heads per block) and the widest block (GQA 8 at batch 4, 32 columns)
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {2, 1}, 512, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {8, 1}, 512, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    // GQA 3 at batch 3 (a block of 4 heads that holds 5 Q columns, 2 of them unused) and a mixed K/V type pair
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {3, 1}, 512, 3, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {4, 1}, 512, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
+
+    // hsk = hsv = 512 (Gemma 4 head_dim) with quantized and bf16 KV: no native tile kernel at this head size, K/V get converted to f16
+    // (head size 512 needs GQA >= 2 with a mask on CUDA/HIP)
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {4, 1}, 1024, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {2, 1}, 1024, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_BF16, GGML_TYPE_BF16));
+
     // MLA shape: the V cache is a sub-view of the K cache, with quantized KV
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1},  113,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {8, 1}, 1024,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 1, 2, 3}, true, true));

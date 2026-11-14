@@ -56,8 +56,8 @@ function(ggml_get_system_arch)
     endif()
 endfunction()
 
-# Determines which FlashAttention vector kernel template instances to compile, returns them in OUT_SRCS.
-function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
+# Determines which FlashAttention vector and tile kernel template instances to compile, returns them in OUT_SRCS.
+function(ggml_cuda_fattn_instances DIR OUT_SRCS)
     set(FA_TYPES q4_0 q4_1 q5_0 q5_1 q8_0 bf16 f16 f8_e4m3)
 
     string(TOLOWER "${GGML_CUDA_FA_QUANTS}" FA_QUANTS)
@@ -113,6 +113,16 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
         endforeach()
     endforeach()
 
+    # The tile kernel reads quantized and bf16 K/V directly only on the AMD GPUs it was tuned for, see
+    # ggml_cuda_fattn_tile_get_config_quant in fattn-tile.cuh. Other builds compile the f16 tile instances only
+    # and convert K and V to f16 before the tile kernel runs.
+    if (GGML_HIP)
+        set(TILE_NATIVE_KV 1)
+    else()
+        set(TILE_NATIVE_KV 0)
+    endif()
+    add_compile_definitions(GGML_CUDA_FA_TILE_NATIVE_KV=${TILE_NATIVE_KV})
+
     message(STATUS "FlashAttention K-V type combinations: ${FA_COMBINATIONS}")
 
     set(SRCS "")
@@ -122,6 +132,15 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
             message(FATAL_ERROR "FlashAttention template instance \"${SRC}\" does not exist")
         endif()
         list(APPEND SRCS "${SRC}")
+
+        # There are no tile instances for FP8 K/V, it is converted to f16 before the tile kernel runs.
+        if ((TILE_NATIVE_KV AND NOT COMBINATION MATCHES "f8_e4m3") OR COMBINATION STREQUAL "f16-f16")
+            file(GLOB TILE_SRCS "${DIR}/template-instances/fattn-tile-instance-*-${COMBINATION}.cu")
+            if (NOT TILE_SRCS)
+                message(FATAL_ERROR "FlashAttention tile template instances for \"${COMBINATION}\" do not exist")
+            endif()
+            list(APPEND SRCS ${TILE_SRCS})
+        endif()
     endforeach()
 
     set(${OUT_SRCS} ${SRCS} PARENT_SCOPE)
