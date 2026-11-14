@@ -356,6 +356,11 @@ template [[host_name("kernel_get_rows_iq1_m")]]   kernel get_rows_q_t kernel_get
 template [[host_name("kernel_get_rows_iq4_nl")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq4_nl,  2,     dequantize_iq4_nl>;
 template [[host_name("kernel_get_rows_iq4_xs")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq4_xs,  QK_NL, dequantize_iq4_xs>;
 template [[host_name("kernel_get_rows_tq2_0")]]   kernel get_rows_q_t kernel_get_rows_q<block_tq2_0,   QK_NL, dequantize_tq2_0>;
+template [[host_name("kernel_get_rows_jq2_k")]]   kernel get_rows_q_t kernel_get_rows_q<block_jq2_k,   QK_NL, dequantize_jq2_k>;
+template [[host_name("kernel_get_rows_jq3_k")]]   kernel get_rows_q_t kernel_get_rows_q<block_jq3_k,   QK_NL, dequantize_jq3_k>;
+template [[host_name("kernel_get_rows_jq4_k")]]   kernel get_rows_q_t kernel_get_rows_q<block_jq4_k,   QK_NL, dequantize_jq4_k>;
+template [[host_name("kernel_get_rows_jq5_k")]]   kernel get_rows_q_t kernel_get_rows_q<block_jq5_k,   QK_NL, dequantize_jq5_k>;
+template [[host_name("kernel_get_rows_jq6_k")]]   kernel get_rows_q_t kernel_get_rows_q<block_jq6_k,   QK_NL, dequantize_jq6_k>;
 
 template<typename TS, typename TI, short QK, typename block_q, void (*quantize_func)(device const float *, device block_q &)>
 kernel void kernel_set_rows_q(
