@@ -367,9 +367,19 @@ MAKE_TEST(test_video_config) {
 // n_frames source frames, each one starts with its index
 struct test_video_source : mtmd_helper_video_seq {
     int32_t n_frames;
-    int32_t n_read = 0;
+    int32_t n_read    = 0;
+    int32_t n_skipped = 0;
 
     test_video_source(int32_t n_frames) : n_frames(n_frames) {}
+
+    bool skip_raw_frame() override {
+        if (n_read >= n_frames) {
+            return false;
+        }
+        n_read++;
+        n_skipped++;
+        return true;
+    }
 
     bool read_raw_frame() override {
         if (n_read >= n_frames) {
@@ -412,17 +422,17 @@ MAKE_TEST(test_video_sequence_qwen3vl) {
     const mtmd_image_preprocessor_qwen3vl preproc(hparams);
 
     // { source video, expected frame size and sequence from Qwen3VLProcessor (transformers 4.57.1) }
-    const std::vector<std::tuple<mtmd_helper_video_src, mtmd_image_size, std::string>> cases = {
-        { {  720, 358, 24.0f, 240 }, { 704, 352 },
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, mtmd_image_size, std::string>> cases = {
+        { {  720, 358, 24.0f, 240, -1.0f }, { 704, 352 },
             "<0.3 seconds>[0][13]<1.3 seconds>[25][38]<2.4 seconds>[50][63]<3.4 seconds>[75][88]<4.5 seconds>[101][113]"
             "<5.5 seconds>[126][138]<6.6 seconds>[151][164]<7.6 seconds>[176][189]<8.6 seconds>[201][214]<9.7 seconds>[226][239]" },
         // odd frame count: the last group repeats its last frame
-        { {  640, 480, 10.0f,  35 }, { 640, 480 },
+        { {  640, 480, 10.0f,  35, -1.0f }, { 640, 480 },
             "<0.3 seconds>[0][6]<1.4 seconds>[11][17]<2.5 seconds>[23][28]<3.4 seconds>[34]" },
         // fewer frames than the minimum of 4
-        { {  320, 240, 30.0f,   3 }, { 320, 256 },
+        { {  320, 240, 30.0f,   3, -1.0f }, { 320, 256 },
             "<0.0 seconds>[0][1]<0.1 seconds>[2]" },
-        { { 1280, 720, 30000.0f / 1001.0f, 300 }, { 1280, 704 },
+        { { 1280, 720, 30000.0f / 1001.0f, 300, -1.0f }, { 1280, 704 },
             "<0.3 seconds>[0][16]<1.3 seconds>[31][47]<2.4 seconds>[63][79]<3.4 seconds>[94][110]<4.5 seconds>[126][142]"
             "<5.5 seconds>[157][173]<6.6 seconds>[189][205]<7.6 seconds>[220][236]<8.7 seconds>[252][268]<9.7 seconds>[283][299]" },
     };
@@ -445,22 +455,98 @@ MAKE_TEST(test_video_sequence_lfm3_omni) {
     hparams.n_merge = 2;
     const mtmd_image_preprocessor_lfm3vl preproc(hparams);
 
-    const mtmd_helper_video_src src = { 64, 64, 2.0f, 9 };
+    const mtmd_helper_video_stream_info src = { 64, 64, 2.0f, 9, -1.0f };
     const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_LFM3_OMNI, &preproc, src.width, src.height, src.n_frames, src.fps);
     test_video_source video(src.n_frames);
     video.configure(cfg, src, 0.0f);
-    video.src_alive  = true;
-    video.audio_rate = 100;
-    video.soundtrack.assign(450, 0.0f);
+    video.src_alive = true;
+    // the video is 4.5 seconds long, the rest of the soundtrack is dropped
+    const std::vector<float> pcm(500, 0.0f);
+    video.set_soundtrack(pcm.data(), pcm.size(), 100);
 
     t.assert_equal("sequence",
         std::string("<0.2 seconds>[0][1]{100}<1.2 seconds>[2][3]{100}<2.2 seconds>[4][5]{100}<3.2 seconds>[6][7]{100}<4.0 seconds>[8]{50}"),
         video_sequence_to_str(t, video));
 }
 
+// a source that gives every frame: the frames of fps_target are picked by index
+MAKE_TEST(test_video_sequence_sample_by_index) {
+    const mtmd_video_config cfg = { MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 };
+
+    // { source video, frames in the source, expected sequence, expected number of skipped frames }
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, int32_t, std::string, int32_t>> cases = {
+        { { 64, 64, 8.0f, 16, -1.0f }, 16, "Video:[0][0m0.00s][4][8][0m1.00s][12]", 9 },
+        // unknown length: every frame is kept
+        { { 64, 64, 8.0f, -1, -1.0f },  3, "Video:[0][0m0.00s][1][2]", 0 },
+    };
+
+    for (const auto & [src, n_frames, expected, expected_skipped] : cases) {
+        const std::string name = std::to_string(src.n_frames) + " frames";
+        test_video_source video(n_frames);
+        video.timestamp_interval_ms = 1000;
+        video.configure(cfg, src, 2.0f);
+        video.sample_by_index(src);
+        video.src_alive = true;
+        t.assert_equal(name + " sequence", expected, video_sequence_to_str(t, video));
+        t.assert_equal(name + " skipped", expected_skipped, video.n_skipped);
+    }
+}
+
 //
 // mtmd_audio
 //
+
+MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_preprocessor_whisper preproc(hparams, sched.get());
+    preproc.initialize();
+
+    // { sample count, expected chunks }, one chunk of 3000 frames covers 480000 samples
+    const std::vector<std::pair<size_t, size_t>> cases = {
+        {       0, 0 },
+        {       1, 1 },
+        {     200, 1 },
+        {     201, 1 },
+        {   32000, 1 },
+        {  479834, 1 },
+        {  479839, 1 },
+        {  479840, 1 },
+        {  479999, 1 },
+        {  480000, 1 },
+        {  480001, 2 },
+        {  480159, 2 },
+        {  480160, 2 },
+        {  959840, 2 },
+        {  959999, 2 },
+        {  960000, 2 },
+        {  960001, 3 },
+        { 1440000, 3 },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+        t.assert_equal("chunks for " + name, expected, out.entries.size());
+        for (const auto & mel : out.entries) {
+            t.assert_equal("frames for " + name, 3000, mel.nx());
+            t.assert_equal("mel bins for " + name, 128, mel.ny());
+        }
+    }
+}
 
 MAKE_TEST(test_audio_preprocessor_conformer) {
     mtmd_hparams hparams;

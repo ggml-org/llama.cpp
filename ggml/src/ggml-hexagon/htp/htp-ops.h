@@ -128,7 +128,7 @@ enum htp_op_code {
     HTP_OP_TOP_K_MASK,
     HTP_OP_LIGHTNING_INDEXER,
     HTP_OP_SSM_SCAN,
-
+    HTP_OP_TIMESTEP_EMBEDDING,
     HTP_OP_INVALID
 };
 

@@ -12859,6 +12859,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, 1048576.0f, 1.0f));
     test_cases.emplace_back(new test_timestep_embedding());
+    test_cases.emplace_back(new test_timestep_embedding(GGML_TYPE_F32, { 1, 1, 1, 1 }, 256, 10000));
+    test_cases.emplace_back(new test_timestep_embedding(GGML_TYPE_F32, { 21, 1, 1, 1 }, 256, 10000));
+    test_cases.emplace_back(new test_timestep_embedding(GGML_TYPE_F32, { 31, 1, 1, 1 }, 256, 10000));
     test_cases.emplace_back(new test_leaky_relu());
 
     test_cases.emplace_back(new test_cumsum(GGML_TYPE_F32, { 10, 5, 4, 3 }));
@@ -13758,6 +13761,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
         }
+    }
+
+    for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 24, 25, 32, 33}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, n, 14336, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 14336, n, 4096, {1, 1}, {1, 1}));
     }
 
     // Q4_K multi-column mat-vec

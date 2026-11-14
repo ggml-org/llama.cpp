@@ -491,6 +491,7 @@ struct sdpa_partition {
     std::vector<dnnl::graph::logical_tensor> ins;
     dnnl::graph::logical_tensor              out;
     size_t id_q = 0, id_k = 0, id_v = 0, id_scale = 0, id_mask = 0;
+    bool   has_mask = false;
     bool   ok = false;
 };
 #endif
