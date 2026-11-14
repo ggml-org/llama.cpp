@@ -25,7 +25,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         // Support both </think> and <tool_call> as reasoning end sequences.
         // The newline variant comes first so it is included in the forced message
         // <function= is omitted, as it is a workaround for Qwen3-Coder which is not a thinking model
-        data.thinking_end_tags = { "\n</think>", "</think>", "<tool_call>" };
+        data.thinking_end_tags = { "\n</think>", "</think>", "<tool_call>", "<function=" };
         data.preserved_tokens.insert(data.preserved_tokens.end(), { "<think>", "</think>" });
     }
 
@@ -75,7 +75,7 @@ common_chat_params common_chat_params_init_qwen3_coder(const common_chat_templat
         auto generation_prompt = p.literal(GEN_PREFIX);
 
         // The template strips the newline before </think>, so leave it out of the reasoning
-        auto think_body  = p.until_one_of({ "\n</think>", "</think>", "<tool_call>" });
+        auto think_body  = p.until_one_of({ "\n</think>", "</think>", "<tool_call>", "<function=" });
         auto think_close = p.literal("\n</think>") | p.literal("</think>") | p.peek(p.literal("<tool_call>"));
 
         auto reasoning_extracted = p.optional("<think>" + p.space() + p.reasoning(think_body) + think_close);
