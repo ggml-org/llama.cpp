@@ -1301,6 +1301,15 @@ jobs:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
+    strategy:
+      matrix:
+        build: [fp32, fp16]
+        include:
+          - build: fp32
+            fp16: OFF
+          - build: fp16
+            fp16: ON
+
     runs-on: windows-2022
 
     defaults:
@@ -1338,7 +1347,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: release-windows-2022-x64-sycl
+          key: release-windows-2022-x64-sycl-${{ matrix.build }}
           evict-old-files: 1d
 
       - name: Build
@@ -1351,7 +1360,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
             -DGGML_CPU=OFF -DGGML_SYCL=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_SYCL_F16=${{ matrix.fp16 }}
+
           cmake --build build --target ggml-sycl -j %NUMBER_OF_PROCESSORS%
 
       - name: Build the release package
@@ -1393,18 +1404,18 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/umf/latest/bin/umf.dll" ./build/bin
 
           echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a -snl llama-bin-win-sycl-x64.zip ./build/bin/*
+          7z a -snl llama-bin-win-sycl-${{ matrix.build }}-x64.zip ./build/bin/*
 
       - name: Upload the release package
         uses: actions/upload-artifact@v7
         with:
-          path: llama-bin-win-sycl-x64.zip
+          path: llama-bin-win-sycl-${{ matrix.build }}-x64.zip
           archive: false
 
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2022-x64-sycl
+          key: release-windows-2022-x64-sycl-${{ matrix.build }}
 
   ubuntu-24-sycl:
     needs: [check-release, ui-build]
