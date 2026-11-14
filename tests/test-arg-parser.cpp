@@ -96,12 +96,16 @@ static void test(void) {
         base.n_parallel = 4;
         base.n_outputs_max_per_seq = 8;
         base.n_ubatch = 512;
+        base.moe_cache_size = 1024;
+        base.moe_cache_disk = true;
 
         {
             const auto draft = common_base_params_to_speculative(base);
             assert(draft.n_outputs_max == 4);
             assert(draft.n_outputs_max_per_seq == 1);
             assert(draft.n_ubatch == 512); // inherits the target by default
+            assert(draft.moe_cache_size == 0);
+            assert(!draft.moe_cache_disk);
         }
 
         base.speculative.draft.n_ubatch = 8;
@@ -244,6 +248,14 @@ static void test(void) {
     argv = {"binary_name", "-m", "model_file.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "model_file.gguf");
+
+    {
+        common_params moe_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache-mib", "2840", "--moe-cache-disk"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_params, LLAMA_EXAMPLE_COMMON));
+        assert(moe_params.moe_cache_size == 2840ull*1024*1024);
+        assert(moe_params.moe_cache_disk);
+    }
 
     {
         auto parse_shards = [&list_str_to_char](std::vector<std::string> args) {

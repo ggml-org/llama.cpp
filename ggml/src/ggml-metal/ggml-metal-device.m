@@ -829,28 +829,42 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
 // MTLComputeCommandEncoder wrapper
 //
 
+struct ggml_metal_event {
+    void * obj; // id<MTLSharedEvent>
+
+    atomic_uint_fast64_t value;
+};
+
 struct ggml_metal_encoder {
     id<MTLComputeCommandEncoder> obj;
+    id<MTLCommandBuffer> cmd_buf;
+    bool concurrent;
 };
+
+static void ggml_metal_encoder_begin(ggml_metal_encoder_t encoder) {
+    if (encoder->concurrent) {
+        encoder->obj = [encoder->cmd_buf computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+    } else {
+        encoder->obj = [encoder->cmd_buf computeCommandEncoder];
+    }
+
+    [encoder->obj retain];
+}
 
 ggml_metal_encoder_t ggml_metal_encoder_init(ggml_metal_cmd_buf_t cmd_buf_raw, bool concurrent) {
     ggml_metal_encoder_t res = calloc(1, sizeof(struct ggml_metal_encoder));
 
-    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
-
-    if (concurrent) {
-        res->obj = [cmd_buf computeCommandEncoderWithDispatchType: MTLDispatchTypeConcurrent];
-    } else {
-        res->obj = [cmd_buf computeCommandEncoder];
-    }
-
-    [res->obj retain];
+    res->cmd_buf    = (id<MTLCommandBuffer>) cmd_buf_raw;
+    res->concurrent = concurrent;
+    [res->cmd_buf retain];
+    ggml_metal_encoder_begin(res);
 
     return res;
 }
 
 void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
     [encoder->obj release];
+    [encoder->cmd_buf release];
     free(encoder);
 }
 
@@ -897,6 +911,20 @@ void ggml_metal_encoder_memory_barrier(ggml_metal_encoder_t encoder) {
 
 void ggml_metal_encoder_end_encoding(ggml_metal_encoder_t encoder) {
     [encoder->obj endEncoding];
+}
+
+void ggml_metal_encoder_signal_and_wait_for_event(
+        ggml_metal_encoder_t enc,
+        ggml_metal_event_t event,
+        uint64_t signal_value,
+        uint64_t wait_value) {
+    id<MTLSharedEvent> ev = (id<MTLSharedEvent>) event->obj;
+
+    [enc->obj endEncoding];
+    [enc->obj release];
+    [enc->cmd_buf encodeSignalEvent:ev value:signal_value];
+    [enc->cmd_buf encodeWaitForEvent:ev value:wait_value];
+    ggml_metal_encoder_begin(enc);
 }
 
 struct ggml_metal_device {
@@ -1444,12 +1472,6 @@ void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev) {
     atomic_store_explicit(&dev->rsets->d_loop, dev->rsets->loops_per_s*dev->rsets->keep_alive_s, memory_order_relaxed);
 }
 
-struct ggml_metal_event {
-    void * obj; // id<MTLSharedEvent>
-
-    atomic_int value;
-};
-
 void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf_raw) {
     id<MTLSharedEvent> event = (id<MTLSharedEvent>)ev->obj;
 
@@ -1464,6 +1486,17 @@ void ggml_metal_event_encode_wait(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cm
     id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
 
     [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
+}
+
+void ggml_metal_event_cpu_signal(ggml_metal_event_t ev, uint64_t value) {
+    id<MTLSharedEvent> event = (id<MTLSharedEvent>) ev->obj;
+    atomic_store_explicit(&ev->value, value, memory_order_relaxed);
+    event.signaledValue = value;
+}
+
+uint64_t ggml_metal_event_value(ggml_metal_event_t ev) {
+    id<MTLSharedEvent> event = (id<MTLSharedEvent>) ev->obj;
+    return event.signaledValue;
 }
 
 ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {

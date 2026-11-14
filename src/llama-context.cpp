@@ -606,8 +606,12 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
+        if (model.moe_cache_disk() && cparams.moe_cache_size == 0) {
+            throw std::runtime_error("disk-backed MoE experts require a non-zero MoE cache size");
+        }
         if (cparams.moe_cache_size > 0) {
-            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft, cparams.moe_cache_size, cparams.moe_cache_cpu_share);
+            moe_cache = std::make_unique<llama_moe_cache>(model, model.no_alloc(), backend_ptrs, backend_buft,
+                cparams.moe_cache_size, cparams.moe_cache_cpu_share, cparams.n_ubatch);
         }
 
         sched_reserve();

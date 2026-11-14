@@ -15,6 +15,7 @@
 #include <vector>
 
 struct llama_cparams;
+struct llama_file;
 struct llama_ubatch;
 struct llama_model_loader;
 struct llama_model;
@@ -973,6 +974,7 @@ struct llama_model {
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
     bool no_alloc() const;
+    bool moe_cache_disk() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
@@ -987,6 +989,9 @@ struct llama_model {
     ggml_backend_buffer_type_t select_buft(int il) const;
 
     bool has_tensor_overrides() const;
+
+    // the GGUF file and byte offset of a disk-backed routed expert tensor, or { nullptr, 0 }
+    std::pair<const llama_file *, size_t> moe_disk_source(const ggml_tensor * tensor) const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
 

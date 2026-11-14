@@ -36,7 +36,7 @@ class llama_moe_cache {
 public:
     // backends are all the backends of the context, each GPU gets its own cache of the given size for the layers assigned to it
     // cpu_share is the share of the misses computed on the CPU instead of uploaded
-    llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share);
+    llama_moe_cache(const llama_model & model, bool no_alloc, const std::vector<ggml_backend_t> & backends, const std::vector<ggml_backend_buffer_type_t> & bufts, size_t size, float cpu_share, uint32_t n_ubatch);
     ~llama_moe_cache();
 
     // the experts of w in the cache, nullptr if w is not cached

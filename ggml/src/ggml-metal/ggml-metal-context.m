@@ -82,6 +82,8 @@ struct ggml_metal {
     // error state - set when a command buffer fails during synchronize
     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
     bool has_error;
+
+    struct ggml_metal_moe_cache_handler moe_cache_handler;
 };
 
 ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
@@ -733,6 +735,7 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
     if (ggml_metal_fusion_info_stats(ctx->finfo)) {
         n_cb = 0;
     }
+    GGML_ASSERT(ctx->moe_cache_handler.fn == NULL || n_cb == 0);
 
     if (ctx->n_cb != n_cb) {
         ctx->n_cb = MIN(n_cb, GGML_METAL_MAX_COMMAND_BUFFERS);
@@ -769,7 +772,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
             idx_end,
             ctx->use_concurrency,
             ctx->capture_compute == 0,
-            ctx->debug_graph);
+            ctx->debug_graph,
+            ctx->moe_cache_handler);
 
         for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
             const int res = ggml_metal_op_encode(ctx_op, idx);
@@ -791,6 +795,16 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
 void ggml_metal_set_abort_callback(ggml_metal_t ctx, ggml_abort_callback abort_callback, void * user_data) {
     ctx->abort_callback = abort_callback;
     ctx->abort_callback_data = user_data;
+}
+
+void ggml_metal_set_moe_cache_handler(ggml_metal_t ctx, struct ggml_metal_moe_cache_handler handler) {
+    GGML_ASSERT(handler.fn == NULL || ctx->moe_cache_handler.fn == NULL);
+    GGML_ASSERT(handler.fn == NULL || (handler.message != NULL && handler.event != NULL));
+    if (handler.fn != NULL) {
+        // The handler has one request buffer, so command buffers must be encoded in order.
+        ggml_metal_set_n_cb(ctx, 0);
+    }
+    ctx->moe_cache_handler = handler;
 }
 
 bool ggml_metal_supports_family(ggml_metal_t ctx, int family) {
