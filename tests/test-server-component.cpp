@@ -740,6 +740,19 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+static void test_pcm_s16_to_f32(testing & t) {
+    const std::string bytes("\x00\x00" "\x00\x40" "\x00\xc0" "\x01\x80", 8); // 0, 16384, -16384, -32767
+
+    std::vector<float> out;
+    t.assert_true ("whole samples", pcm_s16_to_f32(bytes, out));
+    t.assert_equal("size",          (size_t) 4, out.size());
+    t.assert_equal("zero",          0.0f,  out[0]);
+    t.assert_equal("half",          0.5f,  out[1]);
+    t.assert_equal("minus half",    -0.5f, out[2]);
+    t.assert_equal("min",           -32767 / 32768.0f, out[3]);
+    t.assert_true ("odd count",     !pcm_s16_to_f32(bytes.substr(0, 3), out));
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -767,6 +780,7 @@ int main(int argc, char ** argv) {
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("pcm_s16_to_f32",  test_pcm_s16_to_f32);
 
     return t.summary();
 }
