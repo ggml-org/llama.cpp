@@ -898,6 +898,7 @@ struct mtmd_model {
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;
+    ggml_tensor * class_position_embedding = nullptr;
     ggml_tensor * patch_embeddings_0 = nullptr;
     ggml_tensor * patch_embeddings_1 = nullptr;  // additional patch kernel; interpretation is model-specific (Qwen2VL, Nemotron Omni)
     ggml_tensor * patch_bias = nullptr;
