@@ -3833,7 +3833,7 @@ static bool htp_kparams_solve_timestep_embedding(
         dst->ne[0] != dim || dst->ne[1] != src0->ne[0] || dst->ne[2] != 1 || dst->ne[3] != 1) {
         return false;
     }
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+    if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(dst)) {
         return false;
     }
 

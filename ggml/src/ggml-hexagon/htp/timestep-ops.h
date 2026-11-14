@@ -8,7 +8,7 @@
 
 #define HTP_TIMESTEP_BLOCK 32 // f32 lanes per HVX vector
 
-// Per-thread VTCM layout (all buffers are 128B aligned):
+// Per-hvx-thread VTCM layout (all buffers are 128B aligned):
 //   ts   - 2 x chunk_rows timesteps (ping-pong)
 //   freq - blocks_per_hvx frequency vectors
 //   out  - 2 x chunk_rows x [cos | sin] rows (ping-pong)
