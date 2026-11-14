@@ -1267,6 +1267,12 @@ struct mtmd_context {
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(models.a.get());
                 } break;
+            case PROJECTOR_TYPE_INKLINGA:
+                {
+                    aud_beg = "<|content_audio_input|>";
+                    aud_end = "<|audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inklinga>(models.a.get());
+                } break;
             case PROJECTOR_TYPE_DOTS3NOTE_A:
                 {
                     // <|audio_comp_start|> ... (embeddings) ... <|audio_comp_end|>
