@@ -227,4 +227,131 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
 #define HMX_CLRACC_F16() \
     "mxclracc.hf\n"
 
+// --- Fixed-point INT HMX inline asm macros and helpers (v73+) ---
+
+#define HMX_CLRACC_INT() \
+    "mxclracc\n"
+
+#define HMX_SWAPACC_INT() \
+    "mxswapacc\n"
+
+#define HMX_LOAD_MPY_U8_S8_CM(act, act_rt, wt, wt_rt)         \
+    "{\n"                                                     \
+    "    activation.ub = mxmem(" act ", " act_rt "):cm\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt ")\n"               \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP_U8_S8_CM(act, act_rt, wt, wt_rt)         \
+    "{\n"                                                          \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep:cm\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt ")\n"                    \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP2_U8_S8_CM(act, act_rt, wt, wt_rt)        \
+    "{\n"                                                          \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep:cm\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt "):deep\n"               \
+    "}\n"
+
+#define HMX_LOAD_MPY_U8_S8_SM(act, act_rt, wt, wt_rt)      \
+    "{\n"                                                  \
+    "    activation.ub = mxmem(" act ", " act_rt ")\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt ")\n"            \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP_U8_S8_SM(act, act_rt, wt, wt_rt)      \
+    "{\n"                                                       \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt ")\n"                 \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP2_U8_S8_SM(act, act_rt, wt, wt_rt)     \
+    "{\n"                                                       \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep\n"     \
+    "    weight.b = mxmem(" wt ", " wt_rt "):deep\n"            \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP_U8_S4_CM(act, act_rt, wt, wt_rt)         \
+    "{\n"                                                          \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep:cm\n"     \
+    "    weight.n = mxmem(" wt ", " wt_rt "):2x\n"                 \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP_U8_S4_SM(act, act_rt, wt, wt_rt)      \
+    "{\n"                                                       \
+    "    activation.ub = mxmem(" act ", " act_rt "):deep\n"     \
+    "    weight.n = mxmem(" wt ", " wt_rt "):2x\n"              \
+    "}\n"
+
+#define HMX_CVT_UB_ACC(ctrl) \
+    "cvt.ub = acc(" ctrl ")\n"
+
+#define HMX_CVT_UB_ACC_SC0(ctrl) \
+    "cvt.ub = acc(" ctrl "):sc0\n"
+
+#define HMX_CVT_UB_ACC_SC1(ctrl) \
+    "cvt.ub = acc(" ctrl "):sc1\n"
+
+#define HMX_CVT_UH_ACC_2X1(ctrl) \
+    "cvt.uh = acc(" ctrl "):2x1\n"
+
+#define HMX_STORE_CVT_SM(out, range) \
+    "mxmem(" out ", " range ") = cvt\n"
+
+#define HMX_STORE_CVT_CM(out, range) \
+    "mxmem(" out ", " range "):cm = cvt\n"
+
+static inline uint32_t hmx_act_cm_range(uint32_t n_tiles) {
+    return ((n_tiles - 1u) << 16) | 31u;
+}
+
+static inline uint32_t hmx_act_sm_range(uint32_t n_tiles) {
+    return 2048u * n_tiles - 1u;
+}
+
+static inline uint32_t hmx_wt_b_range(uint32_t n_bytes) {
+    return ((n_bytes - 128u) & ~127u) | 0x7Fu;
+}
+
+static inline uint32_t hmx_cvt_ctrl(uint32_t bank, uint32_t frac_only, uint32_t sat_mode, uint32_t retain_acc) {
+    return (1u << 15) | ((frac_only & 1u) << 14) | ((bank & 3u) << 12) | ((sat_mode & 1u) << 1) | (retain_acc & 1u);
+}
+
+static inline void hmx_load_bias_bank(const void * addr, uint32_t bank) {
+    uint32_t rs = ((uint32_t) (uintptr_t) addr & ~255u) | (bank & 3u);
+    asm volatile("bias = mxmem2(%0)\n" :: "r"(rs));
+}
+
+// Lower 32-bit word of fixed-point HMX Bias Register entry for 8x8 (cvt.ub=acc)
+static inline uint32_t hmx_pack_bias_lo32_8x8(uint16_t scale_12b, uint8_t exp_5b, uint8_t shape_3b, uint16_t out_bias_12b) {
+    return (((uint32_t) (scale_12b & 1u)) << 31) |
+           (((uint32_t) (out_bias_12b & 0xFFFu)) << 19) |
+           (((uint32_t) (shape_3b & 0x3u)) << 17) |
+           (((uint32_t) ((~(scale_12b >> 11)) & 1u)) << 16) |
+           (((uint32_t) ((shape_3b >> 2) & 1u)) << 15) |
+           (((uint32_t) (exp_5b & 0x1Fu)) << 10) |
+           ((uint32_t) ((scale_12b >> 1) & 0x3FFu));
+}
+
+// Lower 32-bit word of fixed-point HMX Bias Register entry for 16x8 (cvt.uh=acc:2x1)
+static inline uint32_t hmx_pack_bias_lo32_16x8(uint16_t scale_12b, uint8_t exp_5b, uint8_t shape_3b, uint8_t rnd_1b) {
+    return (((uint32_t) (scale_12b & 1u)) << 31) |
+           (((uint32_t) (rnd_1b & 1u)) << 22) |
+           (((uint32_t) (shape_3b & 0x3u)) << 17) |
+           (((uint32_t) ((~(scale_12b >> 11)) & 1u)) << 16) |
+           (((uint32_t) ((shape_3b >> 2) & 1u)) << 15) |
+           (((uint32_t) (exp_5b & 0x1Fu)) << 10) |
+           ((uint32_t) ((scale_12b >> 1) & 0x3FFu));
+}
+
+// Smallest shift p in [0, 23] such that (127 * l1_w) >> p <= 32767
+static inline uint8_t hmx_compute_l1_shift(uint32_t l1_w) {
+    uint32_t max_mag = 127u * l1_w;
+    if (max_mag <= 32767u) {
+        return 0;
+    }
+    uint8_t p = (uint8_t) (17u - (uint32_t) __builtin_clz(max_mag));
+    return p > 23u ? 23u : p;
+}
+
 #endif // HMX_UTILS_H

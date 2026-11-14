@@ -21,6 +21,7 @@ extern size_t opt_mbuf_static;
 extern size_t opt_mbuf_total;
 
 extern int    opt_mm_select;
+extern int    opt_hmx_kgroup;
 extern int    opt_fa_select;
 extern int    opt_fa_split;
 extern int    opt_li_select;

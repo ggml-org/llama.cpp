@@ -706,6 +706,31 @@ static bool htp_kparams_solve_hmx_mm(
     bool use_grouped = false;
     int act_hvx_selected = 0;
 
+    const uint8_t fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
+    uint8_t       kernel_type      = fp16_kernel_type;
+    uint32_t      k_group          = 0;
+    if (is_tiled && !is_matmul_id && wtype == GGML_TYPE_Q4_0 && (opt_mm_select == 3 || opt_mm_select == 4) &&
+        ne00_padded >= 128 && (ne00_padded % 128) == 0) {
+        uint32_t target_kgroup = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(opt_hmx_kgroup, 128)
+                                                      : ((opt_mm_select == 3) ? 256u : 512u);
+        if (target_kgroup > (uint32_t) ne00_padded) {
+            target_kgroup = (uint32_t) ne00_padded;
+        }
+        for (uint32_t g = (target_kgroup / 128u) * 128u; g >= 128u; g -= 128u) {
+            if (((uint32_t) ne00_padded % g) == 0) {
+                k_group = g;
+                break;
+            }
+        }
+        if (k_group > 0) {
+            if (opt_mm_select == 3) {
+                kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;
+            } else {
+                kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A16_BATCHED : HTP_MM_KERNEL_HMX_W8A16_2D;
+            }
+        }
+    }
+
     if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1) {
         if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             use_grouped = true;
@@ -724,12 +749,25 @@ static bool htp_kparams_solve_hmx_mm(
             m_id_rows = hex_round_up(std::max(m_per_expert, 32), 32);
         }
         const uint32_t cost_m = is_matmul_id ? (uint32_t) m_id_rows : (uint32_t) m_for_solver;
-        if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
-            return false;
+        if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, k_group, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+            if (htp_mm_kernel_is_hmx_int(kernel_type)) {
+                kernel_type = fp16_kernel_type;
+                k_group     = 0;
+                if (!htp_mm_hmx_solve_2d_params_ex(kernel_type, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, 0, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
         }
     }
 
+    const uint32_t hmx_n_groups = (k_group > 0) ? ((uint32_t) ne00_padded / k_group) : 1u;
+    const uint32_t n_k_tiles    = std::max(1, ne00_padded / 32);
+
     kparams->n_hmx              = 1;
+    kparams->hmx_kgroup         = (int32_t) k_group;
+    kparams->hmx_n_groups       = (int32_t) hmx_n_groups;
     kparams->pipeline           = pipeline ? 1 : 0;
     kparams->m_chunk            = m_chunk;
     kparams->n_chunk            = n_chunk;
@@ -741,8 +779,10 @@ static bool htp_kparams_solve_hmx_mm(
     kparams->vtcm_size          = vtcm_size;
     kparams->div_n_act_hvx      = init_fastdiv_values(act_hvx_selected);
     kparams->div_ne00_padded    = init_fastdiv_values(ne00_padded);
+    kparams->div_hmx_n_groups   = init_fastdiv_values(hmx_n_groups);
+    kparams->div_n_k_tiles      = init_fastdiv_values(n_k_tiles);
     kparams->vtcm_bias_size     = (int32_t) src2_size;
-    kparams->kernel_type        = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
+    kparams->kernel_type        = kernel_type;
     return true;
 }
 
@@ -1126,7 +1166,7 @@ bool htp_kparams_solve_mmnx(
 
     const bool is_tiled    = ggml_hexagon_tensor_will_tile(src0);
     const int  wtype       = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
-    const int  ne00_padded = is_tiled ? hex_round_up(ne00, 32) : ne00;
+    const int  ne00_padded = is_tiled ? hex_round_up(ne00, htp_tensor_get_tile_k(wtype)) : ne00;
     const int  ne11_padded = hex_round_up(ne11, 32);
     const int  ne01_tiled  = hex_round_up(ne01, 32);
     const bool is_batched  = (ne02 * ne03 > 1 || ne12 * ne13 > 1);

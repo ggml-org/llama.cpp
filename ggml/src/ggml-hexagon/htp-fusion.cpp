@@ -51,7 +51,7 @@ static inline bool htp_match_consumer(
 
 static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
     if (kparams->n_hmx) {
-        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D;
+        return htp_mm_kernel_is_hmx_2d(kparams->kernel_type);
     }
     return ggml_hexagon_tensor_is_tiled(src0) && (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW);
 }
@@ -275,7 +275,9 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     if (x_in != x_orig || w_in->type != w0->type || w_in->ne[0] != w0->ne[0] ||
         w0->ne[2] != 1 || w0->ne[3] != 1 || w_in->ne[2] != 1 || w_in->ne[3] != 1 ||
         ggml_hexagon_tensor_is_tiled(w_in) != ggml_hexagon_tensor_is_tiled(w0) ||
-        orig_kparams->n_hmx != cur_kparams->n_hmx) {
+        orig_kparams->n_hmx != cur_kparams->n_hmx ||
+        orig_kparams->kernel_type != cur_kparams->kernel_type ||
+        orig_kparams->hmx_kgroup != cur_kparams->hmx_kgroup) {
         return false;
     }
 
