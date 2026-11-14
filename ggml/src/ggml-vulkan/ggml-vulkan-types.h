@@ -270,12 +270,14 @@ struct vk_matmul_pipeline_pair {
     vk_pipeline unaligned;
     vk_pipeline aligned;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 struct vk_tile_config {
     std::vector<uint32_t> warptile;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 using matmul_tile_selector_t = std::function<uint32_t(
@@ -1049,6 +1051,7 @@ struct vk_device_struct {
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
     bool xe_fa_support {};
+    bool disable_narrow_mul_mat;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1237,6 +1240,7 @@ inline std::mutex vk_memory_logger::log_mutex;
 
 class vk_perf_logger {
   public:
+    explicit vk_perf_logger(const vk_device & device) : device(device) {}
     void print_timings(bool force = false);
 
 
@@ -1271,6 +1275,7 @@ class vk_perf_logger {
     }
 
   private:
+    vk_device device;
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
     uint32_t print_count {};
