@@ -1169,6 +1169,28 @@ void ggml_set_f32_nd(const struct ggml_tensor * tensor, int i0, int i1, int i2, 
 
 ////////////////////////////////////////////////////////////////////////////////
 
+static inline void ggml_deinterleave_f32(
+        float * GGML_RESTRICT dst0,
+        float * GGML_RESTRICT dst1,
+        const float * GGML_RESTRICT src,
+        int64_t n,
+        size_t bs,
+        int nrc) {
+    GGML_ASSERT(nrc >= 1 && nrc <= 2);
+
+    if (nrc == 1) {
+        memcpy(dst0, src, n * sizeof(float));
+        return;
+    }
+
+    for (int64_t i = 0; i < n; ++i) {
+        dst0[i     ] = src[2*i + 0     ];
+        dst1[i     ] = src[2*i + 1     ];
+        dst0[bs + i] = src[2*i + 0 + 16];
+        dst1[bs + i] = src[2*i + 1 + 16];
+    }
+}
+
 // ggml_compute_forward_mul_mat
 
 static void ggml_compute_forward_mul_mat_one_chunk(
@@ -1218,8 +1240,16 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     // 16 * 2, accounting for mmla kernels
     float tmp[32];
 
+    // desc: When vec_dot processes two src0 rows at once, pair rows from the
+    //       first and second halves of the chunk to maximize the address distance
+    //       between the two memory streams. Each row in the compressed range maps
+    //       to real rows ir0 and ir0 + ir0_per_row.
+    const int64_t ir0_per_row = (ir0_end - ir0_start) / num_rows_per_vec_dot;
+    const int64_t ir0_end_split = ir0_start + ir0_per_row;
+    const int64_t blck_0_split = blck_0 / num_rows_per_vec_dot;
+
     for (int64_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
-        for (int64_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
+        for (int64_t iir0 = ir0_start; iir0 < ir0_end_split; iir0 += blck_0_split) {
             for (int64_t ir1 = iir1; ir1 < iir1 + blck_1 && ir1 < ir1_end; ir1 += num_rows_per_vec_dot) {
                 const int64_t i13 = (ir1 / (ne12 * ne1));
                 const int64_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
@@ -1249,13 +1279,13 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                 //    vec_dot(ne00, &dst_col[ir0], src0_row + ir0*nb01, src1_col);
                 //}
 
-                for (int64_t ir0 = iir0; ir0 < iir0 + blck_0 && ir0 < ir0_end; ir0 += num_rows_per_vec_dot) {
-                    vec_dot(ne00, &tmp[ir0 - iir0], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
+                for (int64_t ir0 = iir0; ir0 < iir0 + blck_0_split && ir0 < ir0_end_split; ++ir0) {
+                    vec_dot(ne00, &tmp[(ir0 - iir0) * num_rows_per_vec_dot], (num_rows_per_vec_dot > 1 ? 16 : 0), src0_row + ir0 * nb01, (num_rows_per_vec_dot > 1 ? nb01 * ir0_per_row : 0), src1_col, (num_rows_per_vec_dot > 1 ? src1_col_stride : 0), num_rows_per_vec_dot);
                 }
 
-                for (int cn = 0; cn < num_rows_per_vec_dot; ++cn) {
-                    memcpy(&dst_col[iir0 + cn * nb1 / nb0], tmp + (cn * 16), (MIN(iir0 + blck_0, ir0_end) - iir0) * sizeof(float));
-                }
+                const int64_t n = MIN(iir0 + blck_0_split, ir0_end_split) - iir0;
+                float * dst0 = dst_col + iir0;
+                ggml_deinterleave_f32(dst0, dst0 + ir0_per_row, tmp, n, nb1 / nb0, num_rows_per_vec_dot);
             }
         }
     }
