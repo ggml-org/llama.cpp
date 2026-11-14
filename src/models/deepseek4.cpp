@@ -268,6 +268,27 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_mean(ggml_tensor * x) const
     return ggml_scale(ctx0, acc, 1.0f/hc);
 }
 
+ggml_tensor * llama_model_deepseek4::graph::build_head_mix(
+        ggml_tensor * x,
+        ggml_tensor * mix,
+        int il) const {
+    // x: [n_embd_head, n_head, n_tokens], out[:, h] = sum_g mix[h, g] * x[:, g]
+    const int64_t n_embd_head = x->ne[0];
+    const int64_t n_head_x    = x->ne[1];
+    const int64_t nt          = x->ne[2];
+
+    GGML_ASSERT(mix->ne[0] == n_head_x && mix->ne[1] == n_head_x);
+
+    ggml_tensor * xt = ggml_cont(ctx0, ggml_permute(ctx0, x, 1, 0, 2, 3)); // [n_head, n_embd_head, n_tokens]
+    xt = ggml_reshape_2d(ctx0, xt, n_head_x, n_embd_head*nt);
+    xt = ggml_mul_mat(ctx0, mix, xt);
+    xt = ggml_reshape_3d(ctx0, xt, n_head_x, n_embd_head, nt);
+    xt = ggml_cont(ctx0, ggml_permute(ctx0, xt, 1, 0, 2, 3));
+    cb(xt, "attn_head_mix", il);
+
+    return xt;
+}
+
 static ggml_tensor * dsv4_hc_affine(
         ggml_context * ctx,
         ggml_tensor  * x,
@@ -372,6 +393,18 @@ llama_model_deepseek4::graph::build_hc_mixes(
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
     ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
+
+    return build_hc_split_mixes(mixes, hc_scale, hc_base, il);
+}
+
+llama_model_deepseek4::graph::hc_mixes
+llama_model_deepseek4::graph::build_hc_split_mixes(
+        ggml_tensor * mixes,
+        ggml_tensor * hc_scale,
+        ggml_tensor * hc_base,
+        int il) const {
+    const int64_t hc = hparams.dsv4_hc_mult;
+    const int64_t nt = mixes->ne[1];
 
     ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
     ggml_tensor * scale_post = dsv4_view_1d(ctx0, hc_scale, 1, 1);
@@ -1210,12 +1243,24 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
     out = ggml_rope_set_offset(out, n_embd_head_nope);
     cb(out, "attn_derope", il);
 
+    // ERNIE 5.5: mix the heads (the mix acts on the head axis, the inverse RoPE on the dim axis)
+    if (layer.attn_vha) {
+        out = build_head_mix(out, layer.attn_vha, il);
+    }
+
     out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, nt);
     out = ggml_permute(ctx0, out, 0, 2, 1, 3);
     ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
     cb(oa, "attn_wo_a", il);
     oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
     oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, nt);
+
+    // ERNIE 5.5: sigmoid gate on the grouped low-rank output, from the normalized q latent
+    if (layer.wqkv_gate) {
+        ggml_tensor * gate = ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, qr));
+        cb(gate, "attn_gate", il);
+        oa = ggml_mul(ctx0, oa, gate);
+    }
 
     out = build_lora_mm(layer.wo_b, oa);
     cb(out, "attn_out", il);

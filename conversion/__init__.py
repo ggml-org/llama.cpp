@@ -88,6 +88,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Ernie4_5ForCausalLM": "ernie",
     "Ernie4_5_ForCausalLM": "ernie",
     "Ernie4_5_MoeForCausalLM": "ernie",
+    "Ernie5_5_MoeForCausalLM": "ernie5",
     "EuroBertModel": "bert",
     "Exaone4_5_ForConditionalGeneration": "exaone",
     "Exaone4ForCausalLM": "exaone",

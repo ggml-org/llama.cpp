@@ -396,6 +396,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("attn_v_b.weight")         == std::string::npos;
     }
 
+    // ernie5_5: the mHC mixers (incl. output_hc_fn), the VHA head mix, the compressor APE and the indexer
+    // stay as converted; they are small and fp32 in the checkpoint or computed in fp32
+    if (arch == LLM_ARCH_ERNIE5_5) {
+        quantize &= name.find("hc_")                 == std::string::npos;
+        quantize &= name.find("attn_vha.weight")     == std::string::npos;
+        quantize &= name.find("attn_compressor_ape") == std::string::npos;
+        quantize &= name.find("indexer.")            == std::string::npos;
+    }
+
     // xing4_0: do not quantize the MHC hyper-connection gate matrices
     // (the 1D hc_*_base / hc_*_scale tensors are already excluded by the n_dims < 2 rule)
     if (arch == LLM_ARCH_XING4_0) {
