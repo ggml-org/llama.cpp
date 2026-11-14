@@ -970,7 +970,7 @@ bool ggml_et_op_rope(ggml_backend_et_device_context * dev_ctx, const ggml_tensor
     params.rope_params.n_past     = ((const int32_t *) node->op_params)[0];
     params.rope_params.n_dims     = ((const int32_t *) node->op_params)[1];
     params.rope_params.mode       = ((const int32_t *) node->op_params)[2];
-    params.rope_params.n_ctx      = ((const int32_t *) node->op_params)[3];
+    params.rope_params.no_trunc   = !ggml_rope_get_truncate(node);
     params.rope_params.n_ctx_orig = ((const int32_t *) node->op_params)[4];
     memcpy(&params.rope_params.freq_base, (const int32_t *) node->op_params + 5, sizeof(float));
     memcpy(&params.rope_params.freq_scale, (const int32_t *) node->op_params + 6, sizeof(float));

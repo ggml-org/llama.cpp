@@ -12197,9 +12197,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return true;
         case GGML_OP_ROPE: {
             const int mode = ((const int32_t *) op->op_params)[2];
-            if (!ggml_rope_get_truncate(op)) {
-                return false;
-            }
             const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
             const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
             if (is_mrope && !is_vision) {
@@ -38247,7 +38244,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
 
     int nth = MIN(64, ne00);
 
-    const int n_past     = ((int *) dst->op_params)[0];
+    const int truncate   = ggml_rope_get_truncate(dst);
     const int n_dims     = ((int *) dst->op_params)[1];
     const int mode       = ((int *) dst->op_params)[2];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
@@ -38355,7 +38352,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     CL_CHECK(clSetKernelArg(kernel, 21, sizeof(cl_ulong), &nb1));
     CL_CHECK(clSetKernelArg(kernel, 22, sizeof(cl_ulong), &nb2));
     CL_CHECK(clSetKernelArg(kernel, 23, sizeof(cl_ulong), &nb3));
-    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int),      &n_past));
+    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int),      &truncate));
     CL_CHECK(clSetKernelArg(kernel, 25, sizeof(int),      &n_dims));
     CL_CHECK(clSetKernelArg(kernel, 26, sizeof(int),      &n_ctx_orig));
     CL_CHECK(clSetKernelArg(kernel, 27, sizeof(float),    &freq_base));
