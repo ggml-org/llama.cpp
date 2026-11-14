@@ -75,7 +75,7 @@ common_chat_params common_chat_params_init_ministral_3(const common_chat_templat
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.eps();
         auto reasoning =
-            extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until_one_of({"[/THINK]", "[TOOL_CALLS]"}))  + p.choice({p.literal("[/THINK]"), p.literal("[TOOL_CALLS]")})) : p.eps();
+            extract_reasoning ? p.optional("[THINK]" + p.reasoning(p.until_one_of({"[/THINK]", "[TOOL_CALLS]"}))  + p.choice({p.literal("[/THINK]"), p.peek(p.literal("[TOOL_CALLS]"))})) : p.eps();
 
         // Response format parser
         if (has_response_format) {
