@@ -1300,7 +1300,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_NORM:
             return true;
         case GGML_OP_RMS_NORM:
-            return op->ne[0] % 4 == 0 && ggml_is_contiguous_rows(op->src[0]);
+            return op->src[0]->type == GGML_TYPE_F32 && op->ne[0] % 4 == 0 && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_L2_NORM:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_REPEAT:
@@ -1528,8 +1528,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return true;
         case GGML_OP_DIAG:
             return true;
-        case GGML_OP_DIAG_MASK_INF:
-            return op->ne[3] == 1;
         case GGML_OP_ROPE: {
             const int mode = ((const int32_t *) op->op_params)[2];
             if (!ggml_rope_get_truncate(op)) {
@@ -2689,12 +2687,6 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_diag;
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            if (!any_on_device) {
-                return false;
-            }
-            func = ggml_cl_diag_mask_inf;
             break;
         case GGML_OP_SOFT_MAX:
             if (!any_on_device) {
