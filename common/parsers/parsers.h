@@ -55,6 +55,8 @@ common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & 
 
 common_chat_params common_chat_params_init_harmony_xml(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
+common_chat_params common_chat_params_init_inkling2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
+
 common_chat_params common_chat_params_init_k2_horizon(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);

@@ -53,6 +53,18 @@ struct test_registry {
 // mtmd_image
 //
 
+// mtmd_image_preprocessor_inkling2 on one raw channel value (-1 = padding): CLIP-normalised to bf16, then
+// mapped back to [-1, 1] in bf16 as the reference encoder does, so (v - 127.5) / 127.5 up to bf16 rounding
+static float inkling2_pixel(float v, int c) {
+    static const float proc_mean[3] = { 0.48145466f, 0.4578275f,  0.40821073f };
+    static const float proc_std[3]  = { 0.26862954f, 0.2613026f,  0.2757771f  };
+    static const float enc_mean[3]  = { 0.48145466f, 0.4578275f,  0.40821073f };
+    static const float enc_std[3]   = { 0.26862954f, 0.26130258f, 0.27577711f };
+    const auto bf16 = [](float f) { return ggml_bf16_to_fp32(ggml_fp32_to_bf16(f)); };
+    const float x = bf16((v / 255.0f - proc_mean[c]) / proc_std[c]);
+    return bf16(2.0f * (x * bf16(enc_std[c]) + bf16(enc_mean[c])) - 1.0f);
+}
+
 MAKE_TEST(test_image_preprocessor_inkling2) {
     mtmd_hparams hparams;
     hparams.patch_size = 20;
@@ -76,17 +88,21 @@ MAKE_TEST(test_image_preprocessor_inkling2) {
         t.assert_equal("height ceil", ((size.height + 39) / 40) * 40, output.ny());
         const auto & pixels = output.get_ro_buf();
         bool exact = true;
+        bool near  = true;
         for (int y = 0; y < output.ny(); ++y) {
             for (int x = 0; x < output.nx(); ++x) {
                 const bool pad = x >= size.width || y >= size.height;
                 const float rgb[3] = {float(x % 256), float(y % 256), 255.0f};
                 for (int c = 0; c < 3; ++c) {
-                    const float expected = ((pad ? -1.0f : rgb[c]) - 127.5f) / 127.5f;
-                    exact = exact && pixels[3 * (size_t(y) * output.nx() + x) + c] == expected;
+                    const float raw = pad ? -1.0f : rgb[c];
+                    const float got = pixels[3 * (size_t(y) * output.nx() + x) + c];
+                    exact = exact && got == inkling2_pixel(raw, c);
+                    near  = near  && std::fabs(got - (raw - 127.5f) / 127.5f) <= 1.0f / 64;
                 }
             }
         }
         t.assert_true("pixels and negative padding", exact);
+        t.assert_true("pixels within bf16 rounding of [-1, 1]", near);
         image.set_size(size, true);
         const auto placeholder = preproc.preprocess(image);
         t.assert_true("placeholder", placeholder.entries[0].is_placeholder());
@@ -104,7 +120,7 @@ MAKE_TEST(test_image_preprocessor_inkling2) {
     const auto mean = preproc.preprocess_video_frames({first, second});
     t.assert_true("duplicate frames bit exact", !std::memcmp(still.entries[0].get_ro_buf().data(), duplicate.entries[0].get_ro_buf().data(), still.entries[0].get_ro_buf().size()*sizeof(float)));
     t.assert_true("odd frame retained", still.entries[0].get_ro_buf() == odd.entries[0].get_ro_buf());
-    t.assert_equal("fractional raw mean", (22.5f - 127.5f) / 127.5f, mean.entries[0].get_ro_buf()[0]);
+    t.assert_equal("fractional raw mean", inkling2_pixel(22.5f, 0), mean.entries[0].get_ro_buf()[0]);
     t.assert_equal("mean padding unchanged", still.entries[0].get_ro_buf().back(), mean.entries[0].get_ro_buf().back());
     second.set_size({40, 40}, false);
     bool rejected = false;

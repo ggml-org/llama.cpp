@@ -907,6 +907,7 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_INKLING2:
                 {
+                    img_beg = "<|content_image|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2>(models.v.get());
                 } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:

@@ -1473,6 +1473,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
         case LLM_ARCH_DFLASH:
         case LLM_ARCH_GEMMA4_ASSISTANT:
         case LLM_ARCH_LIMITE:
+        case LLM_ARCH_INKLING2: // tok_norm applies to token rows only, chosen per ubatch
             return false;
         default:
             return true;
@@ -1518,6 +1519,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_QWEN3TTS:
         case LLM_ARCH_LIMITE:
+        case LLM_ARCH_INKLING2:
             return false;
         default:
             return true;
