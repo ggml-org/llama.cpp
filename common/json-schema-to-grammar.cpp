@@ -16,6 +16,9 @@
 using json = common_json;
 
 static std::string build_repetition(const std::string & item_rule, int min_items, int max_items, const std::string & separator_rule = "") {
+    if (min_items > max_items) {
+        max_items = min_items;
+    }
     auto has_max = max_items != std::numeric_limits<int>::max();
 
     if (max_items == 0) {
