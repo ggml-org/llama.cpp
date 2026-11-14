@@ -3129,6 +3129,52 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("<|channel>thought\nI'm\nthinking<channel|>Hello, world!\nWhat's up?")
             .run();
 
+        // Models can insert whitespace before the thought channel name.
+        for (const std::string & ws : { " ", "  ", "\t", "\n" }) {
+            const std::string header = "<|channel>" + ws + "thought\n";
+            for (bool has_tools : { false, true }) {
+                const auto tools = has_tools ? std::vector<common_chat_tool>{ get_time_tool } : std::vector<common_chat_tool>{};
+
+                tst.test(header + "I'm\nthinking<channel|>Hello, world!\nWhat's up?")
+                    .tools(tools)
+                    .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                    .expect(message_assist_thoughts)
+                    .run();
+
+                tst.test(header + "I'm\nthinking")
+                    .tools(tools)
+                    .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                    .is_partial(true)
+                    .expect_reasoning("I'm\nthinking")
+                    .run();
+
+                tst.test(header + "<channel|>Hello, world!\nWhat's up?")
+                    .tools(tools)
+                    .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                    .expect(message_assist)
+                    .run();
+
+                tst.test(header + "I'm\nthinking<channel|>Hello, world!\nWhat's up?")
+                    .tools(tools)
+                    .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+                    .expect_content(header + "I'm\nthinking<channel|>Hello, world!\nWhat's up?")
+                    .run();
+            }
+
+            tst.test("<|channel>" + header + "<channel|>Hello, world!\nWhat's up?")
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .expect(message_assist)
+                .run();
+
+            tst.test(header + "I'm\nthinking<channel|><|tool_call>call:get_time{city:<|\"|>Paris<|\"|>}<tool_call|>")
+                .tools({ get_time_tool })
+                .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .expect_reasoning("I'm\nthinking")
+                .expect_tool_calls({ { "get_time", R"({"city": "Paris"})", {} } })
+                .run();
+        }
+
         // Simple tool call with string argument
         tst.test(
                 "<|tool_call>call:get_time{city:<|\"|>London<|\"|>}<tool_call|>")

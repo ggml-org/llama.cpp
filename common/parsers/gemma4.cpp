@@ -332,14 +332,16 @@ common_chat_params common_chat_params_init_gemma4(const common_chat_template &  
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto start = p.rule("start", p.optional(p.literal("<|turn>model\n")));
+        auto thought_name = p.space() + p.literal("thought");
+        auto thought_start = p.literal("<|channel>") + thought_name;
 
         if (extract_reasoning) {
-            p.rule("thought", p.literal("<|channel>thought") + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
+            p.rule("thought", thought_start + p.space() + p.reasoning(p.until("<channel|>")) + p.literal("<channel|>"));
         } else {
-            p.rule("thought", p.content(p.literal("<|channel>thought") + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
+            p.rule("thought", p.content(thought_start + p.space() + p.until("<channel|>") + p.literal("<channel|>")));
         }
 
-        auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(p.literal("thought"))), "");
+        auto consume_empty_channels = p.gbnf(p.zero_or_more(p.literal("<|channel>") + p.negate(thought_name)), "");
         auto thought = (p.peek(p.literal("<|channel>")) + consume_empty_channels + p.ref("thought")) | p.negate(p.literal("<|channel>"));
 
         if (has_response_format) {
