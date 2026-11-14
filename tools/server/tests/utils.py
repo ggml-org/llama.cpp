@@ -34,6 +34,9 @@ DEFAULT_HTTP_TIMEOUT = 600
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
 
+# timeout of the reachability probe of the LAN address
+LAN_PROBE_TIMEOUT = 5
+
 
 class ServerResponse:
     headers: dict
@@ -805,7 +808,7 @@ def download_file(url: str, output_file_path: str | None = None) -> str:
     return output_file
 
 
-def get_lan_ip() -> str | None:
+def get_lan_ip(server: ServerProcess) -> str | None:
     # address of the interface that routes outside, no packet is sent
     import socket
     try:
@@ -814,7 +817,14 @@ def get_lan_ip() -> str | None:
             ip = s.getsockname()[0]
     except OSError:
         return None
-    return None if ip.startswith("127.") else ip
+    if ip.startswith("127."):
+        return None
+    # a host can fail to reach its own LAN address (firewall, VPN, system proxy)
+    try:
+        requests.get(server.make_url("/health", host=ip), timeout=LAN_PROBE_TIMEOUT)
+    except requests.exceptions.RequestException:
+        return None
+    return ip
 
 
 def is_slow_test_allowed():

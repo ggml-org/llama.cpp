@@ -89,21 +89,22 @@ value statement::execute(context & ctx) const {
 }
 
 value identifier::execute_impl(context & ctx) const {
-    auto it = ctx.get_val(val);
-    auto builtins = global_builtins();
-    if (!it->is_undefined()) {
+    auto it = ctx.find_val(key);
+    if (it && !it->is_undefined()) {
         if (ctx.is_get_stats) {
             value_t::stats_t::mark_used(it);
         }
         JJ_DEBUG("Identifier '%s' found, type = %s", val.c_str(), it->type().c_str());
         return it;
-    } else if (builtins.find(val) != builtins.end()) {
-        JJ_DEBUG("Identifier '%s' found in builtins", val.c_str());
-        return mk_val<value_func>(val, builtins.at(val));
-    } else {
-        JJ_DEBUG("Identifier '%s' not found, returning undefined", val.c_str());
-        return mk_val<value_undefined>(val);
     }
+    const auto & builtins = global_builtins();
+    auto builtin = builtins.find(val);
+    if (builtin != builtins.end()) {
+        JJ_DEBUG("Identifier '%s' found in builtins", val.c_str());
+        return mk_val<value_func>(val, builtin->second);
+    }
+    JJ_DEBUG("Identifier '%s' not found, returning undefined", val.c_str());
+    return mk_val<value_undefined>(val);
 }
 
 value object_literal::execute_impl(context & ctx) const {
@@ -693,7 +694,7 @@ value set_statement::execute_impl(context & ctx) const {
         }
         auto obj_ptr = cast_val<value_object>(object);
         JJ_DEBUG("Setting object property '%s' with value type %s", prop_name.c_str(), rhs->type().c_str());
-        obj_ptr->insert(prop_name, rhs);
+        obj_ptr->insert(cached_val<value_string>(ctx, member->static_property), rhs);
 
     } else {
         throw std::runtime_error("Invalid LHS inside assignment expression: " + assignee->type());
@@ -813,6 +814,19 @@ value call_statement::execute_impl(context & ctx) const {
     return callee_func->invoke(args);
 }
 
+member_expression::member_expression(statement_ptr && object, statement_ptr && property, bool computed) :
+    object(std::move(object)),
+    property(std::move(property)),
+    computed(computed) {
+    chk_type<expression>(this->object);
+    chk_type<expression>(this->property);
+    if (!computed) {
+        if (const auto * id = cast_stmt<identifier>(this->property)) {
+            static_property = id->key;
+        }
+    }
+}
+
 value member_expression::execute_impl(context & ctx) const {
     value object = this->object->execute(ctx);
 
@@ -821,14 +835,13 @@ value member_expression::execute_impl(context & ctx) const {
         // syntax: obj[expr]
         JJ_DEBUG("Member expression, computing property type %s", this->property->type().c_str());
 
-        int64_t arr_size = 0;
-        if (is_val<value_array>(object)) {
-            arr_size = object->as_array().size();
-        } else if (is_val<value_string>(object)) {
-            arr_size = object->as_string().length();
-        }
-
         if (is_stmt<slice_expression>(this->property)) {
+            int64_t arr_size = 0;
+            if (is_val<value_array>(object)) {
+                arr_size = static_cast<int64_t>(object->as_array().size());
+            } else if (is_val<value_string>(object)) {
+                arr_size = static_cast<int64_t>(cast_val<value_string>(object)->val_str.length());
+            }
             auto s = cast_stmt<slice_expression>(this->property);
             value step_val  = s->step_expr  ? s->step_expr->execute(ctx)  : mk_val<value_int>(1);
             value start_val = s->start_expr ? s->start_expr->execute(ctx) : (step_val->as_int() < 0 ? mk_val<value_int>(arr_size - 1) : mk_val<value_int>(0));
@@ -850,7 +863,7 @@ value member_expression::execute_impl(context & ctx) const {
         }
     } else if (is_stmt<integer_literal>(this->property)) {
         // syntax: obj.index
-        property = mk_val<value_int>(cast_stmt<integer_literal>(this->property)->val);
+        property = this->property->execute(ctx);
         if (property->as_int() < 0) {
             throw std::runtime_error("Static member property cannot be negative");
         }
@@ -859,8 +872,8 @@ value member_expression::execute_impl(context & ctx) const {
         if (!is_stmt<identifier>(this->property)) {
             throw std::runtime_error("Static member property must be an identifier");
         }
-        property = mk_val<value_string>(cast_stmt<identifier>(this->property)->val);
-        std::string prop = property->as_string().str();
+        property = cached_val<value_string>(ctx, static_property);
+        const auto & prop = cast_stmt<identifier>(this->property)->val;
         JJ_DEBUG("Member expression, object type %s, static property '%s'", object->type().c_str(), prop.c_str());
 
         // behavior of jinja2: obj having prop as a built-in function AND 'prop', as an object key,
@@ -868,51 +881,56 @@ value member_expression::execute_impl(context & ctx) const {
         // while obj['prop'] returns the property value.
         // example: {"obj": {"items": 123}} -> obj.items is the built-in function, obj['items'] is 123
 
-        value val = try_builtin_func(ctx, prop, object, true);
-        if (!is_val<value_undefined>(val)) {
+        value val = find_builtin_func(ctx, prop, object);
+        if (val) {
             return val;
         }
         // else, fallthrough to normal property access below
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
-    value val = mk_val<value_undefined>("object_property");
+    value val;
 
     if (property->is_undefined()) {
         JJ_DEBUG("%s", "Member expression property is undefined, returning undefined");
-        return val;
+        return mk_val<value_undefined>("object_property");
     }
 
     ensure_key_type_allowed(property);
 
     if (is_val<value_undefined>(object)) {
         JJ_DEBUG("%s", "Accessing property on undefined object, returning undefined");
-        return val;
+        return mk_val<value_undefined>("object_property");
 
     } else if (is_val<value_object>(object)) {
-        auto key = property->as_string().str();
-        val = object->at(property, val);
-        if (is_val<value_undefined>(val)) {
-            val = try_builtin_func(ctx, key, object, true);
+        val = object->find(property);
+        if (!val || is_val<value_undefined>(val)) {
+            val = try_builtin_func(ctx, property->as_string().str(), object, true);
         }
-        JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());
+        JJ_DEBUG("Accessed property '%s' value, got type: %s", property->as_string().str().c_str(), val->type().c_str());
 
     } else if (is_val<value_array>(object) || is_val<value_string>(object)) {
         if (is_val<value_int>(property) || is_val<value_bool>(property)) {
             int64_t index = property->as_int();
             JJ_DEBUG("Accessing %s index %d", object->type().c_str(), (int)index);
             if (is_val<value_array>(object)) {
-                auto & arr = object->as_array();
+                const auto * arr = cast_val<value_array>(object);
+                const auto count = arr->as_array().size();
                 if (index < 0) {
-                    index += static_cast<int64_t>(arr.size());
-                }
-                if (index >= 0 && index < static_cast<int64_t>(arr.size())) {
-                    val = arr[index];
+                    // Avoid negating INT64_MIN.
+                    const uint64_t distance = static_cast<uint64_t>(-(index + 1)) + 1;
+                    if (distance <= count) {
+                        val = arr->as_array().at(static_cast<size_t>(count - distance));
+                    }
+                } else if (static_cast<uint64_t>(index) < count) {
+                    val = arr->as_array().at(static_cast<size_t>(index));
                 }
             } else { // value_string
-                auto str = object->as_string().str();
-                if (index >= 0 && index < static_cast<int64_t>(str.size())) {
-                    val = mk_val<value_string>(std::string(1, str[index]));
+                if (index >= 0) {
+                    const auto byte = cast_val<value_string>(object)->val_str.byte_at(static_cast<size_t>(index));
+                    if (byte) {
+                        val = mk_val<value_string>(std::string(1, *byte));
+                    }
                 }
             }
 
@@ -930,7 +948,10 @@ value member_expression::execute_impl(context & ctx) const {
         val = try_builtin_func(ctx, key, object, true);
     }
 
-    if (ctx.is_get_stats && val && object && property) {
+    if (!val) {
+        val = mk_val<value_undefined>("object_property");
+    }
+    if (ctx.is_get_stats && object && property) {
         value_t::stats_t::mark_used(val);
         value_t::stats_t::mark_used(object);
         value_t::stats_t::mark_used(property);
