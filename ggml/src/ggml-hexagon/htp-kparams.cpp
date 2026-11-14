@@ -3837,21 +3837,62 @@ static bool htp_kparams_solve_timestep_embedding(
         return false;
     }
 
-    const uint32_t n_rows = (uint32_t) src0->ne[0];
-    const uint32_t half   = (uint32_t) dim / 2;
-    const uint32_t n_blocks = (half + 31) / 32;
-    if ((uint64_t) n_rows * n_blocks > UINT32_MAX) {
+    if (src0->ne[0] <= 0 || src0->ne[0] > INT32_MAX || dim < 2) {
         return false;
     }
 
-    const uint32_t total_blocks = n_blocks * n_rows;
+    // below this many output elements threading costs more than it saves
+    constexpr uint32_t min_split_elems = 1024;
+    // target size of one VTCM output buffer per thread
+    constexpr size_t out_buf_budget = 16 * 1024;
 
-    kparams->n_hvx        = (std::min)(htp_session_n_hvx(sess), (std::max)(1u, total_blocks));
-    kparams->n_rows       = n_rows;
-    kparams->dim          = (uint32_t) dim;
-    kparams->half         = half;
-    kparams->total_blocks = total_blocks;
-    kparams->div_rows     = init_fastdiv_values((std::max)(1u, n_rows));
+    const uint32_t n_rows   = (uint32_t) src0->ne[0];
+    const uint32_t half     = (uint32_t) dim / 2;
+    const uint32_t n_blocks = (half + HTP_TIMESTEP_BLOCK - 1) / HTP_TIMESTEP_BLOCK;
+
+    // split rows or freq blocks, whichever keeps more threads busy
+    const uint32_t max_hvx    = (uint64_t) n_rows * (uint32_t) dim < min_split_elems ? 1 : htp_session_n_hvx(sess);
+    const uint32_t hvx_rows   = (std::min)(max_hvx, n_rows);
+    const uint32_t hvx_cols   = (std::min)(max_hvx, n_blocks);
+    const bool     split_cols = hvx_cols > hvx_rows;
+
+    uint32_t rows_per_hvx   = n_rows;
+    uint32_t blocks_per_hvx = n_blocks;
+    uint32_t n_hvx          = 1;
+    if (split_cols) {
+        blocks_per_hvx = (n_blocks + hvx_cols - 1) / hvx_cols;
+        n_hvx          = (n_blocks + blocks_per_hvx - 1) / blocks_per_hvx;
+    } else {
+        rows_per_hvx = (n_rows + hvx_rows - 1) / hvx_rows;
+        n_hvx        = (n_rows + rows_per_hvx - 1) / rows_per_hvx;
+    }
+
+    struct htp_timestep_vtcm_layout layout;
+    htp_timestep_vtcm_layout_build(&layout, (uint32_t) dim, blocks_per_hvx, 1, n_hvx);
+
+    const size_t row_bytes  = layout.out_buf_size; // one [cos | sin] row
+    uint32_t     chunk_rows = (uint32_t) (std::max)((size_t) 1, (std::min)((size_t) rows_per_hvx, out_buf_budget / row_bytes));
+
+    htp_timestep_vtcm_layout_build(&layout, (uint32_t) dim, blocks_per_hvx, chunk_rows, n_hvx);
+    while (layout.total_bytes > htp_session_vtcm_size(sess) && chunk_rows > 1) {
+        chunk_rows /= 2;
+        htp_timestep_vtcm_layout_build(&layout, (uint32_t) dim, blocks_per_hvx, chunk_rows, n_hvx);
+    }
+    if (layout.total_bytes > htp_session_vtcm_size(sess)) {
+        return false;
+    }
+
+    kparams->n_hvx          = n_hvx;
+    kparams->n_rows         = n_rows;
+    kparams->dim            = (uint32_t) dim;
+    kparams->half           = half;
+    kparams->n_blocks       = n_blocks;
+    kparams->split_cols     = split_cols ? 1 : 0;
+    kparams->rows_per_hvx   = rows_per_hvx;
+    kparams->blocks_per_hvx = blocks_per_hvx;
+    kparams->chunk_rows     = chunk_rows;
+    kparams->vtcm_size      = (uint32_t) layout.total_bytes;
+    kparams->freq_scale     = -logf((float) max_period) / (float) half;
 
     return true;
 }
