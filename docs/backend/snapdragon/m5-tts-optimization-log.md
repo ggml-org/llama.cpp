@@ -712,3 +712,75 @@ top-k code（60/60 成功），其余噪声与 hidden 完全不变：
 - 剩下的真实收益不在稳态 RTF：首包（0.363 s）、热漂移（同代码
   0.75→0.91）、长时功耗、音质 / 情感表达；以及需要重训的模型级改造
   （非自回归 depth head、codec 蒸馏）。
+
+---
+
+## 15. 当前推理流水线的 NPU / CPU 边界（2026-11-15 03:3x，架构快照）
+
+> 本节是**结构说明**，不含新实验。三张原理图随文放在
+> `docs/backend/snapdragon/m5-tts-pipeline-*.svg`；同一组图也已内联进
+> Learning Hub 第 9 章（随明暗主题变色）。
+
+### 15.1 一句话结论
+
+**真正跑在 NPU 上的只有两个 transformer**：backbone（8 层 Q8_0，32 MB）
+与 depth core（5 层 Q4_0，10.7 MB），合计约 43 MB 常驻 HTP0。
+heads 投影、采样、噪声生成、codec、PCM 输出**全在 CPU**。
+
+![图 15-1 · CPU 与 HTP0 的计算归属](./m5-tts-pipeline-units.svg)
+
+### 15.2 模块归属表
+
+| 模块 | 执行单元 | 权重 / 数据 | 成本 | 为什么放这里 |
+|---|---|---|---|---|
+| HTTP / 分词 / prefix 查表 | CPU（server 主线程） | text / audio embeddings mmap | 一次性 ~150 ms prefill | 纯 CPU 逻辑 |
+| backbone prefill + 1-token decode | **HTP0** · 常驻子进程 A | Q8_0 32 MB / 8 层 | 8.4 ms/帧 | 规则 GEMM，权重可常驻 |
+| depth core 15 次 decode | **HTP0** · 常驻子进程 B | Q4_0 10.7 MB / 5 层 | 47.8 ms/帧（含 CPU heads 与提交开销） | 同上 |
+| depth heads 16 路投影 | CPU · NEON int8 | `depth-weights.f32` 202 MB mmap → 17 MB/帧流式 | ~5.4 ms/帧 | 稀疏查表型权重，HTP 不划算 |
+| 采样（top-10 + Gumbel）+ 噪声 | CPU | JavaRandom 16×2051 | ≤1.4 ms/帧 | 位精确约束，不可向量化 |
+| codec | CPU · ORT 3 线程（独立 worker） | 141 MB Snake 融合 ONNX | 36.3 ms/帧（被 overlap 隐藏） | ONNX 图 + 自写 `m5::Snake` 算子 |
+| WavWriter / chunked HTTP | CPU | — | — | I/O |
+
+### 15.3 进程、线程与数据搬运
+
+- `m5-server` 主进程（CPU）持 HTTP 线程与 render 主线程；`overlap=true` 时
+  另起一个 **codec worker 线程**（`m5_engine.cpp:1180`）。
+- `backbone-resident` / `depth-resident` 是**同一个二进制的两个常驻子进程**
+  （`deploy.sh` 里 cp 一份改 argv），各自
+  `ggml_backend_dev_by_name("HTP0")` + `n_gpu_layers=-1`（`backbone.cpp:72-77`），
+  各持一个 HTP 会话，分时复用**同一物理 HTP0**。分开是为了 KV / 上下文隔离，
+  以及分别调量化与 env（`OPPOLL=1 / NHMX=0`）。
+- 引擎 ↔ stage 走匿名 pipe，一行 FP32 512 维 = 2 KB；stage → DSP 走 FastRPC。
+  默认 `--depth-pipe` 每个 book 一次往返，**一帧 15 次**；
+  `--depth-chain` 可合成 1 次但实测打平（§3.1），`m5_ring` 更慢（§3.4）。
+
+![图 15-2 · 一帧内的 15 次跨边界往返与 codec 并行](./m5-tts-pipeline-frame.svg)
+
+### 15.4 真实一帧的时间线
+
+2026-11-15 03:31 的实跑请求（Serena，87 帧，`X-M5-*` 头）：
+墙钟 5.281 s / RTF 0.770 / 首包 0.561 s；
+`backbone 0.734 s`、`depth 4.160 s`、`codec 3.156 s`，
+折合每帧 8.4 / 47.8 / 36.3 ms。
+
+![图 15-3 · 每帧分项耗时与 overlap](./m5-tts-pipeline-timeline.svg)
+
+`wall ≈ backbone + max(depth, codec) + prefill`：codec 的 36.3 ms 与 depth
+并行、被完全隐藏。这正是 §13 的 `max()` 天花板，也解释了为什么
+「codec 单独优化」端到端收益为 0。
+
+### 15.5 两个容易误解的点
+
+1. **两个 HTP 会话 ≠ 两个 NPU**。都是 HTP0，只是两个独立的 llama 上下文。
+2. **App 形态拿不到 HTP**。OS 对 app uid 封了 `/dev/adsprpc-smd`（EACCES），
+   JNI 版只能全 CPU 跑（RTF ~0.79–0.90）；只有 shell 域启动的 `m5-server`
+   才能用 NPU。因此 §13 / §14 的全部 NPU 结论只适用于 server 形态。
+
+### 15.6 与前面结论的关系
+
+- §13 的资源让渡实验之所以无效，是因为 depth 的 47.8 ms 里主体是
+  **HTP0 的 15 次提交开销**（F≈1.25 ms/次 + R≈0.91 ms/行），
+  与 CPU 侧 codec 线程负载不相关。
+- §14 的学习型草稿之所以判死，是因为草稿只能见 hidden，而 depth core
+  每步输出从 book2 起由 CPU 侧采样出的 codes 决定——这条链横跨
+  CPU↔NPU 15 次，正是图 15-2 的结构。

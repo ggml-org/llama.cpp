@@ -191,6 +191,16 @@
   .filters button.on { border-color: var(--acc); color: var(--acc); background: var(--acc-soft); }
   .dg-onbar { fill: #ffffff; }
   html[data-theme="dark"] .dg-onbar { fill: #0b1220; }
+  .dg-cpu { fill: color-mix(in srgb, var(--acc) 9%, var(--card)); stroke: var(--acc); stroke-width: 1.2; }
+  .dg-cpu-in { fill: var(--card); stroke: var(--acc); stroke-width: 1; }
+  .dg-npu { fill: color-mix(in srgb, var(--acc2) 11%, var(--card)); stroke: var(--acc2); stroke-width: 1.2; }
+  .dg-npu-in { fill: color-mix(in srgb, var(--acc2) 22%, var(--card)); stroke: var(--acc2); stroke-width: 1; }
+  .dg-mix { fill: color-mix(in srgb, var(--acc2) 9%, var(--card)); stroke: var(--acc2); stroke-width: 1.4; stroke-dasharray: 5 3; }
+  .dg-barCpu { fill: var(--acc); }
+  .dg-barNpu { fill: var(--acc2); }
+  .dg-lbl { fill: var(--sub); font: 11px var(--mono); }
+  .dg-num { fill: var(--ink); font: 600 12px var(--mono); }
+  .dg-arr { stroke: var(--sub); stroke-width: 1.5; fill: none; marker-end: url(#arrow); }
   .filters { display: flex; gap: 7px; flex-wrap: wrap; margin: 16px 0 4px; }
 
   .calc { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin: 18px 0; }
@@ -243,7 +253,7 @@
   <div class="sideFoot">
     <div>学习进度 <span id="pctText">0%</span></div>
     <div class="bar"><i id="pctBar"></i></div>
-    <div id="seenText">已浏览 0 / 8 章</div>
+    <div id="seenText">已浏览 0 / 10 章</div>
   </div>
 </aside>
 
@@ -261,7 +271,7 @@
     <span class="chip"><b>15</b> 步串行 depth decode</span>
     <span class="chip"><b>16 × 2051</b> codebook</span>
     <span class="chip"><b>83%</b> 墙钟在 depth</span>
-    <span class="chip"><b>2.1×</b> 批量化理论上限（未解锁）</span>
+    <span class="chip"><b>α≈0.18</b> 学习型草稿已判死</span>
     <span class="chip"><b>0 次</b> 梯度更新也能换音色</span>
   </div>
 </header>
@@ -275,7 +285,7 @@
     <ul>
       <li>一个自回归音频模型，为什么它的瓶颈和文本 LLM 完全不同？</li>
       <li>看到 "RTF 0.9" 这个数字，你会追问哪三个问题？</li>
-      <li>"把 15 次调用合成 1 次" 听起来必然更快，为什么实测结论是完全不能做？</li>
+      <li>"把 15 次调用合成 1 次" 听起来必然更快，为什么连训练一个草稿模型也救不了（Ch 9）？</li>
       <li>量化后 codes 翻转 90%，为什么还算"正确"？什么情况下又必须否决一个量化？</li>
       <li>Serena 的音色是怎样从 Qwen3-TTS 迁移到 M5 的？有没有训练发生？</li>
     </ul>
@@ -478,6 +488,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     一帧 = 1 次 backbone decode + 15 次 depth 提交 + 16 次投影/采样 + 一批 codec 解码。
     <b>串行依赖有三层</b>：book 内链、帧间 next_hidden、以及采样器随机数顺序。优化前先问：我要动的是哪一层依赖？
   </div>
+  <div class="callout key"><span class="tagline">想看物理执行位置？</span>
+    本章讲的是<b>逻辑数据流</b>；哪些模块真正在 HTP0、哪些在 CPU、一帧要跨越多少次 pipe，
+    以及为什么 App 形态拿不到 NPU，统一放在 <b><a href="#ch9">第 9 章 · NPU / CPU 边界</a></b>。
+  </div>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch1">标记本章已学完</button></div>
 </section>
 
@@ -607,7 +621,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <tr><th>类型</th><th>典型症状</th><th>本项目对应</th><th>有效手段</th></tr>
     <tr><td>带宽受限</td><td>耗时 ∝ 权重字节数，算力没吃满</td><td>heads 每帧 34 MB 流式读取</td><td>f16 → int8 量化、权重驻留</td></tr>
     <tr><td>提交开销</td><td>同样行数，调用次数越多越慢</td><td>depth 1.25 ms/次固定成本</td><td>批量化、算子融合、忙轮询</td></tr>
-    <tr><td>串行依赖</td><td>并行/批量会改变输出语义</td><td>15 步 book 链、帧间 next_hidden</td><td>改模型 / 学习型草稿（不能硬凑）</td></tr>
+    <tr><td>串行依赖</td><td>并行/批量会改变输出语义</td><td>15 步 book 链、帧间 next_hidden</td><td>只能改模型图（学习型草稿已判死，见 Ch 9）</td></tr>
     <tr><td>冷启动</td><td>第一个请求特别慢</td><td>prefill / ORT kernel / codec 图初始化</td><td>启动预热、跨请求状态缓存</td></tr>
     <tr><td>重复计算</td><td>同音色每次都重算同一段</td><td>共享 conditioning 前缀、codec primer</td><td>KV 前缀缓存、prime 状态复用</td></tr>
     <tr><td>资源竞争</td><td>两个任务并发时都变慢</td><td>codec 与 depth 同时跑，depth 慢 ~20%</td><td>评估净收益，而非单任务最优</td></tr>
@@ -626,7 +640,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
   <p class="subtitle">本章是整门课的核心——用一个微基准，把"能不能批量化"变成可计算、可证伪的问题。</p>
   <div class="objectives"><b>本章目标</b><ul>
     <li>会用 bench 数据拟合"固定提交成本 + 每行成本"，并算出理论加速上限</li>
-    <li>理解为什么理论 2.1× 拿不到，以及六条压缩路径各自是怎么被排除的</li>
+    <li>理解为什么理论 2.1× 拿不到、六条压缩路径各自怎么被排除，以及为什么连训练草稿也不行（Ch 9 / §14）</li>
     <li>能把这里的推理迁移到 LLM 的投机解码 / Jacobi decoding 讨论</li>
   </ul></div>
 
@@ -642,7 +656,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
   <p>用 <code>T = F·调用次数 + R·行数</code> 拟合，得到 <b>F ≈ 1.25 ms/次提交，R ≈ 0.91 ms/行</b>。
   于是现状（一帧 15 次调用、16 行）≈ <code>15×1.25 + 16×0.91 ≈ 33 ms</code>；
   理想批量（1 次调用、16 行）≈ <code>1.25 + 16×0.91 ≈ 16 ms</code>。
-  <b>理论上限约 2.1×</b>，对应整句 RTF 从 ~0.75 降到 ~0.55。这是值得认真追查的收益。</p>
+  <b>理论上限约 2.1×</b>（只算 depth core 的提交开销）。<b>但这个数字后来被两次修正</b>：
+  算上 heads 投影后 depth 阶段天花板只有 1.78×，而且 codec 与 depth 并行，
+  单独提速会被 <code>max()</code> 吃掉；§14 又证明学习型草稿的 α 上界只有 0.18，
+  连这个 1.78× 都拿不到。详见 Ch 9。</p>
 
   <figure>
     <div class="figureBox">
@@ -717,7 +734,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-t" x="470" y="94">帧间匹配率 1.5%（≈ 随机猜 2051 个码字）</text>
         <text class="dg-t" x="470" y="116">verify 几乎必然在第 1 个 book 就拒绝</text>
         <text class="dg-ts" x="470" y="146">本质：没有可预测的时间局部性</text>
-        <text class="dg-tacc" x="470" y="176">复活条件：训练一个学习型 draft（code[b] ← code[b-1]）</text>
+        <text class="dg-tacc" x="470" y="176">§14：学习型 draft 也已实测判死（α ≈ 0.18）</text>
       </svg>
     </div>
     <figcaption>图 3-2　同样是"草稿 + 批量验证"，在 LLM 上成立、在 codec codes 上不成立。差别不在工程，而在数据分布是否有可预测性。</figcaption>
@@ -726,7 +743,9 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
   <div class="callout bad"><span class="tagline">最重要的结论</span>
     <b>理论上限 ≠ 可达上限</b>。2.1× 的收益是真的，但拿不到它的原因是<b>模型语义</b>：15 步串行是训练出来的依赖结构，不是实现偷懒。
     任何"把 15 次合成 1 次"的精确方案都必须先回答：transform 行里的 code 依赖怎么办？
-    到目前为止的答案是：要么训练一个小草稿模型做预测（学习型），要么重训 depth 头支持并行出多 book。
+    曾经的答案是「训练一个小草稿模型做预测」，但 §14 用 960 帧官方 ONNX 轨迹把这条路也关掉了：
+    可预测性沿 15 步链结构性衰减，α 上界 ≈0.18 远低于盈亏平衡 0.72（Ch 9 / 图 9-2 就是草稿跨不过去的那段依赖）。
+    现在只剩重训 depth 头支持并行出多 book——那是改模型图、需要原始训练数据的另一个项目。
   </div>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch3">标记本章已学完</button></div>
 </section>
@@ -992,9 +1011,11 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <div class="optCard" data-status="no"><div class="hd"><b>depth 换更低量化</b><span class="badge no">排除</span></div><div class="metric">Q8→Q4 只快 9%</div><p>证明非带宽瓶颈。</p></div>
     <div class="optCard" data-status="no"><div class="hd"><b>m5_ring 共享内存</b><span class="badge no">更慢</span></div><div class="metric">futex 等待</div><p>零拷贝不等于低延迟。</p></div>
     <div class="optCard" data-status="no"><div class="hd"><b>噪声向量化 / 跨请求 KV</b><span class="badge no">收益 &lt;2%</span></div><div class="metric">位精确约束 / &lt;2 ms</div><p>先量占比，再决定复杂度。</p></div>
-    <div class="optCard" data-status="wait"><div class="hd"><b>学习型草稿</b><span class="badge wait">唯一大杠杆</span></div><div class="metric">depth 2.1× → RTF ~0.55</div><p>需训练 code[b]←(hidden, code[b-1]) 映射器 + 批量 verify。</p></div>
-    <div class="optCard" data-status="wait"><div class="hd"><b>重训 depth 头</b><span class="badge wait">需训练</span></div><div class="metric">一次前向出多 book</div><p>从根上移除串行依赖。</p></div>
-    <div class="optCard" data-status="wait"><div class="hd"><b>heads int4 / codec 权重 int8 快路径</b><span class="badge wait">候选</span></div><div class="metric">流量再减半</div><p>门禁同 int8；depth 提速后 codec 才会浮出水面。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>学习型草稿</b><span class="badge no">判死</span></div><div class="metric">α_oracle ≈ 0.18 ≪ 0.72 门槛</div><p>960 帧 ONNX：ridge / 核回归 / 单 code 扰动三组证据，见 §14 与 Ch 9。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>并行资源让渡 / 旋钮重扫</b><span class="badge no">证伪</span></div><div class="metric">48 次 A/B，无一快于默认</div><p>§13：depth_s 与 codec 负载不相关；关 overlap 反 +43.9%。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>codec 单独再优化</b><span class="badge no">零收益</span></div><div class="metric">被 max(depth, codec) 吃掉</div><p>§13：codec 变快而 depth 不变，端到端墙钟不动；除非与 depth 提速捆绑。</p></div>
+    <div class="optCard" data-status="wait"><div class="hd"><b>重训 depth 头</b><span class="badge wait">唯一剩余</span></div><div class="metric">一次前向出多 book</div><p>改模型图、需原始训练数据，已是另一个项目（Ch 9）。</p></div>
+    <div class="optCard" data-status="wait"><div class="hd"><b>heads int4</b><span class="badge wait">小候选</span></div><div class="metric">17 MB → 8.5 MB 流量</div><p>门禁同 int8；预期每帧 -2~3 ms，收益有限但风险低。</p></div>
   </div>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch5">标记本章已学完</button></div>
 </section>
@@ -1291,10 +1312,14 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
     运行时既不加载 Qwen 也不更新权重。真正"把槽位训练出来"的例子是 Qwen3-TTS 的 VoiceDesign（自然语言描述控制），
     M5 的 caption 槽因训练稀疏而弱——这正是"槽位存在 ≠ 槽位可用"。</div></details>
   <details class="qa"><summary>Q6　如果让你继续把 RTF 从 0.75 往下压，下一步做什么？</summary>
-    <div class="answer">先算天花板：depth 占 83%，其余环节全砍掉也只有 ~17%。而六条精确压缩路径已被排除，
-    所以只剩<b>改变依赖结构</b>：训练学习型草稿（code[b]←(hidden, code[b-1])）做批量 verify，或重训 depth 头一次出多 book，理论 2.1×。
-    其次等 depth 降下来后，codec 的 3.0 s 才会从 overlap 里浮出成为新瓶颈，那时再做 codec 权重快路径 / int4 heads。
-    不建议先动被隐藏的 codec，也不建议为单用户场景改并发。</div></details>
+    <div class="answer"><b>先别急着动任何模块——这道题在 2026-11-15 被三项实测改写了（Ch 9）。</b>
+    ① 天花板不是 2.1×：算上 heads 后 depth 上限只有 1.78×，而且 codec 与 depth 并行，
+    <code>wall ≈ backbone + max(depth, codec) + prefill</code>；只做草稿会被 codec 卡住。
+    ② 三条看似可行的路全部排除：单边旋钮与资源让渡（§13，48 次 A/B 无一快于默认）、
+    codec 单独优化（被 max 吃掉）、学习型草稿（§14，α_oracle ≈ 0.18 ≪ 0.72 盈亏平衡）。
+    ③ 所以<b>不改模型图时稳态 RTF 0.725 已是极限</b>；把精力转向首包、热漂移、功耗、音质，
+    或接受「重训非自回归 depth head」这个需要训练数据的另一个项目。
+    这题真正考的是：<b>先看清依赖结构与并行结构，再判断某个优化能不能兑现。</b></div></details>
 
   <h3>8.3 术语表</h3>
   <div class="tableWrap"><table>
@@ -1328,6 +1353,169 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
     把这三句带到下一个模型、下一个后端，教程就没白写。
   </div>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch8">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 9 ============ -->
+<section class="chapter" id="ch9" data-title="番外：NPU / CPU 边界与最终结论">
+  <div class="chapHead"><span class="idx">09</span><h2>番外：这套流水线到底哪些跑在 NPU 上</h2></div>
+  <p class="subtitle">2026-11-15 架构快照，以及三项后续实验对"下一步"的改写。对应台账 §13 / §14 / §15。</p>
+  <div class="objectives">
+    <b>学完你应该能回答</b>
+    <ul>
+      <li>"模型跑在 NPU 上"为什么对 M5-TTS 是错的：heads 与 codec 到底在哪里？</li>
+      <li>两个 HTP 会话是两个 NPU 吗？为什么要拆成两个常驻子进程？</li>
+      <li>为什么单独优化 codec 收益为 0，而训练学习型草稿最终也被判死？</li>
+    </ul>
+  </div>
+
+  <h3>9.1 计算归属全景</h3>
+  <p>真正跑在 HTP0 上的只有<b>两个 transformer</b>：backbone（8 层 Q8_0，32 MB）与 depth core（5 层 Q4_0，10.7 MB），合计约 43 MB 权重常驻。
+  <b>heads 投影、采样、噪声生成、codec 声码器、PCM 输出全在 CPU。</b></p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 384" role="img" aria-label="CPU 与 HTP0 NPU 的计算归属全景">
+        <rect class="dg-cpu" x="40" y="40" width="300" height="286" rx="20"/>
+        <text class="dg-tb" x="56" y="62">CPU · 应用处理器（大核）</text>
+        <g class="dg-cpu-in">
+          <rect x="56" y="76" width="268" height="40" rx="8"/><rect x="56" y="122" width="268" height="40" rx="8"/>
+          <rect x="56" y="168" width="268" height="40" rx="8"/><rect x="56" y="214" width="268" height="40" rx="8"/>
+          <rect x="56" y="260" width="268" height="40" rx="8"/>
+        </g>
+        <g class="dg-tb">
+          <text x="68" y="93">HTTP · 分词 · prefix 查表</text><text x="68" y="139">depth heads 投影</text>
+          <text x="68" y="185">采样 + 噪声生成</text><text x="68" y="231">Codec 声码器</text>
+          <text x="68" y="277">PCM 拼接 / WAV / 流式输出</text>
+        </g>
+        <g class="dg-ts">
+          <text x="68" y="109">C++ tokenizer · mmap embeddings</text><text x="68" y="155">16 × 2051 × 512 int8 · NEON</text>
+          <text x="68" y="201">top-10 · Gumbel · JavaRandom</text><text x="68" y="247">ORT CPU · 3 线程 · 141 MB 权重</text>
+          <text x="68" y="293">WavWriter · chunked HTTP</text>
+        </g>
+        <rect class="dg-npu" x="400" y="40" width="240" height="286" rx="20"/>
+        <text class="dg-tb" x="416" y="62">HTP0 · Hexagon NPU</text>
+        <g class="dg-npu-in">
+          <rect x="416" y="76" width="208" height="64" rx="8"/><rect x="416" y="156" width="208" height="64" rx="8"/>
+          <rect x="416" y="236" width="208" height="64" rx="8"/>
+        </g>
+        <g class="dg-tb">
+          <text x="428" y="96">HTP 会话 A · backbone</text><text x="428" y="176">HTP 会话 B · depth core</text>
+          <text x="428" y="256">执行单元</text>
+        </g>
+        <g class="dg-ts">
+          <text x="428" y="114">Q8_0 32 MB · 8 层</text><text x="428" y="131">prefill + 每帧 1 token decode</text>
+          <text x="428" y="194">Q4_0 10.7 MB · 5 层</text><text x="428" y="211">每帧 15 次 decode</text>
+          <text x="428" y="274">HVX 向量 · NHMX=0</text><text x="428" y="291">OPPOLL=1 保持 DSP 时钟</text>
+        </g>
+        <path class="dg-arr" d="M346 118 H394"/><path class="dg-arr" d="M394 166 H346"/>
+        <text class="dg-lbl" x="370" y="205" text-anchor="middle">pipe</text>
+        <text class="dg-lbl" x="370" y="221" text-anchor="middle">2 KB/行</text>
+        <text class="dg-ts" x="40" y="348">两个常驻子进程各持一个 HTP 会话；引擎 ↔ stage 走匿名 pipe（FP32 512 维行），stage → DSP 走 FastRPC。</text>
+        <text class="dg-ts" x="40" y="368">同一物理 HTP0 被两个会话分时复用；codec 在 CPU worker 线程上，与 depth 并行（overlap）。</text>
+      </svg>
+    </div>
+    <figcaption>图 9-1　CPU 与 HTP0 的计算归属。注意"模型在 NPU"只覆盖了 43 MB 权重；每帧最重的 16 路 heads 矩阵乘和整个声码器都在 CPU。</figcaption>
+  </figure>
+
+  <h3>9.2 为什么这样切</h3>
+  <div class="grid2">
+    <div class="tile"><b>① transformer 归 NPU</b><p>backbone / depth core 都是规则 GEMM，权重小（32 MB / 10.7 MB）可常驻 HTP，每层都能被 llama.cpp 的 ggml-hexagon 后端整图提交。HVX 向量单元擅长这个。</p></div>
+    <div class="tile"><b>② heads 留 CPU</b><p><code>depth-weights.f32</code> 是 202 MB 查表型权重，每步只取 1–2 行；CPU 侧 mmap + per-row int8 镜像（17 MB/帧流式读）+ NEON 更划算。带宽特征明显：int8 后 heads 快 2.5×。</p></div>
+    <div class="tile"><b>③ codec 留 CPU</b><p>ONNX Runtime 图，含自写 <code>m5::Snake</code> 自定义算子，走 CPU EP（3 线程）。它不是 GGUF，也进不了 ggml-hexagon 的图。</p></div>
+    <div class="tile"><b>④ 两个进程，一个 NPU</b><p>backbone-resident / depth-resident 是同一二进制的两个常驻子进程，角色由 argv 决定；各自一个 HTP 会话，分时复用同一 HTP0。拆开是为了 KV 隔离、分别调量化与 env。</p></div>
+  </div>
+
+  <h3>9.3 一帧内的 15 次跨边界往返</h3>
+  <p>引擎 ↔ stage 一行 FP32 512 维 = 2 KB。默认 <code>--depth-pipe</code> 下，每个 book 都要「CPU 构造 transform 行 → 送 HTP0 跑一步 depth core → 回 CPU 投影 2051 类 → 采样」，<b>一帧 15 次</b>。<code>--depth-chain</code> 能把整条链搬进 stage、一次往返，但实测打平；<code>m5_ring</code> 共享内存反而更慢——瓶颈从来不是 IPC 次数。</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 306" role="img" aria-label="一帧内 CPU 与 HTP0 的十五次往返及 codec 并行">
+        <g class="dg-lbl">
+          <rect class="dg-npu-in" x="40" y="22" width="12" height="10" rx="2"/><text x="58" y="31">HTP0 / NPU 执行</text>
+          <rect class="dg-cpu-in" x="170" y="22" width="12" height="10" rx="2"/><text x="188" y="31">CPU 执行</text>
+          <rect class="dg-mix" x="268" y="22" width="12" height="10" rx="2"/><text x="286" y="31">跨边界往返 ×15</text>
+        </g>
+        <rect class="dg-npu-in" x="40" y="52" width="132" height="60" rx="8"/>
+        <text class="dg-tb" x="106" y="74" text-anchor="middle">backbone decode</text>
+        <text class="dg-lbl" x="106" y="92" text-anchor="middle">1 token → hidden[512]</text>
+        <rect class="dg-cpu-in" x="196" y="52" width="132" height="60" rx="8"/>
+        <text class="dg-tb" x="262" y="74" text-anchor="middle">book0 投影采样</text>
+        <text class="dg-lbl" x="262" y="92" text-anchor="middle">2051×512 int8 · NEON</text>
+        <rect class="dg-mix" x="352" y="52" width="152" height="60" rx="8"/>
+        <text class="dg-tb" x="428" y="74" text-anchor="middle">15× 深度链往返</text>
+        <text class="dg-lbl" x="428" y="92" text-anchor="middle">transform 行 → core → 投影 → 采样</text>
+        <rect class="dg-cpu-in" x="528" y="52" width="112" height="60" rx="8"/>
+        <text class="dg-tb" x="584" y="74" text-anchor="middle">next_hidden</text>
+        <text class="dg-lbl" x="584" y="92" text-anchor="middle">16 行查表累加</text>
+        <g class="dg-arr"><path d="M174 82 H194"/><path d="M330 82 H350"/><path d="M506 82 H526"/><path d="M428 114 V182"/></g>
+        <path class="dg-arr" d="M584 114 V146 H106 V114"/>
+        <text class="dg-lbl" x="345" y="141" text-anchor="middle">每帧重复，直到 16 个 code 全为 0（EOS）</text>
+        <rect class="dg-cpu" x="196" y="186" width="444" height="56" rx="8"/>
+        <text class="dg-tb" x="418" y="208" text-anchor="middle">codec worker（CPU · ORT 3 线程 · 独立线程）</text>
+        <text class="dg-lbl" x="418" y="226" text-anchor="middle">把 codes 解码成 24 kHz PCM，与下一帧 depth 重叠执行</text>
+        <text class="dg-ts" x="40" y="266">默认 --depth-pipe：每个 book 一次 pipe 往返（1~2 行 × 2 KB），一帧 15 次；--depth-chain 合并成 1 次但实测打平。</text>
+        <text class="dg-ts" x="40" y="286">权重位置：depth-weights.f32（202 MB）在 CPU 侧 mmap，int8 镜像 17 MB/帧流式读；两个 GGUF 共约 43 MB 常驻 HTP。</text>
+      </svg>
+    </div>
+    <figcaption>图 9-2　一帧的数据流。虚线框是 CPU↔NPU 交替区，也是 §14 里草稿无法跨越的那段依赖。</figcaption>
+  </figure>
+
+  <h3>9.4 真实一帧：max() 天花板</h3>
+  <p>2026-11-15 03:31 的实跑请求（Serena，87 帧）：墙钟 5.281 s、RTF 0.770、首包 0.561 s；分项 <code>backbone 0.734 / depth 4.160 / codec 3.156 s</code>，折合每帧 8.4 / 47.8 / 36.3 ms。</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 250" role="img" aria-label="真实合成请求的每帧分项耗时与并行重叠">
+        <text class="dg-ts" x="40" y="28">刚跑的真实请求 · 87 帧 · 墙钟 5.281 s · RTF 0.770 · 首包 0.561 s（wav 路径）</text>
+        <text class="dg-tb" x="40" y="52">每帧耗时（ms）</text>
+        <g class="dg-lbl">
+          <text x="40" y="88">backbone · HTP0</text><text x="40" y="122">depth · HTP0 + CPU</text><text x="40" y="156">codec · CPU（并行）</text>
+        </g>
+        <rect class="dg-barNpu" x="180" y="72" width="59" height="20" rx="3"/>
+        <text class="dg-num" x="245" y="87">8.4 ms</text>
+        <rect class="dg-mix" x="239" y="106" width="335" height="20" rx="3"/>
+        <text class="dg-num" x="580" y="121">47.8 ms</text>
+        <rect class="dg-barCpu" x="239" y="140" width="254" height="20" rx="3"/>
+        <text class="dg-num" x="499" y="155">36.3 ms</text>
+        <g class="dg-line"><path d="M180 174 H600"/><path d="M180 174 V180"/><path d="M250 174 V180"/><path d="M320 174 V180"/><path d="M390 174 V180"/><path d="M460 174 V180"/><path d="M530 174 V180"/><path d="M600 174 V180"/></g>
+        <g class="dg-lbl" text-anchor="middle">
+          <text x="180" y="194">0</text><text x="250" y="194">10</text><text x="320" y="194">20</text>
+          <text x="390" y="194">30</text><text x="460" y="194">40</text><text x="530" y="194">50</text><text x="600" y="194">60</text>
+        </g>
+        <text class="dg-ts" x="40" y="220">墙钟 ≈ 8.4 + 47.8 = 56.2 ms/帧：codec 的 36.3 ms 与 depth 并行，被完全隐藏（§13 的 max() 天花板）。</text>
+        <text class="dg-ts" x="40" y="240">depth 的 47.8 ms 里既有 15 次 HTP0 提交（F≈1.25 ms/次 + R≈0.91 ms/行），也有 CPU 侧 16 路 heads 投影（约 5.4 ms/帧）。</text>
+      </svg>
+    </div>
+    <figcaption>图 9-3　codec 与 depth 并行，墙钟取两者的最大值——这是理解后面所有"优化为什么没收益"的关键。</figcaption>
+  </figure>
+  <div class="callout key"><span class="tagline">把结构变成判据</span>
+    <code>wall ≈ backbone + max(depth, codec) + prefill</code>。两条分支一旦接近，
+    <b>任何单边优化都会被 max() 吃掉</b>：codec 变快而 depth 不变，墙钟一动不动；
+    depth 变快到 codec 以下，codec 立刻变成新瓶颈。这比"哪个模块慢就优化哪个"的直觉重要得多。
+  </div>
+
+  <h3>9.5 三项后续实验改写了"下一步"</h3>
+  <div class="tableWrap"><table>
+    <tr><th>实验</th><th>做法</th><th>结论</th></tr>
+    <tr><td>§12 可行性分析</td><td>数学上重新审视 15 步链：因果 KV + 预生成噪声 → 投机 verify 在理论上成立</td><td>发现「零信息草稿」被排除不代表「学习型草稿」不可行，但真实天花板只有 depth 1.78×，且被 codec 反压</td></tr>
+    <tr><td>§13 P0：资源让渡</td><td>48 次同轮交替 A/B，扫 ORT 线程数 / chunk / CPU 亲和性 / 关 overlap</td><td><b>假设证伪</b>：默认配置已是端到端最优；depth_s 与 codec 负载不相关；关 overlap 反而 +43.9%</td></tr>
+    <tr><td>§14 门槛 0：α 上界</td><td>960 帧官方 ONNX 轨迹，ridge / 核回归 / 单 code 扰动三组实验</td><td><b>NO-GO</b>：ridge 草稿 α 0.03–0.06，oracle 上界 ≈0.18，远低于盈亏平衡 0.72–0.88</td></tr>
+  </table></div>
+  <div class="callout bad"><span class="tagline">最终结论（2026-11-15）</span>
+    单边优化、并行资源让渡、投机草稿<b>三条路全部实测排除</b>。
+    不改模型图的前提下，<b>稳态 RTF 0.725 就是这条流水线的极限</b>。
+    剩下的真实收益不在稳态 RTF，而在首包（0.363 s）、热漂移、长时功耗、音质 / 情感表达，
+    以及需要重训的模型级改造（非自回归 depth head、codec 蒸馏）。
+  </div>
+
+  <h3>9.6 两个容易误解的点</h3>
+  <div class="grid2">
+    <div class="tile"><b>两个 HTP 会话 ≠ 两个 NPU</b><p>都是 HTP0，只是两个独立的 llama 上下文（各自 KV、各自量化）。它们分时复用同一物理 DSP。</p></div>
+    <div class="tile"><b>App 形态拿不到 HTP</b><p>OS 对 app uid 封了 <code>/dev/adsprpc-smd</code>（EACCES），JNI 版只能全 CPU 跑（RTF ~0.79–0.90）。只有 shell 域启动的 m5-server 才能用 NPU——所以本章与 §13/§14 的 NPU 结论只适用于 server 形态。</p></div>
+  </div>
+
+  <details class="qa"><summary>Q7　既然 codec 有 25% 的空闲余量，为什么"让 codec 少干点活、把 CPU 让给 depth"没用？</summary>
+    <div class="answer">因为 <b>depth 的 47.8 ms 主体花在 HTP0 的 15 次提交</b>（F≈1.25 ms/次 + R≈0.91 ms/行），不是 CPU 争抢。实测把 ORT 线程从 3 降到 2 会让 codec 慢 25%，而 <code>depth_s</code> 反而略升；chunk 从 4 加到 16 让 codec 快 7%，<code>depth_s</code> 几乎不动。
+    并发反压确实存在（关 overlap 后 depth 快 11.3%），但它是"codec 线程存在"的固定税，不是负载强度的函数；而 overlap 本身净赚 43.9%，这笔税必须付。</div></details>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch9">标记本章已学完</button></div>
 </section>
 
 

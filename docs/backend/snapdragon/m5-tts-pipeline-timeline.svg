@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 250" width="680" height="250" role="img">
+<title>真实合成请求的每帧分项耗时与并行重叠</title>
+<desc>87 帧请求中，backbone 每帧 8.4 毫秒在 HTP0，depth 47.8 毫秒由 HTP0 提交与 CPU heads 共同构成，codec 36.3 毫秒在 CPU 独立线程与 depth 并行而被隐藏。</desc>
+<rect x="0" y="0" width="680" height="250" fill="#FFFFFF"/>
+<text x="40" y="28" font-size="12" fill="#5F5E5A" font-family="sans-serif">刚跑的真实请求 · 87 帧 · 墙钟 5.281 s · RTF 0.770 · 首包 0.561 s（wav 路径）</text>
+<text x="40" y="52" font-size="13" font-weight="500" fill="#17202E" font-family="sans-serif">每帧耗时（ms）</text>
+<g font-size="11.5" fill="#5F5E5A" font-family="sans-serif">
+<text x="40" y="88">backbone · HTP0</text>
+<text x="40" y="122">depth · HTP0 + CPU</text>
+<text x="40" y="156">codec · CPU（并行）</text>
+</g>
+<rect x="180" y="72" width="59" height="20" rx="3" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+<text x="245" y="87" font-size="11.5" fill="#26215C" font-family="sans-serif">8.4 ms</text>
+<rect x="239" y="106" width="335" height="20" rx="3" fill="#E6F1FB" stroke="#534AB7" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="580" y="121" font-size="11.5" fill="#26215C" font-family="sans-serif">47.8 ms</text>
+<rect x="239" y="140" width="254" height="20" rx="3" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+<text x="499" y="155" font-size="11.5" fill="#042C53" font-family="sans-serif">36.3 ms</text>
+<g stroke="#B4B2A9" stroke-width="0.5" fill="none">
+<path d="M180 174 H600"/>
+<path d="M180 174 V180"/><path d="M250 174 V180"/><path d="M320 174 V180"/>
+<path d="M390 174 V180"/><path d="M460 174 V180"/><path d="M530 174 V180"/><path d="M600 174 V180"/>
+</g>
+<g font-size="11" fill="#888780" text-anchor="middle" font-family="sans-serif">
+<text x="180" y="194">0</text><text x="250" y="194">10</text><text x="320" y="194">20</text>
+<text x="390" y="194">30</text><text x="460" y="194">40</text><text x="530" y="194">50</text><text x="600" y="194">60</text>
+</g>
+<text x="40" y="220" font-size="12" fill="#5F5E5A" font-family="sans-serif">墙钟 ≈ 8.4 + 47.8 = 56.2 ms/帧：codec 的 36.3 ms 与 depth 并行，被完全隐藏（这就是 §13 的 max() 天花板）。</text>
+<text x="40" y="240" font-size="12" fill="#5F5E5A" font-family="sans-serif">depth 的 47.8 ms 里既有 15 次 HTP0 提交（F≈1.25 ms/次 + R≈0.91 ms/行），也有 CPU 侧 16 路 heads 投影（int8 后约 5.4 ms/帧）。</text>
+</svg>

@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 384" width="680" height="384" role="img">
+<title>M5-TTS 推理流水线中 CPU 与 HTP0 NPU 的计算归属</title>
+<desc>左侧 CPU 应用处理器承担 HTTP、分词、depth heads 投影与采样、codec 声码器和 PCM 输出；右侧 HTP0 NPU 上跑两个常驻会话：backbone 与 depth core。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="680" height="384" fill="#FFFFFF"/>
+<rect x="40" y="40" width="300" height="286" rx="20" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="56" y="62" font-size="14" font-weight="500" fill="#042C53" font-family="sans-serif">CPU · 应用处理器（大核）</text>
+<g fill="#FFFFFF" stroke="#185FA5" stroke-width="0.5">
+<rect x="56" y="76" width="268" height="40" rx="8"/>
+<rect x="56" y="122" width="268" height="40" rx="8"/>
+<rect x="56" y="168" width="268" height="40" rx="8"/>
+<rect x="56" y="214" width="268" height="40" rx="8"/>
+<rect x="56" y="260" width="268" height="40" rx="8"/>
+</g>
+<g font-size="13" font-weight="500" fill="#042C53" font-family="sans-serif">
+<text x="68" y="93">HTTP · 分词 · prefix 查表</text>
+<text x="68" y="139">depth heads 投影</text>
+<text x="68" y="185">采样 + 噪声生成</text>
+<text x="68" y="231">Codec 声码器</text>
+<text x="68" y="277">PCM 拼接 / WAV / 流式输出</text>
+</g>
+<g font-size="11.5" fill="#185FA5" font-family="sans-serif">
+<text x="68" y="109">C++ tokenizer · mmap embeddings</text>
+<text x="68" y="155">16 × 2051 × 512 int8 · NEON</text>
+<text x="68" y="201">top-10 · Gumbel · JavaRandom</text>
+<text x="68" y="247">ORT CPU · 3 线程 · 141 MB 权重</text>
+<text x="68" y="293">WavWriter · chunked HTTP</text>
+</g>
+<rect x="400" y="40" width="240" height="286" rx="20" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="416" y="62" font-size="14" font-weight="500" fill="#26215C" font-family="sans-serif">HTP0 · Hexagon NPU</text>
+<g fill="#CECBF6" stroke="#534AB7" stroke-width="0.5">
+<rect x="416" y="76" width="208" height="64" rx="8"/>
+<rect x="416" y="156" width="208" height="64" rx="8"/>
+<rect x="416" y="236" width="208" height="64" rx="8"/>
+</g>
+<g font-size="13" font-weight="500" fill="#26215C" font-family="sans-serif">
+<text x="428" y="96">HTP 会话 A · backbone</text>
+<text x="428" y="176">HTP 会话 B · depth core</text>
+<text x="428" y="256">执行单元</text>
+</g>
+<g font-size="11.5" fill="#534AB7" font-family="sans-serif">
+<text x="428" y="114">Q8_0 32 MB · 8 层</text>
+<text x="428" y="131">prefill + 每帧 1 token decode</text>
+<text x="428" y="194">Q4_0 10.7 MB · 5 层</text>
+<text x="428" y="211">每帧 15 次 decode</text>
+<text x="428" y="274">HVX 向量 · NHMX=0</text>
+<text x="428" y="291">OPPOLL=1 保持 DSP 时钟</text>
+</g>
+<path d="M346 118 H394" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M394 166 H346" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="370" y="205" text-anchor="middle" font-size="11.5" fill="#5F5E5A" font-family="sans-serif">pipe</text>
+<text x="370" y="221" text-anchor="middle" font-size="11.5" fill="#5F5E5A" font-family="sans-serif">2 KB/行</text>
+<text x="40" y="348" font-size="12" fill="#5F5E5A" font-family="sans-serif">两个常驻子进程（backbone-resident / depth-resident，同一二进制、角色由 argv 决定）各持一个 HTP 会话；引擎 ↔ stage 走匿名 pipe（FP32 512 维行），stage → DSP 走 FastRPC。</text>
+<text x="40" y="368" font-size="12" fill="#5F5E5A" font-family="sans-serif">同一物理 HTP0 被两个会话分时复用；codec 在 CPU worker 线程上，与 depth 并行（overlap）。</text>
+</svg>

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 306" width="680" height="306" role="img">
+<title>一帧 M5-TTS 生成的 CPU 与 HTP0 交替流程</title>
+<desc>backbone 在 NPU 解码出 hidden，book0 在 CPU 投影采样，随后 15 次在 CPU 构造 transform 行并送 NPU depth core 解码、再回 CPU 投影采样，codec 在独立 CPU 线程与下一帧并行。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+<rect x="0" y="0" width="680" height="306" fill="#FFFFFF"/>
+<g font-size="11.5" fill="#5F5E5A" font-family="sans-serif">
+<rect x="40" y="22" width="12" height="10" rx="2" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+<text x="58" y="31">HTP0 / NPU 执行</text>
+<rect x="170" y="22" width="12" height="10" rx="2" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+<text x="188" y="31">CPU 执行</text>
+<rect x="268" y="22" width="12" height="10" rx="2" fill="#E6F1FB" stroke="#534AB7" stroke-width="1" stroke-dasharray="3 2"/>
+<text x="286" y="31">跨边界往返 ×15</text>
+</g>
+<rect x="40" y="52" width="132" height="60" rx="8" fill="#CECBF6" stroke="#534AB7" stroke-width="0.5"/>
+<text x="106" y="74" text-anchor="middle" font-size="13" font-weight="500" fill="#26215C" font-family="sans-serif">backbone decode</text>
+<text x="106" y="92" text-anchor="middle" font-size="11.5" fill="#534AB7" font-family="sans-serif">1 token → hidden[512]</text>
+<rect x="196" y="52" width="132" height="60" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+<text x="262" y="74" text-anchor="middle" font-size="13" font-weight="500" fill="#042C53" font-family="sans-serif">book0 投影采样</text>
+<text x="262" y="92" text-anchor="middle" font-size="11.5" fill="#185FA5" font-family="sans-serif">2051×512 int8 · NEON</text>
+<rect x="352" y="52" width="152" height="60" rx="8" fill="#E6F1FB" stroke="#534AB7" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="428" y="74" text-anchor="middle" font-size="13" font-weight="500" fill="#26215C" font-family="sans-serif">15× 深度链往返</text>
+<text x="428" y="92" text-anchor="middle" font-size="11.5" fill="#534AB7" font-family="sans-serif">transform 行 → core → 投影 → 采样</text>
+<rect x="528" y="52" width="112" height="60" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+<text x="584" y="74" text-anchor="middle" font-size="13" font-weight="500" fill="#042C53" font-family="sans-serif">next_hidden</text>
+<text x="584" y="92" text-anchor="middle" font-size="11.5" fill="#185FA5" font-family="sans-serif">16 行查表累加</text>
+<path d="M174 82 H194" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M330 82 H350" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M506 82 H526" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<path d="M584 114 V146 H106 V114" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="345" y="141" text-anchor="middle" font-size="11.5" fill="#5F5E5A" font-family="sans-serif">每帧重复，直到 16 个 code 全为 0（EOS）</text>
+<path d="M428 114 V182" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<rect x="196" y="186" width="444" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="418" y="208" text-anchor="middle" font-size="13" font-weight="500" fill="#042C53" font-family="sans-serif">codec worker（CPU · ORT 3 线程 · 独立线程）</text>
+<text x="418" y="226" text-anchor="middle" font-size="11.5" fill="#185FA5" font-family="sans-serif">把 codes 解码成 24 kHz PCM，与下一帧 depth 重叠执行</text>
+<text x="40" y="266" font-size="12" fill="#5F5E5A" font-family="sans-serif">默认 --depth-pipe：每个 book 一次 pipe 往返（1~2 行 × 2 KB），一帧 15 次；--depth-chain 合并成 1 次往返但实测打平。</text>
+<text x="40" y="286" font-size="12" fill="#5F5E5A" font-family="sans-serif">权重位置：depth-weights.f32（202 MB）在 CPU 侧 mmap，int8 镜像 17 MB/帧流式读；两个 GGUF 共约 43 MB 常驻 HTP。</text>
+</svg>
