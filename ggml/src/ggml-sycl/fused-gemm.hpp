@@ -13,6 +13,32 @@ struct ggml_sycl_grouped_gemm_rows {
     size_t                   nb2;
 };
 
+// AOT: the sub-group size of the XMX combinations of the target, 0 for a target without XMX.
+// Undefined in a JIT build, which keeps every combination.
+#if defined(__SYCL_DEVICE_ONLY__)
+#    if __SYCL_TARGET_INTEL_GPU_ACM_G10__ || __SYCL_TARGET_INTEL_GPU_ACM_G11__ || __SYCL_TARGET_INTEL_GPU_ACM_G12__ || \
+        __SYCL_TARGET_INTEL_GPU_ARL_H__
+#        define FG_AOT_SG 8
+#    elif __SYCL_TARGET_INTEL_GPU_PVC__ || __SYCL_TARGET_INTEL_GPU_PVC_VG__ || __SYCL_TARGET_INTEL_GPU_BMG_G21__ || \
+        __SYCL_TARGET_INTEL_GPU_BMG_G31__ || __SYCL_TARGET_INTEL_GPU_LNL_M__ || __SYCL_TARGET_INTEL_GPU_PTL_H__ ||   \
+        __SYCL_TARGET_INTEL_GPU_PTL_U__ || __SYCL_TARGET_INTEL_GPU_WCL__ || __SYCL_TARGET_INTEL_GPU_NVL_S__ ||       \
+        __SYCL_TARGET_INTEL_GPU_NVL_U__ || __SYCL_TARGET_INTEL_GPU_NVL_P__
+#        define FG_AOT_SG 16
+#    elif __SYCL_TARGET_INTEL_GPU_TGLLP__ || __SYCL_TARGET_INTEL_GPU_RKL__ || __SYCL_TARGET_INTEL_GPU_ADL_S__ || \
+        __SYCL_TARGET_INTEL_GPU_ADL_P__ || __SYCL_TARGET_INTEL_GPU_ADL_N__ || __SYCL_TARGET_INTEL_GPU_DG1__ ||   \
+        __SYCL_TARGET_INTEL_GPU_MTL_U__ || __SYCL_TARGET_INTEL_GPU_MTL_H__
+#        define FG_AOT_SG 0 // no XMX
+#    endif
+#endif
+
+template <int SG> static constexpr bool fg_built() {
+#if defined(FG_AOT_SG)
+    return SG == FG_AOT_SG;
+#else
+    return true;
+#endif
+}
+
 static constexpr int GGML_SYCL_FG_BN = 32;
 static constexpr int64_t GGML_SYCL_MMID_SCHED_MAX_EXPERTS = 4096;
 
