@@ -153,3 +153,74 @@ kernel void KERNEL_NAME_LM(
         }
     }
 }
+
+// F16xF32 matmul for contiguous, unbatched matrices with 2-10 output columns.
+// Four lanes split K for each of 16 rows and share staged activations.
+kernel void kernel_mul_mm_f16_f32_skinny(
+    global half4 * src0,
+    ulong offset0,
+    global float4 * src1,
+    ulong offset1,
+    global float * dst,
+    ulong offsetd,
+    int ne00,
+    int ne01,
+    int ne11,
+    int stride_a,
+    int stride_b,
+    int stride_d
+) {
+    src0 = (global half4 *) ((global char *) src0 + offset0);
+    src1 = (global float4 *) ((global char *) src1 + offset1);
+    dst  = (global float  *) ((global char *) dst  + offsetd);
+
+    const uint lid  = get_local_id(0);
+    const uint row  = get_group_id(0) * 16 + lid / 4;
+    const uint lane = lid % 4;
+    const uint k4   = (uint) ne00 / 4;
+
+    float acc[10] = { 0.0f };
+    global half4 * wrow = row < (uint) ne01
+        ? src0 + ((ulong) row * (uint) stride_a) / 4
+        : src0;
+
+    local float4 xsh[10 * 16];
+    for (uint k0 = 0; k0 < k4; k0 += 16) {
+        for (uint i = lid; i < (uint) ne11 * 16; i += 64) {
+            const uint col = i / 16;
+            const uint k   = i % 16;
+            xsh[i] = src1[((ulong) col * (uint) stride_b) / 4 + k0 + k];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        if (row < (uint) ne01) {
+            for (uint k = lane; k < 16; k += 4) {
+                const float4 w = convert_float4(wrow[k0 + k]);
+                for (uint col = 0; col < (uint) ne11; ++col) {
+                    const float4 x = xsh[col * 16 + k];
+                    acc[col] += w.s0*x.s0 + w.s1*x.s1 + w.s2*x.s2 + w.s3*x.s3;
+                }
+            }
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    local float reduce[10 * 64];
+    for (uint col = 0; col < (uint) ne11; ++col) {
+        reduce[col * 64 + lid] = acc[col];
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (lane < 2) {
+        for (uint col = 0; col < (uint) ne11; ++col) {
+            reduce[col * 64 + lid] += reduce[col * 64 + lid + 2];
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (lane == 0 && row < (uint) ne01) {
+        for (uint col = 0; col < (uint) ne11; ++col) {
+            dst[(ulong) col * (uint) stride_d + row] = reduce[col * 64 + lid] + reduce[col * 64 + lid + 1];
+        }
+    }
+}
