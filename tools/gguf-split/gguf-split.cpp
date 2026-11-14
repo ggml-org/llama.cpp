@@ -425,6 +425,7 @@ static void gguf_merge(const split_params & split_params) {
     auto * ctx_out = gguf_init_empty();
 
     std::vector<uint8_t> read_data;
+    const char * skip_name = getenv("GGUF_SKIP_TENSOR"); // extraction patch: пропустить тензор
     std::vector<ggml_context *> ctx_metas;
     std::vector<gguf_context *> ctx_ggufs;
 
@@ -513,6 +514,7 @@ static void gguf_merge(const split_params & split_params) {
         for (int i_tensor = 0; i_tensor < n_tensors; i_tensor++) {
             const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
             struct ggml_tensor * t = ggml_get_tensor(ctx_meta, t_name);
+            if (skip_name != nullptr && strcmp(t_name, skip_name) == 0) { continue; }
             gguf_add_tensor(ctx_out, t);
         }
         total_tensors += n_tensors;
@@ -561,24 +563,34 @@ static void gguf_merge(const split_params & split_params) {
         auto n_tensors = gguf_get_n_tensors(ctx_gguf);
         for (int i_tensor = 0; i_tensor < n_tensors; i_tensor++) {
             const char * t_name = gguf_get_tensor_name(ctx_gguf, i_tensor);
+            if (skip_name != nullptr && strcmp(t_name, skip_name) == 0) { continue; }
             struct ggml_tensor * t = ggml_get_tensor(ctx_meta, t_name);
 
             auto n_bytes = ggml_nbytes(t);
 
-            if (read_data.size() < n_bytes) {
-                read_data.resize(n_bytes);
+            // streaming patch: big tensors (engram 200+ GB) must not be materialized in RAM
+            constexpr uint64_t stream_chunk = 256ull * 1024 * 1024;
+            const uint64_t buf_size = n_bytes < stream_chunk ? n_bytes : stream_chunk;
+            if (read_data.size() < buf_size) {
+                read_data.resize(buf_size);
             }
 
             auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor);
             f_input.seekg(offset);
-            f_input.read((char *)read_data.data(), n_bytes);
-            if (!f_input) {
-                fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, n_bytes, offset);
-                exit(EXIT_FAILURE);
+            for (uint64_t remaining = n_bytes; remaining > 0; ) {
+                const uint64_t to_copy = remaining < buf_size ? remaining : buf_size;
+                f_input.read((char *)read_data.data(), to_copy);
+                if (!f_input) {
+                    fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, (size_t)to_copy, (size_t)offset);
+                    exit(EXIT_FAILURE);
+                }
+                if (!split_params.dry_run) {
+                    fout.write((const char *)read_data.data(), to_copy);
+                }
+                remaining -= to_copy;
             }
             if (!split_params.dry_run) {
-                // write tensor data + padding
-                fout.write((const char *)read_data.data(), n_bytes);
+                // write padding
                 zeros(fout, GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT) - n_bytes);
             }
         }
