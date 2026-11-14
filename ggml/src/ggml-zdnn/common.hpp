@@ -48,6 +48,7 @@ struct ggml_backend_zdnn_buffer {
     zdnn_tensor_desc pre_tfm_desc;
     zdnn_tensor_desc tfm_desc;
     zdnn_ztensor     ztensor;
+    bool             ztensor_in_buffer = false;  // the ztensor uses the ggml buffer memory and is freed with it
 
     std::vector<float> scales;          // per-row scales for quantized weights
     std::vector<float> channel_scales;  // per-input-channel scales for quantized weights, applied to the inputs

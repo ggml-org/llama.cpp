@@ -258,17 +258,6 @@ static void ggml_zdnn_free(ggml_backend_zdnn_context * ctx) {
 // backend interface
 //
 
-static bool ggml_zdnn_ztensor_in_buffer(
-    const ggml_backend_zdnn_buffer_context * ctx,
-    const zdnn_ztensor & ztensor) {
-
-    const char * ptr           = (const char *)ztensor.buffer;
-    const char * buf_start_ptr = (const char *)ctx->all_data;
-    const char * buf_end_ptr   = buf_start_ptr + ctx->all_size;
-
-    return buf_start_ptr <= ptr && ptr < buf_end_ptr;
-}
-
 static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     ggml_backend_zdnn_buffer_context * ctx = (ggml_backend_zdnn_buffer_context *)buffer->context;
 
@@ -277,7 +266,7 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
         // Free any extra buffer allocated for the tensor. E.g., bias for GGML_OP_MUL_MAT
         if (buf->extra != nullptr) free(buf->extra->data);
-        if (buf->ztensor.buffer_size > 0 && !ggml_zdnn_ztensor_in_buffer(ctx, buf->ztensor)) {
+        if (buf->ztensor.buffer_size > 0 && !buf->ztensor_in_buffer) {
             ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
         }
     }
@@ -436,7 +425,7 @@ static void ggml_backend_zdnn_buffer_reset(ggml_backend_buffer_t buffer) {
             free(buf->extra->data);
         }
 
-        if (buf->ztensor.buffer_size > 0 && !ggml_zdnn_ztensor_in_buffer(ctx, buf->ztensor)) {
+        if (buf->ztensor.buffer_size > 0 && !buf->ztensor_in_buffer) {
             ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
         }
     }

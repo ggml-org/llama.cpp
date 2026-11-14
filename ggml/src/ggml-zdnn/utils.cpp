@@ -234,4 +234,5 @@ void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor 
     // the ztensor uses the memory after the tensor data, see ggml_backend_zdnn_buffer_type_get_alloc_size
     buffer->ztensor.buffer      = (void *)GGML_PAD((uintptr_t)tensor->data + ggml_nbytes(tensor), GGML_ZDNN_ZTENSOR_ALIGN);
     buffer->ztensor.buffer_size = zdnn_getsize_ztensor(&buffer->tfm_desc);
+    buffer->ztensor_in_buffer   = true;
 }
