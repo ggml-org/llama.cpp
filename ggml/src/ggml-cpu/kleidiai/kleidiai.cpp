@@ -1875,7 +1875,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
                                       ggml_type_name(op->src[0]->type));
                     }
                 }
-                if (op->src[0]->type != GGML_TYPE_F16) {
+                if (op->src[0]->type != GGML_TYPE_F16 || ggml_get_src_scale(op, 0)) {
                     return nullptr;
                 }
                 std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
