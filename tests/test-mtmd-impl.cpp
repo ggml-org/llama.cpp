@@ -367,9 +367,19 @@ MAKE_TEST(test_video_config) {
 // n_frames source frames, each one starts with its index
 struct test_video_source : mtmd_helper_video_seq {
     int32_t n_frames;
-    int32_t n_read = 0;
+    int32_t n_read    = 0;
+    int32_t n_skipped = 0;
 
     test_video_source(int32_t n_frames) : n_frames(n_frames) {}
+
+    bool skip_raw_frame() override {
+        if (n_read >= n_frames) {
+            return false;
+        }
+        n_read++;
+        n_skipped++;
+        return true;
+    }
 
     bool read_raw_frame() override {
         if (n_read >= n_frames) {
@@ -449,13 +459,37 @@ MAKE_TEST(test_video_sequence_lfm3_omni) {
     const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_LFM3_OMNI, &preproc, src.width, src.height, src.n_frames, src.fps);
     test_video_source video(src.n_frames);
     video.configure(cfg, src, 0.0f);
-    video.src_alive  = true;
-    video.audio_rate = 100;
-    video.soundtrack.assign(450, 0.0f);
+    video.src_alive = true;
+    // the video is 4.5 seconds long, the rest of the soundtrack is dropped
+    const std::vector<float> pcm(500, 0.0f);
+    video.set_soundtrack(pcm.data(), pcm.size(), 100);
 
     t.assert_equal("sequence",
         std::string("<0.2 seconds>[0][1]{100}<1.2 seconds>[2][3]{100}<2.2 seconds>[4][5]{100}<3.2 seconds>[6][7]{100}<4.0 seconds>[8]{50}"),
         video_sequence_to_str(t, video));
+}
+
+// a source that gives every frame: the frames of fps_target are picked by index
+MAKE_TEST(test_video_sequence_sample_by_index) {
+    const mtmd_video_config cfg = { MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 };
+
+    // { source video, frames in the source, expected sequence, expected number of skipped frames }
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, int32_t, std::string, int32_t>> cases = {
+        { { 64, 64, 8.0f, 16, -1.0f }, 16, "Video:[0][0m0.00s][4][8][0m1.00s][12]", 9 },
+        // unknown length: every frame is kept
+        { { 64, 64, 8.0f, -1, -1.0f },  3, "Video:[0][0m0.00s][1][2]", 0 },
+    };
+
+    for (const auto & [src, n_frames, expected, expected_skipped] : cases) {
+        const std::string name = std::to_string(src.n_frames) + " frames";
+        test_video_source video(n_frames);
+        video.timestamp_interval_ms = 1000;
+        video.configure(cfg, src, 2.0f);
+        video.sample_by_index(src);
+        video.src_alive = true;
+        t.assert_equal(name + " sequence", expected, video_sequence_to_str(t, video));
+        t.assert_equal(name + " skipped", expected_skipped, video.n_skipped);
+    }
 }
 
 //
