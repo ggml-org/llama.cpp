@@ -2745,7 +2745,8 @@ struct llama_model_qwen4exp : public llama_model_base {
         llm_graph_input_kpool * build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb);
 
         // QSA: the additive mask [n_kv, n_tokens] of the top blocks and the tail
-        // with inp_kpool->use_rows: the selected cells per token in sel_rows [n_res, n_tokens] and their mask [n_res, n_tokens]
+        // with inp_kpool->n_group > 0: the selected cells per group of n_group tokens in sel_rows [n_res, n_groups]
+        // and each token's mask over its group's list [n_res, n_groups*n_group], the last group padded with -inf rows
         ggml_tensor * build_qsa_sel(
   const llama_memory_hybrid_idx_context * mctx_hyb,
           llm_graph_input_kpool * inp_kpool,

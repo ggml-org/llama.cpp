@@ -6599,10 +6599,13 @@ struct ggml_tensor * ggml_top_k_rows(
         struct ggml_tensor  * extra,
         int64_t               n_kv,
         int64_t               n_res,
+        int64_t               n_group,
         enum ggml_type        type) {
     GGML_ASSERT(type == GGML_TYPE_I32 || type == GGML_TYPE_F16 || type == GGML_TYPE_F32);
     GGML_ASSERT(top_k->type == GGML_TYPE_I32);
     GGML_ASSERT(n_kv > 0 && n_kv <= INT32_MAX);
+    // a group marks its rows in the bits of one 32-bit word per pick
+    GGML_ASSERT(n_group >= 1 && n_group <= 32);
 
     if (score) {
         GGML_ASSERT(score->type == GGML_TYPE_F32);
@@ -6622,11 +6625,21 @@ struct ggml_tensor * ggml_top_k_rows(
 
     const int64_t n_blk   = blocks ? blocks->ne[0] : 1;
     const int64_t n_extra = extra  ? extra->ne[0]  : 0;
-    GGML_ASSERT(n_res >= top_k->ne[0]*n_blk + n_extra);
+    const int64_t n_pick  = blocks ? blocks->ne[1] : score ? score->ne[0] : n_kv;
+    if (n_group == 1) {
+        GGML_ASSERT(n_res >= top_k->ne[0]*n_blk + n_extra);
+    } else {
+        GGML_ASSERT(n_res >= MIN(n_pick, n_group*top_k->ne[0])*n_blk + n_group*n_extra);
+    }
 
-    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, n_res, top_k->ne[1], top_k->ne[2], top_k->ne[3]);
+    // the list is shared by the rows of a group, the mask has n_group rows per group, the last group may be partial
+    const int64_t n_grp1 = (top_k->ne[1] + n_group - 1)/n_group;
+    const int64_t ne1    = type == GGML_TYPE_I32 ? n_grp1 : n_grp1*n_group;
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, type, n_res, ne1, top_k->ne[2], top_k->ne[3]);
 
     ggml_set_op_params_i32(result, 0, (int32_t) n_kv);
+    ggml_set_op_params_i32(result, 1, (int32_t) n_group);
 
     result->op     = GGML_OP_TOP_K_ROWS;
     result->src[0] = top_k;
