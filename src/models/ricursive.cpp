@@ -132,6 +132,8 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
 
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         cur = build_norm(inpL, layer.attn_norm, NULL, LLM_NORM_RMS, il);
