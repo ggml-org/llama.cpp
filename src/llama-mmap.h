@@ -58,6 +58,9 @@ struct llama_mmap {
 
     void unmap_fragment(size_t first, size_t last);
 
+    // drop the resident pages of [first, last) but keep it mapped; returns false on failure
+    bool discard_fragment(size_t first, size_t last);
+
     static const bool SUPPORTED;
 
 private:
