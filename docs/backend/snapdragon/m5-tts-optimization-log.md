@@ -250,7 +250,7 @@ codec 33 ms/帧（被 overlap 隐藏）**。24 字句里 depth 占墙钟 **83%**
 | E | **server 启动预热**（启动后跑一句短合成） | 首请求 -150~200 ms 首包 | 极低（~10 行） | **已上线（§9）** |
 | F | **pcm 首块 1 帧**（first_frames 2→1） | 首包 -40 ms | 极低 | **已实测：1 帧反而更慢（0.51 vs 0.285 s）→ 维持 2 帧（§9）** |
 | G | 多段文本 KV 复用 | 长文每段省 prefill | 中（D 的延伸） | 段落之间共享同一音色前缀 |
-| H | /metrics 汇总 X-M5 统计 | 可观测性 | 低 | 便于回归对比，不影响性能 |
+| H | /metrics 汇总 X-M5 统计 | 可观测性 | 低 | **已上线（§10）：JSON + Prometheus，pcm 路径唯一可见处** |
 
 **不建议做**：
 - codec 再压缩——被 overlap 隐藏（codec 3.0 s < depth 3.65 s），除非 depth 提速；
@@ -313,3 +313,26 @@ codec 33 ms/帧（被 overlap 隐藏）**。24 字句里 depth 占墙钟 **83%**
   连接被随机分发 → 表现为「wav 一半 500、pcm 正常」的假回归。
   `deploy.sh` 的 pidof 停止逻辑只杀 `m5-server`，不动其他名字。
   排查此类问题时先 `netstat -tlnp | grep 8080` 确认监听者唯一。
+
+## 10. H：GET /metrics 汇总统计（2026-11-15 00:2x）
+
+动机：`X-M5-*` 头只在 wav 全量响应里存在——chunked pcm 在首个分块前就定稿了响应头。
+于是流式路径的性能数据此前只落在设备日志里，回归对比必须上设备 `tail`。
+
+- 端点：`GET /metrics`（JSON，控制台与脚本用）；`?format=prometheus`
+  返回 `text/plain; version=0.0.4`，可直接刮。
+- 内容：累计 `requests / failed / render_s / audio_s`、`avg_rtf`、
+  最近 64 次窗口的 `p50_rtf` 与 `p50_first_pcm_s`、`warmup`、`last`
+  （取**最近一次成功**，避免被拒绝请求把 gauge 打成 0）、以及 `recent[]`
+  逐条明细（voice / format / text_bytes / ok / rtf / elapsed / audio /
+  first_pcm / frames / segments / backbone / depth / codec）。
+- 埋点位置：wav 路径（成功与失败）、pcm worker（成功与失败）、启动预热
+  （单独存档，不进窗口，避免污染分位数）。失败一律计入 `failed` 并保留 ok=false 记录。
+- 控制台：合成完成后再拉一次 `/metrics`，在统计卡片下追加一行
+  「服务端累计 N 次（失败 M）· 均值 RTF · 首包中位 · 启动预热」——
+  pcm 模式下也有一致的服务端视角（卡片本身仍走客户端实测兜底）。
+- 验证：三笔请求（wav 长句 / pcm 短句 / 404 坏音色）后
+  `requests=3 failed=1 avg_rtf=0.800 p50_first=0.428 m5_last_rtf=0.818`，
+  `last_*` 正确跳过末尾那次 404。
+- 回归用法：`curl -s .../metrics?format=prometheus | grep m5_p50`，
+  不再需要 `adb shell tail` 抓日志。

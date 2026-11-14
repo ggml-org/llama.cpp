@@ -11,6 +11,7 @@
 //
 // Endpoints:
 //   GET  /health              liveness probe
+//   GET  /metrics             synthesis stats (JSON, ?format=prometheus)
 //   GET  /v1/models           model list (OpenAI compatibility)
 //   GET  /v1/voices           clones cached in voices.json
 //   POST /v1/audio/speech     {"input","voice"?,"response_format"?"wav"|"pcm"} -> audio
@@ -27,6 +28,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdint>
@@ -726,6 +728,23 @@ std::string encoder_identity(const std::string & encoder_path, std::string & err
     return digest;
 }
 
+// One finished synthesis, kept so /metrics can show what the last requests
+// actually cost. The X-M5-* headers only reach non-streaming clients, so this
+// is the only place where pcm runs can be observed at all.
+struct RequestStat {
+    uint64_t id = 0;
+    std::string voice;
+    std::string format;   // "wav" | "pcm" | "warmup"
+    int text_bytes = 0;
+    bool ok = true;
+    double elapsed = 0, audio = 0, rtf = 0, first_pcm = 0;
+    double backbone = 0, depth = 0, codec = 0;
+    int frames = 0, segments = 0;
+};
+
+// How many finished requests /metrics keeps for percentiles.
+constexpr size_t kStatsKeep = 64;
+
 struct ServerState {
     m5::Engine engine;
     std::mutex render_mutex;   // one synthesis at a time (the stages are shared)
@@ -736,7 +755,68 @@ struct ServerState {
     std::mutex encode_mutex;
     std::unique_ptr<VoiceEncoder> encoder;  // lazy, opened on first encode
     std::string encoder_sha;                // identity stamped by this server
+
+    // /metrics bookkeeping.
+    std::mutex stats_mutex;
+    std::deque<RequestStat> stats_recent;   // last kStatsKeep, oldest first
+    uint64_t stats_total = 0;
+    uint64_t stats_failed = 0;
+    double stats_render_s = 0;
+    double stats_audio_s = 0;
+    bool have_warmup = false;
+    RequestStat warmup;
 };
+
+void record_stat(ServerState & st, RequestStat stat) {
+    std::lock_guard<std::mutex> lock(st.stats_mutex);
+    st.stats_total++;
+    if (stat.id == 0) stat.id = st.stats_total;
+    if (!stat.ok) st.stats_failed++;
+    st.stats_render_s += stat.elapsed;
+    st.stats_audio_s += stat.audio;
+    st.stats_recent.push_back(std::move(stat));
+    while (st.stats_recent.size() > kStatsKeep) st.stats_recent.pop_front();
+}
+
+RequestStat make_stat(const std::string & voice, const std::string & format,
+                      const std::string & text, const m5::Stats & stats, bool ok) {
+    RequestStat s;
+    s.voice = voice;
+    s.format = format;
+    s.text_bytes = (int) text.size();
+    s.ok = ok;
+    s.elapsed = stats.elapsed;
+    s.audio = stats.audio;
+    s.rtf = stats.rtf;
+    s.first_pcm = stats.first_pcm;
+    s.backbone = stats.backbone;
+    s.depth = stats.depth;
+    s.codec = stats.codec;
+    s.frames = stats.frames;
+    s.segments = stats.segments;
+    return s;
+}
+
+std::string stat_json(const RequestStat & s) {
+    char buf[640];
+    snprintf(buf, sizeof buf,
+             "{\"id\":%llu,\"voice\":\"%s\",\"format\":\"%s\",\"text_bytes\":%d,\"ok\":%s,"
+             "\"rtf\":%.3f,\"elapsed_s\":%.3f,\"audio_s\":%.3f,\"first_pcm_s\":%.3f,"
+             "\"frames\":%d,\"segments\":%d,\"backbone_s\":%.3f,\"depth_s\":%.3f,\"codec_s\":%.3f}",
+             (unsigned long long) s.id, json_escape(s.voice).c_str(), s.format.c_str(),
+             s.text_bytes, s.ok ? "true" : "false", s.rtf, s.elapsed, s.audio, s.first_pcm,
+             s.frames, s.segments, s.backbone, s.depth, s.codec);
+    return buf;
+}
+
+// Nearest-rank percentile of an unsorted copy-friendly vector (0 when empty).
+double percentile(std::vector<double> values, double q) {
+    if (values.empty()) return 0.0;
+    std::sort(values.begin(), values.end());
+    size_t at = (size_t) (q * (double) (values.size() - 1) + 0.5);
+    if (at >= values.size()) at = values.size() - 1;
+    return values[at];
+}
 
 void send_json(httplib::Response & res, int status, const std::string & body) {
     res.status = status;
@@ -894,12 +974,28 @@ int main(int argc, char ** argv) {
         m5::Stats warm;
         std::string warm_error;
         st.engine.clear_stop();
-        if (st.engine.render_text("你好，世界。", "", nullptr, warm, warm_error)) {
+        const bool warm_ok = st.engine.render_text("你好，世界。", "", nullptr, warm, warm_error);
+        if (warm_ok) {
             fprintf(stderr, "[m5-server] warmup %.2fs (rtf=%.3f frames=%d)\n",
                     warm.elapsed, warm.rtf, warm.frames);
         } else {
             fprintf(stderr, "[m5-server] warmup skipped: %s\n", warm_error.c_str());
         }
+        // Kept out of the recent window so it never skews the percentiles.
+        st.warmup.format = "warmup";
+        st.warmup.voice = st.default_voice;
+        st.warmup.text_bytes = (int) std::strlen("你好，世界。");
+        st.warmup.ok = warm_ok;
+        st.warmup.elapsed = warm.elapsed;
+        st.warmup.audio = warm.audio;
+        st.warmup.rtf = warm.rtf;
+        st.warmup.first_pcm = warm.first_pcm;
+        st.warmup.backbone = warm.backbone;
+        st.warmup.depth = warm.depth;
+        st.warmup.codec = warm.codec;
+        st.warmup.frames = warm.frames;
+        st.warmup.segments = warm.segments;
+        st.have_warmup = true;
     }
     fprintf(stderr, "[m5-server] model=%s voices=%s listening on %s:%d\n",
             options.model_dir.c_str(), st.voices_path.c_str(), host.c_str(), port);
@@ -936,6 +1032,96 @@ int main(int argc, char ** argv) {
 
     svr.Get("/health", [](const httplib::Request &, httplib::Response & res) {
         send_json(res, 200, "{\"status\":\"ok\"}");
+    });
+
+    // Everything this process has synthesised. The X-M5-* headers only exist on
+    // wav responses (chunked pcm commits its headers before the numbers are
+    // known), so streaming runs are observable only here. Default is JSON for
+    // the console and regression scripts; ?format=prometheus scrapes cleanly.
+    svr.Get("/metrics", [&st](const httplib::Request & req, httplib::Response & res) {
+        uint64_t total = 0, failed = 0;
+        double render_s = 0, audio_s = 0;
+        std::vector<RequestStat> recent;
+        RequestStat warm;
+        bool have_warm = false;
+        {
+            std::lock_guard<std::mutex> lock(st.stats_mutex);
+            total = st.stats_total;
+            failed = st.stats_failed;
+            render_s = st.stats_render_s;
+            audio_s = st.stats_audio_s;
+            recent.assign(st.stats_recent.begin(), st.stats_recent.end());
+            have_warm = st.have_warmup;
+            warm = st.warmup;
+        }
+        std::vector<double> rtfs, firsts;
+        for (const auto & s : recent) {
+            if (!s.ok) continue;
+            rtfs.push_back(s.rtf);
+            firsts.push_back(s.first_pcm);
+        }
+        // `last` prefers the most recent successful run, so the m5_last_* gauges
+        // never collapse to zero just because the newest request was rejected.
+        const RequestStat * last = nullptr;
+        for (auto it = recent.rbegin(); it != recent.rend(); ++it) {
+            if (it->ok) { last = &*it; break; }
+        }
+        if (!last && !recent.empty()) last = &recent.back();
+        const RequestStat & latest = last ? *last : warm;
+
+        if (req.get_param_value("format") == "prometheus") {
+            std::string out;
+            auto gauge = [&out](const char * name, double value, const char * help) {
+                char line[192];
+                snprintf(line, sizeof line, "# HELP %s %s\n# TYPE %s gauge\n%s %.6g\n",
+                         name, help, name, name, value);
+                out += line;
+            };
+            auto counter = [&out](const char * name, double value, const char * help) {
+                char line[192];
+                snprintf(line, sizeof line, "# HELP %s %s\n# TYPE %s counter\n%s %.6g\n",
+                         name, help, name, name, value);
+                out += line;
+            };
+            counter("m5_requests_total", (double) total, "Finished syntheses since start.");
+            counter("m5_requests_failed_total", (double) failed, "Syntheses that returned an error.");
+            counter("m5_render_seconds_total", render_s, "Wall time spent synthesising.");
+            counter("m5_audio_seconds_total", audio_s, "Audio seconds produced.");
+            gauge("m5_avg_rtf", audio_s > 0 ? render_s / audio_s : 0.0, "Aggregate render/audio ratio.");
+            gauge("m5_p50_rtf", percentile(rtfs, 0.5), "Median RTF over the recent window.");
+            gauge("m5_p50_first_pcm_seconds", percentile(firsts, 0.5), "Median first-packet latency.");
+            gauge("m5_last_rtf", latest.rtf, "RTF of the last request.");
+            gauge("m5_last_elapsed_seconds", latest.elapsed, "Wall time of the last request.");
+            gauge("m5_last_audio_seconds", latest.audio, "Audio duration of the last request.");
+            gauge("m5_last_first_pcm_seconds", latest.first_pcm, "First-packet latency of the last request.");
+            gauge("m5_last_frames", (double) latest.frames, "Codec frames of the last request.");
+            gauge("m5_last_backbone_seconds", latest.backbone, "Backbone time of the last request.");
+            gauge("m5_last_depth_seconds", latest.depth, "Depth time of the last request.");
+            gauge("m5_last_codec_seconds", latest.codec, "Codec time of the last request.");
+            gauge("m5_warmup_seconds", have_warm ? warm.elapsed : 0.0, "Startup warmup cost.");
+            res.set_content(out, "text/plain; version=0.0.4");
+            return;
+        }
+
+        char head[384];
+        snprintf(head, sizeof head,
+                 "{\"requests\":%llu,\"failed\":%llu,\"render_s\":%.3f,\"audio_s\":%.3f,"
+                 "\"avg_rtf\":%.3f,\"p50_rtf\":%.3f,\"p50_first_pcm_s\":%.3f,\"window\":%zu,",
+                 (unsigned long long) total, (unsigned long long) failed, render_s, audio_s,
+                 audio_s > 0 ? render_s / audio_s : 0.0, percentile(rtfs, 0.5),
+                 percentile(firsts, 0.5), recent.size());
+        std::string body = head;
+        body += "\"warmup\":";
+        body += have_warm ? stat_json(warm) : "null";
+        body += ",\"last\":";
+        body += last ? stat_json(*last) : "null";
+        body += ",\"recent\":[";
+        for (size_t i = 0; i < recent.size(); i++) {
+            if (i) body += ",";
+            body += stat_json(recent[i]);
+        }
+        body += "]}";
+        send_json(res, 200, body);
     });
 
     svr.Get("/v1/models", [](const httplib::Request &, httplib::Response & res) {
@@ -990,6 +1176,7 @@ int main(int argc, char ** argv) {
                     std::string err;
                     if (!apply_voice_req(st, body, voice, err)) {
                         fprintf(stderr, "[m5-server] pcm voice apply failed: %s\n", err.c_str());
+                        record_stat(st, make_stat(voice, "pcm", text, m5::Stats(), false));
                         stream->finish();
                         return;
                     }
@@ -1004,12 +1191,14 @@ int main(int argc, char ** argv) {
                     m5::Stats stats;
                     std::string err2;
                     st.engine.clear_stop();
-                    st.engine.render_text(text, "", sink, stats, err2);
+                    const bool ok = st.engine.render_text(text, "", sink, stats, err2);
                     // Chunked responses commit headers before the first chunk, so the
-                    // X-M5-* stats cannot ride on this path; log them and let the web
-                    // console measure client-side. wav responses do carry the headers.
+                    // X-M5-* stats cannot ride on this path: they go to the log and to
+                    // GET /metrics instead. wav responses carry the headers as well.
                     fprintf(stderr, "[m5-server] pcm rtf=%.3f elapsed=%.3f first=%.3f frames=%d\n",
                             stats.rtf, stats.elapsed, stats.first_pcm, stats.frames);
+                    if (!ok) fprintf(stderr, "[m5-server] pcm render failed: %s\n", err2.c_str());
+                    record_stat(st, make_stat(voice, "pcm", text, stats, ok));
                 }
                 stream->finish();
             });
@@ -1040,16 +1229,27 @@ int main(int argc, char ** argv) {
         // batches that amortise the ONNX call overhead.
         std::lock_guard<std::mutex> lock(st.render_mutex);
         std::string err;
-        if (!apply_voice_req(st, req.body, voice, err)) { send_error(res, 404, err); return; }
+        const std::string voice_name = voice.empty() ? st.default_voice : voice;
+        if (!apply_voice_req(st, req.body, voice, err)) {
+            record_stat(st, make_stat(voice_name, "wav", text, m5::Stats(), false));
+            send_error(res, 404, err);
+            return;
+        }
         st.engine.set_chunking(4, 16);
         st.engine.clear_stop();
         m5::Stats stats;
         std::string wav;
         if (!st.engine.render_text(text, "", nullptr, stats, err, &wav)) {
+            record_stat(st, make_stat(voice_name, "wav", text, stats, false));
             send_error(res, 500, "render failed: " + err);
             return;
         }
-        if (wav.empty()) { send_error(res, 500, "render produced no audio"); return; }
+        if (wav.empty()) {
+            record_stat(st, make_stat(voice_name, "wav", text, stats, false));
+            send_error(res, 500, "render produced no audio");
+            return;
+        }
+        record_stat(st, make_stat(voice_name, "wav", text, stats, true));
         char hdr[128];
         snprintf(hdr, sizeof hdr, "%g", stats.rtf);
         res.set_header("X-M5-RTF", hdr);

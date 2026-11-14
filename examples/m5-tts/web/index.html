@@ -84,6 +84,7 @@
   .stat { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   .stat b { display: block; font-size: 18px; font-family: var(--mono); }
   .stat span { font-size: 11.5px; color: var(--sub); }
+  .statsNote { margin-top: 8px; font-size: 11.5px; color: var(--sub); font-family: var(--mono); }
   .bar { height: 5px; border-radius: 3px; background: var(--line); margin-top: 16px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--acc), #60a5fa); transition: width .3s; }
   audio { width: 100%; margin-top: 16px; border-radius: 10px; }
@@ -166,6 +167,7 @@
       <div class="stat" title="合成的声学帧数（12.5 帧/秒）。优先取服务端统计"><b id="sFrames">–</b><span>帧数</span></div>
       <div class="stat"><b id="sWall">–</b><span>墙钟耗时</span></div>
     </div>
+    <div class="statsNote" id="srvNote" hidden></div>
     <audio id="player" controls hidden></audio>
   </section>
 
@@ -219,6 +221,22 @@
   const defaultApi = (location.protocol === 'http:' || location.protocol === 'https:')
     ? location.origin : 'http://127.0.0.1:18080';
   const api = () => defaultApi.replace(/\/+$/, '');
+
+  // Server-side aggregate from GET /metrics. It is the only view of the pcm
+  // path, whose chunked response commits headers before the X-M5-* numbers
+  // exist - here the cards above fall back to client-side timing instead.
+  async function refreshServerStats() {
+    try {
+      const r = await fetch(api() + '/metrics', { signal: AbortSignal.timeout(4000) });
+      if (!r.ok) return;
+      const m = await r.json();
+      const warm = m.warmup ? m.warmup.elapsed.toFixed(2) + ' s' : '无';
+      $('srvNote').textContent =
+        `服务端累计 ${m.requests} 次（失败 ${m.failed}） · 均值 RTF ${m.avg_rtf.toFixed(3)}` +
+        ` · 首包中位 ${m.p50_first_pcm_s.toFixed(2)} s · 启动预热 ${warm}`;
+      $('srvNote').hidden = false;
+    } catch { /* metrics are a nice-to-have; never break synthesis over them */ }
+  }
 
   const LS_KEY = 'm5-voices-v2';
   const loadLocal = () => {
@@ -412,6 +430,7 @@
       $('sFrames').textContent = frames != null ? (framesSrv != null ? '' : '≈') + String(frames) : '–';
       $('sWall').textContent = wall.toFixed(2) + ' s';
       $('stats').hidden = false;
+      refreshServerStats();
       $('speechState').textContent = '合成完成';
       toast(`完成：音频 ${audioSeconds.toFixed(2)}s · RTF ${rtf != null ? rtf.toFixed(3) : '?'}`, 'ok');
     } catch (e) {
