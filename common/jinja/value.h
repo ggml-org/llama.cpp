@@ -28,6 +28,7 @@ enum class value_kind {
     BOOLEAN,
     ARRAY,
     TUPLE,
+    RANGE,
     OBJECT,
     NONE,
     UNDEFINED,
@@ -185,7 +186,7 @@ protected:
 
 inline bool has_value_kind(const value_t * val, value_kind kind) {
     return val && (val->kind == kind ||
-                   (kind == value_kind::ARRAY && (val->kind == value_kind::TUPLE)));
+                   (kind == value_kind::ARRAY && (val->kind == value_kind::TUPLE || val->kind == value_kind::RANGE)));
 }
 
 //
@@ -383,32 +384,39 @@ using value_bool = std::shared_ptr<value_bool_t>;
 
 
 struct value_array_t : public value_t {
-    static constexpr auto kind_id = value_kind::ARRAY;
-    std::vector<value> val_arr;
+    static constexpr auto      kind_id = value_kind::ARRAY;
+    mutable std::vector<value> val_arr;
 
     value_array_t() : value_t(kind_id) {}
+
     value_array_t(value & v) : value_t(kind_id), val_arr(v->as_array()) {}
+
     value_array_t(std::vector<value> && arr) : value_t(kind_id), val_arr(std::move(arr)) {}
+
     value_array_t(const std::vector<value> & arr) : value_t(kind_id), val_arr(arr) {}
     void reverse() {
+        materialize();
         if (is_immutable()) {
             throw std::runtime_error("Attempting to modify immutable type");
         }
         std::reverse(val_arr.begin(), val_arr.end());
     }
     void push_back(const value & val) {
+        materialize();
         if (is_immutable()) {
             throw std::runtime_error("Attempting to modify immutable type");
         }
         val_arr.push_back(val);
     }
     void push_back(value && val) {
+        materialize();
         if (is_immutable()) {
             throw std::runtime_error("Attempting to modify immutable type");
         }
         val_arr.push_back(std::move(val));
     }
     value pop_at(int64_t index) {
+        materialize();
         if (is_immutable()) {
             throw std::runtime_error("Attempting to modify immutable type");
         }
@@ -423,9 +431,24 @@ struct value_array_t : public value_t {
         return val;
     }
     virtual std::string type() const override { return "Array"; }
+
     virtual bool is_immutable() const override { return false; }
-    virtual const std::vector<value> & as_array() const override { return val_arr; }
+
+    virtual const std::vector<value> & as_array() const override {
+        materialize();
+        return val_arr;
+    }
+
+    virtual uint64_t size() const { return val_arr.size(); }
+
+    virtual value element(uint64_t index) const {
+        if (index >= val_arr.size()) {
+            throw std::out_of_range("array index out of bounds");
+        }
+        return val_arr.at(static_cast<size_t>(index));
+    }
     virtual string as_string() const override {
+        materialize();
         const bool immutable = is_immutable();
         std::ostringstream ss;
         ss << (immutable ? "(" : "[");
@@ -440,10 +463,10 @@ struct value_array_t : public value_t {
         ss << (immutable ? ")" : "]");
         return ss.str();
     }
-    virtual bool as_bool() const override {
-        return !val_arr.empty();
-    }
+
+    virtual bool    as_bool() const override { return size() != 0; }
     virtual value & at(int64_t index, value & default_val) override {
+        materialize();
         if (index < 0) {
             index += val_arr.size();
         }
@@ -453,6 +476,7 @@ struct value_array_t : public value_t {
         return val_arr[index];
     }
     virtual value & at(int64_t index) override {
+        materialize();
         if (index < 0) {
             index += val_arr.size();
         }
@@ -469,6 +493,7 @@ struct value_array_t : public value_t {
     }
     virtual const func_builtins & get_builtins() const override;
     virtual bool is_hashable() const override {
+        materialize();
         if (std::all_of(val_arr.begin(), val_arr.end(), [&](auto & val) -> bool {
             return val->is_immutable() && val->is_hashable();
         })) {
@@ -477,7 +502,8 @@ struct value_array_t : public value_t {
         return false;
     }
     virtual hasher unique_hash() const noexcept override {
-        auto hash = hasher(typeid(*this));
+        materialize();
+        auto hash = hasher(is_immutable() ? typeid(*this) : typeid(value_array_t));
         for (const auto & val : val_arr) {
             // must use digest to prevent problems from "concatenation" property of hasher
             // for ex. hash of [ "ab", "c" ] should be different from [ "a", "bc" ]
@@ -489,8 +515,13 @@ struct value_array_t : public value_t {
 protected:
     explicit value_array_t(value_kind kind) : value_t(kind) {}
 
+    virtual void materialize() const {}
+
     virtual bool equivalent(const value_t & other) const override {
-        return kind == other.kind && is_hashable() && other.is_hashable() && std::equal(val_arr.begin(), val_arr.end(), other.as_array().begin(), other.as_array().end(), value_equivalence());
+        return is_val<value_array_t>(&other) && is_immutable() == other.is_immutable() && is_hashable() &&
+               other.is_hashable() &&
+               std::equal(as_array().begin(), as_array().end(), other.as_array().begin(), other.as_array().end(),
+                          value_equivalence());
     }
 };
 using value_array = std::shared_ptr<value_array_t>;
@@ -515,6 +546,29 @@ struct value_tuple_t : public value_array_t {
     virtual bool is_immutable() const override { return true; }
 };
 using value_tuple = std::shared_ptr<value_tuple_t>;
+
+
+struct value_range_t : public value_array_t {
+    static constexpr auto kind_id = value_kind::RANGE;
+    value_range_t(int64_t start, int64_t stop, int64_t step);
+
+    uint64_t size() const override { return ready ? val_arr.size() : count; }
+
+    value element(uint64_t index) const override;
+
+    bool is_hashable() const override { return !ready || value_array_t::is_hashable(); }
+
+    hasher unique_hash() const noexcept override;
+  private:
+    int64_t      start;
+    int64_t      step;
+    uint64_t     count;
+    mutable bool ready = false;
+    int64_t      number(uint64_t index) const;
+    void         materialize() const override;
+};
+
+using value_range = std::shared_ptr<value_range_t>;
 
 
 struct value_object_t : public value_t {

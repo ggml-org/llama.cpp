@@ -70,6 +70,16 @@ std::optional<char> string::byte_at(size_t index) const {
     return {};
 }
 
+bool string::equals(std::string_view other) const {
+    for (const auto & part : parts) {
+        if (other.substr(0, part.val.size()) != part.val) {
+            return false;
+        }
+        other.remove_prefix(part.val.size());
+    }
+    return other.empty();
+}
+
 bool string::equals(const string & other) const {
     size_t part = 0, offset = 0;
     for (const auto & left : parts) {
