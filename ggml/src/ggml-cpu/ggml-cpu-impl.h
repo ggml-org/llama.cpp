@@ -238,50 +238,34 @@ inline static ggml_int8x16x4_t ggml_vld1q_s8_x4(const int8_t * ptr) {
     return res;
 }
 
-// NOTE: not tested
 inline static int8x16_t ggml_vqtbl1q_s8(int8x16_t a, uint8x16_t b) {
     int8x16_t res;
 
-    res[ 0] = a[b[ 0]];
-    res[ 1] = a[b[ 1]];
-    res[ 2] = a[b[ 2]];
-    res[ 3] = a[b[ 3]];
-    res[ 4] = a[b[ 4]];
-    res[ 5] = a[b[ 5]];
-    res[ 6] = a[b[ 6]];
-    res[ 7] = a[b[ 7]];
-    res[ 8] = a[b[ 8]];
-    res[ 9] = a[b[ 9]];
-    res[10] = a[b[10]];
-    res[11] = a[b[11]];
-    res[12] = a[b[12]];
-    res[13] = a[b[13]];
-    res[14] = a[b[14]];
-    res[15] = a[b[15]];
+    for (int i = 0; i < 16; ++i) { res[i] = b[i] < 16 ? a[b[i]] : 0; }
 
     return res;
 }
 
-// NOTE: not tested
 inline static uint8x16_t ggml_vqtbl1q_u8(uint8x16_t a, uint8x16_t b) {
     uint8x16_t res;
 
-    res[ 0] = a[b[ 0]];
-    res[ 1] = a[b[ 1]];
-    res[ 2] = a[b[ 2]];
-    res[ 3] = a[b[ 3]];
-    res[ 4] = a[b[ 4]];
-    res[ 5] = a[b[ 5]];
-    res[ 6] = a[b[ 6]];
-    res[ 7] = a[b[ 7]];
-    res[ 8] = a[b[ 8]];
-    res[ 9] = a[b[ 9]];
-    res[10] = a[b[10]];
-    res[11] = a[b[11]];
-    res[12] = a[b[12]];
-    res[13] = a[b[13]];
-    res[14] = a[b[14]];
-    res[15] = a[b[15]];
+    for (int i = 0; i < 16; ++i) { res[i] = b[i] < 16 ? a[b[i]] : 0; }
+
+    return res;
+}
+
+inline static int8x16_t ggml_vqtbl2q_s8(ggml_int8x16x2_t a, uint8x16_t b) {
+    int8x16_t res;
+
+    for (int i = 0; i < 16; ++i) { res[i] = b[i] < 32 ? a.val[b[i] >> 4][b[i] & 15] : 0; }
+
+    return res;
+}
+
+inline static int8x16_t ggml_vqtbl4q_s8(ggml_int8x16x4_t a, uint8x16_t b) {
+    int8x16_t res;
+
+    for (int i = 0; i < 16; ++i) { res[i] = b[i] < 64 ? a.val[b[i] >> 4][b[i] & 15] : 0; }
 
     return res;
 }
@@ -301,6 +285,8 @@ inline static uint8x16_t ggml_vqtbl1q_u8(uint8x16_t a, uint8x16_t b) {
 #define ggml_vld1q_s8_x4  vld1q_s8_x4
 #define ggml_vqtbl1q_s8   vqtbl1q_s8
 #define ggml_vqtbl1q_u8   vqtbl1q_u8
+#define ggml_vqtbl2q_s8   vqtbl2q_s8
+#define ggml_vqtbl4q_s8   vqtbl4q_s8
 
 #endif // !defined(__aarch64__)
 

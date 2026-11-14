@@ -45,15 +45,46 @@ constexpr constant static float kvalues_mxfp4_f[16] = {
     0, .5f, 1.f, 1.5f, 2.f, 3.f, 4.f, 6.f, -0, -.5f, -1.f, -1.5f, -2.f, -3.f, -4.f, -6.f
 };
 
+constexpr constant static float kvalues_jq2k_f[4] = {
+    -19.f, -4.f, 8.f, 26.f
+};
+
+constexpr constant static float kvalues_jq3k_f[8] = {
+    -51.f, -30.f, -16.f, -4.f, 7.f, 20.f, 36.f, 58.f
+};
+
+constexpr constant static float kvalues_jq4k_f[16] = {
+    -127.f, -97.f, -78.f, -62.f, -48.f, -35.f, -23.f, -12.f, -1.f, 11.f, 23.f, 36.f, 51.f, 67.f, 87.f, 105.f
+};
+
+constexpr constant static float kvalues_jq5k_f[32] = {
+    -115.f, -105.f, -94.f, -83.f, -73.f, -65.f, -58.f, -51.f, -45.f, -39.f, -33.f, -27.f, -22.f, -17.f, -11.f,  -6.f,
+      -1.f,    4.f,   9.f,  15.f,  20.f,  26.f,  32.f,  39.f,  46.f,  53.f,  61.f,  69.f,  77.f,  86.f, 103.f, 111.f
+};
+
+constexpr constant static float kvalues_jq6k_f[64] = {
+    -120.f, -115.f, -108.f, -103.f, -99.f, -93.f, -88.f, -83.f, -79.f, -75.f, -70.f, -66.f, -62.f, -59.f, -55.f, -51.f,
+     -48.f,  -45.f,  -41.f,  -38.f, -35.f, -32.f, -29.f, -26.f, -24.f, -21.f, -18.f, -15.f, -13.f, -10.f,  -7.f,  -5.f,
+      -2.f,    0.f,    3.f,    6.f,   8.f,  11.f,  14.f,  16.f,  19.f,  22.f,  25.f,  28.f,  31.f,  34.f,  38.f,  41.f,
+      44.f,   48.f,   52.f,   56.f,  60.f,  64.f,  68.f,  73.f,  77.f,  82.f,  86.f,  93.f,  97.f, 104.f, 109.f, 114.f
+};
+
+constexpr constant static float JQ2K_PHASE_F = 5.f;
+constexpr constant static float JQ3K_PHASE_F = 5.f;
+constexpr constant static float JQ4K_PHASE_F = 18.f;
+constexpr constant static float JQ5K_PHASE_F = 15.f;
+constexpr constant static float JQ6K_PHASE_F = 13.f;
+
 static inline int best_index_int8(int n, constant float * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
+    // val is sorted, so x picks level i once it reaches the midpoint of val[i-1] and val[i].
+    // n must be a power of 2
+    const float x2 = x + x;
+    int idx = 0;
+    for (int step = n >> 1; step > 0; step >>= 1) {
+        const int j = idx + step;
+        idx = (x2 >= val[j-1] + val[j]) ? j : idx;
     }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+    return idx;
 }
 
 static inline float e8m0_to_fp32(uint8_t x) {

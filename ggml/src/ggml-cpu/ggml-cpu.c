@@ -422,6 +422,36 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,
     },
+    [GGML_TYPE_JQ2_K] = {
+        .from_float               = quantize_row_jq2_k,
+        .vec_dot                  = ggml_vec_dot_jq2_k_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_JQ3_K] = {
+        .from_float               = quantize_row_jq3_k,
+        .vec_dot                  = ggml_vec_dot_jq3_k_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_JQ4_K] = {
+        .from_float               = quantize_row_jq4_k,
+        .vec_dot                  = ggml_vec_dot_jq4_k_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_JQ5_K] = {
+        .from_float               = quantize_row_jq5_k,
+        .vec_dot                  = ggml_vec_dot_jq5_k_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_JQ6_K] = {
+        .from_float               = quantize_row_jq6_k,
+        .vec_dot                  = ggml_vec_dot_jq6_k_q8_K,
+        .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
 };
 
 const struct ggml_type_traits_cpu * ggml_get_type_traits_cpu(enum ggml_type type) {
