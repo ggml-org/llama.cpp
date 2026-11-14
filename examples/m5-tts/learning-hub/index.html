@@ -253,7 +253,7 @@
   <div class="sideFoot">
     <div>学习进度 <span id="pctText">0%</span></div>
     <div class="bar"><i id="pctBar"></i></div>
-    <div id="seenText">已浏览 0 / 12 章</div>
+    <div id="seenText">已浏览 0 / 13 章</div>
   </div>
 </aside>
 
@@ -267,10 +267,10 @@
   学会测量、建立成本模型、识别瓶颈、做带质量门禁的优化，并理解"音色"究竟是怎么被模型学会的。
   所有数字都来自这个仓库里的真实实验，包含被否定的方案。</p>
   <div class="heroChips">
-    <span class="chip"><b>0.898 → 0.717</b> RTF 演进</span>
+    <span class="chip"><b>0.898 → 0.694</b> RTF 演进</span>
     <span class="chip"><b>15</b> 步串行 depth decode</span>
     <span class="chip"><b>16 × 2051</b> codebook</span>
-    <span class="chip"><b>83%</b> 墙钟在 depth</span>
+    <span class="chip"><b>77%</b> 墙钟在 depth</span>
     <span class="chip"><b>α≈0.18</b> 学习型草稿已判死</span>
     <span class="chip"><b>0 次</b> 梯度更新也能换音色</span>
   </div>
@@ -1626,7 +1626,7 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
   <h3>11.5 案例：把 0.398 s 首包拆开</h3>
   <p>稳态 RTF 被 <code>max()</code> 锁死（§16），但<b>首包由固定项主导，是另一本账</b>。扫 <code>--first 1/2/3/4/6/8</code> 两轮交替，拟合出 <code>first_pcm = 0.234 s + 74.6 ms/帧</code>（残差 &lt;21 ms）；斜率恰好等于 depth 单帧 31.7 ms 加 codec 单帧 40 ms。再用 <code>--no-overlap</code> 把并行项暴露：codec prime 0.230 s、backbone prefill 0.190 s，overlap 下取 <code>max</code>，所以固定项其实是 <b>codec prime，不是 prefill</b>。斜率/截距加隔离开关，比逐个埋点更省事。</p>
   <p><code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，命中就跳过那 0.23 s。查出的问题是缓存条件错配：warmup 用的是 voice 0（官方样例），而 Web 默认 Serena，于是<b>每个用户的第一次请求都在给用不到的音色付冷启动</b>。部署层加一个 <code>--voice serena</code> 让默认音色对齐，首次 pcm 从 0.346 降到 0.280 s（wav 0.507→0.420），零引擎改动、稳态不退化。<b>先查缓存命中条件，往往比写更快的 kernel 更划算。</b></p>
-  <p>那次优化留了个尾巴：prime 缓存是<b>单条目</b>，换音色立即失效（切回仍要 0.49 s）。下一节把这条最后的冷启动路径关掉，并顺带说明一个极易算错的账：被跳过的操作值 0.23 s，实际能省下的只有约 0.04 s。命中路径仍要发送 32 行共享 prefix，属协议改动、风险较高；<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
+  <p>那次优化留了个尾巴：prime 缓存是<b>单条目</b>，换音色立即失效（切回仍要 0.49 s）。下一节把这条最后的冷启动路径关掉，并顺带说明一个极易算错的账：被跳过的操作值 0.23 s，实际能省下的只有约 0.04 s。命中路径仍要发送 32 行共享 prefix——实测只值 2–4 ms（Ch 12.4），协议改动已判死；<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
 
   <details class="qa"><summary>Q8　某候选把 RTF 从 0.700 降到 0.666，能上线吗？</summary>
     <div class="answer">不能只看这个数。本例中帧数 69→76，音频 5.32→5.88 s，墙钟 3.724→3.914 s（<b>+5.1%</b>），RTF 下降纯粹因为分母变长。而且四条文本/seed 的 codes 与 WAV <b>全部不一致</b>，已经不是同一个任务。正确顺序：先看过没过等价性门禁（逐字节 → ASR → 盲听），再看 <code>elapsed_s</code> 与每帧成本，最后才算 RTF。这个候选是 §17 的 <code>flash-f32</code>，结论是判死。</div></details>
@@ -1678,6 +1678,196 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
   <details class="qa"><summary>Q10　缓存命中跳过了一个 0.23 s 的操作，首包为什么只快了约 0.04 s？</summary>
     <div class="answer">因为 prime 与 backbone prefill <b>并行</b>：冷启动固定项是 <code>max(0.230, 0.190) = 0.234 s</code>，命中后 prime 消失，固定项退化成 prefill 的 <code>0.190 s</code>，省下的只是两者<b>差值</b>约 0.044 s（pcm 路径实测 0.058 s）。稳态章节里 <code>max(depth, codec)</code> 让「codec 单独 -33%」收益为零，是同一个结构在首包维度的翻版。<b>算收益要重画并行结构，不能拿组件耗时直接相减</b>；同理，也不要因为收益比预估小就判定优化无效——它仍然消除了换音色时用户能感知的那一次卡顿。</div></details>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch11">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch12" data-title="余量重估：串行项与 max() 的另一面">
+  <h2>余量重估：串行项与 max() 的另一面</h2>
+  <p>第 11 章教会你「非瓶颈分支的收益恒为 0」。但这句话有个前提：<b>你要先知道哪个分支在瓶颈上</b>。基线一旦改变（这里是把 depth 的 KV 读取范围从 256 缩到 32、又把 prime 缓存换成 LRU），瓶颈就换人了，昨天的结论今天就过期。这一章讲的是<b>转正之后必须做的第二件事</b>：重算收益矩阵，并用最便宜的手段验证它。</p>
+  <p>本章三个实验都在「不改模型图、不重训」的前提下完成，结果是一正两负。价值不在那个正的 2.3%，而在两次负结果各自留下的可复用判据。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 320" role="img" aria-label="墙钟公式中串行加法项与 max 并行项的可兑现收益对比">
+      <title>同一个「快 20%」，位置决定它值多少钱</title>
+      <desc>backbone 是墙钟公式里的加法项，自身降 7.7% 兑现为墙钟 -2.3%；depth 与 codec 位于 max 分支，单侧降 20% 兑现为 0。</desc>
+      <text class="dg-tb" x="24" y="26">wall = backbone + max(depth, codec) + 固定</text>
+      <text class="dg-ts" x="24" y="46">0.677 + max(2.853, 2.820) + 0.197 = 3.70 s</text>
+
+      <rect class="dg-ok" x="24" y="60" width="632" height="104" rx="10"/>
+      <text class="dg-tb" x="40" y="84">① 串行加法项 · backbone_s　0.677 s（18%）</text>
+      <text class="dg-ts" x="40" y="104">不进 max()，降多少兑现多少</text>
+      <rect class="dg-box" x="40" y="114" width="150" height="13" rx="4"/>
+      <text class="dg-ts" x="40" y="150">KV pad 256→128：backbone −7.7%</text>
+      <text class="dg-tacc" x="372" y="104" style="fill:var(--ok)">兑现 wall −2.3%</text>
+      <text class="dg-ts" x="372" y="126">预测 −1.6%，实测 −2.3%</text>
+      <text class="dg-ts" x="372" y="146">兑现率 ≈ 100%</text>
+
+      <rect class="dg-bad" x="24" y="176" width="632" height="104" rx="10"/>
+      <text class="dg-tb" x="40" y="200">② 并行 max 项 · depth / codec　2.853 / 2.820 s</text>
+      <text class="dg-ts" x="40" y="220">两条轨道只差 1.15%，谁也不是余量</text>
+      <rect class="dg-box" x="40" y="230" width="150" height="13" rx="4"/>
+      <rect class="dg-box" x="196" y="230" width="148" height="13" rx="4"/>
+      <text class="dg-ts" x="40" y="266">codec 单独 −20%、depth 单独降到 0</text>
+      <text class="dg-tacc" x="372" y="220" style="fill:var(--bad)">兑现 wall 0 ~ −0.9%</text>
+      <text class="dg-ts" x="372" y="242">另一侧立刻补位成新瓶颈</text>
+      <text class="dg-ts" x="372" y="262">兑现率 ≈ 0%</text>
+
+      <text class="dg-ts" x="24" y="304">所以「还能优化哪里」的答案不在耗时排行里，而在它于公式中的位置。</text>
+      </svg>
+    </div>
+    <figcaption>图 12-1　同一句「快 20%」，写在加法项上和写在 max 分支上，价值差一个数量级。重估余量的第一步就是把分项耗时逐个映射回公式。</figcaption>
+  </figure>
+
+  <h3>12.1 先分清三个「推理时间」</h3>
+  <p>问「还有没有优化空间」之前，必须先定口径。这三条账的分子分母都不同，混着谈会得出互相矛盾的结论：</p>
+  <table>
+    <thead><tr><th>口径</th><th>当前值</th><th>主导项</th><th>约束</th></tr></thead>
+    <tbody>
+      <tr><td>稳态墙钟 / RTF（69 帧长句）</td><td>3.70 s / <b>0.694</b></td><td><code>max(depth, codec)</code></td><td>并行天花板，单侧优化归零</td></tr>
+      <tr><td>首包（pcm，命中）</td><td><b>0.28 s</b></td><td>固定 0.190 + 2 帧 × 74.6 ms</td><td>不受 <code>max()</code> 约束</td></tr>
+      <tr><td>短句 RTF（≤7 字）</td><td>常 &gt;0.9</td><td>固定项摊不薄</td><td>与长句不是同一张账</td></tr>
+    </tbody>
+  </table>
+  <p>稳态那条账的残酷之处在于<b>两条轨道几乎完美平衡</b>（2.853 vs 2.820，差 1.15%）。这是最坏的优化局面：你花力气把 depth 降 20%，codec 立刻变成新瓶颈，墙钟几乎不动。反过来，只要有一项<b>不在 <code>max()</code> 里</b>，它就值得优先动手。</p>
+
+  <h3>12.2 串行项：唯一能 100% 兑现的那 0.677 s</h3>
+  <p><code>backbone_s</code> 在公式里是<b>加法项</b>，占墙钟约 18%。它不在瓶颈上，所以「降 10% 得 10%」在这里成立——这是全流程唯一还有这种性质的计算项。剩下的候选手段只有两类：</p>
+  <ol>
+    <li><b>KV 读取宽度（pad）</b>：零重编译、开关现成，门禁是逐字节等价，成本最低。</li>
+    <li><b>中间档量化 / 分层混合精度</b>：Q6_K、Q5_K 或前后层保 Q8，在 Q8 与 Q4 之间找音质拐点；一次把 Q4 试过头导致音频短 16%、韵律漂移被否掉，所以必须盲听。</li>
+  </ol>
+  <p>先做第 1 项。历史上 backbone 的 pad 被<b>硬编码成 256</b>，原因很朴素——当初做 depth KV32 实验时要求「其他条件严格不变」。于是这个开关从没被单独测过。命令行的 <code>--backbone</code> 参数会整体替换 stage 启动命令，加个 <code>M5_KV_PAD=128</code> 前缀就能<b>只</b>注入 backbone 子进程（depth 仍是 32），一行代码都不用改。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="KV pad 决定 attention 每步读取的 KV 行数，pad 256 与 pad 128 的对比">
+      <title>pad 决定 attention 每步读多少行 K/V</title>
+      <desc>该句 prefill 前缀约 106 行；pad 256 时 n_kv 恒为 256，pad 128 时先 128 后 192，每步少读 25% 到 50% 的行，代价是计算图重建次数翻倍。</desc>
+      <text class="dg-tb" x="24" y="26">n_kv = 向上取整(序列长度 / pad) × pad</text>
+      <text class="dg-ts" x="24" y="46">本句 prefill prefix ≈ 106 行，生成 69 帧</text>
+
+      <rect class="dg-box" x="24" y="62" width="300" height="150" rx="10"/>
+      <text class="dg-tb" x="40" y="86">pad = 256（旧）</text>
+      <text class="dg-ts" x="40" y="106">n_kv 恒为 256，每步读满</text>
+      <g>
+        <rect class="dg-bar" x="40" y="120" width="240" height="10" rx="3"/>
+        <rect class="dg-bar" x="40" y="136" width="240" height="10" rx="3"/>
+        <rect class="dg-bar" x="40" y="152" width="240" height="10" rx="3"/>
+        <rect class="dg-bar" x="40" y="168" width="240" height="10" rx="3"/>
+      </g>
+      <text class="dg-ts" x="40" y="198">图重建 1 次</text>
+
+      <rect class="dg-ok" x="356" y="62" width="300" height="150" rx="10"/>
+      <text class="dg-tb" x="372" y="86">pad = 128（新）</text>
+      <text class="dg-ts" x="372" y="106">n_kv = 128，越界后 192</text>
+      <g>
+        <rect class="dg-bar3" x="372" y="120" width="120" height="10" rx="3"/>
+        <rect class="dg-bar3" x="372" y="136" width="120" height="10" rx="3"/>
+        <rect class="dg-bar3" x="372" y="152" width="180" height="10" rx="3"/>
+        <rect class="dg-bar3" x="372" y="168" width="180" height="10" rx="3"/>
+      </g>
+      <text class="dg-ts" x="372" y="198">图重建 2 次（代价）</text>
+
+      <path class="dg-grid" d="M40 216 H656"/>
+      <text class="dg-ts" x="24" y="240">QK / AV 每步读取行数 −25~50%　→　backbone −7.7%，墙钟 −2.3%</text>
+      <text class="dg-ts" x="24" y="262">图重建 ×2 只多花 1 次，远小于省下的访存</text>
+      <text class="dg-tacc" x="24" y="286">长短句都不亏：170 帧句 backbone −2.6%，墙钟 −0.75%</text>
+      </svg>
+    </div>
+    <figcaption>图 12-2　pad 不是「预分配多少内存」，而是<b>attention 每步实际读多少行 K/V</b>。代价是序列越界时重建计算图的次数，短句几乎无感，长句也能净赚。</figcaption>
+  </figure>
+
+  <p>实测（同轮正逆序交替，取中位数）：</p>
+  <table>
+    <thead><tr><th>配置</th><th>69 帧句 wall / backbone_s</th><th>170 帧句 wall / backbone_s</th></tr></thead>
+    <tbody>
+      <tr><td>pad 256（旧默认）</td><td>3.781 / 0.736</td><td>8.375 / 1.374</td></tr>
+      <tr><td>pad 64</td><td>3.726 / 0.671</td><td>—</td></tr>
+      <tr><td><b>pad 128（新默认）</b></td><td><b>3.695 / 0.677</b></td><td><b>8.313 / 1.338</b></td></tr>
+      <tr><td>pad 32</td><td>3.695 / 0.660</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p>22 次运行 WAV 与 codes <b>全部逐字节一致</b>。64/32 与 128 的差异落在噪声内，但 128 的图重建次数只有它们的一半，长句更稳，所以取 128 而不是更激进的 32——<b>在等价收益里挑最保守的那个</b>。转正后 <code>M5_KV_PAD=256</code> 一键回退；顺带把 server 命中首包从 0.426–0.433 s 拉到 0.410–0.414 s。</p>
+  <p>这一项最值得记的不是数字，而是<b>预测对了</b>：事前算「backbone 占 18%、降 8% → 墙钟约 −1.6%」，实测 −2.3%（含 depth/codec 的正常波动），同量级。而同幅度的 depth 侧优化只能兑现 0.9%。<b>成本模型的价值就在动手前知道能拿到多少，而不是事后找解释。</b></p>
+
+  <h3>12.3 「修好缺陷」不等于「拿到收益」</h3>
+  <p>回到首包那条加法账。<code>--first 1</code> 一直有个众所周知的毛病：单帧 chunk 只有 1920 个样本，而 <code>write_chunk</code> 要把最后 <code>kTail=2400</code> 个样本留作下一块的 overlap 缓冲——<b>全被扣住，一帧根本发不出声音</b>，首包只能等第二个 chunk（共 5 帧，0.575 s）。</p>
+  <p>修法很直接：加一个 <code>M5_FIRST_TAIL</code>，让首个 emit chunk 少扣或不扣 tail。缺陷确实修好了，但收益是负的：</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 268" role="img" aria-label="四组首块配置的首包中位数对比柱状图">
+      <title>首块配置的首包中位数</title>
+      <desc>A 组 first 2 现状 0.387 秒；B 组 first 1 且不扣 tail 为 0.401 秒；C 组 first 2 不扣 tail 为 0.450 秒；D 组 first 1 原样为 0.575 秒。</desc>
+      <text class="dg-tb" x="24" y="24">首包中位数（3 轮交替，12 次）</text>
+
+      <text class="dg-ts" x="24" y="58">A　first 2 / tail 2400（现状）</text>
+      <rect class="dg-box" x="240" y="44" width="180" height="18" rx="4"/>
+      <text class="dg-tacc" x="430" y="58">0.387 s</text>
+
+      <text class="dg-ts" x="24" y="96">B　first 1 / tail 0（候选）</text>
+      <rect class="dg-warn" x="240" y="82" width="186" height="18" rx="4"/>
+      <text class="dg-tacc" x="436" y="96" style="fill:var(--warn)">0.401 s</text>
+
+      <text class="dg-ts" x="24" y="134">C　first 2 / tail 0</text>
+      <rect class="dg-warn" x="240" y="120" width="209" height="18" rx="4"/>
+      <text class="dg-tacc" x="459" y="134" style="fill:var(--warn)">0.450 s</text>
+
+      <text class="dg-ts" x="24" y="172">D　first 1 / tail 2400（原样）</text>
+      <rect class="dg-bad" x="240" y="158" width="267" height="18" rx="4"/>
+      <text class="dg-tacc" x="517" y="172" style="fill:var(--bad)">0.575 s</text>
+
+      <path class="dg-grid" d="M24 196 H656"/>
+      <text class="dg-ts" x="24" y="220">B 修好了 D 的「等 5 帧」缺陷，却追不上 A：</text>
+      <text class="dg-ts" x="24" y="240">depth 少跑一帧省 75 ms，codec 单帧调用的固定开销多花约 80 ms</text>
+      <text class="dg-tacc" x="24" y="260">净收益 ≈ 0 → 维持 --first 2 --chunk 4</text>
+      </svg>
+    </div>
+    <figcaption>图 12-3　四组首块配置。柱子越长越慢——把「少等 4 帧」修成「1 帧出声」，结果仍比现状慢，因为省下的是 depth 的一帧，多花的是 codec 的一次调用。</figcaption>
+  </figure>
+
+  <p>四个可迁移的点：</p>
+  <div class="grid2">
+    <div class="tile"><b>看斜率项归属哪一侧</b><p>首包 74.6 ms/帧 ≈ depth 31.7 + codec 40，是<strong>相加</strong>。改 <code>--first</code> 只动 depth 那一半，codec 的单帧调用固定开销却涨了——一侧省、另一侧还。</p></div>
+    <div class="tile"><b>等价性可以比 SHA 更细</b><p>B 与 A 的 127,680 个样本只差 <strong>1 个样本、1 LSB、位于末尾</strong>（浮点求和顺序噪声），不是 chunk 边界伪影。<strong>codec 输出对 chunk 切分不敏感</strong>，此前担心的边界效应不存在。</p></div>
+    <div class="tile"><b>纯调度实验是免费的对照</b><p>C 组（first 2 + 不扣 tail）逐字节一致，证明「边界移动本身零成本」；它把 B 的差异锁定在「少等一帧」这唯一变量上。</p></div>
+    <div class="tile"><b>负结果要留复活条件</b><p>开关保留、默认关闭。<strong>复活条件</strong>：codec 单帧调用的固定开销显著下降（例如 codec 捆绑改造落地）后重测 <code>--first 1 + M5_FIRST_TAIL=0</code>。</p></div>
+  </div>
+
+  <h3>12.4 先测占比，再谈改协议</h3>
+  <p>prime 命中时可以跳过 codec prime，但引擎<b>仍然</b>把 32 行共享 prefix 发给 backbone stage——因为协议是「先发 header 再发两块矩阵」，少发一块需要改协议。省 64 KB 听起来值得改，先量一下：</p>
+<pre><code>sh=32 rs=71–85  hdr=0.1ms  shared=1.3–3.4ms  rest=7–12ms  wait=85–101ms  total≈105ms
+m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
+  <p>32 行（64 KB）的<b>传输加丢弃只要 2–4 ms</b>：占 prefill 往返（约 105 ms）的 3%，占命中首包（0.41 s）的 <b>不到 1%</b>。大头是 <code>wait</code> 段，也就是 backbone 对 rest 行做的真实 decode——那是算力，不是搬运。</p>
+  <p>算一下风险收益：省 2–4 ms，换一次管道错位崩溃的可能（这条协议以前踩过，错配时 stage 会读垃圾 header）。<b>不成比例，直接判死。</b>更重要的是它留下一条判据：<b>凡是「优化传输」的提案，先问它在端到端里占几个百分点</b>；单看「省了一半数据量」没有意义。</p>
+
+  <h3>12.5 本轮新基线</h3>
+  <table>
+    <thead><tr><th>项</th><th>pad 256（旧）</th><th>pad 128（新）</th></tr></thead>
+    <tbody>
+      <tr><td>CLI 69 帧 wall / RTF</td><td>3.775 s / 0.710</td><td><b>3.695 s / 0.694</b></td></tr>
+      <tr><td><code>backbone_s</code></td><td>0.726</td><td>0.677</td></tr>
+      <tr><td>server 命中首包（wav）</td><td>0.426–0.433</td><td>0.410–0.414</td></tr>
+    </tbody>
+  </table>
+  <p><code>wall ≈ 0.677 + max(depth, codec) + 0.197</code>。<code>max</code> 两侧没动，所以「稳态下一个杠杆是捆绑（−15%，需重训）」的结论不变；剩余项只剩 backbone 分层混合精度（预期 −2~4%，必须过盲听）和热漂移/温控（要的是稳定性，不是 RTF）。</p>
+  <p>还有一件比压模型更值钱的事：<b>同一份代码连续跑，RTF 会从 0.75 漂到 0.91（+21%）</b>，比本章所有剩余优化加起来都大。如果目标是「稳定 &lt;1」而不是「再快 1%」，真问题在温控与长时降频，不在模型推理。</p>
+
+  <h3>12.6 方法论补充</h3>
+  <ol>
+    <li><b>转正后立刻重算矩阵</b>：KV32 转正让 depth 不再是瓶颈，「间接加速 depth」的历史收益（Q4 曾 −18%）换基线后只剩 −4.6%。旧数字必须带上它的基线。</li>
+    <li><b>在等价收益里挑最保守的配置</b>：pad 32/64/128 差异在噪声内时选 128，因为它图重建次数减半，长句更稳。</li>
+    <li><b>append 模式的 dump 是 A/B 地雷</b>：<code>--dump-codes</code> 用追加写，冒烟轮与正式轮共用同名 tag 会静默叠加，产出假性 SHA 不一致（WAV 是截断写，不受影响，且 <code>sha256sum</code> 输出里 wav 在前）。<b>A/B 脚本每轮先 <code>rm -rf</code> 结果目录，冒烟用独立 tag。</b></li>
+    <li><b>测量类实验别改会崩的代码</b>：分段计时加一次对照就能定案，不必为 2–4 ms 去动协议。</li>
+    <li><b>先做零成本的那一个</b>：本章第一项零重编译、门禁现成，跑 16 次就拿到 −2.3%；另外两项各花了半天证明不该做——<b>判死也是产出</b>。</li>
+  </ol>
+
+  <details class="qa"><summary>Q11　backbone 只占墙钟 18%，为什么优化它比优化占 77% 的 depth+codec 更划算？</summary>
+    <div class="answer">因为它们在墙钟公式里的<b>位置</b>不同。depth 与 codec 并行，墙钟取 <code>max(2.853, 2.820)</code>，两者只差 1.15%——把其中一侧降 20%，另一侧立刻成为新瓶颈，端到端收益约 0。backbone 是加法项：<code>wall = backbone + max(...) + 固定</code>，它降 7.7%，墙钟就真降约 7.7% 的那一份（实测 −2.3% 墙钟，符合 18% × 7.7% 量级）。<b>判断优化价值不是看谁耗时最长，而是看它在公式里能不能兑现。</b>这也解释了为什么「先降 depth」在 KV32 之前是对的、之后就不再是。</div></details>
+  <details class="qa"><summary>Q12　`--first 1` 从「等 5 帧」修成「1 帧就出声」，为什么首包仍不如 `--first 2`？</summary>
+    <div class="answer">因为首包的成本是 depth 与 codec <b>相加</b>而不是取 max（流水线还没填满）。<code>--first 1</code> 让 depth 少跑一帧（约 −31.7 ms，加上后续调度约 −75 ms），但 codec 要为一个 chunk 单独调用一次，单帧调用的固定开销让 <code>codec_s</code> 从 2.77 涨到 2.87 s，多花约 80 ms，两者抵消。实测 0.401 vs 0.387 s。要让它转正，得先把 codec 的单次调用开销降下来——所以这个开关的价值不是「现在能用」，而是<b>把复活条件写清楚</b>，等 codec 捆绑改造落地后只需重跑一次。</div></details>
+
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch12">标记本章已学完</button></div>
 </section>
 
 <footer>
