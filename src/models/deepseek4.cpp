@@ -370,7 +370,7 @@ llama_model_deepseek4::graph::build_hc_mixes(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_mixes", il);
 
     ggml_tensor * scale_pre  = dsv4_view_1d(ctx0, hc_scale, 1, 0);
@@ -458,7 +458,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_head(
 
     ggml_tensor * flat = ggml_reshape_2d(ctx0, x, hc_dim, nt);
     ggml_tensor * flat_norm = ggml_rms_norm(ctx0, flat, norm_rms_eps);
-    ggml_tensor * mixes = ggml_mul_mat(ctx0, hc_fn, flat_norm);
+    ggml_tensor * mixes = build_lora_mm(hc_fn, flat_norm);
     cb(mixes, "hc_head_mixes", -1);
 
     ggml_tensor * pre = dsv4_hc_affine(ctx0, mixes, hc_scale, hc_base);
@@ -1184,7 +1184,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
     ggml_tensor * out = nullptr;
     if (inp_mtp) {
         out = build_attn(inp_mtp,
-                nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 q, kv, kv,
                 nullptr, layer.attn_sinks, nullptr,
                 1.0f/sqrtf(float(n_embd_head)), il);
@@ -1212,7 +1212,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
 
     out = ggml_reshape_3d(ctx0, out, o_group_dim, n_groups, nt);
     out = ggml_permute(ctx0, out, 0, 2, 1, 3);
-    ggml_tensor * oa = ggml_mul_mat(ctx0, layer.wo_a, out);
+    ggml_tensor * oa = build_lora_mm(layer.wo_a, out);
     cb(oa, "attn_wo_a", il);
     oa = ggml_permute(ctx0, oa, 0, 2, 1, 3);
     oa = ggml_cont_2d(ctx0, oa, o_lora_rank*n_groups, nt);
@@ -1308,16 +1308,13 @@ llama_model_deepseek4::graph::graph(const llm_graph_params & params) :
                 il,
                 nullptr,
                 nullptr,
-                nullptr,
-                nullptr,
-                nullptr,
                 selected_experts);
         cb(moe_out, "ffn_moe_out", il);
 
         ggml_tensor * ffn_shexp = build_ffn(cur,
-                layer.ffn_up_shexp, nullptr, nullptr,
-                layer.ffn_gate_shexp, nullptr, nullptr,
-                layer.ffn_down_shexp, nullptr, nullptr,
+                layer.ffn_up_shexp, nullptr,
+                layer.ffn_gate_shexp, nullptr,
+                layer.ffn_down_shexp, nullptr,
                 nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(ffn_shexp, "ffn_shexp", il);
 
@@ -1353,7 +1350,7 @@ llama_model_deepseek4::graph::graph(const llm_graph_params & params) :
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }
@@ -1418,7 +1415,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llm_graph_params & params) :
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * inpL = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    ggml_tensor * inpL = build_lora_mm(layer.nextn.eh_proj, concat);
     cb(inpL, "mtp_eh_proj", il);
 
     ggml_tensor * residual = inpL;
@@ -1465,9 +1462,9 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llm_graph_params & params) :
     cb(moe_out, "mtp_ffn_moe_out", il);
 
     ggml_tensor * ffn_shexp = build_ffn(cur,
-            layer.ffn_up_shexp, nullptr, nullptr,
-            layer.ffn_gate_shexp, nullptr, nullptr,
-            layer.ffn_down_shexp, nullptr, nullptr,
+            layer.ffn_up_shexp, nullptr,
+            layer.ffn_gate_shexp, nullptr,
+            layer.ffn_down_shexp, nullptr,
             nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
     cb(ffn_shexp, "mtp_ffn_shexp", il);
 
@@ -1496,7 +1493,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llm_graph_params & params) :
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     GGML_ASSERT(head_w && "DEEPSEEK4 MTP missing LM head");
-    cur = ggml_mul_mat(ctx0, head_w, cur);
+    cur = build_lora_mm(head_w, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;

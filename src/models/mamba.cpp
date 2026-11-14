@@ -128,7 +128,7 @@ llama_model_mamba::graph::graph(const llm_graph_params & params) : llm_build_mam
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

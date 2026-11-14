@@ -156,7 +156,7 @@ llama_model_mimo2::graph::graph(const llm_graph_params & params) : llm_graph_con
             ggml_tensor * sinks = model.layers[il].attn_sinks;
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL, model.layers[il].wo_s,
+                    model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, sinks, nullptr, 1.0f/sqrtf(float(n_embd_head_k)), il);
             cb(cur, "attn_out", il);
 
@@ -183,9 +183,9 @@ llama_model_mimo2::graph::graph(const llm_graph_params & params) : llm_graph_con
         if (model.layers[il].ffn_gate_inp == nullptr) {
             // dense branch
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, NULL,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
+                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,
+                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b,
+                    model.layers[il].ffn_down, model.layers[il].ffn_down_b,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -238,7 +238,7 @@ llama_model_mimo2::graph::graph(const llm_graph_params & params) : llm_graph_con
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -297,7 +297,7 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llm_graph_params & params)
     ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
     cb(concat, "mtp_concat", il);
 
-    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat);
     cb(cur, "mtp_eh_proj", il);
 
     ggml_tensor * inpSA = cur;
@@ -305,7 +305,7 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llm_graph_params & params)
     cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     cb(cur, "mtp_attn_norm", il);
 
-    ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur, layer.wqkv_s);
+    ggml_tensor * qkv = build_lora_mm(layer.wqkv, cur);
     cb(qkv, "mtp_wqkv", il);
 
     const size_t row_k    = ggml_row_size(qkv->type, n_embd_head_k);
@@ -326,7 +326,7 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llm_graph_params & params)
     cb(Vcur, "mtp_Vcur", il);
 
     cur = build_attn(inp_attn,
-            layer.wo, nullptr, layer.wo_s,
+            layer.wo, nullptr,
             Qcur, Kcur, Vcur, nullptr, layer.attn_sinks, nullptr,
             1.0f / sqrtf(float(n_embd_head_k)), il);
     cb(cur, "mtp_attn_out", il);
@@ -344,9 +344,9 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llm_graph_params & params)
 
     GGML_ASSERT(layer.ffn_gate && layer.ffn_down && layer.ffn_up && "MIMO2 MTP requires dense FFN tensors");
     cur = build_ffn(cur,
-            layer.ffn_up,   layer.ffn_up_b,   nullptr,
-            layer.ffn_gate, layer.ffn_gate_b, nullptr,
-            layer.ffn_down, layer.ffn_down_b, nullptr,
+            layer.ffn_up,   layer.ffn_up_b,
+            layer.ffn_gate, layer.ffn_gate_b,
+            layer.ffn_down, layer.ffn_down_b,
             nullptr,
             LLM_FFN_SILU, LLM_FFN_PAR, il);
     cb(cur, "mtp_ffn_out", il);
@@ -367,9 +367,8 @@ llama_model_mimo2::graph_mtp::graph_mtp(const llm_graph_params & params)
     cb(cur, "mtp_shared_head_norm", -1);
 
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
-    ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "MIMO2 MTP missing LM head fallback");
-    cur = build_lora_mm(head_w, cur, head_s);
+    cur = build_lora_mm(head_w, cur);
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;

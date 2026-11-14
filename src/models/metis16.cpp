@@ -182,10 +182,10 @@ ggml_tensor * llama_model_metis16::graph::hc_read(ggml_tensor * x, ggml_tensor *
     ggml_tensor * x2 = ggml_reshape_2d(ctx0, x, n_s, x->ne[1]*x->ne[2]);
 
     ggml_tensor * m = ggml_view_2d(ctx0, mix, n_s, n_s, mix->nb[1], p*mix->nb[2]);
-    *mixed = ggml_mul_mat(ctx0, m, x2);
+    *mixed = build_lora_mm(m, x2);
 
     ggml_tensor * r   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, read, n_s, p*read->nb[1]), n_s, 1);
-    ggml_tensor * src = ggml_reshape_2d(ctx0, ggml_mul_mat(ctx0, r, x2), x->ne[1], x->ne[2]);
+    ggml_tensor * src = ggml_reshape_2d(ctx0, build_lora_mm(r, x2), x->ne[1], x->ne[2]);
     return build_norm(src, norm, NULL, LLM_NORM_RMS, il);
 }
 
@@ -193,7 +193,7 @@ ggml_tensor * llama_model_metis16::graph::hc_write(ggml_tensor * mixed, ggml_ten
     const int64_t n_s = mixed->ne[0];
     ggml_tensor * w   = ggml_reshape_2d(ctx0, ggml_view_1d(ctx0, write, n_s, p*write->nb[1]), 1, n_s);
     ggml_tensor * u   = ggml_reshape_2d(ctx0, update, 1, update->ne[0]*update->ne[1]);
-    ggml_tensor * out = ggml_add(ctx0, mixed, ggml_mul_mat(ctx0, w, u));
+    ggml_tensor * out = ggml_add(ctx0, mixed, build_lora_mm(w, u));
     return ggml_reshape_3d(ctx0, out, n_s, update->ne[0], update->ne[1]);
 }
 
@@ -204,14 +204,14 @@ ggml_tensor * llama_model_metis16::graph::mem_read(const llama_model_metis16 & m
 
     ggml_tensor * x_e = ggml_cont(ctx0, ggml_permute(ctx0, *x, 1, 0, 2, 3));
 
-    ggml_tensor * q = ggml_mul_mat(ctx0, model.depth_mem_query, ggml_reshape_2d(ctx0, x_e, n_embd, n_s*n_tokens));
+    ggml_tensor * q = build_lora_mm(model.depth_mem_query, ggml_reshape_2d(ctx0, x_e, n_embd, n_s*n_tokens));
     q = ggml_reshape_3d(ctx0, ggml_add(ctx0, q, model.depth_mem_query_b), n_m, n_s, n_tokens);
 
     ggml_tensor * kq = ggml_mul_mat(ctx0, bank_k, q);
     kq = ggml_soft_max_ext(ctx0, kq, nullptr, 1.0f/sqrtf(float(n_m)), 0.0f);
 
     ggml_tensor * ret  = ggml_mul_mat(ctx0, bank_vt, kq);
-    ggml_tensor * proj = ggml_mul_mat(ctx0, model.depth_mem_out, ggml_reshape_2d(ctx0, ret, n_m, n_s*n_tokens));
+    ggml_tensor * proj = build_lora_mm(model.depth_mem_out, ggml_reshape_2d(ctx0, ret, n_m, n_s*n_tokens));
     proj = ggml_reshape_3d(ctx0, ggml_add(ctx0, proj, model.depth_mem_out_b), n_embd, n_s, n_tokens);
 
     ggml_tensor * gate = ggml_sum_rows(ctx0, ggml_mul(ctx0, x_e, model.depth_mem_stream_gate));
@@ -232,11 +232,11 @@ void llama_model_metis16::graph::mem_write(const llama_model_metis16 & model, gg
     }
     ggml_tensor * meta = ggml_concat(ctx0, ggml_concat(ctx0, summary, entropy, 0), ggml_concat(ctx0, confidence, cont, 0), 0);
 
-    ggml_tensor * e = ggml_add(ctx0, ggml_mul_mat(ctx0, model.depth_mem_state_write, stream_mean(x)), ggml_mul_mat(ctx0, model.depth_mem_meta_write, meta));
+    ggml_tensor * e = ggml_add(ctx0, build_lora_mm(model.depth_mem_state_write, stream_mean(x)), build_lora_mm(model.depth_mem_meta_write, meta));
     e = ggml_add(ctx0, e, ggml_view_1d(ctx0, model.depth_mem_entry_bias, n_m, entry*model.depth_mem_entry_bias->nb[1]));
 
-    ggml_tensor * k = ggml_add(ctx0, ggml_mul_mat(ctx0, model.depth_mem_key, e), model.depth_mem_key_b);
-    ggml_tensor * v = ggml_add(ctx0, ggml_mul_mat(ctx0, model.depth_mem_value, e), model.depth_mem_value_b);
+    ggml_tensor * k = ggml_add(ctx0, build_lora_mm(model.depth_mem_key, e), model.depth_mem_key_b);
+    ggml_tensor * v = ggml_add(ctx0, build_lora_mm(model.depth_mem_value, e), model.depth_mem_value_b);
     k = ggml_reshape_3d(ctx0, k, n_m, 1, n_tokens);
     v = ggml_reshape_3d(ctx0, v, 1, n_m, n_tokens);
     bank_k  = bank_k  ? ggml_concat(ctx0, bank_k,  k, 1) : k;
@@ -245,15 +245,15 @@ void llama_model_metis16::graph::mem_write(const llama_model_metis16 & model, gg
 
 ggml_tensor * llama_model_metis16::graph::route_features(const llama_model_metis16 & model, ggml_tensor * state,
         ggml_tensor * summary, ggml_tensor * diff, ggml_tensor * history) const {
-    ggml_tensor * f = ggml_mul_mat(ctx0, model.depth_mem_route_state, state);
+    ggml_tensor * f = build_lora_mm(model.depth_mem_route_state, state);
     if (summary) {
-        f = ggml_add(ctx0, f, ggml_mul_mat(ctx0, model.depth_mem_route_retr, summary));
+        f = ggml_add(ctx0, f, build_lora_mm(model.depth_mem_route_retr, summary));
     }
     if (diff) {
-        f = ggml_add(ctx0, f, ggml_mul_mat(ctx0, model.depth_mem_route_diff, diff));
+        f = ggml_add(ctx0, f, build_lora_mm(model.depth_mem_route_diff, diff));
     }
     if (history) {
-        f = ggml_add(ctx0, f, ggml_mul_mat(ctx0, model.depth_mem_route_hist, history));
+        f = ggml_add(ctx0, f, build_lora_mm(model.depth_mem_route_hist, history));
     }
     return ggml_tanh(ctx0, ggml_add(ctx0, f, model.depth_mem_route_b));
 }
@@ -301,7 +301,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
             ggml_tensor * cur = hc_read(x, layer.hc_attn_mix, layer.hc_attn_read, layer.attn_norm, p, &mixed, il);
             if (is_attn) {
                 ggml_tensor * qkv  = build_lora_mm(layer.wqkv, cur);
-                ggml_tensor * lora = ggml_mul_mat(ctx0, layer.attn_pass_lora_up, ggml_mul_mat(ctx0, layer.attn_pass_lora_down, cur));
+                ggml_tensor * lora = build_lora_mm(layer.attn_pass_lora_up, build_lora_mm(layer.attn_pass_lora_down, cur));
                 qkv = ggml_add(ctx0, qkv, ggml_mul(ctx0, lora, ggml_view_1d(ctx0, layer.attn_pass_gate, 1, p*layer.attn_pass_gate->nb[0])));
 
                 const int64_t n_head    = hparams.n_head(il);
@@ -311,7 +311,7 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
                 ggml_tensor * K = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd*es, qkv->nb[1], n_hd*n_head*es));
                 ggml_tensor * V = ggml_cont(ctx0, ggml_view_3d(ctx0, qkv, n_hd, n_head_kv, n_tokens, n_hd*es, qkv->nb[1], n_hd*(n_head + n_head_kv)*es));
 
-                cur = build_attn(inp->get_attn(), layer.wo, nullptr, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
+                cur = build_attn(inp->get_attn(), layer.wo, nullptr, Q, K, V, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_hd)), il);
             } else {
                 cur = build_mamba2_layer(inp->get_recr(), cur, ubatch, il);
             }
@@ -320,8 +320,8 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
 
             cur = hc_read(x, layer.hc_ffn_mix, layer.hc_ffn_read, layer.ffn_norm, p, &mixed, il);
             {
-                ggml_tensor * latent = ggml_mul_mat(ctx0, layer.ffn_latent_down, cur);
-                ggml_tensor * logits = ggml_mul_mat(ctx0, layer.ffn_gate_inp, ggml_concat(ctx0, latent, feats, 0));
+                ggml_tensor * latent = build_lora_mm(layer.ffn_latent_down, cur);
+                ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, ggml_concat(ctx0, latent, feats, 0));
                 logits = ggml_add(ctx0, logits, layer.ffn_gate_inp_b);
 
                 // the balance bias picks the experts; the weights come from the unbiased logits
@@ -329,13 +329,13 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
 
                 ggml_tensor * moe_out = build_moe_ffn(latent, nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr,
                         n_exp, n_used, LLM_FFN_SILU, false, 0.0f, LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT, il_p,
-                        logits, layer.ffn_gate_up_exps, nullptr, nullptr, nullptr, selected);
+                        logits, layer.ffn_gate_up_exps, selected);
                 ggml_tensor * shexp = build_ffn(latent,
-                        layer.ffn_up_shexp,   NULL, NULL,
-                        layer.ffn_gate_shexp, NULL, NULL,
-                        layer.ffn_down_shexp, NULL, NULL,
+                        layer.ffn_up_shexp,   NULL,
+                        layer.ffn_gate_shexp, NULL,
+                        layer.ffn_down_shexp, NULL,
                         NULL, LLM_FFN_SILU, LLM_FFN_PAR, il_p);
-                cur = ggml_mul_mat(ctx0, layer.ffn_latent_up, ggml_add(ctx0, moe_out, shexp));
+                cur = build_lora_mm(layer.ffn_latent_up, ggml_add(ctx0, moe_out, shexp));
                 cb(cur, "ffn_out", il);
 
                 // routing summary: the chosen experts' identity vectors blended by their weights
@@ -370,13 +370,13 @@ llama_model_metis16::graph::graph(const llm_graph_params & params) :
         ggml_tensor * diff  = ggml_sub(ctx0, state, prev_state);
         ggml_tensor * feats = route_features(model, state, retrieved, diff, history);
 
-        ggml_tensor * h = ggml_mul_mat(ctx0, model.cont_hidden_state, state);
-        h = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_retr,  retrieved));
-        h = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_diff,  diff));
-        h = ggml_add(ctx0, h, ggml_mul_mat(ctx0, model.cont_hidden_route, feats));
+        ggml_tensor * h = build_lora_mm(model.cont_hidden_state, state);
+        h = ggml_add(ctx0, h, build_lora_mm(model.cont_hidden_retr,  retrieved));
+        h = ggml_add(ctx0, h, build_lora_mm(model.cont_hidden_diff,  diff));
+        h = ggml_add(ctx0, h, build_lora_mm(model.cont_hidden_route, feats));
         h = ggml_silu(ctx0, ggml_add(ctx0, h, model.cont_hidden_b));
 
-        ggml_tensor * logit = ggml_add(ctx0, ggml_mul_mat(ctx0, model.cont_output, h), model.cont_output_b);
+        ggml_tensor * logit = ggml_add(ctx0, build_lora_mm(model.cont_output, h), model.cont_output_b);
         ggml_tensor * scale = ggml_clamp(ctx0, ggml_sqrt(ctx0, ggml_mean(ctx0, ggml_sqr(ctx0, state))), 1.0e-6f, INFINITY);
         ggml_tensor * innov = ggml_sqrt(ctx0, ggml_mean(ctx0, ggml_sqr(ctx0, diff)));
         logit = ggml_add(ctx0, logit, ggml_scale_bias(ctx0, ggml_tanh(ctx0, ggml_div(ctx0, innov, scale)), 1.0f, -0.5f));

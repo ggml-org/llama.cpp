@@ -140,8 +140,8 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
         ggml_tensor * attn_in = cur;
 
         {
-            ggml_tensor * Qcur = build_lora_mm(layer.wq, attn_in, layer.wq_s);
-            ggml_tensor * Kcur = build_lora_mm(layer.wk, attn_in, layer.wk_s);
+            ggml_tensor * Qcur = build_lora_mm(layer.wq, attn_in);
+            ggml_tensor * Kcur = build_lora_mm(layer.wk, attn_in);
 
             // v_in = lerp(x0, attn_norm(x), sigmoid(lambda)), lambda is learned per layer (modeling_ricursive.py:182-185)
             ggml_tensor * v_in = attn_in;
@@ -150,7 +150,7 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
                 v_in = ggml_add(ctx0, inp_vres, ggml_mul(ctx0, ggml_sub(ctx0, attn_in, inp_vres), mix));
                 cb(v_in, "vres_in", il);
             }
-            ggml_tensor * Vcur = build_lora_mm(layer.wv, v_in, layer.wv_s);
+            ggml_tensor * Vcur = build_lora_mm(layer.wv, v_in);
 
             Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -168,18 +168,18 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            cur = build_attn(inp_attn, NULL, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            cur = build_attn(inp_attn, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
             if (layer.wqkv_gate) {
-                ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_in, layer.wqkv_gate_s);
+                ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_in);
                 gate = ggml_sigmoid(ctx0, gate);
                 cb(gate, "attn_gate", il);
                 cur = ggml_mul(ctx0, cur, gate);
                 cb(cur, "attn_gated", il);
             }
 
-            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+            cur = build_lora_mm(layer.wo, cur);
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
@@ -197,13 +197,13 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
         cb(cur, "ffn_norm", il);
 
         {
-            ggml_tensor * gate = build_lora_mm(layer.ffn_gate, cur, layer.ffn_gate_s);
-            ggml_tensor * up   = build_lora_mm(layer.ffn_up,   cur, layer.ffn_up_s);
+            ggml_tensor * gate = build_lora_mm(layer.ffn_gate, cur);
+            ggml_tensor * up   = build_lora_mm(layer.ffn_up,   cur);
             cur = hparams.swiglu_clamp[il] > 0.0f
                 ? ggml_swiglu_clamp(ctx0, gate, up, hparams.swiglu_clamp[il])
                 : ggml_swiglu_split(ctx0, gate, up);
             cb(cur, "ffn_swiglu", il);
-            cur = build_lora_mm(layer.ffn_down, cur, layer.ffn_down_s);
+            cur = build_lora_mm(layer.ffn_down, cur);
             cb(cur, "ffn_out", il);
         }
 
@@ -221,7 +221,7 @@ llama_model_ricursive::graph::graph(const llm_graph_params & params) : llm_graph
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

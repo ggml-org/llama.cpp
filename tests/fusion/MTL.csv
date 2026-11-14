@@ -36,11 +36,12 @@ clover_moe          ,1   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,
 clover_moe          ,1   ,any     ,SSM_CONV+UNARY              ,      1
 codeshell           ,0   ,any     ,NORM+MUL+ADD                ,      5
 cogvlm              ,0   ,any     ,RMS_NORM+MUL                ,      5
-cohere2             ,0   ,any     ,ADD+ADD                     ,      2
+cohere2             ,0   ,any     ,ADD+ADD                     ,      1
 cohere2             ,0   ,any     ,NORM+MUL                    ,      3
-cohere2moe          ,1   ,any     ,ADD+ADD                     ,      2
+cohere2moe          ,1   ,any     ,ADD+ADD                     ,      1
 cohere2moe          ,1   ,any     ,MUL+ADD                     ,      2
 cohere2moe          ,1   ,any     ,RMS_NORM+MUL                ,      3
+command-r           ,0   ,any     ,ADD+ADD                     ,      1
 command-r           ,0   ,any     ,NORM+MUL                    ,      3
 dbrx                ,0   ,any     ,MUL+ADD                     ,      4
 dbrx                ,0   ,any     ,NORM+MUL                    ,      5
