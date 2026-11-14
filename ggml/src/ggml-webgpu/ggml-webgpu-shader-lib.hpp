@@ -349,6 +349,24 @@ struct ggml_webgpu_pad_pipeline_key_hash {
     }
 };
 
+struct ggml_webgpu_pool_pipeline_key {
+    bool is_2d;
+    bool is_max;
+
+    bool operator==(const ggml_webgpu_pool_pipeline_key & other) const {
+        return is_2d == other.is_2d && is_max == other.is_max;
+    }
+};
+
+struct ggml_webgpu_pool_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_pool_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.is_2d);
+        ggml_webgpu_hash_combine(seed, key.is_max);
+        return seed;
+    }
+};
+
 /** Solve Tri **/
 struct ggml_webgpu_solve_tri_pipeline_key {
     int type;
@@ -1297,6 +1315,8 @@ class ggml_webgpu_shader_lib {
         concat_pipelines;           // type
     std::unordered_map<ggml_webgpu_repeat_pipeline_key, webgpu_pipeline, ggml_webgpu_repeat_pipeline_key_hash>
         repeat_pipelines;           // type
+    std::unordered_map<ggml_webgpu_pool_pipeline_key, webgpu_pipeline, ggml_webgpu_pool_pipeline_key_hash>
+        pool_pipelines;
     std::unordered_map<ggml_webgpu_flash_attn_vec_pipeline_key,
                        webgpu_pipeline,
                        ggml_webgpu_flash_attn_vec_pipeline_key_hash>
@@ -2080,6 +2100,37 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         pad_pipelines[key]       = pipeline;
         return pad_pipelines[key];
+    }
+
+    webgpu_pipeline get_pool_pipeline(const ggml_webgpu_shader_lib_context & context) {
+        ggml_webgpu_pool_pipeline_key key = {};
+        key.is_2d                         = context.dst->op == GGML_OP_POOL_2D;
+        key.is_max                        = ggml_get_op_params_i32(context.dst, 0) == GGML_OP_POOL_MAX;
+
+        auto it = pool_pipelines.find(key);
+        if (it != pool_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = key.is_2d ? "pool_2d" : "pool_1d";
+
+        if (key.is_2d) {
+            defines.push_back("POOL_2D");
+        }
+        if (key.is_max) {
+            defines.push_back("POOL_MAX");
+        }
+        variant += key.is_max ? "_max" : "_avg";
+        defines.push_back("WG_SIZE=" + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_pool, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        pool_pipelines[key]      = pipeline;
+        return pool_pipelines[key];
     }
 
     webgpu_pipeline get_quantize_q8_pipeline(const ggml_webgpu_shader_lib_context & context) {
