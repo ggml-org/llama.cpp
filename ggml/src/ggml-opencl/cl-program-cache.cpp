@@ -170,6 +170,42 @@ std::string compute_key(const std::string & key_suffix,
     return sha256_hex(digest);
 }
 
+// Same identity as compute_key, plus the kernel that failed its work-group
+// check. Empty kernel_name is the whole-program marker.
+std::string compute_reject_key(const std::string & key_suffix,
+                               const char *        source,
+                               const std::string & compile_opts,
+                               const char *        kernel_name,
+                               size_t              required_wg) {
+    sha256_ctx c;
+    sha256_init(c);
+
+    static const uint8_t sep = 0;
+    static const char tag[] = "wg-reject-v1";
+    const char * name = kernel_name ? kernel_name : "";
+    const uint64_t wg = (uint64_t) required_wg;
+    uint8_t wg_le[8];
+    for (int i = 0; i < 8; ++i) {
+        wg_le[i] = (uint8_t) (wg >> (8 * i));
+    }
+
+    sha256_update(c, source,              strlen(source));
+    sha256_update(c, &sep,                1);
+    sha256_update(c, compile_opts.data(), compile_opts.size());
+    sha256_update(c, &sep,                1);
+    sha256_update(c, key_suffix.data(),   key_suffix.size());
+    sha256_update(c, &sep,                1);
+    sha256_update(c, tag,                 sizeof(tag) - 1);
+    sha256_update(c, &sep,                1);
+    sha256_update(c, name,                strlen(name));
+    sha256_update(c, &sep,                1);
+    sha256_update(c, wg_le,               sizeof(wg_le));
+
+    uint8_t digest[32];
+    sha256_final(c, digest);
+    return sha256_hex(digest);
+}
+
 bool make_dir_recursive(const std::string & path) {
     if (path.empty()) { return false; }
     // create_directories() already creates missing parents. It returns false
@@ -236,7 +272,8 @@ std::string compute_key_suffix(cl_device_id device) {
     return s;
 }
 
-const uint8_t MAGIC[8] = { 'G','G','M','L','C','L','B','C' };
+const uint8_t MAGIC[8]     = { 'G','G','M','L','C','L','B','C' };
+const uint8_t REJ_MAGIC[8] = { 'G','G','M','L','C','L','R','J' };
 
 bool read_all(const std::string & path, std::vector<uint8_t> & out) {
     std::ifstream f(fs::u8path(path), std::ios::binary);
@@ -449,5 +486,50 @@ void cl_program_cache_try_save(
     } else {
         ++g_cache_saves;
         cache_debug_line("SAVE", key, source, compile_opts);
+    }
+}
+
+bool cl_program_cache_wg_reject_load(
+    const cl_program_cache_state & state,
+    const char *                   source,
+    const std::string &            compile_opts,
+    const char *                   kernel_name,
+    size_t                         required_wg) {
+
+    if (state.dir.empty() || !source) {
+        return false;
+    }
+
+    const std::string key  = compute_reject_key(state.key_suffix, source, compile_opts, kernel_name, required_wg);
+    const std::string path = state.dir + "/" + key + ".clrej";
+    std::vector<uint8_t> file;
+    if (!read_all(path, file) || file.size() < 8 || std::memcmp(file.data(), REJ_MAGIC, 8) != 0) {
+        return false;
+    }
+    cache_debug_line("REJ", key, source, compile_opts);
+    return true;
+}
+
+void cl_program_cache_wg_reject_save(
+    const cl_program_cache_state & state,
+    const char *                   source,
+    const std::string &            compile_opts,
+    const char *                   kernel_name,
+    size_t                         required_wg) {
+
+    if (state.dir.empty() || !source) {
+        return;
+    }
+
+    const std::string key  = compute_reject_key(state.key_suffix, source, compile_opts, kernel_name, required_wg);
+    const std::string path = state.dir + "/" + key + ".clrej";
+    std::vector<uint8_t> existing;
+    if (read_all(path, existing) && existing.size() >= 8 && std::memcmp(existing.data(), REJ_MAGIC, 8) == 0) {
+        return;
+    }
+    if (!write_atomic(path, REJ_MAGIC, sizeof(REJ_MAGIC))) {
+        GGML_LOG_INFO("ggml_opencl: kernel cache: failed to write '%s'\n", path.c_str());
+    } else {
+        cache_debug_line("RADD", key, source, compile_opts);
     }
 }
