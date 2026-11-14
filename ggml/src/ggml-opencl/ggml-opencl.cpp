@@ -14,6 +14,7 @@
 #include "ggml.h"
 
 #include "cl-program-cache.h"
+#include "opencl_profiling_info.h"
 
 #ifdef GGML_OPENCL_USE_ADRENO_BIN_KERNELS
 #include "libdl.h"
@@ -46,6 +47,7 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 #include <map>
 #include <memory>
 #include <charconv>
+#include <limits>
 #include <mutex>
 #include <regex>
 #include <set>
@@ -69,6 +71,10 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
             GGML_ASSERT(0);                                         \
         }                                                           \
     } while (0)
+
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+#include "Conv3D_GMEM.h"
+#endif
 
 //------------------------------------------------------------------------------
 // OpenCL
@@ -385,71 +391,6 @@ struct ggml_cl_buffer {
         }
     }
 };
-
-// Profiling
-struct ProfilingInfo {
-    std::string op_name;
-    std::string kernel_name;
-
-    cl_kernel kernel;
-    cl_event evt;
-
-    cl_ulong cmd_queued;
-    cl_ulong cmd_submit;
-    cl_ulong cmd_start;
-    cl_ulong cmd_end;
-    cl_ulong overhead_start;
-    cl_ulong overhead_end;
-    // For the times below, see spec for clGetEventProfilingInfo
-    // The time kernel spent in cmd queue - SUBMIT - QUEUED
-    cl_ulong cmd_queued_duration_ns;
-    // The time kernel spent for submission - START - SUBMIT
-    cl_ulong cmd_submit_duration_ns;
-    // Kernel execution time in nanoseconds - END - START
-    cl_ulong cmd_duration_ns;
-    // The time for the kernel to complete - COMPLETE - END
-    cl_ulong cmd_complete_duration_ns;
-    // Total time to finish the kernel - COMPLETE - QUEUED
-    cl_ulong cmd_total_duration_ns;
-    // Global and local work sizes.
-    size_t global_size[3];
-    size_t local_size[3];
-    // Op output size.
-    size_t output_size[4];
-};
-
-static void populateProfilingInfo(
-        ProfilingInfo& info, cl_event evt, cl_kernel kernel, cl_uint work_dim,
-        size_t global_size[3], size_t local_size[3],
-        const ggml_tensor * tensor) {
-    info.op_name     = tensor->name;
-    info.kernel      = kernel;
-    info.evt         = evt;
-
-    // 0 means not specified, e.g., 2D workgroup, or NULL for driver to choose
-    info.local_size[0] = 0;
-    info.local_size[1] = 0;
-    info.local_size[2] = 0;
-
-    info.global_size[0] = 0;
-    info.global_size[1] = 0;
-    info.global_size[2] = 0;
-
-    if (local_size) {
-        for (cl_uint i = 0; i < work_dim; ++i) {
-            info.local_size[i] = local_size[i];
-        }
-    }
-
-    for (cl_uint i = 0; i < work_dim; ++i) {
-        info.global_size[i] = global_size[i];
-    }
-
-    info.output_size[0] = tensor->ne[0];
-    info.output_size[1] = tensor->ne[1];
-    info.output_size[2] = tensor->ne[2];
-    info.output_size[3] = tensor->ne[3];
-}
 
 struct ggml_backend_opencl_context;
 
@@ -1233,103 +1174,12 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mm_q6_k_f32_l4_lm;
     cl_kernel kernel_mul_mm_iq4_nl_f32_l4_lm;
 
-    std::vector<ProfilingInfo> profiling_info;
-    std::vector<ProfilingInfo> profiling_results;
+    ProfilingInfo profiling_info;
 
-    void flush_profiling_batch() {
-        if (profiling_info.empty()) {
-            return;
-        }
-
-        // Populate profiling info
-        for (ProfilingInfo & info : profiling_info) {
-            cl_ulong cmd_queued;
-            cl_ulong cmd_submit;
-            cl_ulong cmd_start;
-            cl_ulong cmd_end;
-            cl_ulong cmd_complete;
-
-            CL_CHECK(clWaitForEvents(1, &info.evt));
-            CL_CHECK(clGetEventProfilingInfo(
-                info.evt, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong), &cmd_queued, NULL));
-            CL_CHECK(clGetEventProfilingInfo(
-                info.evt, CL_PROFILING_COMMAND_SUBMIT, sizeof(cl_ulong), &cmd_submit, NULL));
-            CL_CHECK(clGetEventProfilingInfo(
-                info.evt, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &cmd_start, NULL));
-            CL_CHECK(clGetEventProfilingInfo(
-                info.evt, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &cmd_end, NULL));
-            CL_CHECK(clGetEventProfilingInfo(
-                info.evt, CL_PROFILING_COMMAND_COMPLETE, sizeof(cl_ulong), &cmd_complete, NULL));
-            CL_CHECK(clReleaseEvent(info.evt));
-            info.evt = nullptr;
-
-            char kernel_name[512];
-            CL_CHECK(clGetKernelInfo(info.kernel, CL_KERNEL_FUNCTION_NAME,
-                sizeof(kernel_name), kernel_name, NULL));
-            info.kernel_name = kernel_name;
-
-            info.cmd_queued = cmd_queued;
-            info.cmd_submit = cmd_submit;
-            info.cmd_start  = cmd_start;
-            info.cmd_end    = cmd_end;
-
-            info.cmd_queued_duration_ns     = cmd_submit    - cmd_queued;
-            info.cmd_submit_duration_ns     = cmd_start     - cmd_submit;
-            info.cmd_duration_ns            = cmd_end       - cmd_start;
-            info.cmd_complete_duration_ns   = cmd_complete  - cmd_end;
-            info.cmd_total_duration_ns      = cmd_complete  - cmd_queued;
-        }
-        profiling_results.insert(profiling_results.end(),
-            std::make_move_iterator(profiling_info.begin()),
-            std::make_move_iterator(profiling_info.end()));
-        profiling_info.clear();
-    }
-
-    void write_profiling_info() {
-        if (profiling_results.empty()) {
-            return;
-        }
-
-        // Dump a csv
-        FILE * fperf = fopen("cl_profiling.csv", "w");
-        if (!fperf) {
-            GGML_LOG_ERROR("Failed to open cl_profiling.csv\n");
-            return;
-        }
-
-        fprintf(fperf, "op name, kernel name, exec duration (ms), global size, local size, output size\n");
-        for (const ProfilingInfo & info : profiling_results) {
-            fprintf(fperf, "%s,%s,%f,%zux%zux%zu,%zux%zux%zu,%zux%zux%zux%zu\n",
-                info.op_name.c_str(), info.kernel_name.c_str(),
-                info.cmd_duration_ns/1.e6f,
-                info.global_size[0], info.global_size[1], info.global_size[2],
-                info.local_size[0], info.local_size[1], info.local_size[2],
-                info.output_size[0], info.output_size[1], info.output_size[2], info.output_size[3]);
-        }
-        fclose(fperf);
-
-        // Dump a simple chrome trace
-        FILE * ftrace = fopen("cl_trace.json", "w");
-        if (!ftrace) {
-            GGML_LOG_ERROR("Failed to open cl_trace.json\n");
-            return;
-        }
-
-        fprintf(ftrace, "[\n");
-        for (const ProfilingInfo & info : profiling_results) {
-            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Host\"},\n",
-                info.kernel_name.c_str(), info.cmd_queued/1000);
-            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Host\"},\n",
-                info.kernel_name.c_str(), info.cmd_submit/1000);
-
-            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Device\"},\n",
-                info.kernel_name.c_str(), info.cmd_start/1000);
-            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %" PRIu64 ", \"pid\": \"\", \"tid\": \"Device\"},\n",
-                info.kernel_name.c_str(), info.cmd_end/1000);
-        }
-        fprintf(ftrace, "]\n");
-        fclose(ftrace);
-    }
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+    std::map<std::string, cl_program> conv3d_gmem_programs;
+    std::map<size_t, Conv3D_GMEM *> conv3d_gmem_cache;
+#endif
 
     size_t get_kernel_workgroup_size(cl_kernel kernel) const {
         size_t workgroup_size = 0;
@@ -1358,11 +1208,8 @@ struct ggml_backend_opencl_context {
         cl_event evt;
         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, &evt));
 
-        profiling_info.emplace_back();
-        populateProfilingInfo(profiling_info.back(), evt, kernel, work_dim, global_work_size, local_work_size, tensor);
-        if (profiling_info.size() >= 2048) {
-            flush_profiling_batch();
-        }
+        profiling_info.populate(evt, kernel, work_dim, global_work_size, local_work_size, tensor);
+        CL_CHECK(clReleaseEvent(evt));
 #else
         GGML_UNUSED(tensor);
         CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, NULL));
@@ -1544,9 +1391,8 @@ struct ggml_backend_opencl_context {
                 fa.fd_partial.size = 0;
             }
 #ifdef GGML_OPENCL_PROFILING
-            flush_profiling_batch();
-            write_profiling_info();
-            profiling_results.clear();
+            profiling_info.write();
+            profiling_info.clear();
 #endif
             // release pooled image1d_buffer views over KV cache layers.
             for (auto & kv : kq_img_pool) {
@@ -1566,6 +1412,18 @@ struct ggml_backend_opencl_context {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
             ggml_cl_adreno_xmem_attn_release_scratch(this);
 #endif
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+            for (auto & entry : conv3d_gmem_cache) {
+                delete entry.second;
+            }
+            conv3d_gmem_cache.clear();
+            for (auto & entry : conv3d_gmem_programs) {
+                if (entry.second) {
+                    CL_CHECK(clReleaseProgram(entry.second));
+                }
+            }
+            conv3d_gmem_programs.clear();
+#endif
         }
     }
 };
@@ -1577,7 +1435,7 @@ static std::vector<ggml_backend_device> g_ggml_backend_opencl_devices;
 static std::vector<std::unique_ptr<ggml_backend_opencl_device_context>> g_ggml_backend_opencl_dev_ctxs;
 
 inline std::string read_file(const std::string &path) {
-    std::ifstream ifs(path);
+    std::ifstream ifs(path, std::ios::binary);
     if (!ifs) {
         return "";
     }
@@ -1663,7 +1521,7 @@ static cl_program build_program_from_source(ggml_backend_opencl_context * backen
     return p;
 }
 
-static cl_program build_program_from_binary(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts, size_t bin_size = 0) {
+static cl_program build_program_from_binary(cl_context ctx, cl_device_id dev, const char* program_buffer, const std::string &compile_opts, size_t bin_size = 0, bool fatal = true) {
     cl_program p;
     char *program_log;
     size_t log_size;
@@ -1671,12 +1529,19 @@ static cl_program build_program_from_binary(cl_context ctx, cl_device_id dev, co
 
     p = clCreateProgramWithBinary(ctx, 1, &dev, &bin_size, (const unsigned char**)&program_buffer, NULL, &err);
     if(err < 0) {
+        if (!fatal) {
+            return nullptr;
+        }
         GGML_LOG_ERROR("OpenCL error creating program from binary");
         exit(1);
     }
 
     err = clBuildProgram(p, 0, NULL, compile_opts.c_str(), NULL, NULL);
     if(err < 0) {
+        if (!fatal) {
+            CL_CHECK(clReleaseProgram(p));
+            return nullptr;
+        }
         clGetProgramBuildInfo(p, dev, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size);
         program_log = (char*) malloc(log_size + 1);
         program_log[log_size] = '\0';
@@ -24626,6 +24491,37 @@ static void ggml_cl_conv_3d(ggml_backend_t backend, const ggml_tensor * src0, co
         extra1->data_device,
         extrad->data_device,
     };
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+    const bool gmem_offsets_aligned =
+        offsets[0] % backend_ctx->alignment == 0 &&
+        offsets[1] % backend_ctx->alignment == 0 &&
+        offsets[2] % backend_ctx->alignment == 0;
+    const size_t gmem_hash = gmem_offsets_aligned && backend_ctx->adreno_use_bin_kernels && backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? Conv3D_GMEM::get_hash(backend_ctx->device, dst) : 0;
+    if (gmem_hash != 0) {
+        auto it = backend_ctx->conv3d_gmem_cache.find(gmem_hash);
+        if (it == backend_ctx->conv3d_gmem_cache.end()) {
+            const std::string name = Conv3D_GMEM::program_name(dst);
+            auto program_it = backend_ctx->conv3d_gmem_programs.find(name);
+            if (program_it == backend_ctx->conv3d_gmem_programs.end()) {
+                size_t bin_size = 0;
+                const auto * binary = (const char *) backend_ctx->get_adreno_bin_kernel(name, &bin_size);
+                cl_program program = binary && bin_size ? build_program_from_binary(backend_ctx->context, backend_ctx->device, binary, "", bin_size, false) : nullptr;
+                program_it = backend_ctx->conv3d_gmem_programs.emplace(name, program).first;
+            }
+            Conv3D_GMEM * conv = program_it->second ? Conv3D_GMEM::create(backend_ctx->context, backend_ctx->device, backend_ctx->queue, program_it->second, backend_ctx->profiling_info, dst) : nullptr;
+            it = backend_ctx->conv3d_gmem_cache.emplace(gmem_hash, conv).first;
+        }
+        if (it->second) {
+            it->second->enqueue(
+                buffers[0], offsets[0], buffers[1], offsets[1], buffers[2], offsets[2],
+                (cl_uint) ne2, (cl_uint) ne1, (cl_uint) ne0,
+                (cl_uint) ne12, (cl_uint) ne11, (cl_uint) ne10,
+                (cl_uint) dst->op_params[0], (cl_uint) dst->op_params[6],
+                (cl_uint) dst->op_params[3], (cl_uint) dst->op_params[4], (cl_uint) dst->op_params[5], dst);
+            return;
+        }
+    }
+#endif
     const cl_uint shape[] = {
         (cl_uint) ne00, (cl_uint) ne01, (cl_uint) ne02,
         (cl_uint) ne10, (cl_uint) ne11, (cl_uint) ne12,

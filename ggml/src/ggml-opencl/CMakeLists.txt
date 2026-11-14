@@ -4,10 +4,14 @@ find_package(Python3 REQUIRED)
 set(TARGET_NAME ggml-opencl)
 
 ggml_add_backend_library(${TARGET_NAME}
-                         ggml-opencl.cpp
-                         cl-program-cache.cpp
-                         cl-program-cache.h
-                         ../../include/ggml-opencl.h)
+                          ggml-opencl.cpp
+                          Conv3D_GMEM.cpp
+                          Conv3D_GMEM.h
+                          cl-recordable-queue.h
+                          cl-program-cache.cpp
+                          cl-program-cache.h
+                          opencl_profiling_info.h
+                          ../../include/ggml-opencl.h)
 target_link_libraries(${TARGET_NAME} PRIVATE ${OpenCL_LIBRARIES})
 target_include_directories(${TARGET_NAME} PRIVATE ${OpenCL_INCLUDE_DIRS})
 
