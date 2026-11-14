@@ -259,7 +259,7 @@ void ggml_vk_print_device_lost_info(const vk_device& device) {
 }
 void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
 
-uint64_t vk_tensor_offset(const ggml_tensor * tensor) {
+size_t vk_tensor_offset(const ggml_tensor * tensor) {
     if (tensor->view_src) {
         return (uint8_t *) tensor->view_src->data - (uint8_t *) vk_ptr_base;
     }
@@ -17077,7 +17077,7 @@ void vk_queue_handle_unsynchronized::submit(vk::ArrayProxy<const vk::SubmitInfo>
 
 vk_device_struct::~vk_device_struct() {
     // the build failed before the device was created, nothing to destroy
-    if (device == VK_NULL_HANDLE) {
+    if (!device) {
         return;
     }
 

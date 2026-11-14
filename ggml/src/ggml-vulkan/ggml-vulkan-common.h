@@ -70,7 +70,7 @@ void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t siz
 vk_buffer ggml_vk_buffer_from_host_ptr(vk_device & device, void * ptr, size_t size);
 
 // pipelines
-uint64_t vk_tensor_offset(const ggml_tensor * tensor);
+size_t vk_tensor_offset(const ggml_tensor * tensor);
 uint32_t get_misalign_bytes(const ggml_backend_vk_context * ctx, const ggml_tensor * t);
 void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx);
 void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, vk_pipeline& pipeline, uint32_t n);
