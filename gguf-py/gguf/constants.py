@@ -390,6 +390,7 @@ class Keys:
         EOS_ID               = "tokenizer.ggml.eos_token_id"
         EOT_ID               = "tokenizer.ggml.eot_token_id"
         EOM_ID               = "tokenizer.ggml.eom_token_id"
+        EOG_IDS              = "tokenizer.ggml.eog_token_ids"
         UNK_ID               = "tokenizer.ggml.unknown_token_id"
         SEP_ID               = "tokenizer.ggml.seperator_token_id"
         PAD_ID               = "tokenizer.ggml.padding_token_id"
