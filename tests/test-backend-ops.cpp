@@ -14195,8 +14195,13 @@ static bool op_names_filter_selects(const char * op_names_filter, const char * o
 // The override is backend-global, so this runs after all parallel workers have joined.
 static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter, const char * params_filter, const char * test_file_path) {
     const char * LLAMA_TEST_FA_VEC_DISABLE = getenv("LLAMA_TEST_FA_VEC_DISABLE");
-    if (LLAMA_TEST_FA_VEC_DISABLE) { return true; }
-    if (test_file_path != nullptr || !op_names_filter_selects(op_names_filter, "FLASH_ATTN_EXT")) { return true; }
+    if (LLAMA_TEST_FA_VEC_DISABLE) {
+        return true;
+    }
+
+    if (test_file_path != nullptr || !op_names_filter_selects(op_names_filter, "FLASH_ATTN_EXT")) {
+        return true;
+    }
 
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
     auto set_ov   = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_vec_override");
