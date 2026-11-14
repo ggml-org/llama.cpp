@@ -666,7 +666,9 @@ bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
         const int32_t cell_id = s + min;
         auto & cell = cells[cell_id];
 
-        if (cell.pos >= 0 && last_pos != cell.pos + (llama_pos) n_seq_tokens) {
+        // with M-RoPE, image tokens share a position and the next text jumps forward
+        const bool pos_ok = ubatch.n_pos > 1 ? last_pos >= cell.pos : last_pos == cell.pos + (llama_pos) n_seq_tokens;
+        if (cell.pos >= 0 && !pos_ok) {
             // What should happen when the pos backtracks or skips a value?
             // Clearing the state mid-batch would require special-casing which isn't done.
             LLAMA_LOG_WARN("%s: non-consecutive token position %d after %d for sequence %d with %u new tokens\n",

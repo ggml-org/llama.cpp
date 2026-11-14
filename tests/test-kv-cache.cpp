@@ -1,8 +1,10 @@
 #include "llama-kv-cache.h"
+#include "llama-memory-recurrent.h"
 #include "llama-model.h"
 
 #include <numeric>
 #include <string>
+#include <vector>
 
 static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams = {};
@@ -13,6 +15,37 @@ static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams.n_head_kv_arr.fill(1);
     std::iota(model.hparams.kv_source_impl.begin(), model.hparams.kv_source_impl.end(), 0);
     model.layers.resize(n_layer);
+}
+
+// count find_slot position warnings for one ubatch of seq 0, with pos0 as the first position section
+static int find_slot_pos_warns(llama_memory_recurrent & mem, uint32_t n_pos, const std::vector<llama_pos> & pos0) {
+    const uint32_t n_tokens = pos0.size();
+    std::vector<llama_pos> pos(n_tokens*n_pos, 0);
+    std::copy(pos0.begin(), pos0.end(), pos.begin());
+    llama_seq_id seq_id = 0;
+    std::vector<int32_t> n_seq_id(n_tokens, 1);
+    std::vector<llama_seq_id *> seq_ids(n_tokens, &seq_id);
+
+    llama_ubatch ubatch = {};
+    ubatch.b_equal_seqs = 1;
+    ubatch.n_tokens     = n_tokens;
+    ubatch.n_seq_tokens = n_tokens;
+    ubatch.n_seqs       = 1;
+    ubatch.n_seqs_unq   = 1;
+    ubatch.n_pos        = n_pos;
+    ubatch.pos          = pos.data();
+    ubatch.n_seq_id     = n_seq_id.data();
+    ubatch.seq_id       = seq_ids.data();
+
+    int n_warn = 0;
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        if (level == GGML_LOG_LEVEL_WARN && std::string(text).find("non-consecutive token position") != std::string::npos) {
+            ++*static_cast<int *>(user_data);
+        }
+    }, &n_warn);
+    GGML_ASSERT(mem.find_slot(ubatch));
+    llama_log_set(nullptr, nullptr);
+    return n_warn;
 }
 
 int main() {
@@ -98,6 +131,28 @@ int main() {
                 GGML_ASSERT(shared.get_v_scale(1) == nullptr);
             }
         }
+    }
+
+    {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_QWEN35, llama_model_default_params()));
+        init_model(*model, 1);
+        auto make_mem = [&]() {
+            return std::make_unique<llama_memory_recurrent>(*model, true, GGML_TYPE_F32, GGML_TYPE_F32, false, 1, 1, 0, [](int32_t) { return false; });
+        };
+
+        // M-RoPE: image rows share one position, the text after the image jumps forward
+        auto mem = make_mem();
+        GGML_ASSERT(find_slot_pos_warns(*mem, 4, { 0, 1, 2, 3 }) == 0);
+        GGML_ASSERT(find_slot_pos_warns(*mem, 4, { 4, 4, 4, 4 }) == 0);
+        GGML_ASSERT(find_slot_pos_warns(*mem, 4, { 4, 4 }) == 0);
+        GGML_ASSERT(find_slot_pos_warns(*mem, 4, { 7, 8 }) == 0);
+        GGML_ASSERT(find_slot_pos_warns(*mem, 4, { 2, 3 }) == 1);
+
+        // single position: a skip is still reported
+        mem = make_mem();
+        GGML_ASSERT(find_slot_pos_warns(*mem, 1, { 0, 1, 2, 3 }) == 0);
+        GGML_ASSERT(find_slot_pos_warns(*mem, 1, { 4, 5 }) == 0);
+        GGML_ASSERT(find_slot_pos_warns(*mem, 1, { 7, 8 }) == 1);
     }
 
     llama_backend_free();
