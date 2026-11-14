@@ -183,7 +183,7 @@ static __global__ void top_k_rows_kernel(
             const int64_t t = e / n_blk;
             const int32_t p = top_k_row[t*sk0];
 
-            // the order of top_k is arbitrary, the attention over the list depends on it: list the picks in index order
+            // the picks in index order: the order of top_k is arbitrary, the attention over the list depends on it
             slot = top_k_rows_rank(top_k_row, sk0, n_top, t)*n_blk + e % n_blk;
 
             bool live = p >= 0 && p < n_pick;
