@@ -167,6 +167,7 @@ models = [
     {"name": "ufakzeka",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ufakai/ufakzeka-1", },
     {"name": "mmbert",           "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/jhu-clsp/mmBERT-base", },
     {"name": "k2-horizon",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/IFM/K2-Horizon-36B", },
+    {"name": "inkling2",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -191,8 +192,6 @@ pre_computed_hashes = [
     {"name": "qwen2",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B", "chkhsh": "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c"},
     {"name": "qwen35",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/openbmb/MiniCPM-V-4_6", "chkhsh": "1444df51289cfa8063b96f0e62b1125440111bc79a52003ea14b6eac7016fd5f"},
     {"name": "grok-2",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/alvarobartt/grok-2-tokenizer", "chkhsh": "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273"},
-    # inkling2 has its own vocabulary and no BOS, its pre-tokenizer regex is gpt-4o's
-    {"name": "inkling2",  "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/thinkingmachines/Inkling-2-Small", "chkhsh": "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5"},
     # muse-spark uses the l4_202k tokenizer, whose pre-tokenizer regex is gpt-4o's
     {"name": "gpt-4o",    "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/meta-models/Muse-Spark-Open-816B-A42B", "chkhsh": "f5c965e4198da6e7525072d87d1ecf4c51d981fd486c7c4ec728ef9cec7e03fc"},
     # kolibri1 uses a 128k vocabulary with the qwen2 pre-tokenizer regex
