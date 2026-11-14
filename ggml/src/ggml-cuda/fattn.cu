@@ -3,6 +3,7 @@
 #include "fattn-mma-f16.cuh"
 #include "fattn-tile.cuh"
 #include "fattn-vec.cuh"
+#include "fattn-wmma-dpart.cuh"
 #include "fattn.cuh"
 
 #if !defined(GGML_USE_MUSA)
@@ -564,6 +565,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_TILE    = 200,
     BEST_FATTN_KERNEL_VEC     = 100,
     BEST_FATTN_KERNEL_MMA_F16 = 400,
+    BEST_FATTN_KERNEL_WMMA_DPART = 410,
 };
 
 // K/V types for which there is a vector kernel template instance, other kernels convert these to f16:
@@ -757,6 +759,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
+    // RDNA3: batches of a few tokens (e.g. a speculative-decoding verify) with a GQA ratio that is not a power of 2, at depth.
+    if (ggml_cuda_fattn_wmma_dpart_supported(cc, dst, gqa_opt_applies)) {
+        return BEST_FATTN_KERNEL_WMMA_DPART;
+    }
+
     // AMD WMMA is faster than the tile kernel if the wide tiles with high arithmetic intensity can be utilized.
     if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 256) && Q->ne[0] != 40 && Q->ne[0] != 72 &&
             Q->ne[1] * gqa_ratio_eff > (Q->ne[0] <= 128 ? 8 : 16)) {
@@ -806,6 +813,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
             need_f16_K = K->type == GGML_TYPE_F32 || f16_fallback;
             need_f16_V = V->type == GGML_TYPE_F32 || f16_fallback;
         } break;
+        case BEST_FATTN_KERNEL_WMMA_DPART: // f16 K/V only
         case BEST_FATTN_KERNEL_NONE:
             break;
     }
@@ -829,6 +837,9 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_MMA_F16:
             ggml_cuda_flash_attn_ext_mma_f16(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_WMMA_DPART:
+            ggml_cuda_flash_attn_ext_wmma_dpart(ctx, dst);
             break;
     }
 }
