@@ -210,7 +210,11 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     auto * tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, positions, GGML_TYPE_F32), 1.0f, 1.0f);
     tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
     tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
-    auto * cur = build_norm(build_inp_embd(model.tok_embd), model.tok_norm, nullptr, LLM_NORM_RMS, -1);
+    auto * cur = build_inp_embd(model.tok_embd);
+    // important: do not normalize raw embeddings input (i.e. encoded image embeddings)
+    if (ubatch.token) {
+        cur = build_norm(cur, model.tok_norm, nullptr, LLM_NORM_RMS, -1);
+    }
     std::vector<ggml_tensor *> blocks;
     for (int il = 0; il < n_layer; ++il) {
         const auto & l = model.layers[il];
