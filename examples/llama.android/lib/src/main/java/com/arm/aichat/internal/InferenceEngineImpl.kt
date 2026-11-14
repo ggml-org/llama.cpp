@@ -266,8 +266,10 @@ internal class InferenceEngineImpl private constructor(
 
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
-                    Log.e(TAG, "Failed to process user prompt: $result")
-                    return@flow
+                    val error = RuntimeException("Failed to process user prompt: $result")
+                    Log.e(TAG, "Failed to process user prompt: $result", error)
+                    _state.value = InferenceEngine.State.Error(error)
+                    throw error
                 }
             }
 
