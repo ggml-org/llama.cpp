@@ -19,8 +19,10 @@
 #endif
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 #ifdef GGML_RPC_RDMA
 #  include <infiniband/verbs.h>
@@ -130,8 +132,13 @@ static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match con
 #endif // GGML_RPC_RDMA && !GGML_RPC_RDMA_APPLE
 
 struct socket_t::impl {
-    impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
+    static constexpr size_t TX_COAL_CAP = 256 * 1024;
+    std::vector<uint8_t> tx_buf;
+    impl(sockfd_t fd) : use_rdma(false), fd(fd) {
+        tx_buf.reserve(TX_COAL_CAP);
+    }
     ~impl();
+    bool send_raw(const void * data, size_t size);
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
     bool flush();
@@ -546,17 +553,7 @@ bool socket_t::impl::rdma_recv(void * data, size_t size) {
 
 #endif // GGML_RPC_RDMA
 
-bool socket_t::impl::send_data(const void * data, size_t size) {
-    LOG_DBG3("[%s] transport: %s, size: %s\n", __func__, use_rdma ? "RDMA" : "TCP", rpc_log_format_size(size).c_str());
-#ifdef GGML_RPC_RDMA_APPLE
-    if (use_rdma) {
-        return rdma->send(data, size);
-    }
-#elif defined(GGML_RPC_RDMA)
-    if (use_rdma) {
-        return rdma_send(data, size);
-    }
-#endif
+bool socket_t::impl::send_raw(const void * data, size_t size) {
     size_t bytes_sent = 0;
     while (bytes_sent < size) {
         size_t size_to_send = std::min(size - bytes_sent, MAX_CHUNK_SIZE);
@@ -571,6 +568,39 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
     return true;
 }
 
+bool socket_t::impl::send_data(const void * data, size_t size) {
+    LOG_DBG3("[%s] transport: %s, size: %s\n", __func__, use_rdma ? "RDMA" : "TCP", rpc_log_format_size(size).c_str());
+#ifdef GGML_RPC_RDMA_APPLE
+    if (use_rdma) {
+        return rdma->send(data, size);
+    }
+#elif defined(GGML_RPC_RDMA)
+    if (use_rdma) {
+        return rdma_send(data, size);
+    }
+#endif
+    if (size == 0) {
+        return true;
+    }
+    const uint8_t * ptr = static_cast<const uint8_t *>(data);
+    if (tx_buf.size() + size <= TX_COAL_CAP) {
+        tx_buf.insert(tx_buf.end(), ptr, ptr + size);
+        return true;
+    }
+    if (!tx_buf.empty()) {
+        if (!send_raw(tx_buf.data(), tx_buf.size())) {
+            tx_buf.clear();
+            return false;
+        }
+        tx_buf.clear();
+    }
+    if (size <= TX_COAL_CAP) {
+        tx_buf.insert(tx_buf.end(), ptr, ptr + size);
+        return true;
+    }
+    return send_raw(data, size);
+}
+
 bool socket_t::impl::recv_data(void * data, size_t size) {
     LOG_DBG3("[%s] transport: %s, size: %s\n", __func__, use_rdma ? "RDMA" : "TCP", rpc_log_format_size(size).c_str());
 #ifdef GGML_RPC_RDMA_APPLE
@@ -582,6 +612,9 @@ bool socket_t::impl::recv_data(void * data, size_t size) {
         return rdma_recv(data, size);
     }
 #endif
+    if (!tx_buf.empty() && !flush()) {
+        return false;
+    }
     size_t bytes_recv = 0;
     while (bytes_recv < size) {
         size_t size_to_recv = std::min(size - bytes_recv, MAX_CHUNK_SIZE);
@@ -669,6 +702,11 @@ bool socket_t::impl::flush() {
         return rdma->flush();
     }
 #endif
+    if (!tx_buf.empty()) {
+        bool ok = send_raw(tx_buf.data(), tx_buf.size());
+        tx_buf.clear();
+        return ok;
+    }
     return true;
 }
 
