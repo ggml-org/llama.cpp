@@ -24,7 +24,7 @@ struct mtmd_helper_video;
 typedef struct mtmd_helper_video mtmd_helper_video;
 
 struct mtmd_helper_video_stream_info {
-    uint32_t width;    // as displayed (rotation applied)
+    uint32_t width;    // as displayed (rotation and pixel aspect ratio applied)
     uint32_t height;
     float    fps;
     int32_t  n_frames; // -1 if unknown

@@ -161,7 +161,7 @@ struct ffmpeg_video {
         std::vector<const char *> cmd = {
             ffprobe_bin.c_str(),
             "-v", "quiet",
-            "-show_entries", "stream=width,height,r_frame_rate,nb_frames,duration,start_time",
+            "-show_entries", "stream=width,height,sample_aspect_ratio,r_frame_rate,nb_frames,duration,start_time:stream_side_data=rotation",
             "-select_streams", "v:0",
             "-of", "default=noprint_wrappers=1",
         };
@@ -189,6 +189,9 @@ struct ffmpeg_video {
             probe_sp.start_feeder(input_buf);
         }
 
+        int sar_num  = 1;
+        int sar_den  = 1;
+        int rotation = 0;
         char line[256];
         FILE * fp = probe_sp.stdout_pipe();
 
@@ -213,14 +216,29 @@ struct ffmpeg_video {
                 info.duration = (float)atof(val);
             } else if (strcmp(key, "start_time") == 0 && strcmp(val, "N/A") != 0) {
                 video_start_s = atof(val);
+            } else if (strcmp(key, "sample_aspect_ratio") == 0) {
+                if (sscanf(val, "%d:%d", &sar_num, &sar_den) != 2) {
+                    sar_num = sar_den = 1; // N/A
+                }
+            } else if (strcmp(key, "rotation") == 0) {
+                rotation = atoi(val);
             }
         }
 
         probe_sp.stop();
 
-        // TODO: this is the encoded size, it is wrong for a rotated video (ffmpeg rotates the frames)
+        // ffmpeg gives frames of the encoded size; the displayed size also has the pixel aspect ratio applied
         src_width  = info.width;
         src_height = info.height;
+        const double sar = sar_den > 0 ? (double) sar_num / sar_den : 1.0;
+        if (sar >= 0.1 && sar <= 10.0) { // the value is from the file, ignore it if it is not plausible
+            info.width = (uint32_t) std::nearbyint(info.width * sar);
+        }
+        // ffmpeg rotates the frames by default
+        if (rotation % 180 == 90 || rotation % 180 == -90) {
+            std::swap(src_width, src_height);
+            std::swap(info.width, info.height);
+        }
         return info.width > 0 && info.height > 0 && info.fps > 0.0f;
     }
 
