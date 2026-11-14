@@ -1,0 +1,7 @@
+# Magic local data for file(1) command.
+# Append this to your /etc/magic file.
+# Insert here your local magic data. Format is described in magic(5).
+0	string	tjgg	GGML/GGJT LLM model
+>0x4	lelong	<255	version=%d
+0	string	GGUF	GGUF LLM model
+>0x4	lelong	<255	version=%d
