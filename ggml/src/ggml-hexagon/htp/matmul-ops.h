@@ -136,12 +136,13 @@ static inline int htp_mm_hmx_compute_chunks(size_t   vtcm_total,
                               size_t   per_mn_cost,
                               size_t   m,
                               size_t   n,
+                              size_t   m_align,
                               size_t   m_block_cost,
                               size_t   n_block_cost,
                               size_t * m_chunk_out,
                               size_t * n_chunk_out,
                               size_t * total_out) {
-    if (m == 0 || n == 0) return -1;
+    if (m == 0 || n == 0 || m_align == 0) return -1;
     if (vtcm_total <= overhead) return -1;
     if (per_n_cost == 0 || per_m_cost == 0 || per_mn_cost == 0) return -1;
 
@@ -165,7 +166,7 @@ static inline int htp_mm_hmx_compute_chunks(size_t   vtcm_total,
         {
             size_t remain = usable - n_fixed;
             size_t mc = remain / mc_denom;
-            mc = hex_align_down(mc, HTP_MM_HMX_TILE_N_ROWS);
+            mc = hex_align_down(mc, m_align);
             mc = hex_smin(mc, m);
 
             if (mc == 0) {
@@ -798,7 +799,7 @@ static inline bool htp_mm_hmx_solve_batched_params(
         size_t n_chunk_candidate = 0;
         size_t vtcm_size_candidate = 0;
 
-        if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn, hex_align_up(ne11, 32), ne01_padded,
+        if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn, hex_align_up(ne11, 32), ne01_padded, HTP_MM_HMX_TILE_N_ROWS,
                                (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) ne11 * HTP_MM_HMX_COST_A_CONVERT,
                                 &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
             size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, k, m_chunk_candidate, n_chunk_candidate, group_size, pipeline, act_hvx, bias_size);
@@ -871,12 +872,9 @@ static inline bool htp_mm_hmx_solve_2d_params_ex(
         size_t n_chunk_candidate = 0;
         size_t vtcm_size_candidate = 0;
 
-        if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01_padded,
+        if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01_padded, m_align,
                                (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) m_for_cost * HTP_MM_HMX_COST_A_CONVERT,
                                &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
-            if (is_w8a8) {
-                m_chunk_candidate = (m_chunk_candidate >= 64) ? hex_align_down(m_chunk_candidate, 64) : 64;
-            }
             size_t exact_size = htp_mm_hmx_get_2d_vtcm_size_ex(kernel_type, wtype, k, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_hvx, aligned_tile_size, bias_size, k_group);
             if (exact_size <= vtcm_budget) {
                 size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;

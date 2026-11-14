@@ -711,14 +711,15 @@ static bool htp_kparams_solve_hmx_mm(
     uint32_t      k_group          = 0;
     if (is_tiled && !is_matmul_id && wtype == GGML_TYPE_Q4_0 && (opt_mm_select == 3 || opt_mm_select == 4) &&
         ne00_padded >= 128 && (ne00_padded % 128) == 0) {
-        uint32_t target_kgroup = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(opt_hmx_kgroup, 128)
+        uint32_t target_kgroup = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(std::min(opt_hmx_kgroup, 4096), 128)
                                                       : ((opt_mm_select == 3) ? 256u : 512u);
-        if (target_kgroup > (uint32_t) ne00_padded) {
-            target_kgroup = (uint32_t) ne00_padded;
-        }
+        target_kgroup = std::min(target_kgroup, std::min((uint32_t) ne00_padded, 4096u));
         for (uint32_t g = (target_kgroup / 128u) * 128u; g >= 128u; g -= 128u) {
             if (((uint32_t) ne00_padded % g) == 0) {
                 k_group = g;
+                break;
+            }
+            if (g == 128u) {
                 break;
             }
         }

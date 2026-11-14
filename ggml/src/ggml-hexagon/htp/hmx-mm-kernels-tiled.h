@@ -1964,7 +1964,7 @@ static __attribute__((noinline)) void rescale_q4_0_weight_superblock(
 
     HVX_Vector v_max_dup    = Q6_V_lo_W(Q6_W_vshuff_VVR(v_max_sc, v_max_sc, -2));
     HVX_Vector v_max_sf     = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(Q6_Wqf32_vmpy_VhfVhf(v_max_dup, v_one_f16)));
-    HVX_VectorPred q_pos    = Q6_Q_vcmp_gt_VsfVsf(v_max_sf, Q6_V_vzero());
+    HVX_VectorPred q_pos    = Q6_Q_vcmp_gt_VsfVsf(v_max_sf, hvx_vec_splat_f32(1e-30f));
     HVX_Vector v_inv_raw    = hvx_vec_inverse_f32(v_max_sf);
     HVX_Vector v_inv_max_sf = Q6_V_vmux_QVV(q_pos, hvx_vec_mul_f32_f32(v_inv_raw, hvx_vec_splat_f32(16256.0f)), Q6_V_vzero());
 
@@ -2012,7 +2012,7 @@ static __attribute__((noinline)) void rescale_q4_0_weight_superblock(
         }
     }
 
-    HVX_Vector v_max_mag = Q6_Vw_vsub_VwVw(Q6_Vw_vasl_VwR(v_l1_w, 7), v_l1_w);
+    HVX_Vector v_max_mag = Q6_Vw_vasl_VwR(v_l1_w, 7);
     HVX_Vector v_p       = Q6_Vw_vmax_VwVw(Q6_V_vzero(), Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(17), Q6_Vuw_vcl0_Vuw(v_max_mag)));
     HVX_Vector v_ib      = Q6_Vw_vsub_VwVw(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(32768), v_p), Q6_Vw_vasl_VwR(v_sum_w, 7));
 
@@ -2059,8 +2059,8 @@ static void rescale_q4_0_weight_to_int8_task(
     }
 }
 
-// Quantize one superblock g (k_group columns, multiple of 32) of a 4-row FP32 group into W8A8 :cm 64x32 tiles.
-static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_cm(
+// Quantize one superblock g (k_group columns, multiple of 32) of a 4-row FP32 group into W8A8 SM 64x32 tiles.
+static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm(
         uint8_t * restrict tile_row_base,
         float * restrict d_a_out,
         const float * restrict p0,
@@ -2105,6 +2105,7 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_cm(
 
     const HVX_Vector v_inv_127 = hvx_vec_splat_f32(1.0f / 127.0f);
     const HVX_Vector v_127     = hvx_vec_splat_f32(127.0f);
+    const HVX_Vector v_eps     = hvx_vec_splat_f32(1e-30f);
 
     HVX_Vector vd0 = hvx_vec_mul_f32_f32(vmax0, v_inv_127);
     HVX_Vector vd1 = hvx_vec_mul_f32_f32(vmax1, v_inv_127);
@@ -2115,10 +2116,10 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_cm(
     HVX_Vector v_d0123 = Q6_V_lo_W(Q6_W_vshuff_VVR(v_d13, v_d02, -4));
     hvx_vec_store_u(d_a_out, 4 * sizeof(float), v_d0123);
 
-    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_127), Q6_V_vzero());
-    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_127), Q6_V_vzero());
-    HVX_Vector v_inv2 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero());
-    HVX_Vector v_inv3 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero());
+    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_127), Q6_V_vzero());
+    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_127), Q6_V_vzero());
+    HVX_Vector v_inv2 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero());
+    HVX_Vector v_inv3 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero());
 
     const HVX_Vector v_min_127 = Q6_Vh_vsplat_R(-127);
     const HVX_Vector v_max_127 = Q6_Vh_vsplat_R(127);
@@ -2151,8 +2152,8 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_cm(
     }
 }
 
-// Quantize one superblock g (k_group columns, multiple of 32) of a 4-row FP16 group into W8A8 :cm 64x32 tiles.
-static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_cm(
+// Quantize one superblock g (k_group columns, multiple of 32) of a 4-row FP16 group into W8A8 SM 64x32 tiles.
+static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_sm(
         uint8_t * restrict tile_row_base,
         float * restrict d_a_out,
         const __fp16 * restrict p0,
@@ -2198,6 +2199,7 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_cm(
 
     const HVX_Vector v_inv_127 = hvx_vec_splat_f32(1.0f / 127.0f);
     const HVX_Vector v_127     = hvx_vec_splat_f32(127.0f);
+    const HVX_Vector v_eps     = hvx_vec_splat_f32(1e-30f);
 
     HVX_Vector vd0 = hvx_vec_mul_f32_f32(vmax0, v_inv_127);
     HVX_Vector vd1 = hvx_vec_mul_f32_f32(vmax1, v_inv_127);
@@ -2208,10 +2210,10 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_cm(
     HVX_Vector v_d0123 = Q6_V_lo_W(Q6_W_vshuff_VVR(v_d13, v_d02, -4));
     hvx_vec_store_u(d_a_out, 4 * sizeof(float), v_d0123);
 
-    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_127), Q6_V_vzero());
-    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_127), Q6_V_vzero());
-    HVX_Vector v_inv2 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero());
-    HVX_Vector v_inv3 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero());
+    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_127), Q6_V_vzero());
+    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_127), Q6_V_vzero());
+    HVX_Vector v_inv2 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero());
+    HVX_Vector v_inv3 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero());
 
     const HVX_Vector v_min_127 = Q6_Vh_vsplat_R(-127);
     const HVX_Vector v_max_127 = Q6_Vh_vsplat_R(127);
@@ -2278,14 +2280,15 @@ static __attribute__((noinline)) void quantize_act_superblock_pair_f32_to_u16_sm
 
     const HVX_Vector v_inv_32766 = hvx_vec_splat_f32(1.0f / 32766.0f);
     const HVX_Vector v_32766     = hvx_vec_splat_f32(32766.0f);
+    const HVX_Vector v_eps       = hvx_vec_splat_f32(1e-30f);
 
     HVX_Vector vd0   = hvx_vec_mul_f32_f32(vmax0, v_inv_32766);
     HVX_Vector vd1   = hvx_vec_mul_f32_f32(vmax1, v_inv_32766);
     HVX_Vector v_d01 = Q6_V_lo_W(Q6_W_vshuff_VVR(vd1, vd0, -4));
     hvx_vec_store_u(d_a_out, 2 * sizeof(float), v_d01);
 
-    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_32766), Q6_V_vzero());
-    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_32766), Q6_V_vzero());
+    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_32766), Q6_V_vzero());
+    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_32766), Q6_V_vzero());
 
     const HVX_Vector v_zp_32768 = Q6_Vh_vsplat_R(0x8000);
 
@@ -2342,14 +2345,15 @@ static __attribute__((noinline)) void quantize_act_superblock_pair_f16_to_u16_sm
 
     const HVX_Vector v_inv_32766 = hvx_vec_splat_f32(1.0f / 32766.0f);
     const HVX_Vector v_32766     = hvx_vec_splat_f32(32766.0f);
+    const HVX_Vector v_eps       = hvx_vec_splat_f32(1e-30f);
 
     HVX_Vector vd0   = hvx_vec_mul_f32_f32(vmax0, v_inv_32766);
     HVX_Vector vd1   = hvx_vec_mul_f32_f32(vmax1, v_inv_32766);
     HVX_Vector v_d01 = Q6_V_lo_W(Q6_W_vshuff_VVR(vd1, vd0, -4));
     hvx_vec_store_u(d_a_out, 2 * sizeof(float), v_d01);
 
-    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_32766), Q6_V_vzero());
-    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, Q6_V_vzero()), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_32766), Q6_V_vzero());
+    HVX_Vector v_inv0 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax0, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax0), v_32766), Q6_V_vzero());
+    HVX_Vector v_inv1 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax1, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax1), v_32766), Q6_V_vzero());
 
     const HVX_Vector v_zp_32768 = Q6_Vh_vsplat_R(0x8000);
 
@@ -2370,8 +2374,8 @@ static __attribute__((noinline)) void quantize_act_superblock_pair_f16_to_u16_sm
     }
 }
 
-// Core HMX W8A8 :cm dot-product kernel over all superblocks g = 0..n_groups-1.
-static void core_dot_chunk_w8a8_cm(
+// Core HMX W8A8 SM dot-product kernel over all superblocks g = 0..n_groups-1.
+static void core_dot_chunk_w8a8_sm(
         uint8_t * restrict vtcm_out,
         const uint8_t * restrict vtcm_act,
         const uint8_t * restrict vtcm_weight_tiles,
@@ -2409,7 +2413,7 @@ static void core_dot_chunk_w8a8_cm(
                 const uint8_t * a_ptr = act_base;
                 const uint8_t * w_ptr = wt_base;
                 while (rem > 0) {
-                    const uint32_t step  = (rem > 32) ? 32 : rem;
+                    const uint32_t step  = (rem > 64) ? 64 : rem;
                     const uint32_t a_rng = hmx_act_sm_range(step);
                     const uint32_t w_rng = hmx_wt_b_range(step * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
                     asm volatile(HMX_LOAD_MPY_DEEP_U8_S8_SM("%0", "%1", "%2", "%3")
@@ -2462,7 +2466,7 @@ static void core_dot_chunk_w8a16_2x1(
                 const uint8_t * a_ptr = act_base;
                 const uint8_t * w_ptr = wt_base;
                 while (rem > 0) {
-                    const uint32_t step  = (rem > 32) ? 32 : rem;
+                    const uint32_t step  = (rem > 64) ? 64 : rem;
                     const uint32_t a_rng = hmx_act_sm_range(step);
                     const uint32_t w_rng = hmx_wt_b_range(step * HTP_MM_HMX_WEIGHT_B_TILE_SIZE);
                     asm volatile(HMX_LOAD_MPY_DEEP_U8_S8_SM("%0", "%1", "%2", "%3")
@@ -2479,8 +2483,8 @@ static void core_dot_chunk_w8a16_2x1(
     }
 }
 
-// HVX Epilogue for W8A8 :cm output tiles -> FP32 DDR output with superblock scale accumulation.
-static void transfer_output_chunk_w8a8_cm_to_fp32_col_chunk(
+// HVX Epilogue for W8A8 SM output tiles -> FP32 DDR output with superblock scale accumulation.
+static void transfer_output_chunk_w8a8_sm_to_fp32_col_chunk(
         float * restrict dst,
         const float * restrict src2,
         const uint8_t * restrict vtcm_src,
@@ -2725,4 +2729,3 @@ static void transfer_output_chunk_w8a16_sm_to_fp32_col_chunk(
         }
     }
 }
-

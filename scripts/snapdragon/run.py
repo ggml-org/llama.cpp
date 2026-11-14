@@ -31,6 +31,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_VMEM",
     "GGML_HEXAGON_MBUF",
     "GGML_HEXAGON_MM_SELECT",
+    "GGML_HEXAGON_HMX_KGROUP",
     "GGML_HEXAGON_FA_SELECT",
     "GGML_HEXAGON_FA_HEAD_SPLIT",
     "GGML_HEXAGON_LI_SELECT",
@@ -218,7 +219,8 @@ def main():
     parser.add_argument("--hex-rt-repack", help="Runtime weight repacking mode (0: disabled, 1: quantized only, 2: always) (GGML_HEXAGON_RT_REPACK)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
     parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 512,1024,0) (GGML_HEXAGON_MBUF)")
-    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 4:HMX-W8A16,3:HMX-W8A8,2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-hmx-kgroup", help="HMX INT weight superblock K-group size (GGML_HEXAGON_HMX_KGROUP)")
     parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-fa-head-split", help="Enable (1) or disable (0) head-parallel flash_attn partitioning (GGML_HEXAGON_FA_HEAD_SPLIT)")
     parser.add_argument("--hex-li-select", help="Select Lightning Indexer kernel (GGML_HEXAGON_LI_SELECT) 2:HMX,1:HVX,0:disable")
@@ -375,6 +377,7 @@ def main():
     set_env("GGML_HEXAGON_VMEM", args.hex_vmem)
     set_env("GGML_HEXAGON_MBUF", args.hex_mbuf)
     set_env("GGML_HEXAGON_MM_SELECT", args.hex_mm_select)
+    set_env("GGML_HEXAGON_HMX_KGROUP", args.hex_hmx_kgroup)
     set_env("GGML_HEXAGON_FA_SELECT", args.hex_fa_select)
     set_env("GGML_HEXAGON_FA_HEAD_SPLIT", args.hex_fa_head_split)
     set_env("GGML_HEXAGON_LI_SELECT", args.hex_li_select)
