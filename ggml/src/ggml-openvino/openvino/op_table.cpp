@@ -34,6 +34,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
     return {
         {"GGML_OP_ADD",             op::translate_add                              },
         {"GGML_OP_ADD_ID",          op::translate_add_id                           },
+        {"GGML_OP_ARANGE",          op::translate_arange                           },
         {"GGML_OP_CONCAT",          op::translate_concat                           },
         {"GGML_OP_CONT",            op::translate_cont                             },
         {"GGML_OP_DUP",             op::translate_cont                             },
@@ -95,6 +96,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_FLASH_ATTN_EXT",  op::translate_flash_attn_ext                   },
         {"GGML_OP_CLAMP",           op::translate_clamp                            },
         {"GGML_OP_PAD",             op::translate_pad                              },
+        {"GGML_OP_TOP_K",           op::translate_top_k                            },
         {"GGML_OP_SSM_CONV",        op::translate_ssm_conv                         },
         {"GGML_OP_GATED_DELTA_NET", op::translate_gated_delta_net                  },
         {"GGML_OP_REPEAT",          op::translate_repeat                           },
@@ -103,6 +105,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_DIAG",            op::translate_diag                             },
         {"GGML_OP_TRI",             op::translate_tri                              },
         {"GGML_OP_SET",             op::translate_set                              },
+        {"GGML_OP_POOL_1D",         op::translate_pool_1d                          },
         {"GGML_OP_POOL_2D",         op::translate_pool_2d                          },
         {"GGML_OP_ROLL",            op::translate_roll                             },
         {"GGML_OP_UPSCALE",         op::translate_upscale                          },

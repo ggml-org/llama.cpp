@@ -62,9 +62,36 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
                                                            bool stateful = false,
                                                            int64_t head_dim = 0);
 
+// If `weights` is a dequantization chain emitted by make_int4_weights/make_int8_weights, rebuild
+// it with `indices` gathered out of the leaf Constants, so a row lookup reads the packed rows and
+// dequantizes only those. Returns nullptr if the subgraph is not such a chain, or is too small to
+// be worth the rewrite. Used for tied embeddings, where the same weight also feeds the lm_head
+// matmul: gathering the dequantized table would give that chain a second consumer and force it to
+// be materialized in full.
+std::shared_ptr<ov::Node> gather_compressed_rows(const ov::Output<ov::Node> & weights,
+                                                 const ov::Output<ov::Node> & indices);
+
 ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len = 0, int axis = -1);
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index);
+
+// A KQ mask input. Stateful execution reads the mask parameters through the masks rebuilt from the positions (see
+// add_sliced_mask_stateful); any other input, e.g. the mask rows gemma-4 gathers for its KV-shared layers, as is.
+ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index);
+
+// A stateless KV cache in the [1, ctx, n_heads_kv, head_size] layout (GgmlOvDecoder::is_kvcache_4d), as opposed to
+// [1, n_seq, ctx, n_heads_kv * head_size]
+inline bool is_kvcache_4d_shape(const ov::PartialShape & shape) {
+    return shape.rank().is_static() && shape.rank().get_length() == 4 && shape[1].is_dynamic() &&
+           shape[2].is_static() && shape[3].is_static();
+}
+
+// rt_info key on the Reshape that restores the heads after a grouped-query MUL_MAT (mulmat): the number of A rows
+// stacked per B matrix
+constexpr const char * GGML_OV_GROUPED_ROWS = "ggml_ov_grouped_rows";
+
+// rt_info key on the stateful V cache read with `-fa off` (permute): V is [.., kv, head_size], not transposed
+constexpr const char * GGML_OV_V_TOKEN_MAJOR = "ggml_ov_v_token_major";
 
 namespace op {
 template <typename T> OutputVector translate_1to1_match_2_inputs(const NodeContext & context) {

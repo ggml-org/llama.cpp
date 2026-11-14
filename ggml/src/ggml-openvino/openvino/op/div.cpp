@@ -66,6 +66,10 @@ ov::Output<ov::Node> repeat_input_to_match(const NodeContext & context,
             const int64_t input_dim = input_shape[axis].get_length();
             const int64_t target_dim = target_shape[axis].get_length();
 
+            // Empty token axes can occur in a MoE warmup with no logits.
+            if (input_dim == target_dim) {
+                continue;
+            }
             FRONT_END_OP_CONVERSION_CHECK(input_dim > 0 && target_dim > 0 && target_dim % input_dim == 0,
                                           "DIV input shape ", input_shape, " cannot repeat to match ", target_shape);
 
