@@ -16,6 +16,8 @@ if (EMSCRIPTEN)
 else()
     add_subdirectory(batched)
     add_subdirectory(debug)
+    add_subdirectory(diffusion-gemma-eval)
+    add_subdirectory(diffusion-gemma-server)
     add_subdirectory(embedding)
     add_subdirectory(eval-callback)
 
