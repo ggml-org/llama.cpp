@@ -785,12 +785,28 @@ void llama_context::sched_new(const sched_params & params) {
     sched_params_cur = params;
 }
 
+// the names of the samplers in a backend sampler chain
+// parameters such as the top-k value are not part of it: if a later chain needs larger buffers, the scheduler grows them
+static std::string llama_sampler_chain_shape(llama_sampler * smpl) {
+    std::string shape = llama_sampler_name(smpl);
+    for (int32_t i = 0; i < llama_sampler_chain_n(smpl); ++i) {
+        shape += '|';
+        shape += llama_sampler_name(llama_sampler_chain_get(smpl, i));
+    }
+    return shape;
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
     }
 
     sched_need_reserve = false;
+
+    sampling.samplers_reserved.clear();
+    for (const auto & [seq_id, smpl] : sampling.samplers) {
+        sampling.samplers_reserved[seq_id] = llama_sampler_chain_shape(smpl);
+    }
 
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
@@ -1095,7 +1111,29 @@ enum llama_pooling_type llama_context::pooling_type() const {
 float * llama_context::get_logits() {
     output_reorder();
 
+    for (size_t row = 0; row < logits_deferred.size(); ++row) {
+        logits_fetch_deferred(row);
+    }
+
     return logits.data;
+}
+
+void llama_context::logits_fetch_deferred(int64_t row) {
+    if ((size_t) row >= logits_deferred.size() || logits_deferred[row] < 0) {
+        return;
+    }
+
+    // a graph reset or reserve since the decode drops the graph that holds the rows
+    ggml_tensor * t_logits = gf_res_prev_active ? gf_res_prev_active->get_logits() : nullptr;
+    if (t_logits == nullptr) {
+        return;
+    }
+
+    const int64_t n_vocab = model.vocab.n_tokens();
+
+    ggml_backend_tensor_get(t_logits, logits.data + row*n_vocab, logits_deferred[row]*t_logits->nb[1], n_vocab*sizeof(float));
+
+    logits_deferred[row] = -1;
 }
 
 int64_t llama_context::output_resolve_row(int32_t i) const {
@@ -1136,6 +1174,7 @@ float * llama_context::get_logits_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
+        logits_fetch_deferred(j);
         return logits.data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
@@ -1731,7 +1770,14 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampling.samplers[seq_id] = sampler;
 
-        sched_need_reserve = true;
+        // a server sets the sampler again for every request, so reserve only for a chain shape the last reserve did not include
+        const auto it = sampling.samplers_reserved.find(seq_id);
+        if (it == sampling.samplers_reserved.end() || it->second != llama_sampler_chain_shape(sampler)) {
+            sched_need_reserve = true;
+        }
+
+        // do not reuse a graph built for the previous sampler, even if the new sampler has the same address
+        gf_res_prev_active = nullptr;
 
         return true;
     }
@@ -1748,9 +1794,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
         return false;
     }
 
+    // removing a sampler only removes nodes from the graph, so the reserved buffers are still large enough
     sampling.samplers.erase(seq_id);
-
-    sched_need_reserve = true;
 
     return true;
 }
@@ -1937,6 +1982,9 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
     }
+
+    // the encoder graph replaces the graph that holds the deferred logits
+    logits_deferred.clear();
 
     sched_reserve();
 
@@ -2306,6 +2354,8 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         llama_sampler_backend_begin(entry.second);
     }
 
+    logits_deferred.assign(n_outputs_all, -1);
+
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
 
@@ -2410,18 +2460,24 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             t_embd = res->get_embd_pooled();
         }
 
-        // extract logits
-        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
-            ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
-            GGML_ASSERT(backend_res != nullptr);
-            GGML_ASSERT(logits.data != nullptr);
+        // extract logits; backend-sampled rows of the last ubatch stay on the device until first access
+        if (logits.data && t_logits && n_outputs > 0) {
+            if (n_tokens_prev + ubatch.n_tokens == n_tokens_all && !needs_raw_logits(ubatch, sampling.samplers)) {
+                for (int32_t i = 0; i < (int32_t) n_outputs; ++i) {
+                    logits_deferred[n_outputs_prev + i] = i;
+                }
+            } else {
+                ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+                GGML_ASSERT(backend_res != nullptr);
+                GGML_ASSERT(logits.data != nullptr);
 
-            float * logits_out = logits.data + n_outputs_prev*n_vocab;
+                float * logits_out = logits.data + n_outputs_prev*n_vocab;
 
-            if (n_outputs) {
-                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
-                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                if (n_outputs) {
+                    GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                    GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
+                }
             }
         }
 
@@ -2825,6 +2881,10 @@ void llama_context::output_reorder() {
             for (uint64_t k = 0; k < n_vocab; k++) {
                 std::swap(logits.data[i0*n_vocab + k], logits.data[i1*n_vocab + k]);
             }
+        }
+
+        if (std::max(i0, i1) < logits_deferred.size()) {
+            std::swap(logits_deferred[i0], logits_deferred[i1]);
         }
 
         if (embd.size > 0) {
@@ -4686,6 +4746,12 @@ float * llama_get_logits(llama_context * ctx) {
     ctx->synchronize();
 
     return ctx->get_logits();
+}
+
+float * llama_get_raw_logits_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_logits_ith(i);
 }
 
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {

@@ -349,6 +349,11 @@ private:
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
 
+    // per logits row: its row in the logits of the last ubatch while it is still on the device, -1 when the host row is current
+    std::vector<int32_t> logits_deferred;
+
+    void logits_fetch_deferred(int64_t row);
+
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
     buffer_view<float> embd = {nullptr, 0};
@@ -366,6 +371,9 @@ private:
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
         std::map<llama_seq_id, llama_sampler *> samplers;
+
+        // the chain shape of each sampler included in the last sched_reserve()
+        std::map<llama_seq_id, std::string> samplers_reserved;
 
         buffer_view<float>       logits     = {nullptr, 0};
         buffer_view<llama_token> sampled    = {nullptr, 0};
