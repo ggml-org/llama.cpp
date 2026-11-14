@@ -253,7 +253,7 @@
   <div class="sideFoot">
     <div>学习进度 <span id="pctText">0%</span></div>
     <div class="bar"><i id="pctBar"></i></div>
-    <div id="seenText">已浏览 0 / 13 章</div>
+    <div id="seenText">已浏览 0 / 14 章</div>
   </div>
 </aside>
 
@@ -267,7 +267,7 @@
   学会测量、建立成本模型、识别瓶颈、做带质量门禁的优化，并理解"音色"究竟是怎么被模型学会的。
   所有数字都来自这个仓库里的真实实验，包含被否定的方案。</p>
   <div class="heroChips">
-    <span class="chip"><b>0.898 → 0.694</b> RTF 演进</span>
+    <span class="chip"><b>0.898 → 0.677</b> RTF 演进</span>
     <span class="chip"><b>15</b> 步串行 depth decode</span>
     <span class="chip"><b>16 × 2051</b> codebook</span>
     <span class="chip"><b>77%</b> 墙钟在 depth</span>
@@ -1933,6 +1933,132 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
     <div class="answer">因为首包的成本是 depth 与 codec <b>相加</b>而不是取 max（流水线还没填满）。<code>--first 1</code> 让 depth 少跑一帧（约 −31.7 ms，加上后续调度约 −75 ms），但 codec 要为一个 chunk 单独调用一次，单帧调用的固定开销让 <code>codec_s</code> 从 2.77 涨到 2.87 s，多花约 80 ms，两者抵消。实测 0.401 vs 0.387 s。要让它转正，得先把 codec 的单次调用开销降下来——所以这个开关的价值不是「现在能用」，而是<b>把复活条件写清楚</b>，等 codec 捆绑改造落地后只需重跑一次。</div></details>
 
   <div class="chapterDone"><button class="doneBtn" data-ch="ch12">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch13" data-title="从实验室到产品：环境漂移与配置税">
+  <h2>从实验室到产品：环境漂移与配置税</h2>
+  <p>这一章的任务本来是「测热漂移」——把那个「同代码连续跑 RTF 0.75→0.91（+21%）」的旧结论坐实。结果测出两件事：<b>热根本不是问题</b>，而<b>产品路径一直比调优路径慢 8%</b>。前者教会你怎么读环境数据，后者值 10% 的墙钟。</p>
+
+  <h3>13.1 热基线：温度上去了，时间没动</h3>
+  <p>用常驻 server（真实产品路径）跑 33 次：静置 2 分钟后连续 6 次、再连续 24 次（占空比约 97%）、静置 3 分钟后 3 次。每次请求前后各采一次温度与频率。判据用 <b>ms/帧</b>，不用 RTF——分母会随输出长度变。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="连续 33 次请求中 NPU 温度持续上升而每帧耗时保持水平的双折线图">
+      <title>温度在涨，每帧耗时不动</title>
+      <desc>33 次连续请求期间 nsphvx-0 从 42 度升到 51 度，而每帧耗时始终在 57.4 到 59.1 毫秒之间波动，二者相关系数为负 0.36。</desc>
+      <text class="dg-tb" x="24" y="26">常驻 server · 33 次连续请求 · 每帧耗时 vs NPU 温度</text>
+
+      <path class="dg-grid" d="M70 220 H630"/>
+      <path class="dg-grid" d="M70 60 V220"/>
+
+      <polyline fill="none" stroke="var(--acc2)" stroke-width="2"
+        points="70,195 88,175 105,170 122,160 140,155 158,150 175,145 192,145 210,145 228,140 245,140 262,135 280,135 298,130 315,85 332,110 350,120 368,125 385,125 402,125 420,120 438,125 455,115 472,120 490,115 508,115 525,125 542,110 560,115 578,115 595,175 612,160 630,150"/>
+      <polyline fill="none" stroke="var(--acc)" stroke-width="2"
+        points="70,179 88,190 105,188 122,186 140,190 158,188 175,193 192,188 210,184 228,189 245,190 262,182 280,192 298,195 315,193 332,194 350,188 368,191 385,194 402,188 420,185 438,194 455,186 472,193 490,189 508,189 525,191 542,185 560,194 578,183 595,189 612,186 630,175"/>
+
+      <text class="dg-t" x="452" y="78" style="fill:var(--acc2)">NPU 42 → 51 °C</text>
+      <text class="dg-t" x="470" y="205" style="fill:var(--acc)">ms/帧 57.4 – 59.1</text>
+
+      <text class="dg-ts" x="70" y="242">cold 6</text>
+      <text class="dg-ts" x="200" y="242">soak 24（连续）</text>
+      <text class="dg-ts" x="452" y="242">静置 3 min（回落）</text>
+      <text class="dg-ts" x="580" y="242">post 3</text>
+      <path class="dg-grid" d="M580 60 V220"/>
+
+      <text class="dg-tacc" x="24" y="272">首 6 次中位 58.00 ms ／ 末 6 次 58.19 ms → +0.3%</text>
+      <text class="dg-ts" x="24" y="292">corr(温度, 每帧耗时) = −0.36；33 次全距 2.8%。RTF 全程 0.745–0.766，从未接近 1</text>
+      </svg>
+    </div>
+    <figcaption>图 13-1　紫线（温度）一路向上，蓝线（每帧耗时）原地不动。<b>温度升高不等于降频</b>——要看的是有没有跨过阈值。</figcaption>
+  </figure>
+
+  <table>
+    <thead><tr><th>组</th><th>ms/帧 min / 中位 / max</th><th>首段 → 末段</th><th>温度</th></tr></thead>
+    <tbody>
+      <tr><td>server 33 次</td><td>57.42 / <b>57.93</b> / 59.06</td><td>58.00 → 58.19（+0.3%）</td><td>NPU 36.8→51.6 °C</td></tr>
+      <tr><td>CLI 12 次（对照）</td><td>53.64 / <b>54.45</b> / 55.53</td><td>54.70 → 54.67（0.0%）</td><td>NPU 44.4→48.0 °C</td></tr>
+    </tbody>
+  </table>
+
+  <p>温度确实涨了：NPU +14.8 K、DSP +18.8 K、DDR +14 K，但 <code>shell_front</code> 只有 31–34 °C——整机在帮忙散热，单点温度远没到降频阈值（一般 80–95 °C）。静置 3 分钟后 NPU 从 46 回落到 37.6 °C。所以：</p>
+  <div class="callout ok"><span class="tagline">结论</span>
+    在占空比 ~97%、连续 8 分钟、峰值 52 °C 的条件下<b>没有热降频</b>。「+21% 漂移」应标记为<b>环境相关、未复现</b>，不再当基线引用；真实的环境漂移量级是 <b>4%</b>（同一配置两次测到 3.977 vs 4.164 s），所以交替轮次的做法仍要保留。</div>
+
+  <h3>13.2 意外：两条路径根本不同参</h3>
+  <p>热基线里有一组数字对不上：server 每帧 57.9 ms，CLI 54.2 ms，<b>产品路径慢 7%</b>。更奇怪的是分项——server 的 backbone 更快、depth 更快、codec 甚至快 0.6 s，墙钟却更高，说明差的是一段<b>不属于任何分项的固定残差</b>（0.197 s 涨到 0.65 s）。</p>
+  <p>翻代码找到了：wav 分支里写死了 <code>set_chunking(4, 16)</code>，注释是「whole-file 渲染不受延迟约束，用大批次摊薄 ONNX 调用开销」。这句话在写下的那天成立——当时 codec 是瓶颈。但 KV32 转正后 depth 与 codec 只差 1.15%，16 帧一批意味着 codec 每次要嚼 1.28 s 音频，期间 depth 早已跑完空等。而所有 CLI 调优实验用的是 <code>(2, 4)</code>。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="四组分块配置的墙钟柱状图，批次越大墙钟越高而 codec 耗时越低">
+      <title>批次越大，codec 越快，墙钟越慢</title>
+      <desc>从 2/4 到 4/16，codec 耗时从 2.47 秒降到 2.25 秒，但墙钟从 3.60 秒升到 4.00 秒，因为省下的是并行分支上的时间。</desc>
+      <text class="dg-tb" x="24" y="26">wav 路径 (first, chunk) 扫描 · 每组 6 次 · 同一条 69 帧句子</text>
+
+      <path class="dg-grid" d="M60 230 H640"/>
+
+      <rect class="dg-bar3" x="70" y="101" width="56" height="128" rx="3"/>
+      <text class="dg-tacc" x="82" y="92">3.596</text>
+      <text class="dg-ts" x="86" y="250">2, 4</text>
+      <text class="dg-ts" x="72" y="268">codec 2.47</text>
+
+      <rect class="dg-bar" x="210" y="96" width="56" height="133" rx="3"/>
+      <text class="dg-ts" x="228" y="88">3.729</text>
+      <text class="dg-ts" x="226" y="250">4, 8</text>
+      <text class="dg-ts" x="212" y="268">codec 2.33</text>
+
+      <rect class="dg-bar" x="350" y="89" width="56" height="140" rx="3"/>
+      <text class="dg-ts" x="368" y="81">3.930</text>
+      <text class="dg-ts" x="362" y="250">2, 16</text>
+      <text class="dg-ts" x="352" y="268">codec 2.25</text>
+
+      <rect class="dg-bar" x="490" y="87" width="56" height="143" rx="3"/>
+      <text class="dg-ts" x="508" y="79">4.000</text>
+      <text class="dg-ts" x="502" y="250">4, 16</text>
+      <text class="dg-ts" x="492" y="268">codec 2.25</text>
+
+      <text class="dg-ts" x="490" y="292" style="fill:var(--warn)">旧默认</text>
+      <text class="dg-tacc" x="70" y="292">新默认（墙钟 −10%）</text>
+      <text class="dg-ts" x="24" y="44">柱高 = elapsed（s）</text>
+      </svg>
+    </div>
+    <figcaption>图 13-2　从左到右批次越来越大：codec 耗时一路下降（2.47 → 2.25），墙钟却一路上升（3.60 → 4.00）。<b>省在并行分支上的时间不会变成墙钟</b>。</figcaption>
+  </figure>
+
+  <table>
+    <thead><tr><th>(first, chunk)</th><th>elapsed</th><th>ms/帧</th><th>首包</th><th>codec_s</th><th>WAV</th></tr></thead>
+    <tbody>
+      <tr><td><b>(2, 4) 新默认</b></td><td><b>3.596</b></td><td><b>52.1</b></td><td><b>0.270</b></td><td>2.47</td><td><code>2f30728f</code></td></tr>
+      <tr><td>(4, 8)</td><td>3.729</td><td>54.0</td><td>0.405</td><td>2.33</td><td><code>405830fa</code></td></tr>
+      <tr><td>(2, 16)</td><td>3.930</td><td>57.0</td><td>0.270</td><td>2.25</td><td><code>2f30728f</code></td></tr>
+      <tr><td>(4, 16) 旧默认</td><td>4.000</td><td>58.0</td><td>0.411</td><td>2.25</td><td><code>405830fa</code></td></tr>
+    </tbody>
+  </table>
+
+  <p>转正后生产实测：<code>elapsed 3.567–3.614 s</code>、<code>first_pcm 0.262–0.344 s</code>、WAV 哈希 <code>2f30728f4d6f</code>。<b>零模型改动，墙钟 −10%、首包 −34%。</b></p>
+
+  <h3>13.3 等价性：哈希变了不等于音频变了</h3>
+  <p>(2,4) 的 WAV 与 CLI <b>逐字节相同</b>——默认 seed 就是 1234，所以产品路径终于和所有调优实验同源。但 (4,16) 与 (2,4) 的哈希不同，得看差在哪：127,680 个样本里 <b>1,379 个不同（1.08%）</b>，全部集中在 <b>5.032–5.090 s</b> 这一个 overlap 窗口，最大幅度 1,299/32,767（约 4%）。这是 codec overlap-add 在不同批次下的累加差异，不是边界断裂；两份转写文本完全一致。</p>
+  <div class="grid2">
+    <div class="tile"><b>看位置，不只看有没有</b><p>差异集中在某个 chunk 边界 = 累加顺序；铺满全程 = 语义变了。前者可以过，后者必须否决。</p></div>
+    <div class="tile"><b>哈希是门禁不是判据</b><p>本项目的经验是「哈希不同 → 再量差异」；(4,16) 与 (2,4) 差 1%，但听感要人耳确认。</p></div>
+  </div>
+
+  <h3>13.4 方法论</h3>
+  <ol>
+    <li><b>温度要作为协变量记录</b>，否则「变慢」永远无法归因；判漂移用 ms/帧，别用 RTF。</li>
+    <li><b>历史漂移先复现再当问题</b>：复现失败就写清环境，而不是继续在模型里找原因。</li>
+    <li><b>产品路径与调优路径必须同参</b>：所有 CLI 实验是 (2,4)、线上是 (4,16)，「线上 0.78 vs CLI 0.71」被当成口径差解释了好几轮，实际是配置差。</li>
+    <li><b>配置税是真实存在的优化项</b>：它不在模型里也不在 kernel 里，但值 10%。每换一次基线，就该重扫一遍「当初为了让 A 变快而选的 B」。</li>
+  </ol>
+
+  <details class="qa"><summary>Q13　温度涨了 15 K，为什么每帧耗时一点没变？</summary>
+    <div class="answer">因为没跨过降频阈值。这次峰值只有 52 °C（DSP 55.6 °C），而典型 throttle 在 80–95 °C；同时 <code>shell_front</code> 只有 31–34 °C，说明整机（后盖、边框）在吸收热量，SoC 的结温远没有到需要降频的程度。另一个原因是热时间常数：单次合成 4 s、间隔 0.1 s，8 分钟只够把温度抬 15 K，还没到稳态。<b>「温度升高」和「性能下降」之间隔着一条阈值线</b>，中间还有 DVFS 的调整空间；判断有没有降频要看每帧耗时或实际频率，不能看温度本身。</div></details>
+  <details class="qa"><summary>Q14　codec 从 2.47 s 降到 2.25 s（−9%），墙钟为什么反而慢了 11%？</summary>
+    <div class="answer">因为 codec 在 <code>max()</code> 的<b>非瓶颈侧</b>。批次从 4 帧加到 16 帧，每次 ONNX 调用的固定开销被摊薄，codec 自身确实快了；但 16 帧意味着 codec 每次要连续工作约 640 ms，而这期间 depth 已经产出下一批并进入等待，流水线出现空转。于是「省下来的 codec 时间」没有变成墙钟，反而因为等待和批次边界损失了更多。<b>这和「codec 单独 −20% 收益为 0」是同一条规律的加强版：有时候它不只是 0，还会变成负数。</b></div></details>
+
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch13">标记本章已学完</button></div>
 </section>
 
 <footer>

@@ -49,6 +49,14 @@ constexpr int kVocab = 2051;      // codes are in [0, kVocab)
 constexpr int kMaxVoiceFrames = 375;  // 30 s at 12.5 fps
 constexpr int kSampleRate = 24000;
 
+// Reads an integer from the environment, falling back when unset/blank. Used
+// for the A/B knobs that must be changeable without touching the build.
+int env_int(const char * name, int fallback) {
+    const char * v = getenv(name);
+    if (!v || !*v) return fallback;
+    return atoi(v);
+}
+
 // ---------- minimal JSON reading (request bodies, voices.json) ----------
 
 bool parse_json_string(const std::string & s, size_t & at, std::string & out) {
@@ -1235,7 +1243,13 @@ int main(int argc, char ** argv) {
             send_error(res, 404, err);
             return;
         }
-        st.engine.set_chunking(4, 16);
+        // 2/4 keeps the codec and depth branches overlapped: the old 4/16 split
+        // was tuned when codec was the bottleneck, but after the depth KV32
+        // change 16-frame codec bursts leave the pipeline idling (4.00 s vs
+        // 3.60 s wall on the 69-frame sentence) and also delay the first
+        // packet. 2/4 additionally reproduces the CLI's canonical waveform
+        // bit-for-bit. M5_WAV_FIRST / M5_WAV_CHUNK re-tune without a rebuild.
+        st.engine.set_chunking(env_int("M5_WAV_FIRST", 2), env_int("M5_WAV_CHUNK", 4));
         st.engine.clear_stop();
         m5::Stats stats;
         std::string wav;
