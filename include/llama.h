@@ -228,6 +228,15 @@ extern "C" {
         LLAMA_CONTEXT_TYPE_MTP     = 1,
     };
 
+    // the head on the block of a DFlash draft model
+    enum llama_dflash_variant {
+        LLAMA_DFLASH_VARIANT_NONE     = -1, // not a DFlash draft model
+        LLAMA_DFLASH_VARIANT_DFLASH   = 0,
+        LLAMA_DFLASH_VARIANT_DFLASH2  = 1,
+        LLAMA_DFLASH_VARIANT_DSPARK   = 2,
+        LLAMA_DFLASH_VARIANT_LILICORR = 3,
+    };
+
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
     typedef struct llama_token_data {
         llama_token id; // token id
@@ -666,6 +675,9 @@ extern "C" {
     //
     // NextN / speculative draft model queries
     //
+
+    // the DFlash variant the model loader picked from the head of the draft
+    LLAMA_API enum llama_dflash_variant llama_model_dflash_variant(const struct llama_model * model);
 
     // DFlash2 selector: number of candidate tokens the draft keeps per block position from its logits
     // (the packed lattice also holds the top_k x top_k pairwise transition scores); 0 if the model has no selector head
