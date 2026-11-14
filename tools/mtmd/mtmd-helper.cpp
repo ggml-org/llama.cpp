@@ -870,6 +870,10 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
     bool   use_video_config = false;
     double video_start_s    = 0.0; // start time of the video stream, to align the soundtrack
 
+    // size of the frames that ffmpeg gives without a scale filter
+    uint32_t raw_width  = 0;
+    uint32_t raw_height = 0;
+
     bool is_buf_input() const {
         return !input_buf.empty();
     }
@@ -881,7 +885,7 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         std::vector<const char *> cmd = {
             ffprobe_bin.c_str(),
             "-v", "quiet",
-            "-show_entries", "stream=width,height,r_frame_rate,nb_frames,duration,start_time",
+            "-show_entries", "stream=width,height,sample_aspect_ratio,r_frame_rate,nb_frames,duration,start_time:stream_side_data=rotation",
             "-select_streams", "v:0",
             "-of", "default=noprint_wrappers=1",
         };
@@ -910,6 +914,9 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         }
 
         mtmd_helper_video_src src;
+        int sar_num  = 1;
+        int sar_den  = 1;
+        int rotation = 0;
         char line[256];
         FILE * fp = probe_sp.stdout_pipe();
 
@@ -934,10 +941,29 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
                 src.duration = (float)atof(val);
             } else if (strcmp(key, "start_time") == 0 && strcmp(val, "N/A") != 0) {
                 video_start_s = atof(val);
+            } else if (strcmp(key, "sample_aspect_ratio") == 0) {
+                if (sscanf(val, "%d:%d", &sar_num, &sar_den) != 2) {
+                    sar_num = sar_den = 1; // N/A
+                }
+            } else if (strcmp(key, "rotation") == 0) {
+                rotation = atoi(val);
             }
         }
 
         probe_sp.stop();
+
+        // ffmpeg gives frames of the encoded size; the displayed size also has the pixel aspect ratio applied
+        raw_width  = src.width;
+        raw_height = src.height;
+        const double sar = sar_den > 0 ? (double) sar_num / sar_den : 1.0;
+        if (sar >= 0.1 && sar <= 10.0) { // the value is from the file, ignore it if it is not plausible
+            src.width = (uint32_t) std::nearbyint(src.width * sar);
+        }
+        // ffmpeg rotates the frames by default
+        if (rotation % 180 == 90 || rotation % 180 == -90) {
+            std::swap(raw_width, raw_height);
+            std::swap(src.width, src.height);
+        }
 
         if (src.width == 0 || src.height == 0 || src.fps <= 0.0f) {
             return false;
@@ -1028,18 +1054,19 @@ struct mtmd_helper_video : mtmd_helper_video_seq {
         }
 
         std::string vf;
+        const bool scale = info.width != raw_width || info.height != raw_height;
         if (!frame_indices.empty()) {
             // frames are picked by index in read_next_frame(); B=0 C=0.5 bicubic on RGB is closest to Pillow
-            if (out_width > 0 && out_height > 0) {
+            if (scale) {
                 char scale_buf[160];
                 snprintf(scale_buf, sizeof(scale_buf),
-                        "format=rgb24,scale=%d:%d:flags=bicubic+accurate_rnd+full_chroma_int:param0=0:param1=0.5",
-                        out_width, out_height);
+                        "format=rgb24,scale=%u:%u:flags=bicubic+accurate_rnd+full_chroma_int:param0=0:param1=0.5",
+                        info.width, info.height);
                 vf = scale_buf;
             }
         } else if (fps_target > 0.0f) {
-            if (out_width > 0 && out_height > 0) {
-                snprintf(fps_buf, sizeof(fps_buf), "fps=%.6f,scale=%d:%d", fps_target, out_width, out_height);
+            if (scale) {
+                snprintf(fps_buf, sizeof(fps_buf), "fps=%.6f,scale=%u:%u", fps_target, info.width, info.height);
             } else {
                 snprintf(fps_buf, sizeof(fps_buf), "fps=%.6f", fps_target);
             }
