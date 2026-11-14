@@ -68,8 +68,9 @@ def test_anthropic_messages_basic():
     assert isinstance(res.body["usage"]["input_tokens"], int), "input_tokens should be integer"
     assert isinstance(res.body["usage"]["output_tokens"], int), "output_tokens should be integer"
     assert res.body["usage"]["output_tokens"] > 0, "Should have generated some tokens"
-    # Anthropic API should NOT include timings
-    assert "timings" not in res.body, "Anthropic API should not include timings field"
+    # llama-server extension: timings are included so clients can read generation speed
+    assert "timings" in res.body, "Anthropic API should include timings field"
+    assert res.body["timings"]["predicted_n"] > 0
 
 
 def test_anthropic_messages_with_system():
@@ -197,6 +198,8 @@ def test_anthropic_messages_streaming():
     assert message_delta["delta"]["stop_reason"] in ["end_turn", "max_tokens"]
     assert "usage" in message_delta
     assert message_delta["usage"]["output_tokens"] > 0
+    assert "timings" in message_delta, "message_delta should include timings"
+    assert message_delta["timings"]["predicted_n"] > 0
 
     # Check message_stop
     message_stop = next(e for e in events if e["type"] == "message_stop")
