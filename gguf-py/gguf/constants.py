@@ -175,6 +175,7 @@ class Keys:
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
         TARGET_LAYERS                     = "{arch}.target_layers"
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
+        DSPARK_MARKOV_RANK                = "{arch}.dspark.markov_rank"
         BLOCK_SIZE                        = "{arch}.block_size"
         CONV_KERNEL_SIZE                  = "{arch}.conv_kernel_size"
         CONV_GROUP_SIZE                   = "{arch}.conv_group_size"
@@ -1462,6 +1463,13 @@ class MODEL_TENSOR(IntEnum):
     DSPARK_CONF_PROJ       = auto()  # confidence head
     DSPARK_JOINT_PROJ      = auto()  # rnn markov head
     DSPARK_MASK_EMBD       = auto()  # per-slot mask embeddings
+    DSPARK_FUSE            = auto()
+    DSPARK_NORM            = auto()
+    DSPARK_HIDDEN_OUT      = auto()
+    ATTN_K_CTX             = auto()
+    ATTN_V_CTX             = auto()
+    ATTN_K_CTX_NORM        = auto()
+    DFLARE_NORM            = auto()
     ENGRAM_KV              = auto()
     ENGRAM_GATE            = auto()
     DFLASH_ATTN_CONV_BASE  = auto()
@@ -2441,6 +2449,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_CONF_PROJ:          "conf_proj",
     MODEL_TENSOR.DSPARK_JOINT_PROJ:         "joint_proj",
     MODEL_TENSOR.DSPARK_MASK_EMBD:          "mask_embd",
+    MODEL_TENSOR.DSPARK_FUSE:               "dspark_fuse",
+    MODEL_TENSOR.DSPARK_NORM:               "dspark_norm",
+    MODEL_TENSOR.DSPARK_HIDDEN_OUT:         "dspark_hidden_out",
+    MODEL_TENSOR.ATTN_K_CTX:                "blk.{bid}.attn_k_ctx",
+    MODEL_TENSOR.ATTN_V_CTX:                "blk.{bid}.attn_v_ctx",
+    MODEL_TENSOR.ATTN_K_CTX_NORM:           "blk.{bid}.attn_k_ctx_norm",
+    MODEL_TENSOR.DFLARE_NORM:               "blk.{bid}.dflare_norm",
     MODEL_TENSOR.ENGRAM_KV:                 "blk.{bid}.engram_kv",
     MODEL_TENSOR.ENGRAM_GATE:               "blk.{bid}.engram_gate",
     MODEL_TENSOR.DFLASH_ATTN_CONV_BASE:     "blk.{bid}.attn_conv_base",
@@ -6317,6 +6332,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DSPARK_CONF_PROJ,
         MODEL_TENSOR.DSPARK_JOINT_PROJ,
         MODEL_TENSOR.DSPARK_MASK_EMBD,
+        MODEL_TENSOR.DSPARK_FUSE,
+        MODEL_TENSOR.DSPARK_NORM,
+        MODEL_TENSOR.DSPARK_HIDDEN_OUT,
+        MODEL_TENSOR.ATTN_K_CTX,
+        MODEL_TENSOR.ATTN_V_CTX,
+        MODEL_TENSOR.ATTN_K_CTX_NORM,
+        MODEL_TENSOR.DFLARE_NORM,
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE,
         MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ,
         MODEL_TENSOR.DFLASH_FFN_CONV_BASE,

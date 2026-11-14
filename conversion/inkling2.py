@@ -79,6 +79,20 @@ def _load_inkling2_hparams(dir_model: Path):
         return json.load(f)
 
 
+def _set_inkling2_vocab(model: TextModel):
+    tokens, types, pre = model.get_vocab_base()
+    model.gguf_writer.add_tokenizer_model("gpt2")
+    model.gguf_writer.add_tokenizer_pre(pre)
+    model.gguf_writer.add_token_list(tokens)
+    model.gguf_writer.add_token_types(types)
+    special = gguf.SpecialVocab(model.dir_model, load_merges=True)
+    eos = model.hparams.get("eos_token_id", 200006)
+    special.special_token_ids["eos"] = eos
+    special.special_token_ids["eot"] = eos
+    special.add_special_token["bos"] = False
+    special.add_to_gguf(model.gguf_writer)
+
+
 @ModelBase.register("Inkling2ForConditionalGeneration", "Inkling2ForCausalLM")
 @ModelBase.example("thinkingmachines/Inkling-2-Small")
 class Inkling2Model(TextModel):
@@ -100,7 +114,7 @@ class Inkling2Model(TextModel):
                             raise ValueError(f"Inkling2: duplicate hf_quant_config.json scheme for {name}")
                         self._expert_quant[name] = group
         super().__init__(dir_model, *args, **kwargs)
-        logger.warning("Inkling2: converting the text backbone only; vision and MTP tensors are skipped")
+        logger.warning("Inkling2: converting text only; use --mmproj for vision and --dspark for mtp.safetensors")
         hp = self.hparams
         for name, default in (("q_bias", False), ("o_bias", False), ("n_shared_experts", 0), ("use_value_norm_no_gamma", True), ("attn_res_normalize_values", True), ("scoring_func", "sigmoid")):
             if hp.get(name, default) != default:
@@ -212,17 +226,7 @@ class Inkling2Model(TextModel):
         return tokens[:n], types[:n], pre
 
     def set_vocab(self):
-        tokens, types, pre = self.get_vocab_base()
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre(pre)
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_types(types)
-        special = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        eos = self.hparams.get("eos_token_id", 200006)
-        special.special_token_ids["eos"] = eos
-        special.special_token_ids["eot"] = eos
-        special.add_special_token["bos"] = False
-        special.add_to_gguf(self.gguf_writer)
+        _set_inkling2_vocab(self)
 
     def set_gguf_parameters(self):
         hp = self.hparams
@@ -284,6 +288,76 @@ class Inkling2Model(TextModel):
             new_name = self.map_tensor_name(name, try_suffixes=())
             suffix = ".bias" if name.endswith(".e_score_correction_bias") else ".weight"
             yield new_name + suffix, data_torch
+        else:
+            yield from super().modify_tensors(data_torch, name, bid)
+
+
+class Inkling2DSparkModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, dir_model: Path, *args, **kwargs):
+        config = ModelBase.load_hparams(dir_model, False)
+        text = config.get("text_config", config)
+        mtp = config.get("mtp_config")
+        if not mtp:
+            raise ValueError("Inkling2 DSpark requires mtp_config")
+        targets = mtp["target_layer_ids"]
+        if (len(targets) < 2 or targets != sorted(set(targets)) or targets[0] < 0 or
+                targets[-1] != text["num_hidden_layers"] or mtp["hidden_size"] != text["hidden_size"] or
+                mtp["markov_head_type"] != "rnn_hidden" or mtp.get("q_bias") or mtp.get("o_bias")):
+            raise ValueError("Unsupported Inkling2 DSpark configuration")
+        if (mtp["block_size"] != 8 or not 0 < mtp["markov_rank"] <= mtp["hidden_size"] or
+                mtp["num_attention_heads"] < 1 or mtp["num_key_value_heads"] < 1 or
+                mtp["num_attention_heads"] % mtp["num_key_value_heads"] or mtp["head_dim"] < 2 or mtp["head_dim"] % 2 or
+                mtp["sliding_window_size"] < 1 or
+                any(i < 0 or i >= mtp["num_hidden_layers"] for i in mtp["local_layer_ids"])):
+            raise ValueError("Invalid Inkling2 DSpark dimensions")
+        hp = {**mtp, "architectures": ["Inkling2ForCausalLM"],
+              "vocab_size": text["vocab_size"], "unpadded_vocab_size": text["unpadded_vocab_size"],
+              "eos_token_id": text.get("eos_token_id", 200006),
+              "final_logit_softcapping": text["final_logit_softcapping"]}
+        super().__init__(dir_model, *args, hparams=hp, **kwargs)
+
+    def index_tensors(self, remote_hf_model_id=None):
+        if remote_hf_model_id is not None:
+            raise ValueError("Inkling2 DSpark requires a local mtp.safetensors")
+        if not (self.dir_model / "mtp.safetensors").is_file():
+            raise ValueError("Inkling2 DSpark requires mtp.safetensors")
+        return self.index_local_tensors("mtp")
+
+    def get_vocab_base(self):
+        tokens, types, pre = super().get_vocab_base()
+        n = self.hparams["unpadded_vocab_size"]
+        return tokens[:n], types[:n], pre
+
+    def set_vocab(self):
+        _set_inkling2_vocab(self)
+        self.gguf_writer.add_mask_token_id(0)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hp, w = self.hparams, self.gguf_writer
+        w.add_vocab_size(hp["vocab_size"])
+        w.add_uint32(gguf.Keys.LLM.VOCAB_SIZE_UNPADDED.format(arch="dflash"), hp["unpadded_vocab_size"])
+        w.add_block_size(hp["block_size"])
+        w.add_target_layers(hp["target_layer_ids"])
+        w.add_uint32(gguf.Keys.LLM.DSPARK_MARKOV_RANK.format(arch="dflash"), hp["markov_rank"])
+        w.add_sample_from_anchor(False)
+        w.add_has_confidence_head(False)
+        w.add_bool("dflash.attention.causal", False)
+        w.add_sliding_window(hp["sliding_window_size"])
+        w.add_sliding_window_pattern([i in hp["local_layer_ids"] for i in range(self.block_count)])
+        w.add_rope_dimension_count(hp["head_dim"])
+        w.add_final_logit_softcapping(hp["final_logit_softcapping"])
+
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        if name == "fuse_weight":
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name in ("mask_embed", "fuse_weight"):
+            yield self.map_tensor_name(name, try_suffixes=()) + ".weight", data_torch
         else:
             yield from super().modify_tensors(data_torch, name, bid)
 

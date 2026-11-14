@@ -2143,7 +2143,7 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
     return false; // all sequences use backend sampling
 }
 
-int llama_context::decode(const llama_batch_ext & batch_inp) {
+int llama_context::decode(const llama_batch_ext & batch_inp, llm_graph_type gtype) {
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -2370,7 +2370,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
         ggml_status status;
 
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, gtype == LLM_GRAPH_TYPE_DEFAULT ? ctx_type_to_graph_type(cparams.ctx_type) : gtype, mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2909,6 +2909,7 @@ uint32_t llama_context::graph_max_nodes() const {
         model.arch == LLM_ARCH_HRM_TEXT) {
         res = std::max<uint32_t>(1024u, 64u * model.n_tensors());
     } else if (model.arch == LLM_ARCH_INKLING2 ||
+        model.hparams.dspark_markov_rank > 0 ||
         model.arch == LLM_ARCH_QWEN3NEXT ||
         model.arch == LLM_ARCH_KIMI_LINEAR ||
         model.arch == LLM_ARCH_METIS16 ||
@@ -5189,4 +5190,55 @@ llama_memory_breakdown llama_get_memory_breakdown(const struct llama_context * c
 
 llama_context * llama_get_ctx_other(struct llama_context * ctx) {
     return ctx->get_cparams().ctx_other;
+}
+
+int32_t llama_draft_backbone(llama_context * ctx, const llama_batch_ext * batch) {
+    if (!ctx || !batch || !llama_get_model(ctx)->hparams.dspark_markov_rank) {
+        return -1;
+    }
+    return ctx->decode(*batch, LLM_GRAPH_TYPE_DRAFT_BACKBONE);
+}
+
+bool llama_context::draft_step(llama_token token, llama_embd hidden, llama_embd base, llama_embd context,
+        std::vector<float> & state, std::vector<float> & logits_out) {
+    const auto & hp = model.hparams;
+    const size_t width = hp.n_embd;
+    const size_t vocab = model.vocab.n_tokens();
+    const auto valid = [](llama_embd x, size_t n) { return x.data && x.n_rows == 1 && x.n_embd == n; };
+    if (!hp.dspark_markov_rank || !cparams.ctx_other || token < 0 || size_t(token) >= vocab ||
+            !valid(hidden, width) || !valid(base, vocab) || !valid(context, width) || state.size() != hp.dspark_markov_rank) {
+        return false;
+    }
+    synchronize();
+    std::vector<float> inputs(state);
+    inputs.insert(inputs.end(), hidden.data, hidden.data + width);
+    inputs.insert(inputs.end(), context.data, context.data + width);
+    inputs.insert(inputs.end(), base.data, base.data + vocab);
+
+    llama_batch_ext batch(this);
+    batch.mem = nullptr;
+    const int idx = batch.add_token(0);
+    const llama_pos pos = 0;
+    if (!batch.set_token_id(idx, token) || !batch.set_token_pos(idx, &pos) || !batch.set_output(idx, true) ||
+            !balloc->init(batch, model.vocab, true)) {
+        return false;
+    }
+    auto ubatch = balloc->split_simple(1);
+    ubatch.embd_state = inputs.data();
+    n_outputs = 1;
+    ggml_status status;
+    const auto * result = process_ubatch(ubatch, LLM_GRAPH_TYPE_DRAFT_HEAD, nullptr, status);
+    if (!result) {
+        return false;
+    }
+    synchronize();
+    logits_out.resize(vocab);
+    ggml_backend_tensor_get(result->get_logits(), logits_out.data(), 0, vocab * sizeof(float));
+    ggml_backend_tensor_get(result->get_h_nextn(), state.data(), 0, state.size() * sizeof(float));
+    return true;
+}
+
+bool llama_draft_step(llama_context * ctx, llama_token token, llama_embd hidden, llama_embd base,
+        llama_embd context, std::vector<float> & state, std::vector<float> & logits) {
+    return ctx && ctx->draft_step(token, hidden, base, context, state, logits);
 }
