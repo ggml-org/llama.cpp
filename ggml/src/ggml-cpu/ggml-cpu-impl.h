@@ -487,7 +487,7 @@ inline static int16x8_t vec_padd_s16(int16x8_t a, int16x8_t b) {
 
 inline static int32x4_t vec_paddl_s16(int16x8_t a) {
     const int16x8_t v_ones = vec_splats((int16_t)1);
-    return vec_mule(a, v_ones) + vec_mulo(a, v_ones);
+    return vec_meadd(a, v_ones, vec_mulo(a, v_ones));
 }
 
 /**
@@ -507,9 +507,14 @@ inline static int16x8_t ggml_vec_dot_s16(int16x8_t acc, int8x16_t a, int8x16_t b
     return vec_meadd(a, b, vec_moadd(a, b, acc));
 }
 
+// a * b, each pair of 16-bit products summed into one 32-bit lane
+inline static int32x4_t ggml_vec_madd_s16(int16x8_t a, int16x8_t b) {
+    return vec_meadd(a, b, vec_mulo(a, b));
+}
+
 inline static int32x4_t ggml_vec_dot_s32(int32x4_t acc, int8x16_t a, int8x16_t b) {
-    const int16x8_t p = vec_mule(a, b) + vec_mulo(a, b);
-    return acc + (vec_unpackh(p) + vec_unpackl(p));
+    const int16x8_t p = vec_meadd(a, b, vec_mulo(a, b));
+    return acc + ggml_vec_madd_s16(p, vec_splats((int16_t)1));
 }
 
 #endif
