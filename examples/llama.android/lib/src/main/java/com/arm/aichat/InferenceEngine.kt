@@ -23,12 +23,8 @@ interface InferenceEngine {
     /**
      * Sends a system prompt to the loaded model
      */
-    suspend fun setSystemPrompt(systemPrompt: String)
-    
-    /**
- * Atomically resets the previous native conversation state and applies
- * a fresh system prompt for the next independent AVA turn.
- */
+    suspend fun setSystemPrompt(systemPrompt: String
+                                
 suspend fun resetConversation(systemPrompt: String)
     /**
         suspend fun setSystemPrompt(systemPrompt: String)
