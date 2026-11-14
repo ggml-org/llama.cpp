@@ -361,6 +361,10 @@ struct vk_queue {
 
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
 
+// dequant mul_mat_vec: rows with at least dmmv_tpb8_min_blocks blocks per row can use
+// the 8-invocations-per-block shader variant, and only up to dmmv_tpb8_max_cols columns
+static constexpr uint32_t dmmv_tpb8_max_cols = 1;
+
 static constexpr uint32_t p021_max_gqa_ratio = 8;
 
 enum vk_device_architecture {
@@ -823,6 +827,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_dequant_transpose[GGML_TYPE_COUNT]; // fused dequant+transpose for FA quant-KV
     vk_pipeline pipeline_dequant_mul_mat_vec_f32_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
     vk_pipeline pipeline_dequant_mul_mat_vec_f16_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
+    // iq3_xxs variants of the two pipelines above with TPB=8 in the shader
+    vk_pipeline pipeline_dequant_mul_mat_vec_f32_f32_iq3_xxs_tpb8[DMMV_WG_SIZE_COUNT][mul_mat_vec_max_cols];
+    vk_pipeline pipeline_dequant_mul_mat_vec_f16_f32_iq3_xxs_tpb8[DMMV_WG_SIZE_COUNT][mul_mat_vec_max_cols];
+    uint32_t dmmv_tpb8_min_blocks[DMMV_WG_SIZE_COUNT];
     vk_pipeline pipeline_dequant_mul_mat_vec_id_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT];
 
     vk_pipeline pipeline_dequant_mul_mat_vec_q8_1_f32[DMMV_WG_SIZE_COUNT][GGML_TYPE_COUNT][mul_mat_vec_max_cols];
