@@ -6,6 +6,9 @@
 #include <cublasLt.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#include <cstdint>
+
+typedef uint32_t ggml_cuda_thread_mask_t;
 
 #ifdef GGML_USE_NCCL
 #include <nccl.h>

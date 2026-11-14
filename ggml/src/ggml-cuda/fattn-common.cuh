@@ -376,8 +376,8 @@ static __device__ __forceinline__ void quantize_q8_1_to_shared(
     }
 #pragma unroll
     for (int mask = QI8_1/2; mask > 0; mask >>= 1) {
-        amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, 32));
-        sum +=             __shfl_xor_sync(0xFFFFFFFF, sum,  mask, 32);
+        amax = fmaxf(amax, ggml_cuda_shfl_xor(amax, mask, 32));
+        sum +=             ggml_cuda_shfl_xor(sum,  mask, 32);
     }
 
     const float d = amax / 127;
