@@ -821,7 +821,6 @@ void load_cl_kernels(ggml_backend_opencl_context * backend_ctx) {
     ggml_cl_load_kernels_clamp(backend_ctx);
     ggml_cl_load_kernels_cpy(backend_ctx);
     ggml_cl_load_kernels_repack(backend_ctx);
-    ggml_cl_load_kernels_diag_mask_inf(backend_ctx);
     ggml_cl_load_kernels_diag(backend_ctx);
     ggml_cl_load_kernels_gelu(backend_ctx);
     ggml_cl_load_kernels_glu(backend_ctx);
