@@ -14,6 +14,7 @@
 #ifndef GGML_SYCL_QUANTS_HPP
 #define GGML_SYCL_QUANTS_HPP
 
+#include <cstddef>
 #include <utility>
 
 #include "ggml-common.h"
@@ -224,6 +225,70 @@ template <> struct block_q_t<GGML_TYPE_IQ3_S> {
 
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
+
+template <> struct block_q_t<GGML_TYPE_IQ4_NL> {
+    struct traits {
+        static constexpr uint32_t qk       = QK4_NL;
+        static constexpr uint32_t qi       = QI4_NL;
+        static constexpr uint32_t qr       = QR4_NL;
+        static constexpr uint32_t vdr_mmvq = 4;
+    };
+
+    // Reordered layout: [qs (QK4_NL/2 per block)][d]
+    static constexpr int record_size = offsetof(block_iq4_nl, qs);
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK4_NL / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols / QR4_NL * nrows) + block_index * sizeof(ggml_half), 0 };
+    }
+
+    static float group_scale(const uint8_t * record, const int /* group */) {
+        return *reinterpret_cast<const ggml_half *>(record);
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+template <> struct block_q_t<GGML_TYPE_IQ4_XS> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI4_XS;
+        static constexpr uint32_t qr       = QR4_XS;
+        static constexpr uint32_t vdr_mmvq = 4;
+    };
+
+    // Reordered layout: [qs (QK_K/2 per block)][{d, scales_h, scales_l} per block, as in block_iq4_xs]
+    static constexpr int record_size = offsetof(block_iq4_xs, qs);
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK_K / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        const int nblocks = nrows * (ncols / QK_K);
+        return { nblocks * (QK_K / 2) + block_index * (int) offsetof(block_iq4_xs, qs), 0 };
+    }
+
+    static float group_scale(const uint8_t * record, const int group) {
+        const uint16_t scales_h = *reinterpret_cast<const uint16_t *>(record + offsetof(block_iq4_xs, scales_h));
+        const uint8_t  scales_l = record[offsetof(block_iq4_xs, scales_l) + group / 2];
+        const int      ls       = ((scales_l >> (4 * (group % 2))) & 0xf) | (((scales_h >> (2 * group)) & 3) << 4);
+        return (float) *reinterpret_cast<const ggml_half *>(record + offsetof(block_iq4_xs, d)) * (ls - 32);
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+// IQ4_NL blocks and IQ4_XS sub-blocks are 32-value groups of 16 qs bytes, so in both layouts the qs of
+// group g start at 16 * g; tail is the first byte after all qs, where the per-block records start
+template <ggml_type type> inline float iq4_group_scale(const uint8_t * tail, const int64_t g) {
+    using block_t = block_q_t<type>;
+    constexpr int64_t groups = block_t::traits::qk / QK4_NL;
+    return block_t::group_scale(tail + g / groups * block_t::record_size, (int) (g % groups));
+}
 
 template <> struct block_q_t<GGML_TYPE_Q8_0> {
     struct traits {

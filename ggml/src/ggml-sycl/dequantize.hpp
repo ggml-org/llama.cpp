@@ -15,6 +15,7 @@
 
 #include "common.hpp"
 #include "convert.hpp"
+#include "quants.hpp"
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
 typedef void (*dequantize_kernel_t_reorder)(const void *d, const int64_t ib, const void *qs,
@@ -672,6 +673,15 @@ static __dpct_inline__ void dequantize_iq4_nl(const void *vx, const int64_t ib,
 
     v.x() = dequantize_one(iqs + 0);
     v.y() = dequantize_one(iqs + 1);
+}
+
+static __dpct_inline__ void dequantize_iq4_nl_reorder(const void * d_ptr, const int64_t ib, const void * qs,
+                                                      const int iqs, dfloat2 & v) {
+    const float   d = (float) ((const sycl::half *) d_ptr)[ib];
+    const uint8_t q = ((const uint8_t *) qs)[iqs];
+
+    v.x() = d * kvalues_iq4nl[q & 0xF];
+    v.y() = d * kvalues_iq4nl[q >> 4];
 }
 
 static __dpct_inline__ void dequantize_iq4_xs(const void *vx, const int64_t ib,
@@ -1756,6 +1766,60 @@ dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
         y[j+ 0] = d * kvalues_iq4nl[q4[j] & 0xf];
         y[j+16] = d * kvalues_iq4nl[q4[j] >>  4];
     }
+}
+
+// reordered IQ4_NL / IQ4_XS: qs bytes iq .. iq + 3 of 32-value group g to y[iq + j] and y[iq + 16 + j], with y the
+// group's first output, in two vec<dst_t, 4> stores as for MXFP4; tail is the first byte after all qs
+template <ggml_type type, typename dst_t>
+static __dpct_inline__ void dequantize_iq4_reorder_quad(const uint8_t * __restrict__ x,
+                                                        const uint8_t * __restrict__ tail, const int64_t g,
+                                                        const int iq, dst_t * __restrict__ y) {
+    const uint8_t * qs = x + 16 * g + iq;
+    const float     d  = ggml_sycl_reordered::iq4_group_scale<type>(tail, g);
+
+    sycl::vec<dst_t, 4> lo, hi;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        lo[j] = d * kvalues_iq4nl[qs[j] & 0xf];
+        hi[j] = d * kvalues_iq4nl[qs[j] >> 4];
+    }
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + iq)      = lo;
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(y + iq + 16) = hi;
+}
+
+// flat range over k / 8 items: item i takes group i / 4 from qs byte 4 * (i % 4)
+template <ggml_type type, typename dst_t>
+static void dequantize_block_iq4_reorder_wide(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t k,
+                                              const sycl::id<1> idx) {
+    const int64_t   i = (int64_t) idx[0];
+    const int64_t   g = i / 4;
+    const uint8_t * x = (const uint8_t *) vx;
+    dequantize_iq4_reorder_quad<type>(x, x + k / 2, g, (int) (4 * (i % 4)), yy + 32 * g);
+}
+
+// item t (0..31) of block ib dequantizes four qs bytes of sub-block t/4 into y, the output of block ib
+template <typename dst_t>
+static __dpct_inline__ void dequantize_block_iq4_xs_reorder(const void * __restrict__ vx, dst_t * __restrict__ y,
+                                                           const int64_t ib, const int t, const int64_t nb) {
+    const int ib32 = t / 4;
+    const int iq   = 4 * (t % 4);
+
+    const uint8_t * qs       = (const uint8_t *) vx + ib * (QK_K / 2) + 16 * ib32 + iq;
+    const uint8_t * meta     = (const uint8_t *) vx + nb * (QK_K / 2) + ib * offsetof(block_iq4_xs, qs);
+    const uint16_t  scales_h = *(const uint16_t *) (meta + offsetof(block_iq4_xs, scales_h));
+    const uint8_t   scales_l = meta[offsetof(block_iq4_xs, scales_l) + ib32 / 2];
+    const float     d        = (float) *(const ggml_half *) (meta + offsetof(block_iq4_xs, d)) *
+                               ((((scales_l >> (4 * (ib32 % 2))) & 0xf) | (((scales_h >> (2 * ib32)) & 3) << 4)) - 32);
+
+    sycl::vec<dst_t, 4> lo, hi;
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        lo[j] = d * kvalues_iq4nl[qs[j] & 0xf];
+        hi[j] = d * kvalues_iq4nl[qs[j] >> 4];
+    }
+    dst_t * yb = y + 32 * ib32 + iq;
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(yb)      = lo;
+    *reinterpret_cast<sycl::vec<dst_t, 4> *>(yb + 16) = hi;
 }
 
 template<typename dst_t>

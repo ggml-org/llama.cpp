@@ -588,10 +588,24 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ4_NL:
+            if (src0_reordered) {
+                get_rows_sycl_reorder<QK4_NL, QR4_NL, dequantize_iq4_nl_reorder>(dst->src[0], dst->src[1], dst, dst->src[0]->data,
+                src1_i32, (float *)dst->data, ctx.stream());
+                break;
+            }
             get_rows_sycl<QK4_NL, 1, dequantize_iq4_nl>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_IQ4_XS:
+            if (src0_reordered) {
+                const void * vx = dst->src[0]->data;
+                get_rows_sycl_reorder_k<1, QK_K / 8, 1>(dst->src[0], dst->src[1], dst, src1_i32, (float *)dst->data, ctx.stream(),
+                    [=](float * y, int64_t ib, uint8_t * scales_local, const sycl::nd_item<1> & item_ct1, int64_t nb) {
+                        dequantize_block_iq4_xs_reorder(vx, y, ib, (int) item_ct1.get_local_id(0), nb);
+                        GGML_UNUSED(scales_local);
+                    });
+                break;
+            }
             get_rows_sycl<QK_K, 1, dequantize_iq4_xs>(ctx, dst->src[0], dst->src[1], dst, (const float *)dst->src[0]->data,
             src1_i32, (float *)dst->data, ctx.stream());
             break;

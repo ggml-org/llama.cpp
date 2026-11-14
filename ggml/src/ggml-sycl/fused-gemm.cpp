@@ -1,4 +1,5 @@
 #include "fused-gemm.hpp"
+#include "quants.hpp"
 
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
 
@@ -434,19 +435,23 @@ static __dpct_inline__ void fg_pack_quarter(const float * __restrict__ t, typena
     }
 }
 
+// 32 values from 16 qs bytes, as in IQ4_NL blocks and IQ4_XS sub-blocks: the low nibbles fill the
+// first half of the step and the high nibbles the second, so the halves land at a[0..7] and a[8..15]
 template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq4_xs);
-    // low nibbles fill the first half of the step, high nibbles the second, so the two halves
-    // land at a[0..7] and a[8..15] and no quarter loop is needed
-    const float d = (float) blk->d *
-        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
-    const uint8_t * q4 = blk->qs + 16 * ib;
+static __dpct_inline__ void fg_decode_iq4(const uint8_t * __restrict__ q4, const float d, typename E::pair * a) {
 #pragma unroll
     for (int j = 0; j < 8; ++j) {
         a[j]     = E::make(d * kvalues_iq4nl[q4[2 * j] & 0xf], d * kvalues_iq4nl[q4[2 * j + 1] & 0xf]);
         a[8 + j] = E::make(d * kvalues_iq4nl[q4[2 * j] >> 4],  d * kvalues_iq4nl[q4[2 * j + 1] >> 4]);
     }
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_iq4_xs);
+    const float d = (float) blk->d *
+        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
+    fg_decode_iq4<E>(blk->qs + 16 * ib, d, a);
 }
 
 template <typename E>
@@ -833,6 +838,22 @@ template <> struct fg_soa<block_q6_K> {
                           kb % (QK_K / 32), a);
     }
 };
+
+template <ggml_type type> struct fg_soa_iq4 {
+    static constexpr bool supported = true;
+    // [qs][per-block records]; k step kb is 32-value group kb % groups of block ib
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        constexpr int groups = ggml_sycl_reordered::block_q_t<type>::traits::qk / QK4_NL;
+        const int64_t g      = (int64_t) ib * groups + kb % groups;
+        fg_decode_iq4<E>(x + 16 * g, ggml_sycl_reordered::iq4_group_scale<type>(x + nblocks * groups * 16, g), a);
+    }
+};
+
+template <> struct fg_soa<block_iq4_nl> : fg_soa_iq4<GGML_TYPE_IQ4_NL> {};
+
+template <> struct fg_soa<block_iq4_xs> : fg_soa_iq4<GGML_TYPE_IQ4_XS> {};
 
 
 // one SG_ROWS x BN output tile: B columns [b0, b0 + BN) of packed_b go to dst columns [n0, n1),
