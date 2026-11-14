@@ -1404,7 +1404,7 @@ static inline void fa_softmax_impl(
                 }
             } else {
                 size_t c = 0;
-                for (; c + 64 < kv_rows; c += 128) {
+                for (; c + 128 <= kv_rows; c += 128) {
                     size_t ci0 = c / 64;
                     size_t ci1 = ci0 + 1;
                     v_s_rowmax0 = Q6_Vhf_vmax_VhfVhf(v_s_rowmax0, my_row_buf0[ci0]);
