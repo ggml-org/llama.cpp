@@ -194,6 +194,17 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
+    // active cell count when position p lives in physical cell p; 0 for any non-contiguous layout
+    uint32_t get_n_kv_pos_contiguous(const slot_info & sinfo, const llama_ubatch & ubatch) const;
+
+    // row count (padded) of the cells of the ubatch's sequence gathered in position order, for the banded op when
+    // physical cell != position (a wrapped SWA ring, interleaved sequences); 0 if the ubatch is not the monotonic tail
+    // of a single sequence or a position of its attention window is missing
+    uint32_t get_n_kv_pos_gather(const slot_info & sinfo, const llama_ubatch & ubatch) const;
+
+    // whether the cells can stop being position-contiguous at runtime: SWA pruning reuses cells, unified sequences interleave
+    bool can_pos_gather() const;
+
     // attention over the cells of each sequence of the ubatch instead of the whole cache (see ggml_flash_attn_ext_rows)
     // the ubatch splits into n_slices groups of tokens with one sequence each
     // if it cannot (f.ex. interleaved or coupled sequences), it is a single slice over the cells of all its sequences
@@ -250,6 +261,12 @@ public:
     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    // idx(i, j) = i*(extent + 1) + rel; out-of-band cells map to the zero column `extent`
+    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
+
+    // idx: I32 [n_kv_g] cell of each gathered row; mask: F16 [n_kv_g, n_tokens]; leading rows are masked padding
+    void set_input_pos_gather(ggml_tensor * idx, ggml_tensor * mask, const llama_ubatch * ubatch) const;
+
     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
     bool has_cell_ext() const;
 
@@ -262,6 +279,9 @@ public:
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
 private:
+    // the cells of positions [p_lo, ubatch tail] of the ubatch's sequence, in position order; false if any is missing
+    bool get_pos_gather_cells(const llama_ubatch & ubatch, std::vector<int32_t> & res) const;
+
     const llama_model & model;
     const llama_hparams & hparams;
 
@@ -417,6 +437,8 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    uint32_t get_n_kv_pos_contiguous() const;
+    uint32_t get_n_kv_pos_gather() const;
     uint32_t get_n_kv_rows() const;
 
     ggml_type type_k() const;
@@ -453,6 +475,8 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_pos_rel_flat(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const; // inkling
+    void set_input_pos_gather(ggml_tensor * idx, ggml_tensor * mask, const llama_ubatch * ubatch) const; // inkling
 
     // see llama_kv_cache::get_prev_tokens()
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
@@ -460,8 +484,8 @@ public:
 private:
     llama_memory_status status;
 
-    llama_kv_cache * kv;
-    llama_context * lctx;
+    llama_kv_cache * kv = nullptr;
+    llama_context * lctx = nullptr;
 
     //
     // update context

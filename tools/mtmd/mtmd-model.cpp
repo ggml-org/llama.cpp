@@ -293,6 +293,30 @@ struct mtmd_model_loader {
 
             // model-specific params
             switch (model.proj_type) {
+                case PROJECTOR_TYPE_INKLING2:
+                    {
+                        hparams.ffn_op = FFN_GELU_ERF;
+                        log_ffn_op = "gelu_erf";
+                        hparams.rope_theta = 10000.0f;
+                        get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge);
+                        hparams.image_resize_pad  = PAD_NONE;
+                        hparams.warmup_image_size = 640;
+                    } break;
+                case PROJECTOR_TYPE_INKLING:
+                    {
+                        if (is_vision) {
+                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
+                            hparams.image_resize_pad  = PAD_NONE;
+                            hparams.warmup_image_size = hparams.patch_size;
+                        } else {
+                            hparams.audio_chunk_len   = 0;
+                            hparams.audio_sample_rate = 16000;
+                            hparams.audio_n_fft       = 1600;
+                            hparams.audio_window_len  = 1600;
+                            hparams.audio_hop_len     = 800;
+                            hparams.warmup_audio_size = 4;
+                        }
+                    } break;
                 case PROJECTOR_TYPE_MLP:
                 case PROJECTOR_TYPE_MLP_NORM:
                 case PROJECTOR_TYPE_LDP:
@@ -1469,6 +1493,7 @@ struct mtmd_model_loader {
 
         const bool has_standard_layers = (
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+            model.proj_type != PROJECTOR_TYPE_INKLING &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
@@ -1664,6 +1689,30 @@ struct mtmd_model_loader {
         };
 
         switch (model.proj_type) {
+            case PROJECTOR_TYPE_INKLING2:
+                {
+                    GGML_ASSERT(model.class_embedding && model.position_embeddings && model.patch_embeddings_0);
+                    model.inkling2_cls_pos = get_tensor(TN_INKLING2_CLS_POS);
+                    model.mm_ffn_up_w      = get_tensor(mtmd_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_down_w    = get_tensor(mtmd_format(TN_MM_DOWN, "weight"));
+                } break;
+            case PROJECTOR_TYPE_INKLING:
+                {
+                    if (model.modality == MTMD_MODALITY_VISION) {
+                        model.inkling_hmlp_layers.resize(hparams.n_layer);
+                        for (int il = 0; il < hparams.n_layer; ++il) {
+                            auto & layer = model.inkling_hmlp_layers[il];
+                            layer.linear_w = get_tensor(mtmd_format(TN_INKLING_HMLP_LINEAR, il));
+                            layer.norm_w = il + 1 < hparams.n_layer
+                                ? get_tensor(mtmd_format(TN_INKLING_HMLP_NORM, il))
+                                : nullptr;
+                        }
+                        model.inkling_hmlp_final_norm_w = get_tensor(TN_INKLING_HMLP_FINAL_NORM);
+                    } else {
+                        model.inkling_dmel_embd_w       = get_tensor(TN_INKLING_DMEL_EMBD);
+                        model.inkling_dmel_final_norm_w = get_tensor(TN_INKLING_DMEL_FINAL_NORM);
+                    }
+                } break;
             case PROJECTOR_TYPE_MLP:
             case PROJECTOR_TYPE_MLP_NORM:
                 {
@@ -3857,6 +3906,16 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
     projector_type proj = proj_type;
 
     switch (proj) {
+        case PROJECTOR_TYPE_INKLING:
+            {
+                if (modality == MTMD_MODALITY_AUDIO) {
+                    // One dMel row is one soft audio token.
+                    n_patches = img->nx();
+                } else {
+                    // Batch entries are temporal slices; each pair emits one token.
+                    n_patches = 1;
+                }
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_JANUS_PRO:
@@ -3961,6 +4020,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_KIMIVL:
         case PROJECTOR_TYPE_KIMIK25:
         case PROJECTOR_TYPE_KIMIK31:
+        case PROJECTOR_TYPE_INKLING2:
             {
                 // dynamic size
                 int out_patch_size = params.patch_size * hparams.n_merge;
@@ -4222,6 +4282,10 @@ size_t mtmd_model::cbx_read_tensor(const char * name, float * out, size_t n_max)
 
 int mtmd_model::n_mmproj_embd() const {
     switch (proj_type) {
+        case PROJECTOR_TYPE_INKLING:
+            return modality == MTMD_MODALITY_AUDIO
+                ? inkling_dmel_final_norm_w->ne[0]
+                : inkling_hmlp_final_norm_w->ne[0];
         case PROJECTOR_TYPE_LDP:
             return mm_model_block_1_block_2_1_b->ne[0];
         case PROJECTOR_TYPE_LDPV2:
@@ -4241,6 +4305,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLING2:
             return mm_ffn_down_w->ne[1];
         case PROJECTOR_TYPE_GLM_EDGE:
             return mm_model_mlp_3_w->ne[1];

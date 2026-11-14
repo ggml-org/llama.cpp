@@ -682,6 +682,24 @@ struct llama_layer {
     struct llama_layer_nextn nextn;
 
     struct llama_layer_switch_lora switch_lora;
+
+    // inkling (private arch)
+    struct ggml_tensor * wr             = nullptr; // attn_r  [n_embd, n_head*d_rel]
+    struct ggml_tensor * attn_rel_proj  = nullptr; // [rel_extent, d_rel] (checkpoint [d_rel, E] orientation)
+    struct ggml_tensor * shortconv_k    = nullptr; // [K, kvw]
+    struct ggml_tensor * shortconv_v    = nullptr; // [K, kvw]
+    struct ggml_tensor * shortconv_attn = nullptr; // [K, n_embd]
+    struct ggml_tensor * shortconv_mlp  = nullptr; // [K, n_embd]
+    struct ggml_tensor * ffn_gscale     = nullptr; // F32 [1]
+
+    struct ggml_tensor * attn_q_in_norm  = nullptr;
+    struct ggml_tensor * attn_k_in_norm  = nullptr;
+    struct ggml_tensor * attn_v_in_norm  = nullptr;
+    struct ggml_tensor * attn_sink_proj  = nullptr;
+    struct ggml_tensor * attn_q_clip     = nullptr;
+    struct ggml_tensor * attn_r_clip     = nullptr;
+    struct ggml_tensor * shortconv_k_dyn = nullptr;
+    struct ggml_tensor * shortconv_v_dyn = nullptr;
 };
 
 struct llama_device {
