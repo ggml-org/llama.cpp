@@ -507,7 +507,12 @@ const func_builtins & global_builtins() {
         }},
         {"test_is_divisibleby", [](const func_args & args) -> value {
             args.ensure_vals<value_int, value_int>();
-            bool res = args.get_pos(0)->as_int() % args.get_pos(1)->as_int() == 0;
+            const int64_t a = args.get_pos(0)->as_int();
+            const int64_t b = args.get_pos(1)->as_int();
+            if (b == 0) {
+                throw std::runtime_error("divisibleby: division by zero");
+            }
+            bool res = b == -1 || a % b == 0; // avoid INT64_MIN % -1 overflow
             return mk_val<value_bool>(res);
         }},
         {"test_is_string", test_type_fn<value_string>},

@@ -1523,6 +1523,17 @@ static void test_tests(testing & t) {
         "yes"
     );
 
+    test_template(t, "is divisibleby -1 with INT64_MIN",
+        "{{ x is divisibleby(-1) }}",
+        {{"x", INT64_MIN}},
+        "True"
+    );
+
+    test_template_error(t, "is divisibleby zero",
+        "{{ 10 is divisibleby(0) }}",
+        "divisibleby: division by zero"
+    );
+
     test_template(t, "is eq",
         "{{ 'yes' if 3 is eq(3) }}",
         json::object(),
