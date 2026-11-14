@@ -789,7 +789,7 @@ struct mtmd_model_loader {
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf";
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge);
-                        get_f32(KEY_V_ROPE_FREQ_BASE, hparams.rope_theta);
+                        hparams.rope_theta = 10000.0f;
                         hparams.set_limit_image_tokens(1, 4096);
                         hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
                     } break;
@@ -1915,6 +1915,10 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_INKLING2V:
                 {
+                    // these come from the generic path above, where they are optional
+                    if (!model.class_embedding || !model.position_embeddings || !model.pre_ln_w || !model.pre_ln_b) {
+                        throw std::runtime_error(mtmd_format("%s: missing class_embd, position_embd or pre_ln\n", __func__));
+                    }
                     model.class_position_embedding = get_tensor(TN_CLASS_POS_EMBD);
                     model.mm_1_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "weight"));
                     model.mm_1_b = get_tensor(mtmd_format(TN_LLAVA_PROJ, 1, "bias"), false);

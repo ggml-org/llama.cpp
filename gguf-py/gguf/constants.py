@@ -484,7 +484,6 @@ class Keys:
         WINDOW_SIZE           = "clip.vision.window_size"
         FEATURE_LAYERS        = "clip.vision.feature_layer" # Granite4 Vision
         IMAGE_GRID_PINPOINTS  = "clip.vision.image_grid_pinpoints" # Granite4 Vision
-        ROPE_FREQ_BASE        = "clip.vision.rope.freq_base"
 
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"

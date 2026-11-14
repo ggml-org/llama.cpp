@@ -69,7 +69,6 @@
 #define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
 #define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
 #define KEY_SWIGLU_CLAMP            "clip.vision.swiglu_clamp"
-#define KEY_V_ROPE_FREQ_BASE        "clip.vision.rope.freq_base"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"

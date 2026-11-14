@@ -295,13 +295,12 @@ class Inkling2VisionModel(MmprojModel):
         super().set_gguf_parameters()
         config = self.hparams
         rope = config.get("rope_parameters") or {"rope_type": "axial", "rope_theta": 10000.0}
-        if rope["rope_type"] != "axial":
-            raise ValueError("Inkling2 vision requires axial RoPE")
+        if rope["rope_type"] != "axial" or rope["rope_theta"] != 10000.0:
+            raise ValueError("Inkling2 vision requires axial RoPE with theta 10000")
         w = self.gguf_writer
         w.add_clip_vision_projector_type(gguf.VisionProjectorType.INKLING2V)
         w.add_vision_attention_layernorm_eps(config["layer_norm_eps"])
         w.add_vision_spatial_merge_size(config["spatial_merge_size"])
-        w.add_float32(gguf.Keys.ClipVision.ROPE_FREQ_BASE, float(rope["rope_theta"]))
 
     @classmethod
     def filter_tensors(cls, item):
