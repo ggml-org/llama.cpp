@@ -371,11 +371,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
 
 void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     @autoreleasepool {
-        id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
-        id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
-                                                          length:size
-                                                         options:MTLResourceStorageModeShared
-                                                     deallocator:nil];
+        size_t dst_offs = 0;
+        id<MTLBuffer> buf_dst = ggml_metal_device_wrap_host(ctx->dev, data, size, &dst_offs);
 
         GGML_ASSERT(buf_dst);
 
@@ -395,7 +392,7 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
         [encoder copyFromBuffer:bid_src.metal
                    sourceOffset:bid_src.offs
                        toBuffer:buf_dst
-              destinationOffset:0
+              destinationOffset:dst_offs
                            size:size];
 
         [encoder endEncoding];
