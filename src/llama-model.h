@@ -380,6 +380,7 @@ struct llama_layer {
     // ff MoE per-expert scales (NVFP4 per-tensor scale2)
     struct ggml_tensor * ffn_gate_exps_s   = nullptr;
     struct ggml_tensor * ffn_down_exps_s   = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_s = nullptr;
     struct ggml_tensor * ffn_up_exps_s     = nullptr;
 
     // ff MoE latent proj

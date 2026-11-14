@@ -2191,14 +2191,20 @@ mtmd_image_preproc_out mtmd_image_preprocessor_inkling2::preprocess_pair(const m
                 std::copy_n(src.begin() + offset, size_t(size.width) * 3, dst);
             }
         }
-        padded.cpy_buf(pixels);
-        // Match the reference's fused rescale and normalization, including negative padding.
-        float mean[3], std[3];
+        // the reference CLIP-normalises to bf16, then the encoder maps back to [-1, 1] in bf16; a single affine step cannot match it
+        constexpr float proc_mean[3] = { 0.48145466f, 0.4578275f,  0.40821073f };
+        constexpr float proc_std[3]  = { 0.26862954f, 0.2613026f,  0.2757771f  };
+        constexpr float enc_mean[3] = { 0.48145466f, 0.4578275f,  0.40821073f };
+        constexpr float enc_std[3]  = { 0.26862954f, 0.26130258f, 0.27577711f };
+        const auto bf16_round = [](float v) { return ggml_bf16_to_fp32(ggml_fp32_to_bf16(v)); };
         for (int c = 0; c < 3; ++c) {
-            mean[c] = hparams.image_mean[c] * 255.0f;
-            std[c] = hparams.image_std[c] * 255.0f;
+            const float m = bf16_round(enc_mean[c]), sd = bf16_round(enc_std[c]);
+            for (size_t i = c; i < pixels.size(); i += 3) {
+                const float x = bf16_round((pixels[i] / 255.0f - proc_mean[c]) / proc_std[c]);
+                pixels[i] = bf16_round(2.0f * (x * sd + m) - 1.0f);
+            }
         }
-        padded.normalize(mean, std);
+        padded.cpy_buf(pixels);
     }
     mtmd_image_preproc_out result;
     result.append(hparams, padded, false);

@@ -180,7 +180,7 @@ const func_builtins & global_builtins();
 value try_builtin_func(context & ctx, const std::string & name, value & input, bool undef_on_missing = false);
 value apply_filter_by_name(context & ctx, std::string filter_id, value input, const func_args & args);
 
-std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ");
+std::string value_to_json(const value & val, int indent = -1, const std::string_view item_sep = ", ", const std::string_view key_sep = ": ", bool sort_keys = false);
 
 // Note: only used for debugging purposes
 std::string value_to_string_repr(const value & val);
