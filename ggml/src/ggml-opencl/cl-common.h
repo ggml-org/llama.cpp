@@ -826,7 +826,6 @@ struct ggml_backend_opencl_context {
     ggml_opencl_rms_norm_kernels rms_norm = {};
     ggml_opencl_l2_norm_kernels l2_norm = {};
     ggml_opencl_group_norm_kernels group_norm = {};
-    ggml_opencl_diag_mask_inf_kernels diag_mask_inf = {};
     ggml_opencl_diag_kernels diag = {};
     ggml_opencl_soft_max_kernels soft_max = {};
     ggml_opencl_fa_kernels fa;

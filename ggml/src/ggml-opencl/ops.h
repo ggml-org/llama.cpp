@@ -140,11 +140,6 @@ struct ggml_opencl_group_norm_kernels {
     cl_kernel kernel_group_norm_mul_add;
 };
 
-struct ggml_opencl_diag_mask_inf_kernels {
-    cl_kernel kernel_diag_mask_inf;
-    cl_kernel kernel_diag_mask_inf_8;
-};
-
 struct ggml_opencl_diag_kernels {
     cl_kernel kernel_diag_f32;
 };
@@ -917,7 +912,6 @@ void ggml_cl_view(ggml_backend_t backend, const ggml_tensor * src0, const ggml_t
 void ggml_cl_permute(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_transpose(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_set(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
-void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_diag(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -1032,7 +1026,6 @@ void ggml_cl_load_kernels_view(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_permute(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_transpose(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_set(ggml_backend_opencl_context * backend_ctx);
-void ggml_cl_load_kernels_diag_mask_inf(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_diag(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx);
 void ggml_cl_load_kernels_rope(ggml_backend_opencl_context * backend_ctx);

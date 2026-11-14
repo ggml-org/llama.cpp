@@ -62,7 +62,6 @@ ggml_add_backend_library(${TARGET_NAME}
                          ops/permute.cpp
                          ops/transpose.cpp
                          ops/set.cpp
-                         ops/diag_mask_inf.cpp
                          ops/diag.cpp
                          ops/soft_max.cpp
                          ops/rope.cpp
