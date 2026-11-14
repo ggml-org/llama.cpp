@@ -237,6 +237,7 @@ option(GGML_ZDNN                            "ggml: use zDNN"                    
 option(GGML_VIRTGPU                         "ggml: use the VirtGPU/Virglrenderer API Remoting frontend"     OFF)
 option(GGML_VIRTGPU_BACKEND                 "ggml: build the VirtGPU/Virglrenderer API Remoting backend"    OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
+option(GGML_ANE                             "ggml: use the Apple Neural Engine (experimental)" OFF)
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
 option(GGML_METAL_SHADER_DEBUG              "ggml: compile Metal with -fno-fast-math"         OFF)
 option(GGML_METAL_EMBED_LIBRARY             "ggml: embed Metal library"                       ${GGML_METAL})
@@ -329,6 +330,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml.h
     include/ggml-cpu.h
     include/ggml-alloc.h
+    include/ggml-ane.h
     include/ggml-backend.h
     include/ggml-blas.h
     include/ggml-cann.h
