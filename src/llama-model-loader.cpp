@@ -1282,14 +1282,26 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             return nullptr;
         }
 
+        const bool is_matmul = info.op == GGML_OP_MUL_MAT || info.op == GGML_OP_MUL_MAT_ID;
+        const bool is_matmul_weight = is_matmul && tn.suffix != nullptr && strcmp(tn.suffix, "weight") == 0;
+        const bool is_matmul_scale  = is_matmul && tn.suffix != nullptr &&
+            (strcmp(tn.suffix, "scale") == 0 || strcmp(tn.suffix, "input_scale") == 0);
+
+        // the scale is a source of the matmul, so it goes where the weight is
+        if (is_matmul_scale) {
+            const auto it = matmul_weight_bufts.find(LLM_TN_IMPL(tn.arch, tn.tensor, "weight", tn.bid, tn.xid).str());
+            if (it != matmul_weight_bufts.end()) {
+                return it->second;
+            }
+        }
+
         // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID;
         // embedded-adapter ".lora_a"/".lora_b" tensors are always used with GGML_OP_MUL_MAT_ID
         ggml_op op;
         if (tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0) {
             op = info.op == GGML_OP_MUL_MAT_ID ? GGML_OP_ADD_ID : GGML_OP_ADD;
-        } else if (tn.suffix != nullptr && (strcmp(tn.suffix, "scale") == 0 || strcmp(tn.suffix, "input_scale") == 0) &&
-                (info.op == GGML_OP_MUL_MAT || info.op == GGML_OP_MUL_MAT_ID)) {
-            // scale of a matmul weight, applied elementwise to its result
+        } else if (is_matmul_scale) {
+            // scale without a weight
             op = GGML_OP_MUL;
         } else if (hparams.router_layer >= 0 && tn.suffix != nullptr &&
                 (strcmp(tn.suffix, "lora_a") == 0 || strcmp(tn.suffix, "lora_b") == 0)) {
@@ -1310,6 +1322,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         if (is_lazy) {
+            if (is_matmul_weight) {
+                matmul_weight_bufts[tn.str()] = lazy_read::buft();
+            }
             return lazy_read::buft();
         }
 
@@ -1400,6 +1415,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                 first_moved_to_buft   = buft;
             }
             n_tensors_moved++;
+        }
+
+        if (is_matmul_weight) {
+            matmul_weight_bufts[tn.str()] = buft;
         }
 
         return buft;
