@@ -28,7 +28,7 @@
 namespace fs = std::filesystem;
 
 // macro for nicer error messages on server crash
-#define RPC_STATUS_ASSERT(x) if (!(x)) GGML_ABORT("Remote RPC server crashed or returned malformed response")
+#define RPC_STATUS_ASSERT(x) if (!(x)) GGML_ABORT("Remote RPC server closed the connection or returned a malformed response, see the server log")
 
 // all RPC structures must be packed
 #pragma pack(push, 1)
@@ -79,6 +79,7 @@ enum rpc_cmd {
     RPC_CMD_COMM_ALLREDUCE,
     RPC_CMD_COMM_FREE,
     RPC_CMD_NONE,
+    RPC_CMD_GET_DEVICE_SUPPORTS_OP, // 10.0.1; sent only to servers that set RPC_DISPATCHER_FLAGS_SUPPORTS_OP
     RPC_CMD_COUNT,
 };
 
@@ -110,6 +111,7 @@ static const char * rpc_cmd_name(enum rpc_cmd cmd) {
         case RPC_CMD_COMM_ALLREDUCE:    return "COMM_ALLREDUCE";
         case RPC_CMD_COMM_FREE:         return "COMM_FREE";
         case RPC_CMD_NONE:              return "NONE";
+        case RPC_CMD_GET_DEVICE_SUPPORTS_OP: return "GET_DEVICE_SUPPORTS_OP";
         default:                        return "UNKNOWN";
     }
 }
@@ -128,6 +130,7 @@ struct rpc_msg_hello_req {
 // server feature flags in rpc_msg_hello_rsp::flags
 enum rpc_dispatcher_flags : uint8_t {
     RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH = 1 << 0, // client should try SET_TENSOR_HASH before sending tensor data
+    RPC_DISPATCHER_FLAGS_SUPPORTS_OP      = 1 << 1, // server answers GET_DEVICE_SUPPORTS_OP
 };
 
 struct rpc_msg_hello_rsp {
@@ -274,6 +277,17 @@ struct rpc_msg_comm_free_req {
     uint32_t device;
 };
 
+// RPC_CMD_GET_DEVICE_SUPPORTS_OP asks about several ops in one round trip
+// request : | device (4 bytes) | n_ops (4 bytes) | n_tensors (4 bytes) | ops (n_ops * 4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
+//           each op is an index into tensors; its srcs, and the view_src of the op and of each src, are found among
+//           tensors by rpc_tensor::src and rpc_tensor::view_src ids
+// response: | supported (n_ops * 1 byte) |
+static constexpr uint32_t RPC_SUPPORTS_OP_MAX_OPS     = 8192;
+static constexpr uint32_t RPC_SUPPORTS_OP_MAX_TENSORS = RPC_SUPPORTS_OP_MAX_OPS*2*(1 + GGML_MAX_SRC);
+
+// the client clears its cache of answers when it would grow beyond this many entries
+static constexpr size_t RPC_SUPPORTS_OP_CACHE_MAX = 16384;
+
 #pragma pack(pop)
 
 // RPC data structures
@@ -283,11 +297,17 @@ static ggml_guid_t ggml_backend_rpc_guid() {
     return &guid;
 }
 
+class rpc_dispatcher;
+
 struct ggml_backend_rpc_device_context {
     std::string endpoint;
     uint32_t    device;
     std::string name;
     std::string description;
+    std::shared_ptr<rpc_dispatcher> dispatcher;              // see ggml_backend_rpc_device_dispatcher
+    std::mutex                      supports_op_mutex;
+    std::unordered_map<std::string, bool> supports_op_cache; // keyed by rpc_supports_op_key()
+    std::weak_ptr<rpc_dispatcher>   supports_op_cache_dispatcher; // the connection whose server gave the cached answers
 };
 
 struct ggml_backend_rpc_buffer_type_context {
@@ -346,9 +366,13 @@ static bool recv_msg(socket_ptr sock, void * msg, size_t msg_size) {
     return sock->recv_data(msg, msg_size);
 }
 
-static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input) {
+static bool recv_msg(socket_ptr sock, std::vector<uint8_t> & input, uint64_t max_size = UINT64_MAX) {
     uint64_t size;
     if (!sock->recv_data(&size, sizeof(size))) {
+        return false;
+    }
+    if (size > max_size) {
+        LOG_ERROR("Request of %" PRIu64 " bytes exceeds the limit of %" PRIu64 " bytes\n", size, max_size);
         return false;
     }
     try {
@@ -533,6 +557,7 @@ public:
     void work();
 
     bool get_send_tensor_hash() const { return flags & RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH; }
+    bool get_supports_op()      const { return flags & RPC_DISPATCHER_FLAGS_SUPPORTS_OP; }
 
     ~rpc_dispatcher();
 
@@ -1456,6 +1481,7 @@ public:
     bool init_tensor(const rpc_msg_init_tensor_req & request);
     bool get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_msg_get_alloc_size_rsp & response);
     bool get_device_memory(const rpc_msg_get_device_memory_req & request, rpc_msg_get_device_memory_rsp & response);
+    bool get_device_supports_op(const std::vector<uint8_t> & input, std::vector<uint8_t> & response);
 
     struct stored_graph {
         std::vector<uint8_t>   buffer;
@@ -1505,13 +1531,16 @@ private:
     std::vector<comm_state> comm_states;
     // SET_TENSOR data is received in chunks through this buffer
     std::vector<uint8_t> set_tensor_buf;
+    // the client asked GET_DEVICE_SUPPORTS_OP on this connection, so it places ops by the answers
+    bool client_asks_supports_op = false;
+    bool warned_unsupported_op   = false;
 };
 
 void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.major = RPC_PROTO_MAJOR_VERSION;
     response.minor = RPC_PROTO_MINOR_VERSION;
     response.patch = RPC_PROTO_PATCH_VERSION;
-    response.flags = cache_dir ? RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH : 0;
+    response.flags = (cache_dir ? RPC_DISPATCHER_FLAGS_SEND_TENSOR_HASH : 0) | RPC_DISPATCHER_FLAGS_SUPPORTS_OP;
     LOG_DBG("[%s] version: %d.%d.%d\n", __func__, response.major, response.minor, response.patch);
 }
 
@@ -2181,6 +2210,30 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     return result;
 }
 
+// asks the backend about op without the memory placement of its tensors (buffer, data, view). For a client that does
+// not ask GET_DEVICE_SUPPORTS_OP, graph_compute refuses an op only if this also fails, so a rejection that depends on
+// where the tensors are does not refuse a graph that such a client ran before this check
+static bool rpc_supports_op_unplaced(ggml_backend_t backend, const ggml_tensor * op) {
+    ggml_tensor srcs[GGML_MAX_SRC];
+    ggml_tensor node = *op;
+    node.buffer    = nullptr;
+    node.data      = nullptr;
+    node.view_src  = nullptr;
+    node.view_offs = 0;
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (op->src[i] == nullptr) {
+            continue;
+        }
+        srcs[i] = *op->src[i];
+        srcs[i].buffer    = nullptr;
+        srcs[i].data      = nullptr;
+        srcs[i].view_src  = nullptr;
+        srcs[i].view_offs = 0;
+        node.src[i] = &srcs[i];
+    }
+    return ggml_backend_supports_op(backend, &node);
+}
+
 bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
     // serialization format:
     // | device (4 bytes) | uid (8 bytes) | n_nodes (4 bytes) | nodes (n_nodes * sizeof(uint64_t) | n_tensors (4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
@@ -2266,10 +2319,48 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
     }
     const std::chrono::duration<double, std::milli> deserialize_ms = std::chrono::steady_clock::now() - t_deserialize;
 
+    // an op that the backend does not support computes wrong results or aborts. A client that asks GET_DEVICE_SUPPORTS_OP
+    // places ops by the answers, as the scheduler does for a local device, and its graphs run as they are. Clients
+    // before protocol 10.0.1 do not ask: their graph is refused if the backend rejects an op even without the memory
+    // placement of its tensors
+    const auto t_check = std::chrono::steady_clock::now();
+    for (uint32_t i = 0; i < n_nodes; i++) {
+        const ggml_tensor * node = graph->nodes[i];
+        if (node == nullptr) {
+            continue;
+        }
+        const bool op_ok = (uint32_t) node->op < GGML_OP_COUNT &&
+            !(node->op == GGML_OP_UNARY && (uint32_t) node->op_params[0] >= GGML_UNARY_OP_COUNT) &&
+            !(node->op == GGML_OP_GLU   && (uint32_t) node->op_params[0] >= GGML_GLU_OP_COUNT);
+        if (!op_ok) {
+            LOG_ERROR("[%s] invalid op %d (%s)\n", __func__, (int) node->op, node->name);
+        } else if (ggml_backend_supports_op(backends[device], node)) {
+            continue;
+        } else if (client_asks_supports_op) {
+            if (!warned_unsupported_op) {
+                warned_unsupported_op = true;
+                LOG_WARN("[%s] %s does not support %s (%s), which the client placed here; computing it anyway\n",
+                         __func__, ggml_backend_name(backends[device]), ggml_op_desc(node), node->name);
+            }
+            continue;
+        } else if (rpc_supports_op_unplaced(backends[device], node)) {
+            continue;
+        } else {
+            LOG_ERROR("[%s] %s does not support %s (%s), refusing the graph; if the client is older than this server, update it: "
+                      "clients before RPC protocol 10.0.1 do not ask which ops the device supports\n",
+                      __func__, ggml_backend_name(backends[device]), ggml_op_desc(node), node->name);
+        }
+        if (uid != 0) {
+            stored_graphs[device].erase(uid);
+        }
+        return false;
+    }
+    const std::chrono::duration<double, std::milli> check_ms = std::chrono::steady_clock::now() - t_check;
+
     ggml_status status = ggml_backend_graph_compute_async(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
     sg.graph = graph;
-    LOG_DBG3("[%s] device: %u, graph build: %.3f ms\n", __func__, device, deserialize_ms.count());
+    LOG_DBG3("[%s] device: %u, graph build: %.3f ms, supports_op check: %.3f ms\n", __func__, device, deserialize_ms.count(), check_ms.count());
     return true;
 }
 
@@ -2643,6 +2734,214 @@ bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request
     return true;
 }
 
+// leading src slots that the op's ggml constructor always sets
+static int rpc_op_n_src_required(enum ggml_op op) {
+    switch (op) {
+        case GGML_OP_NONE:
+        case GGML_OP_ARANGE:
+        case GGML_OP_CUSTOM:
+            return 0;
+        case GGML_OP_ADD:
+        case GGML_OP_ACC:
+        case GGML_OP_SUB:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
+        case GGML_OP_COUNT_EQUAL:
+        case GGML_OP_CONCAT:
+        case GGML_OP_SILU_BACK:
+        case GGML_OP_RMS_NORM_BACK:
+        case GGML_OP_MUL_MAT:
+        case GGML_OP_OUT_PROD:
+        case GGML_OP_SET:
+        case GGML_OP_CPY:
+        case GGML_OP_GET_ROWS:
+        case GGML_OP_GET_ROWS_BACK:
+        case GGML_OP_SOFT_MAX_BACK:
+        case GGML_OP_ROPE:
+        case GGML_OP_ROPE_BACK:
+        case GGML_OP_CONV_TRANSPOSE_1D:
+        case GGML_OP_IM2COL:
+        case GGML_OP_IM2COL_BACK:
+        case GGML_OP_IM2COL_3D:
+        case GGML_OP_CONV_2D:
+        case GGML_OP_CONV_3D:
+        case GGML_OP_CONV_2D_DW:
+        case GGML_OP_CONV_TRANSPOSE_2D:
+        case GGML_OP_POOL_2D_BACK:
+        case GGML_OP_SSM_CONV:
+        case GGML_OP_SOLVE_TRI:
+        case GGML_OP_DSV4_HC_PRE:
+        case GGML_OP_MAP_CUSTOM2:
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+            return 2;
+        case GGML_OP_ADD_ID:
+        case GGML_OP_MUL_MAT_ID:
+        case GGML_OP_SET_ROWS:
+        case GGML_OP_FLASH_ATTN_EXT:
+        case GGML_OP_ADD_REL_POS:
+        case GGML_OP_DSV4_HC_COMB:
+        case GGML_OP_DSV4_HC_POST:
+        case GGML_OP_MAP_CUSTOM3:
+        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        case GGML_OP_OPT_STEP_SGD:
+            return 3;
+        case GGML_OP_FLASH_ATTN_BACK:
+        case GGML_OP_LIGHTNING_INDEXER:
+            return 4;
+        case GGML_OP_GATED_LINEAR_ATTN:
+        case GGML_OP_OPT_STEP_ADAMW:
+            return 5;
+        case GGML_OP_RWKV_WKV6:
+        case GGML_OP_GATED_DELTA_NET:
+            return 6;
+        case GGML_OP_SSM_SCAN:
+        case GGML_OP_RWKV_WKV7:
+            return 7;
+        default:
+            return 1;
+    }
+}
+
+static bool rpc_supports_op_tensor_ok(const rpc_tensor & t) {
+    if (t.type >= GGML_TYPE_COUNT || ggml_blck_size((enum ggml_type) t.type) == 0 || t.op >= GGML_OP_COUNT) {
+        return false;
+    }
+    int64_t nelements = 1;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (t.ne[i] > 1 && nelements > INT64_MAX / t.ne[i]) {
+            return false;
+        }
+        nelements *= std::max<int64_t>(t.ne[i], 1);
+    }
+    if (t.ne[0] % ggml_blck_size((enum ggml_type) t.type) != 0) {
+        return false;
+    }
+    if (t.op == GGML_OP_UNARY && (uint32_t) t.op_params[0] >= GGML_UNARY_OP_COUNT) {
+        return false;
+    }
+    if (t.op == GGML_OP_GLU && (uint32_t) t.op_params[0] >= GGML_GLU_OP_COUNT) {
+        return false;
+    }
+    return true;
+}
+
+bool rpc_server::get_device_supports_op(const std::vector<uint8_t> & input, std::vector<uint8_t> & response) {
+    // serialization format: see the comment above RPC_SUPPORTS_OP_MAX_OPS
+    const size_t header_size = 3*sizeof(uint32_t);
+    if (input.size() < header_size) {
+        return false;
+    }
+    uint32_t dev_id;
+    uint32_t n_ops;
+    uint32_t n_tensors;
+    memcpy(&dev_id,    input.data(),                      sizeof(uint32_t));
+    memcpy(&n_ops,     input.data() +   sizeof(uint32_t), sizeof(uint32_t));
+    memcpy(&n_tensors, input.data() + 2*sizeof(uint32_t), sizeof(uint32_t));
+    client_asks_supports_op = true;
+    if (dev_id >= backends.size() || n_ops == 0 || n_ops > RPC_SUPPORTS_OP_MAX_OPS ||
+        n_tensors == 0 || n_tensors > n_ops*2*(1 + GGML_MAX_SRC)) {
+        return false;
+    }
+    if (input.size() != header_size + n_ops*sizeof(uint32_t) + n_tensors*sizeof(rpc_tensor)) {
+        return false;
+    }
+    std::vector<uint32_t> ops(n_ops);
+    memcpy(ops.data(), input.data() + header_size, n_ops*sizeof(uint32_t));
+    std::vector<rpc_tensor> tensors(n_tensors);
+    memcpy(tensors.data(), input.data() + header_size + n_ops*sizeof(uint32_t), n_tensors*sizeof(rpc_tensor));
+
+    // rpc_tensor::id -> index in tensors
+    std::unordered_map<uint64_t, uint32_t> index;
+    for (uint32_t i = 0; i < n_tensors; i++) {
+        if (tensors[i].id == 0 || !index.emplace(tensors[i].id, i).second) {
+            return false;
+        }
+    }
+
+    struct ggml_init_params params {
+        /*.mem_size   =*/ ggml_tensor_overhead()*n_tensors,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+
+    ggml_context_ptr ctx_ptr { ggml_init(params) };
+    GGML_ASSERT(ctx_ptr != nullptr);
+    ggml_context * ctx = ctx_ptr.get();
+
+    // each tensor is checked and deserialized once, when it is first used; nullptr if it is invalid
+    std::vector<ggml_tensor *> deserialized(n_tensors, nullptr);
+    std::vector<bool>          checked(n_tensors, false);
+    auto get_root = [&](uint32_t i) -> ggml_tensor * {
+        if (!checked[i]) {
+            checked[i] = true;
+            if (rpc_supports_op_tensor_ok(tensors[i])) {
+                deserialized[i] = deserialize_tensor(ctx, &tensors[i]);
+            }
+        }
+        return deserialized[i];
+    };
+    // a view whose view_src is in the request also gets its view_src and view_offs, and data from them as in
+    // ggml_new_tensor_impl, so the backend sees the tensor as the client's scheduler does: views of allocated tensors
+    // have a data pointer but no buffer yet. view_src is linked one level deep (ggml views point to their root tensor)
+    std::vector<bool> linked(n_tensors, false);
+    auto get_tensor = [&](uint32_t i) -> ggml_tensor * {
+        ggml_tensor * t = get_root(i);
+        if (t == nullptr || linked[i]) {
+            return t;
+        }
+        linked[i] = true;
+        auto it = tensors[i].view_src != 0 ? index.find(tensors[i].view_src) : index.end();
+        if (it != index.end()) {
+            ggml_tensor * view_src = it->second == i ? nullptr : get_root(it->second);
+            const uint64_t view_offs = tensors[i].view_offs;
+            if (view_src == nullptr || view_offs > ggml_nbytes(view_src) || ggml_nbytes(t) > ggml_nbytes(view_src) - view_offs) {
+                deserialized[i] = nullptr;
+                return nullptr;
+            }
+            t->view_src  = view_src;
+            t->view_offs = view_offs;
+            if (t->data == nullptr && view_src->data != nullptr) {
+                t->data = (char *) view_src->data + view_offs;
+            }
+        }
+        return t;
+    };
+
+    response.assign(n_ops, 0);
+    for (uint32_t k = 0; k < n_ops; k++) {
+        if (ops[k] >= n_tensors) {
+            return false;
+        }
+        const rpc_tensor & t = tensors[ops[k]];
+        ggml_tensor * op = get_tensor(ops[k]);
+        if (op == nullptr) {
+            LOG_ERROR("[%s] invalid op tensor\n", __func__);
+            continue;
+        }
+        const int n_src_required = rpc_op_n_src_required(op->op);
+        bool valid = true;
+        for (int i = 0; i < GGML_MAX_SRC && valid; i++) {
+            op->src[i] = nullptr;
+            if (t.src[i] == 0) {
+                if (i < n_src_required) {
+                    LOG_ERROR("[%s] %s: missing src[%d]\n", __func__, ggml_op_name(op->op), i);
+                    valid = false;
+                }
+                continue;
+            }
+            auto it = index.find(t.src[i]);
+            if (it == index.end() || (op->src[i] = get_tensor(it->second)) == nullptr) {
+                LOG_ERROR("[%s] invalid src[%d] tensor\n", __func__, i);
+                valid = false;
+            }
+        }
+        if (valid) {
+            response[k] = ggml_backend_supports_op(backends[dev_id], op) ? 1 : 0;
+        }
+    }
+    return true;
+}
+
 rpc_server::~rpc_server() {
     // Wait for outstanding work. Destroying a communicator while its kernels are still running
     // is unsafe.
@@ -2977,6 +3276,22 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 }
                 break;
             }
+            case RPC_CMD_GET_DEVICE_SUPPORTS_OP: {
+                const uint64_t max_size = 3*sizeof(uint32_t) +
+                    RPC_SUPPORTS_OP_MAX_OPS*sizeof(uint32_t) + RPC_SUPPORTS_OP_MAX_TENSORS*sizeof(rpc_tensor);
+                std::vector<uint8_t> input;
+                if (!recv_msg(sock, input, max_size)) {
+                    return;
+                }
+                std::vector<uint8_t> response;
+                if (!server.get_device_supports_op(input, response)) {
+                    return;
+                }
+                if (!send_msg(sock, response.data(), response.size())) {
+                    return;
+                }
+                break;
+            }
             default: {
                 LOG_ERROR("Unhandled command: %s\n", rpc_cmd_name((enum rpc_cmd)cmd));
                 return;
@@ -3111,11 +3426,215 @@ static ggml_backend_buffer_type_t ggml_backend_rpc_device_get_buffer_type(ggml_b
     GGML_UNUSED(dev);
 }
 
+// llama.cpp asks about many ops while it places the weights, before any buffer or backend holds the connection, and
+// get_dispatcher() would connect again for each of them. The device keeps the connection only until a buffer or a
+// backend holds it too, so it still closes when they are freed, and the next connection can reach a restarted server
+static std::shared_ptr<rpc_dispatcher> ggml_backend_rpc_device_dispatcher(ggml_backend_rpc_device_context * ctx) {
+    std::lock_guard<std::mutex> lock(ctx->supports_op_mutex);
+    std::shared_ptr<rpc_dispatcher> dispatcher = ctx->dispatcher ? ctx->dispatcher : get_dispatcher(ctx->endpoint);
+    // references: this copy, ctx->dispatcher if set, and buffers and backends
+    if (dispatcher && dispatcher.use_count() > (ctx->dispatcher ? 2 : 1)) {
+        ctx->dispatcher.reset();
+    } else {
+        ctx->dispatcher = dispatcher;
+    }
+    return dispatcher;
+}
+
+// the cached answers belong to one connection: a new connection may reach a different server
+static void rpc_supports_op_cache_bind(ggml_backend_rpc_device_context * ctx, const std::shared_ptr<rpc_dispatcher> & dispatcher) {
+    if (ctx->supports_op_cache_dispatcher.lock() != dispatcher) {
+        ctx->supports_op_cache.clear();
+        ctx->supports_op_cache_dispatcher = dispatcher;
+    }
+}
+
+// the server's answer depends on what it receives: the op and its params, and for dst and each src the type, shape,
+// strides, flags and op, and where the tensor is as the server will see it (see serialize_tensor and
+// get_device_supports_op): the buffer type of a tensor in the server's own buffers, and for a view its view_src's
+// and its offset. Backends check the alignment of the data pointer (Vulkan, WebGPU, CUDA), so the pointer the server
+// will see is keyed modulo 256, the largest alignment they check, which keeps one key for the same op in every layer.
+// Tensor names, which some backends also read, are not keyed
+static void rpc_supports_op_key(const ggml_tensor * op, const rpc_dispatcher * dispatcher, std::string & key) {
+    key.clear();
+    auto append = [&key](const void * data, size_t size) {
+        key.append((const char *) data, size);
+    };
+    auto server_buft = [dispatcher](const ggml_tensor * t) -> ggml_backend_buffer_type_t {
+        if (t && t->buffer && ggml_backend_buffer_is_rpc(t->buffer)) {
+            const ggml_backend_rpc_buffer_context * buf_ctx = (const ggml_backend_rpc_buffer_context *) t->buffer->context;
+            if (buf_ctx != nullptr && buf_ctx->dispatcher.get() == dispatcher) {
+                return t->buffer->buft;
+            }
+        }
+        return nullptr;
+    };
+    const int32_t op_id = op->op;
+    append(&op_id, sizeof(op_id));
+    append(op->op_params, sizeof(op->op_params));
+    for (int i = -1; i < GGML_MAX_SRC; i++) {
+        const ggml_tensor * t = i < 0 ? op : op->src[i];
+        const int32_t type = t ? (int32_t) t->type : -1;
+        append(&type, sizeof(type));
+        if (t == nullptr) {
+            continue;
+        }
+        append(t->ne, sizeof(t->ne));
+        append(t->nb, sizeof(t->nb));
+        append(&t->flags, sizeof(t->flags));
+        const int32_t t_op = t->op;
+        append(&t_op, sizeof(t_op));
+        const ggml_backend_buffer_type_t buft      = server_buft(t);
+        const ggml_backend_buffer_type_t view_buft = server_buft(t->view_src);
+        const uint8_t                    is_view   = t->view_src != nullptr;
+        const uint64_t                   view_offs = t->view_src ? t->view_offs : 0;
+        uint64_t data = 0;
+        if (buft) {
+            data = (uint64_t) (uintptr_t) t->data;
+        } else if (t->view_src) {
+            data = (view_buft ? (uint64_t) (uintptr_t) t->view_src->data : 0) + view_offs;
+        }
+        const uint32_t data_mod = (uint32_t) (data % 256);
+        append(&buft,      sizeof(buft));
+        append(&view_buft, sizeof(view_buft));
+        append(&is_view,   sizeof(is_view));
+        append(&view_offs, sizeof(view_offs));
+        append(&data_mod,  sizeof(data_mod));
+    }
+}
+
+// asks the server whether its backend supports each of ops, in one round trip per RPC_SUPPORTS_OP_MAX_OPS ops,
+// caches the answers under keys and returns them
+static std::vector<uint8_t> rpc_supports_op_query(ggml_backend_rpc_device_context * ctx, const std::shared_ptr<rpc_dispatcher> & dispatcher,
+                                                  const std::vector<const ggml_tensor *> & ops, std::vector<std::string> & keys) {
+    GGML_ASSERT(ops.size() == keys.size());
+    std::vector<uint8_t> answers(ops.size(), 0);
+    for (size_t start = 0; start < ops.size(); start += RPC_SUPPORTS_OP_MAX_OPS) {
+        const uint32_t n_ops = (uint32_t) std::min<size_t>(RPC_SUPPORTS_OP_MAX_OPS, ops.size() - start);
+
+        // the ops, their srcs and the view_src of each, each tensor once
+        std::vector<const ggml_tensor *> tensors;
+        std::unordered_map<const ggml_tensor *, uint32_t> index;
+        auto add = [&](const ggml_tensor * t) {
+            auto res = index.emplace(t, (uint32_t) tensors.size());
+            if (res.second) {
+                tensors.push_back(t);
+                if (t->view_src != nullptr && index.emplace(t->view_src, (uint32_t) tensors.size()).second) {
+                    tensors.push_back(t->view_src);
+                }
+            }
+            return res.first->second;
+        };
+        std::vector<uint32_t> op_index(n_ops);
+        for (uint32_t k = 0; k < n_ops; k++) {
+            const ggml_tensor * op = ops[start + k];
+            op_index[k] = add(op);
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (op->src[i] != nullptr) {
+                    add(op->src[i]);
+                }
+            }
+        }
+        const uint32_t n_tensors = (uint32_t) tensors.size();
+
+        const size_t size = 3*sizeof(uint32_t) + n_ops*sizeof(uint32_t) + n_tensors*sizeof(rpc_tensor);
+        auto request = std::make_shared<std::vector<uint8_t>>(size);
+        uint8_t * dst = request->data();
+        memcpy(dst, &ctx->device, sizeof(uint32_t)); dst += sizeof(uint32_t);
+        memcpy(dst, &n_ops,       sizeof(uint32_t)); dst += sizeof(uint32_t);
+        memcpy(dst, &n_tensors,   sizeof(uint32_t)); dst += sizeof(uint32_t);
+        memcpy(dst, op_index.data(), n_ops*sizeof(uint32_t)); dst += n_ops*sizeof(uint32_t);
+        for (const ggml_tensor * t : tensors) {
+            const rpc_tensor rt = serialize_tensor(t, dispatcher.get());
+            memcpy(dst, &rt, sizeof(rt));
+            dst += sizeof(rt);
+        }
+
+        std::vector<uint8_t> response(n_ops);
+        dispatcher->send(RPC_CMD_GET_DEVICE_SUPPORTS_OP, std::shared_ptr<const void>(request, request->data()), size,
+                         nullptr, 0, response.data(), response.size());
+
+        std::lock_guard<std::mutex> lock(ctx->supports_op_mutex);
+        rpc_supports_op_cache_bind(ctx, dispatcher);
+        if (ctx->supports_op_cache.size() + n_ops > RPC_SUPPORTS_OP_CACHE_MAX) {
+            ctx->supports_op_cache.clear();
+        }
+        for (uint32_t k = 0; k < n_ops; k++) {
+            answers[start + k] = response[k];
+            ctx->supports_op_cache.emplace(std::move(keys[start + k]), response[k] != 0);
+        }
+    }
+    return answers;
+}
+
 static bool ggml_backend_rpc_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
-    GGML_UNUSED(dev);
-    GGML_UNUSED(op);
-    //TODO: call the remote backend and cache the results
-    return true;
+    ggml_backend_rpc_device_context * ctx = (ggml_backend_rpc_device_context *) dev->context;
+
+    std::shared_ptr<rpc_dispatcher> dispatcher = ggml_backend_rpc_device_dispatcher(ctx);
+    if (!dispatcher || !dispatcher->get_supports_op()) {
+        // the server cannot answer (older than 10.0.1 or not reachable): assume that it supports the op
+        return true;
+    }
+
+    std::string key;
+    rpc_supports_op_key(op, dispatcher.get(), key);
+    {
+        std::lock_guard<std::mutex> lock(ctx->supports_op_mutex);
+        rpc_supports_op_cache_bind(ctx, dispatcher);
+        auto it = ctx->supports_op_cache.find(key);
+        if (it != ctx->supports_op_cache.end()) {
+            return it->second;
+        }
+    }
+
+    // ops in a graph are usually answered before this, by ggml_backend_rpc_device_supports_op_prefetch
+    std::vector<const ggml_tensor *> ops  = { op };
+    std::vector<std::string>         keys = { std::move(key) };
+    return rpc_supports_op_query(ctx, dispatcher, ops, keys)[0] != 0;
+}
+
+// called by the scheduler before it assigns backends to the nodes of graph:
+// asks about every uncached op that the scheduler may ask about, in one round trip
+static void ggml_backend_rpc_device_supports_op_prefetch(ggml_backend_dev_t dev, struct ggml_cgraph * graph) {
+    ggml_backend_rpc_device_context * ctx = (ggml_backend_rpc_device_context *) dev->context;
+
+    std::shared_ptr<rpc_dispatcher> dispatcher = ggml_backend_rpc_device_dispatcher(ctx);
+    if (!dispatcher || !dispatcher->get_supports_op()) {
+        return;
+    }
+
+    std::vector<const ggml_tensor *> ops;
+    std::vector<std::string>         keys;
+    std::unordered_set<std::string>  batch;
+    std::string key;
+    auto add = [&](const ggml_tensor * t) {
+        rpc_supports_op_key(t, dispatcher.get(), key);
+        if (!batch.insert(key).second) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(ctx->supports_op_mutex);
+            rpc_supports_op_cache_bind(ctx, dispatcher);
+            if (ctx->supports_op_cache.find(key) != ctx->supports_op_cache.end()) {
+                return;
+            }
+        }
+        ops.push_back(t);
+        keys.push_back(key);
+    };
+    // the scheduler asks a device about a leaf only if the device can use the leaf's buffer
+    for (int i = 0; i < graph->n_leafs; i++) {
+        const ggml_tensor * leaf = graph->leafs[i];
+        if (leaf->buffer && ggml_backend_dev_supports_buft(dev, leaf->buffer->buft)) {
+            add(leaf);
+        }
+    }
+    for (int i = 0; i < graph->n_nodes; i++) {
+        add(graph->nodes[i]);
+    }
+    if (!ops.empty()) {
+        rpc_supports_op_query(ctx, dispatcher, ops, keys);
+    }
 }
 
 static bool ggml_backend_rpc_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
@@ -3346,6 +3865,9 @@ static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const ch
     if (std::strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
         return (void *)ggml_backend_rpc_comm_allreduce_tensor;
     }
+    if (std::strcmp(name, "ggml_backend_dev_supports_op_prefetch") == 0) {
+        return (void *)ggml_backend_rpc_device_supports_op_prefetch;
+    }
     return NULL;
 
     GGML_UNUSED(reg);
@@ -3409,6 +3931,10 @@ ggml_backend_reg_t ggml_backend_rpc_add_server(const char * endpoint) {
             /* .device      = */    ind,
             /* .name        = */    dev_name,
             /* .description = */    dev_desc,
+            /* .dispatcher  = */    nullptr,
+            /* .supports_op_mutex = */ {},
+            /* .supports_op_cache = */ {},
+            /* .supports_op_cache_dispatcher = */ {},
         };
 
         ggml_backend_dev_t dev = new ggml_backend_device {

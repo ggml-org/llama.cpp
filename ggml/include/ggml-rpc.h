@@ -8,7 +8,8 @@ extern "C" {
 
 #define RPC_PROTO_MAJOR_VERSION    10
 #define RPC_PROTO_MINOR_VERSION    0
-#define RPC_PROTO_PATCH_VERSION    0
+// 10.0.1: RPC_CMD_GET_DEVICE_SUPPORTS_OP, sent only to servers that advertise it in the HELLO flags
+#define RPC_PROTO_PATCH_VERSION    1
 
 #ifdef  __cplusplus
 static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT has changed - update RPC_PROTO_PATCH_VERSION");

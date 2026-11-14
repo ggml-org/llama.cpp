@@ -41,3 +41,14 @@ if grep -q "invalid data ptr" "$test_dir/server-b.log"; then
     cat "$test_dir/server-b.log"
     exit 1
 fi
+
+# a graph with an op the server's backend cannot run is refused, not computed
+# (the client aborts on purpose here, so skip the backtrace)
+if GGML_NO_BACKTRACE=1 "$client" "$endpoint_a" "$endpoint_b" unsupported >"$test_dir/client-unsupported.log" 2>&1; then
+    echo "server B computed a graph with an op its backend cannot run"
+    exit 1
+fi
+if ! grep -q "does not support CPY" "$test_dir/server-b.log"; then
+    cat "$test_dir/server-b.log" "$test_dir/client-unsupported.log"
+    exit 1
+fi
