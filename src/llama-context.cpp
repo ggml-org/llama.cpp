@@ -196,6 +196,21 @@ llama_context::llama_context(
         cparams.n_rs_seq = 0;
     }
 
+    // [EXPERIMENTAL] deferred commit for delta-net: keep one state and the inputs of the last ubatch
+    // LLAMA_RS_REPLAY=1: the gdn op replays the kept pending tokens before the new ones
+    cparams.rs_replay = false;
+    if (cparams.n_rs_seq > 0) {
+        const char * env = getenv("LLAMA_RS_REPLAY");
+        const bool supported = model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN3NEXT ||
+                               model.arch == LLM_ARCH_QWEN4EXP;
+        cparams.rs_replay = env && atoi(env) != 0 && supported;
+        if (cparams.rs_replay && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR && model.arch == LLM_ARCH_QWEN3NEXT) {
+            // its conv channels split in two segments, which the channels-first replay conv history cannot keep
+            LLAMA_LOG_WARN("%s: LLAMA_RS_REPLAY is not supported for qwen3next with SPLIT_MODE_TENSOR, using snapshots\n", __func__);
+            cparams.rs_replay = false;
+        }
+    }
+
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
     cparams.yarn_ext_factor         = params.yarn_ext_factor  >= 0.0f ? params.yarn_ext_factor  : hparams.yarn_ext_factor;
@@ -435,6 +450,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: rs_replay             = %s\n",   __func__, cparams.rs_replay ? "true" : "false");
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 

@@ -419,6 +419,10 @@ static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a
 }  // namespace
 using namespace ggml_cuda_gated_delta_net_mma;
 
+bool ggml_cuda_gdn_mma_supported(int device, const ggml_cuda_gdn_mma_args & a) {
+    return a.state_out && select_gdn_mma_path(device, a) != gdn_path::ar;
+}
+
 bool ggml_cuda_gdn_mma_launch(int device, const ggml_cuda_gdn_mma_args & a, cudaStream_t stream) {
     if (!a.state_out) {
         return false;

@@ -309,6 +309,19 @@ public:
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
 
+    // rs_replay: the ubatch first replays the kept pending tokens of the last ubatch (none is a no-op)
+    bool          has_rep  = false;
+    int64_t       n_conv   = 0;       // conv window columns, the widest conv of the model
+    int64_t       n_pend   = 0;       // pending slots per seq
+    ggml_tensor * rep_n    = nullptr; // I32 [n_seqs], kept pending tokens
+    ggml_tensor * rep_cols = nullptr; // I32 [n_conv, n_seqs], conv history columns of the window after the kept tokens
+
+    // views of rep_cols for the delta-net conv and the PLE conv windows, computed once per graph and shared across layers
+    ggml_tensor * rep_cols_r = nullptr;
+    ggml_tensor * rep_cols_p = nullptr;
+
+    void set_input_rep(const llama_memory_recurrent_context * mctx, const llama_ubatch * ubatch);
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse

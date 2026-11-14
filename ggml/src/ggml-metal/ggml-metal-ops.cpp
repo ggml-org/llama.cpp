@@ -2104,6 +2104,12 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         }
     }
 
+    // replay of pending tokens, see ggml_gated_delta_net
+    const ggml_tensor * pk  = op->src[6];
+    const ggml_tensor * pv  = op->src[7];
+    const ggml_tensor * pgb = op->src[8];
+    const ggml_tensor * rep = op->src[9];
+
     int ida = 0;
 
     ggml_metal_kargs_gated_delta_net args = {
@@ -2143,6 +2149,17 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
         /*.nb2  =*/ nb2,
         /*.nb3  =*/ nb3,
         /*.nb_out =*/ nb_out,
+        /*.n_pend =*/ pk  ? ggml_get_op_params_i32(op, 1) : 0,
+        /*.keep   =*/ pk  ? ggml_get_op_params_i32(op, 2) : 0,
+        /*.nb61   =*/ pk  ? pk->nb[1]  : 0,
+        /*.nb62   =*/ pk  ? pk->nb[2]  : 0,
+        /*.nb63   =*/ pk  ? pk->nb[3]  : 0,
+        /*.nb71   =*/ pv  ? pv->nb[1]  : 0,
+        /*.nb72   =*/ pv  ? pv->nb[2]  : 0,
+        /*.nb73   =*/ pv  ? pv->nb[3]  : 0,
+        /*.nb81   =*/ pgb ? pgb->nb[1] : 0,
+        /*.nb82   =*/ pgb ? pgb->nb[2] : 0,
+        /*.nb83   =*/ pgb ? pgb->nb[3] : 0,
     };
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
@@ -2155,6 +2172,10 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), ida++); // state
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         ida++); // dst (attn)
     ggml_metal_encoder_set_buffer  (enc, bid_out,                              ida++); // state_out
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(pk  ? pk  : op->src[0]), ida++); // pend_k
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(pv  ? pv  : op->src[0]), ida++); // pend_v
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(pgb ? pgb : op->src[0]), ida++); // pend_gb
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(rep ? rep : op->src[0]), ida++); // n_rep
 
     const int nsg = pipeline.nsg;
 

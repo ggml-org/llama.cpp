@@ -1459,6 +1459,12 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
     uint32_t       scale_u32;
     memcpy(&scale_u32, &scale, sizeof(scale_u32));
 
+    // replay of pending tokens, see ggml_gated_delta_net
+    ggml_tensor * pend_k  = dst->src[6];
+    ggml_tensor * pend_v  = dst->src[7];
+    ggml_tensor * pend_gb = dst->src[8];
+    ggml_tensor * n_rep   = dst->src[9];
+
     std::vector<uint32_t> params = {
         h,
         n_tokens,
@@ -1483,6 +1489,21 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
         scale_u32,
         dst_fuse ? (uint32_t) (dst_fuse->nb[2] / ggml_type_size(dst_fuse->type)) : 0,
         dst_fuse ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst_fuse) / ggml_type_size(dst_fuse->type)) : 0,
+
+        pend_k ? (uint32_t) ggml_get_op_params_i32(dst, 1) : 0,
+        pend_k ? (uint32_t) ggml_get_op_params_i32(dst, 2) : 0,
+
+        pend_k ? (uint32_t) (pend_k->nb[1] / ggml_type_size(pend_k->type)) : 0,
+        pend_k ? (uint32_t) (pend_k->nb[2] / ggml_type_size(pend_k->type)) : 0,
+        pend_k ? (uint32_t) (pend_k->nb[3] / ggml_type_size(pend_k->type)) : 0,
+
+        pend_v ? (uint32_t) (pend_v->nb[1] / ggml_type_size(pend_v->type)) : 0,
+        pend_v ? (uint32_t) (pend_v->nb[2] / ggml_type_size(pend_v->type)) : 0,
+        pend_v ? (uint32_t) (pend_v->nb[3] / ggml_type_size(pend_v->type)) : 0,
+
+        pend_gb ? (uint32_t) (pend_gb->nb[1] / ggml_type_size(pend_gb->type)) : 0,
+        pend_gb ? (uint32_t) (pend_gb->nb[2] / ggml_type_size(pend_gb->type)) : 0,
+        pend_gb ? (uint32_t) (pend_gb->nb[3] / ggml_type_size(pend_gb->type)) : 0,
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -1494,6 +1515,14 @@ static webgpu_encoded_op ggml_webgpu_gated_delta_net(webgpu_context & ctx,
 
     if (dst_fuse) {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 7, dst_fuse));
+    }
+
+    if (pend_k) {
+        const uint32_t binding = dst_fuse ? 8 : 7;
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, binding + 0, pend_k));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, binding + 1, pend_v));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, binding + 2, pend_gb));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, binding + 3, n_rep));
     }
 
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, h, n_seqs);

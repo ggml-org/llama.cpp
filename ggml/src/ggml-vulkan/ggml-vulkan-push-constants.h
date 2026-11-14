@@ -730,6 +730,10 @@ struct vk_op_gated_delta_net_push_constants {
     uint32_t neq1, rq3;
     float scale;
     uint32_t K;
+    uint32_t n_pend, keep;     // replay: pending tokens per seq, write the state after the replay
+    uint32_t spk1, spk2, spk3; // replay: pend_k, pend_v and pend_gb strides in floats
+    uint32_t spv1, spv2, spv3;
+    uint32_t spg1, spg2, spg3;
 };
 
 struct vk_op_ssm_scan_push_constants {

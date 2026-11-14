@@ -450,9 +450,11 @@ struct ggml_webgpu_gated_delta_net_pipeline_key {
     int  s_v;
     int  kda;
     bool fused_cache;
+    bool replay;
 
     bool operator==(const ggml_webgpu_gated_delta_net_pipeline_key & other) const {
-        return type == other.type && s_v == other.s_v && kda == other.kda && fused_cache == other.fused_cache;
+        return type == other.type && s_v == other.s_v && kda == other.kda && fused_cache == other.fused_cache &&
+               replay == other.replay;
     }
 };
 
@@ -462,6 +464,7 @@ struct ggml_webgpu_gated_delta_net_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.type);
         ggml_webgpu_hash_combine(seed, key.s_v);
         ggml_webgpu_hash_combine(seed, key.kda);
+        ggml_webgpu_hash_combine(seed, key.replay);
         return seed;
     }
 };
@@ -1995,6 +1998,7 @@ class ggml_webgpu_shader_lib {
         key.s_v                                      = (int) context.src2->ne[0];
         key.kda                                      = context.src3->ne[0] == context.src2->ne[0];
         key.fused_cache                              = context.dst_fuse != nullptr;
+        key.replay                                   = context.dst->src[6] != nullptr;
 
         auto it = gated_delta_net_pipelines.find(key);
         if (it != gated_delta_net_pipelines.end()) {
@@ -2020,6 +2024,11 @@ class ggml_webgpu_shader_lib {
         if (key.fused_cache) {
             defines.push_back("FUSED_CACHE");
             variant += "_fused_cache";
+        }
+
+        if (key.replay) {
+            defines.push_back("REPLAY");
+            variant += "_replay";
         }
 
         defines.push_back("S_V=" + std::to_string(key.s_v) + "u");

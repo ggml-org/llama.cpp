@@ -15,6 +15,7 @@ layout(constant_id = 0) const uint S_V = 128;
 layout(constant_id = 1) const uint KDA = 0;
 layout(constant_id = 2) const uint SUBGROUP_SIZE = 32;
 layout(constant_id = 3) const uint LANES_PER_COLUMN = 32;
+layout(constant_id = 4) const uint REPLAY = 0;
 
 const uint COLS_PER_WG = SUBGROUP_SIZE / LANES_PER_COLUMN;
 const uint ROWS_PER_LANE = S_V / LANES_PER_COLUMN;
@@ -32,6 +33,10 @@ layout(push_constant) uniform Parameters {
     uint neq1, rq3;
     float scale;
     uint K;
+    uint n_pend, keep;
+    uint spk1, spk2, spk3;
+    uint spv1, spv2, spv3;
+    uint spg1, spg2, spg3;
 };
 
 layout(binding = 0) readonly  buffer QBuf     { FLOAT_TYPE data_q[];     };
@@ -41,6 +46,12 @@ layout(binding = 3) readonly  buffer GBuf     { FLOAT_TYPE data_g[];     };
 layout(binding = 4) readonly  buffer BetaBuf  { FLOAT_TYPE data_beta[];  };
 layout(binding = 5) readonly  buffer StateBuf { FLOAT_TYPE data_state[]; };
 layout(binding = 6)           buffer DstBuf   { FLOAT_TYPE data_dst[];   };
+
+// replay: pending tokens to run before the new ones (see ggml_gated_delta_net)
+layout(binding = 7)  readonly buffer PKBuf    { FLOAT_TYPE data_pk[];    };
+layout(binding = 8)  readonly buffer PVBuf    { FLOAT_TYPE data_pv[];    };
+layout(binding = 9)  readonly buffer PGBBuf   { FLOAT_TYPE data_pgb[];   };
+layout(binding = 10) readonly buffer NRepBuf  { int        data_n_rep[]; };
 
 #if !USE_SUBGROUP_ADD && !USE_SUBGROUP_CLUSTERED
 shared FLOAT_TYPE temp[SUBGROUP_SIZE];
@@ -113,6 +124,55 @@ void main() {
         s_shard[r] = FLOAT_TYPE(data_state[state_in_base + col * S_V + r * LANES_PER_COLUMN + lane]);
     }
 
+    if (REPLAY != 0) {
+        const uint n_r = uint(clamp(data_n_rep[seq_id], 0, int(n_pend)));
+
+        for (uint t = 0; t < n_r; t++) {
+            const uint k_off = seq_id * spk3 + t * spk2 + iq1 * spk1;
+            const uint v_off = seq_id * spv3 + t * spv2 + head_id * spv1;
+            const uint g_off = seq_id * spg3 + t * spg2 + head_id * spg1;
+            const FLOAT_TYPE beta_val = FLOAT_TYPE(data_pgb[g_off + n_pend * spg2]);
+
+            FLOAT_TYPE k_reg[ROWS_PER_LANE];
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                k_reg[r] = FLOAT_TYPE(data_pk[k_off + r * LANES_PER_COLUMN + lane]);
+            }
+
+            FLOAT_TYPE g_exp[ROWS_PER_LANE];
+            if (KDA == 0) {
+                const FLOAT_TYPE g_val = exp(FLOAT_TYPE(data_pgb[g_off]));
+                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                    g_exp[r] = g_val;
+                }
+            } else {
+                [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                    g_exp[r] = exp(FLOAT_TYPE(data_pgb[g_off + r * LANES_PER_COLUMN + lane]));
+                }
+            }
+
+            const FLOAT_TYPE v_val = FLOAT_TYPE(data_pv[v_off + col]);
+
+            // same update as below, without the attention output
+            FLOAT_TYPE kv_shard = 0.0;
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                kv_shard += g_exp[r] * s_shard[r] * k_reg[r];
+            }
+            FLOAT_TYPE kv_col = reduce_partial(kv_shard);
+
+            FLOAT_TYPE delta_col = (v_val - kv_col) * beta_val;
+
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                s_shard[r] = g_exp[r] * s_shard[r] + k_reg[r] * delta_col;
+            }
+        }
+
+        if (keep != 0) {
+            [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
+                data_dst[s_off + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
+            }
+        }
+    }
+
     // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
     // When n_tokens < K, only slots 0..n_tokens-1 are written; older slots are caller-owned.
 
@@ -181,7 +241,8 @@ void main() {
         }
     }
 
-    if (K == 1u) {
+    // replay with keep: the state output is the state after the replay
+    if (K == 1u && !(REPLAY != 0 && keep != 0)) {
         [[unroll]] for (uint r = 0; r < ROWS_PER_LANE; r++) {
             data_dst[s_off + state_out_base + col * S_V + r * LANES_PER_COLUMN + lane] = s_shard[r];
         }
