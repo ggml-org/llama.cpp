@@ -64,8 +64,9 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
 
         LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
+        // not lazy: this cache is not prepared, so a failed commit in apply() would leave it out of step with mem_attn
         return new llama_kv_cache(
-            model, no_alloc, hparams_idx, type_k, type_v, v_trans, offload, unified,
+            model, no_alloc, hparams_idx, type_k, type_v, v_trans, offload, false, unified,
             kv_size, n_seq_max, n_swa, swa_type,
             nullptr, filter_idx, nullptr, nullptr, "idx_");
     }()) {}

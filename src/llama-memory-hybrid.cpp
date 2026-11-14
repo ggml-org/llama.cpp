@@ -39,6 +39,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         type_v,
         v_trans,
         offload,
+        true,
         unified,
         kv_size,
         n_seq_max,

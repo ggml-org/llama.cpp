@@ -71,7 +71,7 @@ llama_kv_cache_dsa_iswa::llama_kv_cache_dsa_iswa(
 
     kv_swa = std::make_unique<llama_kv_cache>(
             model, no_alloc, hparams, type_k, type_v,
-            v_trans, offload, unified, size_swa, n_seq_max,
+            v_trans, offload, true, unified, size_swa, n_seq_max,
             hparams.n_swa, hparams.swa_type, nullptr, filter_swa, reuse, nullptr);
 }
 

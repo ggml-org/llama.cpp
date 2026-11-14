@@ -352,7 +352,7 @@ static void check_fp8_attention(llama_model * model, bool offload_kqv = true) {
             if (offload_kqv) {
                 // Cache writes cannot fall back from a preallocated device buffer.
                 llama_kv_cache probe(*model, false, model->hparams, params.type_k, params.type_v,
-                        flash == LLAMA_FLASH_ATTN_TYPE_DISABLED, false, true, params.n_ctx, 1,
+                        flash == LLAMA_FLASH_ATTN_TYPE_DISABLED, false, false, true, params.n_ctx, 1,
                         0, LLAMA_SWA_TYPE_NONE, nullptr, nullptr, nullptr, nullptr);
                 ggml_context_ptr ctx(ggml_init({ 64*ggml_tensor_overhead(), nullptr, true }));
                 llama_kv_cache::slot_info slots;

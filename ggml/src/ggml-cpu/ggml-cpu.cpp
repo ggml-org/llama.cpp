@@ -37,6 +37,10 @@
 #    include <sys/types.h>
 #endif
 
+#if defined(__linux__)
+#    include <sys/mman.h>
+#endif
+
 // ggml-backend interface
 
 std::vector<ggml_backend_buffer_type_t> & ggml_backend_cpu_get_extra_buffer_types() {
@@ -492,6 +496,151 @@ static bool ggml_backend_cpu_device_supports_buft(ggml_backend_dev_t dev, ggml_b
     GGML_UNUSED(dev);
 }
 
+// CPU lazy buffer type: anonymous memory that the system gives a page at a time as it is written. A zero memset hands the whole
+// pages back with madvise, so they read as zero again and leave the resident set; only the partial pages at the ends are written.
+#if defined(__linux__)
+
+static void ggml_backend_cpu_lazy_zero(void * ptr, size_t size) {
+    static const uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
+    const uintptr_t a  = (uintptr_t) ptr;
+    const uintptr_t b  = a + size;
+    const uintptr_t pa = (a + page - 1) / page * page;
+    const uintptr_t pb = b / page * page;
+    if (pa >= pb) {
+        memset(ptr, 0, size);
+        return;
+    }
+    memset(ptr, 0, pa - a);
+    if (madvise((void *) pa, pb - pa, MADV_DONTNEED) != 0) {
+        memset((void *) pa, 0, pb - pa);
+    }
+    memset((void *) pb, 0, b - pb);
+}
+
+static void ggml_backend_cpu_lazy_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    munmap(buffer->context, buffer->size);
+}
+
+static void * ggml_backend_cpu_lazy_buffer_get_base(ggml_backend_buffer_t buffer) {
+    return buffer->context;
+}
+
+static void ggml_backend_cpu_lazy_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
+    if (value == 0) {
+        ggml_backend_cpu_lazy_zero((char *) tensor->data + offset, size);
+    } else {
+        memset((char *) tensor->data + offset, value, size);
+    }
+
+    GGML_UNUSED(buffer);
+}
+
+static void ggml_backend_cpu_lazy_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    memcpy((char *) tensor->data + offset, data, size);
+
+    GGML_UNUSED(buffer);
+}
+
+static void ggml_backend_cpu_lazy_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    memcpy(data, (const char *) tensor->data + offset, size);
+
+    GGML_UNUSED(buffer);
+}
+
+static bool ggml_backend_cpu_lazy_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
+    if (ggml_backend_buffer_is_host(src->buffer)) {
+        memcpy(dst->data, src->data, ggml_nbytes(src));
+        return true;
+    }
+    return false;
+
+    GGML_UNUSED(buffer);
+}
+
+static void ggml_backend_cpu_lazy_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
+    if (value == 0) {
+        ggml_backend_cpu_lazy_zero(buffer->context, buffer->size);
+    } else {
+        memset(buffer->context, value, buffer->size);
+    }
+}
+
+static const ggml_backend_buffer_i ggml_backend_cpu_lazy_buffer_i = {
+    /* .free_buffer     = */ ggml_backend_cpu_lazy_buffer_free_buffer,
+    /* .get_base        = */ ggml_backend_cpu_lazy_buffer_get_base,
+    /* .init_tensor     = */ NULL,
+    /* .memset_tensor   = */ ggml_backend_cpu_lazy_buffer_memset_tensor,
+    /* .set_tensor      = */ ggml_backend_cpu_lazy_buffer_set_tensor,
+    /* .get_tensor      = */ ggml_backend_cpu_lazy_buffer_get_tensor,
+    /* .set_tensor_2d   = */ NULL,
+    /* .get_tensor_2d   = */ NULL,
+    /* .cpy_tensor      = */ ggml_backend_cpu_lazy_buffer_cpy_tensor,
+    /* .clear           = */ ggml_backend_cpu_lazy_buffer_clear,
+    /* .reset           = */ NULL,
+    /* .set_tensor_n    = */ NULL,
+    /* .get_tensor_n    = */ NULL,
+    /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL, // the system commits a page when it is first written
+};
+
+static const char * ggml_backend_cpu_lazy_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    return "CPU_Lazy";
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_cpu_lazy_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    void * data = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (data == MAP_FAILED) {
+        GGML_LOG_ERROR("%s: failed to map %zu bytes\n", __func__, size);
+        return NULL;
+    }
+    return ggml_backend_buffer_init(buft, ggml_backend_cpu_lazy_buffer_i, data, size);
+}
+
+static size_t ggml_backend_cpu_lazy_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    return TENSOR_ALIGNMENT;
+
+    GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_cpu_lazy_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    return true;
+
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_cpu_lazy_buffer_type(void) {
+    static struct ggml_backend_buffer_type buft = {
+        /* .iface   = */ {
+            /* .get_name         = */ ggml_backend_cpu_lazy_buffer_type_get_name,
+            /* .alloc_buffer     = */ ggml_backend_cpu_lazy_buffer_type_alloc_buffer,
+            /* .alloc_buffer_n   = */ NULL,
+            /* .get_alignment    = */ ggml_backend_cpu_lazy_buffer_type_get_alignment,
+            /* .get_max_size     = */ NULL,
+            /* .get_alloc_size   = */ NULL,
+            /* .get_alloc_size_n = */ NULL,
+            /* .is_host          = */ ggml_backend_cpu_lazy_buffer_type_is_host,
+        },
+        /* .device  = */ NULL,
+        /* .context = */ NULL,
+    };
+
+    return &buft;
+}
+
+#endif
+
+static ggml_backend_buffer_type_t ggml_backend_cpu_device_get_lazy_buffer_type(ggml_backend_dev_t dev) {
+#if defined(__linux__)
+    return ggml_backend_cpu_lazy_buffer_type();
+#else
+    return NULL;
+#endif
+
+    GGML_UNUSED(dev);
+}
+
 static const struct ggml_backend_device_i ggml_backend_cpu_device_i = {
     /* .get_name             = */ ggml_backend_cpu_device_get_name,
     /* .get_description      = */ ggml_backend_cpu_device_get_description,
@@ -508,6 +657,7 @@ static const struct ggml_backend_device_i ggml_backend_cpu_device_i = {
     /* .event_new            = */ NULL,
     /* .event_free           = */ NULL,
     /* .event_synchronize    = */ NULL,
+    /* .get_lazy_buffer_type = */ ggml_backend_cpu_device_get_lazy_buffer_type,
 };
 
 // CPU backend - backend (reg)

@@ -840,6 +840,7 @@ static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
     /* .set_tensor_n    = */ ggml_backend_hexagon_buffer_set_tensor_n,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 // ** backend buffer type
@@ -900,6 +901,7 @@ static ggml_backend_buffer_i ggml_backend_hexagon_host_buffer_interface = {
     /* .set_tensor_n    = */ ggml_backend_hexagon_host_buffer_set_tensor_n,
     /* .get_tensor_n    = */ NULL,
     /* .cpy_tensor_n    = */ NULL,
+    /* .commit_tensor   = */ NULL,
 };
 
 // ** backend buffer type
@@ -3172,6 +3174,7 @@ static const struct ggml_backend_device_i ggml_backend_hexagon_device_i = {
     /* .event_new            = */ ggml_backend_hexagon_device_event_new,
     /* .event_free           = */ ggml_backend_hexagon_device_event_free,
     /* .event_synchronize    = */ ggml_backend_hexagon_device_event_synchronize,
+    /* .get_lazy_buffer_type = */ NULL,
 };
 
 //** backend registry
