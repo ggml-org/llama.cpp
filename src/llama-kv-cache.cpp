@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -1314,7 +1315,21 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
 
     // pad the n_kv value so that the graph remains constant across batches and can be reused
     // note: this also helps some backends with performance (f.ex https://github.com/ggml-org/llama.cpp/pull/16812#issuecomment-3455112220)
-    const uint32_t n_pad = 256;
+    //
+    // M5-TTS: the depth stage holds at most 16 live in-frame KV rows, so the
+    // upstream 256-wide pad makes QK/AV read ~8x more rows than exist. Pad to
+    // 32 by default (SM6650 A/B: -9% wall time, codes/WAV bit-identical).
+    // The backbone stage opts back into 256 in examples/m5-tts/backbone.cpp
+    // because its prefill prefix grows over the utterance; M5_KV_PAD=256
+    // restores the upstream behaviour globally for A/B or other models.
+    static const uint32_t n_pad = []() -> uint32_t {
+        const char * env = std::getenv("M5_KV_PAD");
+        if (env == nullptr || *env == '\0') {
+            return 32;
+        }
+        const int value = std::atoi(env);
+        return value > 0 ? static_cast<uint32_t>(value) : 32;
+    }();
 
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const auto & cells = v_cells[sinfo.strm[s]];

@@ -13,6 +13,8 @@ enum htp_conv2d_kernel_type {
     HTP_CONV2D_KERNEL_UNSUPPORTED = 0,
     HTP_CONV2D_KERNEL_HMX_WINDOW,       // HMX convolution with sliding-window staging
     HTP_CONV2D_KERNEL_HMX_TILED,        // tiled implicit-GEMM convolution on HMX
+    HTP_CONV2D_KERNEL_HVX_M5,
+    HTP_CONV2D_KERNEL_HVX_M5_BLOCKED,
 };
 
 // HMX_WINDOW output staging buffers per thread

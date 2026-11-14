@@ -13,7 +13,12 @@
 # Local artifacts (override via env):
 #   M5_BUILD   ~/m5-assets/build   m5-server, m5-engine, libm5engine.so
 #   M5_STAGE   ~/m5-assets/stage   backbone-resident (== depth-resident)
+#              plus the llama/ggml/hexagon .so files the stages link against
 #   M5_WEB     examples/m5-tts/web/index.html -> <device-dir>/web.html
+#
+# The 32-wide KV pad and the direct V scatter are compiled into the stage
+# libraries (no separate runtime dir / env injection). Override the depth
+# command with M5_DEPTH_CMD='env M5_KV_PAD=256 ... depth-resident ...' for A/B.
 #
 # The device keeps the model package (model/ dir + codec_encoder.onnx) on its
 # own; --no-models skips the backup pull. /data/local/tmp is wiped on device
@@ -36,12 +41,21 @@ M5_STAGE=${M5_STAGE:-$HOME/m5-assets/stage}
 M5_WEB=${M5_WEB:-$HERE/web/index.html}
 PORT=${PORT:-8080}
 FORWARD_PORT=${FORWARD_PORT:-18080}
+# Optional depth stage override for A/B. The stage binaries now carry the
+# 32-wide KV pad and the direct V scatter as compiled-in defaults, so no
+# separate runtime directory or env injection is needed.
+M5_DEPTH_CMD=${M5_DEPTH_CMD:-}
 
 ADB=${ADB:-$(command -v adb || echo "$HOME/Library/Android/sdk/platform-tools/adb")}
 [ -x "$ADB" ] || { echo "adb not found; set ADB=" >&2; exit 1; }
 
+M5_STAGE_LIBS="libllama.so libggml.so libggml-base.so libggml-cpu.so libggml-hexagon.so libggml-htp-v73.so"
+
 for f in "$M5_BUILD/m5-server" "$M5_BUILD/m5-engine" "$M5_STAGE/backbone-resident" "$M5_WEB"; do
     [ -f "$f" ] || { echo "missing artifact: $f" >&2; exit 1; }
+done
+for lib in $M5_STAGE_LIBS; do
+    [ -f "$M5_STAGE/$lib" ] || { echo "missing stage library: $M5_STAGE/$lib" >&2; exit 1; }
 done
 
 echo "==> stopping old server and stages"
@@ -60,6 +74,10 @@ $ADB push "$M5_BUILD/m5-server" "$VDIR/m5-server" >/dev/null
 $ADB push "$M5_BUILD/m5-engine" "$VDIR/m5-engine" >/dev/null
 $ADB push "$M5_BUILD/libm5engine.so" "$VDIR/libm5engine.so" >/dev/null
 $ADB push "$M5_STAGE/backbone-resident" "$VDIR/backbone-resident" >/dev/null
+echo "==> pushing Hexagon stage libraries"
+for lib in $M5_STAGE_LIBS; do
+    $ADB push "$M5_STAGE/$lib" "$VDIR/$lib" >/dev/null
+done
 # depth-resident is the same binary; the role comes from argv.
 $ADB shell "cp $VDIR/backbone-resident $VDIR/depth-resident && chmod 755 $VDIR/m5-server $VDIR/m5-engine $VDIR/backbone-resident $VDIR/depth-resident"
 
@@ -80,13 +98,20 @@ if [ "$SKIP_MODELS" = 0 ]; then
 fi
 
 echo "==> restarting m5-server"
+DEPTH_ARGS=""
+if [ -n "$M5_DEPTH_CMD" ]; then
+    DEPTH_ARGS="--depth '$M5_DEPTH_CMD'"
+fi
 # The GGML_HEXAGON_* knobs live in ggml/src/ggml-hexagon/ggml-hexagon.cpp:
 # OPPOLL keeps the DSP clocks polled (measured 2.2x on depth), NHMX=0 avoids
 # the HMX matmul path that is slower for the 512-wide heads on this silicon.
+# M5_KV_PAD / M5_HVX_DIRECT_V are compiled-in defaults; prefix them in
+# M5_DEPTH_CMD to override for A/B.
 $ADB shell "cd $VDIR && D=\$PWD; \
     export LD_LIBRARY_PATH=\$D ADSP_LIBRARY_PATH=\$D \
            GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1; \
     nohup ./m5-server model --port $PORT --cwd \$D --threads 3 \
+        $DEPTH_ARGS \
         --voice-encoder \$D/codec_encoder.onnx > \$D/m5-server.log 2>&1 &"
 sleep 3
 $ADB shell "pidof m5-server" >/dev/null || { echo "server did not start; see $VDIR/m5-server.log" >&2; exit 1; }
@@ -103,4 +128,6 @@ m5-server is up.
   web console : http://127.0.0.1:$FORWARD_PORT
   log         : $VDIR/m5-server.log   (adb shell tail -f)
   env pinned  : GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1
+  compiled-in : KV pad 32 (depth) / 256 (backbone), direct V scatter
+                (override with M5_KV_PAD / M5_HVX_DIRECT_V for A/B)
 EOF

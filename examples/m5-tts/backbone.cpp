@@ -110,12 +110,33 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        // The depth/chain stages keep a 16-row in-frame KV chain, so they use
+        // the 32-wide pad default in llama-kv-cache.cpp. The backbone's prefill
+        // prefix cache grows across the whole utterance: keep the upstream
+        // 256-wide pad there (this is also the exact A/B configuration that
+        // produced the -9% wall-time result). M5_KV_PAD set by the caller wins.
+        if (!(depth || chain)) {
+            ::setenv("M5_KV_PAD", "256", 0);
+        }
+
         auto params = llama_context_default_params();
         params.embeddings = true;
         params.pooling_type = LLAMA_POOLING_TYPE_NONE;
         params.type_k = GGML_TYPE_F32;
         params.type_v = GGML_TYPE_F32;
         params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+        const char * depth_attention = std::getenv("M5_DEPTH_ATTENTION");
+        if (depth && depth_attention && std::strcmp(depth_attention, "flash-f32") == 0) {
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        }
+        if (depth && depth_attention &&
+            (std::strcmp(depth_attention, "f16") == 0 || std::strcmp(depth_attention, "flash") == 0)) {
+            params.type_k = GGML_TYPE_F16;
+            params.type_v = GGML_TYPE_F16;
+            if (std::strcmp(depth_attention, "flash") == 0) {
+                params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+            }
+        }
         params.n_ctx = (depth || chain) ? 256 : 2048;
         params.n_batch = prefix;
         params.n_ubatch = prefix;

@@ -253,7 +253,7 @@
   <div class="sideFoot">
     <div>学习进度 <span id="pctText">0%</span></div>
     <div class="bar"><i id="pctBar"></i></div>
-    <div id="seenText">已浏览 0 / 10 章</div>
+    <div id="seenText">已浏览 0 / 11 章</div>
   </div>
 </aside>
 
@@ -1518,6 +1518,26 @@ for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
   <div class="chapterDone"><button class="doneBtn" data-ch="ch9">标记本章已学完</button></div>
 </section>
 
+
+<section class="chapter" id="ch10" data-title="用 Profile 调查提速后的音质变化">
+  <h2>用 Profile 调查提速后的音质变化</h2>
+  <p>Serena 用 Flash Attention 加速后，有个别字听起来像破音。先用同一文本、音色和种子复现，保留基线。听感是验收条件，RTF 只描述吞吐。</p>
+  <ol>
+    <li>按 DSP <code>OPBATCH</code> 切分 trace，只比较相同形状的 decode。旧 profile 有 1,820 个 80 算子批次。按算子族汇总，三个矩阵乘法族合计约 1.64 ms/批，SET_ROWS、RoPE、Softmax 也占时间。用 DSP 批次计时和 host API 计时分别判断核内执行与端到端等待。</li>
+    <li>加中间对照来分离变量。FP32 普通注意力约 2.65 ms/decode，FP16 普通注意力约 2.60–2.65 ms，FP16 Flash 约 1.92 ms。用 <code>FLASH_ATTN_EXT</code> 的 HTP profile 确认真正走了 HVX。不同配置生成帧数会变化，因此用相同 decode 次数衡量提速。</li>
+    <li>按码本隔离生成和解码。分别保存基线与 Flash 生成的 codes，再对比两种 codec 下的 codes 哈希和 WAV。在本例中，同一 attention 配置跨 codec 的 codes 完全一致。四份 PCM16 均未到满幅，排除了 PCM16 满幅削顶。Flash 的后续 chunk 分别用 2、4、8 帧，输出 WAV 逐字节相同，可以降低对分块边界的怀疑。</li>
+    <li>用同 codes 的试听定位。如果 Flash 的 INT8 与 FP32 都在同一个字出现问题，优先查生成轨迹；如果只有 INT8 明显，优先查 codec。本轮人工试听把问题定位到「别着急」，同一组 Flash codes 的 INT8 版更明显，FP32 版有所缓解。优先检查 INT8 图的量化边界，同时保留 Flash 轨迹可能影响局部发音的判断。要评估动态导航，把数字、方向、路名和单位列为独立验收项。</li>
+  </ol>
+  <p>固定同一组 Flash codes，把 codec 尾部三层（conv_28–30）连同量化边界恢复为 FP32。用户试听确认全 FP32 明显更好，尾部混合版与 INT8 接近。混合版仍实时，但首 PCM 从 430–446 ms 增至 502–565 ms，因此不采用。下一次应按上采样阶段做较粗的精度消融，先确定哪段值得细分。</p>
+  <p>同句对比时，用户认为生产版明显优于 Flash 的两种分阶段混合精度版。上游改变了 codes，恢复 codec 精度未找回原有听感。当前组合同时改变了 KV 精度和注意力实现，听感结果不能单独归因到 Flash kernel。后续保留 FP32 KV 和采样语义，先检查 codes 与 WAV 一致，再比较速度。</p>
+  <p>补测 FP16 KV 的普通注意力后，用户反馈没有破音，但韵律下降。随后保留 FP32 KV，尝试跳过 CPU 采样中概率为零的候选。两种种子的 codes 和 WAV 均与基线逐字节一致，但速度改善没有跨种子复现。这组实验说明，音质验收与性能验收需要分别通过。</p>
+  <p>继续按同形状批次拆分 KV 写入，K 与 V 的 SET_ROWS 均值约为 34 和 164 µs。另测只输出 depth 的末行 embedding，KV 写入保留两行。两个文本的 codes 和 WAV 均一致，但双轮主样本的 RTF 只从约 0.824 到 0.820。因此保存补丁作为实验，后续优先剖析 V 的散写。</p>
+  <p>把 FP32 V 的 128/256 个标量改为在 DSP 上按索引直接写入，V 写入时间约从 164 µs 降到 28 µs，两个测试文本的 codes 和 WAV 与基线一致。按权重与缓存名分组后，QK/AV 与 FFN 各约 0.7 ms/步；QKV 和 gate/up 已经融合。按算子名统计只能发现大类，按实际张量名才能决定下一处优化。</p>
+  <p>保持 FP32 KV 与普通注意力，把短序列 KV 的读取范围从 256 改为按 32 对齐，保留原 cache 容量和全部有效位置。两组 codes 和 WAV 逐字节一致，端到端减少约 10%。这是利用模型真实形状减少被掩蔽计算的例子。用单行 decode profile 归因，再用独立 A/B 验收墙钟。</p>
+  <p><b>转正：从实验开关变成编译期默认。</b>实验阶段它只存在于一个隔离 runtime 目录里，靠部署脚本给 depth 子进程注入 <code>M5_KV_PAD32=1</code> 才生效，源码默认仍是 256。转正时把 <code>get_n_kv()</code> 的 pad 默认改为 32（<code>M5_KV_PAD=256</code> 可回退），并让 backbone 分支显式保留 256——因为它的 prefill prefix 会随整句增长，而且原实验只有 depth 用了 32，必须严格复现实验条件。V 直接散写同时转为默认（<code>M5_HVX_DIRECT_V=0</code> 关闭）。部署脚本不再需要特殊目录和 env 注入，并补上了原本缺失的 stage 库推送。12 次交替 A/B：默认 3.775 s / RTF 0.710，pad 256 为 4.163 s / 0.783，关 direct-V 为 3.894 s / 0.732；12 次 codes 与 WAV 的哈希全部相同，backbone 耗时无退化。</p>
+  <p><b>提速成功后，瓶颈结构会改变。</b>转正前 depth 4.53 s、codec 3.62 s，之间有 25% 余量；转正后 depth 2.853 s、codec 2.820 s，<b>只差 1.15%</b>。流水线的墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，于是单独把 depth 再降 27%（Flash 级）只剩 -0.9%，哪怕把 depth 降到零也只是 -0.9%；单独把 codec 降 20% 是 <b>0%</b>。只有两者一起降 20% 才有约 -15%。这正是第 3 章「先看天花板再动手」的实战版：一个成功的优化会把旧的余量吃光，让此前划算的方向突然变得不划算。所以下一步不是继续追 Flash 的速度，而是先用 <code>flash-f32</code>（FP32 KV + 融合 kernel）把音质问题归因清楚，再转向不受 <code>max()</code> 约束的首包、热漂移与听感。</p>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch10">标记本章已学完</button></div>
+</section>
 
 <footer>
   <p>M5-TTS Inference Lab · 基于 <code>llama.cpp</code> 仓库内 <code>examples/m5-tts/</code> 的真实实验整理。

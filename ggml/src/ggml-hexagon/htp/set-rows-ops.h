@@ -8,6 +8,7 @@
 struct htp_set_rows_kernel_params {
     uint32_t n_hvx;
     uint32_t total_tasks;
+    uint32_t direct_scalar;
     uint32_t vtcm_size;
 };
 

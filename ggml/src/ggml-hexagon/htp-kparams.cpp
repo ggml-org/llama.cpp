@@ -1793,6 +1793,23 @@ static bool htp_kparams_solve_set_rows(
     kparams->n_hvx       = (std::min)(htp_session_n_hvx(sess), nr);
     kparams->total_tasks = nr;
 
+    // Default on: for the 128/256-scalar FP32 V SET_ROWS, a plain scatter on
+    // the DSP main thread avoids the small-row DMA and worker queue (164us ->
+    // 28us per step, codes/WAV bit-identical in A/B). Set M5_HVX_DIRECT_V=0
+    // to restore the VTCM/worker path for measurements.
+    const char * direct_v = getenv("M5_HVX_DIRECT_V");
+    const bool direct_v_enabled = direct_v == nullptr || std::strcmp(direct_v, "0") != 0;
+
+    if (direct_v_enabled && htp_session_mdev_count(sess) == 1 &&
+        dst->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_I64 &&
+        src0->ne[0] == 1 && dst->ne[0] == 1 && (nr == 128 || nr == 256) &&
+        src0->ne[2] == 1 && src0->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 &&
+        src1->ne[0] == nr && ggml_is_contiguous(src0) &&
+        ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
+        kparams->direct_scalar = 1;
+        return true;
+    }
+
     struct htp_set_rows_vtcm_layout vtcm_layout;
     htp_set_rows_vtcm_layout_build(&vtcm_layout, dst->type, src0->ne[0], kparams->n_hvx);
     kparams->vtcm_size = vtcm_layout.total_bytes;
@@ -4506,6 +4523,18 @@ static bool htp_kparams_solve_conv2d(
     const int64_t oh = (src1->ne[1] + 2 * p1 - d1 * (src0->ne[1] - 1) - 1) / s1 + 1;
     if (ow != dst->ne[0] || oh != dst->ne[1] || src0->ne[3] != dst->ne[2] || src1->ne[3] != dst->ne[3]) {
         return false;
+    }
+
+    if (getenv("M5_HVX_CONV32") && htp_session_n_hmx(sess) == 0 &&
+        src0->type == GGML_TYPE_F32 && src0->ne[0] == 7 && src0->ne[1] == 1 &&
+        src0->ne[2] == 96 && src0->ne[3] == 96 && src1->ne[1] == 1 && src1->ne[3] == 1 &&
+        (ow == 3840 || ow == 7680) && s0 == 1 && s1 == 1 && p0 == 0 && p1 == 0 && d0 == 9 && d1 == 1 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
+        kparams->kernel_type = getenv("M5_HVX_CONV32_BLOCKED")
+            ? HTP_CONV2D_KERNEL_HVX_M5_BLOCKED : HTP_CONV2D_KERNEL_HVX_M5;
+        kparams->total_rows = 96;
+        kparams->n_hvx = htp_session_n_hvx(sess);
+        return kparams->n_hvx > 0;
     }
 
     return htp_kparams_solve_conv2d_unchecked(sess, op, kparams);

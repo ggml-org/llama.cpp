@@ -196,6 +196,26 @@ int op_set_rows(struct htp_ops_context * octx) {
     }
 
     const struct htp_tensor * dst = octx->dst;
+    if (kparams->direct_scalar) {
+        const struct htp_tensor * src = octx->src[0];
+        const struct htp_tensor * idx = octx->src[1];
+        if (octx->ctx->mdev.count > 1 || src->type != HTP_TYPE_F32 || dst->type != HTP_TYPE_F32 ||
+            idx->type != HTP_TYPE_I64 || ne00 != 1 || ne0 != 1 || (nr != 128 && nr != 256) ||
+            ne02 != 1 || ne03 != 1 || ne2 != 1 || ne3 != 1 || ne10 != nr ||
+            !htp_tensor_is_contiguous(src, 4) || !htp_tensor_is_contiguous(dst, 4) ||
+            !htp_tensor_is_contiguous(idx, 8)) {
+            return HTP_STATUS_INVAL_PARAMS;
+        }
+        const uint32_t * values = (const uint32_t *) src->data;
+        const int64_t * indices = (const int64_t *) idx->data;
+        uint32_t * output = (uint32_t *) dst->data;
+        for (uint32_t i = 0; i < nr; ++i) {
+            const uint64_t row = indices[i];
+            if (row < ne1) output[row] = values[i];
+        }
+        return HTP_STATUS_OK;
+    }
+
     const uint32_t total_tasks    = kparams->total_tasks;
 
     uint32_t task_start = 0;

@@ -2338,6 +2338,74 @@ static int conv2d_hmx_win(struct htp_ops_context * octx, const struct htp_conv2d
     return HTP_STATUS_OK;
 }
 
+static void conv32_hvx_worker(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    (void) th;
+    const struct htp_ops_context * octx = data;
+    const float * weights = (const float *) octx->src[0]->data;
+    const float * input = (const float *) octx->src[1]->data;
+    float * output = (float *) octx->dst->data;
+    const uint32_t rows = octx->dst->ne[0];
+    const uint32_t input_rows = rows + 54;
+
+    for (uint32_t oc = ith; oc < 96; oc += nth) {
+        for (uint32_t t = 0; t < rows; t += 128) {
+            HVX_Vector sums[4] = { Q6_V_vzero(), Q6_V_vzero(), Q6_V_vzero(), Q6_V_vzero() };
+            for (uint32_t ic = 0; ic < 96; ++ic) {
+                for (uint32_t k = 0; k < 7; ++k) {
+                    const float * src = input + ic * input_rows + t + 9 * k;
+                    const HVX_Vector w = hvx_vec_splat_f32(weights[(oc * 96 + ic) * 7 + k]);
+                    for (uint32_t v = 0; v < 4; ++v) {
+                        HVX_Vector x;
+                        memcpy(&x, src + 32 * v, sizeof(x));
+                        sums[v] = Q6_Vqf32_vadd_Vqf32Vqf32(sums[v], Q6_Vqf32_vmpy_VsfVsf(x, w));
+                    }
+                }
+            }
+            for (uint32_t v = 0; v < 4; ++v) {
+                const HVX_Vector value = Q6_Vsf_equals_Vqf32(sums[v]);
+                memcpy(output + oc * rows + t + 32 * v, &value, sizeof(value));
+            }
+        }
+    }
+}
+
+static void conv32_hvx_blocked_worker(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    (void) th;
+    const struct htp_ops_context * octx = data;
+    const float * weights = (const float *) octx->src[0]->data;
+    const float * input = (const float *) octx->src[1]->data;
+    float * output = (float *) octx->dst->data;
+    const uint32_t rows = octx->dst->ne[0];
+    const uint32_t input_rows = rows + 54;
+
+    for (uint32_t oc = 4 * ith; oc < 96; oc += 4 * nth) {
+        for (uint32_t t = 0; t < rows; t += 128) {
+            HVX_Vector sums[4][4];
+            for (uint32_t o = 0; o < 4; ++o) {
+                for (uint32_t v = 0; v < 4; ++v) sums[o][v] = Q6_V_vzero();
+            }
+            for (uint32_t ic = 0; ic < 96; ++ic) {
+                for (uint32_t k = 0; k < 7; ++k) {
+                    const float * src = input + ic * input_rows + t + 9 * k;
+                    HVX_Vector x[4];
+                    for (uint32_t v = 0; v < 4; ++v) x[v] = hvx_vmemu(src + 32 * v);
+                    for (uint32_t o = 0; o < 4; ++o) {
+                        const HVX_Vector w = hvx_vec_splat_f32(weights[((oc + o) * 96 + ic) * 7 + k]);
+                        for (uint32_t v = 0; v < 4; ++v) {
+                            sums[o][v] = Q6_Vqf32_vadd_Vqf32Vqf32(sums[o][v], Q6_Vqf32_vmpy_VsfVsf(x[v], w));
+                        }
+                    }
+                }
+            }
+            for (uint32_t o = 0; o < 4; ++o) {
+                for (uint32_t v = 0; v < 4; ++v) {
+                    hvx_vmemu(output + (oc + o) * rows + t + 32 * v) = Q6_Vsf_equals_Vqf32(sums[o][v]);
+                }
+            }
+        }
+    }
+}
+
 int op_conv_2d(struct htp_ops_context * octx) {
     const struct htp_conv2d_kernel_params * kparams =
         (const struct htp_conv2d_kernel_params *) octx->kernel_params;
@@ -2351,6 +2419,25 @@ int op_conv_2d(struct htp_ops_context * octx) {
     }
     if (kparams->kernel_type == HTP_CONV2D_KERNEL_HMX_TILED) {
         return conv2d_hmx_tiled(octx, kparams);
+    }
+
+    if (kparams->kernel_type == HTP_CONV2D_KERNEL_HVX_M5 ||
+        kparams->kernel_type == HTP_CONV2D_KERNEL_HVX_M5_BLOCKED) {
+        const struct htp_tensor * w = octx->src[0];
+        const struct htp_tensor * x = octx->src[1];
+        const struct htp_tensor * y = octx->dst;
+        if (w->type != HTP_TYPE_F32 || x->type != HTP_TYPE_F32 || y->type != HTP_TYPE_F32 ||
+            w->ne[0] != 7 || w->ne[1] != 1 || w->ne[2] != 96 || w->ne[3] != 96 ||
+            x->ne[0] != y->ne[0] + 54 || x->ne[1] != 1 || x->ne[2] != 96 || x->ne[3] != 1 ||
+            (y->ne[0] != 3840 && y->ne[0] != 7680) || y->ne[1] != 1 || y->ne[2] != 96 || y->ne[3] != 1 ||
+            !htp_tensor_is_contiguous(w, 4) || !htp_tensor_is_contiguous(x, 4) || !htp_tensor_is_contiguous(y, 4) ||
+            !htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
+            return HTP_STATUS_NO_SUPPORT;
+        }
+        work_queue_run(octx->ctx->hvx_queue,
+                       kparams->kernel_type == HTP_CONV2D_KERNEL_HVX_M5_BLOCKED ? conv32_hvx_blocked_worker : conv32_hvx_worker,
+                       octx, kparams->n_hvx);
+        return HTP_STATUS_OK;
     }
 
     return HTP_STATUS_NO_SUPPORT;

@@ -585,7 +585,7 @@ depth 提速，又白白损失 codec 侧的隐藏余量。
 小核 `0f` 10.255（+89.8%）、单核 `80` 16.892（+212.6%）。默认调度已把线程放对；
 HTP 提交路径依赖大核，绑小核/单核是数量级劣化。**CPU 放置没有可利用杠杆。**
 
-### 13.3 修正后的端到端收益矩阵（本次实测基线）
+### 13.3 修正后的端到端收益矩阵（KV32 转正前的实测基线；新基线见 §16）
 
 codec 余量 0.915 s（25.3%）；`wall ≈ backbone 0.743 + max(depth,codec) + prefill 0.108`。
 
@@ -784,3 +784,258 @@ heads 投影、采样、噪声生成、codec、PCM 输出**全在 CPU**。
 - §14 的学习型草稿之所以判死，是因为草稿只能见 hidden，而 depth core
   每步输出从 book2 起由 CPU 侧采样出的 codes 决定——这条链横跨
   CPU↔NPU 15 次，正是图 15-2 的结构。
+
+### Codec 尾部 FP32 子图移植探针
+
+从设备当前 INT8 codec 抓取真实流式第 2 个 4 帧 chunk。探针子图为
+`/conv_32`（96→96、7 taps、dilation 9）→ Snake → `/conv_33`（1 tap），
+输入已带 54 个历史位置，输出在 residual add 之前。生产 ORT profile
+的三个算子中位耗时分别为 11.03、0.94、2.02 ms。GGML CPU 3 线程
+直卷积全块 40.03 ms，FP32 im2col + MatMul 全块 40.00 ms，两者相对
+ORT 最大绝对误差 1.19e-5。GGML 路径用 sin 表达 Snake，ORT 使用融合实现。
+真机 HTP 拒绝该形状的 CONV_2D 和通用 SIN。只把 conv_32 改写成
+HTP im2col + MatMul，可以运行，但含上传、等待和读回为 45.96 ms。
+这些数字是隔离探针与生产算子 profile 的对照，未做并发或 PCM A/B。
+探针和日志分别位于 `examples/m5-tts/codec_tail_probe.cpp` 和
+`~/m5-assets/htp-quality/tail-block/`。
+
+#### Conv32 九相位重排
+
+在同一个真实 4 帧 chunk 中把时轴按位置模 9 分组，各组执行 dilation=1
+的七点卷积，补齐相位长度后丢弃多余输出。仅测 conv32 与 bias，
+耗时包含主机重排、输入上传、计算、读回与交错还原。权重保持 FP32。
+
+- CPU 直卷积 39.92 ms，输出相对 ORT 最大绝对误差 1.19e-6。
+- HTP 直卷积仍不支持。该部署源码的两条 CONV_2D kernel 路径都要求 HMX。
+- HTP 相位 im2col + MatMul 48.26 ms，未分相位的同轮对照 45.99 ms。
+  两者最大误差同为 9.54e-7；生产 ORT Conv32 中位数 11.03 ms。
+
+相位变换简化了索引，但未消除 im2col 或打开无 HMX 的直卷积路径。
+未接入生产 codec。原始日志：`~/m5-assets/htp-quality/tail-block/phase.log`。
+
+#### Conv32 无 HMX 的 HVX 直卷积原型
+
+以 `M5_HVX_CONV32=1` 在隔离后端选择固定形状的 FP32 直卷积。
+HVX 沿时间向量化，每线程处理不同输出通道，直接读取 dilation=9 的
+七个 taps，不构造整块 im2col。相同真实 4 帧输入，计入上传、完整图执行
+（含 bias）与读回，14 次热运行上中位数为 148.814 ms，
+相对 ORT 最大绝对误差 3.81e-6。对照为同一输入的 HTP im2col
+45.99 ms 和生产 ORT Conv32 profile 11.03 ms。
+该原型只按输出通道分工，对不同输出通道重复读输入，尚未用 VTCM
+跨输出通道复用输入。隔离部署未改服务；未测小块形状、PCM 或 CPU 核秒。
+日志：`~/m5-assets/htp-quality/tail-block/hvx-direct.log`。
+
+#### Conv32 HVX 四输出通道分块
+
+同一隔离构建用 `M5_HVX_CONV32_BLOCKED=1` 选择四输出通道 × 128
+时间位置，四个通道复用每次 HVX 输入向量。ABBA 顺序，单轮各取 14
+次热测中位数。原版 150.368 / 146.850 ms，分块版 79.913 / 80.681 ms，
+均含上传、bias 与读回。最大误差均为 3.81e-6。读入复用明显有效，
+但仍慢于 45.99 ms 的 HTP im2col 和 11.03 ms 的 ORT 算子基线。
+此次未使用 VTCM，未测 CPU 核秒或端到端。
+日志：`~/m5-assets/htp-quality/tail-block/hvx-blocked-ab.log`。
+
+#### Depth FP16 KV 与 HVX Flash Attention
+
+隔离 depth stage 用 `M5_DEPTH_ATTENTION=f16` 或 `flash`，backbone
+及 INT8 codec 不变。交替顺序 base/f16/flash/flash/f16/base，长句、
+固定种子、3 线程、chunk 4。前 1900 次 decode 的平均 API 耗时：
+FP32 普通注意力 2.649–2.656 ms，FP16 普通注意力 2.602–2.649 ms，
+FP16 Flash Attention 1.922–1.924 ms。HTP profile 确认 FLASH_ATTN_EXT
+走 2 HVX。整句 RTF 基线 0.778–0.860，Flash 0.645–0.657；
+整句墙钟基线 7.673–8.475 s，Flash 6.620–6.744 s。
+基线 127 帧，FP16 143 帧，Flash 132 帧，故优先用同次数 decode
+判断单步收益。Flash WAV 与基线不等价；单句 ASR 无整句漏读，
+但有近音差异，未通过多文本盲听。生产服务配置未切换。
+日志：`~/m5-assets/htp-quality/depth-attention-ab.log`。
+
+#### Serena Flash Attention 听感复查
+
+固定导航加闲聊文本、Serena 和种子，交叉比较普通注意力或 Flash 与
+INT8 或 FP32 Snake/CT codec。相同 attention 的 codes 跨 codec 完全相同，
+普通注意力 69 帧，Flash 76 帧。四份 PCM16 均无满幅样本，峰值
+0.755–0.801。Flash 的 INT8 分块 2/4/8 帧输出 WAV 逐字节一致。
+用户在同 codes 的两份 Flash 音频中指出「别着急」这几个字，INT8 更明显，FP32 有所缓解。优先检查 codec 的量化误差，Flash 轨迹仍可能有贡献。FP32 对照是融合 Snake 和 ConvTranspose 分解的版本，不能用这组试听锁定某个量化节点。RTF 不能代替听感：
+Flash INT8 0.673，换 FP32 codec 后 1.127。原始样本和统计位于
+`~/m5-assets/htp-quality/attention-quality/`。学习中心第 10 章记录
+按 OPBATCH 聚合、隔离变量和音质判据。
+
+#### 「别着急」尾部混合精度试听
+
+固定 Serena 的 76 帧 Flash codes。恢复 /conv_28、/conv_29、/conv_30
+的原 FP32 权重和 bias，绕过这些层的输入与输出 Q/DQ，其余继续使用
+生产量化图。设备按 INT8 / 混合 / 混合 / INT8 顺序验证，四次 codes
+与原 Flash 一致。INT8 RTF 0.742/0.668，混合 0.739/0.697。混合
+首 PCM 0.502/0.565 s，INT8 0.446/0.430 s。单句混合版仍实时。用户同 codes 试听指出全 FP32 明显更好，尾部
+三层混合版与 INT8 听感接近。该候选增加首 PCM 延迟，决定不采用。脚本及样本位于
+`~/m5-assets/htp-quality/restore-tail.py` 与 `attention-quality/`。
+
+#### 「别着急」按阶段恢复精度
+
+基于生产量化模型分别恢复两组，权重、偏置和对应输入输出 Q/DQ
+一起处理。中段卷积组是 /conv_14–19 和 /conv_21–26，另一组是
+反卷积拆解后的六个 MatMul（__ct0/n1 至 __ct5/n1），其布局操作
+保持原样。两个模型都通过 ONNX checker。真机按 INT8、中段、上采样、
+上采样、中段、INT8 测试。所有样本的 76 帧 Flash codes 逐字节一致。
+中段 RTF 0.829–0.840，首 PCM 0.685–0.704 s；上采样
+RTF 0.713–0.726，首 PCM 0.511–0.573 s。两者均在本句保持实时。
+用户对比同句生产版后，确认生产版听感明显更好，Flash codes 的
+中段和上采样混合精度版都未达到生产版听感。停止针对这组 Flash codes
+继续扩大 codec FP32 范围，当前 FP16 KV + Flash 组合不进入生产。
+本轮没有单独试听普通注意力 + FP16 KV，尚不能区分 KV 精度和融合
+注意力实现各自的影响。复现脚本为
+`~/m5-assets/htp-quality/restore-codec-stage.py`，实测音频和 JSON
+位于同目录的 `attention-quality/`。
+
+#### 保持 PCM 逐字节一致的采样实验
+
+用户试听 FP16 KV + 普通注意力时未听到破音，但韵律下降。因此以
+FP32 KV、普通注意力和原 INT8 codec 为基准。实验只压缩 top-10
+之后的非零概率候选，保持原始顺序、归一化、除噪声顺序及 RNG 消耗。
+同一 Serena 文本，两个种子的 codes 和 WAV 均逐字节相同。
+seed 1234 交替两轮：基线 RTF 0.807–0.810，候选 0.815–0.821，
+heads 累计均约 0.35 s。seed 42 单对为 0.818 对 0.793，
+收益未复现于 1234，候选不保留在执行路径。原始数据和实验补丁为
+`~/m5-assets/htp-quality/depth-sparse-ab.log` 和 `depth-sparse.patch`。
+
+#### 等价图优化：只输出最后一行 embedding
+
+旧 trace 的 1,820 个 80-op decode batch 中，每批 K/V SET_ROWS 均值分别为
+33.66/164.14 us；V 的标量散写是下一处应隔离测量的目标。先验证既有图尾
+行筛选。M5 depth 每帧第一次 decode 输入两行、只用末行，但 embeddings
+模式默认强制输出所有行。实验只允许 M5 测试子进程尊重输出标记，保留
+两行的 KV 写入、FP32 KV 和普通注意力。两个文本及种子配对的 codes 和
+WAV 哈希一致。seed 1234 两轮 RTF 约 0.824→0.820，stage 累计平均
+3.069→3.039 s。seed 42 单对 RTF 0.874→0.831，heads 也波动，不能
+将全部收益归因于图。收益不足以保留核心 API 行为改动。补丁、脚本和日志
+存于 `~/m5-assets/htp-quality/depth-output-rows.patch` 及 `depth-rows-ab.*`。
+
+#### FP32 V cache 直接散写与矩阵乘法分组
+
+隔离版 `M5_HVX_DIRECT_V=1` 在 DSP 主线程按原索引复制 FP32 位型，
+对 128/256 个标量绕过小行的 DMA 和 worker 队列。保留原边界检查、
+写入顺序、KV 布局和普通注意力。真机两文本两种子 codes/WAV 一致。
+主样本 ABBA 整句 RTF 0.813–0.815 → 0.793–0.796，depth stage
+3.018–3.046 → 2.905–2.931 s。第二样本 0.833 → 0.808。旧 profile
+与新 profile 相同 80-op 形状的 V SET_ROWS 平均 164.1 → 27.6 µs/步
+（1820 与 378 批次，跨采样任务）。未直接比较整份 KV 原始缓冲。
+日志位于 `~/m5-assets/htp-quality/v-direct-ab.log` 和
+`v-direct-profile.log`。**2026-11-15 05:2x 已转为编译期默认，见 §16。**
+（`M5_HVX_DIRECT_V=0` 可回退做 A/B。）
+
+同形状旧批次按图中权重/缓存名聚合，五层每步合计：QKV 144 µs、
+QK 499 µs、AV 194 µs、注意力输出 89 µs、FFN gate/up 446 µs、
+FFN down 257 µs。QKV 与 gate/up 已用 MUL_MAT_NX，down 已与残差
+融合。QK 每层约 98–108 µs，KV 轴是固定填充到 256 的短序列；
+下一轮可用小长度分桶衡量收益，须验证变化的 reduction 形状是否保持采样。
+
+#### Depth 普通注意力 KV 读取长度 256 → 32
+
+仅 depth 子进程开启 `M5_KV_PAD32`，两组均开启 V 直接散写。
+保留 256 容量缓冲与 FP32 KV，仅读取按 32 向上取整的有效范围，
+不截断有效位置。同一导航闲聊样本 ABBA，基线 4.214/4.250 s，
+候选 3.853/3.792 s。另一车控导航样本 3.954→3.556 s。两组 codes
+与 WAV 逐字节一致。按 trace 的单行 decode 聚合，五层 QK/AV
+约由 693 降至 265 µs/步，profile 来自独立运行，未纳入墙钟 A/B。
+**2026-11-15 05:2x 已转为编译期默认并重新验证，见 §16。**
+日志为 `~/m5-assets/htp-quality/kv-pad-ab.log` 与
+`kv-pad-profile.log`。
+
+## 16. KV32 转正：新基线与 `max()` 天花板到位（2026-11-15 05:2x）
+
+### 16.1 转正范围
+
+之前 KV32 只存在于设备上的 `depth-kv32/` 隔离 runtime 目录，靠
+`deploy.sh` 给 depth 子进程注入 `M5_KV_PAD32=1 M5_HVX_DIRECT_V=1`
+才能生效——源码默认仍是 256，实验结论也标着「生产未切换」。本次把它
+变成**编译期默认**，所有路径（server / CLI / App stage）自动生效：
+
+| 文件 | 改动 |
+|---|---|
+| `src/llama-kv-cache.cpp` | `get_n_kv()` 的 `n_pad` 默认 32；`M5_KV_PAD=<n>` 覆盖，`M5_KV_PAD=256` 回退 upstream 行为 |
+| `examples/m5-tts/backbone.cpp` | 非 depth/chain 分支 `setenv("M5_KV_PAD","256",0)`，让 backbone 保持 256——严格复现实验条件（实验只有 depth 用 32），避免长上下文 prefix 图每 32 行重建 |
+| `ggml/src/ggml-hexagon/htp-kparams.cpp` | V 直接散写默认开启，`M5_HVX_DIRECT_V=0` 回退；形状保护条件不变 |
+| `examples/m5-tts/deploy.sh` | 删掉隔离目录检查与 `--depth env …` 注入；`M5_DEPTH_CMD` 仅作可选 A/B 覆盖；补推 6 个 stage 库（原脚本只推二进制、库靠手工推送，是个部署缺口） |
+
+`docker_build_stage.sh` 增量重编 19 s，主目录库的 md5 与 host 产物一致；
+server 命令行与 depth 进程 env 均已无任何 `M5_*` 注入。
+
+### 16.2 验证：12 次交替 A/B，逐字节等价
+
+停 server 独占设备，固定 Serena / seed 1234 / 69 帧导航闲聊句 /
+`--chunk 4 --threads 3`，4 轮正逆序交替（A B C / C B A），取中位数。
+A = 新默认；B = `M5_KV_PAD=256`；C = `M5_HVX_DIRECT_V=0`。
+
+| 配置 | elapsed | RTF | depth_s | codec_s | backbone_s | first_pcm |
+|---|---:|---:|---:|---:|---:|---:|
+| **A 默认（KV32 + direct-V）** | **3.775** | **0.710** | 2.853 | 2.820 | 0.726 | 0.435 |
+| B pad 256 | 4.163 | 0.783 | 3.261 | 2.782 | 0.710 | 0.404 |
+| C 关 direct-V | 3.894 | 0.732 | 2.970 | 2.722 | 0.726 | 0.387 |
+
+12 次 codes/WAV 的 SHA256 **全部相同**（`2f30728f…` / `c5166f23…`），
+且与 §15 实验记录的基线哈希一致——是逐字节等价，不是 ASR 级别的近似。
+KV32 单独 **-9.3% 墙钟 / -12.5% depth**（RTF 0.783→0.710）；
+V 直接散写再 **-3.1% / -4.0%**；`backbone_s` +2.1%（噪声内，backbone
+仍用 256 pad，符合设计）。首包 0.404→0.435 s 波动在噪声内，不下结论。
+
+### 16.3 新基线：两条并行分支只差 1.15%
+
+`wall ≈ 0.726 + max(2.853, 2.820) + 0.197 = 3.775 s`，RTF 0.710，
+音频 5.32 s。`depth − codec = 0.032 s`。§13 里那个「codec 有 25%
+空闲余量」的快照已被 KV32 吃掉。
+
+| 动作 | wall | RTF | Δ |
+|---|---:|---:|---:|
+| 当前 | 3.78 | 0.710 | — |
+| depth 单独 -27%（Flash 级） | 3.74 | 0.704 | **-0.9%** |
+| depth 降到 0（理论极限） | 3.74 | 0.704 | **-0.9%** |
+| codec 单独 -20% | 3.78 | 0.710 | **0%** |
+| depth -27% + codec -20%（捆绑） | 3.18 | 0.598 | -15.8% |
+| 两者各 -20%（捆绑） | 3.20 | 0.602 | -15.1% |
+
+**结论：单独压 depth 最多 0.9%，单独压 codec 为 0；稳态 RTF 0.710
+在不改模型图、不捆绑的前提下就是极限。** 而 §12 草稿、§13 旋钮 /
+亲和性、§14 门槛 0 已判死，§15 之后的 codec 尾部 HTP 移植探针
+（相位重排 / HVX 直卷积）也全部慢于 ORT，所以「捆绑」目前**没有
+现成的 depth 侧手段**。
+
+这同时改变了 Flash Attention 的定位：它在旧基线下 -27% 单步 /
+-17% 整句（`depth-attention-ab.log`），但在新基线下与 KV32 争同一段
+depth，叠加后立刻撞 codec 天花板，端到端只剩 ~0.9%，不值得为它
+承担用户试听已否决的音质风险（学习中心第 10 章）。
+
+### 16.4 下一步（按信息量 / 成本）
+
+**P0 · 归因实验，判死或救活 Flash 线（一个下午，零训练）**
+`M5_DEPTH_ATTENTION=flash-f32` 在 `backbone.cpp` 已实现但从未单独测过：
+FP32 KV + 融合注意力 kernel。台账明确记着「没有单独试听普通注意力 +
+FP16 KV，尚不能区分 KV 精度和融合注意力实现各自的影响」，而用户试听
+FP16 KV + 普通注意力时只报告韵律下降、无破音。这个组合保留 FP32 KV
+的采样语义，只换 kernel。判据：① codes/WAV 是否逐字节一致；
+② 多文本盲听；③ 与 KV32 是否叠加。**它是归因实验而不是性能实验**
+（速度收益已被 `max()` 吃掉）——目的是决定「融合注意力 kernel」是否
+还值得作为未来捆绑方案里 depth 的那一半。
+
+**P1 · 不受 `max()` 约束、用户能直接感知的维度**
+首包 0.435 s，其中固定开销 ≈0.197 s、前 2 帧 depth、codec prime；
+拆开量化找固定税（§13 已证稳态被锁，但首包不被锁）。其次是热漂移
+（同代码 RTF 0.75→0.91 的历史观察）、长时功耗、音质 / 情感表达
+——用户主观试听是硬门禁，RTF 不能代替听感。
+
+**P2 · 唯一有实质收益的稳态方向：捆绑（约 -15%），属模型级改造**
+depth 侧重训非自回归 depth head（§14 判死的是投机草稿，不是改图重训）；
+codec 侧 INT4 / 稀疏权重降 DDR 流量（§13 唯一未测的机制方向）或蒸馏。
+两者必须一起验收，且先过 codes/WAV 一致性 + ASR + 人耳试听。
+
+**明确不做**：codec 单独优化（0%）、depth 更低量化（≤0.9%）、
+backbone Q4（试听否决）、旋钮 / 亲和性 / 并发重扫（§13 证伪）、
+学习型草稿（§14 判死）、codec 尾部再搬 HTP（已实测慢 4–13×）、
+为单用户改 `render_mutex`。
+
+### 16.5 交付状态
+
+编译期默认；`M5_KV_PAD=256` / `M5_HVX_DIRECT_V=0` 可回退 A/B。
+`deploy.sh --no-models` 已重启 server，`/health` OK，
+Web 入口 http://127.0.0.1:18080 正常，一次真实 69 帧请求
+RTF 0.778（server/wav 路径，含首块开销）。脚本与原始数据：
+`~/m5-assets/kv32-ab.sh`、`kv32-results.txt`，设备侧 `kv32-out/`。
