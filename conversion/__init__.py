@@ -220,6 +220,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "MiniMaxM2ForCausalLM": "minimax",
     "MiniMaxM3SparseForCausalLM": "minimax",
     "MiniMaxM3SparseForConditionalGeneration": "minimax",
+    "DSparkMiniMaxDraftModel": "minimax",
     "Ministral3ForCausalLM": "mistral3",
     "Ministral3Model": "mistral3",
     "Mistral3ForConditionalGeneration": "mistral3",
