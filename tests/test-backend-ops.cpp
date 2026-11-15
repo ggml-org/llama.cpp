@@ -3854,6 +3854,67 @@ struct test_add_id : public test_case {
     }
 };
 
+struct test_add_id_f16_boundary : public test_case {
+    const int64_t n_embd;
+    const bool skip;
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "ADD_ID";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR2(n_embd, skip);
+    }
+
+    test_add_id_f16_boundary(int64_t n_embd, bool skip) : n_embd(n_embd), skip(skip) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t n_experts = 16;
+        const int64_t n_experts_used = 4;
+        const int64_t n_token = 10;
+        ggml_tensor * a_f32 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_experts_used, n_token);
+        ggml_tensor * b_f32 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_experts);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_experts_used, n_token);
+        ggml_set_name(a_f32, "a_f32");
+        ggml_set_name(b_f32, "b_f32");
+        ggml_set_name(ids, "ids");
+
+        ggml_tensor * a = ggml_dup(ctx, a_f32);
+        ggml_set_name(a, "a_internal");
+        ggml_tensor * add_id = ggml_add_id(ctx, a, b_f32, ids);
+        ggml_set_name(add_id, "add_id");
+        ggml_tensor * out_f32 = ggml_dup(ctx, add_id);
+        ggml_set_name(out_f32, "out_f32");
+        return out_f32;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                    std::vector<int32_t> data(t->ne[0]);
+                    for (int i = 0; i < t->ne[0]; i++) {
+                        data[i] = (i + r) % 16;
+                    }
+                    if (skip) {
+                        mask_skipped_ids(data, r);
+                    }
+                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+                }
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+};
+
 // GGML_OP_SCALE
 struct test_scale : public test_case {
     const ggml_type type;
@@ -12728,7 +12789,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // add_id
-    for (ggml_type type_a : {GGML_TYPE_F32}) {
+    for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {
             for (int n_mats : {4, 8}) {
                 for (int n_used : {1, 2, 4}) {
@@ -12741,6 +12802,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 }
             }
         }
+    }
+    for (int n_embd : {96, 128, 512}) {
+        test_cases.emplace_back(new test_add_id_f16_boundary(n_embd, false));
+        test_cases.emplace_back(new test_add_id_f16_boundary(n_embd, true));
     }
 
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {

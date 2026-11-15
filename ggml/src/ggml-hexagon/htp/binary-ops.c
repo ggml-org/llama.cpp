@@ -304,6 +304,7 @@ DEFINE_BINARY_MIXED_OP(add, BINARY_OP_ADD)
 DEFINE_BINARY_MIXED_OP(sub, BINARY_OP_SUB)
 DEFINE_BINARY_MIXED_OP(mul, BINARY_OP_MUL)
 DEFINE_BINARY_MIXED_OP(div, BINARY_OP_DIV)
+DEFINE_BINARY_MIXED_F16(binary_add_f16_f16_f16, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F16, BINARY_OP_ADD)
 
 #define DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, TYPES)                                                     \
     DEFINE_COMPUTE_SAME_SHAPE(OP_NAME##_##TYPES, binary_##OP_NAME##_##TYPES)                            \
@@ -401,23 +402,43 @@ typedef void (*compute_add_id_t)(
     uint32_t i01, uint32_t i02, uint32_t ne01, uint32_t src1_stride,
     uint32_t n_rows, size_t dst_stride, size_t src0_stride, uint32_t ne00);
 
-static void compute_add_id_f32(
-    uint8_t * dst, const uint8_t * src0, const uint8_t * src1_data, const int32_t * src2_ids,
-    uint32_t i01, uint32_t i02, uint32_t ne01, uint32_t src1_stride,
-    uint32_t n_rows, size_t dst_stride, size_t src0_stride, uint32_t ne00) {
-    for (uint32_t r = 0; r < n_rows; r++) {
-        uint32_t r_i01 = i01 + r;
-        const int32_t idx = src2_ids[i02 * ne01 + r_i01];
-        if (idx < 0) {
-            memcpy(dst + r * dst_stride, src0 + r * src0_stride, ne00 * sizeof(float));
-            continue;
-        }
-        const uint8_t * r_src1 = src1_data + idx * src1_stride;
-        const uint8_t * r_src0 = src0 + r * src0_stride;
-        uint8_t * r_dst = dst + r * dst_stride;
-        hvx_add_f32_aaa(r_dst, r_src0, r_src1, ne00);
-    }
+#define DEFINE_ADD_ID_COPY(NAME, STMT)                                           \
+static void add_id_copy_##NAME(uint8_t * dst, const uint8_t * src, uint32_t n) { \
+    STMT;                                                                        \
 }
+
+DEFINE_ADD_ID_COPY(f16_f16, memcpy(dst, src, n * sizeof(_Float16)))
+DEFINE_ADD_ID_COPY(f32_f32, memcpy(dst, src, n * sizeof(float)))
+DEFINE_ADD_ID_COPY(f16_f32, binary_scalar_add_f16_f32(dst, src, 0.0f, n))
+DEFINE_ADD_ID_COPY(f32_f16, binary_scalar_add_f32_f16(dst, src, 0.0f, n))
+
+#define DEFINE_COMPUTE_ADD_ID(NAME, ADD_FN, COPY_FN)                                          \
+static void compute_add_id_##NAME(                                                            \
+    uint8_t * dst, const uint8_t * src0, const uint8_t * src1_data, const int32_t * src2_ids, \
+    uint32_t i01, uint32_t i02, uint32_t ne01, uint32_t src1_stride,                          \
+    uint32_t n_rows, size_t dst_stride, size_t src0_stride, uint32_t ne00) {                  \
+    for (uint32_t r = 0; r < n_rows; r++) {                                                   \
+        const uint32_t r_i01 = i01 + r;                                                       \
+        const int32_t idx = src2_ids[i02 * ne01 + r_i01];                                     \
+        const uint8_t * r_src0 = src0 + r * src0_stride;                                      \
+        uint8_t * r_dst = dst + r * dst_stride;                                               \
+        if (idx < 0) {                                                                        \
+            COPY_FN(r_dst, r_src0, ne00);                                                     \
+            continue;                                                                         \
+        }                                                                                     \
+        const uint8_t * r_src1 = src1_data + idx * src1_stride;                               \
+        ADD_FN(r_dst, r_src0, r_src1, ne00);                                                  \
+    }                                                                                         \
+}
+
+DEFINE_COMPUTE_ADD_ID(f16_f16_f16, binary_add_f16_f16_f16,     add_id_copy_f16_f16)
+DEFINE_COMPUTE_ADD_ID(f32_f32_f32, hvx_add_f32_aaa,             add_id_copy_f32_f32)
+DEFINE_COMPUTE_ADD_ID(f16_f16_f32, binary_add_f16_f16_f32,     add_id_copy_f16_f32)
+DEFINE_COMPUTE_ADD_ID(f16_f32_f16, binary_add_f16_f32_f16,     add_id_copy_f16_f16)
+DEFINE_COMPUTE_ADD_ID(f16_f32_f32, binary_add_f16_f32_f32,     add_id_copy_f16_f32)
+DEFINE_COMPUTE_ADD_ID(f32_f16_f16, binary_add_f32_f16_f16,     add_id_copy_f32_f16)
+DEFINE_COMPUTE_ADD_ID(f32_f16_f32, binary_add_f32_f16_f32,     add_id_copy_f32_f32)
+DEFINE_COMPUTE_ADD_ID(f32_f32_f16, binary_add_f32_f32_f16,     add_id_copy_f32_f16)
 
 // 1. Scalar src1 in VTCM via DMA (ne10 == 1)
 static void binary_thread_scalar(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
@@ -900,7 +921,7 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
 }
 
 // 6. ADD_ID (src1 gathered via src2 indices)
-static void binary_thread_add_id_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+static void binary_thread_add_id(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct htp_binary_context * bctx = (struct htp_binary_context *) data;
     struct htp_ops_context * octx = bctx->octx;
 
@@ -1584,9 +1605,19 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             }
             break;
         case HTP_BINARY_KERNEL_ADD_ID:
-            if (octx->op == HTP_OP_ADD_ID && src0_type == HTP_TYPE_F32) {
-                worker_func = binary_thread_add_id_f32;
-                compute_func = (void *) compute_add_id_f32;
+            if (octx->op == HTP_OP_ADD_ID) {
+                worker_func = binary_thread_add_id;
+                switch (type_key) {
+                    case 0: compute_func = (void *) compute_add_id_f16_f16_f16; break;
+                    case 1: compute_func = (void *) compute_add_id_f16_f16_f32; break;
+                    case 2: compute_func = (void *) compute_add_id_f16_f32_f16; break;
+                    case 3: compute_func = (void *) compute_add_id_f16_f32_f32; break;
+                    case 4: compute_func = (void *) compute_add_id_f32_f16_f16; break;
+                    case 5: compute_func = (void *) compute_add_id_f32_f16_f32; break;
+                    case 6: compute_func = (void *) compute_add_id_f32_f32_f16; break;
+                    case 7: compute_func = (void *) compute_add_id_f32_f32_f32; break;
+                    default: break;
+                }
             }
             break;
         default: break;

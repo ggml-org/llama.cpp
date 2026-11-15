@@ -1266,7 +1266,12 @@ static bool htp_kparams_solve_binary(
         if (!src2) {
             return false;
         }
-        if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || src2->type != GGML_TYPE_I32) {
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) || src2->type != GGML_TYPE_I32) {
+            return false;
+        }
+        if (!internal_f16 && (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32)) {
             return false;
         }
         if (!ggml_are_same_shape(src0, dst)) {
@@ -1278,7 +1283,8 @@ static bool htp_kparams_solve_binary(
         if (src2->ne[0] != src0->ne[1] || src2->ne[1] != src0->ne[2]) {
             return false;
         }
-        if (src0->nb[0] != sizeof(float) || src1->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float) || src2->nb[0] != sizeof(int32_t)) {
+        if (src0->nb[0] != ggml_type_size(src0->type) || src1->nb[0] != ggml_type_size(src1->type) ||
+            dst->nb[0] != ggml_type_size(dst->type) || src2->nb[0] != sizeof(int32_t)) {
             return false;
         }
         if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
