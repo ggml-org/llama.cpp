@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { SkipForward, Square } from '@lucide/svelte';
-	import { page } from '$app/state';
 	import {
 		ChatFormActionReasoning,
 		ChatFormActionRecord,
@@ -10,44 +9,56 @@
 		ModelsSelector
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
-	import { FileTypeCategory, MessageRole } from '$lib/enums';
+	import { FileTypeCategory } from '$lib/enums';
 	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
+	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import { ChatService } from '$lib/services';
-	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
-	import { getFileTypeCategory } from '$lib/utils';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
+	import { abbreviateWorkingDir, getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
 		canSend?: boolean;
 		class?: string;
 		disabled?: boolean;
+		/** Lay the actions out in the row around them, the add button first, the rest last. */
+		inline?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
 		isRecording?: boolean;
+		/** Why the microphone can't record, shown on its button. */
+		micWarning?: string | null;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
+		/** The chat's working directory, which the + menu names. */
+		workingDirectory?: string | null;
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
+		onWorkingDirectoryClick?: () => void;
 	}
 
 	let {
 		canSend = false,
 		class: className = '',
 		disabled = false,
+		inline = false,
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
+		micWarning = null,
 		onFileUpload,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
+		onWorkingDirectoryClick,
 		showAddButton = true,
 		showModelSelector = true,
-		uploadedFiles = []
+		uploadedFiles = [],
+		workingDirectory = null
 	}: Props = $props();
 
 	let currentConfig = $derived(settingsStore.config);
@@ -85,45 +96,7 @@
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
 
-	let hasProcessedTokens = $derived.by(() => {
-		if (!page.params.id) return false;
-
-		const messages = conversationsStore.activeMessages as DatabaseMessage[];
-
-		let totalHistoricalTokens = 0;
-
-		for (const m of messages) {
-			if (m.role !== MessageRole.ASSISTANT) continue;
-
-			const timings = m.timings;
-
-			if (!timings) continue;
-
-			const agenticLlm = timings.agentic?.llm;
-
-			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
-				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
-			} else {
-				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
-			}
-		}
-
-		if (totalHistoricalTokens > 0) return true;
-
-		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
-
-		const processingState = chatStore.processing.activeState;
-
-		if (!processingState) return false;
-
-		const livePromptTokens = Math.max(
-			processingState.promptTokens ?? 0,
-			processingState.promptProgress?.processed ?? 0
-		);
-		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
-
-		return livePromptTokens > 0 || liveOutputTokens > 0;
-	});
+	const showContextGauge = useShowContextGauge();
 
 	setChatFormActionsContext({
 		get disabled() {
@@ -143,22 +116,35 @@
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;
+		},
+		get onWorkingDirectoryClick() {
+			return onWorkingDirectoryClick;
+		},
+		get workingDirectoryLabel() {
+			return workingDirectory
+				? abbreviateWorkingDir(workingDirectory, toolsStore.serverHome)
+				: SET_WORKING_DIRECTORY_LABEL;
 		}
 	});
 </script>
 
 <div
-	class="flex w-full items-center gap-3 {className} {showAddButton ? '' : 'justify-end'}"
-	style="container-type: inline-size"
+	style:container-type={inline ? undefined : 'inline-size'}
+	class={[
+		inline ? 'contents' : 'flex w-full items-center gap-3',
+		className,
+		!showAddButton && 'justify-end'
+	]}
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-2">
+		<div class={['flex items-center gap-2', inline ? 'order-first' : 'mr-auto']}>
 			<ChatFormActionsAdd />
 		</div>
 	{/if}
 
 	<div class="flex items-center gap-1.5">
-		{#if hasProcessedTokens}
+		<!-- a phone shows the gauge pinned to the chat screen's top right instead -->
+		{#if showContextGauge.current && !deviceStore.isMobile}
 			<ChatFormContextGauge />
 		{/if}
 
@@ -205,7 +191,14 @@
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}
-		<ChatFormActionRecord {disabled} {hasAudioModality} {isLoading} {isRecording} {onMicClick} />
+		<ChatFormActionRecord
+			{disabled}
+			{hasAudioModality}
+			{isLoading}
+			{isRecording}
+			{micWarning}
+			{onMicClick}
+		/>
 	{:else}
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}

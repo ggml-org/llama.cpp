@@ -103,6 +103,14 @@ static void fill_rope_factors(std::vector<float> & dst, const char * name, const
     }
 }
 
+// FFN act scales divide the activation, a value close to 0 overflows the F16 staging of the Metal mul-mat kernel
+static void fill_ffn_act(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
+    fill_normal(dst, name, params);
+    for (float & v : dst) {
+        v = copysignf(1.0f + fabsf(v), v);
+    }
+}
+
 // a norm preserving residual gate holds alpha^2 + beta^2 == 1, and the conversion resolves both from one raw weight
 // the alpha and the beta of a block share that weight, so the key drops the suffix and keeps the block
 static void fill_resid_gate(std::vector<float> & dst, const char * name, const tensor_data_params & params) {
@@ -127,6 +135,7 @@ static const struct { const char * match; tensor_filler fill; } TENSOR_FILLERS[]
     { "ssm_a",        fill_ssm_a        },
     { "_resid_",      fill_resid_gate   },
     { "exp_probs_b",  fill_exp_probs_b  },
+    { "ffn.act",      fill_ffn_act      },
     { "rope_freqs",   fill_rope_factors },
     { "rope_factors", fill_rope_factors },
 };
@@ -317,6 +326,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
+    } else if (arch == LLM_ARCH_INKLING2) {
+        n_embd  = 128;
+        n_head  = 4;
+        n_ff    = 24;
+        n_layer = 3;
     }
 
     uint32_t n_head_kv = n_head;
@@ -682,6 +696,31 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
+    if (arch == LLM_ARCH_INKLING2) {
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
+        ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
+        ms.add_kv(LLM_KV_ATTENTION_RELATIVE_CLIP,     0.1f);
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,   uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,   0.1f);
+        ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
+        ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
+        ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);
+        ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,         n_vocab);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        0.2f);
+        ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 0.3f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,        8.0f);
+        ms.add_kv(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     30.0f);
+        ms.add_kv(LLM_KV_EXPERT_COUNT,                uint32_t(4));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,           uint32_t(2));
+        std::vector<bool> pattern(n_layer);
+        for (uint32_t i = 0; i < n_layer; ++i) {
+            pattern[i] = i % 2 == 0;
+        }
+        std::vector<uint8_t> values(pattern.begin(), pattern.end());
+        gguf_set_arr_data(ret.get(), llama_arch_kv_name(arch, LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+    }
+
     // dummy tokenizer: token ids are derived from fixed-size chunks and detokenized as hex ids
     {
         std::vector<std::string> tokenizer_list(n_vocab);
@@ -746,6 +785,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
     }
 
+    if (arch == LLM_ARCH_ZONOS3) {
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,            n_embd / 2);
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+    }
+
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
     ms.add_kv(LLM_KV_POSNET_BLOCK_COUNT,        n_layer);
     ms.add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, n_embd);
@@ -754,7 +798,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
@@ -1038,6 +1082,8 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
         case LLM_ARCH_METIS16:
+        case LLM_ARCH_ZONOS3:
+        case LLM_ARCH_INKLING2:
             return true;
         default:
             return false;

@@ -35,11 +35,15 @@
 		useGlobalSelection = false
 	}: Props = $props();
 
-	// one setting for every model id in the selector: the trigger and the rows
-	let showOrgName = $derived(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true);
-
 	// a phone opens the picker in a drawer, a desktop keeps the anchored dropdown
 	let isMobile = $derived(deviceStore.isMobile);
+
+	// one setting for every model id in the selector: the trigger and the rows. A phone, where
+	// the selector is narrow, drops it too unless its own setting keeps it
+	let showOrgName = $derived(
+		(settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME] ?? true) &&
+			(!isMobile || settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_ON_MOBILE] === true)
+	);
 	let isOffline = $derived(!!serverStore.error);
 
 	let isOpen = $state(false);

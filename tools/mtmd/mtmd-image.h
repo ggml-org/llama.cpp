@@ -143,6 +143,12 @@ struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
     virtual mtmd_image_size target_size(const mtmd_image_size & original_size) const { return get_target_size(hparams, original_size); }
 };
 
+// Kimi-K2.5 / K3.1 navit_resize_image: scale down to the patch limits, then pad bottom-right with black to a multiple of patch_size*n_merge
+struct mtmd_image_preprocessor_kimik25 : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_kimik25(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+};
+
 // Qwen3-VL, same as dyn_size for images, video frames are sized as Qwen3VLVideoProcessor
 struct mtmd_image_preprocessor_qwen3vl : mtmd_image_preprocessor_dyn_size {
     using mtmd_image_preprocessor_dyn_size::mtmd_image_preprocessor_dyn_size;
@@ -344,5 +350,11 @@ struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
 // pick the patch grid closest to the input aspect ratio under the per-image token cap, stretch-resize.
 struct mtmd_image_preprocessor_muse_glimmer : mtmd_image_preprocessor {
     mtmd_image_preprocessor_muse_glimmer(const mtmd_model * model) : mtmd_image_preprocessor(model) {}
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+};
+
+// pad bottom-right to a multiple of patch_size*n_merge; resize only if the image is above image_max_pixels
+struct mtmd_image_preprocessor_inkling2v : mtmd_image_preprocessor {
+    using mtmd_image_preprocessor::mtmd_image_preprocessor;
     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };

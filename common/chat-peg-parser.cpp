@@ -131,6 +131,12 @@ static std::string normalize_quotes_to_json(const std::string & input) {
             continue;
         }
 
+        // Models can emit raw control characters inside string literals; escape them to keep the JSON valid.
+        if ((in_single_quoted || in_double_quoted) && static_cast<unsigned char>(c) < 0x20) {
+            result += escape_json_string_inner(std::string(1, c));
+            continue;
+        }
+
         // Handle quote characters
         if (c == '"') {
             if (in_single_quoted) {
@@ -556,7 +562,8 @@ common_peg_parser common_chat_peg_builder::python_or_json_value() {
 common_peg_parser common_chat_peg_builder::python_style_tool_calls(
     const ordered_json & tools,
     bool                 parallel_tool_calls,
-    bool                 allow_json_literals) {
+    bool                 allow_json_literals,
+    bool                 allow_undeclared) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -612,6 +619,18 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
         );
 
         tool_choices |= rule("tool-" + std::to_string(i), tool_parser);
+    }
+
+    // last, so declared tools win when parsing
+    if (allow_undeclared) {
+        auto ident = rule("tool-undeclared-ident", chars("[a-zA-Z_]", 1, 1) + chars("[a-zA-Z0-9_.]", 0, -1));
+        auto value = tool_arg_value(allow_json_literals ? python_or_json_value() : python_value());
+        auto arg   = tool_arg(tool_arg_open(tool_arg_name(ident) + literal("=")) + value + tool_arg_close(eps()));
+        auto args  = optional(arg + zero_or_more("," + space() + arg));
+
+        tool_choices |= rule("tool-undeclared", tool(tool_open(tool_name(ident) + literal("(")) +
+            space() + tool_args(args) + space() + tool_close(literal(")"))
+        ));
     }
 
     if (parallel_tool_calls) {
@@ -967,6 +986,21 @@ void common_chat_peg_gemma4_mapper::from_ast(const common_peg_ast_arena & arena,
     }
 }
 
+using gemma4 = common_chat_peg_gemma4_mapper;
+
+// Collects the nearest descendants carrying tag, looking through the rules the parser
+// wraps around the tagged nodes.
+static void gemma4_collect(const common_peg_ast_arena & arena, const common_peg_ast_node & node, const std::string & tag, std::vector<common_peg_ast_id> & out) {
+    for (auto child_id : node.children) {
+        const auto & child = arena.get(child_id);
+        if (child.tag == tag) {
+            out.push_back(child_id);
+        } else {
+            gemma4_collect(arena, child, tag, out);
+        }
+    }
+}
+
 static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id) {
     const auto & node = arena.get(id);
 
@@ -974,51 +1008,45 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return "";
     }
 
-    if (node.rule == "gemma4-number" || node.rule == "gemma4-bool" || node.rule == "gemma4-null") {
+    if (node.tag == gemma4::NUMBER || node.tag == gemma4::BOOL || node.tag == gemma4::NULL_) {
         return std::string(node.text);
     }
 
-    if (node.rule == "gemma4-string-content") {
+    if (node.tag == gemma4::STRING_CONTENT) {
         return escape_json_string_inner(node.sanitized_text());
     }
 
-    if (node.rule == "gemma4-string") {
+    if (node.tag == gemma4::STRING) {
         std::string result = "\"";
-        if (!node.children.empty()) {
-            result += gemma4_to_json(arena, node.children[0]);
-            if (!node.is_partial) {
-                result += "\"";
-            }
+        for (auto child_id : node.children) {
+            result += gemma4_to_json(arena, child_id);
+        }
+        if (!node.is_partial) {
+            result += "\"";
         }
         return result;
     }
 
-    if (node.rule == "gemma4-array") {
+    if (node.tag == gemma4::ARRAY) {
         std::string result = "[";
-
-        bool add_comma = false;
-        for (auto child_id : node.children) {
-            if (add_comma) {
+        for (size_t i = 0; i < node.children.size(); i++) {
+            if (i > 0) {
                 result += ',';
             }
-            add_comma = true;
-            result += gemma4_to_json(arena, child_id);
+            result += gemma4_to_json(arena, node.children[i]);
         }
-
         if (!node.is_partial) {
             result += ']';
         }
         return result;
     }
 
-    if (node.rule == "gemma4-dict-key-name") {
-        return std::string(node.text);
-    }
+    if (node.tag == gemma4::DICT_KEY) {
+        auto name_id = arena.find_by_tag(node, gemma4::DICT_KEY_NAME);
 
-    if (node.rule == "gemma4-dict-key") {
         std::string result = "\"";
-        if (!node.children.empty()) {
-            result += escape_json_string_inner(gemma4_to_json(arena, node.children[0]));
+        if (name_id != COMMON_PEG_INVALID_AST_ID) {
+            result += escape_json_string_inner(std::string(arena.get(name_id).text));
         }
         if (!node.is_partial) {
             result += "\":";
@@ -1026,40 +1054,29 @@ static std::string gemma4_to_json(const common_peg_ast_arena & arena, common_peg
         return result;
     }
 
-    if (node.rule == "gemma4-dict-kv") {
-        std::string result;
-        for (auto child_id : node.children) {
-            result += gemma4_to_json(arena, child_id);
-        }
-        return result;
-    }
+    if (node.tag == gemma4::DICT) {
+        std::vector<common_peg_ast_id> members;
+        gemma4_collect(arena, node, gemma4::DICT_KV, members);
 
-    if (node.rule == "gemma4-dict") {
         std::string result = "{";
-
-        bool add_comma = false;
-        for (auto child_id : node.children) {
-            if (add_comma) {
+        for (size_t i = 0; i < members.size(); i++) {
+            if (i > 0) {
                 result += ',';
             }
-            add_comma = true;
-            result += gemma4_to_json(arena, child_id);
+            result += gemma4_to_json(arena, members[i]);
         }
-
         if (!node.is_partial) {
             result += '}';
         }
         return result;
     }
 
-    if (node.rule == "gemma4-value") {
-        if (!node.children.empty()) {
-            return gemma4_to_json(arena, node.children[0]);
-        }
-        return "";
+    // members, rules and other wrappers
+    std::string result;
+    for (auto child_id : node.children) {
+        result += gemma4_to_json(arena, child_id);
     }
-
-    return "";
+    return result;
 }
 
 void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {

@@ -267,6 +267,57 @@ MAKE_TEST(test_image_preprocessor_lfm2_torch_resize) {
     }
 }
 
+MAKE_TEST(test_image_preprocessor_inkling2v) {
+    mtmd_hparams hparams;
+    hparams.patch_size = 20;
+    hparams.n_merge = 2;
+    for (int c = 0; c < 3; ++c) {
+        hparams.image_mean[c] = hparams.image_std[c] = 0.5f;
+    }
+    mtmd_image_preprocessor_inkling2v preproc(hparams);
+    for (const auto & size : std::vector<mtmd_image_size>{{1, 1}, {40, 40}, {61, 43}, {83, 45}, {161, 21}}) {
+        mtmd_image_u8 image;
+        image.set_size(size, false);
+        for (int y = 0; y < size.height; ++y) {
+            for (int x = 0; x < size.width; ++x) {
+                image.set_pixel(x, y, {uint8_t(x % 256), uint8_t(y % 256), 255});
+            }
+        }
+        const auto result = preproc.preprocess(image);
+        t.assert_equal("one image", size_t(1), result.entries.size());
+        const auto & output = result.entries[0];
+        t.assert_equal("width ceil", ((size.width + 39) / 40) * 40, output.nx());
+        t.assert_equal("height ceil", ((size.height + 39) / 40) * 40, output.ny());
+        const auto & pixels = output.get_ro_buf();
+        bool exact = true;
+        for (int y = 0; y < output.ny(); ++y) {
+            for (int x = 0; x < output.nx(); ++x) {
+                const bool pad = x >= size.width || y >= size.height;
+                const float rgb[3] = {float(x % 256), float(y % 256), 255.0f};
+                for (int c = 0; c < 3; ++c) {
+                    const float expected = ((pad ? -1.0f : rgb[c]) - 127.5f) / 127.5f;
+                    exact = exact && pixels[3 * (size_t(y) * output.nx() + x) + c] == expected;
+                }
+            }
+        }
+        t.assert_true("pixels and negative padding", exact);
+        image.set_size(size, true);
+        const auto placeholder = preproc.preprocess(image);
+        t.assert_true("placeholder", placeholder.entries[0].is_placeholder());
+        t.assert_equal("placeholder width", output.nx(), placeholder.entries[0].nx());
+        t.assert_equal("placeholder height", output.ny(), placeholder.entries[0].ny());
+    }
+    // an image above image_max_pixels is resized down, the output stays aligned
+    hparams.image_max_pixels = 16 * 40 * 40;
+    mtmd_image_u8 large;
+    large.set_size({1000, 300}, false);
+    large.cpy_buf(std::vector<uint8_t>(1000 * 300 * 3, 17));
+    const auto capped = preproc.preprocess(large);
+    t.assert_true("capped area", capped.entries[0].nx() * capped.entries[0].ny() <= hparams.image_max_pixels);
+    t.assert_equal("capped width aligned", 0, capped.entries[0].nx() % 40);
+    t.assert_equal("capped height aligned", 0, capped.entries[0].ny() % 40);
+}
+
 //
 // mtmd temporal merge
 //
@@ -367,9 +418,19 @@ MAKE_TEST(test_video_config) {
 // n_frames source frames, each one starts with its index
 struct test_video_source : mtmd_helper_video_seq {
     int32_t n_frames;
-    int32_t n_read = 0;
+    int32_t n_read    = 0;
+    int32_t n_skipped = 0;
 
     test_video_source(int32_t n_frames) : n_frames(n_frames) {}
+
+    bool skip_raw_frame() override {
+        if (n_read >= n_frames) {
+            return false;
+        }
+        n_read++;
+        n_skipped++;
+        return true;
+    }
 
     bool read_raw_frame() override {
         if (n_read >= n_frames) {
@@ -412,17 +473,17 @@ MAKE_TEST(test_video_sequence_qwen3vl) {
     const mtmd_image_preprocessor_qwen3vl preproc(hparams);
 
     // { source video, expected frame size and sequence from Qwen3VLProcessor (transformers 4.57.1) }
-    const std::vector<std::tuple<mtmd_helper_video_src, mtmd_image_size, std::string>> cases = {
-        { {  720, 358, 24.0f, 240 }, { 704, 352 },
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, mtmd_image_size, std::string>> cases = {
+        { {  720, 358, 24.0f, 240, -1.0f }, { 704, 352 },
             "<0.3 seconds>[0][13]<1.3 seconds>[25][38]<2.4 seconds>[50][63]<3.4 seconds>[75][88]<4.5 seconds>[101][113]"
             "<5.5 seconds>[126][138]<6.6 seconds>[151][164]<7.6 seconds>[176][189]<8.6 seconds>[201][214]<9.7 seconds>[226][239]" },
         // odd frame count: the last group repeats its last frame
-        { {  640, 480, 10.0f,  35 }, { 640, 480 },
+        { {  640, 480, 10.0f,  35, -1.0f }, { 640, 480 },
             "<0.3 seconds>[0][6]<1.4 seconds>[11][17]<2.5 seconds>[23][28]<3.4 seconds>[34]" },
         // fewer frames than the minimum of 4
-        { {  320, 240, 30.0f,   3 }, { 320, 256 },
+        { {  320, 240, 30.0f,   3, -1.0f }, { 320, 256 },
             "<0.0 seconds>[0][1]<0.1 seconds>[2]" },
-        { { 1280, 720, 30000.0f / 1001.0f, 300 }, { 1280, 704 },
+        { { 1280, 720, 30000.0f / 1001.0f, 300, -1.0f }, { 1280, 704 },
             "<0.3 seconds>[0][16]<1.3 seconds>[31][47]<2.4 seconds>[63][79]<3.4 seconds>[94][110]<4.5 seconds>[126][142]"
             "<5.5 seconds>[157][173]<6.6 seconds>[189][205]<7.6 seconds>[220][236]<8.7 seconds>[252][268]<9.7 seconds>[283][299]" },
     };
@@ -445,22 +506,98 @@ MAKE_TEST(test_video_sequence_lfm3_omni) {
     hparams.n_merge = 2;
     const mtmd_image_preprocessor_lfm3vl preproc(hparams);
 
-    const mtmd_helper_video_src src = { 64, 64, 2.0f, 9 };
+    const mtmd_helper_video_stream_info src = { 64, 64, 2.0f, 9, -1.0f };
     const mtmd_video_config cfg = mtmd_video_config_init(MTMD_VIDEO_TEMPLATE_LFM3_OMNI, &preproc, src.width, src.height, src.n_frames, src.fps);
     test_video_source video(src.n_frames);
     video.configure(cfg, src, 0.0f);
-    video.src_alive  = true;
-    video.audio_rate = 100;
-    video.soundtrack.assign(450, 0.0f);
+    video.src_alive = true;
+    // the video is 4.5 seconds long, the rest of the soundtrack is dropped
+    const std::vector<float> pcm(500, 0.0f);
+    video.set_soundtrack(pcm.data(), pcm.size(), 100);
 
     t.assert_equal("sequence",
         std::string("<0.2 seconds>[0][1]{100}<1.2 seconds>[2][3]{100}<2.2 seconds>[4][5]{100}<3.2 seconds>[6][7]{100}<4.0 seconds>[8]{50}"),
         video_sequence_to_str(t, video));
 }
 
+// a source that gives every frame: the frames of fps_target are picked by index
+MAKE_TEST(test_video_sequence_sample_by_index) {
+    const mtmd_video_config cfg = { MTMD_VIDEO_TEMPLATE_DEFAULT, 0.0f, 0, 0, 0 };
+
+    // { source video, frames in the source, expected sequence, expected number of skipped frames }
+    const std::vector<std::tuple<mtmd_helper_video_stream_info, int32_t, std::string, int32_t>> cases = {
+        { { 64, 64, 8.0f, 16, -1.0f }, 16, "Video:[0][0m0.00s][4][8][0m1.00s][12]", 9 },
+        // unknown length: every frame is kept
+        { { 64, 64, 8.0f, -1, -1.0f },  3, "Video:[0][0m0.00s][1][2]", 0 },
+    };
+
+    for (const auto & [src, n_frames, expected, expected_skipped] : cases) {
+        const std::string name = std::to_string(src.n_frames) + " frames";
+        test_video_source video(n_frames);
+        video.timestamp_interval_ms = 1000;
+        video.configure(cfg, src, 2.0f);
+        video.sample_by_index(src);
+        video.src_alive = true;
+        t.assert_equal(name + " sequence", expected, video_sequence_to_str(t, video));
+        t.assert_equal(name + " skipped", expected_skipped, video.n_skipped);
+    }
+}
+
 //
 // mtmd_audio
 //
+
+MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins        = 128;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft       = 400;
+    hparams.audio_window_len  = 400;
+    hparams.audio_hop_len     = 160;
+
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+
+    mtmd_audio_preprocessor_whisper preproc(hparams, sched.get());
+    preproc.initialize();
+
+    // { sample count, expected chunks }, one chunk of 3000 frames covers 480000 samples
+    const std::vector<std::pair<size_t, size_t>> cases = {
+        {       0, 0 },
+        {       1, 1 },
+        {     200, 1 },
+        {     201, 1 },
+        {   32000, 1 },
+        {  479834, 1 },
+        {  479839, 1 },
+        {  479840, 1 },
+        {  479999, 1 },
+        {  480000, 1 },
+        {  480001, 2 },
+        {  480159, 2 },
+        {  480160, 2 },
+        {  959840, 2 },
+        {  959999, 2 },
+        {  960000, 2 },
+        {  960001, 3 },
+        { 1440000, 3 },
+    };
+
+    for (const auto & [n_samples, expected] : cases) {
+        const std::string name = std::to_string(n_samples) + " samples";
+        std::vector<float> samples(n_samples, 0.0f);
+        if (n_samples > 0) {
+            samples.back() = 0.5f;
+        }
+        mtmd_audio_preproc_out out = preproc.preprocess(samples.data(), samples.size());
+        t.assert_equal("chunks for " + name, expected, out.entries.size());
+        for (const auto & mel : out.entries) {
+            t.assert_equal("frames for " + name, 3000, mel.nx());
+            t.assert_equal("mel bins for " + name, 128, mel.ny());
+        }
+    }
+}
 
 MAKE_TEST(test_audio_preprocessor_conformer) {
     mtmd_hparams hparams;
@@ -663,6 +800,85 @@ MAKE_TEST(test_audio_log_mel_blocks) {
         }
     }
     t.assert_true("max_diff = " + std::to_string(max_diff), max_diff < 1e-5f);
+}
+
+//
+// mtmd_helper_resampler
+//
+
+static std::vector<float> make_tone(double freq, int rate, size_t n) {
+    const double pi = 3.14159265358979323846;
+    std::vector<float> x(n);
+    for (size_t i = 0; i < n; i++) {
+        x[i] = (float) (0.5 * std::sin(2 * pi * freq * i / rate));
+    }
+    return x;
+}
+
+// amplitude of the freq component, skipping the edges
+static double tone_amplitude(const std::vector<float> & x, double freq, int rate) {
+    const double pi = 3.14159265358979323846;
+    const size_t skip = rate / 10;
+    double re = 0.0, im = 0.0;
+    for (size_t i = skip; i < x.size() - skip; i++) {
+        re += x[i] * std::cos(2 * pi * freq * i / rate);
+        im += x[i] * std::sin(2 * pi * freq * i / rate);
+    }
+    return 2.0 * std::sqrt(re * re + im * im) / (x.size() - 2 * skip);
+}
+
+static std::vector<float> resample_chunked(mtmd_helper_resampler * rs, const std::vector<float> & in, size_t chunk) {
+    std::vector<float> res;
+    for (size_t off = 0; off < in.size(); off += chunk) {
+        const float * out = nullptr;
+        const int64_t n = mtmd_helper_resampler_process(rs, in.data() + off, std::min(chunk, in.size() - off), &out);
+        if (n < 0) {
+            return {};
+        }
+        res.insert(res.end(), out, out + n);
+    }
+    return res;
+}
+
+MAKE_TEST(test_helper_resampler) {
+    const int rate_out = 16000;
+    for (int rate_in : { 8000, 24000, 44100, 48000 }) {
+        const std::string name = std::to_string(rate_in) + " -> " + std::to_string(rate_out);
+        const std::vector<float> in = make_tone(440, rate_in, (size_t) rate_in * 2);
+
+        mtmd_helper::resampler_ptr rs_all(mtmd_helper_resampler_init(rate_in, rate_out));
+        mtmd_helper::resampler_ptr rs_chk(mtmd_helper_resampler_init(rate_in, rate_out));
+        if (!t.assert_true(name + " init", rs_all && rs_chk)) {
+            continue;
+        }
+        const std::vector<float> all = resample_chunked(rs_all.get(), in, in.size());
+        const std::vector<float> chk = resample_chunked(rs_chk.get(), in, 1234); // odd size, not a multiple of the ratio
+
+        t.assert_equal(name + " n_samples", (size_t) rate_out * 2, all.size());
+        t.assert_true(name + " chunked == one-shot", all == chk);
+
+        const double amp = tone_amplitude(all, 440, rate_out);
+        t.assert_true(name + " amplitude = " + std::to_string(amp), std::fabs(amp - 0.5) < 0.02);
+    }
+
+    // above the output Nyquist: 10 kHz at 48 kHz aliases to 6 kHz at 16 kHz, the low-pass filter must cut it
+    {
+        mtmd_helper::resampler_ptr rs(mtmd_helper_resampler_init(48000, rate_out));
+        const std::vector<float> out = resample_chunked(rs.get(), make_tone(10000, 48000, 48000 * 2), 4800);
+        const double db = 20 * std::log10(tone_amplitude(out, 6000, rate_out) / 0.5);
+        t.assert_true("aliasing = " + std::to_string(db) + " dB", db < -15); // about -20 dB with lpfOrder = 8, -10 dB with the default
+    }
+
+    // same rate: no copy
+    {
+        mtmd_helper::resampler_ptr rs(mtmd_helper_resampler_init(rate_out, rate_out));
+        const std::vector<float> in = make_tone(440, rate_out, 1000);
+        const float * out = nullptr;
+        const int64_t n = rs ? mtmd_helper_resampler_process(rs.get(), in.data(), in.size(), &out) : -1;
+        t.assert_true("passthrough", n == (int64_t) in.size() && out == in.data());
+    }
+
+    t.assert_true("invalid rate", mtmd_helper_resampler_init(0, rate_out) == nullptr);
 }
 
 //

@@ -39,7 +39,7 @@ static void print_usage(int, char ** argv) {
     LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
     LOG("\nnote: --tts-lang, --tts-voice and --tts-speaker-file may not be supported in all models");
     LOG("\n      use -n to limit the output length");
-    LOG("\n      see tts/README.md for per-model usage notes");
+    LOG("\n      see docs/multimodal/tts.md for per-model usage notes");
     LOG("\n\n");
 }
 
@@ -151,6 +151,10 @@ int main(int argc, char ** argv) {
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.seed        = params.sampling.seed;
+    // without --temp the audio frames keep the model default, not the CLI default
+    if (params.sampling.user_sampling_config & common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TEMP) {
+        inp.temp    = params.sampling.temp;
+    }
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation

@@ -941,6 +941,9 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                         op->nb[1] == op->ne[0] * sizeof(float);
             break;
         case GGML_OP_MUL_MAT:
+            if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
+                break;
+            }
             // Support Q8_0 x F32 -> F32, F16 x F32 -> F32, F16 x F16 -> F32, and F32 x F32 -> F32 matrix multiplication
             // Stride requirements: first dimension must be contiguous for all tensors
             if (op->type == GGML_TYPE_F32 &&
@@ -1299,7 +1302,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const bool me_eligible = op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16 &&
                                          (op->src[0]->ne[0] % 32) == 0;
 
-                supported = me_eligible && mask_ok && (prec == GGML_PREC_F32 || prec == GGML_PREC_BF16 || prec == GGML_PREC_DEFAULT) &&
+                supported = me_eligible && mask_ok && (prec == GGML_PREC_F32 || prec == GGML_PREC_BF16 || prec == GGML_PREC_UNDEFINED) &&
                             max_bias == 0.0f && logit_softcap == 0.0f && op->src[0]->nb[0] == sizeof(float) &&
                             op->src[1]->nb[0] == k_elem && op->src[2]->nb[0] == v_elem && op->nb[0] == sizeof(float) &&
                             op->src[0]->ne[0] == op->src[1]->ne[0] &&  // dk matches

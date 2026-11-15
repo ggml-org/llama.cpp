@@ -268,12 +268,28 @@ struct mtmd_graph_granite_speech : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+struct mtmd_graph_vibevoice_asr : mtmd_graph {
+    mtmd_graph_vibevoice_asr(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    std::map<std::string, ggml_tensor *> state_in;
+    mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    ggml_tensor * with_left_ctx(ggml_tensor * x, const std::string & name) const;
+    ggml_tensor * causal_conv(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & name) const;
+    ggml_tensor * encode(int e, ggml_tensor * x) const;
+};
+
 struct mtmd_graph_muse_spark_audio : mtmd_graph {
     mtmd_graph_muse_spark_audio(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
 struct mtmd_graph_gemma4a : mtmd_graph {
+    // attention_chunk_size, attention_context_left - 1
+    static constexpr int64_t chunk_size = 12;
+    static constexpr int64_t max_past   = 12;
+
     mtmd_graph_gemma4a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const override;
@@ -335,6 +351,27 @@ struct mtmd_graph_qwen3a : mtmd_graph {
 struct mtmd_graph_mimo_audio : mtmd_graph {
     mtmd_graph_mimo_audio(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
+};
+
+// zonos3 speaker encoder: MECT-B2 + ASTP, then the speaker projection of the backbone
+struct mtmd_graph_zonos3_spkenc : mtmd_graph {
+    mtmd_graph_zonos3_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    ggml_tensor * W(const std::string & name) const;
+    bool          has(const std::string & name) const;
+    ggml_tensor * chan(ggml_tensor * v) const;
+    ggml_tensor * bn(ggml_tensor * x, const std::string & p) const;
+    ggml_tensor * conv(ggml_tensor * x, const std::string & p, int s_t, int s_f, bool bias, int pad) const;
+    ggml_tensor * grouped3x3(ggml_tensor * x, const std::string & p, int s_t, int s_f) const;
+    ggml_tensor * res_block(ggml_tensor * x, const std::string & q, int s_f, int s_t) const;
+    ggml_tensor * linear(ggml_tensor * x, const std::string & p) const;
+    ggml_tensor * layer_norm(ggml_tensor * x, const std::string & p) const;
+    ggml_tensor * flatten(ggml_tensor * x) const;
+    ggml_tensor * unflatten(ggml_tensor * x, int64_t F, int64_t C) const;
+    ggml_tensor * attention(ggml_tensor * h, const std::string & p) const;
+    ggml_tensor * moe_ffn(ggml_tensor * h, const std::string & p) const;
+    ggml_tensor * pos_conv(ggml_tensor * h, const std::string & p) const;
 };
 
 struct mtmd_graph_qwen3tts_spkenc : mtmd_graph {
@@ -532,6 +569,47 @@ struct mtmd_graph_drama3_gen : mtmd_graph {
                               ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
 };
 
+//
+// zonos3 generation:
+// GEN_CODE = 10 codebook heads, or the backbone row of a sampled frame
+// GEN_WAV  = ZAC codec decoder up to the iSTFT spectra
+//
+struct mtmd_graph_zonos3_gen : mtmd_graph {
+    mtmd_graph_zonos3_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, bool all_known, int n_frames)
+        : mtmd_graph(ctx, img), gen_process(gen_process), all_known(all_known), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_codebooks = 10;
+    static constexpr int   n_cb_vocab  = 4096;
+    static constexpr float softcap     = 15.0f;
+
+    // ZAC decoder, fixed by the codec config
+    static constexpr int   n_stages              = 5;
+    static constexpr int   stage_ctx[n_stages]   = { 150, 300, 480, 480, 480 }; // attention window
+    static constexpr int   head_dim              = 64;
+    static constexpr float ln_eps                = 1e-5f;
+    static constexpr float convnext_eps          = 1e-6f;
+    static constexpr int   hop                   = 184;  // at 44160 Hz
+    static constexpr int   n_fft[2]              = { 736, 2208 };
+    static constexpr int   rs_orig               = 736;  // 44160 -> 44100 Hz
+    static constexpr int   rs_new                = 735;
+    static constexpr int   samples_per_frame     = 2940;
+
+    mtmd_subctx_gen_process gen_process;
+    bool all_known; // GEN_CODE: only the backbone row
+    int  n_frames;  // GEN_WAV
+
+    std::map<std::string, ggml_tensor *> state_in;
+    std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    ggml_cgraph * build_gen_code();
+    ggml_cgraph * build_gen_wav();
+    ggml_tensor * convnext(ggml_tensor * x, const mtmd_zonos3_wav::convnext & b, const std::string & state_name);
+    ggml_tensor * moss_layer(ggml_tensor * x, const mtmd_zonos3_wav::layer & l, int s, int il, ggml_tensor * base);
+};
+
+std::vector<c2w_state_slot> list_zonos3_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
 struct mtmd_graph_soprano : mtmd_graph {
     mtmd_graph_soprano(mtmd_subcontext * ctx, const mtmd_image_f32 & img, int n_frames) : mtmd_graph(ctx, img), n_frames(n_frames) {}
     ggml_cgraph * build() override;
@@ -573,6 +651,12 @@ std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const mtmd_hparams & hpar
 
 // state slots of the streaming LFM3-Audio encoder (lfm3a)
 std::vector<c2w_state_slot> list_lfm3a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
+// state slots of the streaming Gemma 4 audio encoder (gemma4a)
+std::vector<c2w_state_slot> list_gemma4a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
+// vibevoice-asr: the left context of every causal conv, a zero state is the causal zero padding
+std::vector<c2w_state_slot> list_vibevoice_asr_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 struct mtmd_graph_kimik25 : mtmd_graph {
     mtmd_graph_kimik25(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
@@ -619,5 +703,10 @@ private:
 
 struct mtmd_graph_muse_glimmer : mtmd_graph {
     mtmd_graph_muse_glimmer(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
+struct mtmd_graph_inkling2v : mtmd_graph {
+    using mtmd_graph::mtmd_graph;
     ggml_cgraph * build() override;
 };

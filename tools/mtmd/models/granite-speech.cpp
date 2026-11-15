@@ -189,7 +189,7 @@ ggml_cgraph * mtmd_graph_granite_speech::build() {
                 } else {
                     concat_result = ggml_concat(ctx0, concat_result, cur, 0);
                 }
-                cb(concat_result, string_format("feature_layer_%d", il + 1).c_str(), il);
+                cb(concat_result, mtmd_format("feature_layer_%d", il + 1).c_str(), il);
             }
         }
 

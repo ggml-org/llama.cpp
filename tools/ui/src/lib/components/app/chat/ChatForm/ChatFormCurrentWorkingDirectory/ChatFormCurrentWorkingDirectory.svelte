@@ -1,8 +1,9 @@
 <script lang="ts">
 	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
 	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
-	import { FolderOpen } from '@lucide/svelte';
+	import { FolderOpen, X } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
+	import * as Drawer from '$lib/components/ui/drawer';
 	import * as Popover from '$lib/components/ui/popover';
 	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
 	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '$lib/enums';
@@ -10,7 +11,7 @@
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { ToolsService } from '$lib/services/tools.service';
-	import { conversationsStore, toolsStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, toolsStore } from '$lib/stores';
 	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
 	// Microtask delay so the popover's focus scope tears down first.
@@ -20,7 +21,7 @@
 		class?: string;
 		disabled?: boolean;
 		directory?: string | null;
-		/** Controlled open state; the host owns it so the chip click and the
+		/** Controlled open state; the host owns it so the chip, the + menu and the
 		 * `/cwd` slash command open the picker through the same path. */
 		isOpen: boolean;
 		/** Two-way bound query, kept in sync with the text after `/cwd `. */
@@ -32,6 +33,8 @@
 		onClose?: () => void;
 		/** Fired when the chip is clicked so the host can open the picker. */
 		onOpen?: () => void;
+		/** Renders the chip trigger; off when the host anchors its own trigger. */
+		showChip?: boolean;
 	}
 
 	let {
@@ -43,7 +46,8 @@
 		onChange,
 		onClose,
 		onOpen,
-		query = $bindable('')
+		query = $bindable(''),
+		showChip = true
 	}: Props = $props();
 
 	// File System Access API is opt-in (Chrome / Edge / Opera): the popover
@@ -297,93 +301,145 @@
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
-<button
-	class={[
-		'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-		className
-	]}
-	{disabled}
-	onclick={onOpen}
-	type="button"
->
-	<ChatFormCurrentWorkingDirectoryChip
-		{directory}
+{#if showChip}
+	<button
+		class={[
+			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
+			className
+		]}
 		{disabled}
-		{homeBase}
-		onClear={handleDismiss}
-		{showTooltip}
-	/>
-</button>
-
-<Popover.Root onOpenChange={handleOpenChange} open={isOpen}>
-	<Popover.Trigger
-		aria-hidden="true"
-		class="pointer-events-none absolute inset-0 opacity-0"
-		tabindex={-1}
+		onclick={onOpen}
+		type="button"
 	>
-		<span class="sr-only">Open working directory picker</span>
-	</Popover.Trigger>
+		<ChatFormCurrentWorkingDirectoryChip
+			{directory}
+			{disabled}
+			{homeBase}
+			onClear={handleDismiss}
+			{showTooltip}
+		/>
+	</button>
+{/if}
 
-	<Popover.Content
-		align="start"
-		class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl"
-		{customAnchor}
-		onCloseAutoFocus={(event) => event.preventDefault()}
-		onOpenAutoFocus={(event) => event.preventDefault()}
-		onkeydown={handleKeydown}
-		preventScroll={false}
-		side="top"
-		sideOffset={12}
-	>
-		<div class="p-2 min-h-22 flex flex-col justify-between">
-			<SearchInput
-				bind:ref={searchInputRef}
-				bind:value={query}
-				class="w-full"
-				onClose={closePicker}
-				placeholder="Choose working directory"
+<!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and
+     lined up with the search results, and text sized for a phone -->
+{#snippet picker(inDrawer: boolean)}
+	<div class={inDrawer ? 'flex flex-col gap-1 px-4' : 'p-2 min-h-22 flex flex-col justify-between'}>
+		<SearchInput
+			bind:ref={searchInputRef}
+			bind:value={query}
+			class="w-full"
+			onClose={closePicker}
+			placeholder="Choose working directory"
+		/>
+
+		{#if !fileSearchEnabled}
+			<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
+		{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
+			<ChatFormCurrentWorkingDirectoryResultsList
+				bind:container={listContainer}
+				error={searchError}
+				hoveredIndex={nav.hoveredIndex}
+				isSearching={search.isSearching}
+				onCommit={commit}
+				onHover={(index) => nav.setHover(index)}
+				rawQuery={query}
+				results={queryResults}
 			/>
+		{/if}
 
-			{#if !fileSearchEnabled}
-				<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
-			{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
-				<ChatFormCurrentWorkingDirectoryResultsList
-					bind:container={listContainer}
-					error={searchError}
-					hoveredIndex={nav.hoveredIndex}
-					isSearching={search.isSearching}
-					onCommit={commit}
-					onHover={(index) => nav.setHover(index)}
-					rawQuery={query}
-					results={queryResults}
-				/>
-			{/if}
+		{#if pickerSupported && fileSearchEnabled}
+			<button
+				class={[
+					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
+					inDrawer
+						? 'mt-1 gap-2 rounded-lg px-2 py-2.5 text-[15px]'
+						: '-mt-1 gap-2 rounded-sm px-2 py-1.5 text-sm'
+				]}
+				onclick={browseNative}
+				type="button"
+			>
+				<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
 
-			{#if pickerSupported && fileSearchEnabled}
-				<button
-					class="-mt-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none hover:bg-accent hover:text-accent-foreground"
-					onclick={browseNative}
-					type="button"
+				<span>Browse</span>
+			</button>
+		{/if}
+
+		{#if directory}
+			<button
+				class={[
+					'flex cursor-pointer items-center outline-hidden select-none hover:bg-accent hover:text-accent-foreground',
+					inDrawer
+						? 'gap-2 rounded-lg px-2 py-2.5 text-[15px]'
+						: 'gap-2 rounded-sm px-2 py-1.5 text-sm'
+				]}
+				onclick={clearDirectory}
+				type="button"
+			>
+				<X class="size-4 shrink-0 text-muted-foreground" />
+
+				<span>Clear working directory</span>
+			</button>
+		{/if}
+
+		{#if homeBase && fileSearchEnabled}
+			<div
+				aria-hidden="true"
+				class={['h-px', inDrawer ? 'my-1 bg-border/60' : '-mx-2 my-2 bg-border/20']}
+			></div>
+
+			<span class={['font-mono', inDrawer ? 'px-2 py-2 text-xs' : 'px-2 py-1.5 text-[10px]']}>
+				Searching in:
+
+				<span class="truncate text-muted-foreground/70" title={searchScope}
+					>{abbreviateHome(searchScope, homeBase)}</span
 				>
-					<FolderOpen class="size-4 shrink-0 text-muted-foreground" />
+			</span>
+		{/if}
+	</div>
+{/snippet}
 
-					<span>Browse</span>
-				</button>
-			{/if}
+<!-- a phone picks in a drawer from the screen's bottom; elsewhere a popover above the form -->
+{#if deviceStore.isMobile}
+	<Drawer.Root onOpenChange={handleOpenChange} open={isOpen}>
+		<Drawer.Content class="gap-0" onkeydown={handleKeydown}>
+			<Drawer.Header>
+				<Drawer.Title>Working directory</Drawer.Title>
 
-			{#if homeBase && fileSearchEnabled}
-				<div aria-hidden="true" class="-mx-2 my-2 h-px bg-border/20"></div>
+				<Drawer.Description class="sr-only"
+					>Choose the directory the chat works in</Drawer.Description
+				>
+			</Drawer.Header>
 
-				<span class="px-2 py-1.5 font-mono text-[10px]">
-					Searching in:
+			<div class="pb-safe-4">
+				{@render picker(true)}
+			</div>
+		</Drawer.Content>
+	</Drawer.Root>
+{:else}
+	<Popover.Root onOpenChange={handleOpenChange} open={isOpen}>
+		<Popover.Trigger
+			aria-hidden="true"
+			class="pointer-events-none absolute inset-0 opacity-0"
+			tabindex={-1}
+		>
+			<span class="sr-only">Open working directory picker</span>
+		</Popover.Trigger>
 
-					<span class="truncate text-muted-foreground/70" title={searchScope}
-						>{abbreviateHome(searchScope, homeBase)}</span
-					>
-				</span>
-			{/if}
-		</div>
-	</Popover.Content>
-</Popover.Root>
+		<Popover.Content
+			align="start"
+			class="w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0"
+			{customAnchor}
+			onCloseAutoFocus={(event) => event.preventDefault()}
+			onOpenAutoFocus={(event) => event.preventDefault()}
+			onkeydown={handleKeydown}
+			preventScroll={false}
+			side="top"
+			sideOffset={12}
+		>
+			{@render picker(false)}
+		</Popover.Content>
+	</Popover.Root>
+{/if}
 
 <svelte:window bind:innerWidth />

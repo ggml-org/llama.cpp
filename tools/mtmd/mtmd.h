@@ -353,6 +353,7 @@ DEPRECATED(MTMD_API int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tok
            "use mtmd_encode_chunk() instead");
 
 // text chunk will be ignored silently, only media chunk will be encoded
+// the output is stored in ctx: do not call it from several threads at once
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
@@ -377,6 +378,7 @@ MTMD_API void         mtmd_batch_free(mtmd_batch * batch);
 // returns 3 if it cannot be batched with the existing chunks in the batch
 MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk * chunk);
 
+// thread-safe, the output is stored in the batch
 // returns 0 on success
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
@@ -431,11 +433,13 @@ MTMD_API int32_t mtmd_audio_stream_push(mtmd_audio_stream * stream, const float 
 // pad the stream so that all pending rows can be produced
 // end = false: the stream stays open (use it on a pause, to get a partial transcript)
 // end = true:  no more push() is accepted
+// thread-safe across streams
 // returns 0 on success, 1 if the stream has ended
 MTMD_API int32_t mtmd_audio_stream_flush(mtmd_audio_stream * stream, bool end);
 
 // produce the next decoder rows
 // last_token is the token sampled from the previous row, LLAMA_TOKEN_NULL before the first sample
+// thread-safe across streams
 // return value:
 //   > 0 number of rows ready, read them with mtmd_audio_stream_get_output_embd()
 //   0   more audio is needed
@@ -468,6 +472,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_LFM3A,
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
     MTMD_GEN_AUDIO_TYPE_DRAMA3,
+    MTMD_GEN_AUDIO_TYPE_ZONOS3,
 };
 
 struct mtmd_gen_audio_info {
@@ -481,7 +486,7 @@ MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context *
 
 // read a named tensor of the gen audio model as F32, returns the element count (0 if not found), out may be null to query the size
 MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max);
-// name of the idx-th predefined voice, nullptr when idx is out of range
+// name of the idx-th predefined voice, nullptr when idx is out of range; idx 0 is the default voice
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
 
 // predefined voice with this name as a voice bitmap, to pass as speaker reference
@@ -505,13 +510,14 @@ struct mtmd_gen_inp {
     float * embd;   // the hidden state from backbone, must have n_text_embd elements
     int32_t top_k;
     float   top_p;
-    float   temp; // sampling temperature, or noise scale for flow-matching decoders
+    float   temp; // sampling temperature, or noise scale for flow-matching decoders (0 = no noise)
     float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
     int32_t penalty_last_n; // frames the repetition penalty looks back on
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     int32_t * codes;
     size_t    n_codes;
     const float * feats;
@@ -557,6 +563,7 @@ MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
 
 // run one step and update the state in place
 // the caller drives the backbone and collects the audio frames
+// thread-safe across gen states
 MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
                                 mtmd_gen_state * state,
                                 const struct mtmd_gen_inp * inp,

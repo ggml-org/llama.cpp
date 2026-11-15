@@ -120,8 +120,8 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * Used by ChatScreenForm and ChatMessageEditForm for both new conversations and message editing.
  *
  * **Architecture:**
- * - Composes ChatFormInput (a plain textarea, or a ChatFormInputRich for
- *   messages with file mention links), ChatFormActions, and ChatFormPickerMcpPrompts
+ * - Composes ChatFormInput (a live-preview markdown editor), ChatFormActions,
+ *   and ChatFormPickerMcpPrompts
  * - Manages file upload state via `uploadedFiles` bindable prop
  * - Integrates with ModelsSelectorDropdown for model selection in router mode
  * - Communicates with parent via callbacks (onSubmit, onFilesAdd, onStop, etc.)
@@ -133,7 +133,7 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * - Keyboard shortcut `/` triggers MCP prompt picker
  *
  * **Features:**
- * - Auto-resizing textarea with placeholder
+ * - Auto-growing live-preview markdown editor with placeholder
  * - File upload via button dropdown (images/text/PDF), drag-drop, or paste
  * - Audio recording with WAV conversion (when model supports audio)
  * - MCP prompt picker with search and argument forms
@@ -142,8 +142,7 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * - Loading state with stop button, disabled state for errors
  *
  * **Exported API:**
- * - `focus()` - Focus the textarea programmatically
- * - `resetTextareaHeight()` - Reset textarea to default height after submit
+ * - `focus()` - Focus the message editor programmatically
  * - `openModelSelector()` - Open model selection dropdown
  * - `checkModelSelected(): boolean` - Validate model selection, show error if none
  *
@@ -237,11 +236,10 @@ export { default as ChatFormInputFileInputInvisible } from './ChatForm/ChatFormI
 export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResourcesList.svelte';
 
 /**
- * The message editor. Renders a plain auto-resizing textarea by default,
- * or a ChatFormInputRich that renders `[name](file://...)` mention links as
- * inline chips (keeping the value as the markdown source string) once a
- * mention link lands in the buffer. The variant is selected via the
- * `useRichInput` prop; both share one imperative handle.
+ * The message editor: a live-preview MarkdownEditor. Plain text reads like a
+ * textarea; markdown blocks render as in chat messages until the cursor enters
+ * them, and `[name](file://...)` mention links show as badges while editing.
+ * The value stays the exact markdown source string.
  */
 export { default as ChatFormInput } from './ChatForm/ChatFormInput/ChatFormInput.svelte';
 

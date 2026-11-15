@@ -169,21 +169,27 @@ void ggml_cuda_mul_mat_q(
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     // Fused gate/up/GLU: src0 is the up weight, dst the GLU output.
+    // Fused scale (no gate): dst is the MUL that applies the weight scale to the MUL_MAT.
     const ggml_tensor * gate = fusion ? fusion->gate : nullptr;
     ggml_cuda_mm_fusion_args_device fusion_device = {};
     if (fusion) {
-        GGML_ASSERT(gate && !fusion->x_bias && !fusion->gate_bias && !fusion->x_scale == !fusion->gate_scale);
-        GGML_ASSERT(gate->type == src0->type && ggml_are_same_shape(gate, src0) && ggml_are_same_stride(gate, src0));
+        GGML_ASSERT(!fusion->x_bias && !fusion->gate_bias);
         // NVFP4 weight scales (only applied for NVFP4): one value per tensor, or one per expert with ids.
         for (const ggml_tensor * scale : { fusion->x_scale, fusion->gate_scale }) {
             GGML_ASSERT(!scale || (src0->type == GGML_TYPE_NVFP4 && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale) &&
                 ggml_nelements(scale) == (ids ? src0->ne[2] : 1)));
         }
-        fusion_device.gate       = gate->data;
-        fusion_device.x_scale    = fusion->x_scale    ? fusion->x_scale->data    : nullptr;
-        fusion_device.gate_scale = fusion->gate_scale ? fusion->gate_scale->data : nullptr;
-        fusion_device.glu_op     = fusion->glu_op;
-        fusion_device.glu_limit  = fusion->glu_limit;
+        if (gate) {
+            GGML_ASSERT(!fusion->x_scale == !fusion->gate_scale);
+            GGML_ASSERT(gate->type == src0->type && ggml_are_same_shape(gate, src0) && ggml_are_same_stride(gate, src0));
+            fusion_device.gate       = gate->data;
+            fusion_device.gate_scale = fusion->gate_scale ? fusion->gate_scale->data : nullptr;
+            fusion_device.glu_op     = fusion->glu_op;
+            fusion_device.glu_limit  = fusion->glu_limit;
+        } else {
+            GGML_ASSERT(!fusion->gate_scale && fusion->x_scale);
+        }
+        fusion_device.x_scale = fusion->x_scale ? fusion->x_scale->data : nullptr;
     }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
@@ -231,8 +237,8 @@ void ggml_cuda_mul_mat_q(
 
     const bool fallback = ggml_cuda_mmq_needs_fallback(ne01);
 
-    // With fusion dst is the GLU output, not a MUL_MAT; the src1 precision requested by both fused MUL_MATs is in the fusion args.
-    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, gate ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
+    // With fusion dst is the GLU output or the scale node, not a MUL_MAT; the src1 precision requested by the fused MUL_MATs is in the fusion args.
+    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, fusion ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);

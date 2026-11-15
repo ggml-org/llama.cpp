@@ -76,7 +76,6 @@ set(GGML_OPENCL_KERNELS
     clamp
     cpy
     cvt
-    diag_mask_inf
     diag
     div
     dsv4_hc
@@ -322,11 +321,14 @@ set(GGML_OPENCL_KERNELS
     repeat
     mul_mat_f16_f32
     mul_mm_f16_f32_kq_kqv
+    mul_mm_f16_f32_kq_p8
+    mul_mm_q8_f32_kqv
     conv2d
     conv2d_f16_f32
     conv2_dw
     flash_attn_repack
     flash_attn_pre_f16
+    flash_attn_pv_direct
     flash_attn_f32_f16
     flash_attn_f32_q8_0
     flash_attn_f32_q4_0

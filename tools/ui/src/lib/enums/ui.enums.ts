@@ -30,6 +30,13 @@ export enum SidebarAction {
 	SETTINGS = 'settings'
 }
 
+/** Kind of a sidebar conversation section, which can be dragged into another order. */
+export enum SidebarSectionKind {
+	GROUP = 'group',
+	PINNED = 'pinned',
+	RECENT = 'recent'
+}
+
 /**
  * MCP prompt display variant
  */
