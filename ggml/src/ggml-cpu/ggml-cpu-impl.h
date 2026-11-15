@@ -538,6 +538,9 @@ struct ggml_threadpool * ggml_threadpool_new_numa(struct ggml_threadpool_params 
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
 int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
 
+// NUMA nodes present, WITHOUT initializing the NUMA state
+uint32_t ggml_numa_node_count(void);
+
 // set the calling thread's affinity through the threadpool helper, which caches the last mask per thread (Linux only)
 bool ggml_cpu_thread_set_affinity(const bool * mask);
 

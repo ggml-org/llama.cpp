@@ -1,6 +1,7 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
+#include "ggml-cpu-impl.h"
 #include "repack.h"
 #include "traits.h"
 #include "ggml-impl.h"
@@ -9,6 +10,17 @@
 #include <cctype>
 #include <string>
 #include <vector>
+
+#if defined(__gnu_linux__)
+#    include <cerrno>
+#    include <cstdio>
+#    include <cstring>
+#    include <linux/mempolicy.h>
+#    include <sched.h>
+#    include <sys/mman.h>
+#    include <sys/syscall.h>
+#    include <unistd.h>
+#endif
 
 #ifdef GGML_USE_CPU_HBM
 #    include "hbm.h"
@@ -107,6 +119,10 @@ struct ggml_backend_cpu_context {
     void *              abort_callback_data;
 
     bool                use_ref;  // use reference implementation
+
+    int                 numa_node;       // -1 = threads not pinned
+    ggml_threadpool_t   numa_threadpool; // owned, threads pinned to numa node
+    int                 numa_n_threads;  // thread count of numa_threadpool
 };
 
 static const char * ggml_backend_cpu_get_name(ggml_backend_t backend) {
@@ -118,6 +134,7 @@ static const char * ggml_backend_cpu_get_name(ggml_backend_t backend) {
 static void ggml_backend_cpu_free(ggml_backend_t backend) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
     delete[] cpu_ctx->work_data;
+    ggml_threadpool_free(cpu_ctx->numa_threadpool);
     delete cpu_ctx;
     delete backend;
 }
@@ -167,10 +184,64 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
     GGML_UNUSED(backend);
 }
 
+// threadpool pinned to the node CPUs, rebuilt when n_threads changes. With more threads than node CPUs, all CPUs are allowed
+static ggml_threadpool_t ggml_backend_cpu_numa_threadpool(ggml_backend_cpu_context * ctx) {
+#if defined(__gnu_linux__)
+    if (ctx->numa_threadpool && ctx->numa_n_threads == ctx->n_threads) {
+        return ctx->numa_threadpool;
+    }
+    ggml_threadpool_free(ctx->numa_threadpool);
+    ctx->numa_threadpool = NULL;
+
+    ggml_threadpool_params tpp = ggml_threadpool_params_default(ctx->n_threads);
+    int n_node_cpus = 0;
+    for (int c = 0; c < GGML_MAX_N_THREADS; c++) {
+        char path[256];
+        snprintf(path, sizeof(path), "/sys/devices/system/node/node%d/cpu%d", ctx->numa_node, c);
+        if (access(path, F_OK) == 0) {
+            tpp.cpumask[c] = true;
+            n_node_cpus++;
+        }
+    }
+    if (n_node_cpus == 0) {
+        ctx->numa_node = -1;
+        return NULL;
+    }
+    if (ctx->n_threads > n_node_cpus) {
+        for (int c = 0; c < GGML_MAX_N_THREADS; c++) {
+            char path[256];
+            snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d", c);
+            tpp.cpumask[c] = access(path, F_OK) == 0;
+        }
+    }
+
+    // one CPU per thread: the pool fills the node, and floating threads can stack on one CPU and stall every barrier
+    tpp.strict_cpu = true;
+
+    if (ctx->n_threads <= n_node_cpus) {
+        // pin the master first, so the pool and its OpenMP team are first-touched on the node
+        // through the affinity helper: a direct sched_setaffinity bypasses its mask cache, and the later pin to one CPU is skipped
+        ggml_cpu_thread_set_affinity(tpp.cpumask);
+    }
+
+    ctx->numa_threadpool = ggml_threadpool_new_numa(&tpp);
+    ctx->numa_n_threads  = ctx->n_threads;
+    return ctx->numa_threadpool;
+#else
+    ctx->numa_node = -1;
+    return NULL;
+#endif
+}
+
 static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
-    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, cpu_ctx->threadpool);
+    ggml_threadpool_t threadpool = cpu_ctx->threadpool;
+    if (threadpool == NULL && cpu_ctx->numa_node >= 0) {
+        threadpool = ggml_backend_cpu_numa_threadpool(cpu_ctx);
+    }
+
+    struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, threadpool);
 
     if (cpu_ctx->work_size < cplan.work_size) {
         delete[] cpu_ctx->work_data;
@@ -230,6 +301,9 @@ ggml_backend_t ggml_backend_cpu_init(void) {
     ctx->abort_callback      = NULL;
     ctx->abort_callback_data = NULL;
     ctx->use_ref             = false;
+    ctx->numa_node           = -1;
+    ctx->numa_threadpool     = NULL;
+    ctx->numa_n_threads      = 0;
 
     ggml_backend_t cpu_backend = new ggml_backend {
         /* .guid    = */ ggml_backend_cpu_guid(),
@@ -284,10 +358,187 @@ void ggml_backend_cpu_set_use_ref(ggml_backend_t backend_cpu, bool use_ref) {
     ctx->use_ref = use_ref;
 }
 
-// CPU backend - device
+// NUMA buffer type: one per NUMA node, memory bound to the node with mbind(), so each device's tensors stay on its node
+
+#if defined(__gnu_linux__)
+
+struct ggml_backend_cpu_numa_buffer_type_context {
+    int         node;
+    std::string name;
+};
+
+// true if node exists in /sys
+static bool ggml_backend_cpu_numa_node_real(int node) {
+    return node >= 0 && (uint32_t) node < ggml_numa_node_count();
+}
+
+static bool ggml_backend_cpu_numa_node_memory(int node, size_t * free, size_t * total) {
+    if (!ggml_backend_cpu_numa_node_real(node)) {
+        return false;
+    }
+
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/devices/system/node/node%d/meminfo", node);
+
+    FILE * f = fopen(path, "r");
+    if (!f) {
+        return false;
+    }
+
+    char line[256];
+    unsigned long kb_total = 0;
+    unsigned long kb_free  = 0;
+    while (fgets(line, sizeof(line), f)) {
+        unsigned long v;
+        if (sscanf(line, "Node %*d MemTotal: %lu kB", &v) == 1) {
+            kb_total = v;
+        } else if (sscanf(line, "Node %*d MemFree: %lu kB", &v) == 1) {
+            kb_free = v;
+        }
+    }
+    fclose(f);
+
+    if (kb_total == 0) {
+        return false;
+    }
+    *total = (size_t) kb_total * 1024;
+    *free  = (size_t) kb_free  * 1024;
+
+    return true;
+}
+
+static const char * ggml_backend_cpu_numa_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    return ((ggml_backend_cpu_numa_buffer_type_context *) buft->context)->name.c_str();
+}
+
+static void ggml_backend_cpu_numa_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    munmap(buffer->context, buffer->size > 0 ? buffer->size : 1);
+}
+
+static ggml_backend_buffer_t ggml_backend_cpu_numa_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    const int node = ((ggml_backend_cpu_numa_buffer_type_context *) buft->context)->node;
+
+    // mmap rather than ggml_aligned_malloc: mbind needs a page aligned range it fully owns
+    const size_t len = size > 0 ? size : 1;
+
+    void * data = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (data == MAP_FAILED) {
+        GGML_LOG_ERROR("%s: mmap of %zu bytes failed: %s\n", __func__, len, strerror(errno));
+        return NULL;
+    }
+
+    if (ggml_backend_cpu_numa_node_real(node)) {
+
+        // MPOL_BIND has no fallback node: a too large request is not refused here, it is OOM killed on first touch. Warn while we can
+        size_t node_free = 0, node_total = 0;
+        if (ggml_backend_cpu_numa_node_memory(node, &node_free, &node_total) && len > node_free) {
+            GGML_LOG_WARN("%s: %zu MiB requested on node %d, which has %zu MiB free; "
+                          "the binding allows no fallback, so this may be OOM killed when first touched\n",
+                          __func__, len >> 20, node, node_free >> 20);
+        }
+
+        const unsigned long mask = 1UL << node;
+        if (syscall(SYS_mbind, data, len, MPOL_BIND, &mask, 8*sizeof(mask), MPOL_MF_STRICT | MPOL_MF_MOVE) != 0) {
+            GGML_LOG_ERROR("%s: mbind of %zu bytes to node %d failed: %s\n", __func__, len, node, strerror(errno));
+            munmap(data, len);
+            return NULL;
+        }
+    }
+
+    ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(data, size);
+    buffer->buft                 = buft;
+    buffer->iface.free_buffer    = ggml_backend_cpu_numa_buffer_free_buffer;
+
+    return buffer;
+}
+
+static size_t ggml_backend_cpu_numa_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+    return ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
+
+    GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_cpu_numa_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
+    return true;
+
+    GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_cpu_numa_buffer_type_is_numa(ggml_backend_buffer_type_t buft);
+
+static const ggml_backend_buffer_type_i ggml_backend_cpu_numa_buffer_type_i = {
+    /* .get_name         = */ ggml_backend_cpu_numa_buffer_type_get_name,
+    /* .alloc_buffer     = */ ggml_backend_cpu_numa_buffer_type_alloc_buffer,
+    /* .alloc_buffer_n   = */ NULL,
+    /* .get_alignment    = */ ggml_backend_cpu_numa_buffer_type_get_alignment,
+    /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+    /* .get_alloc_size   = */ NULL, // defaults to ggml_bytes,
+    /* .get_alloc_size_n = */ NULL, // defaults to ggml_bytes,
+    /* .is_host          = */ ggml_backend_cpu_numa_buffer_type_is_host,
+};
+
+static bool ggml_backend_cpu_numa_buffer_type_is_numa(ggml_backend_buffer_type_t buft) {
+    return buft != NULL && buft->iface.get_name == ggml_backend_cpu_numa_buffer_type_get_name;
+}
+
+
+static int ggml_backend_cpu_numa_device_count(void);
+
+// Callers hold raw pointers into these, build once never resize.
+static ggml_backend_buffer_type_t ggml_backend_cpu_numa_buffer_type(ggml_backend_dev_t dev, int node) {
+    const int n_dev = ggml_backend_cpu_numa_device_count();
+    GGML_ASSERT(node >= 0 && node < n_dev);
+
+    struct numa_bufts {
+        std::vector<ggml_backend_cpu_numa_buffer_type_context> ctxs;
+        std::vector<ggml_backend_buffer_type>                  bufts;
+    };
+
+    static numa_bufts * nb = [n_dev]() {
+        numa_bufts * b = new numa_bufts();
+        b->ctxs.resize(n_dev);
+        b->bufts.reserve(n_dev);
+        for (int i = 0; i < n_dev ; i++) {
+            b->ctxs[i].node = i;
+            b->ctxs[i].name = "NUMA" + std::to_string(i);
+            b->bufts.push_back({
+                /* .iface   = */ ggml_backend_cpu_numa_buffer_type_i,
+                /* .device  = */ nullptr,
+                /* .context = */ &b->ctxs[i],
+            });
+        }
+        return b;
+    } ();
+
+    nb->bufts[node].device = dev;
+
+    return &nb->bufts[node];
+}
+
+#endif // __gnu_linux__
+
+// device 0 is "CPU", llama adds it by itself. With GGML_CPU_NUMA_DEVICES=1 on a multi-node machine, NUMA0 ... NUMAn-1 follow it for -sm tensor
+static int ggml_backend_cpu_numa_device_count(void) {
+    static const int n = []() -> int {
+        const char * s = getenv("GGML_CPU_NUMA_DEVICES");
+        if (!s || atoi(s) == 0) {
+            return 0;
+        }
+        // runs before --numa is parsed, so it must not call ggml_numa_init
+        const int n_nodes = (int) ggml_numa_node_count();
+        if (n_nodes < 2) {
+            return 0;
+        }
+        return n_nodes > GGML_BACKEND_META_MAX_DEVICES ? GGML_BACKEND_META_MAX_DEVICES : n_nodes;
+    }();
+
+    return n;
+}
 
 struct ggml_backend_cpu_device_context {
     std::string description = "CPU";
+    std::string name = "CPU";
+    int         numa_node = -1; // -1 = not node bound
 
     ggml_backend_cpu_device_context() {
 #ifdef __APPLE__
@@ -351,9 +602,9 @@ struct ggml_backend_cpu_device_context {
 };
 
 static const char * ggml_backend_cpu_device_get_name(ggml_backend_dev_t dev) {
-    return "CPU";
-
-    GGML_UNUSED(dev);
+    // "CPU" for device 0, "NUMA<n>" for the NUMA devices
+    struct ggml_backend_cpu_device_context * ctx = (struct ggml_backend_cpu_device_context *)dev->context;
+    return ctx->name.c_str();
 }
 
 static const char * ggml_backend_cpu_device_get_description(ggml_backend_dev_t dev) {
@@ -363,6 +614,14 @@ static const char * ggml_backend_cpu_device_get_description(ggml_backend_dev_t d
 }
 
 static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+#if defined(__gnu_linux__)
+    // a NUMA device reports the memory of its node only
+    const struct ggml_backend_cpu_device_context * numa_ctx = (const struct ggml_backend_cpu_device_context *)dev->context;
+    if (ggml_backend_cpu_numa_node_memory(numa_ctx->numa_node, free, total)) {
+        *free = *total;
+        return;
+    }
+#endif
 #ifdef _WIN32
     MEMORYSTATUSEX status;
     status.dwLength = sizeof(status);
@@ -402,13 +661,27 @@ static void ggml_backend_cpu_device_get_props(ggml_backend_dev_t dev, struct ggm
 }
 
 static ggml_backend_t ggml_backend_cpu_device_init_backend(ggml_backend_dev_t dev, const char * params) {
-    return ggml_backend_cpu_init();
+    ggml_backend_t backend = ggml_backend_cpu_init();
+    if (backend != NULL) {
+        // ggml_backend_cpu_init always sets device 0, so set the real device and its node here
+        backend->device = dev;
 
-    GGML_UNUSED(dev);
+        const ggml_backend_cpu_device_context * dev_ctx = (const ggml_backend_cpu_device_context *) dev->context;
+        ((ggml_backend_cpu_context *) backend->context)->numa_node = dev_ctx->numa_node;
+    }
+    return backend;
+
     GGML_UNUSED(params);
 }
 
 static ggml_backend_buffer_type_t ggml_backend_cpu_device_get_buffer_type(ggml_backend_dev_t dev) {
+#if defined(__gnu_linux__)
+    // one buffer type per NUMA device, bound to its node: with the shared CPU buffer type the meta backend can't tell the devices apart
+    const ggml_backend_cpu_device_context * ctx = (const ggml_backend_cpu_device_context *) dev->context;
+    if (ctx->numa_node >= 0) {
+        return ggml_backend_cpu_numa_buffer_type(dev, ctx->numa_node);
+    }
+#endif
     return ggml_backend_cpu_buffer_type();
 
     GGML_UNUSED(dev);
@@ -488,6 +761,12 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
 }
 
 static bool ggml_backend_cpu_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
+#if defined(__gnu_linux__)
+    // any CPU can read host memory, but a node's buffer type belongs to its own device only (like a GPU)
+    if (ggml_backend_cpu_numa_buffer_type_is_numa(buft)) {
+        return buft->device == dev;
+    }
+#endif
     return ggml_backend_buft_is_host(buft) || ggml_backend_cpu_is_extra_buffer_type(buft);
     GGML_UNUSED(dev);
 }
@@ -519,23 +798,43 @@ static const char * ggml_backend_cpu_reg_get_name(ggml_backend_reg_t reg) {
 }
 
 static size_t ggml_backend_cpu_reg_get_device_count(ggml_backend_reg_t reg) {
-    return 1;
+    return (size_t) (1 + ggml_backend_cpu_numa_device_count());
 
     GGML_UNUSED(reg);
 }
 
+// device 0 is "CPU", devices 1..n are NUMA0 ... NUMAn-1. Callers keep raw pointers, so build once and never resize
 static ggml_backend_dev_t ggml_backend_cpu_reg_get_device(ggml_backend_reg_t reg, size_t index) {
-    GGML_ASSERT(index == 0);
+    const int n_dev = 1 + ggml_backend_cpu_numa_device_count();
+    GGML_ASSERT(index < (size_t) n_dev);
 
-    static ggml_backend_cpu_device_context ctx;
-    static ggml_backend_device ggml_backend_cpu_device = {
-        /* .iface   = */ ggml_backend_cpu_device_i,
-        /* .reg     = */ reg,
-        /* .context = */ &ctx,
+    struct cpu_devices {
+        std::vector<ggml_backend_cpu_device_context>    ctxs;
+        std::vector<ggml_backend_device>                devs;
     };
 
-    return &ggml_backend_cpu_device;
+    static cpu_devices * devices = [reg, n_dev]() {
+        cpu_devices * d = new cpu_devices();
+        d->ctxs.resize(n_dev);
+        d->devs.reserve(n_dev);
+
+        for (int i = 0; i < n_dev; i++) {
+            if (i > 0) {
+                d->ctxs[i].name = "NUMA" + std::to_string(i - 1);
+                d->ctxs[i].numa_node = i - 1;
+            }
+            d->devs.push_back({
+                /* .iface = */   ggml_backend_cpu_device_i,
+                /* .reg = */     reg,
+                /* .context = */ &d->ctxs[i],
+            });
+        }
+        return d;
+    }();
+
+    return &devices->devs[index];
 }
+
 
 // This is intended to replace the the ggml_cpu_has_* functions when loading the CPU backend dynamically,
 // and additionally to allow other backends to expose their own list of features that applications can query using the same API

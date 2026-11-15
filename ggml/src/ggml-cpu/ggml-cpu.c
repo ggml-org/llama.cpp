@@ -796,6 +796,25 @@ bool ggml_is_numa(void) {
     return g_state.numa.n_nodes > 1;
 }
 
+// Count NUMA nodes WITHOUT initializing the NUMA state
+uint32_t ggml_numa_node_count(void) {
+#if defined(__gnu_linux__)
+    struct stat st;
+    char path[256];
+    uint32_t n = 0;
+    while (n < GGML_NUMA_MAX_NODES) {
+        int rv = snprintf(path, sizeof(path), "/sys/devices/system/node/node%u", n);
+        GGML_ASSERT(rv > 0 && (unsigned) rv < sizeof(path));
+        if (stat(path, &st) != 0) { break; }
+        ++n;
+    }
+    return n;
+#else
+    return 0;
+#endif
+}
+
+
 #if defined(__ARM_ARCH)
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
 #include <arm_sve.h>
