@@ -5,7 +5,7 @@ from collections import defaultdict
 import re
 
 try:
-    from itanium_demangler import parse as demangle
+    from itanium_demangler import parse as demangle  # ty: ignore[import-not-found]
 except ImportError:
     demangle = None
 
