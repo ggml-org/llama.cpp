@@ -2285,7 +2285,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (probs_in == nullptr) {
         logits = build_lora_mm(gate_inp, cur); // [n_expert, n_tokens]
-        if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+        if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS || hparams.expert_router_f32) {
             // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash/blob/60d8d70770c6776ff598c94bb586a859a38244f1/inference/model.py#L565
             ggml_prec_set_acc(logits, GGML_PREC_F32);
         }
@@ -2403,6 +2403,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         if (arch == LLM_ARCH_DEEPSEEK41) {
             // model.py Gate.forward: weights / (sum + 1e-20); the sum can fall below the F16 clamp below
             weights_sum = ggml_scale_bias(ctx0, weights_sum, 1.0f, 1e-20f);
+        } else if (hparams.expert_weights_norm_eps > 0.0f) {
+            weights_sum = ggml_scale_bias(ctx0, weights_sum, 1.0f, hparams.expert_weights_norm_eps);
         } else {
             // Avoid division by zero, clamp to smallest number representable by F16
             weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5, INFINITY);
@@ -2425,12 +2427,9 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // compute the expert input before the slot lookup, so that the scheduler prefetches it for the CPU part (the router can read a different tensor)
     ggml_build_forward_expand(gf, cur);
 
-    // the experts of host-resident layers may be read from the MoE cache, and part of the misses computed from the host experts
-    // the CPU part does not support weights before the FFN, LoRAs or rotated experts
-    const std::array<ggml_tensor *, 4> exps = { up_exps, gate_exps, down_exps, gate_up_exps };
-    const bool can_cpu_share = !weight_before_ffn && loras->empty() &&
-        std::none_of(exps.begin(), exps.end(), [&](ggml_tensor * w) { return w != nullptr && hdmd != nullptr && hdmd->rot.count(w) > 0; });
-    const llm_graph_moe_cache_slots cache = build_moe_cache_slots(selected_experts, up_exps, gate_exps, down_exps, gate_up_exps, can_cpu_share, il);
+    // the experts of host-resident layers may be read from the MoE cache (see llama_moe_cache::build_lookup)
+    const llama_moe_cache_lookup cache = moe_cache == nullptr ? llama_moe_cache_lookup{} :
+        moe_cache->build_lookup(*this, { il, up_exps, gate_exps, down_exps, gate_up_exps, weight_before_ffn }, selected_experts);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
@@ -2603,14 +2602,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         return experts;
     };
 
-    ggml_tensor * experts = build_experts(cur, selected_experts, cache.slots, true);
-    if (cache.cpu_ids != nullptr) {
-        // the cached experts and the misses computed from the host experts, each reads the others as zero
-        // the cached experts come first in the graph, so that they are computed while the misses are
-        ggml_build_forward_expand(gf, experts);
-        experts = ggml_add(ctx0, experts, build_experts(cur, selected_experts, cache.cpu_ids, false));
-        cb(experts, "ffn_moe_down_merged", il);
-    }
+    ggml_tensor * experts = cache.slots == nullptr ?
+        build_experts(cur, selected_experts, nullptr, true) :
+        moe_cache->build_experts(*this, cache, cur, selected_experts,
+                [](ggml_tensor * cur, ggml_tensor * ids, ggml_tensor * mm_ids, bool cached, void * user_data) {
+                    return (*static_cast<decltype(build_experts) *>(user_data))(cur, ids, mm_ids, cached);
+                }, &build_experts);
 
     if (down_exps_s) {
         cb(experts, "ffn_moe_down_scaled", il);
@@ -2667,66 +2664,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cb(moe_out, "ffn_moe_out", il);
 
     return moe_out;
-}
-
-llm_graph_moe_cache_slots llm_graph_context::build_moe_cache_slots(
-         ggml_tensor * selected_experts,
-         ggml_tensor * up_exps,
-         ggml_tensor * gate_exps,
-         ggml_tensor * down_exps,
-         ggml_tensor * gate_up_exps,
-                bool   cpu_part,
-                 int   il) const {
-    if (moe_cache == nullptr) {
-        return { nullptr, nullptr };
-    }
-
-    ggml_tensor * cpu_map  = cpu_part ? moe_cache->get_cpu_map(il, selected_experts->ne[1]) : nullptr;
-    ggml_tensor * slot_map = moe_cache->get_slot_map(il, selected_experts->ne[1], selected_experts->ne[0], cpu_map != nullptr);
-    if (slot_map == nullptr) {
-        return { nullptr, nullptr };
-    }
-    for (ggml_tensor * w : { up_exps, gate_exps, down_exps, gate_up_exps }) {
-        if (w == nullptr) {
-            continue;
-        }
-        ggml_tensor * experts = moe_cache->get_experts(w);
-        if (experts == nullptr) {
-            return { nullptr, nullptr };
-        }
-        // the device of the cache must compute the matmul, else the scheduler copies the cache to another backend
-        ggml_tensor * b = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, experts->ne[0], w == down_exps ? selected_experts->ne[0] : 1, selected_experts->ne[1]);
-        if (!ggml_backend_supports_op(moe_cache->backend(il), ggml_mul_mat_id(ctx0, experts, b, selected_experts))) {
-            return { nullptr, nullptr };
-        }
-    }
-
-    ggml_tensor * ids = selected_experts;
-    if (!ggml_is_contiguous(ids)) {
-        ids = ggml_cont(ctx0, ids);
-    }
-    ids = ggml_reshape_1d(ctx0, ids, ggml_nelements(ids));
-
-    // the slot map is a host weight, so the scheduler starts a new split here and copies it with the copy callback
-    // the callback reads the selected experts, uploads the missing ones and updates the slot map
-    ggml_tensor * slots = ggml_get_rows(ctx0, slot_map, ids); // [1, n_expert_used*n_tokens]
-    if (!ggml_backend_supports_op(moe_cache->backend(il), slots)) {
-        return { nullptr, nullptr };
-    }
-    ggml_backend_sched_set_tensor_backend(sched, slots, moe_cache->backend(il));
-    cb(slots, "ffn_moe_slots", il);
-
-    // add the lookup now: the transform of a Hadamard-folded expert reads host weights and would start its split first
-    ggml_build_forward_expand(gf, slots);
-
-    // the misses computed from the host experts, read after the lookup has picked them
-    ggml_tensor * cpu_ids = nullptr;
-    if (cpu_map != nullptr) {
-        cpu_ids = ggml_get_rows(ctx0, cpu_map, ids); // [1, n_expert_used*n_tokens]
-        cpu_ids = ggml_reshape_2d(ctx0, cpu_ids, selected_experts->ne[0], selected_experts->ne[1]);
-    }
-
-    return { ggml_reshape_2d(ctx0, slots, selected_experts->ne[0], selected_experts->ne[1]), cpu_ids };
 }
 
 // input embeddings with optional lora
@@ -3097,7 +3034,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
     ggml_tensor * cur;
 
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr && (!sinks || ggml_is_vector(sinks));
     GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
     if (use_flash_attn) {
         GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
@@ -3180,8 +3117,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cb(kq, "kq_plus_kq_b", il);
         }
 
-        kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
-        ggml_soft_max_add_sinks(kq, sinks);
+        if (sinks && !ggml_is_vector(sinks)) {
+            // Per-query sinks are extra logits with zero values.
+            const int64_t n_kv = kq->ne[0];
+            kq = ggml_add(ctx0, ggml_scale(ctx0, kq, kq_scale), ggml_cast(ctx0, kq_mask, GGML_TYPE_F32));
+            kq = ggml_soft_max(ctx0, ggml_concat(ctx0, kq, sinks, 0));
+            kq = ggml_cont(ctx0, ggml_view_4d(ctx0, kq, n_kv, kq->ne[1], kq->ne[2], kq->ne[3], kq->nb[1], kq->nb[2], kq->nb[3], 0));
+        } else {
+            kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+            ggml_soft_max_add_sinks(kq, sinks);
+        }
         cb(kq, "kq_soft_max", il);
 
         if (!v_trans) {
@@ -3675,7 +3620,8 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * sinks,
         ggml_tensor * v_mla,
             float     kq_scale,
-            int       il) const {
+            int       il,
+        ggml_tensor * kq_mask) const {
     const bool is_swa = hparams.is_swa(il);
 
     auto * k_rot = is_swa ? inp->self_k_rot_swa[il] : inp->self_k_rot[il];
@@ -3731,7 +3677,9 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
 
-    const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
+    if (!kq_mask) {
+        kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
+    }
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
     ggml_tensor * q = q_cur;

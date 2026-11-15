@@ -154,6 +154,9 @@ hy_v4               ,0   ,any     ,MUL+ADD                     ,      2
 hy_v4               ,0   ,any     ,NORM+MUL+ADD                ,      1
 hy_v4               ,0   ,any     ,RMS_NORM+MUL                ,      9
 hy_v4               ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      1
+inkling2            ,0   ,any     ,MUL+ADD                     ,      6
+inkling2            ,0   ,any     ,RMS_NORM+MUL                ,     10
+inkling2            ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+SCALE+DIV+SCALE,      3
 internlm2           ,0   ,any     ,RMS_NORM+MUL                ,      5
 jais                ,0   ,any     ,NORM+MUL+ADD                ,      5
 jais2               ,0   ,any     ,NORM+MUL+ADD                ,      5
@@ -191,7 +194,8 @@ lfm2                ,0   ,any     ,RMS_NORM+MUL                ,      7
 lfm2moe             ,1   ,any     ,MUL+ADD                     ,      2
 lfm2moe             ,1   ,any     ,RMS_NORM+MUL                ,      7
 lfm2moe             ,1   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      1
-lfm3                ,0   ,any     ,RMS_NORM+MUL                ,     17
+lfm3                ,0   ,any     ,RMS_NORM+MUL                ,     12
+lfm3                ,0   ,any     ,RMS_NORM+MUL+ADD            ,      5
 llada               ,0   ,any     ,RMS_NORM+MUL                ,      5
 llada-moe           ,1   ,any     ,MUL+ADD                     ,      4
 llada-moe           ,1   ,any     ,RMS_NORM+MUL                ,      9
@@ -344,3 +348,8 @@ xing4_0             ,0   ,any     ,MUL+ADD                     ,      2
 xing4_0             ,0   ,any     ,RMS_NORM+MUL                ,      9
 xing4_0             ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
 xverse              ,0   ,any     ,RMS_NORM+MUL                ,      5
+zonos3              ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
+zonos3              ,0   ,any     ,MUL+ADD                     ,      2
+zonos3              ,0   ,any     ,RMS_NORM+MUL                ,     12
+zonos3              ,0   ,any     ,RMS_NORM+SCALE              ,      2
+zonos3              ,0   ,any     ,SSM_CONV+UNARY              ,      1

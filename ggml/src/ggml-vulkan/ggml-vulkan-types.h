@@ -270,12 +270,14 @@ struct vk_matmul_pipeline_pair {
     vk_pipeline unaligned;
     vk_pipeline aligned;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 struct vk_tile_config {
     std::vector<uint32_t> warptile;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 using matmul_tile_selector_t = std::function<uint32_t(
@@ -977,6 +979,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_dsv4_hc_pre_gated_f32;
     vk_pipeline pipeline_dsv4_hc_post_f32;
     vk_pipeline pipeline_dsv4_hc_post_nocomb_f32;
+    vk_pipeline pipeline_top_k_mask_f16;
+    vk_pipeline pipeline_top_k_mask_f32;
     std::map<vk_solve_tri_pipeline_state, vk_pipeline> pipeline_solve_tri_f32;
     vk_pipeline pipeline_im2col_f32, pipeline_im2col_f32_f16;
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
@@ -1047,6 +1051,7 @@ struct vk_device_struct {
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
     bool xe_fa_support {};
+    bool disable_narrow_mul_mat;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1235,6 +1240,7 @@ inline std::mutex vk_memory_logger::log_mutex;
 
 class vk_perf_logger {
   public:
+    explicit vk_perf_logger(const vk_device & device) : device(device) {}
     void print_timings(bool force = false);
 
 
@@ -1269,6 +1275,7 @@ class vk_perf_logger {
     }
 
   private:
+    vk_device device;
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
     uint32_t print_count {};
@@ -1278,6 +1285,10 @@ struct ggml_backend_vk_context {
     std::string name;
 
     vk_device device;
+
+    // Workaround for drivers moving VRAM contents off the GPU when idle
+    std::promise<void> keepalive_stop;
+    std::thread keepalive_thread;
 
     size_t semaphore_idx, binary_semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
@@ -1416,13 +1427,16 @@ struct vk_fa_tuning_params {
     uint32_t row_split;
     bool shmem_staging;
     bool disable_subgroups;
+    bool q_in_regs;
+    bool flip;
+    bool flip_direct;
     uint32_t limit_occupancy_shmem;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
                      " block_rows=" << block_rows << " block_cols=" << block_cols << " d_split=" << d_split <<
                      " row_split=" << row_split << " shmem_staging=" << shmem_staging << " disable_subgroups=" << disable_subgroups <<
-                     " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
+                     " q_in_regs=" << q_in_regs << " flip=" << flip << " flip_direct=" << flip_direct << " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
     }
 };
 
