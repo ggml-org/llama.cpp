@@ -374,61 +374,14 @@ static constexpr __device__ int ggml_cuda_fattn_tile_get_nbatch_K(const int DKQ,
 }
 
 #ifdef GGML_USE_HIP
-struct ggml_cuda_fattn_tile_sparse_config {
-    int64_t min_kv;
-    int min_gqa;
-};
-
-static constexpr ggml_cuda_fattn_tile_sparse_config ggml_cuda_fattn_tile_get_sparse_config_gcn(
-        const int DKQ, const int DV, const int gqa_ratio) {
-    if (DKQ == 72  && DV == 72)  return {32768, 1};
-    if (DKQ == 80  && DV == 80)  return {16384, 1};
-    if (DKQ == 96  && DV == 96)  return {16384, 1};
-    if (DKQ == 112 && DV == 112) return {16384, 1};
-    if (DKQ == 128 && DV == 128) return {32768, 1};
-    if (DKQ == 192 && DV == 128) return {16384, 1};
-    if (DKQ == 256 && DV == 256) return {gqa_ratio == 2 ? 32768 : 4096, 1};
-    if (DKQ == 320 && DV == 256) return {65536, 64};
-    if (DKQ == 512 && DV == 512) return {65536, 16};
-    if (DKQ == 576 && DV == 512) return {65536, 32};
-
-    return {0, 0}; // Unsupported geometry.
-}
-
-static constexpr bool ggml_cuda_fattn_tile_sparse_supported(
+static constexpr bool ggml_cuda_flash_attn_ext_tile_may_use_sparse(
         const int DKQ, const int DV, const int ncols2, const bool use_logit_softcap) {
-    // TODO: Extend sparse kernel support to other AMD architectures.
-    return ggml_cuda_fattn_tile_get_sparse_config_gcn(DKQ, DV, 1).min_kv > 0 &&
-           ncols2 > 1 && !use_logit_softcap &&
+    return DKQ > 64 && ncols2 > 1 && !use_logit_softcap &&
            ggml_cuda_fattn_tile_get_config_amd(DKQ, DV, ncols2) != 0 &&
            ggml_cuda_fattn_tile_get_config_amd_rdna(DKQ, DV, ncols2) != 0;
 }
 
-static bool ggml_cuda_fattn_tile_use_sparse(const ggml_tensor * dst, const int cc, const int DKQ, const int DV) {
-    // TODO: Add sparse selection policies for other AMD architectures.
-    if (!GGML_CUDA_CC_IS_GCN(cc)) {
-        return false;
-    }
-
-    const ggml_tensor * Q    = dst->src[0];
-    const ggml_tensor * K    = dst->src[1];
-    const ggml_tensor * mask = dst->src[3];
-    const int n_kv_max = ggml_get_op_params_i32(dst, 4);
-
-    if (!mask || mask->ne[0] != K->ne[1] ||
-        mask->ne[1] < Q->ne[1] || mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0) {
-        return false;
-    }
-
-    // Sparse compaction is not beneficial when the selected positions exceed 25% of the KV cache.
-    if (n_kv_max > K->ne[1]/4) {
-        return false;
-    }
-
-    const int gqa_ratio = Q->ne[2] / K->ne[2];
-    const auto config = ggml_cuda_fattn_tile_get_sparse_config_gcn(DKQ, DV, gqa_ratio);
-    return config.min_kv > 0 && K->ne[1] >= config.min_kv && gqa_ratio >= config.min_gqa;
-}
+bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_tensor * dst, const int DKQ, const int DV);
 #endif // GGML_USE_HIP
 
 // TODO: deduplicate with mma-f16
@@ -1224,8 +1177,8 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_cuda_context & ctx, ggm
     constexpr size_t nbytes_shared = 0;
 
 #ifdef GGML_USE_HIP
-    if constexpr (ggml_cuda_fattn_tile_sparse_supported(DKQ, DV, ncols2, use_logit_softcap)) {
-        if (ggml_cuda_fattn_tile_use_sparse(dst, cc, DKQ, DV)) {
+    if constexpr (ggml_cuda_flash_attn_ext_tile_may_use_sparse(DKQ, DV, ncols2, use_logit_softcap)) {
+        if (ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst, DKQ, DV)) {
             const int nwarps = ggml_cuda_fattn_tile_get_nthreads(DKQ, DV, ncols2, cc) / warp_size;
             const int nbatch_fa = ggml_cuda_fattn_tile_get_nbatch_fa(DKQ, DV, ncols2, cc);
             fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, 1, ncols2, use_logit_softcap, true>;
