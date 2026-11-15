@@ -2260,6 +2260,7 @@ extern "C" {
     // mask:    [n_kv,     n_batch, ne32,      ne3]
     // kv_rows: [n_kv,     ne3] I32, mask column i of slice i3 uses row kv_rows[i, i3] of k and v
     // negative rows are padding, their mask entries must be -inf
+    // the result is repeatable only for the same order of the list
     GGML_API struct ggml_tensor * ggml_flash_attn_ext_rows(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2523,7 +2524,7 @@ extern "C" {
     //
     // top_k, score, blocks, extra: as in ggml_top_k_mask
     // n_group == 1:
-    //   res: [n_res, ne1, ne2, ne3] i32: the cells of the live picks (n_blk per pick), then the extra cells, then padding
+    //   res: [n_res, ne1, ne2, ne3] i32: the cells of the picks in pick order (n_blk per pick), then the extra cells, then padding
     //        entries of dead picks, cells out of [0, n_kv) and the padding are -1
     //        f16 or f32: the matching mask, 0 for a listed cell and -inf for a -1 entry
     // n_group > 1, rows i1 = g*n_group + j form group g, n_grp1 = ceil(ne1/n_group) groups:

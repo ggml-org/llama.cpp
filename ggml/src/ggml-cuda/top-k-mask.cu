@@ -140,6 +140,18 @@ void ggml_cuda_op_top_k_mask(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
     }
 }
 
+// the position of pick t among the picks of the row sorted by index, equal picks keep their top_k order
+static __device__ int64_t top_k_rows_rank(const int32_t * top_k_row, const int64_t sk0, const int64_t n_top, const int64_t t) {
+    const int32_t p = top_k_row[t*sk0];
+
+    int64_t rank = 0;
+    for (int64_t q = 0; q < n_top; ++q) {
+        const int32_t pq = top_k_row[q*sk0];
+        rank += pq < p || (pq == p && q < t);
+    }
+    return rank;
+}
+
 // one thread per list entry, blockIdx.x is the row: the cell of a live pick or an extra cell, else -1
 template <typename T>
 static __global__ void top_k_rows_kernel(
@@ -165,9 +177,15 @@ static __global__ void top_k_rows_kernel(
 
     const int64_t e = int64_t(blockIdx.y)*blockDim.x + threadIdx.x;
     if (e < n_res) {
-        int32_t c = -1;
+        int32_t c    = -1;
+        int64_t slot = e;
         if (e < n_top*n_blk) {
-            const int32_t p = top_k_row[(e / n_blk)*sk0];
+            const int64_t t = e / n_blk;
+            const int32_t p = top_k_row[t*sk0];
+
+            // the picks in index order: the order of top_k is arbitrary, the attention over the list depends on it
+            slot = top_k_rows_rank(top_k_row, sk0, n_top, t)*n_blk + e % n_blk;
+
             bool live = p >= 0 && p < n_pick;
             if (live && score) {
                 live = score[p*ss0 + i1*ss1 + i2*ss2 + i3*ss3] > -INFINITY;
@@ -183,9 +201,9 @@ static __global__ void top_k_rows_kernel(
         }
 
         if constexpr (std::is_same_v<T, int32_t>) {
-            dst_row[e] = c;
+            dst_row[slot] = c;
         } else {
-            dst_row[e] = ggml_cuda_cast<T>(c >= 0 ? 0.0f : -INFINITY);
+            dst_row[slot] = ggml_cuda_cast<T>(c >= 0 ? 0.0f : -INFINITY);
         }
     }
 }
