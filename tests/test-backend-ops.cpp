@@ -7038,6 +7038,81 @@ struct test_soft_max : public test_case {
     }
 };
 
+struct test_soft_max_f16_boundary : public test_case {
+    enum io_mode_t {
+        F16_TO_F16 = 0,
+        F16_TO_F32 = 1,
+        F32_TO_F16 = 2,
+    };
+
+    const std::array<int64_t, 4> ne;
+    const io_mode_t io_mode;
+    const bool mask;
+    const bool sinks;
+    const ggml_type m_prec;
+    const std::array<int64_t, 2> nr23;
+    const float scale;
+    const float max_bias;
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SOFT_MAX";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR8(ne, io_mode, mask, sinks, m_prec, nr23, scale, max_bias);
+    }
+
+    double max_nmse_err() override {
+        return 1e-3;
+    }
+
+    test_soft_max_f16_boundary(
+            std::array<int64_t, 4> ne = {8, 64, 1, 1},
+            io_mode_t io_mode = F16_TO_F16,
+            bool mask = false,
+            bool sinks = false,
+            ggml_type m_prec = GGML_TYPE_F32,
+            std::array<int64_t, 2> nr23 = {1, 1},
+            float scale = 1.0f,
+            float max_bias = 0.0f)
+        : ne(ne), io_mode(io_mode), mask(mask), sinks(sinks), m_prec(m_prec), nr23(nr23), scale(scale), max_bias(max_bias) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2]*nr23[0], ne[3]*nr23[1]);
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * x = (io_mode == F32_TO_F16) ? a : ggml_dup(ctx, a);
+        if (x != a) {
+            ggml_set_name(x, "x_in");
+        }
+
+        ggml_tensor * mask_t = nullptr;
+        if (this->mask) {
+            mask_t = ggml_new_tensor_4d(ctx, m_prec, ne[0], ne[1], ne[2], ne[3]);
+            ggml_set_name(mask_t, "mask");
+        }
+
+        ggml_tensor * sinks_t = nullptr;
+        if (this->sinks) {
+            sinks_t = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[2]*nr23[0]);
+            ggml_set_name(sinks_t, "sinks");
+        }
+
+        ggml_tensor * y = ggml_soft_max_ext(ctx, x, mask_t, scale, max_bias);
+        ggml_soft_max_add_sinks(y, sinks_t);
+        ggml_set_name(y, "soft_max");
+
+        ggml_tensor * out = (io_mode == F16_TO_F32) ? y : ggml_dup(ctx, y);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_SOFT_MAX_BACK
 struct test_soft_max_back : public test_case {
     const ggml_type type;
@@ -13338,6 +13413,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4,      1, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4,   1023, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {643251, 3, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+
+    for (auto io_mode : { test_soft_max_f16_boundary::F16_TO_F16,
+                          test_soft_max_f16_boundary::F16_TO_F32,
+                          test_soft_max_f16_boundary::F32_TO_F16 }) {
+        for (int64_t ne0 : { 8, 64, 128, 256 }) {
+            test_cases.emplace_back(new test_soft_max_f16_boundary({ ne0, 16, 1, 1 }, io_mode, false, false, GGML_TYPE_F32, { 1, 1 }, 1.0f, 0.0f));
+        }
+        for (int64_t ne0 : { 31, 33, 512, 2048 }) {
+            test_cases.emplace_back(new test_soft_max_f16_boundary({ ne0, 8, 1, 1 }, io_mode, false, false, GGML_TYPE_F32, { 4, 1 }, 0.125f, 0.0f));
+            test_cases.emplace_back(new test_soft_max_f16_boundary({ ne0, 8, 1, 1 }, io_mode, false, true,  GGML_TYPE_F32, { 4, 1 }, 0.125f, 0.0f));
+            for (ggml_type m_prec : { GGML_TYPE_F16, GGML_TYPE_F32 }) {
+                test_cases.emplace_back(new test_soft_max_f16_boundary({ ne0, 8, 1, 1 }, io_mode, true, false, m_prec, { 4, 1 }, 0.125f, 0.0f));
+                test_cases.emplace_back(new test_soft_max_f16_boundary({ ne0, 8, 1, 1 }, io_mode, true, true,  m_prec, { 8, 1 }, 0.125f, 8.0f));
+            }
+        }
+    }
 
     for (float max_bias : {0.0f, 8.0f}) {
         for (float scale : {1.0f, 0.1f}) {

@@ -1902,6 +1902,7 @@ static bool htp_kparams_solve_set_rows(
 static bool htp_kparams_solve_softmax(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
     struct htp_softmax_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1911,10 +1912,17 @@ static bool htp_kparams_solve_softmax(
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
-    if (src2) {
-        return false;
+    if (!internal_f16) {
+        if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+            return false;
+        }
+    } else {
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+            return false;
+        }
     }
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || src0->ne[2] > 512) {
+    if (src0->ne[2] > 512) {
         return false;
     }
     if (src1) {
@@ -1922,6 +1930,14 @@ static bool htp_kparams_solve_softmax(
             src0->ne[0] != src1->ne[0] || src1->ne[1] < src0->ne[1] ||
             src0->ne[2] % src1->ne[2] != 0 || src0->ne[3] % src1->ne[3] != 0 ||
             !ggml_is_contiguous(src1)) {
+            return false;
+        }
+    }
+    if (src2) {
+        if (src2->type != GGML_TYPE_F32 ||
+            src2->ne[0] != src0->ne[2] ||
+            src2->ne[1] != 1 || src2->ne[2] != 1 || src2->ne[3] != 1 ||
+            !ggml_is_contiguous(src2)) {
             return false;
         }
     }
@@ -1956,14 +1972,26 @@ static bool htp_kparams_solve_softmax(
         kparams->m1 = 1.0f;
     }
 
+    kparams->src0_f16 = (src0->type == GGML_TYPE_F16) ? 1 : 0;
+    kparams->dst_f16  = (dst->type  == GGML_TYPE_F16) ? 1 : 0;
     kparams->use_src1 = (src1 != nullptr) ? 1 : 0;
     kparams->use_f16  = (src1 != nullptr && src1->type == GGML_TYPE_F16) ? 1 : 0;
+    kparams->use_src2 = (src2 != nullptr) ? 1 : 0;
 
     const uint32_t ne00 = src0->ne[0];
     const uint32_t ne10 = src1 ? src1->ne[0] : 1;
 
     struct htp_softmax_vtcm_layout layout;
-    htp_softmax_vtcm_layout_build(&layout, ne00, ne10, kparams->use_src1 != 0, kparams->use_f16 != 0, n_hvx);
+    htp_softmax_vtcm_layout_build(&layout,
+                                  ne00,
+                                  ne10,
+                                  n_head,
+                                  kparams->src0_f16 != 0,
+                                  kparams->dst_f16 != 0,
+                                  kparams->use_src1 != 0,
+                                  kparams->use_f16 != 0,
+                                  kparams->use_src2 != 0,
+                                  n_hvx);
     if (layout.total_bytes > htp_session_vtcm_size(sess)) {
         return false;
     }
@@ -1971,12 +1999,22 @@ static bool htp_kparams_solve_softmax(
     kparams->n_hvx     = n_hvx;
     kparams->vtcm_size = (uint32_t) layout.total_bytes;
 
-    if (!kparams->use_src1) {
-        kparams->kernel_type = HTP_SOFTMAX_KERNEL_NOMASK;
-    } else if (kparams->use_f16) {
-        kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F16;
+    if (kparams->src0_f16) {
+        if (!kparams->use_src1) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_SRC16_NOMASK;
+        } else if (kparams->use_f16) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_SRC16_MASK_F16;
+        } else {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_SRC16_MASK_F32;
+        }
     } else {
-        kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F32;
+        if (!kparams->use_src1) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_NOMASK;
+        } else if (kparams->use_f16) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F16;
+        } else {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F32;
+        }
     }
 
     if (src0->ne[1] > 0) kparams->div_ne01 = init_fastdiv_values(src0->ne[1]);
@@ -6001,7 +6039,11 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_ssm_scan>(sess, op, kparams);
 
         case HTP_OP_SOFTMAX:
-            return htp_kparams_invoke<htp_kparams_solve_softmax>(sess, op, kparams);
+        {
+            struct htp_softmax_kernel_params tmp;
+            return htp_kparams_solve_softmax(sess, op, internal_f16,
+                                             kparams ? (struct htp_softmax_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_GATED_DELTA_NET:
             return htp_kparams_invoke<htp_kparams_solve_gated_delta_net>(sess, op, kparams);
