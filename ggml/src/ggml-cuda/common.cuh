@@ -601,13 +601,39 @@ static __device__ __forceinline__ int warp_reduce_any(int x) {
     }
 }
 
-template<int width = WARP_SIZE>
-static __device__ __forceinline__ float warp_reduce_max(float x) {
+template<int width>
+static __device__ __forceinline__ float warp_reduce_max_impl(float x) {
+#if defined(GGML_USE_HIP)
+    if constexpr (width >= 2 && width <= 32 && width <= ggml_cuda_get_physical_warp_size()) {
+        if constexpr (width >= 16) {
+            asm volatile(
+                "v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:8\n\t"
+                "v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:4"
+                : "+v"(x));
+        }
+        if constexpr (width >= 4) {
+            asm volatile("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 quad_perm:[2,3,0,1]" : "+v"(x));
+        }
+        asm volatile("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 quad_perm:[1,0,3,2]" : "+v"(x));
+        if constexpr (width == 8) {
+            asm volatile("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_half_mirror" : "+v"(x));
+        }
+        if constexpr (width == 32) {
+            return fmaxf(x, __builtin_bit_cast(float, __builtin_amdgcn_ds_swizzle(__builtin_bit_cast(int, x), 0x401F)));
+        }
+        return x;
+    }
+#endif // defined(GGML_USE_HIP)
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
         x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
     }
     return x;
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ float warp_reduce_max(float x) {
+    return warp_reduce_max_impl<width>(x);
 }
 
 template<typename T, int width = WARP_SIZE>
