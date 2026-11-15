@@ -45,8 +45,7 @@ def test_server_sleep():
     server.sleep_idle_seconds = 1
     server.start()
 
-    # wait a bit so that server can go to sleep
-    time.sleep(2)
+    wait_for_sleep(server)
 
     # make sure these endpoints are still responsive after sleep
     res = server.make_request("GET", "/health")

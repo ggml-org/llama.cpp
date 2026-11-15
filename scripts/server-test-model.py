@@ -183,7 +183,7 @@ def test_tool_call(url, stream):
 def main():
     parser = argparse.ArgumentParser(description="Test llama-server functionality.")
     parser.add_argument("--host", default="localhost", help="Server host")
-    parser.add_argument("--port", default=8080, type=int, help="Server port")
+    parser.add_argument("--port", default=9931, type=int, help="Server port")
     args = parser.parse_args()
 
     base_url = f"http://{args.host}:{args.port}/v1/chat/completions"

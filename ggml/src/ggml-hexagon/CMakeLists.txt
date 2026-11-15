@@ -21,6 +21,7 @@ message(STATUS "hexagon: using ${HEXAGON_SDK_ROOT} and ${HEXAGON_TOOLS_ROOT} for
 
 include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 option(GGML_HEXAGON_HTP_DEBUG  "ggml-hexagon: enable HTP debug output" OFF)
 set(GGML_HEXAGON_HTP_BUILD_TYPE "Release" CACHE STRING "ggml-hexagon: HTP skel build type (Release, RelWithDebInfo, Debug)")
@@ -32,10 +33,11 @@ add_library(htp_iface OBJECT
 set_target_properties(htp_iface PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(htp_iface PUBLIC
     ${HEXAGON_SDK_ROOT}/incs
-    ${HEXAGON_SDK_ROOT}/incs/stddef
     ${HEXAGON_SDK_ROOT}/utils/examples
     ${CMAKE_CURRENT_SOURCE_DIR}/htp
     ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(htp_iface PRIVATE
+    ${HEXAGON_SDK_ROOT}/incs/stddef)
 
 build_idl(htp/htp_iface.idl htp_iface)
 
@@ -50,13 +52,28 @@ endif()
 set(TARGET_NAME ggml-hexagon)
 ggml_add_backend_library(${TARGET_NAME}
     ggml-hexagon.cpp
+    htp-common.h
+    htp-kparams.cpp
+    htp-kparams.h
+    htp-opnode.cpp
+    htp-opnode.h
+    htp-fusion.cpp
+    htp-fusion.h
+    htp-repack.cpp
+    htp-repack.h
     htp-drv.cpp
     htp-drv.h
     libdl.h
     ../../include/ggml-hexagon.h)
 
+if (WIN32)
+    # some clang-cl drivers do not predefine ARM64 macros for winnt.h
+    target_compile_definitions(${TARGET_NAME} PRIVATE _M_ARM64=1 _ARM64_=1)
+endif()
+
 target_link_libraries(${TARGET_NAME} PRIVATE htp_iface)
 target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/htp ${CMAKE_CURRENT_BINARY_DIR})
+target_include_directories(${TARGET_NAME} SYSTEM PRIVATE ${HEXAGON_SDK_ROOT}/incs/stddef)
 
 # Build HTP skels
 set(HTP_SKELS)
@@ -72,7 +89,8 @@ function(build_htp_skel V)
             -DHEXAGON_TOOLS_ROOT=${HEXAGON_TOOLS_ROOT}
             -DHEXAGON_HTP_DEBUG=${GGML_HEXAGON_HTP_DEBUG}
             -DDSP_VERSION=${V}
-            -DPREBUILT_LIB_DIR="toolv19_${V}")
+            -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
+            -DPREBUILT_LIB_DIR="toolv21_${V}")
     list(APPEND HTP_SKELS ${CMAKE_CURRENT_BINARY_DIR}/libggml-htp-${V}.so)
     list(APPEND HTP_PROJECTS htp-${V})
     set(HTP_SKELS ${HTP_SKELS} PARENT_SCOPE)
@@ -83,6 +101,7 @@ build_htp_skel(v73)
 build_htp_skel(v75)
 build_htp_skel(v79)
 build_htp_skel(v81)
+build_htp_skel(v85)
 
 # Install Hexagon skels required at runtime
 install(FILES ${HTP_SKELS} TYPE LIB)

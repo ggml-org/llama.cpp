@@ -80,6 +80,14 @@ export class ConversationPreferences {
 	 */
 	pendingCwd = $state<string | null>(null);
 
+	/**
+	 * Group the chat about to start goes into, picked before any conversation
+	 * exists. Consumed by `createConversation()` so the first send lands in
+	 * that group. Unlike `pendingCwd` it outlives `resetPending()`, so leaving
+	 * the new-chat tab and coming back keeps it; `openNewChat()` clears it.
+	 */
+	pendingGroupId = $state<string | null>(null);
+
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(loadReasoningEffortDefault());
 

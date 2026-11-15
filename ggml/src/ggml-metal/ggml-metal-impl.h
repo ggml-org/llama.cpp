@@ -14,7 +14,8 @@
 #define N_MM_SIMD_GROUP_X 2
 #define N_MM_SIMD_GROUP_Y 2
 
-#define N_MM_NPART_AMAX 256
+#define N_ARGMAX_NPART_MAX 256
+#define N_ARGMAX_CHUNK 4096
 
 // kernel parameters for mat-vec threadgroups
 //
@@ -124,6 +125,8 @@
 #define FC_FLASH_ATTN_EXT_TENSOR       2200
 #define FC_LIGHTNING_INDEXER           2200
 #define FC_MUL_MV_MMA                  2300
+#define FC_TOP_K_MASK                  2400
+#define FC_GROUP_NORM                  2500
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -383,6 +386,19 @@ typedef struct {
     int32_t  nblocks;
 } ggml_metal_kargs_flash_attn_ext_kv_f16;
 
+// gather the K/V cache rows referenced by the kv_rows lists into contiguous F16 buffers
+typedef struct {
+    int32_t  ne11;      // number of rows per list (n_kv_rows)
+    int32_t  ne_12_2;   // number of K/V heads
+    int32_t  ne10;      // DK
+    int32_t  ne20;      // DV, set to 0 to skip gathering V (V is a view of K)
+    uint64_t v_off;     // byte offset of the gathered V region in dst
+    uint64_t nb11;      // K source strides (ne13 = 1: the cache is shared by all streams)
+    uint64_t nb12;
+    uint64_t nb21;      // V source strides (ne23 = 1)
+    uint64_t nb22;
+} ggml_metal_kargs_flash_attn_ext_rows;
+
 typedef struct {
     int32_t  ne11;
     int32_t  ne_12_2; // assume K and V are same shape
@@ -560,7 +576,6 @@ typedef struct {
 } ggml_metal_kargs_mul_mv_ext;
 
 typedef struct {
-    int32_t  ne02;
     int32_t  ne10;
     int32_t  ne11;  // n_expert_used (bcast)
     uint64_t nb11;
@@ -571,12 +586,11 @@ typedef struct {
 } ggml_metal_kargs_mul_mm_id_map0;
 
 typedef struct {
-    int32_t  ne00;
-    int32_t  ne01;
-    int32_t  ne02;
-    uint64_t nb01;
-    uint64_t nb02;
-} ggml_metal_kargs_mul_mm_id_amax;
+    int32_t  ne0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb21;
+} ggml_metal_kargs_mul_mm_id_zero;
 
 typedef struct {
     int32_t  ne00;
@@ -590,7 +604,6 @@ typedef struct {
     uint64_t nb12;
     uint64_t nb13;
     int32_t  ne20;
-    int32_t  ne21;
     int32_t  ne0;
     int32_t  ne1;
     int16_t  r2;
@@ -665,6 +678,10 @@ typedef struct {
     uint64_t nb00;
     uint64_t nb01;
     uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
     int32_t  ngrp;
     float    eps;
 } ggml_metal_kargs_group_norm;
@@ -1258,6 +1275,7 @@ typedef struct {
     uint64_t nb01;      // logits row stride
     uint64_t nb1_ids;   // ids row stride
     float    clamp;
+    float    bias;
     float    scale;
 } ggml_metal_kargs_topk_moe;
 
@@ -1296,6 +1314,38 @@ typedef struct {
     uint64_t nbm1;
     uint64_t nbm3;
 } ggml_metal_kargs_lightning_indexer;
+
+typedef struct {
+    int32_t  n_kv;
+    int32_t  m1;
+    int32_t  m2;
+    int32_t  m3;
+    int32_t  n_top;
+    int32_t  n_pick;
+    int32_t  n_blk;
+    int32_t  n_extra;
+    int64_t  n_elems;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t nbm1;
+    uint64_t nbm2;
+    uint64_t nbm3;
+    uint64_t nbk0;
+    uint64_t nbk1;
+    uint64_t nbk2;
+    uint64_t nbk3;
+    uint64_t nbs0;
+    uint64_t nbs1;
+    uint64_t nbs2;
+    uint64_t nbs3;
+    uint64_t nbb0;
+    uint64_t nbb1;
+    uint64_t nbe0;
+    uint64_t nbe1;
+    uint64_t nbe2;
+    uint64_t nbe3;
+} ggml_metal_kargs_top_k_mask;
 
 typedef struct {
     int32_t  n_tokens;
@@ -1381,8 +1431,10 @@ typedef struct {
 } ggml_metal_kargs_pool_1d;
 
 typedef struct {
-     int64_t ne00;
+    int64_t ne00;
     uint64_t nb01;
+    int64_t npart;
+    int64_t ne01;
 } ggml_metal_kargs_argmax;
 
 typedef struct {

@@ -9,13 +9,13 @@
 //
 // there is no codebook anywhere, "codes" in the mtmd API are continuous features here
 
-ggml_tensor * clip_graph_pockettts_gen::modulate(ggml_tensor * x, ggml_tensor * shift, ggml_tensor * scale) const {
+ggml_tensor * mtmd_graph_pockettts_gen::modulate(ggml_tensor * x, ggml_tensor * shift, ggml_tensor * scale) const {
     ggml_tensor * cur = ggml_mul(ctx0, x, ggml_scale_bias(ctx0, scale, 1.0f, 1.0f));
     return ggml_add(ctx0, cur, shift);
 }
 
 // see TimestepEmbedder in the reference
-ggml_tensor * clip_graph_pockettts_gen::time_embed(const clip_flow_net::time_embd & te, float t) const {
+ggml_tensor * mtmd_graph_pockettts_gen::time_embed(const mtmd_flow_net::time_embd & te, float t) const {
     // t is a graph-build constant, so the cos/sin table can be folded into a scaled copy
     ggml_tensor * args = ggml_scale(ctx0, te.freqs, t);
     ggml_tensor * emb  = ggml_concat(ctx0, ggml_cos(ctx0, args), ggml_sin(ctx0, args), 0);
@@ -42,7 +42,7 @@ ggml_tensor * clip_graph_pockettts_gen::time_embed(const clip_flow_net::time_emb
 }
 
 // one velocity evaluation: v(cond, s, t, x)
-ggml_tensor * clip_graph_pockettts_gen::flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const {
+ggml_tensor * mtmd_graph_pockettts_gen::flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const {
     const auto & flow = model.flow;
 
     ggml_tensor * cur = build_mm(flow.input_proj_w, x);
@@ -99,7 +99,7 @@ ggml_tensor * clip_graph_pockettts_gen::flow_forward(ggml_tensor * cond, ggml_te
 
 // state carried between GEN_WAV calls: rope offset, per-layer KV window, conv left context
 // and the transposed-conv overlap tails
-std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model) {
+std::vector<c2w_state_slot> list_pockettts_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     std::vector<c2w_state_slot> slots;
     if (model.gen_upsample_w == nullptr) {
         return slots; // not a pocket-tts decoder
@@ -136,8 +136,8 @@ std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hpar
     return slots;
 }
 
-ggml_cgraph * clip_graph_pockettts_gen::build() {
-    if (gen_process == CLIP_GEN_PROCESS_GEN_CODE) {
+ggml_cgraph * mtmd_graph_pockettts_gen::build() {
+    if (gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE) {
         // the backbone hidden state arrives as the single batch entry
         ggml_tensor * h_state = build_inp_raw(1);
         h_state = ggml_reshape_2d(ctx0, h_state, n_mmproj_embd, 1);
@@ -188,7 +188,7 @@ ggml_cgraph * clip_graph_pockettts_gen::build() {
     cur = build_mm(model.gen_quant_out_w, cur);
     cb(cur, "quant_out", -1);
 
-    clip_graph_pockettts_seanet seanet(*this);
+    mtmd_graph_pockettts_seanet seanet(*this);
     for (const auto & slot : list_pockettts_state_slots(hparams, model)) {
         ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
         ggml_set_name(t, ("state_in_" + slot.name).c_str());
@@ -225,6 +225,9 @@ ggml_cgraph * clip_graph_pockettts_gen::build() {
     keep = ggml_mul(ctx0, keep,
         ggml_step(ctx0, ggml_scale_bias(ctx0, ggml_add(ctx0, pos_k, base), 1.0f, 0.5f - (float) prefix)));
     ggml_tensor * kq_mask = ggml_reshape_4d(ctx0, ggml_log(ctx0, keep), n_kv, n_pos, 1, 1);
+    if (flash_attn_type == MTMD_FLASH_ATTN_TYPE_ENABLED) {
+        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+    }
 
     for (int il = 0; il < n_layer; il++) {
         const auto & layer = model.gen_tfm_layers[il];

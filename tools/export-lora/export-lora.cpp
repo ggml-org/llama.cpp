@@ -104,6 +104,9 @@ struct file_input {
         auto offset = gguf_get_data_offset(ctx_gguf) + gguf_get_tensor_offset(ctx_gguf, i_tensor_in);
         f_in.seekg(offset);
         f_in.read((char* )buf.data(), len);
+        if (!f_in) {
+            throw std::runtime_error("failed to read data for tensor " + name + ", input file may be truncated");
+        }
     }
 
     ~file_input() {
@@ -179,6 +182,8 @@ struct lora_merge_ctx {
     ggml_type get_out_tensor_type(struct ggml_tensor * t) {
         if (t->type == GGML_TYPE_F32) {
             return GGML_TYPE_F32;
+        } else if (t->type == GGML_TYPE_BF16) {
+            return GGML_TYPE_BF16;
         } else {
             return GGML_TYPE_F16;
         }
@@ -406,8 +411,7 @@ struct lora_merge_ctx {
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model-f16.gguf\n", argv[0]);
-    printf("\nNOTE: output model is F16\n");
+    printf("\n  %s -m base-model.gguf --lora lora-file.gguf -o merged-model.gguf\n", argv[0]);
     printf("\n");
 }
 

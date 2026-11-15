@@ -45,6 +45,7 @@ set(METALLIB_KERNEL_SOURCES
     kernels/fa_q5_0.metal
     kernels/fa_q5_1.metal
     kernels/fa_q8_0.metal
+    kernels/fa_tensor.metal
     kernels/fa_vec_f16.metal
     kernels/fa_vec_f32.metal
     kernels/fa_vec_q4_0.metal
@@ -233,12 +234,12 @@ else()
             VERBATIM
         )
 
-        set(AIR_FA_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fa_f16_tensor.air")
+        set(AIR_FA_TENSOR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/fa_tensor_tensor.air")
         add_custom_command(
             OUTPUT ${AIR_FA_TENSOR}
-            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/fa_f16.metal -o ${AIR_FA_TENSOR}
-            DEPENDS kernels/fa_f16.metal ${METALLIB_KERNELS_FA_SHARED} kernels/common.h kernels/dequantize.h ${METALLIB_COMMON} ggml-metal-impl.h
-            COMMENT "Compiling kernels/fa_f16.metal (tensor API)"
+            COMMAND xcrun -sdk ${METAL_SDK} metal ${XC_FLAGS_TENSOR} -DGGML_METAL_HAS_TENSOR -I ${CMAKE_RUNTIME_OUTPUT_DIRECTORY} -c ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernels/fa_tensor.metal -o ${AIR_FA_TENSOR}
+            DEPENDS kernels/fa_tensor.metal kernels/common.h ${METALLIB_COMMON} ggml-metal-impl.h
+            COMMENT "Compiling kernels/fa_tensor.metal (tensor API)"
             VERBATIM
         )
 

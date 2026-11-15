@@ -11,6 +11,8 @@ export const SETTINGS_KEYS = {
 	API_KEY: 'apiKey',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	BACKEND_SAMPLING: 'backend_sampling',
+	COMPACTION_PRESERVED_STEPS: 'compactionPreservedSteps',
+	COMPACTION_PROMPT: 'compactionPrompt',
 	CONVERSATION_TABS: 'conversationTabs',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
 	CUSTOM_CSS: 'customCss',
@@ -26,10 +28,12 @@ export const SETTINGS_KEYS = {
 	DYNATEMP_EXPONENT: 'dynatemp_exponent',
 	DYNATEMP_RANGE: 'dynatemp_range',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
+	ENABLE_DISCOVER_MODELS: 'enableDiscoverModels',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
-	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
+	GROUP_MODELS_BY_FAMILY: 'groupModelsByFamily',
+	LIVE_MARKDOWN_PREVIEW: 'liveMarkdownPreview',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	MAX_TOKENS: 'max_tokens',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
@@ -37,6 +41,7 @@ export const SETTINGS_KEYS = {
 	MCP_SERVERS: 'mcpServers',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
 	MIN_P: 'min_p',
+	// Display
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
 	// Performance
@@ -54,13 +59,17 @@ export const SETTINGS_KEYS = {
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
-	SHOW_MODEL_ORG_NAME_IN_TRIGGER: 'showModelOrgNameInTrigger',
+	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
+	SHOW_MODEL_ORG_NAME: 'showModelOrgName',
+	SHOW_MODEL_ORG_NAME_ON_MOBILE: 'showModelOrgNameOnMobile',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
+	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	SINGLE_ROW_CHAT_FORM: 'singleRowChatForm',
 	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	SYSTEM_MESSAGE: 'systemMessage',
 	// Sampling
@@ -73,6 +82,8 @@ export const SETTINGS_KEYS = {
 	TOP_K: 'top_k',
 	TOP_P: 'top_p',
 	TYP_P: 'typ_p',
+	// General
+	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;

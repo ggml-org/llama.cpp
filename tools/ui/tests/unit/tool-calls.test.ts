@@ -1,4 +1,7 @@
-import { parseToolArgs } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
+import {
+	extractToolArgPath,
+	parseToolArgs
+} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
 import {
 	parseEditFileMeta,
 	parseEditFileTitleMeta
@@ -12,6 +15,7 @@ import {
 	parseWriteFileMeta,
 	parseWriteFileTitleMeta
 } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file';
+import { CODE_BLOCK } from '$lib/constants';
 import { AgenticSectionType, BuiltInTool } from '$lib/enums';
 import type { AgenticSection, WriteFileMeta } from '$lib/types';
 import { abbreviateHome, formatCwdMessage, lastPathSegment, parseCwdMessage } from '$lib/utils';
@@ -164,6 +168,22 @@ describe('parseToolArgs (shared)', () => {
 	});
 });
 
+describe('extractToolArgPath', () => {
+	it('reads every path alias', () => {
+		expect(extractToolArgPath({ path: '/a' })).toBe('/a');
+		expect(extractToolArgPath({ file_path: '/b' })).toBe('/b');
+		expect(extractToolArgPath({ filePath: '/c' })).toBe('/c');
+	});
+
+	it('returns undefined when no path alias is a usable string', () => {
+		expect(extractToolArgPath({ content: 'x' })).toBeUndefined();
+		expect(extractToolArgPath({ path: '' })).toBeUndefined();
+		expect(extractToolArgPath({ path: 7 })).toBeUndefined();
+		expect(extractToolArgPath(null)).toBeUndefined();
+		expect(extractToolArgPath(undefined)).toBeUndefined();
+	});
+});
+
 describe('parseWriteFileMeta', () => {
 	it('returns null for sections with a different tool name', () => {
 		expect(
@@ -176,12 +196,23 @@ describe('parseWriteFileMeta', () => {
 		).toBeNull();
 	});
 
-	it('returns null when args have no path-like field', () => {
-		expect(
-			parseWriteFileMeta(
-				makeSection({ toolArgs: '{"content":"x"}', toolName: BuiltInTool.SERVER_WRITE_FILE })
-			)
-		).toBeNull();
+	it('returns content without a path when args have no path-like field', () => {
+		const meta = parseWriteFileMeta(
+			makeSection({ toolArgs: '{"content":"x"}', toolName: BuiltInTool.SERVER_WRITE_FILE })
+		);
+
+		expect(meta?.content).toBe('x');
+		expect(meta?.filePath).toBeUndefined();
+		expect(meta?.fileName).toBeUndefined();
+		expect(meta?.language).toBe(CODE_BLOCK.DEFAULT_LANGUAGE);
+	});
+
+	it('returns content streamed before the path has arrived', () => {
+		const meta = parseWriteFileMeta(
+			makeSection({ toolArgs: '{"content":"hello ', toolName: BuiltInTool.SERVER_WRITE_FILE })
+		);
+
+		expect(meta?.content).toBe('hello ');
 	});
 
 	it('accepts partial args (renders incrementally as content streams in)', () => {
@@ -279,6 +310,16 @@ describe('parseWriteFileTitleMeta', () => {
 		expect(parseWriteFileTitleMeta(section)?.filePath).toBe('/foo.t');
 	});
 
+	it('returns meta without a path when args have no path-like field', () => {
+		const title = parseWriteFileTitleMeta(
+			makeSection({ toolArgs: '{"content":"x"}', toolName: BuiltInTool.SERVER_WRITE_FILE })
+		);
+
+		expect(title?.filePath).toBeUndefined();
+		expect(title?.fileName).toBeUndefined();
+		expect(title?.language).toBe(CODE_BLOCK.DEFAULT_LANGUAGE);
+	});
+
 	it('returns null for sections with a different tool name', () => {
 		expect(
 			parseWriteFileTitleMeta(
@@ -324,12 +365,13 @@ describe('parseEditFileTitleMeta', () => {
 		expect(parseEditFileTitleMeta(section)?.errorMessage).toBe('permission denied');
 	});
 
-	it('returns null when args have no path-like field', () => {
-		expect(
-			parseEditFileTitleMeta(
-				makeSection({ toolArgs: '{"edits":[]}', toolName: BuiltInTool.SERVER_EDIT_FILE })
-			)
-		).toBeNull();
+	it('returns meta without a path when args have no path-like field', () => {
+		const title = parseEditFileTitleMeta(
+			makeSection({ toolArgs: '{"edits":[]}', toolName: BuiltInTool.SERVER_EDIT_FILE })
+		);
+
+		expect(title?.filePath).toBeUndefined();
+		expect(title?.fileName).toBeUndefined();
 	});
 });
 
@@ -382,6 +424,33 @@ describe('parseEditFileMeta', () => {
 
 		expect(meta?.errorMessage).toBe('bad path');
 		expect(meta?.resultMessage).toBeUndefined();
+	});
+
+	it('still parses edits when args have no path-like field', () => {
+		const meta = parseEditFileMeta(
+			makeSection({
+				toolArgs: '{"edits":[{"old_text":"a","new_text":"b"}]}',
+				toolName: BuiltInTool.SERVER_EDIT_FILE
+			})
+		);
+
+		expect(meta?.edits).toEqual([{ newText: 'b', oldText: 'a' }]);
+		expect(meta?.filePath).toBeUndefined();
+	});
+
+	it('parses edits streamed before the path has arrived', () => {
+		const meta = parseEditFileMeta(
+			makeSection({
+				// second edit is still mid-stream: only its old_text has landed
+				toolArgs: '{"edits":[{"old_text":"a","new_text":"b"},{"old_text":"c',
+				toolName: BuiltInTool.SERVER_EDIT_FILE
+			})
+		);
+
+		expect(meta?.edits).toEqual([
+			{ newText: 'b', oldText: 'a' },
+			{ newText: '', oldText: 'c' }
+		]);
 	});
 });
 
@@ -642,6 +711,39 @@ describe('parseExecShellCommandMeta', () => {
 			parseExecShellCommandMeta(
 				makeSection(
 					{ toolArgs: '{"cwd":"/x"}', toolName: BuiltInTool.SERVER_EXEC_SHELL_COMMAND },
+					BuiltInTool.SERVER_EXEC_SHELL_COMMAND
+				)
+			)
+		).toBeNull();
+	});
+
+	it('surfaces a partially streamed command before the JSON closes', () => {
+		const meta = parseExecShellCommandMeta(
+			makeSection(
+				{ toolArgs: '{"command":"git sta', toolName: BuiltInTool.SERVER_EXEC_SHELL_COMMAND },
+				BuiltInTool.SERVER_EXEC_SHELL_COMMAND
+			)
+		);
+
+		expect(meta?.command).toBe('git sta');
+	});
+
+	it('keeps a dangling escape from breaking the partial parse', () => {
+		const meta = parseExecShellCommandMeta(
+			makeSection(
+				{ toolArgs: '{"command":"echo \\"he', toolName: BuiltInTool.SERVER_EXEC_SHELL_COMMAND },
+				BuiltInTool.SERVER_EXEC_SHELL_COMMAND
+			)
+		);
+
+		expect(meta?.command).toBe('echo "he');
+	});
+
+	it('returns null while the command value is still empty', () => {
+		expect(
+			parseExecShellCommandMeta(
+				makeSection(
+					{ toolArgs: '{"command":"', toolName: BuiltInTool.SERVER_EXEC_SHELL_COMMAND },
 					BuiltInTool.SERVER_EXEC_SHELL_COMMAND
 				)
 			)

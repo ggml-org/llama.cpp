@@ -38,11 +38,11 @@ struct MulMatIdParams {
 @group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // [cols, rows, n_expert]
 @group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // [cols, b_ne1, n_tokens]
 @group(0) @binding(2) var<storage, read_write> dst: array<DST_TYPE>;   // [rows, n_expert_used, n_tokens]
-@group(0) @binding(3) var<storage, read_write> global_gathered_expert_used: array<u32>; // [n_expert][n_tokens]
-@group(0) @binding(4) var<storage, read_write> global_gathered_tokens: array<u32>; // [n_expert][n_tokens]
-@group(0) @binding(5) var<storage, read_write> gathered_count_ids: array<u32>; // [n_expert]
 
-@group(0) @binding(6) var<uniform> params: MulMatIdParams;
+@group(0) @binding(3) var<storage, read_write> ids_slot_pos: array<u32>; // [n_expert_used * n_tokens]
+@group(0) @binding(4) var<storage, read_write> ids_tiles: array<u32>; // [n_tiles, (expert, first slot, n slots) * n_tiles]
+
+@group(0) @binding(5) var<uniform> params: MulMatIdParams;
 
 fn get_local_n(thread_id: u32) -> u32 {
     return thread_id / WORKGROUP_SIZE_M;
@@ -90,44 +90,29 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let local_m = get_local_m(thread_id);
     let local_n = get_local_n(thread_id);
 
-    var expert_idx:u32 = 0xFFFFFFFFu;
-    var wg_in_batch:u32 = 0;
-    var wg_sum:u32 = 0;
     let wg_m_count = (params.m + WORKGROUP_SIZE_M * TILE_M - 1u) / (WORKGROUP_SIZE_M * TILE_M);
     let wg_linear = wg_id.y * num_wg.x + wg_id.x;
 
-    for (var i = 0u;i < params.n_expert;i += 1) {
-        let wg_n_count = (gathered_count_ids[i] + WORKGROUP_SIZE_N * TILE_N - 1u) / (WORKGROUP_SIZE_N * TILE_N);
-        let wg_per_matrix = wg_m_count * wg_n_count;
-        if (wg_sum <= wg_linear && wg_linear < wg_sum + wg_per_matrix) {
-            expert_idx = i;
-            wg_in_batch = wg_linear - wg_sum;
-            break;
-        }
-        wg_sum += wg_per_matrix;
-    }
+    // the slot tile of this workgroup, described by mul_mat_id_gather.wgsl
+    let tile = wg_linear / wg_m_count;
+    let wg_m = wg_linear % wg_m_count;
 
-    let is_valid = expert_idx != 0xFFFFFFFFu;
+    let is_valid = tile < ids_tiles[0];
 
-    var wg_m: u32 = 0;
-    var wg_n: u32 = 0;
-    var offset_wg_m: u32 = 0;
-    var offset_wg_n: u32 = 0;
+    var expert_idx: u32 = 0;
     var rest_token_n: u32 = 0;
     var src0_batch_offset: u32 = 0;
 
-    wg_m = wg_in_batch % wg_m_count;
-    wg_n = wg_in_batch / wg_m_count;
-
-    offset_wg_m = wg_m * WORKGROUP_SIZE_M * TILE_M;
-    offset_wg_n = wg_n * WORKGROUP_SIZE_N * TILE_N;
+    let offset_wg_m = wg_m * WORKGROUP_SIZE_M * TILE_M;
 
     if (is_valid) {
-        rest_token_n = gathered_count_ids[expert_idx] - offset_wg_n;
-        let global_gathered_base = expert_idx * params.n_tokens + offset_wg_n;
-        for (var i = thread_id; i < TILE_N * WORKGROUP_SIZE_N && offset_wg_n + i < gathered_count_ids[expert_idx]; i += TOTAL_WORKGROUP_SIZE) {
-            gathered_expert_used[i] = global_gathered_expert_used[global_gathered_base + i];
-            gathered_tokens[i] = global_gathered_tokens[global_gathered_base + i];
+        expert_idx = ids_tiles[1 + 3 * tile];
+        let slot_base = ids_tiles[1 + 3 * tile + 1];
+        rest_token_n = ids_tiles[1 + 3 * tile + 2];
+        for (var i = thread_id; i < rest_token_n; i += TOTAL_WORKGROUP_SIZE) {
+            let pos_in_ids = ids_slot_pos[slot_base + i];
+            gathered_expert_used[i] = pos_in_ids % params.n_expert_used;
+            gathered_tokens[i] = pos_in_ids / params.n_expert_used;
         }
         src0_batch_offset = params.offset_src0 + expert_idx * params.stride_02;
     }
@@ -135,7 +120,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     workgroupBarrier();
 
     let output_row_base = offset_wg_m + local_m * TILE_M;
-    let output_col_base = offset_wg_n + local_n * TILE_N;
+    let output_col_base = local_n * TILE_N;
 
     let dst2_stride = params.m * params.n_expert_used;
     let dst1_stride = params.m;
@@ -178,9 +163,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     if (is_valid) {
         for (var tn = 0u; tn < TILE_N; tn++) {
             let n_idx = output_col_base + tn;
-            if (n_idx < gathered_count_ids[expert_idx]) {
-                let dst1_idx = gathered_expert_used[n_idx - offset_wg_n];
-                let dst2_idx = gathered_tokens[n_idx - offset_wg_n];
+            if (n_idx < rest_token_n) {
+                let dst1_idx = gathered_expert_used[n_idx];
+                let dst2_idx = gathered_tokens[n_idx];
                 let dst12_offset = params.offset_dst + dst2_idx * dst2_stride + dst1_idx * dst1_stride;
                 for (var tm = 0u; tm < TILE_M; tm += VEC_SIZE) {
                     let global_row = output_row_base + tm;

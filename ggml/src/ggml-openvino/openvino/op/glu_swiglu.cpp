@@ -75,6 +75,15 @@ OutputVector translate_glu_swiglu_oai(const NodeContext & context) {
     const float alpha = reinterpret_cast<const float *>(params)[2];
     const float limit = reinterpret_cast<const float *>(params)[3];
 
+    // Compute in f32: alpha_const/one are f32, and Swish/Add need matching input types.
+    auto output_type = context.get_output_type();
+    if (src0.get_element_type() != ov::element::f32) {
+        src0 = std::make_shared<ov::op::v0::Convert>(src0, ov::element::f32);
+    }
+    if (src1.get_element_type() != ov::element::f32) {
+        src1 = std::make_shared<ov::op::v0::Convert>(src1, ov::element::f32);
+    }
+
     auto gate = std::make_shared<ov::op::v0::Clamp>(src0, -std::numeric_limits<float>::infinity(), limit);
     auto alpha_const = ov::op::v0::Constant::create(ov::element::f32, {}, {alpha});
     auto out_glu = std::make_shared<ov::op::v4::Swish>(gate, alpha_const);
@@ -82,7 +91,10 @@ OutputVector translate_glu_swiglu_oai(const NodeContext & context) {
     auto up = std::make_shared<ov::op::v0::Clamp>(src1, -limit, limit);
     auto one = ov::op::v0::Constant::create(ov::element::f32, {}, {1.0f});
     auto up_plus_one = std::make_shared<ov::op::v1::Add>(up, one);
-    auto res = std::make_shared<ov::op::v1::Multiply>(out_glu, up_plus_one);
+    ov::Output<ov::Node> res = std::make_shared<ov::op::v1::Multiply>(out_glu, up_plus_one);
+    if (res.get_element_type() != output_type) {
+        res = std::make_shared<ov::op::v0::Convert>(res, output_type);
+    }
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }

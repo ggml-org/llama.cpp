@@ -84,26 +84,29 @@ fn in_set_view(rel: u32, coords: vec4<u32>) -> bool {
 }
 
 @compute @workgroup_size(WG_SIZE)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    if (gid.x >= params.ne) {
+fn main(@builtin(num_workgroups) num_wg: vec3<u32>,
+        @builtin(global_invocation_id) gid: vec3<u32>) {
+
+    let gid_i = gid.x + (num_wg.x * u32(WG_SIZE)) * gid.y;
+    if (gid_i >= params.ne) {
         return;
     }
 
 #ifdef INPLACE
-    let coords = decode_src1_coords(gid.x);
+    let coords = decode_src1_coords(gid_i);
 
     let src1_idx = params.offset_src1 + src1_idx_from_coords(coords);
     let dst_idx = params.offset_view + view_rel_from_coords(coords);
 
     dst[dst_idx] = src1[src1_idx];
 #else
-    let rel = select(params.ne, gid.x - params.offset_view, gid.x >= params.offset_view);
+    let rel = select(params.ne, gid_i - params.offset_view, gid_i >= params.offset_view);
     let coords = decode_view_coords(rel);
 
     if (rel < params.stride_dst13 * params.src1_ne3 && in_set_view(rel, coords)) {
-        dst[gid.x] = src1[params.offset_src1 + src1_idx_from_coords(coords)];
+        dst[gid_i] = src1[params.offset_src1 + src1_idx_from_coords(coords)];
     } else {
-        dst[gid.x] = src0[params.offset_src0 + gid.x];
+        dst[gid_i] = src0[params.offset_src0 + gid_i];
     }
 #endif
 }

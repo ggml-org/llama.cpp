@@ -85,92 +85,124 @@ struct common_chat_schema {
 
     static const char * kind_name(node_kind kind);
     static const char * type_name(value_type type);
+
+    template <typename T>
+    const T & as() const {
+        GGML_ASSERT(kind() == T::KIND);
+        return static_cast<const T &>(*this);
+    }
 };
 
 using common_chat_schema_ptr = std::unique_ptr<common_chat_schema>;
 
 struct common_chat_schema_any : common_chat_schema {
-    node_kind kind() const override { return KIND_ANY; }
+    static constexpr node_kind KIND = KIND_ANY;
+
+    node_kind kind() const override { return KIND; }
 };
 
 // {"$ref": "#/..."}, only references into the same document are supported
 struct common_chat_schema_ref : common_chat_schema {
+    static constexpr node_kind KIND = KIND_REF;
+
     std::string                ref;
     const common_chat_schema * target = nullptr;  // owned by common_chat_schema_document::refs
 
     explicit common_chat_schema_ref(std::string ref) : ref(std::move(ref)) {}
 
-    node_kind kind() const override { return KIND_REF; }
+    node_kind kind() const override { return KIND; }
 };
 
 // oneOf / anyOf, or a "type" array expanded to one alternative per type
 struct common_chat_schema_any_of : common_chat_schema {
+    static constexpr node_kind KIND = KIND_ANY_OF;
+
     std::vector<common_chat_schema_ptr> children;
 
-    node_kind kind() const override { return KIND_ANY_OF; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_all_of : common_chat_schema {
+    static constexpr node_kind KIND = KIND_ALL_OF;
+
     std::vector<common_chat_schema_ptr> children;
 
-    node_kind kind() const override { return KIND_ALL_OF; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_const : common_chat_schema {
+    static constexpr node_kind KIND = KIND_CONST;
+
     common_json value;
 
     explicit common_chat_schema_const(common_json value) : value(std::move(value)) {}
 
-    node_kind kind() const override { return KIND_CONST; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_enum : common_chat_schema {
+    static constexpr node_kind KIND = KIND_ENUM;
+
     std::vector<common_json> values;
 
-    node_kind kind() const override { return KIND_ENUM; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_null : common_chat_schema {
-    node_kind kind() const override { return KIND_NULL; }
+    static constexpr node_kind KIND = KIND_NULL;
+
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_boolean : common_chat_schema {
-    node_kind kind() const override { return KIND_BOOLEAN; }
+    static constexpr node_kind KIND = KIND_BOOLEAN;
+
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_number : common_chat_schema {
-    node_kind kind() const override { return KIND_NUMBER; }
+    static constexpr node_kind KIND = KIND_NUMBER;
+
+    node_kind kind() const override { return KIND; }
 };
 
 // bounds are inclusive, exclusiveMinimum / exclusiveMaximum are folded in
 struct common_chat_schema_integer : common_chat_schema {
+    static constexpr node_kind KIND = KIND_INTEGER;
+
     int64_t minimum = INT64_MIN;  // INT64_MIN for unbounded
     int64_t maximum = INT64_MAX;  // INT64_MAX for unbounded
 
-    node_kind kind() const override { return KIND_INTEGER; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_string : common_chat_schema {
+    static constexpr node_kind KIND = KIND_STRING;
+
     std::string   pattern;  // empty when absent
     string_format format     = FORMAT_NONE;
     int           min_length = 0;
     int           max_length = -1;  // -1 for unbounded
 
-    node_kind kind() const override { return KIND_STRING; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_array : common_chat_schema {
+    static constexpr node_kind KIND = KIND_ARRAY;
+
     common_chat_schema_ptr items;  // a common_chat_schema_any when "items" is absent
     int                    min_items = 0;
     int                    max_items = -1;  // -1 for unbounded
 
-    node_kind kind() const override { return KIND_ARRAY; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_tuple : common_chat_schema {
+    static constexpr node_kind KIND = KIND_TUPLE;
+
     std::vector<common_chat_schema_ptr> items;
 
-    node_kind kind() const override { return KIND_TUPLE; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_property {
@@ -180,10 +212,12 @@ struct common_chat_schema_property {
 };
 
 struct common_chat_schema_object : common_chat_schema {
+    static constexpr node_kind KIND = KIND_OBJECT;
+
     std::vector<common_chat_schema_property> properties;             // in schema order
     common_chat_schema_ptr                   additional_properties;  // null when not allowed
 
-    node_kind kind() const override { return KIND_OBJECT; }
+    node_kind kind() const override { return KIND; }
 };
 
 struct common_chat_schema_document {

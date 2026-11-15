@@ -48,43 +48,24 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include <algorithm>
-
 #include <cmath>
-
 #include <functional>
-
 #include <iomanip>
-
 #include <iostream>
-
 #include <tuple>
-
 #include <vector>
-
 #include <deque>
-
 #include <sstream>
-
 #include <utility>
-
 #include <memory>
-
 #include <limits>
-
 #include <map>
-
 #include <set>
-
 #include <unordered_map>
-
 #include <shared_mutex>
-
 #include <mutex>
-
 #include <future>
-
 #include <condition_variable>
-
 #include <thread>
 
 #if defined(_MSC_VER)
@@ -110,9 +91,7 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #endif
 
 #include "ggml-impl.h"
-
 #include "ggml-backend-impl.h"
-
 #include "ggml-vulkan-shaders.hpp"
 
 #if !defined(VK_KHR_shader_bfloat16)
@@ -291,12 +270,14 @@ struct vk_matmul_pipeline_pair {
     vk_pipeline unaligned;
     vk_pipeline aligned;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 struct vk_tile_config {
     std::vector<uint32_t> warptile;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    uint32_t narrow_n_max = 0;
 };
 
 using matmul_tile_selector_t = std::function<uint32_t(
@@ -403,6 +384,7 @@ enum vk_conv_shapes {
     CONV_SHAPE_64x32,
     CONV_SHAPE_32x256,
     CONV_SHAPE_64x128,
+    CONV_SHAPE_256x128,
     CONV_SHAPE_COUNT,
 };
 
@@ -418,6 +400,7 @@ inline vk_conv_block_size vk_conv_block_sizes[CONV_SHAPE_COUNT] = {
     {  64,  32, 32 }, // CONV_SHAPE_64x32
     {  32, 256, 16 }, // CONV_SHAPE_32x256
     {  64, 128, 16 }, // CONV_SHAPE_64x128
+    { 256, 128, 16 }, // CONV_SHAPE_256x128
 };
 
 enum dmmv_wg_sizes {
@@ -449,6 +432,21 @@ struct vk_fa_pipeline_state {
     bool operator<(const vk_fa_pipeline_state &b) const {
         return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type) <
                std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
+    }
+};
+
+struct vk_xe_fa_pipeline_state {
+    uint32_t HSK, HSV;
+    uint32_t qk_ratio, pv_ratio;
+    uint32_t decode_n;
+    bool unaligned_seq_len;
+    bool unaligned_q;
+    bool partial_row_mask;
+    bool multi_head_mask;
+
+    bool operator<(const vk_xe_fa_pipeline_state &b) const {
+        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
+               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
     }
 };
 
@@ -504,6 +502,15 @@ static constexpr uint32_t num_argsort_pipelines = 11;
 static constexpr uint32_t num_topk_moe_pipelines = 10;
 
 static constexpr uint32_t num_topk_pipelines = 11;
+
+// FWHT block widths with a dedicated pipeline. The subgroup shader keeps n/subgroup_size
+// values per invocation, so widths above fwht_max_subgroup_n, or a subgroup narrow enough to
+// exceed fwht_max_subgroup_el_w values, use the shared-memory shader with one row per
+// workgroup instead.
+static constexpr uint32_t num_fwht_pipelines     = 8;
+static constexpr uint32_t fwht_max_subgroup_n    = 512;
+static constexpr uint32_t fwht_max_subgroup_el_w = 64;
+static constexpr uint32_t fwht_rows              = 4;
 
 static constexpr std::initializer_list<ggml_op> topk_moe_early_softmax_norm{ GGML_OP_SOFT_MAX, GGML_OP_RESHAPE,  GGML_OP_ARGSORT,
                                                                              GGML_OP_VIEW,     GGML_OP_GET_ROWS, GGML_OP_RESHAPE,
@@ -680,7 +687,6 @@ class vk_memory_logger;
 struct vk_device_struct {
     std::recursive_mutex mutex;
     std::mutex queue_submit_mutex;
-    mutable std::shared_mutex pinned_memory_mutex;
 
     // Guards compile_pending, all_pipelines, and the dynamic pipeline maps
     // (flash_attn, fa_mask_opt, solve_tri, conv2d, etc). The actual compile
@@ -699,6 +705,7 @@ struct vk_device_struct {
     uint64_t suballocation_block_size;
     uint64_t min_imported_host_pointer_alignment;
     bool external_memory_host {};
+    bool external_semaphore {};
     bool fp16;
     bool bf16;
     bool pipeline_robustness;
@@ -717,6 +724,7 @@ struct vk_device_struct {
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
     bool uma;
+    bool rebar;
     bool prefer_host_memory;
     bool float_controls_rte_fp16;
     bool float_controls_denorm_preserve_fp16;
@@ -771,6 +779,9 @@ struct vk_device_struct {
 
     bool dot2_f16 {};
     bool ocp_fp4 {};
+
+    bool workgroup_memory_explicit_layout {};
+    bool workgroup_memory_explicit_layout_16bit {};
 
     bool pipeline_executable_properties_support {};
 
@@ -846,6 +857,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add_id_f32;
 
     vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64;
+    vk_pipeline pipeline_concat_transpose_i8, pipeline_concat_transpose_i16, pipeline_concat_transpose_i32;
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_log[2];
@@ -857,8 +869,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_roll_f32;
     vk_pipeline pipeline_repeat_i32, pipeline_repeat_back_f32;
     vk_pipeline pipeline_repeat_i16;
-    vk_pipeline pipeline_cpy_f32_f32, pipeline_cpy_f32_f16, pipeline_cpy_f16_f16, pipeline_cpy_f16_f32, pipeline_cpy_f32_bf16, pipeline_cpy_bf16_f32, pipeline_cpy_f32_i32, pipeline_cpy_i32_f32;
-    vk_pipeline pipeline_contig_cpy_f32_f32, pipeline_contig_cpy_f32_f16, pipeline_contig_cpy_f16_f16, pipeline_contig_cpy_f16_f32, pipeline_contig_cpy_f32_bf16, pipeline_contig_cpy_bf16_f32, pipeline_contig_cpy_f32_i32, pipeline_contig_cpy_i32_f32;
+    vk_pipeline pipeline_cpy_32, pipeline_cpy_f32_f16, pipeline_cpy_16, pipeline_cpy_f16_f32, pipeline_cpy_f32_bf16, pipeline_cpy_bf16_f32, pipeline_cpy_bf16_f16, pipeline_cpy_f32_i32, pipeline_cpy_i32_f32;
+    vk_pipeline pipeline_contig_cpy_32, pipeline_contig_cpy_f32_f16, pipeline_contig_cpy_16, pipeline_contig_cpy_f16_f32, pipeline_contig_cpy_f32_bf16, pipeline_contig_cpy_bf16_f32, pipeline_contig_cpy_bf16_f16, pipeline_contig_cpy_f32_i32, pipeline_contig_cpy_i32_f32;
     vk_pipeline pipeline_cpy_f32_quant[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_quant_f32[GGML_TYPE_COUNT];
     vk_pipeline pipeline_cpy_transpose_16, pipeline_cpy_transpose_32;
@@ -868,18 +880,18 @@ struct vk_device_struct {
     vk_pipeline pipeline_set_rows_i64[2][GGML_TYPE_COUNT];
     vk_pipeline pipeline_norm_f32;
     vk_pipeline pipeline_group_norm_f32;
-    vk_pipeline pipeline_rms_norm_f32;
-    vk_pipeline pipeline_rms_norm_mul_f32;
-    vk_pipeline pipeline_rms_norm_mul_add_f32;
-    vk_pipeline pipeline_rms_norm_mul_add_mul_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_add_mul_f32;
     vk_pipeline pipeline_rms_norm_mul_add_partials_f32;
     vk_pipeline pipeline_rms_norm_mul_add_mul_partials_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f32;
     vk_pipeline pipeline_rms_norm_set_rows_f32_f16;
     vk_pipeline pipeline_rms_norm_partials_f32;
     vk_pipeline pipeline_rms_norm_mul_partials_f32;
-    vk_pipeline pipeline_rms_norm_mul_rope_f32_f32;
-    vk_pipeline pipeline_rms_norm_mul_rope_f32_f16;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_f32_f32;
+    std::array<vk_pipeline, 3> pipeline_rms_norm_mul_rope_f32_f16;
     vk_pipeline pipeline_rms_norm_back_f32;
     vk_pipeline pipeline_l2_norm_f32;
 
@@ -933,7 +945,6 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_leaky_relu[2];
     vk_pipeline pipeline_silu_back_f32;
-    vk_pipeline pipeline_diag_mask_inf_f32;
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
     vk_pipeline pipeline_soft_max_f32_wg512, pipeline_soft_max_f32_f16_wg512;
     vk_pipeline pipeline_soft_max_back_f32;
@@ -954,7 +965,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_sum_rows_f32;
     vk_pipeline pipeline_cross_entropy_loss_f32, pipeline_cross_entropy_loss_f32_wg512;
     vk_pipeline pipeline_cross_entropy_loss_back_f32, pipeline_cross_entropy_loss_back_f32_wg512;
-    vk_pipeline pipeline_fwht_f32[4];
+    vk_pipeline pipeline_fwht_f32[num_fwht_pipelines];
+    vk_pipeline pipeline_fwht_f16[num_fwht_pipelines];
+    uint32_t    fwht_rows_per_wg[num_fwht_pipelines] = {};
     vk_pipeline pipeline_cumsum_f32;
     vk_pipeline pipeline_cumsum_small_f32;
     vk_pipeline pipeline_cumsum_multipass1_f32;
@@ -966,6 +979,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_dsv4_hc_pre_gated_f32;
     vk_pipeline pipeline_dsv4_hc_post_f32;
     vk_pipeline pipeline_dsv4_hc_post_nocomb_f32;
+    vk_pipeline pipeline_top_k_mask_f16;
+    vk_pipeline pipeline_top_k_mask_f32;
     std::map<vk_solve_tri_pipeline_state, vk_pipeline> pipeline_solve_tri_f32;
     vk_pipeline pipeline_im2col_f32, pipeline_im2col_f32_f16;
     vk_pipeline pipeline_im2col_3d_f32, pipeline_im2col_3d_f32_f16;
@@ -980,6 +995,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_snake_bf16;
     vk_pipeline pipeline_pool1d_f32;
     vk_pipeline pipeline_pool2d_f32;
+    vk_pipeline pipeline_pool2d_subgroup_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_gated_linear_attn_f32;
@@ -1011,7 +1027,8 @@ struct vk_device_struct {
     bool fa_sparse_compact_use_subgroups;
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
+    std::map<vk_xe_fa_pipeline_state, std::pair<vk_pipeline, vk_pipeline>> pipeline_xe_fa_decode_dual_phases;
+    std::map<vk_xe_fa_pipeline_state, vk_pipeline> pipeline_xe_fa_prefill;
     vk_pipeline pipeline_count_experts;
 
     // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
@@ -1019,19 +1036,22 @@ struct vk_device_struct {
 
     std::vector<vk_pipeline_ref> all_pipelines;
 
-    std::vector<std::tuple<void*, size_t, vk_buffer>> pinned_memory;
-
     vk::Fence fence;
     vk_buffer sync_staging;
 
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    std::atomic<bool> fusion_stats_enabled {false};
+    std::mutex fusion_mutex;
+    std::map<std::string, uint64_t> fusion_counts;
     bool disable_descriptor_reuse;
     std::atomic<uint64_t> buffer_destroy_count {};
     bool disable_host_visible_vidmem;
     bool allow_sysmem_fallback;
     bool disable_graph_optimize;
+    bool xe_fa_support {};
+    bool disable_narrow_mul_mat;
 
     std::unique_ptr<vk_memory_logger> memory_logger;
 
@@ -1108,6 +1128,9 @@ struct vk_submission {
     vk_command_buffer* buffer = nullptr;
     std::vector<vk_semaphore> wait_semaphores;
     std::vector<vk_semaphore> signal_semaphores;
+    // submit waits until *ready >= ready_value
+    const std::atomic<uint64_t> * ready = nullptr;
+    uint64_t ready_value = 0;
 };
 
 typedef std::vector<vk_submission> vk_sequence;
@@ -1134,6 +1157,21 @@ struct vk_staging_memset {
     void * dst;
     uint32_t val;
     size_t n;
+};
+
+struct vk_buffer_region {
+    vk_buffer buf;
+    size_t offset;
+    void * host;
+    size_t size;
+};
+
+struct vk_buffer_copy_region {
+    vk_buffer dst;
+    size_t dst_offset;
+    vk_buffer src;
+    size_t src_offset;
+    size_t size;
 };
 
 struct vk_context_struct {
@@ -1202,6 +1240,7 @@ inline std::mutex vk_memory_logger::log_mutex;
 
 class vk_perf_logger {
   public:
+    explicit vk_perf_logger(const vk_device & device) : device(device) {}
     void print_timings(bool force = false);
 
 
@@ -1236,6 +1275,7 @@ class vk_perf_logger {
     }
 
   private:
+    vk_device device;
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
     uint32_t print_count {};
@@ -1246,7 +1286,11 @@ struct ggml_backend_vk_context {
 
     vk_device device;
 
-    size_t semaphore_idx, event_idx;
+    // Workaround for drivers moving VRAM contents off the GPU when idle
+    std::promise<void> keepalive_stop;
+    std::thread keepalive_thread;
+
+    size_t semaphore_idx, binary_semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
@@ -1333,6 +1377,12 @@ struct ggml_backend_vk_buffer_context {
 
 };
 
+struct vk_host_allocation {
+    void *    base = nullptr;
+    size_t    size = 0;
+    vk_buffer views[GGML_VK_MAX_DEVICES];  // indexed by device->idx; null = not (yet) mapped here
+};
+
 struct vk_instance_t {
     vk::Instance instance;
 
@@ -1346,7 +1396,17 @@ struct vk_instance_t {
 
     std::vector<size_t> device_indices;
     std::vector<bool>   device_supports_membudget;
+    std::vector<bool>   device_host_buffer_import;
     vk_device devices[GGML_VK_MAX_DEVICES];
+
+    std::vector<vk_host_allocation> host_allocations;
+    std::shared_mutex               host_allocations_mutex;
+
+    size_t host_import_alignment = 0;
+    uint32_t host_import_failed = 0;  // bitmask by device->idx, guarded by host_allocations_mutex
+
+    bool multi_device = false;
+    bool allreduce_disabled = false;
 };
 
 typedef void (*ggml_vk_func_t)(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
@@ -1367,14 +1427,45 @@ struct vk_fa_tuning_params {
     uint32_t row_split;
     bool shmem_staging;
     bool disable_subgroups;
+    bool q_in_regs;
+    bool flip;
+    bool flip_direct;
     uint32_t limit_occupancy_shmem;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
                      " block_rows=" << block_rows << " block_cols=" << block_cols << " d_split=" << d_split <<
                      " row_split=" << row_split << " shmem_staging=" << shmem_staging << " disable_subgroups=" << disable_subgroups <<
-                     " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
+                     " q_in_regs=" << q_in_regs << " flip=" << flip << " flip_direct=" << flip_direct << " limit_occupancy_shmem=" << limit_occupancy_shmem << std::endl;
     }
+};
+
+struct vk_xe_fa_tuning_params {
+    size_t shmem_sz;
+    std::array<uint32_t, 2> workgroup_size;
+    std::array<uint32_t, 2> subgroup_size;
+    uint32_t tm;
+    uint32_t tn;
+    uint32_t tk;
+
+    struct {
+        uint32_t wg_row;
+        uint32_t gqa_fold;
+        uint32_t q_in_reg;
+        uint32_t p_per_iter;
+        uint32_t sg_col;
+        uint32_t acc_count;
+        uint32_t pipeline_flag;
+    } prefill_params;
+
+    struct {
+        uint32_t p_chunk_ph1;
+        uint32_t out_per_wg_ph1;
+        uint32_t split_p_per_iter_ph2;
+        uint32_t out_row_per_wg_ph2;
+        uint32_t out_col_per_wg_ph2;
+        uint32_t pipeline_flag_ph2;
+    } decode_params;
 };
 
 struct GpuPipelineConfig {

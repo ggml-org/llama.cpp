@@ -42,10 +42,17 @@ class DeviceStore {
 	/** OS color scheme preference; the user override lives in settingsStore. */
 	readonly systemTheme = $state({ isDark: false });
 
+	private coarsePointer = new MediaQuery(MEDIA_QUERIES.COARSE_POINTER);
+
 	private mobile = new MediaQuery(`max-width: ${DEFAULT_MOBILE_BREAKPOINT - 1}px`);
 
 	get isMobile(): boolean {
 		return this.mobile.current;
+	}
+
+	/** A finger is the main pointer, so typing uses the on-screen keyboard. */
+	get isTouch(): boolean {
+		return this.coarsePointer.current;
 	}
 
 	constructor() {

@@ -11,7 +11,9 @@ export {
 	AudioRecorder,
 	convertToWav,
 	createAudioFile,
-	isAudioRecordingSupported
+	describeMicrophoneError,
+	isAudioRecordingSupported,
+	microphoneUnavailableReason
 } from './audio-recording';
 
 // PDF processing utilities (pdfjs-dist with DOMMatrix)

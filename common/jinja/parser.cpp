@@ -21,6 +21,17 @@ static bool is_type(const statement_ptr & ptr) {
 class parser {
     const std::vector<token> & tokens;
     size_t current = 0;
+    int depth = 0;
+
+    struct depth_guard {
+        parser & p;
+        depth_guard(parser & p) : p(p) {
+            if (++p.depth > JINJA_RECURSIVE_LIMIT) {
+                throw parser_exception("Parser Error: template is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep", p.source, p.peek().pos);
+            }
+        }
+        ~depth_guard() { p.depth--; }
+    };
 
     std::string source; // for error reporting
 
@@ -94,6 +105,7 @@ private:
     }
 
     statement_ptr parse_any() {
+        depth_guard guard(*this);
         size_t start_pos = current;
         switch (peek().t) {
             case token::comment:
@@ -166,7 +178,7 @@ private:
             // bool has_caller_args = false;
             if (is(token::open_paren)) {
                 // Optional caller arguments, e.g. {% call(user) dump_users(...) %}
-                caller_args = parse_args();
+                caller_args = parse_args(false);
                 // has_caller_args = true;
             }
             auto callee = parse_primary_expression();
@@ -254,6 +266,7 @@ private:
             size_t pos0 = current;
             ++current; // consume {%
             ++current; // consume 'elif'
+            depth_guard guard(*this);
             alternate.push_back(parse_if_statement(pos0)); // nested If
         } else if (is_statement({"else"})) {
             ++current; // consume {%
@@ -270,7 +283,7 @@ private:
 
     statement_ptr parse_macro_statement(size_t start_pos) {
         auto name = parse_primary_expression();
-        auto args = parse_args();
+        auto args = parse_args(false);
         expect(token::close_statement, "Expected %}");
         statements body;
         // Keep going until we hit {% endmacro
@@ -330,6 +343,7 @@ private:
     }
 
     statement_ptr parse_if_expression() {
+        depth_guard guard(*this);
         auto a = parse_logical_or_expression();
         if (is_identifier("if")) {
             // Ternary expression
@@ -373,6 +387,7 @@ private:
     statement_ptr parse_logical_negation_expression() {
         // Try parse unary operators
         if (is_identifier("not")) {
+            depth_guard guard(*this);
             size_t start_pos = current;
             auto op = next();
             return mk_stmt<unary_expression>(start_pos, op, parse_logical_negation_expression());
@@ -382,11 +397,13 @@ private:
 
     statement_ptr parse_comparison_expression() {
         // NOTE: membership has same precedence as comparison
-        // e.g., ('a' in 'apple' == 'b' in 'banana') evaluates as ('a' in ('apple' == ('b' in 'banana')))
-        auto left = parse_additive_expression();
+        // e.g., ('a' in 'apple' == 'b' in 'banana') evaluates as ('a' in 'apple' and 'apple' == 'b' and 'b' in 'banana')
+        statements operands;
+        std::vector<token> ops;
+        operands.push_back(parse_additive_expression());
+        size_t pos = current;
         while (true) {
             token op;
-            size_t start_pos = current;
             if (is_identifier("not") && peek(1).t == token::identifier && peek(1).value == "in") {
                 op = {token::identifier, "not in", tokens[current].pos};
                 ++current; // consume 'not'
@@ -396,9 +413,17 @@ private:
             } else if (is(token::comparison_binary_operator)) {
                 op = next();
             } else break;
-            left = mk_stmt<binary_expression>(start_pos, op, std::move(left), parse_additive_expression());
+            ops.push_back(std::move(op));
+            operands.push_back(parse_additive_expression());
         }
-        return left;
+        if (ops.empty()) {
+            return std::move(operands[0]);
+        }
+        if (ops.size() == 1) {
+            return mk_stmt<binary_expression>(pos, ops[0], std::move(operands[0]), std::move(operands[1]));
+        }
+        // chained comparison, e.g. 1 <= x <= 100
+        return mk_stmt<comparison_chain_expression>(pos, std::move(operands), std::move(ops));
     }
 
     statement_ptr parse_additive_expression() {
@@ -458,6 +483,7 @@ private:
 
     statement_ptr parse_unary_expression() {
         if (is(token::unary_operator)) {
+            depth_guard guard(*this);
             size_t start_pos = current;
             auto op = next();
             return mk_stmt<unary_expression>(start_pos, op, parse_unary_expression());
@@ -477,22 +503,29 @@ private:
         size_t start_pos = current;
         auto expr = mk_stmt<call_expression>(start_pos, std::move(callee), parse_args());
         auto member = parse_member_expression(std::move(expr)); // foo.x().y
-        return is(token::open_paren)
-            ? parse_call_expression(std::move(member)) // foo.x()()
-            : std::move(member);
+        if (!is(token::open_paren)) {
+            return member;
+        }
+        depth_guard guard(*this);
+        return parse_call_expression(std::move(member)); // foo.x()()
     }
 
-    statements parse_args() {
+    statements parse_args(bool allow_spread = true) {
         // comma-separated arguments list
         expect(token::open_paren, "Expected (");
         statements args;
         while (!is(token::close_paren)) {
             statement_ptr arg;
-            // unpacking: *expr
-            if (peek().t == token::multiplicative_binary_operator && peek().value == "*") {
+            // unpacking: *expr or **expr
+            const auto & t = peek();
+            if (t.t == token::power_operator || (t.t == token::multiplicative_binary_operator && t.value == "*")) {
+                if (!allow_spread) {
+                    throw std::runtime_error("Unexpected token: " + t.value + " of type " + std::to_string(t.t));
+                }
                 size_t start_pos = current;
-                ++current; // consume *
-                arg = mk_stmt<spread_expression>(start_pos, parse_expression());
+                ++current; // consume * or **
+                bool is_kwargs = t.t == token::power_operator;
+                arg = mk_stmt<spread_expression>(start_pos, parse_expression(), is_kwargs);
             } else {
                 arg = parse_expression();
                 if (is(token::equals)) {

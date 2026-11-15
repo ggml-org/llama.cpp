@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 MCP server that sleeps before responding, for timeout testing.
+With --log, it appends every message it reads from stdin to that file, for cancellation testing.
 """
 import json
 import sys
@@ -70,6 +71,7 @@ HANDLERS = {
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--delay", type=float, default=5.0, help="Delay in seconds for sleep tool")
+    parser.add_argument("--log", help="File to append every message read from stdin to")
     args = parser.parse_args()
 
     # Override the sleep duration
@@ -102,6 +104,9 @@ def main():
         line = line.strip()
         if not line:
             continue
+        if args.log:
+            with open(args.log, "a") as log:
+                log.write(line + "\n")
         try:
             request = json.loads(line)
         except json.JSONDecodeError:

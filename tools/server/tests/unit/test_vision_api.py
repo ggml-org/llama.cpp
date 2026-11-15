@@ -6,8 +6,8 @@ import requests
 server: ServerProcess
 
 def get_img_url(id: str) -> str:
-    IMG_URL_0 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
-    IMG_URL_1 = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
+    IMG_URL_0 = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+    IMG_URL_1 = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/91_cat.png"
     if id == "IMG_URL_0":
         return IMG_URL_0
     elif id == "IMG_URL_1":
@@ -39,6 +39,9 @@ def create_server():
     global server
     os.environ['LLAMA_MEDIA_MARKER'] = '<__media__>'
     server = ServerPreset.tinygemma3()
+    # the test images are on huggingface.co, which resolves to a private address on runners inside the HF network
+    # test_vision_image_url_private_address covers the private address check
+    server.media_allow_private_urls = True
 
 def test_models_supports_multimodal_capability():
     global server
@@ -204,3 +207,41 @@ def test_vision_embeddings_oai_content():
     # same prompt and image in both formats
     assert data[0]["embedding"] == data[1]["embedding"]
     assert data[0]["embedding"] != data[2]["embedding"]
+
+
+@pytest.mark.parametrize("allow_private", [False, True])
+def test_vision_image_url_private_address(allow_private: bool):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+    img = requests.get(get_img_url("IMG_URL_0")).content
+
+    class ImageHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.end_headers()
+            self.wfile.write(img)
+
+        def log_message(self, format, *args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), ImageHandler)
+    threading.Thread(target=target.serve_forever, daemon=True).start()
+    try:
+        global server
+        server.media_allow_private_urls = allow_private
+        server.start()
+        res = server.make_request("POST", "/chat/completions", data={
+            "temperature": 0.0,
+            "top_k": 1,
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "What is this:\n"},
+                    {"type": "image_url", "image_url": {"url": f"http://127.0.0.1:{target.server_port}/img.png"}},
+                ]},
+            ],
+        })
+        assert res.status_code == (200 if allow_private else 400)
+    finally:
+        target.shutdown()
+        target.server_close()
