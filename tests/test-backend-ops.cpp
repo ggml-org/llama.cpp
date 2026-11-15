@@ -6749,6 +6749,102 @@ struct test_mul_mat_id_shared : public test_case {
     }
 };
 
+struct test_mul_mat_id_f16_boundary : public test_case {
+    const ggml_type type_a;
+    const int n_mats;
+    const int n_used;
+    const bool b;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int io_mask;
+    const bool skip;
+
+    test_mul_mat_id_f16_boundary(ggml_type type_a, int n_mats, int n_used, bool b, int64_t m, int64_t n, int64_t k, int io_mask, bool skip = false)
+        : type_a(type_a), n_mats(n_mats), n_used(n_used), b(b), m(m), n(n), k(k), io_mask(io_mask), skip(skip) {}
+
+    std::string vars() override {
+        return VARS_TO_STR9(type_a, n_mats, n_used, b, m, n, k, io_mask, skip);
+    }
+
+    double max_nmse_err() override {
+        return (type_a == GGML_TYPE_MXFP4 || io_mask == 7) ? 1e-2 : 2e-3;
+    }
+
+    bool run_whole_graph() override {
+        return true;
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return (io_mask == 5 || io_mask == 6) ? "MUL_MAT_ID_FUSION" : "MUL_MAT_ID";
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
+        ggml_set_name(ids, "ids");
+        if (n_used != n_mats) {
+            ids = ggml_view_2d(ctx, ids, n_used, n, ids->nb[1], 0);
+            ggml_set_name(ids, "view_of_ids");
+        }
+
+        if (io_mask == 7) {
+            const int64_t m_inter = (type_a == GGML_TYPE_Q4_K) ? 256 : m;
+            ggml_tensor * inp = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+            ggml_tensor * norm_w = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, k);
+            ggml_tensor * normed = ggml_mul(ctx, ggml_rms_norm(ctx, inp, 1e-5f), norm_w);
+            ggml_tensor * b_act = ggml_reshape_3d(ctx, normed, k, 1, n);
+            ggml_tensor * w_gate = ggml_new_tensor_3d(ctx, type_a, k, m_inter, n_mats);
+            ggml_tensor * w_up = ggml_new_tensor_3d(ctx, type_a, k, m_inter, n_mats);
+            ggml_tensor * gate = ggml_mul_mat_id(ctx, w_gate, b_act, ids);
+            ggml_tensor * up = ggml_mul_mat_id(ctx, w_up, b_act, ids);
+            ggml_tensor * hid = ggml_swiglu_split(ctx, gate, up);
+            ggml_tensor * w_down = ggml_new_tensor_3d(ctx, type_a, m_inter, m, n_mats);
+            ggml_tensor * down = ggml_mul_mat_id(ctx, w_down, hid, ids);
+            ggml_tensor * exp_w_in = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_used, n);
+            ggml_tensor * exp_w = ggml_dup(ctx, exp_w_in);
+            ggml_tensor * weighted = ggml_mul(ctx, down, exp_w);
+            ggml_tensor * weighted_4d = ggml_reshape_4d(ctx, weighted, 4, m / 4, n_used, n);
+            ggml_tensor * summed = ggml_sum_rows(ctx, weighted_4d);
+            ggml_tensor * res_in = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, m / 4, n_used, n);
+            ggml_tensor * res = ggml_dup(ctx, res_in);
+            return ggml_add(ctx, summed, res);
+        }
+
+        ggml_tensor * b_f32 = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, this->b ? 1 : n_used, n);
+        ggml_tensor * b_act = (io_mask & 1) ? ggml_dup(ctx, b_f32) : b_f32;
+
+        if (io_mask == 5) {
+            ggml_tensor * w_gate = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+            ggml_tensor * w_up = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+            ggml_tensor * gate = ggml_mul_mat_id(ctx, w_gate, b_act, ids);
+            ggml_tensor * up = ggml_mul_mat_id(ctx, w_up, b_act, ids);
+            ggml_tensor * silu_gate = ggml_silu(ctx, gate);
+            return ggml_add(ctx, ggml_dup(ctx, silu_gate), up);
+        }
+
+        if (io_mask == 6) {
+            ggml_tensor * w_gate = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+            ggml_tensor * w_up = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+            ggml_tensor * gate = ggml_mul_mat_id(ctx, w_gate, b_act, ids);
+            ggml_tensor * up = ggml_mul_mat_id(ctx, w_up, b_act, ids);
+            ggml_tensor * hid = ggml_swiglu_split(ctx, gate, up);
+            return ggml_dup(ctx, hid);
+        }
+
+        ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+        ggml_tensor * out = ggml_mul_mat_id(ctx, as, b_act, ids);
+        if (io_mask & 2) {
+            out = ggml_dup(ctx, out);
+        }
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        init_mul_mat_id_tensors(ctx, n_mats, skip);
+    }
+};
+
 // GGML_OP_OUT_PROD
 struct test_out_prod : public test_case {
     const ggml_type type_a;
@@ -13703,6 +13799,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (ggml_type type_b : {GGML_TYPE_F32}) {
                 // test with mul after (ffn_moe_weighted)
                 test_cases.emplace_back(new test_mul_mat_id_fusion(type_a, type_b, 128, 8, false, 768, bs, 2048, 1, true));
+            }
+        }
+    }
+
+    for (ggml_type type_a : {GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4}) {
+        for (int io_mask : {1, 2, 3, 5, 6}) {
+            for (int n : {1, 4, 32}) {
+                test_cases.emplace_back(new test_mul_mat_id_f16_boundary(type_a, 8, 2, true, 256, n, 256, io_mask, false));
+                test_cases.emplace_back(new test_mul_mat_id_f16_boundary(type_a, 8, 4, false, 160, n, 256, io_mask, true));
+            }
+        }
+        for (int n_mats : {8, 64}) {
+            for (int n_used : {2, 4, 8}) {
+                for (int n : {1, 4, 32}) {
+                    if (n_mats == 64 && n == 32 && n_used == 4) {
+                        continue;
+                    }
+                    test_cases.emplace_back(new test_mul_mat_id_f16_boundary(type_a, n_mats, n_used, true, 160, n, 256, 7, n_used == 4));
+                }
             }
         }
     }

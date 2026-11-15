@@ -336,10 +336,11 @@ static bool fuse_mul_mat_id_nx(const ggml_hexagon_session * sess, htp_opnode & p
     }
 
     struct htp_mm_kernel_params kparams;
-    if (d_in->nb[1] == prev.node->nb[1]) {
+    const ggml_tensor * dst_for_solve = !htp_can_row_partition(prev.node) ? prev.node : d_in;
+    if (htp_can_row_partition(d_in) == htp_can_row_partition(prev.node) && d_in->nb[1] == prev.node->nb[1]) {
         kparams = *orig_kparams;
         kparams.n_weights = curr_n + 1;
-    } else if (!htp_kparams_solve_mmidnx(sess, w0, x, d_in, curr_n + 1, &kparams)) {
+    } else if (!htp_kparams_solve_mmidnx(sess, w0, x, dst_for_solve, curr_n + 1, &kparams)) {
         return false;
     }
     if (!is_supported_mul_mat_id_nx_kernel(w0, &kparams)) return false;

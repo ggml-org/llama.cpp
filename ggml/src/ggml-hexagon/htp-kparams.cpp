@@ -628,7 +628,7 @@ static bool htp_matmul_is_hmx_eligible(
 ) {
     GGML_UNUSED(dst);
 
-    if (src1->type != GGML_TYPE_F32 && (src1->type != GGML_TYPE_F16 || is_matmul_id)) {
+    if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
         return false;
     }
 
@@ -995,14 +995,8 @@ static bool htp_matmul_check_types(
 ) {
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
 
-    if (is_matmul_id) {
-        if (dst->type != GGML_TYPE_F32) {
-            return false;
-        }
-    } else {
-        if (dst->type != GGML_TYPE_F32 && (!internal_f16 || dst->type != GGML_TYPE_F16)) {
-            return false;
-        }
+    if (dst->type != GGML_TYPE_F32 && (!internal_f16 || dst->type != GGML_TYPE_F16)) {
+        return false;
     }
 
     if (ggml_prec_get_src(dst, 1) == GGML_PREC_BF16 || ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
@@ -1011,7 +1005,9 @@ static bool htp_matmul_check_types(
 
     if (is_matmul_id) {
         const struct ggml_tensor * src2 = dst->src[2];
-        if (src1->type != GGML_TYPE_F32 || !src2 || src2->type != GGML_TYPE_I32) {
+        const bool src1_ok = (src1->type == GGML_TYPE_F32) ||
+                             (src1->type == GGML_TYPE_F16 && (internal_f16 || src0->type == GGML_TYPE_F16));
+        if (!src1_ok || !src2 || src2->type != GGML_TYPE_I32) {
             return false;
         }
         switch (src0->type) {
@@ -5944,7 +5940,7 @@ bool htp_kparams_solve(
     if (htp_op_is_glu(tmp.opcode)) {
         return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));
     }
-    if (tmp.opcode == HTP_OP_MUL_MAT) {
+    if (tmp.opcode == HTP_OP_MUL_MAT || tmp.opcode == HTP_OP_MUL_MAT_ID) {
         if (!htp_matmul_check_types(src0, src1, dst, internal_f16)) {
             return false;
         }
@@ -5977,6 +5973,30 @@ bool htp_kparams_solve(
         const auto * kp = tmp.kparams<htp_mm_kernel_params>();
         const bool ok = kp->n_hmx ? htp_mm_kernel_is_hmx_2d(kp->kernel_type)
                                   : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) && kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW);
+        return commit(ok);
+    }
+    if (tmp.opcode == HTP_OP_MUL_MAT_ID_NX) {
+        const size_t n_w = tmp.outputs.size();
+        if (n_w == 0 || tmp.inputs.size() != n_w + 2 || !tmp.inputs[n_w] || !tmp.inputs[n_w + 1]) {
+            return false;
+        }
+        const ggml_tensor * act = tmp.inputs[n_w];
+        const ggml_tensor * dst_for_solve = tmp.outputs[0];
+        for (size_t i = 0; i < n_w; ++i) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i], internal_f16)) {
+                return false;
+            }
+            if (!htp_can_row_partition(tmp.outputs[i])) {
+                dst_for_solve = tmp.outputs[i];
+            }
+        }
+        if (!htp_kparams_solve_mmidnx(sess, tmp.inputs[0], act, dst_for_solve, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
+            return false;
+        }
+        const auto * kp = tmp.kparams<htp_mm_kernel_params>();
+        const bool ok = kp->n_hmx ? (kp->kernel_type == HTP_MM_KERNEL_HMX_2D)
+                                  : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) &&
+                                     (kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK));
         return commit(ok);
     }
     if (tmp.opcode == HTP_OP_UPSCALE) {
