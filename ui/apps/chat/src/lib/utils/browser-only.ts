@@ -8,7 +8,6 @@
 
 // Audio utilities (MediaRecorder API)
 export {
-	AudioRecorder,
 	convertToWav,
 	createAudioFile,
 	describeMicrophoneError,

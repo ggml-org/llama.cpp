@@ -36,6 +36,17 @@ beforeAll(async () => {
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Waits for `done`, polling: a loaded test run can start the audio graph late. */
+async function waitFor(done: () => boolean, timeoutMs = 5000) {
+	const deadline = Date.now() + timeoutMs;
+
+	while (!done()) {
+		if (Date.now() > deadline) throw new Error('timed out waiting for audio');
+
+		await wait(20);
+	}
+}
+
 afterEach(async () => {
 	vi.restoreAllMocks();
 	vi.unstubAllGlobals();
@@ -57,7 +68,8 @@ describe('VoiceCapture', () => {
 		await capture.start();
 		expect(capture.state).toBe('recording');
 
-		await wait(700);
+		// at least 600 ms of tone recorded, however long the audio graph took to start
+		await waitFor(() => chunks.length >= 6 && levels.length > 5);
 
 		const clip = await capture.stop();
 
@@ -77,8 +89,8 @@ describe('VoiceCapture', () => {
 		expect(chunks[0]).toHaveLength(1600);
 
 		expect(clip.sampleRate).toBe(16_000);
-		expect(clip.durationMs).toBeGreaterThan(400);
-		expect(clip.durationMs).toBeLessThan(1500);
+		expect(clip.durationMs).toBeGreaterThan(500);
+		expect(clip.durationMs).toBeLessThan(5000);
 		expect(clip.peaks).toHaveLength(64);
 		expect(Math.max(...clip.peaks)).toBe(1);
 		// a steady tone: no span of the clip is silent

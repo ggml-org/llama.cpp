@@ -95,7 +95,8 @@ export default defineConfig(({ mode }) => {
 				'/props': SERVER_ORIGIN,
 				'/slots': SERVER_ORIGIN,
 				'/tools': SERVER_ORIGIN,
-				'/v1': SERVER_ORIGIN
+				// ws: realtime transcription (/v1/realtime) is a WebSocket
+				'/v1': { target: SERVER_ORIGIN, ws: true }
 			}
 		},
 
