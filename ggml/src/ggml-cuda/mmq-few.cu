@@ -700,7 +700,7 @@ static __global__ void mul_mat_q_few(
 // A second group of 16 columns spills registers with ROCm 7.2.
 
 static constexpr __host__ __device__ bool mmq_few_hip_supported(const ggml_type type) {
-    return type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K;
+    return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_IQ4_NL || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K;
 }
 
 static constexpr int MMQ_FEW_CDNA_MAX_NWARPS = 8;
@@ -810,7 +810,7 @@ static __device__ __forceinline__ int4 mmq_few_cdna_load_b4(const int * p) {
 }
 
 // The raw src0 data of a lane for one unit and tile, loaded one unit ahead of its use.
-// Q4_K, Q5_K and IQ4_NL: chain c holds sub-block 2g + c.
+// Q4_K, Q5_K, Q8_0 and IQ4_NL: chain c holds sub-block 2g + c.
 // Q6_K: chain c holds sub-block 4*(g/2) + 2c + g%2, the low and high nibbles of the same ql bytes.
 struct mmq_few_cdna_x {
     int4 v[5];
@@ -850,6 +850,14 @@ static __device__ __forceinline__ void mmq_few_cdna_load_x(mmq_few_cdna_x & xr, 
         xr.v[0] = mmq_few_cdna_load_b4(p);
         xr.v[1] = mmq_few_cdna_load_b4(p + 4);
         xr.w[0] = p[8];
+    } else if constexpr (type == GGML_TYPE_Q8_0) {
+        // the 2 blocks of 34 bytes at 68g
+        const int * p = (const int *) (x + 68*g);
+#pragma unroll
+        for (int k = 0; k < 4; ++k) {
+            xr.v[k] = mmq_few_cdna_load_b4(p + 4*k);
+        }
+        xr.w[0] = p[16];
     } else {
         static_assert(type == GGML_TYPE_COUNT, "unsupported type");
     }
@@ -1052,22 +1060,33 @@ static __device__ __forceinline__ void mmq_few_cdna_vec_dot_q6_K(
     }
 }
 
-// IQ4_NL: for ncg == 0 the d of the blocks of the other lane groups come from these lane groups.
-template <int ncg, int nrt>
-static __device__ __forceinline__ void mmq_few_cdna_vec_dot_iq4_nl(
+// Q8_0 and IQ4_NL have a block with its own d per 32 values, for ncg == 0 the d of the other slots come from the lanes of these slots.
+template <ggml_type type, int ncg, int nrt>
+static __device__ __forceinline__ void mmq_few_cdna_vec_dot_q8_0_iq4_nl(
         const mmq_few_cdna_x (&xr)[nrt], const mmq_few_cdna_y<ncg> & yr, const float4 * ds, float (&sum)[nrt][mmq_few_cdna_nc<ncg>()]) {
     constexpr int ncgr = ncg == 0 ? 1 : ncg;
     constexpr int nblk = ncg == 0 ? 4 : 1;
+    // the 4 byte words of the 2 blocks, the d of the first block in the low half of word 0, the qs follow it
+    constexpr int nw = type == GGML_TYPE_Q8_0 ? 17 : 9;
 #pragma unroll
     for (int t = 0; t < nrt; ++t) {
-        const int4 w0 = xr[t].v[0];
-        const int4 w1 = xr[t].v[1];
-        const int  qs[2][4] = {
-            {(int) __builtin_amdgcn_alignbyte(w0.y, w0.x, 2), (int) __builtin_amdgcn_alignbyte(w0.z, w0.y, 2),
-             (int) __builtin_amdgcn_alignbyte(w0.w, w0.z, 2), (int) __builtin_amdgcn_alignbyte(w1.x, w0.w, 2)},
-            {w1.y, w1.z, w1.w, xr[t].w[0]},
-        };
-        const int dd = (w0.x & 0x0000FFFF) | (w1.x & 0xFFFF0000); // d of the blocks 2g and 2g + 1
+        int w[nw];
+#pragma unroll
+        for (int k = 0; k < nw/4; ++k) {
+            w[4*k + 0] = xr[t].v[k].x;
+            w[4*k + 1] = xr[t].v[k].y;
+            w[4*k + 2] = xr[t].v[k].z;
+            w[4*k + 3] = xr[t].v[k].w;
+        }
+        w[nw - 1] = xr[t].w[0];
+        constexpr int nq = nw/2; // qs words per block, the second block starts at word nq
+        int qs[2][nq];
+#pragma unroll
+        for (int i = 0; i < nq; ++i) {
+            qs[0][i] = __builtin_amdgcn_alignbyte(w[i + 1], w[i], 2);
+            qs[1][i] = w[nq + 1 + i];
+        }
+        const int dd = (w[0] & 0x0000FFFF) | (w[nq] & 0xFFFF0000); // d of the blocks 2g and 2g + 1
 
         float2 dx[nblk];
 #pragma unroll
@@ -1080,9 +1099,14 @@ static __device__ __forceinline__ void mmq_few_cdna_vec_dot_iq4_nl(
             int b[8];
 #pragma unroll
             for (int i = 0; i < 4; ++i) {
-                const int2 v = get_int_from_table_16(qs[c][i], kvalues_iq4nl);
-                b[i + 0] = v.x;
-                b[i + 4] = v.y;
+                if constexpr (type == GGML_TYPE_Q8_0) {
+                    b[i + 0] = qs[c][i + 0];
+                    b[i + 4] = qs[c][i + 4];
+                } else {
+                    const int2 v = get_int_from_table_16(qs[c][i], kvalues_iq4nl);
+                    b[i + 0] = v.x;
+                    b[i + 4] = v.y;
+                }
             }
 #pragma unroll
             for (int cg = 0; cg < ncgr; ++cg) {
@@ -1090,7 +1114,7 @@ static __device__ __forceinline__ void mmq_few_cdna_vec_dot_iq4_nl(
                 mmq_few_cdna_mma<ncg, 8>(C, yr.qs[cg] + 8*c, b);
 #pragma unroll
                 for (int bb = 0; bb < nblk; ++bb) {
-                    const int    s   = mmq_few_cdna_sub<GGML_TYPE_IQ4_NL>(mmq_few_cdna_sb<ncg>(bb), c);
+                    const int    s   = mmq_few_cdna_sub<type>(mmq_few_cdna_sb<ncg>(bb), c);
                     const float  dxs = c == 0 ? dx[bb].x : dx[bb].y;
                     const float4 dy  = ds[4*s + mmq_few_cdna_k<ncg>(cg)];
                     sum[t][MMQ_FEW_CDNA_NC*cg + 0] += dxs*dy.x * float(C[4*bb + 0]);
@@ -1106,8 +1130,8 @@ static __device__ __forceinline__ void mmq_few_cdna_vec_dot_iq4_nl(
 template <ggml_type type, int ncg, int nrt>
 static __device__ __forceinline__ void mmq_few_cdna_vec_dot(
         const mmq_few_cdna_x (&xr)[nrt], const mmq_few_cdna_y<ncg> & yr, const float4 * ds, float (&sum)[nrt][mmq_few_cdna_nc<ncg>()]) {
-    if constexpr (type == GGML_TYPE_IQ4_NL) {
-        mmq_few_cdna_vec_dot_iq4_nl<ncg, nrt>(xr, yr, ds, sum);
+    if constexpr (type == GGML_TYPE_Q8_0 || type == GGML_TYPE_IQ4_NL) {
+        mmq_few_cdna_vec_dot_q8_0_iq4_nl<type, ncg, nrt>(xr, yr, ds, sum);
     } else if constexpr (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K) {
         mmq_few_cdna_vec_dot_q45_K<type, ncg, nrt>(xr, yr, ds, sum);
     } else if constexpr (type == GGML_TYPE_Q6_K) {
@@ -1356,6 +1380,29 @@ static __device__ __forceinline__ void mmq_few_hip_vec_dot_iq4_nl(const char * x
     }
 }
 
+// Q8_0 has a block with its own scale per 32 values.
+template <bool half>
+static __device__ __forceinline__ void mmq_few_hip_vec_dot_q8_0(const char * x, const int4 * y, float (&sum)[MMQ_FEW_HIP_NC]) {
+    const int i0 = (4 - MMQ_FEW_HIP_NE)*(threadIdx.x / 16);
+#pragma unroll
+    for (int s = 0; s < 8; ++s) {
+        // a unit starts 16 byte aligned, the qs of every second block 2 bytes off a 4 byte boundary
+        const char * xa = (const char *) __builtin_assume_aligned(x, 16);
+        int b[8];
+        mmq_few_hip_get_ints_b2<8>(xa, int(sizeof(block_q8_0))*s + 2, b);
+        const float d = __half2float(((const block_q8_0 *) xa + s)->d);
+
+        const mmq_few_hip_y yf = mmq_few_hip_load_y<half>(y, s);
+        mmq_few_hip_tile_c C;
+        mmq_few_hip_mma(C, yf.qs[0], b + i0 + 0);
+        mmq_few_hip_mma(C, yf.qs[1], b + i0 + 4);
+#pragma unroll
+        for (int v = 0; v < mmq_few_hip_nv<half>(); ++v) {
+            sum[v] += d*mmq_few_hip_get_d<MMQ_Q8_1_DS_LAYOUT_D4>(yf, v) * float(C.x[v]);
+        }
+    }
+}
+
 template <ggml_type type, bool half, int nrt>
 static __device__ __forceinline__ void mmq_few_hip_vec_dot(const char * const * xr, const int4 * y, float (*sum)[MMQ_FEW_HIP_NC]) {
     // on RDNA a lane has no registers for a second tile, mmq_few_hip_nrt keeps nrt at 1 there
@@ -1363,6 +1410,8 @@ static __device__ __forceinline__ void mmq_few_hip_vec_dot(const char * const * 
     for (int t = 0; t < nrt; ++t) {
         if constexpr (type == GGML_TYPE_IQ4_NL) {
             mmq_few_hip_vec_dot_iq4_nl<half>(xr[t], y, sum[t]);
+        } else if constexpr (type == GGML_TYPE_Q8_0) {
+            mmq_few_hip_vec_dot_q8_0<half>(xr[t], y, sum[t]);
         } else if constexpr (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K) {
             mmq_few_hip_vec_dot_q45_K<type, half>(xr[t], y, sum[t]);
         } else if constexpr (type == GGML_TYPE_Q6_K) {
@@ -1768,21 +1817,22 @@ static void launch_mul_mat_q_few_hip_switch_ncols(const ggml_tensor * src0, cons
 }
 
 // Min. and max. number of src1 columns for AMD GPUs, 0 if the type is not supported.
-// Below the min. MMVQ is faster, above the max. MMQ. Q8_0 would need more than 16 columns to beat MMQ.
+// Below the min. MMVQ is faster, above the max. MMQ.
+// RDNA4 Q8_0 only beats MMVQ at 7 and 8 columns. On RDNA3 Q8_0 is not tested, on RDNA3.5 it would need more than 16 columns to beat MMQ.
 static int2 mmq_few_hip_ncols_range(const ggml_type type, const int cc) {
-    if (GGML_CUDA_CC_IS_CDNA(cc)) { // placeholder, to be tuned on the MI100
-        static const int rmin = getenv("MMQ_FEW_CDNA_MIN") ? atoi(getenv("MMQ_FEW_CDNA_MIN")) : 1;
-        static const int rmax = getenv("MMQ_FEW_CDNA_MAX") ? atoi(getenv("MMQ_FEW_CDNA_MAX")) : 16;
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
         switch (type) {
-            case GGML_TYPE_Q4_K:   return make_int2(rmin, rmax);
-            case GGML_TYPE_Q5_K:   return make_int2(rmin, rmax);
-            case GGML_TYPE_Q6_K:   return make_int2(rmin, rmax);
-            case GGML_TYPE_IQ4_NL: return make_int2(rmin, rmax);
+            case GGML_TYPE_Q8_0:   return make_int2(4, 16);
+            case GGML_TYPE_Q4_K:   return make_int2(2, 16);
+            case GGML_TYPE_Q5_K:   return make_int2(3, 16);
+            case GGML_TYPE_Q6_K:   return make_int2(3, 16);
+            case GGML_TYPE_IQ4_NL: return make_int2(2, 16);
             default:               return make_int2(0,  0);
         }
     }
-    if (GGML_CUDA_CC_IS_RDNA4(cc)) { // tuned on the Radeon RX 9070 XT (gfx1201)
+    if (GGML_CUDA_CC_IS_RDNA4(cc)) {
         switch (type) {
+            case GGML_TYPE_Q8_0:   return make_int2(7,  8);
             case GGML_TYPE_Q4_K:   return make_int2(3, 16);
             case GGML_TYPE_Q5_K:   return make_int2(3, 16);
             case GGML_TYPE_Q6_K:   return make_int2(5, 16);
@@ -1790,7 +1840,7 @@ static int2 mmq_few_hip_ncols_range(const ggml_type type, const int cc) {
             default:               return make_int2(0,  0);
         }
     }
-    if (GGML_CUDA_CC_IS_RDNA3_0(cc)) { // tuned on the Radeon RX 7900 XTX (gfx1100)
+    if (GGML_CUDA_CC_IS_RDNA3_0(cc)) {
         switch (type) {
             case GGML_TYPE_Q4_K:   return make_int2(2, 16);
             case GGML_TYPE_Q5_K:   return make_int2(2, 16);
@@ -1799,7 +1849,7 @@ static int2 mmq_few_hip_ncols_range(const ggml_type type, const int cc) {
             default:               return make_int2(0,  0);
         }
     }
-    switch (type) { // tuned on the Radeon 8060S (gfx1151)
+    switch (type) {
         case GGML_TYPE_Q4_K:   return make_int2(3, 16);
         case GGML_TYPE_Q5_K:   return make_int2(3,  8);
         case GGML_TYPE_Q6_K:   return make_int2(6, 16);
@@ -1828,6 +1878,9 @@ static void ggml_cuda_mul_mat_q_few_hip(ggml_backend_cuda_context & ctx, const g
         ne11, ne12, ne13, stream);
 
     switch (src0->type) {
+        case GGML_TYPE_Q8_0:
+            launch_mul_mat_q_few_hip_switch_ncols<GGML_TYPE_Q8_0>(src0, src1, dst, src1_q.get(), cc, stream);
+            break;
         case GGML_TYPE_Q4_K:
             launch_mul_mat_q_few_hip_switch_ncols<GGML_TYPE_Q4_K>(src0, src1, dst, src1_q.get(), cc, stream);
             break;
