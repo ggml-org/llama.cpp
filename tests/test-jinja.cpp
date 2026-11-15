@@ -675,6 +675,18 @@ static void test_expressions(testing & t) {
         "-1,False,-2,-3"
     );
 
+    test_template(t, "unary minus after elif",
+        "{% if false %}a{% elif -1 < 0 %}b{% endif %}",
+        json::object(),
+        "b"
+    );
+
+    test_template(t, "unary and binary sign",
+        "{{ -x }},{{ - 1 }},{{ --x }},{{ 1 - -x }},{{ 1 -1 }},{{ x -1 }},{{ [x, -1][-1] }},{{ +x }},{{ -x|abs }}",
+        {{"x", 3}},
+        "-3,-1,3,4,0,2,-1,3,3"
+    );
+
     test_template(t, "binary minus after keyword attribute",
         "{{ a.else - 1 }}",
         {{"a", {{"else", 3}}}},

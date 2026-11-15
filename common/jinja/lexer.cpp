@@ -6,7 +6,6 @@
 #include <charconv>
 #include <functional>
 #include <map>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -263,47 +262,6 @@ lexer_result lexer::tokenize(const std::string & source) {
         if (pos >= src.size()) break;
 
         char ch = src[pos];
-
-        bool is_closing_block = ch == '-' && next_pos_is( {'%', '}'} );
-
-        // Check for unary operators
-        if (!is_closing_block && (ch == '-' || ch == '+')) {
-            start_pos = pos;
-            token::type last_token_type = tokens.empty() ? token::eof : tokens.back().t;
-            if (last_token_type == token::text || last_token_type == token::eof) {
-                throw lexer_exception(std::string("unexpected character: ") + ch, source, pos);
-            }
-            // keyword followed by an operand, e.g. `x if c else -1`; `a.else - 1` is still binary
-            static const std::set<std::string> operand_keywords = { "if", "else", "and", "or", "not", "in", "is" };
-            const bool is_attr = tokens.size() >= 2 && tokens[tokens.size() - 2].t == token::dot;
-            if (last_token_type == token::identifier && !is_attr && operand_keywords.count(tokens.back().value)) {
-                last_token_type = token::eof; // handle as unary below
-            }
-            switch (last_token_type) {
-                case token::identifier:
-                case token::numeric_literal:
-                case token::string_literal:
-                case token::close_paren:
-                case token::close_square_bracket:
-                    // Part of a binary operator
-                    // a - 1, 1 - 1, true - 1, "apple" - 1, (1) - 1, a[1] - 1
-                    // Continue parsing normally
-                    break;
-                default: {
-                    // Is part of a unary operator
-                    // (-1), [-1], (1 + -1), not -1, -apple
-                    ++pos; // Consume the operator
-
-                    // Check for numbers following the unary operator
-                    std::string num = consume_numeric();
-                    std::string value = std::string(1, ch) + num;
-                    token::type t = num.empty() ? token::unary_operator : token::numeric_literal;
-                    // JJ_DEBUG("consumed unary operator or numeric literal: '%s'", value.c_str());
-                    tokens.push_back({t, value, start_pos});
-                    continue;
-                }
-            }
-        }
 
         // Try to match one of the tokens in the mapping table
         bool matched = false;
