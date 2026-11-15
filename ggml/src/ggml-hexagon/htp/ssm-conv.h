@@ -35,13 +35,21 @@ struct htp_ssm_conv_vtcm_layout {
     size_t dst_bytes;
 };
 
+static inline size_t htp_ssm_conv_raw_stride_bytes(uint32_t ncs, size_t src0_elem_size) {
+    if (src0_elem_size == 2) {
+        return (size_t) hex_round_up(ncs, 2) * 2 + sizeof(float);
+    }
+    return (size_t) ncs * sizeof(float) + sizeof(float);
+}
+
 static inline void htp_ssm_conv_vtcm_layout_build(
     struct htp_ssm_conv_vtcm_layout * L,
     uint32_t d_inner_per_hvx,
     uint32_t d_conv,
     uint32_t n_t,
     uint32_t d_inner_tile,
-    uint32_t n_hvx
+    uint32_t n_hvx,
+    size_t   src0_elem_size
 ) {
     const size_t src1_raw_bytes = hex_round_up((size_t) d_inner_per_hvx * d_conv * sizeof(float), 128) + 128;
     const size_t src1_T_bytes   = hex_round_up((size_t) d_conv * d_inner_per_hvx * sizeof(float), 128);
@@ -49,13 +57,14 @@ static inline void htp_ssm_conv_vtcm_layout_build(
     L->src1_bytes_per_hvx = src1_raw_bytes + src1_T_bytes;
 
     if (n_t == 1) {
-        const size_t src0_tile_raw_bytes = hex_round_up((size_t) d_inner_tile * d_conv * sizeof(float), 128);
+        const size_t raw_stride_bytes    = (src0_elem_size == 2) ? ((size_t) hex_round_up(d_conv, 2) * 2) : ((size_t) d_conv * sizeof(float));
+        const size_t src0_tile_raw_bytes = hex_round_up((size_t) d_inner_tile * raw_stride_bytes, 128);
         const size_t src0_T_bytes        = hex_round_up((size_t) d_conv * d_inner_tile * sizeof(float), 128);
         L->src0_bytes_per_hvx            = 2 * src0_tile_raw_bytes + src0_T_bytes;
         L->dst_bytes_per_hvx             = 2 * hex_round_up((size_t) d_inner_tile * sizeof(float), 128);
     } else {
         const uint32_t ncs              = d_conv - 1 + n_t;
-        const size_t   raw_stride_bytes = ncs * sizeof(float) + sizeof(float);
+        const size_t   raw_stride_bytes = htp_ssm_conv_raw_stride_bytes(ncs, src0_elem_size);
         const size_t   src0_block_T     = hex_round_up((size_t) ncs * 32 * sizeof(float), 128);
         const size_t   src0_tile_raw    = hex_round_up((size_t) d_inner_tile * raw_stride_bytes, 128);
         L->src0_bytes_per_hvx           = 2 * src0_tile_raw + src0_block_T;

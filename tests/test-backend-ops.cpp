@@ -5312,6 +5312,56 @@ struct test_ssm_conv_bias_silu : public test_case {
     }
 };
 
+struct test_ssm_conv_f16_boundary : public test_case {
+    const std::array<int64_t, 4> ne_a;
+    const std::array<int64_t, 4> ne_b;
+    const bool pre_dup;
+    const bool post_dup;
+    const bool dup_w;
+    const bool fuse_silu;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return fuse_silu ? "SSM_CONV_BIAS_SILU" : "SSM_CONV";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override { return 1e-4; }
+
+    std::string vars() override {
+        return VARS_TO_STR6(ne_a, ne_b, pre_dup, post_dup, dup_w, fuse_silu);
+    }
+
+    test_ssm_conv_f16_boundary(std::array<int64_t, 4> ne_a,
+                               std::array<int64_t, 4> ne_b,
+                               bool pre_dup,
+                               bool post_dup,
+                               bool dup_w = false,
+                               bool fuse_silu = false)
+        : ne_a(ne_a), ne_b(ne_b), pre_dup(pre_dup), post_dup(post_dup), dup_w(dup_w), fuse_silu(fuse_silu) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_a.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b.data());
+        ggml_set_name(a, "a");
+        ggml_set_name(b, "b");
+
+        ggml_tensor * sx = pre_dup ? ggml_dup(ctx, a) : a;
+        ggml_tensor * c  = dup_w   ? ggml_dup(ctx, b) : b;
+
+        ggml_tensor * out = ggml_ssm_conv(ctx, sx, c);
+        if (fuse_silu) {
+            out = ggml_silu(ctx, out);
+        }
+        if (post_dup) {
+            out = ggml_dup(ctx, out);
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SSM_SCAN
 struct test_ssm_scan : public test_case {
     const ggml_type type;
@@ -12663,6 +12713,67 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
                 test_cases.emplace_back(new test_ssm_conv_bias_silu(
                     GGML_TYPE_F32, {d_conv - 1 + 64, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}, fuse_bias));
+            }
+        }
+    }
+
+    // F16 / mixed F16-F32 internal promotion boundary tests for ssm_conv (unfused and fused with silu)
+    {
+        struct ssm_conv_f16_shape {
+            int64_t d_conv;
+            int64_t n_t;
+            int64_t n_s;
+            int64_t d_inner;
+        };
+        const ssm_conv_f16_shape f16_shapes[] = {
+            { 4,  1, 1,  128 },
+            { 4,  1, 4,  160 },
+            { 3,  1, 1,  160 },
+            { 5,  1, 4,  128 },
+            { 4, 16, 1,  128 },
+            { 4, 16, 4,  160 },
+            { 3, 16, 1,  160 },
+            { 5, 16, 4,  128 },
+            { 4, 64, 1,  128 },
+            { 3, 64, 4,  160 },
+        };
+        const std::pair<bool, bool> io_modes[] = {
+            { true,  true  }, // F16 -> F16
+            { true,  false }, // F16 -> F32
+            { false, true  }, // F32 -> F16
+        };
+        for (const auto & s : f16_shapes) {
+            const int64_t ncs = s.d_conv - 1 + s.n_t;
+            for (const auto & io : io_modes) {
+                for (bool dup_w : { false, true }) {
+                    for (bool fuse_silu : { false, true }) {
+                        test_cases.emplace_back(new test_ssm_conv_f16_boundary(
+                            { ncs, s.d_inner, s.n_s, 1 }, { s.d_conv, s.d_inner, 1, 1 },
+                            io.first, io.second, dup_w, fuse_silu));
+                    }
+                }
+            }
+        }
+        const ssm_conv_f16_shape large_f16_shapes[] = {
+            { 4,  1, 1, 2048 },
+            { 4,  1, 4, 6144 },
+            { 3,  1, 1, 6144 },
+            { 5,  1, 1, 2048 },
+            { 4, 16, 1, 2048 },
+            { 4, 16, 4, 2048 },
+            { 3, 16, 1, 6144 },
+            { 5, 16, 1, 2048 },
+            { 4, 64, 1, 2048 },
+            { 4, 64, 1, 6144 },
+        };
+        for (const auto & s : large_f16_shapes) {
+            const int64_t ncs = s.d_conv - 1 + s.n_t;
+            for (const auto & io : io_modes) {
+                for (bool fuse_silu : { false, true }) {
+                    test_cases.emplace_back(new test_ssm_conv_f16_boundary(
+                        { ncs, s.d_inner, s.n_s, 1 }, { s.d_conv, s.d_inner, 1, 1 },
+                        io.first, io.second, io.first && io.second, fuse_silu));
+                }
             }
         }
     }

@@ -2374,16 +2374,22 @@ static bool htp_kparams_solve_repeat(
 
 static bool htp_kparams_solve_ssm_conv(
     const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    bool internal_f16,
     struct htp_ssm_conv_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const struct ggml_tensor * src0 = op->src[0];
-    const struct ggml_tensor * src1 = op->src[1];
-    const struct ggml_tensor * dst  = op;
+    if (!src0 || !src1 || !dst) {
+        return false;
+    }
 
-    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [internal_f16](ggml_type t) {
+        return t == GGML_TYPE_F32 || (internal_f16 && t == GGML_TYPE_F16);
+    };
+    if (!is_valid_type(src0->type) || !is_valid_type(src1->type) || !is_valid_type(dst->type)) {
         return false;
     }
     if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || dst->ne[3] != 1) {
@@ -2407,10 +2413,15 @@ static bool htp_kparams_solve_ssm_conv(
     if (dst->ne[0] != d_inner_64 || dst->ne[1] != n_t_64 || dst->ne[2] != n_s_64) {
         return false;
     }
-    if (src0->nb[0] != sizeof(float) || src1->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+
+    const size_t src0_elem_size = ggml_type_size(src0->type);
+    const size_t src1_elem_size = ggml_type_size(src1->type);
+    const size_t dst_elem_size  = ggml_type_size(dst->type);
+
+    if (src0->nb[0] != src0_elem_size || src1->nb[0] != src1_elem_size || dst->nb[0] != dst_elem_size) {
         return false;
     }
-    if (src0->nb[1] != src0->ne[0] * sizeof(float) || src1->nb[1] != src1->ne[0] * sizeof(float)) {
+    if (src0->nb[1] != (size_t) src0->ne[0] * src0_elem_size || src1->nb[1] != (size_t) src1->ne[0] * src1_elem_size) {
         return false;
     }
 
@@ -2448,7 +2459,7 @@ static bool htp_kparams_solve_ssm_conv(
         target_max_tile          = (std::max)(target_max_tile, 32u);
         target_max_tile          = (std::min)(target_max_tile, 128u);
 
-        const size_t raw_stride_bytes = ncs * sizeof(float) + sizeof(float);
+        const size_t raw_stride_bytes = htp_ssm_conv_raw_stride_bytes(ncs, src0_elem_size);
         uint32_t d_inner_tile = (uint32_t) (avail_for_tiles / (2 * (raw_stride_bytes + n_t * sizeof(float))));
         d_inner_tile          = (d_inner_tile / 32) * 32;
         if (d_inner_tile == 0) {
@@ -2464,7 +2475,7 @@ static bool htp_kparams_solve_ssm_conv(
     }
 
     struct htp_ssm_conv_vtcm_layout L;
-    htp_ssm_conv_vtcm_layout_build(&L, d_inner_per_hvx, d_conv, n_t, kparams->d_inner_tile, n_hvx);
+    htp_ssm_conv_vtcm_layout_build(&L, d_inner_per_hvx, d_conv, n_t, kparams->d_inner_tile, n_hvx, src0_elem_size);
 
     kparams->vtcm_size        = (uint32_t) L.total_bytes;
     kparams->div_d_inner_tile = init_fastdiv_values(kparams->d_inner_tile);
@@ -5968,6 +5979,13 @@ bool htp_kparams_solve(
     if (tmp.opcode == HTP_OP_GET_ROWS) {
         return commit(htp_kparams_solve_repeat_get_rows(sess, src0, src1, dst, internal_f16, tmp.kparams<htp_get_rows_kernel_params>()));
     }
+    if (tmp.opcode == HTP_OP_SSM_CONV) {
+        auto * kp = tmp.kparams<htp_ssm_conv_kernel_params>();
+        const uint32_t silu = kp->silu;
+        const bool ok = htp_kparams_solve_ssm_conv(sess, src0, src1, dst, internal_f16, kp);
+        kp->silu = silu;
+        return commit(ok);
+    }
 
     if (!tmp.fused.empty()) {
         return false;
@@ -6035,7 +6053,11 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_rope>(sess, op, kparams);
 
         case HTP_OP_SSM_CONV:
-            return htp_kparams_invoke<htp_kparams_solve_ssm_conv>(sess, op, kparams);
+        {
+            struct htp_ssm_conv_kernel_params tmp;
+            return htp_kparams_solve_ssm_conv(sess, op->src[0], op->src[1], op, internal_f16,
+                                              kparams ? (struct htp_ssm_conv_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_SSM_SCAN:
             return htp_kparams_invoke<htp_kparams_solve_ssm_scan>(sess, op, kparams);

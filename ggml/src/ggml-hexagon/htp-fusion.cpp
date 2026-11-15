@@ -397,7 +397,7 @@ static bool fuse_ssm_conv_silu(const ggml_hexagon_session * sess, htp_opnode & p
 
     const ggml_tensor * conv_dst = prev.dst();
     const ggml_tensor * dst      = cur.dst();
-    if (!ggml_are_same_layout(conv_dst, dst)) return false;
+    if (!ggml_are_same_shape(conv_dst, dst) || !ggml_is_contiguous(conv_dst) || !ggml_is_contiguous(dst)) return false;
     if (htp_tensors_overlap(dst, prev.src0()) || htp_tensors_overlap(dst, prev.src1())) return false;
 
     kparams->silu   = 1;
