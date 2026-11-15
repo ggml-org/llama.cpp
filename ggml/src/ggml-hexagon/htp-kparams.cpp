@@ -1581,14 +1581,18 @@ static bool htp_kparams_solve_unary_impl(
     uint32_t op,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
+    const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
+    bool internal_f16,
     struct htp_unary_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    if (!htp_op_is_unary((htp_op_code) op)) {
+    if (!htp_op_is_unary((htp_op_code) op) || !src0 || !dst) {
         return false;
     }
+
+    const bool is_rms_norm = (op == HTP_OP_RMS_NORM || op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
 
     if (op == HTP_OP_HADAMARD) {
         const int64_t n = src0->ne[0];
@@ -1598,6 +1602,29 @@ static bool htp_kparams_solve_unary_impl(
         if (!dst->src[0] || dst->src[0]->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
             (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16)) {
             return false;
+        }
+    } else if (is_rms_norm) {
+        if (!internal_f16) {
+            if (op != HTP_OP_RMS_NORM || src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+                return false;
+            }
+        } else {
+            if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+                (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+                return false;
+            }
+            if (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD) {
+                if (!src1 || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+                    !ggml_is_contiguous_rows(src1) || src1->ne[0] != src0->ne[0]) {
+                    return false;
+                }
+            }
+            if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+                if (!src2 || (src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
+                    !ggml_is_contiguous_rows(src2) || !ggml_are_same_shape(src0, src2)) {
+                    return false;
+                }
+            }
         }
     } else {
         if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != src0->type) {
@@ -1609,7 +1636,6 @@ static bool htp_kparams_solve_unary_impl(
         if (src0->type == GGML_TYPE_F16) {
             switch (op) {
                 case HTP_OP_NORM:
-                case HTP_OP_RMS_NORM:
                 case HTP_OP_L2_NORM:
                 case HTP_OP_SCALE:
                 case HTP_OP_CLAMP:
@@ -1642,9 +1668,10 @@ static bool htp_kparams_solve_unary_impl(
         return false;
     }
 
-    const size_t elem_size = ggml_type_size(src0->type);
+    const size_t src0_elem_size = ggml_type_size(src0->type);
+    const size_t dst_elem_size  = ggml_type_size(dst->type);
 
-    const size_t dst_data_row_size  = dst->ne[0]  * ggml_type_size(dst->type);
+    const size_t dst_data_row_size  = dst->ne[0] * dst_elem_size;
 
     const uint32_t src0_nrows          = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t min_rows_per_hvx    = (uint32_t) (std::max<size_t>(1, (128 + dst_data_row_size - 1) / dst_data_row_size));
@@ -1655,13 +1682,17 @@ static bool htp_kparams_solve_unary_impl(
     kparams->n_hvx = n_hvx;
 
     const bool has_weight       = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2         = (op == HTP_OP_RMS_NORM_MUL_ADD);
     const bool broadcast_weight = has_weight && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
+    if (op == HTP_OP_RMS_NORM_MUL && !broadcast_weight && !ggml_are_same_shape(src0, src1)) {
+        return false;
+    }
     if (op == HTP_OP_RMS_NORM_MUL_ADD && !broadcast_weight) {
         return false;
     }
     kparams->broadcast_weight   = broadcast_weight;
 
-    const bool     src0_contig        = ggml_is_contiguous_1(src0);
+    const bool     src0_contig        = ggml_is_contiguous_1(src0) && (!has_src2 || ggml_is_contiguous_1(src2));
     const bool     src1_contig        = (has_weight && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
     const uint32_t src0_nrows_per_hvx = (src0_nrows + n_hvx - 1) / n_hvx;
     const uint32_t min_block_rows     = (uint32_t) (std::max<size_t>(1, 2048 / dst_data_row_size));
@@ -1673,13 +1704,17 @@ static bool htp_kparams_solve_unary_impl(
     kparams->src0_contig = src0_contig ? 1 : 0;
     kparams->src1_contig = src1_contig ? 1 : 0;
 
+    const size_t src1_elem_size = has_weight ? ggml_type_size(src1->type) : sizeof(float);
+    const size_t src2_elem_size = has_src2   ? ggml_type_size(src2->type) : sizeof(float);
+
     struct htp_unary_vtcm_layout L;
     uint32_t col_tile            = 0;
     uint32_t vtcm_row_per_hvx    = 0;
 
     htp_unary_solve_layout(&L, op, src0->ne[0], dst->ne[0],
                            has_weight ? src1->ne[0] : 0,
-                           max_block, broadcast_weight, n_hvx, vtcm_size, elem_size,
+                           max_block, broadcast_weight, n_hvx, vtcm_size,
+                           src0_elem_size, dst_elem_size, src1_elem_size, src2_elem_size,
                            &col_tile, &vtcm_row_per_hvx);
 
     kparams->col_tile  = col_tile;
@@ -1704,7 +1739,7 @@ static bool htp_kparams_solve_unary(
     const htp_op_code opcode = htp_op_remap(op);
     const struct ggml_tensor * src0 = (opcode == HTP_OP_HADAMARD) ? op->src[1] : op->src[0];
     const struct ggml_tensor * src1 = (opcode == HTP_OP_HADAMARD) ? nullptr    : op->src[1];
-    return htp_kparams_solve_unary_impl(sess, opcode, src0, src1, op, kparams);
+    return htp_kparams_solve_unary_impl(sess, opcode, src0, src1, op->src[2], op, false, kparams);
 }
 
 bool htp_kparams_solve_rms_norm_mul(
@@ -1714,17 +1749,18 @@ bool htp_kparams_solve_rms_norm_mul(
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
-    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, dst, kparams);
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, nullptr, dst, true, kparams);
 }
 
 bool htp_kparams_solve_rms_norm_mul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
+    const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
-    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, dst, kparams);
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, src2, dst, true, kparams);
 }
 
 bool htp_kparams_solve_repeat_get_rows(
@@ -5694,16 +5730,8 @@ bool htp_kparams_solve(
     };
 
     if (htp_op_is_unary(tmp.opcode)) {
-        if (tmp.opcode == HTP_OP_RMS_NORM_MUL) {
-            if (!src0 || !src1 || src1->type != src0->type) {
-                return false;
-            }
-        } else if (tmp.opcode == HTP_OP_RMS_NORM_MUL_ADD) {
-            if (!src0 || !src1 || src1->type != src0->type || tmp.inputs.size() < 3 || !tmp.inputs[2] || tmp.inputs[2]->type != src0->type) {
-                return false;
-            }
-        }
-        return commit(htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_unary_kernel_params>()));
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        return commit(htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, src2, dst, internal_f16, tmp.kparams<htp_unary_kernel_params>()));
     }
     if (htp_op_is_glu(tmp.opcode)) {
         return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));
@@ -5782,7 +5810,7 @@ bool htp_kparams_solve(
     const htp_op_code opcode = htp_op_remap(op);
     if (htp_op_is_unary(opcode) || htp_op_is_glu(opcode) || opcode == HTP_OP_UPSCALE) {
         htp_opnode tmp(opcode, op);
-        if (!htp_kparams_solve(sess, tmp, false)) {
+        if (!htp_kparams_solve(sess, tmp, internal_f16)) {
             return false;
         }
         if (kparams) {

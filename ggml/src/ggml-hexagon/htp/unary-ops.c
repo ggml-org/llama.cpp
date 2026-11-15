@@ -71,14 +71,17 @@ struct htp_unary_context {
 
     size_t                    src0_data_row_size;   // actual data bytes per row
     size_t                    src1_data_row_size;
+    size_t                    src2_data_row_size;
     size_t                    dst_data_row_size;    // actual data bytes per row
 
     size_t                    src0_row_size_aligned;
     size_t                    src1_row_size_aligned;
+    size_t                    src2_row_size_aligned;
     size_t                    dst_row_size_aligned;
 
     size_t                    src0_vtcm_half_size;
     size_t                    src1_vtcm_half_size;
+    size_t                    src2_vtcm_half_size;
     size_t                    dst_vtcm_half_size;
 
     uint32_t                  block;
@@ -88,6 +91,10 @@ struct htp_unary_context {
     uint32_t                  nc;
     uint32_t                  col_tile;             // tiled mode
     bool                      broadcast_weight;
+    bool                      src0_f16;
+    bool                      src1_f16;
+    bool                      src2_f16;
+    bool                      dst_f16;
 
     uint8_t *                 vtcm_src0;
     uint8_t *                 vtcm_src1;
@@ -244,11 +251,208 @@ static void leaky_relu_f32(const void * restrict src,
     }
 }
 
-static void rms_norm_f32(const void * restrict src,
-                         void * restrict dst,
-                         const uint32_t num_rows,
-                         const uint32_t ne0,
-                         const struct htp_unary_context * uctx) {
+static inline HVX_Vector rms_norm_sum_sq_f32(const uint8_t * restrict src, uint32_t num_elems, HVX_Vector sum_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    const uint32_t nvec = num_elems / VLEN_FP32;
+    const uint32_t nloe = num_elems % VLEN_FP32;
+
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_Vector v1 = v_src[i];
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * sizeof(float));
+        HVX_Vector v1 = Q6_V_vand_QV(bmask, v_src[nvec]);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+    }
+
+    return sum_v;
+}
+
+static inline HVX_Vector rms_norm_sum_sq_f16(const uint8_t * restrict src, uint32_t num_elems, HVX_Vector sum_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    const uint32_t nvec = num_elems / VLEN_FP16;
+    const uint32_t nloe = num_elems % VLEN_FP16;
+
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_VectorPair p = hvx_vec_f16_to_f32(v_src[i]);
+        HVX_Vector v0 = Q6_V_lo_W(p);
+        HVX_Vector v1 = Q6_V_hi_W(p);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v0, v0));
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * sizeof(_Float16));
+        HVX_Vector masked = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_VectorPair p = hvx_vec_f16_to_f32(masked);
+        HVX_Vector v0 = Q6_V_lo_W(p);
+        HVX_Vector v1 = Q6_V_hi_W(p);
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v0, v0));
+        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+    }
+
+    return sum_v;
+}
+
+static inline HVX_Vector rms_norm_scale_from_sum_f32(HVX_Vector sum_v, uint32_t num_elems, float epsilon, float scale) {
+    HVX_Vector t_v            = hvx_vec_splat_f32((float) (int32_t) num_elems);
+    HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
+    HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
+    HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, hvx_vec_splat_f32(epsilon));
+    HVX_Vector scale_v        = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+
+    if (scale != 0.0f) {
+        scale_v = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(scale_v, hvx_vec_splat_f32(scale)));
+    }
+
+    return scale_v;
+}
+
+static __attribute__((noinline)) HVX_Vector rms_norm_row_scale(const uint8_t * restrict src,
+                                                               uint32_t num_elems,
+                                                               float epsilon,
+                                                               float scale,
+                                                               bool src0_f16) {
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
+    sum_v = src0_f16 ? rms_norm_sum_sq_f16(src, num_elems, sum_v)
+                     : rms_norm_sum_sq_f32(src, num_elems, sum_v);
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+    return rms_norm_scale_from_sum_f32(sum_v, num_elems, epsilon, scale);
+}
+
+static __attribute__((noinline)) float rms_norm_tile_sum_sq(const uint8_t * restrict src,
+                                                            uint32_t num_elems,
+                                                            bool src0_f16) {
+    HVX_Vector sum_v = Q6_V_vsplat_R(0x00000000);
+    sum_v = src0_f16 ? rms_norm_sum_sq_f16(src, num_elems, sum_v)
+                     : rms_norm_sum_sq_f32(src, num_elems, sum_v);
+    sum_v = hvx_vec_reduce_sum_f32(Q6_Vsf_equals_Vqf32(sum_v));
+    return hvx_vec_get_f32(sum_v);
+}
+
+static inline HVX_VectorPair rms_load_pair_f32(const uint8_t * restrict ptr, uint32_t i, bool is_f16) {
+    const HVX_Vector * restrict v_ptr = (const HVX_Vector *) ptr;
+    if (is_f16) {
+        return hvx_vec_f16_to_f32(v_ptr[i >> 6]);
+    }
+    return Q6_W_vcombine_VV(v_ptr[(i >> 5) + 1], v_ptr[i >> 5]);
+}
+
+static inline HVX_Vector rms_load_vec_f32(const uint8_t * restrict ptr, uint32_t i, bool is_f16) {
+    const HVX_Vector * restrict v_ptr = (const HVX_Vector *) ptr;
+    if (!is_f16) {
+        return v_ptr[i >> 5];
+    }
+    HVX_VectorPair p = hvx_vec_f16_to_f32(v_ptr[i >> 6]);
+    return (i & 32u) ? Q6_V_hi_W(p) : Q6_V_lo_W(p);
+}
+
+static inline void rms_store_pair_f32(uint8_t * restrict dst, uint32_t i, HVX_Vector r0, HVX_Vector r1, bool is_f16) {
+    HVX_Vector * restrict v_dst = (HVX_Vector *) dst;
+    if (is_f16) {
+        r0 = hvx_vec_clamp_f16_f32(r0);
+        r1 = hvx_vec_clamp_f16_f32(r1);
+        v_dst[i >> 6] = hvx_vec_f32_to_f16(r0, r1);
+    } else {
+        v_dst[(i >> 5) + 0] = r0;
+        v_dst[(i >> 5) + 1] = r1;
+    }
+}
+
+static inline void rms_store_tail_f32(uint8_t * restrict dst, uint32_t i, uint32_t rem, HVX_Vector r0, HVX_Vector r1, bool is_f16) {
+    HVX_Vector * restrict v_dst = (HVX_Vector *) dst;
+    if (is_f16) {
+        r0 = hvx_vec_clamp_f16_f32(r0);
+        r1 = hvx_vec_clamp_f16_f32(r1);
+        HVX_Vector packed = hvx_vec_f32_to_f16(r0, r1);
+        hvx_vec_store_a(&v_dst[i >> 6], rem * sizeof(_Float16), packed);
+    } else if (rem <= 32) {
+        hvx_vec_store_a(&v_dst[i >> 5], rem * sizeof(float), r0);
+    } else {
+        v_dst[(i >> 5) + 0] = r0;
+        hvx_vec_store_a(&v_dst[(i >> 5) + 1], (rem - 32) * sizeof(float), r1);
+    }
+}
+
+static __attribute__((noinline)) void rms_norm_apply_row(const uint8_t * restrict src,
+                                                         const uint8_t * restrict weight,
+                                                         const uint8_t * restrict add,
+                                                         uint8_t * restrict dst,
+                                                         uint32_t n,
+                                                         HVX_Vector scale_v,
+                                                         const struct htp_unary_context * uctx) {
+    const bool src0_f16 = uctx->src0_f16;
+    const bool src1_f16 = uctx->src1_f16;
+    const bool src2_f16 = uctx->src2_f16;
+    const bool dst_f16  = uctx->dst_f16;
+
+    uint32_t i = 0;
+    for (; i + 64 <= n; i += 64) {
+        HVX_VectorPair sp = rms_load_pair_f32(src, i, src0_f16);
+        HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_lo_W(sp), scale_v));
+        HVX_Vector r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_V_hi_W(sp), scale_v));
+
+        if (weight) {
+            HVX_VectorPair wp = rms_load_pair_f32(weight, i, src1_f16);
+            r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0, Q6_V_lo_W(wp)));
+            r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r1, Q6_V_hi_W(wp)));
+        }
+        if (add) {
+            HVX_VectorPair ap = rms_load_pair_f32(add, i, src2_f16);
+            r0 = hvx_vec_add_f32_f32(r0, Q6_V_lo_W(ap));
+            r1 = hvx_vec_add_f32_f32(r1, Q6_V_hi_W(ap));
+        }
+
+        rms_store_pair_f32(dst, i, r0, r1, dst_f16);
+    }
+
+    if (i < n) {
+        const uint32_t rem = n - i;
+        HVX_Vector r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(rms_load_vec_f32(src, i, src0_f16), scale_v));
+        HVX_Vector r1 = Q6_V_vzero();
+        if (rem > 32) {
+            r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(rms_load_vec_f32(src, i + 32, src0_f16), scale_v));
+        }
+
+        if (weight) {
+            r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r0, rms_load_vec_f32(weight, i, src1_f16)));
+            if (rem > 32) {
+                r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(r1, rms_load_vec_f32(weight, i + 32, src1_f16)));
+            }
+        }
+        if (add) {
+            r0 = hvx_vec_add_f32_f32(r0, rms_load_vec_f32(add, i, src2_f16));
+            if (rem > 32) {
+                r1 = hvx_vec_add_f32_f32(r1, rms_load_vec_f32(add, i + 32, src2_f16));
+            }
+        }
+
+        rms_store_tail_f32(dst, i, rem, r0, r1, dst_f16);
+    }
+}
+
+static __attribute__((noinline)) void rms_norm_apply_tile(const uint8_t * restrict src,
+                                                          const uint8_t * restrict weight,
+                                                          const uint8_t * restrict add,
+                                                          uint8_t * restrict dst,
+                                                          uint32_t n,
+                                                          uint32_t ne0,
+                                                          float sum_sq,
+                                                          float epsilon,
+                                                          float scale,
+                                                          const struct htp_unary_context * uctx) {
+    const HVX_Vector scale_v = rms_norm_scale_from_sum_f32(hvx_vec_splat_f32(sum_sq), ne0, epsilon, scale);
+    rms_norm_apply_row(src, weight, add, dst, n, scale_v, uctx);
+}
+
+static void rms_norm_rows(const void * restrict src,
+                          void * restrict dst,
+                          const uint32_t num_rows,
+                          const uint32_t ne0,
+                          const struct htp_unary_context * uctx) {
     htp_unary_op_preamble;
     float epsilon = 0.f;
     float scale   = 0.f;
@@ -256,18 +460,19 @@ static void rms_norm_f32(const void * restrict src,
     memcpy(&scale,   &op_params[1], sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+        const uint8_t * restrict src_local = (const uint8_t *) src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *) dst + (ir * dst_row_size_aligned);
 
-        hvx_fast_rms_norm_f32((const uint8_t *) src_local, (uint8_t *) dst_local, ne0, epsilon, scale);
+        HVX_Vector scale_v = rms_norm_row_scale(src_local, ne0, epsilon, scale, uctx->src0_f16);
+        rms_norm_apply_row(src_local, NULL, NULL, dst_local, ne0, scale_v, uctx);
     }
 }
 
-static void rms_norm_mul_f32(const void * restrict src,
-                             const void * restrict weight,
-                             void * restrict dst,
-                             const uint32_t num_rows,
-                             const struct htp_unary_context * uctx) {
+static void rms_norm_mul_rows(const void * restrict src,
+                              const void * restrict weight,
+                              void * restrict dst,
+                              const uint32_t num_rows,
+                              const struct htp_unary_context * uctx) {
     htp_unary_op_preamble;
     const uint32_t ne0 = uctx->nc;
     float epsilon = 0.f;
@@ -276,20 +481,21 @@ static void rms_norm_mul_f32(const void * restrict src,
     memcpy(&scale,   &op_params[1], sizeof(float));
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
-        const uint8_t * restrict w_local   = (const uint8_t *)weight + (uctx->broadcast_weight ? 0 : ir * uctx->src1_row_size_aligned);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+        const uint8_t * restrict src_local = (const uint8_t *) src + (ir * src0_row_size_aligned);
+        const uint8_t * restrict w_local   = (const uint8_t *) weight + (uctx->broadcast_weight ? 0 : ir * uctx->src1_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *) dst + (ir * dst_row_size_aligned);
 
-        hvx_fast_rms_norm_mul_f32(src_local, w_local, dst_local, ne0, epsilon, scale);
+        HVX_Vector scale_v = rms_norm_row_scale(src_local, ne0, epsilon, scale, uctx->src0_f16);
+        rms_norm_apply_row(src_local, w_local, NULL, dst_local, ne0, scale_v, uctx);
     }
 }
 
-static void rms_norm_mul_add_f32(const void * restrict src,
-                                 const void * restrict weight,
-                                 const void * restrict add,
-                                 void * restrict dst,
-                                 const uint32_t num_rows,
-                                 const struct htp_unary_context * uctx) {
+static void rms_norm_mul_add_rows(const void * restrict src,
+                                  const void * restrict weight,
+                                  const void * restrict add,
+                                  void * restrict dst,
+                                  const uint32_t num_rows,
+                                  const struct htp_unary_context * uctx) {
     htp_unary_op_preamble;
     const uint32_t ne0 = uctx->nc;
     float epsilon = 0.f;
@@ -301,10 +507,11 @@ static void rms_norm_mul_add_f32(const void * restrict src,
 
     for (uint32_t ir = 0; ir < num_rows; ir++) {
         const uint8_t * restrict src_local = (const uint8_t *) src + (ir * src0_row_size_aligned);
-        const uint8_t * restrict add_local = (const uint8_t *) add + (ir * src0_row_size_aligned);
+        const uint8_t * restrict add_local = (const uint8_t *) add + (ir * uctx->src2_row_size_aligned);
         uint8_t * restrict dst_local       = (uint8_t *) dst + (ir * dst_row_size_aligned);
 
-        hvx_fast_rms_norm_mul_add_f32(src_local, w_local, add_local, dst_local, ne0, epsilon, scale);
+        HVX_Vector scale_v = rms_norm_row_scale(src_local, ne0, epsilon, scale, uctx->src0_f16);
+        rms_norm_apply_row(src_local, w_local, add_local, dst_local, ne0, scale_v, uctx);
     }
 }
 
@@ -431,23 +638,6 @@ static void leaky_relu_f16(const void * restrict src,
         uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
         hvx_leaky_relu_scalar_f16_aa(dst_local, src_local, negative_slope, ne0);
-    }
-}
-
-static void rms_norm_f16(const void * restrict src,
-                         void * restrict dst,
-                         const uint32_t num_rows,
-                         const uint32_t ne0,
-                         const struct htp_unary_context * uctx) {
-    htp_unary_op_preamble;
-    float epsilon = 0.f;
-    memcpy(&epsilon, op_params, sizeof(float));
-
-    for (uint32_t ir = 0; ir < num_rows; ir++) {
-        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
-        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
-
-        hvx_fast_rms_norm_f16((const uint8_t *) src_local, (uint8_t *) dst_local, ne0, epsilon);
     }
 }
 
@@ -1774,7 +1964,7 @@ static void unary_thread_row_block(const htp_thread_t * th, unsigned int nth, un
 }
 
 // 2. RMS_NORM_MUL row-block task with weight buffer.
-static void unary_thread_rms_norm_mul_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+static void unary_thread_rms_norm_mul(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
     struct htp_ops_context * octx = uctx->octx;
@@ -1908,7 +2098,7 @@ static void unary_thread_rms_norm_mul_f32(const htp_thread_t * th, unsigned int 
 }
 
 // 2b. RMS_NORM_MUL_ADD row-block task with broadcast weight and residual add.
-static void unary_thread_rms_norm_mul_add_f32(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+static void unary_thread_rms_norm_mul_add(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     (void) nth;
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
     struct htp_ops_context * octx = uctx->octx;
@@ -1918,10 +2108,17 @@ static void unary_thread_rms_norm_mul_add_f32(const htp_thread_t * th, unsigned 
 
     htp_unary_preamble;
 
-    const uint32_t src0_nrows_per_hvx = uctx->src0_nrows_per_hvx;
-    const size_t src0_data_row_size = uctx->src0_data_row_size;
-    const size_t dst_data_row_size  = uctx->dst_data_row_size;
+    const struct htp_tensor * src2 = octx->src[2];
+    const uint32_t nb21 = src2->nb[1];
+    const uint32_t nb22 = src2->nb[2];
+    const uint32_t nb23 = src2->nb[3];
+
+    const uint32_t src0_nrows_per_hvx  = uctx->src0_nrows_per_hvx;
+    const size_t src0_data_row_size    = uctx->src0_data_row_size;
+    const size_t src2_data_row_size    = uctx->src2_data_row_size;
+    const size_t dst_data_row_size     = uctx->dst_data_row_size;
     const size_t src0_row_size_aligned = uctx->src0_row_size_aligned;
+    const size_t src2_row_size_aligned = uctx->src2_row_size_aligned;
     const size_t dst_row_size_aligned  = uctx->dst_row_size_aligned;
 
     const uint32_t src0_nrows     = uctx->src0_nrows;
@@ -1943,6 +2140,7 @@ static void unary_thread_rms_norm_mul_add_f32(const htp_thread_t * th, unsigned 
     uint8_t * dst_vtcm_data  = uctx->vtcm_dst  + (ith * uctx->vtcm_dst_size_per_hvx);
 
     const size_t src0_vtcm_half_size = uctx->src0_vtcm_half_size;
+    const size_t src2_vtcm_half_size = uctx->src2_vtcm_half_size;
     const size_t dst_vtcm_half_size  = uctx->dst_vtcm_half_size;
 
     const bool src0_contig = uctx->kparams->src0_contig;
@@ -1967,12 +2165,14 @@ static void unary_thread_rms_norm_mul_add_f32(const htp_thread_t * th, unsigned 
 
         const size_t src0_off = src0_contig ? ((size_t) ir * nb01) :
             unary_row_offset(ir, ne01, ne02, div_ne01, div_ne02, div_ne012, nb01, nb02, nb03);
+        const size_t src2_off = src0_contig ? ((size_t) ir * nb21) :
+            unary_row_offset(ir, ne01, ne02, div_ne01, div_ne02, div_ne012, nb21, nb22, nb23);
         dma_queue_push(dma_q,
             dma_make_data(src0_vtcm_data + (vtcm_idx * src0_vtcm_half_size), data_src + src0_off),
             src0_row_size_aligned, nb01, src0_data_row_size, block_size);
         dma_queue_push(dma_q,
-            dma_make_data(src2_vtcm_data + (vtcm_idx * src0_vtcm_half_size), data_src2 + src0_off),
-            src0_row_size_aligned, nb01, src0_data_row_size, block_size);
+            dma_make_data(src2_vtcm_data + (vtcm_idx * src2_vtcm_half_size), data_src2 + src2_off),
+            src2_row_size_aligned, nb21, src2_data_row_size, block_size);
 
         ir += block_size;
     }
@@ -2005,18 +2205,197 @@ static void unary_thread_rms_norm_mul_add_f32(const htp_thread_t * th, unsigned 
                                                                   ne01, div_ne01);
                 const size_t src0_pref_off = src0_contig ? ((size_t) pref_ir * nb01) :
                     unary_row_offset(pref_ir, ne01, ne02, div_ne01, div_ne02, div_ne012, nb01, nb02, nb03);
+                const size_t src2_pref_off = src0_contig ? ((size_t) pref_ir * nb21) :
+                    unary_row_offset(pref_ir, ne01, ne02, div_ne01, div_ne02, div_ne012, nb21, nb22, nb23);
                 dma_queue_push(dma_q,
                     dma_make_data(src0_vtcm, data_src + src0_pref_off),
                     src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);
                 dma_queue_push(dma_q,
-                    dma_make_data(src2_vtcm, data_src2 + src0_pref_off),
-                    src0_row_size_aligned, nb01, src0_data_row_size, pref_block_size);
+                    dma_make_data(src2_vtcm, data_src2 + src2_pref_off),
+                    src2_row_size_aligned, nb21, src2_data_row_size, pref_block_size);
             }
         }
         ir += block_size;
     }
 
     dma_queue_flush(dma_q);
+}
+
+// 2c. 2-pass column-tiled task for wide-row RMS_NORM / RMS_NORM_MUL / RMS_NORM_MUL_ADD.
+static void unary_thread_tiled_rms_norm(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;
+    struct htp_ops_context * octx = uctx->octx;
+    const struct htp_tensor * src = octx->src[0];
+    const struct htp_tensor * dst = octx->dst;
+    struct htp_thread_trace * tr = th->trace;
+
+    htp_unary_preamble;
+
+    const uint32_t src0_nrows_per_hvx = uctx->src0_nrows_per_hvx;
+    const uint32_t col_tile           = uctx->col_tile;
+
+    const uint32_t src0_nrows     = uctx->src0_nrows;
+    const uint32_t src0_start_row = uctx->row_start + src0_nrows_per_hvx * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_hvx, uctx->row_start + src0_nrows);
+
+    if (src0_start_row >= src0_end_row) {
+        return;
+    }
+
+    const bool has_weight = (octx->op == HTP_OP_RMS_NORM_MUL || octx->op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2   = (octx->op == HTP_OP_RMS_NORM_MUL_ADD);
+
+    const struct htp_tensor * src1 = has_weight ? octx->src[1] : NULL;
+    const struct htp_tensor * src2 = has_src2   ? octx->src[2] : NULL;
+
+    const uint32_t nb10 = has_weight ? src1->nb[0] : 0;
+    const uint32_t nb11 = has_weight ? src1->nb[1] : 0;
+    const uint32_t nb12 = has_weight ? src1->nb[2] : 0;
+    const uint32_t nb13 = has_weight ? src1->nb[3] : 0;
+
+    const uint32_t nb20 = has_src2 ? src2->nb[0] : 0;
+    const uint32_t nb21 = has_src2 ? src2->nb[1] : 0;
+    const uint32_t nb22 = has_src2 ? src2->nb[2] : 0;
+    const uint32_t nb23 = has_src2 ? src2->nb[3] : 0;
+
+    const dma_addr_t data_src  = uctx->data_src0;
+    const dma_addr_t data_src1 = uctx->data_src1;
+    const dma_addr_t data_src2 = uctx->data_src2;
+    const dma_addr_t data_dst  = uctx->data_dst;
+
+    uint8_t * src0_vtcm_data = uctx->vtcm_src0 + (ith * uctx->vtcm_src0_size_per_hvx);
+    uint8_t * src1_vtcm_data = uctx->vtcm_src1 ? (uctx->vtcm_src1 + (ith * uctx->vtcm_src1_size_per_hvx)) : NULL;
+    uint8_t * src2_vtcm_data = uctx->vtcm_src2 ? (uctx->vtcm_src2 + (ith * uctx->vtcm_src2_size_per_hvx)) : NULL;
+    uint8_t * dst_vtcm_data  = uctx->vtcm_dst  + (ith * uctx->vtcm_dst_size_per_hvx);
+
+    const size_t src0_half = uctx->src0_vtcm_half_size;
+    const size_t src1_half = uctx->src1_vtcm_half_size;
+    const size_t src2_half = uctx->src2_vtcm_half_size;
+    const size_t dst_half  = uctx->dst_vtcm_half_size;
+
+    const struct fastdiv_values * div_ne01  = &uctx->kparams->div_ne01;
+    const struct fastdiv_values * div_ne02  = &uctx->kparams->div_ne02;
+    const struct fastdiv_values * div_ne012 = &uctx->kparams->div_ne012;
+
+    const uint32_t tiles_per_row = uctx->kparams->tiles_per_row;
+    const bool     src0_contig   = uctx->kparams->src0_contig;
+    const bool     src1_contig   = uctx->kparams->src1_contig;
+
+    float epsilon = 0.f;
+    float scale   = 0.f;
+    memcpy(&epsilon, &octx->op_params[0], sizeof(float));
+    memcpy(&scale,   &octx->op_params[1], sizeof(float));
+
+    dma_queue * dma_q = th->dma_q;
+
+    for (uint32_t row = src0_start_row; row < src0_end_row; row++) {
+        const size_t src0_row_off = src0_contig ? ((size_t) row * nb01) :
+            unary_row_offset(row, ne01, ne02, div_ne01, div_ne02, div_ne012, nb01, nb02, nb03);
+        const size_t src1_row_off = (!has_weight || uctx->broadcast_weight) ? 0 :
+            (src1_contig ? ((size_t) row * nb11) :
+             unary_row_offset(row, ne01, ne02, div_ne01, div_ne02, div_ne012, nb11, nb12, nb13));
+        const size_t src2_row_off = !has_src2 ? 0 :
+            (src0_contig ? ((size_t) row * nb21) :
+             unary_row_offset(row, ne01, ne02, div_ne01, div_ne02, div_ne012, nb21, nb22, nb23));
+        const size_t dst_row_off  = (size_t) row * nb1;
+
+        for (uint32_t t = 0; t < tiles_per_row && t < 2; t++) {
+            const uint32_t col = t * col_tile;
+            const uint32_t tw  = MIN(col_tile, ne0 - col);
+            const size_t   tb0 = (size_t) tw * nb00;
+            dma_queue_push(dma_q,
+                dma_make_data(src0_vtcm_data + (t * src0_half), data_src + src0_row_off + (size_t) col * nb00),
+                tb0, tb0, tb0, 1);
+        }
+
+        float sum_sq = 0.0f;
+        for (uint32_t t = 0; t < tiles_per_row; t++) {
+            const uint32_t col = t * col_tile;
+            const uint32_t tw  = MIN(col_tile, ne0 - col);
+            const uint8_t * s0 = (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
+
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row);
+            sum_sq += rms_norm_tile_sum_sq(s0, tw, uctx->src0_f16);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, row);
+
+            const uint32_t pt = t + 2;
+            if (pt < tiles_per_row) {
+                const uint32_t pcol = pt * col_tile;
+                const uint32_t ptw  = MIN(col_tile, ne0 - pcol);
+                const size_t   ptb0 = (size_t) ptw * nb00;
+                dma_queue_push(dma_q,
+                    dma_make_data((void *) s0, data_src + src0_row_off + (size_t) pcol * nb00),
+                    ptb0, ptb0, ptb0, 1);
+            }
+        }
+
+        for (uint32_t t = 0; t < tiles_per_row && t < 2; t++) {
+            const uint32_t col = t * col_tile;
+            const uint32_t tw  = MIN(col_tile, ne0 - col);
+            const size_t   tb0 = (size_t) tw * nb00;
+
+            dma_queue_push(dma_q, dma_make_data(data_dst, dst_vtcm_data + (t * dst_half)), 0, 0, 0, 0);
+            dma_queue_push(dma_q,
+                dma_make_data(src0_vtcm_data + (t * src0_half), data_src + src0_row_off + (size_t) col * nb00),
+                tb0, tb0, tb0, 1);
+            if (has_weight) {
+                const size_t tb1 = (size_t) tw * nb10;
+                dma_queue_push(dma_q,
+                    dma_make_data(src1_vtcm_data + (t * src1_half), data_src1 + src1_row_off + (size_t) col * nb10),
+                    tb1, tb1, tb1, 1);
+            }
+            if (has_src2) {
+                const size_t tb2 = (size_t) tw * nb20;
+                dma_queue_push(dma_q,
+                    dma_make_data(src2_vtcm_data + (t * src2_half), data_src2 + src2_row_off + (size_t) col * nb20),
+                    tb2, tb2, tb2, 1);
+            }
+        }
+
+        for (uint32_t t = 0; t < tiles_per_row; t++) {
+            const uint32_t col = t * col_tile;
+            const uint32_t tw  = MIN(col_tile, ne0 - col);
+
+            uint8_t *       d_vtcm  = (uint8_t *) (uintptr_t) dma_queue_pop(dma_q).src;
+            const uint8_t * s0_vtcm = (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst;
+            const uint8_t * s1_vtcm = has_weight ? (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst : NULL;
+            const uint8_t * s2_vtcm = has_src2   ? (const uint8_t *) (uintptr_t) dma_queue_pop(dma_q).dst : NULL;
+
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, row);
+            rms_norm_apply_tile(s0_vtcm, s1_vtcm, s2_vtcm, d_vtcm, tw, ne0, sum_sq, epsilon, scale, uctx);
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, row);
+
+            const size_t tb_dst = (size_t) tw * nb0;
+            dma_queue_push(dma_q,
+                dma_make_data(data_dst + dst_row_off + (size_t) col * nb0, d_vtcm),
+                tb_dst, tb_dst, tb_dst, 1);
+
+            const uint32_t pt = t + 2;
+            if (pt < tiles_per_row) {
+                const uint32_t pcol = pt * col_tile;
+                const uint32_t ptw  = MIN(col_tile, ne0 - pcol);
+                const size_t   ptb0 = (size_t) ptw * nb00;
+                dma_queue_push(dma_q,
+                    dma_make_data((void *) s0_vtcm, data_src + src0_row_off + (size_t) pcol * nb00),
+                    ptb0, ptb0, ptb0, 1);
+                if (has_weight) {
+                    const size_t ptb1 = (size_t) ptw * nb10;
+                    dma_queue_push(dma_q,
+                        dma_make_data((void *) s1_vtcm, data_src1 + src1_row_off + (size_t) pcol * nb10),
+                        ptb1, ptb1, ptb1, 1);
+                }
+                if (has_src2) {
+                    const size_t ptb2 = (size_t) ptw * nb20;
+                    dma_queue_push(dma_q,
+                        dma_make_data((void *) s2_vtcm, data_src2 + src2_row_off + (size_t) pcol * nb20),
+                        ptb2, ptb2, ptb2, 1);
+                }
+            }
+        }
+
+        dma_queue_flush(dma_q);
+    }
 }
 
 // 3. TRI row-block task with row index ir.
@@ -2338,33 +2717,33 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     const char * op_type = NULL;
 
     switch (octx->op) {
-        case HTP_OP_NORM:             op_type = is_f16 ? "norm-f16"       : "norm-f32";         break;
-        case HTP_OP_RMS_NORM:         op_type = is_f16 ? "rmsnorm-f16"    : "rmsnorm-f32";      break;
-        case HTP_OP_RMS_NORM_MUL:     op_type = "rmsnorm-mul-f32";                              break;
-        case HTP_OP_RMS_NORM_MUL_ADD: op_type = "rmsnorm-mul-add-f32";                          break;
-        case HTP_OP_SCALE:            op_type = is_f16 ? "scale-f16"      : "scale-f32";        break;
-        case HTP_OP_CLAMP:            op_type = is_f16 ? "clamp-f16"      : "clamp-f32";        break;
-        case HTP_OP_LEAKY_RELU:       op_type = is_f16 ? "leaky-relu-f16" : "leaky-relu-f32";   break;
-        case HTP_OP_SQR:              op_type = is_f16 ? "sqr-f16"        : "sqr-f32";          break;
-        case HTP_OP_SQRT:             op_type = is_f16 ? "sqrt-f16"       : "sqrt-f32";         break;
-        case HTP_OP_UNARY_NEG:        op_type = is_f16 ? "neg-f16"        : "neg-f32";          break;
-        case HTP_OP_UNARY_EXP:        op_type = is_f16 ? "exp-f16"        : "exp-f32";          break;
-        case HTP_OP_UNARY_SIGMOID:    op_type = is_f16 ? "sigmoid-f16"    : "sigmoid-f32";      break;
-        case HTP_OP_UNARY_SILU:       op_type = is_f16 ? "silu-f16"       : "silu-f32";         break;
-        case HTP_OP_UNARY_GELU:       op_type = is_f16 ? "gelu-f16"       : "gelu-f32";         break;
-        case HTP_OP_UNARY_GELU_QUICK: op_type = is_f16 ? "gelu-quick-f16" : "gelu-quick-f32";   break;
-        case HTP_OP_UNARY_GELU_ERF:   op_type = is_f16 ? "gelu-erf-f16"   : "gelu-erf-f32";     break;
-        case HTP_OP_UNARY_SOFTPLUS:   op_type = is_f16 ? "softplus-f16"   : "softplus-f32";     break;
-        case HTP_OP_UNARY_TANH:       op_type = is_f16 ? "tanh-f16"       : "tanh-f32";         break;
-        case HTP_OP_UNARY_ABS:        op_type = is_f16 ? "abs-f16"        : "abs-f32";          break;
-        case HTP_OP_UNARY_LOG:        op_type = is_f16 ? "log-f16"        : "log-f32";          break;
-        case HTP_OP_UNARY_RELU:       op_type = is_f16 ? "relu-f16"       : "relu-f32";         break;
-        case HTP_OP_UNARY_STEP:       op_type = is_f16 ? "step-f16"       : "step-f32";         break;
-        case HTP_OP_UNARY_CEIL:       op_type = is_f16 ? "ceil-f16"       : "ceil-f32";         break;
-        case HTP_OP_UNARY_SGN:        op_type = is_f16 ? "sgn-f16"        : "sgn-f32";          break;
-        case HTP_OP_L2_NORM:          op_type = is_f16 ? "l2norm-f16"     : "l2norm-f32";       break;
-        case HTP_OP_TRI:              op_type = "tri-f32";                                      break;
-        case HTP_OP_HADAMARD:         op_type = is_f16 ? "hadamard-f16"   : "hadamard-f32";     break;
+        case HTP_OP_NORM:             op_type = is_f16 ? "norm-f16"            : "norm-f32";            break;
+        case HTP_OP_RMS_NORM:         op_type = is_f16 ? "rmsnorm-f16"         : "rmsnorm-f32";         break;
+        case HTP_OP_RMS_NORM_MUL:     op_type = is_f16 ? "rmsnorm-mul-f16"     : "rmsnorm-mul-f32";     break;
+        case HTP_OP_RMS_NORM_MUL_ADD: op_type = is_f16 ? "rmsnorm-mul-add-f16" : "rmsnorm-mul-add-f32"; break;
+        case HTP_OP_SCALE:            op_type = is_f16 ? "scale-f16"           : "scale-f32";           break;
+        case HTP_OP_CLAMP:            op_type = is_f16 ? "clamp-f16"           : "clamp-f32";           break;
+        case HTP_OP_LEAKY_RELU:       op_type = is_f16 ? "leaky-relu-f16"      : "leaky-relu-f32";      break;
+        case HTP_OP_SQR:              op_type = is_f16 ? "sqr-f16"             : "sqr-f32";             break;
+        case HTP_OP_SQRT:             op_type = is_f16 ? "sqrt-f16"            : "sqrt-f32";            break;
+        case HTP_OP_UNARY_NEG:        op_type = is_f16 ? "neg-f16"             : "neg-f32";             break;
+        case HTP_OP_UNARY_EXP:        op_type = is_f16 ? "exp-f16"             : "exp-f32";             break;
+        case HTP_OP_UNARY_SIGMOID:    op_type = is_f16 ? "sigmoid-f16"         : "sigmoid-f32";         break;
+        case HTP_OP_UNARY_SILU:       op_type = is_f16 ? "silu-f16"            : "silu-f32";            break;
+        case HTP_OP_UNARY_GELU:       op_type = is_f16 ? "gelu-f16"            : "gelu-f32";            break;
+        case HTP_OP_UNARY_GELU_QUICK: op_type = is_f16 ? "gelu-quick-f16"      : "gelu-quick-f32";      break;
+        case HTP_OP_UNARY_GELU_ERF:   op_type = is_f16 ? "gelu-erf-f16"        : "gelu-erf-f32";        break;
+        case HTP_OP_UNARY_SOFTPLUS:   op_type = is_f16 ? "softplus-f16"        : "softplus-f32";        break;
+        case HTP_OP_UNARY_TANH:       op_type = is_f16 ? "tanh-f16"            : "tanh-f32";            break;
+        case HTP_OP_UNARY_ABS:        op_type = is_f16 ? "abs-f16"             : "abs-f32";             break;
+        case HTP_OP_UNARY_LOG:        op_type = is_f16 ? "log-f16"             : "log-f32";             break;
+        case HTP_OP_UNARY_RELU:       op_type = is_f16 ? "relu-f16"            : "relu-f32";            break;
+        case HTP_OP_UNARY_STEP:       op_type = is_f16 ? "step-f16"            : "step-f32";            break;
+        case HTP_OP_UNARY_CEIL:       op_type = is_f16 ? "ceil-f16"            : "ceil-f32";            break;
+        case HTP_OP_UNARY_SGN:        op_type = is_f16 ? "sgn-f16"             : "sgn-f32";             break;
+        case HTP_OP_L2_NORM:          op_type = is_f16 ? "l2norm-f16"          : "l2norm-f32";          break;
+        case HTP_OP_TRI:              op_type = "tri-f32";                                              break;
+        case HTP_OP_HADAMARD:         op_type = is_f16 ? "hadamard-f16"        : "hadamard-f32";        break;
         default:
             FARF(ERROR, "Unsupported unary Op %u\n", octx->op);
             return HTP_STATUS_NO_SUPPORT;
@@ -2376,11 +2755,22 @@ static int execute_op_unary(struct htp_ops_context * octx) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
+    const bool has_weight = (octx->op == HTP_OP_RMS_NORM_MUL || octx->op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2   = (octx->op == HTP_OP_RMS_NORM_MUL_ADD);
+
+    const struct htp_tensor * src1 = has_weight ? octx->src[1] : NULL;
+    const struct htp_tensor * src2 = has_src2   ? octx->src[2] : NULL;
+
     const size_t src0_elem_size = is_f16 ? sizeof(_Float16) : sizeof(float);
     const size_t dst_elem_size  = (dst->type == HTP_TYPE_F16) ? sizeof(_Float16) : sizeof(float);
+    const size_t src1_elem_size = (has_weight && src1->type == HTP_TYPE_F16) ? sizeof(_Float16) : sizeof(float);
+    const size_t src2_elem_size = (has_src2   && src2->type == HTP_TYPE_F16) ? sizeof(_Float16) : sizeof(float);
+
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const size_t src0_data_row_size = src0->ne[0] * src0_elem_size;
     const size_t dst_data_row_size  = dst->ne[0]  * dst_elem_size;
+    const size_t src1_data_row_size = has_weight ? (src1->ne[0] * src1_elem_size) : 0;
+    const size_t src2_data_row_size = has_src2   ? (src2->ne[0] * src2_elem_size) : 0;
 
     uint32_t row_start = 0;
     uint32_t nrows     = src0_nrows;
@@ -2401,19 +2791,7 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
     const uint32_t col_tile = kparams->col_tile;
 
-    size_t src1_data_row_size = 0;
     bool broadcast_weight = kparams->broadcast_weight;
-    const struct htp_tensor * src1 = NULL;
-
-    const bool has_weight = (octx->op == HTP_OP_RMS_NORM_MUL || octx->op == HTP_OP_RMS_NORM_MUL_ADD);
-    const bool has_src2   = (octx->op == HTP_OP_RMS_NORM_MUL_ADD);
-
-    // RMS_NORM_MUL* fusion is F32-only (its weight tensor is always F32; see
-    // try_fuse_node()'s type guard), so this never triggers when is_f16 is true.
-    if (has_weight) {
-        src1 = octx->src[1];
-        src1_data_row_size = src1->ne[0] * sizeof(float);
-    }
 
     if ((!col_tile && kparams->block == 0) || octx->ctx->vtcm_size < (size_t) kparams->vtcm_size) {
         FARF(ERROR, "unary-%s : current VTCM reservation %zu is too small, needed %zu\n", op_type, octx->ctx->vtcm_size, (size_t) kparams->vtcm_size);
@@ -2425,8 +2803,9 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     octx->dst_spad.src  = NULL;
 
     struct htp_unary_vtcm_layout L;
-    htp_unary_vtcm_layout_build(&L, octx->op, src0_data_row_size, dst_data_row_size, src1_data_row_size,
-                                src0_elem_size, col_tile, kparams->block, broadcast_weight, kparams->n_hvx);
+    htp_unary_vtcm_layout_build(&L, octx->op, src0_data_row_size, dst_data_row_size, src1_data_row_size, src2_data_row_size,
+                                src0_elem_size, dst_elem_size, src1_elem_size, src2_elem_size,
+                                col_tile, kparams->block, broadcast_weight, kparams->n_hvx);
 
     FARF(HIGH, "%s: (%ux%ux%ux%u) -> (%ux%ux%ux%u) : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu\n", op_type,
          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
@@ -2442,25 +2821,32 @@ static int execute_op_unary(struct htp_ops_context * octx) {
 
         .data_src0             = src0->data,
         .data_src1             = has_weight ? src1->data : 0,
-        .data_src2             = has_src2 ? octx->src[2]->data : 0,
+        .data_src2             = has_src2 ? src2->data : 0,
         .data_dst              = dst->data,
 
         .src0_data_row_size    = src0_data_row_size,
         .src1_data_row_size    = src1_data_row_size,
+        .src2_data_row_size    = src2_data_row_size,
         .dst_data_row_size     = dst_data_row_size,
 
         .src0_row_size_aligned = L.src0_row_size_aligned,
         .src1_row_size_aligned = L.src1_row_size_aligned,
+        .src2_row_size_aligned = L.src2_row_size_aligned,
         .dst_row_size_aligned  = L.dst_row_size_aligned,
 
         .src0_vtcm_half_size   = L.src0_bytes >> 1,
-        .src1_vtcm_half_size   = has_weight ? (L.src1_bytes >> (broadcast_weight ? 0 : 1)) : 0,
+        .src1_vtcm_half_size   = has_weight ? (L.src1_bytes >> ((broadcast_weight && !col_tile) ? 0 : 1)) : 0,
+        .src2_vtcm_half_size   = L.src2_bytes >> 1,
         .dst_vtcm_half_size    = L.dst_bytes >> 1,
 
         .block                 = kparams->block,
         .nc                    = src0->ne[0],
         .col_tile              = col_tile,
         .broadcast_weight      = broadcast_weight,
+        .src0_f16              = is_f16,
+        .src1_f16              = has_weight && (src1->type == HTP_TYPE_F16),
+        .src2_f16              = has_src2   && (src2->type == HTP_TYPE_F16),
+        .dst_f16               = (dst->type == HTP_TYPE_F16),
 
         .vtcm_src0             = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src0),
         .vtcm_src1             = VTCM_LAYOUT_PTR_OPTIONAL(uint8_t, base, L.off_src1, L.src1_bytes > 0),
@@ -2478,10 +2864,26 @@ static int execute_op_unary(struct htp_ops_context * octx) {
     work_queue_func_t task_func = col_tile ? unary_thread_tiled : unary_thread_row_block;
     void * compute_func = NULL;
 
-    if (is_f16) {
+    switch (octx->op) {
+        case HTP_OP_RMS_NORM:
+            task_func    = col_tile ? unary_thread_tiled_rms_norm : unary_thread_row_block;
+            compute_func = (void *) rms_norm_rows;
+            break;
+        case HTP_OP_RMS_NORM_MUL:
+            task_func    = col_tile ? unary_thread_tiled_rms_norm : unary_thread_rms_norm_mul;
+            compute_func = (void *) rms_norm_mul_rows;
+            break;
+        case HTP_OP_RMS_NORM_MUL_ADD:
+            task_func    = col_tile ? unary_thread_tiled_rms_norm : unary_thread_rms_norm_mul_add;
+            compute_func = (void *) rms_norm_mul_add_rows;
+            break;
+        default:
+            break;
+    }
+
+    if (!compute_func && is_f16) {
         switch (octx->op) {
             case HTP_OP_NORM:             compute_func = (void *) norm_f16;        break;
-            case HTP_OP_RMS_NORM:         compute_func = (void *) rms_norm_f16;    break;
             case HTP_OP_SCALE:            compute_func = (void *) scale_f16;       break;
             case HTP_OP_CLAMP:            compute_func = (void *) clamp_f16;       break;
             case HTP_OP_LEAKY_RELU:       compute_func = (void *) leaky_relu_f16;  break;
@@ -2506,18 +2908,9 @@ static int execute_op_unary(struct htp_ops_context * octx) {
             case HTP_OP_HADAMARD:         compute_func = (void *) hadamard_f16;    break;
             default:                      break;
         }
-    } else {
+    } else if (!compute_func) {
         switch (octx->op) {
             case HTP_OP_NORM:             compute_func = (void *) norm_f32;        break;
-            case HTP_OP_RMS_NORM:         compute_func = (void *) rms_norm_f32;    break;
-            case HTP_OP_RMS_NORM_MUL:
-                task_func    = unary_thread_rms_norm_mul_f32;
-                compute_func = (void *) rms_norm_mul_f32;
-                break;
-            case HTP_OP_RMS_NORM_MUL_ADD:
-                task_func    = unary_thread_rms_norm_mul_add_f32;
-                compute_func = (void *) rms_norm_mul_add_f32;
-                break;
             case HTP_OP_SCALE:            compute_func = (void *) scale_f32;       break;
             case HTP_OP_CLAMP:            compute_func = (void *) clamp_f32;       break;
             case HTP_OP_LEAKY_RELU:       compute_func = (void *) leaky_relu_f32;  break;

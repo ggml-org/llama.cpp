@@ -138,7 +138,9 @@ static bool fuse_rms_norm_mul(const ggml_hexagon_session * sess, htp_opnode & pr
 
     const ggml_tensor * src0 = prev.src0();
     const ggml_tensor * dst  = cur.dst();
-    if (src0->type != GGML_TYPE_F32 || src0->ne[0] != weight->ne[0] || !htp_same_shape_and_contiguity(prev.dst(), dst)) return false;
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16) ||
+        src0->ne[0] != weight->ne[0] || !htp_same_shape_and_contiguity(prev.dst(), dst)) return false;
     if (htp_inputs_overlap_unsafe(prev, dst, weight)) return false;
 
     const bool is_row_bcast  = (weight->ne[1] == 1 && weight->ne[2] == 1 && weight->ne[3] == 1);
@@ -170,11 +172,13 @@ static bool fuse_rms_norm_mul_add(const ggml_hexagon_session * sess, htp_opnode 
     const ggml_tensor * src0   = prev.src0();
     const ggml_tensor * weight = prev.inputs[1];
     const ggml_tensor * dst    = cur.dst();
-    if (!ggml_are_same_layout(src0, r)) return false;
+    if ((r->type != GGML_TYPE_F32 && r->type != GGML_TYPE_F16) ||
+        (weight->type != GGML_TYPE_F32 && weight->type != GGML_TYPE_F16)) return false;
+    if (!ggml_are_same_shape(src0, r) || (ggml_is_contiguous(src0) != ggml_is_contiguous(r))) return false;
     if (htp_inputs_overlap_unsafe(prev, dst, r)) return false;
 
     struct htp_unary_kernel_params kparams;
-    if (!htp_kparams_solve_rms_norm_mul_add(sess, src0, weight, dst, &kparams)) return false;
+    if (!htp_kparams_solve_rms_norm_mul_add(sess, src0, weight, r, dst, &kparams)) return false;
 
     prev.opcode = HTP_OP_RMS_NORM_MUL_ADD;
     prev.inputs.push_back(r);
@@ -191,7 +195,7 @@ static bool fuse_rms_norm_scale(const ggml_hexagon_session * sess, htp_opnode & 
 
     const ggml_tensor * src0 = prev.src0();
     const ggml_tensor * dst  = cur.dst();
-    if (src0->type != GGML_TYPE_F32 || !htp_same_shape_and_contiguity(prev.dst(), dst)) return false;
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || !htp_same_shape_and_contiguity(prev.dst(), dst)) return false;
     if (htp_inputs_overlap_unsafe(prev, dst)) return false;
 
     float scale = 0.0f;

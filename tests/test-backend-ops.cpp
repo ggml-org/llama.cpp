@@ -4386,7 +4386,14 @@ struct test_rms_norm_mul_add : public test_case {
 
     double max_nmse_err() override {
         // fused ops round to BF16 once, the CPU rounds after each op
-        return type == GGML_TYPE_BF16 ? 1e-4 : test_case::max_nmse_err();
+        if (type == GGML_TYPE_BF16) {
+            return 1e-4;
+        }
+        const char * f16_test = getenv("GGML_HEXAGON_F16_TEST");
+        if (f16_test && atoi(f16_test) != 0) {
+            return 1e-6;
+        }
+        return test_case::max_nmse_err();
     }
 
     float grad_eps() override {
@@ -4395,6 +4402,114 @@ struct test_rms_norm_mul_add : public test_case {
 
     bool grad_precise() override {
         return true;
+    }
+};
+
+struct test_rms_norm_f16_boundary : public test_case {
+    enum variant_t {
+        NORM_ONLY = 0,
+        NORM_SCALE = 1,
+        NORM_MUL_1D = 2,
+        NORM_MUL_1D_W16 = 3,
+        NORM_MUL_4D = 4,
+        NORM_MUL_ADD_W32_R32 = 5,
+        NORM_MUL_ADD_W16_R16 = 6,
+    };
+
+    enum io_mode_t {
+        F16_TO_F16 = 0,
+        F16_TO_F32 = 1,
+        F32_TO_F16 = 2,
+    };
+
+    const std::array<int64_t, 4> ne;
+    const float eps;
+    const variant_t variant;
+    const io_mode_t io_mode;
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return variant >= NORM_MUL_ADD_W32_R32 ? "RMS_NORM_MUL_ADD" : "RMS_NORM";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(ne, eps, variant, io_mode);
+    }
+
+    test_rms_norm_f16_boundary(std::array<int64_t, 4> ne = {128, 4, 2, 1},
+            float eps = 1e-6f, variant_t variant = NORM_ONLY, io_mode_t io_mode = F16_TO_F16)
+        : ne(ne), eps(eps), variant(variant), io_mode(io_mode) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * w = nullptr;
+        ggml_tensor * r = nullptr;
+        if (variant == NORM_MUL_1D || variant == NORM_MUL_1D_W16 ||
+            variant == NORM_MUL_ADD_W32_R32 || variant == NORM_MUL_ADD_W16_R16) {
+            ggml_tensor * w_in = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+            ggml_set_param(w_in);
+            ggml_set_name(w_in, "w_in");
+            const bool w_f16 = (variant == NORM_MUL_1D_W16 || variant == NORM_MUL_ADD_W16_R16);
+            w = w_f16 ? ggml_dup(ctx, w_in) : w_in;
+            if (w != w_in) {
+                ggml_set_name(w, "w_f16");
+            }
+        } else if (variant == NORM_MUL_4D) {
+            w = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+            ggml_set_param(w);
+            ggml_set_name(w, "w4d");
+        }
+        if (variant == NORM_MUL_ADD_W32_R32 || variant == NORM_MUL_ADD_W16_R16) {
+            ggml_tensor * r_in = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+            ggml_set_param(r_in);
+            ggml_set_name(r_in, "r_in");
+            r = (variant == NORM_MUL_ADD_W16_R16) ? ggml_dup(ctx, r_in) : r_in;
+            if (r != r_in) {
+                ggml_set_name(r, "r_f16");
+            }
+        }
+
+        // F16_TO_F16 / F16_TO_F32 wrap input in ggml_dup so htp_f16_promote promotes x to F16
+        ggml_tensor * x = (io_mode == F32_TO_F16) ? a : ggml_dup(ctx, a);
+        if (x != a) {
+            ggml_set_name(x, "x_in");
+        }
+
+        ggml_tensor * y = ggml_rms_norm(ctx, x, eps);
+        ggml_set_name(y, "norm");
+
+        if (variant == NORM_SCALE) {
+            y = ggml_scale(ctx, y, 0.5f);
+            ggml_set_name(y, "norm_scale");
+        } else if (variant == NORM_MUL_1D || variant == NORM_MUL_1D_W16 || variant == NORM_MUL_4D) {
+            y = ggml_mul(ctx, y, w);
+            ggml_set_name(y, "norm_mul");
+        } else if (variant == NORM_MUL_ADD_W32_R32 || variant == NORM_MUL_ADD_W16_R16) {
+            ggml_tensor * m = ggml_mul(ctx, y, w);
+            ggml_set_name(m, "norm_mul");
+            y = ggml_add(ctx, m, r);
+            ggml_set_name(y, "norm_mul_add");
+        }
+
+        // F16_TO_F16 / F32_TO_F16 wrap output in ggml_dup so y stays internal (F16) and out is F32
+        ggml_tensor * out = (io_mode == F16_TO_F32) ? y : ggml_dup(ctx, y);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -2.0f, 2.0f);
+        }
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
     }
 };
 
@@ -12024,6 +12139,31 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, true, false, false, GGML_TYPE_F32, GGML_TYPE_BF16));
     // the ADD operand is the BF16 input itself, added in place
     test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_BF16, { 1536, 1, 1, 1 }, 1e-6f, false, false, false, true, false, GGML_TYPE_F32));
+
+    for (int64_t n : { 64, 65, 96, 128, 256, 2048, 5120, 32768 }) {
+        const int64_t ne1 = (n <= 256) ? 4 : 2;
+        const int64_t ne2 = (n <= 256) ? 2 : 1;
+        const std::array<int64_t, 4> dims = { n, ne1, ne2, 1 };
+        for (auto io_mode : {
+                test_rms_norm_f16_boundary::F16_TO_F16,
+                test_rms_norm_f16_boundary::F16_TO_F32,
+                test_rms_norm_f16_boundary::F32_TO_F16 }) {
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_ONLY, io_mode));
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_SCALE, io_mode));
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_MUL_1D, io_mode));
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_MUL_1D_W16, io_mode));
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_MUL_4D, io_mode));
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_MUL_ADD_W32_R32, io_mode));
+            test_cases.emplace_back(new test_rms_norm_f16_boundary(dims, 1e-6f, test_rms_norm_f16_boundary::NORM_MUL_ADD_W16_R16, io_mode));
+        }
+    }
+    for (auto io_mode : {
+            test_rms_norm_f16_boundary::F16_TO_F16,
+            test_rms_norm_f16_boundary::F16_TO_F32,
+            test_rms_norm_f16_boundary::F32_TO_F16 }) {
+        test_cases.emplace_back(new test_rms_norm_f16_boundary({ 65536, 8, 1, 1 }, 1e-6f, test_rms_norm_f16_boundary::NORM_ONLY, io_mode));
+        test_cases.emplace_back(new test_rms_norm_f16_boundary({ 65536, 8, 1, 1 }, 1e-6f, test_rms_norm_f16_boundary::NORM_SCALE, io_mode));
+    }
 
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}));
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 4, 7, 2}, 1e-6f, false, true));
