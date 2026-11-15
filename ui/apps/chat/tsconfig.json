@@ -9,6 +9,7 @@
 			"@ggml-org/llama-ui/enums": ["../../lib/ui/src/lib/enums/index.ts"],
 			"@ggml-org/llama-ui/code": ["../../lib/ui/src/lib/utils/index.ts"],
 			"@ggml-org/llama-ui/utils": ["../../lib/ui/src/lib/components/ui/utils.ts"],
+			"@ggml-org/llama-ui/voice": ["../../lib/ui/src/lib/components/voice/index.ts"],
 			"@ggml-org/llama-ui/styles/*": ["../../lib/ui/src/lib/styles/*"],
 			"@ggml-org/llama-ui/theme.css": ["../../lib/ui/src/lib/styles/theme.css"],
 			"@ggml-org/llama-ui/tokens.css": ["../../lib/ui/src/lib/styles/tokens.css"],
