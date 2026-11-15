@@ -1986,7 +1986,7 @@ class TextModel(ModelBase):
             logger.info(f"gguf: rope theta swa = {local_rope_theta}")
         # Add rope_pattern from no_rope_layers
         if no_rope_layers := self.hparams.get("no_rope_layers"):
-            if len(no_rope_layers) == self.block_count:  # "no_rope_layers": [False, False, False, True]
+            if len(no_rope_layers) == self.block_count:  # "no_rope_layers": [0, 0, 0, 1]
                 rope_pattern = [bool(x) for x in no_rope_layers]
             else:  # "no_rope_layers": [3]
                 rope_pattern = [i not in no_rope_layers for i in range(self.block_count)]
