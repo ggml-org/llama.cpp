@@ -10,6 +10,7 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <cmath>
 #include <sstream>
 
 //
@@ -1564,6 +1565,17 @@ json server_task_result_metrics::to_json() {
     return json{};
 }
 
+// whole numbers are printed in full, the default stream precision rounds them to 6 digits
+static std::string metric_value_str(double value) {
+    if (value == std::floor(value) && std::fabs(value) < 9007199254740992.0) { // 2^53
+        return std::to_string((int64_t) value);
+    }
+
+    std::ostringstream ss;
+    ss << value;
+    return ss.str();
+}
+
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
 std::string server_task_result_metrics::to_metrics() {
     const std::vector<metric_item> counters = {
@@ -1676,7 +1688,7 @@ std::string server_task_result_metrics::to_metrics() {
         for (const auto & item : items) {
             prometheus << "# HELP llamacpp:" << item.name << " " << item.description << "\n"
                        << "# TYPE llamacpp:" << item.name << " " << type             << "\n"
-                       << "llamacpp:"        << item.name << " " << item.value       << "\n";
+                       << "llamacpp:"        << item.name << " " << metric_value_str(item.value) << "\n";
         }
     };
 

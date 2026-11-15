@@ -136,15 +136,19 @@ def test_cache_disk_ram_first():
 
 def test_cache_disk_ram_eviction():
     # the RAM cache has room for one of the two states
-    server.cache_ram = 1
+    server.cache_ram = 2
     server.n_ctx = 2048
     server.start()
-    process_prompt(PROMPT_A * 5)
-    process_prompt(PROMPT_B * 5)
+    process_prompt(PROMPT_A * 9)
+    process_prompt(PROMPT_B * 9)
     process_prompt(PROMPT_A)
     assert len(cache_files()) >= 1
     assert get_metric("saves_total") == len(cache_files())
-    assert get_metric("save_bytes_total") == sum(os.path.getsize(f) for f in cache_files())
+
+    # large values are not rounded
+    size_saved = sum(os.path.getsize(f) for f in cache_files())
+    assert size_saved > 1000000
+    assert get_metric("save_bytes_total") == size_saved
     assert get_metric("loads_total") == 0
 
 
