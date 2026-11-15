@@ -1113,6 +1113,9 @@ static value array_sum(const func_args & args) {
     double sum      = start->is_undefined() ? 0.0 : start->as_float();
     for (const auto & item : args.get_pos(0)->as_array()) {
         value v = attribute->is_undefined() ? item : get_attribute(item, attribute, undef);
+        if (v->is_undefined() && !attribute->is_undefined()) {
+            throw raised_exception("sum: " + item->type() + " has no attribute '" + attribute->as_string().str() + "'");
+        }
         if (!is_val<value_int>(v) && !is_val<value_float>(v)) {
             throw raised_exception("sum: unsupported operand type " + v->type());
         }
