@@ -909,11 +909,21 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_sel(
         const int64_t n_group = inp_kpool->n_group;
         const int64_t n_res   = llm_graph_input_kpool::n_sel_rows(inp_kpool->n_sel, n_group);
 
-        *sel_rows = ggml_top_k_rows(ctx0, top_k, score, inp_kpool->pool_idxs, inp_kpool->tail_idxs,
+        // a list per token follows the order of the picks, a list per group follows the pool index
+        ggml_tensor * picks = top_k;
+        if (n_group == 1) {
+            // the picks in index order: the order of top_k is arbitrary, the attention over the list depends on it
+            ggml_tensor * order = ggml_argsort(ctx0, ggml_cast(ctx0, top_k, GGML_TYPE_F32), GGML_SORT_ORDER_ASC); // [n_top_pool, n_tokens]
+            picks = ggml_get_rows(ctx0, ggml_reshape_3d(ctx0, top_k, 1, n_top_pool, n_tokens), order); // [1, n_top_pool, n_tokens]
+            picks = ggml_reshape_2d(ctx0, picks, n_top_pool, n_tokens);
+            cb(picks, "indexer_top_k_sorted", il);
+        }
+
+        *sel_rows = ggml_top_k_rows(ctx0, picks, score, inp_kpool->pool_idxs, inp_kpool->tail_idxs,
                 inp_kpool->n_kv, n_res, n_group, GGML_TYPE_I32); // [n_res, n_groups]
         cb(*sel_rows, "indexer_sel_rows", il);
 
-        ggml_tensor * sel = ggml_top_k_rows(ctx0, top_k, score, inp_kpool->pool_idxs, inp_kpool->tail_idxs,
+        ggml_tensor * sel = ggml_top_k_rows(ctx0, picks, score, inp_kpool->pool_idxs, inp_kpool->tail_idxs,
                 inp_kpool->n_kv, n_res, n_group, type_mask); // [n_res, n_groups*n_group]
         cb(sel, "indexer_sel", il);
 
