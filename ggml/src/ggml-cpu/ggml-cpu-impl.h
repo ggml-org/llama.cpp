@@ -532,6 +532,9 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 // TODO: move to ggml-threading
 void ggml_barrier(struct ggml_threadpool * tp);
 
+// pool for a NUMA device, uses the dissemination barrier (OpenMP builds only)
+struct ggml_threadpool * ggml_threadpool_new_numa(struct ggml_threadpool_params * params);
+
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
 int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
 
