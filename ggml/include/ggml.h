@@ -2260,6 +2260,7 @@ extern "C" {
     // mask:    [n_kv,     n_batch, ne32,      ne3]
     // kv_rows: [n_kv,     ne3] I32, mask column i of slice i3 uses row kv_rows[i, i3] of k and v
     // negative rows are padding, their mask entries must be -inf
+    // the result is repeatable only for the same order of the list
     GGML_API struct ggml_tensor * ggml_flash_attn_ext_rows(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
