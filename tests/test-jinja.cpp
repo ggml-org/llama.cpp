@@ -1132,6 +1132,12 @@ static void test_filters(testing & t) {
         "{\"a\": 1, \"b\": 2}"
     );
 
+    test_template(t, "tojson sort_keys=true nested with separators",
+        "{{ data|tojson(sort_keys=true, separators=(',',':')) }}",
+        {{"data", {{"name", "f"}, {"args", {{"z", 1}, {"a", json::array({json{{"y", 2}, {"b", 3}}})}}}}}},
+        "{\"args\":{\"a\":[{\"b\":3,\"y\":2}],\"z\":1},\"name\":\"f\"}"
+    );
+
     test_template(t, "tojson",
         "{{ data|tojson }}",
         {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
