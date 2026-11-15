@@ -46,19 +46,24 @@ def test_ternary_tensor_payload_roundtrip(tmp_path, qtype):
     np.testing.assert_array_equal(dequantize(tensor.data, qtype), data)
 
 
-def test_ptq1_quantize_cli_roundtrip(tmp_path):
+@pytest.mark.parametrize("width,qtype", [
+    (256, GGMLQuantizationType.PTQ1_0),
+    (96, GGMLQuantizationType.Q4_0),
+    (127, GGMLQuantizationType.F16),
+])
+def test_ptq1_quantize_cli_roundtrip(tmp_path, width, qtype):
     binary = os.environ.get("LLAMA_TEST_QUANTIZE_BIN")
     if binary is None:
         pytest.skip("set LLAMA_TEST_QUANTIZE_BIN to a CPU llama-quantize executable")
     source = tmp_path / "source.gguf"
     target = tmp_path / "ptq1.gguf"
     copied = tmp_path / "copied.gguf"
-    data = (np.arange(128 * 256, dtype=np.int32) % 3 - 1).astype(np.float32).reshape(128, 256)
+    data = (np.arange(128 * width, dtype=np.int32) % 3 - 1).astype(np.float32).reshape(128, width)
     data[:, :128] *= 0.5
     writer = GGUFWriter(source, "llama")
     writer.add_context_length(32)
     writer.add_embedding_length(128)
-    writer.add_feed_forward_length(256)
+    writer.add_feed_forward_length(width)
     writer.add_block_count(1)
     writer.add_head_count(4)
     writer.add_layer_norm_rms_eps(1e-6)
@@ -69,10 +74,12 @@ def test_ptq1_quantize_cli_roundtrip(tmp_path):
     writer.close()
     subprocess.run([binary, "--pure", str(source), str(target), "PTQ1_0", "1"], check=True, capture_output=True)
     subprocess.run([binary, str(target), str(copied), "COPY", "1"], check=True, capture_output=True)
-    expected = quantize(data, GGMLQuantizationType.PTQ1_0)
+    expected = quantize(data, qtype)
     for path in (target, copied):
         reader = GGUFReader(path)
         assert reader.fields["general.file_type"].contents() == 143
-        assert reader.tensors[0].tensor_type == GGMLQuantizationType.PTQ1_0
+        assert reader.tensors[0].tensor_type == qtype
         np.testing.assert_array_equal(reader.tensors[0].data, expected)
-        np.testing.assert_array_equal(dequantize(reader.tensors[0].data, GGMLQuantizationType.PTQ1_0), data)
+        np.testing.assert_array_equal(dequantize(reader.tensors[0].data, qtype), dequantize(expected, qtype))
+        if qtype == GGMLQuantizationType.PTQ1_0:
+            np.testing.assert_array_equal(dequantize(reader.tensors[0].data, qtype), data)

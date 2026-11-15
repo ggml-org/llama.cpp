@@ -66,6 +66,39 @@ Advanced options:
 * `--prune-layers` prune (remove) the layers in the list
 * `--override-kv` option to override model metadata by key in the quantized model. May be specified multiple times.
 
+## Group-128 ternary weights (PTQ1_0)
+
+`PTQ1_0` uses the same base-3 digit encoding as `TQ1_0`, with one fp16 scale per 128 weights instead of per 256 weights.
+It adds a separate format; it does not replace or reinterpret existing `TQ1_0` files.
+
+| Format | Weights per block | Bytes per block | Bits per weight |
+| --- | --- | --- | --- |
+| `TQ1_0` | 256 | 54 | 1.6875 |
+| `PTQ1_0` | 128 | 28 | 1.75 |
+
+A PTQ1_0 block stores 24 bytes at five trits per byte, two tail bytes at four trits per byte, then an fp16 scale.
+The scale multiplies decoded values from {-1, 0, 1}.
+Weights that are already exactly ternary with an fp16-representable scale per group of 128 round-trip losslessly.
+Combining two groups with different scales into one TQ1_0 block can introduce error.
+Quantizing arbitrary high-precision weights to ternary generally loses accuracy; measure model quality before deployment.
+
+To create a PTQ1_0 GGUF with the quantizer built from this branch:
+
+```bash
+./build/bin/llama-quantize --pure input-model-f16.gguf output-model-PTQ1_0.gguf PTQ1_0 8
+```
+
+`--pure` requests the same quantization type for quantizable tensors; it does not quantize every tensor in a model.
+Without `--pure`, the usual tensor-selection policy can retain other formats, including higher-precision embeddings or output tensors.
+A tensor row must contain a multiple of 128 values to use PTQ1_0.
+The quantizer falls back to Q4_0 when a row does not fit PTQ1_0 but is divisible by 32, or F16 when it is not divisible by 32, and reports the fallback.
+Check the per-tensor types and warnings instead of assuming every tensor in the output uses PTQ1_0.
+
+The existing `TQ1_0` CLI option and tensor ID 34 retain their original meaning.
+This branch retains the published PTQ1_0 tensor ID 143 and block layout; naming and upstream ID allocation remain subject to maintainer agreement.
+A stock runtime without this type will not load these tensors.
+Support for the tensor encoding alone does not add any model-specific graph operations or transforms required by a checkpoint.
+
 ## (Optional) Convert the multimodal components
 
 llama.cpp will convert the LLM portion of the source model, which is enough for conversational applications. If the model accepts multimodal inputs and you wish to take advantage of them, you need to create a separate GGUF file. This file is generically known as `mmproj`, for "multimedia projector"; however, it may contain various components such as vision or audio encoders in addition to projections.
