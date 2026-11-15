@@ -89,6 +89,44 @@ def test_clear_and_restore():
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
 
 
+@pytest.mark.parametrize("n_slots,n_ctx,cache_ram,n_tokens_a,n_tokens_b", [
+    (2, 512, 100, 350, 300),
+    (3, 512, 100, 350, 300),
+    # Both prompts fit in KV, but their states do not fit together in RAM.
+    (2, 2048, 1, 1200, 700),
+])
+def test_restore_under_cache_pressure(n_slots, n_ctx, cache_ram, n_tokens_a, n_tokens_b):
+    global server
+    server.n_slots = n_slots
+    server.n_ctx = n_ctx
+    server.cache_ram = cache_ram
+    server.override_kv = f"llama.context_length=int:{n_ctx}"
+    server.start()
+
+    res = server.make_request("POST", "/tokenize", data={"content": "Hello world"})
+    assert res.status_code == 200
+    tokens = res.body["tokens"]
+    prompt_a = [tokens[0]] * n_tokens_a
+    prompt_b = [tokens[-1]] * n_tokens_b
+
+    for prompt, n_cached in [
+        (prompt_a, 0),
+        (prompt_a + [tokens[0]] * 10, n_tokens_a),
+        (prompt_b, 0),
+        (prompt_a + [tokens[0]] * 20, n_tokens_a + 10),
+        (prompt_b + [tokens[-1]] * 10, n_tokens_b),
+        (prompt_a + [tokens[0]] * 30, n_tokens_a + 20),
+    ]:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        assert res.body["timings"]["cache_n"] >= n_cached
+        assert res.body["timings"]["prompt_n"] <= len(prompt) - n_cached
+
+
 def test_disabled_with_flag():
     global server
     server.no_cache_idle_slots = True
