@@ -96,6 +96,53 @@ export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
 ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512 -lv 4   # later runs: log shows "model cache HIT"
 ```
 
+## Tips for Memory Optimization
+
+With the default settings, the GPU and CPU plugins keep their own copy of the weights next to the backend's copy while a model compiles. On integrated GPUs both copies are in system RAM. The settings below lower that peak. They do not change the output.
+
+```bash
+# GPU or CPU, large model: back the weight buffer with a file, so the kernel can drop its pages.
+# Use a directory on a local disk (not tmpfs) with free space of about the model size. Can lower prompt speed.
+export GGML_OPENVINO_SPILL_DIR=$HOME/ov_spill
+mkdir -p $GGML_OPENVINO_SPILL_DIR
+```
+
+```bash
+# GPU or CPU, the same model started again and again: compile once, then load the compiled model only.
+export GGML_OPENVINO_DEVICE=GPU   # or CPU
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=$HOME/ov_cache
+GGML_OPENVINO_SPILL_DIR=$HOME/ov_spill ./build/ReleaseOV/bin/llama-cli -m model.gguf   # first run writes the cache
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1
+./build/ReleaseOV/bin/llama-cli -m model.gguf                                           # later runs skip the weight upload
+```
+
+```bash
+# GPU, one long-running model (llama-server): release the host copy of the weights after compilation.
+# One model per process; a graph that must compile again later stops the run.
+export GGML_OPENVINO_DEVICE=GPU
+export GGML_OPENVINO_MEMORY_OPTIMIZE=1
+```
+
+```bash
+# CPU, MoE model: build fewer weight nodes during compilation.
+export GGML_OPENVINO_REDUCE_COMPILE_MEM=1
+```
+
+```bash
+# NPU: weightless cache, then use the memory-mapped GGUF as the model buffer.
+export GGML_OPENVINO_DEVICE=NPU
+export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=$HOME/ov_cache
+export GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1
+./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512      # first run writes the cache
+export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
+./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512      # later runs
+```
+
+- A cache hit without `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1` shortens the load, but it uses about as much memory as a run without the cache.
+- MoE models are not written to the cache on CPU, so cache-only mode does not work for them on CPU.
+- `GGML_OPENVINO_SPILL_DIR` is ignored on Windows and in cache-only mode.
+- `-lm none` (no mmap) does not lower the memory in use, and it turns cache-only mode off.
+
 ## NPU plugin properties
 
 The backend sets the properties below for the NPU. `GGML_OPENVINO_NPU_CONFIG` can change them and add others.

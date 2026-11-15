@@ -189,6 +189,7 @@ The models below were tested with `llama-cli` and `Q4_K_M` files on an Intel® C
 |  |  |  |  |
 | [HuggingFaceTB/smollm2-1.7b-instruct-q4_k_m](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 | [openbmb/MiniCPM-V-2_6-Q4_K_M](https://huggingface.co/openbmb/MiniCPM-V-2_6-gguf) | ✓ | ✓ | ✓ |
+| [openbmb/MiniCPM-V-4_5-Q4_K_M](https://huggingface.co/openbmb/MiniCPM-V-4_5-gguf) | ✓ | ✓ | ✓ |
 | [bartowski/tencent_Hunyuan-7B-Instruct-Q4_K_M](https://huggingface.co/bartowski/tencent_Hunyuan-7B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 | [LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-Q4_K_M](https://huggingface.co/LGAI-EXAONE/EXAONE-3.5-7.8B-Instruct-GGUF) | ✓ | ✓ | ✓ |
 | [bartowski/prism-ml_Bonsai-8B-unpacked-Q4_K_M](https://huggingface.co/bartowski/prism-ml_Bonsai-8B-unpacked-GGUF) | ✓ | ✓ | ✓ |
@@ -819,6 +820,7 @@ export GGML_OPENVINO_EXACT_ZERO_POINT=1    # Boolean: 1 (on) or 0 (off)
 ```
 
 - The backend reads the variables once, at start. Unset or empty means the default.
+- To lower the memory a model needs, see [Tips for Memory Optimization](../../ggml/src/ggml-openvino/dev_doc/OpenVINO-ENV-VARS.md#tips-for-memory-optimization).
 - A value that is not valid stops the backend. A `GGML_OPENVINO_*` name that the backend does not know gives a warning:
 
 ```text
