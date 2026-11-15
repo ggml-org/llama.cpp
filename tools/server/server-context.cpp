@@ -140,7 +140,7 @@ static std::vector<llama_token> server_sample_and_accept_synth(
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
-    SLOT_STATE_WAIT_OTHER, // after assigning a task, but waiting for parent slot to process prompt
+    SLOT_STATE_WAIT_OTHER, // after assigning a task, but waiting for the parent or donor slot to process prompt
     SLOT_STATE_STARTED,    // after assigning a task and about to process prompt
     SLOT_STATE_PROCESSING_PROMPT,
     SLOT_STATE_DONE_PROMPT,
@@ -341,6 +341,15 @@ struct server_slot {
 
     server_prompt prompt;
 
+    // the slot waits for the task of another slot to process the start of the prompt, then copies it
+    int     id_slot_donor  = -1;
+    int     id_task_donor  = -1;
+    int32_t n_tokens_donor = 0;
+
+    // some cells of the sequence may belong to another slot too, they must not be shifted
+    // set on both slots by copy_prefix_to(), stays until the sequence is removed
+    bool shares_cells = false;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
         if (prompt.tokens.size() == 0) {
             return false;
@@ -385,6 +394,8 @@ struct server_slot {
         mem.seq_rm(id, -1, -1);
 
         prompt.clear();
+
+        shares_cells = false;
     }
 
     std::vector<common_adapter_lora_info> lora;
@@ -435,6 +446,10 @@ struct server_slot {
         stop           = STOP_TYPE_NONE;
         stopping_word  = "";
         n_sent_text    = 0;
+
+        id_slot_donor  = -1;
+        id_task_donor  = -1;
+        n_tokens_donor = 0;
 
         if (can_speculate()) {
             spec_draft.clear();
@@ -857,6 +872,20 @@ struct server_slot {
         other.prompt = prompt.clone();
     }
 
+    // the other slot continues from the first n_tokens tokens, no data is copied: the cells are shared
+    // only for a unified KV cache with partial sequence removal, see can_share_prompt
+    void copy_prefix_to(server_slot & other, int32_t n_tokens) {
+        other.prompt_clear();
+
+        other.prompt.tokens = prompt.tokens.clone();
+        other.prompt.tokens.keep_first(n_tokens);
+
+        mem.seq_cp(id, other.id, 0, other.prompt.tokens.pos_next());
+
+        shares_cells       = true;
+        other.shares_cells = true;
+    }
+
     void copy_state_to(server_slot & other) const {
         GGML_ASSERT(state == SLOT_STATE_DONE_PROMPT);
 
@@ -1097,6 +1126,9 @@ private:
 
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
+
+    // a new task can wait for a busy slot with the same prompt prefix and copy it, see find_donor()
+    bool can_share_prompt = false;
 
     common_speculative_ptr spec;
 
@@ -1525,6 +1557,32 @@ private:
             return false;
         }
 
+        // the copy shares the KV cells between 2 slots, and shifting a shared cell would move it for both
+        // TODO: support the other memory types, they can only be copied at the exact end of the prefix
+        {
+            const char * reason = nullptr;
+            if (params_base.n_parallel < 2) {
+                reason = "single slot";
+            } else if (!params_base.kv_unified) {
+                reason = "it needs --kv-unified";
+            } else if (params_base.ctx_shift) {
+                reason = "not compatible with --context-shift";
+            } else if (params_base.n_cache_reuse > 0) {
+                reason = "not compatible with --cache-reuse";
+            } else if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_PART || n_swa > 0) {
+                reason = "not supported by the memory of this model";
+            } else if (ctx_dft && ctx_dft_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_PART) {
+                reason = "not supported by the memory of the draft model";
+            }
+
+            can_share_prompt = reason == nullptr;
+            if (can_share_prompt) {
+                SRV_INF("%s", "prompt sharing between slots is enabled\n");
+            } else {
+                SRV_INF("prompt sharing between slots is disabled: %s\n", reason);
+            }
+        }
+
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot & slot = slots[i];
 
@@ -1810,6 +1868,84 @@ private:
             res.push_back({ slot.id, slot.task.get(), slot.is_processing(), slot.t_last_used, &slot.prompt });
         }
         return res;
+    }
+
+    // the tasks that can give or take the start of a prompt
+    static bool can_share_task(const server_task & task) {
+        return (task.type == SERVER_TASK_TYPE_COMPLETION || task.type == SERVER_TASK_TYPE_INFILL)
+            && !task.is_parent()
+            && !task.is_child()
+            && !task.is_stateless()
+            && task.params.cache_prompt
+            && task.n_tokens_shared == 0;
+    }
+
+    // a busy slot that the task can copy the start of its prompt from, call after the prompt cache update
+    server_slot_donor find_donor(const server_slot & slot, const server_task & task) {
+        if (!can_share_prompt || !can_share_task(task)) {
+            return {};
+        }
+
+        // the state is only valid for the same adapters, see launch_slot_with_task()
+        const auto task_loras = task.params.lora.empty() ? params_base.lora_adapters : construct_lora_list(task.params.lora);
+        if (lora_all_alora(task_loras)) {
+            return {};
+        }
+
+        auto infos = get_slot_infos();
+        for (size_t i = 0; i < infos.size(); i++) {
+            const server_slot & other = slots[i];
+            infos[i].can_donate = other.is_processing()
+                && other.task->type == task.type
+                && can_share_task(*other.task)
+                && are_lora_equal(other.lora, task_loras);
+        }
+
+        // the cached tokens are kept only if the adapters do not change
+        const int32_t n_have = are_lora_equal(slot.lora, task_loras) ? slot.prompt.tokens.get_common_prefix(task.tokens) : 0;
+
+        return slot_sched.select_donor(infos, task, slot.id, n_have);
+    }
+
+    // start the slots that wait for a donor, with the start of the prompt copied from it if possible
+    // call only when no token is pending in the batch: the copy takes the cells that exist now
+    void start_waiting_slots() {
+        for (auto & slot : slots) {
+            if (slot.state != SLOT_STATE_WAIT_OTHER || slot.id_slot_donor == -1) {
+                continue;
+            }
+
+            server_slot & donor = *get_slot_by_id(slot.id_slot_donor);
+
+            // the donor is still the one to wait for if it is on the same task and has not finished the prompt
+            const bool is_pending = donor.is_processing()
+                && donor.task->id == slot.id_task_donor
+                && (donor.state == SLOT_STATE_WAIT_OTHER || donor.state == SLOT_STATE_STARTED || donor.state == SLOT_STATE_PROCESSING_PROMPT);
+
+            // even if the donor was stopped or took another task, what it has may still be of use
+            const int32_t n_donor = are_lora_equal(donor.lora, slot.lora) ? donor.prompt.tokens.get_common_prefix(slot.task->tokens) : 0;
+
+            if (is_pending && n_donor < slot.n_tokens_donor) {
+                continue;
+            }
+
+            const int32_t n_have = slot.prompt.tokens.get_common_prefix(slot.task->tokens);
+
+            if (n_donor > n_have) {
+                SLT_INF(slot, "copying the first %d tokens of the prompt from slot %d (n_have = %d, n_wait = %d)\n", n_donor, donor.id, n_have, slot.n_tokens_donor);
+                SLT_DBG(slot, "%s", "__TEST_TAG_SHARE_PROMPT__\n");
+
+                donor.copy_prefix_to(slot, n_donor);
+            } else {
+                SLT_WRN(slot, "nothing to copy from slot %d (n_donor = %d, n_have = %d, n_wait = %d)\n", donor.id, n_donor, n_have, slot.n_tokens_donor);
+            }
+
+            slot.id_slot_donor  = -1;
+            slot.id_task_donor  = -1;
+            slot.n_tokens_donor = 0;
+
+            slot.state = SLOT_STATE_STARTED;
+        }
     }
 
     // call only when the task is sure to launch on the slot
@@ -2991,6 +3127,8 @@ private:
                         update_prompt_cache(*slot, task);
                     }
 
+                    const auto donor = find_donor(*slot, task);
+
                     if (task.is_parent()) {
                         if (!launch_slots_with_parent_task(*slot, child_slots, std::move(task))) {
                             SRV_ERR("failed to launch slot with parent task, id_task = %d\n", id_task);
@@ -2999,6 +3137,19 @@ private:
                     } else if (!launch_slot_with_task(*slot, std::move(task))) {
                         SRV_ERR("failed to launch slot with task, id_task = %d\n", id_task);
                         break; // drop the task
+                    }
+
+                    if (donor.id_slot != -1) {
+                        const server_slot & slot_donor = *get_slot_by_id(donor.id_slot);
+
+                        SLT_INF(*slot, "waiting for slot %d to process the first %d tokens of the prompt\n", donor.id_slot, donor.n_tokens);
+                        SLT_DBG(*slot, "%s", "__TEST_TAG_WAIT_DONOR_SLOT__\n");
+
+                        slot->id_slot_donor  = donor.id_slot;
+                        slot->id_task_donor  = slot_donor.task->id;
+                        slot->n_tokens_donor = donor.n_tokens;
+
+                        slot->state = SLOT_STATE_WAIT_OTHER;
                     }
 
                     if (params_base.cache_idle_slots) {
@@ -3698,6 +3849,8 @@ private:
     }
 
     void pre_decode() {
+        start_waiting_slots();
+
         // apply context-shift if needed
         // TODO: simplify and improve
         iterate(slots, [&](server_slot & slot) {
@@ -3932,10 +4085,12 @@ private:
                     return;
                 }
 
-                // check if this is a child slot
+                // check if this is a child slot, or a slot that waits for a donor
                 if (slot.state == SLOT_STATE_WAIT_OTHER) {
-                    SLT_DBG(slot, "%s", "waiting for parent slot to complete\n");
-                    SLT_DBG(slot, "%s", "__TEST_TAG_WAIT_PARENT_SLOT__\n");
+                    if (slot.id_slot_donor == -1) {
+                        SLT_DBG(slot, "%s", "waiting for parent slot to complete\n");
+                        SLT_DBG(slot, "%s", "__TEST_TAG_WAIT_PARENT_SLOT__\n");
+                    }
                     return;
                 }
 
@@ -4062,12 +4217,15 @@ private:
 
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;
 
+                                // a shared cell cannot be shifted, it would move for the other slot too
                                 const bool can_cache_reuse =
                                     llama_memory_can_shift(llama_get_memory(ctx_tgt)) &&
-                                    !slot.prompt.tokens.has_mtmd;
+                                    !slot.prompt.tokens.has_mtmd &&
+                                    !slot.shares_cells;
 
                                 if (!can_cache_reuse && n_cache_reuse > 0) {
-                                    SLT_WRN(slot, "cache reuse is not supported - ignoring n_cache_reuse = %d\n", n_cache_reuse);
+                                    SLT_WRN(slot, "cache reuse is not supported%s - ignoring n_cache_reuse = %d\n",
+                                            slot.shares_cells ? " for a prompt shared with another slot" : "", n_cache_reuse);
                                 }
 
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
@@ -4270,6 +4428,10 @@ private:
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
                     slot.mem.seq_rm(slot.id, p0, -1);
+
+                    if (p0 == 0) {
+                        slot.shares_cells = false;
+                    }
 
                     // shared prompt prefix: once it is processed, the children continue from it with their own prompt
                     bool wait_shared = false;

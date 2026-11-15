@@ -4,6 +4,7 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-slot-sched.h"
 
 #include <algorithm>
 #include <cmath>
@@ -240,6 +241,104 @@ static void test_server_tokens(testing & t) {
     t.test("serialize",     test_server_tokens_serialize);
     t.test("clone",         test_server_tokens_clone);
     t.test("prefix_hashes", test_server_tokens_prefix_hashes);
+}
+
+//
+// server_slot_sched
+//
+
+static void test_server_slot_sched_donor(testing & t) {
+    const int n_min = 64;
+
+    // tokens [0, n_same) are common to all prompts, the rest depends on the seed
+    auto make_tokens = [](size_t n_same, size_t n, llama_token seed) {
+        llama_tokens res(n);
+        for (size_t i = 0; i < n; i++) {
+            res[i] = i < n_same ? (llama_token) (i % 1000) : (llama_token) (seed + i % 1000);
+        }
+        return server_tokens(res, false);
+    };
+
+    // a slot that has processed n_done tokens of its task
+    struct slot_data {
+        server_task   task = server_task(SERVER_TASK_TYPE_COMPLETION);
+        server_prompt prompt;
+    };
+
+    auto make_slot = [&](size_t n_same, size_t n, llama_token seed, size_t n_done) {
+        auto res = std::make_unique<slot_data>();
+        res->task.tokens   = make_tokens(n_same, n, seed);
+        res->prompt.tokens = make_tokens(n_same, n_done, seed);
+        return res;
+    };
+
+    auto make_info = [](int id, const slot_data & data) {
+        server_slot_info res;
+        res.id            = id;
+        res.task          = &data.task;
+        res.is_processing = true;
+        res.prompt        = &data.prompt;
+        res.can_donate    = true;
+        return res;
+    };
+
+    server_slot_sched sched;
+    sched.n_donor_min = n_min;
+
+    server_task task(SERVER_TASK_TYPE_COMPLETION);
+    task.tokens = make_tokens(500, 800, 5000);
+
+    const auto s0 = make_slot(500, 900, 2000, 100); // shares 500 tokens, 100 done
+    const auto s1 = make_slot(300, 900, 3000, 300); // shares 300 tokens, all done
+    const auto s2 = make_slot(500, 700, 4000, 400); // shares 500 tokens, 400 done
+
+    {
+        const auto donor = sched.select_donor({ make_info(0, *s0), make_info(1, *s1) }, task, 3, 0);
+        t.assert_equal("longest prefix: slot",     0,   donor.id_slot);
+        t.assert_equal("longest prefix: n_tokens", 500, (int) donor.n_tokens);
+    }
+
+    {
+        const auto donor = sched.select_donor({ make_info(0, *s0), make_info(1, *s1), make_info(2, *s2) }, task, 3, 0);
+        t.assert_equal("same prefix, the furthest along: slot",     2,   donor.id_slot);
+        t.assert_equal("same prefix, the furthest along: n_tokens", 500, (int) donor.n_tokens);
+    }
+
+    t.assert_equal("the slot has enough",      -1, sched.select_donor({ make_info(0, *s0) }, task, 3, 500 - n_min + 1).id_slot);
+    t.assert_equal("the slot has just too few", 0, sched.select_donor({ make_info(0, *s0) }, task, 3, 500 - n_min).id_slot);
+    t.assert_equal("own slot is skipped",      -1, sched.select_donor({ make_info(0, *s0) }, task, 0, 0).id_slot);
+    t.assert_equal("no slots",                 -1, sched.select_donor({}, task, 0, 0).id_slot);
+
+    {
+        auto info = make_info(0, *s0);
+        info.can_donate = false;
+        t.assert_equal("cannot donate", -1, sched.select_donor({ info }, task, 3, 0).id_slot);
+    }
+
+    {
+        auto info = make_info(0, *s0);
+        info.is_processing = false;
+        t.assert_equal("idle slot", -1, sched.select_donor({ info }, task, 3, 0).id_slot);
+    }
+
+    {
+        // the prefix is shorter than the min
+        const auto s = make_slot(n_min - 1, 900, 2000, 0);
+        t.assert_equal("prefix too short", -1, sched.select_donor({ make_info(0, *s) }, task, 3, 0).id_slot);
+    }
+
+    {
+        // the slot still holds a longer match from its previous task
+        auto s = make_slot(200, 900, 2000, 0);
+        s->prompt.tokens = make_tokens(500, 600, 5000);
+        const auto donor = sched.select_donor({ make_info(0, *s) }, task, 3, 0);
+        t.assert_equal("tokens of the previous task: slot",     0,   donor.id_slot);
+        t.assert_equal("tokens of the previous task: n_tokens", 600, (int) donor.n_tokens);
+    }
+}
+
+static void test_server_slot_sched(testing & t) {
+    t.test("donor", test_server_slot_sched_donor);
 }
 
 //
@@ -865,6 +964,7 @@ int main(int argc, char ** argv) {
     }
 
     t.test("server_tokens", test_server_tokens);
+    t.test("server_slot_sched", test_server_slot_sched);
     t.test("utf8",          test_utf8);
     t.test("sse",           test_sse);
     t.test("json_helpers",  test_json_helpers);
