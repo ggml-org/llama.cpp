@@ -1,6 +1,6 @@
 # Migrate from `llama_batch` to `llama_batch_ext`
 
-The old `llama_batch` API was removed in [#30565](https://github.com/ggml-org/llama.cpp/pull/30565). This includes `llama_batch`, `llama_batch_init()`, `llama_batch_get_one()`, `llama_batch_free()`, `llama_encode()` and `llama_decode()`.
+The old `llama_batch` API was deprecated in [#32306](https://github.com/ggml-org/llama.cpp/pull/32306). This includes `llama_batch`, `llama_batch_init()`, `llama_batch_get_one()`, `llama_batch_free()`, `llama_encode()` and `llama_decode()`.
 
 Use `llama_batch_ext` and `llama_process()` instead. This guide shows how to port existing code.
 
