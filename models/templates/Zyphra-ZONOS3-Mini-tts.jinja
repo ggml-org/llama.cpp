@@ -452,6 +452,16 @@
 {%- endif -%}
 {%- endmacro -%}
 
+{#- fr / es / it / pt: million and above are nouns, a round amount takes "de" before the currency (deux millions d'euros) -#}
+{%- macro unit_sep(L, ip, unit) -%}
+{%- set d = tts_norm_sub(ip, "%D", "") -%}
+{%- if L in ["fr", "es", "it", "pt"] and d|length > 6 and d[(d|length) - 6:] == "000000" -%}
+{{- " d'" if L == "fr" and unit[0:1] in "aeiou" else " " ~ ("di" if L == "it" else "de") ~ " " -}}
+{%- else -%}
+{{- " " -}}
+{%- endif -%}
+{%- endmacro -%}
+
 {%- macro money(L, cur, ip, cents, scale) -%}
 {%- if cur not in M[L] -%}
 {{- cur ~ W[L]["sep"] ~ number(L, ip, cents, false) -}}
@@ -466,12 +476,12 @@
 {%- if tts_norm_sub(ip, "%D", "")|int == 0 -%}
 {{- c -}}
 {%- else -%}
-{{- attr(L, number(L, ip, "", false)) ~ " " ~ u[0 if ip == "1" else 1] ~ (W[L]["and"] ~ c if cents|int > 0 else "") -}}
+{{- attr(L, number(L, ip, "", false)) ~ unit_sep(L, ip, u[1]) ~ u[0 if ip == "1" else 1] ~ (W[L]["and"] ~ c if cents|int > 0 else "") -}}
 {%- endif -%}
 {%- elif cents -%}
 {{- number(L, ip, cents, false) ~ " " ~ u[1] -}}
 {%- else -%}
-{{- attr(L, number(L, ip, "", false)) ~ " " ~ u[0 if ip == "1" else 1] -}}
+{{- attr(L, number(L, ip, "", false)) ~ unit_sep(L, ip, u[1]) ~ u[0 if ip == "1" else 1] -}}
 {%- endif -%}
 {%- endif -%}
 {%- endmacro -%}
@@ -566,6 +576,13 @@
     "it": [["ordinal", "(?<![%d,.])(%d{1,15})%.?([ºª])"]],
     "pt": [["ordinal", "(?<![%d,.])(%d{1,15})%.?([ºª])"]],
 }.get(L, []) -%}
+{#- en / de: a 4-digit number is read as a year only after one of these words (in 1990, im Jahr 1990), 1234 people stays a count -#}
+{%- set year_cues = {
+    "en": "(?i)%b(in|since|by|from|until|till|to|through|between|of|around|circa|before|after|during|year|early|late|mid"
+          ~ "|january|february|march|april|may|june|july|august|september|october|november|december)",
+    "de": "(?i)%b(im|seit|bis|von|ab|anno|um|vor|nach|zwischen|jahr|jahre|jahres|jahren|anfang|mitte|ende"
+          ~ "|januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember)",
+} -%}
 {%- set rules = [
     ["money",   cur ~ "%s?" ~ int ~ frac ~ "(?: (thousand|million|billion|trillion)%b)?"],
     ["money2",  int ~ frac ~ "%s?" ~ cur],
@@ -574,6 +591,7 @@
     ["time",    time],
 ] + ords
   + ([["year", "(?<![%d,.])(%d{2,4})(?=年)"]] if L == "zh" else [])
+  + ([["year4", year_cues[L] ~ "(%s+)(%d{4})(?!%a|%d|[,.]%d|%s?[$€£¥%%])"]] if L in year_cues else [])
   + ([["plural", "(?<![%d,.])(%d{1,15})s(?!%a)"]] if L == "en" else [])
   + [["number", neg ~ int ~ frac]] -%}
 {%- for s in tts_norm_scan(t, rules) -%}
@@ -594,12 +612,14 @@
 {{- ordinal(L, g[0], g[1]) -}}
 {%- elif s.rule == "year" -%}
 {{- spell(L, g[0]) -}}
+{%- elif s.rule == "year4" -%}
+{{- g[0] ~ g[1] ~ number(L, g[2], "", true) -}}
 {%- elif s.rule == "plural" -%}
 {#- decades and plurals: 1990s -> nineteen nineties -#}
 {%- set w = number(L, g[0], "", true) -%}
 {{- (w[0:(w|length) - 1] ~ "ies") if w.endswith("y") else w ~ "s" -}}
 {%- elif s.rule == "number" -%}
-{{- (W[L]["minus"] if g[0] else "") ~ number(L, g[1], g[2], true) -}}
+{{- (W[L]["minus"] if g[0] else "") ~ number(L, g[1], g[2], false) -}}
 {%- else -%}
 {{- s.text -}}
 {%- endif -%}
