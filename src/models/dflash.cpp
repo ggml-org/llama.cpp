@@ -77,6 +77,8 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     }
 
+    ml.get_key_or_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, hparams.n_layer(), false);
+
     type = LLM_TYPE_UNKNOWN;
 }
 
@@ -263,7 +265,11 @@ llama_model_dflash::graph_base::graph_base(const llm_graph_params & params) : ll
     std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 }
 
-ggml_tensor * llama_model_dflash::graph_base::build_rope(ggml_tensor * cur, ggml_tensor * pos) {
+ggml_tensor * llama_model_dflash::graph_base::build_rope(ggml_tensor * cur, ggml_tensor * pos, int il) {
+    if (!hparams.has_rope(il)) {
+        return cur;
+    }
+
     return rope_type == GGML_ROPE_TYPE_MROPE
         ? ggml_rope_multi(ctx0, cur, pos, nullptr,
                 n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -292,7 +298,7 @@ ggml_tensor * llama_model_dflash::graph_base::build_inject() {
         if (shared_kv) {
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
         }
-        Kcur = build_rope(Kcur, inp_pos);
+        Kcur = build_rope(Kcur, inp_pos, il);
         cb(Kcur, "Kcur_injected", il);
         cb(Vcur, "Vcur_injected", il);
 
@@ -382,8 +388,8 @@ ggml_tensor * llama_model_dflash::graph_base::build_layers(ggml_tensor * inp_tok
             Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
         }
 
-        Qcur = build_rope(Qcur, inp_pos);
-        Kcur = build_rope(Kcur, inp_pos);
+        Qcur = build_rope(Qcur, inp_pos, il);
+        Kcur = build_rope(Kcur, inp_pos, il);
         cb(Qcur, "Qcur", il);
         cb(Kcur, "Kcur", il);
         cb(Vcur, "Vcur", il);
