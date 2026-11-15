@@ -158,6 +158,10 @@ class Zonos3TextModel(TextModel):
         # the reference wraps the text as [BOS] + ids + [EOS]
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(True)
+        # the reference normalizes the text with NeMo, the template covers the English numbers
+        template_path = Path(__file__).parent.parent / "models" / "templates" / "Zyphra-ZONOS3-Mini-tts.jinja"
+        with open(template_path, "r", encoding="utf-8") as f:
+            self.gguf_writer.add_chat_template([{"name": "tts", "template": f.read()}])
 
     def set_gguf_parameters(self):
         hp = self.hparams

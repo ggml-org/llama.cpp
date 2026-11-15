@@ -192,8 +192,9 @@ python convert_hf_to_gguf.py path/to/drama-3 --mmproj --outtype bf16 --outfile m
 
 Available params:
 - `--tts-voice` picks one of the predefined voices of the release (`Savannah_en-American_F_1` by default); `llama-server` lists them in `GET /props`. A voice is the prompt prefix of its reference codes, the default speaker mode of the reference
-- The language is the one of the text, `--tts-lang` is not used
-- Note: there is no text normalization (the reference uses NeMo text normalization), numbers, dates and abbreviations are read as written; supply normalized text, e.g. "twenty twenty-four" instead of "2024"
+- The language is the one of the text; `--tts-lang` (`lang` in `llama-server`) only selects the text normalization
+- Numbers are spelled out by the `tts` chat template of the GGUF: cardinals, decimals, money, percents, clock times, common ordinal forms (`1st`, `1er`, `1º`), English and German years. Languages: `en`, `fr`, `de`, `es`, `it`, `pt`, `ja` and `zh` (or `cmn`), the region is ignored (`fr_fr`, `pt_br`); English when the language is empty, other languages are left as written. Set the language to the one of the text: the separators differ, e.g. `1.234` is a thousand in German
+- Note: the reference uses NeMo text normalization, which also covers units, dates, abbreviations and Korean; supply normalized text for them
 - `--tts-speaker-file` clones the voice of a clip (the first 60 s are used) with the speaker encoder of the release, the "embedding" speaker mode of the reference
 - `llama-server` also takes `speed` (relative to 15 UTF-8 bytes per second) and `loudness` (LUFS), see the `/tts` endpoint; they pick the speaking-rate and loudness condition buckets of the checkpoint, the defaults leave them unknown
 - Note: `loudness` has a strong effect with a cloned voice; a predefined voice mostly keeps the loudness of its reference clip
