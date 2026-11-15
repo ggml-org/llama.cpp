@@ -42,9 +42,10 @@ struct server_prompt {
 
     // n_prefix: tokens shared with the new prompt, must be > 0
     // has_new_tokens: the new prompt is longer than n_prefix
+    // can_rewind: the model has no recurrent state that requires checkpoint restoration
     // pos_min: min position of the live state
     // n_past == 0 without a checkpoint means that nothing can be reused
-    server_prompt_reuse get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min) const;
+    server_prompt_reuse get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min, bool can_rewind) const;
 };
 
 struct server_prompt_data {

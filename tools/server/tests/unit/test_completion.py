@@ -721,6 +721,56 @@ def test_completion_prompt_cache():
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
 
 
+@pytest.mark.parametrize("continuation", ["extend", "rewind"])
+def test_completion_swa_intact_prefix(continuation):
+    global server
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def tokenize(content):
+        res = server.make_request("POST", "/tokenize", data={"content": content})
+        assert res.status_code == 200
+        return res.body["tokens"]
+
+    def complete(prompt, **kwargs):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "ignore_eos": True,
+            "cache_prompt": True,
+            **kwargs,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    prompt = tokenize("Explain how plants turn sunlight into energy.")
+    generated = complete(prompt, n_predict=8, return_tokens=True)["tokens"]
+    assert len(generated) == 8
+
+    # The last sampled token has not been evaluated yet.
+    cached = prompt + generated[:-1]
+    if continuation == "extend":
+        prompt = prompt + generated + tokenize(" Give one more detail.")
+        expected_cache = len(cached)
+    else:
+        prompt = cached[:2]
+        expected_cache = len(prompt) - 1
+
+    warm = complete(prompt, n_probs=5)
+    cold = complete(prompt, n_probs=5, cache_prompt=False)
+
+    assert warm["timings"]["cache_n"] == expected_cache
+    assert warm["timings"]["prompt_n"] == len(prompt) - expected_cache
+    expected = cold["completion_probabilities"][0]["top_logprobs"]
+    actual = warm["completion_probabilities"][0]["top_logprobs"]
+    assert [p["id"] for p in actual] == [p["id"] for p in expected]
+    for p, p_expected in zip(actual, expected):
+        assert p["logprob"] == pytest.approx(p_expected["logprob"], abs=1e-3)
+
+
 # a slot that switched to an unrelated prompt must not restore a context checkpoint of the previous one
 def test_completion_checkpoint_after_unrelated_prompt():
     global server
@@ -765,6 +815,7 @@ def test_completion_checkpoint_kept_after_restore():
     server.n_slots = 1
     server.n_batch = 16
     server.n_ubatch = 16
+    server.override_kv = "gemma3.attention.sliding_window=int:64"
     server.cache_ram = 0
     server.temperature = 0.0
     server.start()
@@ -793,7 +844,10 @@ def test_completion_checkpoint_kept_after_restore():
     # 4 tokens: the checkpoint 4 tokens before the end of the prompt holds exactly the prefix
     cache_n(prefix + suffixes[0][:4])
 
-    # suffixes longer than n_ubatch + 4: no new checkpoint within the prefix, only the restored one can be reused
+    # Fill the SWA cache so the live state no longer contains the prefix.
+    cache_n(prefix + suffixes[0] * 12)
+
+    # No new checkpoint within the prefix: only the restored one can be reused.
     for suffix in suffixes[1:]:
         assert len(suffix) > server.n_ubatch + 4
-        assert cache_n(prefix + suffix) == len(prefix) - 1
+        assert cache_n(prefix + suffix * 12) == len(prefix) - 1

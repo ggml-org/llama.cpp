@@ -701,16 +701,21 @@ def parse_ckpt_appendix(data):
 @pytest.mark.parametrize("damage", ["oversized_blob", "empty_target", "corrupt_state", "many_checkpoints"])
 def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
     server = swa_server
+    # Evict the shared prefix during generation so the checkpoint appendix is needed.
+    server.override_kv = "gemma3.attention.sliding_window=int:64"
     server.start()
 
     base = "The quick brown fox jumps over the lazy dog. " * 20
 
     res = server.make_request("POST", "/completion", data={
         "prompt": base + "The first ending of this story is a happy one.",
+        "n_predict": 256,
+        "ignore_eos": True,
         "id_slot": 1,
         "cache_prompt": True,
     })
     assert res.status_code == 200
+    assert res.body["timings"]["predicted_n"] == 256
 
     res = server.make_request("POST", "/completion", data={
         "prompt": base + "But the second ending was different and sad.",
@@ -725,10 +730,13 @@ def test_slot_restore_damaged_checkpoint_appendix(swa_server, damage):
 
     res = server.make_request("POST", "/completion", data={
         "prompt": base + "The first ending of this story is a happy one.",
+        "n_predict": 256,
+        "ignore_eos": True,
         "id_slot": 1,
         "cache_prompt": True,
     })
     assert res.status_code == 200
+    assert res.body["timings"]["predicted_n"] == 256
 
     res = server.make_request("POST", "/slots/1?action=save", data={
         "filename": "ckpt_damaged.bin",
@@ -924,3 +932,76 @@ def test_prompt_cache_swa_window(swa_window_server):
 
     assert cached["cache_n"]  == direct["cache_n"]
     assert cached["prompt_n"] == direct["prompt_n"]
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_slot_swa_bounded_checkpoint_budget(swa_server, extra):
+    server = swa_server
+    server.override_kv = "gemma3.attention.sliding_window=int:64"
+    server.start()
+    res = server.make_request("POST", "/tokenize", data={"content": "Explain how plants use sunlight."})
+    assert res.status_code == 200
+    prompt = res.body["tokens"]
+    res = server.make_request("POST", "/completion", data={
+        "prompt": prompt, "id_slot": 1, "n_predict": 8,
+        "ignore_eos": True, "cache_prompt": True, "return_tokens": True,
+    })
+    assert res.status_code == 200
+    continuation = prompt + res.body["tokens"]
+
+    def checkpoint_positions():
+        res = server.make_request("POST", "/slots/1?action=save", data={"filename": "bounded.bin"})
+        assert res.status_code == 200
+        with open(os.path.join(server.slot_save_path, "bounded.bin"), "rb") as f:
+            data = f.read()
+        _, checkpoints = parse_ckpt_appendix(data)
+        return [struct.unpack_from("<q", data, start)[0] for start, _, _ in checkpoints]
+
+    before = checkpoint_positions()
+    assert before
+    res = server.make_request("POST", "/completion", data={
+        "prompt": continuation, "id_slot": 1, "n_predict": 64 - len(continuation) + extra,
+        "ignore_eos": True, "cache_prompt": True,
+    })
+    assert res.status_code == 200
+    after = checkpoint_positions()
+    if extra <= 0:
+        assert after == before
+    else:
+        assert max(after) > max(before)
+
+
+def test_slot_swa_bounded_then_evict(swa_server):
+    server = swa_server
+    server.override_kv = "gemma3.attention.sliding_window=int:64"
+    server.start()
+    res = server.make_request("POST", "/tokenize", data={"content": "Explain how plants use sunlight."})
+    assert res.status_code == 200
+    prompt = res.body["tokens"]
+
+    def complete(tokens, n_predict=1, cache_prompt=True):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": tokens, "id_slot": 1, "n_predict": n_predict,
+            "ignore_eos": True, "cache_prompt": cache_prompt, "return_tokens": True,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    first = complete(prompt, 8)
+    res = server.make_request("POST", "/slots/1?action=save", data={"filename": "short.bin"})
+    assert res.status_code == 200
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 200
+    res = server.make_request("POST", "/slots/1?action=restore", data={"filename": "short.bin"})
+    assert res.status_code == 200
+    continuation = prompt + first["tokens"]
+    complete(continuation, 300)
+    res = server.make_request("POST", "/slots/1?action=save", data={"filename": "long.bin"})
+    assert res.status_code == 200
+    with open(os.path.join(server.slot_save_path, "long.bin"), "rb") as f:
+        _, checkpoints = parse_ckpt_appendix(f.read())
+    assert checkpoints
+    warm = complete(continuation)
+    cold = complete(continuation, cache_prompt=False)
+    assert 0 < warm["timings"]["cache_n"] < len(continuation)
+    assert warm["tokens"] == cold["tokens"]

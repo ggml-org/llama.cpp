@@ -4173,7 +4173,8 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                auto reuse = slot.prompt.get_reuse(n_past, has_new_tokens, n_swa, pos_min);
+                                const bool can_rewind = !llama_model_is_recurrent(model_tgt) && !llama_model_is_hybrid(model_tgt);
+                                auto reuse = slot.prompt.get_reuse(n_past, has_new_tokens, n_swa, pos_min, can_rewind);
 
                                 if (reuse.ckpt) {
                                     const auto & cur = *reuse.ckpt;
@@ -4308,6 +4309,17 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
+
+                    // A bounded text request cannot evict SWA history while it stays inside the first window.
+                    const auto n_prompt = slot.task->n_tokens();
+                    const bool swa_history_retained = n_swa > 0 && !spec && !input_tokens.has_mtmd &&
+                        slot.stats.n_prompt_cached > 0 && !slot.prompt.checkpoints.empty() &&
+                        !llama_model_is_recurrent(model_tgt) && !llama_model_is_hybrid(model_tgt) &&
+                        slot.n_predict_max > 0 && n_prompt < (size_t) n_swa &&
+                        (size_t) slot.n_predict_max <= (size_t) n_swa - n_prompt &&
+                        n_prompt + (size_t) slot.n_predict_max <= (size_t) slot.n_ctx &&
+                        llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id) <= 0;
+                    do_checkpoint = do_checkpoint && !swa_history_retained;
 
                     // TODO: do the same for all models, then remove process_mtmd_chunk()
                     if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
