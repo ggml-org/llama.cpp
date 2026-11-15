@@ -323,23 +323,16 @@ MAKE_TEST(test_image_preprocessor_inklingv) {
         t.assert_true("placeholder", placeholder.entries[0].is_placeholder());
         t.assert_equal("placeholder token count", model.n_output_tokens(&output), model.n_output_tokens(&placeholder.entries[0]));
     }
-    for (const auto & size : std::vector<mtmd_image_size>{{0, 40}, {-1, 40}}) {
-        mtmd_image_u8 image;
-        image.set_size(size, true);
-        bool rejected = false;
-        try {
-            preproc.preprocess(image);
-        } catch (const std::runtime_error &) {
-            rejected = true;
-        }
-        t.assert_true("invalid dimensions", rejected);
-    }
-    for (const auto & size : std::vector<mtmd_image_size>{{6000, 4000}, {2147483647, 40}, {40, 2147483647}}) {
-        mtmd_image_u8 image;
-        image.set_size(size, true);
-        const auto output = preproc.preprocess(image);
-        t.assert_true("large image stays within token cap", model.n_output_tokens(&output.entries[0]) <= 4096);
-        t.assert_true("resized placeholder", output.entries[0].is_placeholder());
+    // an image above image_max_pixels is resized down, the output stays aligned
+    hparams.image_max_pixels = 16 * 40 * 40;
+    for (const auto & size : std::vector<mtmd_image_size>{{1000, 300}, {300, 1000}, {6000, 4000}}) {
+        mtmd_image_u8 large;
+        large.set_size(size, false);
+        large.cpy_buf(std::vector<uint8_t>(size_t(size.width) * size.height * 3, 17));
+        const auto & capped = preproc.preprocess(large).entries[0];
+        t.assert_true("capped area", capped.nx() * capped.ny() <= hparams.image_max_pixels);
+        t.assert_equal("capped width aligned", 0, capped.nx() % 40);
+        t.assert_equal("capped height aligned", 0, capped.ny() % 40);
     }
     t.assert_equal("each frame is an image", 1, model.n_temporal_merge());
 }

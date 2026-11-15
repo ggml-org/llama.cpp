@@ -827,14 +827,12 @@ struct mtmd_model_loader {
                     } break;
                 case PROJECTOR_TYPE_INKLINGV:
                     {
-                        if (hparams.patch_size != mtmd_graph_inklingv::patch_size || hparams.n_layer != mtmd_graph_inklingv::n_stages || hparams.eps != 1e-6f) {
-                            throw std::runtime_error(mtmd_format("inklingv requires patch size %d, %d encoder stages and RMS epsilon 1e-6", mtmd_graph_inklingv::patch_size, mtmd_graph_inklingv::n_stages));
+                        // the graph folds are fixed, they set the patch size
+                        if (hparams.patch_size != mtmd_graph_inklingv::patch_size) {
+                            throw std::runtime_error(mtmd_format("%s: inklingv requires patch size %d\n", __func__, mtmd_graph_inklingv::patch_size));
                         }
-                        hparams.ffn_op = FFN_GELU_ERF;
-                        log_ffn_op = "gelu_erf";
                         hparams.set_limit_image_tokens(1, 4096);
-                        hparams.set_warmup_n_tokens(32 * 32);
-                        model.flash_attn_auto = false;
+                        hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_INKLINGA:
                     {
