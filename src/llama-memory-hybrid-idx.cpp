@@ -69,8 +69,6 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
             kv_size, n_seq_max, n_swa, swa_type,
             nullptr, filter_idx, nullptr, nullptr, "idx_");
     }()) {
-    const char * LLAMA_KPOOL_VERIFY = getenv("LLAMA_KPOOL_VERIFY");
-    kpool_verify = LLAMA_KPOOL_VERIFY ? atoi(LLAMA_KPOOL_VERIFY) != 0 : false;
 }
 
 llama_memory_context_ptr llama_memory_hybrid_idx::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
@@ -480,7 +478,9 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
 
         kpool_scan(sq, kpool, hparams_idx.indexer_kpool_by_order);
 
-        if (kpool_verify) {
+#ifndef NDEBUG
+        // debug builds check every update against a full rebuild
+        {
             kpool_layout::seq ref;
             ref.cells.assign(sp.begin(), sp.end());
             ref.pos_min = sp.empty() ? 0 : sp.begin()->first;
@@ -491,6 +491,7 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
                 GGML_ABORT("k-pool layout verification failed");
             }
         }
+#endif
 
         lay.n_pool_real += (uint32_t) sq.pools.size();
     }

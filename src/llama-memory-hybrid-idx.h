@@ -122,9 +122,6 @@ private:
     // unique_ptr because kpool_layout is incomplete here
     std::unique_ptr<kpool_layout> kpool_lay;
 
-    // LLAMA_KPOOL_VERIFY=1 checks every layout update against a full rebuild
-    bool kpool_verify = false;
-
     // seq_id < 0 stales every sequence, p0 < 0 stales the sequence from its first position
     void mem_idx_stale_set(llama_seq_id seq_id, llama_pos p0);
 
