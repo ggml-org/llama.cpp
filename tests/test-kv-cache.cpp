@@ -3,6 +3,7 @@
 
 #include <numeric>
 #include <string>
+#include <vector>
 
 static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams = {};
@@ -13,6 +14,65 @@ static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams.n_head_kv_arr.fill(1);
     std::iota(model.hparams.kv_source_impl.begin(), model.hparams.kv_source_impl.end(), 0);
     model.layers.resize(n_layer);
+}
+
+// add n tokens to the sequence, starting at pos
+static bool add_tokens(llama_kv_cache & kv, llama_seq_id seq_id, llama_pos pos, uint32_t n) {
+    std::vector<llama_token>    token(n, 0);
+    std::vector<llama_pos>      pos_data(n);
+    std::vector<int32_t>        n_seq_id(n, 1);
+    std::vector<llama_seq_id *> seq_ids(n, &seq_id);
+
+    std::iota(pos_data.begin(), pos_data.end(), pos);
+
+    llama_ubatch ubatch = {};
+    ubatch.n_tokens     = n;
+    ubatch.n_seq_tokens = n;
+    ubatch.n_seqs       = 1;
+    ubatch.n_seqs_unq   = 1;
+    ubatch.n_pos        = 1;
+    ubatch.token        = token.data();
+    ubatch.pos          = pos_data.data();
+    ubatch.n_seq_id     = n_seq_id.data();
+    ubatch.seq_id       = seq_ids.data();
+    ubatch.seq_id_unq   = &seq_id;
+
+    const auto sinfo = kv.find_slot(ubatch, false);
+    if (sinfo.empty()) {
+        return false;
+    }
+
+    kv.apply_ubatch(sinfo, ubatch);
+
+    return true;
+}
+
+// 2 sequences that share cells in a unified SWA cache: a cell is free again when it is out of the window of both
+static void test_swa_shared_cells() {
+    const uint32_t n_swa = 4;
+
+    std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_GEMMA4, llama_model_default_params()));
+    init_model(*model, 1);
+
+    llama_kv_cache kv(*model, false, model->hparams, GGML_TYPE_F16, GGML_TYPE_F16,
+            false, false, true, 16, 2, n_swa, LLAMA_SWA_TYPE_STANDARD, nullptr, nullptr, nullptr, nullptr);
+
+    llama_pos pos = 0;
+    for (; pos < 12; pos += 4) {
+        GGML_ASSERT(add_tokens(kv, 0, pos, 4));
+    }
+
+    kv.seq_cp(0, 1, -1, -1);
+
+    for (int i = 0; i < 32; ++i, pos += 4) {
+        for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
+            GGML_ASSERT(add_tokens(kv, seq_id, pos, 4));
+
+            // the positions inside the window are all present
+            GGML_ASSERT(kv.seq_pos_max(seq_id) == pos + 3);
+            GGML_ASSERT(kv.seq_pos_min(seq_id) <= pos + 3 - (llama_pos) n_swa + 1);
+        }
+    }
 }
 
 int main() {
@@ -104,6 +164,8 @@ int main() {
             }
         }
     }
+
+    test_swa_shared_cells();
 
     llama_backend_free();
     return 0;
