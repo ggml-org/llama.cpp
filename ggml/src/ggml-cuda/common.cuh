@@ -601,6 +601,7 @@ static __device__ __forceinline__ int warp_reduce_any(int x) {
     }
 }
 
+// ROCm fails to merge multiple v_max_f32_dpp in one v_max_f32_dpp automatically ==> force it with asm (test with ROCm 7.2.4)
 template<int width>
 static __device__ __forceinline__ float warp_reduce_max_impl(float x) {
 #if defined(GGML_USE_HIP)
