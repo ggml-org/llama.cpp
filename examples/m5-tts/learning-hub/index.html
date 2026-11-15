@@ -217,6 +217,12 @@
   .doneBtn { border: 1px solid var(--line); background: var(--card); color: var(--sub); border-radius: 8px; padding: 8px 14px; cursor: pointer; font-size: 12.5px; }
   .doneBtn.on { border-color: var(--ok); color: var(--ok); background: var(--ok-soft); }
 
+  .partIntro { margin: 50px 0 -8px; padding: 18px 22px; border-radius: 12px;
+    background: linear-gradient(90deg, var(--acc-soft), transparent 82%); border-left: 3px solid var(--acc); }
+  .partIntro b { font: 600 12px var(--mono); color: var(--acc); letter-spacing: .12em; display: block; margin-bottom: 6px; }
+  .partIntro p { margin: 0; color: var(--sub); font-size: 13.5px; max-width: 740px; }
+  .partIntro p strong { color: var(--ink); font-weight: 600; }
+
   footer { color: var(--sub); font-size: 12.5px; padding: 30px 0 0; }
   #menuBtn { display: none; position: fixed; top: 12px; left: 12px; z-index: 60; }
   @media (max-width: 900px) {
@@ -267,90 +273,103 @@
   学会测量、建立成本模型、识别瓶颈、做带质量门禁的优化，并理解"音色"究竟是怎么被模型学会的。
   所有数字都来自这个仓库里的真实实验，包含被否定的方案。</p>
   <div class="heroChips">
-    <span class="chip"><b>0.898 → 0.677</b> RTF 演进</span>
-    <span class="chip"><b>1.57×</b> 多实例吞吐上限</span>
+    <span class="chip"><b>0.898 → 0.68</b> RTF 演进</span>
+    <span class="chip"><b>max()</b> 并行天花板</span>
     <span class="chip"><b>15</b> 步串行 depth decode</span>
     <span class="chip"><b>16 × 2051</b> codebook</span>
-    <span class="chip"><b>77%</b> 墙钟在 depth</span>
-    <span class="chip"><b>α≈0.18</b> 学习型草稿已判死</span>
-    <span class="chip"><b>0 次</b> 梯度更新也能换音色</span>
+    <span class="chip"><b>1.5×</b> 实时并发上限</span>
+    <span class="chip"><b>三级台阶</b> 唯一剩余杠杆</span>
+    <span class="chip"><b>0 次</b> 梯度更新换音色</span>
   </div>
 </header>
 
-<!-- ============ CHAPTER 0 ============ -->
+
+<!-- ============ 导读 ============ -->
 <section class="chapter" id="ch0" data-title="导读与学习路线">
   <div class="chapHead"><span class="idx">00</span><h2>导读：这门课想让你带走什么</h2></div>
-  <p class="subtitle">不是"某模型怎么调快"的流水账，而是一套可迁移的推理系统思维。</p>
+  <p class="subtitle">不是"某模型怎么调快"的流水账，而是一套可迁移的推理系统思维——全书按认识对象、学会测量、优化复盘、迁移专题四部展开。</p>
   <div class="objectives">
     <b>学完你应该能回答</b>
     <ul>
       <li>一个自回归音频模型，为什么它的瓶颈和文本 LLM 完全不同？</li>
       <li>看到 "RTF 0.9" 这个数字，你会追问哪三个问题？</li>
-      <li>"把 15 次调用合成 1 次" 听起来必然更快，为什么连训练一个草稿模型也救不了（Ch 9）？</li>
+      <li>"把 15 次调用合成 1 次" 听起来必然更快，为什么连训练一个草稿模型也救不了（第 5、10 章）？</li>
       <li>量化后 codes 翻转 90%，为什么还算"正确"？什么情况下又必须否决一个量化？</li>
+      <li>两条并行分支几乎打平时，为什么任何单边优化都变成 0（第 11 章）？剩下的唯一大杠杆是什么？</li>
       <li>Serena 的音色是怎样从 Qwen3-TTS 迁移到 M5 的？有没有训练发生？</li>
     </ul>
   </div>
 
-  <h3>三条并行的线索</h3>
-  <div class="grid2">
-    <div class="tile"><b>① 系统：端到端流水线</b><p>文本 → conditioning 序列 → backbone → 16-book depth 链 → codec → PCM。理解数据形状与单位，是所有优化的前提。</p></div>
-    <div class="tile"><b>② 框架：llama.cpp 提供了什么</b><p>GGUF 模型加载、ggml 计算图与后端调度、llama_batch / llama_decode、KV cache 管理、量化。M5 是在这些原语上"借壳"运行的自定义模型。</p></div>
-    <div class="tile"><b>③ 方法：性能工程</b><p>测量 → 分解 → 建模 → 假设 → 同轮 A/B → 质量门禁 → 记录（包括负结果）。这才是能带走的东西。</p></div>
-    <div class="tile"><b>④ 专题：音色与情感</b><p>离散音频 token 如何承载说话人身份；零样本克隆的两条机制；为什么 caption 控制情感是弱训练槽。</p></div>
-  </div>
+  <h3>四部结构，一条主线</h3>
+  <p>主线只有一句话：<b>先看懂数字，再动手；先算清收益，再投入。</b>四部课程都为它服务——
+  第一部让你看得懂流水线与框架，第二部让你看得懂测量，第三部用十几个真实的优化与判死案例把
+  这句话练成 reflex，第四部把它抽象成可迁移的方法。</p>
 
   <figure>
     <div class="figureBox">
-      <svg viewBox="0 0 880 210" role="img" aria-label="本教程的学习路径图：认识对象、测量、建模、优化、抽象、音色专题">
-        <rect class="dg-panel" x="0" y="0" width="880" height="210" rx="12"/>
+      <svg viewBox="0 0 880 312" role="img" aria-label="课程结构：认识对象、学会测量、优化复盘、迁移与专题四部">
+        <rect class="dg-panel" x="0" y="0" width="880" height="312" rx="12"/>
         <g>
-          <rect class="dg-box" x="24" y="42" width="118" height="62" rx="10"/>
-          <text class="dg-tb" x="83" y="68" text-anchor="middle">认识对象</text>
-          <text class="dg-ts" x="83" y="87" text-anchor="middle">Ch 1 · 帧</text>
-          <rect class="dg-box" x="166" y="42" width="118" height="62" rx="10"/>
-          <text class="dg-tb" x="225" y="68" text-anchor="middle">学会测量</text>
-          <text class="dg-ts" x="225" y="87" text-anchor="middle">Ch 2 · RTF</text>
-          <rect class="dg-accent" x="308" y="42" width="118" height="62" rx="10"/>
-          <text class="dg-tb" x="367" y="68" text-anchor="middle">成本模型</text>
-          <text class="dg-ts" x="367" y="87" text-anchor="middle">Ch 3 · F+R</text>
-          <rect class="dg-box" x="450" y="42" width="118" height="62" rx="10"/>
-          <text class="dg-tb" x="509" y="68" text-anchor="middle">逐项优化</text>
-          <text class="dg-ts" x="509" y="87" text-anchor="middle">Ch 4-5</text>
-          <rect class="dg-box" x="592" y="42" width="118" height="62" rx="10"/>
-          <text class="dg-tb" x="651" y="68" text-anchor="middle">抽象迁移</text>
-          <text class="dg-ts" x="651" y="87" text-anchor="middle">Ch 6 · 通用</text>
-          <rect class="dg-accent2" x="734" y="42" width="122" height="62" rx="10"/>
-          <text class="dg-tb" x="795" y="68" text-anchor="middle">音色专题</text>
-          <text class="dg-ts" x="795" y="87" text-anchor="middle">Ch 7 · Qwen</text>
-          <path class="dg-flow" d="M142 73 H164"/><path class="dg-flow" d="M284 73 H306"/>
-          <path class="dg-flow" d="M426 73 H448"/><path class="dg-flow" d="M568 73 H590"/>
-          <path class="dg-flow" d="M710 73 H732"/>
+          <text class="dg-tb" x="24" y="34">第一部 · 认识对象</text>
+          <rect class="dg-box" x="150" y="16" width="226" height="36" rx="8"/><text class="dg-t" x="263" y="39" text-anchor="middle">01 一帧音频的诞生</text>
+          <rect class="dg-box" x="384" y="16" width="232" height="36" rx="8"/><text class="dg-t" x="500" y="39" text-anchor="middle">02 llama.cpp 框架解剖</text>
+          <rect class="dg-box" x="624" y="16" width="232" height="36" rx="8"/><text class="dg-t" x="740" y="39" text-anchor="middle">03 HTP 后端与 NPU 边界</text>
+
+          <text class="dg-tb" x="24" y="104">第二部 · 学会测量</text>
+          <rect class="dg-accent" x="150" y="86" width="326" height="36" rx="8"/><text class="dg-t" x="313" y="109" text-anchor="middle">04 RTF、埋点与质量门禁</text>
+          <rect class="dg-accent" x="484" y="86" width="232" height="36" rx="8"/><text class="dg-t" x="600" y="109" text-anchor="middle">05 成本模型：15 步串行</text>
+
+          <text class="dg-tb" x="24" y="186">第三部 · 优化复盘</text>
+          <rect class="dg-box" x="150" y="156" width="110" height="44" rx="8"/><text class="dg-ts" x="205" y="174" text-anchor="middle">06</text><text class="dg-t" x="205" y="190" text-anchor="middle">数据搬运</text>
+          <rect class="dg-box" x="266" y="156" width="110" height="44" rx="8"/><text class="dg-ts" x="321" y="174" text-anchor="middle">07</text><text class="dg-t" x="321" y="190" text-anchor="middle">时间重叠</text>
+          <rect class="dg-box" x="382" y="156" width="110" height="44" rx="8"/><text class="dg-ts" x="437" y="174" text-anchor="middle">08</text><text class="dg-t" x="437" y="190" text-anchor="middle">产品化</text>
+          <rect class="dg-box" x="498" y="156" width="110" height="44" rx="8"/><text class="dg-ts" x="553" y="174" text-anchor="middle">09</text><text class="dg-t" x="553" y="190" text-anchor="middle">并发</text>
+          <rect class="dg-box" x="614" y="156" width="118" height="44" rx="8"/><text class="dg-ts" x="673" y="174" text-anchor="middle">10</text><text class="dg-t" x="673" y="190" text-anchor="middle">判死方法论</text>
+          <rect class="dg-accent2" x="738" y="156" width="118" height="44" rx="8"/><text class="dg-ts" x="797" y="174" text-anchor="middle">11</text><text class="dg-t" x="797" y="190" text-anchor="middle">结构天花板</text>
+
+          <text class="dg-tb" x="24" y="262">第四部 · 迁移与专题</text>
+          <rect class="dg-box" x="150" y="236" width="226" height="36" rx="8"/><text class="dg-t" x="263" y="259" text-anchor="middle">12 从案例到通用方法</text>
+          <rect class="dg-box" x="384" y="236" width="232" height="36" rx="8"/><text class="dg-t" x="500" y="259" text-anchor="middle">13 音色专题：Qwen3 → M5</text>
+          <rect class="dg-box" x="624" y="236" width="232" height="36" rx="8"/><text class="dg-t" x="740" y="259" text-anchor="middle">14 实验手册与术语表</text>
         </g>
-        <text class="dg-ts" x="24" y="140">下层支撑：llama.cpp / ggml / HTP backend · ONNX Runtime codec · HTTP 服务与可观测性</text>
-        <text class="dg-ts" x="24" y="164">贯穿纪律：同轮 A/B · 质量门禁（codes 确定性 / ASR / 音频统计 / 人耳）· 负结果也要记录</text>
-        <text class="dg-ts" x="24" y="188">Ch 8 提供实验命令、思考题与术语表</text>
+        <text class="dg-ts" x="24" y="296">贯穿纪律：同轮 A/B · 质量门禁（codes 确定性 / ASR / 音频统计 / 人耳）· 负结果也要记录</text>
       </svg>
     </div>
-    <figcaption>图 0-1　课程结构：前三章建立"看得懂数字"的能力，四、五章复盘真实优化，六章抽象成通用方法，七章专题讲音色。</figcaption>
+    <figcaption>图 0-1　课程结构。第三部第 11 章是收口：当所有免重训手段穷尽，结构天花板指向唯一剩下的杠杆（depth + codec 三级台阶）。</figcaption>
   </figure>
+
+  <h3>三条读法</h3>
+  <p>全书 15 章不必从头读到尾。按你的目的选一条：</p>
+  <div class="grid2">
+    <div class="tile"><b>只要结论（约 40 分钟）</b><p>读第 0、5、11 章。你会得到这个系统的完整成本结构、<code>max()</code> 天花板的来历，以及"现在还能不能更快"的答案。</p></div>
+    <div class="tile"><b>要自己上手（约 3 小时）</b><p>按顺序读。第 1–3 章建立对象，第 4 章学会测量，第 6–9 章跟着六个战场练手，第 14 章是可以直接抄的命令与判据。</p></div>
+    <div class="tile"><b>要方法论（约 2 小时）</b><p>读第 4、5、10、11、12 章。这条线讲的全是"怎么判断值不值得做""怎么把一条路判死"，与具体模型无关。</p></div>
+  </div>
 
   <div class="callout key"><span class="tagline">口径约定</span>
     本文所有 RTF = 端到端生成耗时 ÷ 生成音频时长（越小越好）。不同章节的数据来自不同长度的测试句与不同设备热状态，
     <b>跨章节的绝对数字不可直接比较</b>；每个结论都标注了它的对照实验。测试约定：同轮交替 A/B、固定种子/文本/音色、
     质量门禁 = codes 确定性 + ASR 转写 + 音频统计族（RMS / 过零率 / 峰值）+ 必要时人耳试听。
+    <br>引用格式：正文里的"第 N 章"指本书章节，"日志 §N"指优化台账
+    <code>docs/backend/snapdragon/m5-tts-optimization-log.md</code> 的小节——需要看原始实验记录时按它去查。
   </div>
   <h3>资料来源</h3>
   <ul>
-    <li>项目主台账：<code>docs/backend/snapdragon/m5-tts-optimization-log.md</code>（时间线细节见 <code>m5-tts-port-notes.md</code>）</li>
+    <li>项目主台账：<code>docs/backend/snapdragon/m5-tts-optimization-log.md</code>（日志 §1–§30；时间线细节见 <code>m5-tts-port-notes.md</code>）</li>
     <li>代码：<code>examples/m5-tts/</code>（<code>m5_engine.cpp</code>, <code>m5_depth_heads.h</code>, <code>backbone.cpp</code>, <code>m5_server.cpp</code>）</li>
     <li>Qwen3-TTS：<a href="https://github.com/QwenLM/Qwen3-TTS" target="_blank" rel="noopener">QwenLM/Qwen3-TTS 技术报告</a>、仓库内 <code>tools/tts/README.md</code> 与 <code>conversion/qwen3tts.py</code></li>
   </ul>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch0">标记本章已学完</button><span>左侧目录会记录进度（保存在本浏览器）。</span></div>
 </section>
 
-<!-- ============ CHAPTER 1 ============ -->
-<section class="chapter" id="ch1" data-title="M5-TTS 与 llama.cpp">
+
+<div class="partIntro" id="p1">
+  <b>第一部 · 认识对象</b>
+  <p>动手改任何一行代码之前，先钉死三件事：音频是怎么一帧帧生成的（第 1 章）、llama.cpp
+  这个推理框架到底给了我们哪些原语（第 2 章）、这些计算真正落在哪块芯片上（第 3 章）。
+  这三章是后面所有判断的地基。</p>
+</div>
+<section class="chapter" id="ch1" data-title="M5-TTS 流水线">
   <div class="chapHead"><span class="idx">01</span><h2>认识被优化的对象：一帧音频是怎么来的</h2></div>
   <p class="subtitle">先把数据形状和计算图钉死，否则后面所有"优化"都是猜。</p>
   <div class="objectives"><b>本章目标</b><ul>
@@ -426,7 +445,107 @@
   <code>+1</code> 因为 0 是 EOS）。换句话说：模型在 prompt 里同时看到了"这句话该说什么"和"用谁的声音、什么韵律说过一遍类似的话"。
   这就是 <b>in-context learning</b> 式的音色条件，不是把说话人向量注入到某一层。</p>
 
-  <h3>1.3 llama.cpp 在这个工程里的角色</h3>
+
+  <div class="callout key"><span class="tagline">往下深挖</span>
+    本章讲的是<b>逻辑数据流</b>。llama.cpp 在这条流水线里到底复用了哪些原语、
+    <code>llama_batch.embd</code> 这招"借壳"为什么成立，展开在 <b><a href="#ch2">第 2 章 · llama.cpp 框架解剖</a></b>；
+    哪些模块真正在 HTP0、哪些在 CPU、一帧要跨多少次边界、以及为什么 App 形态拿不到 NPU，
+    统一放在 <b><a href="#ch3">第 3 章 · HTP 后端与 NPU / CPU 边界</a></b>。
+  </div>
+
+  <h3>1.3 depth 链：16 个 book 为什么必须一个一个来</h3>
+  <pre><span class="cm">// m5_depth_heads.h: chain() 的骨架</span>
+proj(book0, hidden)  → logits[2051] → <span class="kw">sample</span>(T=0.9, top-k=10, noise=-log u) → code[0]
+proj(projection, hidden) → projected_hidden
+<span class="kw">for</span> book = 1..15:
+    rows = (book==1) ? [projected_hidden, transform(code[0])] : [transform(code[book-1])]
+    decoded = <span class="kw">depth_decode</span>(rows)          <span class="cm">// 一次 llama_decode 调用，HTP 提交</span>
+    proj(book, decoded) → sample → code[book]     <span class="cm">// 下一步的输入依赖这一步的采样结果</span>
+next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// 反馈给下一帧</span></pre>
+  <p>权重布局（<code>m5_depth_heads.h: layout()</code>）：<code>projection</code> 块
+  <code>16×2051×512</code> floats ≈ 67 MB（f32），<code>projected</code> 块 <code>512×512</code>，
+  <code>audio</code> 块再来 <code>16×2051×512</code>。每帧要对 book 投影矩阵做 16 次 GEMV，
+  <b>流式读取权重</b>正是后面 f16 / int8 量化的用武之地。采样是 Gumbel 技巧：
+  噪声 <code>n = -log(1-u)</code> 由 JavaRandom LCG 生成，取 <code>argmax(prob / noise)</code>；
+  它要求按 book 顺序消耗随机数，因此"预生成噪声并向量化"也受到位精确约束。</p>
+
+  <div class="callout key"><span class="tagline">本章要点</span>
+    一帧 = 1 次 backbone decode + 15 次 depth 提交 + 16 次投影/采样 + 一批 codec 解码。
+    <b>串行依赖有三层</b>：book 内链、帧间 next_hidden、以及采样器随机数顺序。优化前先问：我要动的是哪一层依赖？
+  </div>  <div class="chapterDone"><button class="doneBtn" data-ch="ch1">标记本章已学完</button></div>
+</section>
+
+<!-- ============ CHAPTER 2 ============ -->
+<section class="chapter" id="ch2" data-title="llama.cpp 框架解剖">
+  <div class="chapHead"><span class="idx">02</span><h2>llama.cpp 推理框架解剖：我们到底复用了什么</h2></div>
+  <p class="subtitle">M5-TTS 并不是 llama.cpp 原生支持的模型。这一章讲清楚这个推理框架的分层与一次 decode 的完整生命周期——以及"借壳"注入 embedding 行那一招为什么成立。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能画出一次 <code>llama_decode()</code> 从 batch 到 hidden 的完整生命周期</li>
+    <li>理解 ggml 计算图"先描述、后执行"的两阶段，以及 backend 调度在其中做的事</li>
+    <li>知道 KV cache 的 memory 接口与量化块格式，能算一笔简单的带宽账</li>
+  </ul></div>
+
+  <h3>2.1 一次 decode 的生命周期</h3>
+  <p>llama.cpp 的推理入口只有两个：<code>llama_decode()</code>（一条 batch 走一遍）和它包裹的
+  <b>build → schedule → compute → read</b> 四步循环。M5 每帧都在走这个循环，只是喂进去的不是 token：</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 250" role="img" aria-label="一次 llama_decode 的生命周期：batch 到 hidden">
+        <rect class="dg-panel" x="0" y="0" width="880" height="250" rx="12"/>
+        <rect class="dg-accent" x="20" y="26" width="190" height="66" rx="10"/>
+        <text class="dg-tb" x="115" y="52" text-anchor="middle">① llama_batch</text>
+        <text class="dg-ts" x="115" y="71" text-anchor="middle">embd[512] · pos · seq_id · logits</text>
+        <rect class="dg-box" x="232" y="26" width="190" height="66" rx="10"/>
+        <text class="dg-tb" x="327" y="52" text-anchor="middle">② build ggml 计算图</text>
+        <text class="dg-ts" x="327" y="71" text-anchor="middle">attention + FFN + KV 读写</text>
+        <rect class="dg-box" x="444" y="26" width="190" height="66" rx="10"/>
+        <text class="dg-tb" x="539" y="52" text-anchor="middle">③ backend 调度</text>
+        <text class="dg-ts" x="539" y="71" text-anchor="middle">算子 → HTP0 / CPU 分派</text>
+        <rect class="dg-ok" x="656" y="26" width="200" height="66" rx="10"/>
+        <text class="dg-tb" x="756" y="52" text-anchor="middle">④ embeddings 取回</text>
+        <text class="dg-ts" x="756" y="71" text-anchor="middle">get_embeddings_ith(-1)</text>
+        <path class="dg-flow" d="M210 59 H230"/><path class="dg-flow" d="M422 59 H442"/><path class="dg-flow" d="M634 59 H654"/>
+        <rect class="dg-panel" x="232" y="118" width="402" height="24" rx="6"/>
+        <text class="dg-tacc" x="433" y="134" text-anchor="middle">hidden[512] 返回给引擎 → depth 链 → codec</text>
+        <path class="dg-flow2" d="M756 92 V130 H636"/>
+        <text class="dg-ts" x="20" y="180">关键点：图是<b>每帧重建</b>的（形状随 batch 变化），但张量 buffer 由 backend 复用；KV 行是图里真实被读取的张量。</text>
+        <text class="dg-ts" x="20" y="204">M5 的两个常驻子进程各自持有独立的 llama_context：同一个二进制，backbone 子进程 n_ctx=2048，depth 子进程 n_ctx=256。</text>
+        <text class="dg-ts" x="20" y="228">embd 注入要求 n_embd == 512：embedding 行必须与模型宽度逐字对齐，否则 decode 直接报错。</text>
+      </svg>
+    </div>
+    <figcaption>图 2-1　一次 decode 的生命周期。M5 把 token id 留空、只填 <code>embd</code>，于是标准 decode 路径免费提供了 KV cache、后端调度与量化。</figcaption>
+  </figure>
+
+  <h3>2.2 计算图：先描述，再执行</h3>
+  <p>ggml 的核心设计是<b>两阶段</b>：先把这一步要做的全部算子描述成一张
+  <code>ggml_cgraph</code>（节点 = 算子，边 = 张量），再由 backend 按拓扑序执行。这件事有两个容易被忽视的后果：</p>
+  <ul>
+    <li><b>图的形状决定成本。</b>attention 要读多少行 K/V，是写进图形状里的——这正是第 11 章 KV pad
+    实验的机制：pad 从 256 缩到 32，等于每步少读被掩蔽的 K/V 行；代价是 <code>n_kv</code> 档位变多、
+    计算图重建次数翻倍（内存 vs 带宽的交易）。</li>
+    <li><b>后端是"设备的抽象"。</b>ggml_backend 把算子分派给 CPU / HTP / 其他设备；M5 通过
+    <code>ggml_backend_load_all()</code> 从 <code>LD_LIBRARY_PATH</code> 加载 Hexagon 后端（<code>libggml-hexagon.so</code> 等），
+    之后整张图提交给 HTP0 常驻执行。两个 stage 进程 = 两份独立的 backend 会话。</li>
+  </ul>
+
+  <h3>2.3 KV cache 与 memory 接口</h3>
+  <p>上下文状态不在模型里，在 <code>llama_context</code> 的 memory 里：按位置（pos）索引的 K/V 行。
+  M5 每次新请求用一条 <code>count == -1</code> 的管道消息触发整体清空（<code>llama_memory_seq_rm</code>），
+  prefill 前缀缓存则复用"整句前缀 + 少量行"这段 KV（第 7 章图 7-2 讲了它的协议形态）。
+  type_k / type_v 保持 <b>F32</b> 是实验换来的结论：KV 精度比权重精度敏感得多，f16 KV 会让 codes 漂移（第 6 章 6.1 节）。</p>
+
+  <h3>2.4 量化块：Q8_0 与 Q4_0 的带宽账</h3>
+  <div class="tableWrap"><table>
+    <tr><th>格式</th><th>块结构</th><th>每权重位数</th><th>本工程用途</th></tr>
+    <tr><td>Q8_0</td><td>32 权重/块 · int8 + fp16 scale</td><td>≈8.5</td><td>backbone（8 层，≈32 MB，常驻 HTP0）</td></tr>
+    <tr><td>Q4_0</td><td>32 权重/块 · int4 + fp16 scale</td><td>≈4.5</td><td>depth core（5 层，≈10.7 MB，常驻 HTP0）</td></tr>
+    <tr><td>F32 查表</td><td>无块（embedding 表）</td><td>32</td><td>heads 权重 202 MB，留 CPU 侧 mmap + int8 镜像</td></tr>
+  </table></div>
+  <p>块量化的意义是<b>带宽</b>而非算力：dequant 在算子内核里即时完成，CPU/NPU 少搬多少字节才是收益。
+  这也是"量化一分钱都拿不到"案例（第 11 章 11.5 节）的机制伏笔：当算子是调度/延迟受限而不是带宽受限时，
+  权重体积腰斩不改变时间。</p>
+
+  <h3>2.5 embd 注入：借壳的标准路径</h3>
   <figure>
     <div class="figureBox">
       <svg viewBox="0 0 880 260" role="img" aria-label="llama.cpp 分层架构与 M5 的复用点">
@@ -454,7 +573,7 @@
         <text class="dg-ts" x="24" y="232">部署形态：backbone-resident 与 depth-resident 两个常驻子进程（同一份二进制、argv 决定角色），父进程经匿名管道交换 float 行</text>
       </svg>
     </div>
-    <figcaption>图 1-2　llama.cpp 分层与 M5 的复用点。这里最有教学价值的一招是 <code>llama_batch.embd</code>：把自定义向量直接喂进标准 decode 路径，从而免费获得 KV cache、后端调度与量化支持。</figcaption>
+    <figcaption>图 2-2　llama.cpp 分层与 M5 的复用点。这里最有教学价值的一招是 <code>llama_batch.embd</code>：把自定义向量直接喂进标准 decode 路径，从而免费获得 KV cache、后端调度与量化支持。</figcaption>
   </figure>
 
   <p><code>backbone.cpp</code> 用 <code>llama_model_load_from_file()</code> 载入 GGUF，检查 <code>n_embd == 512</code>，
@@ -462,43 +581,190 @@
   <code>n_ctx=2048</code>（depth 子进程 256），然后构造一个<b>不带 token 字段</b>的 <code>llama_batch</code>：
   只填 <code>embd</code>（512 维浮点行）、<code>pos</code>、<code>seq_id</code> 和 <code>logits</code>（只请求最后一行）。
   <code>llama_decode()</code> 之后用 <code>llama_get_embeddings_ith(ctx, -1)</code> 取回最后一层 hidden。</p>
-
-  <div class="callout warn"><span class="tagline">工程约束</span>
-    Snapdragon HTP 的 <code>/dev/adsprpc-smd</code> 对普通 App uid 返回 EACCES，只有 shell 域进程能用 DSP。
-    所以服务端形态（adb shell 启动的 m5-server）能跑 HTP，而 Android App 形态只能退到 native CPU。
-    这也是为什么 backbone/depth 被拆成常驻子进程：HTP 上下文初始化昂贵，且需要隔离崩溃域。
-  </div>
-
-  <h3>1.4 depth 链：16 个 book 为什么必须一个一个来</h3>
-  <pre><span class="cm">// m5_depth_heads.h: chain() 的骨架</span>
-proj(book0, hidden)  → logits[2051] → <span class="kw">sample</span>(T=0.9, top-k=10, noise=-log u) → code[0]
-proj(projection, hidden) → projected_hidden
-<span class="kw">for</span> book = 1..15:
-    rows = (book==1) ? [projected_hidden, transform(code[0])] : [transform(code[book-1])]
-    decoded = <span class="kw">depth_decode</span>(rows)          <span class="cm">// 一次 llama_decode 调用，HTP 提交</span>
-    proj(book, decoded) → sample → code[book]     <span class="cm">// 下一步的输入依赖这一步的采样结果</span>
-next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// 反馈给下一帧</span></pre>
-  <p>权重布局（<code>m5_depth_heads.h: layout()</code>）：<code>projection</code> 块
-  <code>16×2051×512</code> floats ≈ 67 MB（f32），<code>projected</code> 块 <code>512×512</code>，
-  <code>audio</code> 块再来 <code>16×2051×512</code>。每帧要对 book 投影矩阵做 16 次 GEMV，
-  <b>流式读取权重</b>正是后面 f16 / int8 量化的用武之地。采样是 Gumbel 技巧：
-  噪声 <code>n = -log(1-u)</code> 由 JavaRandom LCG 生成，取 <code>argmax(prob / noise)</code>；
-  它要求按 book 顺序消耗随机数，因此"预生成噪声并向量化"也受到位精确约束。</p>
-
+<h3>2.6 没有复用的部分</h3>
+  <ul>
+    <li><b>lm_head / logits</b>：M5 的"词表"是 16 个 book 各 2051 类，投影矩阵自己拿在手里（<code>m5_depth_heads.h</code>），
+    所以只请求最后一行的 embeddings，不做标准 logits 采样。</li>
+    <li><b>tokenizer / sampling API</b>：C++ 侧自带分词与 Gumbel 采样，因为采样顺序（JavaRandom LCG）
+    是位精确门禁的一部分。</li>
+    <li><b>llama-server</b>：m5-server 是独立的 httplib 实现，端点面向 TTS（<code>/v1/audio/speech</code> 等）。</li>
+  </ul>
   <div class="callout key"><span class="tagline">本章要点</span>
-    一帧 = 1 次 backbone decode + 15 次 depth 提交 + 16 次投影/采样 + 一批 codec 解码。
-    <b>串行依赖有三层</b>：book 内链、帧间 next_hidden、以及采样器随机数顺序。优化前先问：我要动的是哪一层依赖？
+    llama.cpp 给 M5 的不是"跑一个新模型"，而是一组<b>可注入的原语</b>：embedding 进、hidden 出，
+    中间的 KV / 调度 / 量化全部继承。代价是要懂它的生命周期——图的形状、KV 的行数、块的带宽，
+    每一样都会变成后面的优化变量。
   </div>
-  <div class="callout key"><span class="tagline">想看物理执行位置？</span>
-    本章讲的是<b>逻辑数据流</b>；哪些模块真正在 HTP0、哪些在 CPU、一帧要跨越多少次 pipe，
-    以及为什么 App 形态拿不到 NPU，统一放在 <b><a href="#ch9">第 9 章 · NPU / CPU 边界</a></b>。
-  </div>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch1">标记本章已学完</button></div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch2">标记本章已学完</button></div>
 </section>
 
-<!-- ============ CHAPTER 2 ============ -->
-<section class="chapter" id="ch2" data-title="性能分析的方法论">
-  <div class="chapHead"><span class="idx">02</span><h2>先学会测量：RTF、分层埋点与质量门禁</h2></div>
+<!-- ============ CHAPTER 3 ============ -->
+<section class="chapter" id="ch3" data-title="HTP 后端与 NPU 边界">
+  <div class="chapHead"><span class="idx">03</span><h2>HTP 后端：FastRPC、HVX 与 NPU / CPU 的边界</h2></div>
+  <p class="subtitle">"模型跑在 NPU 上"这句话对 M5-TTS 只对了一小半。这一章讲清楚 DSP 的调用链、计算归属，以及每帧 15 次跨边界往返的真实结构。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能画出从用户态进程到 Hexagon DSP 的 FastRPC 调用链，解释为什么 App 形态拿不到 NPU</li>
+    <li>说出六个模块各自落在 CPU 还是 HTP0，以及为什么这样切</li>
+    <li>理解"两个 HTP 会话分时一个 NPU"与每帧 15 次往返的结构含义</li>
+  </ul></div>
+
+  <h3>3.1 FastRPC：从用户态到 DSP</h3>
+  <p>HTP（Hexagon Tensor Processor）不是一块"插上就能用"的加速卡，它是一组通过
+  <b>FastRPC</b> 远程过程调用的 DSP 服务。调用链是：</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 264" role="img" aria-label="FastRPC 调用链：stage 进程到 Hexagon DSP 到 HVX">
+        <rect class="dg-panel" x="0" y="0" width="880" height="264" rx="12"/>
+        <rect class="dg-cpu" x="20" y="24" width="250" height="120" rx="12"/>
+        <text class="dg-tb" x="145" y="50" text-anchor="middle">常驻 stage 进程（CPU 侧）</text>
+        <text class="dg-ts" x="145" y="71" text-anchor="middle">backbone-resident / depth-resident</text>
+        <text class="dg-ts" x="145" y="91" text-anchor="middle">llama_context + ggml 图</text>
+        <text class="dg-ts" x="145" y="111" text-anchor="middle">每帧 1~15 次提交</text>
+        <rect class="dg-mix" x="310" y="44" width="180" height="80" rx="10"/>
+        <text class="dg-tb" x="400" y="74" text-anchor="middle">libadsprpc.so</text>
+        <text class="dg-ts" x="400" y="95" text-anchor="middle">FastRPC ioctl</text>
+        <rect class="dg-mix" x="530" y="44" width="150" height="80" rx="10"/>
+        <text class="dg-tb" x="605" y="74" text-anchor="middle">/dev/adsprpc-smd</text>
+        <text class="dg-ts" x="605" y="95" text-anchor="middle">内核节点 · 权限闸门</text>
+        <rect class="dg-npu" x="720" y="24" width="140" height="200" rx="12"/>
+        <text class="dg-tb" x="790" y="50" text-anchor="middle">HTP0 · DSP</text>
+        <rect class="dg-npu-in" x="732" y="64" width="116" height="46" rx="8"/>
+        <text class="dg-t" x="790" y="92" text-anchor="middle">会话（skel）</text>
+        <text class="dg-ts" x="790" y="108" text-anchor="middle">libggml-htp-v73</text>
+        <rect class="dg-npu-in" x="732" y="118" width="116" height="46" rx="8"/>
+        <text class="dg-t" x="790" y="146" text-anchor="middle">量化算子执行</text>
+        <text class="dg-ts" x="790" y="162" text-anchor="middle">HVX 向量核</text>
+        <text class="dg-ts" x="790" y="196" text-anchor="middle">会话创建昂贵 →</text>
+        <text class="dg-ts" x="790" y="212" text-anchor="middle">进程必须常驻</text>
+        <path class="dg-flow" d="M270 84 H308"/><path class="dg-flow" d="M490 84 H528"/><path class="dg-flow" d="M680 84 H718"/>
+        <text class="dg-ts" x="20" y="166">ADSP_LIBRARY_PATH 指向设备目录，DSP 侧按需加载 skel（<code>libggml-htp-v73.so</code>）；同一个二进制被两种角色复用。</text>
+        <text class="dg-bad" x="20" y="190" style="font:600 12px var(--mono)">权限：app uid 打开 /dev/adsprpc-smd 得到 EACCES —— 只有 shell 域进程能用 DSP。</text>
+        <text class="dg-ts" x="20" y="214">这就是"server 形态跑 NPU、App 形态只能 native CPU"的根源；也是 stage 被拆成常驻子进程的第二原因（隔离崩溃域）。</text>
+        <text class="dg-ts" x="20" y="238">提交成本模型（第 5 章展开）：F ≈ 1.25 ms 固定/次 + R ≈ 0.91 ms/行 —— 15 次串行提交 = 18.8 ms 纯税。</text>
+      </svg>
+    </div>
+    <figcaption>图 3-1　FastRPC 调用链。FastRPC 的"每次提交都有固定开销"直接决定了 depth 的成本模型形状，也是"15 步压成 2 步"这唯一剩余杠杆的物理来源。</figcaption>
+  </figure>
+  <h3>3.2 计算归属全景</h3>
+  <p>真正跑在 HTP0 上的只有<b>两个 transformer</b>：backbone（8 层 Q8_0，32 MB）与 depth core（5 层 Q4_0，10.7 MB），合计约 43 MB 权重常驻。
+  <b>heads 投影、采样、噪声生成、codec 声码器、PCM 输出全在 CPU。</b></p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 384" role="img" aria-label="CPU 与 HTP0 NPU 的计算归属全景">
+        <rect class="dg-cpu" x="40" y="40" width="300" height="286" rx="20"/>
+        <text class="dg-tb" x="56" y="62">CPU · 应用处理器（大核）</text>
+        <g class="dg-cpu-in">
+          <rect x="56" y="76" width="268" height="40" rx="8"/><rect x="56" y="122" width="268" height="40" rx="8"/>
+          <rect x="56" y="168" width="268" height="40" rx="8"/><rect x="56" y="214" width="268" height="40" rx="8"/>
+          <rect x="56" y="260" width="268" height="40" rx="8"/>
+        </g>
+        <g class="dg-tb">
+          <text x="68" y="93">HTTP · 分词 · prefix 查表</text><text x="68" y="139">depth heads 投影</text>
+          <text x="68" y="185">采样 + 噪声生成</text><text x="68" y="231">Codec 声码器</text>
+          <text x="68" y="277">PCM 拼接 / WAV / 流式输出</text>
+        </g>
+        <g class="dg-ts">
+          <text x="68" y="109">C++ tokenizer · mmap embeddings</text><text x="68" y="155">16 × 2051 × 512 int8 · NEON</text>
+          <text x="68" y="201">top-10 · Gumbel · JavaRandom</text><text x="68" y="247">ORT CPU · 3 线程 · 141 MB 权重</text>
+          <text x="68" y="293">WavWriter · chunked HTTP</text>
+        </g>
+        <rect class="dg-npu" x="400" y="40" width="240" height="286" rx="20"/>
+        <text class="dg-tb" x="416" y="62">HTP0 · Hexagon NPU</text>
+        <g class="dg-npu-in">
+          <rect x="416" y="76" width="208" height="64" rx="8"/><rect x="416" y="156" width="208" height="64" rx="8"/>
+          <rect x="416" y="236" width="208" height="64" rx="8"/>
+        </g>
+        <g class="dg-tb">
+          <text x="428" y="96">HTP 会话 A · backbone</text><text x="428" y="176">HTP 会话 B · depth core</text>
+          <text x="428" y="256">执行单元</text>
+        </g>
+        <g class="dg-ts">
+          <text x="428" y="114">Q8_0 32 MB · 8 层</text><text x="428" y="131">prefill + 每帧 1 token decode</text>
+          <text x="428" y="194">Q4_0 10.7 MB · 5 层</text><text x="428" y="211">每帧 15 次 decode</text>
+          <text x="428" y="274">HVX 向量 · NHMX=0</text><text x="428" y="291">OPPOLL=1 保持 DSP 时钟</text>
+        </g>
+        <path class="dg-arr" d="M346 118 H394"/><path class="dg-arr" d="M394 166 H346"/>
+        <text class="dg-lbl" x="370" y="205" text-anchor="middle">pipe</text>
+        <text class="dg-lbl" x="370" y="221" text-anchor="middle">2 KB/行</text>
+        <text class="dg-ts" x="40" y="348">两个常驻子进程各持一个 HTP 会话；引擎 ↔ stage 走匿名 pipe（FP32 512 维行），stage → DSP 走 FastRPC。</text>
+        <text class="dg-ts" x="40" y="368">同一物理 HTP0 被两个会话分时复用；codec 在 CPU worker 线程上，与 depth 并行（overlap）。</text>
+      </svg>
+    </div>
+    <figcaption>图 3-2　CPU 与 HTP0 的计算归属。注意"模型在 NPU"只覆盖了 43 MB 权重；每帧最重的 16 路 heads 矩阵乘和整个声码器都在 CPU。</figcaption>
+  </figure>
+
+  <h3>3.3 为什么这样切</h3>
+  <div class="grid2">
+    <div class="tile"><b>① transformer 归 NPU</b><p>backbone / depth core 都是规则 GEMM，权重小（32 MB / 10.7 MB）可常驻 HTP，每层都能被 llama.cpp 的 ggml-hexagon 后端整图提交。HVX 向量单元擅长这个。</p></div>
+    <div class="tile"><b>② heads 留 CPU</b><p><code>depth-weights.f32</code> 是 202 MB 查表型权重，每步只取 1–2 行；CPU 侧 mmap + per-row int8 镜像（17 MB/帧流式读）+ NEON 更划算。带宽特征明显：int8 后 heads 快 2.5×。</p></div>
+    <div class="tile"><b>③ codec 留 CPU</b><p>ONNX Runtime 图，含自写 <code>m5::Snake</code> 自定义算子，走 CPU EP（3 线程）。它不是 GGUF，也进不了 ggml-hexagon 的图。</p></div>
+    <div class="tile"><b>④ 两个进程，一个 NPU</b><p>backbone-resident / depth-resident 是同一二进制的两个常驻子进程，角色由 argv 决定；各自一个 HTP 会话，分时复用同一 HTP0。拆开是为了 KV 隔离、分别调量化与 env。</p></div>
+  </div>
+
+  <h3>3.4 一帧内的 15 次跨边界往返</h3>
+  <p>引擎 ↔ stage 一行 FP32 512 维 = 2 KB。默认 <code>--depth-pipe</code> 下，每个 book 都要「CPU 构造 transform 行 → 送 HTP0 跑一步 depth core → 回 CPU 投影 2051 类 → 采样」，<b>一帧 15 次</b>。<code>--depth-chain</code> 能把整条链搬进 stage、一次往返，但实测打平；<code>m5_ring</code> 共享内存反而更慢——瓶颈从来不是 IPC 次数。</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 306" role="img" aria-label="一帧内 CPU 与 HTP0 的十五次往返及 codec 并行">
+        <g class="dg-lbl">
+          <rect class="dg-npu-in" x="40" y="22" width="12" height="10" rx="2"/><text x="58" y="31">HTP0 / NPU 执行</text>
+          <rect class="dg-cpu-in" x="170" y="22" width="12" height="10" rx="2"/><text x="188" y="31">CPU 执行</text>
+          <rect class="dg-mix" x="268" y="22" width="12" height="10" rx="2"/><text x="286" y="31">跨边界往返 ×15</text>
+        </g>
+        <rect class="dg-npu-in" x="40" y="52" width="132" height="60" rx="8"/>
+        <text class="dg-tb" x="106" y="74" text-anchor="middle">backbone decode</text>
+        <text class="dg-lbl" x="106" y="92" text-anchor="middle">1 token → hidden[512]</text>
+        <rect class="dg-cpu-in" x="196" y="52" width="132" height="60" rx="8"/>
+        <text class="dg-tb" x="262" y="74" text-anchor="middle">book0 投影采样</text>
+        <text class="dg-lbl" x="262" y="92" text-anchor="middle">2051×512 int8 · NEON</text>
+        <rect class="dg-mix" x="352" y="52" width="152" height="60" rx="8"/>
+        <text class="dg-tb" x="428" y="74" text-anchor="middle">15× 深度链往返</text>
+        <text class="dg-lbl" x="428" y="92" text-anchor="middle">transform 行 → core → 投影 → 采样</text>
+        <rect class="dg-cpu-in" x="528" y="52" width="112" height="60" rx="8"/>
+        <text class="dg-tb" x="584" y="74" text-anchor="middle">next_hidden</text>
+        <text class="dg-lbl" x="584" y="92" text-anchor="middle">16 行查表累加</text>
+        <g class="dg-arr"><path d="M174 82 H194"/><path d="M330 82 H350"/><path d="M506 82 H526"/><path d="M428 114 V182"/></g>
+        <path class="dg-arr" d="M584 114 V146 H106 V114"/>
+        <text class="dg-lbl" x="345" y="141" text-anchor="middle">每帧重复，直到 16 个 code 全为 0（EOS）</text>
+        <rect class="dg-cpu" x="196" y="186" width="444" height="56" rx="8"/>
+        <text class="dg-tb" x="418" y="208" text-anchor="middle">codec worker（CPU · ORT 3 线程 · 独立线程）</text>
+        <text class="dg-lbl" x="418" y="226" text-anchor="middle">把 codes 解码成 24 kHz PCM，与下一帧 depth 重叠执行</text>
+        <text class="dg-ts" x="40" y="266">默认 --depth-pipe：每个 book 一次 pipe 往返（1~2 行 × 2 KB），一帧 15 次；--depth-chain 合并成 1 次但实测打平。</text>
+        <text class="dg-ts" x="40" y="286">权重位置：depth-weights.f32（202 MB）在 CPU 侧 mmap，int8 镜像 17 MB/帧流式读；两个 GGUF 共约 43 MB 常驻 HTP。</text>
+      </svg>
+    </div>
+    <figcaption>图 3-3　一帧的数据流。虚线框是 CPU↔NPU 交替区，也是日志 §14 里草稿无法跨越的那段依赖。</figcaption>
+  </figure>
+<h3>3.5 三个值 2.2 倍的后端旋钮</h3>
+  <p>ggml-hexagon 后端有三个环境旋钮，全部写进了部署脚本（见 <code>deploy.sh</code> 头部注释）：</p>
+  <div class="grid2">
+    <div class="tile"><b><code>GGML_HEXAGON_NHMX=0</code></b><p>HMX 是 Hexagon 的矩阵扩展，按理更适合 GEMM——但本部署的形状是 512 宽、每次 1–2 行的 GEMV，实测走 HMX 反而慢，关掉后走 HVX 向量路径。旋钮的价值随硅与形状变，抄配置之前先量。</p></div>
+    <div class="tile"><b><code>GGML_HEXAGON_OPPOLL=1</code></b><p>保持 DSP 时钟轮询。不设时 DSP 在两次提交之间掉频，实测差 <b>2.2×</b>——这是本项目捡到的最大一笔"免费"收益。后续测量还发现它只改墙钟、不改 CPU 总量（省的是等待，不是算力）。</p></div>
+    <div class="tile"><b><code>POWER_MODE=sustained_high_performance</code></b><p>告诉电源管理"这是持续负载"。与 OPPOLL 一起构成 DSP 侧的稳态环境；漏掉任何一个，NPU 结论都不可复现。</p></div>
+    <div class="tile"><b>为什么是环境变量</b><p>三个旋钮都属于"不改代码、只改部署"的层。它们的教训是通用的：<b>先把执行环境的税交齐，再谈 kernel 优化</b>——顺序反了会把环境噪声当成算子瓶颈。</p></div>
+  </div>
+
+  <h3>3.6 两个容易误解的点</h3>
+  <div class="grid2">
+    <div class="tile"><b>两个 HTP 会话 ≠ 两个 NPU</b><p>都是 HTP0，只是两个独立的 llama 上下文（各自 KV、各自量化）。它们分时复用同一物理 DSP。</p></div>
+    <div class="tile"><b>App 形态拿不到 HTP</b><p>OS 对 app uid 封了 <code>/dev/adsprpc-smd</code>（EACCES），JNI 版只能全 CPU 跑（RTF ~0.79–0.90）。只有 shell 域启动的 m5-server 才能用 NPU——所以全书的 NPU 结论都只适用于 server 形态。</p></div>
+  </div>
+  <div class="callout warn"><span class="tagline">由此决定的一个工程结构</span>
+    backbone 与 depth 被拆成两个常驻子进程，不是为了"并行"，而是两个边界条件逼出来的：
+    HTP 上下文初始化以秒计（一次进程启动就吃掉整段预算），且一旦 DSP 侧崩溃，
+    进程级隔离才不会把整个 server 带走。<b>先量清楚启动成本与崩溃域，再决定进程拓扑</b>——
+    这是端侧推理里最容易被忽略的一层设计。
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch3">标记本章已学完</button></div>
+</section>
+
+
+<div class="partIntro" id="p2">
+  <b>第二部 · 学会测量</b>
+  <p>优化之前先学会看数字。第 4 章建立测量与验收的纪律——RTF 的陷阱、分层埋点、质量门禁；
+  第 5 章把 15 步串行写成成本模型。它是后面每一次"值不值得做"判断的计算器。</p>
+</div>
+<section class="chapter" id="ch4" data-title="测量与质量门禁">
+  <div class="chapHead"><span class="idx">04</span><h2>先学会测量：RTF、分层埋点与质量门禁</h2></div>
   <p class="subtitle">大多数"优化失败"，其实是一开始就量错了。</p>
   <div class="objectives"><b>本章目标</b><ul>
     <li>知道 RTF 什么时候会骗人，并能用"固定成本 + 每帧成本"拆解它</li>
@@ -506,7 +772,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <li>理解为什么 TTS 优化必须带质量门禁，以及门禁各自的盲区</li>
   </ul></div>
 
-  <h3>2.1 RTF 的定义与三个陷阱</h3>
+  <h3>4.1 RTF 的定义与三个陷阱</h3>
   <p><code>RTF = 生成耗时 ÷ 生成音频时长</code>。小于 1 表示"比实时快"。它直观、便于对比，但有三个坑：</p>
   <ol>
     <li><b>短句惩罚</b>：模型有固定的 prefill / codec 预热 / 首批调度成本，音频越短摊不掉。实测 7 字句 RTF 0.918，19 字 0.837，24 字 0.742——同一份代码，只因为句子长度不同。</li>
@@ -555,7 +821,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-ts" x="640" y="180">■ depth　■ backbone　■ 固定</text>
       </svg>
     </div>
-    <figcaption>图 2-1　RTF 随句长下降不是"模型变快了"，而是 152 ms 固定成本被更多帧摊薄。长句时 depth 占墙钟约 83%，这才是真正该盯的地方。</figcaption>
+    <figcaption>图 4-1　RTF 随句长下降不是"模型变快了"，而是 152 ms 固定成本被更多帧摊薄。长句时 depth 占墙钟约 83%，这才是真正该盯的地方。</figcaption>
   </figure>
 
   <div class="callout key"><span class="tagline">可迁移的做法</span>
@@ -564,7 +830,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     优化截距只对短请求有意义，优化斜率才对长请求有意义——两者 often 需要完全不同的手段。
   </div>
 
-  <h3>2.2 三层可观测性</h3>
+  <h3>4.2 三层可观测性</h3>
   <div class="tableWrap"><table>
     <tr><th>层</th><th>工具 / 接口</th><th>回答什么问题</th><th>本项目实例</th></tr>
     <tr><td>端到端</td><td><code>X-M5-RTF / Elapsed-S / First-Pcm-S / Frames</code>、<code>GET /metrics</code></td><td>用户实际感受到多快？分布如何？</td><td>wav 响应带头；pcm 流式头提前定稿，只能靠 <code>/metrics</code> 与客户端实测</td></tr>
@@ -604,10 +870,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-ts" x="22" y="190">反模式：只看构建日志就说"优化生效"；跨轮比绝对值；只信 ASR；把"能改"当成"该改"；不记录被否定的方案</text>
       </svg>
     </div>
-    <figcaption>图 2-2　本项目反复使用的决策循环。第 7 步最容易被跳过，却决定了下一次不会重走死路。</figcaption>
+    <figcaption>图 4-2　本项目反复使用的决策循环。第 7 步最容易被跳过，却决定了下一次不会重走死路。</figcaption>
   </figure>
 
-  <h3>2.3 质量门禁：为什么"codes 不一样"不等于"错了"</h3>
+  <h3>4.3 质量门禁：为什么"codes 不一样"不等于"错了"</h3>
   <p>自回归生成是<b>混沌系统</b>：任何 1-ulp 的数值扰动都可能让采样落在另一个 token 上，之后轨迹完全分叉。
   因此门禁不是"逐位一致"，而是分层：</p>
   <div class="grid2">
@@ -617,12 +883,12 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <div class="tile"><b>④ 什么时候必须否决</b><p>backbone Q4_0 让音频短 16%（语速变快），ASR 依然全对——只有耳朵能抓到韵律漂移，最终保持 Q8。</p></div>
   </div>
 
-  <h3>2.4 瓶颈分类学（后面所有优化都对应其中一类）</h3>
+  <h3>4.4 瓶颈分类学（后面所有优化都对应其中一类）</h3>
   <div class="tableWrap"><table>
     <tr><th>类型</th><th>典型症状</th><th>本项目对应</th><th>有效手段</th></tr>
     <tr><td>带宽受限</td><td>耗时 ∝ 权重字节数，算力没吃满</td><td>heads 每帧 34 MB 流式读取</td><td>f16 → int8 量化、权重驻留</td></tr>
     <tr><td>提交开销</td><td>同样行数，调用次数越多越慢</td><td>depth 1.25 ms/次固定成本</td><td>批量化、算子融合、忙轮询</td></tr>
-    <tr><td>串行依赖</td><td>并行/批量会改变输出语义</td><td>15 步 book 链、帧间 next_hidden</td><td>只能改模型图（学习型草稿已判死，见 Ch 9）</td></tr>
+    <tr><td>串行依赖</td><td>并行/批量会改变输出语义</td><td>15 步 book 链、帧间 next_hidden</td><td>只能改模型图（学习型草稿已判死，见第 5 章）</td></tr>
     <tr><td>冷启动</td><td>第一个请求特别慢</td><td>prefill / ORT kernel / codec 图初始化</td><td>启动预热、跨请求状态缓存</td></tr>
     <tr><td>重复计算</td><td>同音色每次都重算同一段</td><td>共享 conditioning 前缀、codec primer</td><td>KV 前缀缓存、prime 状态复用</td></tr>
     <tr><td>资源竞争</td><td>两个任务并发时都变慢</td><td>codec 与 depth 同时跑，depth 慢 ~20%</td><td>评估净收益，而非单任务最优</td></tr>
@@ -632,20 +898,42 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     depth 权重 Q8_0(21 MB) → Q4_0(10.7 MB) 只快 9%，若真是带宽受限应该接近翻倍——由此判定 depth 是"提交开销 + 计算主导"，
     于是"继续降位量化"这条路被直接关掉。这个判别法比看 profiler 百分比更可靠。
   </div>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch2">标记本章已学完</button></div>
+
+  <h3>4.5 案例：一次"提速后音质变差"的完整调查</h3>
+  <p>这一节是 4.3 分层门禁的实战版。Serena 换上 Flash Attention 融合内核后，个别字出现疑似破音。
+  调查分四步，每步只回答一个问题：</p>
+  <ol>
+    <li><b>复现并保住基线。</b> 同一文本、音色、种子重新生成，两份产物都保留。听感是验收条件，RTF 只描述吞吐。</li>
+    <li><b>按算子形状拆 profile。</b> 按 DSP 批次形状分组、只比较同形状的 decode（旧 profile 里 1,820 个 80 算子批次）：
+        FP32 普通注意力 ≈ 2.65 ms/decode，FP16 普通 ≈ 2.60–2.65，FP16 Flash ≈ 1.92——先确认 Flash 真的走了 HVX，提速是真的。</li>
+    <li><b>把"生成"与"解码"隔离。</b> 分别保存基线与 Flash 的 codes：同一 attention 配置跨 codec 的 codes 完全一致，
+        排除 PCM16 削顶与分块边界——问题出在<b>生成轨迹</b>，不在声码器。</li>
+    <li><b>同一组 codes 盲听定位。</b> INT8 版比 FP32 版更明显：量化边界放大了轨迹差异，但轨迹本身已经变了。</li>
+  </ol>
+  <div class="callout warn"><span class="tagline">人耳证据与判决</span>
+    三条文本各两份、a/b 顺序打乱的双盲试听：用户指出第 3 组（车站播报）的 <code>3a</code> 差——揭晓后 3a 正是融合内核版。
+    KV 精度没变、codes 之外的客观指标全对，但<b>只换 attention 实现也能被听出来</b>。
+    按 4.3 节等价性分层判决：第 ③ 层不通过即否决，与第 ①② 层通过与否无关。
+    样本量小（3 组、1 组被指出），所以结论是"不进入生产"，不是"所有文本都能听出差异"——
+    分层门禁的价值恰恰在于：它规定了<b>哪一层有一票否决权</b>。
+  </div>
+  <div class="grid2">
+    <div class="tile"><b>音质验收 ≠ 性能验收</b><p>两条链路分开走：性能看 elapsed_s 与每帧成本；音质看 codes 一致性 → ASR → 盲听。任何"客观指标全对"都不能替代最后一层。</p></div>
+    <div class="tile"><b>归因一次只动一个变量</b><p>本案例曾同时动过 KV 精度与 kernel 实现，听感无法归因；退回"保 FP32 KV、只换 kernel"后证据才干净。profile 里按形状分组，而不是按时间轴平均。</p></div>
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch4">标记本章已学完</button></div>
 </section>
 
-<!-- ============ CHAPTER 3 ============ -->
-<section class="chapter" id="ch3" data-title="成本模型与 15 步串行">
-  <div class="chapHead"><span class="idx">03</span><h2>成本模型：把 15 步串行看透</h2></div>
+<section class="chapter" id="ch5" data-title="成本模型">
+  <div class="chapHead"><span class="idx">05</span><h2>成本模型：把 15 步串行看透</h2></div>
   <p class="subtitle">本章是整门课的核心——用一个微基准，把"能不能批量化"变成可计算、可证伪的问题。</p>
   <div class="objectives"><b>本章目标</b><ul>
     <li>会用 bench 数据拟合"固定提交成本 + 每行成本"，并算出理论加速上限</li>
-    <li>理解为什么理论 2.1× 拿不到、六条压缩路径各自怎么被排除，以及为什么连训练草稿也不行（Ch 9 / §14）</li>
+    <li>理解为什么理论 2.1× 拿不到、六条压缩路径各自怎么被排除，以及为什么连训练草稿也不行（5.3 与日志 §14）</li>
     <li>能把这里的推理迁移到 LLM 的投机解码 / Jacobi decoding 讨论</li>
   </ul></div>
 
-  <h3>3.1 一次调用多少钱</h3>
+  <h3>5.1 一次调用多少钱</h3>
   <p><code>depth_batch_bench.cpp</code> 在 HTP0 上把 28 行输入拆成四种形状，各跑多轮取中位数：</p>
   <div class="tableWrap"><table>
     <tr><th>形状</th><th class="num">总耗时</th><th>含义</th></tr>
@@ -659,8 +947,8 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
   理想批量（1 次调用、16 行）≈ <code>1.25 + 16×0.91 ≈ 16 ms</code>。
   <b>理论上限约 2.1×</b>（只算 depth core 的提交开销）。<b>但这个数字后来被两次修正</b>：
   算上 heads 投影后 depth 阶段天花板只有 1.78×，而且 codec 与 depth 并行，
-  单独提速会被 <code>max()</code> 吃掉；§14 又证明学习型草稿的 α 上界只有 0.18，
-  连这个 1.78× 都拿不到。详见 Ch 9。</p>
+  单独提速会被 <code>max()</code> 吃掉；日志 §14 又证明学习型草稿的 α 上界只有 0.18，
+  连这个 1.78× 都拿不到。详见本章 5.3。</p>
 
   <figure>
     <div class="figureBox">
@@ -684,10 +972,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-ts" x="24" y="220">注意：固定成本 F 在 DSP 后端里是"提交一次图 + 等完成"的开销，与行数几乎无关 —— 这正是小 batch 的税。</text>
       </svg>
     </div>
-    <figcaption>图 3-1　提交次数比行数更贵。把 28 行拆成 28 次提交，比一次提交慢 2.3 倍。</figcaption>
+    <figcaption>图 5-1　提交次数比行数更贵。把 28 行拆成 28 次提交，比一次提交慢 2.3 倍。</figcaption>
   </figure>
 
-  <h3>3.2 动手：自己推一遍理论上限</h3>
+  <h3>5.2 动手：自己推一遍理论上限</h3>
   <div class="calc" id="costCalc">
     <p style="margin-top:0;font-size:13px;color:var(--sub)">拖动滑块，观察"调用次数"如何支配总耗时。默认值来自本项目实测。</p>
     <div class="row">
@@ -706,7 +994,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <p style="font-size:12px;color:var(--sub);margin-bottom:0">RTF 估算含 152 ms prefill + 6.1 ms/帧 backbone，codec 视为被 overlap 隐藏；音频按 12.5 fps 换算。它是教学模型，不是实测值。</p>
   </div>
 
-  <h3>3.3 六条"精确压缩"路径，逐条被实验关掉</h3>
+  <h3>5.3 六条"精确压缩"路径，逐条被实验关掉</h3>
   <div class="tableWrap"><table>
     <tr><th>路径</th><th>想法</th><th>证伪证据</th><th>结论</th></tr>
     <tr><td>① 哑输入批量</td><td>把 15 步合成 1 次，transform 行先用零占位</td><td><code>M5_ZERO_TRANSFORM=1</code> 让 codes 翻转 <b>99.6%</b>（首帧 15/15 全翻），音频 70→500 帧发散不终止</td><td>❌ transform 行承载语义与 EOS 决策</td></tr>
@@ -735,25 +1023,31 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-t" x="470" y="94">帧间匹配率 1.5%（≈ 随机猜 2051 个码字）</text>
         <text class="dg-t" x="470" y="116">verify 几乎必然在第 1 个 book 就拒绝</text>
         <text class="dg-ts" x="470" y="146">本质：没有可预测的时间局部性</text>
-        <text class="dg-tacc" x="470" y="176">§14：学习型 draft 也已实测判死（α ≈ 0.18）</text>
+        <text class="dg-tacc" x="470" y="176">日志 §14：学习型 draft 也已实测判死（α ≈ 0.18）</text>
       </svg>
     </div>
-    <figcaption>图 3-2　同样是"草稿 + 批量验证"，在 LLM 上成立、在 codec codes 上不成立。差别不在工程，而在数据分布是否有可预测性。</figcaption>
+    <figcaption>图 5-2　同样是"草稿 + 批量验证"，在 LLM 上成立、在 codec codes 上不成立。差别不在工程，而在数据分布是否有可预测性。</figcaption>
   </figure>
 
   <div class="callout bad"><span class="tagline">最重要的结论</span>
     <b>理论上限 ≠ 可达上限</b>。2.1× 的收益是真的，但拿不到它的原因是<b>模型语义</b>：15 步串行是训练出来的依赖结构，不是实现偷懒。
     任何"把 15 次合成 1 次"的精确方案都必须先回答：transform 行里的 code 依赖怎么办？
-    曾经的答案是「训练一个小草稿模型做预测」，但 §14 用 960 帧官方 ONNX 轨迹把这条路也关掉了：
-    可预测性沿 15 步链结构性衰减，α 上界 ≈0.18 远低于盈亏平衡 0.72（Ch 9 / 图 9-2 就是草稿跨不过去的那段依赖）。
+    曾经的答案是「训练一个小草稿模型做预测」，但日志 §14 用 960 帧官方 ONNX 轨迹把这条路也关掉了：
+    可预测性沿 15 步链结构性衰减，α 上界 ≈0.18 远低于盈亏平衡 0.72（图 5-2 与第 3 章图 3-3 就是草稿跨不过去的那段依赖）。
     现在只剩重训 depth 头支持并行出多 book——那是改模型图、需要原始训练数据的另一个项目。
   </div>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch3">标记本章已学完</button></div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch5">标记本章已学完</button></div>
 </section>
 
-<!-- ============ CHAPTER 4 ============ -->
-<section class="chapter" id="ch4" data-title="优化复盘（上）：数据搬运">
-  <div class="chapHead"><span class="idx">04</span><h2>优化复盘（上）：让数据搬运变便宜</h2></div>
+
+<div class="partIntro" id="p3">
+  <b>第三部 · 优化复盘</b>
+  <p>全书主体：六个真实的优化战场，按<strong>手段</strong>组织而不是按发生时间排列——数据搬运（06）、
+  时间重叠（07）、产品化（08）、并发（09）、判死（10）、结构天花板（11）。
+  每章都有转正与判死两类结局；负结果同样是产出。</p>
+</div>
+<section class="chapter" id="ch6" data-title="优化 I：数据搬运">
+  <div class="chapHead"><span class="idx">06</span><h2>优化复盘（上）：让数据搬运变便宜</h2></div>
   <p class="subtitle">量化、算子融合、编译期验证——这一组优化的共同敌人是"字节数"和"扫描次数"。</p>
   <div class="objectives"><b>本章目标</b><ul>
     <li>会用"权重流量 × 带宽"估算 GEMV 耗时，并据此判断量化能省多少</li>
@@ -761,7 +1055,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <li>区分钟算式优化与提交开销型优化</li>
   </ul></div>
 
-  <h3>4.1 f16：一个"优化了但根本没编译进去"的故事</h3>
+  <h3>6.1 f16：一个"优化了但根本没编译进去"的故事</h3>
   <p>depth heads 每帧要做 16 次 <code>512×2051</code> 的 GEMV，权重是流式读取的。
   最初的 f16 内核守卫写成了 GCC 风格宏 <code>__ARM_FEATURE_FP16</code>，而 NDK clang 19 实际定义的是
   <code>__ARM_FEATURE_FP16_VECTOR_ARITHMETIC</code> / <code>__ARM_FEATURE_FP16_FML</code>。
@@ -774,7 +1068,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     宏名要按实际编译器的特性宏写；跨平台 SIMD 路径尤其容易静默回退到标量实现。
   </div>
 
-  <h3>4.2 heads int8：带宽减半，heads 快 2.5 倍</h3>
+  <h3>6.2 heads int8：带宽减半，heads 快 2.5 倍</h3>
   <p>埋点显示 heads 每帧约 13.4 ms，而每帧要流过约 34 MB f16 权重（投影 + projected 块），
   折算带宽约 2.5 GB/s —— <b>这是典型的内存带宽瓶颈，算力几乎没参与</b>。
   于是做 per-row 对称量化：每行 512 个 float 求 <code>max|w|</code>，<code>scale = max/127</code>，
@@ -798,10 +1092,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-tacc" x="580" y="88">2.5× · RTF 0.86 → 0.75（-13%）</text>
         <text class="dg-ts" x="580" y="118">带宽估算：34 MB / 13.4 ms ≈ 2.5 GB/s</text>
         <text class="dg-ts" x="580" y="140">符合 DDR 流式读特征 → 减字节数直接见效</text>
-        <text class="dg-ts" x="24" y="196">对比：depth 权重 Q8(21 MB) → Q4(10.7 MB) 只快 9% ⇒ depth 不是带宽瓶颈（见 §2.4 判别法）</text>
+        <text class="dg-ts" x="24" y="196">对比：depth 权重 Q8(21 MB) → Q4(10.7 MB) 只快 9% ⇒ depth 不是带宽瓶颈（见 4.4 的判别法）</text>
       </svg>
     </div>
-    <figcaption>图 4-1　同一个"量化"动作，在 heads 上是特效药，在 depth 上却几乎无效。判别依据是耗时是否随字节数按比例变化。</figcaption>
+    <figcaption>图 6-1　同一个"量化"动作，在 heads 上是特效药，在 depth 上却几乎无效。判别依据是耗时是否随字节数按比例变化。</figcaption>
   </figure>
 
   <p>量化还带来一个必须讲清楚的现象：<b>codes 从第 2 帧起翻转 ~90%</b>。别急着判死刑——见下面这张图。</p>
@@ -827,10 +1121,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-ts" x="24" y="178">判定：这是"换随机种子"级别的同分布轨迹分叉，不是误差累积。质量门禁应检验分布，而非逐位一致。</text>
       </svg>
     </div>
-    <figcaption>图 4-2　自回归系统的数值扰动会被反馈环放大。门禁要看首帧（数值正确性）与最终听感（语义正确性），中间 codes 逐位相等既不可能也不必要。</figcaption>
+    <figcaption>图 6-2　自回归系统的数值扰动会被反馈环放大。门禁要看首帧（数值正确性）与最终听感（语义正确性），中间 codes 逐位相等既不可能也不必要。</figcaption>
   </figure>
 
-  <h3>4.3 什么时候量化必须被否决：backbone Q4_0</h3>
+  <h3>6.3 什么时候量化必须被否决：backbone Q4_0</h3>
   <p>用 host 端 <code>llama-quantize --allow-requantize</code> 把 backbone 从 Q8_0(32.4 MB) 压到 Q4_0(17.1 MB)，
   同轮交替 A/B 的数据很漂亮：<code>backbone_s 0.632 → 0.495（-21%）</code>，depth 也因 DDR 竞争减少快了 15%，
   <b>两版 ASR 全对</b>。但音频时长从 5.90 s 缩到 4.94 s（<b>-16%，语速变快</b>）——这是韵律漂移。
@@ -841,7 +1135,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     同时要算清收益占比：为了 14% 的环节去牺牲全局听感，通常不划算。
   </div>
 
-  <h3>4.4 codec：三步量化 + 一次"反直觉"的算子融合</h3>
+  <h3>6.4 codec：三步量化 + 一次"反直觉"的算子融合</h3>
   <div class="tableWrap"><table>
     <tr><th>动作</th><th>效果</th><th>原理</th></tr>
     <tr><td>CT → MatMul 改写、权重动态 int8</td><td>模型 362 → 141 MB；codec 7.49 → 4.68 s（115 帧句）</td><td>让算子落到 ORT 的量化快速路径</td></tr>
@@ -855,7 +1149,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
   <p>另外两个死胡同也值得记：尾部 ConvTranspose 保留 fp32 只有 12.78 vs 12.75 dB 的无差别收益；
   对 QK^T / AV 这类"激活 × 激活"的 MatMul 做量化会掉 1.3 dB（Softmax 敏感），因此动态量化时必须把 17 个这样的节点排除。</p>
 
-  <h3>4.5 小结：怎么判断"该不该量化"</h3>
+  <h3>6.5 小结：怎么判断"该不该量化"</h3>
   <ol>
     <li>先测<b>流量与耗时是否成比例</b>（改权重的位宽做 A/B），确认是带宽瓶颈；</li>
     <li>若是，优先量化<b>流式读取的大权重块</b>，且尽量只量化权重、保留激活精度；</li>
@@ -863,12 +1157,11 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <li>算清该环节在总墙钟的占比，收益天花板 = 占比 × 提速比例；</li>
     <li>如果环节被流水线重叠隐藏（codec），现在优化它<b>不会</b>反映在端到端 RTF 上——等主瓶颈降下来再做。</li>
   </ol>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch4">标记本章已学完</button></div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch6">标记本章已学完</button></div>
 </section>
 
-<!-- ============ CHAPTER 5 ============ -->
-<section class="chapter" id="ch5" data-title="优化复盘（下）：时间与重复">
-  <div class="chapHead"><span class="idx">05</span><h2>优化复盘（下）：让时间重叠、让重复消失</h2></div>
+<section class="chapter" id="ch7" data-title="优化 II：重叠与复用">
+  <div class="chapHead"><span class="idx">07</span><h2>优化复盘（下）：让时间重叠、让重复消失</h2></div>
   <p class="subtitle">这一组优化不改变数学，只改变"什么时候做、做几次"。</p>
   <div class="objectives"><b>本章目标</b><ul>
     <li>理解后端轮询模式为什么能带来 2×，以及系统化调参的正确姿势</li>
@@ -877,7 +1170,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <li>能一眼说出本项目每个成功项 / 负结果属于哪类杠杆</li>
   </ul></div>
 
-  <h3>5.1 后端旋钮：一次环境变量值 2.2 倍</h3>
+  <h3>7.1 后端旋钮：一次环境变量值 2.2 倍</h3>
   <p><code>ggml/src/ggml-hexagon/ggml-hexagon.cpp</code> 暴露了一组 HTP 后端参数，默认值并不适配这个
   "每帧 15 次极小图提交"的工作负载。其中 <code>GGML_HEXAGON_OPPOLL</code>（默认 0）决定是否<b>忙轮询</b>
   DSP 队列完成：设为 1 时 <code>dspqueue_read</code> 超时为 0（不睡眠等中断），
@@ -900,7 +1193,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     结论落在 ±1% 噪声内，才敢说"当前配置已最优"。
   </div>
 
-  <h3>5.2 流水线重叠：把 codec 藏在 depth 后面</h3>
+  <h3>7.2 流水线重叠：把 codec 藏在 depth 后面</h3>
   <figure>
     <div class="figureBox">
       <svg viewBox="0 0 880 216" role="img" aria-label="depth 与 codec 双线程重叠的时间线">
@@ -922,10 +1215,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-ts" x="24" y="198">推论：在 depth 提速前，继续优化 codec 不会反映到端到端 RTF —— 优化的是"被隐藏的时间"。</text>
       </svg>
     </div>
-    <figcaption>图 5-1　重叠（overlap）是系统工程里最划算的一招：不改变任何计算量，只让两条依赖链并行。判断它是否值得，要比较的是净墙钟，而不是单条泳道的速度。</figcaption>
+    <figcaption>图 7-1　重叠（overlap）是系统工程里最划算的一招：不改变任何计算量，只让两条依赖链并行。判断它是否值得，要比较的是净墙钟，而不是单条泳道的速度。</figcaption>
   </figure>
 
-  <h3>5.3 分块策略与"固定开销"的第二次出现</h3>
+  <h3>7.3 分块策略与"固定开销"的第二次出现</h3>
   <p>codec 是带递归状态的 ONNX 会话，按 chunk 批量解码。chunk 越小首包越早，但每次 ORT Run 有固定开销；
   于是按请求类型分策略：</p>
   <div class="grid2">
@@ -936,10 +1229,10 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
   </div>
   <div class="callout warn"><span class="tagline">规律</span>
     "更小的块 = 更低延迟"只在<b>固定开销小</b>时成立。任何带会话初始化、图提交、DMA 的调用都要先量它的固定成本，
-    再决定分块粒度。这与 §3.1 的 <code>F</code> 是同一个概念，只是发生在 codec 层。
+    再决定分块粒度。这与 5.1 的 <code>F</code> 是同一个概念，只是发生在 codec 层。
   </div>
 
-  <h3>5.4 prefill 前缀 KV 缓存：一个协议级优化</h3>
+  <h3>7.4 prefill 前缀 KV 缓存：一个协议级优化</h3>
   <p>同一音色的每次请求，prefix 的前半段（控制标记 + caption + 参考文本）完全一样，只有目标文本与参考 codes 后面的部分不同。
   既然 backbone 是标准 llama.cpp context，就可以<b>保留共享段的 KV，只重算新增部分</b>。</p>
   <figure>
@@ -971,12 +1264,12 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
         <text class="dg-ts" x="24" y="242">坑：命中时也<b>必须读掉</b> shared 块字节，否则管道错位、下一条消息头读出垃圾 count，服务崩溃</text>
       </svg>
     </div>
-    <figcaption>图 5-2　<code>count == -1</code> 预填充消息与 <code>llama_memory_seq_rm</code>。这是"用框架原生 KV 能力做应用级缓存"的典型范例。</figcaption>
+    <figcaption>图 7-2　<code>count == -1</code> 预填充消息与 <code>llama_memory_seq_rm</code>。这是"用框架原生 KV 能力做应用级缓存"的典型范例。</figcaption>
   </figure>
   <p>还有两个同类的"别重复做"：<code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，
   同音色第二次请求起跳过一次 primer ORT Run；<code>voices.json</code> 按 mtime 缓存，避免每请求重读解析。</p>
 
-  <h3>5.5 传输与并发：正确 ≠ 更快</h3>
+  <h3>7.5 传输与并发：正确 ≠ 更快</h3>
   <div class="tableWrap"><table>
     <tr><th>尝试</th><th>结果</th><th>为什么值得记</th></tr>
     <tr><td><code>--depth-chain</code>：16 次 pipe 往返 → 1 次</td><td>逐位一致，但慢 1.5%</td><td>证明瓶颈是权重带宽 / 提交开销，不是 IPC 延迟；协议仍保留为未来批量化落点</td></tr>
@@ -986,7 +1279,7 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <tr><td>并发改造 <code>render_mutex</code></td><td>单用户场景无收益</td><td>优化要匹配真实负载，别为假想流量设计</td></tr>
   </table></div>
 
-  <h3>5.6 全量卡片：每一个优化尝试</h3>
+  <h3>7.6 全量卡片：每一个优化尝试</h3>
   <div class="filters">
     <button class="miniBtn on" data-filter="all">全部</button>
     <button class="miniBtn" data-filter="ok">✅ 已上线</button>
@@ -1012,935 +1305,25 @@ next_hidden = Σ_book audio_embedding[book][code[book]]   <span class="cm">// �
     <div class="optCard" data-status="no"><div class="hd"><b>depth 换更低量化</b><span class="badge no">排除</span></div><div class="metric">Q8→Q4 只快 9%</div><p>证明非带宽瓶颈。</p></div>
     <div class="optCard" data-status="no"><div class="hd"><b>m5_ring 共享内存</b><span class="badge no">更慢</span></div><div class="metric">futex 等待</div><p>零拷贝不等于低延迟。</p></div>
     <div class="optCard" data-status="no"><div class="hd"><b>噪声向量化 / 跨请求 KV</b><span class="badge no">收益 &lt;2%</span></div><div class="metric">位精确约束 / &lt;2 ms</div><p>先量占比，再决定复杂度。</p></div>
-    <div class="optCard" data-status="no"><div class="hd"><b>学习型草稿</b><span class="badge no">判死</span></div><div class="metric">α_oracle ≈ 0.18 ≪ 0.72 门槛</div><p>960 帧 ONNX：ridge / 核回归 / 单 code 扰动三组证据，见 §14 与 Ch 9。</p></div>
-    <div class="optCard" data-status="no"><div class="hd"><b>并行资源让渡 / 旋钮重扫</b><span class="badge no">证伪</span></div><div class="metric">48 次 A/B，无一快于默认</div><p>§13：depth_s 与 codec 负载不相关；关 overlap 反 +43.9%。</p></div>
-    <div class="optCard" data-status="no"><div class="hd"><b>codec 单独再优化</b><span class="badge no">零收益</span></div><div class="metric">被 max(depth, codec) 吃掉</div><p>§13：codec 变快而 depth 不变，端到端墙钟不动；除非与 depth 提速捆绑。</p></div>
-    <div class="optCard" data-status="wait"><div class="hd"><b>重训 depth 头</b><span class="badge wait">唯一剩余</span></div><div class="metric">一次前向出多 book</div><p>改模型图、需原始训练数据，已是另一个项目（Ch 9）。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>学习型草稿</b><span class="badge no">判死</span></div><div class="metric">α_oracle ≈ 0.18 ≪ 0.72 门槛</div><p>960 帧 ONNX：ridge / 核回归 / 单 code 扰动三组证据，见日志 §14 与第 5 章。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>并行资源让渡 / 旋钮重扫</b><span class="badge no">证伪</span></div><div class="metric">48 次 A/B，无一快于默认</div><p>日志 §13：depth_s 与 codec 负载不相关；关 overlap 反 +43.9%。</p></div>
+    <div class="optCard" data-status="no"><div class="hd"><b>codec 单独再优化</b><span class="badge no">零收益</span></div><div class="metric">被 max(depth, codec) 吃掉</div><p>日志 §13：codec 变快而 depth 不变，端到端墙钟不动；除非与 depth 提速捆绑。</p></div>
+    <div class="optCard" data-status="wait"><div class="hd"><b>重训 depth 头</b><span class="badge wait">唯一剩余</span></div><div class="metric">一次前向出多 book</div><p>改模型图、需原始训练数据，已是另一个项目（见第 11.9 节）。</p></div>
     <div class="optCard" data-status="wait"><div class="hd"><b>heads int4</b><span class="badge wait">小候选</span></div><div class="metric">17 MB → 8.5 MB 流量</div><p>门禁同 int8；预期每帧 -2~3 ms，收益有限但风险低。</p></div>
   </div>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch5">标记本章已学完</button></div>
-</section>
-
-<!-- ============ CHAPTER 6 ============ -->
-<section class="chapter" id="ch6" data-title="抽象成通用方法">
-  <div class="chapHead"><span class="idx">06</span><h2>从案例到方法论：llama.cpp 推理加速通用套路</h2></div>
-  <p class="subtitle">把上面 20 多次尝试压缩成一张可以带到别的项目里的检查表。</p>
-
-  <h3>6.1 八个杠杆，按"先问什么"排序</h3>
-  <div class="tableWrap"><table>
-    <tr><th>#</th><th>杠杆</th><th>先问的问题</th><th>llama.cpp / 后端对应</th><th>M5 案例</th></tr>
-    <tr><td>1</td><td>可观测性</td><td>我量的是哪个口径？分项在哪？</td><td><code>llama_perf_context_print</code>、自定义 timers / headers</td><td>X-M5-* + /metrics</td></tr>
-    <tr><td>2</td><td>prefill / decode 分离</td><td>固定成本与每 token 成本各多少？</td><td><code>n_batch / n_ubatch</code>、prompt 复用</td><td>线性拟合 152 ms + 48.6 ms/帧</td></tr>
-    <tr><td>3</td><td>KV 复用</td><td>有没有跨请求/跨段共享前缀？</td><td><code>llama_memory_seq_rm</code>、prefix cache、<code>seq_id</code></td><td>count == -1 协议</td></tr>
-    <tr><td>4</td><td>批处理 / 提交合并</td><td>依赖是否允许？F 有多大？</td><td><code>llama_batch.n_tokens</code>、ubatch、continuous batching</td><td>depth-bench 15→1（被依赖否决）</td></tr>
-    <tr><td>5</td><td>量化 / 权重布局</td><td>是不是带宽瓶颈？</td><td>GGUF <code>Q4_0/Q8_0</code>、<code>llama-quantize</code>、f16/f32 KV</td><td>heads int8 生效、backbone Q4 否决</td></tr>
-    <tr><td>6</td><td>算子融合 / 后端旋钮</td><td>扫描次数与提交次数能否减少？</td><td>ggml graph fusion、backend env、flash attention</td><td>Snake 融合、OPPOLL=1</td></tr>
-    <tr><td>7</td><td>异步重叠</td><td>哪两条链互不依赖？</td><td>多 stream / async、pipeline parallel</td><td>codec worker 藏在 depth 后</td></tr>
-    <tr><td>8</td><td>冷启动 / I/O / 状态</td><td>首请求为什么慢？状态能留吗？</td><td>model warmup、mmap、session 复用</td><td>预热、restore_prime、WavWriter 内存模式</td></tr>
-  </table></div>
-
-  <h3>6.2 llama.cpp 的旋钮怎么映射到本案例</h3>
-  <pre><span class="cm"># 通用 llama.cpp 参数 → 在 M5 里的对应物</span>
-n_ctx / n_batch / n_ubatch   →  <span class="kw">backbone.cpp</span> n_ctx=2048（depth=256）, n_batch=n_ubatch=prefix
-type_k / type_v              →  GGML_TYPE_F32（depth 图小，KV 非瓶颈，不为省内存冒险）
-embeddings=true, pooling=NONE→  需要 llama_get_embeddings_ith(ctx, -1) 取 hidden
-llama_batch.embd             →  自定义 512 维输入，绕开 token id 与 lm_head
-llama_memory_seq_rm          →  前缀 KV 缓存命中时保留 [0, sh)
-GGUF Q8_0 / Q4_0            →  backbone / depth 权重；host 用 llama-quantize 转
-ggml_backend_load_all        →  选择 HTP0（shell 域）或 CPU（App 域）
-GGML_HEXAGON_*               →  DSP 提交/轮询/融合策略，按工作负载扫参</pre>
-  <p>可以看到一条很实用的"借壳"路径：<b>把自定义模型的权重导成 GGUF、把自定义输入塞进 <code>llama_batch.embd</code>，
-  就能复用 llama.cpp 的 KV cache、后端调度、量化与图优化</b>；只有采样头和辅助模块留在外面自己写。
-  这比从头写一套推理引擎便宜得多，代价是必须遵守框架对 <code>n_embd</code>、batch、位置编码的约定。</p>
-
-  <h3>6.3 性能问题诊断模板（可直接抄）</h3>
-  <ol>
-    <li><b>锁定口径</b>：固定输入、固定种子、设备冷却到同一状态；记录 RTF、墙钟、首包、帧数。</li>
-    <li><b>画泳道</b>：把 prefill / 主 decode / 辅助解码 / I/O 画在时间线上，标出哪些重叠、哪些串行。</li>
-    <li><b>拟合</b>：<code>T(N) = 截距 + 斜率 × N</code>；截距归冷启动，斜率归热路径。</li>
-    <li><b>分类瓶颈</b>：改字节数（带宽）、改调用次数（提交）、改并发（竞争）、改输入长度（依赖），一次只动一个变量。</li>
-    <li><b>算天花板</b>：该环节占墙钟百分之几 × 最多提速几倍。占比 &lt;10% 的环节先别碰。</li>
-    <li><b>做 A/B</b>：同轮交替、至少两轮；把负结果和复活条件一起写进文档。</li>
-    <li><b>过门禁</b>：数值正确性 → 生成分布 → 语义/感知 → 必要时人耳/人眼。</li>
-    <li><b>固化</b>：把赢下来的配置写进部署脚本与监控，防止下次重启静默回退。</li>
-  </ol>
-
-  <h3>6.4 五个反模式</h3>
-  <div class="grid2">
-    <div class="tile"><b>看构建日志判断优化生效</b><p>宏名不匹配让 f16 成了死代码；要以产物为准。</p></div>
-    <div class="tile"><b>跨轮比较绝对值</b><p>热漂移能让同代码 RTF 0.75→0.91。</p></div>
-    <div class="tile"><b>把 ASR 正确当音质正确</b><p>Q4 韵律漂移，只有试听能发现。</p></div>
-    <div class="tile"><b>盲目批处理 / 盲目换后端</b><p>依赖不允许时，批量只会毁输出；ring 比 pipe 慢。</p></div>
-    <div class="tile"><b>优化被隐藏的时间</b><p>codec 被 depth 重叠盖住，压缩它当时不改善 RTF。</p></div>
-  </div>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch6">标记本章已学完</button></div>
-</section>
-
-<!-- ============ CHAPTER 7 ============ -->
-<section class="chapter" id="ch7" data-title="音色怎么学会的：Qwen3-TTS">
-  <div class="chapHead"><span class="idx">07</span><h2>音色是怎么"学"来的：从 Qwen3-TTS 到 M5</h2></div>
-  <p class="subtitle">这一章回答一个特别容易误解的问题：换音色到底有没有训练？</p>
-  <div class="objectives"><b>本章目标</b><ul>
-    <li>能复述本仓库里 <code>serena</code> 音色从 Qwen3-TTS 迁移到 M5 的完整链路</li>
-    <li>理解离散多码本 token 为什么能承载说话人身份</li>
-    <li>区分零样本克隆的两条机制（speaker embedding / in-context learning）</li>
-    <li>知道 Qwen3-TTS 的双轨 + MTP 架构，以及 llama.cpp 里的落地方式</li>
-  </ul></div>
-
-  <h3>7.1 先澄清：仓库里有两条独立的 TTS 线</h3>
-  <div class="grid2">
-    <div class="tile"><b>① examples/m5-tts（本教程主角）</b><p>Android/HTP 移植的 M5 引擎。运行时<b>只用自身的 codec codes</b>，conditioning 用 <code>&lt;|caption_begin|&gt;…</code> 系列标记。Qwen 只出现在<b>离线生成参考 WAV</b> 的脚本里。</p></div>
-    <div class="tile"><b>② tools/tts + src/models/qwen3tts（llama.cpp 原生）</b><p><code>llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF</code>，经 libmtmd 跑完整 Qwen3-TTS，用 ChatML wrap 与 <code>&lt;|codec_*|&gt;</code> 特殊 token。</p></div>
-  </div>
-  <p>用户问的"TTS 怎么学 Qwen3-TTS 的音色"，在这个项目里指的是第 ① 条线：
-  <b>用 Qwen3-TTS 的 CustomVoice 预设音色 Serena 合成一句参考音频，再把这段音频转换成 M5 能理解的 codec codes，
-  作为"示范"写进 M5 的 prompt</b>。下面把这条链路拆开。</p>
-
-  <h3>7.2 Serena 的诞生：五步，零梯度</h3>
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 880 272" role="img" aria-label="Qwen3-TTS 生成参考音频，经 codec encoder 变为 codes 存入 voices.json，M5 运行时只读取 codes">
-        <rect class="dg-panel" x="0" y="0" width="880" height="272" rx="12"/>
-        <text class="dg-ts" x="24" y="24">离线阶段（在 PC / Python 环境，一次完成）</text>
-        <g>
-          <rect class="dg-accent2" x="24" y="38" width="152" height="66" rx="9"/>
-          <text class="dg-tb" x="100" y="62" text-anchor="middle">Qwen3-TTS</text>
-          <text class="dg-ts" x="100" y="80" text-anchor="middle">CustomVoice · Serena</text>
-          <text class="dg-ts" x="100" y="95" text-anchor="middle">0.6B / 1.7B</text>
-          <rect class="dg-box" x="200" y="38" width="152" height="66" rx="9"/>
-          <text class="dg-tb" x="276" y="62" text-anchor="middle">参考 WAV</text>
-          <text class="dg-ts" x="276" y="80" text-anchor="middle">"下过雨的早晨…"</text>
-          <text class="dg-ts" x="276" y="95" text-anchor="middle">+ 逐字转写 .txt</text>
-          <rect class="dg-box" x="376" y="38" width="152" height="66" rx="9"/>
-          <text class="dg-tb" x="452" y="62" text-anchor="middle">clone_voice.py</text>
-          <text class="dg-ts" x="452" y="80" text-anchor="middle">24 kHz / 归一化</text>
-          <text class="dg-ts" x="452" y="95" text-anchor="middle">静音切分</text>
-          <rect class="dg-ok" x="552" y="38" width="152" height="66" rx="9"/>
-          <text class="dg-tb" x="628" y="62" text-anchor="middle">codec_encoder.onnx</text>
-          <text class="dg-ts" x="628" y="80" text-anchor="middle">audio[1,T] → codes[1,16,F]</text>
-          <text class="dg-ts" x="628" y="95" text-anchor="middle">65 帧 × 16 book</text>
-          <rect class="dg-box" x="728" y="38" width="128" height="66" rx="9"/>
-          <text class="dg-tb" x="792" y="62" text-anchor="middle">voices.json</text>
-          <text class="dg-ts" x="792" y="80" text-anchor="middle">name: serena</text>
-          <text class="dg-ts" x="792" y="95" text-anchor="middle">reference_text</text>
-          <path class="dg-flow" d="M176 71 H198"/><path class="dg-flow" d="M352 71 H374"/>
-          <path class="dg-flow" d="M528 71 H550"/><path class="dg-flow" d="M704 71 H726"/>
-        </g>
-        <text class="dg-ts" x="24" y="136">在线阶段（设备端 m5-server，每次请求）</text>
-        <g>
-          <rect class="dg-box" x="24" y="150" width="180" height="60" rx="9"/>
-          <text class="dg-tb" x="114" y="174" text-anchor="middle">用户文本 + voice=serena</text>
-          <text class="dg-ts" x="114" y="193" text-anchor="middle">POST /v1/audio/speech</text>
-          <rect class="dg-accent" x="228" y="150" width="230" height="60" rx="9"/>
-          <text class="dg-tb" x="343" y="174" text-anchor="middle">conditioning 前缀</text>
-          <text class="dg-ts" x="343" y="193" text-anchor="middle">参考文本 + 目标文本 + codes 行</text>
-          <rect class="dg-ok" x="482" y="150" width="180" height="60" rx="9"/>
-          <text class="dg-tb" x="572" y="174" text-anchor="middle">M5 自回归续写</text>
-          <text class="dg-ts" x="572" y="193" text-anchor="middle">backbone + depth + codec</text>
-          <rect class="dg-box" x="686" y="150" width="170" height="60" rx="9"/>
-          <text class="dg-tb" x="771" y="174" text-anchor="middle">Serena 音色的语音</text>
-          <text class="dg-ts" x="771" y="193" text-anchor="middle">任意新文本</text>
-          <path class="dg-flow" d="M204 180 H226"/><path class="dg-flow" d="M458 180 H480"/>
-          <path class="dg-flow" d="M662 180 H684"/>
-        </g>
-        <text class="dg-tacc" x="24" y="238">关键：M5 运行时不加载 Qwen、不做微调、不更新任何权重 —— "学会"的是 prompt 里的示范，不是模型参数。</text>
-        <text class="dg-ts" x="24" y="260">generate_qwen_reference.py --speaker Serena --seed 1234  ·  clone_voice.py ref.wav "$(cat ref.txt)" --name serena</text>
-      </svg>
-    </div>
-    <figcaption>图 7-1　Serena 音色的迁移链路。训练只发生在 Qwen3-TTS 自己被训练时；跨模型迁移靠的是<b>共同可表示的离散音频 token</b>，是一次纯推理时的 in-context 迁移。</figcaption>
-  </figure>
-
-  <h3>7.3 为什么一堆整数 codes 能带音色</h3>
-  <p>神经音频 codec（如 RVQ / 多码本量化）把波形压成 <code>[帧, 码本层]</code> 的整数序列。
-  M5 与 Qwen3-TTS-12Hz 都是 <b>12.5 Hz、16 层码本</b> 的设定；Qwen3-TTS 技术报告明确：
-  第一层码本偏向语义内容，后续层逐层补充声学细节（音色、气息、环境、韵律），
-  因此容量足够用轻量级因果 ConvNet 直接重建波形，<b>不需要单独抽取说话人向量，也不需要扩散模型</b>。</p>
-  <div class="grid2">
-    <div class="tile"><b>离散化带来的好处</b><p>说话人身份被编码成 token 序列后，语言模型可以像处理文本一样"读"它；于是音色变成了上下文，而不是某个需要注入的向量。</p></div>
-    <div class="tile"><b>为什么必须带逐字转写</b><p>M5 的 prompt 里参考文本与 codes 是配套的：模型需要知道这段声音"说的是哪句话"，才能把音色与内容解耦，续写新文本时沿用前者、替换后者。</p></div>
-    <div class="tile"><b>为什么 3-30 秒就够</b><p>零样本克隆不更新权重，只需要足够覆盖音素与韵律的上下文。本项目的 serena 参考约 65 帧（≈5.2 s），服务端上限 375 帧（30 s）。</p></div>
-    <div class="tile"><b>情感也在这里</b><p>语气、语速、停顿同样留在 codes 里。所以"换一段带情绪的参考音频"比写 caption 更可靠（见 §7.7）。</p></div>
-  </div>
-
-  <h3>7.4 零样本克隆的两条机制</h3>
-  <div class="tableWrap"><table>
-    <tr><th>机制</th><th>做法</th><th>优点</th><th>局限</th><th>本案例</th></tr>
-    <tr><td><b>Speaker embedding</b></td><td>说话人编码器把参考音频压成固定维向量，注入 LM 的每一步</td><td>实时、与文本无关、便于跨语言</td><td>容易丢韵律细节；需要联合训练编码器</td><td>Qwen3-TTS 的实时克隆路径；llama.cpp 里映射为 mtmd audio encoder</td></tr>
-    <tr><td><b>Text–speech pair / in-context</b></td><td>把「参考文本 + 参考音频 codes」直接拼进 prompt，让模型续写</td><td><b>更好地保留韵律</b>；无需额外编码器</td><td>占上下文长度；依赖 tokenizer 与训练格式</td><td><b>M5 走这条</b>：voices.json 里的 codes 作为前缀行</td></tr>
-  </table></div>
-  <div class="callout key"><span class="tagline">一句话回答"怎么学的"</span>
-    没有梯度下降、没有 LoRA、没有微调。Qwen3-TTS 生成的一段音频被<b>重新编码成 M5 自己词表里的离散 token</b>，
-    作为 few-shot 示范放在 prompt 前面；M5 在自回归续写时把这段示范的统计特征（音色、语速、韵律）延续下去。
-    这在机器学习里叫 <b>in-context learning（上下文学习）</b>，是推理时行为，不是训练时行为。
-  </div>
-
-  <h3>7.5 Qwen3-TTS 本身：为什么能 97 ms 出第一个音包</h3>
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 880 240" role="img" aria-label="Qwen3-TTS 双轨自回归与 16 码本 MTP 架构">
-        <rect class="dg-panel" x="0" y="0" width="880" height="240" rx="12"/>
-        <text class="dg-ts" x="24" y="24">Qwen3-TTS-12Hz：dual-track LM + MTP（Multi-Token Prediction）</text>
-        <rect class="dg-box" x="24" y="40" width="160" height="52" rx="9"/>
-        <text class="dg-tb" x="104" y="62" text-anchor="middle">文本 token 流</text>
-        <text class="dg-ts" x="104" y="80" text-anchor="middle">Qwen tokenizer</text>
-        <rect class="dg-accent2" x="24" y="108" width="160" height="52" rx="9"/>
-        <text class="dg-tb" x="104" y="130" text-anchor="middle">说话人 / 参考</text>
-        <text class="dg-ts" x="104" y="148" text-anchor="middle">speaker encoder / ICL</text>
-        <rect class="dg-accent" x="216" y="60" width="180" height="80" rx="10"/>
-        <text class="dg-tb" x="306" y="88" text-anchor="middle">Dual-Track LM</text>
-        <text class="dg-ts" x="306" y="108" text-anchor="middle">收到 1 个文本 token 即预测声学帧</text>
-        <text class="dg-ts" x="306" y="126" text-anchor="middle">文本轨与声学轨并行</text>
-        <rect class="dg-ok" x="428" y="60" width="180" height="80" rx="10"/>
-        <text class="dg-tb" x="518" y="84" text-anchor="middle">backbone → codec_0</text>
-        <text class="dg-ts" x="518" y="104" text-anchor="middle">MTP → 其余 15 个残差码本</text>
-        <text class="dg-ts" x="518" y="124" text-anchor="middle">单帧一次出齐，避免 16 步串行</text>
-        <rect class="dg-box" x="640" y="60" width="216" height="80" rx="10"/>
-        <text class="dg-tb" x="748" y="84" text-anchor="middle">Code2Wav（因果 ConvNet）</text>
-        <text class="dg-ts" x="748" y="104" text-anchor="middle">轻量、只看左侧上下文</text>
-        <text class="dg-ts" x="748" y="124" text-anchor="middle">首个 codec 帧即可出声</text>
-        <path class="dg-flow" d="M184 66 H214"/><path class="dg-flow" d="M184 134 H214"/>
-        <path class="dg-flow" d="M396 100 H426"/><path class="dg-flow" d="M608 100 H638"/>
-        <text class="dg-ts" x="24" y="192">Tokenizer-12Hz = 12.5 Hz × 16 层多码本；第一层语义、其余声学 → 可省略 speaker vector 与扩散解码</text>
-        <text class="dg-ts" x="24" y="214">首包延迟 97 ms（0.6B）/ 101 ms（1.7B）；训练数据 &gt;500 万小时、10 种语言；VoiceDesign 用自然语言描述创造新音色</text>
-      </svg>
-    </div>
-    <figcaption>图 7-2　对照 M5 看很有意思：Qwen3-TTS 用 <b>MTP 模块一次预测 15 个残差码本</b>，从架构上绕开了本教程 §3 里那个 15 步串行地狱——这是"训练侧改架构"与"推理侧硬优化"的分野。</figcaption>
-  </figure>
-
-  <h3>7.6 llama.cpp 怎么把 Qwen3-TTS 塞进现有框架</h3>
-  <p>仓库的 <code>conversion/qwen3tts.py</code> 与 <code>tools/mtmd/mtmd-helper-gen.cpp</code> 展示了一组很聪明的映射：</p>
-  <div class="tableWrap"><table>
-    <tr><th>Qwen3-TTS 组件</th><th>映射到 llama.cpp</th><th>关键技巧</th></tr>
-    <tr><td>codec token</td><td>扩展词表，追加 <code>&lt;|codec_0|&gt;…&lt;|codec_1023|&gt;</code>、<code>&lt;|codec_bos|&gt;</code>(2149)、<code>&lt;|codec_eos_token|&gt;</code>(2150)、<code>&lt;|codec_language_chinese|&gt;</code>(2055)</td><td>把音频码字当成"词"，复用 embedding 表</td></tr>
-    <tr><td>text projection MLP</td><td>折进 embedding 表</td><td>减少一层计算，保持标准 decode 路径</td></tr>
-    <tr><td>codec_head</td><td>输出张量比词表小，推理时 pad logits</td><td>兼容 llama.cpp 的 logits 布局</td></tr>
-    <tr><td>speaker reference encoder</td><td>mtmd audio encoder</td><td>复用多模态音频编码通路</td></tr>
-    <tr><td>backbone</td><td>标准 libllama 自回归文本模型</td><td>采样时 <code>suppress_tokens</code> 限制只出语义码本或 EOS</td></tr>
-    <tr><td>code_predictor / code2wav</td><td><code>MTMD_GEN_PROCESS_TYPE_GEN_CODE</code> / <code>GEN_WAV</code></td><td>把"预测其余 15 码本"和"解码波形"作为生成流水线的两个阶段</td></tr>
-    <tr><td>输入格式</td><td>ChatML wrap + <code>sum_row()</code> 把文本 embedding 与 codec/speaker embedding 相加</td><td><code>&lt;|im_start|&gt;assistant\n…&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n</code> 后切片</td></tr>
-  </table></div>
-  <p>把这张表和 §1.3 并排看，就是本教程最想让你体会的一点：
-  <b>llama.cpp 不关心你的 token 是字还是声音，它只关心 embedding 行、位置、序列 id 与计算图</b>。
-  M5 与 Qwen3-TTS 两条实现，一个用 <code>llama_batch.embd</code> 直接注入，一个把音频码字扩进词表——
-  两条不同的"借壳"路线，共享同一套 KV / 后端 / 量化基础设施。</p>
-
-  <h3>7.7 情感控制为什么难：一个弱训练槽的案例</h3>
-  <p>M5 的 conditioning 里有 <code>&lt;|caption_begin|&gt;…&lt;|caption_end|&gt;</code> 风格槽，但官方推理把它硬编码为空。
-  项目做过 7 档 caption（NONE / happy / sad / angry / gentle / 开心 / 悲伤）× 同句同种子，再用 4 个种子做噪声基线：</p>
-  <div class="tableWrap"><table>
-    <tr><th>路径</th><th>实测证据</th><th>难度</th></tr>
-    <tr><td>caption 风格槽</td><td>非空 caption 让时长 +0~42%，但 F0 / 能量变化落在种子噪声 ±8% 内 → 弱训练槽，无可靠语义情感控制</td><td>接线低，效果不可靠</td></tr>
-    <tr><td>情感参考音频克隆</td><td>codes 强烈迁移音色与韵律；录一段带目标情绪的参考即可</td><td><b>低</b>，但情感与音色绑定</td></tr>
-    <tr><td>DSP 后处理</td><td>变调 / 变速 / EQ 可预测但机械</td><td>低</td></tr>
-    <tr><td>训练侧（情感标注 CPT / SFT）</td><td>模型卡注明改动 delimiter 需要继续预训练；稀疏训练导致 caption 无效</td><td><b>高</b></td></tr>
-  </table></div>
-  <div class="callout warn"><span class="tagline">实验纪律</span>
-    种子带来的 F0 采样噪声本身就有 ±8%，所以任何 &lt;10% 的"情感差异"都不可信——
-    <b>验证情感/风格效果必须多种子平均</b>。这与 §2.1 的热漂移是同一类问题：先量噪声底，再谈信号。
-    相比之下 Qwen3-TTS 的 VoiceDesign 变体是专门用自然语言描述 + instruction 训练过的，属于"训练侧把槽位填满"。
-  </div>
-
-  <h3>7.8 想自己做一个音色？五步 recipe</h3>
-  <pre><span class="cm"># 1) 用 Qwen3-TTS 生成参考音频与逐字稿（离线，PC / Python 3.12）</span>
-python generate_qwen_reference.py serena.wav --speaker Serena
-<span class="cm">#    可换 --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --instruct '语气轻柔温暖…'</span>
-
-<span class="cm"># 2) 检查 WAV 内容与 .txt 逐字一致（不一致要手工改稿）</span>
-
-<span class="cm"># 3) 用与部署模型配套的 encoder 转成 codes（16 book × T 帧，值域 0..2047）</span>
-python clone_voice.py serena.wav "$(cat serena.txt)" --name serena --voices model/voices.json
-
-<span class="cm"># 4) 部署到设备，服务端只在 /v1/voices 里看到 name + reference_text + codes</span>
-./deploy.sh
-
-<span class="cm"># 5) 用一句与参考不同的文本试听，验证音色迁移而非内容复述</span>
-curl -s -X POST localhost:18080/v1/audio/speech \
-  -H 'Content-Type: application/json' \
-  -d '{"input":"明天下午的会议需要准备哪些材料呢？","voice":"serena","response_format":"wav"}' -o out.wav</pre>
-  <p>Web 控制台里也可以直接录音克隆：<code>/v1/voices/encode</code> 跑 <code>codec_encoder.onnx</code>
-  返回 codes，但<b>只保存在浏览器 localStorage</b>，服务端不落盘——这正是"零样本克隆不需要训练"的另一个体现：
-  换一段参考音频，只是换一段 prompt。</p>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch7">标记本章已学完</button></div>
 </section>
 
-<!-- ============ CHAPTER 8 ============ -->
-<section class="chapter" id="ch8" data-title="实验手册与思考题">
-  <div class="chapHead"><span class="idx">08</span><h2>实验手册、思考题与术语表</h2></div>
-  <p class="subtitle">把教程变成可复现的动作。</p>
-
-  <h3>8.1 命令速查</h3>
-  <pre><span class="cm"># 端到端 / 分项统计</span>
-curl -s -D - -o out.wav -X POST 127.0.0.1:18080/v1/audio/speech \
-  -H 'Content-Type: application/json' \
-  -d '{"input":"今天天气不错，我们一起去公园散步吧。","voice":"serena","response_format":"wav"}' \
-  | grep -i x-m5
-curl -s '127.0.0.1:18080/metrics?format=prometheus' | grep m5_p50
-
-<span class="cm"># 微基准：depth 提交成本模型</span>
-adb shell 'cd /data/local/tmp/llama-m5-htp-v73 &amp;&amp; \
-  LD_LIBRARY_PATH=$PWD ADSP_LIBRARY_PATH=$PWD GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1 \
-  ./depth-bench depth-Q4_0.gguf HTP0 7'
-
-<span class="cm"># 依赖消融 / codes 逐帧 dump / heads 分项</span>
-M5_ZERO_TRANSFORM=1 ./m5-engine model --text "…" --voice 0 --out /tmp/a.wav
-./m5-engine model --text "…" --voice 0 --dump-codes /tmp/a.codes --out /tmp/a.wav
-M5_HEAD_STATS=1 ./m5-engine model --text "…" --voice 0 --out /tmp/a.wav
-
-<span class="cm"># 量化 A/B（同轮交替，避免热漂移）</span>
-for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
-./llama-quantize --allow-requantize backbone-Q8_0.gguf backbone-Q4_0.gguf Q4_0
-
-<span class="cm"># 一键部署（固定 env、推二进制/控制台、预热、forward）</span>
-./deploy.sh</pre>
-
-  <h3>8.2 思考题（先自己算，再展开）</h3>
-  <details class="qa"><summary>Q1　为什么 7 字句 RTF 0.918 而 24 字句 0.742？这算优化成功吗？</summary>
-    <div class="answer"><b>不算。</b>同一份代码，只是固定成本被摊薄。用 <code>T(N)=截距+斜率×N</code> 拟合：截距 ≈152 ms（prefill / 图初始化 / codec prime），斜率 ≈54.7 ms/帧（backbone 6.1 + depth 48.6，codec 被重叠）。
-    短句 23 帧摊 152 ms 固定开销，每帧多背 6.6 ms；长句 75 帧只多 2 ms。所以看性能必须固定输入长度，或同时报告截距与斜率。</div></details>
-  <details class="qa"><summary>Q2　depth 权重从 21 MB 降到 10.7 MB 只快 9%，你能推出什么？若改成 heads 权重减半呢？</summary>
-    <div class="answer">若瓶颈是权重带宽，字节数减半应接近 2×；只有 9% 说明 <b>depth 是提交开销 / 计算主导</b>，继续降位量化没有意义。
-    而 heads 每帧流式读 34 MB、耗时 13.4 ms ≈ 2.5 GB/s，符合带宽特征；f16→int8 减半后 heads_s 0.94→0.38 s（2.5×），验证了判别。<b>同一个动作效果相反，因为瓶颈类型不同。</b></div></details>
-  <details class="qa"><summary>Q3　流式首块从 2 帧改成 1 帧，为什么首包反而从 0.285 s 涨到 0.51 s？</summary>
-    <div class="answer">少了一个 depth step 省下的时间，小于 codec 多一次 ORT Run 的固定开销 + 该会话的调度/状态准备成本。
-    这是 §3.1 的 <code>F</code> 在 codec 层的翻版：<b>分块越碎，固定成本占比越高</b>。结论是维持 2 帧，并把"1 帧更慢"写进代码注释防止后人重试。</div></details>
-  <details class="qa"><summary>Q4　int8 让 codes 翻转 90%，为什么还能上线？什么情况下你必须否决一个量化？</summary>
-    <div class="answer">首帧 0/16 翻转证明没有系统性数值误差；之后是 <code>next_hidden</code> 反馈放大 1-ulp 差异造成的混沌分叉，等价换随机种子。
-    门禁看 ASR（语义）、音频统计族（分布）、模式内确定性 0% 翻转、人耳。
-    <b>否决条件</b>是感知层面的系统性偏移：backbone Q4 让音频短 16%、语速变快，ASR 全对也不行；或 codec 激活×激活量化掉 1.3 dB。</div></details>
-  <details class="qa"><summary>Q5　"用 Qwen3-TTS 的音色"这句话里，梯度更新发生在哪里？</summary>
-    <div class="answer"><b>迁移过程里一次都没有。</b>Qwen3-TTS 自己的音色能力来自它预训练 / 后训练（含 speaker fine-tuning）时学到的映射；
-    M5 只是把 Qwen 生成的一段音频重新编码成自己词表里的 codec codes，作为 prompt 前缀做 in-context learning。
-    运行时既不加载 Qwen 也不更新权重。真正"把槽位训练出来"的例子是 Qwen3-TTS 的 VoiceDesign（自然语言描述控制），
-    M5 的 caption 槽因训练稀疏而弱——这正是"槽位存在 ≠ 槽位可用"。</div></details>
-  <details class="qa"><summary>Q6　如果让你继续把 RTF 从 0.75 往下压，下一步做什么？</summary>
-    <div class="answer"><b>先别急着动任何模块——这道题在 2026-11-15 被三项实测改写了（Ch 9）。</b>
-    ① 天花板不是 2.1×：算上 heads 后 depth 上限只有 1.78×，而且 codec 与 depth 并行，
-    <code>wall ≈ backbone + max(depth, codec) + prefill</code>；只做草稿会被 codec 卡住。
-    ② 三条看似可行的路全部排除：单边旋钮与资源让渡（§13，48 次 A/B 无一快于默认）、
-    codec 单独优化（被 max 吃掉）、学习型草稿（§14，α_oracle ≈ 0.18 ≪ 0.72 盈亏平衡）。
-    ③ 所以<b>不改模型图时稳态 RTF 0.725 已是极限</b>；把精力转向首包、热漂移、功耗、音质，
-    或接受「重训非自回归 depth head」这个需要训练数据的另一个项目。
-    这题真正考的是：<b>先看清依赖结构与并行结构，再判断某个优化能不能兑现。</b></div></details>
-
-  <h3>8.3 术语表</h3>
-  <div class="tableWrap"><table>
-    <tr><th>术语</th><th>在本项目里的含义</th></tr>
-    <tr><td>RTF</td><td>Real-Time Factor = 生成耗时 / 音频时长；&lt;1 表示快于实时</td></tr>
-    <tr><td>frame / hop</td><td>一帧 = 1920 samples @24 kHz = 80 ms；12.5 fps</td></tr>
-    <tr><td>codebook / book</td><td>每帧 16 个离散码本索引，词表 2051（含 EOS）；M5 的 book 链必须串行采样</td></tr>
-    <tr><td>prefill / decode</td><td>一次性处理 conditioning 序列 / 逐帧（逐 token）自回归生成</td></tr>
-    <tr><td>KV cache</td><td>llama.cpp 保存的注意力历史；<code>llama_memory_seq_rm</code> 可保留指定前缀</td></tr>
-    <tr><td>Gumbel-style 采样</td><td><code>argmax(prob / -log(1-u))</code>，配合 T=0.9 与 top-k 10；随机数顺序敏感</td></tr>
-    <tr><td>overlap</td><td>codec worker 与 depth 主线程并发，隐藏 codec 墙钟</td></tr>
-    <tr><td>primer / restore_prime</td><td>参考 codes 最后 8 帧用于推进 codec 递归状态，可在同音色请求间复用</td></tr>
-    <tr><td>zero-shot voice clone</td><td>不更新权重，靠参考音频的 speaker embedding 或 text–speech pair 上下文迁移音色</td></tr>
-    <tr><td>MTP</td><td>Multi-Token Prediction：Qwen3-TTS 一次生成 15 个残差码本，避开 16 步串行</td></tr>
-    <tr><td>dual-track</td><td>Qwen3-TTS 文本轨与声学轨并行自回归，收到文本即刻出声学帧</td></tr>
-  </table></div>
-
-  <h3>8.4 延伸阅读</h3>
-  <ul>
-    <li><code>docs/backend/snapdragon/m5-tts-optimization-log.md</code> —— 本教程的数据主台账（含负结果与复活条件）</li>
-    <li><code>docs/backend/snapdragon/m5-tts-port-notes.md</code> —— 按时间线的完整实验日志</li>
-    <li><code>examples/m5-tts/m5_engine.cpp</code> / <code>m5_depth_heads.h</code> / <code>backbone.cpp</code> —— 流水线、采样、llama.cpp 协议</li>
-    <li><code>examples/m5-tts/depth_batch_bench.cpp</code> —— 自己复现 F + R 成本模型</li>
-    <li><a href="https://github.com/QwenLM/Qwen3-TTS" target="_blank" rel="noopener">Qwen3-TTS Technical Report</a> —— 12Hz/25Hz tokenizer、dual-track、MTP、VoiceDesign、3 秒克隆</li>
-    <li><code>tools/tts/README.md</code>、<code>conversion/qwen3tts.py</code>、<code>tools/mtmd/mtmd-helper-gen.cpp</code> —— llama.cpp 原生 Qwen3-TTS 实现</li>
-    <li><code>examples/m5-tts/README.md</code> 的 "Bring a voice from another TTS model" 章节 —— Serena 迁移的原始 recipe</li>
-  </ul>
-  <div class="callout ok"><span class="tagline">结课</span>
-    这个案例最值钱的不是某个 RTF 数字，而是三条判断：
-    <b>① 先量清楚再动手；② 依赖结构决定优化天花板，工程技巧不能突破它；③ 生成式系统的正确性要有感知层验收。</b>
-    把这三句带到下一个模型、下一个后端，教程就没白写。
-  </div>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch8">标记本章已学完</button></div>
-</section>
-
-<!-- ============ CHAPTER 9 ============ -->
-<section class="chapter" id="ch9" data-title="番外：NPU / CPU 边界与最终结论">
-  <div class="chapHead"><span class="idx">09</span><h2>番外：这套流水线到底哪些跑在 NPU 上</h2></div>
-  <p class="subtitle">2026-11-15 架构快照，以及三项后续实验对"下一步"的改写。对应台账 §13 / §14 / §15。</p>
-  <div class="objectives">
-    <b>学完你应该能回答</b>
-    <ul>
-      <li>"模型跑在 NPU 上"为什么对 M5-TTS 是错的：heads 与 codec 到底在哪里？</li>
-      <li>两个 HTP 会话是两个 NPU 吗？为什么要拆成两个常驻子进程？</li>
-      <li>为什么单独优化 codec 收益为 0，而训练学习型草稿最终也被判死？</li>
-    </ul>
-  </div>
-
-  <h3>9.1 计算归属全景</h3>
-  <p>真正跑在 HTP0 上的只有<b>两个 transformer</b>：backbone（8 层 Q8_0，32 MB）与 depth core（5 层 Q4_0，10.7 MB），合计约 43 MB 权重常驻。
-  <b>heads 投影、采样、噪声生成、codec 声码器、PCM 输出全在 CPU。</b></p>
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 384" role="img" aria-label="CPU 与 HTP0 NPU 的计算归属全景">
-        <rect class="dg-cpu" x="40" y="40" width="300" height="286" rx="20"/>
-        <text class="dg-tb" x="56" y="62">CPU · 应用处理器（大核）</text>
-        <g class="dg-cpu-in">
-          <rect x="56" y="76" width="268" height="40" rx="8"/><rect x="56" y="122" width="268" height="40" rx="8"/>
-          <rect x="56" y="168" width="268" height="40" rx="8"/><rect x="56" y="214" width="268" height="40" rx="8"/>
-          <rect x="56" y="260" width="268" height="40" rx="8"/>
-        </g>
-        <g class="dg-tb">
-          <text x="68" y="93">HTTP · 分词 · prefix 查表</text><text x="68" y="139">depth heads 投影</text>
-          <text x="68" y="185">采样 + 噪声生成</text><text x="68" y="231">Codec 声码器</text>
-          <text x="68" y="277">PCM 拼接 / WAV / 流式输出</text>
-        </g>
-        <g class="dg-ts">
-          <text x="68" y="109">C++ tokenizer · mmap embeddings</text><text x="68" y="155">16 × 2051 × 512 int8 · NEON</text>
-          <text x="68" y="201">top-10 · Gumbel · JavaRandom</text><text x="68" y="247">ORT CPU · 3 线程 · 141 MB 权重</text>
-          <text x="68" y="293">WavWriter · chunked HTTP</text>
-        </g>
-        <rect class="dg-npu" x="400" y="40" width="240" height="286" rx="20"/>
-        <text class="dg-tb" x="416" y="62">HTP0 · Hexagon NPU</text>
-        <g class="dg-npu-in">
-          <rect x="416" y="76" width="208" height="64" rx="8"/><rect x="416" y="156" width="208" height="64" rx="8"/>
-          <rect x="416" y="236" width="208" height="64" rx="8"/>
-        </g>
-        <g class="dg-tb">
-          <text x="428" y="96">HTP 会话 A · backbone</text><text x="428" y="176">HTP 会话 B · depth core</text>
-          <text x="428" y="256">执行单元</text>
-        </g>
-        <g class="dg-ts">
-          <text x="428" y="114">Q8_0 32 MB · 8 层</text><text x="428" y="131">prefill + 每帧 1 token decode</text>
-          <text x="428" y="194">Q4_0 10.7 MB · 5 层</text><text x="428" y="211">每帧 15 次 decode</text>
-          <text x="428" y="274">HVX 向量 · NHMX=0</text><text x="428" y="291">OPPOLL=1 保持 DSP 时钟</text>
-        </g>
-        <path class="dg-arr" d="M346 118 H394"/><path class="dg-arr" d="M394 166 H346"/>
-        <text class="dg-lbl" x="370" y="205" text-anchor="middle">pipe</text>
-        <text class="dg-lbl" x="370" y="221" text-anchor="middle">2 KB/行</text>
-        <text class="dg-ts" x="40" y="348">两个常驻子进程各持一个 HTP 会话；引擎 ↔ stage 走匿名 pipe（FP32 512 维行），stage → DSP 走 FastRPC。</text>
-        <text class="dg-ts" x="40" y="368">同一物理 HTP0 被两个会话分时复用；codec 在 CPU worker 线程上，与 depth 并行（overlap）。</text>
-      </svg>
-    </div>
-    <figcaption>图 9-1　CPU 与 HTP0 的计算归属。注意"模型在 NPU"只覆盖了 43 MB 权重；每帧最重的 16 路 heads 矩阵乘和整个声码器都在 CPU。</figcaption>
-  </figure>
-
-  <h3>9.2 为什么这样切</h3>
-  <div class="grid2">
-    <div class="tile"><b>① transformer 归 NPU</b><p>backbone / depth core 都是规则 GEMM，权重小（32 MB / 10.7 MB）可常驻 HTP，每层都能被 llama.cpp 的 ggml-hexagon 后端整图提交。HVX 向量单元擅长这个。</p></div>
-    <div class="tile"><b>② heads 留 CPU</b><p><code>depth-weights.f32</code> 是 202 MB 查表型权重，每步只取 1–2 行；CPU 侧 mmap + per-row int8 镜像（17 MB/帧流式读）+ NEON 更划算。带宽特征明显：int8 后 heads 快 2.5×。</p></div>
-    <div class="tile"><b>③ codec 留 CPU</b><p>ONNX Runtime 图，含自写 <code>m5::Snake</code> 自定义算子，走 CPU EP（3 线程）。它不是 GGUF，也进不了 ggml-hexagon 的图。</p></div>
-    <div class="tile"><b>④ 两个进程，一个 NPU</b><p>backbone-resident / depth-resident 是同一二进制的两个常驻子进程，角色由 argv 决定；各自一个 HTP 会话，分时复用同一 HTP0。拆开是为了 KV 隔离、分别调量化与 env。</p></div>
-  </div>
-
-  <h3>9.3 一帧内的 15 次跨边界往返</h3>
-  <p>引擎 ↔ stage 一行 FP32 512 维 = 2 KB。默认 <code>--depth-pipe</code> 下，每个 book 都要「CPU 构造 transform 行 → 送 HTP0 跑一步 depth core → 回 CPU 投影 2051 类 → 采样」，<b>一帧 15 次</b>。<code>--depth-chain</code> 能把整条链搬进 stage、一次往返，但实测打平；<code>m5_ring</code> 共享内存反而更慢——瓶颈从来不是 IPC 次数。</p>
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 306" role="img" aria-label="一帧内 CPU 与 HTP0 的十五次往返及 codec 并行">
-        <g class="dg-lbl">
-          <rect class="dg-npu-in" x="40" y="22" width="12" height="10" rx="2"/><text x="58" y="31">HTP0 / NPU 执行</text>
-          <rect class="dg-cpu-in" x="170" y="22" width="12" height="10" rx="2"/><text x="188" y="31">CPU 执行</text>
-          <rect class="dg-mix" x="268" y="22" width="12" height="10" rx="2"/><text x="286" y="31">跨边界往返 ×15</text>
-        </g>
-        <rect class="dg-npu-in" x="40" y="52" width="132" height="60" rx="8"/>
-        <text class="dg-tb" x="106" y="74" text-anchor="middle">backbone decode</text>
-        <text class="dg-lbl" x="106" y="92" text-anchor="middle">1 token → hidden[512]</text>
-        <rect class="dg-cpu-in" x="196" y="52" width="132" height="60" rx="8"/>
-        <text class="dg-tb" x="262" y="74" text-anchor="middle">book0 投影采样</text>
-        <text class="dg-lbl" x="262" y="92" text-anchor="middle">2051×512 int8 · NEON</text>
-        <rect class="dg-mix" x="352" y="52" width="152" height="60" rx="8"/>
-        <text class="dg-tb" x="428" y="74" text-anchor="middle">15× 深度链往返</text>
-        <text class="dg-lbl" x="428" y="92" text-anchor="middle">transform 行 → core → 投影 → 采样</text>
-        <rect class="dg-cpu-in" x="528" y="52" width="112" height="60" rx="8"/>
-        <text class="dg-tb" x="584" y="74" text-anchor="middle">next_hidden</text>
-        <text class="dg-lbl" x="584" y="92" text-anchor="middle">16 行查表累加</text>
-        <g class="dg-arr"><path d="M174 82 H194"/><path d="M330 82 H350"/><path d="M506 82 H526"/><path d="M428 114 V182"/></g>
-        <path class="dg-arr" d="M584 114 V146 H106 V114"/>
-        <text class="dg-lbl" x="345" y="141" text-anchor="middle">每帧重复，直到 16 个 code 全为 0（EOS）</text>
-        <rect class="dg-cpu" x="196" y="186" width="444" height="56" rx="8"/>
-        <text class="dg-tb" x="418" y="208" text-anchor="middle">codec worker（CPU · ORT 3 线程 · 独立线程）</text>
-        <text class="dg-lbl" x="418" y="226" text-anchor="middle">把 codes 解码成 24 kHz PCM，与下一帧 depth 重叠执行</text>
-        <text class="dg-ts" x="40" y="266">默认 --depth-pipe：每个 book 一次 pipe 往返（1~2 行 × 2 KB），一帧 15 次；--depth-chain 合并成 1 次但实测打平。</text>
-        <text class="dg-ts" x="40" y="286">权重位置：depth-weights.f32（202 MB）在 CPU 侧 mmap，int8 镜像 17 MB/帧流式读；两个 GGUF 共约 43 MB 常驻 HTP。</text>
-      </svg>
-    </div>
-    <figcaption>图 9-2　一帧的数据流。虚线框是 CPU↔NPU 交替区，也是 §14 里草稿无法跨越的那段依赖。</figcaption>
-  </figure>
-
-  <h3>9.4 真实一帧：max() 天花板</h3>
-  <p>2026-11-15 03:31 的实跑请求（Serena，87 帧）：墙钟 5.281 s、RTF 0.770、首包 0.561 s；分项 <code>backbone 0.734 / depth 4.160 / codec 3.156 s</code>，折合每帧 8.4 / 47.8 / 36.3 ms。</p>
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 250" role="img" aria-label="真实合成请求的每帧分项耗时与并行重叠">
-        <text class="dg-ts" x="40" y="28">刚跑的真实请求 · 87 帧 · 墙钟 5.281 s · RTF 0.770 · 首包 0.561 s（wav 路径）</text>
-        <text class="dg-tb" x="40" y="52">每帧耗时（ms）</text>
-        <g class="dg-lbl">
-          <text x="40" y="88">backbone · HTP0</text><text x="40" y="122">depth · HTP0 + CPU</text><text x="40" y="156">codec · CPU（并行）</text>
-        </g>
-        <rect class="dg-barNpu" x="180" y="72" width="59" height="20" rx="3"/>
-        <text class="dg-num" x="245" y="87">8.4 ms</text>
-        <rect class="dg-mix" x="239" y="106" width="335" height="20" rx="3"/>
-        <text class="dg-num" x="580" y="121">47.8 ms</text>
-        <rect class="dg-barCpu" x="239" y="140" width="254" height="20" rx="3"/>
-        <text class="dg-num" x="499" y="155">36.3 ms</text>
-        <g class="dg-line"><path d="M180 174 H600"/><path d="M180 174 V180"/><path d="M250 174 V180"/><path d="M320 174 V180"/><path d="M390 174 V180"/><path d="M460 174 V180"/><path d="M530 174 V180"/><path d="M600 174 V180"/></g>
-        <g class="dg-lbl" text-anchor="middle">
-          <text x="180" y="194">0</text><text x="250" y="194">10</text><text x="320" y="194">20</text>
-          <text x="390" y="194">30</text><text x="460" y="194">40</text><text x="530" y="194">50</text><text x="600" y="194">60</text>
-        </g>
-        <text class="dg-ts" x="40" y="220">墙钟 ≈ 8.4 + 47.8 = 56.2 ms/帧：codec 的 36.3 ms 与 depth 并行，被完全隐藏（§13 的 max() 天花板）。</text>
-        <text class="dg-ts" x="40" y="240">depth 的 47.8 ms 里既有 15 次 HTP0 提交（F≈1.25 ms/次 + R≈0.91 ms/行），也有 CPU 侧 16 路 heads 投影（约 5.4 ms/帧）。</text>
-      </svg>
-    </div>
-    <figcaption>图 9-3　codec 与 depth 并行，墙钟取两者的最大值——这是理解后面所有"优化为什么没收益"的关键。</figcaption>
-  </figure>
-  <div class="callout key"><span class="tagline">把结构变成判据</span>
-    <code>wall ≈ backbone + max(depth, codec) + prefill</code>。两条分支一旦接近，
-    <b>任何单边优化都会被 max() 吃掉</b>：codec 变快而 depth 不变，墙钟一动不动；
-    depth 变快到 codec 以下，codec 立刻变成新瓶颈。这比"哪个模块慢就优化哪个"的直觉重要得多。
-  </div>
-
-  <h3>9.5 三项后续实验改写了"下一步"</h3>
-  <div class="tableWrap"><table>
-    <tr><th>实验</th><th>做法</th><th>结论</th></tr>
-    <tr><td>§12 可行性分析</td><td>数学上重新审视 15 步链：因果 KV + 预生成噪声 → 投机 verify 在理论上成立</td><td>发现「零信息草稿」被排除不代表「学习型草稿」不可行，但真实天花板只有 depth 1.78×，且被 codec 反压</td></tr>
-    <tr><td>§13 P0：资源让渡</td><td>48 次同轮交替 A/B，扫 ORT 线程数 / chunk / CPU 亲和性 / 关 overlap</td><td><b>假设证伪</b>：默认配置已是端到端最优；depth_s 与 codec 负载不相关；关 overlap 反而 +43.9%</td></tr>
-    <tr><td>§14 门槛 0：α 上界</td><td>960 帧官方 ONNX 轨迹，ridge / 核回归 / 单 code 扰动三组实验</td><td><b>NO-GO</b>：ridge 草稿 α 0.03–0.06，oracle 上界 ≈0.18，远低于盈亏平衡 0.72–0.88</td></tr>
-  </table></div>
-  <div class="callout bad"><span class="tagline">最终结论（2026-11-15）</span>
-    单边优化、并行资源让渡、投机草稿<b>三条路全部实测排除</b>。
-    不改模型图的前提下，<b>稳态 RTF 0.725 就是这条流水线的极限</b>。
-    剩下的真实收益不在稳态 RTF，而在首包（0.363 s）、热漂移、长时功耗、音质 / 情感表达，
-    以及需要重训的模型级改造（非自回归 depth head、codec 蒸馏）。
-  </div>
-
-  <h3>9.6 两个容易误解的点</h3>
-  <div class="grid2">
-    <div class="tile"><b>两个 HTP 会话 ≠ 两个 NPU</b><p>都是 HTP0，只是两个独立的 llama 上下文（各自 KV、各自量化）。它们分时复用同一物理 DSP。</p></div>
-    <div class="tile"><b>App 形态拿不到 HTP</b><p>OS 对 app uid 封了 <code>/dev/adsprpc-smd</code>（EACCES），JNI 版只能全 CPU 跑（RTF ~0.79–0.90）。只有 shell 域启动的 m5-server 才能用 NPU——所以本章与 §13/§14 的 NPU 结论只适用于 server 形态。</p></div>
-  </div>
-
-  <details class="qa"><summary>Q7　既然 codec 有 25% 的空闲余量，为什么"让 codec 少干点活、把 CPU 让给 depth"没用？</summary>
-    <div class="answer">因为 <b>depth 的 47.8 ms 主体花在 HTP0 的 15 次提交</b>（F≈1.25 ms/次 + R≈0.91 ms/行），不是 CPU 争抢。实测把 ORT 线程从 3 降到 2 会让 codec 慢 25%，而 <code>depth_s</code> 反而略升；chunk 从 4 加到 16 让 codec 快 7%，<code>depth_s</code> 几乎不动。
-    并发反压确实存在（关 overlap 后 depth 快 11.3%），但它是"codec 线程存在"的固定税，不是负载强度的函数；而 overlap 本身净赚 43.9%，这笔税必须付。</div></details>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch9">标记本章已学完</button></div>
-</section>
-
-
-<section class="chapter" id="ch10" data-title="用 Profile 调查提速后的音质变化">
-  <h2>用 Profile 调查提速后的音质变化</h2>
-  <p>Serena 用 Flash Attention 加速后，有个别字听起来像破音。先用同一文本、音色和种子复现，保留基线。听感是验收条件，RTF 只描述吞吐。</p>
-  <ol>
-    <li>按 DSP <code>OPBATCH</code> 切分 trace，只比较相同形状的 decode。旧 profile 有 1,820 个 80 算子批次。按算子族汇总，三个矩阵乘法族合计约 1.64 ms/批，SET_ROWS、RoPE、Softmax 也占时间。用 DSP 批次计时和 host API 计时分别判断核内执行与端到端等待。</li>
-    <li>加中间对照来分离变量。FP32 普通注意力约 2.65 ms/decode，FP16 普通注意力约 2.60–2.65 ms，FP16 Flash 约 1.92 ms。用 <code>FLASH_ATTN_EXT</code> 的 HTP profile 确认真正走了 HVX。不同配置生成帧数会变化，因此用相同 decode 次数衡量提速。</li>
-    <li>按码本隔离生成和解码。分别保存基线与 Flash 生成的 codes，再对比两种 codec 下的 codes 哈希和 WAV。在本例中，同一 attention 配置跨 codec 的 codes 完全一致。四份 PCM16 均未到满幅，排除了 PCM16 满幅削顶。Flash 的后续 chunk 分别用 2、4、8 帧，输出 WAV 逐字节相同，可以降低对分块边界的怀疑。</li>
-    <li>用同 codes 的试听定位。如果 Flash 的 INT8 与 FP32 都在同一个字出现问题，优先查生成轨迹；如果只有 INT8 明显，优先查 codec。本轮人工试听把问题定位到「别着急」，同一组 Flash codes 的 INT8 版更明显，FP32 版有所缓解。优先检查 INT8 图的量化边界，同时保留 Flash 轨迹可能影响局部发音的判断。要评估动态导航，把数字、方向、路名和单位列为独立验收项。</li>
-  </ol>
-  <p>固定同一组 Flash codes，把 codec 尾部三层（conv_28–30）连同量化边界恢复为 FP32。用户试听确认全 FP32 明显更好，尾部混合版与 INT8 接近。混合版仍实时，但首 PCM 从 430–446 ms 增至 502–565 ms，因此不采用。下一次应按上采样阶段做较粗的精度消融，先确定哪段值得细分。</p>
-  <p>同句对比时，用户认为生产版明显优于 Flash 的两种分阶段混合精度版。上游改变了 codes，恢复 codec 精度未找回原有听感。当前组合同时改变了 KV 精度和注意力实现，听感结果不能单独归因到 Flash kernel。后续保留 FP32 KV 和采样语义，先检查 codes 与 WAV 一致，再比较速度。</p>
-  <p>补测 FP16 KV 的普通注意力后，用户反馈没有破音，但韵律下降。随后保留 FP32 KV，尝试跳过 CPU 采样中概率为零的候选。两种种子的 codes 和 WAV 均与基线逐字节一致，但速度改善没有跨种子复现。这组实验说明，音质验收与性能验收需要分别通过。</p>
-  <p>继续按同形状批次拆分 KV 写入，K 与 V 的 SET_ROWS 均值约为 34 和 164 µs。另测只输出 depth 的末行 embedding，KV 写入保留两行。两个文本的 codes 和 WAV 均一致，但双轮主样本的 RTF 只从约 0.824 到 0.820。因此保存补丁作为实验，后续优先剖析 V 的散写。</p>
-  <p>把 FP32 V 的 128/256 个标量改为在 DSP 上按索引直接写入，V 写入时间约从 164 µs 降到 28 µs，两个测试文本的 codes 和 WAV 与基线一致。按权重与缓存名分组后，QK/AV 与 FFN 各约 0.7 ms/步；QKV 和 gate/up 已经融合。按算子名统计只能发现大类，按实际张量名才能决定下一处优化。</p>
-  <p>保持 FP32 KV 与普通注意力，把短序列 KV 的读取范围从 256 改为按 32 对齐，保留原 cache 容量和全部有效位置。两组 codes 和 WAV 逐字节一致，端到端减少约 10%。这是利用模型真实形状减少被掩蔽计算的例子。用单行 decode profile 归因，再用独立 A/B 验收墙钟。</p>
-  <p><b>转正：从实验开关变成编译期默认。</b>实验阶段它只存在于一个隔离 runtime 目录里，靠部署脚本给 depth 子进程注入 <code>M5_KV_PAD32=1</code> 才生效，源码默认仍是 256。转正时把 <code>get_n_kv()</code> 的 pad 默认改为 32（<code>M5_KV_PAD=256</code> 可回退），并让 backbone 分支显式保留 256——因为它的 prefill prefix 会随整句增长，而且原实验只有 depth 用了 32，必须严格复现实验条件。V 直接散写同时转为默认（<code>M5_HVX_DIRECT_V=0</code> 关闭）。部署脚本不再需要特殊目录和 env 注入，并补上了原本缺失的 stage 库推送。12 次交替 A/B：默认 3.775 s / RTF 0.710，pad 256 为 4.163 s / 0.783，关 direct-V 为 3.894 s / 0.732；12 次 codes 与 WAV 的哈希全部相同，backbone 耗时无退化。</p>
-  <p><b>提速成功后，瓶颈结构会改变。</b>转正前 depth 4.53 s、codec 3.62 s，之间有 25% 余量；转正后 depth 2.853 s、codec 2.820 s，<b>只差 1.15%</b>。流水线的墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，于是单独把 depth 再降 27%（Flash 级）只剩 -0.9%，哪怕把 depth 降到零也只是 -0.9%；单独把 codec 降 20% 是 <b>0%</b>。只有两者一起降 20% 才有约 -15%。这正是第 3 章「先看天花板再动手」的实战版：一个成功的优化会把旧的余量吃光，让此前划算的方向突然变得不划算。后续 P0 归因实验（§17）确认：即使 KV 保持 FP32，融合 kernel 也会改变 codes 与帧数，单帧只快 6.9% 而整句墙钟反而 +5.1%，这条线判死。方法沉淀见下一章。</p>
-  <p><b>盲听复核。</b>三条文本各出两份音频，a/b 顺序打乱，映射表在反馈前不揭晓。用户指出第 3 组（车站播报）的 <code>3a</code> 有点差；揭晓后 <code>3a</code> 正是融合 kernel 版，<code>3b</code> 是基线。这是独立于 codes/WAV 哈希、ASR 和 RTF 的<b>人耳证据</b>：KV 精度没变，只换 attention 实现也能被听出来。按等价性分层的第 ③ 层，不通过即否决。样本量小（3 组、仅 1 组被明确指出），所以结论是「不进入生产」，不是「所有文本都能听出差异」。</p>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch10">标记本章已学完</button></div>
-</section>
-
-
-<section class="chapter" id="ch11" data-title="性能分析方法论：从分项到判死">
-  <h2>性能分析方法论：从分项到判死</h2>
-  <p>前面十章讲的是「这个模型怎么加速」。这一章把过程中反复用到的判断方式抽出来：它们不依赖 M5-TTS，换一个推理引擎、换一块 NPU 也成立。核心只有一句——<b>先算清楚这个优化能兑现多少，再决定要不要动手</b>。</p>
-
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 340" role="img" aria-label="性能分析的四道决策门，以及每道门在本仓库中的实证">
-      <title>性能分析的四道决策门</title>
-      <desc>建墙钟模型、算可兑现收益、交替 A/B 加等价性门禁、判死或转正并重算余量；右侧对应本仓库的实测案例。</desc>
-      <text class="dg-tb" x="40" y="26">决策步骤</text>
-      <text class="dg-tb" x="360" y="26">本仓库的实证</text>
-
-      <rect class="dg-accent" x="40" y="40" width="280" height="54" rx="8"/>
-      <text class="dg-tb" x="54" y="61">① 建墙钟模型</text>
-      <text class="dg-ts" x="54" y="80">wall = bb + max(depth,codec) + 固定</text>
-      <rect class="dg-box" x="360" y="40" width="280" height="54" rx="8"/>
-      <text class="dg-t" x="374" y="61">§16 残差稳定在 0.197 s</text>
-      <text class="dg-ts" x="374" y="80">模型可证伪，不是事后解释</text>
-      <path class="dg-grid" d="M320 67 H360"/>
-
-      <rect class="dg-accent" x="40" y="108" width="280" height="54" rx="8"/>
-      <text class="dg-tb" x="54" y="129">② 算可兑现收益</text>
-      <text class="dg-ts" x="54" y="148">非瓶颈分支的收益恒为 0</text>
-      <rect class="dg-box" x="360" y="108" width="280" height="54" rx="8"/>
-      <text class="dg-t" x="374" y="129">codec 单独 -20% → 0%</text>
-      <text class="dg-ts" x="374" y="148">depth 降到 0 也只有 -0.9%</text>
-      <path class="dg-grid" d="M320 135 H360"/>
-
-      <rect class="dg-accent" x="40" y="176" width="280" height="54" rx="8"/>
-      <text class="dg-tb" x="54" y="197">③ 交替 A/B + 等价性</text>
-      <text class="dg-ts" x="54" y="216">elapsed_s · 逐字节 · 盲听</text>
-      <rect class="dg-box" x="360" y="176" width="280" height="54" rx="8"/>
-      <text class="dg-t" x="374" y="197">flash-f32 墙钟 +5.1%</text>
-      <text class="dg-ts" x="374" y="216">而 RTF 显示 -4.9%（分母变了）</text>
-      <path class="dg-grid" d="M320 203 H360"/>
-
-      <rect class="dg-accent" x="40" y="244" width="280" height="54" rx="8"/>
-      <text class="dg-tb" x="54" y="265">④ 判死或转正</text>
-      <text class="dg-ts" x="54" y="284">重算余量，重排优先级</text>
-      <rect class="dg-box" x="360" y="244" width="280" height="54" rx="8"/>
-      <text class="dg-t" x="374" y="265">KV32 转正：余量 25% → 1.15%</text>
-      <text class="dg-ts" x="374" y="284">Flash 从最大杠杆变不值得</text>
-      <path class="dg-grid" d="M320 271 H360"/>
-
-      <path class="dg-flow" d="M180 94 V106"/>
-      <path class="dg-flow" d="M180 162 V174"/>
-      <path class="dg-flow" d="M180 230 V242"/>
-      <text class="dg-ts" x="40" y="322">先做便宜的判死实验，再投入训练；每次转正后回到第 ① 步重算余量。</text>
-      </svg>
-    </div>
-    <figcaption>图 11-1　四道决策门。每个「不做了」的结论都必须能追到某一道门，而不是凭感觉。</figcaption>
-  </figure>
-
-  <h3>11.1 为什么先建模型</h3>
-  <p>分项统计（<code>backbone_s / depth_s / codec_s</code>）本身不是模型，把它们的<b>结构关系</b>写出来才是。本项目的两条分支并行重叠，所以墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，不是三者相加。用残差检验：不同配置下减出来的固定项都约 0.197 s，说明模型抓住了结构。有了它，动刀之前就能算出「codec 降 20% 值多少」——在 §13 的答案是 0，在 §16 的答案仍是 0。省下的是一整轮无用的量化实验。</p>
-
-  <h3>11.2 十条速查判据</h3>
-  <ol>
-    <li>先写可证伪的墙钟模型，用它算<b>可兑现收益</b>，不要用单项耗时当目标。</li>
-    <li>区分「组件变快」与「端到端变快」；<code>max()</code> 结构下优化非瓶颈分支收益为 0。</li>
-    <li>每次成功优化后重算余量、重排优先级：KV32 把 25% 余量吃到 1.15%，旧结论立即失效。</li>
-    <li>同轮正逆序交替 A/B，固定文本与 seed、取中位数；判据是 <code>elapsed_s</code>。热漂移能让同代码 RTF 从 0.75 变 0.91。</li>
-    <li>RTF 只在输出不变时可用。分母 <code>audio_s</code> 会随生成轨迹变化，必须同时看墙钟、每帧成本、输出长度。</li>
-    <li>等价性分层：① codes/WAV 逐字节；② ASR + 音频统计；③ 多文本人耳盲听。heads int8 与 B/Q4 都证明「指标全对 ≠ 听感通过」。</li>
-    <li>归因实验一次只改一个变量（KV 精度 × kernel 实现），并用 profile 数算子证明改动真的生效，别靠 env 名猜。</li>
-    <li>算子形状比墙钟推测更接近机制：<code>SOFT_MAX 256:32:8:1</code> 直接解释融合 kernel 为何只剩 7%。</li>
-    <li>负结果写清机制与复活条件：α 上界 0.18、反压是固定税、可预测性沿链衰减、kernel 改变轨迹。</li>
-    <li>先做便宜的判死实验，再投入训练或改图。960 帧离线数据判死草稿，16 次合成判死 Flash 线。</li>
-  </ol>
-
-  <h3>11.3 四个反复出现的陷阱</h3>
-  <div class="grid2">
-    <div class="tile"><b>分母会变</b><p><code>flash-f32</code> 的 RTF 从 0.700 降到 0.666，看似快 5%；实际帧数 69→76、音频长 10.5%、墙钟 <b>+5.1%</b>。只看 RTF 会得到完全相反的结论。</p></div>
-    <div class="tile"><b>只看单边指标</b><p><code>--threads 3</code>、<code>chunk (2,4)</code>、<code>OPPOLL=1</code> 都是按「codec 单独耗时」「首包最短」定的。§13 用端到端墙钟重扫 48 次，没有任何配置快于默认。</p></div>
-    <div class="tile"><b>把近似当等价</b><p>codes 分叉、帧数漂移时，两条轨迹已经不是同一个任务；此时比速度没有意义，先过门禁再谈性能。</p></div>
-    <div class="tile"><b>沿用旧基线</b><p>「Flash 是最大杠杆（-17%）」在 KV32 之前成立；转正后它只剩 ~0.9%。每条结论都要带上它的基线。</p></div>
-    <div class="tile"><b>冷 / 热口径混用</b><p>CLI 每次都是新进程，codec prime 缓存必然空；常驻 server 同音色第二次起就命中，首包差约 0.08 s。之前所有分项实验用 CLI，报的都是冷启动数。延迟必须标明是「重启后首次」还是「稳态」。</p></div>
-  </div>
-
-  <h3>11.4 把负结果变成资产</h3>
-  <p>§12–§14、§17 四条线全部判死，但留下的是可复用的机制：α 上界、固定税、可预测性衰减、kernel 轨迹漂移。写清楚「为什么不行」和「什么条件下复活」，比记录「试过没收益」有价值得多——它让下一个人不必重跑一遍，也让自己不会在换基线后重复投入。</p>
-
-  <h3>11.5 案例：把 0.398 s 首包拆开</h3>
-  <p>稳态 RTF 被 <code>max()</code> 锁死（§16），但<b>首包由固定项主导，是另一本账</b>。扫 <code>--first 1/2/3/4/6/8</code> 两轮交替，拟合出 <code>first_pcm = 0.234 s + 74.6 ms/帧</code>（残差 &lt;21 ms）；斜率恰好等于 depth 单帧 31.7 ms 加 codec 单帧 40 ms。再用 <code>--no-overlap</code> 把并行项暴露：codec prime 0.230 s、backbone prefill 0.190 s，overlap 下取 <code>max</code>，所以固定项其实是 <b>codec prime，不是 prefill</b>。斜率/截距加隔离开关，比逐个埋点更省事。</p>
-  <p><code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，命中就跳过那 0.23 s。查出的问题是缓存条件错配：warmup 用的是 voice 0（官方样例），而 Web 默认 Serena，于是<b>每个用户的第一次请求都在给用不到的音色付冷启动</b>。部署层加一个 <code>--voice serena</code> 让默认音色对齐，首次 pcm 从 0.346 降到 0.280 s（wav 0.507→0.420），零引擎改动、稳态不退化。<b>先查缓存命中条件，往往比写更快的 kernel 更划算。</b></p>
-  <p>那次优化留了个尾巴：prime 缓存是<b>单条目</b>，换音色立即失效（切回仍要 0.49 s）。下一节把这条最后的冷启动路径关掉，并顺带说明一个极易算错的账：被跳过的操作值 0.23 s，实际能省下的只有约 0.04 s。命中路径仍要发送 32 行共享 prefix——实测只值 2–4 ms（Ch 12.4），协议改动已判死；<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
-
-  <details class="qa"><summary>Q8　某候选把 RTF 从 0.700 降到 0.666，能上线吗？</summary>
-    <div class="answer">不能只看这个数。本例中帧数 69→76，音频 5.32→5.88 s，墙钟 3.724→3.914 s（<b>+5.1%</b>），RTF 下降纯粹因为分母变长。而且四条文本/seed 的 codes 与 WAV <b>全部不一致</b>，已经不是同一个任务。正确顺序：先看过没过等价性门禁（逐字节 → ASR → 盲听），再看 <code>elapsed_s</code> 与每帧成本，最后才算 RTF。这个候选是 §17 的 <code>flash-f32</code>，结论是判死。</div></details>
-  <details class="qa"><summary>Q9　把首块从 2 帧减到 1 帧，首包为什么反而从 0.398 s 涨到 0.616 s？</summary>
-    <div class="answer">因为 <code>kTail = 2400</code> 个样本大于单帧 <code>kHop = 1920</code>：第一个 chunk 的输出被全部留作 overlap tail，<code>drop = 0</code>，根本没有 PCM 写出。首包只能等第二个 chunk（4 帧），等于等 5 帧——<code>0.234 + 5 × 0.0746 = 0.607 s</code>，与实测 0.616 s 吻合。<b>减小批次不一定降低延迟，要先看输出阈值。</b>另外把 prime 的输出接进 tail 虽然能让 1 帧发出声音，但会把参考音色原声混进开头，不能这么修。</div></details>
-  <h3>11.6 案例：把单条目缓存换成 LRU，以及「跳过 ≠ 省下」</h3>
-  <p>§19 留下的冷启动尾巴，改法只有约 25 行：把 <code>prime_codes_ / prime_inputs_ / prime_offset_</code> 换成 <code>vector&lt;PrimeEntry&gt;</code>，命中移到 front、新条目插 front、超出容量裁尾。关键是 <b>key 取「真正决定状态的最小输入」</b>——这里就是参考 codes 的最后 8 帧，而不是音色名字或索引。于是换文本不失效、同名不同内容不误命中，浏览器内联的临时音色（请求里带 <code>codes</code>）也自动纳入同一缓存。容量 4、每条目 1.04 MB，约 4.4 MB 上限；<code>M5_PRIME_CACHE=1</code> 复现旧行为、<code>=0</code> 禁用缓存，<code>M5_PRIME_STATS=1</code> 打印 hit/miss/save。</p>
-
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 250" role="img" aria-label="冷启动与命中缓存时 prime 和 prefill 并行结构的对比，说明可兑现收益只是两者之差">
-      <title>缓存收益被并行结构吃掉</title>
-      <desc>冷启动时 codec prime 0.230 秒与 backbone prefill 0.190 秒并行，固定项取 max 为 0.234 秒；命中后 prime 消失，固定项退化为 0.190 秒，因此只省约 0.044 秒。</desc>
-      <text class="dg-tb" x="24" y="26">冷启动（未命中）</text>
-      <text class="dg-tb" x="352" y="26">命中缓存</text>
-
-      <rect class="dg-accent" x="24" y="40" width="296" height="158" rx="10"/>
-      <text class="dg-t" x="38" y="64">codec prime　0.230 s</text>
-      <rect class="dg-box" x="38" y="74" width="248" height="14" rx="4"/>
-      <text class="dg-t" x="38" y="110">backbone prefill　0.190 s</text>
-      <rect class="dg-box" x="38" y="120" width="205" height="14" rx="4"/>
-      <text class="dg-ts" x="38" y="158">两条分支并行，不是相加</text>
-      <text class="dg-tacc" x="38" y="182">固定项 = max = 0.234 s</text>
-
-      <path class="dg-flow" d="M322 119 H348"/>
-      <rect class="dg-accent2" x="352" y="40" width="304" height="158" rx="10"/>
-      <text class="dg-t" x="366" y="64">codec prime　已跳过</text>
-      <path class="dg-grid" d="M366 82 H630"/>
-      <text class="dg-t" x="366" y="110">backbone prefill　0.190 s</text>
-      <rect class="dg-box" x="366" y="120" width="205" height="14" rx="4"/>
-      <text class="dg-ts" x="366" y="158">prefill 成为新的下界</text>
-      <text class="dg-tacc" x="366" y="182">固定项 = 0.190 s</text>
-
-      <text class="dg-tb" x="24" y="226">可兑现收益 ≈ 0.234 − 0.190 = 0.044 s（pcm 实测 0.058 s），不是 0.230 s</text>
-      </svg>
-    </div>
-    <figcaption>图 11-2　稳态里 <code>max(depth, codec)</code> 吃掉单侧优化，首包里 <code>max(prime, prefill)</code> 吃掉大部分缓存收益。跳过一个操作之前，先重画一遍并行结构。</figcaption>
-  </figure>
-
-  <p><b>怎么验收</b>：容量按 <code>0,1,4,4,1,0</code> 交替重启 server，每轮固定序列「serena → 官方样例 → serena → 官方样例 → serena → pcm」，共 36 次请求。服务端日志给出的 prime 调用统计是 <code>0/13</code>、<code>8/13</code>、<code>11/13</code> 次命中：容量 4 多出的 3 次正好是三个「切回音色」请求。切回三请求首包中位数 <b>0.500 → 0.463 s（-7.5%）</b>；用永远冷的 cap=0 轮做热漂移基线（s1→s3 <code>+0.032 s</code>）校正后，单条目的冷启动惩罚 <code>+0.044 s</code> 被压到 <code>+0.005 s</code>。更硬的门禁是 <b>30 份 WAV 跨容量、跨冷热、跨 6 次重启全部同一哈希</b>；用 6 个不同的内联临时音色逼出 LRU 驱逐，被驱逐后重算的两个音色哈希也与首次完全相同。</p>
-
-  <div class="grid2">
-    <div class="tile"><b>Key 取最小决定输入</b><p>prime 状态是 8 帧 codes 的纯函数，就别用音色名字当 key。缓存语义由<b>被缓存的计算</b>决定，不由请求身份决定。</p></div>
-    <div class="tile"><b>先让缓存可观测</b><p>hit/miss/save 日志比「首包看起来快了」可靠得多；它还能给出每条目字节数，让容量选择有依据。</p></div>
-    <div class="tile"><b>禁用缓存一物两用</b><p><code>cap=0</code> 既是「命中省多少」的冷基线，又是同轮热漂移的校正量——不必另跑一轮漂移实验。</p></div>
-    <div class="tile"><b>等价性跨命中状态</b><p>不只验证「同配置两次一样」，要覆盖冷、热、驱逐后重算、不同容量、不同进程；否则缓存可能悄悄改变输出。</p></div>
-  </div>
-
-  <details class="qa"><summary>Q10　缓存命中跳过了一个 0.23 s 的操作，首包为什么只快了约 0.04 s？</summary>
-    <div class="answer">因为 prime 与 backbone prefill <b>并行</b>：冷启动固定项是 <code>max(0.230, 0.190) = 0.234 s</code>，命中后 prime 消失，固定项退化成 prefill 的 <code>0.190 s</code>，省下的只是两者<b>差值</b>约 0.044 s（pcm 路径实测 0.058 s）。稳态章节里 <code>max(depth, codec)</code> 让「codec 单独 -33%」收益为零，是同一个结构在首包维度的翻版。<b>算收益要重画并行结构，不能拿组件耗时直接相减</b>；同理，也不要因为收益比预估小就判定优化无效——它仍然消除了换音色时用户能感知的那一次卡顿。</div></details>
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch11">标记本章已学完</button></div>
-</section>
-
-<section class="chapter" id="ch12" data-title="余量重估：串行项与 max() 的另一面">
-  <h2>余量重估：串行项与 max() 的另一面</h2>
-  <p>第 11 章教会你「非瓶颈分支的收益恒为 0」。但这句话有个前提：<b>你要先知道哪个分支在瓶颈上</b>。基线一旦改变（这里是把 depth 的 KV 读取范围从 256 缩到 32、又把 prime 缓存换成 LRU），瓶颈就换人了，昨天的结论今天就过期。这一章讲的是<b>转正之后必须做的第二件事</b>：重算收益矩阵，并用最便宜的手段验证它。</p>
-  <p>本章三个实验都在「不改模型图、不重训」的前提下完成，结果是一正两负。价值不在那个正的 2.3%，而在两次负结果各自留下的可复用判据。</p>
-
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 320" role="img" aria-label="墙钟公式中串行加法项与 max 并行项的可兑现收益对比">
-      <title>同一个「快 20%」，位置决定它值多少钱</title>
-      <desc>backbone 是墙钟公式里的加法项，自身降 7.7% 兑现为墙钟 -2.3%；depth 与 codec 位于 max 分支，单侧降 20% 兑现为 0。</desc>
-      <text class="dg-tb" x="24" y="26">wall = backbone + max(depth, codec) + 固定</text>
-      <text class="dg-ts" x="24" y="46">0.677 + max(2.853, 2.820) + 0.197 = 3.70 s</text>
-
-      <rect class="dg-ok" x="24" y="60" width="632" height="104" rx="10"/>
-      <text class="dg-tb" x="40" y="84">① 串行加法项 · backbone_s　0.677 s（18%）</text>
-      <text class="dg-ts" x="40" y="104">不进 max()，降多少兑现多少</text>
-      <rect class="dg-box" x="40" y="114" width="150" height="13" rx="4"/>
-      <text class="dg-ts" x="40" y="150">KV pad 256→128：backbone −7.7%</text>
-      <text class="dg-tacc" x="372" y="104" style="fill:var(--ok)">兑现 wall −2.3%</text>
-      <text class="dg-ts" x="372" y="126">预测 −1.6%，实测 −2.3%</text>
-      <text class="dg-ts" x="372" y="146">兑现率 ≈ 100%</text>
-
-      <rect class="dg-bad" x="24" y="176" width="632" height="104" rx="10"/>
-      <text class="dg-tb" x="40" y="200">② 并行 max 项 · depth / codec　2.853 / 2.820 s</text>
-      <text class="dg-ts" x="40" y="220">两条轨道只差 1.15%，谁也不是余量</text>
-      <rect class="dg-box" x="40" y="230" width="150" height="13" rx="4"/>
-      <rect class="dg-box" x="196" y="230" width="148" height="13" rx="4"/>
-      <text class="dg-ts" x="40" y="266">codec 单独 −20%、depth 单独降到 0</text>
-      <text class="dg-tacc" x="372" y="220" style="fill:var(--bad)">兑现 wall 0 ~ −0.9%</text>
-      <text class="dg-ts" x="372" y="242">另一侧立刻补位成新瓶颈</text>
-      <text class="dg-ts" x="372" y="262">兑现率 ≈ 0%</text>
-
-      <text class="dg-ts" x="24" y="304">所以「还能优化哪里」的答案不在耗时排行里，而在它于公式中的位置。</text>
-      </svg>
-    </div>
-    <figcaption>图 12-1　同一句「快 20%」，写在加法项上和写在 max 分支上，价值差一个数量级。重估余量的第一步就是把分项耗时逐个映射回公式。</figcaption>
-  </figure>
-
-  <h3>12.1 先分清三个「推理时间」</h3>
-  <p>问「还有没有优化空间」之前，必须先定口径。这三条账的分子分母都不同，混着谈会得出互相矛盾的结论：</p>
-  <table>
-    <thead><tr><th>口径</th><th>当前值</th><th>主导项</th><th>约束</th></tr></thead>
-    <tbody>
-      <tr><td>稳态墙钟 / RTF（69 帧长句）</td><td>3.70 s / <b>0.694</b></td><td><code>max(depth, codec)</code></td><td>并行天花板，单侧优化归零</td></tr>
-      <tr><td>首包（pcm，命中）</td><td><b>0.28 s</b></td><td>固定 0.190 + 2 帧 × 74.6 ms</td><td>不受 <code>max()</code> 约束</td></tr>
-      <tr><td>短句 RTF（≤7 字）</td><td>常 &gt;0.9</td><td>固定项摊不薄</td><td>与长句不是同一张账</td></tr>
-    </tbody>
-  </table>
-  <p>稳态那条账的残酷之处在于<b>两条轨道几乎完美平衡</b>（2.853 vs 2.820，差 1.15%）。这是最坏的优化局面：你花力气把 depth 降 20%，codec 立刻变成新瓶颈，墙钟几乎不动。反过来，只要有一项<b>不在 <code>max()</code> 里</b>，它就值得优先动手。</p>
-
-  <h3>12.2 串行项：唯一能 100% 兑现的那 0.677 s</h3>
-  <p><code>backbone_s</code> 在公式里是<b>加法项</b>，占墙钟约 18%。它不在瓶颈上，所以「降 10% 得 10%」在这里成立——这是全流程唯一还有这种性质的计算项。剩下的候选手段只有两类：</p>
-  <ol>
-    <li><b>KV 读取宽度（pad）</b>：零重编译、开关现成，门禁是逐字节等价，成本最低。</li>
-    <li><b>中间档量化 / 分层混合精度</b>：Q6_K、Q5_K 或前后层保 Q8，在 Q8 与 Q4 之间找音质拐点；一次把 Q4 试过头导致音频短 16%、韵律漂移被否掉，所以必须盲听。</li>
-  </ol>
-  <p>先做第 1 项。历史上 backbone 的 pad 被<b>硬编码成 256</b>，原因很朴素——当初做 depth KV32 实验时要求「其他条件严格不变」。于是这个开关从没被单独测过。命令行的 <code>--backbone</code> 参数会整体替换 stage 启动命令，加个 <code>M5_KV_PAD=128</code> 前缀就能<b>只</b>注入 backbone 子进程（depth 仍是 32），一行代码都不用改。</p>
-
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 300" role="img" aria-label="KV pad 决定 attention 每步读取的 KV 行数，pad 256 与 pad 128 的对比">
-      <title>pad 决定 attention 每步读多少行 K/V</title>
-      <desc>该句 prefill 前缀约 106 行；pad 256 时 n_kv 恒为 256，pad 128 时先 128 后 192，每步少读 25% 到 50% 的行，代价是计算图重建次数翻倍。</desc>
-      <text class="dg-tb" x="24" y="26">n_kv = 向上取整(序列长度 / pad) × pad</text>
-      <text class="dg-ts" x="24" y="46">本句 prefill prefix ≈ 106 行，生成 69 帧</text>
-
-      <rect class="dg-box" x="24" y="62" width="300" height="150" rx="10"/>
-      <text class="dg-tb" x="40" y="86">pad = 256（旧）</text>
-      <text class="dg-ts" x="40" y="106">n_kv 恒为 256，每步读满</text>
-      <g>
-        <rect class="dg-bar" x="40" y="120" width="240" height="10" rx="3"/>
-        <rect class="dg-bar" x="40" y="136" width="240" height="10" rx="3"/>
-        <rect class="dg-bar" x="40" y="152" width="240" height="10" rx="3"/>
-        <rect class="dg-bar" x="40" y="168" width="240" height="10" rx="3"/>
-      </g>
-      <text class="dg-ts" x="40" y="198">图重建 1 次</text>
-
-      <rect class="dg-ok" x="356" y="62" width="300" height="150" rx="10"/>
-      <text class="dg-tb" x="372" y="86">pad = 128（新）</text>
-      <text class="dg-ts" x="372" y="106">n_kv = 128，越界后 192</text>
-      <g>
-        <rect class="dg-bar3" x="372" y="120" width="120" height="10" rx="3"/>
-        <rect class="dg-bar3" x="372" y="136" width="120" height="10" rx="3"/>
-        <rect class="dg-bar3" x="372" y="152" width="180" height="10" rx="3"/>
-        <rect class="dg-bar3" x="372" y="168" width="180" height="10" rx="3"/>
-      </g>
-      <text class="dg-ts" x="372" y="198">图重建 2 次（代价）</text>
-
-      <path class="dg-grid" d="M40 216 H656"/>
-      <text class="dg-ts" x="24" y="240">QK / AV 每步读取行数 −25~50%　→　backbone −7.7%，墙钟 −2.3%</text>
-      <text class="dg-ts" x="24" y="262">图重建 ×2 只多花 1 次，远小于省下的访存</text>
-      <text class="dg-tacc" x="24" y="286">长短句都不亏：170 帧句 backbone −2.6%，墙钟 −0.75%</text>
-      </svg>
-    </div>
-    <figcaption>图 12-2　pad 不是「预分配多少内存」，而是<b>attention 每步实际读多少行 K/V</b>。代价是序列越界时重建计算图的次数，短句几乎无感，长句也能净赚。</figcaption>
-  </figure>
-
-  <p>实测（同轮正逆序交替，取中位数）：</p>
-  <table>
-    <thead><tr><th>配置</th><th>69 帧句 wall / backbone_s</th><th>170 帧句 wall / backbone_s</th></tr></thead>
-    <tbody>
-      <tr><td>pad 256（旧默认）</td><td>3.781 / 0.736</td><td>8.375 / 1.374</td></tr>
-      <tr><td>pad 64</td><td>3.726 / 0.671</td><td>—</td></tr>
-      <tr><td><b>pad 128（新默认）</b></td><td><b>3.695 / 0.677</b></td><td><b>8.313 / 1.338</b></td></tr>
-      <tr><td>pad 32</td><td>3.695 / 0.660</td><td>—</td></tr>
-    </tbody>
-  </table>
-  <p>22 次运行 WAV 与 codes <b>全部逐字节一致</b>。64/32 与 128 的差异落在噪声内，但 128 的图重建次数只有它们的一半，长句更稳，所以取 128 而不是更激进的 32——<b>在等价收益里挑最保守的那个</b>。转正后 <code>M5_KV_PAD=256</code> 一键回退；顺带把 server 命中首包从 0.426–0.433 s 拉到 0.410–0.414 s。</p>
-  <p>这一项最值得记的不是数字，而是<b>预测对了</b>：事前算「backbone 占 18%、降 8% → 墙钟约 −1.6%」，实测 −2.3%（含 depth/codec 的正常波动），同量级。而同幅度的 depth 侧优化只能兑现 0.9%。<b>成本模型的价值就在动手前知道能拿到多少，而不是事后找解释。</b></p>
-
-  <h3>12.3 「修好缺陷」不等于「拿到收益」</h3>
-  <p>回到首包那条加法账。<code>--first 1</code> 一直有个众所周知的毛病：单帧 chunk 只有 1920 个样本，而 <code>write_chunk</code> 要把最后 <code>kTail=2400</code> 个样本留作下一块的 overlap 缓冲——<b>全被扣住，一帧根本发不出声音</b>，首包只能等第二个 chunk（共 5 帧，0.575 s）。</p>
-  <p>修法很直接：加一个 <code>M5_FIRST_TAIL</code>，让首个 emit chunk 少扣或不扣 tail。缺陷确实修好了，但收益是负的：</p>
-
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 268" role="img" aria-label="四组首块配置的首包中位数对比柱状图">
-      <title>首块配置的首包中位数</title>
-      <desc>A 组 first 2 现状 0.387 秒；B 组 first 1 且不扣 tail 为 0.401 秒；C 组 first 2 不扣 tail 为 0.450 秒；D 组 first 1 原样为 0.575 秒。</desc>
-      <text class="dg-tb" x="24" y="24">首包中位数（3 轮交替，12 次）</text>
-
-      <text class="dg-ts" x="24" y="58">A　first 2 / tail 2400（现状）</text>
-      <rect class="dg-box" x="240" y="44" width="180" height="18" rx="4"/>
-      <text class="dg-tacc" x="430" y="58">0.387 s</text>
-
-      <text class="dg-ts" x="24" y="96">B　first 1 / tail 0（候选）</text>
-      <rect class="dg-warn" x="240" y="82" width="186" height="18" rx="4"/>
-      <text class="dg-tacc" x="436" y="96" style="fill:var(--warn)">0.401 s</text>
-
-      <text class="dg-ts" x="24" y="134">C　first 2 / tail 0</text>
-      <rect class="dg-warn" x="240" y="120" width="209" height="18" rx="4"/>
-      <text class="dg-tacc" x="459" y="134" style="fill:var(--warn)">0.450 s</text>
-
-      <text class="dg-ts" x="24" y="172">D　first 1 / tail 2400（原样）</text>
-      <rect class="dg-bad" x="240" y="158" width="267" height="18" rx="4"/>
-      <text class="dg-tacc" x="517" y="172" style="fill:var(--bad)">0.575 s</text>
-
-      <path class="dg-grid" d="M24 196 H656"/>
-      <text class="dg-ts" x="24" y="220">B 修好了 D 的「等 5 帧」缺陷，却追不上 A：</text>
-      <text class="dg-ts" x="24" y="240">depth 少跑一帧省 75 ms，codec 单帧调用的固定开销多花约 80 ms</text>
-      <text class="dg-tacc" x="24" y="260">净收益 ≈ 0 → 维持 --first 2 --chunk 4</text>
-      </svg>
-    </div>
-    <figcaption>图 12-3　四组首块配置。柱子越长越慢——把「少等 4 帧」修成「1 帧出声」，结果仍比现状慢，因为省下的是 depth 的一帧，多花的是 codec 的一次调用。</figcaption>
-  </figure>
-
-  <p>四个可迁移的点：</p>
-  <div class="grid2">
-    <div class="tile"><b>看斜率项归属哪一侧</b><p>首包 74.6 ms/帧 ≈ depth 31.7 + codec 40，是<strong>相加</strong>。改 <code>--first</code> 只动 depth 那一半，codec 的单帧调用固定开销却涨了——一侧省、另一侧还。</p></div>
-    <div class="tile"><b>等价性可以比 SHA 更细</b><p>B 与 A 的 127,680 个样本只差 <strong>1 个样本、1 LSB、位于末尾</strong>（浮点求和顺序噪声），不是 chunk 边界伪影。<strong>codec 输出对 chunk 切分不敏感</strong>，此前担心的边界效应不存在。</p></div>
-    <div class="tile"><b>纯调度实验是免费的对照</b><p>C 组（first 2 + 不扣 tail）逐字节一致，证明「边界移动本身零成本」；它把 B 的差异锁定在「少等一帧」这唯一变量上。</p></div>
-    <div class="tile"><b>负结果要留复活条件</b><p>开关保留、默认关闭。<strong>复活条件</strong>：codec 单帧调用的固定开销显著下降（例如 codec 捆绑改造落地）后重测 <code>--first 1 + M5_FIRST_TAIL=0</code>。</p></div>
-  </div>
-
-  <h3>12.4 先测占比，再谈改协议</h3>
-  <p>prime 命中时可以跳过 codec prime，但引擎<b>仍然</b>把 32 行共享 prefix 发给 backbone stage——因为协议是「先发 header 再发两块矩阵」，少发一块需要改协议。省 64 KB 听起来值得改，先量一下：</p>
-<pre><code>sh=32 rs=71–85  hdr=0.1ms  shared=1.3–3.4ms  rest=7–12ms  wait=85–101ms  total≈105ms
-m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
-  <p>32 行（64 KB）的<b>传输加丢弃只要 2–4 ms</b>：占 prefill 往返（约 105 ms）的 3%，占命中首包（0.41 s）的 <b>不到 1%</b>。大头是 <code>wait</code> 段，也就是 backbone 对 rest 行做的真实 decode——那是算力，不是搬运。</p>
-  <p>算一下风险收益：省 2–4 ms，换一次管道错位崩溃的可能（这条协议以前踩过，错配时 stage 会读垃圾 header）。<b>不成比例，直接判死。</b>更重要的是它留下一条判据：<b>凡是「优化传输」的提案，先问它在端到端里占几个百分点</b>；单看「省了一半数据量」没有意义。</p>
-
-  <h3>12.5 量化：把模型砍掉一半，为什么时间没动</h3>
-  <p>backbone 剩下的候选只有「降精度」了。直觉上：Q8 31 MB → Q4 16 MB，每帧少读一半权重，该快。实测不是——五组权重精度、三轮交替，backbone 一动不动：</p>
-
-  <figure>
-    <div class="figureBox">
-      <svg viewBox="0 0 680 300" role="img" aria-label="五组权重量化：权重体积腰斩而 backbone 耗时几乎不变">
-      <title>权重体积与 backbone 耗时脱钩</title>
-      <desc>Q8_0 到 Q4_0 权重从 30.85 MiB 降到 16 MiB（减半），但 backbone 耗时从 0.687 秒到 0.666 秒，仅差 3%，落在组间噪声内；Q5_K_M 甚至更慢。</desc>
-      <text class="dg-tb" x="24" y="26">同一句文本，只换 backbone 的 gguf（3 轮 × 5 组）</text>
-
-      <text class="dg-ts" x="44" y="52">权重体积 / MiB</text>
-      <text class="dg-ts" x="376" y="52">backbone_s / s</text>
-
-      <path class="dg-grid" d="M24 230 H656"/>
-
-      <rect class="dg-bar" x="44" y="120" width="40" height="110" rx="3"/>
-      <text class="dg-ts" x="52" y="112">30.9</text>
-      <rect class="dg-bar" x="99" y="145" width="40" height="85" rx="3"/>
-      <text class="dg-ts" x="107" y="137">23.8</text>
-      <rect class="dg-bar" x="154" y="155" width="40" height="75" rx="3"/>
-      <text class="dg-ts" x="162" y="147">21.0</text>
-      <rect class="dg-bar" x="209" y="159" width="40" height="71" rx="3"/>
-      <text class="dg-ts" x="217" y="151">20.0</text>
-      <rect class="dg-bar" x="264" y="173" width="40" height="57" rx="3"/>
-      <text class="dg-ts" x="272" y="165">16.0</text>
-
-      <rect class="dg-bar3" x="376" y="125" width="40" height="105" rx="3"/>
-      <text class="dg-ts" x="384" y="117">0.687</text>
-      <rect class="dg-bar3" x="431" y="126" width="40" height="104" rx="3"/>
-      <text class="dg-ts" x="439" y="118">0.681</text>
-      <rect class="dg-bar3" x="486" y="123" width="40" height="107" rx="3"/>
-      <text class="dg-ts" x="494" y="115">0.701</text>
-      <rect class="dg-bar3" x="541" y="127" width="40" height="103" rx="3"/>
-      <text class="dg-ts" x="549" y="119">0.673</text>
-      <rect class="dg-bar3" x="596" y="128" width="40" height="102" rx="3"/>
-      <text class="dg-ts" x="604" y="120">0.666</text>
-
-      <text class="dg-ts" x="44" y="250">Q8_0</text>
-      <text class="dg-ts" x="99" y="250">Q6_K</text>
-      <text class="dg-ts" x="154" y="250">Q5_K_M</text>
-      <text class="dg-ts" x="209" y="250">mix4</text>
-      <text class="dg-ts" x="264" y="250">Q4_0</text>
-      <text class="dg-ts" x="376" y="250">Q8_0</text>
-      <text class="dg-ts" x="431" y="250">Q6_K</text>
-      <text class="dg-ts" x="486" y="250">Q5_K_M</text>
-      <text class="dg-ts" x="541" y="250">mix4</text>
-      <text class="dg-ts" x="596" y="250">Q4_0</text>
-
-      <text class="dg-tacc" x="44" y="278">−48% 体积</text>
-      <text class="dg-tacc" x="376" y="278" style="fill:var(--warn)">−3% 时间（噪声内）</text>
-      <text class="dg-ts" x="24" y="296">mix4 = 首末层保 Q8_0、中间 6 层 Q4_0 的分层混合精度，同样没有收益</text>
-      </svg>
-    </div>
-    <figcaption>图 12-4　权重体积腰斩，耗时几乎不动。当「更小的模型」不换时间时，瓶颈不是字节搬运，而是<b>调用次数</b>。</figcaption>
-  </figure>
-
-  <p>为什么不吃带宽？把 <code>backbone_s</code> 拆开看：<code>0.687 s ≈ prefill 0.19 s + 69 帧 × 7.2 ms</code>。每帧只送 1 行（hidden 512）进去，8 层权重 Q8 约 13 MB，摊到 7.2 ms 上只有约 <b>1.9 GB/s</b>——远低于这块 LPDDR5X 的可用带宽。反过来算：每层约 0.86 ms、每层约 9 个算子，即 <b>每算子 0.1 ms</b>，正好是 NPU 的 dispatch / 同步固定成本。<b>69 次「1 行 decode」= 69 次独立调用，成本由调用次数决定，不由权重字节数决定。</b></p>
-
-  <p>这次实验还附赠两个必须记住的坑。第一，<b>所有量化都改变了输出</b>：帧数 69 → 71/73/74，音频 5.32 → 5.48/5.64/5.72 s（长 3~7.5%）。分层混合（首末层保 Q8）也没救回来，帧数反而最多。第二，因此 <b>RTF 全部「变好」</b>（0.702 → 0.685），而墙钟全部变慢（+2.2~5.5%）——分母又被做大了，这是同一个陷阱的第三次出现。</p>
-
-  <div class="callout bad"><span class="tagline">判死</span>
-    backbone 中间档量化（Q6_K / Q5_K_M）与分层混合精度在端到端上一律负收益，且都以韵律漂移为代价。<strong>复活条件</strong>只有一个：先让 69 次单行 decode 不再是 69 次独立调用（改图合并、或降低每层 dispatch 成本），单次调用变大后带宽才会重新成为限制——<b>先改调用形状，再谈精度</b>。</div>
-
-  <h3>12.6 本轮新基线</h3>
-  <table>
-    <thead><tr><th>项</th><th>pad 256（旧）</th><th>pad 128（新）</th></tr></thead>
-    <tbody>
-      <tr><td>CLI 69 帧 wall / RTF</td><td>3.775 s / 0.710</td><td><b>3.695 s / 0.694</b></td></tr>
-      <tr><td><code>backbone_s</code></td><td>0.726</td><td>0.677</td></tr>
-      <tr><td>server 命中首包（wav）</td><td>0.426–0.433</td><td>0.410–0.414</td></tr>
-    </tbody>
-  </table>
-  <p><code>wall ≈ 0.677 + max(depth, codec) + 0.197</code>。<code>max</code> 两侧没动，所以「稳态下一个杠杆是捆绑（−15%，需重训）」的结论不变；剩余项只剩 backbone 分层混合精度（预期 −2~4%，必须过盲听）和热漂移/温控（要的是稳定性，不是 RTF）。</p>
-  <p>还有一件比压模型更值钱的事：<b>同一份代码连续跑，RTF 会从 0.75 漂到 0.91（+21%）</b>，比本章所有剩余优化加起来都大。如果目标是「稳定 &lt;1」而不是「再快 1%」，真问题在温控与长时降频，不在模型推理。</p>
-
-  <h3>12.7 方法论补充</h3>
-  <ol>
-    <li><b>转正后立刻重算矩阵</b>：KV32 转正让 depth 不再是瓶颈，「间接加速 depth」的历史收益（Q4 曾 −18%）换基线后只剩 −4.6%。旧数字必须带上它的基线。</li>
-    <li><b>在等价收益里挑最保守的配置</b>：pad 32/64/128 差异在噪声内时选 128，因为它图重建次数减半，长句更稳。</li>
-    <li><b>append 模式的 dump 是 A/B 地雷</b>：<code>--dump-codes</code> 用追加写，冒烟轮与正式轮共用同名 tag 会静默叠加，产出假性 SHA 不一致（WAV 是截断写，不受影响，且 <code>sha256sum</code> 输出里 wav 在前）。<b>A/B 脚本每轮先 <code>rm -rf</code> 结果目录，冒烟用独立 tag。</b></li>
-    <li><b>测量类实验别改会崩的代码</b>：分段计时加一次对照就能定案，不必为 2–4 ms 去动协议。</li>
-    <li><b>「模型变小」≠「变快」</b>：先判断受限类型。判别实验只要两档极端值（Q8 对 Q4，体积差 2×）；2× 体积差换不来时间，就说明不是带宽问题，别逐档试精度。</li>
-    <li><b>分层的价值前提是「有收益可分」</b>：mix4 这种边缘层保精度的做法，只在量化本身能加速时才有意义；加速为 0 时它只是「更慢 + 输出不一样」。</li>
-    <li><b>先做零成本的那一个</b>：本章第一项零重编译、门禁现成，跑 16 次就拿到 −2.3%；另外两项各花了半天证明不该做——<b>判死也是产出</b>。</li>
-  </ol>
-
-  <details class="qa"><summary>Q11　backbone 只占墙钟 18%，为什么优化它比优化占 77% 的 depth+codec 更划算？</summary>
-    <div class="answer">因为它们在墙钟公式里的<b>位置</b>不同。depth 与 codec 并行，墙钟取 <code>max(2.853, 2.820)</code>，两者只差 1.15%——把其中一侧降 20%，另一侧立刻成为新瓶颈，端到端收益约 0。backbone 是加法项：<code>wall = backbone + max(...) + 固定</code>，它降 7.7%，墙钟就真降约 7.7% 的那一份（实测 −2.3% 墙钟，符合 18% × 7.7% 量级）。<b>判断优化价值不是看谁耗时最长，而是看它在公式里能不能兑现。</b>这也解释了为什么「先降 depth」在 KV32 之前是对的、之后就不再是。</div></details>
-  <details class="qa"><summary>Q12　`--first 1` 从「等 5 帧」修成「1 帧就出声」，为什么首包仍不如 `--first 2`？</summary>
-    <div class="answer">因为首包的成本是 depth 与 codec <b>相加</b>而不是取 max（流水线还没填满）。<code>--first 1</code> 让 depth 少跑一帧（约 −31.7 ms，加上后续调度约 −75 ms），但 codec 要为一个 chunk 单独调用一次，单帧调用的固定开销让 <code>codec_s</code> 从 2.77 涨到 2.87 s，多花约 80 ms，两者抵消。实测 0.401 vs 0.387 s。要让它转正，得先把 codec 的单次调用开销降下来——所以这个开关的价值不是「现在能用」，而是<b>把复活条件写清楚</b>，等 codec 捆绑改造落地后只需重跑一次。</div></details>
-
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch12">标记本章已学完</button></div>
-</section>
-
-<section class="chapter" id="ch13" data-title="从实验室到产品：环境漂移与配置税">
-  <h2>从实验室到产品：环境漂移与配置税</h2>
+<section class="chapter" id="ch8" data-title="产品化：漂移与配置税">
+  <div class="chapHead"><span class="idx">08</span><h2>从实验室到产品：环境漂移与配置税</h2></div>
   <p>这一章的任务本来是「测热漂移」——把那个「同代码连续跑 RTF 0.75→0.91（+21%）」的旧结论坐实。结果测出两件事：<b>热根本不是问题</b>，而<b>产品路径一直比调优路径慢 8%</b>。前者教会你怎么读环境数据，后者值 10% 的墙钟。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能区分「连续压测后变慢」的三种原因：真热漂移、升频滞后、测量对象不对</li>
+    <li>会设计一次已经排除环境税的 A/B（discard 热身 + 同轮交替 + 正逆序）</li>
+    <li>能发现并固化「同一份代码、两条路径不同参」这类配置税</li>
+  </ul></div>
 
-  <h3>13.1 热基线：温度上去了，时间没动</h3>
+  <h3>8.1 热基线：温度上去了，时间没动</h3>
   <p>用常驻 server（真实产品路径）跑 33 次：静置 2 分钟后连续 6 次、再连续 24 次（占空比约 97%）、静置 3 分钟后 3 次。每次请求前后各采一次温度与频率。判据用 <b>ms/帧</b>，不用 RTF——分母会随输出长度变。</p>
 
   <figure>
@@ -1971,7 +1354,7 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
       <text class="dg-ts" x="24" y="292">corr(温度, 每帧耗时) = −0.36；33 次全距 2.8%。RTF 全程 0.745–0.766，从未接近 1</text>
       </svg>
     </div>
-    <figcaption>图 13-1　紫线（温度）一路向上，蓝线（每帧耗时）原地不动。<b>温度升高不等于降频</b>——要看的是有没有跨过阈值。</figcaption>
+    <figcaption>图 8-1　紫线（温度）一路向上，蓝线（每帧耗时）原地不动。<b>温度升高不等于降频</b>——要看的是有没有跨过阈值。</figcaption>
   </figure>
 
   <table>
@@ -1986,7 +1369,7 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
   <div class="callout ok"><span class="tagline">结论</span>
     在占空比 ~97%、连续 8 分钟、峰值 52 °C 的条件下<b>没有热降频</b>。「+21% 漂移」应标记为<b>环境相关、未复现</b>，不再当基线引用；真实的环境漂移量级是 <b>4%</b>（同一配置两次测到 3.977 vs 4.164 s），所以交替轮次的做法仍要保留。</div>
 
-  <h3>13.2 意外：两条路径根本不同参</h3>
+  <h3>8.2 意外：两条路径根本不同参</h3>
   <p>热基线里有一组数字对不上：server 每帧 57.9 ms，CLI 54.2 ms，<b>产品路径慢 7%</b>。更奇怪的是分项——server 的 backbone 更快、depth 更快、codec 甚至快 0.6 s，墙钟却更高，说明差的是一段<b>不属于任何分项的固定残差</b>（0.197 s 涨到 0.65 s）。</p>
   <p>翻代码找到了：wav 分支里写死了 <code>set_chunking(4, 16)</code>，注释是「whole-file 渲染不受延迟约束，用大批次摊薄 ONNX 调用开销」。这句话在写下的那天成立——当时 codec 是瓶颈。但 KV32 转正后 depth 与 codec 只差 1.15%，16 帧一批意味着 codec 每次要嚼 1.28 s 音频，期间 depth 早已跑完空等。而所有 CLI 调优实验用的是 <code>(2, 4)</code>。</p>
 
@@ -2024,7 +1407,7 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
       <text class="dg-ts" x="24" y="44">柱高 = elapsed（s）</text>
       </svg>
     </div>
-    <figcaption>图 13-2　从左到右批次越来越大：codec 耗时一路下降（2.47 → 2.25），墙钟却一路上升（3.60 → 4.00）。<b>省在并行分支上的时间不会变成墙钟</b>。</figcaption>
+    <figcaption>图 8-2　从左到右批次越来越大：codec 耗时一路下降（2.47 → 2.25），墙钟却一路上升（3.60 → 4.00）。<b>省在并行分支上的时间不会变成墙钟</b>。</figcaption>
   </figure>
 
   <table>
@@ -2039,14 +1422,14 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
 
   <p>转正后生产实测：<code>elapsed 3.567–3.614 s</code>、<code>first_pcm 0.262–0.344 s</code>、WAV 哈希 <code>2f30728f4d6f</code>。<b>零模型改动，墙钟 −10%、首包 −34%。</b></p>
 
-  <h3>13.3 等价性：哈希变了不等于音频变了</h3>
+  <h3>8.3 等价性：哈希变了不等于音频变了</h3>
   <p>(2,4) 的 WAV 与 CLI <b>逐字节相同</b>——默认 seed 就是 1234，所以产品路径终于和所有调优实验同源。但 (4,16) 与 (2,4) 的哈希不同，得看差在哪：127,680 个样本里 <b>1,379 个不同（1.08%）</b>，全部集中在 <b>5.032–5.090 s</b> 这一个 overlap 窗口，最大幅度 1,299/32,767（约 4%）。这是 codec overlap-add 在不同批次下的累加差异，不是边界断裂；两份转写文本完全一致。</p>
   <div class="grid2">
     <div class="tile"><b>看位置，不只看有没有</b><p>差异集中在某个 chunk 边界 = 累加顺序；铺满全程 = 语义变了。前者可以过，后者必须否决。</p></div>
     <div class="tile"><b>哈希是门禁不是判据</b><p>本项目的经验是「哈希不同 → 再量差异」；(4,16) 与 (2,4) 差 1%，但听感要人耳确认。</p></div>
   </div>
 
-  <h3>13.4 方法论</h3>
+  <h3>8.4 方法论</h3>
   <ol>
     <li><b>温度要作为协变量记录</b>，否则「变慢」永远无法归因；判漂移用 ms/帧，别用 RTF。</li>
     <li><b>历史漂移先复现再当问题</b>：复现失败就写清环境，而不是继续在模型里找原因。</li>
@@ -2054,19 +1437,24 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
     <li><b>配置税是真实存在的优化项</b>：它不在模型里也不在 kernel 里，但值 10%。每换一次基线，就该重扫一遍「当初为了让 A 变快而选的 B」。</li>
   </ol>
 
-  <details class="qa"><summary>Q13　温度涨了 15 K，为什么每帧耗时一点没变？</summary>
+  <details class="qa"><summary>Q1　温度涨了 15 K，为什么每帧耗时一点没变？</summary>
     <div class="answer">因为没跨过降频阈值。这次峰值只有 52 °C（DSP 55.6 °C），而典型 throttle 在 80–95 °C；同时 <code>shell_front</code> 只有 31–34 °C，说明整机（后盖、边框）在吸收热量，SoC 的结温远没有到需要降频的程度。另一个原因是热时间常数：单次合成 4 s、间隔 0.1 s，8 分钟只够把温度抬 15 K，还没到稳态。<b>「温度升高」和「性能下降」之间隔着一条阈值线</b>，中间还有 DVFS 的调整空间；判断有没有降频要看每帧耗时或实际频率，不能看温度本身。</div></details>
-  <details class="qa"><summary>Q14　codec 从 2.47 s 降到 2.25 s（−9%），墙钟为什么反而慢了 11%？</summary>
+  <details class="qa"><summary>Q2　codec 从 2.47 s 降到 2.25 s（−9%），墙钟为什么反而慢了 11%？</summary>
     <div class="answer">因为 codec 在 <code>max()</code> 的<b>非瓶颈侧</b>。批次从 4 帧加到 16 帧，每次 ONNX 调用的固定开销被摊薄，codec 自身确实快了；但 16 帧意味着 codec 每次要连续工作约 640 ms，而这期间 depth 已经产出下一批并进入等待，流水线出现空转。于是「省下来的 codec 时间」没有变成墙钟，反而因为等待和批次边界损失了更多。<b>这和「codec 单独 −20% 收益为 0」是同一条规律的加强版：有时候它不只是 0，还会变成负数。</b></div></details>
 
-  <div class="chapterDone"><button class="doneBtn" data-ch="ch13">标记本章已学完</button></div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch8">标记本章已学完</button></div>
 </section>
 
-<section class="chapter" id="ch14" data-title="并发与有效算力：8 核为什么不等于 8 倍">
-  <h2>并发与有效算力：8 核为什么不等于 8 倍</h2>
+<section class="chapter" id="ch9" data-title="并发与有效算力">
+  <div class="chapHead"><span class="idx">09</span><h2>并发与有效算力：8 核为什么不等于 8 倍</h2></div>
   <p>上一章把「同一台机器、同一份代码」跑出了 10% 的差距。这一章换个问法：<b>如果同时来两个用户呢？</b>直觉是「8 核，两台机器都撑得住」。实测是：能接，但几乎不能并行——多开一个实例只换来 <b>6.6%</b> 的吞吐，代价是延迟翻倍。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>会用「一个请求的 CPU-秒」判断一台设备能装几路</li>
+    <li>理解 8 核为什么只有约 4.4 核的有效算力</li>
+    <li>知道并发之后 max() 的哪一侧会翻转，以及为什么吞吐只涨 6.6%</li>
+  </ul></div>
 
-  <h3>14.1 一次请求到底吃掉多少 CPU</h3>
+  <h3>9.1 一次请求到底吃掉多少 CPU</h3>
   <p>先把问题量化。用常驻 server 跑一次 5.32 秒音频（69 帧），在请求窗口前后读 <code>/proc/stat</code>，再按进程族拆开（100 Hz 的 jiffies 换成 CPU-秒）：</p>
 
   <figure>
@@ -2092,12 +1480,12 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
       <text class="dg-ts" x="80" y="242">threads=1 对照：codec 涨到 4.39 s、elapsed 4.81 s，CPU 总量反而只降到 12.05 秒</text>
       </svg>
     </div>
-    <figcaption>图 14-1　墙钟里看不到 codec 的成本（它被 <code>max()</code> 藏起来了），但 CPU 账上它占 72%。<b>「不影响墙钟」和「不消耗资源」是两件事</b>——这正是并发一来就翻脸的原因。</figcaption>
+    <figcaption>图 9-1　墙钟里看不到 codec 的成本（它被 <code>max()</code> 藏起来了），但 CPU 账上它占 72%。<b>「不影响墙钟」和「不消耗资源」是两件事</b>——这正是并发一来就翻脸的原因。</figcaption>
   </figure>
 
   <p>还有一个反直觉的数字：codec 用 3 线程只比单线程快 <b>1.8×</b>（4.39 → 2.44 s），并行效率 60%。而 stage 的 host 侧完全不受 <code>--threads</code> 影响（depth 2.77 → 2.78 s）——那 2.36 CPU-秒是与 depth 的 15 步串行绑定的，加线程没用。</p>
 
-  <h3>14.2 三种并发形态</h3>
+  <h3>9.2 三种并发形态</h3>
   <p>同一个请求，三种投递方式。第三种是真正的并行：两个 server 实例，各带自己的 stage 子进程，同时收请求。</p>
 
   <table>
@@ -2136,13 +1524,13 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
       <path class="dg-arr" d="M270 168 L392 168"/>
       </svg>
     </div>
-    <figcaption>图 14-2　多开一个实例把 CPU 占用从 2.94 核推到 6.06 核，却只把总时间从 7.22 s 压到 6.76 s。<b>资源投进去了，产出没出来</b>——这正是「并行效率」崩掉的形状。</figcaption>
+    <figcaption>图 9-2　多开一个实例把 CPU 占用从 2.94 核推到 6.06 核，却只把总时间从 7.22 s 压到 6.76 s。<b>资源投进去了，产出没出来</b>——这正是「并行效率」崩掉的形状。</figcaption>
   </figure>
 
   <div class="callout ok"><span class="tagline">排队不降级</span>
     同 server 的两个请求，各自的 <code>elapsed</code> 与单请求完全一致（3.60 vs 3.61）。<code>render_mutex</code> 的串行是「干净」的：它让用户等，但不让任务变慢。所以产品侧的正确做法是<b>排队 + 限流</b>，而不是多开实例。</div>
 
-  <h3>14.3 为什么并行会崩：有效算力不是核数</h3>
+  <h3>9.3 为什么并行会崩：有效算力不是核数</h3>
   <p>并行时两条轨道退化得不一样，这个差别是本章的核心：</p>
   <table>
     <thead><tr><th>轨道</th><th>并行倍率</th><th>原因</th></tr></thead>
@@ -2195,12 +1583,12 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
       <text class="dg-tacc" x="80" y="292">按 2.2 GHz 归一：3 + 4×0.27 + 1×0.29 ≈ 4.4 核（不是 8 核）</text>
       </svg>
     </div>
-    <figcaption>图 14-3　空载时大核被压到 633 MHz（上限 2.3 GHz），小核只有 595 MHz。<b>「8 核」是拓扑事实，「4.4 核」才是算力事实</b>。两个 server 各 3 个 ORT 线程就等于 6 个计算线程，直接超出这个池子。</figcaption>
+    <figcaption>图 9-3　空载时大核被压到 633 MHz（上限 2.3 GHz），小核只有 595 MHz。<b>「8 核」是拓扑事实，「4.4 核」才是算力事实</b>。两个 server 各 3 个 ORT 线程就等于 6 个计算线程，直接超出这个池子。</figcaption>
   </figure>
 
   <p>这也解释了为什么 codec 比 depth 更惨：<b>depth 的分时是硬件的（一个 NPU，绕不过去），codec 的分时是频率的（CPU 明明有空核，但空核是 595 MHz 的小核）</b>。同一个「并行退化」，机制完全不同，优化手段也完全不同。</p>
 
-  <h3>14.4 最重要的一课：<code>max()</code> 的那一侧会翻转</h3>
+  <h3>9.4 最重要的一课：<code>max()</code> 的那一侧会翻转</h3>
   <p>把两种场景的公式并排写出来，就能看到一件容易被忽略的事：</p>
   <div class="callout"><span class="tagline">算术</span>
     <b>单请求</b>：<code>wall = 0.61 + max(depth 2.80, codec 2.44) + 0.09 = 3.61</code> → 瓶颈是 <b>depth</b><br>
@@ -2209,7 +1597,7 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
   <p>于是：想靠「降 depth 50%」拿收益，单请求是 0（被 <code>max()</code> 吃掉），并行<b>也是 0</b>（此时 codec 是瓶颈，depth 降到 2.73 也无用）。反过来想靠「codec 移出 CPU」拿收益，单请求是 0，并行也只有 +15%（因为 depth 的 5.45 接棒成为瓶颈）。</p>
   <p><b>两侧必须同批改造，否则两侧都是 0。</b>这是「捆绑」的第三次独立验证——第一次来自成本模型，第二次来自并发实测，这一次来自「瓶颈侧会随场景翻转」。</p>
 
-  <h3>14.5 方法论：这一轮我错了四次</h3>
+  <h3>9.5 方法论：这一轮我错了四次</h3>
   <p>本章的结论来得不干净，前三次测量全是错的。记下来因为比结论更有用：</p>
   <ol>
     <li><b>孤儿进程。</b>第一次测出「单实例 481 秒 CPU」。原因是之前 SIGKILL 的脚本留下了 stage 常驻进程，加上 Android App（<code>com.m5.offline</code>）的两个 CPU 模式 stage 还在跑——它们的进程名被改写成 <code>libbackbone_resident.so</code>，<code>pidof backbone-resident</code> 抓不到。<b>测量前先 <code>kill -9</code> 并 <code>ps</code> 确认清零。</b></li>
@@ -2218,11 +1606,936 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
     <li><b>把调频滞后当成热漂移。</b>静置后第一批请求慢 44%（3.60 → 5.19 s），我一度以为是热。实际是 <code>walt</code> 把大核压到 633 MHz 后升频滞后。含义：<b>任何 A/B 必须先跑一次 discard 请求把频率拉起来</b>，否则第一组必然吃亏。</li>
   </ol>
 
-  <details class="qa"><summary>Q15　既然 8 核只用 6 核，为什么不能再塞第三路？</summary>
+  <details class="qa"><summary>Q3　既然 8 核只用 6 核，为什么不能再塞第三路？</summary>
     <div class="answer">因为「6.06 核」是<b>平均占用</b>，不是「还剩 2 核空闲」。第一，8 核里有 5 个是 595–633 MHz 的低频核，按 2.2 GHz 归一后总有效算力只有 4.4 核，而 6.06 这个数字本身就是按核数算的平均，对应的频率加权占用更高。第二，并行时 codec 已经从 2.44 s 退化到 5.93 s，说明它已经在争抢；再塞一路只会让退化倍率继续上升，而不是线性分摊。第三，两路时 depth 已经 5.45 s（1.94×），第三路会是 2.9×——HTP 的分时是硬约束。<b>判断能不能再塞，别看核数，看「瓶颈侧当前的倍率」</b>：倍率已经 >2 就不是加资源能解决的。</div></details>
-  <details class="qa"><summary>Q16　为什么省掉 codec 的 72% CPU，只换来 15% 吞吐？</summary>
+  <details class="qa"><summary>Q4　为什么省掉 codec 的 72% CPU，只换来 15% 吞吐？</summary>
     <div class="answer">因为省掉的资源要用来「解锁」另一侧，而不是直接变成时间。并行时墙钟是 <code>0.74 + max(depth 5.45, codec 5.93) + 0.09</code>。假设 codec 完全不占 CPU 也不占 HTP，<code>max()</code> 立刻由 depth 的 5.45 决定，墙钟降到 6.28 s——从 6.76 到 6.28 就是 <b>6.6%→15%</b> 的全部收益。想再多，就必须同时把 depth 也降下来，此时墙钟才会跟着 <code>max()</code> 一起掉。<b>优化一个被 <code>max()</code> 遮住的分支，最多只能拿回「另一侧的时间」；想突破，必须动另一侧。</b></div></details>
 
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch9">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch10" data-title="判死方法论">
+  <div class="chapHead"><span class="idx">10</span><h2>性能分析方法论：从分项到判死</h2></div>
+  <p>前面十章讲的是「这个模型怎么加速」。这一章把过程中反复用到的判断方式抽出来：它们不依赖 M5-TTS，换一个推理引擎、换一块 NPU 也成立。核心只有一句——<b>先算清楚这个优化能兑现多少，再决定要不要动手</b>。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能把「试过，没收益」升级成「有机制解释的判死」，并写清复活条件</li>
+    <li>掌握十条速查判据与四个反复出现的陷阱</li>
+    <li>会用「斜率 / 截距 + 隔离开关」把固定成本拆开（0.398 s 首包案例）</li>
+  </ul></div>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 340" role="img" aria-label="性能分析的四道决策门，以及每道门在本仓库中的实证">
+      <title>性能分析的四道决策门</title>
+      <desc>建墙钟模型、算可兑现收益、交替 A/B 加等价性门禁、判死或转正并重算余量；右侧对应本仓库的实测案例。</desc>
+      <text class="dg-tb" x="40" y="26">决策步骤</text>
+      <text class="dg-tb" x="360" y="26">本仓库的实证</text>
+
+      <rect class="dg-accent" x="40" y="40" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="61">① 建墙钟模型</text>
+      <text class="dg-ts" x="54" y="80">wall = bb + max(depth,codec) + 固定</text>
+      <rect class="dg-box" x="360" y="40" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="61">日志 §16 残差稳定在 0.197 s</text>
+      <text class="dg-ts" x="374" y="80">模型可证伪，不是事后解释</text>
+      <path class="dg-grid" d="M320 67 H360"/>
+
+      <rect class="dg-accent" x="40" y="108" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="129">② 算可兑现收益</text>
+      <text class="dg-ts" x="54" y="148">非瓶颈分支的收益恒为 0</text>
+      <rect class="dg-box" x="360" y="108" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="129">codec 单独 -20% → 0%</text>
+      <text class="dg-ts" x="374" y="148">depth 降到 0 也只有 -0.9%</text>
+      <path class="dg-grid" d="M320 135 H360"/>
+
+      <rect class="dg-accent" x="40" y="176" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="197">③ 交替 A/B + 等价性</text>
+      <text class="dg-ts" x="54" y="216">elapsed_s · 逐字节 · 盲听</text>
+      <rect class="dg-box" x="360" y="176" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="197">flash-f32 墙钟 +5.1%</text>
+      <text class="dg-ts" x="374" y="216">而 RTF 显示 -4.9%（分母变了）</text>
+      <path class="dg-grid" d="M320 203 H360"/>
+
+      <rect class="dg-accent" x="40" y="244" width="280" height="54" rx="8"/>
+      <text class="dg-tb" x="54" y="265">④ 判死或转正</text>
+      <text class="dg-ts" x="54" y="284">重算余量，重排优先级</text>
+      <rect class="dg-box" x="360" y="244" width="280" height="54" rx="8"/>
+      <text class="dg-t" x="374" y="265">KV32 转正：余量 25% → 1.15%</text>
+      <text class="dg-ts" x="374" y="284">Flash 从最大杠杆变不值得</text>
+      <path class="dg-grid" d="M320 271 H360"/>
+
+      <path class="dg-flow" d="M180 94 V106"/>
+      <path class="dg-flow" d="M180 162 V174"/>
+      <path class="dg-flow" d="M180 230 V242"/>
+      <text class="dg-ts" x="40" y="322">先做便宜的判死实验，再投入训练；每次转正后回到第 ① 步重算余量。</text>
+      </svg>
+    </div>
+    <figcaption>图 10-1　四道决策门。每个「不做了」的结论都必须能追到某一道门，而不是凭感觉。</figcaption>
+  </figure>
+
+  <h3>10.1 为什么先建模型</h3>
+  <p>分项统计（<code>backbone_s / depth_s / codec_s</code>）本身不是模型，把它们的<b>结构关系</b>写出来才是。本项目的两条分支并行重叠，所以墙钟是 <code>backbone + max(depth, codec) + 固定开销</code>，不是三者相加。用残差检验：不同配置下减出来的固定项都约 0.197 s，说明模型抓住了结构。有了它，动刀之前就能算出「codec 降 20% 值多少」——在日志 §13 的答案是 0，在日志 §16 的答案仍是 0。省下的是一整轮无用的量化实验。</p>
+
+  <h3>10.2 十条速查判据</h3>
+  <ol>
+    <li>先写可证伪的墙钟模型，用它算<b>可兑现收益</b>，不要用单项耗时当目标。</li>
+    <li>区分「组件变快」与「端到端变快」；<code>max()</code> 结构下优化非瓶颈分支收益为 0。</li>
+    <li>每次成功优化后重算余量、重排优先级：KV32 把 25% 余量吃到 1.15%，旧结论立即失效。</li>
+    <li>同轮正逆序交替 A/B，固定文本与 seed、取中位数；判据是 <code>elapsed_s</code>。热漂移能让同代码 RTF 从 0.75 变 0.91。</li>
+    <li>RTF 只在输出不变时可用。分母 <code>audio_s</code> 会随生成轨迹变化，必须同时看墙钟、每帧成本、输出长度。</li>
+    <li>等价性分层：① codes/WAV 逐字节；② ASR + 音频统计；③ 多文本人耳盲听。heads int8 与 B/Q4 都证明「指标全对 ≠ 听感通过」。</li>
+    <li>归因实验一次只改一个变量（KV 精度 × kernel 实现），并用 profile 数算子证明改动真的生效，别靠 env 名猜。</li>
+    <li>算子形状比墙钟推测更接近机制：<code>SOFT_MAX 256:32:8:1</code> 直接解释融合 kernel 为何只剩 7%。</li>
+    <li>负结果写清机制与复活条件：α 上界 0.18、反压是固定税、可预测性沿链衰减、kernel 改变轨迹。</li>
+    <li>先做便宜的判死实验，再投入训练或改图。960 帧离线数据判死草稿，16 次合成判死 Flash 线。</li>
+  </ol>
+
+  <h3>10.3 四个反复出现的陷阱</h3>
+  <div class="grid2">
+    <div class="tile"><b>分母会变</b><p><code>flash-f32</code> 的 RTF 从 0.700 降到 0.666，看似快 5%；实际帧数 69→76、音频长 10.5%、墙钟 <b>+5.1%</b>。只看 RTF 会得到完全相反的结论。</p></div>
+    <div class="tile"><b>只看单边指标</b><p><code>--threads 3</code>、<code>chunk (2,4)</code>、<code>OPPOLL=1</code> 都是按「codec 单独耗时」「首包最短」定的。日志 §13 用端到端墙钟重扫 48 次，没有任何配置快于默认。</p></div>
+    <div class="tile"><b>把近似当等价</b><p>codes 分叉、帧数漂移时，两条轨迹已经不是同一个任务；此时比速度没有意义，先过门禁再谈性能。</p></div>
+    <div class="tile"><b>沿用旧基线</b><p>「Flash 是最大杠杆（-17%）」在 KV32 之前成立；转正后它只剩 ~0.9%。每条结论都要带上它的基线。</p></div>
+    <div class="tile"><b>冷 / 热口径混用</b><p>CLI 每次都是新进程，codec prime 缓存必然空；常驻 server 同音色第二次起就命中，首包差约 0.08 s。之前所有分项实验用 CLI，报的都是冷启动数。延迟必须标明是「重启后首次」还是「稳态」。</p></div>
+  </div>
+
+  <h3>10.4 把负结果变成资产</h3>
+  <p>日志 §12–§14、§17 四条线全部判死，但留下的是可复用的机制：α 上界、固定税、可预测性衰减、kernel 轨迹漂移。写清楚「为什么不行」和「什么条件下复活」，比记录「试过没收益」有价值得多——它让下一个人不必重跑一遍，也让自己不会在换基线后重复投入。</p>
+
+  <h3>10.5 案例：把 0.398 s 首包拆开</h3>
+  <p>稳态 RTF 被 <code>max()</code> 锁死（日志 §16），但<b>首包由固定项主导，是另一本账</b>。扫 <code>--first 1/2/3/4/6/8</code> 两轮交替，拟合出 <code>first_pcm = 0.234 s + 74.6 ms/帧</code>（残差 &lt;21 ms）；斜率恰好等于 depth 单帧 31.7 ms 加 codec 单帧 40 ms。再用 <code>--no-overlap</code> 把并行项暴露：codec prime 0.230 s、backbone prefill 0.190 s，overlap 下取 <code>max</code>，所以固定项其实是 <b>codec prime，不是 prefill</b>。斜率/截距加隔离开关，比逐个埋点更省事。</p>
+  <p><code>Codec::restore_prime</code> 按参考 codes 的最后 8 帧缓存 codec 递归状态，命中就跳过那 0.23 s。查出的问题是缓存条件错配：warmup 用的是 voice 0（官方样例），而 Web 默认 Serena，于是<b>每个用户的第一次请求都在给用不到的音色付冷启动</b>。部署层加一个 <code>--voice serena</code> 让默认音色对齐，首次 pcm 从 0.346 降到 0.280 s（wav 0.507→0.420），零引擎改动、稳态不退化。<b>先查缓存命中条件，往往比写更快的 kernel 更划算。</b></p>
+  <p>那次优化留了个尾巴：prime 缓存是<b>单条目</b>，换音色立即失效（切回仍要 0.49 s）。下一节把这条最后的冷启动路径关掉，并顺带说明一个极易算错的账：被跳过的操作值 0.23 s，实际能省下的只有约 0.04 s。命中路径仍要发送 32 行共享 prefix——实测只值 2–4 ms（见第 11.4 节），协议改动已判死；<code>--first 2 --chunk 4</code> 已是最优，别再试更小的首块。</p>
+
+  <details class="qa"><summary>Q5　某候选把 RTF 从 0.700 降到 0.666，能上线吗？</summary>
+    <div class="answer">不能只看这个数。本例中帧数 69→76，音频 5.32→5.88 s，墙钟 3.724→3.914 s（<b>+5.1%</b>），RTF 下降纯粹因为分母变长。而且四条文本/seed 的 codes 与 WAV <b>全部不一致</b>，已经不是同一个任务。正确顺序：先看过没过等价性门禁（逐字节 → ASR → 盲听），再看 <code>elapsed_s</code> 与每帧成本，最后才算 RTF。这个候选是日志 §17 的 <code>flash-f32</code>，结论是判死。</div></details>
+  <details class="qa"><summary>Q6　把首块从 2 帧减到 1 帧，首包为什么反而从 0.398 s 涨到 0.616 s？</summary>
+    <div class="answer">因为 <code>kTail = 2400</code> 个样本大于单帧 <code>kHop = 1920</code>：第一个 chunk 的输出被全部留作 overlap tail，<code>drop = 0</code>，根本没有 PCM 写出。首包只能等第二个 chunk（4 帧），等于等 5 帧——<code>0.234 + 5 × 0.0746 = 0.607 s</code>，与实测 0.616 s 吻合。<b>减小批次不一定降低延迟，要先看输出阈值。</b>另外把 prime 的输出接进 tail 虽然能让 1 帧发出声音，但会把参考音色原声混进开头，不能这么修。</div></details>
+  <h3>10.6 案例：把单条目缓存换成 LRU，以及「跳过 ≠ 省下」</h3>
+  <p>日志 §19 留下的冷启动尾巴，改法只有约 25 行：把 <code>prime_codes_ / prime_inputs_ / prime_offset_</code> 换成 <code>vector&lt;PrimeEntry&gt;</code>，命中移到 front、新条目插 front、超出容量裁尾。关键是 <b>key 取「真正决定状态的最小输入」</b>——这里就是参考 codes 的最后 8 帧，而不是音色名字或索引。于是换文本不失效、同名不同内容不误命中，浏览器内联的临时音色（请求里带 <code>codes</code>）也自动纳入同一缓存。容量 4、每条目 1.04 MB，约 4.4 MB 上限；<code>M5_PRIME_CACHE=1</code> 复现旧行为、<code>=0</code> 禁用缓存，<code>M5_PRIME_STATS=1</code> 打印 hit/miss/save。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 250" role="img" aria-label="冷启动与命中缓存时 prime 和 prefill 并行结构的对比，说明可兑现收益只是两者之差">
+      <title>缓存收益被并行结构吃掉</title>
+      <desc>冷启动时 codec prime 0.230 秒与 backbone prefill 0.190 秒并行，固定项取 max 为 0.234 秒；命中后 prime 消失，固定项退化为 0.190 秒，因此只省约 0.044 秒。</desc>
+      <text class="dg-tb" x="24" y="26">冷启动（未命中）</text>
+      <text class="dg-tb" x="352" y="26">命中缓存</text>
+
+      <rect class="dg-accent" x="24" y="40" width="296" height="158" rx="10"/>
+      <text class="dg-t" x="38" y="64">codec prime　0.230 s</text>
+      <rect class="dg-box" x="38" y="74" width="248" height="14" rx="4"/>
+      <text class="dg-t" x="38" y="110">backbone prefill　0.190 s</text>
+      <rect class="dg-box" x="38" y="120" width="205" height="14" rx="4"/>
+      <text class="dg-ts" x="38" y="158">两条分支并行，不是相加</text>
+      <text class="dg-tacc" x="38" y="182">固定项 = max = 0.234 s</text>
+
+      <path class="dg-flow" d="M322 119 H348"/>
+      <rect class="dg-accent2" x="352" y="40" width="304" height="158" rx="10"/>
+      <text class="dg-t" x="366" y="64">codec prime　已跳过</text>
+      <path class="dg-grid" d="M366 82 H630"/>
+      <text class="dg-t" x="366" y="110">backbone prefill　0.190 s</text>
+      <rect class="dg-box" x="366" y="120" width="205" height="14" rx="4"/>
+      <text class="dg-ts" x="366" y="158">prefill 成为新的下界</text>
+      <text class="dg-tacc" x="366" y="182">固定项 = 0.190 s</text>
+
+      <text class="dg-tb" x="24" y="226">可兑现收益 ≈ 0.234 − 0.190 = 0.044 s（pcm 实测 0.058 s），不是 0.230 s</text>
+      </svg>
+    </div>
+    <figcaption>图 10-2　稳态里 <code>max(depth, codec)</code> 吃掉单侧优化，首包里 <code>max(prime, prefill)</code> 吃掉大部分缓存收益。跳过一个操作之前，先重画一遍并行结构。</figcaption>
+  </figure>
+
+  <p><b>怎么验收</b>：容量按 <code>0,1,4,4,1,0</code> 交替重启 server，每轮固定序列「serena → 官方样例 → serena → 官方样例 → serena → pcm」，共 36 次请求。服务端日志给出的 prime 调用统计是 <code>0/13</code>、<code>8/13</code>、<code>11/13</code> 次命中：容量 4 多出的 3 次正好是三个「切回音色」请求。切回三请求首包中位数 <b>0.500 → 0.463 s（-7.5%）</b>；用永远冷的 cap=0 轮做热漂移基线（s1→s3 <code>+0.032 s</code>）校正后，单条目的冷启动惩罚 <code>+0.044 s</code> 被压到 <code>+0.005 s</code>。更硬的门禁是 <b>30 份 WAV 跨容量、跨冷热、跨 6 次重启全部同一哈希</b>；用 6 个不同的内联临时音色逼出 LRU 驱逐，被驱逐后重算的两个音色哈希也与首次完全相同。</p>
+
+  <div class="grid2">
+    <div class="tile"><b>Key 取最小决定输入</b><p>prime 状态是 8 帧 codes 的纯函数，就别用音色名字当 key。缓存语义由<b>被缓存的计算</b>决定，不由请求身份决定。</p></div>
+    <div class="tile"><b>先让缓存可观测</b><p>hit/miss/save 日志比「首包看起来快了」可靠得多；它还能给出每条目字节数，让容量选择有依据。</p></div>
+    <div class="tile"><b>禁用缓存一物两用</b><p><code>cap=0</code> 既是「命中省多少」的冷基线，又是同轮热漂移的校正量——不必另跑一轮漂移实验。</p></div>
+    <div class="tile"><b>等价性跨命中状态</b><p>不只验证「同配置两次一样」，要覆盖冷、热、驱逐后重算、不同容量、不同进程；否则缓存可能悄悄改变输出。</p></div>
+  </div>
+
+  <details class="qa"><summary>Q7　缓存命中跳过了一个 0.23 s 的操作，首包为什么只快了约 0.04 s？</summary>
+    <div class="answer">因为 prime 与 backbone prefill <b>并行</b>：冷启动固定项是 <code>max(0.230, 0.190) = 0.234 s</code>，命中后 prime 消失，固定项退化成 prefill 的 <code>0.190 s</code>，省下的只是两者<b>差值</b>约 0.044 s（pcm 路径实测 0.058 s）。稳态章节里 <code>max(depth, codec)</code> 让「codec 单独 -33%」收益为零，是同一个结构在首包维度的翻版。<b>算收益要重画并行结构，不能拿组件耗时直接相减</b>；同理，也不要因为收益比预估小就判定优化无效——它仍然消除了换音色时用户能感知的那一次卡顿。</div></details>
+
+  <div class="callout ok"><span class="tagline">从实验开关到编译期默认</span>
+    一个优化从"实验室里快"走到"生产里快"，中间还有三步：<b>①转成编译期默认</b>（KV pad 32 写进
+    <code>get_n_kv()</code>，<code>M5_KV_PAD=256</code> 可回退；backbone 分支显式保留 256，严格复现实验条件）、
+    <b>②部署脚本去掉特殊目录与 env 注入</b>（顺带补上缺失的 stage 库推送）、
+    <b>③交替 A/B 复验</b>（默认 3.775 s vs pad 256 4.163 s，12 次 codes 与 WAV 哈希全部相同）。
+    没有第 ③ 步的转正都是赌博：改的是默认值，赌的是每一个还没跑过的输入。
+  </div>
+  <details class="qa"><summary>Q8　既然 codec 有 25% 的空闲余量，为什么"让 codec 少干点活、把 CPU 让给 depth"没用？</summary>
+    <div class="answer">因为 <b>depth 的成本主体花在 HTP0 的 15 次提交</b>（F≈1.25 ms/次 + R≈0.91 ms/行），不是 CPU 争抢。实测把 ORT 线程从 3 降到 2 会让 codec 慢 25%，而 <code>depth_s</code> 反而略升；chunk 从 4 加到 16 让 codec 快 7%，<code>depth_s</code> 几乎不动。
+    并发反压确实存在（关 overlap 后 depth 快 11.3%），但它是"codec 线程存在"的固定税，不是负载强度的函数；而 overlap 本身净赚 43.9%，这笔税必须付。</div></details>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch10">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch11" data-title="结构天花板与三级台阶">
+  <div class="chapHead"><span class="idx">11</span><h2>余量重估：串行项与 max() 的另一面</h2></div>
+  <p>第 10 章教会你「非瓶颈分支的收益恒为 0」。但这句话有个前提：<b>你要先知道哪个分支在瓶颈上</b>。基线一旦改变（这里是把 depth 的 KV 读取范围从 256 缩到 32、又把 prime 缓存换成 LRU），瓶颈就换人了，昨天的结论今天就过期。这一章讲的是<b>转正之后必须做的第二件事</b>：重算收益矩阵，并用最便宜的手段验证它。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能分清三个「推理时间」口径，知道做决策该用哪一个</li>
+    <li>能把分项耗时映射回成本模型，判断一项改动落在加法项还是 max 分支</li>
+    <li>理解为什么单边优化归零、为什么重训顺序被唯一确定（P2 → P3 → P2'）</li>
+  </ul></div>
+  <p>本章三个实验都在「不改模型图、不重训」的前提下完成，结果是一正两负。价值不在那个正的 2.3%，而在两次负结果各自留下的可复用判据。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 320" role="img" aria-label="墙钟公式中串行加法项与 max 并行项的可兑现收益对比">
+      <title>同一个「快 20%」，位置决定它值多少钱</title>
+      <desc>backbone 是墙钟公式里的加法项，自身降 7.7% 兑现为墙钟 -2.3%；depth 与 codec 位于 max 分支，单侧降 20% 兑现为 0。</desc>
+      <text class="dg-tb" x="24" y="26">wall = backbone + max(depth, codec) + 固定</text>
+      <text class="dg-ts" x="24" y="46">0.677 + max(2.853, 2.820) + 0.197 = 3.70 s</text>
+
+      <rect class="dg-ok" x="24" y="60" width="632" height="104" rx="10"/>
+      <text class="dg-tb" x="40" y="84">① 串行加法项 · backbone_s　0.677 s（18%）</text>
+      <text class="dg-ts" x="40" y="104">不进 max()，降多少兑现多少</text>
+      <rect class="dg-box" x="40" y="114" width="150" height="13" rx="4"/>
+      <text class="dg-ts" x="40" y="150">KV pad 256→128：backbone −7.7%</text>
+      <text class="dg-tacc" x="372" y="104" style="fill:var(--ok)">兑现 wall −2.3%</text>
+      <text class="dg-ts" x="372" y="126">预测 −1.6%，实测 −2.3%</text>
+      <text class="dg-ts" x="372" y="146">兑现率 ≈ 100%</text>
+
+      <rect class="dg-bad" x="24" y="176" width="632" height="104" rx="10"/>
+      <text class="dg-tb" x="40" y="200">② 并行 max 项 · depth / codec　2.853 / 2.820 s</text>
+      <text class="dg-ts" x="40" y="220">两条轨道只差 1.15%，谁也不是余量</text>
+      <rect class="dg-box" x="40" y="230" width="150" height="13" rx="4"/>
+      <rect class="dg-box" x="196" y="230" width="148" height="13" rx="4"/>
+      <text class="dg-ts" x="40" y="266">codec 单独 −20%、depth 单独降到 0</text>
+      <text class="dg-tacc" x="372" y="220" style="fill:var(--bad)">兑现 wall 0 ~ −0.9%</text>
+      <text class="dg-ts" x="372" y="242">另一侧立刻补位成新瓶颈</text>
+      <text class="dg-ts" x="372" y="262">兑现率 ≈ 0%</text>
+
+      <text class="dg-ts" x="24" y="304">所以「还能优化哪里」的答案不在耗时排行里，而在它于公式中的位置。</text>
+      </svg>
+    </div>
+    <figcaption>图 11-1　同一句「快 20%」，写在加法项上和写在 max 分支上，价值差一个数量级。重估余量的第一步就是把分项耗时逐个映射回公式。</figcaption>
+  </figure>
+
+  <h3>11.1 先分清三个「推理时间」</h3>
+  <p>问「还有没有优化空间」之前，必须先定口径。这三条账的分子分母都不同，混着谈会得出互相矛盾的结论：</p>
+  <table>
+    <thead><tr><th>口径</th><th>当前值</th><th>主导项</th><th>约束</th></tr></thead>
+    <tbody>
+      <tr><td>稳态墙钟 / RTF（69 帧长句）</td><td>3.70 s / <b>0.694</b></td><td><code>max(depth, codec)</code></td><td>并行天花板，单侧优化归零</td></tr>
+      <tr><td>首包（pcm，命中）</td><td><b>0.28 s</b></td><td>固定 0.190 + 2 帧 × 74.6 ms</td><td>不受 <code>max()</code> 约束</td></tr>
+      <tr><td>短句 RTF（≤7 字）</td><td>常 &gt;0.9</td><td>固定项摊不薄</td><td>与长句不是同一张账</td></tr>
+    </tbody>
+  </table>
+  <p>稳态那条账的残酷之处在于<b>两条轨道几乎完美平衡</b>（2.853 vs 2.820，差 1.15%）。这是最坏的优化局面：你花力气把 depth 降 20%，codec 立刻变成新瓶颈，墙钟几乎不动。反过来，只要有一项<b>不在 <code>max()</code> 里</b>，它就值得优先动手。</p>
+
+  <h3>11.2 串行项：唯一能 100% 兑现的那 0.677 s</h3>
+  <p><code>backbone_s</code> 在公式里是<b>加法项</b>，占墙钟约 18%。它不在瓶颈上，所以「降 10% 得 10%」在这里成立——这是全流程唯一还有这种性质的计算项。剩下的候选手段只有两类：</p>
+  <ol>
+    <li><b>KV 读取宽度（pad）</b>：零重编译、开关现成，门禁是逐字节等价，成本最低。</li>
+    <li><b>中间档量化 / 分层混合精度</b>：Q6_K、Q5_K 或前后层保 Q8，在 Q8 与 Q4 之间找音质拐点；一次把 Q4 试过头导致音频短 16%、韵律漂移被否掉，所以必须盲听。</li>
+  </ol>
+  <p>先做第 1 项。历史上 backbone 的 pad 被<b>硬编码成 256</b>，原因很朴素——当初做 depth KV32 实验时要求「其他条件严格不变」。于是这个开关从没被单独测过。命令行的 <code>--backbone</code> 参数会整体替换 stage 启动命令，加个 <code>M5_KV_PAD=128</code> 前缀就能<b>只</b>注入 backbone 子进程（depth 仍是 32），一行代码都不用改。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="KV pad 决定 attention 每步读取的 KV 行数，pad 256 与 pad 128 的对比">
+      <title>pad 决定 attention 每步读多少行 K/V</title>
+      <desc>该句 prefill 前缀约 106 行；pad 256 时 n_kv 恒为 256，pad 128 时先 128 后 192，每步少读 25% 到 50% 的行，代价是计算图重建次数翻倍。</desc>
+      <text class="dg-tb" x="24" y="26">n_kv = 向上取整(序列长度 / pad) × pad</text>
+      <text class="dg-ts" x="24" y="46">本句 prefill prefix ≈ 106 行，生成 69 帧</text>
+
+      <rect class="dg-box" x="24" y="62" width="300" height="150" rx="10"/>
+      <text class="dg-tb" x="40" y="86">pad = 256（旧）</text>
+      <text class="dg-ts" x="40" y="106">n_kv 恒为 256，每步读满</text>
+      <g>
+        <rect class="dg-bar" x="40" y="120" width="240" height="10" rx="3"/>
+        <rect class="dg-bar" x="40" y="136" width="240" height="10" rx="3"/>
+        <rect class="dg-bar" x="40" y="152" width="240" height="10" rx="3"/>
+        <rect class="dg-bar" x="40" y="168" width="240" height="10" rx="3"/>
+      </g>
+      <text class="dg-ts" x="40" y="198">图重建 1 次</text>
+
+      <rect class="dg-ok" x="356" y="62" width="300" height="150" rx="10"/>
+      <text class="dg-tb" x="372" y="86">pad = 128（新）</text>
+      <text class="dg-ts" x="372" y="106">n_kv = 128，越界后 192</text>
+      <g>
+        <rect class="dg-bar3" x="372" y="120" width="120" height="10" rx="3"/>
+        <rect class="dg-bar3" x="372" y="136" width="120" height="10" rx="3"/>
+        <rect class="dg-bar3" x="372" y="152" width="180" height="10" rx="3"/>
+        <rect class="dg-bar3" x="372" y="168" width="180" height="10" rx="3"/>
+      </g>
+      <text class="dg-ts" x="372" y="198">图重建 2 次（代价）</text>
+
+      <path class="dg-grid" d="M40 216 H656"/>
+      <text class="dg-ts" x="24" y="240">QK / AV 每步读取行数 −25~50%　→　backbone −7.7%，墙钟 −2.3%</text>
+      <text class="dg-ts" x="24" y="262">图重建 ×2 只多花 1 次，远小于省下的访存</text>
+      <text class="dg-tacc" x="24" y="286">长短句都不亏：170 帧句 backbone −2.6%，墙钟 −0.75%</text>
+      </svg>
+    </div>
+    <figcaption>图 11-2　pad 不是「预分配多少内存」，而是<b>attention 每步实际读多少行 K/V</b>。代价是序列越界时重建计算图的次数，短句几乎无感，长句也能净赚。</figcaption>
+  </figure>
+
+  <p>实测（同轮正逆序交替，取中位数）：</p>
+  <table>
+    <thead><tr><th>配置</th><th>69 帧句 wall / backbone_s</th><th>170 帧句 wall / backbone_s</th></tr></thead>
+    <tbody>
+      <tr><td>pad 256（旧默认）</td><td>3.781 / 0.736</td><td>8.375 / 1.374</td></tr>
+      <tr><td>pad 64</td><td>3.726 / 0.671</td><td>—</td></tr>
+      <tr><td><b>pad 128（新默认）</b></td><td><b>3.695 / 0.677</b></td><td><b>8.313 / 1.338</b></td></tr>
+      <tr><td>pad 32</td><td>3.695 / 0.660</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p>22 次运行 WAV 与 codes <b>全部逐字节一致</b>。64/32 与 128 的差异落在噪声内，但 128 的图重建次数只有它们的一半，长句更稳，所以取 128 而不是更激进的 32——<b>在等价收益里挑最保守的那个</b>。转正后 <code>M5_KV_PAD=256</code> 一键回退；顺带把 server 命中首包从 0.426–0.433 s 拉到 0.410–0.414 s。</p>
+  <p>这一项最值得记的不是数字，而是<b>预测对了</b>：事前算「backbone 占 18%、降 8% → 墙钟约 −1.6%」，实测 −2.3%（含 depth/codec 的正常波动），同量级。而同幅度的 depth 侧优化只能兑现 0.9%。<b>成本模型的价值就在动手前知道能拿到多少，而不是事后找解释。</b></p>
+
+  <h3>11.3 「修好缺陷」不等于「拿到收益」</h3>
+  <p>回到首包那条加法账。<code>--first 1</code> 一直有个众所周知的毛病：单帧 chunk 只有 1920 个样本，而 <code>write_chunk</code> 要把最后 <code>kTail=2400</code> 个样本留作下一块的 overlap 缓冲——<b>全被扣住，一帧根本发不出声音</b>，首包只能等第二个 chunk（共 5 帧，0.575 s）。</p>
+  <p>修法很直接：加一个 <code>M5_FIRST_TAIL</code>，让首个 emit chunk 少扣或不扣 tail。缺陷确实修好了，但收益是负的：</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 268" role="img" aria-label="四组首块配置的首包中位数对比柱状图">
+      <title>首块配置的首包中位数</title>
+      <desc>A 组 first 2 现状 0.387 秒；B 组 first 1 且不扣 tail 为 0.401 秒；C 组 first 2 不扣 tail 为 0.450 秒；D 组 first 1 原样为 0.575 秒。</desc>
+      <text class="dg-tb" x="24" y="24">首包中位数（3 轮交替，12 次）</text>
+
+      <text class="dg-ts" x="24" y="58">A　first 2 / tail 2400（现状）</text>
+      <rect class="dg-box" x="240" y="44" width="180" height="18" rx="4"/>
+      <text class="dg-tacc" x="430" y="58">0.387 s</text>
+
+      <text class="dg-ts" x="24" y="96">B　first 1 / tail 0（候选）</text>
+      <rect class="dg-warn" x="240" y="82" width="186" height="18" rx="4"/>
+      <text class="dg-tacc" x="436" y="96" style="fill:var(--warn)">0.401 s</text>
+
+      <text class="dg-ts" x="24" y="134">C　first 2 / tail 0</text>
+      <rect class="dg-warn" x="240" y="120" width="209" height="18" rx="4"/>
+      <text class="dg-tacc" x="459" y="134" style="fill:var(--warn)">0.450 s</text>
+
+      <text class="dg-ts" x="24" y="172">D　first 1 / tail 2400（原样）</text>
+      <rect class="dg-bad" x="240" y="158" width="267" height="18" rx="4"/>
+      <text class="dg-tacc" x="517" y="172" style="fill:var(--bad)">0.575 s</text>
+
+      <path class="dg-grid" d="M24 196 H656"/>
+      <text class="dg-ts" x="24" y="220">B 修好了 D 的「等 5 帧」缺陷，却追不上 A：</text>
+      <text class="dg-ts" x="24" y="240">depth 少跑一帧省 75 ms，codec 单帧调用的固定开销多花约 80 ms</text>
+      <text class="dg-tacc" x="24" y="260">净收益 ≈ 0 → 维持 --first 2 --chunk 4</text>
+      </svg>
+    </div>
+    <figcaption>图 11-3　四组首块配置。柱子越长越慢——把「少等 4 帧」修成「1 帧出声」，结果仍比现状慢，因为省下的是 depth 的一帧，多花的是 codec 的一次调用。</figcaption>
+  </figure>
+
+  <p>四个可迁移的点：</p>
+  <div class="grid2">
+    <div class="tile"><b>看斜率项归属哪一侧</b><p>首包 74.6 ms/帧 ≈ depth 31.7 + codec 40，是<strong>相加</strong>。改 <code>--first</code> 只动 depth 那一半，codec 的单帧调用固定开销却涨了——一侧省、另一侧还。</p></div>
+    <div class="tile"><b>等价性可以比 SHA 更细</b><p>B 与 A 的 127,680 个样本只差 <strong>1 个样本、1 LSB、位于末尾</strong>（浮点求和顺序噪声），不是 chunk 边界伪影。<strong>codec 输出对 chunk 切分不敏感</strong>，此前担心的边界效应不存在。</p></div>
+    <div class="tile"><b>纯调度实验是免费的对照</b><p>C 组（first 2 + 不扣 tail）逐字节一致，证明「边界移动本身零成本」；它把 B 的差异锁定在「少等一帧」这唯一变量上。</p></div>
+    <div class="tile"><b>负结果要留复活条件</b><p>开关保留、默认关闭。<strong>复活条件</strong>：codec 单帧调用的固定开销显著下降（例如 codec 捆绑改造落地）后重测 <code>--first 1 + M5_FIRST_TAIL=0</code>。</p></div>
+  </div>
+
+  <h3>11.4 先测占比，再谈改协议</h3>
+  <p>prime 命中时可以跳过 codec prime，但引擎<b>仍然</b>把 32 行共享 prefix 发给 backbone stage——因为协议是「先发 header 再发两块矩阵」，少发一块需要改协议。省 64 KB 听起来值得改，先量一下：</p>
+<pre><code>sh=32 rs=71–85  hdr=0.1ms  shared=1.3–3.4ms  rest=7–12ms  wait=85–101ms  total≈105ms
+m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
+  <p>32 行（64 KB）的<b>传输加丢弃只要 2–4 ms</b>：占 prefill 往返（约 105 ms）的 3%，占命中首包（0.41 s）的 <b>不到 1%</b>。大头是 <code>wait</code> 段，也就是 backbone 对 rest 行做的真实 decode——那是算力，不是搬运。</p>
+  <p>算一下风险收益：省 2–4 ms，换一次管道错位崩溃的可能（这条协议以前踩过，错配时 stage 会读垃圾 header）。<b>不成比例，直接判死。</b>更重要的是它留下一条判据：<b>凡是「优化传输」的提案，先问它在端到端里占几个百分点</b>；单看「省了一半数据量」没有意义。</p>
+
+  <h3>11.5 量化：把模型砍掉一半，为什么时间没动</h3>
+  <p>backbone 剩下的候选只有「降精度」了。直觉上：Q8 31 MB → Q4 16 MB，每帧少读一半权重，该快。实测不是——五组权重精度、三轮交替，backbone 一动不动：</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="五组权重量化：权重体积腰斩而 backbone 耗时几乎不变">
+      <title>权重体积与 backbone 耗时脱钩</title>
+      <desc>Q8_0 到 Q4_0 权重从 30.85 MiB 降到 16 MiB（减半），但 backbone 耗时从 0.687 秒到 0.666 秒，仅差 3%，落在组间噪声内；Q5_K_M 甚至更慢。</desc>
+      <text class="dg-tb" x="24" y="26">同一句文本，只换 backbone 的 gguf（3 轮 × 5 组）</text>
+
+      <text class="dg-ts" x="44" y="52">权重体积 / MiB</text>
+      <text class="dg-ts" x="376" y="52">backbone_s / s</text>
+
+      <path class="dg-grid" d="M24 230 H656"/>
+
+      <rect class="dg-bar" x="44" y="120" width="40" height="110" rx="3"/>
+      <text class="dg-ts" x="52" y="112">30.9</text>
+      <rect class="dg-bar" x="99" y="145" width="40" height="85" rx="3"/>
+      <text class="dg-ts" x="107" y="137">23.8</text>
+      <rect class="dg-bar" x="154" y="155" width="40" height="75" rx="3"/>
+      <text class="dg-ts" x="162" y="147">21.0</text>
+      <rect class="dg-bar" x="209" y="159" width="40" height="71" rx="3"/>
+      <text class="dg-ts" x="217" y="151">20.0</text>
+      <rect class="dg-bar" x="264" y="173" width="40" height="57" rx="3"/>
+      <text class="dg-ts" x="272" y="165">16.0</text>
+
+      <rect class="dg-bar3" x="376" y="125" width="40" height="105" rx="3"/>
+      <text class="dg-ts" x="384" y="117">0.687</text>
+      <rect class="dg-bar3" x="431" y="126" width="40" height="104" rx="3"/>
+      <text class="dg-ts" x="439" y="118">0.681</text>
+      <rect class="dg-bar3" x="486" y="123" width="40" height="107" rx="3"/>
+      <text class="dg-ts" x="494" y="115">0.701</text>
+      <rect class="dg-bar3" x="541" y="127" width="40" height="103" rx="3"/>
+      <text class="dg-ts" x="549" y="119">0.673</text>
+      <rect class="dg-bar3" x="596" y="128" width="40" height="102" rx="3"/>
+      <text class="dg-ts" x="604" y="120">0.666</text>
+
+      <text class="dg-ts" x="44" y="250">Q8_0</text>
+      <text class="dg-ts" x="99" y="250">Q6_K</text>
+      <text class="dg-ts" x="154" y="250">Q5_K_M</text>
+      <text class="dg-ts" x="209" y="250">mix4</text>
+      <text class="dg-ts" x="264" y="250">Q4_0</text>
+      <text class="dg-ts" x="376" y="250">Q8_0</text>
+      <text class="dg-ts" x="431" y="250">Q6_K</text>
+      <text class="dg-ts" x="486" y="250">Q5_K_M</text>
+      <text class="dg-ts" x="541" y="250">mix4</text>
+      <text class="dg-ts" x="596" y="250">Q4_0</text>
+
+      <text class="dg-tacc" x="44" y="278">−48% 体积</text>
+      <text class="dg-tacc" x="376" y="278" style="fill:var(--warn)">−3% 时间（噪声内）</text>
+      <text class="dg-ts" x="24" y="296">mix4 = 首末层保 Q8_0、中间 6 层 Q4_0 的分层混合精度，同样没有收益</text>
+      </svg>
+    </div>
+    <figcaption>图 11-4　权重体积腰斩，耗时几乎不动。当「更小的模型」不换时间时，瓶颈不是字节搬运，而是<b>调用次数</b>。</figcaption>
+  </figure>
+
+  <p>为什么不吃带宽？把 <code>backbone_s</code> 拆开看：<code>0.687 s ≈ prefill 0.19 s + 69 帧 × 7.2 ms</code>。每帧只送 1 行（hidden 512）进去，8 层权重 Q8 约 13 MB，摊到 7.2 ms 上只有约 <b>1.9 GB/s</b>——远低于这块 LPDDR5X 的可用带宽。反过来算：每层约 0.86 ms、每层约 9 个算子，即 <b>每算子 0.1 ms</b>，正好是 NPU 的 dispatch / 同步固定成本。<b>69 次「1 行 decode」= 69 次独立调用，成本由调用次数决定，不由权重字节数决定。</b></p>
+
+  <p>这次实验还附赠两个必须记住的坑。第一，<b>所有量化都改变了输出</b>：帧数 69 → 71/73/74，音频 5.32 → 5.48/5.64/5.72 s（长 3~7.5%）。分层混合（首末层保 Q8）也没救回来，帧数反而最多。第二，因此 <b>RTF 全部「变好」</b>（0.702 → 0.685），而墙钟全部变慢（+2.2~5.5%）——分母又被做大了，这是同一个陷阱的第三次出现。</p>
+
+  <div class="callout bad"><span class="tagline">判死</span>
+    backbone 中间档量化（Q6_K / Q5_K_M）与分层混合精度在端到端上一律负收益，且都以韵律漂移为代价。<strong>复活条件</strong>只有一个：先让 69 次单行 decode 不再是 69 次独立调用（改图合并、或降低每层 dispatch 成本），单次调用变大后带宽才会重新成为限制——<b>先改调用形状，再谈精度</b>。</div>
+
+  <h3>11.6 本轮新基线</h3>
+  <table>
+    <thead><tr><th>项</th><th>pad 256（旧）</th><th>pad 128（新）</th></tr></thead>
+    <tbody>
+      <tr><td>CLI 69 帧 wall / RTF</td><td>3.775 s / 0.710</td><td><b>3.695 s / 0.694</b></td></tr>
+      <tr><td><code>backbone_s</code></td><td>0.726</td><td>0.677</td></tr>
+      <tr><td>server 命中首包（wav）</td><td>0.426–0.433</td><td>0.410–0.414</td></tr>
+    </tbody>
+  </table>
+  <p><code>wall ≈ 0.677 + max(depth, codec) + 0.197</code>。<code>max</code> 两侧没动，所以「稳态下一个杠杆是捆绑（−15%，需重训）」的结论不变；剩余项只剩 backbone 分层混合精度（预期 −2~4%，必须过盲听）和热漂移/温控（要的是稳定性，不是 RTF）。</p>
+  <p>还有一件比压模型更值钱的事：<b>同一份代码连续跑，RTF 会从 0.75 漂到 0.91（+21%）</b>，比本章所有剩余优化加起来都大。如果目标是「稳定 &lt;1」而不是「再快 1%」，真问题在温控与长时降频，不在模型推理。</p>
+
+  <h3>11.7 方法论补充</h3>
+  <ol>
+    <li><b>转正后立刻重算矩阵</b>：KV32 转正让 depth 不再是瓶颈，「间接加速 depth」的历史收益（Q4 曾 −18%）换基线后只剩 −4.6%。旧数字必须带上它的基线。</li>
+    <li><b>在等价收益里挑最保守的配置</b>：pad 32/64/128 差异在噪声内时选 128，因为它图重建次数减半，长句更稳。</li>
+    <li><b>append 模式的 dump 是 A/B 地雷</b>：<code>--dump-codes</code> 用追加写，冒烟轮与正式轮共用同名 tag 会静默叠加，产出假性 SHA 不一致（WAV 是截断写，不受影响，且 <code>sha256sum</code> 输出里 wav 在前）。<b>A/B 脚本每轮先 <code>rm -rf</code> 结果目录，冒烟用独立 tag。</b></li>
+    <li><b>测量类实验别改会崩的代码</b>：分段计时加一次对照就能定案，不必为 2–4 ms 去动协议。</li>
+    <li><b>「模型变小」≠「变快」</b>：先判断受限类型。判别实验只要两档极端值（Q8 对 Q4，体积差 2×）；2× 体积差换不来时间，就说明不是带宽问题，别逐档试精度。</li>
+    <li><b>分层的价值前提是「有收益可分」</b>：mix4 这种边缘层保精度的做法，只在量化本身能加速时才有意义；加速为 0 时它只是「更慢 + 输出不一样」。</li>
+    <li><b>先做零成本的那一个</b>：本章第一项零重编译、门禁现成，跑 16 次就拿到 −2.3%；另外两项各花了半天证明不该做——<b>判死也是产出</b>。</li>
+  </ol>
+
+  <details class="qa"><summary>Q9　backbone 只占墙钟 18%，为什么优化它比优化占 77% 的 depth+codec 更划算？</summary>
+    <div class="answer">因为它们在墙钟公式里的<b>位置</b>不同。depth 与 codec 并行，墙钟取 <code>max(2.853, 2.820)</code>，两者只差 1.15%——把其中一侧降 20%，另一侧立刻成为新瓶颈，端到端收益约 0。backbone 是加法项：<code>wall = backbone + max(...) + 固定</code>，它降 7.7%，墙钟就真降约 7.7% 的那一份（实测 −2.3% 墙钟，符合 18% × 7.7% 量级）。<b>判断优化价值不是看谁耗时最长，而是看它在公式里能不能兑现。</b>这也解释了为什么「先降 depth」在 KV32 之前是对的、之后就不再是。</div></details>
+  <details class="qa"><summary>Q10　`--first 1` 从「等 5 帧」修成「1 帧就出声」，为什么首包仍不如 `--first 2`？</summary>
+    <div class="answer">因为首包的成本是 depth 与 codec <b>相加</b>而不是取 max（流水线还没填满）。<code>--first 1</code> 让 depth 少跑一帧（约 −31.7 ms，加上后续调度约 −75 ms），但 codec 要为一个 chunk 单独调用一次，单帧调用的固定开销让 <code>codec_s</code> 从 2.77 涨到 2.87 s，多花约 80 ms，两者抵消。实测 0.401 vs 0.387 s。要让它转正，得先把 codec 的单次调用开销降下来——所以这个开关的价值不是「现在能用」，而是<b>把复活条件写清楚</b>，等 codec 捆绑改造落地后只需重跑一次。</div></details>
+
+  <h3>11.8 真实一帧，与"两版数字"的教训</h3>
+  <p>2026-11-15 03:31 的实跑请求（Serena，87 帧）：墙钟 5.281 s、RTF 0.770、首包 0.561 s；分项 <code>backbone 0.734 / depth 4.160 / codec 3.156 s</code>，折合每帧 8.4 / 47.8 / 36.3 ms。</p>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 250" role="img" aria-label="真实合成请求的每帧分项耗时与并行重叠">
+        <text class="dg-ts" x="40" y="28">刚跑的真实请求 · 87 帧 · 墙钟 5.281 s · RTF 0.770 · 首包 0.561 s（wav 路径）</text>
+        <text class="dg-tb" x="40" y="52">每帧耗时（ms）</text>
+        <g class="dg-lbl">
+          <text x="40" y="88">backbone · HTP0</text><text x="40" y="122">depth · HTP0 + CPU</text><text x="40" y="156">codec · CPU（并行）</text>
+        </g>
+        <rect class="dg-barNpu" x="180" y="72" width="59" height="20" rx="3"/>
+        <text class="dg-num" x="245" y="87">8.4 ms</text>
+        <rect class="dg-mix" x="239" y="106" width="335" height="20" rx="3"/>
+        <text class="dg-num" x="580" y="121">47.8 ms</text>
+        <rect class="dg-barCpu" x="239" y="140" width="254" height="20" rx="3"/>
+        <text class="dg-num" x="499" y="155">36.3 ms</text>
+        <g class="dg-line"><path d="M180 174 H600"/><path d="M180 174 V180"/><path d="M250 174 V180"/><path d="M320 174 V180"/><path d="M390 174 V180"/><path d="M460 174 V180"/><path d="M530 174 V180"/><path d="M600 174 V180"/></g>
+        <g class="dg-lbl" text-anchor="middle">
+          <text x="180" y="194">0</text><text x="250" y="194">10</text><text x="320" y="194">20</text>
+          <text x="390" y="194">30</text><text x="460" y="194">40</text><text x="530" y="194">50</text><text x="600" y="194">60</text>
+        </g>
+        <text class="dg-ts" x="40" y="220">墙钟 ≈ 8.4 + 47.8 = 56.2 ms/帧：codec 的 36.3 ms 与 depth 并行，被完全隐藏（日志 §13 的 max() 天花板）。</text>
+        <text class="dg-ts" x="40" y="240">depth 的 47.8 ms 里既有 15 次 HTP0 提交（F≈1.25 ms/次 + R≈0.91 ms/行），也有 CPU 侧 16 路 heads 投影（约 5.4 ms/帧）。</text>
+      </svg>
+    </div>
+    <figcaption>图 11-5　codec 与 depth 并行，墙钟取两者的最大值——这是理解后面所有"优化为什么没收益"的关键。</figcaption>
+  </figure>
+  <div class="callout key"><span class="tagline">把结构变成判据</span>
+    <code>wall ≈ backbone + max(depth, codec) + prefill</code>。两条分支一旦接近，
+    <b>任何单边优化都会被 max() 吃掉</b>：codec 变快而 depth 不变，墙钟一动不动；
+    depth 变快到 codec 以下，codec 立刻变成新瓶颈。这比"哪个模块慢就优化哪个"的直觉重要得多。
+  </div>
+
+  <div class="callout warn"><span class="tagline">后来修正（台账 §30）</span>
+    上面写的"两条轨道只差 1.15%"来自日志 §25 的<b>斜率外推</b>（41.3 vs 40.9 ms/帧）；
+    日志 §29 的进程族记账给出的<b>段实测</b>是 40.6 / 35.4 ms/帧——差 13%。这一版数字改写了台阶的起点：
+    depth 减到 codec 以下时，先有约 0.36 s 的空档是白送的，因此 P2（depth 重训）单独可兑现 <b>−10%</b> 而不是 0。
+    <b>斜率拟合适合回答"再多一帧要多久"，段实测才适合回答"哪一侧在瓶颈上"。</b>
+    两版数字都留在这里，正是为了示范：结论要跟着测量口径走，而不是跟着记忆走。
+  </div>
+
+  <h3>11.9 唯一的剩余杠杆：depth + codec 三级台阶</h3>
+  <p>免重训的手段全部穷尽后，收益矩阵只剩一条路：<b>让两侧一起降</b>。数学上很直白——
+  <code>wall = 0.874 + max(depth, codec)</code>，要端到端降 δ，两侧都必须 ≤ (1−δ)×现状；
+  单边改进要么被 max() 吃掉，要么只吃到两侧差距那一小截。这就是"捆绑"的含义：
+  depth 重训（把 15 步压成 2 步）与 codec 收窄必须同批立项，<b>顺序被唯一确定为 P2 → P3 → P2'。</b></p>
+  <div class="tableWrap"><table>
+    <tr><th>台阶</th><th>改动</th><th class="num">depth</th><th class="num">codec</th><th class="num">wall</th><th class="num">Δ</th></tr>
+    <tr><td>R0 现状</td><td>—</td><td class="num">2.80 s</td><td class="num">2.44 s</td><td class="num">3.70 s</td><td class="num">—</td></tr>
+    <tr><td><b>R1</b></td><td>P2 · G2：15 步压成 2 步（粗 8 + 细 8）</td><td class="num"><b>1.79</b></td><td class="num">2.44</td><td class="num"><b>3.31</b></td><td class="num"><b>−10.3%</b></td></tr>
+    <tr><td><b>R2</b></td><td>+ P3 · codec decoder 收窄 −27%</td><td class="num">1.79</td><td class="num"><b>1.79</b></td><td class="num"><b>2.66</b></td><td class="num"><b>−27.9%</b></td></tr>
+    <tr><td><b>R3</b></td><td>+ P2 · G16：一步出全部 16 book</td><td class="num"><b>1.55</b></td><td class="num">1.79</td><td class="num"><b>2.42</b></td><td class="num"><b>−34.4%</b></td></tr>
+  </table></div>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="depth 与 codec 联合收益矩阵，两轴各有一段平台">
+        <title>联合收益矩阵：两级平台</title>
+        <desc>行为 depth，列为 codec；单元格为 wall。第一行全平说明 codec 单独优化归零；第一列在 3.31 平台说明 depth 单独优化只值两侧差距那一截。</desc>
+        <text class="dg-tb" x="24" y="24">wall = 0.874 + max(depth, codec)　（秒）</text>
+        <g class="dg-lbl"><text x="150" y="52">codec →</text></g>
+        <g class="dg-num" text-anchor="middle">
+          <text x="196" y="52">2.44</text><text x="286" y="52">2.00</text><text x="376" y="52">1.70</text><text x="466" y="52">1.25</text>
+          <text x="60" y="86" text-anchor="end">depth 2.80</text><text x="60" y="132" text-anchor="end">1.79</text><text x="60" y="178" text-anchor="end">1.55</text>
+        </g>
+        <g>
+          <rect class="dg-bad" x="70" y="66" width="80" height="34" rx="6"/><rect class="dg-bad" x="160" y="66" width="80" height="34" rx="6"/>
+          <rect class="dg-bad" x="250" y="66" width="80" height="34" rx="6"/><rect class="dg-bad" x="340" y="66" width="80" height="34" rx="6"/>
+          <text class="dg-onbar" x="110" y="88" text-anchor="middle">3.67</text><text class="dg-onbar" x="200" y="88" text-anchor="middle">3.67</text>
+          <text class="dg-onbar" x="290" y="88" text-anchor="middle">3.67</text><text class="dg-onbar" x="380" y="88" text-anchor="middle">3.67</text>
+          <rect class="dg-panel" x="70" y="112" width="80" height="34" rx="6"/><rect class="dg-panel" x="160" y="112" width="80" height="34" rx="6"/>
+          <rect class="dg-accent" x="250" y="112" width="80" height="34" rx="6"/><rect class="dg-accent" x="340" y="112" width="80" height="34" rx="6"/>
+          <text class="dg-num" x="110" y="134" text-anchor="middle">3.31</text><text class="dg-num" x="200" y="134" text-anchor="middle">3.31</text>
+          <text class="dg-num" x="290" y="134" text-anchor="middle">2.66</text><text class="dg-num" x="380" y="134" text-anchor="middle">2.66</text>
+          <rect class="dg-panel" x="70" y="158" width="80" height="34" rx="6"/><rect class="dg-panel" x="160" y="158" width="80" height="34" rx="6"/>
+          <rect class="dg-ok" x="250" y="158" width="80" height="34" rx="6"/><rect class="dg-ok" x="340" y="158" width="80" height="34" rx="6"/>
+          <text class="dg-num" x="110" y="180" text-anchor="middle">3.31</text><text class="dg-num" x="200" y="180" text-anchor="middle">3.31</text>
+          <text class="dg-num" x="290" y="180" text-anchor="middle">2.57</text><text class="dg-num" x="380" y="180" text-anchor="middle">2.42</text>
+        </g>
+        <g class="dg-ts">
+          <text x="70" y="216">■ 第一行全平：depth 不动时，codec 从 2.44 降到 1.25，wall 一分钱不省（−0.6%，噪声）。</text>
+          <text x="70" y="236">■ 第一列在 3.31 平台：codec 不动时，depth 从 2.80 砍到 1.55 只值两侧差距那 0.36 s（−10.3%）。</text>
+          <text x="70" y="256">■ 每下台阶都必须换边：−28% 需要 depth &lt; 2.44 且 codec ≤ depth；−34% 还要再各降一档。</text>
+          <text x="70" y="278">保底 −26%（P3 只做到 −20% 时），争取 −34%。P2 单独 = −10.3%，P3 单独 = 0。</text>
+        </g>
+      </svg>
+    </div>
+    <figcaption>图 11-6　联合收益矩阵。画成矩阵而不是两个单点，才能看见"两级平台"——也能看见为什么顺序被唯一确定：永远先动当前 max 的那一侧，直到它低于对方。</figcaption>
+  </figure>
+  <p>两个工程细节让这条路线比看起来更可行：其一，<b>分组粒度只有一种含义</b>——一次 HTP 调用里的
+  N 行是并行的，所以同批的 book 必须条件独立，"G2（2 批 × 8 本）"支配"G4（4 批 × 4 本）"；
+  其二，它<b>不需要新的 HTP 算子</b>——现有的"1 次 16 行"形状早就实测过，部署侧几乎零改动。
+  公开先例也现成：VALL-E 的 NAR head、MOSS-TTS 的 33 个并行 head、Qwen3-TTS 的 MTP 都是同一个动作。</p>
+  <div class="callout warn"><span class="tagline">门槛不在模型，在数据</span>
+    P2 需要 ≈100 h 可商用语料（2.25 M 帧训练样本 + 教师逐 book logits），P3 需要 50 h；
+    官方三条样例（约 20 s）不能用于训练。<b>没有语料这不是"做得慢"是"做不了"</b>——
+    这一条应该在讨论任何模型细节之前先确认。
+  </div>
+  <div class="callout key"><span class="tagline">决策（2026-11-15）</span>
+    单路 RTF 0.68 已满足实时、首包 0.26 s 与它无关——P2+P3 卖的是<b>并发</b>（CPU 10.6 → ≈7.2 秒/请求，
+    单机 2–3 路才装得下）与<b>功耗</b>，不是"更快"。触发立项的三个条件：产品要多路、功耗受限、
+    且已有语料。都不满足时，正确动作是把"单机 1 路 + 2 路限流"写进产品文档。
+    计划、门禁与 kill 判据的完整版在台账 <b>§30</b>。
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch11">标记本章已学完</button></div>
+</section>
+
+
+<div class="partIntro" id="p4">
+  <b>第四部 · 迁移与专题</b>
+  <p>把案例经验抽象成可迁移的方法（第 12 章），讲清楚"音色"这个专题（第 13 章），
+  最后附上可以直接抄走的实验手册（第 14 章）。</p>
+</div>
+<section class="chapter" id="ch12" data-title="通用方法迁移">
+  <div class="chapHead"><span class="idx">12</span><h2>从案例到方法论：llama.cpp 推理加速通用套路</h2></div>
+  <p class="subtitle">把上面 20 多次尝试压缩成一张可以带到别的项目里的检查表。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>拿到一张八杠杆检查表，能按「先问什么」排序</li>
+    <li>能把 llama.cpp 的旋钮映射到自己项目的对应物</li>
+    <li>记住五个反模式，避免在同一类坑里重复投入</li>
+  </ul></div>
+
+  <h3>12.1 八个杠杆，按"先问什么"排序</h3>
+  <div class="tableWrap"><table>
+    <tr><th>#</th><th>杠杆</th><th>先问的问题</th><th>llama.cpp / 后端对应</th><th>M5 案例</th></tr>
+    <tr><td>1</td><td>可观测性</td><td>我量的是哪个口径？分项在哪？</td><td><code>llama_perf_context_print</code>、自定义 timers / headers</td><td>X-M5-* + /metrics</td></tr>
+    <tr><td>2</td><td>prefill / decode 分离</td><td>固定成本与每 token 成本各多少？</td><td><code>n_batch / n_ubatch</code>、prompt 复用</td><td>线性拟合 152 ms + 48.6 ms/帧</td></tr>
+    <tr><td>3</td><td>KV 复用</td><td>有没有跨请求/跨段共享前缀？</td><td><code>llama_memory_seq_rm</code>、prefix cache、<code>seq_id</code></td><td>count == -1 协议</td></tr>
+    <tr><td>4</td><td>批处理 / 提交合并</td><td>依赖是否允许？F 有多大？</td><td><code>llama_batch.n_tokens</code>、ubatch、continuous batching</td><td>depth-bench 15→1（被依赖否决）</td></tr>
+    <tr><td>5</td><td>量化 / 权重布局</td><td>是不是带宽瓶颈？</td><td>GGUF <code>Q4_0/Q8_0</code>、<code>llama-quantize</code>、f16/f32 KV</td><td>heads int8 生效、backbone Q4 否决</td></tr>
+    <tr><td>6</td><td>算子融合 / 后端旋钮</td><td>扫描次数与提交次数能否减少？</td><td>ggml graph fusion、backend env、flash attention</td><td>Snake 融合、OPPOLL=1</td></tr>
+    <tr><td>7</td><td>异步重叠</td><td>哪两条链互不依赖？</td><td>多 stream / async、pipeline parallel</td><td>codec worker 藏在 depth 后</td></tr>
+    <tr><td>8</td><td>冷启动 / I/O / 状态</td><td>首请求为什么慢？状态能留吗？</td><td>model warmup、mmap、session 复用</td><td>预热、restore_prime、WavWriter 内存模式</td></tr>
+  </table></div>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 340" role="img" aria-label="同一个现象背后四种原因的四问定位图">
+        <rect class="dg-panel" x="0" y="0" width="880" height="340" rx="12"/>
+        <text class="dg-tb" x="24" y="30">同一个现象「优化做了，墙钟没动」，四种截然不同的原因</text>
+
+        <rect class="dg-box" x="24" y="52" width="190" height="56" rx="9"/>
+        <text class="dg-tb" x="119" y="76" text-anchor="middle">① 字节数变了吗</text>
+        <text class="dg-ts" x="119" y="95" text-anchor="middle">带宽 · 量化 · 布局</text>
+        <path class="dg-arr" d="M119 110 V122"/>
+        <rect class="dg-accent" x="24" y="124" width="190" height="52" rx="9"/>
+        <text class="dg-t" x="34" y="145">该动的杠杆</text>
+        <text class="dg-ts" x="34" y="163">量化 / 改布局 / 少读 KV 行</text>
+        <text class="dg-ts" x="24" y="196">heads int8：+2.5×</text>
+        <text class="dg-ts" x="24" y="213">backbone Q4：体积 −48%</text>
+        <text class="dg-ts" x="24" y="230">却只换 −3% ⇒ 不是带宽</text>
+
+        <rect class="dg-box" x="234" y="52" width="190" height="56" rx="9"/>
+        <text class="dg-tb" x="329" y="76" text-anchor="middle">② 调用次数变了吗</text>
+        <text class="dg-ts" x="329" y="95" text-anchor="middle">提交 · 融合 · 旋钮</text>
+        <path class="dg-arr" d="M329 110 V122"/>
+        <rect class="dg-accent" x="234" y="124" width="190" height="52" rx="9"/>
+        <text class="dg-t" x="244" y="145">该动的杠杆</text>
+        <text class="dg-ts" x="244" y="163">合并提交 / 算子融合</text>
+        <text class="dg-ts" x="234" y="196">OPPOLL=1：2.2×</text>
+        <text class="dg-ts" x="234" y="213">depth 15 步 → 1 次</text>
+        <text class="dg-ts" x="234" y="230">被组内依赖否决（需重训）</text>
+
+        <rect class="dg-box" x="444" y="52" width="190" height="56" rx="9"/>
+        <text class="dg-tb" x="539" y="76" text-anchor="middle">③ 两条链重叠了吗</text>
+        <text class="dg-ts" x="539" y="95" text-anchor="middle">异步 · 流水线</text>
+        <path class="dg-arr" d="M539 110 V122"/>
+        <rect class="dg-accent" x="444" y="124" width="190" height="52" rx="9"/>
+        <text class="dg-t" x="454" y="145">该动的杠杆</text>
+        <text class="dg-ts" x="454" y="163">让无依赖的两条链并行</text>
+        <text class="dg-ts" x="444" y="196">codec 藏在 depth 之后</text>
+        <text class="dg-ts" x="444" y="213">压缩被盖住的那一侧</text>
+        <text class="dg-ts" x="444" y="230">⇒ 墙钟不动（max()）</text>
+
+        <rect class="dg-bad" x="654" y="52" width="190" height="56" rx="9"/>
+        <text class="dg-tb" x="749" y="76" text-anchor="middle">④ 分母变了吗</text>
+        <text class="dg-ts" x="749" y="95" text-anchor="middle">口径 · 音频时长</text>
+        <path class="dg-arr" d="M749 110 V122"/>
+        <rect class="dg-warn" x="654" y="124" width="190" height="52" rx="9"/>
+        <text class="dg-t" x="664" y="145">该动的杠杆</text>
+        <text class="dg-ts" x="664" y="163">先过门禁，再用 elapsed</text>
+        <text class="dg-ts" x="654" y="196">音频 5.32 → 5.88 s</text>
+        <text class="dg-ts" x="654" y="213">RTF「变好」是假象</text>
+        <text class="dg-ts" x="654" y="230">frame_ms 才是同一把尺</text>
+
+        <line class="dg-line" x1="24" y1="258" x2="856" y2="258"/>
+        <text class="dg-ts" x="24" y="282">顺序不能颠倒：<tspan class="dg-tacc">先确认口径（④），再分类（①②③）</tspan>。口径错了，后面三种分析全是噪声。</text>
+        <text class="dg-ts" x="24" y="306">每一问都有「是」的答案时，再回第 5 章的成本模型算一遍：它落在加法项上，还是落在 max 分支上？前者降多少兑现多少，后者可能一分不拿。</text>
+        <text class="dg-ts" x="24" y="328">①②③ 在本书里各有判死案例：量化 → 6.3 / 11.5，提交合并 → 5.3，重叠 → 7.2 / 9.4。</text>
+      </svg>
+    </div>
+    <figcaption>图 12-1　四问定位。这张图是第 10 章判死方法论的正向版本：不是「怎么否定一个想法」，而是「先问哪四个问题，才能把一个想法放到正确的杠杆上」。</figcaption>
+  </figure>
+
+  <h3>12.2 llama.cpp 的旋钮怎么映射到本案例</h3>
+  <pre><span class="cm"># 通用 llama.cpp 参数 → 在 M5 里的对应物</span>
+n_ctx / n_batch / n_ubatch   →  <span class="kw">backbone.cpp</span> n_ctx=2048（depth=256）, n_batch=n_ubatch=prefix
+type_k / type_v              →  GGML_TYPE_F32（depth 图小，KV 非瓶颈，不为省内存冒险）
+embeddings=true, pooling=NONE→  需要 llama_get_embeddings_ith(ctx, -1) 取 hidden
+llama_batch.embd             →  自定义 512 维输入，绕开 token id 与 lm_head
+llama_memory_seq_rm          →  前缀 KV 缓存命中时保留 [0, sh)
+GGUF Q8_0 / Q4_0            →  backbone / depth 权重；host 用 llama-quantize 转
+ggml_backend_load_all        →  选择 HTP0（shell 域）或 CPU（App 域）
+GGML_HEXAGON_*               →  DSP 提交/轮询/融合策略，按工作负载扫参</pre>
+  <p>可以看到一条很实用的"借壳"路径：<b>把自定义模型的权重导成 GGUF、把自定义输入塞进 <code>llama_batch.embd</code>，
+  就能复用 llama.cpp 的 KV cache、后端调度、量化与图优化</b>；只有采样头和辅助模块留在外面自己写。
+  这比从头写一套推理引擎便宜得多，代价是必须遵守框架对 <code>n_embd</code>、batch、位置编码的约定。</p>
+
+  <h3>12.3 性能问题诊断模板（可直接抄）</h3>
+  <ol>
+    <li><b>锁定口径</b>：固定输入、固定种子、设备冷却到同一状态；记录 RTF、墙钟、首包、帧数。</li>
+    <li><b>画泳道</b>：把 prefill / 主 decode / 辅助解码 / I/O 画在时间线上，标出哪些重叠、哪些串行。</li>
+    <li><b>拟合</b>：<code>T(N) = 截距 + 斜率 × N</code>；截距归冷启动，斜率归热路径。</li>
+    <li><b>分类瓶颈</b>：改字节数（带宽）、改调用次数（提交）、改并发（竞争）、改输入长度（依赖），一次只动一个变量。</li>
+    <li><b>算天花板</b>：该环节占墙钟百分之几 × 最多提速几倍。占比 &lt;10% 的环节先别碰。</li>
+    <li><b>做 A/B</b>：同轮交替、至少两轮；把负结果和复活条件一起写进文档。</li>
+    <li><b>过门禁</b>：数值正确性 → 生成分布 → 语义/感知 → 必要时人耳/人眼。</li>
+    <li><b>固化</b>：把赢下来的配置写进部署脚本与监控，防止下次重启静默回退。</li>
+  </ol>
+
+  <h3>12.4 五个反模式</h3>
+  <div class="grid2">
+    <div class="tile"><b>看构建日志判断优化生效</b><p>宏名不匹配让 f16 成了死代码；要以产物为准。</p></div>
+    <div class="tile"><b>跨轮比较绝对值</b><p>热漂移能让同代码 RTF 0.75→0.91。</p></div>
+    <div class="tile"><b>把 ASR 正确当音质正确</b><p>Q4 韵律漂移，只有试听能发现。</p></div>
+    <div class="tile"><b>盲目批处理 / 盲目换后端</b><p>依赖不允许时，批量只会毁输出；ring 比 pipe 慢。</p></div>
+    <div class="tile"><b>优化被隐藏的时间</b><p>codec 被 depth 重叠盖住，压缩它当时不改善 RTF。</p></div>
+  </div>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch12">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch13" data-title="音色专题">
+  <div class="chapHead"><span class="idx">13</span><h2>音色是怎么"学"来的：从 Qwen3-TTS 到 M5</h2></div>
+  <p class="subtitle">这一章回答一个特别容易误解的问题：换音色到底有没有训练？</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能复述本仓库里 <code>serena</code> 音色从 Qwen3-TTS 迁移到 M5 的完整链路</li>
+    <li>理解离散多码本 token 为什么能承载说话人身份</li>
+    <li>区分零样本克隆的两条机制（speaker embedding / in-context learning）</li>
+    <li>知道 Qwen3-TTS 的双轨 + MTP 架构，以及 llama.cpp 里的落地方式</li>
+  </ul></div>
+
+  <h3>13.1 先澄清：仓库里有两条独立的 TTS 线</h3>
+  <div class="grid2">
+    <div class="tile"><b>① examples/m5-tts（本教程主角）</b><p>Android/HTP 移植的 M5 引擎。运行时<b>只用自身的 codec codes</b>，conditioning 用 <code>&lt;|caption_begin|&gt;…</code> 系列标记。Qwen 只出现在<b>离线生成参考 WAV</b> 的脚本里。</p></div>
+    <div class="tile"><b>② tools/tts + src/models/qwen3tts（llama.cpp 原生）</b><p><code>llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF</code>，经 libmtmd 跑完整 Qwen3-TTS，用 ChatML wrap 与 <code>&lt;|codec_*|&gt;</code> 特殊 token。</p></div>
+  </div>
+  <p>用户问的"TTS 怎么学 Qwen3-TTS 的音色"，在这个项目里指的是第 ① 条线：
+  <b>用 Qwen3-TTS 的 CustomVoice 预设音色 Serena 合成一句参考音频，再把这段音频转换成 M5 能理解的 codec codes，
+  作为"示范"写进 M5 的 prompt</b>。下面把这条链路拆开。</p>
+
+  <h3>13.2 Serena 的诞生：五步，零梯度</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 272" role="img" aria-label="Qwen3-TTS 生成参考音频，经 codec encoder 变为 codes 存入 voices.json，M5 运行时只读取 codes">
+        <rect class="dg-panel" x="0" y="0" width="880" height="272" rx="12"/>
+        <text class="dg-ts" x="24" y="24">离线阶段（在 PC / Python 环境，一次完成）</text>
+        <g>
+          <rect class="dg-accent2" x="24" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="100" y="62" text-anchor="middle">Qwen3-TTS</text>
+          <text class="dg-ts" x="100" y="80" text-anchor="middle">CustomVoice · Serena</text>
+          <text class="dg-ts" x="100" y="95" text-anchor="middle">0.6B / 1.7B</text>
+          <rect class="dg-box" x="200" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="276" y="62" text-anchor="middle">参考 WAV</text>
+          <text class="dg-ts" x="276" y="80" text-anchor="middle">"下过雨的早晨…"</text>
+          <text class="dg-ts" x="276" y="95" text-anchor="middle">+ 逐字转写 .txt</text>
+          <rect class="dg-box" x="376" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="452" y="62" text-anchor="middle">clone_voice.py</text>
+          <text class="dg-ts" x="452" y="80" text-anchor="middle">24 kHz / 归一化</text>
+          <text class="dg-ts" x="452" y="95" text-anchor="middle">静音切分</text>
+          <rect class="dg-ok" x="552" y="38" width="152" height="66" rx="9"/>
+          <text class="dg-tb" x="628" y="62" text-anchor="middle">codec_encoder.onnx</text>
+          <text class="dg-ts" x="628" y="80" text-anchor="middle">audio[1,T] → codes[1,16,F]</text>
+          <text class="dg-ts" x="628" y="95" text-anchor="middle">65 帧 × 16 book</text>
+          <rect class="dg-box" x="728" y="38" width="128" height="66" rx="9"/>
+          <text class="dg-tb" x="792" y="62" text-anchor="middle">voices.json</text>
+          <text class="dg-ts" x="792" y="80" text-anchor="middle">name: serena</text>
+          <text class="dg-ts" x="792" y="95" text-anchor="middle">reference_text</text>
+          <path class="dg-flow" d="M176 71 H198"/><path class="dg-flow" d="M352 71 H374"/>
+          <path class="dg-flow" d="M528 71 H550"/><path class="dg-flow" d="M704 71 H726"/>
+        </g>
+        <text class="dg-ts" x="24" y="136">在线阶段（设备端 m5-server，每次请求）</text>
+        <g>
+          <rect class="dg-box" x="24" y="150" width="180" height="60" rx="9"/>
+          <text class="dg-tb" x="114" y="174" text-anchor="middle">用户文本 + voice=serena</text>
+          <text class="dg-ts" x="114" y="193" text-anchor="middle">POST /v1/audio/speech</text>
+          <rect class="dg-accent" x="228" y="150" width="230" height="60" rx="9"/>
+          <text class="dg-tb" x="343" y="174" text-anchor="middle">conditioning 前缀</text>
+          <text class="dg-ts" x="343" y="193" text-anchor="middle">参考文本 + 目标文本 + codes 行</text>
+          <rect class="dg-ok" x="482" y="150" width="180" height="60" rx="9"/>
+          <text class="dg-tb" x="572" y="174" text-anchor="middle">M5 自回归续写</text>
+          <text class="dg-ts" x="572" y="193" text-anchor="middle">backbone + depth + codec</text>
+          <rect class="dg-box" x="686" y="150" width="170" height="60" rx="9"/>
+          <text class="dg-tb" x="771" y="174" text-anchor="middle">Serena 音色的语音</text>
+          <text class="dg-ts" x="771" y="193" text-anchor="middle">任意新文本</text>
+          <path class="dg-flow" d="M204 180 H226"/><path class="dg-flow" d="M458 180 H480"/>
+          <path class="dg-flow" d="M662 180 H684"/>
+        </g>
+        <text class="dg-tacc" x="24" y="238">关键：M5 运行时不加载 Qwen、不做微调、不更新任何权重 —— "学会"的是 prompt 里的示范，不是模型参数。</text>
+        <text class="dg-ts" x="24" y="260">generate_qwen_reference.py --speaker Serena --seed 1234  ·  clone_voice.py ref.wav "$(cat ref.txt)" --name serena</text>
+      </svg>
+    </div>
+    <figcaption>图 13-1　Serena 音色的迁移链路。训练只发生在 Qwen3-TTS 自己被训练时；跨模型迁移靠的是<b>共同可表示的离散音频 token</b>，是一次纯推理时的 in-context 迁移。</figcaption>
+  </figure>
+
+  <h3>13.3 为什么一堆整数 codes 能带音色</h3>
+  <p>神经音频 codec（如 RVQ / 多码本量化）把波形压成 <code>[帧, 码本层]</code> 的整数序列。
+  M5 与 Qwen3-TTS-12Hz 都是 <b>12.5 Hz、16 层码本</b> 的设定；Qwen3-TTS 技术报告明确：
+  第一层码本偏向语义内容，后续层逐层补充声学细节（音色、气息、环境、韵律），
+  因此容量足够用轻量级因果 ConvNet 直接重建波形，<b>不需要单独抽取说话人向量，也不需要扩散模型</b>。</p>
+  <div class="grid2">
+    <div class="tile"><b>离散化带来的好处</b><p>说话人身份被编码成 token 序列后，语言模型可以像处理文本一样"读"它；于是音色变成了上下文，而不是某个需要注入的向量。</p></div>
+    <div class="tile"><b>为什么必须带逐字转写</b><p>M5 的 prompt 里参考文本与 codes 是配套的：模型需要知道这段声音"说的是哪句话"，才能把音色与内容解耦，续写新文本时沿用前者、替换后者。</p></div>
+    <div class="tile"><b>为什么 3-30 秒就够</b><p>零样本克隆不更新权重，只需要足够覆盖音素与韵律的上下文。本项目的 serena 参考约 65 帧（≈5.2 s），服务端上限 375 帧（30 s）。</p></div>
+    <div class="tile"><b>情感也在这里</b><p>语气、语速、停顿同样留在 codes 里。所以"换一段带情绪的参考音频"比写 caption 更可靠（见 13.7）。</p></div>
+  </div>
+
+  <h3>13.4 零样本克隆的两条机制</h3>
+  <div class="tableWrap"><table>
+    <tr><th>机制</th><th>做法</th><th>优点</th><th>局限</th><th>本案例</th></tr>
+    <tr><td><b>Speaker embedding</b></td><td>说话人编码器把参考音频压成固定维向量，注入 LM 的每一步</td><td>实时、与文本无关、便于跨语言</td><td>容易丢韵律细节；需要联合训练编码器</td><td>Qwen3-TTS 的实时克隆路径；llama.cpp 里映射为 mtmd audio encoder</td></tr>
+    <tr><td><b>Text–speech pair / in-context</b></td><td>把「参考文本 + 参考音频 codes」直接拼进 prompt，让模型续写</td><td><b>更好地保留韵律</b>；无需额外编码器</td><td>占上下文长度；依赖 tokenizer 与训练格式</td><td><b>M5 走这条</b>：voices.json 里的 codes 作为前缀行</td></tr>
+  </table></div>
+  <div class="callout key"><span class="tagline">一句话回答"怎么学的"</span>
+    没有梯度下降、没有 LoRA、没有微调。Qwen3-TTS 生成的一段音频被<b>重新编码成 M5 自己词表里的离散 token</b>，
+    作为 few-shot 示范放在 prompt 前面；M5 在自回归续写时把这段示范的统计特征（音色、语速、韵律）延续下去。
+    这在机器学习里叫 <b>in-context learning（上下文学习）</b>，是推理时行为，不是训练时行为。
+  </div>
+
+  <h3>13.5 Qwen3-TTS 本身：为什么能 97 ms 出第一个音包</h3>
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 880 240" role="img" aria-label="Qwen3-TTS 双轨自回归与 16 码本 MTP 架构">
+        <rect class="dg-panel" x="0" y="0" width="880" height="240" rx="12"/>
+        <text class="dg-ts" x="24" y="24">Qwen3-TTS-12Hz：dual-track LM + MTP（Multi-Token Prediction）</text>
+        <rect class="dg-box" x="24" y="40" width="160" height="52" rx="9"/>
+        <text class="dg-tb" x="104" y="62" text-anchor="middle">文本 token 流</text>
+        <text class="dg-ts" x="104" y="80" text-anchor="middle">Qwen tokenizer</text>
+        <rect class="dg-accent2" x="24" y="108" width="160" height="52" rx="9"/>
+        <text class="dg-tb" x="104" y="130" text-anchor="middle">说话人 / 参考</text>
+        <text class="dg-ts" x="104" y="148" text-anchor="middle">speaker encoder / ICL</text>
+        <rect class="dg-accent" x="216" y="60" width="180" height="80" rx="10"/>
+        <text class="dg-tb" x="306" y="88" text-anchor="middle">Dual-Track LM</text>
+        <text class="dg-ts" x="306" y="108" text-anchor="middle">收到 1 个文本 token 即预测声学帧</text>
+        <text class="dg-ts" x="306" y="126" text-anchor="middle">文本轨与声学轨并行</text>
+        <rect class="dg-ok" x="428" y="60" width="180" height="80" rx="10"/>
+        <text class="dg-tb" x="518" y="84" text-anchor="middle">backbone → codec_0</text>
+        <text class="dg-ts" x="518" y="104" text-anchor="middle">MTP → 其余 15 个残差码本</text>
+        <text class="dg-ts" x="518" y="124" text-anchor="middle">单帧一次出齐，避免 16 步串行</text>
+        <rect class="dg-box" x="640" y="60" width="216" height="80" rx="10"/>
+        <text class="dg-tb" x="748" y="84" text-anchor="middle">Code2Wav（因果 ConvNet）</text>
+        <text class="dg-ts" x="748" y="104" text-anchor="middle">轻量、只看左侧上下文</text>
+        <text class="dg-ts" x="748" y="124" text-anchor="middle">首个 codec 帧即可出声</text>
+        <path class="dg-flow" d="M184 66 H214"/><path class="dg-flow" d="M184 134 H214"/>
+        <path class="dg-flow" d="M396 100 H426"/><path class="dg-flow" d="M608 100 H638"/>
+        <text class="dg-ts" x="24" y="192">Tokenizer-12Hz = 12.5 Hz × 16 层多码本；第一层语义、其余声学 → 可省略 speaker vector 与扩散解码</text>
+        <text class="dg-ts" x="24" y="214">首包延迟 97 ms（0.6B）/ 101 ms（1.7B）；训练数据 &gt;500 万小时、10 种语言；VoiceDesign 用自然语言描述创造新音色</text>
+      </svg>
+    </div>
+    <figcaption>图 13-2　对照 M5 看很有意思：Qwen3-TTS 用 <b>MTP 模块一次预测 15 个残差码本</b>，从架构上绕开了本书第 5 章里那个 15 步串行地狱——这是"训练侧改架构"与"推理侧硬优化"的分野。</figcaption>
+  </figure>
+
+  <h3>13.6 llama.cpp 怎么把 Qwen3-TTS 塞进现有框架</h3>
+  <p>仓库的 <code>conversion/qwen3tts.py</code> 与 <code>tools/mtmd/mtmd-helper-gen.cpp</code> 展示了一组很聪明的映射：</p>
+  <div class="tableWrap"><table>
+    <tr><th>Qwen3-TTS 组件</th><th>映射到 llama.cpp</th><th>关键技巧</th></tr>
+    <tr><td>codec token</td><td>扩展词表，追加 <code>&lt;|codec_0|&gt;…&lt;|codec_1023|&gt;</code>、<code>&lt;|codec_bos|&gt;</code>(2149)、<code>&lt;|codec_eos_token|&gt;</code>(2150)、<code>&lt;|codec_language_chinese|&gt;</code>(2055)</td><td>把音频码字当成"词"，复用 embedding 表</td></tr>
+    <tr><td>text projection MLP</td><td>折进 embedding 表</td><td>减少一层计算，保持标准 decode 路径</td></tr>
+    <tr><td>codec_head</td><td>输出张量比词表小，推理时 pad logits</td><td>兼容 llama.cpp 的 logits 布局</td></tr>
+    <tr><td>speaker reference encoder</td><td>mtmd audio encoder</td><td>复用多模态音频编码通路</td></tr>
+    <tr><td>backbone</td><td>标准 libllama 自回归文本模型</td><td>采样时 <code>suppress_tokens</code> 限制只出语义码本或 EOS</td></tr>
+    <tr><td>code_predictor / code2wav</td><td><code>MTMD_GEN_PROCESS_TYPE_GEN_CODE</code> / <code>GEN_WAV</code></td><td>把"预测其余 15 码本"和"解码波形"作为生成流水线的两个阶段</td></tr>
+    <tr><td>输入格式</td><td>ChatML wrap + <code>sum_row()</code> 把文本 embedding 与 codec/speaker embedding 相加</td><td><code>&lt;|im_start|&gt;assistant\n…&lt;|im_end|&gt;\n&lt;|im_start|&gt;assistant\n</code> 后切片</td></tr>
+  </table></div>
+  <p>把这张表和 3.2 的归属全景并排看，就是本教程最想让你体会的一点：
+  <b>llama.cpp 不关心你的 token 是字还是声音，它只关心 embedding 行、位置、序列 id 与计算图</b>。
+  M5 与 Qwen3-TTS 两条实现，一个用 <code>llama_batch.embd</code> 直接注入，一个把音频码字扩进词表——
+  两条不同的"借壳"路线，共享同一套 KV / 后端 / 量化基础设施。</p>
+
+  <h3>13.7 情感控制为什么难：一个弱训练槽的案例</h3>
+  <p>M5 的 conditioning 里有 <code>&lt;|caption_begin|&gt;…&lt;|caption_end|&gt;</code> 风格槽，但官方推理把它硬编码为空。
+  项目做过 7 档 caption（NONE / happy / sad / angry / gentle / 开心 / 悲伤）× 同句同种子，再用 4 个种子做噪声基线：</p>
+  <div class="tableWrap"><table>
+    <tr><th>路径</th><th>实测证据</th><th>难度</th></tr>
+    <tr><td>caption 风格槽</td><td>非空 caption 让时长 +0~42%，但 F0 / 能量变化落在种子噪声 ±8% 内 → 弱训练槽，无可靠语义情感控制</td><td>接线低，效果不可靠</td></tr>
+    <tr><td>情感参考音频克隆</td><td>codes 强烈迁移音色与韵律；录一段带目标情绪的参考即可</td><td><b>低</b>，但情感与音色绑定</td></tr>
+    <tr><td>DSP 后处理</td><td>变调 / 变速 / EQ 可预测但机械</td><td>低</td></tr>
+    <tr><td>训练侧（情感标注 CPT / SFT）</td><td>模型卡注明改动 delimiter 需要继续预训练；稀疏训练导致 caption 无效</td><td><b>高</b></td></tr>
+  </table></div>
+  <div class="callout warn"><span class="tagline">实验纪律</span>
+    种子带来的 F0 采样噪声本身就有 ±8%，所以任何 &lt;10% 的"情感差异"都不可信——
+    <b>验证情感/风格效果必须多种子平均</b>。这与 4.1 讲的热漂移是同一类问题：先量噪声底，再谈信号。
+    相比之下 Qwen3-TTS 的 VoiceDesign 变体是专门用自然语言描述 + instruction 训练过的，属于"训练侧把槽位填满"。
+  </div>
+
+  <h3>13.8 想自己做一个音色？五步 recipe</h3>
+  <pre><span class="cm"># 1) 用 Qwen3-TTS 生成参考音频与逐字稿（离线，PC / Python 3.12）</span>
+python generate_qwen_reference.py serena.wav --speaker Serena
+<span class="cm">#    可换 --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice --instruct '语气轻柔温暖…'</span>
+
+<span class="cm"># 2) 检查 WAV 内容与 .txt 逐字一致（不一致要手工改稿）</span>
+
+<span class="cm"># 3) 用与部署模型配套的 encoder 转成 codes（16 book × T 帧，值域 0..2047）</span>
+python clone_voice.py serena.wav "$(cat serena.txt)" --name serena --voices model/voices.json
+
+<span class="cm"># 4) 部署到设备，服务端只在 /v1/voices 里看到 name + reference_text + codes</span>
+./deploy.sh
+
+<span class="cm"># 5) 用一句与参考不同的文本试听，验证音色迁移而非内容复述</span>
+curl -s -X POST localhost:18080/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"明天下午的会议需要准备哪些材料呢？","voice":"serena","response_format":"wav"}' -o out.wav</pre>
+  <p>Web 控制台里也可以直接录音克隆：<code>/v1/voices/encode</code> 跑 <code>codec_encoder.onnx</code>
+  返回 codes，但<b>只保存在浏览器 localStorage</b>，服务端不落盘——这正是"零样本克隆不需要训练"的另一个体现：
+  换一段参考音频，只是换一段 prompt。</p>
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch13">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch14" data-title="实验手册与术语表">
+  <div class="chapHead"><span class="idx">14</span><h2>实验手册、思考题与术语表</h2></div>
+  <p class="subtitle">把教程变成可复现的动作。</p>
+  <div class="objectives"><b>本章目标</b><ul>
+    <li>能照着命令复现本书的关键实验（含回退开关）</li>
+    <li>用 16 道思考题自测，覆盖全书判断链</li>
+    <li>术语表用于快速对齐口径，避免各说各话</li>
+  </ul></div>
+
+  <h3>14.1 命令速查</h3>
+  <pre><span class="cm"># 端到端 / 分项统计</span>
+curl -s -D - -o out.wav -X POST 127.0.0.1:18080/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"input":"今天天气不错，我们一起去公园散步吧。","voice":"serena","response_format":"wav"}' \
+  | grep -i x-m5
+curl -s '127.0.0.1:18080/metrics?format=prometheus' | grep m5_p50
+
+<span class="cm"># 微基准：depth 提交成本模型</span>
+adb shell 'cd /data/local/tmp/llama-m5-htp-v73 &amp;&amp; \
+  LD_LIBRARY_PATH=$PWD ADSP_LIBRARY_PATH=$PWD GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1 \
+  ./depth-bench depth-Q14_0.gguf HTP0 7'
+
+<span class="cm"># 依赖消融 / codes 逐帧 dump / heads 分项</span>
+M5_ZERO_TRANSFORM=1 ./m5-engine model --text "…" --voice 0 --out /tmp/a.wav
+./m5-engine model --text "…" --voice 0 --dump-codes /tmp/a.codes --out /tmp/a.wav
+M5_HEAD_STATS=1 ./m5-engine model --text "…" --voice 0 --out /tmp/a.wav
+
+<span class="cm"># 量化 A/B（同轮交替，避免热漂移）</span>
+for i in 1 2; do M5_HEADS_INT8=1 …; M5_HEADS_INT8=0 …; done
+./llama-quantize --allow-requantize backbone-Q8_0.gguf backbone-Q14_0.gguf Q14_0
+
+<span class="cm"># 一键部署（固定 env、推二进制/控制台、预热、forward）</span>
+./deploy.sh</pre>
+
+  <h3>14.2 思考题（先自己算，再展开）</h3>
+  <details class="qa"><summary>Q11　为什么 7 字句 RTF 0.918 而 24 字句 0.742？这算优化成功吗？</summary>
+    <div class="answer"><b>不算。</b>同一份代码，只是固定成本被摊薄。用 <code>T(N)=截距+斜率×N</code> 拟合：截距 ≈152 ms（prefill / 图初始化 / codec prime），斜率 ≈54.7 ms/帧（backbone 6.1 + depth 48.6，codec 被重叠）。
+    短句 23 帧摊 152 ms 固定开销，每帧多背 6.6 ms；长句 75 帧只多 2 ms。所以看性能必须固定输入长度，或同时报告截距与斜率。</div></details>
+  <details class="qa"><summary>Q12　depth 权重从 21 MB 降到 10.7 MB 只快 9%，你能推出什么？若改成 heads 权重减半呢？</summary>
+    <div class="answer">若瓶颈是权重带宽，字节数减半应接近 2×；只有 9% 说明 <b>depth 是提交开销 / 计算主导</b>，继续降位量化没有意义。
+    而 heads 每帧流式读 34 MB、耗时 13.4 ms ≈ 2.5 GB/s，符合带宽特征；f16→int8 减半后 heads_s 0.94→0.38 s（2.5×），验证了判别。<b>同一个动作效果相反，因为瓶颈类型不同。</b></div></details>
+  <details class="qa"><summary>Q13　流式首块从 2 帧改成 1 帧，为什么首包反而从 0.285 s 涨到 0.51 s？</summary>
+    <div class="answer">少了一个 depth step 省下的时间，小于 codec 多一次 ORT Run 的固定开销 + 该会话的调度/状态准备成本。
+    这是 5.1 的 <code>F</code> 在 codec 层的翻版：<b>分块越碎，固定成本占比越高</b>。结论是维持 2 帧，并把"1 帧更慢"写进代码注释防止后人重试。</div></details>
+  <details class="qa"><summary>Q14　int8 让 codes 翻转 90%，为什么还能上线？什么情况下你必须否决一个量化？</summary>
+    <div class="answer">首帧 0/16 翻转证明没有系统性数值误差；之后是 <code>next_hidden</code> 反馈放大 1-ulp 差异造成的混沌分叉，等价换随机种子。
+    门禁看 ASR（语义）、音频统计族（分布）、模式内确定性 0% 翻转、人耳。
+    <b>否决条件</b>是感知层面的系统性偏移：backbone Q14 让音频短 16%、语速变快，ASR 全对也不行；或 codec 激活×激活量化掉 1.3 dB。</div></details>
+  <details class="qa"><summary>Q15　"用 Qwen3-TTS 的音色"这句话里，梯度更新发生在哪里？</summary>
+    <div class="answer"><b>迁移过程里一次都没有。</b>Qwen3-TTS 自己的音色能力来自它预训练 / 后训练（含 speaker fine-tuning）时学到的映射；
+    M5 只是把 Qwen 生成的一段音频重新编码成自己词表里的 codec codes，作为 prompt 前缀做 in-context learning。
+    运行时既不加载 Qwen 也不更新权重。真正"把槽位训练出来"的例子是 Qwen3-TTS 的 VoiceDesign（自然语言描述控制），
+    M5 的 caption 槽因训练稀疏而弱——这正是"槽位存在 ≠ 槽位可用"。</div></details>
+  <details class="qa"><summary>Q16　如果让你继续把 RTF 从 0.75 往下压，下一步做什么？</summary>
+    <div class="answer"><b>先别急着动任何模块——这道题在 2026-11-15 被三项实测改写了（第 10、11 章）。</b>
+    ① 天花板不是 2.1×：算上 heads 后 depth 上限只有 1.78×，而且 codec 与 depth 并行，
+    <code>wall ≈ backbone + max(depth, codec) + prefill</code>；只做草稿会被 codec 卡住。
+    ② 三条看似可行的路全部排除：单边旋钮与资源让渡（日志 §13，48 次 A/B 无一快于默认）、
+    codec 单独优化（被 max 吃掉）、学习型草稿（日志 §14，α_oracle ≈ 0.18 ≪ 0.72 盈亏平衡）。
+    ③ 所以<b>不改模型图时稳态 RTF 0.725 已是极限</b>；把精力转向首包、热漂移、功耗、音质，
+    或接受「重训非自回归 depth head」这个需要训练数据的另一个项目。
+    这题真正考的是：<b>先看清依赖结构与并行结构，再判断某个优化能不能兑现。</b></div></details>
+
+  <h3>14.3 术语表</h3>
+  <div class="tableWrap"><table>
+    <tr><th>术语</th><th>在本项目里的含义</th></tr>
+    <tr><td>RTF</td><td>Real-Time Factor = 生成耗时 / 音频时长；&lt;1 表示快于实时</td></tr>
+    <tr><td>frame / hop</td><td>一帧 = 1920 samples @24 kHz = 80 ms；12.5 fps</td></tr>
+    <tr><td>codebook / book</td><td>每帧 16 个离散码本索引，词表 2051（含 EOS）；M5 的 book 链必须串行采样</td></tr>
+    <tr><td>prefill / decode</td><td>一次性处理 conditioning 序列 / 逐帧（逐 token）自回归生成</td></tr>
+    <tr><td>KV cache</td><td>llama.cpp 保存的注意力历史；<code>llama_memory_seq_rm</code> 可保留指定前缀</td></tr>
+    <tr><td>Gumbel-style 采样</td><td><code>argmax(prob / -log(1-u))</code>，配合 T=0.9 与 top-k 10；随机数顺序敏感</td></tr>
+    <tr><td>overlap</td><td>codec worker 与 depth 主线程并发，隐藏 codec 墙钟</td></tr>
+    <tr><td>primer / restore_prime</td><td>参考 codes 最后 8 帧用于推进 codec 递归状态，可在同音色请求间复用</td></tr>
+    <tr><td>zero-shot voice clone</td><td>不更新权重，靠参考音频的 speaker embedding 或 text–speech pair 上下文迁移音色</td></tr>
+    <tr><td>MTP</td><td>Multi-Token Prediction：Qwen3-TTS 一次生成 15 个残差码本，避开 16 步串行</td></tr>
+    <tr><td>dual-track</td><td>Qwen3-TTS 文本轨与声学轨并行自回归，收到文本即刻出声学帧</td></tr>
+  </table></div>
+
+  <h3>14.4 延伸阅读</h3>
+  <ul>
+    <li><code>docs/backend/snapdragon/m5-tts-optimization-log.md</code> —— 本教程的数据主台账（含负结果与复活条件）</li>
+    <li><code>docs/backend/snapdragon/m5-tts-port-notes.md</code> —— 按时间线的完整实验日志</li>
+    <li><code>examples/m5-tts/m5_engine.cpp</code> / <code>m5_depth_heads.h</code> / <code>backbone.cpp</code> —— 流水线、采样、llama.cpp 协议</li>
+    <li><code>examples/m5-tts/depth_batch_bench.cpp</code> —— 自己复现 F + R 成本模型</li>
+    <li><a href="https://github.com/QwenLM/Qwen3-TTS" target="_blank" rel="noopener">Qwen3-TTS Technical Report</a> —— 12Hz/25Hz tokenizer、dual-track、MTP、VoiceDesign、3 秒克隆</li>
+    <li><code>tools/tts/README.md</code>、<code>conversion/qwen3tts.py</code>、<code>tools/mtmd/mtmd-helper-gen.cpp</code> —— llama.cpp 原生 Qwen3-TTS 实现</li>
+    <li><code>examples/m5-tts/README.md</code> 的 "Bring a voice from another TTS model" 章节 —— Serena 迁移的原始 recipe</li>
+  </ul>
+  <div class="callout ok"><span class="tagline">结课</span>
+    这个案例最值钱的不是某个 RTF 数字，而是三条判断：
+    <b>① 先量清楚再动手；② 依赖结构决定优化天花板，工程技巧不能突破它；③ 生成式系统的正确性要有感知层验收。</b>
+    把这三句带到下一个模型、下一个后端，教程就没白写。
+  </div>
   <div class="chapterDone"><button class="doneBtn" data-ch="ch14">标记本章已学完</button></div>
 </section>
 
@@ -2258,11 +2571,16 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
   const chapters = $$('section.chapter');
   const nav = $('#nav');
   const navLinks = [];
-  const group = document.createElement('div');
-  group.className = 'navGroup';
-  group.textContent = '课程目录';
-  nav.appendChild(group);
+  const PARTS = [[0, '开篇'], [1, '第一部 · 认识对象'], [4, '第二部 · 学会测量'],
+                 [6, '第三部 · 优化复盘'], [12, '第四部 · 迁移与专题']];
+  const partAt = new Map(PARTS);
   chapters.forEach((sec, i) => {
+    if (partAt.has(i)) {
+      const g = document.createElement('div');
+      g.className = 'navGroup';
+      g.textContent = partAt.get(i);
+      nav.appendChild(g);
+    }
     const title = sec.dataset.title;
     const a = document.createElement('a');
     a.href = '#' + sec.id;
