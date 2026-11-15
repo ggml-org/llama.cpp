@@ -3371,9 +3371,21 @@ bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string 
     return true;
 }
 
-void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor) {
-    std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: " << tensor.data()
-              << '\n';
+void print_input_tensor_info(const std::string & name, const ov::Tensor & input) {
+    // GPU inputs can be device (USM) tensors, whose data() throws; print a host copy of those.
+    const bool is_remote = input.is<ov::RemoteTensor>();
+    ov::Tensor tensor = input;
+    if (is_remote) {
+        tensor = ov::Tensor(input.get_element_type(), input.get_shape());
+        input.copy_to(tensor);
+    }
+    std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: ";
+    if (is_remote) {
+        std::cout << "device";
+    } else {
+        std::cout << tensor.data();
+    }
+    std::cout << '\n';
     switch (tensor.get_element_type()) {
     case ov::element::f32: {
         if (name.find("self_kq_mask") == std::string::npos && name.find("KQ_mask") == std::string::npos) {
