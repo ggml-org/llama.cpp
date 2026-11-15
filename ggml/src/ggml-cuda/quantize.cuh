@@ -32,14 +32,17 @@ void quantize_mmq_few_q8_1_cuda(
         const float * x, void * vy, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
-// src1 of the few-row MMQ for RDNA3 WMMA, which multiplies 16 src1 columns and needs the same A and B data in both half-warps.
-// Per channel, 256 values and group of MMQ_FEW_WMMA_NCOLS columns:
+// src1 of the few-row MMQ for AMD GPUs, in the layout of the WMMA and MFMA fragments. Both multiply 16 src1 columns and use the same total size.
+// RDNA WMMA, per channel, 256 values and group of MMQ_FEW_HIP_NCOLS columns:
 //   qs: int4[8][16][2], [s][m][k] holds the values [16k, 16k + 16) of sub-block s of column m, the A fragments of lanes m and m + 16.
 //   ds: int4[8][2][2], [s][h][k] holds d (D4, float) or (d, sum) (DS4, half2) of sub-block s of the columns 2v + h, v = 4k .. 4k + 3.
-static constexpr int MMQ_FEW_WMMA_NCOLS     = 16;
-static constexpr int MMQ_FEW_WMMA_Q8_1_INT4 = 8*16*2 + 8*2*2;
+// CDNA MFMA, where a lane computes the src1 column l % 16 and the src0 rows 4*(l / 16) + v:
+//   qs: int2[8][4][16], [s][q][m] holds the values [4q, 4q + 4) and [16 + 4q, 16 + 4q + 4) of sub-block s of column m, one MFMA per half.
+//   ds: int[8][16], [s][m] holds d (D4, float) or (d, sum) (DS4, half2) of sub-block s of column m.
+static constexpr int MMQ_FEW_HIP_NCOLS     = 16;
+static constexpr int MMQ_FEW_HIP_Q8_1_INT4 = 8*16*2 + 8*2*2;
 
-void quantize_mmq_few_wmma_q8_1_cuda(
+void quantize_mmq_few_hip_q8_1_cuda(
         const float * x, void * vy, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
