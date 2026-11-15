@@ -9,14 +9,14 @@
 # each metric line is matched to the most recent function of the same location.
 #
 # Usage:
-#   python3 gcn-cdna-occupancy-check.py <baseline_metrics.log> <pr_metrics.log> \
-#           [--tolerance N] [--ignore FILE] [--report FILE]
+#   python3 gcn-cdna-metrics-check.py <baseline_metrics.log> <pr_metrics.log> \
+#           [--tolerance N] [--ignore FILE] [--dump FILE]
 #
 #   --tolerance N : allow occupancy drops of up to N waves/SIMD (default 0)
 #   --ignore FILE : file with one kernel symbol per line to exclude (exact
 #                   match, lines starting with '#' are comments)
-#   --report FILE : also write a markdown report with all progressions and
-#                   regressions to FILE
+#   --dump FILE   : also write all deltas to FILE as TSV, for consumption by
+#                   gcn-cdna-metrics-report.py
 #
 # Exit code: 1 if at least one kernel regresses (occupancy drop or new spills),
 # 0 otherwise. Kernels present in only one log are reported for information
@@ -31,6 +31,8 @@ FUNC_RE = re.compile(r'(?:remark: )?([^:]+):(\d+):\d+: Function Name: (\S+)')
 OCC_RE = re.compile(r'(?:remark: )?([^:]+):(\d+):\d+:\s+ Occupancy \[waves/SIMD\]: (\d+)')
 VSPILL_RE = re.compile(r'(?:remark: )?([^:]+):(\d+):\d+:\s+ VGPRs Spill: (\d+)')
 SSPILL_RE = re.compile(r'(?:remark: )?([^:]+):(\d+):\d+:\s+ SGPRs Spill: (\d+)')
+
+METRICS = ('occupancy', 'vgpr_spill', 'sgpr_spill')
 
 
 def parse_log_file(filepath):
@@ -95,6 +97,11 @@ def load_ignore_file(filepath):
     return ignored
 
 
+def worst(values, metric):
+    # Occupancy is worst at its minimum, spills at their maximum.
+    return min(values) if metric == 'occupancy' else max(values)
+
+
 def compare_metric(base_values, pr_values, names, worse, tolerance=0):
     # worse: comparison direction, 'min' for occupancy (lower is worse),
     # 'max' for spills (higher is worse). Only compare names that have the
@@ -119,81 +126,16 @@ def compare_metric(base_values, pr_values, names, worse, tolerance=0):
     return regressions, gains
 
 
-def write_report(path, baseline_log, pr_log, base_names, pr_names, common,
-                 occ_regressions, occ_gains, vspill_regressions, vspill_gains,
-                 sspill_regressions, sspill_gains, added, removed, locations,
-                 baseline, pr):
-    def kernel_link(name):
-        return f'`{name}`'
-
+def dump_tsv(path, baseline_log, pr_log, base_count, pr_count, common_count, rows):
     with open(path, 'w') as f:
-        f.write('# HIP kernel metrics comparison\n\n')
-        f.write(f'- Baseline: `{baseline_log}`\n- PR: `{pr_log}`\n\n')
-        f.write(f'Kernels compared: {len(common)} (baseline {len(base_names)}, PR {len(pr_names)}). '
-                f'Added kernels: {len(added)}, removed kernels: {len(removed)}.\n\n')
-
-        f.write(f'## Occupancy regressions ({len(occ_regressions)})\n\n')
-        if occ_regressions:
-            f.write('| Location | Kernel | Baseline | PR |\n|---|---|---|---|\n')
-            for name, base_occ, pr_occ in occ_regressions:
-                f.write(f'| {locations[name]} | {kernel_link(name)} | {base_occ} | {pr_occ} |\n')
-        else:
-            f.write('None.\n')
-        f.write('\n')
-
-        f.write(f'## Occupancy improvements ({len(occ_gains)})\n\n')
-        if occ_gains:
-            f.write('| Location | Kernel | Baseline | PR |\n|---|---|---|---|\n')
-            for name, base_occ, pr_occ in occ_gains:
-                f.write(f'| {locations[name]} | {kernel_link(name)} | {base_occ} | {pr_occ} |\n')
-        else:
-            f.write('None.\n')
-        f.write('\n')
-
-        f.write(f'## VGPR spill regressions ({len(vspill_regressions)})\n\n')
-        if vspill_regressions:
-            f.write('| Location | Kernel | Baseline | PR |\n|---|---|---|---|\n')
-            for name, base_val, pr_val in vspill_regressions:
-                f.write(f'| {locations[name]} | {kernel_link(name)} | {base_val} | {pr_val} |\n')
-        else:
-            f.write('None.\n')
-        f.write('\n')
-
-        f.write(f'## VGPR spill improvements ({len(vspill_gains)})\n\n')
-        if vspill_gains:
-            f.write('| Location | Kernel | Baseline | PR |\n|---|---|---|---|\n')
-            for name, base_val, pr_val in vspill_gains:
-                f.write(f'| {locations[name]} | {kernel_link(name)} | {base_val} | {pr_val} |\n')
-        else:
-            f.write('None.\n')
-        f.write('\n')
-
-        f.write(f'## SGPR spill regressions ({len(sspill_regressions)})\n\n')
-        if sspill_regressions:
-            f.write('| Location | Kernel | Baseline | PR |\n|---|---|---|---|\n')
-            for name, base_val, pr_val in sspill_regressions:
-                f.write(f'| {locations[name]} | {kernel_link(name)} | {base_val} | {pr_val} |\n')
-        else:
-            f.write('None.\n')
-        f.write('\n')
-
-        f.write(f'## SGPR spill improvements ({len(sspill_gains)})\n\n')
-        if sspill_gains:
-            f.write('| Location | Kernel | Baseline | PR |\n|---|---|---|---|\n')
-            for name, base_val, pr_val in sspill_gains:
-                f.write(f'| {locations[name]} | {kernel_link(name)} | {base_val} | {pr_val} |\n')
-        else:
-            f.write('None.\n')
-        f.write('\n')
-
-        f.write(f'## Added kernels ({len(added)})\n\n')
-        for name in sorted(added):
-            f.write(f'- {kernel_link(name)} (occupancy {min(pr[0][name]) if pr[0][name] else "?"})\n')
-        f.write('\n')
-
-        f.write(f'## Removed kernels ({len(removed)})\n\n')
-        for name in sorted(removed):
-            f.write(f'- {kernel_link(name)} (occupancy {min(baseline[0][name]) if baseline[0][name] else "?"})\n')
+        f.write(f'#baseline_log\t{baseline_log}\n')
+        f.write(f'#pr_log\t{pr_log}\n')
+        f.write(f'#baseline_kernels\t{base_count}\n')
+        f.write(f'#pr_kernels\t{pr_count}\n')
+        f.write(f'#kernels_compared\t{common_count}\n')
+        f.write('metric\tkernel\tlocation\tbaseline\tpr\tstatus\n')
+        for row in rows:
+            f.write('\t'.join(str(col) for col in row) + '\n')
 
 
 def main():
@@ -203,19 +145,19 @@ def main():
     parser.add_argument('-t', '--tolerance', type=int, default=0,
                         help='allow occupancy drops of up to N waves/SIMD (default 0)')
     parser.add_argument('--ignore', help='file with kernel symbols to exclude, one per line')
-    parser.add_argument('--report', help='write a markdown report to FILE')
+    parser.add_argument('--dump', help='write all deltas to FILE as TSV, for gcn-cdna-metrics-report.py')
     args = parser.parse_args()
 
     ignored = load_ignore_file(args.ignore) if args.ignore else set()
 
-    baseline = parse_log_file(args.baseline_log)
-    pr = parse_log_file(args.pr_log)
-    base_occ, base_vspill, base_sspill, base_loc = baseline
-    pr_occ, pr_vspill, pr_sspill, pr_loc = pr
+    base_occ, base_vspill, base_sspill, base_loc = parse_log_file(args.baseline_log)
+    pr_occ, pr_vspill, pr_sspill, pr_loc = parse_log_file(args.pr_log)
     locations = {**base_loc, **pr_loc}
 
-    base_names = {name for name in base_occ if base_occ[name]} | {name for name in base_vspill} | {name for name in base_sspill}
-    pr_names = {name for name in pr_occ if pr_occ[name]} | {name for name in pr_vspill} | {name for name in pr_sspill}
+    base_names = ({name for name in base_occ if base_occ[name]}
+                  | set(base_vspill) | set(base_sspill))
+    pr_names = ({name for name in pr_occ if pr_occ[name]}
+                | set(pr_vspill) | set(pr_sspill))
     base_names -= ignored
     pr_names -= ignored
     common = base_names & pr_names
@@ -249,12 +191,29 @@ def main():
     for name in sorted(removed):
         print(f"note: kernel only in baseline: {name}")  # noqa: NP100
 
-    if args.report:
-        write_report(args.report, args.baseline_log, args.pr_log, base_names, pr_names, common,
-                     occ_regressions, occ_gains, vspill_regressions, vspill_gains,
-                     sspill_regressions, sspill_gains, added, removed, locations,
-                     baseline, pr)
-        print(f"Report written to {args.report}")  # noqa: NP100
+    if args.dump:
+        rows = []
+        pr_metrics = {'occupancy': pr_occ, 'vgpr_spill': pr_vspill, 'sgpr_spill': pr_sspill}
+        base_metrics = {'occupancy': base_occ, 'vgpr_spill': base_vspill, 'sgpr_spill': base_sspill}
+        for metric, regressions, gains in (
+            ('occupancy', occ_regressions, occ_gains),
+            ('vgpr_spill', vspill_regressions, vspill_gains),
+            ('sgpr_spill', sspill_regressions, sspill_gains),
+        ):
+            for name, base_val, pr_val in sorted(regressions):
+                rows.append((metric, name, locations[name], base_val, pr_val, 'regression'))
+            for name, base_val, pr_val in sorted(gains):
+                rows.append((metric, name, locations[name], base_val, pr_val, 'improved'))
+        for name in sorted(added):
+            for metric in METRICS:
+                if pr_metrics[metric][name]:
+                    rows.append((metric, name, locations[name], '', worst(pr_metrics[metric][name], metric), 'added'))
+        for name in sorted(removed):
+            for metric in METRICS:
+                if base_metrics[metric][name]:
+                    rows.append((metric, name, locations[name], worst(base_metrics[metric][name], metric), '', 'removed'))
+        dump_tsv(args.dump, args.baseline_log, args.pr_log, len(base_names), len(pr_names), len(common), rows)
+        print(f"Deltas written to {args.dump}")  # noqa: NP100
 
     regressions = occ_regressions + vspill_regressions + sspill_regressions
     if regressions:
