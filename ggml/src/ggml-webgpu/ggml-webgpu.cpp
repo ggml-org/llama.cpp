@@ -32,11 +32,11 @@
 #include <utility>
 #include <vector>
 
-template<typename T>
-void destroy_and_reset(T& resource){
+template <typename T>
+void destroy_and_reset(T & resource){
     if (resource) {
         resource.Destroy();
-        resource = nullptr; 
+        resource = nullptr;
     }
 }
 
