@@ -26,6 +26,7 @@ void ggml_cl_load_kernels_glu(ggml_backend_opencl_context * backend_ctx) {
         CL_CHECK((backend_ctx->glu.kernel_geglu_f16       = clCreateKernel(prog, "kernel_geglu_f16", &err), err));
         CL_CHECK((backend_ctx->glu.kernel_reglu_f16       = clCreateKernel(prog, "kernel_reglu_f16", &err), err));
         CL_CHECK((backend_ctx->glu.kernel_swiglu_f16      = clCreateKernel(prog, "kernel_swiglu_f16", &err), err));
+        CL_CHECK((backend_ctx->glu.kernel_swiglu_oai_f16  = clCreateKernel(prog, "kernel_swiglu_oai_f16", &err), err));
         CL_CHECK((backend_ctx->glu.kernel_swiglu_clamp_f16 = clCreateKernel(prog, "kernel_swiglu_clamp_f16", &err), err));
         CL_CHECK((backend_ctx->glu.kernel_geglu_erf_f16   = clCreateKernel(prog, "kernel_geglu_erf_f16", &err), err));
         CL_CHECK((backend_ctx->glu.kernel_geglu_quick_f16 = clCreateKernel(prog, "kernel_geglu_quick_f16", &err), err));
@@ -74,7 +75,11 @@ void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
             }
             break;
         case GGML_GLU_OP_SWIGLU_OAI:
-            kernel = backend_ctx->glu.kernel_swiglu_oai;
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->glu.kernel_swiglu_oai;
+            } else {
+                kernel = backend_ctx->glu.kernel_swiglu_oai_f16;
+            }
             break;
         case GGML_GLU_OP_SWIGLU_CLAMP:
             if (dst->type == GGML_TYPE_F32) {
