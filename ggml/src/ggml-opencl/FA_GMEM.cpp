@@ -50,7 +50,7 @@ std::tuple<cl_uint, cl_uint, cl_uint, cl_uint, cl_uint, cl_uint, cl_uint> FA_GME
     cl_uint mX0_paddedM = blockM;    // Q*Kt, M-first
 
     // SM
-    cl_uint mSM_paddedN = sizeof(fa_per_row_data); // 4x per-row max & sum, N-first
+    cl_uint mSM_paddedN = sizeof(fa_per_row_data) / sizeof(float); // Float elements per four-row group.
 
     // MM1
     cl_uint mX1_paddedK = blockN0K1; // softmax(Q*Kt), K-first
@@ -117,15 +117,15 @@ auto stridesQKV = compute_stride_bytes_QKV(blockM, blockN0K1, totalK0N1, gtAct, 
     const cl_uint lineStrideMatrixB1inBytes = std::get<5>(stridesQKV); \
     const cl_uint lineStrideMatrixC1inBytes = std::get<6>(stridesQKV); \
     \
-    const size_t msizeA0_block_bytes = (blockM) * lineStrideMatrixA0inBytes; \
-    const size_t _msizeB0_block_bytes = (blockN0K1) * lineStrideMatrixB0inBytes; \
-    const size_t _msizeC0_block_bytes = (blockN0K1) * lineStrideMatrixC0inBytes; \
+    const size_t msizeA0_block_bytes = size_t(blockM) * lineStrideMatrixA0inBytes; \
+    const size_t _msizeB0_block_bytes = size_t(blockN0K1) * lineStrideMatrixB0inBytes; \
+    const size_t _msizeC0_block_bytes = size_t(blockN0K1) * lineStrideMatrixC0inBytes; \
     \
-    const size_t msizeSM_block_bytes = (blockM) * lineStrideMatrixSMinBytes; \
+    const size_t msizeSM_block_bytes = ((size_t(blockM) + 3) / 4) * lineStrideMatrixSMinBytes; \
     \
     const size_t _msizeA1_block_bytes = ((size_t(blockM) + 3) & ~size_t(3)) * lineStrideMatrixA1inBytes; \
-    const size_t _msizeB1_block_bytes = (totalK0N1) * lineStrideMatrixB1inBytes; \
-    const size_t msizeC1_block_bytes = (totalK0N1) * lineStrideMatrixC1inBytes; \
+    const size_t _msizeB1_block_bytes = size_t(totalK0N1) * lineStrideMatrixB1inBytes; \
+    const size_t msizeC1_block_bytes = size_t(totalK0N1) * lineStrideMatrixC1inBytes; \
     \
     const size_t msizeB_block_bytes = std::max(_msizeB0_block_bytes, _msizeB1_block_bytes)
 
