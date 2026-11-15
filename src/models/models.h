@@ -1574,7 +1574,7 @@ struct llama_model_dflash : public llama_model_base {
         ggml_tensor * build_inp_tokens();
         ggml_tensor * build_layers(ggml_tensor * inp_tokens);
         ggml_tensor * build_logits(ggml_tensor * cur);
-        ggml_tensor * build_rope(ggml_tensor * cur, ggml_tensor * pos);
+        ggml_tensor * build_rope(ggml_tensor * cur, ggml_tensor * pos, int il);
     };
 
     struct graph_dflash : public graph_base {
