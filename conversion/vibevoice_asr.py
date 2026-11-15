@@ -38,10 +38,10 @@ class VibeVoiceAsrModel(Qwen2Model):
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
+        name, _ = item
         if not name.startswith("language_model."):
             return None
-        return super().filter_tensors((name[len("language_model."):], gen))
+        return super().filter_tensors(item)
 
 
 @ModelBase.register("VibeVoiceAsrForConditionalGeneration")
