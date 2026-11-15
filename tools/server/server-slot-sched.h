@@ -108,6 +108,9 @@ struct server_slot_info {
 
     // the slot runs a task whose prompt a new task can copy, see select_donor()
     bool can_donate = false;
+
+    // tokens of the task that are processed, -1 if the task has not started yet
+    int32_t n_task_done = -1;
 };
 
 struct server_slot_plan {
@@ -132,6 +135,9 @@ struct server_slot_sched {
 
     // a donor must give at least this many tokens more than the slot of the task already has
     int32_t n_donor_min = 64;
+
+    // the memory can only be copied as a whole: the donor must end a batch exactly at the end of the shared tokens
+    bool donor_exact = false;
 
     // idle slots that lose the least by being reused: empty slots first, then the least recently used ones
     std::vector<int> get_free_slots(const std::vector<server_slot_info> & slots, size_t n_slots_needed, int exclude_id_slot) const;

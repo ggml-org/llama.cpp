@@ -17,7 +17,7 @@ class LogReader:
         self.path = path
         self.pos = 0
     def drain(self):
-        with open(self.path) as f:
+        with open(self.path, errors="replace") as f:
             f.seek(self.pos)
             content = f.read()
             self.pos = f.tell()
@@ -40,8 +40,8 @@ def create_server():
 
 
 # the model has 512 tokens, the first n_same tokens do not depend on the seed
-def make_prompt(seed: int, n_same: int = N_SAME, n_own: int = N_OWN):
-    same = [10 + (i * 7) % 200 for i in range(n_same)]
+def make_prompt(seed: int, n_same: int = N_SAME, n_own: int = N_OWN, same_seed: int = 7):
+    same = [10 + (i * same_seed) % 200 for i in range(n_same)]
     own  = [300 + (i * seed + seed) % 200 for i in range(n_own)]
     return same + own
 
@@ -92,6 +92,17 @@ def test_share_prompt():
         assert res[i]["timings"]["prompt_n"] == N_OWN
 
     # the copied state gives the same answers
+    for i in range(3):
+        assert res[i]["content"] == reference(prompts[i])
+
+    # a prompt that is the start of another one, and the same prompt 2 times
+    # the shared part is new, so that the slots have nothing of it
+    prompt = make_prompt(9, same_seed=11)
+    prompts = [prompt, prompt[:N_SAME + 10], prompt]
+    res = completions(prompts)
+
+    content = log.drain()
+    assert content.count(TAG_COPY) == 2
     for i in range(3):
         assert res[i]["content"] == reference(prompts[i])
 

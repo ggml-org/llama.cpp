@@ -346,6 +346,9 @@ struct server_slot {
     int     id_task_donor  = -1;
     int32_t n_tokens_donor = 0;
 
+    // the batch of the prompt ends at this point: a waiting slot copies the state from here, -1 if none
+    int32_t n_tokens_split = -1;
+
     // some cells of the sequence may belong to another slot too, they must not be shifted
     // set on both slots by copy_prefix_to(), stays until the sequence is removed
     bool shares_cells = false;
@@ -450,6 +453,7 @@ struct server_slot {
         id_slot_donor  = -1;
         id_task_donor  = -1;
         n_tokens_donor = 0;
+        n_tokens_split = -1;
 
         if (can_speculate()) {
             spec_draft.clear();
@@ -873,14 +877,20 @@ struct server_slot {
     }
 
     // the other slot continues from the first n_tokens tokens, no data is copied: the cells are shared
-    // only for a unified KV cache with partial sequence removal, see can_share_prompt
+    // only for a unified KV cache, see can_share_prompt
     void copy_prefix_to(server_slot & other, int32_t n_tokens) {
         other.prompt_clear();
 
-        other.prompt.tokens = prompt.tokens.clone();
+        // the checkpoints past n_tokens are erased when the other slot starts
+        other.prompt = prompt.clone();
         other.prompt.tokens.keep_first(n_tokens);
 
-        mem.seq_cp(id, other.id, 0, other.prompt.tokens.pos_next());
+        if (n_tokens == prompt.n_tokens()) {
+            // the only copy that all the memory types support
+            mem.seq_cp(id, other.id, -1, -1);
+        } else {
+            mem.seq_cp(id, other.id, 0, other.prompt.tokens.pos_next());
+        }
 
         shares_cells       = true;
         other.shares_cells = true;
@@ -1129,6 +1139,9 @@ private:
 
     // a new task can wait for a busy slot with the same prompt prefix and copy it, see find_donor()
     bool can_share_prompt = false;
+
+    // the memory has no partial copy: the donor splits its prompt at the end of the shared tokens, see n_tokens_split
+    bool share_prompt_exact = false;
 
     common_speculative_ptr spec;
 
@@ -1558,8 +1571,18 @@ private:
         }
 
         // the copy shares the KV cells between 2 slots, and shifting a shared cell would move it for both
-        // TODO: support the other memory types, they can only be copied at the exact end of the prefix
         {
+            // a part of a sequence can be copied only if all of its cells are kept
+            const auto is_exact = [](common_context_seq_rm_type type) {
+                return type != COMMON_CONTEXT_SEQ_RM_TYPE_PART;
+            };
+            share_prompt_exact = is_exact(ctx_tgt_seq_rm_type) || (ctx_dft && is_exact(ctx_dft_seq_rm_type));
+
+            // TODO: test the memory with a bounded rollback (RS), then enable it
+            const auto is_supported = [](common_context_seq_rm_type type) {
+                return type == COMMON_CONTEXT_SEQ_RM_TYPE_PART || type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+            };
+
             const char * reason = nullptr;
             if (params_base.n_parallel < 2) {
                 reason = "single slot";
@@ -1569,15 +1592,20 @@ private:
                 reason = "not compatible with --context-shift";
             } else if (params_base.n_cache_reuse > 0) {
                 reason = "not compatible with --cache-reuse";
-            } else if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_PART || n_swa > 0) {
+            } else if (n_swa > 0) {
+                // TODO: the SWA cache reuses a cell only if it has 1 sequence, so the shared cells fill it up
+                reason = "not supported with a sliding window, it needs --swa-full";
+            } else if (!is_supported(ctx_tgt_seq_rm_type)) {
                 reason = "not supported by the memory of this model";
-            } else if (ctx_dft && ctx_dft_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_PART) {
+            } else if (ctx_dft && !is_supported(ctx_dft_seq_rm_type)) {
                 reason = "not supported by the memory of the draft model";
             }
 
             can_share_prompt = reason == nullptr;
+            slot_sched.donor_exact = share_prompt_exact;
+
             if (can_share_prompt) {
-                SRV_INF("%s", "prompt sharing between slots is enabled\n");
+                SRV_INF("prompt sharing between slots is enabled%s\n", share_prompt_exact ? " (copy at the end of the shared tokens only)" : "");
             } else {
                 SRV_INF("prompt sharing between slots is disabled: %s\n", reason);
             }
@@ -1899,6 +1927,9 @@ private:
                 && other.task->type == task.type
                 && can_share_task(*other.task)
                 && are_lora_equal(other.lora, task_loras);
+
+            const bool is_started = other.state != SLOT_STATE_IDLE && other.state != SLOT_STATE_WAIT_OTHER && other.state != SLOT_STATE_STARTED;
+            infos[i].n_task_done = is_started ? other.prompt.n_tokens() : -1;
         }
 
         // the cached tokens are kept only if the adapters do not change
@@ -1910,6 +1941,10 @@ private:
     // start the slots that wait for a donor, with the start of the prompt copied from it if possible
     // call only when no token is pending in the batch: the copy takes the cells that exist now
     void start_waiting_slots() {
+        for (auto & slot : slots) {
+            slot.n_tokens_split = -1;
+        }
+
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_WAIT_OTHER || slot.id_slot_donor == -1) {
                 continue;
@@ -1926,12 +1961,19 @@ private:
             const int32_t n_donor = are_lora_equal(donor.lora, slot.lora) ? donor.prompt.tokens.get_common_prefix(slot.task->tokens) : 0;
 
             if (is_pending && n_donor < slot.n_tokens_donor) {
+                // the nearest split first, the donor goes on to the next one after the copy
+                if (share_prompt_exact && (donor.n_tokens_split == -1 || donor.n_tokens_split > slot.n_tokens_donor)) {
+                    donor.n_tokens_split = slot.n_tokens_donor;
+                }
                 continue;
             }
 
             const int32_t n_have = slot.prompt.tokens.get_common_prefix(slot.task->tokens);
 
-            if (n_donor > n_have) {
+            // without a partial copy, the donor must have nothing but the shared tokens
+            const bool can_copy = !share_prompt_exact || n_donor == donor.prompt.n_tokens();
+
+            if (can_copy && n_donor > n_have) {
                 SLT_INF(slot, "copying the first %d tokens of the prompt from slot %d (n_have = %d, n_wait = %d)\n", n_donor, donor.id, n_have, slot.n_tokens_donor);
                 SLT_DBG(slot, "%s", "__TEST_TAG_SHARE_PROMPT__\n");
 
@@ -4494,7 +4536,8 @@ private:
                         auto cur_token_idx = slot.prompt.n_tokens();
                         if (
                             cur_token_idx >= slot.task->n_tokens() ||
-                            input_tokens[cur_token_idx] != LLAMA_TOKEN_NULL // encountered a text token
+                            input_tokens[cur_token_idx] != LLAMA_TOKEN_NULL || // encountered a text token
+                            cur_token_idx == slot.n_tokens_split
                         ) {
                             break;
                         }
@@ -4547,6 +4590,11 @@ private:
 
                         // stop at the end of the shared prefix, the children are started from this state
                         if (wait_shared && slot.prompt.n_tokens() == slot.task->n_tokens_shared) {
+                            break;
+                        }
+
+                        // a waiting slot copies the state from here in the next iteration
+                        if (slot.prompt.n_tokens() == slot.n_tokens_split) {
                             break;
                         }
 

@@ -335,6 +335,33 @@ static void test_server_slot_sched_donor(testing & t) {
         t.assert_equal("tokens of the previous task: slot",     0,   donor.id_slot);
         t.assert_equal("tokens of the previous task: n_tokens", 600, (int) donor.n_tokens);
     }
+
+    // the memory is copied as a whole
+    sched.donor_exact = true;
+    {
+        auto info = make_info(0, *s0);
+
+        info.n_task_done = -1;
+        t.assert_equal("exact: not started", 0, sched.select_donor({ info }, task, 3, 0).id_slot);
+
+        info.n_task_done = 500;
+        t.assert_equal("exact: at the end of the shared tokens", 0, sched.select_donor({ info }, task, 3, 0).id_slot);
+
+        info.n_task_done = 501;
+        t.assert_equal("exact: past the shared tokens", -1, sched.select_donor({ info }, task, 3, 0).id_slot);
+    }
+
+    {
+        // the task has the same prompt as the slot: 1 token is left for the task
+        server_task same(SERVER_TASK_TYPE_COMPLETION);
+        same.tokens = make_tokens(500, 900, 2000);
+        const auto donor = sched.select_donor({ make_info(0, *s0) }, same, 3, 0);
+        t.assert_equal("exact: same prompt: slot",     0,   donor.id_slot);
+        t.assert_equal("exact: same prompt: n_tokens", 899, (int) donor.n_tokens);
+
+        sched.donor_exact = false;
+        t.assert_equal("same prompt: n_tokens", 900, (int) sched.select_donor({ make_info(0, *s0) }, same, 3, 0).n_tokens);
+    }
 }
 
 static void test_server_slot_sched(testing & t) {

@@ -1087,13 +1087,13 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
                 // can we use this cell? either:
                 //  - the cell is empty
-                //  - the cell is occupied only by one sequence:
+                //  - the cell is masked for all of its sequences:
                 //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
                 //    - mask SWA, using current max pos for that sequence in the cache
                 //                always insert in the cell with minimum pos
                 bool can_use = cells.is_empty(idx);
 
-                if (!can_use && cells.seq_count(idx) == 1) {
+                if (!can_use && swa_type != LLAMA_SWA_TYPE_NONE) {
                     const llama_pos pos_cell = cells.pos_get(idx);
 
                     // (disabled) causal mask
@@ -1102,12 +1102,18 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                     //    can_use = pos_cell >= pos;
                     //}
 
-                    if (!can_use) {
-                        const llama_seq_id seq_id_cell = cells.seq_get(idx);
+                    // SWA mask
+                    const auto & seqs_cell = cells.seq_get_all(idx);
 
-                        // SWA mask
-                        if (llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
-                            can_use = true;
+                    can_use = true;
+                    for (uint32_t seq_id_cell = 0; seq_id_cell < n_seq_max; ++seq_id_cell) {
+                        if (!seqs_cell.test(seq_id_cell)) {
+                            continue;
+                        }
+
+                        if (!llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                            can_use = false;
+                            break;
                         }
                     }
                 }
@@ -1170,12 +1176,14 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
             const auto idx = sinfo.idxs[s][ii];
 
             if (!cells.is_empty(idx)) {
-                assert(cells.seq_count(idx) == 1);
+                const llama_pos pos       = cells.pos_get(idx);
+                const auto &    seqs_cell = cells.seq_get_all(idx);
 
-                const llama_seq_id seq_id = cells.seq_get(idx);
-                const llama_pos    pos    = cells.pos_get(idx);
-
-                seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+                for (uint32_t seq_id = 0; seq_id < n_seq_max; ++seq_id) {
+                    if (seqs_cell.test(seq_id)) {
+                        seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+                    }
+                }
 
                 cells.rm(idx);
             }
