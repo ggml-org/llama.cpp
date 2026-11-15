@@ -1539,12 +1539,12 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int stream_k_blocks = GGML_CUDA_CC_IS_GCN(cc) ? nsm * config.occupancy : nsm;
 
     const int k_chunks = (args.ncols_x + config.K_vram - 1) / config.K_vram;
-    bool force_tiling = false;
-    if (GGML_CUDA_CC_IS_GCN(cc)) {
-        // Use tiling when Stream-K is unlikely to improve performance.
-        force_tiling = tiles_efficiency_percent >= 90 || ntiles_dst >= 2*stream_k_blocks ||
-            k_chunks <= config.occupancy * tiles_nwaves;
-    }
+    // Use tiling when Stream-K is unlikely to improve performance:
+    // With at least 2 full waves of tiles, tiling already saturates the device and Stream-K only adds overhead.
+    // With few K chunks per tile, the extra parallelism of Stream-K is not needed.
+    const bool force_tiling = GGML_CUDA_CC_IS_GCN(cc) &&
+        (tiles_efficiency_percent >= 90 || ntiles_dst >= 2*stream_k_blocks ||
+         k_chunks <= config.occupancy * tiles_nwaves);
 
     if (force_tiling) {
         GGML_ASSERT(nti <= 65535);
