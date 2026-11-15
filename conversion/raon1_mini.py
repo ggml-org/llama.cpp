@@ -5,7 +5,7 @@ from typing import Any, Callable, Iterable
 import torch
 from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import ModelBase, TextModel, gguf
 
 
 _REQUIRED = object()
@@ -51,7 +51,7 @@ class Raon1MiniModel(TextModel):
     _MHC_SITES = (("self_attn_raon_mhc", "HC_ATTN"), ("mlp_raon_mhc", "HC_FFN"))
     _MHC_PARTS = ("phi_pre", "phi_post", "res.phi_z", "b_pre", "b_post", "res.b_z",
                   "alpha_pre", "alpha_post", "res.alpha_z", "res.eta")
-    # kept unquantized by llama-quantize (src/llama-quant.cpp); a quantized --outtype keeps them at F16 the same way
+    # Keep these tensors at F16 for direct conversion to Q8_0, TQ1_0 or TQ2_0.
     _KEEP_UNQUANTIZED = ("hc_attn_fn", "hc_ffn_fn", "ssm_f_a", "ssm_f_b", "ssm_beta", "ssm_rda")
     _KEEP_UNQUANTIZED_Q8_0 = ("attn_kv_a_mqa", "attn_k_b", "attn_v_b")
 
@@ -61,17 +61,19 @@ class Raon1MiniModel(TextModel):
         self._mhc: dict[tuple[int, str], dict[str, Tensor]] = {}
         self._rda_layers = set(_rda_config(self.hparams)["rda_layers"])
 
-    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
-        # MTP is not supported: drop the nextn layers (model.layers.{num_hidden_layers}..) before any data is read
-        n_layer = self.hparams["num_hidden_layers"]
-        mtp = [name for name in tensors if name.startswith("model.layers.") and int(name.split(".")[2]) >= n_layer]
-        if mtp:
-            n_mtp = len({name.split(".")[2] for name in mtp})
-            logger.info(f"Skipping {len(mtp)} MTP tensors in {n_mtp} layer(s) from model.layers.{n_layer}; MTP is not supported")
-            for name in mtp:
-                del tensors[name]
-        return tensors
+    def filter_tensors(self, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        filtered = super().filter_tensors(item)
+        if filtered is None:
+            return None
+
+        name, _ = filtered
+        if name.startswith("model.layers."):
+            layer = name.split(".", 3)[2]
+            # MTP layers follow the main model layers.
+            if layer.isdecimal() and int(layer) >= self.hparams["num_hidden_layers"]:
+                return None
+
+        return filtered
 
     def set_gguf_parameters(self):
         hp = self.hparams
