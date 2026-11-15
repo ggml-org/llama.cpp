@@ -1,6 +1,8 @@
 import {
 	MEDIUM_DURATION_THRESHOLD,
 	MS_PER_SECOND,
+	RELATIVE_TIME_MAX_DAYS,
+	SECONDS_PER_DAY,
 	SECONDS_PER_HOUR,
 	SECONDS_PER_MINUTE,
 	SHORT_DURATION_THRESHOLD
@@ -100,6 +102,50 @@ export function formatJsonPretty(jsonString: string): string {
 	} catch {
 		return jsonString;
 	}
+}
+
+/**
+ * Formats a past timestamp as a coarse relative label.
+ * Examples: "just now", "37 minutes ago", "1 hour ago", "3 days ago"
+ *
+ * @param timestamp - Epoch milliseconds in the past
+ * @returns Relative time string
+ */
+export function formatRelativeTime(timestamp: number): string {
+	const elapsedSeconds = (Date.now() - timestamp) / MS_PER_SECOND;
+	const plural = (value: number, unit: string) => `${value} ${unit}${value === 1 ? '' : 's'} ago`;
+
+	if (elapsedSeconds < SECONDS_PER_MINUTE) return 'just now';
+
+	if (elapsedSeconds < SECONDS_PER_HOUR) {
+		return plural(Math.floor(elapsedSeconds / SECONDS_PER_MINUTE), 'minute');
+	}
+
+	if (elapsedSeconds < SECONDS_PER_DAY) {
+		return plural(Math.floor(elapsedSeconds / SECONDS_PER_HOUR), 'hour');
+	}
+
+	if (elapsedSeconds < RELATIVE_TIME_MAX_DAYS * SECONDS_PER_DAY) {
+		return plural(Math.floor(elapsedSeconds / SECONDS_PER_DAY), 'day');
+	}
+
+	return new Date(timestamp).toLocaleDateString();
+}
+
+function pad2(value: number): string {
+	return String(value).padStart(2, '0');
+}
+
+/** ISO 8601 in local time, e.g. `2026-08-17T14:05:09+02:00` */
+export function formatLocalIso(date: Date): string {
+	// getTimezoneOffset() counts minutes behind UTC, ISO 8601 counts them ahead
+	const offset = -date.getTimezoneOffset();
+	const sign = offset < 0 ? '-' : '+';
+	const absOffset = Math.abs(offset);
+	const day = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+	const time = `${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+
+	return `${day}T${time}${sign}${pad2(Math.floor(absOffset / 60))}:${pad2(absOffset % 60)}`;
 }
 
 /**

@@ -15,6 +15,7 @@
 # Environment:
 #   SKIP_APIABI_CHECK:    set to 1 or true to skip
 #   APIABI_COMPARE_TAG:   equivalent to --tag (used by CI)
+#   APIABI_REPORT_DIR:    preserve reports and dumps in this directory, even if the comparison fails
 
 set -euo pipefail
 
@@ -113,4 +114,15 @@ cmake --build "$BUILD_NEW" --parallel "$(nproc)"
 
 (cd "$WORKTREE_DIR" && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_OLD" "${LIBS[@]}")
 (cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" --include-path ggml/include --generate "$BUILD_NEW" "${LIBS[@]}")
-(cd "$REPO_ROOT"    && "$SCRIPT_DIR/check-apiabi-compat.sh" "${CHECK_FLAGS[@]}" --check "$BUILD_OLD" "$BUILD_NEW")
+
+CHECK_RESULT=0
+(cd "$REPO_ROOT" && "$SCRIPT_DIR/check-apiabi-compat.sh" "${CHECK_FLAGS[@]}" --check "$BUILD_OLD" "$BUILD_NEW") || CHECK_RESULT=$?
+
+if [[ -n "${APIABI_REPORT_DIR:-}" ]]; then
+    mkdir -p "$APIABI_REPORT_DIR/old" "$APIABI_REPORT_DIR/new"
+    cp -R "$BUILD_OLD/apiabi/." "$APIABI_REPORT_DIR/old/"
+    cp -R "$BUILD_NEW/apiabi/." "$APIABI_REPORT_DIR/new/"
+    echo "API/ABI reports saved to $APIABI_REPORT_DIR"
+fi
+
+exit "$CHECK_RESULT"

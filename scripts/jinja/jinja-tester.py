@@ -241,10 +241,10 @@ class CodeEditor(QPlainTextEdit):
         if not self.isReadOnly():
             selection = QTextEdit.ExtraSelection()
             line_color = QColorConstants.Yellow.lighter(160)
-            selection.format.setBackground(line_color)  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            selection.cursor = self.textCursor()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            selection.cursor.clearSelection()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            selection.format.setBackground(line_color)  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            selection.cursor = self.textCursor()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            selection.cursor.clearSelection()  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
             extra_selections.append(selection)
         self.setExtraSelections(extra_selections)
 
@@ -262,8 +262,8 @@ class CodeEditor(QPlainTextEdit):
                 )
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
 
             self.setExtraSelections(self.extraSelections() + [extra])
 
@@ -274,8 +274,8 @@ class CodeEditor(QPlainTextEdit):
             cursor.select(QTextCursor.SelectionType.LineUnderCursor)
 
             extra = QTextEdit.ExtraSelection()
-            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            extra.format.setBackground(color.lighter(160))  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            extra.cursor = cursor  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
 
             self.setExtraSelections(self.extraSelections() + [extra])
 

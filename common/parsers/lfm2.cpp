@@ -61,10 +61,10 @@ common_chat_params common_chat_params_init_lfm2(const common_chat_template &    
             data.generation_prompt += THINK_END + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
-    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+    data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(GEN_PROMPT);
         auto end = p.end();
 
@@ -83,7 +83,8 @@ common_chat_params common_chat_params_init_lfm2(const common_chat_template &    
         auto tool_calls = p.rule("tool-calls",
             p.trigger_rule("tool-call",
                 p.literal(TOOL_CALL_START) +
-                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls, /* allow_json_literals = */ true) +
+                p.python_style_tool_calls(inputs.tools, inputs.parallel_tool_calls, /* allow_json_literals = */ true,
+                                          /* allow_undeclared = */ true) +
                 p.literal(TOOL_CALL_END)
             )
         );
@@ -93,12 +94,10 @@ common_chat_params common_chat_params_init_lfm2(const common_chat_template &    
         return generation_prompt + reasoning + content + tool_calls + end;
     });
 
-    data.parser = parser.save();
-
     if (include_grammar) {
         data.grammar_lazy = !(has_response_format || (has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         data.grammar_triggers = {

@@ -61,7 +61,9 @@
 		bind:ref
 		bind:value
 		{autofocus}
-		class="max-md:h-10 pl-9 {showClearButton ? 'pr-9' : ''} {size === 'sm' ? 'h-8' : ''}"
+		class="max-md:h-10 pl-9 {showClearButton ? 'pr-9' : ''} {size === 'sm'
+			? 'h-8'
+			: ''} [&::-webkit-search-cancel-button]:hidden"
 		{id}
 		oninput={handleInput}
 		onkeydown={onKeyDown}

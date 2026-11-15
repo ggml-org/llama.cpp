@@ -41,16 +41,21 @@
 						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 
-					{@const isCategoryEnabled =
-						group.source !== ToolSource.MCP && toolsStore.isCategoryEnabled(group.source)}
+					{@const groupToggleKey =
+						group.source === ToolSource.MCP && group.serverId
+							? toolsStore.getMcpServerToolsKey(group.serverId)
+							: null}
 
-					{#if group.source !== ToolSource.MCP}
-						<Checkbox
-							checked={isCategoryEnabled}
-							onCheckedChange={() => toolsStore.toggleCategory(group.source)}
-							onclick={(e) => e.stopPropagation()}
-						/>
-					{/if}
+					<Checkbox
+						checked={groupToggleKey
+							? toolsStore.isToolEnabled(groupToggleKey)
+							: toolsStore.isCategoryEnabled(group.source)}
+						onCheckedChange={() =>
+							groupToggleKey
+								? toolsStore.toggleTool(groupToggleKey)
+								: toolsStore.toggleCategory(group.source)}
+						onclick={(e) => e.stopPropagation()}
+					/>
 
 					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
 

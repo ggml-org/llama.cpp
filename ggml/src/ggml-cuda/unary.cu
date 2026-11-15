@@ -91,7 +91,7 @@ static __device__ __forceinline__ float op_expm1(float x) {
 }
 
 static __device__ __forceinline__ float op_softplus(float x) {
-    return (x > 20.0f) ? x : logf(1.0f + expf(x));
+    return (x > 20.0f) ? x : log1pf(expf(x));
 }
 
 static __device__ __forceinline__ float op_elu(float x) {
@@ -107,7 +107,7 @@ static __device__ __forceinline__ float op_ceil(float x) {
 }
 
 static __device__ __forceinline__ float op_round(float x) {
-    return round(x);
+    return roundf(x);
 }
 
 static __device__ __forceinline__ float op_trunc(float x) {

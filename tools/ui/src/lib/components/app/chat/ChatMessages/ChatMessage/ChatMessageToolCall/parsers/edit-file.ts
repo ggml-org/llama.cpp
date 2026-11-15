@@ -1,10 +1,16 @@
 // Meta parser for `edit_file` tool calls. Reads the file path and the
 // array of edits from the streamed args (partial JSON for incremental
 // rendering), plus the result blob for `result` / `edits_applied` /
-// `error` fields.
+// `error` fields. The path is display-only (block title), so a call
+// that has not streamed one still shows its diffs.
 
-import { extractToolArgString, parseToolArgs } from './_shared';
-import { FILE_PATH_SEPARATOR_REGEX, TOOL_ARG_PATH_KEYS } from '$lib/constants';
+import {
+	extractToolArgPath,
+	extractToolArgString,
+	fileNameFromPath,
+	parseToolArgs
+} from './_shared';
+import { TOOL_ARG_PATH_KEYS } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
 import type { AgenticSection, EditFileEdit, EditFileMeta, EditFileTitleMeta } from '$lib/types';
 import { tryParseToolResultObject } from '$lib/utils';
@@ -14,11 +20,8 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 
 	if (!args) return null;
 
-	const rawPath = args.path ?? args.file_path ?? args.filePath;
-
-	if (typeof rawPath !== 'string' || !rawPath) return null;
-
-	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
+	const filePath = extractToolArgPath(args);
+	const fileName = fileNameFromPath(filePath);
 	// Filter the streamed edits array strictly: each entry must be an
 	// object with a non-empty `old_text`. Edits without an old_text
 	// would diff against empty and render as a full re-write.
@@ -61,7 +64,7 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 		editsApplied,
 		errorMessage,
 		fileName,
-		filePath: rawPath,
+		filePath,
 		resultMessage
 	};
 }
@@ -75,18 +78,15 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 export function parseEditFileTitleMeta(section: AgenticSection): EditFileTitleMeta | null {
 	if (section.toolName !== BuiltInTool.SERVER_EDIT_FILE || !section.toolArgs) return null;
 
-	let rawPath: string | undefined = extractToolArgString(section.toolArgs, TOOL_ARG_PATH_KEYS);
+	let filePath = extractToolArgString(section.toolArgs, TOOL_ARG_PATH_KEYS);
 
-	if (!rawPath) {
-		const args = parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true });
-		const fallbackPath = args?.path ?? args?.file_path ?? args?.filePath;
-
-		if (typeof fallbackPath === 'string' && fallbackPath) rawPath = fallbackPath;
+	if (!filePath) {
+		filePath = extractToolArgPath(
+			parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true })
+		);
 	}
 
-	if (!rawPath) return null;
-
-	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
+	const fileName = fileNameFromPath(filePath);
 	const resultObj = tryParseToolResultObject(section.toolResult);
 
 	let resultMessage: string | undefined;
@@ -105,5 +105,5 @@ export function parseEditFileTitleMeta(section: AgenticSection): EditFileTitleMe
 		}
 	}
 
-	return { editsApplied, errorMessage, fileName, filePath: rawPath, resultMessage };
+	return { editsApplied, errorMessage, fileName, filePath, resultMessage };
 }

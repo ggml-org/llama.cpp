@@ -90,7 +90,7 @@ describe('filterModelOptions', () => {
 });
 
 describe('groupModelOptions', () => {
-	it('groups the options by org, unnamed last', () => {
+	it('groups the options by org, unnamed first', () => {
 		const grouped = groupModelOptions([
 			option('org/a', 'org'),
 			option('org/b', 'org'),
@@ -98,7 +98,21 @@ describe('groupModelOptions', () => {
 			option('plain')
 		]);
 
-		expect(grouped.available.map((group) => group.orgName)).toEqual(['org', 'other', null]);
-		expect(grouped.available[0].items.map((item) => item.option.model)).toEqual(['org/a', 'org/b']);
+		expect(grouped.available.map((group) => group.orgName)).toEqual([null, 'org', 'other']);
+		expect(grouped.available[1].items.map((item) => item.option.model)).toEqual(['org/a', 'org/b']);
+	});
+
+	it('keeps org-less options together ahead of the org they follow', () => {
+		const grouped = groupModelOptions([
+			option('Qwen/Qwen2.5', 'Qwen'),
+			option('gemma-3'),
+			option('gpt-oss'),
+			option('unsloth/Qwen3.6', 'unsloth'),
+			option('qwen3.6')
+		]);
+
+		expect(grouped.available.map((group) => group.orgName)).toEqual([null, 'Qwen', 'unsloth']);
+		expect(grouped.available[0].items.map((item) => item.option.model)) //
+			.toEqual(['gemma-3', 'gpt-oss', 'qwen3.6']);
 	});
 });

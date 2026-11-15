@@ -1,178 +1,5 @@
 #pragma once
 
-//
-// GGML Tensor Library
-//
-// This documentation is still a work in progress.
-// If you wish some specific topics to be covered, feel free to drop a comment:
-//
-//   https://github.com/ggml-org/whisper.cpp/issues/40
-//
-// ## Overview
-//
-// This library implements:
-//
-//  - a set of tensor operations
-//  - automatic differentiation
-//  - basic optimization algorithms
-//
-// The aim of this library is to provide a minimalistic approach for various machine learning tasks. This includes,
-// but is not limited to, the following:
-//
-//  - linear regression
-//  - support vector machines
-//  - neural networks
-//
-// The library allows the user to define a certain function using the available tensor operations. This function
-// definition is represented internally via a computation graph. Each tensor operation in the function definition
-// corresponds to a node in the graph. Having the computation graph defined, the user can choose to compute the
-// function's value and/or its gradient with respect to the input variables. Optionally, the function can be optimized
-// using one of the available optimization algorithms.
-//
-// For example, here we define the function: f(x) = a*x^2 + b
-//
-//   {
-//       struct ggml_init_params params = {
-//           .mem_size   = 16*1024*1024,
-//           .mem_buffer = NULL,
-//       };
-//
-//       // memory allocation happens here
-//       struct ggml_context * ctx = ggml_init(params);
-//
-//       struct ggml_tensor * x = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-//
-//       ggml_set_param(ctx, x); // x is an input variable
-//
-//       struct ggml_tensor * a  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-//       struct ggml_tensor * b  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
-//       struct ggml_tensor * x2 = ggml_mul(ctx, x, x);
-//       struct ggml_tensor * f  = ggml_add(ctx, ggml_mul(ctx, a, x2), b);
-//
-//       ...
-//   }
-//
-// Notice that the function definition above does not involve any actual computation. The computation is performed only
-// when the user explicitly requests it. For example, to compute the function's value at x = 2.0:
-//
-//   {
-//       ...
-//
-//       struct ggml_cgraph * gf = ggml_new_graph(ctx);
-//       ggml_build_forward_expand(gf, f);
-//
-//       // set the input variable and parameter values
-//       ggml_set_f32(x, 2.0f);
-//       ggml_set_f32(a, 3.0f);
-//       ggml_set_f32(b, 4.0f);
-//
-//       ggml_graph_compute_with_ctx(ctx, &gf, n_threads);
-//
-//       printf("f = %f\n", ggml_get_f32_1d(f, 0));
-//
-//       ...
-//   }
-//
-// The actual computation is performed in the ggml_graph_compute() function.
-//
-// The ggml_new_tensor_...() functions create new tensors. They are allocated in the memory buffer provided to the
-// ggml_init() function. You have to be careful not to exceed the memory buffer size. Therefore, you have to know
-// in advance how much memory you need for your computation. Alternatively, you can allocate a large enough memory
-// and after defining the computation graph, call the ggml_used_mem() function to find out how much memory was
-// actually needed.
-//
-// The ggml_set_param() function marks a tensor as an input variable. This is used by the automatic
-// differentiation and optimization algorithms.
-//
-// The described approach allows to define the function graph once and then compute its forward or backward graphs
-// multiple times. All computations will use the same memory buffer allocated in the ggml_init() function. This way
-// the user can avoid the memory allocation overhead at runtime.
-//
-// The library supports multi-dimensional tensors - up to 4 dimensions. The FP16 and FP32 data types are first class
-// citizens, but in theory the library can be extended to support FP8 and integer data types.
-//
-// Each tensor operation produces a new tensor. Initially the library was envisioned to support only the use of unary
-// and binary operations. Most of the available operations fall into one of these two categories. With time, it became
-// clear that the library needs to support more complex operations. The way to support these operations is not clear
-// yet, but a few examples are demonstrated in the following operations:
-//
-//   - ggml_permute()
-//   - ggml_conv_1d_1s()
-//   - ggml_conv_1d_2s()
-//
-// For each tensor operator, the library implements a forward and backward computation function. The forward function
-// computes the output tensor value given the input tensor values. The backward function computes the adjoint of the
-// input tensors given the adjoint of the output tensor. For a detailed explanation of what this means, take a
-// calculus class, or watch the following video:
-//
-//   What is Automatic Differentiation?
-//   https://www.youtube.com/watch?v=wG_nF1awSSY
-//
-//
-// ## Tensor data (struct ggml_tensor)
-//
-// The tensors are stored in memory via the ggml_tensor struct. The structure provides information about the size of
-// the tensor, the data type, and the memory buffer where the tensor data is stored. Additionally, it contains
-// pointers to the "source" tensors - i.e. the tensors that were used to compute the current tensor. For example:
-//
-//   {
-//       struct ggml_tensor * c = ggml_add(ctx, a, b);
-//
-//       assert(c->src[0] == a);
-//       assert(c->src[1] == b);
-//   }
-//
-// The multi-dimensional tensors are stored in row-major order. The ggml_tensor struct contains fields for the
-// number of elements in each dimension ("ne") as well as the number of bytes ("nb", a.k.a. stride). This allows
-// to store tensors that are not contiguous in memory, which is useful for operations such as transposition and
-// permutation. All tensor operations have to take the stride into account and not assume that the tensor is
-// contiguous in memory.
-//
-// The data of the tensor is accessed via the "data" pointer. For example:
-//
-//   {
-//       const int nx = 2;
-//       const int ny = 3;
-//
-//       struct ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nx, ny);
-//
-//       for (int y = 0; y < ny; y++) {
-//           for (int x = 0; x < nx; x++) {
-//               *(float *) ((char *) a->data + y*a->nb[1] + x*a->nb[0]) = x + y;
-//           }
-//       }
-//
-//       ...
-//   }
-//
-// Alternatively, there are helper functions, such as ggml_get_f32_1d() and ggml_set_f32_1d() that can be used.
-//
-// ## The matrix multiplication operator (ggml_mul_mat)
-//
-// TODO
-//
-//
-// ## Multi-threading
-//
-// TODO
-//
-//
-// ## Overview of ggml.c
-//
-// TODO
-//
-//
-// ## SIMD optimizations
-//
-// TODO
-//
-//
-// ## Debugging ggml
-//
-// TODO
-//
-//
-
 #ifdef GGML_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
 #        ifdef GGML_BUILD
@@ -381,6 +208,8 @@ extern "C" {
     GGML_API void        ggml_fp32_to_bf16_row_ref(const float *, ggml_bf16_t *, int64_t);
     GGML_API void        ggml_fp32_to_bf16_row(const float *, ggml_bf16_t *, int64_t);
 
+    typedef struct { uint8_t bits; } ggml_fp8_e4m3_t;
+
     struct ggml_object;
     struct ggml_context;
     struct ggml_cgraph;
@@ -430,7 +259,8 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_F8_E4M3 = 43,
+        GGML_TYPE_COUNT   = 44,
     };
 
     // [TAG_GGML_PREC]
@@ -442,7 +272,6 @@ extern "C" {
     // the precision parameters are stored as ggml_tensor.op_params to the respective ops
     enum ggml_prec {
         GGML_PREC_UNDEFINED = 0,
-        GGML_PREC_DEFAULT   = 0,  // note: deprecated, use GGML_PREC_UNDEFINED
         GGML_PREC_F32       = 10,
         GGML_PREC_BF16      = 15,
         GGML_PREC_F16       = 20,
@@ -486,6 +315,7 @@ extern "C" {
         GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0    = 27, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q2_0    = 28, // except 1d tensors
+        GGML_FTYPE_MOSTLY_F8_E4M3 = 29, // except 1d tensors
     };
 
     // available tensor operations:
@@ -495,7 +325,6 @@ extern "C" {
         GGML_OP_DUP,
         GGML_OP_ADD,
         GGML_OP_ADD_ID,
-        GGML_OP_ADD1,
         GGML_OP_ACC,
         GGML_OP_SUB,
         GGML_OP_MUL,
@@ -537,8 +366,6 @@ extern "C" {
         GGML_OP_GET_ROWS_BACK,
         GGML_OP_SET_ROWS,
         GGML_OP_DIAG,
-        GGML_OP_DIAG_MASK_INF,
-        GGML_OP_DIAG_MASK_ZERO,
         GGML_OP_SOFT_MAX,
         GGML_OP_SOFT_MAX_BACK,
         GGML_OP_ROPE,
@@ -585,6 +412,7 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_TOP_K_MASK,
 
         GGML_OP_UNARY,
 
@@ -760,10 +588,6 @@ extern "C" {
     GGML_API size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
     GGML_API size_t  ggml_row_size (enum ggml_type type, int64_t ne); // size in bytes for all elements in a row
 
-    GGML_DEPRECATED(
-    GGML_API double ggml_type_sizef(enum ggml_type type), // ggml_type_size()/ggml_blck_size() as float
-    "use ggml_row_size() instead");
-
     GGML_API const char * ggml_type_name(enum ggml_type type);
     GGML_API const char * ggml_op_name  (enum ggml_op   op);
     GGML_API const char * ggml_op_symbol(enum ggml_op   op);
@@ -925,23 +749,12 @@ extern "C" {
             enum   ggml_type      type);
 
     // dst[i0, i1, i2] = a[i0, i1, i2] + b[i0, ids[i1, i2]]
+    // an id of -1 adds nothing: dst[i0, i1, i2] = a[i0, i1, i2]
     GGML_API struct ggml_tensor * ggml_add_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
-
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_add1(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b),
-        "use ggml_add instead");
-
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_add1_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b),
-        "use ggml_add_inplace instead");
 
     // dst = a
     // view(dst, nb1, nb2, nb3, offset) += b
@@ -1476,6 +1289,16 @@ extern "C" {
             enum ggml_prec       prec,
             int                  idx);
 
+    // [TAG_GGML_PREC]
+    // get the accumulator / src[idx] precision set by the functions above
+    // return GGML_PREC_UNDEFINED when the op does not carry the requested precision
+    GGML_API enum ggml_prec ggml_prec_get_acc(
+            const struct ggml_tensor * a);
+
+    GGML_API enum ggml_prec ggml_prec_get_src(
+            const struct ggml_tensor * a,
+            int                        idx);
+
     // A: k columns, n rows => [ne03, ne02, n, k]
     // B: k columns, m rows  (i.e. we transpose it internally) => [ne03 * x, ne02 * y, m, k]
     // result is n columns, m rows => [ne03 * x, ne02 * y, m, n]
@@ -1484,19 +1307,19 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
-    // change the precision of a matrix multiplication
-    // set to GGML_PREC_F32 for higher precision (useful for phi-2)
-    GGML_DEPRECATED(GGML_API void ggml_mul_mat_set_prec(
-            struct ggml_tensor * a,
-            enum ggml_prec       prec),
-        "use ggml_prec_set_acc() instead");
-
     // change the hint of a matrix multiplication
     GGML_API void ggml_mul_mat_set_hint(
             struct ggml_tensor * a,
             enum ggml_op_hint    hint);
 
     // indirect matrix multiplication
+    // an id of -1 skips the slot and zeroes the matching row of the result
+    //
+    // [TAG_MUL_MAT_ID_DUPLICATE_ID]
+    // note: this op has undefined behaviour if a given `a` is referenced more than once for a given `b`
+    //       (i.e. duplicate experts per token are not guaranteed to be supported in all backends)
+    // TODO: add backend support: https://github.com/ggml-org/llama.cpp/pull/29998#issuecomment-6153742533
+    // the CPU backend skips negative ids, their rows of the result are zero
     GGML_API struct ggml_tensor * ggml_mul_mat_id(
             struct ggml_context * ctx,
             struct ggml_tensor  * as,
@@ -1755,30 +1578,6 @@ extern "C" {
         struct ggml_context     * ctx,
         struct ggml_tensor      * a);
 
-    // set elements above the diagonal to -INF
-    GGML_API struct ggml_tensor * ggml_diag_mask_inf(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   n_past);
-
-    // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_diag_mask_inf_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   n_past);
-
-    // set elements above the diagonal to 0
-    GGML_API struct ggml_tensor * ggml_diag_mask_zero(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   n_past);
-
-    // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_diag_mask_zero_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   n_past);
-
     GGML_API struct ggml_tensor * ggml_clamp(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
@@ -1982,40 +1781,6 @@ extern "C" {
             float                 beta_fast,
             float                 beta_slow);
 
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_rope_custom(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   n_dims,
-            int                   mode,
-            int                   n_ctx_orig,
-            float                 freq_base,
-            float                 freq_scale,
-            float                 ext_factor,
-            float                 attn_factor,
-            float                 beta_fast,
-            float                 beta_slow),
-        "use ggml_rope_ext instead");
-
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_rope_custom_inplace(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   n_dims,
-            int                   mode,
-            int                   n_ctx_orig,
-            float                 freq_base,
-            float                 freq_scale,
-            float                 ext_factor,
-            float                 attn_factor,
-            float                 beta_fast,
-            float                 beta_slow),
-        "use ggml_rope_ext_inplace instead");
-
-    // compute correction dims for YaRN RoPE scaling
-    GGML_API void ggml_rope_yarn_corr_dims(
-        int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, float dims[2]);
-
     // rotary position embedding backward, i.e compute dx from dy
     // a - dy
     GGML_API struct ggml_tensor * ggml_rope_ext_back(
@@ -2057,6 +1822,11 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_rope_set_offset(
             struct ggml_tensor  * a,
             int                   n_offs);
+
+    // control rounding of YaRN correction bounds (default: true)
+    GGML_API struct ggml_tensor * ggml_rope_set_truncate(
+            struct ggml_tensor * a,
+            bool                 truncate);
 
     // im2col
     // converts data into a format that effectively results in a convolution when combined with matrix multiplication
@@ -2316,7 +2086,7 @@ extern "C" {
         GGML_SCALE_MODE_BILINEAR = 1,
         GGML_SCALE_MODE_BICUBIC  = 2,
 
-        GGML_SCALE_MODE_COUNT
+        GGML_SCALE_MODE_COUNT = 3
     };
 
     enum ggml_scale_flag {
@@ -2331,18 +2101,6 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   scale_factor,
             enum ggml_scale_mode  mode);
-
-    // interpolate
-    // interpolate scale to specified dimensions
-    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_upscale_ext(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            int                   ne0,
-            int                   ne1,
-            int                   ne2,
-            int                   ne3,
-            enum ggml_scale_mode  mode),
-        "use ggml_interpolate instead");
 
     // Up- or downsamples the input to the specified size.
     // 2D scale modes (eg. bilinear) are applied to the first two dimensions.
@@ -2494,10 +2252,23 @@ extern "C" {
             float                 max_bias,
             float                 logit_softcap);
 
-    GGML_DEPRECATED(GGML_API void ggml_flash_attn_ext_set_prec(
-            struct ggml_tensor * a,
-            enum ggml_prec       prec),
-        "use ggml_prec_set_acc() instead");
+    // same as ggml_flash_attn_ext, but each q slice attends to its own list of K/V rows
+    // q:       [n_embd_k, n_batch, n_head,    ne3]
+    // k:       [n_embd_k, n_rows,  n_head_kv, 1  ] shared by all q slices
+    // v:       [n_embd_v, n_rows,  n_head_kv, 1  ]
+    // mask:    [n_kv,     n_batch, ne32,      ne3]
+    // kv_rows: [n_kv,     ne3] I32, mask column i of slice i3 uses row kv_rows[i, i3] of k and v
+    // negative rows are padding, their mask entries must be -inf
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * kv_rows,
+            float                 scale,
+            float                 max_bias,
+            float                 logit_softcap);
 
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);
@@ -2649,6 +2420,7 @@ extern "C" {
     // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by K state
     // snapshots, most-recent first (slot 0 = final state, slot s = state s tokens back). K == 1
     // keeps only the final state; when n_tokens < K only slots 0..n_tokens-1 are written.
+    // when n_tokens > K only slot 0 is guaranteed; backends may leave slots 1..K-1 unwritten.
     GGML_API struct ggml_tensor * ggml_gated_delta_net(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -2725,6 +2497,26 @@ extern "C" {
             struct ggml_tensor  * residual,
             struct ggml_tensor  * post,
             struct ggml_tensor  * comb);
+
+    // top-k sparse attention mask: keep the mask cells of the live picks and the extra cells, set the rest to -inf
+    //
+    // mask:   [n_kv,    m1,  m2,  m3]  f16 or f32, broadcast to the rows of top_k
+    // top_k:  [n_top,   ne1, ne2, ne3] i32, picks of each row
+    // score:  [n_pick,  ne1, ne2, ne3] f32, can be NULL: a pick is live when its score is above -inf, else every pick is live
+    // blocks: [n_blk,   n_pick]        i32, can be NULL: the member cells of each pick, else a pick is a cell
+    // extra:  [n_extra, ne1, ne2, ne3] i32, can be NULL: cells of each row kept without a pick
+    // res:    [n_kv,    ne1, ne2, ne3] same type as mask
+    //
+    // res[c, i] = mask[c, i % m] when c is a cell of a live pick of row i or an extra cell of row i, else -inf
+    // picks and cells out of range are skipped
+    //
+    GGML_API struct ggml_tensor * ggml_top_k_mask(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * top_k,
+            struct ggml_tensor  * score,
+            struct ggml_tensor  * blocks,
+            struct ggml_tensor  * extra);
 
     // custom operators
 
