@@ -500,6 +500,8 @@ static bool htp_kparams_solve_flash_attn(
 static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
+    const struct ggml_tensor * dst_cache,
     struct htp_gdn_kernel_params * kparams
 ) {
     if (opt_gdn_select < 1) {
@@ -516,9 +518,18 @@ static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_tensor * state = op->src[5];
     const struct ggml_tensor * dst   = op;
 
-    if (q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
-        g->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || state->type != GGML_TYPE_F32 ||
-        dst->type != GGML_TYPE_F32) {
+    auto is_act_type = [internal_f16](ggml_type t) {
+        return t == GGML_TYPE_F32 || (internal_f16 && t == GGML_TYPE_F16);
+    };
+
+    if (!is_act_type(q->type) || !is_act_type(k->type) || !is_act_type(v->type) ||
+        g->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || state->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (dst_cache && (dst_cache->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst_cache))) {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F32 && !(internal_f16 && dst_cache != nullptr && dst->type == GGML_TYPE_F16)) {
         return false;
     }
 
@@ -5986,6 +5997,20 @@ bool htp_kparams_solve(
         kp->silu = silu;
         return commit(ok);
     }
+    if (tmp.opcode == HTP_OP_GATED_DELTA_NET) {
+        if (tmp.inputs.size() != 6 || tmp.outputs.empty() || tmp.outputs.size() > 2) {
+            return false;
+        }
+        ggml_tensor op_view = *tmp.dst();
+        op_view.op = tmp.node->op;
+        op_view.flags = tmp.node->flags;
+        memcpy(op_view.op_params, tmp.params, sizeof(op_view.op_params));
+        for (size_t i = 0; i < 6; ++i) {
+            op_view.src[i] = const_cast<ggml_tensor *>(tmp.inputs[i]);
+        }
+        const ggml_tensor * dst_cache = (tmp.outputs.size() == 2) ? tmp.outputs[1] : nullptr;
+        return commit(htp_kparams_solve_gated_delta_net(sess, &op_view, internal_f16, dst_cache, tmp.kparams<htp_gdn_kernel_params>()));
+    }
 
     if (!tmp.fused.empty()) {
         return false;
@@ -6070,7 +6095,11 @@ bool htp_kparams_solve(
         }
 
         case HTP_OP_GATED_DELTA_NET:
-            return htp_kparams_invoke<htp_kparams_solve_gated_delta_net>(sess, op, kparams);
+        {
+            struct htp_gdn_kernel_params tmp;
+            return htp_kparams_solve_gated_delta_net(sess, op, internal_f16, nullptr,
+                                                     kparams ? (struct htp_gdn_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_ARGSORT:
         case HTP_OP_TOP_K:

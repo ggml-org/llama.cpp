@@ -5703,38 +5703,70 @@ struct test_gated_delta_net : public test_case {
     const bool    padded_v;
     const bool    padded_q;
     const bool    permuted_k;
+    const bool    f16_boundary;
 
     std::string vars() override {
-        return VARS_TO_STR13(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K, correlated, padded_v, padded_q, permuted_k);
+        std::string s = VARS_TO_STR13(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K, correlated, padded_v, padded_q, permuted_k);
+        if (f16_boundary) {
+            s += ",f16_boundary=1";
+        }
+        return s;
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        if (f16_boundary) {
+            return "GATED_DELTA_NET";
+        }
+        return test_case::op_desc(t);
+    }
+
+    bool run_whole_graph() override { return f16_boundary; }
+
+    double max_nmse_err() override {
+        if (!kda && K == 1 && (head_size == 64 || head_size == 128) && n_seq_tokens >= 64) {
+            return 5e-3;
+        }
+        return f16_boundary ? 1e-4 : test_case::max_nmse_err();
     }
 
     test_gated_delta_net(ggml_type type = GGML_TYPE_F32,
             int64_t head_count = 4, int64_t head_size = 16, int64_t n_seq_tokens = 1, int64_t n_seqs = 1,
-            int v_repeat = 1, bool permuted = false, bool kda = false, int64_t K = 1, bool correlated = false, bool padded_v = false, bool padded_q = false, bool permuted_k = false)
+            int v_repeat = 1, bool permuted = false, bool kda = false, int64_t K = 1,
+            bool correlated = false, bool padded_v = false, bool padded_q = false, bool permuted_k = false, bool f16_boundary = false)
         : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs),
-          v_repeat(v_repeat), permuted(permuted), kda(kda), K(K), correlated(correlated), padded_v(padded_v), padded_q(padded_q), permuted_k(permuted_k) {}
+          v_repeat(v_repeat), permuted(permuted), kda(kda), K(K),
+          correlated(correlated), padded_v(padded_v), padded_q(padded_q), permuted_k(permuted_k), f16_boundary(f16_boundary) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * q;
-        ggml_tensor * k;
-        ggml_tensor * v;
+        ggml_tensor * q0;
+        ggml_tensor * k0;
+        ggml_tensor * v0;
         if (permuted) {
             // create with dims 1 and 2 swapped, then permute back to get non-contiguous layout
-            q = ggml_permute(ctx, ggml_new_tensor_4d(ctx, type, head_size, n_seq_tokens, head_count, n_seqs), 0, 2, 1, 3);
-            k = ggml_permute(ctx, ggml_new_tensor_4d(ctx, type, head_size, n_seq_tokens, head_count, n_seqs), 0, 2, 1, 3);
-            v = ggml_permute(ctx, ggml_new_tensor_4d(ctx, type, head_size + padded_v, n_seq_tokens, head_count * v_repeat, n_seqs), 0, 2, 1, 3);
+            q0 = ggml_new_tensor_4d(ctx, type, head_size, n_seq_tokens, head_count, n_seqs);
+            k0 = ggml_new_tensor_4d(ctx, type, head_size, n_seq_tokens, head_count, n_seqs);
+            v0 = ggml_new_tensor_4d(ctx, type, head_size + padded_v, n_seq_tokens, head_count * v_repeat, n_seqs);
         } else {
-            q = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
-            k = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
-            v = ggml_new_tensor_4d(ctx, type, head_size + padded_v, head_count * v_repeat, n_seq_tokens, n_seqs);
+            q0 = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
+            k0 = ggml_new_tensor_4d(ctx, type, head_size, head_count, n_seq_tokens, n_seqs);
+            v0 = ggml_new_tensor_4d(ctx, type, head_size + padded_v, head_count * v_repeat, n_seq_tokens, n_seqs);
+        }
+        ggml_set_name(q0, "q");
+        ggml_set_name(k0, "k");
+        ggml_set_name(v0, "v");
+
+        ggml_tensor * q = f16_boundary ? ggml_dup(ctx, q0) : q0;
+        ggml_tensor * k = f16_boundary ? ggml_dup(ctx, k0) : k0;
+        ggml_tensor * v = f16_boundary ? ggml_dup(ctx, v0) : v0;
+        if (permuted) {
+            q = ggml_permute(ctx, q, 0, 2, 1, 3);
+            k = ggml_permute(ctx, k, 0, 2, 1, 3);
+            v = ggml_permute(ctx, v, 0, 2, 1, 3);
         }
         if (padded_v) {
-            ggml_set_name(v, "v");
             v = ggml_view_4d(ctx, v, head_size, head_count * v_repeat, n_seq_tokens, n_seqs, v->nb[1], v->nb[2], v->nb[3], 0);
         }
-        ggml_set_name(q, "q");
-        ggml_set_name(k, "k");
-        ggml_set_name(v, "v");
+
         const int64_t g_ne0 = kda ? head_size : 1;
         ggml_tensor * g     = ggml_new_tensor_4d(ctx, type, g_ne0, head_count * v_repeat, n_seq_tokens, n_seqs);
         ggml_tensor * beta  = ggml_new_tensor_4d(ctx, type, 1, head_count * v_repeat, n_seq_tokens, n_seqs);
@@ -5792,18 +5824,33 @@ struct test_gated_delta_net_cache_fusion : public test_case {
     const int64_t head_size;
     const int64_t n_seq_tokens;
     const int64_t n_seqs;
-    const int64_t K; // snapshot slot count (>1)
+    const int64_t K; // snapshot slot count (>=1)
+    const bool    kda;
+    const int     f16_mode; // 0 = raw inputs, 1 = dup q/k/v inputs, 2 = ssm_conv+silu -> l2_norm -> gdn
 
-    ggml_tensor * cpy_node = nullptr;
+    ggml_tensor * cpy_node      = nullptr;
+    ggml_tensor * attn_out_node = nullptr;
 
     std::string vars() override {
-        return VARS_TO_STR6(type, head_count, head_size, n_seq_tokens, n_seqs, K);
+        std::string s = VARS_TO_STR6(type, head_count, head_size, n_seq_tokens, n_seqs, K);
+        if (kda || f16_mode != 0) {
+            s += "," + VARS_TO_STR2(kda, f16_mode);
+        }
+        return s;
+    }
+
+    double max_nmse_err() override {
+        if (!kda && K == 1 && (head_size == 64 || head_size == 128) && n_seq_tokens >= 64) {
+            return 5e-3;
+        }
+        return 1e-4;
     }
 
     test_gated_delta_net_cache_fusion(ggml_type type = GGML_TYPE_F32,
             int64_t head_count = 4, int64_t head_size = 32, int64_t n_seq_tokens = 2, int64_t n_seqs = 1,
-            int64_t K = 2)
-        : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), K(K) {}
+            int64_t K = 2, bool kda = false, int f16_mode = 0)
+        : type(type), head_count(head_count), head_size(head_size), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs),
+          K(K), kda(kda), f16_mode(f16_mode) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t S_v = head_size;
@@ -5812,13 +5859,41 @@ struct test_gated_delta_net_cache_fusion : public test_case {
         const int64_t D   = S_v * S_v * H_v;
         const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
 
-        ggml_tensor * q     = ggml_new_tensor_4d(ctx, type, head_size, H_k, n_seq_tokens, n_seqs);
-        ggml_tensor * k     = ggml_new_tensor_4d(ctx, type, head_size, H_k, n_seq_tokens, n_seqs);
-        ggml_tensor * v     = ggml_new_tensor_4d(ctx, type, head_size, H_v, n_seq_tokens, n_seqs);
-        ggml_set_name(q, "q");
-        ggml_set_name(k, "k");
-        ggml_set_name(v, "v");
-        ggml_tensor * g     = ggml_new_tensor_4d(ctx, type, 1, H_v, n_seq_tokens, n_seqs);
+        ggml_tensor * q = nullptr;
+        ggml_tensor * k = nullptr;
+        ggml_tensor * v = nullptr;
+        if (f16_mode == 2) {
+            const int64_t d_conv  = 4;
+            const int64_t qkv_dim = S_v * (2 * H_k + H_v);
+            ggml_tensor * conv_in = ggml_new_tensor_3d(ctx, type, d_conv - 1 + n_seq_tokens, qkv_dim, n_seqs);
+            ggml_tensor * conv_w  = ggml_new_tensor_2d(ctx, type, d_conv, qkv_dim);
+            ggml_set_name(conv_in, "conv_in");
+            ggml_set_name(conv_w,  "conv_w");
+
+            ggml_tensor * conv_out = ggml_silu(ctx, ggml_ssm_conv(ctx, ggml_dup(ctx, conv_in), ggml_dup(ctx, conv_w)));
+            const size_t nb1_qkv   = ggml_row_size(conv_out->type, qkv_dim);
+            q = ggml_view_4d(ctx, conv_out, S_v, H_k, n_seq_tokens, n_seqs,
+                    ggml_row_size(conv_out->type, S_v), nb1_qkv, nb1_qkv * n_seq_tokens, 0);
+            k = ggml_view_4d(ctx, conv_out, S_v, H_k, n_seq_tokens, n_seqs,
+                    ggml_row_size(conv_out->type, S_v), nb1_qkv, nb1_qkv * n_seq_tokens,
+                    ggml_row_size(conv_out->type, S_v * H_k));
+            v = ggml_view_4d(ctx, conv_out, S_v, H_v, n_seq_tokens, n_seqs,
+                    ggml_row_size(conv_out->type, S_v), nb1_qkv, nb1_qkv * n_seq_tokens,
+                    ggml_row_size(conv_out->type, 2 * S_v * H_k));
+        } else {
+            ggml_tensor * q0 = ggml_new_tensor_4d(ctx, type, head_size, H_k, n_seq_tokens, n_seqs);
+            ggml_tensor * k0 = ggml_new_tensor_4d(ctx, type, head_size, H_k, n_seq_tokens, n_seqs);
+            ggml_tensor * v0 = ggml_new_tensor_4d(ctx, type, head_size, H_v, n_seq_tokens, n_seqs);
+            ggml_set_name(q0, "q");
+            ggml_set_name(k0, "k");
+            ggml_set_name(v0, "v");
+            q = (f16_mode == 1) ? ggml_dup(ctx, q0) : q0;
+            k = (f16_mode == 1) ? ggml_dup(ctx, k0) : k0;
+            v = (f16_mode == 1) ? ggml_dup(ctx, v0) : v0;
+        }
+
+        const int64_t g_ne0 = kda ? head_size : 1;
+        ggml_tensor * g     = ggml_new_tensor_4d(ctx, type, g_ne0, H_v, n_seq_tokens, n_seqs);
         ggml_tensor * beta  = ggml_new_tensor_4d(ctx, type, 1, H_v, n_seq_tokens, n_seqs);
         ggml_tensor * state = ggml_new_tensor_4d(ctx, type, head_size, head_size, H_v, n_seqs);
         ggml_set_name(g,     "g");
@@ -5859,9 +5934,13 @@ struct test_gated_delta_net_cache_fusion : public test_case {
         ggml_set_name(cpy, "gdn_cache_cpy");
         cpy_node = cpy;
 
-        // read the cpy output (not the plain dst view, which would not pull the cpy into the graph)
-        // so that neither the gdn nor the cpy is the graph output
-        ggml_tensor * out = ggml_sum(ctx, cpy);
+        ggml_tensor * attn_out = ggml_dup(ctx, attn);
+        ggml_set_name(attn_out, "attn_out");
+        ggml_set_output(attn_out);
+        attn_out_node = attn_out;
+
+        // read both cpy and attn_out so that cpy immediately follows gdn_out and attn view is live
+        ggml_tensor * out = ggml_add(ctx, ggml_sum(ctx, cpy), ggml_sum(ctx, attn_out));
         return out;
     }
 
@@ -5871,7 +5950,7 @@ struct test_gated_delta_net_cache_fusion : public test_case {
     }
 
     bool run_whole_graph() override { return true; }
-    std::vector<ggml_tensor *> fusion_test_nodes() override { return { cpy_node }; }
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return { cpy_node, attn_out_node }; }
 
     uint64_t op_flops(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -14712,12 +14791,33 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,   4, 2, 1, false, true,  /*K=*/4));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 8, 32,   4, 2, 2, false, true,  /*K=*/4));
 
-    // gdn + cache cpy fusion (K > 1)
+    // F16 promotion boundary cases for unfused GATED_DELTA_NET (q/k/v promoted to F16, dst stays F32)
+    for (int64_t hs : { 16, 32, 64, 128 }) {
+        for (bool kda : { false, true }) {
+            test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, hs, 1, 1, 1, false, kda, 1, false, false, false, false, true));
+            test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, hs, 8, 1, 1, false, kda, 1, false, false, false, false, true));
+        }
+    }
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4,  64,  8, 2, 2, true,  false, 2, false, false, false, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4,  64, 64, 1, 1, false, false, 1, false, false, false, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 64, 1, 1, false, false, 1, false, false, false, false, true));
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 65, 1, 2, false, false, 1, false, false, false, false, true));
+
+    // gdn + cache cpy fusion (K >= 1, including F16 promotion boundary and ssm_conv+silu->l2_norm->gdn chains)
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 32,   2, 1, 2));
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 64,   4, 1, 2));
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 32,   4, 1, 4));
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 8, 32,   4, 2, 4));
     test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 32,   8, 1, 4));
+    for (int f16_mode : { 1, 2 }) {
+        for (int64_t hs : { 16, 32, 64, 128 }) {
+            test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, hs,  1, 1, 2, false, f16_mode));
+            test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, hs,  8, 1, 4, false, f16_mode));
+            test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, hs,  8, 1, 4, true,  f16_mode));
+        }
+        test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4,  64, 64, 1, 1, false, f16_mode));
+        test_cases.emplace_back(new test_gated_delta_net_cache_fusion(GGML_TYPE_F32, 4, 128, 64, 1, 1, false, f16_mode));
+    }
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging

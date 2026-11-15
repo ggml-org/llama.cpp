@@ -59,6 +59,7 @@ _Static_assert(sizeof(struct htp_gdn_kernel_params) <= 128, "htp_gdn_kernel_para
 
 struct htp_gdn_vtcm_layout {
     size_t state_aligned;
+    size_t scratch_bytes;
     size_t bytes_per_hvx;
     size_t off_state;
     size_t total_bytes;
@@ -71,7 +72,8 @@ static inline void htp_gdn_vtcm_layout_build(
 ) {
     size_t state_bytes = (size_t) S_v * S_v * sizeof(float);
     L->state_aligned = hex_round_up(state_bytes, 128);
-    L->bytes_per_hvx = 2 * L->state_aligned;
+    L->scratch_bytes = 24 * 128;
+    L->bytes_per_hvx = 2 * L->state_aligned + L->scratch_bytes;
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_state, L->bytes_per_hvx * n_hvx);
     L->total_bytes = off;
