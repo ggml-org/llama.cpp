@@ -55,11 +55,6 @@
 #    include "spacemit/ime.h"
 #endif
 
-// Note: once we move threading into a separate C++ file
-// will use std::hardware_destructive_interference_size instead of hardcoding it here
-// and we'll use C++ attribute syntax.
-#define GGML_CACHE_LINE  64
-
 #if defined(__clang__) || defined(__GNUC__)
 #define GGML_CACHE_ALIGN __attribute__((aligned(GGML_CACHE_LINE)))
 #endif
@@ -534,28 +529,6 @@ struct ggml_compute_state {
     int barrier_face;
     int barrier_sense;
 };
-
-// Helpers for polling loops
-#if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
-static inline void ggml_thread_cpu_relax(void) {
-    __asm__ volatile("yield" ::: "memory");
-}
-#elif defined(__x86_64__)
-static inline void ggml_thread_cpu_relax(void) {
-    _mm_pause();
-}
-#elif defined(__riscv)
-static inline void ggml_thread_cpu_relax(void) {
-    #ifdef __riscv_zihintpause
-        __asm__ __volatile__ ("pause");
-    #else
-        /* Encoding of the pause instruction */
-        __asm__ __volatile__ (".4byte 0x100000F");
-    #endif
-}
-#else
-static inline void ggml_thread_cpu_relax(void) {;}
-#endif
 
 //
 // NUMA support
