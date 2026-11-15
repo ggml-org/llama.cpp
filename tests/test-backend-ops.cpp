@@ -11864,6 +11864,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // > 2^31-element dst (8.9 GB), about 45 GB peak memory. Too large to be enabled by default.
     // kernel_mul_mm dst offset of the last batch is past INT32_MAX: rows 0-31 use full tiles, rows 32-39 use edge tiles.
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 1048576, 40, 64, {1, 1}, {53, 1}));
+    // CUDA mul_mat_q: > 2^31-element dst (8.9 GB), the dst offset of column tiles starting past column 8648 does not fit in 32 bits
+    // (same shape class as a 248k-vocab output head with a 16k ubatch of outputs)
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 248320, 8960, 32, {1, 1}, {1, 1}));
 
     // kernel_mul_mm_id: the index of tokens 32768-33791 does not fit in 16 bits (about 0.3 GB peak memory).
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F32, GGML_TYPE_F32, 4, 2, false, 64, 33792, 64));
