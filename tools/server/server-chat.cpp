@@ -287,6 +287,65 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         throw std::invalid_argument("'input' must be a string or array of objects");
     }
 
+    // some chat templates (e.g. Qwen3) reject system/developer messages that are not at
+    // the beginning, so hoist any that appear mid-conversation into the leading system message
+    {
+        auto is_sys = [](const json & msg) {
+            const std::string role = msg.value("role", std::string());
+            return role == "system" || role == "developer";
+        };
+        auto content_text = [](const json & msg) -> std::string {
+            const json & content = msg.value("content", json());
+            if (content.is_string()) {
+                return content.get<std::string>();
+            }
+            std::string text;
+            if (content.is_array()) {
+                for (const json & part : content) {
+                    if (part.is_object() && part.value("type", std::string()) == "text") {
+                        text += part.value("text", std::string());
+                    }
+                }
+            }
+            return text;
+        };
+
+        size_t lead_end = 0;
+        while (lead_end < chatcmpl_messages.size() && is_sys(chatcmpl_messages[lead_end])) {
+            lead_end++;
+        }
+        std::string extra;
+        size_t hoisted = 0;
+        for (size_t i = lead_end; i < chatcmpl_messages.size(); i++) {
+            if (!is_sys(chatcmpl_messages[i])) {
+                continue;
+            }
+            const std::string text = content_text(chatcmpl_messages[i]);
+            if (!text.empty()) {
+                if (!extra.empty()) {
+                    extra += "\n";
+                }
+                extra += text;
+            }
+            chatcmpl_messages.erase(chatcmpl_messages.begin() + i);
+            i--;
+            hoisted++;
+        }
+        if (hoisted > 0) {
+            SRV_WRN("hoisted %zu system/developer message(s) from mid-conversation to the beginning\n", hoisted);
+        }
+        if (!extra.empty()) {
+            if (lead_end > 0) {
+                chatcmpl_messages[0]["content"] = content_text(chatcmpl_messages[0]) + "\n" + extra;
+            } else {
+                chatcmpl_messages.insert(chatcmpl_messages.begin(), json {
+                    {"role",    "system"},
+                    {"content", extra},
+                });
+            }
+        }
+    }
+
     chatcmpl_body["messages"] = chatcmpl_messages;
 
     if (response_body.contains("tools")) {
