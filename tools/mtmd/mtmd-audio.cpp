@@ -2044,9 +2044,8 @@ bool mtmd_audio_preprocessor_pockettts::process(const float *                 sa
 //
 // mtmd_audio_preprocessor_vibevoice_asr
 //
-// Matches VibeVoiceAcousticTokenizerFeatureExtractor: the clip is scaled to -25 dBFS RMS, then
-// zero-padded to a whole number of frames. The reference encodes it with a streaming conv cache;
-// here each chunk instead re-reads audio_n_ctx samples before its start, which gives the same output.
+// Matches VibeVoiceAcousticTokenizerFeatureExtractor: the clip is scaled to -25 dBFS RMS, then zero-padded to a whole number of frames.
+// The reference encodes it with a streaming conv cache, here each chunk re-reads audio_n_ctx samples before its start instead, which gives the same output.
 //
 
 double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak) {

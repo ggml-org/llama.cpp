@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from torch import Tensor
@@ -75,18 +75,3 @@ class HiggsAudioWhisperEncoderModel(WhisperEncoderModel):
         if not name.startswith(("audio_tower.", "audio_encoder_proj.")):
             return None
         return super().filter_tensors(item)
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("audio_encoder_proj."):
-            suffix = "." + name.rsplit(".", 1)[-1]
-            if ".temporal." in name:
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV, suffix=suffix), data_torch)
-            elif ".linear1." in name:
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 1, suffix=suffix), data_torch)
-            elif ".linear2." in name:
-                yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 2, suffix=suffix), data_torch)
-            else:
-                raise ValueError(f"unexpected tensor {name}")
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)
