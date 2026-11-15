@@ -470,6 +470,38 @@ static void test_rerank_template(testing & t) {
 }
 
 //
+// server_decision_context::can_share_prompt, every type that reads one prompt per question
+//
+
+static void test_decision_can_share_prompt(testing & t) {
+    // the types whose questions start with the same tokens and can continue from them
+    const std::vector<common_decision_type> shared = {
+        COMMON_DECISION_TYPE_OPENJEV,
+        COMMON_DECISION_TYPE_GRANITE_SWITCH,
+        COMMON_DECISION_TYPE_LEV,
+        COMMON_DECISION_TYPE_KEV,
+        COMMON_DECISION_TYPE_NIMBLE,
+        COMMON_DECISION_TYPE_PPLX_DECIDER,
+        COMMON_DECISION_TYPE_VLLM_DECISION2,
+        COMMON_DECISION_TYPE_VLLM_D3,
+        COMMON_DECISION_TYPE_LFM2_D1,
+        COMMON_DECISION_TYPE_H2O_LIGHTNING,
+    };
+
+    server_decision_context ctx;
+    for (const auto type : shared) {
+        ctx.type = type;
+        t.assert_true("can share prompt", ctx.can_share_prompt());
+    }
+
+    // one prompt holds all the questions (clef), or there is no prompt of that shape (none)
+    for (const auto type : {COMMON_DECISION_TYPE_CLEF, COMMON_DECISION_TYPE_NONE}) {
+        ctx.type = type;
+        t.assert_true("cannot share prompt", !ctx.can_share_prompt());
+    }
+}
+
+//
 // server_decision_context::format_answer, 2 class scores (minicpm-ocr-jev)
 //
 
@@ -760,6 +792,7 @@ int main(int argc, char ** argv) {
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
+    t.test("decision_can_share_prompt", test_decision_can_share_prompt);
     t.test("decision_class_scores", test_decision_class_scores);
     t.test("decision_ocr_jev_validation", test_decision_ocr_jev_validation);
     t.test("decision_depth",  test_decision_depth);
