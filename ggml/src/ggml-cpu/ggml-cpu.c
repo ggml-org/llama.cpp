@@ -2652,6 +2652,13 @@ static bool ggml_thread_apply_priority(int32_t prio) {
 // TODO: this may not work on BSD, to be verified
 
 static bool ggml_thread_apply_affinity(const bool * mask) {
+    // runs on every thread for every graph, skip the syscall when the thread already has this mask
+    static _Thread_local bool applied[GGML_MAX_N_THREADS];
+    static _Thread_local bool applied_valid =  false;
+    if (applied_valid && memcmp(applied, mask, sizeof(applied)) == 0) {
+        return true;
+    }
+
     cpu_set_t cpuset;
     int err;
 
@@ -2677,7 +2684,15 @@ static bool ggml_thread_apply_affinity(const bool * mask) {
         return false;
     }
 
+    memcpy(applied, mask, sizeof(applied));
+    applied_valid = true;
+
     return true;
+}
+
+// for affinity changes outside a threadpool (NUMA pools): going through the helper keeps its per-thread cache right
+bool ggml_cpu_thread_set_affinity(const bool * mask) {
+    return ggml_thread_apply_affinity(mask);
 }
 
 static bool ggml_thread_apply_priority(int32_t prio) {

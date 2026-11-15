@@ -535,6 +535,9 @@ void ggml_barrier(struct ggml_threadpool * tp);
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
 int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
 
+// set the calling thread's affinity through the threadpool helper, which caches the last mask per thread (Linux only)
+bool ggml_cpu_thread_set_affinity(const bool * mask);
+
 #ifdef __cplusplus
 }
 #endif
