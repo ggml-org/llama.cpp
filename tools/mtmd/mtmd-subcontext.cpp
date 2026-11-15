@@ -323,6 +323,9 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         cur = ggml_add(ctx0,
                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
+        if (config.power_floor > 0.0f) {
+            cur = ggml_clamp(ctx0, cur, config.power_floor, FLT_MAX);
+        }
         if (config.use_magnitude) {
             cur = ggml_sqrt(ctx0, cur);
         }
@@ -1655,6 +1658,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
                 set_input_f32("inp_temb", temb);
             } break;
+        case PROJECTOR_TYPE_INKLINGV:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:
@@ -1680,6 +1684,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
         case PROJECTOR_TYPE_ZONOS3_SPKENC:
+        case PROJECTOR_TYPE_INKLINGA:
             {
                 // do nothing
             } break;

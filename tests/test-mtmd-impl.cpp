@@ -48,6 +48,26 @@ struct test_registry {
     static void name(testing & t)
 
 
+MAKE_TEST(test_audio_hann_window_whisper) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins = 80;
+    hparams.audio_sample_rate = 16000;
+    hparams.audio_n_fft = 400;
+    hparams.audio_window_len = 400;
+    hparams.audio_hop_len = 160;
+    mtmd_audio_preprocessor_whisper preproc(hparams, nullptr);
+    preproc.initialize();
+    const auto & window = preproc.mel_config.cache->hann_window;
+    t.assert_equal("Whisper Hann length", size_t(400), window.size());
+    constexpr double pi = 3.14159265358979323846;
+    for (size_t i = 0; i < window.size(); ++i) {
+        const float previous = 0.5 * (1.0 - cosf((2.0 * pi * i) / 400));
+        const float review_round = 0.5f * (1.0f - cosf((float) ((2.0 * pi * i) / 400)));
+        t.assert_equal("original Hann sample " + std::to_string(i), previous, window[i]);
+        t.assert_equal("review Hann sample " + std::to_string(i), review_round, window[i]);
+    }
+}
+
 //
 // mtmd_image
 //
@@ -265,6 +285,57 @@ MAKE_TEST(test_image_preprocessor_lfm2_torch_resize) {
         hash = hash_pixels(sliced.overview, hash);
         t.assert_equal("pixels of " + std::to_string(size.width) + "x" + std::to_string(size.height) + " with resize algo " + resize_algo_to_str(algo), expected, hash);
     }
+}
+
+MAKE_TEST(test_image_preprocessor_inklingv) {
+    mtmd_model model;
+    model.proj_type = PROJECTOR_TYPE_INKLINGV;
+    auto & hparams = model.hparams;
+    hparams.patch_size = 40;
+    const float mean[] = {0.48145466f, 0.4578275f, 0.40821073f};
+    const float std[] = {0.26862954f, 0.26130258f, 0.27577711f};
+    std::copy_n(mean, 3, hparams.image_mean);
+    std::copy_n(std, 3, hparams.image_std);
+    const mtmd_image_preprocessor_inklingv preproc(hparams);
+    for (const auto & size : std::vector<mtmd_image_size>{{1, 1}, {40, 40}, {80, 80}, {61, 43}, {120, 41}}) {
+        auto image = make_test_image(size);
+        const auto result = preproc.preprocess(image);
+        t.assert_equal("one entry", size_t(1), result.entries.size());
+        const auto & output = result.entries[0];
+        t.assert_equal("extra column", (size.width / 40 + 1) * 40, output.nx());
+        t.assert_equal("height ceil", ((size.height + 39) / 40) * 40, output.ny());
+        t.assert_equal("tokens", ((size.height + 39) / 40) * (size.width / 40 + 1), model.n_output_tokens(&output));
+        t.assert_equal("token columns", size.width / 40 + 1, model.n_output_tokens_x(&output));
+        t.assert_equal("token rows", (size.height + 39) / 40, model.n_output_tokens_y(&output));
+        bool exact = true;
+        for (int y = 0; y < output.ny(); ++y) {
+            for (int x = 0; x < output.nx(); ++x) {
+                for (int c = 0; c < 3; ++c) {
+                    const float raw = x < size.width && y < size.height ? image.get_ro_buf()[3 * (size_t(y) * size.width + x) + c] : -1.0f;
+                    const float expected = (raw - mean[c] * 255.0f) / (std[c] * 255.0f);
+                    exact = exact && output.get_ro_buf()[3 * (size_t(y) * output.nx() + x) + c] == expected;
+                }
+            }
+        }
+        t.assert_true("normalization including raw negative padding", exact);
+        image.set_size(size, true);
+        const auto placeholder = preproc.preprocess(image);
+        t.assert_true("placeholder", placeholder.entries[0].is_placeholder());
+        t.assert_equal("placeholder token count", model.n_output_tokens(&output), model.n_output_tokens(&placeholder.entries[0]));
+    }
+    // an image above image_max_pixels is resized down, the output stays aligned
+    hparams.image_max_pixels = 16 * 40 * 40;
+    for (const auto & size : std::vector<mtmd_image_size>{{1000, 300}, {300, 1000}, {6000, 4000}}) {
+        mtmd_image_u8 large;
+        large.set_size(size, false);
+        large.cpy_buf(std::vector<uint8_t>(size_t(size.width) * size.height * 3, 17));
+        const auto result = preproc.preprocess(large);
+        const auto & capped = result.entries[0];
+        t.assert_true("capped area", capped.nx() * capped.ny() <= hparams.image_max_pixels);
+        t.assert_equal("capped width aligned", 0, capped.nx() % 40);
+        t.assert_equal("capped height aligned", 0, capped.ny() % 40);
+    }
+    t.assert_equal("each frame is an image", 1, model.n_temporal_merge());
 }
 
 MAKE_TEST(test_image_preprocessor_inkling2v) {
@@ -546,6 +617,91 @@ MAKE_TEST(test_video_sequence_sample_by_index) {
 //
 // mtmd_audio
 //
+
+// same quantization as the inklinga graph: nearest of 16 levels in [-7, 2] (log10)
+static int inklinga_bin(float v) {
+    return (int) std::round((std::min(2.0f, std::max(-7.0f, v)) + 7.0f) * 15.0f / 9.0f);
+}
+
+MAKE_TEST(test_audio_preprocessor_inklinga) {
+    mtmd_hparams hparams;
+    hparams.n_mel_bins = 80;
+    hparams.audio_n_fft = hparams.audio_window_len = 1600;
+    hparams.audio_hop_len = 800;
+    hparams.audio_sample_rate = 16000;
+    ggml_backend_ptr backend(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr));
+    ggml_backend_t backends[] = { backend.get() };
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends, nullptr, 1, 256, false, true));
+    mtmd_audio_preprocessor_inklinga preproc(hparams, sched.get());
+    preproc.initialize();
+    for (size_t count : {1, 799, 800, 801, 1599, 1600, 1601}) {
+        std::vector<float> samples(count, 0.0f);
+        auto out = preproc.preprocess(samples.data(), samples.size());
+        if (!t.assert_equal("chunks", size_t(1), out.entries.size())) {
+            continue;
+        }
+        t.assert_equal("frames", (int) ((count + 799) / 800), out.entries[0].nx());
+        t.assert_equal("mel bins", 80, out.entries[0].ny());
+        if (!t.assert_true("compute", preproc.compute(out))) {
+            continue;
+        }
+        // the power is floored before the sqrt, so silence is bin 2, not 0
+        const auto & mel = out.entries[0].get_ro_buf();
+        t.assert_true("reference silence bins", std::all_of(mel.begin(), mel.end(), [](float v) { return inklinga_bin(v) == 2; }));
+    }
+
+    struct test_case {
+        const char * name;
+        size_t samples;
+        int frame;
+        const char * f32;
+        const char * f64;
+    };
+    // HF Transformers 5.21 InklingFeatureExtractor/InklingProcessor; one hex digit per mel code.
+    const test_case cases[] = {
+        {"chirp-32769", 32769, 3,
+            "5556667789accdddddcba98776665554444433333332222222222222222222222222222222222222",
+            "5556667789accdddddcba98776665554444443333332222222222222222222222222222222222222"},
+        {"near-silent-2401", 2401, 1,
+            "22222222222222222222222222222222222222222222222222222222222222222222222222222222",
+            "22222222222222222222222222222222222222222222222222222222222222222222222222222222"},
+        {"clipped-extra-4001", 4001, 2,
+            "bbaaaabbbcdddeeedddcbabaaaabbbbcccccccccccccccbccccccccccccbbcccbbbbbbbbbbbbbbbb",
+            "bbaaaabbbcdddeeedddcbabaaaabbbbcccccccccccccccbccccccccccccbbcccbbbbbbbbbbbbbbbb"},
+        {"chirp-801", 801, 1,
+            "9999999999999999999999aaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbcccccccccccccccccbba",
+            "9999999999999999999999aaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbcccccccccccccccccbba"},
+    };
+    constexpr double pi = 3.14159265358979323846;
+    for (size_t c = 0; c < 4; ++c) {
+        const auto & ref = cases[c];
+        std::vector<float> samples(ref.samples);
+        for (size_t i = 0; i < samples.size(); ++i) {
+            const double time = (double) i / 16000.0;
+            if (c == 1) {
+                samples[i] = (float) (1e-9 * std::sin(2.0 * pi * 431.0 * time));
+            } else if (c == 2) {
+                samples[i] = (float) std::max(-1.0, std::min(1.0, 20.0 * std::sin(2.0 * pi * (91.0 * time + 2300.0 * time * time))));
+            } else {
+                samples[i] = (float) (0.7 * std::sin(2.0 * pi * (80.0 * time + 3500.0 * time * time / (ref.samples / 16000.0))));
+            }
+        }
+        auto out = preproc.preprocess(samples.data(), samples.size());
+        if (!t.assert_true(ref.name, preproc.compute(out))) {
+            continue;
+        }
+        const int frames = (ref.samples + 799) / 800;
+        t.assert_equal("frontend frames", frames, out.entries[0].nx());
+        const auto & mel = out.entries[0].get_ro_buf();
+        auto decode = [](char c) { return c <= '9' ? c - '0' : c - 'a' + 10; };
+        for (int m = 0; m < 80; ++m) {
+            const int actual = inklinga_bin(mel[m * frames + ref.frame]);
+            // a value on a bin boundary may land on either side, as HF F32 and F64 already disagree there
+            const bool ok = actual == decode(ref.f32[m]) || actual == decode(ref.f64[m]);
+            t.assert_true(std::string(ref.name) + " HF mel " + std::to_string(m), ok);
+        }
+    }
+}
 
 MAKE_TEST(test_audio_preprocessor_whisper_chunks) {
     mtmd_hparams hparams;

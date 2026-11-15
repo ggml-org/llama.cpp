@@ -261,7 +261,19 @@ void llama_kv_cache_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id
 
 void llama_kv_cache_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     kv_base->state_read(io, seq_id, flags);
-    kv_swa ->state_read(io, seq_id, flags);
+
+    try {
+        kv_swa->state_read(io, seq_id, flags);
+    } catch (...) {
+        kv_base->state_clear(seq_id);
+
+        throw;
+    }
+}
+
+void llama_kv_cache_iswa::state_clear(llama_seq_id seq_id) {
+    kv_base->state_clear(seq_id);
+    kv_swa ->state_clear(seq_id);
 }
 
 llama_kv_cache * llama_kv_cache_iswa::get_base() const {

@@ -825,6 +825,14 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_minimax_m3>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_INKLINGV:
+            {
+                builder = std::make_unique<mtmd_graph_inklingv>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_INKLINGA:
+            {
+                builder = std::make_unique<mtmd_graph_inklinga>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_INKLING2V:
             {
                 builder = std::make_unique<mtmd_graph_inkling2v>(ctx, img);

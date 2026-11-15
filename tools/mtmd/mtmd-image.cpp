@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 void mtmd_image_preproc_out::append(const mtmd_hparams & hparams, const mtmd_image_u8 & img, bool normalized) {
@@ -2143,6 +2144,48 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
     mtmd_image_preproc_out output;
     output.append(hparams, resized_image, true);
     return output;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_inklingv::preprocess(const mtmd_image_u8 & input) const {
+    const int patch = hparams.patch_size;
+    // the reference always adds one more column of patches on the right
+    auto padded_width = [patch](int w) { return (w / patch + 1) * patch; };
+    auto size = input.get_size();
+    mtmd_image_u8 resized;
+    const bool too_large = hparams.image_max_pixels > 0 &&
+        int64_t(padded_width(size.width)) * MTMD_ALIGN(size.height, patch) > hparams.image_max_pixels;
+    if (too_large) {
+        // the reference does not resize; this only bounds the number of image tokens
+        img_tool::calc_size_opt opts;
+        opts.align_size = patch;
+        opts.max_pixels = hparams.image_max_pixels;
+        size = img_tool::calc_size_preserved_ratio(size, opts);
+        size.width -= 1; // so that the extra column stays inside the aligned width
+        img_tool::resize(input, resized, size, hparams.image_resize_algo, PAD_NONE);
+    }
+    const mtmd_image_u8 & img = too_large ? resized : input;
+    const int width  = padded_width(size.width);
+    const int height = MTMD_ALIGN(size.height, patch);
+    mtmd_image_f32 padded;
+    padded.set_size({width, height}, img.is_placeholder(), false);
+    if (!img.is_placeholder()) {
+        std::vector<float> pixels(size_t(width) * height * 3, -1.0f);
+        const auto & src = img.get_ro_buf();
+        for (int y = 0; y < size.height; ++y) {
+            std::copy_n(src.begin() + size_t(y) * size.width * 3, size_t(size.width) * 3, pixels.begin() + size_t(y) * width * 3);
+        }
+        padded.cpy_buf(pixels);
+        // Match the reference's fused rescale and normalization, including negative padding.
+        float mean[3], std[3];
+        for (int c = 0; c < 3; ++c) {
+            mean[c] = hparams.image_mean[c] * 255.0f;
+            std[c] = hparams.image_std[c] * 255.0f;
+        }
+        padded.normalize(mean, std);
+    }
+    mtmd_image_preproc_out result;
+    result.append(hparams, padded, false);
+    return result;
 }
 
 //

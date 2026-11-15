@@ -2684,6 +2684,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
                 clean_spaces = false;
             } else if (
+                tokenizer_pre == "inkling" ||
                 tokenizer_pre == "inkling2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
                 special_bos_id = LLAMA_TOKEN_NULL;

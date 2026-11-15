@@ -87,6 +87,8 @@ public:
     // llama_kv_cache_iswa specific API
     //
 
+    void state_clear(llama_seq_id seq_id);
+
     llama_kv_cache * get_base() const;
     llama_kv_cache * get_swa () const;
 

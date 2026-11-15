@@ -340,8 +340,8 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("mudd_")               == std::string::npos;
     }
 
-    // inkling2: short conv kernels, clip scales, residual mix queries and the relative bias projection
-    if (arch == LLM_ARCH_INKLING2) {
+    // inkling, inkling2: short conv kernels, clip scales, residual mix queries and the relative bias projection
+    if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING) {
         quantize &= name.find("_conv.weight")         == std::string::npos;
         quantize &= name.find("_clip.weight")         == std::string::npos;
         quantize &= name.find("_res_query.weight")    == std::string::npos;

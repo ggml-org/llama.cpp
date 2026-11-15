@@ -912,6 +912,12 @@ struct mtmd_context {
                     img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+
+            case PROJECTOR_TYPE_INKLINGV:
+                {
+                    img_beg = "<|content_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inklingv>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_INKLING2V:
                 {
                     // the chat template code gives the image its own message block
@@ -1282,6 +1288,12 @@ struct mtmd_context {
             case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_nemotron_transcribe>(models.a.get());
+                } break;
+            case PROJECTOR_TYPE_INKLINGA:
+                {
+                    aud_beg = "<|content_audio_input|>";
+                    aud_end = "<|audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inklinga>(models.a.get());
                 } break;
             case PROJECTOR_TYPE_GEMMA4UA:
                 {
@@ -1961,7 +1973,7 @@ struct mtmd_tokenizer {
                     n_samples = dummy.size();
                 } else {
                     const auto & buf = bitmap->get_ro_buf();
-                    GGML_ASSERT(buf.size() > sizeof(float));
+                    GGML_ASSERT(buf.size() >= sizeof(float));
                     GGML_ASSERT(buf.size() % sizeof(float) == 0);
 
                     samples = (const float *)buf.data();

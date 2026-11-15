@@ -218,6 +218,8 @@
 #define TN_GLM_ADAPTER_GATE     "adapter.linear.gate.%s"
 #define TN_GLM_ADAPTER_D_4H_2_H "adapter.linear.dense_4h_to_h.%s"
 
+// inkling
+
 // ultravox
 #define TN_CONV1D       "a.conv1d.%d.%s"
 #define TN_CONV2D       "a.conv2d.%d.%s"
@@ -594,6 +596,8 @@ enum projector_type {
     PROJECTOR_TYPE_MUSE_SPARK_AUDIO,
     PROJECTOR_TYPE_CHATTERBOX,
     PROJECTOR_TYPE_CHATTERBOX_SPKENC,
+    PROJECTOR_TYPE_INKLINGV,
+    PROJECTOR_TYPE_INKLINGA,
     PROJECTOR_TYPE_INKLING2V,
     PROJECTOR_TYPE_UNKNOWN,
 };
@@ -686,6 +690,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MUSE_SPARK_AUDIO,  "muse-spark-audio"},
     { PROJECTOR_TYPE_CHATTERBOX,        "chatterbox"},
     { PROJECTOR_TYPE_CHATTERBOX_SPKENC, "chatterbox_spkenc"},
+    { PROJECTOR_TYPE_INKLINGV,          "inklingv"},
+    { PROJECTOR_TYPE_INKLINGA,          "inklinga"},
     { PROJECTOR_TYPE_INKLING2V,         "inkling2v"},
 };
 
@@ -892,6 +898,10 @@ struct mtmd_image_f32 {
 
     size_t n_elements() const {
         return n_pixels() * 3;
+    }
+
+    void set_pixel(int x, int y, int c, float value) {
+        buf[((size_t) y * nx_ + x) * 3 + c] = value;
     }
 
     void normalize(const float mean[3], const float std[3]) {

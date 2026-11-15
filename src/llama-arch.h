@@ -185,6 +185,7 @@ enum llm_arch {
     LLM_ARCH_LIMITE,
     LLM_ARCH_RICURSIVE,
     LLM_ARCH_INKLING2,
+    LLM_ARCH_INKLING,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -583,6 +584,7 @@ enum llm_tensor {
     LLM_TENSOR_FFN_GATE,
     LLM_TENSOR_FFN_DOWN,
     LLM_TENSOR_FFN_UP,
+    LLM_TENSOR_FFN_OUT_SCALE,
     LLM_TENSOR_FFN_ACT,
     LLM_TENSOR_FFN_DOWN_EXP,  // split experts for backward compatibility
     LLM_TENSOR_FFN_GATE_EXP,

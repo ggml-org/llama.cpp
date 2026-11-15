@@ -771,6 +771,7 @@ class MODEL_ARCH(IntEnum):
     KOLIBRI1         = auto()
     LIMITE           = auto()
     INKLING2         = auto()
+    INKLING          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -852,6 +853,7 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE             = auto()
     FFN_DOWN             = auto()
     FFN_UP               = auto()
+    FFN_OUT_SCALE        = auto()
     FFN_ACT              = auto()
     FFN_NORM_EXP         = auto()
     FFN_GATE_EXP         = auto()
@@ -1719,6 +1721,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
     MODEL_ARCH.INKLING2:         "inkling2",
+    MODEL_ARCH.INKLING:          "inkling",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1800,6 +1803,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE:                  "blk.{bid}.ffn_gate",
     MODEL_TENSOR.FFN_DOWN:                  "blk.{bid}.ffn_down",
     MODEL_TENSOR.FFN_UP:                    "blk.{bid}.ffn_up",
+    MODEL_TENSOR.FFN_OUT_SCALE:             "blk.{bid}.ffn_out_scale",
     MODEL_TENSOR.FFN_GATE_SHEXP:            "blk.{bid}.ffn_gate_shexp",
     MODEL_TENSOR.FFN_DOWN_SHEXP:            "blk.{bid}.ffn_down_shexp",
     MODEL_TENSOR.FFN_UP_SHEXP:              "blk.{bid}.ffn_up_shexp",
@@ -6890,6 +6894,37 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_POST_CONV,
         MODEL_TENSOR.FFN_RES_QUERY,
     ],
+    MODEL_ARCH.INKLING: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_REL,
+        MODEL_TENSOR.ATTN_REL_BIAS,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_K_CONV,
+        MODEL_TENSOR.ATTN_V_CONV,
+        MODEL_TENSOR.ATTN_POST_CONV,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_OUT_SCALE,
+        MODEL_TENSOR.FFN_POST_CONV,
+    ],
 }
 
 # tensors that will not be serialized
@@ -7240,6 +7275,8 @@ class VisionProjectorType:
     D1OMNI_V       = "d1omni_v"  # lfm2 vision, without separator tokens
     D1OMNI_A       = "d1omni_a"  # lfm2a audio, with a residual block after the projector
     MUSE_SPARK_AUDIO = "muse-spark-audio"
+    INKLINGV       = "inklingv"
+    INKLINGA       = "inklinga"
     INKLING2V      = "inkling2v"
 
 

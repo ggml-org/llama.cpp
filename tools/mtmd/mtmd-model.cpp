@@ -825,6 +825,23 @@ struct mtmd_model_loader {
                         hparams.audio_n_ctx       = (int32_t) ((rf + hop - 1) / hop * hop);
                         hparams.warmup_audio_size = (int32_t) ((int64_t) hparams.audio_chunk_len * hparams.audio_sample_rate / hop * hop) + hparams.audio_n_ctx;
                     } break;
+                case PROJECTOR_TYPE_INKLINGV:
+                    {
+                        // the graph folds are fixed, they set the patch size
+                        if (hparams.patch_size != mtmd_graph_inklingv::patch_size) {
+                            throw std::runtime_error(mtmd_format("%s: inklingv requires patch size %d\n", __func__, mtmd_graph_inklingv::patch_size));
+                        }
+                        hparams.set_limit_image_tokens(1, 4096);
+                        hparams.set_warmup_n_tokens(32*32); // avoid OOM on warmup
+                    } break;
+                case PROJECTOR_TYPE_INKLINGA:
+                    {
+                        hparams.audio_chunk_len   = 0;
+                        hparams.audio_sample_rate = 16000;
+                        hparams.audio_n_fft       = 1600;
+                        hparams.audio_window_len  = 1600;
+                        hparams.audio_hop_len     = 800;
+                    } break;
                 case PROJECTOR_TYPE_INKLING2V:
                     {
                         hparams.ffn_op = FFN_GELU_ERF;
@@ -1524,7 +1541,8 @@ struct mtmd_model_loader {
             model.modality  == MTMD_MODALITY_VISION &&
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR &&
-            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2);
+            model.proj_type != PROJECTOR_TYPE_DEEPSEEKOCR2 &&
+            model.proj_type != PROJECTOR_TYPE_INKLINGV);
 
         model.patch_bias = get_tensor(TN_PATCH_BIAS, false);
         model.patch_embeddings_0 = get_tensor(TN_PATCH_EMBD,   has_patch_embd);
@@ -1539,6 +1557,7 @@ struct mtmd_model_loader {
         model.lfm3vl_embedding_norm_w = get_tensor(mtmd_format(TN_LFM3VL_EMBEDDING_NORM, prefix, "weight"), false);
 
         const bool has_standard_layers = (
+            model.proj_type != PROJECTOR_TYPE_INKLINGV &&
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_ZONOS3_SPKENC &&
@@ -2022,6 +2041,27 @@ struct mtmd_model_loader {
                     model.mm_norm_mid_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP_NORM, 2, "weight"));
                     model.mm_3_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      3, "weight"));
                     model.mm_3_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      3, "bias"));
+                } break;
+            case PROJECTOR_TYPE_INKLINGV:
+                {
+                    // post_ln comes from the generic path above, where it is optional
+                    if (!model.post_ln_w) {
+                        throw std::runtime_error(mtmd_format("%s: missing post_ln\n", __func__));
+                    }
+                    model.layers.resize(mtmd_graph_inklingv::n_stages);
+                    for (int i = 0; i < mtmd_graph_inklingv::n_stages; ++i) {
+                        auto & layer = model.layers[i];
+                        layer.ff_up_w = get_tensor(mtmd_format(TN_FFN_UP, "v", i, "weight"));
+                        layer.ln_1_w  = get_tensor(mtmd_format(TN_LN_1, "v", i, "weight"));
+                    }
+                    model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                } break;
+            case PROJECTOR_TYPE_INKLINGA:
+                {
+                    if (!model.post_ln_w) {
+                        throw std::runtime_error(mtmd_format("%s: missing post_ln\n", __func__));
+                    }
+                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                 } break;
             case PROJECTOR_TYPE_INKLING2V:
                 {
@@ -4079,6 +4119,7 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLINGV:
         case PROJECTOR_TYPE_INKLING2V:
             return img->nx() / (params.patch_size * params.n_merge);
         case PROJECTOR_TYPE_DEEPSEEKOCR:
@@ -4114,6 +4155,7 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
         case PROJECTOR_TYPE_MINICPM_OCR_1_0:
+        case PROJECTOR_TYPE_INKLINGV:
         case PROJECTOR_TYPE_INKLING2V:
             return img->ny() / (params.patch_size * params.n_merge);
         default:
@@ -4206,6 +4248,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_STEP3VL:
+        case PROJECTOR_TYPE_INKLINGV:
         case PROJECTOR_TYPE_INKLING2V:
             {
                 int x_patch = img->nx() / (params.patch_size * params.n_merge);
@@ -4410,6 +4453,10 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
             {
                 n_patches = img->nx();  // no downsampling: one token per raw waveform frame
             } break;
+        case PROJECTOR_TYPE_INKLINGA:
+            {
+                n_patches = img->nx(); // one token per mel frame
+            } break;
         case PROJECTOR_TYPE_MIMO_AUDIO:
             {
                 // conv1(s=1) + conv2(s=2) -> RVQ-encoder downsample conv(k=2,s=2)
@@ -4535,6 +4582,8 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_MINIMAX_M3:
             return mm_merger_fc2_b->ne[0];
+        case PROJECTOR_TYPE_INKLINGV:
+            return mm_0_w->ne[1];
         case PROJECTOR_TYPE_MUSE_GLIMMER:
         case PROJECTOR_TYPE_INKLING2V:
             return mm_2_w->ne[1];
@@ -4585,6 +4634,7 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
+        case PROJECTOR_TYPE_INKLINGA:
             return mm_fc_w->ne[1];
         case PROJECTOR_TYPE_QWEN3A:
         case PROJECTOR_TYPE_HIGGS_AUDIO:

@@ -200,7 +200,14 @@ void llama_memory_hybrid_iswa::state_write(llama_io_write_i & io, llama_seq_id s
 
 void llama_memory_hybrid_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     mem_attn->state_read(io, seq_id, flags);
-    mem_recr->state_read(io, seq_id, flags);
+
+    try {
+        mem_recr->state_read(io, seq_id, flags);
+    } catch (...) {
+        mem_attn->state_clear(seq_id);
+
+        throw;
+    }
 }
 
 llama_kv_cache_iswa * llama_memory_hybrid_iswa::get_mem_attn() const {

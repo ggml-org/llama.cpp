@@ -181,6 +181,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_KOLIBRI1,         "kolibri1"         },
     { LLM_ARCH_RICURSIVE,        "ricursive"        },
     { LLM_ARCH_INKLING2,         "inkling2"         },
+    { LLM_ARCH_INKLING,          "inkling"          },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -544,6 +545,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_FFN_GATE,                               "blk.%d.ffn_gate" },
     { LLM_TENSOR_FFN_DOWN,                               "blk.%d.ffn_down" },
     { LLM_TENSOR_FFN_UP,                                 "blk.%d.ffn_up" },
+    { LLM_TENSOR_FFN_OUT_SCALE,                          "blk.%d.ffn_out_scale" },
     { LLM_TENSOR_FFN_GATE_EXP,                           "blk.%d.ffn_gate.%d" },
     { LLM_TENSOR_FFN_DOWN_EXP,                           "blk.%d.ffn_down.%d" },
     { LLM_TENSOR_FFN_UP_EXP,                             "blk.%d.ffn_up.%d" },
@@ -986,6 +988,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_FFN_GATE,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_DOWN,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_UP,                     {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_OUT_SCALE,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_FFN_DOWN_SHEXP,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_GATE_SHEXP,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_FFN_UP_SHEXP,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1419,6 +1422,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_MINIMAX_01:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING:
             return true;
         default:
             return false;
@@ -1455,6 +1459,7 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
         case LLM_ARCH_LFM3:
         case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING:
             return true;
         default:
             return false;
@@ -1472,6 +1477,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
         case LLM_ARCH_DFLASH:
         case LLM_ARCH_GEMMA4_ASSISTANT:
         case LLM_ARCH_LIMITE:
+        case LLM_ARCH_INKLING:
         case LLM_ARCH_INKLING2:
             return false;
         default:
@@ -1492,6 +1498,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING:
         case LLM_ARCH_OLMO2:
         case LLM_ARCH_OLMOE:
         case LLM_ARCH_DEEPSEEK2:
