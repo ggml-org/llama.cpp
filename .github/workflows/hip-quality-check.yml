@@ -11,7 +11,8 @@ on:
       '**/*.cuh',
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py'
+      'scripts/hip/gcn-cdna-vgpr-check.py',
+      'scripts/hip/gcn-cdna-occupancy-check.py'
     ]
 
   pull_request:
@@ -22,7 +23,8 @@ on:
       '**/*.cuh',
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py'
+      'scripts/hip/gcn-cdna-vgpr-check.py',
+      'scripts/hip/gcn-cdna-occupancy-check.py'
     ]
 
 cache-mode: none
@@ -96,6 +98,31 @@ jobs:
           cd build
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
           python3 ../scripts/hip/gcn-cdna-vgpr-check.py metrics.log
+
+      - name: Checkout baseline (master)
+        uses: actions/checkout@v6
+        with:
+          ref: master
+          path: hip-baseline
+
+      - name: Check for occupancy regressions vs master
+        id: occupancy_check
+        run: |
+          # Build the baseline with the same target and flags, then compare
+          # per-kernel occupancy. The main checkout is the PR merge commit,
+          # so the baseline isolates the changes of this PR.
+          cd hip-baseline
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DGPU_TARGETS=gfx908 \
+            -DGGML_HIP=ON \
+            -DGGML_HIP_EXPORT_METRICS=On \
+            -DCMAKE_HIP_FLAGS="" \
+            -DCMAKE_BUILD_TYPE=Release
+          cd build
+          make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
+          cd ../..
+          python3 scripts/hip/gcn-cdna-occupancy-check.py hip-baseline/build/metrics.log build/metrics.log
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
