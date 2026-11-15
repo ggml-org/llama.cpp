@@ -6228,6 +6228,66 @@ struct test_mul_mat : public test_case {
     }
 };
 
+struct test_mul_mat_f16_boundary : public test_case {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int io_mask;
+
+    test_mul_mat_f16_boundary(ggml_type type_a, int64_t m, int64_t n, int64_t k, int io_mask = 3)
+        : type_a(type_a), m(m), n(n), k(k), io_mask(io_mask) {}
+
+    std::string vars() override {
+        return VARS_TO_STR5(type_a, m, n, k, io_mask);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return ggml_op_name(GGML_OP_MUL_MAT);
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-3;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        if (io_mask & 1) {
+            b = ggml_dup(ctx, b);
+        }
+
+        if (io_mask == 7) {
+            ggml_tensor * w_gate = ggml_new_tensor_2d(ctx, type_a, k, m);
+            ggml_tensor * w_up   = ggml_new_tensor_2d(ctx, type_a, k, m);
+            ggml_tensor * w_down = ggml_new_tensor_2d(ctx, type_a, m, k);
+            ggml_tensor * res    = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+            res = ggml_dup(ctx, res);
+
+            ggml_tensor * gate = ggml_mul_mat(ctx, w_gate, b);
+            ggml_tensor * up   = ggml_mul_mat(ctx, w_up, b);
+            ggml_tensor * hid  = ggml_swiglu_split(ctx, gate, up);
+            ggml_tensor * down = ggml_mul_mat(ctx, w_down, hid);
+            ggml_tensor * out  = ggml_add(ctx, down, res);
+            out = ggml_dup(ctx, out);
+            ggml_set_name(out, "out");
+            return out;
+        }
+
+        ggml_tensor * a  = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_tensor * mm = ggml_mul_mat(ctx, a, b);
+        ggml_tensor * out = mm;
+        if (io_mask & 2) {
+            out = (io_mask & 4) ? ggml_silu(ctx, mm) : mm;
+            out = ggml_dup(ctx, out);
+        }
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_HINT_SRC0_IS_HADAMARD
 struct test_mul_mat_hadamard : public test_mul_mat {
     test_mul_mat_hadamard(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
@@ -8923,14 +8983,19 @@ struct test_mul_mat_add : public test_case {
     const int64_t n;
     const int64_t k;
     const mul_mat_add_mode mode;
+    const int io_mask;
 
-    test_mul_mat_add(ggml_type type_a, int64_t m, int64_t n, int64_t k, mul_mat_add_mode mode = MUL_MAT_ADD_MM_RES)
-        : type_a(type_a), m(m), n(n), k(k), mode(mode) {
+    test_mul_mat_add(ggml_type type_a, int64_t m, int64_t n, int64_t k, mul_mat_add_mode mode = MUL_MAT_ADD_MM_RES, int io_mask = 0)
+        : type_a(type_a), m(m), n(n), k(k), mode(mode), io_mask(io_mask) {
         GGML_ASSERT(mode != MUL_MAT_ADD_B_INPLACE || m == k);
     }
 
     std::string vars() override {
-        return VARS_TO_STR5(type_a, m, n, k, mode);
+        std::string s = VARS_TO_STR5(type_a, m, n, k, mode);
+        if (io_mask != 0) {
+            s += "," + VAR_TO_STR(io_mask);
+        }
+        return s;
     }
 
     std::string op_desc(ggml_tensor * t) override {
@@ -8941,13 +9006,20 @@ struct test_mul_mat_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     double max_nmse_err() override {
-        return 5e-4;
+        return io_mask != 0 ? 5e-3 : 5e-4;
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a   = ggml_new_tensor_2d(ctx, type_a,        k, m);
         ggml_tensor * b   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
         ggml_tensor * res = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, m, mode == MUL_MAT_ADD_ROW ? 1 : n);
+
+        if (io_mask & 1) {
+            b = ggml_dup(ctx, b);
+        }
+        if (io_mask & 2) {
+            res = ggml_dup(ctx, res);
+        }
 
         ggml_tensor * mm  = ggml_mul_mat(ctx, a, b);
         ggml_tensor * out = nullptr;
@@ -8963,6 +9035,9 @@ struct test_mul_mat_add : public test_case {
                     ggml_tensor * mm2 = ggml_mul_mat(ctx, a2, b);
                     out = ggml_add(ctx, mm2, mm);
                 } break;
+        }
+        if (io_mask & 4) {
+            out = ggml_dup(ctx, out);
         }
         ggml_set_name(out, "out");
 
@@ -9163,6 +9238,72 @@ struct test_mul_mat_fusion : public test_case {
             return 2e-2;
         }
         return max_nmse_err();
+    }
+};
+
+struct test_mul_mat_nx_f16_boundary : public test_case {
+    const ggml_type type;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_proj;
+    const int io_mask;
+
+    test_mul_mat_nx_f16_boundary(ggml_type type, int64_t m, int64_t n, int64_t k, int n_proj = 2, int io_mask = 7)
+        : type(type), m(m), n(n), k(k), n_proj(n_proj), io_mask(io_mask) {}
+
+    std::string vars() override {
+        return VARS_TO_STR6(type, m, n, k, n_proj, io_mask);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_FUSION";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override {
+        return 5e-3;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, m);
+        if (io_mask & 1) {
+            cur = ggml_dup(ctx, cur);
+        }
+
+        ggml_tensor * w0 = ggml_new_tensor_2d(ctx, type, k, n);
+        ggml_tensor * w1 = ggml_new_tensor_2d(ctx, type, k, n);
+        ggml_tensor * w2 = (n_proj >= 3) ? ggml_new_tensor_2d(ctx, type, k, n) : nullptr;
+
+        ggml_tensor * y0 = ggml_mul_mat(ctx, w0, cur);
+        ggml_tensor * y1 = ggml_mul_mat(ctx, w1, cur);
+        ggml_tensor * y2 = w2 ? ggml_mul_mat(ctx, w2, cur) : nullptr;
+
+        if (!(io_mask & 2)) {
+            ggml_set_output(y0);
+        } else {
+            y0 = ggml_dup(ctx, ggml_silu(ctx, y0));
+        }
+
+        if (!(io_mask & 4)) {
+            ggml_set_output(y1);
+        } else {
+            y1 = ggml_dup(ctx, ggml_silu(ctx, y1));
+        }
+
+        ggml_tensor * out = ggml_add(ctx, y0, y1);
+        if (y2) {
+            if (!(io_mask & 8)) {
+                ggml_set_output(y2);
+            } else {
+                y2 = ggml_dup(ctx, ggml_silu(ctx, y2));
+            }
+            out = ggml_add(ctx, out, y2);
+        }
+        ggml_set_name(out, "out");
+        return out;
     }
 };
 
@@ -13056,6 +13197,35 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_MXFP4, GGML_TYPE_F32, 2880, 32, 2880, {1, 1}, {1, 1}));
 
+    // F16 promotion boundary coverage across weight types, M (tokens), and N (output cols including non-64-aligned)
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,
+                             GGML_TYPE_MXFP4, GGML_TYPE_IQ4_NL, GGML_TYPE_Q1_0, GGML_TYPE_Q2_0,
+                             GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
+        const int64_t k = (type_a == GGML_TYPE_Q4_K || type_a == GGML_TYPE_Q6_K) ? 256 : 128;
+        for (int64_t n : {1, 2, 16, 64, 128}) {
+            for (int64_t m : {64, 96, 509}) {
+                for (int io_mask : {1, 3, 6, 7}) {
+                    if (io_mask == 7 && (m % 256 != 0)) {
+                        continue;
+                    }
+                    test_cases.emplace_back(new test_mul_mat_f16_boundary(type_a, m, n, k, io_mask));
+                }
+            }
+            test_cases.emplace_back(new test_mul_mat_f16_boundary(type_a, 256, n, k, 7));
+        }
+        test_cases.emplace_back(new test_mul_mat_f16_boundary(type_a, 2048, 16, 256, 3));
+    }
+
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_MXFP4, GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (int64_t n : {1, 2, 16, 64}) {
+            for (int io_mask : {1, 2, 5, 7}) {
+                test_cases.emplace_back(new test_mul_mat_add(type_a, 96,  n, 256, MUL_MAT_ADD_MM_RES, io_mask));
+                test_cases.emplace_back(new test_mul_mat_add(type_a, 256, n, 256, MUL_MAT_ADD_RES_MM, io_mask));
+            }
+            test_cases.emplace_back(new test_mul_mat_add(type_a, 256, n, 256, MUL_MAT_ADD_MM_MM, 5));
+        }
+    }
+
     // m == 1, with n on both sides of MMVF_MAX_BATCH_SIZE (8): mmvf below, operand swap above
     for (int64_t n : {1, 7, 8, 9, 16, 127, 128, 511, 512}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 1, n, 2048, {1, 1}, {1, 1}));
@@ -14647,6 +14817,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         9,   128, 2048, false, 1, 1, false, false, true, false, { 1, 1 }));
     // on DGX Spark also the expert gate and up matmuls at 8 tokens, instead of the fused MMVQ path
     test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q4_K,   GGML_GLU_OP_SWIGLU,         8,   128, 2048, true, 16, 4, true));
+
+    // F16 input/output and mixed F16/F32 output coverage on 2-way (gate/up) and 3-way (q/k/v) MUL_MAT_NX
+    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_Q8_0, GGML_TYPE_Q6_K,
+                           GGML_TYPE_MXFP4, GGML_TYPE_IQ4_NL, GGML_TYPE_F16}) {
+        for (int64_t m_batch : {1, 2, 16, 64}) {
+            for (int64_t n_cols : {64, 96}) {
+                for (int io_mask : {3, 5, 7}) {
+                    test_cases.emplace_back(new test_mul_mat_nx_f16_boundary(type, m_batch, n_cols, 256, 2, io_mask));
+                }
+            }
+            for (int io_mask : {7, 15}) {
+                test_cases.emplace_back(new test_mul_mat_nx_f16_boundary(type, m_batch, 64, 256, 3, io_mask));
+            }
+        }
+    }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {

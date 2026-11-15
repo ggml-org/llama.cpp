@@ -829,6 +829,8 @@ static void htp_kparams_solve_hvx_mm(
     GGML_UNUSED(ne03);
 
     const int src1_nrows = ne11 * ne12 * ne13;
+    const size_t act_elem_size = ggml_type_size(src1->type);
+    const size_t dst_row_size  = dst ? (size_t) dst->ne[0] * sizeof(float) : 0;
 
     if (is_tiled) {
         kparams->tile_size         = htp_tensor_get_tile_size(wtype);
@@ -847,7 +849,7 @@ static void htp_kparams_solve_hvx_mm(
             for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                 htp_mm_hvx_vtcm_layout_build(
                     &L, kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                    0, src0->nb[1], kparams->act_row_size, 0, d, true, false
+                    0, src0->nb[1], act_elem_size, 0, d, true, false
                 );
                 if (L.total_bytes <= vtcm_budget) {
                     best_n_prefetch = d;
@@ -874,7 +876,7 @@ static void htp_kparams_solve_hvx_mm(
                 for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                     htp_mm_hvx_vtcm_layout_build(
                         &L, kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                        dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, d, false, false
+                        dst_row_size, src0->nb[1], act_elem_size, src2_row_size, d, false, false
                     );
                     if (L.total_bytes <= vtcm_budget) {
                         best_n_prefetch = d;
@@ -885,7 +887,7 @@ static void htp_kparams_solve_hvx_mm(
                 uint32_t m_chunk = 0;
                 if (htp_mm_hvx_solve_vtcm_params(
                         kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                        dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, best_n_prefetch, vtcm_budget,
+                        dst_row_size, src0->nb[1], act_elem_size, src2_row_size, best_n_prefetch, vtcm_budget,
                         &L, &m_chunk)) {
                     kparams->n_prefetch     = best_n_prefetch;
                     kparams->m_chunk        = (m_chunk < (uint32_t) src1_nrows) ? m_chunk : 0;
@@ -915,7 +917,7 @@ static void htp_kparams_solve_hvx_mm(
         uint32_t m_chunk = 0;
         if (htp_mm_hvx_solve_vtcm_params(
                 ktype, wtype, ne10, src1_nrows, n_hvx,
-                dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, vtcm_budget,
+                dst_row_size, src0->nb[1], act_elem_size, src2_row_size, 16, vtcm_budget,
                 &L, &m_chunk)) {
             kparams->kernel_type    = ktype;
             kparams->m_chunk        = (m_chunk < (uint32_t) src1_nrows) ? m_chunk : 0;
@@ -988,12 +990,19 @@ finalize:
 static bool htp_matmul_check_types(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
-    const struct ggml_tensor * dst
+    const struct ggml_tensor * dst,
+    bool internal_f16 = false
 ) {
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
 
-    if (dst->type != GGML_TYPE_F32) {
-        return false;
+    if (is_matmul_id) {
+        if (dst->type != GGML_TYPE_F32) {
+            return false;
+        }
+    } else {
+        if (dst->type != GGML_TYPE_F32 && (!internal_f16 || dst->type != GGML_TYPE_F16)) {
+            return false;
+        }
     }
 
     if (ggml_prec_get_src(dst, 1) == GGML_PREC_BF16 || ggml_prec_get_src(dst, 1) == GGML_PREC_F32) {
@@ -1074,11 +1083,6 @@ static bool htp_matmul_check_types(
             return src0->ne[0] % ggml_blck_size(src0->type) == 0;
 
         case GGML_TYPE_F32:
-            if (src1->type != GGML_TYPE_F32) {
-                return false;
-            }
-            return src0->nb[1] >= src0->nb[0];
-
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
             return src0->nb[1] >= src0->nb[0];
@@ -1091,13 +1095,14 @@ static bool htp_matmul_check_types(
 static bool htp_kparams_solve_matmul(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
     struct htp_mm_kernel_params * kparams
 ) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!htp_matmul_check_types(src0, src1, dst)) {
+    if (!htp_matmul_check_types(src0, src1, dst, internal_f16)) {
         return false;
     }
     if (htp_matmul_can_collapse(src0, src1, dst)) {
@@ -1191,7 +1196,7 @@ bool htp_kparams_solve_mmnx(
         }
     }
 
-    if (!is_tiled || act->type != GGML_TYPE_F32 || ne10 % 32 != 0) {
+    if (!is_tiled || (act->type != GGML_TYPE_F32 && act->type != GGML_TYPE_F16) || ne10 % 32 != 0) {
         kparams->kernel_type = HTP_MM_KERNEL_UNSUPPORTED;
         return false;
     }
@@ -1199,6 +1204,7 @@ bool htp_kparams_solve_mmnx(
     {
         const int    act_nrows     = ne11 * ne12 * ne13;
         const size_t act_row_size  = htp_mm_tiled_act_row_size(wtype, ne10);
+        const size_t act_elem_size = ggml_type_size(act->type);
         const size_t src0_row_size = src0->nb[1];
 
         const uint32_t max_prefetch = (act_nrows > HTP_MM_HMX_MIN_NROWS) ? 2 : 16;
@@ -1207,7 +1213,7 @@ bool htp_kparams_solve_mmnx(
             struct htp_mm_hvx_vtcm_layout L;
             htp_mm_hvx_vtcm_layout_build(
                 &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, act_nrows, n_hvx,
-                0, src0_row_size, act_row_size, 0, d, false, true
+                0, src0_row_size, act_elem_size, 0, d, false, true
             );
             if (L.total_bytes <= vtcm_budget) {
                 best_n_prefetch = d;
@@ -1218,7 +1224,7 @@ bool htp_kparams_solve_mmnx(
         struct htp_mm_hvx_vtcm_layout L;
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, act_nrows, n_hvx,
-            0, src0_row_size, act_row_size, 0, best_n_prefetch, false, true
+            0, src0_row_size, act_elem_size, 0, best_n_prefetch, false, true
         );
 
         if (opt_mm_select >= 1 && L.total_bytes <= vtcm_budget) {
@@ -5939,14 +5945,16 @@ bool htp_kparams_solve(
         return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT) {
-        if (!htp_matmul_check_types(src0, src1, dst)) {
+        if (!htp_matmul_check_types(src0, src1, dst, internal_f16)) {
             return false;
         }
         return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, tmp.kparams<htp_mm_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_ADD) {
         const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
-        if (!src2 || src2->type != GGML_TYPE_F32 || !htp_matmul_check_types(src0, src1, dst)) {
+        if (!src2 || (src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
+            src2->nb[0] != ggml_type_size(src2->type) ||
+            !htp_matmul_check_types(src0, src1, dst, internal_f16)) {
             return false;
         }
         const size_t src2_size = hex_round_up(ggml_nbytes(src2), 128);
@@ -5959,7 +5967,7 @@ bool htp_kparams_solve(
         }
         const ggml_tensor * act = tmp.inputs[n_w];
         for (size_t i = 0; i < n_w; ++i) {
-            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i], internal_f16)) {
                 return false;
             }
         }
@@ -6048,7 +6056,11 @@ bool htp_kparams_solve(
     switch (opcode) {
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ID:
-            return htp_kparams_invoke<htp_kparams_solve_matmul>(sess, op, kparams);
+        {
+            struct htp_mm_kernel_params tmp;
+            return htp_kparams_solve_matmul(sess, op, internal_f16,
+                                            kparams ? (struct htp_mm_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_MUL:
         case HTP_OP_ADD:

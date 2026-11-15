@@ -245,8 +245,8 @@ static inline size_t htp_mm_tiled_act_row_size(int weight_type, uint32_t ne) {
     return htp_mm_weight_has_offset(weight_type) ? htp_mm_q8_1_tiled_row_size(ne) : htp_mm_q8_0_tiled_row_size(ne);
 }
 
-static inline size_t htp_mm_act_raw_row_size(uint32_t ne) {
-    return hex_round_up(ne, HTP_MM_ACT_BLOCK_K) * sizeof(float);
+static inline size_t htp_mm_act_raw_row_size(uint32_t ne, size_t act_elem_size) {
+    return hex_round_up(ne, HTP_MM_ACT_BLOCK_K) * act_elem_size;
 }
 
 static inline size_t htp_mm_round_up(size_t n, size_t m) {
@@ -551,13 +551,13 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     uint32_t n_hvx,
     size_t dst_row_size,
     size_t src0_row_size,
-    size_t act_row_size,
+    size_t act_elem_size,
     size_t bias_row_size,
     uint32_t n_prefetch,
     bool is_matmul_id,
     bool is_fused_nx
 ) {
-    (void)act_row_size;
+    const size_t raw_elem_size = (act_elem_size == sizeof(__fp16)) ? sizeof(__fp16) : sizeof(float);
     size_t src0_sz    = 0;
     size_t act_sz     = 0;
     size_t bias_sz    = bias_row_size > 0 ? htp_mm_round_up(bias_row_size, 128) : 0;
@@ -573,7 +573,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
         size_t tiled_act_row_size = htp_mm_tiled_act_row_size(wtype, ne10);
         size_t q_act_sz = hex_round_up(tiled_act_row_size * act_nrows, 128);
-        size_t raw_row_size = htp_mm_act_raw_row_size(ne10);
+        size_t raw_row_size = htp_mm_act_raw_row_size(ne10, raw_elem_size);
 
         src0_sz    = weight_sz_per_hvx * n_hvx; // shared single-weight prefetch buffer
         act_sz     = q_act_sz;                         // quantized activation buffer
@@ -589,7 +589,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
         act_sz = htp_mm_round_up(act_row_size_tiled * act_nrows, 256);
 
-        size_t raw_row_size = htp_mm_act_raw_row_size(ne10);
+        size_t raw_row_size = htp_mm_act_raw_row_size(ne10, raw_elem_size);
 
         src0_sz    = src0_sz_per_hvx * n_hvx;
         dst_sz     = 0;
@@ -605,7 +605,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
                 act_sz     = htp_mm_round_up(f16_act_row_size * act_nrows, 256);
                 src0_sz    = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256) * n_hvx;
                 dst_sz     = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_hvx : 0;
-                act_raw_sz = hex_round_up(hex_round_up(ne10 * sizeof(float), 128) * act_nrows, 128);
+                act_raw_sz = hex_round_up(hex_round_up(ne10 * raw_elem_size, 128) * act_nrows, 128);
                 break;
             }
             case HTP_MM_KERNEL_HVX_F32_F32_VTCM:
@@ -614,7 +614,9 @@ static inline void htp_mm_hvx_vtcm_layout_build(
                 act_sz     = htp_mm_round_up(f32_act_row_size * act_nrows, 256);
                 src0_sz    = htp_mm_round_up(n_prefetch * src0_row_size_padded, 256) * n_hvx;
                 dst_sz     = dst_nrows > 0 ? htp_mm_round_up(dst_row_size, 128) * n_hvx : 0;
-                act_raw_sz = 0;
+                act_raw_sz = (raw_elem_size == sizeof(__fp16))
+                           ? hex_round_up(hex_round_up(ne10 * sizeof(__fp16), 128) * act_nrows, 128)
+                           : 0;
                 break;
             }
             case HTP_MM_KERNEL_HVX_QUANT_BLOCK:
@@ -630,7 +632,7 @@ static inline void htp_mm_hvx_vtcm_layout_build(
 
                 size_t dst_slice_per_hvx = (dst_nrows > 0 && act_nrows == 1) ? htp_mm_round_up((dst_row_size + n_hvx - 1) / n_hvx, 128) : 0;
                 dst_sz = dst_slice_per_hvx * n_hvx;
-                size_t raw_row_size = htp_mm_act_raw_row_size(ne10);
+                size_t raw_row_size = htp_mm_act_raw_row_size(ne10, raw_elem_size);
                 act_raw_sz = hex_round_up(raw_row_size * act_nrows, 128);
                 break;
             }
@@ -673,17 +675,18 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
     uint32_t n_hvx,
     size_t dst_row_size,
     size_t src0_row_size,
-    size_t act_row_size,
+    size_t act_elem_size,
     size_t bias_row_size,
     uint32_t n_prefetch,
     size_t vtcm_budget,
     struct htp_mm_hvx_vtcm_layout * L_out,
     uint32_t * m_chunk_out
 ) {
+    const size_t raw_elem_size = (act_elem_size == sizeof(__fp16)) ? sizeof(__fp16) : sizeof(float);
     struct htp_mm_hvx_vtcm_layout L;
     htp_mm_hvx_vtcm_layout_build(
         &L, kernel_type, wtype, ne10, act_nrows, n_hvx,
-        dst_row_size, src0_row_size, act_row_size, bias_row_size, n_prefetch, false, false
+        dst_row_size, src0_row_size, raw_elem_size, bias_row_size, n_prefetch, false, false
     );
 
     if (L.total_bytes <= vtcm_budget) {
@@ -712,7 +715,7 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
 
     size_t eff_row_size = row_size;
     if (kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK) {
-        eff_row_size += htp_mm_act_raw_row_size(ne10);
+        eff_row_size += htp_mm_act_raw_row_size(ne10, raw_elem_size);
     }
 
     uint32_t m_chunk = (uint32_t) (avail_act / eff_row_size);
@@ -728,14 +731,22 @@ static inline bool htp_mm_hvx_solve_vtcm_params(
 
     htp_mm_hvx_vtcm_layout_build(
         &L, kernel_type, wtype, ne10, m_chunk, n_hvx,
-        dst_row_size, src0_row_size, act_row_size, bias_row_size, n_prefetch, false, false
+        dst_row_size, src0_row_size, raw_elem_size, bias_row_size, n_prefetch, false, false
     );
 
     while (m_chunk > 2 && L.total_bytes > vtcm_budget) {
         m_chunk -= 2;
         htp_mm_hvx_vtcm_layout_build(
             &L, kernel_type, wtype, ne10, m_chunk, n_hvx,
-            dst_row_size, src0_row_size, act_row_size, bias_row_size, n_prefetch, false, false
+            dst_row_size, src0_row_size, raw_elem_size, bias_row_size, n_prefetch, false, false
+        );
+    }
+
+    if (m_chunk > 1 && L.total_bytes > vtcm_budget) {
+        m_chunk = 1;
+        htp_mm_hvx_vtcm_layout_build(
+            &L, kernel_type, wtype, ne10, m_chunk, n_hvx,
+            dst_row_size, src0_row_size, raw_elem_size, bias_row_size, n_prefetch, false, false
         );
     }
 
@@ -866,7 +877,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     size_t per_n_approx = 0, per_m_approx = 0, per_mn_approx = 0;
     htp_mm_hmx_get_2d_chunk_costs_ex(kernel_type, wtype, k, pipeline, aligned_tile_size, k_group,
                                      &per_n_approx, &per_m_approx, &per_mn_approx);
-    const size_t base_overhead = htp_mm_hmx_get_2d_overhead(pipeline, is_matmul_id) +
+    const size_t base_overhead = htp_mm_hmx_get_2d_overhead(wtype, pipeline, is_matmul_id) +
                                  HTP_MM_HMX_TILE_SIZE + (pipeline ? 2u : 1u) * 768u +
                                  (bias_size > 0 ? hex_align_up(bias_size, HTP_MM_HMX_TILE_SIZE) : 0u);
     if (vtcm_budget <= base_overhead || per_n_approx == 0 || per_m_approx == 0 || per_mn_approx == 0) {

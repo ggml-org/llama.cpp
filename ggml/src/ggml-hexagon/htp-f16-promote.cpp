@@ -78,7 +78,9 @@ static bool htp_f16_node_has_output(const htp_opnode & node, const ggml_tensor *
 static bool htp_f16_is_mm_root(const std::vector<htp_opnode> & nodes, const ggml_tensor * root) {
     for (const htp_opnode & node : nodes) {
         if (htp_f16_node_has_output(node, root)) {
-            return node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID || node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX;
+            return node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ADD ||
+                   node.opcode == HTP_OP_MUL_MAT_ID || node.opcode == HTP_OP_MUL_MAT_NX ||
+                   node.opcode == HTP_OP_MUL_MAT_ID_NX;
         }
     }
     return false;
