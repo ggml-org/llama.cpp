@@ -210,3 +210,55 @@ def test_spec_method(case: SpecCase):
     assert (
         accept_len >= case.min_accept_len
     ), f"{case.name}: accept length {accept_len:.3f} < {case.min_accept_len}"
+
+
+@pytest.mark.heavy
+@pytest.mark.slow
+@pytest.mark.skipif(not os.environ.get("HYBRID_MTP_MODEL"), reason="requires a local MTP model and at least two CUDA GPUs")
+def test_hybrid_mtp_round_trip(monkeypatch, tmp_path):
+    # The default placement and capacity fit Qwen3.8-27B on the 32 + 12 GiB test pair.
+    monkeypatch.setenv("LLAMA_ARG_SPLIT_MODE", "tensor")
+    monkeypatch.setenv("LLAMA_ARG_TENSOR_SPLIT", os.environ.get("HYBRID_MTP_TENSOR_SPLIT", "4,1"))
+    monkeypatch.setenv("LLAMA_ARG_HYBRID_PREFILL", os.environ.get("HYBRID_MTP_SPLIT", "59,7"))
+    monkeypatch.setenv("LLAMA_ARG_SPEC_DRAFT_SAMPLING", "probabilistic")
+    server = ServerProcess()
+    server.model_hf_repo = None
+    server.model_hf_file = None
+    server.model_file = os.environ["HYBRID_MTP_MODEL"]
+    server.n_ctx = 224000
+    server.n_batch = 2048
+    server.n_ubatch = 512
+    server.n_slots = 1
+    server.n_gpu_layer = 99
+    server.fa = "on"
+    server.spec_type = "draft-mtp"
+    server.spec_draft_n_max = 3
+    server.api_key = "hybrid-mtp-test"
+    server.log_path = str(tmp_path / "hybrid-mtp.log")
+    prefix = "".join(
+        f"Record {i}: The quick brown fox walks through the forest. A careful experiment measures memory, time, and correctness.\n"
+        for i in range(320)
+    )
+    prompt = prefix + "Summarize these records and explain how to design a useful experiment."
+    try:
+        server.start(timeout_seconds=300)
+        continuation = prompt + "\nAdditional records:\n" + prefix + "Summarize all records."
+        for text in ("Explain how a computer works.", prompt, prompt + "\nUse numbered steps:", continuation):
+            res = server.make_request("POST", "/completion", headers={"Authorization": f"Bearer {server.api_key}"}, data={
+                "prompt": text,
+                "temperature": 0.0,
+                "seed": 123,
+                "n_predict": 64,
+                "cache_prompt": True,
+            })
+            assert res.status_code == 200
+            assert res.body["content"]
+            assert res.body["timings"]["draft_n"] > 0
+            assert res.body["timings"]["draft_n_accepted"] > 0
+        assert res.body["timings"]["cache_n"] > 0
+    finally:
+        server.stop()
+    log = (tmp_path / "hybrid-mtp.log").read_text()
+    requests = log.split("listening on", 1)[1]
+    assert requests.count("hybrid: switched to tensor") == 3
+    assert requests.count("hybrid: switched to layer") == 2

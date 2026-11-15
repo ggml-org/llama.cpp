@@ -580,6 +580,9 @@ llama_context::llama_context(
             !model.has_tensor_overrides() &&
             cparams.moe_cache_size == 0; // not supported by the MoE cache
 
+        const char * pipeline_env = getenv("LLAMA_PIPELINE_PARALLEL");
+        pipeline_parallel = pipeline_parallel && (!pipeline_env || atoi(pipeline_env) != 0);
+
         // pipeline parallelism requires support for async compute and events in all devices
         if (pipeline_parallel) {
             for (auto & backend : backends) {

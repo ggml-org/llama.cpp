@@ -179,6 +179,7 @@ if (CUDAToolkit_FOUND)
     if (GGML_CUDA_NO_VMM)
         # No VMM requested, no need to link directly with the cuda driver lib (libcuda.so)
     else()
+        target_sources(ggml-cuda PRIVATE arena.cpp)
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
     endif()
 
