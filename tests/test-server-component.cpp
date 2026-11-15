@@ -4,11 +4,14 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-slot-sched.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <random>
 #include <regex>
 #include <string>
 #include <thread>
@@ -230,6 +233,144 @@ static void test_server_tokens_prefix_hashes(testing & t) {
         t.assert_equal("block ends inside the image", i_image, a.get_common_prefix_lower(make_mtmd(true, 2).get_prefix_hashes()));
         t.assert_equal("text in place of the image",  (size_t) 0, a.get_common_prefix_lower(make_mtmd(false, 1).get_prefix_hashes()));
     }
+}
+
+//
+// server_prompt_cache_disk
+//
+
+// the prompts share the first n_tokens - 1 tokens when only "last" differs
+static server_prompt_cache_state make_cache_state(size_t n_tokens, llama_token last, size_t size_main) {
+    llama_tokens toks(n_tokens);
+    for (size_t i = 0; i < n_tokens; i++) {
+        toks[i] = 100 + (llama_token) i;
+    }
+    toks.back() = last;
+
+    server_prompt_cache_state res;
+    res.prompt.tokens = server_tokens(toks, false);
+    res.data.main.assign(size_main, (uint8_t) last);
+    res.data.drft.assign(3, 7);
+
+    auto ckpt = std::make_shared<common_prompt_checkpoint>();
+    ckpt->n_tokens  = n_tokens / 2;
+    ckpt->pos_min   = 1;
+    ckpt->pos_max   = (llama_pos) n_tokens / 2;
+    ckpt->data_tgt  = { 1, 2, 3, 4 };
+    ckpt->data_spec = { 5 };
+    res.prompt.checkpoints.push_back(std::move(ckpt));
+
+    return res;
+}
+
+static void test_server_prompt_cache_disk(testing & t) {
+    namespace fs = std::filesystem;
+
+    const size_t n_blk = server_tokens::hash_block_size;
+    const size_t n_tok = 2 * n_blk + 10;
+
+    const fs::path dir = fs::temp_directory_path() / ("test-server-cache-disk-" + std::to_string(std::random_device{}()));
+    fs::create_directories(dir);
+
+    const std::string compat   = "0123456789abcdef";
+    const auto        state    = make_cache_state(n_tok, 1, 1000);
+    const auto &      tokens   = state.prompt.tokens;
+
+    {
+        const auto other = make_cache_state(n_tok, 2, 1000);
+        t.assert_true("get_hash, same tokens",      tokens.get_hash(n_tok) == tokens.clone().get_hash(n_tok));
+        t.assert_true("get_hash, same prefix",      tokens.get_hash(n_tok - 1) == other.prompt.tokens.get_hash(n_tok - 1));
+        t.assert_true("get_hash, other last token", tokens.get_hash(n_tok) != other.prompt.tokens.get_hash(n_tok));
+        t.assert_true("get_hash, other length",     tokens.get_hash(n_tok) != tokens.get_hash(n_tok - 1));
+        t.assert_true("get_hash, not a chain hash", tokens.get_hash(n_blk) != tokens.get_prefix_hashes()[0]);
+    }
+
+    {
+        server_prompt_cache_disk disk(dir.string(), compat, 0, false);
+        t.assert_equal("empty dir", (size_t) 0, disk.get_entries().size());
+        t.assert_true("save", disk.save(state));
+        t.assert_true("save again", disk.save(state));
+        t.assert_equal("one file", (size_t) 1, disk.get_entries().size());
+        t.assert_equal("size", (size_t) fs::file_size(dir / disk.get_entries().front().name), disk.size());
+    }
+
+    {
+        // the files are found again after a restart
+        server_prompt_cache_disk disk(dir.string(), compat, 0, false);
+        t.assert_equal("scan", (size_t) 1, disk.get_entries().size());
+
+        const auto & entry = disk.get_entries().front();
+        t.assert_equal("n_tokens", n_tok, entry.n_tokens);
+        t.assert_true("hashes", entry.hashes == tokens.get_prefix_hashes());
+
+        const auto other = make_cache_state(n_tok + 50, 2, 10);
+        t.assert_equal("lookup", 2 * n_blk, other.prompt.tokens.get_common_prefix_lower(entry.hashes));
+
+        server_prompt_cache_state loaded;
+        t.assert_true("load", disk.load(entry, loaded));
+        t.assert_equal("tokens", n_tok, loaded.prompt.tokens.get_common_prefix(tokens));
+        t.assert_equal("tokens size", n_tok, loaded.prompt.tokens.size());
+        t.assert_true("state", loaded.data.main == state.data.main);
+        t.assert_true("draft state", loaded.data.drft == state.data.drft);
+        t.assert_equal("checkpoints", (size_t) 1, loaded.prompt.checkpoints.size());
+
+        const auto & ckpt     = *loaded.prompt.checkpoints.front();
+        const auto & ckpt_ref = *state.prompt.checkpoints.front();
+        t.assert_equal("checkpoint n_tokens", ckpt_ref.n_tokens, ckpt.n_tokens);
+        t.assert_equal("checkpoint pos_min", ckpt_ref.pos_min, ckpt.pos_min);
+        t.assert_equal("checkpoint pos_max", ckpt_ref.pos_max, ckpt.pos_max);
+        t.assert_true("checkpoint data", ckpt.data_tgt == ckpt_ref.data_tgt && ckpt.data_dft.empty() && ckpt.data_spec == ckpt_ref.data_spec);
+
+        // same length, other last token: both are kept
+        t.assert_true("save other", disk.save(make_cache_state(n_tok, 2, 1000)));
+        t.assert_equal("two files", (size_t) 2, disk.get_entries().size());
+
+        // a longer prompt replaces the prompts that are its prefix
+        auto longer = make_cache_state(n_tok, 1, 1000);
+        longer.prompt.tokens.push_back(3);
+        t.assert_true("save longer", disk.save(longer));
+        t.assert_equal("prefix removed", (size_t) 2, disk.get_entries().size());
+        t.assert_equal("longer is the newest", n_tok + 1, disk.get_entries().back().n_tokens);
+    }
+
+    {
+        // another model sees the files but cannot use them
+        server_prompt_cache_disk disk(dir.string(), "fedcba9876543210", 0, false);
+        t.assert_equal("other compat, files", (size_t) 2, disk.get_entries().size());
+        t.assert_equal("other compat, n_tokens", (size_t) 0, disk.get_entries().front().n_tokens);
+        t.assert_true("other compat, size", disk.size() > 2000);
+    }
+
+    {
+        // room for two files of this size
+        server_prompt_cache_disk disk(dir.string(), compat, 4000, false);
+        const std::string oldest = disk.get_entries().front().name;
+
+        t.assert_true("save over the limit", disk.save(make_cache_state(n_tok, 4, 1000)));
+        t.assert_equal("oldest removed", (size_t) 2, disk.get_entries().size());
+        t.assert_true("oldest file removed", !fs::exists(dir / oldest));
+        t.assert_true("too large", !disk.save(make_cache_state(n_tok, 5, 5000)));
+    }
+
+    {
+        // a broken file is removed
+        server_prompt_cache_disk disk(dir.string(), compat, 0, false);
+        const auto & entry = disk.get_entries().front();
+        const fs::path path = dir / entry.name;
+        fs::resize_file(path, fs::file_size(path) - 1);
+
+        server_prompt_cache_state loaded;
+        t.assert_true("load broken file", !disk.load(entry, loaded));
+        t.assert_equal("broken file removed", (size_t) 1, disk.get_entries().size());
+        t.assert_true("broken file deleted", !fs::exists(path));
+
+        const fs::path path_last = dir / disk.get_entries().front().name;
+        fs::resize_file(path_last, fs::file_size(path_last) - 1);
+        server_prompt_cache_disk disk_new(dir.string(), compat, 0, false);
+        t.assert_equal("broken file removed by the scan", (size_t) 0, disk_new.get_entries().size());
+    }
+
+    fs::remove_all(dir);
 }
 
 static void test_server_tokens(testing & t) {
@@ -830,6 +971,7 @@ int main(int argc, char ** argv) {
     }
 
     t.test("server_tokens", test_server_tokens);
+    t.test("server_prompt_cache_disk", test_server_prompt_cache_disk);
     t.test("utf8",          test_utf8);
     t.test("sse",           test_sse);
     t.test("json_helpers",  test_json_helpers);

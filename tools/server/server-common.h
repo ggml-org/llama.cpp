@@ -197,6 +197,9 @@ private: // disallow accessing these members directly, risking out-of-sync
 
     void update_hashes();
 
+    // hash of the tokens in [i_begin, i_end), chained after prev
+    prefix_hash hash_range(const prefix_hash & prev, size_t i_begin, size_t i_end) const;
+
 public:
     server_tokens() = default;
     ~server_tokens() = default;
@@ -275,6 +278,9 @@ public:
     size_t get_common_prefix(const server_tokens & b) const;
 
     const std::vector<prefix_hash> & get_prefix_hashes() const { return hashes; }
+
+    // hash of the first n tokens, n does not need to be at a block boundary
+    prefix_hash get_hash(size_t n) const;
 
     // lower bound of get_common_prefix(), b is known only by its prefix hashes
     // the result is less than one block plus one media chunk below the exact value
