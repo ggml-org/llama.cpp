@@ -702,7 +702,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         });
     }
 
-    // run all tasks in parallel
+   // run all tasks in parallel
     if (!params.offline) {
         // if duplicated files are found, only download once (but still call on_done for each task)
         std::unordered_map<std::string, common_download_task *> unique_tasks;
@@ -714,12 +714,12 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
         std::vector<common_download_task> unique_tasks_vec;
         for (auto & pair : unique_tasks) {
-            LOG_DBG("download task: %s -> %s\n", pair.second->url.c_str(), pair.second->local_path.c_str());
+            LOG_INF("downloading model file: %s -> %s\n", pair.second->url.c_str(), pair.second->local_path.c_str());
             unique_tasks_vec.push_back(*pair.second);
         }
         common_download_run_tasks(unique_tasks_vec);
     }
-
+    
     // download successful, update params with the downloaded paths
     for (const auto & task : tasks) {
         if (task.on_done) {

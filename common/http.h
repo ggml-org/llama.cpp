@@ -23,7 +23,6 @@ struct common_http_url {
     std::string path;
 };
 
-// bracket an IPv6 literal host for a URL authority (RFC 3986)
 static std::string common_http_format_host(const std::string & host) {
     return host.find(':') != std::string::npos ? "[" + host + "]" : host;
 }
@@ -66,7 +65,6 @@ static common_http_url common_http_parse_url(const std::string & url) {
         parts.path = "/";
     }
 
-    // split the authority into host and optional port, a bracketed IPv6 literal keeps its inner colons (RFC 3986)
     std::string port_str;
     if (!parts.host.empty() && parts.host.front() == '[') {
         auto close = parts.host.find(']');
@@ -99,7 +97,6 @@ static common_http_url common_http_parse_url(const std::string & url) {
     return parts;
 }
 
-// resolve a redirect Location against the URL it came from
 static std::string common_http_resolve_location(const std::string & base_url, const std::string & location) {
     if (location.find("://") != std::string::npos) {
         return location;
@@ -119,9 +116,6 @@ static std::string common_http_resolve_location(const std::string & base_url, co
     return origin + path.substr(0, path.rfind('/') + 1) + location;
 }
 
-// match a loopback destination: a remote proxy can never reach the client machine's own
-// loopback, so these hosts are always contacted directly, before NO_PROXY is consulted
-// (similar to Go's net/http)
 static bool common_http_is_loopback(const std::string & host) {
     auto lower = [](std::string s) {
         for (auto & c : s) {
@@ -142,7 +136,6 @@ static bool common_http_is_loopback(const std::string & host) {
         return true;
     }
 
-    // IPv4 literal: exactly four all-digit octets with values 0-255, loopback is 127.0.0.0/8
     int octets[4] = { 0, 0, 0, 0 };
     size_t pos = 0;
     int n = 0;
@@ -176,8 +169,6 @@ static bool common_http_is_loopback(const std::string & host) {
     return complete && octets[0] == 127;
 }
 
-// match a host against a NO_PROXY list: comma separated entries, "*" bypasses the proxy for every host,
-// an entry matches the host itself or any of its subdomains, a leading dot is optional, ports are ignored
 static bool common_http_proxy_bypass(const std::string & no_proxy, const std::string & host) {
     auto lower = [](std::string s) {
         for (auto & c : s) {
@@ -256,8 +247,10 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
     }
 
     cli.set_follow_location(true);
+    cli.set_connection_timeout(15, 0);
+    cli.set_read_timeout(30, 0);
+    cli.set_write_timeout(30, 0);
 
-    // Honor HTTP_PROXY / HTTPS_PROXY environment variables (both lower- and upper-case).
     auto getenv_s = [](const char * upper, const char * lower) -> std::string {
         const char * val = std::getenv(upper);
         if (!val) {
@@ -279,7 +272,6 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
                 cli.set_proxy_basic_auth(proxy.user, proxy.password);
             }
         } catch (const std::exception & e) {
-            // fall back to a direct connection, the URL itself is not logged as it can carry credentials
             LOG_WRN("%s: ignoring malformed proxy URL from the environment: %s\n", __func__, e.what());
         }
     }
