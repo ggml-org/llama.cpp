@@ -2003,7 +2003,9 @@ static bool htp_kparams_solve_rope(
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_I32) {
+    const bool is_f32 = (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
+    const bool is_f16 = (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16);
+    if ((!is_f32 && !is_f16) || src1->type != GGML_TYPE_I32) {
         return false;
     }
     if (src0->ne[0] <= 0) {
@@ -2064,8 +2066,9 @@ static bool htp_kparams_solve_rope(
         }
     }
 
-    if (src0->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float) ||
-        src0->nb[1] < src0->ne[0] * sizeof(float) || dst->nb[1] < dst->ne[0] * sizeof(float)) {
+    const size_t elem_size = is_f16 ? sizeof(ggml_fp16_t) : sizeof(float);
+    if (src0->nb[0] != elem_size || dst->nb[0] != elem_size ||
+        src0->nb[1] < src0->ne[0] * elem_size || dst->nb[1] < dst->ne[0] * elem_size) {
         return false;
     }
 
@@ -2073,7 +2076,7 @@ static bool htp_kparams_solve_rope(
     const uint32_t n_freq_factors = src2 ? (uint32_t) src2->ne[0] : 0;
 
     struct htp_rope_vtcm_layout layout;
-    htp_rope_vtcm_layout_build(&layout, src0->ne[0], n_hvx, n_freq_factors);
+    htp_rope_vtcm_layout_build(&layout, src0->ne[0], elem_size, n_hvx, n_freq_factors);
     if (layout.total_bytes > htp_session_vtcm_size(sess)) {
         return false;
     }
