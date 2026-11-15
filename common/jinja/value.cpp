@@ -1101,8 +1101,25 @@ const func_builtins & value_bool_t::get_builtins() const {
     return builtins;
 }
 
-[[noreturn]] static value array_sum_not_implemented(const func_args &) {
-    throw not_implemented_exception("Array sum builtin not implemented");
+static value array_sum(const func_args & args) {
+    args.ensure_kwargs({"attribute", "start"});
+    args.ensure_count(1, 3);
+    args.ensure_vals<value_array>();
+    value undef     = mk_val<value_undefined>();
+    value attribute = args.get_kwarg_or_pos("attribute", 1);
+    value start     = args.get_kwarg_or_pos("start",     2);
+    // same as the + operator: compute in double, int result if all operands are int
+    bool   is_float = is_val<value_float>(start);
+    double sum      = start->is_undefined() ? 0.0 : start->as_float();
+    for (const auto & item : args.get_pos(0)->as_array()) {
+        value v = attribute->is_undefined() ? item : get_attribute(item, attribute, undef);
+        if (!is_val<value_int>(v) && !is_val<value_float>(v)) {
+            throw raised_exception("sum: unsupported operand type " + v->type());
+        }
+        is_float = is_float || is_val<value_float>(v);
+        sum += v->as_float();
+    }
+    return is_float ? value(mk_val<value_float>(sum)) : value(mk_val<value_int>(static_cast<int64_t>(sum)));
 }
 
 const func_builtins & value_array_t::get_builtins() const {
@@ -1171,7 +1188,7 @@ const func_builtins & value_array_t::get_builtins() const {
         {"select", select_or_reject<false, false>},
         {"rejectattr", select_or_reject<true, true>},
         {"reject", select_or_reject<true, false>},
-        {"sum", array_sum_not_implemented},
+        {"sum", array_sum},
         {"join", [](const func_args & args) -> value {
             args.ensure_kwargs({"d", "attribute"});
             args.ensure_count(1, 3);
