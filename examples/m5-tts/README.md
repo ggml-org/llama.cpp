@@ -141,6 +141,8 @@ drafts (§14), Flash-attention variants (§17), multi-instance parallelism
 (§29). The only remaining big lever is the depth+codec retraining plan in §30
 of the [optimization log](../../docs/backend/snapdragon/m5-tts-optimization-log.md);
 the offline tutorial copy lives in [learning-hub](learning-hub/index.html).
+The [Chinese blog series](learning-hub/blog/README.md) covers the pipeline, profiling,
+performance and audio quality, and the Serena voice workflow.
 
 ## Bring a voice from another TTS model
 

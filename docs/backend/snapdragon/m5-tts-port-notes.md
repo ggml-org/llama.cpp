@@ -1317,7 +1317,7 @@ app uid 域（/dev/adsprpc-smd EACCES）；m5-server 跑在 adb shell 域，fast
 - 测试路径（本机电脑）：
   1. 设备 shell 域启动：`./m5-server model --port 8080 --cwd $D`（HTP）；
   2. `adb forward tcp:18080 tcp:8080` → 浏览器开 `http://127.0.0.1:18080`；
-  3. 同 Wi-Fi 也可直连 `http://192.168.3.102:8080`（server bind 0.0.0.0），
+  3. 同 Wi-Fi 也可直连 `http://<device-ip>:8080`（server bind 0.0.0.0），
      任意 LAN 设备的浏览器都能用，手机即"TTS 一体机"。
 - 注：在线发布（公网链接）无法回连手机 API——web 与 server 要在同一可达
   网络内；LAN 直连是产品形态，adb forward 是调试形态。
