@@ -1872,7 +1872,7 @@ static bool htp_kparams_solve_set_rows(
     if (dst->type == GGML_TYPE_Q8_0 && src0->ne[0] < 32) {
         return false;
     }
-    if (src0->type != GGML_TYPE_F32) {
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
         return false;
     }
     if (src1->type != GGML_TYPE_I32 && src1->type != GGML_TYPE_I64) {
@@ -1888,7 +1888,7 @@ static bool htp_kparams_solve_set_rows(
     kparams->total_tasks = nr;
 
     struct htp_set_rows_vtcm_layout vtcm_layout;
-    htp_set_rows_vtcm_layout_build(&vtcm_layout, dst->type, src0->ne[0], kparams->n_hvx);
+    htp_set_rows_vtcm_layout_build(&vtcm_layout, src0->type, dst->type, src0->ne[0], kparams->n_hvx);
     kparams->vtcm_size = vtcm_layout.total_bytes;
 
     return vtcm_layout.total_bytes <= htp_session_vtcm_size(sess);

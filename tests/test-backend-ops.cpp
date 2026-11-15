@@ -11260,6 +11260,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
+    for (ggml_type dst_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (ggml_type idx_type : {GGML_TYPE_I32, GGML_TYPE_I64}) {
+            for (int64_t ne0 : {31, 33, 64, 128, 256}) {
+                for (bool v : {false, true}) {
+                    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, dst_type, idx_type, { ne0, 5, 2, 2 }, { 1, 1 }, 4, v));
+                }
+            }
+        }
+    }
+    for (ggml_type idx_type : {GGML_TYPE_I32, GGML_TYPE_I64}) {
+        for (int64_t ne0 : {64, 128, 256}) {
+            for (bool v : {false, true}) {
+                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_Q8_0, idx_type, { ne0, 5, 2, 2 }, { 1, 1 }, 4, v));
+            }
+        }
+    }
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION, GGML_ROPE_TYPE_IMROPE }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
