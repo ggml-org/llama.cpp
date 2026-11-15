@@ -68,14 +68,15 @@ void htp_opnode_collapse(
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    void * kparams = nullptr
+    void * kparams = nullptr,
+    bool internal_f16 = false
 );
 
 static inline bool htp_kparams_check(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op
 ) {
-    return htp_kparams_solve(sess, op, nullptr);
+    return htp_kparams_solve(sess, op, nullptr, false);
 }
 
 bool htp_kparams_solve_allreduce(

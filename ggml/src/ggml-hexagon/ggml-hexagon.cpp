@@ -62,6 +62,7 @@
 #include "htp-common.h"
 #include "htp-kparams.h"
 #include "htp-fusion.h"
+#include "htp-f16-promote.h"
 
 using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
@@ -152,6 +153,8 @@ int    opt_opqueue   = 8;    // max number of pending batches
 int    opt_optrace   = 0;    // trace buffer size per thread (0 means default)
 int    opt_oppoll    = 0;    // polling for batch completions
 int    opt_opfusion  = 1;    // enable/disable op fusion
+int    opt_mm_f16_out = 0;   // promote internal F32 MUL_MAT outputs to F16
+int    opt_f16_test  = 0;    // promote any supported internal F32 output to F16
 int    opt_rt_repack = 1;    // runtime repacking: 0 = disabled, 1 = all tileable weights (default)
 
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
@@ -335,6 +338,7 @@ struct ggml_hexagon_session {
     std::atomic<uint32_t> last_error{HTP_STATUS_OK};
 
     uint64_t                cached_uid = 0;
+    std::vector<uintptr_t>  cached_signature;
     std::vector<htp_opnode> cached_nodes;
 
     ggml_hexagon_mdev_group                mdev;
@@ -2525,6 +2529,24 @@ static void ggml_hexagon_graph_repack(const ggml_cgraph * graph, ggml_hexagon_se
     }
 }
 
+static std::vector<uintptr_t> ggml_hexagon_graph_signature(const ggml_cgraph * graph) {
+    std::vector<uintptr_t> signature;
+    signature.reserve(3 + graph->n_nodes * (GGML_MAX_SRC + 1) * 3);
+    signature.push_back((uintptr_t) opt_opfusion);
+    signature.push_back((uintptr_t) opt_mm_f16_out);
+    signature.push_back((uintptr_t) opt_f16_test);
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        const ggml_tensor * node = graph->nodes[i];
+        for (int j = -1; j < GGML_MAX_SRC; ++j) {
+            const ggml_tensor * tensor = j < 0 ? node : node->src[j];
+            signature.push_back((uintptr_t) tensor);
+            signature.push_back(tensor ? (uintptr_t) tensor->data : 0);
+            signature.push_back(tensor ? (uintptr_t) tensor->buffer : 0);
+        }
+    }
+    return signature;
+}
+
 static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
 
@@ -2537,7 +2559,8 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     const std::vector<htp_opnode> * nodes_ptr = nullptr;
     std::vector<htp_opnode> computed_nodes;
 
-    bool cache_hit = (graph->uid != 0 && sess->cached_uid == graph->uid);
+    const std::vector<uintptr_t> signature = ggml_hexagon_graph_signature(graph);
+    bool cache_hit = graph->uid != 0 && sess->cached_uid == graph->uid && sess->cached_signature == signature;
     if (cache_hit) {
         nodes_ptr = &sess->cached_nodes;
     } else {
@@ -2560,12 +2583,18 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             htp_opnode node(opcode, n);
             GGML_ASSERT(htp_kparams_solve(sess, node));
-
-            computed_nodes.push_back(std::move(node));
+            if (!computed_nodes.empty() && opt_opfusion && htp_fusion_try_fuse(sess, computed_nodes.back(), node)) {
+                GGML_ASSERT(htp_kparams_solve(sess, computed_nodes.back()));
+            } else {
+                computed_nodes.push_back(std::move(node));
+            }
         }
+
+        htp_f16_promote(sess, graph, computed_nodes);
 
         if (graph->uid != 0) {
             sess->cached_uid   = graph->uid;
+            sess->cached_signature = signature;
             sess->cached_nodes = std::move(computed_nodes);
             nodes_ptr = &sess->cached_nodes;
         } else {
@@ -3536,6 +3565,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_opqueue  = getenv("GGML_HEXAGON_OPQUEUE");
     const char * str_oppoll   = getenv("GGML_HEXAGON_OPPOLL");
     const char * str_opfusion = getenv("GGML_HEXAGON_OPFUSION");
+    const char * str_mm_f16_out = getenv("GGML_HEXAGON_MM_F16_OUT");
+    const char * str_f16_test = getenv("GGML_HEXAGON_F16_TEST");
     const char * str_rt_repack = getenv("GGML_HEXAGON_RT_REPACK");
     const char * str_opfilter = getenv("GGML_HEXAGON_OPFILTER");
     const char * str_profile  = getenv("GGML_HEXAGON_PROFILE");
@@ -3598,6 +3629,8 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * HTP_TRACE_MAX_EVENTS + 131072);
     opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
     opt_opfusion  = str_opfusion ? atoi(str_opfusion)                     : opt_opfusion;
+    opt_mm_f16_out = str_mm_f16_out ? atoi(str_mm_f16_out)                : opt_mm_f16_out;
+    opt_f16_test  = str_f16_test ? atoi(str_f16_test)                     : opt_f16_test;
     opt_rt_repack = str_rt_repack ? atoi(str_rt_repack)                   : opt_rt_repack;
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;
     opt_etm       = str_etm      ? atoi(str_etm)                          : 0;

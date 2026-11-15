@@ -5684,14 +5684,24 @@ bool htp_kparams_solve(
         return htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_lid_kernel_params>());
     }
 
-    return htp_kparams_solve(sess, node.node, node.kernel_params);
+    ggml_tensor op_view = *node.dst();
+    op_view.op = node.node->op;
+    op_view.flags = node.node->flags;
+    memcpy(op_view.op_params, node.params, sizeof(op_view.op_params));
+    for (size_t i = 0; i < node.inputs.size(); ++i) {
+        op_view.src[i] = const_cast<ggml_tensor *>(node.inputs[i]);
+    }
+
+    return htp_kparams_solve(sess, &op_view, node.kernel_params, true);
 }
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
-    void * kparams
+    void * kparams,
+    bool internal_f16
 ) {
+    (void) internal_f16;
     const htp_op_code opcode = htp_op_remap(op);
     if (htp_op_is_unary(opcode) || htp_op_is_glu(opcode) || opcode == HTP_OP_UPSCALE) {
         htp_opnode tmp(opcode, op);
