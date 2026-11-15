@@ -4007,7 +4007,7 @@ static void ggml_backend_webgpu_buffer_set_tensor_n(ggml_backend_buffer_t       
     auto grow_buffer = [&ctx](wgpu::Buffer & buf, size_t size, const char * label) {
         if (buf == nullptr || buf.GetSize() < size) {
             if (buf) {
-                buf.Destroy(); // TODO: destroy_and_reset_template usefull? guess not as pointer get reallocated directly.
+                buf.Destroy();
             }
             ggml_webgpu_create_buffer(ctx->device, buf, size, wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage,
                                       label);
