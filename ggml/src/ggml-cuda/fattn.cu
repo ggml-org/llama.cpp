@@ -189,6 +189,8 @@ bool ggml_cuda_fattn_ext_use_gqa_opt(
 // without modifying upstream's function (the allocation must match the kernel actually chosen, or the f16 scratch region is sized
 // wrong). A mismatch is a sizing bug only for quantized-KV ops that qualify for the fused path, and the GGML_CUDA_FATTN_MMA_FUSED=2
 // routing pin in ggml_cuda_flash_attn_ext_mma_f16_case aborts on exactly that case. Keep these in sync with upstream's switch_ncols1.
+// Note that case checks the sparse predicate again at its own ncols1 (wide sparse variants compile at ncols1 > 1): callers of
+// the fused gate must mirror that check too, see ggml_cuda_fattn_mma_f16_fused_q_applies_dkq.
 // Predicts whether switch_ncols1 routes to the sparse kernel at ncols1=1. Must be called with the same may_use_sparse guard as switch_ncols1:
 template <int DKQ, int DV, int ncols2>
 static bool ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile(const int cc, const ggml_tensor * dst) {
@@ -847,17 +849,21 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_TILE;
 }
 
-// Per-DKQ half of ggml_cuda_fattn_mma_f16_fused_q_applies, templated so the 128/256/512 routes stay one mirror of switch_ncols1.
+// Per-DKQ half of ggml_cuda_fattn_mma_f16_fused_q_applies, templated so the 128/256/512 routes stay one mirror of the dispatch.
 template <int DKQ>
 static bool ggml_cuda_fattn_mma_f16_fused_q_applies_dkq(
         const int cc, const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * dst) {
-    if constexpr (DKQ != 128) { // may_use_sparse has no 128 entries, so switch_ncols1 never routes a D=128 op to the sparse kernel
-        if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<DKQ, DKQ, 8>(cc, dst)) {
-            return false; // the sparse kernel is selected instead, it has no fused dequant path
-        }
-    }
     const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<DKQ>(cc, Q->ne[1], 8);
     const int nstages = ggml_cuda_fattn_mma_get_nstages(DKQ, DKQ, ncols1, 8, cc);
+    if constexpr (DKQ != 128) { // may_use_sparse has no 128 entries
+        // Skip the fused path when either site can pick the sparse kernel (it has no fused dequant path): the
+        // ncols1=1 pre-check, or the case's own runtime check at its compiled ncols1 — 256/512 compile wide sparse cells.
+        if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<DKQ, DKQ, 8>(cc, dst) ||
+                (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DKQ, ncols1, 8) &&
+                 ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, 8))) {
+            return false; // the sparse kernel is selected instead
+        }
+    }
     return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DKQ, 8, nstages);
 }
 
