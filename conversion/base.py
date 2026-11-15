@@ -581,10 +581,12 @@ class ModelBase:
                 for name in self.model_tensors.keys():
                     if name.endswith(".weight_scale_inv"):
                         weight_name = name.removesuffix("_scale_inv")
+                        tensors_to_remove.append(name)
+                        if weight_name not in self.model_tensors:
+                            continue
                         w = self.model_tensors[weight_name]
                         s = self.model_tensors[name]
                         self.model_tensors[weight_name] = lambda w=w, s=s, bs=block_size: dequant_mxfp8(w(), s(), bs)
-                        tensors_to_remove.append(name)
                         if self._fp8_as_q8:
                             self._fp8_dequantized.add(weight_name)
             elif quant_method == "gptq":
