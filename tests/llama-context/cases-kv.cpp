@@ -429,6 +429,8 @@ struct case_state_restore_failure : ctx_test {
 
         llama_memory_clear(mem, true);
 
+        const size_t empty_state_size = llama_state_seq_get_size(ctx.get(), 0);
+
         std::vector<float> baseline;
         if (!decode(tokens_verify, 1, &baseline)) {
             return case_result::fail();
@@ -444,6 +446,13 @@ struct case_state_restore_failure : ctx_test {
                     return false;
                 }
 
+                return llama_state_seq_set_data(ctx.get(), state.data(), state.size(), 0) == 0;
+            }},
+            { "truncated-buffer", [&]() {
+                std::vector<uint8_t> state(llama_state_seq_get_size(ctx.get(), 0));
+                GGML_ASSERT(llama_state_seq_get_data(ctx.get(), state.data(), state.size(), 0) == state.size());
+                llama_memory_seq_rm(mem, 0, -1, -1);
+                state.pop_back();
                 return llama_state_seq_set_data(ctx.get(), state.data(), state.size(), 0) == 0;
             }},
             { "file", [&]() {
@@ -473,6 +482,30 @@ struct case_state_restore_failure : ctx_test {
 
                 return nread == 0;
             }},
+            { "truncated-file", [&]() {
+                GGML_ASSERT(llama_state_seq_save_file(ctx.get(), path.c_str(), 0, tokens_save.data(), tokens_save.size()) > 0);
+                llama_memory_seq_rm(mem, 0, -1, -1);
+
+                std::vector<uint8_t> data;
+                {
+                    std::ifstream f(path, std::ios::binary);
+                    data.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+                }
+
+                data.pop_back();
+
+                {
+                    std::ofstream f(path, std::ios::binary);
+                    f.write((const char *) data.data(), data.size());
+                }
+
+                llama_tokens tokens_out(tokens_save.size());
+                size_t n_token_count = 0;
+                const size_t nread = llama_state_seq_load_file(ctx.get(), path.c_str(), 0, tokens_out.data(), tokens_out.size(), &n_token_count);
+                std::remove(path.c_str());
+
+                return nread == 0;
+            }},
         };
 
         for (const auto & [name, restore_failed] : sub_cases) {
@@ -486,6 +519,9 @@ struct case_state_restore_failure : ctx_test {
 
             CTX_REQUIRE(llama_memory_seq_pos_max(mem, 0) == -1,
                     std::string(name) + ": the sequence is not empty after a failed restore");
+
+            CTX_REQUIRE(llama_state_seq_get_size(ctx.get(), 0) == empty_state_size,
+                    std::string(name) + ": a cache component retained state after a failed restore");
 
             std::vector<float> logits;
             if (!decode(tokens_verify, 1, &logits)) {

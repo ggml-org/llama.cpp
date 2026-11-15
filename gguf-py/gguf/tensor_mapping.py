@@ -532,6 +532,7 @@ class TensorNameMap:
         MODEL_TENSOR.ATTN_POST_CONV: (
             "model.layers.{bid}.post_attention_convolution.conv1d",  # inkling2
             "model.layers.{bid}.attn_sconv",                         # inkling2
+            "model.layers.{bid}.attn_sconv.conv1d",                  # inkling
         ),
 
         MODEL_TENSOR.ATTN_RES_QUERY: (
@@ -782,8 +783,9 @@ class TensorNameMap:
 
         MODEL_TENSOR.FFN_GATE_UP_EXP: (
             "model.layers.{bid}.mlp.experts.gate_up_proj",
-            "model.layers.{bid}.experts.gate_up_proj", # gemma4
-            "layers.{bid}.moe.local_experts.gate_up",  # metis16
+            "model.layers.{bid}.experts.gate_up_proj",   # gemma4
+            "layers.{bid}.moe.local_experts.gate_up",    # metis16
+            "model.layers.{bid}.mlp.experts.w13_weight", # inkling
         ),
 
         MODEL_TENSOR.MOE_LATENT_DOWN: (
@@ -798,9 +800,15 @@ class TensorNameMap:
             "layers.{bid}.moe.latent_up",                                  # metis16
         ),
 
+        MODEL_TENSOR.FFN_OUT_SCALE: (
+            "model.layers.{bid}.mlp.global_scale",       # inkling
+            "model.layers.{bid}.mlp.gate.global_scale",  # inkling
+        ),
+
         MODEL_TENSOR.FFN_POST_CONV: (
             "model.layers.{bid}.post_mlp_convolution.conv1d",  # inkling2
             "model.layers.{bid}.mlp_sconv",                    # inkling2
+            "model.layers.{bid}.mlp_sconv.conv1d",             # inkling
         ),
 
         MODEL_TENSOR.FFN_RES_QUERY: (
@@ -928,6 +936,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.language_mlp.down_proj",          # cogvlm
             "model.blocks.{bid}.mlp.mlp_resid",                       # talkie
             "head.layers.{bid}.linear2",  # laya
+            "model.layers.{bid}.mlp.w2_md",                           # inkling
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -943,6 +952,7 @@ class TensorNameMap:
             "model.layers.{bid}.moe.down_proj",                     # step3.5
             "model.layers.{bid}.experts.down_proj",                 # gemma4
             "layers.{bid}.moe.local_experts.down",                  # metis16
+            "model.layers.{bid}.mlp.experts.w2_weight",             # inkling
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
@@ -956,6 +966,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # kimi
             "model.layers.{bid}.share_expert.down_proj",               # step3.5
             "layers.{bid}.moe.shared_expert.down",                     # metis16
+            "model.layers.{bid}.mlp.shared_experts.shared_w2_weight",       # inkling
         ),
 
         MODEL_TENSOR.FFN_DOWN_CHEXP: (
@@ -977,6 +988,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.q_norm",                                  # qwen3-embedding
             "model.layers.{bid}.attention.query_layernorm",                   # apertus
             "model.blocks.{bid}.attn.head_gain.head_g",                       # talkie
+            "model.layers.{bid}.attn.q_norm",                                 # inkling
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -994,6 +1006,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
             "model.layers.{bid}.self_attn.k_rope_only_layernorm",             # dots3note
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
+            "model.layers.{bid}.attn.k_norm",                                 # inkling
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -2167,6 +2180,8 @@ class TensorNameMap:
             "vision_model.transformer.resblocks.{bid}.ln_1", # Step3-VL
             "model.qwen2_model.model.model.layers.{bid}.input_layernorm", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.norm1", # muse-glimmer
+            "model.visual.layers.norm_{bid}", # inkling
+            "model.vision_tower.encoder_layers.{bid}.layer_norm", # inkling
             "model.vision_tower.layers.{bid}.layernorm_before", # inkling2
             "model.visual.backbone.layers.{bid}.ln_1", # inkling2
         ),
@@ -2267,6 +2282,8 @@ class TensorNameMap:
             "vision_model.transformer.resblocks.{bid}.mlp.c_fc", # Step3-VL
             "model.qwen2_model.model.model.layers.{bid}.mlp.up_proj", # Deepseek-OCR-2 qwen2
             "model.vision_tower.layers.{bid}.mlp.fc1", # muse-glimmer
+            "model.visual.layers.linear_{bid}", # inkling
+            "model.vision_tower.encoder_layers.{bid}.projection", # inkling
             "model.visual.backbone.layers.{bid}.mlp.c_fc", # inkling2
         ),
 
@@ -2392,6 +2409,8 @@ class TensorNameMap:
             "visual.post_layernorm", # glm4v
             "siglip2.vision_model.post_layernorm",
             "model.qwen2_model.model.model.norm", # Deepseek-OCR-2 qwen2
+            "model.visual.final_norm", # inkling
+            "model.vision_tower.final_norm", # inkling
             "model.vision_tower.ln_post", # muse-glimmer
             "vision_projector.vision_final_layernorm", # Nemotron Omni Reasoning V3
         ),
@@ -2732,6 +2751,11 @@ class TensorNameMap:
 
         # audio (mtmd)
 
+        MODEL_TENSOR.A_ENC_CODE_EMBD: (
+            "model.audio.encoder",
+            "model.audio_tower.embed_audio_tokens.embed_audio_tokens",
+        ),
+
         MODEL_TENSOR.A_ENC_EMBD_POS: (
             "audio_tower.embed_positions", # ultravox
             "audio_embedding.embedding", # lfm2
@@ -2782,6 +2806,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.A_POST_NORM: (
+            "model.audio.final_norm", # inkling
+            "model.audio_tower.norm", # inkling
             "audio_tower.layer_norm", # ultravox
             "audio_tower.norm", # voxtral realtime
             "audio_encoder.dots_encoder.speech_encoder.layer_norm", # dots3note

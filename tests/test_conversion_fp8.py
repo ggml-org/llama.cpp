@@ -20,6 +20,7 @@ from safetensors.torch import save_file
 
 from conversion.base import LazyTorchTensor, gguf
 from conversion.deepseek import DeepseekV2Model
+from conversion.inkling import InklingModel
 from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
 from conversion.llama import LlamaModel
 from conversion.nemotron import NemotronHModel
@@ -673,6 +674,47 @@ class TestInkling2TextNames(unittest.TestCase):
         self.assertEqual(renamed.keys(), actual.keys())
         for name in actual:
             np.testing.assert_array_equal(renamed[name], actual[name], name)
+
+
+class TestInklingTextNames(unittest.TestCase):
+    def test_interleaved_weights_and_bare_parameters(self):
+        model = InklingModel.__new__(InklingModel)
+        model.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.INKLING, 3)
+        model.model_arch = gguf.MODEL_ARCH.INKLING
+        model.fuse_gate_up_exps = False
+        model.fuse_qkv = False
+        cases = (
+            ("mlp.w13_dn.weight", (8, 4), ("ffn_gate.weight", "ffn_up.weight")),
+            ("mlp.shared_experts.shared_w13_weight", (2, 8, 4), ("ffn_gate_shexp.weight", "ffn_up_shexp.weight")),
+            ("mlp.experts.w13_weight", (4, 8, 4), ("ffn_gate_up_exps.weight",)),
+        )
+        for source, shape, targets in cases:
+            tensor = torch.arange(int(np.prod(shape)), dtype=torch.float32).reshape(shape)
+            item = InklingModel.filter_tensors(("model.llm.layers.2." + source, lambda: tensor))
+            assert item is not None
+            name, _ = item
+            actual = dict(model.modify_tensors(tensor, name, 2))
+            gate, up = tensor[..., 0::2, :], tensor[..., 1::2, :]
+            expected = (gate, up) if len(targets) == 2 else (torch.cat((gate, up), dim=-2),)
+            self.assertEqual(set(actual), {"blk.2." + target for target in targets})
+            for target, value in zip(targets, expected):
+                torch.testing.assert_close(actual["blk.2." + target], value, rtol=0, atol=0)
+        for source, shape, target, transform in (
+            ("attn.rel_logits_proj.proj", (4, 8), "attn_rel_bias.weight", lambda x: x.T),
+            ("attn.k_sconv.weight", (16, 1, 4), "attn_k_conv.weight", lambda x: x.squeeze(1)),
+            ("mlp.gate.bias", (4,), "exp_probs_b.bias", lambda x: x),
+            ("mlp.gate.global_scale", (1,), "ffn_out_scale.weight", lambda x: x),
+            ("mlp.global_scale", (1,), "ffn_out_scale.weight", lambda x: x),
+        ):
+            bid = 0 if source == "mlp.global_scale" else 2
+            tensor = torch.arange(1, int(np.prod(shape)) + 1, dtype=torch.float32).reshape(shape)
+            item = InklingModel.filter_tensors((f"model.llm.layers.{bid}." + source, lambda: tensor))
+            assert item is not None
+            name, _ = item
+            actual = dict(model.modify_tensors(tensor, name, bid))
+            torch.testing.assert_close(actual[f"blk.{bid}." + target], transform(tensor), rtol=0, atol=0)
+        for prefix in ("model.visual.", "model.audio.", "model.mtp."):
+            self.assertIsNone(InklingModel.filter_tensors((prefix + "weight", lambda: torch.zeros(1))))
 
 
 if __name__ == "__main__":

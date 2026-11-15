@@ -1,7 +1,12 @@
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-iswa.h"
+#include "llama-io.h"
 #include "llama-model.h"
 
+#include <algorithm>
+#include <cstring>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 
 static void init_model(llama_model & model, uint32_t n_layer) {
@@ -13,6 +18,128 @@ static void init_model(llama_model & model, uint32_t n_layer) {
     model.hparams.n_head_kv_arr.fill(1);
     std::iota(model.hparams.kv_source_impl.begin(), model.hparams.kv_source_impl.end(), 0);
     model.layers.resize(n_layer);
+}
+
+struct state_writer : llama_io_write_i {
+    std::vector<uint8_t> data;
+    std::vector<std::pair<size_t, size_t>> tensors;
+
+    void write(const void * src, size_t size) override {
+        const auto * ptr = static_cast<const uint8_t *>(src);
+        data.insert(data.end(), ptr, ptr + size);
+    }
+
+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+        tensors.emplace_back(data.size(), size);
+        const size_t start = data.size();
+        data.resize(start + size);
+        ggml_backend_tensor_get(tensor, data.data() + start, offset, size);
+    }
+
+    size_t n_bytes() override { return data.size(); }
+};
+
+struct state_reader : llama_io_read_i {
+    const std::vector<uint8_t> & data;
+    size_t pos = 0;
+    struct tensor_read { ggml_tensor * tensor; size_t offset; size_t size; };
+    std::vector<tensor_read> tensors;
+
+    explicit state_reader(const std::vector<uint8_t> & data) : data(data) {}
+
+    void read(void * dst, size_t size) override {
+        if (size > data.size() - pos) {
+            throw std::runtime_error("truncated state");
+        }
+        memcpy(dst, data.data() + pos, size);
+        pos += size;
+    }
+
+    void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
+        std::vector<uint8_t> bytes(size);
+        read(bytes.data(), size);
+        ggml_backend_tensor_set(tensor, bytes.data(), offset, size);
+        tensors.push_back({tensor, offset, size});
+    }
+
+    size_t n_bytes() override { return pos; }
+};
+
+static void test_iswa_restore_failure() {
+    for (bool variable : { false, true }) {
+        for (bool v_trans : { false, true }) {
+            std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
+            init_model(*model, 2);
+            model->hparams.n_head_arr.fill(2);
+            model->hparams.n_embd_head_k_swa = 4;
+            model->hparams.n_embd_head_v_swa = 4;
+            model->hparams.n_swa = 16;
+            model->hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+            model->hparams.is_swa_impl[1] = true;
+            model->hparams.n_head_kv_arr[1] = variable ? 2 : 1;
+            llama_kv_cache_iswa cache(*model, false, GGML_TYPE_F32, GGML_TYPE_F32,
+                    v_trans, false, true, true, 256, 2, 32, nullptr, nullptr, nullptr, nullptr);
+            cache.clear(true);
+
+            llama_batch_allocr balloc(1);
+            auto ubatch = balloc.ubatch_reserve(1, 1);
+            llama_seq_id seq_id = 0;
+            ubatch.seq_id_unq[0] = seq_id;
+            ubatch.seq_id[0] = &seq_id;
+            ubatch.n_seq_id[0] = 1;
+            ubatch.pos[0] = 0;
+            for (auto * kv : { cache.get_base(), cache.get_swa() }) {
+                kv->apply_ubatch(kv->find_slot(ubatch, false), ubatch);
+            }
+
+            state_writer saved;
+            cache.get_base()->state_write(saved, 0);
+            const size_t swa_offset = saved.data.size();
+            cache.get_swa()->state_write(saved, 0);
+            cache.clear(true);
+
+            // Keep a live sequence while the other sequence fails to restore.
+            seq_id = 1;
+            ubatch.seq_id_unq[0] = seq_id;
+            for (auto * kv : { cache.get_base(), cache.get_swa() }) {
+                kv->apply_ubatch(kv->find_slot(ubatch, false), ubatch);
+            }
+            state_writer before;
+            cache.state_write(before, 1);
+            for (const auto & range : before.tensors) {
+                std::fill_n(before.data.begin() + range.first, range.second, 0x3e);
+            }
+            state_reader live(before.data);
+            cache.state_read(live, 1);
+
+            for (const auto & range : saved.tensors) {
+                std::fill_n(saved.data.begin() + range.first, range.second, 0xff);
+            }
+            std::fill_n(saved.data.begin() + swa_offset, sizeof(uint32_t), 0xff);
+            state_reader reader(saved.data);
+            bool failed = false;
+            try {
+                cache.state_read(reader, 0);
+            } catch (const std::exception &) {
+                failed = true;
+            }
+            GGML_ASSERT(failed);
+            GGML_ASSERT(cache.get_base()->seq_pos_max(0) == -1);
+            GGML_ASSERT(cache.get_swa()->seq_pos_max(0) == -1);
+            state_writer after;
+            cache.state_write(after, 1);
+            GGML_ASSERT(before.data == after.data);
+
+            GGML_ASSERT(!reader.tensors.empty());
+            for (const auto & range : reader.tensors) {
+                std::vector<uint8_t> bytes(range.size);
+                ggml_backend_tensor_get(range.tensor, bytes.data(), range.offset, range.size);
+                for (uint8_t byte : bytes) {
+                    GGML_ASSERT(byte == 0);
+                }
+            }
+        }
+    }
 }
 
 int main() {
@@ -104,6 +231,8 @@ int main() {
             }
         }
     }
+
+    test_iswa_restore_failure();
 
     llama_backend_free();
     return 0;

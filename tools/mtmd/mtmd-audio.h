@@ -186,6 +186,16 @@ struct mtmd_audio_preprocessor_gemma4a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_inklinga : mtmd_audio_preprocessor {
+    using mtmd_audio_preprocessor::mtmd_audio_preprocessor;
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+    static int32_t quantize(float value);
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_gemma4ua : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_gemma4ua(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;

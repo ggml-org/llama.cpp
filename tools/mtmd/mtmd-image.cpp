@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 void mtmd_image_preproc_out::append(const mtmd_hparams & hparams, const mtmd_image_u8 & img, bool normalized) {
@@ -2143,6 +2144,52 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
     mtmd_image_preproc_out output;
     output.append(hparams, resized_image, true);
     return output;
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_inklingv::preprocess(const mtmd_image_u8 & input) const {
+    auto size = input.get_size();
+    const int patch = hparams.patch_size;
+    if (patch != 40 || size.width <= 0 || size.height <= 0) {
+        throw std::runtime_error("inklingv: invalid image dimensions or patch size");
+    }
+    const int max_tokens = hparams.image_max_pixels > 0 ? hparams.image_max_pixels / (patch * patch) : 4096;
+    auto n_tokens = [&]() {
+        return (int64_t(size.width) / patch + 1) * ((int64_t(size.height) + patch - 1) / patch);
+    };
+    mtmd_image_u8 resized;
+    const bool too_large = n_tokens() > max_tokens;
+    while (n_tokens() > max_tokens) {
+        const double scale = std::sqrt((double) max_tokens / n_tokens());
+        size.width = std::max(1, (int) (size.width * scale) - 1);
+        size.height = std::max(1, (int) (size.height * scale) - 1);
+    }
+    if (too_large) {
+        img_tool::resize(input, resized, size, hparams.image_resize_algo, PAD_NONE);
+    }
+    const auto & img = too_large ? resized : input;
+    const int width = (size.width / patch + 1) * patch;
+    const int height = MTMD_ALIGN(size.height, patch);
+    mtmd_image_f32 padded;
+    padded.set_size({width, height}, img.is_placeholder(), false);
+    if (!img.is_placeholder()) {
+        const auto & src = img.get_ro_buf();
+        float mean[3], std[3];
+        for (int c = 0; c < 3; ++c) {
+            mean[c] = hparams.image_mean[c] * 255.0f;
+            std[c] = hparams.image_std[c] * 255.0f;
+        }
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                for (int c = 0; c < 3; ++c) {
+                    const float value = x < size.width && y < size.height ? src[((size_t) y * size.width + x) * 3 + c] : -1.0f;
+                    padded.set_pixel(x, y, c, (value - mean[c]) / std[c]);
+                }
+            }
+        }
+    }
+    mtmd_image_preproc_out result;
+    result.append(hparams, padded, false);
+    return result;
 }
 
 //

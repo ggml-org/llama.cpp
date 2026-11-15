@@ -1655,6 +1655,29 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
                 set_input_f32("inp_temb", temb);
             } break;
+        case PROJECTOR_TYPE_INKLINGA:
+            {
+                const auto & audio = imgs.entries[0];
+                const auto & codes = audio.get_ro_buf();
+                const int frames = audio.nx();
+                const int n_mel = hparams.n_mel_bins;
+                if (codes.size() != (size_t) n_mel * frames) {
+                    return false;
+                }
+                std::vector<int32_t> ids(codes.size());
+                for (int t = 0; t < frames; ++t) {
+                    for (int m = 0; m < n_mel; ++m) {
+                        const float code = codes[(size_t) m * frames + t];
+                        if (!(code >= 0 && code <= 15) || code != std::floor(code)) {
+                            LOG_ERR("%s: invalid Inkling audio code\n", __func__);
+                            return false;
+                        }
+                        ids[(size_t) m * frames + t] = (int32_t) code + m * 16;
+                    }
+                }
+                set_input_i32("inp_codes", ids);
+            } break;
+        case PROJECTOR_TYPE_INKLINGV:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:

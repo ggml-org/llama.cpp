@@ -326,7 +326,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
-    } else if (arch == LLM_ARCH_INKLING2) {
+    } else if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING) {
         n_embd  = 128;
         n_head  = 4;
         n_ff    = 24;
@@ -409,6 +409,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         }
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv_per_layer);
+    } else if (arch == LLM_ARCH_INKLING) {
+        std::vector<uint32_t> kv_heads(n_layer, 4);
+        for (uint32_t i = 1; i < n_layer; i += 2) {
+            kv_heads[i] = 2;
+        }
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, kv_heads);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(1) : n_head_kv);
@@ -696,7 +703,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
-    if (arch == LLM_ARCH_INKLING2) {
+    if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING) {
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
         ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
@@ -770,6 +777,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      uint32_t(2));
             ms.add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_USED_COUNT, uint32_t(2));
         }
+    }
+
+    if (arch == LLM_ARCH_INKLING) {
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, uint32_t(32));
+        ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,       uint32_t(2));
+        ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_LOGIT_SCALE,               0.5f);
     }
 
     if (arch == LLM_ARCH_BEAM) {
@@ -1084,6 +1098,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_METIS16:
         case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING:
             return true;
         default:
             return false;

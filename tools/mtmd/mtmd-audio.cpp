@@ -9,6 +9,8 @@
 #include <fstream>
 #include <algorithm>
 #include <functional>
+#include <thread>
+#include <complex>
 
 // some of the code here is copied from whisper.cpp
 
@@ -1869,6 +1871,121 @@ bool mtmd_audio_preprocessor_nemotron_transcribe::process(const float *         
     return true;
 }
 
+
+void mtmd_audio_preprocessor_inklinga::initialize() {
+    const uint32_t length = hparams.audio_window_len;
+    cache.hann_window.resize(length);
+    const float phase_step = (float) (2.0 * M_PI / length);
+    for (uint32_t i = 0; i < length; ++i) {
+        cache.hann_window[i] = 0.5f * (1.0f - cosf(phase_step * i));
+    }
+    cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
+    mel_config.cache = &cache;
+}
+
+int32_t mtmd_audio_preprocessor_inklinga::quantize(float value) {
+    value = std::max(-7.0f, std::min(2.0f, value));
+    int32_t best = 0;
+    float distance = FLT_MAX;
+    for (int32_t i = 0; i < 16; ++i) {
+        const float center = (float) (-7.0 + 9.0 * i / 15.0);
+        const float candidate = std::abs(value - center);
+        if (candidate < distance) {
+            best = i;
+            distance = candidate;
+        }
+    }
+    return best;
+}
+
+bool mtmd_audio_preprocessor_inklinga::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const {
+    const int n_fft = hparams.audio_n_fft;
+    const int hop = hparams.audio_hop_len;
+    const int n_mel = hparams.n_mel_bins;
+    const int n_bins = n_fft / 2 + 1;
+    if (n_samples == 0 || n_samples > (size_t) (INT32_MAX - n_fft)) {
+        return false;
+    }
+    if (!shape_only && std::any_of(samples, samples + n_samples, [](float v) { return !std::isfinite(v); })) {
+        return false;
+    }
+    const int frames = (n_samples + hop - 1) / hop;
+    mtmd_audio_mel mel;
+    mel.n_len = frames;
+    mel.n_len_org = frames;
+    mel.n_mel = n_mel;
+    if (!shape_only) {
+        mel.data.resize((size_t) n_mel * frames);
+        const int n_threads = std::min(frames, std::max(1, mel_config.n_threads));
+        std::vector<std::complex<double>> roots(n_fft);
+        for (int i = 0; i < n_fft; ++i) {
+            const double phase = -2.0 * M_PI * i / n_fft;
+            roots[i] = {std::cos(phase), std::sin(phase)};
+        }
+        auto worker = [&](int thread) {
+            std::vector<float> windowed(n_fft), magnitude(n_bins);
+            std::vector<std::complex<double>> spectrum(n_fft);
+            // Double precision keeps weak spectral bins stable at dMel decision boundaries.
+            std::function<void(int, int, int, std::complex<double> *)> transform;
+            transform = [&](int offset, int stride, int n, std::complex<double> * out) {
+                if (n % 2 != 0) {
+                    for (int k = 0; k < n; ++k) {
+                        std::complex<double> sum = 0.0;
+                        for (int j = 0; j < n; ++j) {
+                            sum += (double) windowed[offset + j * stride] * roots[(k * j * stride) % n_fft];
+                        }
+                        out[k] = sum;
+                    }
+                    return;
+                }
+                const int half = n / 2;
+                transform(offset, stride * 2, half, out);
+                transform(offset + stride, stride * 2, half, out + half);
+                for (int k = 0; k < half; ++k) {
+                    const auto even = out[k];
+                    const auto odd = roots[k * stride] * out[k + half];
+                    out[k] = even + odd;
+                    out[k + half] = even - odd;
+                }
+            };
+            for (int t = thread; t < frames; t += n_threads) {
+                for (int j = 0; j < n_fft; ++j) {
+                    const int64_t pos = (int64_t) t * hop + j - n_fft / 2;
+                    windowed[j] = pos >= 0 && (size_t) pos < n_samples ? samples[pos] * cache.hann_window[j] : 0.0f;
+                }
+                transform(0, 1, n_fft, spectrum.data());
+                for (int k = 0; k < n_bins; ++k) {
+                    const float re = spectrum[k].real();
+                    const float im = spectrum[k].imag();
+                    magnitude[k] = std::sqrt(std::max(re * re + im * im, 1e-10f));
+                }
+                for (int m = 0; m < n_mel; ++m) {
+                    double sum = 0.0;
+                    for (int k = 0; k < n_bins; ++k) {
+                        sum += magnitude[k] * cache.filters.data[(size_t) m * n_bins + k];
+                    }
+                    mel.data[(size_t) m * frames + t] = std::log10(std::max(sum, 1e-10));
+                }
+            }
+        };
+        std::vector<std::thread> workers;
+        for (int i = 1; i < n_threads; ++i) {
+            workers.emplace_back(worker, i);
+        }
+        worker(0);
+        for (auto & thread : workers) {
+            thread.join();
+        }
+        for (auto & value : mel.data) {
+            if (!std::isfinite(value)) {
+                return false;
+            }
+            value = (float) quantize(value);
+        }
+    }
+    output.push_back(std::move(mel));
+    return true;
+}
 
 // mtmd_audio_preprocessor_gemma4ua
 //

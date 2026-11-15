@@ -353,6 +353,11 @@ struct mtmd_image_preprocessor_muse_glimmer : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
 };
 
+struct mtmd_image_preprocessor_inklingv : mtmd_image_preprocessor {
+    using mtmd_image_preprocessor::mtmd_image_preprocessor;
+    mtmd_image_preproc_out preprocess(const mtmd_image_u8 & img) const override;
+};
+
 // pad bottom-right to a multiple of patch_size*n_merge; resize only if the image is above image_max_pixels
 struct mtmd_image_preprocessor_inkling2v : mtmd_image_preprocessor {
     using mtmd_image_preprocessor::mtmd_image_preprocessor;
