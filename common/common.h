@@ -692,6 +692,7 @@ struct common_params {
 
     std::string ssl_file_key  = "";                                                                         // NOLINT
     std::string ssl_file_cert = "";                                                                         // NOLINT
+    int max_request_body_mb = 100; // if >0, request bodies larger than this many MiB are rejected with HTTP 413; 0 = unlimited
 
     std::map<std::string, std::string> default_template_kwargs;
     bool preserve_reasoning_specified = false;
