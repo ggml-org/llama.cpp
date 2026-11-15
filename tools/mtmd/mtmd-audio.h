@@ -14,6 +14,7 @@ struct mtmd_audio_mel {
     int64_t n_len;
     int64_t n_len_org;
     int64_t n_mel;
+    int64_t n_ctx = 0; // see mtmd_image_f32::audio_n_ctx
 
     std::vector<float> data;
 };
@@ -128,6 +129,17 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
+// vibevoice: gain to -25 dBFS RMS, without clipping the peak
+// the RMS is floored at -50 dBFS, so that silence or noise alone is not boosted to full scale
+double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak);
+
+// raw 24 kHz waveform, cut in chunks that carry their causal context, see mtmd_hparams::audio_n_ctx
+struct mtmd_audio_preprocessor_vibevoice_asr : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_vibevoice_asr(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override {}
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     mtmd_audio_preprocessor_conformer(const mtmd_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}
@@ -196,6 +208,12 @@ struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
 
   private:
     mtmd_audio_cache cache;
+};
+
+// same per-chunk log-mel as dots3note, with 4s chunks
+struct mtmd_audio_preprocessor_higgs_audio : mtmd_audio_preprocessor_dots3note {
+    mtmd_audio_preprocessor_higgs_audio(const mtmd_model * model) : mtmd_audio_preprocessor_dots3note(model) {}
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
 struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {

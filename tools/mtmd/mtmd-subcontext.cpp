@@ -402,6 +402,7 @@ static std::vector<c2w_state_slot> list_enc_state_slots(const mtmd_hparams & hpa
     switch (model.proj_type) {
         case PROJECTOR_TYPE_LFM3A:   return list_lfm3a_state_slots(hparams, model);
         case PROJECTOR_TYPE_GEMMA4A: return list_gemma4a_state_slots(hparams, model);
+        case PROJECTOR_TYPE_VIBEVOICE_ASR: return list_vibevoice_asr_state_slots(hparams, model);
         default:                     return {};
     }
 }
@@ -451,7 +452,7 @@ mtmd_subctx_gen_state * mtmd_subcontext::gen_state_init(uint32_t seed) {
 
 mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
     const auto & hparams = model.hparams;
-    if (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A) {
+    if (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A || model.proj_type == PROJECTOR_TYPE_VIBEVOICE_ASR) {
         // see list_enc_state_slots()
         const auto slots = list_enc_state_slots(hparams, model);
         auto st = std::make_unique<mtmd_subctx_enc_state>();
@@ -1662,6 +1663,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_NEMOTRON_V2_VL:
         case PROJECTOR_TYPE_NEMOTRON_OMNI:
         case PROJECTOR_TYPE_QWEN2A:
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
         case PROJECTOR_TYPE_QWEN3A:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_ULTRAVOX:
@@ -1981,6 +1983,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     positions[i] = i;
                 }
                 set_input_i32("positions", positions);
+            } break;
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            {
+                set_enc_state_in();
             } break;
         case PROJECTOR_TYPE_GEMMA4A:
             {
@@ -2627,7 +2633,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             }
         }
     }
-    if (params->enc_state != nullptr && (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A)) {
+    if (params->enc_state != nullptr && (model.proj_type == PROJECTOR_TYPE_LFM3A || model.proj_type == PROJECTOR_TYPE_GEMMA4A || model.proj_type == PROJECTOR_TYPE_VIBEVOICE_ASR)) {
         const auto & slots = params->enc_state->slots;
         size_t i = 0;
         for (const auto & slot : list_enc_state_slots(hparams, model)) {

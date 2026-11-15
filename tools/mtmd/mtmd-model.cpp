@@ -785,6 +785,46 @@ struct mtmd_model_loader {
                         }
                         hparams.warmup_audio_size = hparams.audio_samples_per_token();
                     } break;
+                case PROJECTOR_TYPE_VIBEVOICE_ASR:
+                    {
+                        hparams.audio_sample_rate = 24000; // mono waveform, no frontend
+                        hparams.audio_chunk_len   = 30;    // in seconds, any length works as the convs are causal
+                        get_u32(KEY_A_CONV_KERNEL_SIZE, hparams.audio_conv_kernel_size, true);
+                        get_arr_int(KEY_A_PATCH_SIZES,  hparams.audio_patch_sizes,  true);
+                        get_arr_int(KEY_A_DEPTHS,       hparams.audio_depths,       true);
+
+                        // bounds keep the receptive field below from overflowing
+                        const size_t n_stage = hparams.audio_patch_sizes.size();
+                        if (n_stage == 0 || n_stage > 16 || hparams.audio_depths.size() != n_stage || hparams.n_mel_bins != 1 ||
+                                hparams.audio_conv_kernel_size < 1 || hparams.audio_conv_kernel_size > 64) {
+                            throw std::runtime_error(mtmd_format("%s: invalid vibevoice audio hparams\n", __func__));
+                        }
+
+                        // receptive field: stem conv (kernel), downsample convs (2 * stride), blocks (kernel), head conv (kernel)
+                        const int64_t k   = hparams.audio_conv_kernel_size;
+                        int64_t       hop = 1;
+                        int64_t       rf  = 0;
+                        int64_t n_blocks  = 0;
+                        for (size_t i = 0; i < n_stage; ++i) {
+                            const int64_t stride = hparams.audio_patch_sizes[i];
+                            if (stride < 1 || stride > 64 || hop * stride > (1 << 20) || hparams.audio_depths[i] < 0 || hparams.audio_depths[i] > 64) {
+                                throw std::runtime_error(mtmd_format("%s: invalid vibevoice audio hparams\n", __func__));
+                            }
+                            rf  += ((i == 0 ? k : 2 * stride) - 1) * hop;
+                            hop *= stride;
+                            rf  += hparams.audio_depths[i] * (k - 1) * hop;
+                            n_blocks += hparams.audio_depths[i];
+                        }
+                        rf += (k - 1) * hop;
+                        if (rf > 60 * hparams.audio_sample_rate) {
+                            throw std::runtime_error(mtmd_format("%s: vibevoice receptive field of %" PRId64 " samples is too long\n", __func__, rf));
+                        }
+                        if (n_blocks != hparams.n_layer) {
+                            throw std::runtime_error(mtmd_format("%s: sum of audio depths (%" PRId64 ") does not match n_layer (%d)\n", __func__, n_blocks, hparams.n_layer));
+                        }
+                        hparams.audio_n_ctx       = (int32_t) ((rf + hop - 1) / hop * hop);
+                        hparams.warmup_audio_size = (int32_t) ((int64_t) hparams.audio_chunk_len * hparams.audio_sample_rate / hop * hop) + hparams.audio_n_ctx;
+                    } break;
                 case PROJECTOR_TYPE_INKLING2V:
                     {
                         hparams.ffn_op = FFN_GELU_ERF;
@@ -892,6 +932,7 @@ struct mtmd_model_loader {
                     } break;
                 case PROJECTOR_TYPE_ULTRAVOX:
                 case PROJECTOR_TYPE_QWEN2A:
+                case PROJECTOR_TYPE_HIGGS_AUDIO:
                 case PROJECTOR_TYPE_QWEN3A:
                 case PROJECTOR_TYPE_GLMA:
                 case PROJECTOR_TYPE_VOXTRAL:
@@ -912,6 +953,12 @@ struct mtmd_model_loader {
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+
+                        if (model.proj_type == PROJECTOR_TYPE_HIGGS_AUDIO) {
+                            // each 4s chunk is encoded on its own
+                            hparams.audio_chunk_len   = 4;
+                            hparams.warmup_audio_size = 400;
+                        }
                     } break;
                 case PROJECTOR_TYPE_VOXTRAL_RT:
                     {
@@ -1324,6 +1371,7 @@ struct mtmd_model_loader {
                 // Muse Spark is encoder-free in the same sense: its conv pyramid reads the raw waveform, one channel takes the place of the mel bins
                 const bool fft_based = model.proj_type != PROJECTOR_TYPE_GEMMA4UA &&
                                        model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+                                       model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
                                        model.proj_type != PROJECTOR_TYPE_POCKETTTS_SPKENC;
 
                 // Validate audio hparams loaded from GGUF metadata
@@ -1497,6 +1545,7 @@ struct mtmd_model_loader {
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
+            model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
             model.proj_type != PROJECTOR_TYPE_CHATTERBOX_SPKENC);
 
@@ -1928,6 +1977,52 @@ struct mtmd_model_loader {
                     model.mm_fc_w   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                     model.mm_fc_b   = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
                 } break;
+            case PROJECTOR_TYPE_VIBEVOICE_ASR:
+                {
+                    const int n_stage = (int) hparams.audio_patch_sizes.size();
+                    for (int e = 0; e < 2; ++e) {
+                        auto & enc = model.cnx_enc[e];
+                        enc.conv_w.resize(n_stage + 1);
+                        enc.conv_b.resize(n_stage + 1);
+                        for (int i = 0; i <= n_stage; ++i) {
+                            enc.conv_w[i] = get_tensor(mtmd_format(TN_A_CNX_CONV, e, i, "weight"));
+                            enc.conv_b[i] = get_tensor(mtmd_format(TN_A_CNX_CONV, e, i, "bias"));
+                            // the receptive field in load_hparams assumes these kernel sizes
+                            const int64_t k_expected = (i == 0 || i == n_stage) ? hparams.audio_conv_kernel_size : 2 * hparams.audio_patch_sizes[i];
+                            if (enc.conv_w[i]->ne[0] != k_expected) {
+                                throw std::runtime_error(mtmd_format("%s: %s has kernel %" PRId64 ", expected %" PRId64 "\n", __func__, ggml_get_name(enc.conv_w[i]), enc.conv_w[i]->ne[0], k_expected));
+                            }
+                        }
+                        enc.blocks.resize(hparams.n_layer);
+                        for (int il = 0; il < hparams.n_layer; ++il) {
+                            auto & layer = enc.blocks[il];
+                            layer.ln_1_w    = get_tensor(mtmd_format(TN_A_CNX_NORM,     e, il, "weight"));
+                            layer.conv_w    = get_tensor(mtmd_format(TN_A_CNX_DW,       e, il, "weight"));
+                            layer.conv_b    = get_tensor(mtmd_format(TN_A_CNX_DW,       e, il, "bias"));
+                            layer.ls_1_w    = get_tensor(mtmd_format(TN_A_CNX_LS1,      e, il, "weight"));
+                            layer.ln_2_w    = get_tensor(mtmd_format(TN_A_CNX_FFN_NORM, e, il, "weight"));
+                            layer.ff_up_w   = get_tensor(mtmd_format(TN_A_CNX_FFN_UP,   e, il, "weight"));
+                            layer.ff_up_b   = get_tensor(mtmd_format(TN_A_CNX_FFN_UP,   e, il, "bias"));
+                            layer.ff_down_w = get_tensor(mtmd_format(TN_A_CNX_FFN_DOWN, e, il, "weight"));
+                            layer.ff_down_b = get_tensor(mtmd_format(TN_A_CNX_FFN_DOWN, e, il, "bias"));
+                            layer.ls_2_w    = get_tensor(mtmd_format(TN_A_CNX_LS2,      e, il, "weight"));
+                            if (layer.conv_w->ne[0] != hparams.audio_conv_kernel_size || layer.conv_w->type != GGML_TYPE_F32) {
+                                throw std::runtime_error(mtmd_format("%s: %s must be F32 with kernel %d\n", __func__, ggml_get_name(layer.conv_w), hparams.audio_conv_kernel_size));
+                            }
+                        }
+                    }
+                    // acoustic connector: mlp 0 -> norm -> mlp 1, semantic connector: mlp 2 -> norm -> mlp 3
+                    model.mm_0_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      0, "weight"));
+                    model.mm_0_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      0, "bias"));
+                    model.mm_norm_pre_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP_NORM, 0, "weight"));
+                    model.mm_1_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      1, "weight"));
+                    model.mm_1_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      1, "bias"));
+                    model.mm_2_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      2, "weight"));
+                    model.mm_2_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      2, "bias"));
+                    model.mm_norm_mid_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP_NORM, 2, "weight"));
+                    model.mm_3_w        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      3, "weight"));
+                    model.mm_3_b        = get_tensor(mtmd_format(TN_MM_AUDIO_MLP,      3, "bias"));
+                } break;
             case PROJECTOR_TYPE_INKLING2V:
                 {
                     // these come from the generic path above, where they are optional
@@ -2314,6 +2409,19 @@ struct mtmd_model_loader {
                     model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
                     model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                     model.mm_fc_b = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "bias"));
+                } break;
+            case PROJECTOR_TYPE_HIGGS_AUDIO:
+                {
+                    model.conv1d_1_w = get_tensor(mtmd_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(mtmd_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(mtmd_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(mtmd_format(TN_CONV1D, 2, "bias"));
+                    model.downsample_conv_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    model.downsample_conv_b = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "bias"));
+                    model.mm_1_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
+                    model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "weight"));
+                    model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_QWEN3A:
                 {
@@ -4187,6 +4295,10 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 const int64_t fold = hparams.audio_samples_per_token();
                 n_patches = (int) ((img->nx() + fold - 1) / fold);
             } break;
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            {
+                n_patches = (img->nx() - img->audio_n_ctx) / hparams.audio_samples_per_token();
+            } break;
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_QWEN2A:
@@ -4209,6 +4321,13 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                     // divide by 2 because of nn.AvgPool1d(2, stride=2)
                     n_patches /= 2;
                 }
+            } break;
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
+            {
+                // stride-2 conv1d, avgpool(2), stride-2 depthwise conv1d
+                n_patches = (img->nx() + 1) / 2;
+                n_patches = n_patches / 2;
+                n_patches = (n_patches + 1) / 2;
             } break;
         case PROJECTOR_TYPE_QWEN3A:
             {
@@ -4449,6 +4568,8 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
             return mm_fc_w->ne[1];
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            return mm_1_w->ne[1];
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_VOXTRAL_RT:
@@ -4466,6 +4587,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
             return mm_fc_w->ne[1];
         case PROJECTOR_TYPE_QWEN3A:
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_LFM2:

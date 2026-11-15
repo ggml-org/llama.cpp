@@ -1386,6 +1386,14 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_SEANET_RES_CONV1   = auto() # residual unit, dilated conv
     A_ENC_SEANET_RES_CONV2   = auto() # residual unit, pointwise conv
     A_ENC_SEANET_SCALE_CONV  = auto() # strided downsample conv
+    A_ENC_CNX_CONV           = auto() # vibevoice: causal conv of a stage (stem, downsample, head), bid = encoder
+    A_ENC_CNX_NORM           = auto() # vibevoice: ConvNeXt block, bid = encoder, xid = block
+    A_ENC_CNX_DW             = auto()
+    A_ENC_CNX_LS1            = auto()
+    A_ENC_CNX_FFN_NORM       = auto()
+    A_ENC_CNX_FFN_UP         = auto()
+    A_ENC_CNX_FFN_DOWN       = auto()
+    A_ENC_CNX_LS2            = auto()
     A_ENC_ATTN_SCALE         = auto() # layer scale (gamma) on the attn output
     A_ENC_FFN_SCALE_LS       = auto() # layer scale (gamma) on the FFN output
     A_ENC_SPEAKER_PROJ       = auto() # voice latent -> backbone embd
@@ -1419,6 +1427,7 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_WAV_OUTPUT               = auto()
     A_MMPROJ              = auto()
     A_MMPROJ_FC           = auto()
+    A_MMPROJ_NORM         = auto() # vibevoice: norm after mm.a.mlp.{bid}
     A_MM_NORM_PRE         = auto()
     A_MM_NORM_MID         = auto()
     A_MM_EMBEDDING        = auto() # gemma3n
@@ -2317,6 +2326,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_SEANET_RES_CONV1:    "a.seanet.blk.{bid}.res_conv1",
     MODEL_TENSOR.A_ENC_SEANET_RES_CONV2:    "a.seanet.blk.{bid}.res_conv2",
     MODEL_TENSOR.A_ENC_SEANET_SCALE_CONV:   "a.seanet.blk.{bid}.scale_conv",
+    MODEL_TENSOR.A_ENC_CNX_CONV:            "a.cnx.{bid}.conv.{xid}",
+    MODEL_TENSOR.A_ENC_CNX_NORM:            "a.cnx.{bid}.blk.{xid}.norm",
+    MODEL_TENSOR.A_ENC_CNX_DW:              "a.cnx.{bid}.blk.{xid}.dw",
+    MODEL_TENSOR.A_ENC_CNX_LS1:             "a.cnx.{bid}.blk.{xid}.ls1",
+    MODEL_TENSOR.A_ENC_CNX_FFN_NORM:        "a.cnx.{bid}.blk.{xid}.ffn_norm",
+    MODEL_TENSOR.A_ENC_CNX_FFN_UP:          "a.cnx.{bid}.blk.{xid}.ffn_up",
+    MODEL_TENSOR.A_ENC_CNX_FFN_DOWN:        "a.cnx.{bid}.blk.{xid}.ffn_down",
+    MODEL_TENSOR.A_ENC_CNX_LS2:             "a.cnx.{bid}.blk.{xid}.ls2",
     MODEL_TENSOR.A_ENC_ATTN_SCALE:          "a.blk.{bid}.ls1",
     MODEL_TENSOR.A_ENC_FFN_SCALE_LS:        "a.blk.{bid}.ls2",
     MODEL_TENSOR.A_ENC_SPEAKER_PROJ:        "a.speaker_proj",
@@ -2349,6 +2366,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_WAV_OUTPUT:          "a.gen.wav.output",
     MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
     MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
+    MODEL_TENSOR.A_MMPROJ_NORM:             "mm.a.mlp_norm.{bid}",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
     MODEL_TENSOR.A_MM_NORM_MID:             "mm.a.norm_mid",
     MODEL_TENSOR.A_MM_INP_PROJ:             "mm.a.input_projection",      # gemma3n
@@ -2641,6 +2659,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_RVQ_CODEBOOK,
         MODEL_TENSOR.A_MMPROJ,
         MODEL_TENSOR.A_MMPROJ_FC,
+        MODEL_TENSOR.A_MMPROJ_NORM,
         MODEL_TENSOR.A_MM_NORM_PRE,
         MODEL_TENSOR.A_MM_NORM_MID,
         MODEL_TENSOR.A_MM_CODE_EMBD,
@@ -2741,6 +2760,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_SEANET_RES_CONV1,
         MODEL_TENSOR.A_ENC_SEANET_RES_CONV2,
         MODEL_TENSOR.A_ENC_SEANET_SCALE_CONV,
+        MODEL_TENSOR.A_ENC_CNX_CONV,
+        MODEL_TENSOR.A_ENC_CNX_NORM,
+        MODEL_TENSOR.A_ENC_CNX_DW,
+        MODEL_TENSOR.A_ENC_CNX_LS1,
+        MODEL_TENSOR.A_ENC_CNX_FFN_NORM,
+        MODEL_TENSOR.A_ENC_CNX_FFN_UP,
+        MODEL_TENSOR.A_ENC_CNX_FFN_DOWN,
+        MODEL_TENSOR.A_ENC_CNX_LS2,
         MODEL_TENSOR.A_ENC_ATTN_SCALE,
         MODEL_TENSOR.A_ENC_FFN_SCALE_LS,
         MODEL_TENSOR.A_ENC_SPEAKER_PROJ,
@@ -7155,6 +7182,8 @@ class VisionProjectorType:
     QWEN2A = "qwen2a" # audio
     QWEN3A = "qwen3a" # audio
     GLMA = "glma" # audio
+    HIGGS_AUDIO = "higgs_audio" # audio
+    VIBEVOICE_ASR = "vibevoice_asr" # audio
     QWEN25O = "qwen2.5o" # omni
     VOXTRAL = "voxtral"
     VOXTRAL_RT = "voxtral_rt"

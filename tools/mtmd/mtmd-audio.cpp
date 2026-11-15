@@ -277,6 +277,7 @@ static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool sha
         GGML_ASSERT(mel.n_mel <= INT32_MAX && mel.n_mel >= 0);
         mtmd_image_f32 entry;
         entry.set_size({(int) mel.n_len, (int) mel.n_mel}, shape_only || mel.data.empty(), /* is_audio */ true);
+        entry.audio_n_ctx = (int32_t) mel.n_ctx;
         if (!entry.is_placeholder()) {
             entry.cpy_buf(mel.data);
         }
@@ -688,7 +689,7 @@ bool mtmd_audio_preprocessor_qwen3a::process(const float *                 sampl
 //
 // mtmd_audio_preprocessor_dots3note
 //
-// Matches Dots3NoteFeatureExtractor: the waveform is split into 60s chunks and each chunk gets
+// Matches Dots3NoteFeatureExtractor: the waveform is split into audio_chunk_len chunks and each chunk gets
 // its own whisper-style log-mel (center=True, log10 + (max-8)/4). Only sample_length//hop frames
 // per chunk are valid; the reference masks everything beyond them, so we emit exactly that many.
 //
@@ -733,7 +734,7 @@ bool mtmd_audio_preprocessor_dots3note::process(const float *                 sa
             continue; // sub-hop tail, contributes no frames
         }
 
-        // reflect-pad the start; the reference zero-pads partial chunks to 60s before the STFT,
+        // reflect-pad the start; the reference zero-pads partial chunks to the chunk length before the STFT,
         // so a partial chunk sees zeros past its end while a full chunk reflects its own tail
         std::vector<float> padded(n_chunk + 2 * pad, 0.0f);
         for (int i = 0; i < pad; i++) {
@@ -778,6 +779,20 @@ bool mtmd_audio_preprocessor_dots3note::process(const float *                 sa
         output.push_back(std::move(out));
     }
     return !output.empty();
+}
+
+bool mtmd_audio_preprocessor_higgs_audio::process(const float *                 samples,
+                                                   size_t                        n_samples,
+                                                   std::vector<mtmd_audio_mel> & output,
+                                                   bool                          shape_only) const {
+    if (!mtmd_audio_preprocessor_dots3note::process(samples, n_samples, output, shape_only)) {
+        return false;
+    }
+    // a tail under 3 frames gives no token, the reference drops it too
+    if (output.size() > 1 && output.back().n_len < 3) {
+        output.pop_back();
+    }
+    return !output.empty() && output.back().n_len >= 3;
 }
 
 //
@@ -2224,6 +2239,65 @@ bool mtmd_audio_preprocessor_pockettts::process(const float *                 sa
     std::copy(samples, samples + n_samples, out.data.begin());
 
     output.push_back(std::move(out));
+    return true;
+}
+
+//
+// mtmd_audio_preprocessor_vibevoice_asr
+//
+// Matches VibeVoiceAcousticTokenizerFeatureExtractor: the clip is scaled to -25 dBFS RMS, then zero-padded to a whole number of frames.
+// The reference encodes it with a streaming conv cache, here each chunk re-reads audio_n_ctx samples before its start instead, which gives the same output.
+//
+
+double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak) {
+    const double rms  = std::max(std::sqrt(sum_sq / std::max<int64_t>(n_samples, 1)), std::pow(10.0, -50.0 / 20.0));
+    double       gain = std::pow(10.0, -25.0 / 20.0) / (rms + 1e-6);
+    if (peak * gain > 1.0) {
+        gain /= peak * gain + 1e-6;
+    }
+    return gain;
+}
+
+bool mtmd_audio_preprocessor_vibevoice_asr::process(const float *                 samples,
+                                                    size_t                        n_samples,
+                                                    std::vector<mtmd_audio_mel> & output,
+                                                    bool /*shape_only*/) const {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    const int64_t hop      = hparams.audio_samples_per_token();
+    const int64_t n_ctx    = hparams.audio_n_ctx;
+    const int64_t n_chunk  = (int64_t) hparams.audio_chunk_len * hparams.audio_sample_rate / hop * hop;
+    const int64_t n_padded = ((int64_t) n_samples + hop - 1) / hop * hop;
+    GGML_ASSERT(n_chunk > 0 && n_ctx % hop == 0);
+
+    double sum_sq = 0.0;
+    double peak   = 0.0;
+    for (size_t i = 0; i < n_samples; i++) {
+        sum_sq += (double) samples[i] * samples[i];
+        peak    = std::max(peak, (double) std::fabs(samples[i]));
+    }
+    const double scale = mtmd_audio_vibevoice_gain(sum_sq, (int64_t) n_samples, peak);
+
+    std::vector<float> audio((size_t) n_padded, 0.0f);
+    for (size_t i = 0; i < n_samples; i++) {
+        audio[i] = (float) (samples[i] * scale);
+    }
+
+    output.clear();
+    for (int64_t start = 0; start < n_padded; start += n_chunk) {
+        const int64_t beg = std::max<int64_t>(0, start - n_ctx);
+        const int64_t end = std::min(n_padded, start + n_chunk);
+
+        mtmd_audio_mel mel;
+        mel.n_len     = end - beg;
+        mel.n_len_org = end - beg;
+        mel.n_mel     = 1;
+        mel.n_ctx     = start - beg;
+        mel.data.assign(audio.begin() + beg, audio.begin() + end);
+        output.push_back(std::move(mel));
+    }
     return true;
 }
 

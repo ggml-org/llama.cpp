@@ -268,6 +268,18 @@ struct mtmd_graph_granite_speech : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+struct mtmd_graph_vibevoice_asr : mtmd_graph {
+    mtmd_graph_vibevoice_asr(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    std::map<std::string, ggml_tensor *> state_in;
+    mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    ggml_tensor * with_left_ctx(ggml_tensor * x, const std::string & name) const;
+    ggml_tensor * causal_conv(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, const std::string & name) const;
+    ggml_tensor * encode(int e, ggml_tensor * x) const;
+};
+
 struct mtmd_graph_muse_spark_audio : mtmd_graph {
     mtmd_graph_muse_spark_audio(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -642,6 +654,9 @@ std::vector<c2w_state_slot> list_lfm3a_state_slots(const mtmd_hparams & hparams,
 
 // state slots of the streaming Gemma 4 audio encoder (gemma4a)
 std::vector<c2w_state_slot> list_gemma4a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
+
+// vibevoice-asr: the left context of every causal conv, a zero state is the causal zero padding
+std::vector<c2w_state_slot> list_vibevoice_asr_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
 struct mtmd_graph_kimik25 : mtmd_graph {
     mtmd_graph_kimik25(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}

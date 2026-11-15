@@ -739,14 +739,22 @@ json convert_transcriptions_to_chatcmpl(
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
-    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
-    if (prompt.empty()) {
+    common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
+    if (preset.needs_audio_length) {
+        mtmd_helper_media_meta meta;
+        if (mtmd_helper_get_media_meta(out_files[0].data(), out_files[0].size(), mtmd_helper_init_opt_default(), &meta) != 0 ||
+                meta.type != MTMD_HELPER_MEDIA_TYPE_AUDIO || meta.duration < 0) {
+            throw std::invalid_argument("the input file is not a supported audio file");
+        }
+        preset = common_chat_get_asr_prompt(tmpls, language, meta.duration, prompt);
+    }
+    if (prompt.empty() || preset.has_context) {
         prompt = preset.user;
     }
     if (!language.empty() && !preset.has_language) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
-    prompt += get_media_marker();
+    prompt = preset.media_first ? get_media_marker() + prompt : prompt + get_media_marker();
 
     json messages = json::array();
     if (!preset.system.empty()) {

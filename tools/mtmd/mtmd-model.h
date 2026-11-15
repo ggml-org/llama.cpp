@@ -160,7 +160,7 @@ struct mtmd_hparams {
     int32_t audio_proj_downsample_rate = 0;
     int32_t audio_proj_head_count      = 0;
 
-    // audio pyramid (muse-spark): widths, folded samples and blocks per stage
+    // audio pyramid (muse-spark, vibevoice): widths, folded samples (vibevoice: conv strides) and blocks per stage
     std::vector<int32_t> audio_hidden_sizes;
     std::vector<int32_t> audio_patch_sizes;
     std::vector<int32_t> audio_depths;
@@ -173,6 +173,9 @@ struct mtmd_hparams {
         }
         return (int32_t) n;
     }
+
+    // vibevoice: leading samples of a chunk that only feed the causal convs, at least their receptive field
+    int32_t audio_n_ctx = 0;
 
     // audio-to-mel preprocessor params
     int32_t audio_chunk_len   = -1; // in seconds
@@ -526,6 +529,14 @@ struct mtmd_seanet {
     ggml_tensor * conv_out_w = nullptr;
     ggml_tensor * conv_out_b = nullptr;
     std::vector<stage> stages;
+};
+
+// vibevoice-asr: causal conv pyramid over the raw waveform
+// stage = strided conv -> ConvNeXt blocks (RMS norm, depthwise conv, layer scale, then RMS norm, MLP, layer scale)
+struct mtmd_cnx_encoder {
+    std::vector<ggml_tensor *> conv_w; // stem, one downsample conv per stage, head
+    std::vector<ggml_tensor *> conv_b;
+    std::vector<mtmd_layer>    blocks; // ln_1, conv (depthwise), ls_1, ln_2, ffn_up, ffn_down, ls_2
 };
 
 // pocket-tts flow-matching decoder (SimpleMLPAdaLN)
@@ -1160,7 +1171,9 @@ struct mtmd_model {
     ggml_tensor * mm_norm_mid_w = nullptr;
 
     // mimo-audio-tokenizer: post-transformer downsample + RVQ codebook
-    ggml_tensor * downsample_conv_w = nullptr; // no bias
+    // higgs-audio: depthwise downsample conv of the projector
+    ggml_tensor * downsample_conv_w = nullptr;
+    ggml_tensor * downsample_conv_b = nullptr; // higgs-audio only
     ggml_tensor * downsample_norm_w = nullptr;
     ggml_tensor * downsample_norm_b = nullptr;
     ggml_tensor * rvq_codebook = nullptr; // merged 3D [n_q, max_bins, dim]
@@ -1207,6 +1220,9 @@ struct mtmd_model {
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     mtmd_seanet seanet;
+
+    // vibevoice-asr: acoustic and semantic encoders
+    mtmd_cnx_encoder cnx_enc[2];
 
     // pocket-tts: voice latent -> backbone embd (speaker path)
     ggml_tensor * spk_proj_w      = nullptr;
@@ -1332,6 +1348,7 @@ struct mtmd_model {
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
+            || proj_type == PROJECTOR_TYPE_HIGGS_AUDIO
             || proj_type == PROJECTOR_TYPE_VOXTRAL
             || proj_type == PROJECTOR_TYPE_MUSIC_FLAMINGO;
     }
