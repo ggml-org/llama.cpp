@@ -48,7 +48,7 @@ std::string mtmd_format(const char * fmt, ...) {
 }
 
 // remember to bump this if the serialization format changes
-#define MTMD_SERIALIZATION_VERSION 4
+#define MTMD_SERIALIZATION_VERSION 5
 
 // oldest compat version that can be loaded
 #define MTMD_SERIALIZATION_VERSION_MIN 2
@@ -137,6 +137,7 @@ void mtmd_image_f32::serialize(mtmd_serialization & ser) const {
     ser.write((int32_t)anyres.orig_ny);
     ser.write((int32_t)nx_);
     ser.write((int32_t)ny_);
+    ser.write(audio_n_ctx);
 }
 void mtmd_image_f32::deserialize(mtmd_serialization & ser) {
     add_viewsep = ser.read<bool>();
@@ -155,6 +156,12 @@ void mtmd_image_f32::deserialize(mtmd_serialization & ser) {
     }
     nx_ = ser.read<int32_t>();
     ny_ = ser.read<int32_t>();
+    if (ser.version >= 5) {
+        audio_n_ctx = ser.read<int32_t>();
+        if (audio_n_ctx < 0 || audio_n_ctx > nx_) {
+            throw std::runtime_error("invalid audio_n_ctx");
+        }
+    }
     buf.clear(); // always a placeholder after loading
 }
 
@@ -1194,6 +1201,19 @@ struct mtmd_context {
                     aud_end = "<|audio_eos|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(models.a.get());
                 } break;
+            case PROJECTOR_TYPE_HIGGS_AUDIO:
+                {
+                    // the 4s chunks are joined in one <|audio_bos|> ... <|audio_eos|> span
+                    aud_beg = "<|audio_bos|>";
+                    aud_end = "<|audio_eos|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_higgs_audio>(models.a.get());
+                } break;
+            case PROJECTOR_TYPE_VIBEVOICE_ASR:
+                {
+                    aud_beg = "<|object_ref_start|>";
+                    aud_end = "<|object_ref_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_vibevoice_asr>(models.a.get());
+                } break;
             case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
                 {
                     aud_beg = "<|soft_audio_start|>";
@@ -1285,6 +1305,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_qwen3tts_spk>(models.a.get());
+                } break;
+            case PROJECTOR_TYPE_ZONOS3_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_zonos3_spk>(models.a.get());
                 } break;
             case PROJECTOR_TYPE_POCKETTTS_SPKENC:
                 {
@@ -2462,6 +2486,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_DRAMA3;
             info.sample_rate = 44100;
             break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_ZONOS3;
+            info.sample_rate = 44100;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -2822,8 +2850,23 @@ const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;
     }
-    const auto & voices = ctx->ctx_gen_a->model.gen_voices;
-    return idx < (int32_t) voices.size() ? std::next(voices.begin(), idx)->first.c_str() : nullptr;
+    const auto & model = ctx->ctx_gen_a->model;
+    const auto & voices = model.gen_voices;
+    if (idx >= (int32_t) voices.size()) {
+        return nullptr;
+    }
+    // the default voice goes first, the others keep their order
+    const auto def = voices.find(model.hparams.gen_default_voice);
+    if (def != voices.end() && idx == 0) {
+        return def->first.c_str();
+    }
+    int32_t i = def != voices.end() ? 1 : 0;
+    for (auto it = voices.begin(); it != voices.end(); ++it) {
+        if (it != def && i++ == idx) {
+            return it->first.c_str();
+        }
+    }
+    return nullptr;
 }
 
 mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name) {
@@ -2871,6 +2914,14 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_p = 0.9f;
             inp.temp  = 1.0f;
             break;
+        case PROJECTOR_TYPE_ZONOS3_GEN:
+            // sampled in the helper, defaults of registries/generation.json
+            inp.top_k          = 80;
+            inp.top_p          = 0.69f;
+            inp.temp           = 0.75f;
+            inp.penalty_repeat = 2.4f;
+            inp.penalty_last_n = 96;
+            break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {
                 // MaskGIT sampling runs in the helper, with the settings of the checkpoint
@@ -2901,6 +2952,9 @@ struct mtmd_gen_state {
 
     // lfm3a: the codec graph yields STFT frames, the ISTFT runs on the host
     std::unique_ptr<mtmd_audio_streaming_istft> istft;
+
+    // zonos3: the iSTFT head runs on the host
+    std::unique_ptr<mtmd_audio_zonos3_synth> zonos3_synth;
 
     ~mtmd_gen_state() {
         delete gen_state;
@@ -2941,6 +2995,60 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
         const auto * hparams = &state->sctx->model.hparams;
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
     }
+    state->zonos3_synth.reset();
+}
+
+// zonos3 GEN_WAV: n_codes == 0 flushes and resets the state
+static int32_t mtmd_gen_wav_zonos3(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    mtmd_subcontext * sctx = ctx->ctx_gen_a.get();
+    const auto & z = sctx->model.zonos3;
+    using g = mtmd_graph_zonos3_gen;
+
+    if (!state->zonos3_synth) {
+        state->zonos3_synth = std::make_unique<mtmd_audio_zonos3_synth>(z.mixer, z.resample, g::n_fft[0], g::n_fft[1], g::hop, g::rs_orig, g::rs_new);
+    }
+    auto & audio = state->out_audio;
+    audio.clear();
+
+    if (!inp->codes || inp->n_codes == 0) {
+        state->zonos3_synth->flush(audio);
+        mtmd_gen_state_reset(state);
+    } else {
+        if (inp->n_codes % g::n_codebooks != 0) {
+            LOG_ERR("%s: expected whole frames of %d codes\n", __func__, g::n_codebooks);
+            return 1;
+        }
+        std::vector<int32_t> in_codes(inp->codes, inp->codes + inp->n_codes);
+        std::vector<float>   spec;
+
+        // no hidden-state input, the batch entry is an unused placeholder
+        mtmd_image_f32 dummy;
+        dummy.set_size({1, 1}, false, true);
+        dummy.cpy_buf(std::vector<float>(1, 0.0f));
+
+        mtmd_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(dummy));
+
+        mtmd_subctx_encode_params params;
+        params.imgs        = &batch;
+        params.n_threads   = ctx->n_threads;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
+        params.codes       = &in_codes;
+        params.out_feats   = &spec;
+        params.gen_state   = state->gen_state;
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: encode failed (codec)\n", __func__);
+            return 1;
+        }
+        const int64_t n_rows = (g::n_fft[0] + 2) + (g::n_fft[1] + 2);
+        GGML_ASSERT(spec.size() % (size_t) n_rows == 0);
+        state->zonos3_synth->push(spec.data(), (int64_t) (spec.size() / n_rows), audio);
+    }
+
+    out->audio     = audio.data();
+    out->n_samples = audio.size();
+    return 0;
 }
 
 // lfm3a GEN_WAV: ISTFT of the codec output, n_codes == 0 flushes and resets the state
@@ -3041,6 +3149,9 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV && sctx->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN) {
         return mtmd_gen_wav_lfm3a(ctx, state, inp, out);
+    }
+    if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV && sctx->model.proj_type == PROJECTOR_TYPE_ZONOS3_GEN) {
+        return mtmd_gen_wav_zonos3(ctx, state, inp, out);
     }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE) {
@@ -4179,12 +4290,58 @@ struct mtmd_audio_stream_gemma4a : mtmd_audio_stream {
     bool    encode(int n);
 };
 
+// Higgs Audio: each 4 s chunk is encoded on its own, so a chunk goes out once it is complete
+// a flush encodes the partial chunk as a chunk of its own, the reference also cuts chunks at VAD boundaries
+struct mtmd_audio_stream_higgs_audio : mtmd_audio_stream {
+    int64_t chunk_len = 0; // samples per complete chunk
+
+    std::vector<float> beg_rows;
+    std::vector<float> end_rows;
+    bool beg_done = false;
+    bool end_done = false;
+
+    bool    init(const mtmd_audio_stream_params & params) override;
+    int32_t flush(bool end) override;
+    int32_t step(llama_token last_token) override;
+
+    int64_t n_chunk_rows(int64_t n) const;
+    bool    encode(int64_t n);
+};
+
+// VibeVoice-ASR: the encoder is causal, its convs keep their left context in the state
+// the reference scales the whole clip to -25 dBFS, here the gain comes from the audio pushed so far (see mtmd_audio_vibevoice_gain)
+struct mtmd_audio_stream_vibevoice_asr : mtmd_audio_stream {
+    mtmd_subctx_enc_state * enc_state = nullptr;
+
+    int64_t n_step     = 0; // samples per encoder call
+    int64_t n_step_max = 0; // largest call, the warmup size
+    int64_t n_stat     = 0; // pushed samples counted in sum_sq and peak
+    double  sum_sq     = 0.0;
+    double  peak       = 0.0;
+
+    std::vector<float> beg_rows;
+    std::vector<float> end_rows;
+    bool beg_done = false;
+    bool end_done = false;
+
+    ~mtmd_audio_stream_vibevoice_asr() override {
+        delete enc_state;
+    }
+
+    bool    init(const mtmd_audio_stream_params & params) override;
+    int32_t flush(bool end) override;
+    int32_t step(llama_token last_token) override;
+
+    bool    encode(int64_t n);
+};
+
 bool mtmd_support_audio_stream(const mtmd_context * ctx) {
     if (!ctx->ctx_a || !ctx->text_model) {
         return false;
     }
     const projector_type proj = ctx->ctx_a->model.proj_type;
-    return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A || proj == PROJECTOR_TYPE_GEMMA4A;
+    return proj == PROJECTOR_TYPE_VOXTRAL_RT || proj == PROJECTOR_TYPE_LFM3A || proj == PROJECTOR_TYPE_GEMMA4A ||
+           proj == PROJECTOR_TYPE_HIGGS_AUDIO || proj == PROJECTOR_TYPE_VIBEVOICE_ASR;
 }
 
 mtmd_audio_stream_params mtmd_audio_stream_params_default(void) {
@@ -4207,6 +4364,8 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
         case PROJECTOR_TYPE_VOXTRAL_RT: s = std::make_unique<mtmd_audio_stream_voxtral_rt>(); break;
         case PROJECTOR_TYPE_LFM3A:      s = std::make_unique<mtmd_audio_stream_lfm3a>();      break;
         case PROJECTOR_TYPE_GEMMA4A:    s = std::make_unique<mtmd_audio_stream_gemma4a>();    break;
+        case PROJECTOR_TYPE_HIGGS_AUDIO:   s = std::make_unique<mtmd_audio_stream_higgs_audio>();   break;
+        case PROJECTOR_TYPE_VIBEVOICE_ASR: s = std::make_unique<mtmd_audio_stream_vibevoice_asr>(); break;
         default:                        GGML_ABORT("unsupported projector");
     }
     s->ctx      = ctx;
@@ -4943,6 +5102,210 @@ int32_t mtmd_audio_stream_gemma4a::step(llama_token /* last_token */) {
     n_rows      += n_out;
     n_rows_done += n_avail; // the markers are not audio rows
     return (int32_t) n_out;
+}
+
+// encodes one audio entry, the rows are appended to embd
+static bool mtmd_audio_stream_encode(mtmd_audio_stream & s, mtmd_image_f32 && img, mtmd_subctx_enc_state * enc_state) {
+    const int n_out = s.sctx->model.n_output_tokens(&img);
+
+    mtmd_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(img));
+
+    std::vector<float> res((size_t) s.n_embd * n_out);
+    mtmd_subctx_encode_params params;
+    params.n_threads = s.ctx->n_threads;
+    params.imgs      = &batch;
+    params.out_embd  = &res;
+    params.enc_state = enc_state;
+    if (!s.sctx->encode(&params)) {
+        LOG_ERR("%s: failed to encode audio\n", __func__);
+        return false;
+    }
+    s.embd.insert(s.embd.end(), res.begin(), res.end());
+    return true;
+}
+
+// rows carry no text: all of them go out at once between the audio markers, last_token is not used
+static int32_t mtmd_audio_stream_emit_rows(mtmd_audio_stream & s, const std::vector<float> & beg_rows, const std::vector<float> & end_rows,
+                                           bool & beg_done, bool & end_done) {
+    const int64_t n_avail = (int64_t) (s.embd.size() / s.n_embd);
+    s.out.clear();
+    if (n_avail > 0 || s.ended) {
+        if (!beg_done) {
+            beg_done = true;
+            s.out = beg_rows;
+        }
+        s.out.insert(s.out.end(), s.embd.begin(), s.embd.end());
+        s.embd.clear();
+        if (s.ended && !end_done) {
+            end_done = true;
+            s.out.insert(s.out.end(), end_rows.begin(), end_rows.end());
+        }
+    }
+    const int64_t n_out = (int64_t) (s.out.size() / s.n_embd);
+    if (n_out == 0) {
+        return s.ended ? -1 : 0;
+    }
+    s.n_rows      += n_out;
+    s.n_rows_done += n_avail; // the markers are not audio rows
+    return (int32_t) n_out;
+}
+
+//
+// Higgs Audio
+//
+
+bool mtmd_audio_stream_higgs_audio::init(const mtmd_audio_stream_params & params) {
+    const mtmd_hparams * hparams = &sctx->model.hparams;
+    if (params.n_prompt > 0) {
+        LOG_ERR("%s: Higgs Audio takes no prompt, its audio is a chat turn\n", __func__);
+        return false;
+    }
+    if (!ctx->audio_preproc) {
+        LOG_ERR("%s: the audio preprocessor is not initialized\n", __func__);
+        return false;
+    }
+    chunk_len       = (int64_t) hparams->audio_chunk_len * hparams->audio_sample_rate;
+    frames_per_tok  = 8; // stride-2 conv, avgpool, stride-2 projector conv
+    samples_per_tok = frames_per_tok * hop;
+    return mtmd_audio_stream_marker_rows(ctx, ctx->aud_beg, beg_rows) && mtmd_audio_stream_marker_rows(ctx, ctx->aud_end, end_rows);
+}
+
+// rows of a chunk with n samples, see mtmd_audio_preprocessor_higgs_audio
+int64_t mtmd_audio_stream_higgs_audio::n_chunk_rows(int64_t n) const {
+    const int64_t n_frames = n / hop;
+    if (n_frames < 3) {
+        return 0;
+    }
+    return ((n_frames + 1) / 2 / 2 + 1) / 2;
+}
+
+bool mtmd_audio_stream_higgs_audio::encode(int64_t n) {
+    mtmd_audio_preproc_out pre = ctx->audio_preproc->preprocess(buf.data(), (size_t) n);
+    if (pre.entries.empty() || !ctx->audio_preproc->compute(pre)) {
+        LOG_ERR("%s: unable to preprocess the audio\n", __func__);
+        return false;
+    }
+    for (auto & entry : pre.entries) {
+        if (!mtmd_audio_stream_encode(*this, std::move(entry), nullptr)) {
+            return false;
+        }
+    }
+    buf.erase(buf.begin(), buf.begin() + n);
+    buf_pos += n;
+    return true;
+}
+
+int32_t mtmd_audio_stream_higgs_audio::flush(bool end) {
+    const int64_t n_pending = n_samples - buf_pos;
+    n_rows_flushed = n_rows_done + (int64_t) (embd.size() / n_embd) + (n_pending / chunk_len) * n_chunk_rows(chunk_len) + n_chunk_rows(n_pending % chunk_len);
+    pending_flush = true;
+    ended = end;
+    return 0;
+}
+
+int32_t mtmd_audio_stream_higgs_audio::step(llama_token /* last_token */) {
+    const bool flush = pending_flush;
+    pending_flush = false;
+
+    while ((int64_t) buf.size() >= chunk_len) {
+        if (!encode(chunk_len)) {
+            return -2;
+        }
+    }
+    // a tail too short for a row is kept until the next flush, or dropped at the end
+    if ((flush || ended) && !buf.empty()) {
+        if (n_chunk_rows((int64_t) buf.size()) > 0) {
+            if (!encode((int64_t) buf.size())) {
+                return -2;
+            }
+        } else if (ended) {
+            buf_pos += (int64_t) buf.size();
+            buf.clear();
+        }
+    }
+    return mtmd_audio_stream_emit_rows(*this, beg_rows, end_rows, beg_done, end_done);
+}
+
+//
+// VibeVoice-ASR
+//
+
+bool mtmd_audio_stream_vibevoice_asr::init(const mtmd_audio_stream_params & params) {
+    const mtmd_hparams * hparams = &sctx->model.hparams;
+    if (params.n_prompt > 0) {
+        LOG_ERR("%s: VibeVoice-ASR takes no prompt, its audio is a chat turn\n", __func__);
+        return false;
+    }
+    hop             = hparams->audio_samples_per_token();
+    frames_per_tok  = 1;
+    samples_per_tok = hop;
+    n_step     = std::max<int64_t>(1, ((int64_t) params.step_ms * hparams->audio_sample_rate / 1000 + hop - 1) / hop) * hop;
+    n_step_max = std::max(n_step, (int64_t) hparams->audio_chunk_len * hparams->audio_sample_rate / hop * hop);
+
+    enc_state = sctx->enc_state_init(0);
+    if (!enc_state) {
+        return false;
+    }
+    return mtmd_audio_stream_marker_rows(ctx, ctx->aud_beg, beg_rows) && mtmd_audio_stream_marker_rows(ctx, ctx->aud_end, end_rows);
+}
+
+// n is a multiple of hop, see mtmd_audio_preprocessor_vibevoice_asr for the gain
+bool mtmd_audio_stream_vibevoice_asr::encode(int64_t n) {
+    const double gain = mtmd_audio_vibevoice_gain(sum_sq, n_stat, peak);
+
+    std::vector<float> data((size_t) n);
+    for (int64_t i = 0; i < n; i++) {
+        data[i] = (float) (buf[i] * gain);
+    }
+    mtmd_image_f32 img;
+    img.set_size({(int) n, 1}, false, /* is_audio */ true);
+    img.cpy_buf(data);
+    if (!mtmd_audio_stream_encode(*this, std::move(img), enc_state)) {
+        return false;
+    }
+    buf.erase(buf.begin(), buf.begin() + n);
+    buf_pos += n;
+    return true;
+}
+
+int32_t mtmd_audio_stream_vibevoice_asr::flush(bool end) {
+    n_rows_flushed = end ? (n_samples + hop - 1) / hop : n_samples / hop;
+    pending_flush = true;
+    ended = end;
+    return 0;
+}
+
+int32_t mtmd_audio_stream_vibevoice_asr::step(llama_token /* last_token */) {
+    const bool flush = pending_flush;
+    pending_flush = false;
+
+    // the padding added at the end does not count in the gain
+    for (int64_t i = n_stat - buf_pos; i < (int64_t) buf.size(); i++) {
+        sum_sq += (double) buf[i] * buf[i];
+        peak    = std::max(peak, (double) std::fabs(buf[i]));
+    }
+    n_stat = n_samples;
+    if (ended && n_samples % hop != 0) {
+        add_silence(hop - n_samples % hop);
+        n_stat = n_samples;
+    }
+
+    // whole rows only: a partial row would put its zero padding into the state
+    int64_t n = (int64_t) buf.size();
+    n -= n % hop;
+    if (!flush && !ended) {
+        n -= n % n_step;
+    }
+    while (n > 0) {
+        const int64_t m = std::min(n, n_step_max);
+        if (!encode(m)) {
+            return -2;
+        }
+        n -= m;
+    }
+    return mtmd_audio_stream_emit_rows(*this, beg_rows, end_rows, beg_done, end_done);
 }
 
 int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {

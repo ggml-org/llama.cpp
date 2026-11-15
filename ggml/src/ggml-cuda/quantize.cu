@@ -600,8 +600,8 @@ void quantize_mmq_q8_1_cuda(
     }
 }
 
-// Each thread quantizes 4 values of one column, see quantize.cuh for the layout.
-template <mmq_q8_1_ds_layout ds_layout>
+// Each thread quantizes 4 values of one column, see quantize.cuh for the layouts.
+template <mmq_q8_1_ds_layout ds_layout, bool hip, int cdna_order>
 static __global__ void quantize_mmq_few_q8_1(
         const float * x_ptr, void * vy_ptr, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int ne1, const int ne2) {
@@ -637,8 +637,46 @@ static __global__ void quantize_mmq_few_q8_1(
         sum = d*warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
     }
 
-    const int s = i0 % QK_K / QK8_1;          // sub-block
-    const int k = i0 % QK8_1;                 // first value in sub-block
+    const int s = i0 % QK_K / QK8_1; // sub-block
+    const int k = i0 % QK8_1;        // first value in sub-block
+
+    if constexpr (hip) {
+        const int m = blockIdx.x % MMQ_FEW_HIP_NCOLS; // column in group
+        int4 * yg = vy + ((blockIdx.z*(ne00/QK_K) + i0/QK_K)*(gridDim.x/MMQ_FEW_HIP_NCOLS) + blockIdx.x/MMQ_FEW_HIP_NCOLS)*MMQ_FEW_HIP_Q8_1_INT4;
+#if defined(AMD_MFMA_AVAILABLE)
+        constexpr bool q6_K   = cdna_order & MMQ_FEW_CDNA_ORDER_Q6_K;
+        constexpr bool narrow = cdna_order & MMQ_FEW_CDNA_ORDER_NARROW;
+        const int g = q6_K ? 2*(s/4) + s % 2 : s/2;   // slot
+        const int c = q6_K ? (s/2) % 2      : s % 2; // chain
+        if constexpr (narrow) {
+            const int i = k/4; // int of the chain
+            ((int *) yg)[(((((m/4)*2 + c)*2 + i/4)*4 + g)*4 + m % 4)*4 + i % 4] = *(const int *) &q;
+        } else {
+            const int i = 8*c + k/4; // int of the lane
+            ((int *) yg)[((i/4)*64 + 16*g + m)*4 + i % 4] = *(const int *) &q;
+        }
+        if (k == 0) {
+            float * ds = (float *) (yg + 8*MMQ_FEW_HIP_NCOLS*2) + s*MMQ_FEW_HIP_NCOLS + m;
+            ds[0] = d;
+            if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_DS4) {
+                ds[8*MMQ_FEW_HIP_NCOLS] = sum;
+            }
+        }
+#else
+        GGML_UNUSED(cdna_order);
+        ((int *) yg)[(s*MMQ_FEW_HIP_NCOLS + m)*8 + k/4] = *(const int *) &q;
+        if (k == 0) {
+            int * ds = (int *) (yg + 8*MMQ_FEW_HIP_NCOLS*2) + (s*2 + m % 2)*8 + m/2;
+            if constexpr (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
+                *(float *) ds = d;
+            } else {
+                *(half2 *) ds = make_half2(d, sum);
+            }
+        }
+#endif // defined(AMD_MFMA_AVAILABLE)
+        return;
+    }
+
     const int g = blockIdx.x % MMQ_FEW_NCOLS; // column in group
     int4 * yg = vy + ((blockIdx.z*(ne00/QK_K) + i0/QK_K)*(gridDim.x/MMQ_FEW_NCOLS) + blockIdx.x/MMQ_FEW_NCOLS)*MMQ_FEW_Q8_1_INT4;
     ((int *) (yg + (s/2)*WARP_SIZE + 4*g + (k % 16)/4))[2*(s % 2) + k/16] = *(const int *) &q;
@@ -652,26 +690,53 @@ static __global__ void quantize_mmq_few_q8_1(
     }
 }
 
-void quantize_mmq_few_q8_1_cuda(
+template <bool hip, int cdna_order>
+static void quantize_mmq_few_q8_1_launch(
         const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
     GGML_ASSERT(ne00 % QK_K == 0);
 
     const int64_t block_num_y = (ne00 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
-    const dim3 num_blocks(GGML_PAD(ne1, MMQ_FEW_NCOLS), block_num_y, ne2*ne3);
+    const dim3 num_blocks(GGML_PAD(ne1, hip ? MMQ_FEW_HIP_NCOLS : MMQ_FEW_NCOLS), block_num_y, ne2*ne3);
     const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(num_blocks, block_size, 0, stream);
     switch (ds_layout) {
         case MMQ_Q8_1_DS_LAYOUT_D4:
-            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4>, launch_params,
+            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, hip, cdna_order>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
             break;
         case MMQ_Q8_1_DS_LAYOUT_DS4:
-            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4>, launch_params,
+            ggml_cuda_kernel_launch(quantize_mmq_few_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, hip, cdna_order>, launch_params,
                 x, vy, ne00, s01, s02, s03, (int) ne1, (int) ne2);
             break;
         default:
             GGML_ABORT("fatal error");
+    }
+}
+
+void quantize_mmq_few_q8_1_cuda(
+        const float * x, void * vy, const mmq_q8_1_ds_layout ds_layout, const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    quantize_mmq_few_q8_1_launch<false, 0>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
+}
+
+void quantize_mmq_few_hip_q8_1_cuda(
+        const float * x, void * vy, const ggml_type type_src0, const bool narrow, const mmq_q8_1_ds_layout ds_layout,
+        const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
+        const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
+    const bool q6_K = type_src0 == GGML_TYPE_Q6_K;
+    if (narrow) {
+        if (q6_K) {
+            quantize_mmq_few_q8_1_launch<true, MMQ_FEW_CDNA_ORDER_NARROW | MMQ_FEW_CDNA_ORDER_Q6_K>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
+        } else {
+            quantize_mmq_few_q8_1_launch<true, MMQ_FEW_CDNA_ORDER_NARROW>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
+        }
+    } else {
+        if (q6_K) {
+            quantize_mmq_few_q8_1_launch<true, MMQ_FEW_CDNA_ORDER_Q6_K>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
+        } else {
+            quantize_mmq_few_q8_1_launch<true, 0>(x, vy, ds_layout, ne00, s01, s02, s03, ne1, ne2, ne3, stream);
+        }
     }
 }
 

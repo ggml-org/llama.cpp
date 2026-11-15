@@ -718,6 +718,41 @@ static void test_dry_sequence_breakers(testing & t) {
     }
 }
 
+static void test_stop_strings(testing & t) {
+    common_params params_base;
+
+    const auto eval = [&](const json & data) {
+        return server_schema::eval_llama_cmpl_schema(nullptr, params_base, {}, data);
+    };
+
+    {
+        json data;
+        data["stop"] = "";
+        t.assert_true("empty string is ignored", eval(data).antiprompt.empty());
+    }
+
+    {
+        json data;
+        data["stop"] = json::array({""});
+        t.assert_true("empty string in array is ignored", eval(data).antiprompt.empty());
+    }
+
+    {
+        json data;
+        data["stop"] = json::array({"", "zzz"});
+        const std::vector<std::string> expected = {"zzz"};
+        t.assert_true("only non-empty strings are kept", eval(data).antiprompt == expected);
+    }
+
+    {
+        params_base.antiprompt = {"User:"};
+        json data;
+        data["stop"] = json::array({""});
+        const std::vector<std::string> expected = {"User:"};
+        t.assert_true("falls back to CLI defaults", eval(data).antiprompt == expected);
+    }
+}
+
 //
 // glob_match
 //
@@ -790,9 +825,9 @@ static void test_speech_convert(testing & t) {
     t.assert_true ("audio streams",     out.at("stream").get<bool>());
     t.assert_true ("rejects sse",       rejected("stream_format", "sse"));
 
-    // speed
-    t.assert_true ("speed 1.0",         !rejected("speed", 1.0));
-    t.assert_true ("rejects speed 1.5", rejected("speed", 1.5));
+    // speed is forwarded, the model decides whether it is supported
+    out = convert_speech_to_tts(with("speed", 1.5));
+    t.assert_equal("speed forwarded",   1.5, out.at("speed").get<double>());
 
     // instructions are ignored
     t.assert_true ("instructions",      !rejected("instructions", "whisper"));
@@ -842,6 +877,7 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
 

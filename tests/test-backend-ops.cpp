@@ -13799,6 +13799,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 14336, n, 4096, {1, 1}, {1, 1}));
     }
 
+    // TODO: few-row MMQ tuning, remove before committing
+    for (ggml_type type_a : { GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_IQ4_NL }) {
+        for (int bs : { 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 16 }) {
+            for (int64_t k : { 4096, 14336 }) {
+                test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 4096, bs, k, { 1, 1 }, { 1, 1 }));
+            }
+        }
+    }
+
     // Q4_K multi-column mat-vec
     for (int64_t m : {4096, 6144, 6272, 14336}) {
         for (int bs : {1, 2, 3, 4, 8}) {
