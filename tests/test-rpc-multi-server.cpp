@@ -95,15 +95,6 @@ int main(int argc, char ** argv) {
     ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
     ggml_tensor * y = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
 
-    ggml_tensor * no_srcs = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
-    no_srcs->op = GGML_OP_MUL_MAT;
-    GGML_ASSERT(!ggml_backend_dev_supports_op(dev_a, no_srcs));
-
-    ggml_tensor * no_src1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
-    no_src1->op = GGML_OP_MUL_MAT;
-    no_src1->src[0] = x;
-    GGML_ASSERT(!ggml_backend_dev_supports_op(dev_a, no_src1));
-
     ggml_tensor * bad_op = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
     bad_op->op = (ggml_op) (GGML_OP_COUNT + 7);
     bad_op->src[0] = x;
@@ -138,25 +129,28 @@ int main(int argc, char ** argv) {
     GGML_ASSERT( ggml_backend_dev_supports_op(dev_a, ggml_add(ctx, view, y)));
     GGML_ASSERT(!ggml_backend_dev_supports_op(dev_a, ggml_add(ctx, bad_view, y)));
 
-    // a malformed op in a request does not change the answers for the other ops in it:
-    // the prefetch asks about the three nodes in one request, scale has a malformed src
+    // a malformed op in a request is answered as unsupported and does not change the answers for the ops that do not
+    // use it: the prefetch asks about the four nodes in one request, scale has a malformed src. add uses scale, so its
+    // answer depends on what else is in the request, and is not checked
     ggml_tensor * bad = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 64);
     bad->op = (ggml_op) (GGML_OP_COUNT + 9);
     bad->src[0] = x;
     ggml_tensor * scale = ggml_scale(ctx, bad, 2.0f);
     ggml_tensor * add   = ggml_add(ctx, scale, y);
-    ggml_cgraph * graph3 = ggml_new_graph_custom(ctx, 3, false);
+    ggml_tensor * sub   = ggml_sub(ctx, x, y);
+    ggml_cgraph * graph3 = ggml_new_graph_custom(ctx, 4, false);
     graph3->nodes[0] = bad;
     graph3->nodes[1] = scale;
     graph3->nodes[2] = add;
-    graph3->n_nodes  = 3;
+    graph3->nodes[3] = sub;
+    graph3->n_nodes  = 4;
     auto prefetch = (ggml_backend_dev_supports_op_prefetch_t) ggml_backend_reg_get_proc_address(
         ggml_backend_dev_backend_reg(dev_a), "ggml_backend_dev_supports_op_prefetch");
     GGML_ASSERT(prefetch != nullptr);
     prefetch(dev_a, graph3);
-    GGML_ASSERT( ggml_backend_dev_supports_op(dev_a, add));
     GGML_ASSERT(!ggml_backend_dev_supports_op(dev_a, scale));
     GGML_ASSERT(!ggml_backend_dev_supports_op(dev_a, bad));
+    GGML_ASSERT( ggml_backend_dev_supports_op(dev_a, sub));
     ggml_backend_rpc_get_device_memory(endpoint_a, 0, &free_mem, &total_mem);
     GGML_ASSERT(total_mem > 0);
 

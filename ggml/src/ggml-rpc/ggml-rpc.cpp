@@ -19,6 +19,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <functional>
 #include <cstring>
 #include <fstream>
 #include <filesystem>
@@ -278,10 +279,9 @@ struct rpc_msg_comm_free_req {
 };
 
 // RPC_CMD_GET_DEVICE_SUPPORTS_OP asks about several ops in one round trip
-// request : | device (4 bytes) | n_ops (4 bytes) | n_tensors (4 bytes) | ops (n_ops * 4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
-//           each op is an index into tensors; its srcs, and the view_src of the op and of each src, are found among
-//           tensors by rpc_tensor::src and rpc_tensor::view_src ids
-// response: | supported (n_ops * 1 byte) |
+// request : a graph in the RPC_CMD_GRAPH_COMPUTE format, with uid 0. Its nodes are the ops asked about, and its tensors
+//           are the ops, their srcs and the view_src of each. A tensor that is not asked about is sent without srcs
+// response: | supported (n_nodes * 1 byte) |
 static constexpr uint32_t RPC_SUPPORTS_OP_MAX_OPS     = 8192;
 static constexpr uint32_t RPC_SUPPORTS_OP_MAX_TENSORS = RPC_SUPPORTS_OP_MAX_OPS*2*(1 + GGML_MAX_SRC);
 
@@ -1737,6 +1737,26 @@ ggml_tensor * rpc_server::deserialize_tensor(struct ggml_context * ctx, const rp
         return nullptr;
     }
 
+    if (tensor->op >= GGML_OP_COUNT) {
+        LOG_ERROR("[%s] invalid tensor op received: %u\n", __func__, tensor->op);
+        return nullptr;
+    }
+
+    // ggml_new_tensor_4d asserts on these
+    int64_t nelements = 1;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        const int64_t ne = std::max<int64_t>(tensor->ne[i], 1);
+        if (nelements >= INT64_MAX / ne) {
+            LOG_ERROR("[%s] tensor shape overflows\n", __func__);
+            return nullptr;
+        }
+        nelements *= ne;
+    }
+    if (tensor->ne[0] % ggml_blck_size((enum ggml_type) tensor->type) != 0) {
+        LOG_ERROR("[%s] ne[0] is not a multiple of the block size\n", __func__);
+        return nullptr;
+    }
+
     ggml_tensor * result = ggml_new_tensor_4d(ctx, (ggml_type) tensor->type,
         tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
 
@@ -2158,8 +2178,9 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
                                       struct ggml_context * ctx,
                                       const std::unordered_map<uint64_t, const rpc_tensor*> & tensor_ptrs,
                                       std::unordered_map<uint64_t, struct ggml_tensor*> & tensor_map) {
-    if (tensor_map.find(id) != tensor_map.end()) {
-        return tensor_map[id];
+    auto it_map = tensor_map.find(id);
+    if (it_map != tensor_map.end()) {
+        return it_map->second;
     }
     // Safely find the tensor pointer
     auto it_ptr = tensor_ptrs.find(id);
@@ -2168,13 +2189,18 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
     }
     const rpc_tensor * tensor = it_ptr->second;
 
+    // a tensor that fails is remembered as nullptr, so that it is not created again in ctx when another node uses it
+    auto fail = [&]() -> ggml_tensor * {
+        tensor_map[id] = nullptr;
+        return nullptr;
+    };
     struct ggml_tensor * result = deserialize_tensor(ctx, tensor);
     if (result == nullptr) {
-        return nullptr;
+        return fail();
     }
     if (result->buffer == nullptr && result->data != nullptr) {
         LOG_ERROR("[%s] invalid data ptr\n", __func__);
-        return nullptr;
+        return fail();
     }
     tensor_map[id] = result;
     for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -2188,7 +2214,7 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
                 LOG_ERROR("[%s] failed to create source node %d (src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
                                __func__, i, tensor->src[i], id);
                 // Must return nullptr to signal failure up the call stack
-                return nullptr;
+                return fail();
             }
         }
     }
@@ -2203,7 +2229,7 @@ ggml_tensor * rpc_server::create_node(uint64_t id,
             LOG_ERROR("[%s] failed to create view_src node (view_src_id=%" PRIu64 ") for node id %" PRIu64 "\n",
                            __func__, tensor->view_src, id);
             // Must return nullptr to signal failure up the call stack
-            return nullptr;
+            return fail();
         }
     }
     result->view_offs = tensor->view_offs;
@@ -2234,37 +2260,57 @@ static bool rpc_supports_op_unplaced(ggml_backend_t backend, const ggml_tensor *
     return ggml_backend_supports_op(backend, &node);
 }
 
-bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
+// a graph as GRAPH_COMPUTE and GET_DEVICE_SUPPORTS_OP send it
+struct rpc_graph_input {
+    uint32_t           device;
+    uint64_t           uid;
+    uint32_t           n_nodes;
+    const uint8_t    * nodes;   // n_nodes unaligned uint64_t ids
+    uint32_t           n_tensors;
+    const rpc_tensor * tensors;
+
+    uint64_t node_id(uint32_t i) const {
+        uint64_t id;
+        memcpy(&id, nodes + i*sizeof(uint64_t), sizeof(id));
+        return id;
+    }
+};
+
+static bool rpc_parse_graph_input(const std::vector<uint8_t> & input, rpc_graph_input & graph) {
     // serialization format:
     // | device (4 bytes) | uid (8 bytes) | n_nodes (4 bytes) | nodes (n_nodes * sizeof(uint64_t) | n_tensors (4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
-    if (input.size() < 2*sizeof(uint32_t) + sizeof(uint64_t)) {
+    size_t offset = 2*sizeof(uint32_t) + sizeof(uint64_t);
+    if (input.size() < offset) {
         return false;
     }
     const uint8_t * src = input.data();
-    uint32_t device;
-    memcpy(&device, src, sizeof(device));
-    src += sizeof(device);
-    if (device >= backends.size()) {
+    memcpy(&graph.device,  src,                                     sizeof(graph.device));
+    memcpy(&graph.uid,     src + sizeof(uint32_t),                  sizeof(graph.uid));
+    memcpy(&graph.n_nodes, src + sizeof(uint32_t) + sizeof(uint64_t), sizeof(graph.n_nodes));
+    graph.nodes = src + offset;
+    offset += (size_t) graph.n_nodes*sizeof(uint64_t);
+    if (input.size() < offset + sizeof(uint32_t)) {
         return false;
     }
-    uint64_t uid;
-    memcpy(&uid, src, sizeof(uid));
-    src += sizeof(uid);
-    uint32_t n_nodes;
-    memcpy(&n_nodes, src, sizeof(n_nodes));
-    src += sizeof(n_nodes);
-    if (input.size() < 2*sizeof(uint32_t) + sizeof(uint64_t) + n_nodes*sizeof(uint64_t) + sizeof(uint32_t)) {
+    memcpy(&graph.n_tensors, src + offset, sizeof(graph.n_tensors));
+    offset += sizeof(uint32_t);
+    if (input.size() < offset + (size_t) graph.n_tensors*sizeof(rpc_tensor)) {
         return false;
     }
-    const uint64_t * nodes = (const uint64_t *)src;
-    src += n_nodes*sizeof(uint64_t);
-    uint32_t n_tensors;
-    memcpy(&n_tensors, src, sizeof(n_tensors));
-    src += sizeof(n_tensors);
-    if (input.size() < 2*sizeof(uint32_t) + sizeof(uint64_t) + n_nodes*sizeof(uint64_t) + sizeof(uint32_t) + n_tensors*sizeof(rpc_tensor)) {
+    graph.tensors = (const rpc_tensor *) (src + offset);
+    return true;
+}
+
+bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
+    rpc_graph_input input_graph;
+    if (!rpc_parse_graph_input(input, input_graph) || input_graph.device >= backends.size()) {
         return false;
     }
-    const rpc_tensor * tensors = (const rpc_tensor *)src;
+    const uint32_t           device    = input_graph.device;
+    const uint64_t           uid       = input_graph.uid;
+    const uint32_t           n_nodes   = input_graph.n_nodes;
+    const uint32_t           n_tensors = input_graph.n_tensors;
+    const rpc_tensor *       tensors   = input_graph.tensors;
     LOG_DBG("[%s] device: %u, uid: %" PRIu64 ", n_nodes: %u, n_tensors: %u\n", __func__, device, uid, n_nodes, n_tensors);
 
     // graphs with uid == 0 are not cached, see GRAPH_CACHE_MAX for the eviction policy
@@ -2301,8 +2347,7 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
     // observable here - the round trip is timed on the client
     const auto t_deserialize = std::chrono::steady_clock::now();
     for (uint32_t i = 0; i < n_nodes; i++) {
-        int64_t id;
-        memcpy(&id, &nodes[i], sizeof(id));
+        const int64_t id = (int64_t) input_graph.node_id(i);
         graph->nodes[i] = create_node(id, ctx, tensor_ptrs, tensor_map);
         // Check if create_node failed for a *non-zero* ID.
         // If id was 0, create_node returning nullptr is expected.
@@ -2329,18 +2374,13 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         if (node == nullptr) {
             continue;
         }
-        const bool op_ok = (uint32_t) node->op < GGML_OP_COUNT &&
-            !(node->op == GGML_OP_UNARY && (uint32_t) node->op_params[0] >= GGML_UNARY_OP_COUNT) &&
-            !(node->op == GGML_OP_GLU   && (uint32_t) node->op_params[0] >= GGML_GLU_OP_COUNT);
-        if (!op_ok) {
-            LOG_ERROR("[%s] invalid op %d (%s)\n", __func__, (int) node->op, node->name);
-        } else if (ggml_backend_supports_op(backends[device], node)) {
+        if (ggml_backend_supports_op(backends[device], node)) {
             continue;
         } else if (client_asks_supports_op) {
             if (!warned_unsupported_op) {
                 warned_unsupported_op = true;
                 LOG_WARN("[%s] %s does not support %s (%s), which the client placed here; computing it anyway\n",
-                         __func__, ggml_backend_name(backends[device]), ggml_op_desc(node), node->name);
+                         __func__, ggml_backend_name(backends[device]), ggml_op_name(node->op), node->name);
             }
             continue;
         } else if (rpc_supports_op_unplaced(backends[device], node)) {
@@ -2348,7 +2388,7 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         } else {
             LOG_ERROR("[%s] %s does not support %s (%s), refusing the graph; if the client is older than this server, update it: "
                       "clients before RPC protocol 10.0.1 do not ask which ops the device supports\n",
-                      __func__, ggml_backend_name(backends[device]), ggml_op_desc(node), node->name);
+                      __func__, ggml_backend_name(backends[device]), ggml_op_name(node->op), node->name);
         }
         if (uid != 0) {
             stored_graphs[device].erase(uid);
@@ -2734,213 +2774,68 @@ bool rpc_server::get_device_memory(const rpc_msg_get_device_memory_req & request
     return true;
 }
 
-// leading src slots that the op's ggml constructor always sets
-static int rpc_op_n_src_required(enum ggml_op op) {
-    switch (op) {
-        case GGML_OP_NONE:
-        case GGML_OP_ARANGE:
-        case GGML_OP_CUSTOM:
-            return 0;
-        case GGML_OP_ADD:
-        case GGML_OP_ACC:
-        case GGML_OP_SUB:
-        case GGML_OP_MUL:
-        case GGML_OP_DIV:
-        case GGML_OP_COUNT_EQUAL:
-        case GGML_OP_CONCAT:
-        case GGML_OP_SILU_BACK:
-        case GGML_OP_RMS_NORM_BACK:
-        case GGML_OP_MUL_MAT:
-        case GGML_OP_OUT_PROD:
-        case GGML_OP_SET:
-        case GGML_OP_CPY:
-        case GGML_OP_GET_ROWS:
-        case GGML_OP_GET_ROWS_BACK:
-        case GGML_OP_SOFT_MAX_BACK:
-        case GGML_OP_ROPE:
-        case GGML_OP_ROPE_BACK:
-        case GGML_OP_CONV_TRANSPOSE_1D:
-        case GGML_OP_IM2COL:
-        case GGML_OP_IM2COL_BACK:
-        case GGML_OP_IM2COL_3D:
-        case GGML_OP_CONV_2D:
-        case GGML_OP_CONV_3D:
-        case GGML_OP_CONV_2D_DW:
-        case GGML_OP_CONV_TRANSPOSE_2D:
-        case GGML_OP_POOL_2D_BACK:
-        case GGML_OP_SSM_CONV:
-        case GGML_OP_SOLVE_TRI:
-        case GGML_OP_DSV4_HC_PRE:
-        case GGML_OP_MAP_CUSTOM2:
-        case GGML_OP_CROSS_ENTROPY_LOSS:
-            return 2;
-        case GGML_OP_ADD_ID:
-        case GGML_OP_MUL_MAT_ID:
-        case GGML_OP_SET_ROWS:
-        case GGML_OP_FLASH_ATTN_EXT:
-        case GGML_OP_ADD_REL_POS:
-        case GGML_OP_DSV4_HC_COMB:
-        case GGML_OP_DSV4_HC_POST:
-        case GGML_OP_MAP_CUSTOM3:
-        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
-        case GGML_OP_OPT_STEP_SGD:
-            return 3;
-        case GGML_OP_FLASH_ATTN_BACK:
-        case GGML_OP_LIGHTNING_INDEXER:
-            return 4;
-        case GGML_OP_GATED_LINEAR_ATTN:
-        case GGML_OP_OPT_STEP_ADAMW:
-            return 5;
-        case GGML_OP_RWKV_WKV6:
-        case GGML_OP_GATED_DELTA_NET:
-            return 6;
-        case GGML_OP_SSM_SCAN:
-        case GGML_OP_RWKV_WKV7:
-            return 7;
-        default:
-            return 1;
+// a view of a tensor that is not allocated yet has no data pointer on the client either, but a view of an allocated
+// tensor does, set from its view_src as in ggml_new_tensor_impl. Backends check the alignment of the data pointer, so
+// the server sets it in the same way. Views that reach past their view_src are rejected
+static bool rpc_supports_op_link_view(ggml_tensor * t) {
+    ggml_tensor * view_src = t->view_src;
+    if (view_src == nullptr) {
+        return true;
     }
-}
-
-static bool rpc_supports_op_tensor_ok(const rpc_tensor & t) {
-    if (t.type >= GGML_TYPE_COUNT || ggml_blck_size((enum ggml_type) t.type) == 0 || t.op >= GGML_OP_COUNT) {
+    if (t->view_offs > ggml_nbytes(view_src) || ggml_nbytes(t) > ggml_nbytes(view_src) - t->view_offs) {
         return false;
     }
-    int64_t nelements = 1;
-    for (int i = 0; i < GGML_MAX_DIMS; i++) {
-        if (t.ne[i] > 1 && nelements > INT64_MAX / t.ne[i]) {
-            return false;
-        }
-        nelements *= std::max<int64_t>(t.ne[i], 1);
-    }
-    if (t.ne[0] % ggml_blck_size((enum ggml_type) t.type) != 0) {
-        return false;
-    }
-    if (t.op == GGML_OP_UNARY && (uint32_t) t.op_params[0] >= GGML_UNARY_OP_COUNT) {
-        return false;
-    }
-    if (t.op == GGML_OP_GLU && (uint32_t) t.op_params[0] >= GGML_GLU_OP_COUNT) {
-        return false;
+    if (t->data == nullptr && view_src->data != nullptr) {
+        t->data = (char *) view_src->data + t->view_offs;
     }
     return true;
 }
 
 bool rpc_server::get_device_supports_op(const std::vector<uint8_t> & input, std::vector<uint8_t> & response) {
     // serialization format: see the comment above RPC_SUPPORTS_OP_MAX_OPS
-    const size_t header_size = 3*sizeof(uint32_t);
-    if (input.size() < header_size) {
+    rpc_graph_input graph;
+    if (!rpc_parse_graph_input(input, graph)) {
         return false;
     }
-    uint32_t dev_id;
-    uint32_t n_ops;
-    uint32_t n_tensors;
-    memcpy(&dev_id,    input.data(),                      sizeof(uint32_t));
-    memcpy(&n_ops,     input.data() +   sizeof(uint32_t), sizeof(uint32_t));
-    memcpy(&n_tensors, input.data() + 2*sizeof(uint32_t), sizeof(uint32_t));
     client_asks_supports_op = true;
-    if (dev_id >= backends.size() || n_ops == 0 || n_ops > RPC_SUPPORTS_OP_MAX_OPS ||
-        n_tensors == 0 || n_tensors > n_ops*2*(1 + GGML_MAX_SRC)) {
+    if (graph.device >= backends.size() || graph.n_nodes == 0 || graph.n_nodes > RPC_SUPPORTS_OP_MAX_OPS ||
+        graph.n_tensors > RPC_SUPPORTS_OP_MAX_TENSORS) {
         return false;
     }
-    if (input.size() != header_size + n_ops*sizeof(uint32_t) + n_tensors*sizeof(rpc_tensor)) {
-        return false;
-    }
-    std::vector<uint32_t> ops(n_ops);
-    memcpy(ops.data(), input.data() + header_size, n_ops*sizeof(uint32_t));
-    std::vector<rpc_tensor> tensors(n_tensors);
-    memcpy(tensors.data(), input.data() + header_size + n_ops*sizeof(uint32_t), n_tensors*sizeof(rpc_tensor));
 
-    // rpc_tensor::id -> index in tensors
-    std::unordered_map<uint64_t, uint32_t> index;
-    for (uint32_t i = 0; i < n_tensors; i++) {
-        if (tensors[i].id == 0 || !index.emplace(tensors[i].id, i).second) {
-            return false;
-        }
-    }
-
+    // create_node makes at most one tensor per id
     struct ggml_init_params params {
-        /*.mem_size   =*/ ggml_tensor_overhead()*n_tensors,
+        /*.mem_size   =*/ ggml_tensor_overhead()*graph.n_tensors,
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
-
     ggml_context_ptr ctx_ptr { ggml_init(params) };
     GGML_ASSERT(ctx_ptr != nullptr);
     ggml_context * ctx = ctx_ptr.get();
 
-    // each tensor is checked and deserialized once, when it is first used; nullptr if it is invalid
-    std::vector<ggml_tensor *> deserialized(n_tensors, nullptr);
-    std::vector<bool>          checked(n_tensors, false);
-    auto get_root = [&](uint32_t i) -> ggml_tensor * {
-        if (!checked[i]) {
-            checked[i] = true;
-            if (rpc_supports_op_tensor_ok(tensors[i])) {
-                deserialized[i] = deserialize_tensor(ctx, &tensors[i]);
-            }
-        }
-        return deserialized[i];
-    };
-    // a view whose view_src is in the request also gets its view_src and view_offs, and data from them as in
-    // ggml_new_tensor_impl, so the backend sees the tensor as the client's scheduler does: views of allocated tensors
-    // have a data pointer but no buffer yet. view_src is linked one level deep (ggml views point to their root tensor)
-    std::vector<bool> linked(n_tensors, false);
-    auto get_tensor = [&](uint32_t i) -> ggml_tensor * {
-        ggml_tensor * t = get_root(i);
-        if (t == nullptr || linked[i]) {
-            return t;
-        }
-        linked[i] = true;
+    std::unordered_map<uint64_t, const rpc_tensor*> tensor_ptrs;
+    tensor_ptrs.reserve(graph.n_tensors);
+    for (uint32_t i = 0; i < graph.n_tensors; i++) {
         // rpc_tensor is packed: copy the id out before binding it to a reference
-        const uint64_t view_src_id = tensors[i].view_src;
-        auto it = view_src_id != 0 ? index.find(view_src_id) : index.end();
-        if (it != index.end()) {
-            ggml_tensor * view_src = it->second == i ? nullptr : get_root(it->second);
-            const uint64_t view_offs = tensors[i].view_offs;
-            if (view_src == nullptr || view_offs > ggml_nbytes(view_src) || ggml_nbytes(t) > ggml_nbytes(view_src) - view_offs) {
-                deserialized[i] = nullptr;
-                return nullptr;
-            }
-            t->view_src  = view_src;
-            t->view_offs = view_offs;
-            if (t->data == nullptr && view_src->data != nullptr) {
-                t->data = (char *) view_src->data + view_offs;
-            }
-        }
-        return t;
-    };
+        const uint64_t id = graph.tensors[i].id;
+        tensor_ptrs.emplace(id, &graph.tensors[i]);
+    }
+    std::unordered_map<uint64_t, ggml_tensor*> tensor_map;
+    tensor_map.reserve(graph.n_tensors);
 
-    response.assign(n_ops, 0);
-    for (uint32_t k = 0; k < n_ops; k++) {
-        if (ops[k] >= n_tensors) {
-            return false;
+    // an op that cannot be created is answered as unsupported, and does not change the answers for the others
+    response.assign(graph.n_nodes, 0);
+    for (uint32_t k = 0; k < graph.n_nodes; k++) {
+        ggml_tensor * op = create_node(graph.node_id(k), ctx, tensor_ptrs, tensor_map);
+        bool valid = op != nullptr && rpc_supports_op_link_view(op);
+        for (int i = 0; i < GGML_MAX_SRC && valid; i++) {
+            valid = op->src[i] == nullptr || rpc_supports_op_link_view(op->src[i]);
         }
-        const rpc_tensor & t = tensors[ops[k]];
-        ggml_tensor * op = get_tensor(ops[k]);
-        if (op == nullptr) {
-            LOG_ERROR("[%s] invalid op tensor\n", __func__);
+        if (!valid) {
+            LOG_ERROR("[%s] invalid op %u in the request\n", __func__, k);
             continue;
         }
-        const int n_src_required = rpc_op_n_src_required(op->op);
-        bool valid = true;
-        for (int i = 0; i < GGML_MAX_SRC && valid; i++) {
-            op->src[i] = nullptr;
-            if (t.src[i] == 0) {
-                if (i < n_src_required) {
-                    LOG_ERROR("[%s] %s: missing src[%d]\n", __func__, ggml_op_name(op->op), i);
-                    valid = false;
-                }
-                continue;
-            }
-            const uint64_t src_id = t.src[i];
-            auto it = index.find(src_id);
-            if (it == index.end() || (op->src[i] = get_tensor(it->second)) == nullptr) {
-                LOG_ERROR("[%s] invalid src[%d] tensor\n", __func__, i);
-                valid = false;
-            }
-        }
-        if (valid) {
-            response[k] = ggml_backend_supports_op(backends[dev_id], op) ? 1 : 0;
-        }
+        response[k] = ggml_backend_supports_op(backends[graph.device], op) ? 1 : 0;
     }
     return true;
 }
@@ -3280,8 +3175,8 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
                 break;
             }
             case RPC_CMD_GET_DEVICE_SUPPORTS_OP: {
-                const uint64_t max_size = 3*sizeof(uint32_t) +
-                    RPC_SUPPORTS_OP_MAX_OPS*sizeof(uint32_t) + RPC_SUPPORTS_OP_MAX_TENSORS*sizeof(rpc_tensor);
+                const uint64_t max_size = 3*sizeof(uint32_t) + sizeof(uint64_t) +
+                    RPC_SUPPORTS_OP_MAX_OPS*sizeof(uint64_t) + RPC_SUPPORTS_OP_MAX_TENSORS*sizeof(rpc_tensor);
                 std::vector<uint8_t> input;
                 if (!recv_msg(sock, input, max_size)) {
                     return;
@@ -3515,23 +3410,27 @@ static std::vector<uint8_t> rpc_supports_op_query(ggml_backend_rpc_device_contex
     for (size_t start = 0; start < ops.size(); start += RPC_SUPPORTS_OP_MAX_OPS) {
         const uint32_t n_ops = (uint32_t) std::min<size_t>(RPC_SUPPORTS_OP_MAX_OPS, ops.size() - start);
 
-        // the ops, their srcs and the view_src of each, each tensor once
-        std::vector<const ggml_tensor *> tensors;
-        std::unordered_map<const ggml_tensor *, uint32_t> index;
-        auto add = [&](const ggml_tensor * t) {
-            auto res = index.emplace(t, (uint32_t) tensors.size());
-            if (res.second) {
-                tensors.push_back(t);
-                if (t->view_src != nullptr && index.emplace(t->view_src, (uint32_t) tensors.size()).second) {
-                    tensors.push_back(t->view_src);
-                }
+        // a graph whose nodes are the ops: the ops, their srcs and the view_src of each, each tensor once.
+        // The other tensors are sent without their srcs, which are not part of the request
+        std::unordered_set<const ggml_tensor *> asked(ops.begin() + start, ops.begin() + start + n_ops);
+        std::vector<rpc_tensor> tensors;
+        std::unordered_set<const ggml_tensor *> added;
+        std::function<void(const ggml_tensor *)> add = [&](const ggml_tensor * t) {
+            if (!added.insert(t).second) {
+                return;
             }
-            return res.first->second;
+            rpc_tensor rt = serialize_tensor(t, dispatcher.get());
+            if (asked.find(t) == asked.end()) {
+                memset(rt.src, 0, sizeof(rt.src));
+            }
+            tensors.push_back(rt);
+            if (t->view_src != nullptr) {
+                add(t->view_src);
+            }
         };
-        std::vector<uint32_t> op_index(n_ops);
         for (uint32_t k = 0; k < n_ops; k++) {
             const ggml_tensor * op = ops[start + k];
-            op_index[k] = add(op);
+            add(op);
             for (int i = 0; i < GGML_MAX_SRC; i++) {
                 if (op->src[i] != nullptr) {
                     add(op->src[i]);
@@ -3539,19 +3438,21 @@ static std::vector<uint8_t> rpc_supports_op_query(ggml_backend_rpc_device_contex
             }
         }
         const uint32_t n_tensors = (uint32_t) tensors.size();
+        const uint64_t uid       = 0;
 
-        const size_t size = 3*sizeof(uint32_t) + n_ops*sizeof(uint32_t) + n_tensors*sizeof(rpc_tensor);
+        // serialization format: see RPC_CMD_GRAPH_COMPUTE
+        const size_t size = 3*sizeof(uint32_t) + sizeof(uint64_t) + n_ops*sizeof(uint64_t) + n_tensors*sizeof(rpc_tensor);
         auto request = std::make_shared<std::vector<uint8_t>>(size);
         uint8_t * dst = request->data();
         memcpy(dst, &ctx->device, sizeof(uint32_t)); dst += sizeof(uint32_t);
+        memcpy(dst, &uid,         sizeof(uint64_t)); dst += sizeof(uint64_t);
         memcpy(dst, &n_ops,       sizeof(uint32_t)); dst += sizeof(uint32_t);
-        memcpy(dst, &n_tensors,   sizeof(uint32_t)); dst += sizeof(uint32_t);
-        memcpy(dst, op_index.data(), n_ops*sizeof(uint32_t)); dst += n_ops*sizeof(uint32_t);
-        for (const ggml_tensor * t : tensors) {
-            const rpc_tensor rt = serialize_tensor(t, dispatcher.get());
-            memcpy(dst, &rt, sizeof(rt));
-            dst += sizeof(rt);
+        for (uint32_t k = 0; k < n_ops; k++) {
+            const uint64_t id = reinterpret_cast<uint64_t>(ops[start + k]);
+            memcpy(dst, &id, sizeof(id)); dst += sizeof(id);
         }
+        memcpy(dst, &n_tensors, sizeof(uint32_t)); dst += sizeof(uint32_t);
+        memcpy(dst, tensors.data(), n_tensors*sizeof(rpc_tensor));
 
         std::vector<uint8_t> response(n_ops);
         dispatcher->send(RPC_CMD_GET_DEVICE_SUPPORTS_OP, std::shared_ptr<const void>(request, request->data()), size,
