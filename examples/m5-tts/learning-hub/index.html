@@ -253,7 +253,7 @@
   <div class="sideFoot">
     <div>学习进度 <span id="pctText">0%</span></div>
     <div class="bar"><i id="pctBar"></i></div>
-    <div id="seenText">已浏览 0 / 14 章</div>
+    <div id="seenText">已浏览 0 / 15 章</div>
   </div>
 </aside>
 
@@ -268,6 +268,7 @@
   所有数字都来自这个仓库里的真实实验，包含被否定的方案。</p>
   <div class="heroChips">
     <span class="chip"><b>0.898 → 0.677</b> RTF 演进</span>
+    <span class="chip"><b>1.57×</b> 多实例吞吐上限</span>
     <span class="chip"><b>15</b> 步串行 depth decode</span>
     <span class="chip"><b>16 × 2051</b> codebook</span>
     <span class="chip"><b>77%</b> 墙钟在 depth</span>
@@ -2059,6 +2060,170 @@ m5-stage prefix hit sh=32 discard_ms=2.2–4.3</code></pre>
     <div class="answer">因为 codec 在 <code>max()</code> 的<b>非瓶颈侧</b>。批次从 4 帧加到 16 帧，每次 ONNX 调用的固定开销被摊薄，codec 自身确实快了；但 16 帧意味着 codec 每次要连续工作约 640 ms，而这期间 depth 已经产出下一批并进入等待，流水线出现空转。于是「省下来的 codec 时间」没有变成墙钟，反而因为等待和批次边界损失了更多。<b>这和「codec 单独 −20% 收益为 0」是同一条规律的加强版：有时候它不只是 0，还会变成负数。</b></div></details>
 
   <div class="chapterDone"><button class="doneBtn" data-ch="ch13">标记本章已学完</button></div>
+</section>
+
+<section class="chapter" id="ch14" data-title="并发与有效算力：8 核为什么不等于 8 倍">
+  <h2>并发与有效算力：8 核为什么不等于 8 倍</h2>
+  <p>上一章把「同一台机器、同一份代码」跑出了 10% 的差距。这一章换个问法：<b>如果同时来两个用户呢？</b>直觉是「8 核，两台机器都撑得住」。实测是：能接，但几乎不能并行——多开一个实例只换来 <b>6.6%</b> 的吞吐，代价是延迟翻倍。</p>
+
+  <h3>14.1 一次请求到底吃掉多少 CPU</h3>
+  <p>先把问题量化。用常驻 server 跑一次 5.32 秒音频（69 帧），在请求窗口前后读 <code>/proc/stat</code>，再按进程族拆开（100 Hz 的 jiffies 换成 CPU-秒）：</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 260" role="img" aria-label="一次请求的 10.62 CPU 秒按进程族分解的水平堆叠条">
+      <title>一次请求的 CPU 成本分解</title>
+      <desc>总 10.62 CPU 秒中，m5-server 里的 codec 占 7.66 秒，depth stage 占 2.36 秒，backbone stage 占 0.60 秒。</desc>
+      <text class="dg-tb" x="24" y="26">一次请求（69 帧 / 5.32 s 音频）的 CPU-秒分解</text>
+
+      <text class="dg-ts" x="24" y="106">每请求</text>
+      <rect class="dg-bar" x="80" y="96" width="390" height="52" rx="3"/>
+      <rect class="dg-bar2" x="470" y="96" width="120" height="52" rx="3"/>
+      <rect class="dg-bar3" x="590" y="96" width="30" height="52" rx="3"/>
+
+      <text class="dg-onbar" x="96" y="120">codec（ORT 3 线程）7.66 s</text>
+      <text class="dg-onbar" x="96" y="138">占全请求 CPU 的 72%</text>
+      <text class="dg-t" x="478" y="120">depth 2.36</text>
+      <text class="dg-t" x="478" y="138">host 侧</text>
+      <text class="dg-ts" x="588" y="178">backbone 0.60</text>
+      <path class="dg-arr" d="M592 174 L600 130"/>
+      <text class="dg-ts" x="80" y="196">合计 10.62 CPU-秒 ÷ elapsed 3.61 s = 平均 2.94 核</text>
+      <text class="dg-tacc" x="80" y="220">codec 的 2.44 s 与 depth 的 2.80 s 并行，所以墙钟只算一次；但它要占 3 个线程</text>
+      <text class="dg-ts" x="80" y="242">threads=1 对照：codec 涨到 4.39 s、elapsed 4.81 s，CPU 总量反而只降到 12.05 秒</text>
+      </svg>
+    </div>
+    <figcaption>图 14-1　墙钟里看不到 codec 的成本（它被 <code>max()</code> 藏起来了），但 CPU 账上它占 72%。<b>「不影响墙钟」和「不消耗资源」是两件事</b>——这正是并发一来就翻脸的原因。</figcaption>
+  </figure>
+
+  <p>还有一个反直觉的数字：codec 用 3 线程只比单线程快 <b>1.8×</b>（4.39 → 2.44 s），并行效率 60%。而 stage 的 host 侧完全不受 <code>--threads</code> 影响（depth 2.77 → 2.78 s）——那 2.36 CPU-秒是与 depth 的 15 步串行绑定的，加线程没用。</p>
+
+  <h3>14.2 三种并发形态</h3>
+  <p>同一个请求，三种投递方式。第三种是真正的并行：两个 server 实例，各带自己的 stage 子进程，同时收请求。</p>
+
+  <table>
+    <thead><tr><th>场景</th><th>elapsed</th><th>depth</th><th>codec</th><th>CPU-秒/请求</th><th>吞吐*</th></tr></thead>
+    <tbody>
+      <tr><td>单请求</td><td>3.61 s</td><td>2.80</td><td>2.44</td><td>10.6</td><td><b>1.47</b></td></tr>
+      <tr><td>同 server 两请求（排队）</td><td>3.61 / 3.60 s</td><td>2.80 / 2.81</td><td>2.45 / 2.45</td><td>10.6</td><td><b>1.47</b></td></tr>
+      <tr><td>双 server 两请求（真并行）</td><td><b>6.76 / 6.76 s</b></td><td>5.48 / 5.41</td><td><b>5.93 / 5.96</b></td><td>20.5</td><td><b>1.57</b></td></tr>
+    </tbody>
+  </table>
+  <p class="note">* 吞吐 = 产出音频秒 / 墙钟秒，>1 表示快于实时。</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 290" role="img" aria-label="串行与真并行两种方式跑两个请求的总墙钟对比柱状图">
+      <title>两个请求：排队 7.22 秒，并行 6.76 秒</title>
+      <desc>串联方式总共 7.22 秒，真并行 6.76 秒，只省 0.46 秒即 6.4%，但第二个用户的等待从 7.2 秒变成 6.8 秒且两路延迟都翻倍。</desc>
+      <text class="dg-tb" x="24" y="26">两个请求的总墙钟：并行几乎不省时间</text>
+
+      <path class="dg-grid" d="M70 210 H630"/>
+
+      <rect class="dg-bar2" x="150" y="60" width="110" height="150" rx="3"/>
+      <text class="dg-num" x="176" y="50">7.22 s</text>
+      <text class="dg-ts" x="150" y="232">同 server 排队</text>
+      <text class="dg-ts" x="150" y="250">延迟 3.6 / 7.2 s</text>
+      <text class="dg-ts" x="150" y="268">平均 2.94 核</text>
+
+      <rect class="dg-bar" x="400" y="70" width="110" height="140" rx="3"/>
+      <text class="dg-num" x="426" y="60">6.76 s</text>
+      <text class="dg-ts" x="400" y="232">双 server 真并行</text>
+      <text class="dg-ts" x="400" y="250">延迟 6.8 / 6.8 s</text>
+      <text class="dg-ts" x="400" y="268">平均 6.06 核</text>
+
+      <text class="dg-tacc" x="272" y="112">只省 6.4% 墙钟</text>
+      <text class="dg-bad" x="272" y="138">延迟却 ×1.87</text>
+      <path class="dg-arr" d="M270 168 L392 168"/>
+      </svg>
+    </div>
+    <figcaption>图 14-2　多开一个实例把 CPU 占用从 2.94 核推到 6.06 核，却只把总时间从 7.22 s 压到 6.76 s。<b>资源投进去了，产出没出来</b>——这正是「并行效率」崩掉的形状。</figcaption>
+  </figure>
+
+  <div class="callout ok"><span class="tagline">排队不降级</span>
+    同 server 的两个请求，各自的 <code>elapsed</code> 与单请求完全一致（3.60 vs 3.61）。<code>render_mutex</code> 的串行是「干净」的：它让用户等，但不让任务变慢。所以产品侧的正确做法是<b>排队 + 限流</b>，而不是多开实例。</div>
+
+  <h3>14.3 为什么并行会崩：有效算力不是核数</h3>
+  <p>并行时两条轨道退化得不一样，这个差别是本章的核心：</p>
+  <table>
+    <thead><tr><th>轨道</th><th>并行倍率</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td>depth</td><td>1.94×</td><td>单 HTP 分时，<b>硬件上就是串行</b></td></tr>
+      <tr><td>codec</td><td><b>2.43×</b></td><td>CPU <b>有效算力</b>不足，超线性退化</td></tr>
+    </tbody>
+  </table>
+  <p>设备写着 8 核，但 <code>walt</code> governor 把频率压成这样：</p>
+
+  <figure>
+    <div class="figureBox">
+      <svg viewBox="0 0 680 300" role="img" aria-label="8 个核心的实测频率柱状图，4 个小核 595 兆赫、3 个中核 2208 兆赫、1 个大核 633 兆赫">
+      <title>名义 8 核，有效 4.4 核</title>
+      <desc>小核四个都只有 595 兆赫，中核三个 2208 兆赫，大核只有 633 兆赫；按 2.2 吉赫归一后等效算力约 4.4 核。</desc>
+      <text class="dg-tb" x="24" y="26">8 个核心的实测频率（空载静置后的典型值）</text>
+
+      <path class="dg-grid" d="M70 230 H640"/>
+      <path class="dg-grid" d="M70 86 H640"/>
+      <text class="dg-ts" x="596" y="76">2.2 GHz</text>
+
+      <rect class="dg-bar3" x="80" y="191" width="44" height="39" rx="2"/>
+      <rect class="dg-bar3" x="146" y="191" width="44" height="39" rx="2"/>
+      <rect class="dg-bar3" x="212" y="191" width="44" height="39" rx="2"/>
+      <rect class="dg-bar3" x="278" y="191" width="44" height="39" rx="2"/>
+      <rect class="dg-bar" x="344" y="86" width="44" height="144" rx="2"/>
+      <rect class="dg-bar" x="410" y="86" width="44" height="144" rx="2"/>
+      <rect class="dg-bar" x="476" y="86" width="44" height="144" rx="2"/>
+      <rect class="dg-bar2" x="542" y="189" width="44" height="41" rx="2"/>
+
+      <text class="dg-ts" x="86" y="184">595</text>
+      <text class="dg-ts" x="152" y="184">595</text>
+      <text class="dg-ts" x="218" y="184">595</text>
+      <text class="dg-ts" x="284" y="184">595</text>
+      <text class="dg-ts" x="350" y="79">2208</text>
+      <text class="dg-ts" x="416" y="79">2208</text>
+      <text class="dg-ts" x="482" y="79">2208</text>
+      <text class="dg-ts" x="550" y="182">633</text>
+
+      <text class="dg-ts" x="86" y="250">cpu0</text>
+      <text class="dg-ts" x="152" y="250">cpu1</text>
+      <text class="dg-ts" x="218" y="250">cpu2</text>
+      <text class="dg-ts" x="284" y="250">cpu3</text>
+      <text class="dg-ts" x="350" y="250">cpu4</text>
+      <text class="dg-ts" x="416" y="250">cpu5</text>
+      <text class="dg-ts" x="482" y="250">cpu6</text>
+      <text class="dg-ts" x="550" y="250">cpu7</text>
+
+      <text class="dg-ts" x="80" y="272">小核 4 个 @595 MHz　　中核 3 个 @2.2 GHz　　大核 1 个 @633 MHz</text>
+      <text class="dg-tacc" x="80" y="292">按 2.2 GHz 归一：3 + 4×0.27 + 1×0.29 ≈ 4.4 核（不是 8 核）</text>
+      </svg>
+    </div>
+    <figcaption>图 14-3　空载时大核被压到 633 MHz（上限 2.3 GHz），小核只有 595 MHz。<b>「8 核」是拓扑事实，「4.4 核」才是算力事实</b>。两个 server 各 3 个 ORT 线程就等于 6 个计算线程，直接超出这个池子。</figcaption>
+  </figure>
+
+  <p>这也解释了为什么 codec 比 depth 更惨：<b>depth 的分时是硬件的（一个 NPU，绕不过去），codec 的分时是频率的（CPU 明明有空核，但空核是 595 MHz 的小核）</b>。同一个「并行退化」，机制完全不同，优化手段也完全不同。</p>
+
+  <h3>14.4 最重要的一课：<code>max()</code> 的那一侧会翻转</h3>
+  <p>把两种场景的公式并排写出来，就能看到一件容易被忽略的事：</p>
+  <div class="callout"><span class="tagline">算术</span>
+    <b>单请求</b>：<code>wall = 0.61 + max(depth 2.80, codec 2.44) + 0.09 = 3.61</code> → 瓶颈是 <b>depth</b><br>
+    <b>并行</b>：<code>wall = 0.74 + max(depth 5.45, codec 5.93) + 0.09 = 6.76</code> → 瓶颈变成 <b>codec</b>
+  </div>
+  <p>于是：想靠「降 depth 50%」拿收益，单请求是 0（被 <code>max()</code> 吃掉），并行<b>也是 0</b>（此时 codec 是瓶颈，depth 降到 2.73 也无用）。反过来想靠「codec 移出 CPU」拿收益，单请求是 0，并行也只有 +15%（因为 depth 的 5.45 接棒成为瓶颈）。</p>
+  <p><b>两侧必须同批改造，否则两侧都是 0。</b>这是「捆绑」的第三次独立验证——第一次来自成本模型，第二次来自并发实测，这一次来自「瓶颈侧会随场景翻转」。</p>
+
+  <h3>14.5 方法论：这一轮我错了四次</h3>
+  <p>本章的结论来得不干净，前三次测量全是错的。记下来因为比结论更有用：</p>
+  <ol>
+    <li><b>孤儿进程。</b>第一次测出「单实例 481 秒 CPU」。原因是之前 SIGKILL 的脚本留下了 stage 常驻进程，加上 Android App（<code>com.m5.offline</code>）的两个 CPU 模式 stage 还在跑——它们的进程名被改写成 <code>libbackbone_resident.so</code>，<code>pidof backbone-resident</code> 抓不到。<b>测量前先 <code>kill -9</code> 并 <code>ps</code> 确认清零。</b></li>
+    <li><b>拿 CLI 当被测对象。</b>CLI 每次启动都要初始化 ORT session（141 MB ONNX），墙钟 6.4 s 里有 2.1 s 是启动，于是「每请求 25 CPU-秒」虚高一倍多。<b>要测稳态成本，必须用常驻 server。</b></li>
+    <li><b>相信裸 <code>wait</code>。</b><code>nohup ./m5-server &amp;</code> 是同一个 shell 的后台作业，裸 <code>wait</code> 会连它一起等，脚本永远不返回。<b>要 <code>wait $p1 $p2</code>。</b></li>
+    <li><b>把调频滞后当成热漂移。</b>静置后第一批请求慢 44%（3.60 → 5.19 s），我一度以为是热。实际是 <code>walt</code> 把大核压到 633 MHz 后升频滞后。含义：<b>任何 A/B 必须先跑一次 discard 请求把频率拉起来</b>，否则第一组必然吃亏。</li>
+  </ol>
+
+  <details class="qa"><summary>Q15　既然 8 核只用 6 核，为什么不能再塞第三路？</summary>
+    <div class="answer">因为「6.06 核」是<b>平均占用</b>，不是「还剩 2 核空闲」。第一，8 核里有 5 个是 595–633 MHz 的低频核，按 2.2 GHz 归一后总有效算力只有 4.4 核，而 6.06 这个数字本身就是按核数算的平均，对应的频率加权占用更高。第二，并行时 codec 已经从 2.44 s 退化到 5.93 s，说明它已经在争抢；再塞一路只会让退化倍率继续上升，而不是线性分摊。第三，两路时 depth 已经 5.45 s（1.94×），第三路会是 2.9×——HTP 的分时是硬约束。<b>判断能不能再塞，别看核数，看「瓶颈侧当前的倍率」</b>：倍率已经 >2 就不是加资源能解决的。</div></details>
+  <details class="qa"><summary>Q16　为什么省掉 codec 的 72% CPU，只换来 15% 吞吐？</summary>
+    <div class="answer">因为省掉的资源要用来「解锁」另一侧，而不是直接变成时间。并行时墙钟是 <code>0.74 + max(depth 5.45, codec 5.93) + 0.09</code>。假设 codec 完全不占 CPU 也不占 HTP，<code>max()</code> 立刻由 depth 的 5.45 决定，墙钟降到 6.28 s——从 6.76 到 6.28 就是 <b>6.6%→15%</b> 的全部收益。想再多，就必须同时把 depth 也降下来，此时墙钟才会跟着 <code>max()</code> 一起掉。<b>优化一个被 <code>max()</code> 遮住的分支，最多只能拿回「另一侧的时间」；想突破，必须动另一侧。</b></div></details>
+
+  <div class="chapterDone"><button class="doneBtn" data-ch="ch14">标记本章已学完</button></div>
 </section>
 
 <footer>
