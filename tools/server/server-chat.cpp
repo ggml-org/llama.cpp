@@ -712,8 +712,7 @@ json convert_transcriptions_to_chatcmpl(
         const json & inp_body,
         const common_chat_templates * tmpls,
         const std::map<std::string, uploaded_file> & in_files,
-        std::vector<raw_buffer> & out_files,
-        const std::function<double(const raw_buffer &)> & get_audio_length) {
+        std::vector<raw_buffer> & out_files) {
     // TODO @ngxson : this function may need to be improved in the future
     // handle input files
     out_files.clear();
@@ -733,7 +732,12 @@ json convert_transcriptions_to_chatcmpl(
     }
     common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
     if (preset.needs_audio_length) {
-        preset = common_chat_get_asr_prompt(tmpls, language, get_audio_length(out_files[0]), prompt);
+        mtmd_helper_media_meta meta;
+        if (mtmd_helper_get_media_meta(out_files[0].data(), out_files[0].size(), mtmd_helper_init_opt_default(), &meta) != 0 ||
+                meta.type != MTMD_HELPER_MEDIA_TYPE_AUDIO || meta.duration < 0) {
+            throw std::invalid_argument("the input file is not a supported audio file");
+        }
+        preset = common_chat_get_asr_prompt(tmpls, language, meta.duration, prompt);
     }
     if (prompt.empty() || preset.has_context) {
         prompt = preset.user;
