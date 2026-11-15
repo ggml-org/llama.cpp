@@ -12,6 +12,10 @@
 #define hvx_vmem(A)   *((HVX_Vector *)(A))
 #define hvx_vmemu(A)  *((HVX_UVector *)(A))
 
+static inline void hvx_vmem_store_nt(void * restrict dst, HVX_Vector v) {
+    asm("vmem(%1+#0):nt = %2" : "=m"(*(HVX_Vector *) dst) : "r"(dst), "v"(v));
+}
+
 static inline void hvx_vec_store_u(void * restrict dst, uint32_t n, HVX_Vector v) {
     // Rotate as needed.
     v = Q6_V_vlalign_VVR(v, v, (size_t) dst);

@@ -3031,16 +3031,19 @@ static void transfer_output_chunk_int_threaded(
     state.src2_stride        = src2_stride;
     state.dst_cols           = (uint32_t) dst_cols;
 
-    const uint32_t n_blocks = hmx_ceil_div((uint32_t) n_cols, 32);
-    if (n_hvx > 1 && n_blocks >= (uint32_t) n_hvx) {
+    const uint32_t n_blocks         = hmx_ceil_div((uint32_t) n_cols, 32);
+    const bool     prefer_row_chunk = ((uint32_t) n_rows >= (uint32_t) n_hvx * m_align);
+    if (n_hvx > 1 && !prefer_row_chunk && n_blocks >= (uint32_t) n_hvx) {
         state.n_hvx_div = octx->n_hvx_div;
         work_queue_run(octx->ctx->hvx_queue, transfer_output_chunk_int_col_chunk_worker_fn, &state, n_hvx);
         return;
     }
 
-    uint32_t chunks_per_task = (n_hvx <= 1) ? (uint32_t) n_rows : fastdiv((uint32_t) n_rows + (uint32_t) n_hvx - 1, &octx->n_hvx_div);
-    chunks_per_task          = hex_align_up(chunks_per_task, row_step);
-    const int actual_hvx     = hex_smin(n_hvx, is_w8a8 ? ((n_rows + 3) >> 2) : ((n_rows + 1) >> 1));
+    const uint32_t chunk_align     = prefer_row_chunk ? m_align : row_step;
+    uint32_t       chunks_per_task = (n_hvx <= 1) ? (uint32_t) n_rows
+                                   : fastdiv((uint32_t) n_rows + (uint32_t) n_hvx - 1, &octx->n_hvx_div);
+    chunks_per_task                = hex_align_up(chunks_per_task, chunk_align);
+    const int actual_hvx           = hex_smin(n_hvx, is_w8a8 ? ((n_rows + 3) >> 2) : ((n_rows + 1) >> 1));
 
     state.n_tasks           = (uint32_t) actual_hvx;
     state.n_chunks_per_task = chunks_per_task;
