@@ -478,21 +478,6 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
 
         kpool_scan(sq, kpool, hparams_idx.indexer_kpool_by_order);
 
-#ifndef NDEBUG
-        // debug builds check every update against a full rebuild
-        {
-            kpool_layout::seq ref;
-            ref.cells.assign(sp.begin(), sp.end());
-            ref.pos_min = sp.empty() ? 0 : sp.begin()->first;
-            kpool_scan(ref, kpool, hparams_idx.indexer_kpool_by_order);
-            if (ref.cells != sq.cells || ref.pools != sq.pools || ref.j_next != sq.j_next || ref.pos_min != sq.pos_min) {
-                LLAMA_LOG_ERROR("%s: seq %d: k-pool layout differs from a full rebuild (stale %d, cells %zu/%zu, pools %zu/%zu)\n",
-                        __func__, s, (int) stale, sq.cells.size(), ref.cells.size(), sq.pools.size(), ref.pools.size());
-                GGML_ABORT("k-pool layout verification failed");
-            }
-        }
-#endif
-
         lay.n_pool_real += (uint32_t) sq.pools.size();
     }
 

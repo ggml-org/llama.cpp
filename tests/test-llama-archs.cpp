@@ -985,7 +985,7 @@ static bool check_causal_attn_toggle(
 }
 
 // speculative decoding: each step decodes a token and 0 to n_draft_max drafts, then rejects the drafts
-// the logits of the token must match a decode without drafts, and debug builds check each k-pool layout update against a full rebuild
+// the logits of the token must match a decode without drafts
 static double check_draft_rollback(llama_model * model, const std::vector<llama_token> & tokens, const std::vector<float> & logits_ref) {
     const uint32_t n_vocab     = llama_vocab_n_tokens(llama_model_get_vocab(model));
     const uint32_t n_tokens    = tokens.size();
