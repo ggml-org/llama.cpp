@@ -99,18 +99,44 @@ jobs:
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
           python3 ../scripts/hip/gcn-cdna-vgpr-check.py metrics.log
 
+      # On master pushes, cache the metrics log as the baseline for PR checks.
+      - name: Save master metrics baseline
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        run: cp build/metrics.log hip-baseline-metrics.log
+
+      - name: Cache master metrics baseline
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: actions/cache/save@v5
+        with:
+          path: hip-baseline-metrics.log
+          key: hip-quality-check-master-metrics-${{ github.sha }}
+
+      # On PRs, restore the baseline metrics log cached from the master tip.
+      # The PR build reuses the same build as the VGPR spill check above.
+      - name: Get master tip SHA
+        if: ${{ github.event_name == 'pull_request' }}
+        id: master_sha
+        run: echo "sha=$(git ls-remote origin refs/heads/master | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore master metrics baseline
+        if: ${{ github.event_name == 'pull_request' }}
+        id: baseline_cache
+        uses: actions/cache/restore@v5
+        with:
+          path: hip-baseline-metrics.log
+          key: hip-quality-check-master-metrics-${{ steps.master_sha.outputs.sha }}
+
+      # Fallback when the master tip has no cached baseline yet.
       - name: Checkout baseline (master)
+        if: ${{ github.event_name == 'pull_request' && steps.baseline_cache.outputs.cache-hit != 'true' }}
         uses: actions/checkout@v6
         with:
-          ref: master
+          ref: ${{ steps.master_sha.outputs.sha }}
           path: hip-baseline
 
-      - name: Check for occupancy regressions vs master
-        id: occupancy_check
+      - name: Build master metrics baseline
+        if: ${{ github.event_name == 'pull_request' && steps.baseline_cache.outputs.cache-hit != 'true' }}
         run: |
-          # Build the baseline with the same target and flags, then compare
-          # per-kernel occupancy. The main checkout is the PR merge commit,
-          # so the baseline isolates the changes of this PR.
           cd hip-baseline
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
@@ -121,8 +147,15 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cd build
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
-          cd ../..
-          python3 scripts/hip/gcn-cdna-occupancy-check.py hip-baseline/build/metrics.log build/metrics.log
+          cp metrics.log ../../hip-baseline-metrics.log
+
+      - name: Check for occupancy regressions vs master
+        if: ${{ github.event_name == 'pull_request' }}
+        id: occupancy_check
+        run: |
+          # The PR metrics.log comes from the VGPR spill check build above, so
+          # this step adds no extra build when the baseline cache hits.
+          python3 scripts/hip/gcn-cdna-occupancy-check.py hip-baseline-metrics.log build/metrics.log
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
