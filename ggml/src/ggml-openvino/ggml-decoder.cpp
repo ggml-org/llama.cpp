@@ -340,6 +340,10 @@ void GgmlOvDecoder::set_input_output() {
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
                 src_name = get_tensor_graph_input_ov_name(this, m_cgraph, src, node);
             }
+            // Same name as in create_weight_nodes(), so ROPE reads the weight Constant.
+            if (is_rope_freqs_weight(src->view_src ? src->view_src : src, node)) {
+                src_name = "rope_freqs.weight";
+            }
             current_node_info.node_inputs[src_name] = src;
             current_node_info.node_inputs_names.push_back(src_name);
 
@@ -1824,6 +1828,13 @@ void GgmlOvDecoder::compute_model_inputs() {
             std::string src_name = get_tensor_ov_name(m_cgraph, src);
             if (src->flags & GGML_TENSOR_FLAG_INPUT) {
                 src_name = get_tensor_graph_input_ov_name(this, m_cgraph, src, node);
+            }
+            // ROPE frequency factors (rope_factors_short/long in Phi-3, Phi-4 and MiniCPM) are registered as
+            // "rope_freqs.weight" in create_weight_nodes(). Without the same name here they become a
+            // Parameter fed from the host weight buffer, which is empty in cache-only mode and after
+            // GGML_OPENVINO_RELEASE_WEIGHTS.
+            if (is_rope_freqs_weight(src->view_src ? src->view_src : src, node)) {
+                src_name = "rope_freqs.weight";
             }
             if (m_model_weights.find(src_name) != m_model_weights.end()) {
                 continue;
