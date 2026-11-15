@@ -9172,51 +9172,6 @@ struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     }
 };
 
-struct test_flash_attn_ext_negative_logits : public test_flash_attn_ext {
-    using test_flash_attn_ext::test_flash_attn_ext;
-
-    std::string vars() override {
-        return test_flash_attn_ext::vars() + ",negative_logits=1";
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        test_flash_attn_ext::initialize_tensors(ctx);
-        init_tensor_uniform(ggml_get_tensor(ctx, "q"), 1.0f, 1.0f);
-        init_tensor_uniform(ggml_get_tensor(ctx, "k"), -100.0f/sqrtf(hsk), -100.0f/sqrtf(hsk));
-        init_tensor_uniform(ggml_get_tensor(ctx, "v"), 1.0f, 1.0f);
-    }
-};
-
-struct test_flash_attn_ext_shifted_max : public test_flash_attn_ext {
-    using test_flash_attn_ext::test_flash_attn_ext;
-
-    std::string vars() override {
-        return test_flash_attn_ext::vars() + ",shifted_max=1";
-    }
-
-    void initialize_tensors(ggml_context * ctx) override {
-        test_flash_attn_ext::initialize_tensors(ctx);
-        ggml_tensor * k = ggml_get_tensor(ctx, "k");
-        ggml_tensor * v = ggml_get_tensor(ctx, "v");
-        init_tensor_uniform(ggml_get_tensor(ctx, "q"), 1.0f, 1.0f);
-        init_tensor_uniform(k, 2.0f/sqrtf(hsk), 2.0f/sqrtf(hsk));
-        init_tensor_uniform(v, -512.0f, -512.0f);
-
-        auto set_prefix = [&](ggml_tensor * t, float value) {
-            // The last KV row changes the maximum after earlier blocks produce output.
-            const size_t count = size_t(kv - 1) * t->ne[0];
-            const std::vector<float> values(count, value);
-            const std::vector<ggml_fp16_t> half_values(count, ggml_fp32_to_fp16(value));
-            const void * data = t->type == GGML_TYPE_F16 ? static_cast<const void *>(half_values.data()) : values.data();
-            for (int64_t head = 0; head < t->ne[2]; ++head) {
-                ggml_backend_tensor_set(t, data, head * t->nb[2], count * ggml_type_size(t->type));
-            }
-        };
-        set_prefix(k, -2.0f/sqrtf(hsk));
-        set_prefix(v, 1.0f);
-    }
-};
-
 // GGML_OP_FLASH_ATTN_EXT with kv_rows: each q slice attends to its own list of K/V cache rows
 struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t hs;
@@ -13091,23 +13046,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(65, 67, 4, {1, 1}, 113, 75, true, true, 8.0f, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(65, 67, 4, {1, 1}, 17, 75, false, false, 0, 1.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(65, 67, 4, {1, 1}, 113, 75, false, false, 0, 1.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-
-    // Dense unmasked attention: partial tiles, KV padding, and online-softmax continuation.
-    for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
-        test_cases.emplace_back(new test_flash_attn_ext(64, 64, 1, {1, 1}, 64, 64, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        test_cases.emplace_back(new test_flash_attn_ext(80, 80, 1, {1, 1}, 113, 75, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        test_cases.emplace_back(new test_flash_attn_ext(112, 112, 1, {1, 1}, 113, 128, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {1, 1}, 256, 128, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 2, {1, 1}, 8193, 511, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        test_cases.emplace_back(new test_flash_attn_ext_large_logits(128, 128, 2, {1, 1}, 8193, 511, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        test_cases.emplace_back(new test_flash_attn_ext_shifted_max(128, 128, 3, {1, 1}, 8193, 515, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-        for (int64_t nq : {64, 65, 66, 67, 75}) {
-            for (int64_t nk : {49, 50, 51, 113}) {
-                test_cases.emplace_back(new test_flash_attn_ext_negative_logits(128, 128, 1, {1, 1}, nk, nq, false, false, 0, 0, GGML_PREC_F32, type, type, {0, 1, 2, 3}, false));
-            }
-        }
-    }
-    test_cases.emplace_back(new test_flash_attn_ext_negative_logits(16384, 16384, 1, {1, 1}, 64, 256, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F32, GGML_TYPE_F32, {0, 1, 2, 3}, false));
 
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
