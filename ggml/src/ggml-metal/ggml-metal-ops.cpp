@@ -4698,16 +4698,17 @@ int ggml_metal_op_norm(ggml_metal_op_t ctx, int idx) {
 
             for (int i = 1; i < n_fuse; i++) {
                 const ggml_tensor * fn = ctx->node(idx + i);
+                const ggml_tensor * fs = fn->src[0] == ctx->node(idx + i - 1) ? fn->src[1] : fn->src[0];
 
-                bid_fuse[i - 1] = ggml_metal_get_buffer_id(fn->src[1]);
+                bid_fuse[i - 1] = ggml_metal_get_buffer_id(fs);
 
-                args.nef1[i] = fn->src[1]->ne[1];
-                args.nef2[i] = fn->src[1]->ne[2];
-                args.nef3[i] = fn->src[1]->ne[3];
+                args.nef1[i] = fs->ne[1];
+                args.nef2[i] = fs->ne[2];
+                args.nef3[i] = fs->ne[3];
 
-                args.nbf1[i] = fn->src[1]->nb[1];
-                args.nbf2[i] = fn->src[1]->nb[2];
-                args.nbf3[i] = fn->src[1]->nb[3];
+                args.nbf1[i] = fs->nb[1];
+                args.nbf2[i] = fs->nb[2];
+                args.nbf3[i] = fs->nb[3];
             }
 
             if (debug_fusion > 1) {
