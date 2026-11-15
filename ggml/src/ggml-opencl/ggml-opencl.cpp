@@ -74,6 +74,7 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 
 #if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
 #include "Conv3D_GMEM.h"
+#include "FA_GMEM.h"
 #include "MM_GMEM.h"
 #endif
 
@@ -1182,6 +1183,8 @@ struct ggml_backend_opencl_context {
     std::map<size_t, Conv3D_GMEM *> conv3d_gmem_cache;
     std::map<std::string, cl_program> mm_gmem_programs;
     std::map<std::tuple<std::string, cl_uint, cl_uint, cl_uint>, MM_GMEM *> mm_gmem_cache;
+    std::map<ggml_type, cl_program> fa_gmem_programs;
+    std::map<std::tuple<ggml_type, cl_uint, cl_uint, cl_uint, cl_uint>, FA_GMEM *> fa_gmem_cache;
 #endif
 
     size_t get_kernel_workgroup_size(cl_kernel kernel) const {
@@ -1435,6 +1438,15 @@ struct ggml_backend_opencl_context {
                 if (entry.second) { CL_CHECK(clReleaseProgram(entry.second)); }
             }
             mm_gmem_programs.clear();
+            for (auto & entry : fa_gmem_cache) {
+                delete entry.second;
+            }
+            fa_gmem_cache.clear();
+            FA_GMEM::cleanup(context);
+            for (auto & entry : fa_gmem_programs) {
+                if (entry.second) { CL_CHECK(clReleaseProgram(entry.second)); }
+            }
+            fa_gmem_programs.clear();
 #endif
         }
     }
@@ -1512,7 +1524,7 @@ static cl_program build_program_from_source_ex(cl_context ctx, cl_device_id dev,
     return NULL;
 }
 
-static cl_program build_program_from_source(ggml_backend_opencl_context * backend_ctx, const char* program_buffer, const std::string &compile_opts) {
+static cl_program build_program_from_source(ggml_backend_opencl_context * backend_ctx, const char* program_buffer, const std::string &compile_opts, bool fatal = true) {
     cl_context   ctx = backend_ctx->context;
     cl_device_id dev = backend_ctx->device;
 
@@ -1524,7 +1536,7 @@ static cl_program build_program_from_source(ggml_backend_opencl_context * backen
         return p_cached;
     }
 
-    cl_program p = build_program_from_source_ex(ctx, dev, program_buffer, compile_opts, /*fatal=*/true);
+    cl_program p = build_program_from_source_ex(ctx, dev, program_buffer, compile_opts, fatal);
 
     // Best-effort save of the freshly-built binary (no-op if cache disabled).
     if (p != nullptr) {
@@ -11707,6 +11719,115 @@ static bool ggml_cl_mul_mat_can_use_fwht(const ggml_backend_opencl_context * bac
            ggml_is_contiguous_rows(b) && ggml_is_contiguous(op) && ggml_are_same_shape(b, op);
 }
 
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+static bool use_adreno_fa_gmem(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * op) {
+    static const bool disabled = getenv("GGML_OPENCL_DISABLE_FA_GMEM") != nullptr;
+    if (disabled || !backend_ctx || !backend_ctx->adreno_use_bin_kernels || backend_ctx->adreno_gen != ADRENO_GPU_GEN::X2E) {
+        return false;
+    }
+    const ggml_tensor * q = op->src[0];
+    const ggml_tensor * k = op->src[1];
+    const ggml_tensor * v = op->src[2];
+    if (q->type != GGML_TYPE_F32 || (k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_F32) ||
+        k->type != v->type || op->type != GGML_TYPE_F32 ||
+        !ggml_is_contiguous(q) || !ggml_is_contiguous(k) || !ggml_is_contiguous(v) || !ggml_is_contiguous(op) ||
+        op->src[3] || op->src[4] || op->src[5]) {
+        return false;
+    }
+    for (const ggml_tensor * tensor : { q, k, v, op }) {
+        size_t bytes = ggml_type_size(tensor->type);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            if (tensor->ne[i] <= 0 || tensor->ne[i] > std::numeric_limits<int>::max() ||
+                uint64_t(tensor->ne[i]) > std::numeric_limits<cl_uint>::max() / bytes) {
+                return false;
+            }
+            bytes *= tensor->ne[i];
+        }
+        const auto * extra = (const ggml_tensor_extra_cl *) tensor->extra;
+        const cl_ulong offset = (extra ? extra->offset : 0) + tensor->view_offs;
+        if (offset % backend_ctx->alignment != 0) { return false; }
+    }
+    // FLASH_ATTN_EXT output is [d_v, n_head, n_q, n_batch].
+    if (q->ne[0] != k->ne[0] || q->ne[0] != v->ne[0] || k->ne[1] != v->ne[1] ||
+        q->ne[2] != k->ne[2] || q->ne[2] != v->ne[2] ||
+        q->ne[3] != 1 || k->ne[3] != 1 || v->ne[3] != 1 || op->ne[3] != 1 ||
+        q->ne[1] != op->ne[2] || q->ne[2] != op->ne[1] || v->ne[0] != op->ne[0]) {
+        return false;
+    }
+    if (q->ne[2] > 1 && (q->nb[2] % backend_ctx->alignment || k->nb[2] % backend_ctx->alignment || v->nb[2] % backend_ctx->alignment)) {
+        return false;
+    }
+    float max_bias;
+    float logit_softcap;
+    memcpy(&max_bias, &op->op_params[1], sizeof(max_bias));
+    memcpy(&logit_softcap, &op->op_params[2], sizeof(logit_softcap));
+    const ggml_prec precision = ggml_prec_get_acc(op);
+    if (max_bias != 0.0f || logit_softcap != 0.0f || (precision != GGML_PREC_F32 && precision != GGML_PREC_UNDEFINED)) {
+        return false;
+    }
+    return FA_GMEM::get_hash(backend_ctx->device, (cl_uint) q->ne[1], (cl_uint) k->ne[1], (cl_uint) q->ne[0],
+        (cl_uint) q->ne[2], q->type, k->type) != 0;
+}
+
+static FA_GMEM * ggml_opencl_ensure_fa_gmem(ggml_backend_opencl_context * backend_ctx, const ggml_tensor * op) {
+    const ggml_tensor * q = op->src[0];
+    const ggml_type type_kv = op->src[1]->type;
+    const auto key = std::make_tuple(type_kv, (cl_uint) q->ne[1], (cl_uint) op->src[1]->ne[1], (cl_uint) q->ne[0], (cl_uint) q->ne[2]);
+    auto it = backend_ctx->fa_gmem_cache.find(key);
+    if (it == backend_ctx->fa_gmem_cache.end()) {
+        const std::string names[] = { FA_GMEM::mm0_program_name(type_kv), FA_GMEM::mm1_program_name(type_kv) };
+        cl_program programs[2] = {};
+        for (size_t i = 0; i < 2; ++i) {
+            auto & cache = backend_ctx->mm_gmem_programs;
+            auto program_it = cache.find(names[i]);
+            if (program_it == cache.end()) {
+                size_t bin_size = 0;
+                const auto * binary = (const char *) backend_ctx->get_adreno_bin_kernel(names[i], &bin_size);
+                cl_program program = binary && bin_size ? build_program_from_binary(backend_ctx->context, backend_ctx->device, binary, "", bin_size, false) : nullptr;
+                program_it = cache.emplace(names[i], program).first;
+            }
+            programs[i] = program_it->second;
+            if (!programs[i]) { break; }
+        }
+        FA_GMEM * fa = nullptr;
+        if (programs[0] && programs[1]) {
+            auto source_it = backend_ctx->fa_gmem_programs.find(type_kv);
+            if (source_it == backend_ctx->fa_gmem_programs.end()) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+                const std::string row_source {
+#include "fa_per_row_data.cl.h"
+                };
+                const std::string fa_source {
+#include "fa_gmem.cl.h"
+                };
+#else
+                const std::string row_source = read_file("fa_per_row_data.cl");
+                const std::string fa_source = read_file("fa_gmem.cl");
+#endif
+                cl_program program = nullptr;
+                if (!row_source.empty() && !fa_source.empty()) {
+                    if (!backend_ctx->program_cache_initialized) {
+                        backend_ctx->program_cache = cl_program_cache_init(backend_ctx->device);
+                        backend_ctx->program_cache_initialized = true;
+                    }
+                    const std::string source = row_source + "\n" + fa_source;
+                    std::string options = "-cl-std=CL2.0 -qcom-accelerate-16-bit=false -qcom-enable-single-pool=always -cl-ray-tracing-kernel";
+                    if (type_kv == GGML_TYPE_F16) { options += " -DFP16KV"; }
+                    program = build_program_from_source(backend_ctx, source.c_str(), options, false);
+                }
+                source_it = backend_ctx->fa_gmem_programs.emplace(type_kv, program).first;
+            }
+            if (source_it->second) {
+                fa = FA_GMEM::create(backend_ctx->context, backend_ctx->device, backend_ctx->queue,
+                    backend_ctx->profiling_info, programs[0], source_it->second, programs[1], type_kv);
+            }
+        }
+        it = backend_ctx->fa_gmem_cache.emplace(key, fa).first;
+    }
+    return it->second;
+}
+#endif
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
@@ -12185,6 +12306,11 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             if (op->src[5] != nullptr) {
                 return false;
             }
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+            if (use_adreno_fa_gmem(backend_ctx, op) && ggml_opencl_ensure_fa_gmem(backend_ctx, op)) {
+                return true;
+            }
+#endif
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
             if (use_fa_bin_kernels_prefill(backend_ctx, op->src[0], op->src[1], op->src[2])) {
                 return true;
@@ -23336,6 +23462,26 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const int n_head = q->ne[2];
     const int n_head_kv = k->ne[2];
     const int n_batch = q->ne[3];
+
+#if defined(GGML_OPENCL_USE_ADRENO_KERNELS) && defined(GGML_OPENCL_USE_ADRENO_BIN_KERNELS) && GGML_OPENCL_TARGET_VERSION >= 300
+    if (use_adreno_fa_gmem(backend_ctx, dst)) {
+        FA_GMEM * fa = ggml_opencl_ensure_fa_gmem(backend_ctx, dst);
+        if (fa) {
+            auto * extra_q = (ggml_tensor_extra_cl *) q->extra;
+            auto * extra_k = (ggml_tensor_extra_cl *) k->extra;
+            auto * extra_v = (ggml_tensor_extra_cl *) v->extra;
+            auto * extra_o = (ggml_tensor_extra_cl *) dst->extra;
+            float scale;
+            memcpy(&scale, &dst->op_params[0], sizeof(scale));
+            fa->enqueue((cl_uint) n_q, (cl_uint) n_kv, (cl_uint) d_head_q, (cl_uint) n_head,
+                extra_q->data_device, extra_q->offset + q->view_offs,
+                extra_k->data_device, extra_k->offset + k->view_offs, scale,
+                extra_v->data_device, extra_v->offset + v->view_offs,
+                extra_o->data_device, extra_o->offset + dst->view_offs, dst);
+            return;
+        }
+    }
+#endif
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (ggml_cl_adreno_xmem_attn_can_use(backend_ctx, q, k, dst)) {

@@ -9,6 +9,9 @@ ggml_add_backend_library(${TARGET_NAME}
                           Conv3D_GMEM.h
                           MM_GMEM.cpp
                           MM_GMEM.h
+                          FA_GMEM.cpp
+                          FA_GMEM.h
+                          fa-per-row-data.h
                           cl-recordable-queue.h
                           cl-program-cache.cpp
                           cl-program-cache.h
@@ -346,6 +349,10 @@ set(GGML_OPENCL_KERNELS
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
     list(APPEND GGML_OPENCL_KERNELS gemm_xmem_f16_f32_os8 sdpa_xmem_f32_f16_os8)
+endif ()
+
+if (GGML_OPENCL_USE_ADRENO_KERNELS AND GGML_OPENCL_USE_ADRENO_BIN_KERNELS AND GGML_OPENCL_TARGET_VERSION GREATER_EQUAL 300)
+    list(APPEND GGML_OPENCL_KERNELS fa_per_row_data fa_gmem)
 endif ()
 
 foreach (K ${GGML_OPENCL_KERNELS})
