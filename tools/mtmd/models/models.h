@@ -536,6 +536,18 @@ struct mtmd_graph_drama3_gen : mtmd_graph {
                               ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
 };
 
+//
+// fish_s2 generation:
+// GEN_CODE = fast AR, backbone hidden + semantic code -> other codes of the frame + next backbone input
+// GEN_WAV  = Fish DAC decoder, same as drama3
+//
+struct mtmd_graph_fish_s2_gen : mtmd_graph_drama3_gen {
+    using mtmd_graph_drama3_gen::mtmd_graph_drama3_gen;
+    ggml_cgraph * build() override;
+
+    ggml_cgraph * build_fast_ar();
+};
+
 struct mtmd_graph_soprano : mtmd_graph {
     mtmd_graph_soprano(mtmd_subcontext * ctx, const mtmd_image_f32 & img, int n_frames) : mtmd_graph(ctx, img), n_frames(n_frames) {}
     ggml_cgraph * build() override;

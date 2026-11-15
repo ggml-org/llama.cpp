@@ -156,10 +156,13 @@ ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::layer_forward(
     q = ggml_reshape_3d(ctx0, q, d_head, n_head, 1);
     k = ggml_reshape_3d(ctx0, k, d_head, n_head_kv, 1);
 
-    q = ggml_rms_norm(ctx0, q, hparams.eps);
-    q = ggml_mul(ctx0, q, layer.q_norm);
-    k = ggml_rms_norm(ctx0, k, hparams.eps);
-    k = ggml_mul(ctx0, k, layer.k_norm);
+    // fish_s2 fast AR has no qk norm
+    if (layer.q_norm) {
+        q = ggml_rms_norm(ctx0, q, hparams.eps);
+        q = ggml_mul(ctx0, q, layer.q_norm);
+        k = ggml_rms_norm(ctx0, k, hparams.eps);
+        k = ggml_mul(ctx0, k, layer.k_norm);
+    }
 
     q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0,
                       hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);

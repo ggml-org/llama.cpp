@@ -2463,6 +2463,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_DRAMA3;
             info.sample_rate = 44100;
             break;
+        case PROJECTOR_TYPE_FISH_S2_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_FISH_S2;
+            info.sample_rate = 44100;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -2871,6 +2875,12 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.top_k = 30;
             inp.top_p = 0.9f;
             inp.temp  = 1.0f;
+            break;
+        case PROJECTOR_TYPE_FISH_S2_GEN:
+            // fast AR is greedy in the reference (sglang-omni fishaudio_s2_pro), temp > 0 samples instead
+            inp.top_k = 30;
+            inp.top_p = 0.9f;
+            inp.temp  = 0.0f;
             break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {

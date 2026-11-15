@@ -1033,7 +1033,11 @@ struct mtmd_model_loader {
                         hparams.wav_tfm_swa = 72;
                     } break;
                 case PROJECTOR_TYPE_DRAMA3_GEN:
+                case PROJECTOR_TYPE_FISH_S2_GEN:
                     {
+                        // fish_s2 fast AR, drama3 hardcodes its tower RoPE in the graph
+                        hparams.rope_theta = 1000000.0f;
+
                         // Fish DAC decoder, codec.pth has no config
                         hparams.audio_sample_rate    = 44100;
                         hparams.wav_tfm_n_layer      = 8;
@@ -2589,6 +2593,16 @@ struct mtmd_model_loader {
                     }
                     model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight")); // merged 3D, one table per codebook
                     model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight")); // merged 3D, codebooks 1..
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
+                    load_code2wav(false);
+                } break;
+            case PROJECTOR_TYPE_FISH_S2_GEN:
+                {
+                    // generic a.gen.code.blk.* tensors are loaded by the loop above
+                    model.gen_code_tok_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_TOK_EMBD, "weight")); // fast AR input
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight")); // fast AR head, residual codebooks
+                    model.gen_code_norm_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_NORM,     "weight"));
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight")); // merged 3D, backbone input tables
                     model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
                     load_code2wav(false);
                 } break;
@@ -4175,6 +4189,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
             {
                 // one hidden-state vector fed back to the talker per call
                 n_patches = 1;
@@ -4359,6 +4374,7 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
         case PROJECTOR_TYPE_LFM3A_GEN:
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
             return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             return spk_proj_w->ne[1];

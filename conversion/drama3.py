@@ -36,6 +36,7 @@ class Drama3TextModel(Qwen3_5MoeTextModel):
 class Drama3MmprojModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = False
+    gen_projector_type = gguf.VisionProjectorType.DRAMA3_GEN
 
     _LAYER_MAP = {
         "enorm.weight":                                 (gguf.MODEL_TENSOR.A_GEN_CODE_ENORM, True),
@@ -69,7 +70,7 @@ class Drama3MmprojModel(MmprojModel):
         cfg = self.hparams
         self.gguf_writer.add_file_type(self.ftype)
         self.gguf_writer.add_clip_has_gen_audio_encoder(True)
-        self.gguf_writer.add_clip_gen_audio_projector_type(gguf.VisionProjectorType.DRAMA3_GEN)
+        self.gguf_writer.add_clip_gen_audio_projector_type(self.gen_projector_type)
         self.gguf_writer.add_gen_audio_projection_dim(self.n_embd_text)
         self.gguf_writer.add_gen_audio_embedding_length(cfg["dim"])
         self.gguf_writer.add_gen_audio_feed_forward_length(cfg["intermediate_size"])

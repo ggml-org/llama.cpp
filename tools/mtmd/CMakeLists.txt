@@ -83,6 +83,7 @@ add_library(mtmd
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
             models/drama3-gen.cpp
+            models/fish-s2-gen.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp
             models/pockettts-gen.cpp

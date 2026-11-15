@@ -270,6 +270,9 @@
 #define TN_A_GEN_CODE_BLK_EMBD     "a.gen.code.blk.%d.embd.%s"
 #define TN_A_GEN_CODE_BLK_OUT_NORM "a.gen.code.blk.%d.out_norm.%s"
 
+// fish_s2: fast AR input embedding, shared by all codebooks
+#define TN_A_GEN_CODE_TOK_EMBD "a.gen.code.tok_embd.%s"
+
 // qwen3tts code2wav (RVQ codes -> raw PCM)
 // pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
 #define TN_A_GEN_WAV_QUANT_FIRST_IN  "a.gen.wav.quant.first.in_proj.%s"
@@ -572,6 +575,7 @@ enum projector_type {
     PROJECTOR_TYPE_SOPRANO,
     PROJECTOR_TYPE_LFM3A_GEN,
     PROJECTOR_TYPE_DRAMA3_GEN,
+    PROJECTOR_TYPE_FISH_S2_GEN,
     PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_SENSENOVA_U1,
     PROJECTOR_TYPE_COHERE2V,
@@ -660,6 +664,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_SOPRANO,           "soprano"},
     { PROJECTOR_TYPE_LFM3A_GEN,         "lfm3a_gen"},
     { PROJECTOR_TYPE_DRAMA3_GEN,        "drama3_gen"},
+    { PROJECTOR_TYPE_FISH_S2_GEN,       "fish_s2_gen"},
     { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
     { PROJECTOR_TYPE_SENSENOVA_U1,      "sensenova_u1"},
     { PROJECTOR_TYPE_COHERE2V,          "cohere2v"},

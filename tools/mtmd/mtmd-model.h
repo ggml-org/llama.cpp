@@ -1140,6 +1140,7 @@ struct mtmd_model {
     ggml_tensor * gen_code_head_w     = nullptr; // per-codebook output head, merged 3D
     ggml_tensor * gen_code_out_embd_w = nullptr; // codebook-0 embedding, fed back into the talker
     ggml_tensor * gen_code_norm_w     = nullptr; // final norm
+    ggml_tensor * gen_code_tok_embd_w = nullptr; // fish_s2: input embedding shared by all codebooks
 
     // lfm3a depthformer (MaskGIT)
     ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D

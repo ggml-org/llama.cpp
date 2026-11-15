@@ -185,3 +185,34 @@ The routed experts of the checkpoint are FP8, they are dequantized at conversion
 python convert_hf_to_gguf.py path/to/drama-3 --outtype q8_0 --outfile drama3.gguf
 python convert_hf_to_gguf.py path/to/drama-3 --mmproj --outtype bf16 --outfile mmproj-drama3.gguf
 ```
+
+## Fish Audio S2 Pro
+
+[Fish Audio S2 Pro](https://huggingface.co/fishaudio/s2-pro): a Qwen3 backbone (4B) samples each frame's semantic token, a 4-layer fast AR predicts the 9 other codes, and the Fish DAC (same as Drama 3) decodes them to 44.1 kHz audio.
+
+Available params:
+- Speaker tags `<|speaker:0|>`, `<|speaker:1|>`, ... in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
+- Inline instructions in brackets control the delivery, for example `[laughing]`, `[whisper]` or `[pause]`
+- The language is the one of the text, `--tts-lang` is not used
+- Note: `--tts-speaker-file` is not supported yet (voice cloning)
+- Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference (semantic token: repetition penalty 1.1 over the last 16 frames, top-k 30, top-p 0.8, temperature 0.8, or top-p 0.9 and temperature 1.0 when the last 4 frames repeat a token; other codes: greedy)
+- Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
+
+Example usage:
+
+```sh
+llama-tts -m s2-pro.gguf \
+    -mm mmproj-s2-pro.gguf \
+    -p "<|speaker:0|>Did you remember to buy the bread? <|speaker:1|>Of course I did [laughing] it is on the kitchen table." \
+    -n 1000 \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+The mmproj holds the fast AR and the decoder half of `codec.pth`, it is best kept in BF16:
+
+```sh
+python convert_hf_to_gguf.py path/to/s2-pro --outtype q8_0 --outfile s2-pro.gguf
+python convert_hf_to_gguf.py path/to/s2-pro --mmproj --outtype bf16 --outfile mmproj-s2-pro.gguf
+```
