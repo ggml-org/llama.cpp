@@ -5330,14 +5330,26 @@ static void ggml_compute_forward_get_rows_f32(
     const int ith = params->ith;
     const int nth = params->nth;
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    // fewer rows than threads and long rows (e.g. a 2 MB recurrent state): split each row into column parts
+    int64_t nsplit = 1;
+    if (nr < nth && nc >= 8192) {
+        nsplit = nth / nr;
+        if (nsplit > nc / 4096) nsplit = nc / 4096;
+        if (nsplit < 1) nsplit = 1;
+    }
+    const int64_t nunits = nr * nsplit;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+    // units per thread
+    const int64_t du = (nunits + nth - 1)/nth;
+    const int64_t u0 = du*ith;
+    const int64_t u1 = MIN(u0 + du, nunits);
 
-    for (int64_t i = ir0; i < ir1; ++i) {
+    for (int64_t u = u0; u < u1; ++u) {
+        const int64_t i  = u / nsplit;
+        const int64_t p  = u % nsplit;
+        const int64_t c0 = (p * nc) / nsplit;
+        const int64_t c1 = ((p + 1) * nc) / nsplit;
+
         const int64_t i12 = i/(ne11*ne10);
         const int64_t i11 = (i - i12*ne11*ne10)/ne10;
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
@@ -5345,9 +5357,9 @@ static void ggml_compute_forward_get_rows_f32(
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
-        ggml_vec_cpy_f32(nc,
-                (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3),
-                (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03));
+        ggml_vec_cpy_f32(c1 - c0,
+                (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3) + c0,
+                (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03) + c0);
     }
 }
 
