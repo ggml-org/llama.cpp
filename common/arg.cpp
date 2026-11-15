@@ -4525,7 +4525,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--tts-speaker-text"}, "TEXT",
         "transcript of --tts-speaker-file, for models that need it to clone the voice\n"
-        "see tts/README.md for per-model usage notes",
+        "see docs/multimodal/tts.md for per-model usage notes",
         [](common_params & params, const std::string & value) {
             params.tts_speaker_text = value;
         }
