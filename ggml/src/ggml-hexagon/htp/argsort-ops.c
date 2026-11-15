@@ -456,6 +456,23 @@ static void merge_runs(
     }
 }
 
+// Expand fp16 values in-place to fp32 backwards from the last vector so lower fp16 vectors are read before overwrite.
+__attribute__((noinline))
+static void sort_unpack_f16_to_f32_inplace(float * restrict values, uint32_t count) {
+    const HVX_Vector * vsrc = (const HVX_Vector *) values;
+    HVX_Vector *       vdst = (HVX_Vector *) values;
+    const uint32_t n_vec_f32 = (count + 31) / 32;
+    const uint32_t n_vec_f16 = (n_vec_f32 + 1) / 2;
+
+    for (int32_t v = (int32_t) n_vec_f16 - 1; v >= 0; v--) {
+        const HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[v]);
+        if ((uint32_t) (2 * v + 1) < n_vec_f32) {
+            vdst[2 * v + 1] = Q6_V_hi_W(p);
+        }
+        vdst[2 * v] = Q6_V_lo_W(p);
+    }
+}
+
 struct htp_sort_chunk_ctx {
     struct htp_ops_context *              octx;
     const struct htp_sort_kernel_params * kparams;
@@ -488,7 +505,9 @@ static void htp_sort_chunk_job(const htp_thread_t * th, unsigned int n, unsigned
     int32_t * merge_indices = cctx->merge_indices;
 
     struct htp_thread_trace * tr = th->trace;
-    const dma_addr_t src_addr = src0->data + (size_t) chunk_base * sizeof(float);
+    const bool src0_f16 = (src0->type == HTP_TYPE_F16);
+    const size_t src_elem_size = src0_f16 ? sizeof(__fp16) : sizeof(float);
+    const dma_addr_t src_addr = src0->data + (size_t) chunk_base * src_elem_size;
 
     if (kparams->is_top_k) {
         uint32_t k = dst->ne[0];
@@ -503,9 +522,12 @@ static void htp_sort_chunk_job(const htp_thread_t * th, unsigned int n, unsigned
         }
 
         if (local_k == 1 && ne00 >= 128*1024) {
-            dma_sync_read(th->dma_q, values_buf, src_addr, real_count * sizeof(float));
+            dma_sync_read(th->dma_q, values_buf, src_addr, real_count * src_elem_size);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
+            if (src0_f16) {
+                sort_unpack_f16_to_f32_inplace(values_buf, real_count);
+            }
             float max_value;
             uint32_t max_index = top_k_max_value_index(values_buf, real_count, &max_value);
             merge_values[i] = max_value;
@@ -515,9 +537,12 @@ static void htp_sort_chunk_job(const htp_thread_t * th, unsigned int n, unsigned
         }
 
         if (local_k > 1 && local_k <= 64 && chunk_elems > 1024) {
-            dma_sync_read(th->dma_q, values_buf, src_addr, real_count * sizeof(float));
+            dma_sync_read(th->dma_q, values_buf, src_addr, real_count * src_elem_size);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
+            if (src0_f16) {
+                sort_unpack_f16_to_f32_inplace(values_buf, real_count);
+            }
             top_k_scan(values_buf, real_count, local_k, &merge_values[i * local_k], &merge_indices[i * local_k]);
             for (uint32_t j = 0; j < local_k; j++) {
                 merge_indices[i * local_k + j] += (int32_t) chunk_base;
@@ -526,9 +551,12 @@ static void htp_sort_chunk_job(const htp_thread_t * th, unsigned int n, unsigned
             return;
         }
 
-        dma_sync_read(th->dma_q, values_buf, src_addr, real_count * sizeof(float));
+        dma_sync_read(th->dma_q, values_buf, src_addr, real_count * src_elem_size);
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
+        if (src0_f16) {
+            sort_unpack_f16_to_f32_inplace(values_buf, real_count);
+        }
         if (chunk_elems > real_count) {
             hvx_splat_f32_u((uint8_t *)(values_buf + real_count), -INFINITY, chunk_elems - real_count);
         }
@@ -542,9 +570,12 @@ static void htp_sort_chunk_job(const htp_thread_t * th, unsigned int n, unsigned
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
     } else {
         if (real_count > 0) {
-            dma_sync_read(th->dma_q, values_buf, src_addr, real_count * sizeof(float));
+            dma_sync_read(th->dma_q, values_buf, src_addr, real_count * src_elem_size);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i);
+            if (src0_f16) {
+                sort_unpack_f16_to_f32_inplace(values_buf, real_count);
+            }
             init_indices_ramp(indices_buf, real_count, chunk_base);
 
             if (kparams->order == GGML_SORT_ORDER_ASC) {
@@ -677,10 +708,14 @@ static inline void compute_row_sort(
     int32_t * cur_indices,
     uint32_t ne00,
     uint32_t chunk_elems,
+    bool src0_f16,
     bool is_top_k,
     enum ggml_sort_order order,
     uint32_t k
 ) {
+    if (src0_f16) {
+        sort_unpack_f16_to_f32_inplace(cur_values, ne00);
+    }
     if (is_top_k) {
         if (k > 1 && k <= 64 && ne00 > 1024) {
             float out_v[64];
@@ -758,11 +793,12 @@ static void htp_sort_multi_row_job(const htp_thread_t * th, unsigned int n, unsi
     dma_queue * dma_q = th->dma_q;
     struct htp_thread_trace * tr = th->trace;
 
+    const bool src0_f16 = (src0->type == HTP_TYPE_F16);
     bool is_top_k = kparams->is_top_k != 0;
     uint32_t k = dst->ne[0];
     enum ggml_sort_order order = (enum ggml_sort_order) kparams->order;
 
-    const uint32_t src_bytes = ne00 * sizeof(float);
+    const uint32_t src_bytes = ne00 * (src0_f16 ? sizeof(__fp16) : sizeof(float));
     const uint32_t dst_bytes = (is_top_k ? k : ne00) * sizeof(int32_t);
 
     if (kparams->n_slots == 2) {
@@ -802,7 +838,7 @@ static void htp_sort_multi_row_job(const htp_thread_t * th, unsigned int n, unsi
             dma_queue_pop(dma_q);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
-            compute_row_sort(cur_values, cur_indices, ne00, chunk_elems, is_top_k, order, k);
+            compute_row_sort(cur_values, cur_indices, ne00, chunk_elems, src0_f16, is_top_k, order, k);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
 
             // Push writeback of current slot
@@ -831,7 +867,7 @@ static void htp_sort_multi_row_job(const htp_thread_t * th, unsigned int n, unsi
             dma_sync_read(dma_q, values_buf, src_addr, src_bytes);
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
-            compute_row_sort(values_buf, indices_buf, ne00, chunk_elems, is_top_k, order, k);
+            compute_row_sort(values_buf, indices_buf, ne00, chunk_elems, src0_f16, is_top_k, order, k);
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
 
             dma_sync_write(dma_q, dst_addr, indices_buf, dst_bytes);
@@ -841,7 +877,7 @@ static void htp_sort_multi_row_job(const htp_thread_t * th, unsigned int n, unsi
 }
 
 static int op_sort_common(struct htp_ops_context * octx, bool is_top_k) {
-    if (octx->src[0]->type != HTP_TYPE_F32) {
+    if (octx->src[0]->type != HTP_TYPE_F32 && octx->src[0]->type != HTP_TYPE_F16) {
         return HTP_STATUS_NO_SUPPORT;
     }
 

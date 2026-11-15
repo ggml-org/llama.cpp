@@ -2621,6 +2621,7 @@ static bool htp_kparams_solve_ssm_scan(
 static bool htp_kparams_solve_sort(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
     struct htp_sort_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -2629,7 +2630,8 @@ static bool htp_kparams_solve_sort(
     const struct ggml_tensor * dst  = op;
     const bool is_top_k             = (op->op == GGML_OP_TOP_K);
 
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_I32) {
+    const bool src0_ok = (src0->type == GGML_TYPE_F32) || (internal_f16 && src0->type == GGML_TYPE_F16);
+    if (!src0_ok || dst->type != GGML_TYPE_I32) {
         return false;
     }
 
@@ -6050,7 +6052,11 @@ bool htp_kparams_solve(
 
         case HTP_OP_ARGSORT:
         case HTP_OP_TOP_K:
-            return htp_kparams_invoke<htp_kparams_solve_sort>(sess, op, kparams);
+        {
+            struct htp_sort_kernel_params tmp;
+            return htp_kparams_solve_sort(sess, op, internal_f16,
+                                          kparams ? (struct htp_sort_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_POOL_2D:
         case HTP_OP_POOL_1D:

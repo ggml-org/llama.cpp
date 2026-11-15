@@ -8270,6 +8270,94 @@ struct test_top_k_inf : public test_top_k {
     }
 };
 
+struct test_sort_f16_boundary : public test_case {
+    const std::array<int64_t, 4> ne;
+    const bool is_top_k;
+    const int k;
+    const ggml_sort_order order;
+
+    test_sort_f16_boundary(std::array<int64_t, 4> ne, bool is_top_k, int k = 1, ggml_sort_order order = GGML_SORT_ORDER_ASC)
+        : ne(ne), is_top_k(is_top_k), k(k), order(order) {}
+
+    std::string vars() override {
+        if (is_top_k) {
+            return VARS_TO_STR2(ne, k) + ",f16_boundary=1";
+        }
+        return VARS_TO_STR2(ne, order) + ",f16_boundary=1";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_err() override {
+        return 0.0;
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        std::vector<int32_t> ia(n);
+        std::vector<int32_t> ib(n);
+        double diff = 0.0;
+
+        for (size_t i = 0; i < n; i++) {
+            ia[i] = (int32_t) a[i];
+            ib[i] = (int32_t) b[i];
+            diff += std::fabs(a[i] - ia[i]);
+            diff += std::fabs(b[i] - ib[i]);
+        }
+
+        if (is_top_k) {
+            for (size_t r = 0; r + (size_t) k <= n; r += (size_t) k) {
+                std::sort(ia.begin() + r, ia.begin() + r + k);
+                std::sort(ib.begin() + r, ib.begin() + r + k);
+            }
+        }
+
+        for (size_t i = 0; i < n; i++) {
+            if (ia[i] != ib[i]) {
+                diff += 1.0;
+            }
+        }
+
+        return diff;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * a_f16 = ggml_dup(ctx, a);
+        ggml_set_name(a_f16, "a_f16");
+
+        ggml_tensor * out = is_top_k ? ggml_top_k(ctx, a_f16, k) : ggml_argsort(ctx, a_f16, order);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        std::mt19937 rng(42);
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> data(ggml_nelements(t), 0);
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (t->type == GGML_TYPE_F32) {
+                for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                    std::vector<float> data(t->ne[0]);
+                    for (int i = 0; i < t->ne[0]; i++) {
+                        const uint16_t h = (i < 30720)
+                            ? (uint16_t) (0x0400 + i)
+                            : (uint16_t) (0x8400 + (i - 30720));
+                        data[i] = ggml_fp16_to_fp32(h);
+                    }
+                    std::shuffle(data.begin(), data.end(), rng);
+                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(float));
+                }
+            } else {
+                GGML_ABORT("fatal error");
+            }
+        }
+    }
+};
+
 // qwen4exp QSA indexer top-k fusion: expand per-block scores to cells, add the f16 mask, top-k.
 struct test_topk_qsa : public test_case {
     const int64_t n_blocks;
@@ -13717,6 +13805,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_topk_qsa(512,  2048,  2, 1, 1500));
     test_cases.emplace_back(new test_topk_qsa(256,  2048,  4, 2, 2000));
     test_cases.emplace_back(new test_topk_qsa(64,   256,   2, 1, 200));  // small k: unfused fallback
+
+    for (int64_t ne0 : {8, 32, 64, 128, 256, 1025, 32768}) {
+        for (int64_t nrows : {1, 16, 64}) {
+            if (ne0 < 32768 || nrows < 64) {
+                for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
+                    test_cases.emplace_back(new test_sort_f16_boundary({ne0, nrows, 1, 1}, false, 1, order));
+                }
+            }
+            for (int k : {1, 4, 8, 32, 64}) {
+                if (k <= ne0) {
+                    test_cases.emplace_back(new test_sort_f16_boundary({ne0, nrows, 1, 1}, true, k));
+                }
+            }
+        }
+    }
 
     // exhaustive top_k tests
     //for (int i = 1; i < 9999; ++i) {
