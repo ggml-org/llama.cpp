@@ -1631,6 +1631,8 @@ private:
 
                 lora_init = params_base.lora_adapters;
 
+                SRV_WRN("%s", "--cache-disk is experimental, its behavior and file format can change in the future\n");
+
                 prompt_cache->disk = std::make_unique<server_prompt_cache_disk>(
                         params_base.cache_disk_path, server_prompt_cache_disk_compat(params_base), limit_size, mctx != nullptr);
             }

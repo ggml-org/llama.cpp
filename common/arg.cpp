@@ -1702,7 +1702,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"-cdisk", "--cache-disk"}, "PATH",
-        "directory of the disk prompt cache: the prompts that are dropped from the RAM cache are saved there and loaded back when needed, also after a restart (default: disabled, requires cache-ram)",
+        "experimental: directory of the disk prompt cache: the prompts that are dropped from the RAM cache are saved there and loaded back when needed, also after a restart (default: disabled, requires cache-ram)",
         [](common_params & params, const std::string & value) {
             if (!fs_is_directory(value)) {
                 throw std::invalid_argument("not a directory: " + value);

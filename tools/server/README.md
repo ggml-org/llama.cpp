@@ -167,7 +167,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, 0 for decision models, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
-| `-cdisk, --cache-disk PATH` | directory of the disk prompt cache: the prompts that are dropped from the RAM cache are saved there and loaded back when needed, also after a restart (default: disabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_DISK) |
+| `-cdisk, --cache-disk PATH` | experimental: directory of the disk prompt cache: the prompts that are dropped from the RAM cache are saved there and loaded back when needed, also after a restart (default: disabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_DISK) |
 | `--cache-disk-max-size N` | set the maximum size of the disk prompt cache directory in MiB, the oldest files are removed first (default: -1, -1 - no limit)<br/>(env: LLAMA_ARG_CACHE_DISK_MAX_SIZE) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
@@ -348,6 +348,8 @@ services:
 ```
 
 ### Prompt cache on disk
+
+This feature is experimental: its behavior, options and file format can change.
 
 With `--cache-disk PATH`, the prompts that no longer fit in the RAM cache (`--cache-ram`) are kept in a directory, and they are still there after a restart. The directory must exist, and the RAM cache must be enabled.
 
