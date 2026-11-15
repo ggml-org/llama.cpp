@@ -1283,7 +1283,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
 
         const bool is_matmul = info.op == GGML_OP_MUL_MAT || info.op == GGML_OP_MUL_MAT_ID;
-        const bool is_matmul_weight = is_matmul && tn.suffix != nullptr && strcmp(tn.suffix, "weight") == 0;
+        const bool is_matmul_weight = is_matmul && tn.suffix != nullptr && strcmp(tn.suffix, "weight") == 0 && !(flags & TENSOR_NO_SCALE);
         const bool is_matmul_scale  = is_matmul && tn.suffix != nullptr &&
             (strcmp(tn.suffix, "scale") == 0 || strcmp(tn.suffix, "input_scale") == 0);
 
@@ -1330,7 +1330,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
         const ggml_tensor * scale_meta = nullptr;
         ggml_tensor user_scale_meta = {};
-        if (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID) {
+        if (!(flags & TENSOR_NO_SCALE) && (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID)) {
             const std::string scale_name = LLM_TN_IMPL(tn.arch, tn.tensor, "scale", tn.bid, tn.xid).str();
             scale_meta = get_tensor_meta(scale_name.c_str());
             if (!scale_meta && files.empty()) {

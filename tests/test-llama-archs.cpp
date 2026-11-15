@@ -1357,6 +1357,7 @@ static bool moe_implemented(const llm_arch arch) {
     }
     switch (arch) {
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_GEMMA4:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_GRANITE:

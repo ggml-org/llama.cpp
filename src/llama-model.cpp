@@ -2507,7 +2507,7 @@ ggml_tensor * llama_model_base::create_tensor(llama_model_loader & ml, const LLM
     }
     ggml_tensor * t = ml.create_tensor(
         hparams, &pimpl->cpu_buft_list, pimpl->dev_input.buft_list, pimpl->dev_output.buft_list, buft_list_layer,
-        tn, ne, flags & ~llama_model_loader::TENSOR_NO_SCALE);
+        tn, ne, flags);
 
     if (tn.suffix == nullptr || strcmp(tn.suffix, "weight") != 0 || (flags & llama_model_loader::TENSOR_NO_SCALE)) {
         return t;
