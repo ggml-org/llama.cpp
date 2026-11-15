@@ -57,6 +57,13 @@ int env_int(const char * name, int fallback) {
     return atoi(v);
 }
 
+// Both response formats tune the codec chunking through the same knob pair
+// (pcm and wav both default to first=2 / chunk=4), so an A/B env switch
+// covers the whole device. Values <= 0 keep the current setting.
+void apply_chunking(m5::Engine & engine) {
+    engine.set_chunking(env_int("M5_WAV_FIRST", 2), env_int("M5_WAV_CHUNK", 4));
+}
+
 // ---------- minimal JSON reading (request bodies, voices.json) ----------
 
 bool parse_json_string(const std::string & s, size_t & at, std::string & out) {
@@ -1195,7 +1202,8 @@ int main(int argc, char ** argv) {
                     // Two frames per first chunk measured best: one frame is
                     // the smallest batch the codec takes but its fixed call
                     // overhead pushes First-Pcm to ~0.51 s versus ~0.29 s.
-                    st.engine.set_chunking(2, 4);
+                    // M5_WAV_FIRST / M5_WAV_CHUNK re-tune without a rebuild.
+                    apply_chunking(st.engine);
                     m5::Stats stats;
                     std::string err2;
                     st.engine.clear_stop();
@@ -1233,8 +1241,6 @@ int main(int argc, char ** argv) {
         }
 
         // wav: synthesize fully in memory (no temp file; stats ride in headers).
-        // Whole-file rendering is not latency-bound, so the codec runs in big
-        // batches that amortise the ONNX call overhead.
         std::lock_guard<std::mutex> lock(st.render_mutex);
         std::string err;
         const std::string voice_name = voice.empty() ? st.default_voice : voice;
@@ -1248,8 +1254,8 @@ int main(int argc, char ** argv) {
         // change 16-frame codec bursts leave the pipeline idling (4.00 s vs
         // 3.60 s wall on the 69-frame sentence) and also delay the first
         // packet. 2/4 additionally reproduces the CLI's canonical waveform
-        // bit-for-bit. M5_WAV_FIRST / M5_WAV_CHUNK re-tune without a rebuild.
-        st.engine.set_chunking(env_int("M5_WAV_FIRST", 2), env_int("M5_WAV_CHUNK", 4));
+        // bit-for-bit.
+        apply_chunking(st.engine);
         st.engine.clear_stop();
         m5::Stats stats;
         std::string wav;

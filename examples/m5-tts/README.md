@@ -83,6 +83,65 @@ requests. The host keeps the process alive. The reported first PCM includes
 codec priming and production of the first nonempty PCM. Warm-run RTF excludes
 the first run. Review the WAV for content and quality when generated lengths differ.
 
+## Resident server and web console (product path)
+
+The engine also builds as an OpenAI-style HTTP server that runs on the device
+(`m5-server`), fronted by a single-file web console (`web/index.html`).
+`deploy.sh [device-dir]` pushes the binaries and stage libraries, restarts the
+server with the HTP environment pinned (`GGML_HEXAGON_NHMX=0 OPPOLL=1`, worth
+2.2x - do not drop it), and re-establishes the browser forward at
+`http://127.0.0.1:18080`. `/data/local/tmp` is wiped on reboot, so re-run it
+after one.
+
+```sh
+adb shell 'cd /data/local/tmp/llama-m5-htp-v73 && \
+    LD_LIBRARY_PATH=$PWD ADSP_LIBRARY_PATH=$PWD GGML_HEXAGON_NHMX=0 \
+    GGML_HEXAGON_OPPOLL=1 ./m5-server model --port 8080 --cwd $PWD \
+    --threads 3 --voice serena --voice-encoder codec_encoder.onnx'
+adb forward tcp:18080 tcp:8080
+```
+
+Endpoints (details in the `m5_server.cpp` header comment):
+
+```
+GET  /health  /metrics  /v1/models  /v1/voices
+POST /v1/audio/speech   {"input","voice"?,"response_format"?:"wav"|"pcm"}
+POST /v1/voices/clone   {"name","reference_text","codes":[[16]xT]}
+POST /v1/voices/encode  {"name","reference_text","wav_base64"}
+```
+
+The console defaults to Serena and streaming pcm. Cloning runs only on
+`/v1/voices/encode` (the server runs `codec_encoder.onnx` itself); synthesis
+never clones, and browser-recorded voices stay in the browser (localStorage),
+with zero server-side state.
+
+### Runtime knobs (all changeable without a rebuild)
+
+| knob | default | effect |
+|---|---|---|
+| `M5_WAV_FIRST` / `M5_WAV_CHUNK` | 2 / 4 | codec chunking, shared by the pcm and wav response paths |
+| `M5_KV_PAD` | 32 (depth) / 128 (backbone) | KV rows per graph; `256` restores the upstream behaviour |
+| `M5_HVX_DIRECT_V` | on | direct V scatter in the HTP k-params; `0` disables |
+| `M5_PRIME_CACHE` | 4 | codec prime LRU entries; `1` = old single-entry cache, `0` = off |
+| `M5_CODEC_EP` | CPU | `XNNPACK`/`NNAPI` for A/B; measured no faster (§28) |
+| `M5_FIRST_TAIL` | 2400 | first-chunk tail samples; smaller lets `--first 1` emit audio |
+| `M5_HEADS_INT8` | on | int8 depth heads; `0` falls back to f16 |
+| `M5_PRIME_STATS` / `M5_HEAD_STATS` / `M5_PREFIX_STATS` / `M5_CODEC_PROFILE` | off | diagnostics (cache hits, heads, prefix transfer, ORT profile) |
+| `M5_ZERO_TRANSFORM` | off | ablation only (§14); do not ship |
+
+### Where the time goes (SM6650, 69-frame sentence, threads=3)
+
+`wall ≈ 0.874 s + max(depth 2.80, codec 2.44)` — 3.60 s wall / RTF 0.68 for
+the wav path, first pcm 0.26–0.29 s (cold ~0.35 s). Concurrency is one FIFO
+lane at ~1.5x realtime; a second concurrent request waits.
+
+Measured dead ends (do not retry without new evidence): backbone weight
+quantisation (§23), codec on another EP / HTP (§28, §15), speculative depth
+drafts (§14), Flash-attention variants (§17), multi-instance parallelism
+(§29). The only remaining big lever is the depth+codec retraining plan in §30
+of the [optimization log](../../docs/backend/snapdragon/m5-tts-optimization-log.md);
+the offline tutorial copy lives in [learning-hub](learning-hub/index.html).
+
 ## Bring a voice from another TTS model
 
 Generate a short reference WAV and keep its exact spoken transcript in a

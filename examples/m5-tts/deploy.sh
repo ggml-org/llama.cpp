@@ -139,13 +139,14 @@ m5-server is up.
   log         : $VDIR/m5-server.log   (adb shell tail -f)
   env pinned  : GGML_HEXAGON_NHMX=0 GGML_HEXAGON_OPPOLL=1
   compiled-in : KV pad 32 (depth) / 128 (backbone), direct V scatter,
-                codec prime LRU (4 entries, ~1 MB each), wav chunking 2/4
+                codec prime LRU (4 entries, ~1 MB each), chunking 2/4 shared
+                by the pcm and wav paths
                 (override with M5_KV_PAD / M5_HVX_DIRECT_V / M5_PRIME_CACHE /
                  M5_WAV_FIRST + M5_WAV_CHUNK for A/B;
                  M5_CODEC_EP=XNNPACK to switch the codec EP - measured no
                  faster than CPU here (NNAPI is not compiled in, QNN lacks
                  its runtime libs on this device);
-                 M5_KV_PAD=256 restores the old backbone pad, =1 the old
-                 single-entry prime cache, =0 disables it)
+                 M5_KV_PAD=256 restores the old backbone pad, M5_PRIME_CACHE=1
+                 the old single-entry cache, =0 disables it)
   warmup voice: ${M5_DEFAULT_VOICE:-(none)}  (codec prime cached for this voice)
 EOF

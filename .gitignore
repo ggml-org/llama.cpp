@@ -156,3 +156,6 @@ AGENTS.local.md
 
 # WorkBuddy local project data (memory, session state)
 .workbuddy/
+
+# m5-tts web console demo audio (user-generated, not source)
+examples/m5-tts/web/demo-*.wav
