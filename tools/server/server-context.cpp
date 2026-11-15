@@ -3145,6 +3145,10 @@ private:
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
 
+                    if (prompt_cache && prompt_cache->disk) {
+                        res->cache_disk = prompt_cache->disk->get_stats();
+                    }
+
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }

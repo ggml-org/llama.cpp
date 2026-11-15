@@ -529,6 +529,21 @@ struct server_slot_stats {
     json to_json() const;
 };
 
+// for /metrics, the counters restart when the model is loaded again after sleeping
+struct server_prompt_cache_disk_stats {
+    uint64_t n_saves      = 0; // files written
+    uint64_t n_loads      = 0; // files read
+    uint64_t n_evictions  = 0; // files removed to stay under the size limit
+    uint64_t size_saved   = 0; // in bytes
+    uint64_t size_loaded  = 0; // in bytes
+    uint64_t t_save       = 0; // in microseconds
+    uint64_t t_load       = 0; // in microseconds
+
+    // current state of the directory, the files of other models included
+    uint64_t n_files = 0;
+    uint64_t size    = 0; // in bytes
+};
+
 // shared between server_context_impl and server_task_result_*
 // unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
 struct server_metrics {

@@ -37,6 +37,15 @@ def process_prompt(prompt, **kwargs):
     return res.body["timings"]
 
 
+def get_metric(name: str) -> float:
+    res = server.make_request("GET", "/metrics")
+    assert res.status_code == 200
+    for line in res.body.splitlines():
+        if line.startswith(f"llamacpp:prompt_cache_disk_{name} "):
+            return float(line.split(" ")[1])
+    raise AssertionError(f"metric not found: {name}")
+
+
 def create_server_preset(preset):
     global server, cache_dir
     cache_dir = tempfile.mkdtemp(prefix="llama_cache_disk_")
@@ -45,6 +54,7 @@ def create_server_preset(preset):
     server.n_ctx = 512
     server.temperature = 0.0
     server.debug = True
+    server.server_metrics = True
     server.cache_disk = cache_dir
     fd, server.log_path = tempfile.mkstemp(suffix=".log")
     os.close(fd)
@@ -71,6 +81,13 @@ def test_cache_disk_restart():
     assert TAG_DISK_LOAD in read_log()
     assert timings["cache_n"] == len(PROMPT_A)
     assert timings["prompt_n"] == 3
+
+    file_size = os.path.getsize(cache_files()[0])
+    assert get_metric("loads_total") == 1
+    assert get_metric("load_bytes_total") == file_size
+    assert get_metric("saves_total") == 0
+    assert get_metric("files") == 1
+    assert get_metric("bytes") == file_size
 
     # the longer prompt replaces its prefix on disk
     server.stop()
@@ -126,6 +143,9 @@ def test_cache_disk_ram_eviction():
     process_prompt(PROMPT_B * 5)
     process_prompt(PROMPT_A)
     assert len(cache_files()) >= 1
+    assert get_metric("saves_total") == len(cache_files())
+    assert get_metric("save_bytes_total") == sum(os.path.getsize(f) for f in cache_files())
+    assert get_metric("loads_total") == 0
 
 
 def test_cache_disk_broken_file():

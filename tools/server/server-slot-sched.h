@@ -105,6 +105,8 @@ struct server_prompt_cache_disk {
 
     size_t size() const;
 
+    server_prompt_cache_disk_stats get_stats() const;
+
     // removes the saved prompts that are a prefix of this one, then the oldest files if over the limit
     bool save(const server_prompt_cache_state & state);
 
@@ -128,6 +130,8 @@ private:
 
     // oldest first
     entry_list entries;
+
+    server_prompt_cache_disk_stats stats;
 };
 
 // id of everything that makes a saved state unusable when it changes

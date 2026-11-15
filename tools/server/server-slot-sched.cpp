@@ -215,6 +215,13 @@ size_t server_prompt_cache_disk::size() const {
     return res;
 }
 
+server_prompt_cache_disk_stats server_prompt_cache_disk::get_stats() const {
+    server_prompt_cache_disk_stats res = stats;
+    res.n_files = entries.size();
+    res.size    = size();
+    return res;
+}
+
 server_prompt_cache_disk::entry_list::iterator server_prompt_cache_disk::remove(entry_list::iterator it) {
     std::error_code ec;
     fs::remove(dir / it->name, ec);
@@ -233,7 +240,8 @@ void server_prompt_cache_disk::touch(entry_list::iterator it) {
 bool server_prompt_cache_disk::save(const server_prompt_cache_state & state) {
     const auto & tokens = state.prompt.tokens;
 
-    if (tokens.empty() || state.data.main.empty()) {
+    // a prompt without a full hash block can never be found
+    if (tokens.size() < server_tokens::hash_block_size || state.data.main.empty()) {
         return false;
     }
 
@@ -292,8 +300,11 @@ bool server_prompt_cache_disk::save(const server_prompt_cache_state & state) {
             SRV_TRC(" - making room on disk, removing oldest file '%s' (size = %.3f MiB)\n",
                     entries.front().name.c_str(), entries.front().size / (1024.0 * 1024.0));
             remove(entries.begin());
+            stats.n_evictions++;
         }
     }
+
+    const int64_t t_start = ggml_time_us();
 
     const fs::path path     = dir / name;
     const fs::path path_tmp = dir / (name + FILE_EXT_TMP);
@@ -349,6 +360,10 @@ bool server_prompt_cache_disk::save(const server_prompt_cache_state & state) {
     entry.hashes   = hashes;
     entries.push_back(std::move(entry));
 
+    stats.n_saves++;
+    stats.size_saved += size_file;
+    stats.t_save     += ggml_time_us() - t_start;
+
     SRV_INF("saved prompt with %zu tokens to disk, %.3f MiB, '%s'\n", tokens.size(), size_file / (1024.0 * 1024.0), name.c_str());
 
     return true;
@@ -361,6 +376,8 @@ bool server_prompt_cache_disk::load(const server_prompt_cache_disk_entry & entry
     GGML_ASSERT(it != entries.end());
 
     server_prompt_cache_state res;
+
+    const int64_t t_start = ggml_time_us();
 
     try {
         std::ifstream in(dir / it->name, std::ios::binary);
@@ -417,6 +434,10 @@ bool server_prompt_cache_disk::load(const server_prompt_cache_disk_entry & entry
     }
 
     SRV_INF("loaded prompt with %zu tokens from disk, %.3f MiB, '%s'\n", it->n_tokens, it->size / (1024.0 * 1024.0), it->name.c_str());
+
+    stats.n_loads++;
+    stats.size_loaded += it->size;
+    stats.t_load      += ggml_time_us() - t_start;
 
     touch(it);
 
