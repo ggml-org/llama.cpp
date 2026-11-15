@@ -158,9 +158,9 @@ static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, 
 }
 
 class llm_graph_input_gemma4_prune : public llm_graph_input_i {
-int64_t S;
-int64_t T;
-int64_t M;
+    int64_t n_slices;
+    int64_t n_slice_tokens;
+    int64_t n_slice_outputs;
 public:
     ggml_tensor * full_mask      = nullptr;
     ggml_tensor * full_mask_swa  = nullptr;
@@ -168,15 +168,15 @@ public:
     ggml_tensor * out_mask_swa   = nullptr;
     ggml_tensor * inp_prune_ids  = nullptr;
     ggml_tensor * inp_prune_keep = nullptr;
-    llm_graph_input_gemma4_prune(int64_t S, int64_t T, int64_t M)
-            : S(S), T(T), M(M) {}
+    llm_graph_input_gemma4_prune(int64_t n_slices, int64_t n_slice_tokens, int64_t n_slice_outputs)
+            : n_slices(n_slices), n_slice_tokens(n_slice_tokens), n_slice_outputs(n_slice_outputs) {}
 
     void set_input(const llama_ubatch * ubatch) override;
 
     bool can_reuse(const llm_graph_params & params) override;
 
     static int64_t max_outputs_per_slice(
-        const llama_ubatch & ubatch, int64_t S, int64_t T
+        const llama_ubatch & ubatch, int64_t n_slices, int64_t n_slice_tokens
     );
 };
 
@@ -239,16 +239,16 @@ llama_model_gemma4::graph::graph(const llm_graph_params & params) :
             ggml_tensor * full     = inp_attn->self_attn_mask.raw;
             ggml_tensor * full_swa = inp_attn->self_attn_mask_swa.raw;
 
-            const int64_t S = full->ne[3], T = full->ne[1];
-            const int64_t M = llm_graph_input_gemma4_prune::max_outputs_per_slice(ubatch, S, T);
+            const int64_t n_slices = full->ne[3], n_slice_tokens = full->ne[1];
+            const int64_t n_slice_outputs = llm_graph_input_gemma4_prune::max_outputs_per_slice(ubatch, n_slices, n_slice_tokens);
 
-            n_rows = S * M;
+            n_rows = n_slices * n_slice_outputs;
 
-            auto prune_input = std::make_unique<llm_graph_input_gemma4_prune>(S, T, M);
+            auto prune_input = std::make_unique<llm_graph_input_gemma4_prune>(n_slices, n_slice_tokens, n_slice_outputs);
             prune_input->full_mask = full;
             prune_input->full_mask_swa = full_swa;
-            prune_input->out_mask = ggml_new_tensor_4d(ctx0, full->type, full->ne[0], M, 1, S);
-            prune_input->out_mask_swa = ggml_new_tensor_4d(ctx0, full_swa->type, full_swa->ne[0], M, 1, S);
+            prune_input->out_mask = ggml_new_tensor_4d(ctx0, full->type, full->ne[0], n_slice_outputs, 1, n_slices);
+            prune_input->out_mask_swa = ggml_new_tensor_4d(ctx0, full_swa->type, full_swa->ne[0], n_slice_outputs, 1, n_slices);
             prune_input->inp_prune_ids  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
             prune_input->inp_prune_keep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_outputs);
 
@@ -608,11 +608,11 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
 }
 
 void llm_graph_input_gemma4_prune::set_input(const llama_ubatch * ubatch) {
-    std::vector<std::vector<int32_t>> selected(S);
+    std::vector<std::vector<int32_t>> selected(n_slices);
 
-    for (int32_t s = 0; s < S; ++s) {
-        for (int32_t t = 0; t < T; ++t) {
-            const int32_t i = s * T + t;
+    for (int32_t s = 0; s < n_slices; ++s) {
+        for (int32_t t = 0; t < n_slice_tokens; ++t) {
+            const int32_t i = s * n_slice_tokens + t;
             if (ubatch->output[i]) {
                 selected[s].push_back(i);
             }
@@ -620,16 +620,16 @@ void llm_graph_input_gemma4_prune::set_input(const llama_ubatch * ubatch) {
     }
 
     std::vector<int32_t> take, keep;
-    for (int32_t s = 0; s < S; ++s) {
+    for (int32_t s = 0; s < n_slices; ++s) {
         const auto & ids = selected[s];
 
         for (int32_t j = 0; j < int32_t(ids.size()); ++j) {
-            keep.push_back(s * M + j);
+            keep.push_back(s * n_slice_outputs + j);
         }
 
         take.insert(take.end(), ids.begin(), ids.end());
-        const int32_t dummy = ids.empty() ? s * T : ids.back();
-        take.insert(take.end(), M - ids.size(), dummy);
+        const int32_t dummy = ids.empty() ? s * n_slice_tokens : ids.back();
+        take.insert(take.end(), n_slice_outputs - ids.size(), dummy);
     }
 
     GGML_ASSERT(take.size() == size_t(inp_prune_ids->ne[0]));
@@ -670,20 +670,20 @@ void llm_graph_input_gemma4_prune::set_input(const llama_ubatch * ubatch) {
 bool llm_graph_input_gemma4_prune::can_reuse(const llm_graph_params & params) {
     const auto & ubatch = params.ubatch;
 
-    if (ubatch.n_tokens != S * T || !ubatch.output) {
+    if (ubatch.n_tokens != n_slices * n_slice_tokens || !ubatch.output) {
         return false;
     }
 
-    return max_outputs_per_slice(ubatch, S, T) == M;
+    return max_outputs_per_slice(ubatch, n_slices, n_slice_tokens) == n_slice_outputs;
 }
 
-int64_t llm_graph_input_gemma4_prune::max_outputs_per_slice(const llama_ubatch & ubatch, int64_t S, int64_t T) {
+int64_t llm_graph_input_gemma4_prune::max_outputs_per_slice(const llama_ubatch & ubatch, int64_t n_slices, int64_t n_slice_tokens) {
     int64_t res = 0;
 
-    for (int32_t s = 0; s < S; ++s) {
+    for (int32_t s = 0; s < n_slices; ++s) {
         int64_t m = 0;
-        for (int32_t t = 0; t < T; ++t) {
-            const int32_t i = s * T + t;
+        for (int32_t t = 0; t < n_slice_tokens; ++t) {
+            const int32_t i = s * n_slice_tokens + t;
             if (ubatch.output[i]) {
                 m++;
             }
