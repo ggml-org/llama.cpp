@@ -1711,15 +1711,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_DISK").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
-        {"--cache-disk-limit"}, "N",
-        string_format("set the maximum size of the disk prompt cache directory in MiB, the oldest files are removed first (default: %d, -1 - no limit)", params.cache_disk_limit_mib),
+        {"--cache-disk-max-size"}, "N",
+        string_format("set the maximum size of the disk prompt cache directory in MiB, the oldest files are removed first (default: %d, -1 - no limit)", params.cache_disk_max_size_mib),
         [](common_params & params, int value) {
             if (value == 0 || value < -1) {
-                throw std::invalid_argument("cache-disk-limit must be positive or -1 (no limit)");
+                throw std::invalid_argument("cache-disk-max-size must be positive or -1 (no limit)");
             }
-            params.cache_disk_limit_mib = value;
+            params.cache_disk_max_size_mib = value;
         }
-    ).set_env("LLAMA_ARG_CACHE_DISK_LIMIT").set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_env("LLAMA_ARG_CACHE_DISK_MAX_SIZE").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},

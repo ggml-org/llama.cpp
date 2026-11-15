@@ -1627,7 +1627,7 @@ private:
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
 
             if (!params_base.cache_disk_path.empty()) {
-                const size_t limit_size = 1024ull*1024ull*(params_base.cache_disk_limit_mib < 0 ? 0 : params_base.cache_disk_limit_mib);
+                const size_t limit_size = 1024ull*1024ull*(params_base.cache_disk_max_size_mib < 0 ? 0 : params_base.cache_disk_max_size_mib);
 
                 lora_init = params_base.lora_adapters;
 
