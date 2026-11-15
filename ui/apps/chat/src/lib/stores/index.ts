@@ -61,6 +61,9 @@ export { permissionsStore } from './permissions.svelte';
 // TOOLS
 export { toolsStore } from './tools.svelte';
 
+// VOICE (transcripts of voice messages on their way)
+export { voiceTranscriptsStore } from './voice-transcripts.svelte';
+
 // ENVIRONMENT / META
 export { versionStore } from './version.svelte';
 
