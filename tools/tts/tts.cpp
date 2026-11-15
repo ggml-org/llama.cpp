@@ -147,6 +147,7 @@ int main(int argc, char ** argv) {
     inp.prompt      = prompt.c_str();
     inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
+    inp.speaker_ref_text = params.tts_speaker_text.empty() ? nullptr : params.tts_speaker_text.c_str();
     inp.lang        = params.tts_lang.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;

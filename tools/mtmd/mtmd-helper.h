@@ -284,6 +284,7 @@ struct mtmd_helper_gen_audio_inp {
     enum mtmd_helper_gen_audio_out_mode out_mode; // n_past > 0 only (default: auto)
 
     mtmd_bitmap * speaker_ref; // optional, can be NULL: audio to clone, or a voice bitmap
+    const char * speaker_ref_text; // optional, can be NULL: transcript of speaker_ref, for models that put it in the prompt (e.g. Fish S2)
     const char * lang; // optional, can be NULL
 
     int32_t  top_k;
@@ -392,6 +393,7 @@ struct gen_audio {
         mtmd_helper_gen_audio_inp data = mtmd_helper_gen_audio_inp_default();
         std::string prompt_str;
         std::string lang_str;
+        std::string speaker_ref_text_str;
         mtmd::bitmap_ptr speaker_ref_ptr;
 
         inp()                             = default;
@@ -403,6 +405,7 @@ struct gen_audio {
         void set_prompt     (std::string p)        { prompt_str = std::move(p); }
         void set_lang       (std::string l)        { lang_str   = std::move(l); }
         void set_speaker_ref(mtmd::bitmap_ptr bmp) { speaker_ref_ptr = std::move(bmp); }
+        void set_speaker_ref_text(std::string t)   { speaker_ref_text_str = std::move(t); }
 
         // pointers are only valid as long as *this is alive
         const mtmd_helper_gen_audio_inp * get() {
@@ -410,6 +413,7 @@ struct gen_audio {
             data.prompt_len  = prompt_str.size();
             data.lang        = lang_str.empty() ? nullptr : lang_str.c_str();
             data.speaker_ref = speaker_ref_ptr.get();
+            data.speaker_ref_text = speaker_ref_text_str.empty() ? nullptr : speaker_ref_text_str.c_str();
             return &data;
         }
     };

@@ -1291,6 +1291,10 @@ struct mtmd_context {
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_pockettts>(models.a.get());
                 } break;
+            case PROJECTOR_TYPE_FISH_S2_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_fish_s2>(models.a.get());
+                } break;
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));

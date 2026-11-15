@@ -128,6 +128,12 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
+// fish_s2 speaker reference: same as muse spark (raw waveform, whole frames), truncated to fish_s2_max_spk_seconds
+struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audio {
+    using mtmd_audio_preprocessor_muse_spark_audio::mtmd_audio_preprocessor_muse_spark_audio;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
 struct mtmd_audio_preprocessor_conformer : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_conformer(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     mtmd_audio_preprocessor_conformer(const mtmd_hparams & hparams, ggml_backend_sched_t sched) : mtmd_audio_preprocessor(hparams, sched) {}

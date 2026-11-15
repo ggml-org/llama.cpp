@@ -2120,15 +2120,8 @@ public:
             return 1;
         }
 
-        // tokenize each segment alone as the reference does
-        for (const std::string & seg : prompt_segments(std::string(inp->prompt, inp->prompt_len))) {
-            std::vector<llama_token> ids(seg.size() + 16);
-            const int32_t n = llama_tokenize(vocab, seg.c_str(), (int32_t) seg.size(), ids.data(), (int32_t) ids.size(), false, true);
-            if (n < 0) {
-                LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
-                return 1;
-            }
-            prompt_tokens.insert(prompt_tokens.end(), ids.begin(), ids.begin() + n);
+        if (!tokenize_segments(prompt_segments(std::string(inp->prompt, inp->prompt_len)), prompt_tokens)) {
+            return 1;
         }
         if (prompt_tokens.size() >= llama_n_ctx_seq(lctx) || prompt_tokens.size() > max_rows()) {
             LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
@@ -2285,6 +2278,20 @@ public:
     }
 
 protected:
+    // tokenize each segment alone as the reference does
+    bool tokenize_segments(const std::vector<std::string> & segments, std::vector<llama_token> & out) const {
+        for (const std::string & seg : segments) {
+            std::vector<llama_token> ids(seg.size() + 16);
+            const int32_t n = llama_tokenize(vocab, seg.c_str(), (int32_t) seg.size(), ids.data(), (int32_t) ids.size(), false, true);
+            if (n < 0) {
+                LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
+                return false;
+            }
+            out.insert(out.end(), ids.begin(), ids.begin() + n);
+        }
+        return true;
+    }
+
     // reference-bracket-v1 prompt without references
     virtual std::vector<std::string> prompt_segments(std::string text) const {
         if (text.rfind("<|speaker:", 0) != 0) {
@@ -2444,26 +2451,83 @@ class fish_s2_gen_audio_pipeline : public drama3_gen_audio_pipeline {
 public:
     using drama3_gen_audio_pipeline::drama3_gen_audio_pipeline;
 
+    void reset() override {
+        drama3_gen_audio_pipeline::reset();
+        parts.clear();
+        part_idx = 0;
+        part_pos = 0;
+    }
+
+    // voice cloning (sglang-omni fishaudio_s2_pro): a system message with the transcript and the codec rows of the clip
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        std::vector<float> ref_rows;
+        if (inp->speaker_ref && !encode_speaker(inp->speaker_ref, ref_rows)) {
+            return 1;
+        }
+        mtmd_helper_gen_audio_inp text_inp = *inp;
+        text_inp.speaker_ref = nullptr;
+        if (drama3_gen_audio_pipeline::set_input(&text_inp) != 0) {
+            return 1;
+        }
+
+        size_t n_total = prompt_tokens.size();
+        if (!ref_rows.empty()) {
+            // optional, the reference leaves the text empty when it has none
+            std::string ref_text = inp->speaker_ref_text ? inp->speaker_ref_text : "";
+            if (!ref_text.empty() && ref_text.rfind("<|speaker:", 0) != 0) {
+                ref_text = "<|speaker:0|>" + ref_text;
+            }
+            prompt_part head, rows, tail;
+            if (!tokenize_segments({ "<|im_start|>system\n", "convert the provided text to speech reference to the following:\n\nText:\n",
+                                     ref_text, "\n\nSpeech:\n" }, head.tokens) ||
+                !tokenize_segments({ "<|im_end|>\n" }, tail.tokens)) {
+                return 1;
+            }
+            rows.rows = std::move(ref_rows);
+            for (auto * part : { &head, &rows, &tail }) {
+                n_total += part->size(n_embd);
+                parts.push_back(std::move(*part));
+            }
+        }
+        if (n_total >= llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
+            return 1;
+        }
+        prompt_part text;
+        text.tokens = prompt_tokens;
+        parts.push_back(std::move(text));
+        return 0;
+    }
+
     // the first frame comes from the last prompt row
     int32_t step_prompt(int32_t n_batch) override {
         GGML_ASSERT(n_batch > 0);
-        const int n_prompt = (int) prompt_tokens.size();
-        if (prompt_pos >= n_prompt) {
+        if (part_idx >= parts.size()) {
             return 0;
         }
-        const int  n    = std::min(n_batch, n_prompt - prompt_pos);
-        const bool last = prompt_pos + n == n_prompt;
-        llama_batch batch = llama_batch_init(n, 0, 1);
-        for (int i = 0; i < n; i++) {
-            batch.token   [i]    = prompt_tokens[(size_t) (prompt_pos + i)];
-            batch.pos     [i]    = pos + i;
-            batch.n_seq_id[i]    = 1;
-            batch.seq_id  [i][0] = seq_id;
-            batch.logits  [i]    = last && i == n - 1;
+        const prompt_part & part = parts[part_idx];
+        const int  n_part = part.size(n_embd);
+        const int  n      = std::min(n_batch, n_part - part_pos);
+        const bool last   = part_idx + 1 == parts.size() && part_pos + n == n_part;
+
+        int ret = 0;
+        if (part.rows.empty()) {
+            llama_batch batch = llama_batch_init(n, 0, 1);
+            for (int i = 0; i < n; i++) {
+                batch.token   [i]    = part.tokens[(size_t) (part_pos + i)];
+                batch.pos     [i]    = pos + i;
+                batch.n_seq_id[i]    = 1;
+                batch.seq_id  [i][0] = seq_id;
+                batch.logits  [i]    = last && i == n - 1;
+            }
+            batch.n_tokens = n;
+            ret = llama_decode(lctx, batch);
+            llama_batch_free(batch);
+        } else {
+            decode_embd_batch batch(part.rows.data() + (size_t) part_pos * n_embd, n, 1, n_embd);
+            batch.set_position_normal(pos, seq_id);
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n));
         }
-        batch.n_tokens = n;
-        const int ret = llama_decode(lctx, batch);
-        llama_batch_free(batch);
         if (ret != 0) {
             LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
             return -1;
@@ -2473,9 +2537,17 @@ public:
             h_state_buf.assign(h, h + n_embd);
             save_main_logits(-1);
         }
-        pos        += n;
-        prompt_pos += n;
-        return n_prompt - prompt_pos;
+        pos      += n;
+        part_pos += n;
+        if (part_pos == n_part) {
+            part_idx++;
+            part_pos = 0;
+        }
+        int32_t n_left = -part_pos;
+        for (size_t i = part_idx; i < parts.size(); i++) {
+            n_left += parts[i].size(n_embd);
+        }
+        return n_left;
     }
 
 protected:
@@ -2491,6 +2563,16 @@ protected:
 
     // no codebook tower, only the context limits the length
     size_t max_rows() const override { return SIZE_MAX; }
+
+    // token ids, or backbone input rows of n_embd floats
+    struct prompt_part {
+        std::vector<llama_token> tokens;
+        std::vector<float>       rows;
+        int size(int n_embd) const { return rows.empty() ? (int) tokens.size() : (int) (rows.size() / n_embd); }
+    };
+    std::vector<prompt_part> parts;
+    size_t part_idx = 0;
+    int    part_pos = 0;
 
     // same as the reference: repetition penalty over the last ras_window main tokens, top-k, top-p on the
     // untempered logits (the crossing token is dropped), then temperature

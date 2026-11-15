@@ -209,6 +209,8 @@ struct mtmd_hparams {
 
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
+    // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
+    static constexpr int32_t fish_s2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
     std::vector<int32_t> seanet_ratios; // encoder order (reversed compared to the config)
     int32_t mimi_downsample   = 0;      // encoder frame rate / model frame rate
@@ -609,6 +611,12 @@ struct mtmd_code2wav {
     ggml_tensor * quant_rest_in_w   = nullptr; // acoustic RVQ
     ggml_tensor * quant_rest_out_w  = nullptr;
     ggml_tensor * quant_rest_cb_w   = nullptr; // codebooks, merged 3D [15, vocab, dim]
+
+    // fish_s2 codec encoder: in_proj bias and l2-normalized codebooks for the nearest-entry search
+    ggml_tensor * quant_first_in_b      = nullptr;
+    ggml_tensor * quant_rest_in_b       = nullptr;
+    ggml_tensor * quant_first_cb_norm_w = nullptr;
+    ggml_tensor * quant_rest_cb_norm_w  = nullptr;
 
     ggml_tensor * pre_conv_w = nullptr;
     ggml_tensor * pre_conv_b = nullptr;

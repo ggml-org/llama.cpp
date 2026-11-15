@@ -964,6 +964,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_pockettts_spkenc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_fish_s2_spkenc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
                 const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;

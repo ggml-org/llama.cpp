@@ -17,6 +17,7 @@ Note: it's highly recommended to always provide a speaker reference voice (via `
 Common params:
 - Sampling params such as `--top-k`, `--top-p`, `--temp`, etc. `--temp` also sets the temperature of the audio frames for models that support it, without it they use the model default
 - `-n <number_of_frames>` limits the output length, e.g. `-n 500`. Note that how many milliseconds each frame represents varies by model
+- `--tts-speaker-text` (optional) gives the transcript of `--tts-speaker-file`, some models put it in the prompt (e.g. Fish Audio S2 Pro)
 - Core inference params such as `-ngl`, `-b`, `-ub`, etc.
 
 ## Qwen3-TTS
@@ -194,7 +195,7 @@ Available params:
 - Speaker tags `<|speaker:0|>`, `<|speaker:1|>`, ... in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
 - Inline instructions in brackets control the delivery, for example `[laughing]`, `[whisper]` or `[pause]`
 - The language is the one of the text, `--tts-lang` is not used
-- Note: `--tts-speaker-file` is not supported yet (voice cloning)
+- Voice cloning: `--tts-speaker-file` with the reference clip, optionally `--tts-speaker-text` with its transcript (it is put in the prompt as the reference does). The clip is encoded by the codec encoder half of `codec.pth`, it is truncated to the first 30 s
 - Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference (semantic token: repetition penalty 1.1 over the last 16 frames, top-k 30, top-p 0.8, temperature 0.8, or top-p 0.9 and temperature 1.0 when the last 4 frames repeat a token; other codes: greedy)
 - Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
 
@@ -208,9 +209,20 @@ llama-tts -m s2-pro.gguf \
     --output out.wav
 ```
 
+Voice cloning (`--tts-speaker-text` can be left out):
+
+```sh
+llama-tts -m s2-pro.gguf \
+    -mm mmproj-s2-pro.gguf \
+    --tts-speaker-file reference.wav \
+    --tts-speaker-text "The words spoken in reference.wav." \
+    -p "Hello, this is a cloned voice." \
+    --output out.wav
+```
+
 **Note for GGUF conversion:**
 
-The mmproj holds the fast AR and the decoder half of `codec.pth`, it is best kept in BF16:
+The mmproj holds the fast AR and `codec.pth` (the encoder half for voice cloning, the decoder half for the audio), it is best kept in BF16. The codec encoder is always stored in F16/F32, small errors in it change the codes picked by its VQ:
 
 ```sh
 python convert_hf_to_gguf.py path/to/s2-pro --outtype q8_0 --outfile s2-pro.gguf
