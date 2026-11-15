@@ -76,6 +76,11 @@
 #include "ggml-cuda/top-k-mask.cuh"
 #include "ggml.h"
 
+#if defined(GGML_USE_HIP)
+#include "ggml-hip/gemm-autotune.cuh"
+#include <rocblas/rocblas.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -352,6 +357,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.devices[id].supports_cooperative_launch = !!supports_coop_launch;
 
 #if defined(GGML_USE_HIP)
+        // Needded for rocblas solution autotune
+        rocblas_initialize();
+
         info.devices[id].smpbo = prop.sharedMemPerBlock;
 
         info.devices[id].cc = ggml_cuda_parse_id(prop.gcnArchName);
@@ -1970,14 +1978,34 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                                            (const float *) src1_ptr, s11,
                     (const float *) beta,  (float       *)  dst_ptr, ldc));
     } else if (ne12 == 1 && ne13 == 1) {
-        CUBLAS_CHECK(
-            cublasGemmEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
-                    ne01, ne11, ne10,
-                    alpha, src0_ptr, cu_data_type_a, s01,
-                           src1_ptr, cu_data_type_b, s11,
-                    beta,   dst_ptr, cu_data_type,   ldc,
-                    cu_compute_type,
-                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+        bool issued = false;
+#if defined(GGML_USE_HIP)
+        // rocBLAS does not reliably pick the fastest Tensile solution, measure
+        // the alternatives once per shape instead. GGML_HIP_GEMM_AUTOTUNE=0
+        // leaves the selection to rocBLAS.
+        static const bool hip_gemm_autotune = [] {
+            const char * env = getenv("GGML_HIP_GEMM_AUTOTUNE");
+            return env == nullptr || std::atoi(env) != 0;
+        }();
+        if (hip_gemm_autotune) {
+            issued = ggml_hip_gemm_autotune(
+                    cublas_h, cc, ne01, ne11, ne10,
+                    alpha, src0_ptr, s01,
+                           src1_ptr, s11,
+                    beta,   dst_ptr, ldc,
+                    cu_data_type_a, cu_data_type_b, cu_data_type, cu_compute_type);
+        }
+#endif
+        if (!issued) {
+            CUBLAS_CHECK(
+                cublasGemmEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
+                        ne01, ne11, ne10,
+                        alpha, src0_ptr, cu_data_type_a, s01,
+                               src1_ptr, cu_data_type_b, s11,
+                        beta,   dst_ptr, cu_data_type,   ldc,
+                        cu_compute_type,
+                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+        }
     } else if (r2 == 1 && r3 == 1 && is_src0_cont_2 && is_src1_cont_2) {
         // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
         const int64_t sma = ne02 == 1 ? s03 : s02;
