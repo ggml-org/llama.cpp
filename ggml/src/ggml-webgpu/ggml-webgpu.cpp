@@ -4420,6 +4420,10 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
             {
                 const ggml_tensor * src0 = tensor->src[0];
                 const ggml_tensor * src1 = tensor->src[1];
+                if (!src0 || !src1) {
+                    // a tensor asked about before its srcs are known, e.g. GET_ALLOC_SIZE over RPC
+                    break;
+                }
 
                 // the q8 copy of src1 grows with its rows, so a longer batch reserves the copy of the longest
                 // mmvq batch and the size stays monotonic in the batch length
