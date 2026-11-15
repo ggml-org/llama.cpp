@@ -526,7 +526,7 @@ static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
             x += ggml_hip_dpp_move<GGML_HIP_DPP_QUAD_PERM_2301>(x);
         }
         if constexpr (width >= 8) {
-            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_4>(x);
+            x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_HALF_MIRROR>(x);
         }
         if constexpr (width >= 16) {
             x += ggml_hip_dpp_move<GGML_HIP_DPP_ROW_ROR_8>(x);
