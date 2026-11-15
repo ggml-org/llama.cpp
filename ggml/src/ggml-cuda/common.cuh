@@ -633,13 +633,15 @@ static __device__ __forceinline__ float warp_reduce_max_impl(float x) {
             return ggml_cuda_shfl(x, 63, 64);
         }
         return x;
-    }
+    } else
 #endif // defined(GGML_USE_HIP)
+    {
 #pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
+        }
+        return x;
     }
-    return x;
 }
 
 template<int width = WARP_SIZE>
