@@ -712,7 +712,8 @@ json convert_transcriptions_to_chatcmpl(
         const json & inp_body,
         const common_chat_templates * tmpls,
         const std::map<std::string, uploaded_file> & in_files,
-        std::vector<raw_buffer> & out_files) {
+        std::vector<raw_buffer> & out_files,
+        const std::function<double(const raw_buffer &)> & get_audio_length) {
     // TODO @ngxson : this function may need to be improved in the future
     // handle input files
     out_files.clear();
@@ -730,14 +731,17 @@ json convert_transcriptions_to_chatcmpl(
     if (response_format != "json") {
         throw std::invalid_argument("Only 'json' response_format is supported for transcription");
     }
-    const common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
-    if (prompt.empty()) {
+    common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language, 0.0, prompt);
+    if (preset.needs_audio_length) {
+        preset = common_chat_get_asr_prompt(tmpls, language, get_audio_length(out_files[0]), prompt);
+    }
+    if (prompt.empty() || preset.has_context) {
         prompt = preset.user;
     }
     if (!language.empty() && !preset.has_language) {
         prompt += string_format(" (language: %s)", language.c_str());
     }
-    prompt += get_media_marker();
+    prompt = preset.media_first ? get_media_marker() + prompt : prompt + get_media_marker();
 
     json messages = json::array();
     if (!preset.system.empty()) {

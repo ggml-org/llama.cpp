@@ -155,6 +155,7 @@ struct realtime_conversation {
     bool        started   = false; // something went into the slot, the session config is fixed
     bool        turn_open = false; // a user turn is being filled
     bool        has_audio = false; // the open turn has audio not committed yet
+    int64_t     n_turn_samples = 0; // audio of the open turn, at the model rate
     bool        tool_results = false; // tool results went in after the last response, the next one answers them
     int         n_turns   = 0;
     std::string next_header;       // text that goes in before the next user turn
@@ -376,8 +377,10 @@ struct realtime_conversation {
         if (!resample(samples) || samples.empty() || !ensure_turn()) {
             return;
         }
+        const int64_t n = (int64_t) samples.size();
         if (control(SERVER_CONTROL_ACTION_AUDIO_APPEND, {}, std::move(samples))) {
             has_audio = true;
+            n_turn_samples += n;
         }
     }
 
@@ -410,7 +413,8 @@ struct realtime_conversation {
         if (!control(SERVER_CONTROL_ACTION_AUDIO_END)) {
             return false;
         }
-        has_audio = false;
+        has_audio      = false;
+        n_turn_samples = 0;
 
         std::lock_guard<std::mutex> lock(mutex);
         const json prev = last_item_id.empty() ? json(nullptr) : json(last_item_id);
@@ -424,6 +428,7 @@ struct realtime_conversation {
     }
 
     void on_commit() {
+        const int64_t n_audio = n_turn_samples;
         if (!commit() || type != "transcription") {
             return;
         }
@@ -433,11 +438,19 @@ struct realtime_conversation {
             transcribe_item_id = last_item_id;
             transcript.clear();
         }
+        // some models (VibeVoice-ASR) take an instruction after the audio, with its length
+        const auto * tmpls = deps.meta.chat_params.tmpls.get();
+        common_chat_prompt_preset preset = common_chat_get_asr_prompt(tmpls, language);
+        if (preset.needs_audio_length) {
+            preset = common_chat_get_asr_prompt(tmpls, language, (double) n_audio / mtmd_get_audio_sample_rate(deps.mctx));
+        }
+        const std::string after_audio = preset.media_first ? preset.user : "";
+
         server_control_response response;
         response.n_predict = max_output_tokens;
         response.out_mode  = MTMD_HELPER_GEN_AUDIO_OUT_TEXT;
         response.sampling  = response_sampling(nullptr);
-        if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, user_footer + assistant_header, {}, response)) {
+        if (!control(SERVER_CONTROL_ACTION_RESPONSE_CREATE, after_audio + user_footer + assistant_header, {}, response)) {
             return;
         }
         control(SERVER_CONTROL_ACTION_CLEAR);

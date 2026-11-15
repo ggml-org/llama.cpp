@@ -6153,11 +6153,21 @@ void server_routes::init_routes() {
         }
 
         std::vector<raw_buffer> files;
+        auto get_audio_length = [this](const raw_buffer & file) {
+            auto wrapper = mtmd_helper_bitmap_init_from_buf(ctx_server.mctx, file.data(), file.size(), true, ctx_server.init_opt);
+            mtmd::bitmap bmp(wrapper.bitmap);
+            mtmd_helper::video_ptr video(wrapper.video_ctx);
+            if (!bmp.ptr || !mtmd_bitmap_is_audio(bmp.ptr.get())) {
+                throw std::invalid_argument("failed to decode the audio file");
+            }
+            return (double) bmp.nx() / mtmd_get_audio_sample_rate(ctx_server.mctx);
+        };
         json body = convert_transcriptions_to_chatcmpl(
             json::parse(req.body),
             meta->chat_params.tmpls.get(),
             req.files,
-            files);
+            files,
+            get_audio_length);
         SRV_DBG("%s\n", "Request converted: OpenAI Transcriptions -> OpenAI Chat Completions");
         SRV_DBG("converted request: %s\n", body.dump().c_str());
         common_chat_session session;

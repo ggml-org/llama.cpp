@@ -63,6 +63,7 @@ add_library(mtmd
             models/nemotron-transcribe.cpp
             models/muse-glimmer.cpp
             models/muse-spark-audio.cpp
+            models/vibevoice-asr.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp

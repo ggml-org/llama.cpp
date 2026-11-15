@@ -8,6 +8,8 @@
 
 #include "json.h"
 
+#include <functional>
+
 // Convert OpenAI Responses API format to OpenAI Chat Completions API format
 json server_chat_convert_responses_to_chatcmpl(const json & body);
 
@@ -18,11 +20,13 @@ json server_chat_convert_responses_tools(const json & tools);
 json server_chat_convert_anthropic_to_oai(const json & body);
 
 // convert OpenAI transcriptions API format to OpenAI Chat Completions API format
+// get_audio_length returns the length in seconds of the input file, only called when the prompt needs it
 json convert_transcriptions_to_chatcmpl(
     const json & body,
     const common_chat_templates * tmpls,
     const std::map<std::string, uploaded_file> & in_files,
-    std::vector<raw_buffer> & out_files);
+    std::vector<raw_buffer> & out_files,
+    const std::function<double(const raw_buffer &)> & get_audio_length);
 
 // convert OpenAI speech API format to the /tts format
 json convert_speech_to_tts(const json & body);

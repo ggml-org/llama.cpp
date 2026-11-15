@@ -870,6 +870,7 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_QWEN2A:
+        case PROJECTOR_TYPE_HIGGS_AUDIO:
         case PROJECTOR_TYPE_GLMA:
         case PROJECTOR_TYPE_MERALION:
         case PROJECTOR_TYPE_MUSIC_FLAMINGO:
@@ -879,6 +880,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
             {
                 builder = std::make_unique<mtmd_graph_muse_spark_audio>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_VIBEVOICE_ASR:
+            {
+                builder = std::make_unique<mtmd_graph_vibevoice_asr>(ctx, img);
             } break;
         case PROJECTOR_TYPE_KIMIVL:
             {
