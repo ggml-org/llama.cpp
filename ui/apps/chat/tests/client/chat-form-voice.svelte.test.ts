@@ -1,0 +1,225 @@
+// Guards voice input in the chat form, with a fake recorder in place of the microphone:
+// what the microphone offers per model, the recording row, dictated text written into the
+// message around what the user types, and a voice message whose transcript comes later.
+
+import { modelServerProps, seedStores } from '../stories/chat/form/fixtures';
+import { deferred, FakeVoiceRecorder } from '../stories/voice/fake-voice-recorder.svelte';
+import ChatFormVoiceTestWrapper from './components/ChatFormVoiceTestWrapper.svelte';
+import { EditorView } from '@codemirror/view';
+import { SETTINGS_KEYS, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
+import { ServerRole, VoiceInputMode } from '#lib/enums/index.ts';
+import { voiceTranscriptsStore } from '#lib/stores/index.ts';
+import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
+import { tick } from 'svelte';
+import { afterEach, describe, expect, it } from 'vitest';
+import { userEvent } from 'vitest/browser';
+import { render } from 'vitest-browser-svelte';
+
+let restore: (() => void) | undefined;
+
+afterEach(() => {
+	restore?.();
+	restore = undefined;
+});
+
+function seed(audio: boolean, inputMode: VoiceInputMode = VoiceInputMode.AUTO) {
+	restore = seedStores({
+		config: {
+			autoMicOnEmpty: true,
+			[SETTINGS_KEYS.VOICE_INPUT_MODE]: inputMode,
+			[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES]: true
+		},
+		serverProps: modelServerProps({ modalities: { audio, video: false, vision: false } }),
+		serverRole: ServerRole.MODEL
+	});
+}
+
+async function renderForm() {
+	const recorder = new FakeVoiceRecorder();
+	const state = $state({ files: [] as ChatUploadedFile[], value: '' });
+	const screen = render(ChatFormVoiceTestWrapper, { state, voiceRecorder: recorder });
+
+	await tick();
+
+	const content = screen.container.querySelector<HTMLElement>('.cm-content');
+	const editor = content && EditorView.findFromDOM(content);
+
+	if (!editor) throw new Error('editor not rendered');
+
+	// an edit as typing makes it: reported to the form like a keystroke
+	const type = (at: number, text: string) =>
+		editor.dispatch({ changes: { from: at, insert: text }, userEvent: 'input.type' });
+	const recordingRow = () => screen.container.querySelector('[data-slot="chat-form-recording"]');
+
+	return { editor, recorder, recordingRow, screen, state, type };
+}
+
+// the tooltip's trigger wraps the button and takes its name, so the button is the inner one
+describe('the microphone', () => {
+	it('sends a voice message to a model with audio input', async () => {
+		seed(true);
+
+		const { screen } = await renderForm();
+
+		await expect
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
+			.toBeEnabled();
+	});
+
+	it('dictates when the user always dictates', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { screen } = await renderForm();
+
+		await expect
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last())
+			.toBeEnabled();
+	});
+
+	it('leaves the send button on a single-model server without audio input', async () => {
+		seed(false);
+
+		const { screen } = await renderForm();
+
+		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.voiceMessage);
+	});
+});
+
+describe('recording', () => {
+	it('shows the live waveform with cancel and stop, and Escape drops it', async () => {
+		seed(true);
+
+		const { recorder, recordingRow, screen } = await renderForm();
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
+		await expect.poll(recordingRow).toBeTruthy();
+
+		recorder.setLevels(Array.from({ length: 48 }, (_, i) => (i % 5) / 5));
+		await tick();
+
+		expect(recordingRow()?.querySelector('[data-slot="voice-waveform-live"]')).toBeTruthy();
+		await expect
+			.element(screen.getByRole('button', { name: 'Cancel recording' }))
+			.toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('button', { name: 'Stop recording' }).last())
+			.toBeEnabled();
+
+		await userEvent.keyboard('{Escape}');
+		await expect.poll(recordingRow).toBeNull();
+		expect(recorder.cancelled).toBe(1);
+	});
+});
+
+describe('dictation', () => {
+	it('writes the live text into the message, keeping what is typed around it', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state, type } = await renderForm();
+		const transcript = deferred<string>();
+
+		recorder.transcript = transcript.promise;
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+
+		recorder.say('one');
+		await expect.poll(() => state.value).toBe('one');
+
+		// typed before and after the dictated text while it streams
+		type(0, 'Note: ');
+		await expect.poll(() => state.value).toBe('Note: one');
+		type(state.value.length, ' (end)');
+		recorder.say('one two');
+		await expect.poll(() => state.value).toBe('Note: one two (end)');
+
+		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
+		transcript.resolve('One, two.');
+
+		await expect.poll(() => state.value).toBe('Note: One, two. (end)');
+		expect(state.files).toHaveLength(0);
+	});
+
+	it('waits for the text after recording when none streamed, then inserts it', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state } = await renderForm();
+		const transcript = deferred<string>();
+
+		recorder.transcript = transcript.promise;
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
+
+		await expect.element(screen.getByText(VOICE_MODE_MESSAGE.transcribing)).toBeInTheDocument();
+
+		transcript.resolve('Hello there');
+		await expect.poll(() => state.value).toBe('Hello there');
+		expect(state.files).toHaveLength(0);
+	});
+
+	it('takes the dictated text back out on cancel', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state } = await renderForm();
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		recorder.say('never mind');
+		await expect.poll(() => state.value).toBe('never mind');
+
+		await screen.getByRole('button', { name: 'Cancel recording' }).click();
+		await expect.poll(() => state.value).toBe('');
+	});
+});
+
+describe('a voice message', () => {
+	it('is attached as a voice clip that gets its transcript later', async () => {
+		seed(true);
+
+		const { recorder, screen, state } = await renderForm();
+		const transcript = deferred<string>();
+
+		recorder.transcript = transcript.promise;
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+
+		// streamed text shows under the waveform, not in the message
+		recorder.say('What is the weather on Mars');
+		await expect.element(screen.getByText('What is the weather on Mars')).toBeInTheDocument();
+		expect(state.value).toBe('');
+
+		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
+		await expect.poll(() => state.files.length).toBe(1);
+
+		const [file] = state.files;
+
+		expect(file.voice).toMatchObject({ durationMs: 2400 });
+		expect(file.voice?.peaks).toHaveLength(64);
+		expect(state.value).toBe('');
+		expect(voiceTranscriptsStore.get(file.name)?.status).toBe('transcribing');
+
+		// drawn as a voice chip, its transcript on the way
+		const reveal = () =>
+			screen.container.querySelector('[data-slot="chat-attachment-voice"] [data-status]');
+
+		await expect.poll(() => reveal()?.getAttribute('data-status')).toBe('transcribing');
+
+		transcript.resolve('What is the weather on Mars?');
+		await expect
+			.poll(() => voiceTranscriptsStore.transcriptOf(file.name))
+			.toBe('What is the weather on Mars?');
+
+		await expect.poll(() => reveal()?.getAttribute('data-status')).toBe('done');
+
+		const { extras } = await parseFilesToMessageExtras($state.snapshot(state.files));
+
+		expect(extras[0]).toMatchObject({
+			durationMs: 2400,
+			transcript: 'What is the weather on Mars?',
+			voice: true
+		});
+
+		voiceTranscriptsStore.forget(file.name);
+	});
+});

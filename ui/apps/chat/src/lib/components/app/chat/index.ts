@@ -80,6 +80,14 @@ export { default as ChatAttachmentsListItemMcpResource } from './ChatAttachments
 export { default as ChatAttachmentsListItemThumbnailFile } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemThumbnailFile.svelte';
 
 /**
+ * An audio attachment drawn as a clip: a playable waveform (peaks computed from
+ * the audio when it was stored without them) and, for a voice message, its
+ * transcript under it on hover, focus or a tap, with the transcribing and failed
+ * states. `sm` in the chat form, removable; `md` in a sent message.
+ */
+export { default as ChatAttachmentsListItemVoice } from './ChatAttachments/ChatAttachmentsList/ChatAttachmentsListItem/ChatAttachmentsListItemVoice.svelte';
+
+/**
  * Thumbnail for image attachments with lazy loading and error fallback.
  * Displays image preview with configurable dimensions. Falls back to placeholder
  * on load error.

@@ -65,15 +65,7 @@ export function peaksOf(samples: Float32Array, count = PEAK_COUNT): number[] {
 	return peaks.map((peak) => peak / loudest);
 }
 
-const cache = new Map<string, DemoClip>();
-
-/** A clip of `seconds`, the same for the same arguments. */
-export function demoClip(seconds: number, seed = 1): DemoClip {
-	const key = `${seconds}:${seed}`;
-	const cached = cache.get(key);
-
-	if (cached) return cached;
-
+function demoSamples(seconds: number, seed: number): Float32Array {
 	const samples = new Float32Array(Math.round(seconds * SAMPLE_RATE));
 
 	for (let i = 0; i < samples.length; i++) {
@@ -83,6 +75,42 @@ export function demoClip(seconds: number, seed = 1): DemoClip {
 		samples[i] = 0.5 * envelope(t, seed) * Math.sin(2 * Math.PI * pitch * t);
 	}
 
+	return samples;
+}
+
+/** The demo clip as a stored attachment holds it: base64 WAV, with its peaks and length. */
+export async function demoStoredClip(
+	seconds: number,
+	seed = 1
+): Promise<{ base64: string; durationMs: number; peaks: number[]; size: number }> {
+	const samples = demoSamples(seconds, seed);
+	const blob = wavBlob(samples);
+	const bytes = new Uint8Array(await blob.arrayBuffer());
+
+	let binary = '';
+
+	for (let i = 0; i < bytes.length; i += 0x8000) {
+		binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+	}
+
+	return {
+		base64: btoa(binary),
+		durationMs: seconds * 1000,
+		peaks: peaksOf(samples),
+		size: blob.size
+	};
+}
+
+const cache = new Map<string, DemoClip>();
+
+/** A clip of `seconds`, the same for the same arguments. */
+export function demoClip(seconds: number, seed = 1): DemoClip {
+	const key = `${seconds}:${seed}`;
+	const cached = cache.get(key);
+
+	if (cached) return cached;
+
+	const samples = demoSamples(seconds, seed);
 	const clip = {
 		durationMs: seconds * 1000,
 		peaks: peaksOf(samples),

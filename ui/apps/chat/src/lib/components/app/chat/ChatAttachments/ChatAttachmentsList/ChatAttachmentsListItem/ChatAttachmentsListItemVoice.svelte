@@ -1,0 +1,116 @@
+<!--
+	An audio attachment drawn as a clip: a playable waveform, and for a voice message its transcript, which opens under
+	it on hover, keyboard focus or a tap. `sm` is the chip in the chat form, `md` the clip in a sent message. A clip
+	stored without peaks (an older message, an uploaded file) gets them computed from its audio.
+-->
+<script lang="ts">
+	import {
+		VoiceTranscriptReveal,
+		type VoiceTranscriptStatus,
+		VoiceWaveform
+	} from '@ggml-org/llama-ui/voice';
+	import { X } from '@lucide/svelte';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { voiceTranscriptsStore } from '#lib/stores/index.ts';
+	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
+	import { audioUrl, lazyPeaks, voiceAttachmentSource } from '#lib/utils/voice-attachment.ts';
+
+	interface Props {
+		class?: string;
+		item: ChatAttachmentDisplayItem;
+		onRemove?: (id: string) => void;
+		readonly?: boolean;
+		size?: 'sm' | 'md';
+	}
+
+	let { class: className = '', item, onRemove, readonly = false, size = 'md' }: Props = $props();
+
+	let source = $derived(voiceAttachmentSource(item));
+	let computedPeaks = $state<number[] | null>(null);
+	let src = $state<string | undefined>();
+
+	let peaks = $derived(source.peaks ?? computedPeaks ?? []);
+	let pending = $derived(voiceTranscriptsStore.get(source.name));
+	let transcript = $derived(
+		source.transcript ?? (pending?.status === 'done' ? pending.transcript : undefined)
+	);
+	let status = $derived<VoiceTranscriptStatus>(
+		transcript !== undefined
+			? 'done'
+			: pending?.status === 'transcribing'
+				? 'transcribing'
+				: pending?.status === 'error'
+					? 'error'
+					: 'idle'
+	);
+	let label = $derived(source.voice ? 'Voice message' : source.name);
+
+	// an object URL lives as long as the clip is on screen
+	$effect(() => {
+		const audio = source.audio;
+
+		if (!audio) {
+			src = undefined;
+
+			return;
+		}
+
+		const playable = audioUrl(audio, source.mimeType);
+
+		src = playable?.url;
+
+		return () => {
+			if (playable?.revoke) URL.revokeObjectURL(playable.url);
+		};
+	});
+
+	$effect(() => {
+		const { audio, name, peaks: stored } = source;
+
+		computedPeaks = null;
+
+		if (stored || !audio) return;
+
+		let cancelled = false;
+
+		lazyPeaks(name, audio).then((value) => {
+			if (!cancelled) computedPeaks = value;
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	});
+</script>
+
+<div
+	class={[
+		'group relative min-w-0',
+		size === 'sm'
+			? 'w-60 max-w-[calc(100vw-4rem)] rounded-lg border border-border bg-muted py-2 pr-9 pl-2'
+			: 'w-80 max-w-full rounded-[1.125rem] matte-sheen bg-(--user-bubble-background) px-3 py-2.5 backdrop-blur-md dark:bg-primary/15',
+		className
+	]}
+	data-slot="chat-attachment-voice"
+	data-voice={source.voice || undefined}
+>
+	<VoiceTranscriptReveal {status} {transcript}>
+		<VoiceWaveform durationMs={source.durationMs} {label} {peaks} {size} {src} />
+	</VoiceTranscriptReveal>
+
+	{#if !source.voice}
+		<p class="mt-1 truncate px-1 text-caption text-fg-muted">{source.name}</p>
+	{/if}
+
+	{#if !readonly && onRemove}
+		<div class="absolute top-1/2 right-1 -translate-y-1/2">
+			<ActionIcon
+				ariaLabel={source.voice ? 'Remove voice message' : `Remove ${source.name}`}
+				icon={X}
+				onclick={() => onRemove?.(item.id)}
+				stopPropagationOnClick
+				tooltip="Remove"
+			/>
+		</div>
+	{/if}
+</div>
