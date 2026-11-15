@@ -41,6 +41,11 @@ std::string common_chat_template_generation_prompt_impl(
 
 bool is_lfm2_template(const std::string & src);
 
+bool is_inkling2_template(const std::string & src);
+
+// give each media marker of a text block its own message block
+void common_chat_inkling2_split_media(common_chat_prompt & prompt);
+
 common_chat_params common_chat_params_init_cohere2moe(const common_chat_template & tmpl, const autoparser::generation_params & inputs);
 
 common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_template & tmpl, const autoparser::generation_params & inputs);

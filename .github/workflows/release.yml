@@ -1239,6 +1239,7 @@ jobs:
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
           evict-old-files: 1d
+          max-size: "1G"
 
       - name: Build
         id: cmake_build
