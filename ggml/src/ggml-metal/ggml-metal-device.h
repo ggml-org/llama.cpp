@@ -330,6 +330,9 @@ ggml_metal_device_t ggml_metal_device_get(int device, int n_devices);
 void * ggml_metal_device_get_obj  (ggml_metal_device_t dev); // id<MTLDevice>
 void * ggml_metal_device_get_queue(ggml_metal_device_t dev); // id<MTLCommandQueue>
 
+// Retained id<MTLBuffer> for host range [ptr, ptr + size). *offs receives the offset of ptr.
+void * ggml_metal_device_wrap_host(ggml_metal_device_t dev, void * ptr, size_t size, size_t * offs);
+
 ggml_metal_library_t ggml_metal_device_get_library(ggml_metal_device_t dev);
 
 void ggml_metal_device_rsets_add(ggml_metal_device_t dev, ggml_metal_rset_t rset);
