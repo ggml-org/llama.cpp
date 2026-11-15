@@ -2570,6 +2570,102 @@ struct test_get_rows : public test_case {
 
 };
 
+struct test_get_rows_f16_boundary : public test_case {
+    enum io_mode_t {
+        F16_TO_F16 = 0,
+        F32_TO_F16 = 1,
+        F16_TO_F32 = 2,
+        DIRECT_F16_TO_F32 = 3,
+    };
+
+    const int n;
+    const int m;
+    const int r;
+    const int be1;
+    const int be2;
+    const bool repeat;
+    const bool vs0;
+    const io_mode_t io_mode;
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "GET_ROWS";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR8(n, m, r, be1, be2, repeat, vs0, io_mode);
+    }
+
+    test_get_rows_f16_boundary(int n = 128, int m = 8, int r = 5, int be1 = 1, int be2 = 1,
+            bool repeat = false, bool vs0 = false, io_mode_t io_mode = F16_TO_F16)
+        : n(n), m(m), r(r), be1(be1), be2(be2), repeat(repeat), vs0(vs0), io_mode(io_mode) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int s_be1 = repeat ? 1 : be1;
+        const int s_be2 = repeat ? 1 : be2;
+        const int offset_rows = vs0 ? 2 : 0;
+        const int offset_cols = vs0 ? 4 : 0;
+        const int padded_m = m + offset_rows;
+        const int padded_n = n + offset_cols;
+
+        const ggml_type in_type = (io_mode == DIRECT_F16_TO_F32) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+        ggml_tensor * in_base = ggml_new_tensor_4d(ctx, in_type, padded_n, padded_m, s_be1, s_be2);
+        ggml_set_name(in_base, "in_base");
+
+        ggml_tensor * src0 = (io_mode == F16_TO_F16 || io_mode == F16_TO_F32) ? ggml_dup(ctx, in_base) : in_base;
+        if (src0 != in_base) {
+            ggml_set_name(src0, "src0_internal");
+        }
+
+        if (vs0) {
+            src0 = ggml_view_4d(ctx, src0, n, m, s_be1, s_be2,
+                                src0->nb[1], src0->nb[2], src0->nb[3],
+                                offset_cols * src0->nb[0] + offset_rows * src0->nb[1]);
+            ggml_set_name(src0, "src0_view");
+        }
+
+        if (repeat) {
+            src0 = ggml_repeat_4d(ctx, src0, n, m, be1, be2);
+            ggml_set_name(src0, "src0_repeat");
+        }
+
+        ggml_tensor * rows = ggml_new_tensor_3d(ctx, GGML_TYPE_I32, r, be1, be2);
+        ggml_set_name(rows, "rows");
+
+        ggml_tensor * gr = ggml_get_rows(ctx, src0, rows);
+        ggml_set_name(gr, "get_rows");
+
+        ggml_tensor * out = (io_mode == F16_TO_F16 || io_mode == F32_TO_F16) ? ggml_dup(ctx, gr) : gr;
+        if (out != gr) {
+            ggml_set_name(out, "out");
+        }
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
+            if (t->type == GGML_TYPE_I32) {
+                std::vector<int> data(ggml_nelements(t));
+                for (size_t i = 0; i < data.size(); i++) {
+                    data[i] = rand() % m;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(int));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+};
+
 // GGML_OP_GET_ROWS on a weight also used by GGML_OP_MUL_MAT (tied embeddings)
 // that the preceding mul_mat may have put in the SYCL reorder layout. The
 // mul_mat runs first, so a backend that changes the weight layout in place
@@ -11218,6 +11314,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_get_rows(GGML_TYPE_F32, 256, 8, 2, 1, 1, false, true, 3));
+    test_cases.emplace_back(new test_get_rows(GGML_TYPE_F16, 256, 8, 2, 1, 1, false, true, 3));
+    for (int n : { 31, 33, 64, 128, 256 }) {
+        test_cases.emplace_back(new test_get_rows(GGML_TYPE_F16, n, 8, 5, 3, 2, false, false));
+        test_cases.emplace_back(new test_get_rows(GGML_TYPE_F16, n, 8, 5, 3, 2, false, true, 4));
+        for (auto io_mode : {
+                test_get_rows_f16_boundary::F16_TO_F16,
+                test_get_rows_f16_boundary::F32_TO_F16,
+                test_get_rows_f16_boundary::F16_TO_F32,
+                test_get_rows_f16_boundary::DIRECT_F16_TO_F32 }) {
+            for (bool vs0 : { false, true }) {
+                test_cases.emplace_back(new test_get_rows_f16_boundary(n, 8, 5, 1, 1, false, vs0, io_mode));
+                test_cases.emplace_back(new test_get_rows_f16_boundary(n, 8, 5, 3, 2, false, vs0, io_mode));
+                test_cases.emplace_back(new test_get_rows_f16_boundary(n, 8, 5, 3, 2, true,  vs0, io_mode));
+            }
+        }
+    }
 
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 8, 2, 1, false));
     test_cases.emplace_back(new test_get_rows_back(GGML_TYPE_F32, 1, 70000, 4, 1, false)); // row count > CUDA grid-y limit (65535)

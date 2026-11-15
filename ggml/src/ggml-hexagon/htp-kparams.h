@@ -139,6 +139,7 @@ bool htp_kparams_solve_repeat_get_rows(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
+    bool internal_f16,
     struct htp_get_rows_kernel_params * kparams
 );
 

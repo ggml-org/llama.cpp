@@ -1768,6 +1768,7 @@ bool htp_kparams_solve_repeat_get_rows(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
+    bool internal_f16,
     struct htp_get_rows_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -1786,12 +1787,16 @@ bool htp_kparams_solve_repeat_get_rows(
         return false;
     }
 
-    if (src0->type == dst->type) {
-        if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_I32 && src0->type != GGML_TYPE_F16) {
+    const bool tiled = ggml_hexagon_tensor_is_tiled(src0);
+
+    if (src0->type == GGML_TYPE_I32) {
+        if (dst->type != GGML_TYPE_I32 || tiled) {
             return false;
         }
-    } else if (src0->type == GGML_TYPE_I32) {
-        return false;
+    } else if (dst->type == GGML_TYPE_F16) {
+        if (!internal_f16 || tiled || (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32)) {
+            return false;
+        }
     } else if (dst->type != GGML_TYPE_F32) {
         return false;
     }
@@ -1805,8 +1810,7 @@ bool htp_kparams_solve_repeat_get_rows(
     const uint32_t ne12 = src1->ne[2];
     const uint32_t nr   = ne10 * ne11 * ne12;
 
-    const bool tiled = ggml_hexagon_tensor_is_tiled(src0);
-    const int  wtype = (tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
+    const int wtype = (tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
 
     if (tiled) {
         kparams->kernel_type = HTP_GET_ROWS_KERNEL_TILED;
@@ -1825,7 +1829,7 @@ bool htp_kparams_solve_repeat_get_rows(
 
     struct htp_get_rows_vtcm_layout vtcm_layout = {};
     while (kparams->n_hvx > 0) {
-        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, ne00, total_tasks, src1->type, kparams->n_hvx);
+        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, dst->type, ne00, total_tasks, src1->type, kparams->n_hvx);
         if (vtcm_layout.total_bytes <= vtcm_size) {
             break;
         }
@@ -1833,7 +1837,7 @@ bool htp_kparams_solve_repeat_get_rows(
     }
 
     if (kparams->n_hvx == 0 && total_tasks > 0) {
-        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, ne00, total_tasks, src1->type, 1);
+        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, dst->type, ne00, total_tasks, src1->type, 1);
     }
 
     kparams->vtcm_size   = (total_tasks == 0) ? 0 : vtcm_layout.total_bytes;
@@ -1853,9 +1857,10 @@ bool htp_kparams_solve_repeat_get_rows(
 static bool htp_kparams_solve_get_rows(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
     struct htp_get_rows_kernel_params * kparams
 ) {
-    return htp_kparams_solve_repeat_get_rows(sess, op->src[0], op->src[1], op, kparams);
+    return htp_kparams_solve_repeat_get_rows(sess, op->src[0], op->src[1], op, internal_f16, kparams);
 }
 
 static bool htp_kparams_solve_set_rows(
@@ -5788,6 +5793,9 @@ bool htp_kparams_solve(
         const ggml_tensor * src3 = tmp.inputs.size() > 3 ? tmp.inputs[3] : nullptr;
         return commit(htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, tmp.kparams<htp_lid_kernel_params>()));
     }
+    if (tmp.opcode == HTP_OP_GET_ROWS) {
+        return commit(htp_kparams_solve_repeat_get_rows(sess, src0, src1, dst, internal_f16, tmp.kparams<htp_get_rows_kernel_params>()));
+    }
 
     if (!tmp.fused.empty()) {
         return false;
@@ -5842,7 +5850,11 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_flash_attn>(sess, op, kparams);
 
         case HTP_OP_GET_ROWS:
-            return htp_kparams_invoke<htp_kparams_solve_get_rows>(sess, op, kparams);
+        {
+            struct htp_get_rows_kernel_params tmp;
+            return htp_kparams_solve_get_rows(sess, op, internal_f16,
+                                              kparams ? (struct htp_get_rows_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_SET_ROWS:
             return htp_kparams_invoke<htp_kparams_solve_set_rows>(sess, op, kparams);
