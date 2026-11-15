@@ -1,0 +1,163 @@
+// Guards VoiceCapture in a real browser, fed by a synthesized microphone (an oscillator
+// into a MediaStream, since the fake capture device flags are not available here): the
+// levels move, the PCM worklet loads from its Blob URL and streams chunks, stop() returns
+// a WAV clip with a plausible duration and peaks, and every path stops the tracks.
+
+import { MICROPHONE_UNAVAILABLE_MESSAGE } from '#lib/constants/index.ts';
+import { VoiceCapture, VoiceCaptureError } from '#lib/voice/index.ts';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
+
+const sources: AudioContext[] = [];
+
+/** A 440 Hz tone as a microphone stream. */
+function toneStream(): MediaStream {
+	const context = new AudioContext();
+	const oscillator = context.createOscillator();
+	const destination = context.createMediaStreamDestination();
+
+	oscillator.frequency.value = 440;
+	oscillator.connect(destination);
+	oscillator.start();
+	sources.push(context);
+
+	return destination.stream;
+}
+
+// audio contexts only run after a user gesture, as the mic button gives in the app
+beforeAll(async () => {
+	const button = document.createElement('button');
+
+	button.textContent = 'Record';
+	document.body.append(button);
+	await userEvent.click(button);
+	button.remove();
+});
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+afterEach(async () => {
+	vi.restoreAllMocks();
+	vi.unstubAllGlobals();
+
+	for (const context of sources.splice(0)) await context.close();
+});
+
+describe('VoiceCapture', () => {
+	it('streams levels and PCM chunks, and stops with a WAV clip', async () => {
+		const warn = vi.spyOn(console, 'warn');
+		const stream = toneStream();
+		const capture = new VoiceCapture({ levelsIntervalMs: 20, levelsLength: 16, stream });
+		const levels: (readonly number[])[] = [];
+		const chunks: Int16Array[] = [];
+
+		capture.onLevels((value) => levels.push(value));
+		capture.onPcm((chunk) => chunks.push(chunk));
+
+		await capture.start();
+		expect(capture.state).toBe('recording');
+
+		await wait(700);
+
+		const clip = await capture.stop();
+
+		// the worklet loaded from its Blob URL under COOP/COEP, as llama-server serves the UI, no fallback
+		expect(crossOriginIsolated).toBe(true);
+		expect(warn).not.toHaveBeenCalledWith(
+			expect.stringContaining('AudioWorklet unavailable'),
+			expect.anything()
+		);
+
+		expect(levels.length).toBeGreaterThan(5);
+		expect(levels.at(-1)).toHaveLength(16);
+		expect(Math.max(...levels.at(-1)!)).toBeGreaterThan(0.5);
+
+		// 100 ms chunks at 16 kHz, the last one may be shorter
+		expect(chunks.length).toBeGreaterThan(3);
+		expect(chunks[0]).toHaveLength(1600);
+
+		expect(clip.sampleRate).toBe(16_000);
+		expect(clip.durationMs).toBeGreaterThan(400);
+		expect(clip.durationMs).toBeLessThan(1500);
+		expect(clip.peaks).toHaveLength(64);
+		expect(Math.max(...clip.peaks)).toBe(1);
+		// a steady tone: no span of the clip is silent
+		expect(clip.peaks.filter((peak) => peak > 0.5).length).toBeGreaterThan(48);
+
+		const header = new DataView(await clip.blob.slice(0, 44).arrayBuffer());
+		const pcmBytes = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+
+		expect(clip.blob.type).toBe('audio/wav');
+		expect(header.getUint16(22, true)).toBe(1);
+		expect(header.getUint32(24, true)).toBe(16_000);
+		expect(header.getUint16(34, true)).toBe(16);
+		expect(header.getUint32(40, true)).toBe(pcmBytes);
+
+		// the clip decodes as audio
+		const decoded = await new OfflineAudioContext(1, 1, 16_000).decodeAudioData(
+			await clip.blob.arrayBuffer()
+		);
+
+		expect(decoded.duration * 1000).toBeCloseTo(clip.durationMs, 0);
+		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
+		expect(capture.state).toBe('stopped');
+	});
+
+	it('cancel stops the tracks and drops the recording', async () => {
+		const stream = toneStream();
+		const capture = new VoiceCapture({ stream });
+
+		await capture.start();
+		await wait(200);
+		capture.cancel();
+
+		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
+		expect(capture.state).toBe('idle');
+		await expect(capture.stop()).rejects.toThrow();
+	});
+
+	it('cancel during start releases the microphone once it arrives', async () => {
+		const stream = toneStream();
+
+		let grant!: (value: MediaStream) => void;
+
+		vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(
+			() => new Promise((resolve) => (grant = resolve))
+		);
+
+		const capture = new VoiceCapture();
+		const started = capture.start().catch((e) => e);
+
+		capture.cancel();
+		grant(stream);
+
+		expect(await started).toBeInstanceOf(DOMException);
+		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
+	});
+
+	it('a page hide tears the capture down', async () => {
+		const stream = toneStream();
+		const capture = new VoiceCapture({ stream });
+
+		await capture.start();
+		dispatchEvent(new PageTransitionEvent('pagehide'));
+
+		expect(capture.state).toBe('idle');
+		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
+	});
+
+	it('asks for the microphone with the clean-up constraints and names a refusal', async () => {
+		const getUserMedia = vi
+			.spyOn(navigator.mediaDevices, 'getUserMedia')
+			.mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+		const capture = new VoiceCapture();
+		const error = await capture.start().catch((e) => e);
+
+		expect(getUserMedia).toHaveBeenCalledWith({
+			audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }
+		});
+		expect(error).toBeInstanceOf(VoiceCaptureError);
+		expect(error.message).toBe(MICROPHONE_UNAVAILABLE_MESSAGE.denied);
+		expect(capture.state).toBe('idle');
+	});
+});
