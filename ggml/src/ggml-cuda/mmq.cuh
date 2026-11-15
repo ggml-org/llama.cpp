@@ -1312,7 +1312,6 @@ static constexpr __device__ int mul_mat_q_stream_k_fixup_nthreads() {
 #ifdef GCN
     // With NVIDIA warp32, the half-sized fixup launch has nthreads/64 warps.
     // GCN wave64 needs the full MMQ thread count to keep the same nthreads/64 wavefronts.
-    // TODO: Test whether the same wave64 fixup sizing also helps CDNA.
     return ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1);
 #else
     return ggml_cuda_mmq_get_nthreads(type, J, fallback, prec_src1) / 2;
@@ -1539,7 +1538,6 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm*tiles_nwaves);
     const int stream_k_blocks = GGML_CUDA_CC_IS_GCN(cc) ? nsm * config.occupancy : nsm;
 
-    // TODO: Test other AMD architectures.
     const int k_chunks = (args.ncols_x + config.K_vram - 1) / config.K_vram;
     bool force_tiling = false;
     if (GGML_CUDA_CC_IS_GCN(cc)) {
@@ -1582,7 +1580,6 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const dim3 block_nums_fixup(block_nums_stream_k.x, config.I/warp_size, 1);
 
     // GCN wave64 already halves the warp count relative to NVIDIA warp32, so halving nwarps again would halve fixup parallelism.
-    // TODO: Test whether the same wave64 fixup sizing also helps CDNA.
     const int nwarps_fixup = GGML_CUDA_CC_IS_GCN(cc) ? nwarps : nwarps/2;
     const dim3 block_dims_fixup(block_dims.x, nwarps_fixup, block_dims.z);
 
