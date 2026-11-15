@@ -415,3 +415,50 @@ server_slot_plan server_slot_sched::select(const std::vector<server_slot_info> &
 
     return { ret->id, update_cache };
 }
+
+server_slot_donor server_slot_sched::select_donor(const std::vector<server_slot_info> & slots, const server_task & task, int id_slot, int32_t n_have) const {
+    server_slot_donor ret;
+
+    int32_t n_done_best = 0;
+
+    for (const auto & slot : slots) {
+        if (!slot.can_donate || !slot.is_processing || slot.task == nullptr || slot.id == id_slot) {
+            continue;
+        }
+
+        // what the slot has now, and what it has once its prompt is processed
+        const int32_t n_done = slot.prompt->tokens.get_common_prefix(task.tokens);
+        int32_t       n_cur  = std::max<int32_t>(n_done, slot.task->tokens.get_common_prefix(task.tokens));
+
+        if (donor_exact) {
+            // the task needs at least 1 token of its own to evaluate [TAG_PROMPT_LOGITS]
+            if (n_cur > 0 && n_cur == (int32_t) task.tokens.size()) {
+                n_cur--;
+
+                // the split would be inside a media chunk
+                if (task.tokens[n_cur] == LLAMA_TOKEN_NULL) {
+                    continue;
+                }
+            }
+
+            // the slot is already past the shared tokens
+            if (slot.n_task_done > n_cur) {
+                continue;
+            }
+        }
+
+        SLT_TRC(slot, " - checking donor, n_tokens = %d, n_done = %d, n_have = %d\n", n_cur, n_done, n_have);
+
+        if (n_cur < n_have + n_donor_min) {
+            continue;
+        }
+
+        // the longest prefix wins, then the slot that is the furthest along
+        if (n_cur > ret.n_tokens || (n_cur == ret.n_tokens && n_done > n_done_best)) {
+            ret         = { slot.id, n_cur };
+            n_done_best = n_done;
+        }
+    }
+
+    return ret;
+}

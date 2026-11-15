@@ -105,6 +105,12 @@ struct server_slot_info {
     int64_t t_last_used = -1;
 
     const server_prompt * prompt = nullptr;
+
+    // the slot runs a task whose prompt a new task can copy, see select_donor()
+    bool can_donate = false;
+
+    // tokens of the task that are processed, -1 if the task has not started yet
+    int32_t n_task_done = -1;
 };
 
 struct server_slot_plan {
@@ -115,12 +121,30 @@ struct server_slot_plan {
     bool update_cache = false;
 };
 
+// a busy slot that has, or will have, the start of the prompt of a new task
+struct server_slot_donor {
+    int id_slot = -1; // -1 if there is none
+
+    // tokens shared with the new task, the task waits until the donor has them
+    int32_t n_tokens = 0;
+};
+
 // decides only, the caller applies the plan
 struct server_slot_sched {
     float slot_prompt_similarity = 0.0f;
+
+    // a donor must give at least this many tokens more than the slot of the task already has
+    int32_t n_donor_min = 64;
+
+    // the memory can only be copied as a whole: the donor must end a batch exactly at the end of the shared tokens
+    bool donor_exact = false;
 
     // idle slots that lose the least by being reused: empty slots first, then the least recently used ones
     std::vector<int> get_free_slots(const std::vector<server_slot_info> & slots, size_t n_slots_needed, int exclude_id_slot) const;
 
     server_slot_plan select(const std::vector<server_slot_info> & slots, const server_task & task) const;
+
+    // id_slot: the slot of the task
+    // n_have: tokens of the task that its slot already has
+    server_slot_donor select_donor(const std::vector<server_slot_info> & slots, const server_task & task, int id_slot, int32_t n_have) const;
 };
