@@ -659,6 +659,15 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         }
     }
 
+    // Handle Anthropic-specific output_config param
+    if (body.contains("output_config")) {
+        json output_config = json_value(body, "output_config", json::object());
+        std::string effort = json_value(output_config, "effort", std::string());
+        if (!effort.empty()) {
+            oai_body["reasoning_effort"] = effort;
+        }
+    }
+
     // Handle Anthropic-specific metadata param
     if (body.contains("metadata")) {
         json metadata = json_value(body, "metadata", json::object());

@@ -10,6 +10,7 @@
 
 #include "json.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -167,6 +168,10 @@ std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_i
 struct server_tokens {
     bool has_mtmd = false;
 
+    static constexpr size_t hash_block_size = 64;
+
+    using prefix_hash = std::array<uint8_t, 32>; // SHA-256
+
 private: // disallow accessing these members directly, risking out-of-sync
 
     // map a **start** index in tokens to the image chunk
@@ -185,6 +190,12 @@ private: // disallow accessing these members directly, risking out-of-sync
     // idx  0   1   2   3   4   5      6      7      8      9      10
     // pos  0   1   2   3   4   5      5      5      7      7      7
     // map_idx_to_media will contain: {5, img0}, {8, img1}
+
+    // chained hashes: entry k covers the first (k + 1) * hash_block_size tokens
+    // set_token() drops the entries after the change, the next append brings them back
+    std::vector<prefix_hash> hashes;
+
+    void update_hashes();
 
 public:
     server_tokens() = default;
@@ -254,6 +265,7 @@ public:
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();
+        hashes.clear();
     }
 
     void keep_first(size_t n);
@@ -261,6 +273,12 @@ public:
     std::string detokenize(const llama_context * ctx, bool special) const;
 
     size_t get_common_prefix(const server_tokens & b) const;
+
+    const std::vector<prefix_hash> & get_prefix_hashes() const { return hashes; }
+
+    // lower bound of get_common_prefix(), b is known only by its prefix hashes
+    // the result is less than one block plus one media chunk below the exact value
+    size_t get_common_prefix_lower(const std::vector<prefix_hash> & b_hashes) const;
 
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;

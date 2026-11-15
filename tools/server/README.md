@@ -295,8 +295,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-ngram-size-n N` | the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match |
 | `--spec-ngram-size-m N` | the argument has been removed. use the respective --spec-ngram-*-size-m |
 | `--spec-ngram-min-hits N` | the argument has been removed. use the respective --spec-ngram-*-min-hits |
-| `--tts-lang FNAME` | language (ISO 639-1) for audio generation<br/>see tts/README.md for per-model usage notes |
-| `--tts-voice VOICE` | voice for audio generation (model-dependent)<br/>see tts/README.md for per-model usage notes |
+| `--tts-lang FNAME` | language (ISO 639-1) for audio generation<br/>see docs/multimodal/tts.md for per-model usage notes |
+| `--tts-voice VOICE` | voice for audio generation (model-dependent)<br/>see docs/multimodal/tts.md for per-model usage notes |
 | `--embd-gemma-default` | use default EmbeddingGemma model (note: can download weights from the internet) |
 | `--fim-qwen-1.5b-default` | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet) |
 | `--fim-qwen-3b-default` | use default Qwen 2.5 Coder 3B (note: can download weights from the internet) |
@@ -854,7 +854,7 @@ Causal decoder rerankers (e.g. `Qwen3-VL-Reranker`) have no such limitation.
 
 ### POST `/tts`: Generate speech audio from text
 
-Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info, see [tts/README.md](../tts/README.md)
+Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list of supported models and their params, see [docs/multimodal/tts.md](../../docs/multimodal/tts.md)
 
 *Options:*
 
