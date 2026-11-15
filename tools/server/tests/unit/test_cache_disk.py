@@ -168,6 +168,31 @@ def test_cache_disk_broken_file():
     assert files[0] not in cache_files()
 
 
+def test_cache_disk_shared_dir():
+    # two servers with different models use the same directory
+    other = ServerPreset.stories15m_moe()
+    other.server_port = server.server_port + 1
+    other.n_slots = 1
+    other.n_ctx = 512
+    other.cache_disk = cache_dir
+
+    server.start()
+    other.start()
+    process_prompt(PROMPT_A)
+    res = other.make_request("POST", "/completion", data={"prompt": PROMPT_B, "n_predict": 0, "cache_prompt": True})
+    assert res.status_code == 200
+    other.stop()
+    server.stop()
+    assert len(cache_files()) == 2
+
+    # each server finds its own prompt
+    server.start()
+    timings = process_prompt(PROMPT_A)
+    assert TAG_DISK_LOAD in read_log()
+    assert timings["cache_n"] == len(PROMPT_A) - 1
+    assert get_metric("files") == 2
+
+
 def test_cache_disk_lora():
     create_server_preset(ServerPreset.stories15m_moe())
     server.lora_files = [download_file("https://huggingface.co/ggml-org-dev/stories15M_MOE/resolve/main/moe_shakespeare15M.gguf")]

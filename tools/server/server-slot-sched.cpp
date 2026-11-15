@@ -69,6 +69,28 @@ namespace fs = std::filesystem;
 static const char * FILE_EXT     = ".cache";
 static const char * FILE_EXT_TMP = ".tmp";
 
+// of any compat id, other files in the directory are left alone
+static const std::regex re_file_name("[0-9a-f]{16}-[0-9a-f]{32}\\.cache");
+static const std::regex re_file_name_tmp("[0-9a-f]{16}-[0-9a-f]{32}\\.cache\\.tmp");
+
+// TODO: the lock is held for a whole operation, the reads and writes of the large files included
+//       this is simple and correct, but the servers that share the directory wait for each other
+struct server_cache_disk_lock {
+    common_file_lock & lock;
+
+    server_cache_disk_lock(common_file_lock & lock) : lock(lock) {
+        static bool warned = false;
+        if (!lock.acquire() && !warned) {
+            warned = true;
+            SRV_WRN("%s", "failed to lock the disk prompt cache directory, do not share it with another server\n");
+        }
+    }
+
+    ~server_cache_disk_lock() {
+        lock.close();
+    }
+};
+
 struct server_cache_disk_header {
     uint32_t magic   = 0x48434143; // "CACH"
     uint32_t version = 1; // to be increased when the file format changes
@@ -152,12 +174,21 @@ static server_cache_disk_header read_header(std::ifstream & in, const std::strin
 }
 
 server_prompt_cache_disk::server_prompt_cache_disk(const std::string & dir, const std::string & compat, size_t limit_size, bool has_mtmd)
-        : dir(dir), compat(compat), limit_size(limit_size), has_mtmd(has_mtmd) {
-    scan();
+        : dir(dir), compat(compat), limit_size(limit_size), has_mtmd(has_mtmd), lock((this->dir / ".lock").string()) {
+    server_cache_disk_lock guard(lock);
+    refresh();
+
+    const size_t n_usable = std::count_if(entries.begin(), entries.end(), [](const auto & entry) {
+        return entry.n_tokens > 0;
+    });
+
+    SRV_INF("disk prompt cache '%s': %zu prompts, %zu files of other models, %.3f MiB (limit: %.3f MiB)\n",
+            this->dir.string().c_str(), n_usable, entries.size() - n_usable, size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
 }
 
-void server_prompt_cache_disk::scan() {
-    size_t n_usable = 0;
+void server_prompt_cache_disk::refresh() {
+    entry_list known = std::move(entries);
+    entries.clear();
 
     std::error_code ec;
     for (const auto & file : fs::directory_iterator(dir, ec)) {
@@ -166,17 +197,14 @@ void server_prompt_cache_disk::scan() {
         }
 
         const std::string name = file.path().filename().string();
-        const bool is_compat   = string_starts_with(name, compat + "-");
 
-        // left by a server that was killed while saving
-        if (is_compat && string_ends_with(name, FILE_EXT_TMP)) {
+        // a file is written under the lock, so this one was left by a server that was killed
+        if (std::regex_match(name, re_file_name_tmp)) {
             fs::remove(file.path(), ec);
             continue;
         }
 
-        // of any compat id, other files in the directory are left alone
-        static const std::regex re_name("[0-9a-f]{16}-[0-9a-f]{32}\\.cache");
-        if (!std::regex_match(name, re_name)) {
+        if (!std::regex_match(name, re_file_name)) {
             continue;
         }
 
@@ -185,16 +213,27 @@ void server_prompt_cache_disk::scan() {
         entry.size   = file.file_size(ec);
         entry.t_used = file.last_write_time(ec);
 
-        if (is_compat) {
-            try {
-                std::ifstream in(file.path(), std::ios::binary);
-                read_header(in, compat, entry);
-            } catch (const std::exception & e) {
-                SRV_WRN("removing '%s': %s\n", name.c_str(), e.what());
-                fs::remove(file.path(), ec);
-                continue;
+        if (string_starts_with(name, compat + "-")) {
+            const auto it = std::find_if(known.begin(), known.end(), [&entry](const auto & cur) {
+                return cur.name == entry.name && cur.size == entry.size;
+            });
+
+            if (it != known.end()) {
+                // the header of a known file is not read again
+                entry.n_tokens = it->n_tokens;
+                entry.hash     = it->hash;
+                entry.hashes   = std::move(it->hashes);
+                known.erase(it);
+            } else {
+                try {
+                    std::ifstream in(file.path(), std::ios::binary);
+                    read_header(in, compat, entry);
+                } catch (const std::exception & e) {
+                    SRV_WRN("removing '%s': %s\n", name.c_str(), e.what());
+                    fs::remove(file.path(), ec);
+                    continue;
+                }
             }
-            n_usable++;
         }
 
         entries.push_back(std::move(entry));
@@ -203,9 +242,6 @@ void server_prompt_cache_disk::scan() {
     entries.sort([](const auto & a, const auto & b) {
         return a.t_used < b.t_used;
     });
-
-    SRV_INF("disk prompt cache '%s': %zu prompts, %zu files of other models, %.3f MiB (limit: %.3f MiB)\n",
-            dir.string().c_str(), n_usable, entries.size() - n_usable, size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
 }
 
 size_t server_prompt_cache_disk::size() const {
@@ -253,21 +289,6 @@ bool server_prompt_cache_disk::save(const server_prompt_cache_state & state) {
 
     const std::string name = make_name(compat, header.hash);
 
-    for (auto it = entries.begin(); it != entries.end();) {
-        if (it->name == name) {
-            SRV_TRC(" - prompt is already on disk, '%s'\n", name.c_str());
-            touch(it);
-            return true;
-        }
-
-        if (0 < it->n_tokens && it->n_tokens < tokens.size() && tokens.get_hash(it->n_tokens) == it->hash) {
-            SRV_TRC(" - removing obsolete prompt with length %zu from disk, '%s'\n", it->n_tokens, it->name.c_str());
-            it = remove(it);
-        } else {
-            ++it;
-        }
-    }
-
     std::vector<char> tokens_data;
     try {
         tokens_data = tokens.serialize();
@@ -292,13 +313,31 @@ bool server_prompt_cache_disk::save(const server_prompt_cache_state & state) {
     const size_t size_hashes = hashes.size() * sizeof(server_tokens::prefix_hash);
     const size_t size_file   = sizeof(header) + size_hashes + header.size_tokens + header.size_main + header.size_drft + header.size_checkpoints;
 
-    if (limit_size > 0) {
-        if (size_file > limit_size) {
-            SRV_WRN(" - prompt size %.3f MiB exceeds disk cache size limit %.3f MiB, skipping\n",
-                    size_file / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
-            return false;
+    if (limit_size > 0 && size_file > limit_size) {
+        SRV_WRN(" - prompt size %.3f MiB exceeds disk cache size limit %.3f MiB, skipping\n",
+                size_file / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
+        return false;
+    }
+
+    server_cache_disk_lock guard(lock);
+    refresh();
+
+    for (auto it = entries.begin(); it != entries.end();) {
+        if (it->name == name) {
+            SRV_TRC(" - prompt is already on disk, '%s'\n", name.c_str());
+            touch(it);
+            return true;
         }
 
+        if (0 < it->n_tokens && it->n_tokens < tokens.size() && tokens.get_hash(it->n_tokens) == it->hash) {
+            SRV_TRC(" - removing obsolete prompt with length %zu from disk, '%s'\n", it->n_tokens, it->name.c_str());
+            it = remove(it);
+        } else {
+            ++it;
+        }
+    }
+
+    if (limit_size > 0) {
         while (!entries.empty() && size() + size_file > limit_size) {
             SRV_TRC(" - making room on disk, removing oldest file '%s' (size = %.3f MiB)\n",
                     entries.front().name.c_str(), entries.front().size / (1024.0 * 1024.0));
@@ -372,12 +411,52 @@ bool server_prompt_cache_disk::save(const server_prompt_cache_state & state) {
     return true;
 }
 
-bool server_prompt_cache_disk::load(const server_prompt_cache_disk_entry & entry, server_prompt_cache_state & state) {
-    const auto it = std::find_if(entries.begin(), entries.end(), [&entry](const auto & cur) {
-        return &cur == &entry;
-    });
-    GGML_ASSERT(it != entries.end());
+server_prompt_cache_disk::entry_list::iterator server_prompt_cache_disk::find(const server_tokens & tokens, size_t n_prefix_min, size_t n_tokens_max) {
+    auto   it_best       = entries.end();
+    size_t n_prefix_best = n_prefix_min;
 
+    for (auto it = entries.begin(); it != entries.end(); ++it) {
+        if (it->n_tokens == 0 || it->n_tokens > n_tokens_max) {
+            continue;
+        }
+
+        // only the hashes are known here, so this is a lower bound
+        const size_t n_prefix_cur = tokens.get_common_prefix_lower(it->hashes);
+
+        // don't trash large prompts
+        if (n_prefix_cur < 0.25f * it->n_tokens) {
+            continue;
+        }
+
+        if (n_prefix_cur > n_prefix_best) {
+            n_prefix_best = n_prefix_cur;
+            it_best       = it;
+        }
+    }
+
+    return it_best;
+}
+
+bool server_prompt_cache_disk::load(const server_tokens & tokens, size_t n_prefix_min, size_t n_tokens_max, server_prompt_cache_state & state) {
+    // the lock is taken only if the files that are known so far have a match
+    if (find(tokens, n_prefix_min, n_tokens_max) == entries.end()) {
+        return false;
+    }
+
+    server_cache_disk_lock guard(lock);
+    refresh();
+
+    const auto it = find(tokens, n_prefix_min, n_tokens_max);
+    if (it == entries.end()) {
+        return false;
+    }
+
+    SRV_TRC(" - found better prompt on disk with length %zu\n", it->n_tokens);
+
+    return read(it, state);
+}
+
+bool server_prompt_cache_disk::read(entry_list::iterator it, server_prompt_cache_state & state) {
     server_prompt_cache_state res;
 
     const int64_t t_start = ggml_time_us();
@@ -639,35 +718,8 @@ void server_prompt_cache::load_from_disk(const server_tokens & tokens_new, size_
         lcp_best = std::max(lcp_best, state.prompt.tokens.get_common_prefix(tokens_new));
     }
 
-    const server_prompt_cache_disk_entry * entry_best = nullptr;
-
-    for (const auto & entry : disk->get_entries()) {
-        if (entry.n_tokens == 0 || entry.n_tokens > (size_t) n_ctx_slot) {
-            continue;
-        }
-
-        // only the hashes are known here, so this is a lower bound
-        const size_t lcp_cur = tokens_new.get_common_prefix_lower(entry.hashes);
-
-        // don't trash large prompts
-        if (lcp_cur < 0.25f * entry.n_tokens) {
-            continue;
-        }
-
-        if (lcp_cur > lcp_best) {
-            lcp_best   = lcp_cur;
-            entry_best = &entry;
-        }
-    }
-
-    if (entry_best == nullptr) {
-        return;
-    }
-
-    SRV_TRC(" - found better prompt on disk with length %zu, lcp >= %zu\n", entry_best->n_tokens, lcp_best);
-
     server_prompt_cache_state state;
-    if (disk->load(*entry_best, state)) {
+    if (disk->load(tokens_new, lcp_best, n_ctx_slot, state)) {
         SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_DISK_LOAD__\n");
         states.push_back(std::move(state));
     }

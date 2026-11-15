@@ -3,6 +3,8 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include "file-lock.h"
+
 #include <filesystem>
 #include <list>
 #include <memory>
@@ -81,6 +83,7 @@ struct server_prompt_cache_state {
 
 // prompt cache on disk, one file per prompt in a flat directory: {compat}-{prompt hash}.cache
 // file: header | hash chain | tokens | state | draft state | checkpoints
+// the directory can be shared by many servers, every operation holds a lock on it
 
 struct server_prompt_cache_disk_entry {
     std::string name;
@@ -100,7 +103,7 @@ struct server_prompt_cache_disk {
     // limit_size: in bytes, 0 = no limit
     server_prompt_cache_disk(const std::string & dir, const std::string & compat, size_t limit_size, bool has_mtmd);
 
-    // pass entry.hashes to server_tokens::get_common_prefix_lower() to find a matching prompt without reading its file
+    // the files as of the last operation, another server can change them at any time
     const std::list<server_prompt_cache_disk_entry> & get_entries() const { return entries; }
 
     size_t size() const;
@@ -110,13 +113,22 @@ struct server_prompt_cache_disk {
     // removes the saved prompts that are a prefix of this one, then the oldest files if over the limit
     bool save(const server_prompt_cache_state & state);
 
-    // a file that cannot be read is removed
-    bool load(const server_prompt_cache_disk_entry & entry, server_prompt_cache_state & state);
+    // loads the saved prompt that shares the longest prefix with the tokens
+    // n_prefix_min: the saved prompt must share more tokens than this
+    // n_tokens_max: longer saved prompts are skipped
+    bool load(const server_tokens & tokens, size_t n_prefix_min, size_t n_tokens_max, server_prompt_cache_state & state);
 
 private:
     using entry_list = std::list<server_prompt_cache_disk_entry>;
 
-    void scan();
+    // reads the directory again, the lock must be held
+    void refresh();
+
+    // the prompts are compared by their hashes, no file is read
+    entry_list::iterator find(const server_tokens & tokens, size_t n_prefix_min, size_t n_tokens_max);
+
+    // a file that cannot be read is removed
+    bool read(entry_list::iterator it, server_prompt_cache_state & state);
 
     entry_list::iterator remove(entry_list::iterator it);
 
@@ -130,6 +142,8 @@ private:
 
     // oldest first
     entry_list entries;
+
+    common_file_lock lock;
 
     server_prompt_cache_disk_stats stats;
 };

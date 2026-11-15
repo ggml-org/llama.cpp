@@ -365,7 +365,8 @@ Notes:
 
 - The files hold the prompt tokens as they are, so anyone who can read the directory can read the prompts.
 - While a large state is written or read, the other requests wait.
-- Use one running server per model for a given directory.
+- Several servers can share the directory, for example the models of a router, and `--cache-disk-max-size` then applies to all of them together. They take turns: while one reads or writes a file, the others wait.
+- In router mode, a model that is unloaded has `stop-timeout` seconds to save its prompts.
 - With `--metrics`, see the `llamacpp:prompt_cache_disk_*` metrics in [`/metrics`](#get-metrics-prometheus-compatible-metrics-exporter).
 
 ### Multimodal support

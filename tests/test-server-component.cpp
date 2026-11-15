@@ -307,8 +307,12 @@ static void test_server_prompt_cache_disk(testing & t) {
         const auto other = make_cache_state(n_tok + 50, 2, 10);
         t.assert_equal("lookup", 2 * n_blk, other.prompt.tokens.get_common_prefix_lower(entry.hashes));
 
+        const size_t n_max = 100000;
+
         server_prompt_cache_state loaded;
-        t.assert_true("load", disk.load(entry, loaded));
+        t.assert_true("load, not enough shared",  !disk.load(other.prompt.tokens, 2 * n_blk, n_max, loaded));
+        t.assert_true("load, prompt is too long", !disk.load(other.prompt.tokens, 0, n_tok - 1, loaded));
+        t.assert_true("load", disk.load(other.prompt.tokens, 2 * n_blk - 1, n_max, loaded));
         t.assert_equal("tokens", n_tok, loaded.prompt.tokens.get_common_prefix(tokens));
         t.assert_equal("tokens size", n_tok, loaded.prompt.tokens.size());
         t.assert_true("state", loaded.data.main == state.data.main);
@@ -365,8 +369,9 @@ static void test_server_prompt_cache_disk(testing & t) {
         const fs::path path = dir / entry.name;
         fs::resize_file(path, fs::file_size(path) - 1);
 
+        // the other file matches the same prompt and is loaded in its place
         server_prompt_cache_state loaded;
-        t.assert_true("load broken file", !disk.load(entry, loaded));
+        t.assert_true("load with a broken file", disk.load(tokens, 0, 100000, loaded));
         t.assert_equal("broken file removed", (size_t) 1, disk.get_entries().size());
         t.assert_true("broken file deleted", !fs::exists(path));
 
@@ -377,6 +382,39 @@ static void test_server_prompt_cache_disk(testing & t) {
     }
 
     t.assert_true("other file is kept", fs::exists(dir / "notes.cache"));
+
+    {
+        // two servers with different models share the directory, both started on an empty directory
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+
+        server_prompt_cache_disk disk_a(dir.string(), compat, 0, false);
+        server_prompt_cache_disk disk_b(dir.string(), "fedcba9876543210", 4000, false);
+
+        t.assert_true("shared, save a", disk_a.save(make_cache_state(n_tok, 1, 1000)));
+        t.assert_true("shared, save a again", disk_a.save(make_cache_state(n_tok, 2, 1000)));
+        const std::string oldest = disk_a.get_entries().front().name;
+
+        // b sees the files of a and removes the oldest one to stay under its limit
+        t.assert_true("shared, save b", disk_b.save(make_cache_state(n_tok, 3, 1000)));
+        t.assert_equal("shared, b sees all files", (size_t) 2, disk_b.get_entries().size());
+        t.assert_true("shared, oldest file removed", !fs::exists(dir / oldest));
+
+        // a finds out when it looks for the removed prompt, the other one is still there
+        const auto state_1 = make_cache_state(n_tok, 1, 1000);
+        const auto state_2 = make_cache_state(n_tok, 2, 1000);
+        server_prompt_cache_state loaded;
+        t.assert_true("shared, removed prompt", !disk_a.load(state_1.prompt.tokens, n_tok - 1, 100000, loaded));
+        t.assert_equal("shared, a sees all files", (size_t) 2, disk_a.get_entries().size());
+        t.assert_true("shared, kept prompt", disk_a.load(state_2.prompt.tokens, 0, 100000, loaded));
+        t.assert_equal("shared, kept prompt tokens", n_tok, loaded.prompt.tokens.get_common_prefix(state_2.prompt.tokens));
+
+        // a file left by a killed server is removed
+        const fs::path path_tmp = dir / (oldest + ".tmp");
+        std::ofstream(path_tmp) << "partial";
+        t.assert_true("shared, save a after tmp", disk_a.save(make_cache_state(n_tok, 4, 1000)));
+        t.assert_true("shared, tmp file removed", !fs::exists(path_tmp));
+    }
 
     fs::remove_all(dir);
 }
