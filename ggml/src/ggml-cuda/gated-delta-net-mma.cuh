@@ -30,6 +30,11 @@ struct ggml_cuda_gdn_mma_args {
     int64_t sb3;
     float   scale;
     bool    eligible;
+
+    // ragged: I32 [4, n_seqs], per seq: pending tokens to replay, first token, token count, keep
+    // n_tokens is then the total of all the seqs and n_seq_tokens_max the largest count of a seq
+    const int32_t * seq_info;
+    int64_t         n_seq_tokens_max;
 };
 
 // true when ggml_cuda_gdn_mma_launch would run the chunked kernel for these args

@@ -519,6 +519,11 @@ static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_tensor * dst   = op;
     const bool replay = pend_k != nullptr;
 
+    // the ragged layout (op param 3) is not implemented
+    if (ggml_get_op_params_i32(op, 3) != 0) {
+        return false;
+    }
+
     if (q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
         g->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || state->type != GGML_TYPE_F32 ||
         dst->type != GGML_TYPE_F32) {

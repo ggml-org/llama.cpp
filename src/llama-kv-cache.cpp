@@ -1331,7 +1331,8 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
     }
 
     // each sequence set of an equal split is a single sequence
-    if (ubatch.equal_seqs() && ubatch.n_seqs == ubatch.n_seqs_unq) {
+    // a ragged split is the same, but its slices have different token counts
+    if ((ubatch.equal_seqs() || ubatch.is_ragged()) && ubatch.n_seqs == ubatch.n_seqs_unq) {
         return ubatch.n_seqs;
     }
 
@@ -1358,13 +1359,21 @@ uint32_t llama_kv_cache::get_n_kv_slices(const llama_ubatch & ubatch) {
 static std::vector<llama_kv_rows_slice> get_kv_rows_slices(const llama_ubatch & ubatch, uint32_t n_slices, uint32_t n_swa, llama_swa_type swa_type) {
     std::vector<llama_kv_rows_slice> res(n_slices);
 
+    // first token and token count of each slice
+    const bool ragged = ubatch.is_ragged() && n_slices > 1;
+
+    std::vector<uint32_t> i0(n_slices);
+    std::vector<uint32_t> n (n_slices);
+    for (uint32_t s = 0; s < n_slices; ++s) {
+        n[s]  = ragged ? ubatch.seq_tokens[s] : ubatch.n_tokens/n_slices;
+        i0[s] = s == 0 ? 0 : i0[s - 1] + n[s - 1];
+    }
+
     if (n_slices == 1) {
         res[0].seq_ids.assign(ubatch.seq_id_unq, ubatch.seq_id_unq + ubatch.n_seqs_unq);
     } else {
-        const uint32_t n_tps = ubatch.n_tokens/n_slices;
-
         for (uint32_t s = 0; s < n_slices; ++s) {
-            res[s].seq_ids = { ubatch.seq_id[s*n_tps][0] };
+            res[s].seq_ids = { ubatch.seq_id[i0[s]][0] };
         }
     }
 
@@ -1374,12 +1383,10 @@ static std::vector<llama_kv_rows_slice> get_kv_rows_slices(const llama_ubatch & 
         return res;
     }
 
-    const uint32_t n_tps = ubatch.n_tokens/n_slices;
-
     for (uint32_t s = 0; s < n_slices; ++s) {
-        llama_pos p = ubatch.pos[s*n_tps];
-        for (uint32_t i = 1; i < n_tps; ++i) {
-            p = std::min(p, ubatch.pos[s*n_tps + i]);
+        llama_pos p = ubatch.pos[i0[s]];
+        for (uint32_t i = 1; i < n[s]; ++i) {
+            p = std::min(p, ubatch.pos[i0[s] + i]);
         }
 
         res[s].p_min = swa_type == LLAMA_SWA_TYPE_STANDARD ? p - (llama_pos) n_swa + 1 : (p/(llama_pos) n_swa)*(llama_pos) n_swa;
@@ -1706,6 +1713,9 @@ struct args_set_input_attn_mask {
     int64_t n_stream;
     int64_t n_tps;
 
+    // tokens of each stream if they differ (ragged ubatch), nullptr if every stream has n_tps
+    const int32_t * n_tps_ragged;
+
     // cell of each mask column per stream, nullptr if the columns are the cells
     const int32_t * rows;
 
@@ -1748,6 +1758,9 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
         seq_first[seq_id]   = std::min(seq_first[seq_id],   i);
     }
 
+    // first token of the stream
+    uint32_t i0 = 0;
+
     for (uint32_t s = 0; s < n_stream; ++s) {
         // bookkeeping of the KQ mask cells that could change for other tokens of the same sequence
         std::unordered_map<llama_seq_id, uint32_t>              seq_srct;
@@ -1755,8 +1768,10 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
 
         const int32_t * rows = rows_all ? rows_all + s*n_kv : nullptr;
 
-        for (uint32_t ii = 0; ii < n_tps; ++ii) {
-            const uint32_t i = s*n_tps + ii;
+        const uint32_t n_ts = args.n_tps_ragged ? args.n_tps_ragged[s] : n_tps;
+
+        for (uint32_t ii = 0; ii < n_ts; ++ii) {
+            const uint32_t i = i0 + ii;
 
             const llama_seq_id seq_id = ubatch->seq_id[i][0];
 
@@ -1877,6 +1892,8 @@ skip:
                 data[idst + c] = mask_drop;
             }
         }
+
+        i0 += n_ts;
     }
 }
 
@@ -1934,6 +1951,22 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
         cells.get_seq_cells(get_kv_rows_slices(*ubatch, n_slices, n_swa, swa_type), data, n_rows);
     }
 
+    // the tokens of each slice of a ragged ubatch
+    if (attn_mask.rows_cols && attn_mask.rows_cols->buffer) {
+        GGML_ASSERT(ggml_backend_buffer_is_host(attn_mask.rows_cols->buffer));
+        GGML_ASSERT(ubatch->is_ragged() && attn_mask.rows_cols->ne[1] == ubatch->n_seqs);
+
+        int32_t * data = (int32_t *) attn_mask.rows_cols->data;
+
+        int32_t i0 = 0;
+        for (uint32_t s = 0; s < ubatch->n_seqs; ++s) {
+            data[2*s + 0] = i0;
+            data[2*s + 1] = ubatch->seq_tokens[s];
+
+            i0 += ubatch->seq_tokens[s];
+        }
+    }
+
     // the mask is left unallocated when the graph only stores K/V without attending
     if (attn_mask.raw && attn_mask.raw->buffer) {
         ggml_tensor * dst = attn_mask.raw;
@@ -1941,8 +1974,11 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
 
         const uint32_t n_tokens = ubatch->n_tokens;
 
+        // the slices of a ragged ubatch have different token counts, its mask is [n_kv_rows, n_tokens]
+        const bool ragged = rows && ubatch->is_ragged() && attn_mask.rows->ne[1] > 1;
+
         const int64_t n_kv     = dst->ne[0];
-        const int64_t n_stream = dst->ne[3]; // num streams in the current ubatch
+        const int64_t n_stream = ragged ? attn_mask.rows->ne[1] : dst->ne[3]; // num streams in the current ubatch
 
         GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
@@ -1950,7 +1986,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             GGML_ASSERT(attn_mask.rows->ne[0] == n_kv && attn_mask.rows->ne[1] == n_stream);
         }
 
-        GGML_ASSERT(n_tokens%n_stream == 0);
+        GGML_ASSERT(ragged || n_tokens%n_stream == 0);
 
         // n_tps == n_tokens_per_stream
         const int64_t n_tps = n_tokens/n_stream;
@@ -1976,6 +2012,7 @@ void llama_kv_cache::set_input_attn_mask(const llm_attn_mask & attn_mask, const 
             /*.n_kv             =*/ n_kv,
             /*.n_stream         =*/ n_stream,
             /*.n_tps            =*/ n_tps,
+            /*.n_tps_ragged     =*/ ragged ? ubatch->seq_tokens : nullptr,
             /*.rows             =*/ rows,
             /*.block_uniform    =*/ attn_mask.block_uniform,
         };

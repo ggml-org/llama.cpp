@@ -26,6 +26,7 @@ llama_memory_hybrid::llama_memory_hybrid(
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
                      bool   rs_replay,
+                     bool   ragged,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -65,7 +66,10 @@ llama_memory_hybrid::llama_memory_hybrid(
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
-    )) {}
+    )) {
+    // the attention cache takes ubatches with any mix of seqs only when it is unified
+    mem_recr->ragged = ragged && mem_attn->get_n_stream() == 1;
+}
 
 llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     do {
@@ -89,7 +93,11 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
                 //   so that the rollback snapshots remain valid
                 const uint32_t n_rs_seq = mem_recr->n_rs_seq;
 
-                ubatch = balloc.split_equal(n_ubatch, !unified, n_rs_seq > 0 ? n_rs_seq + 1 : 0);
+                if (mem_recr->ragged) {
+                    ubatch = balloc.split_ragged(n_ubatch, n_rs_seq > 0 ? n_rs_seq + 1 : 0);
+                } else {
+                    ubatch = balloc.split_equal(n_ubatch, !unified, n_rs_seq > 0 ? n_rs_seq + 1 : 0);
+                }
             }
 
             if (ubatch.n_tokens == 0) {

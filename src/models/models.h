@@ -88,6 +88,32 @@ struct llm_build_delta_net_base : public llm_graph_context {
             ggml_tensor *        b,
             ggml_tensor *        s,
             int                  il);
+
+    // ragged ubatch variants: the token tensors hold the tokens of all the seqs in dim 2 [TAG_RECURRENT_RAGGED]
+    // x: [channels, n_tokens, 1] new conv inputs; returns [n_tokens + n_conv*n_seqs, channels, 1], per seq its window then its tokens
+    ggml_tensor * build_conv_state_ragged(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        conv_states_all,
+            ggml_tensor *        x,
+            int64_t              n_conv,
+            int64_t              channels,
+            int                  il);
+
+    // conv output of the input above: [channels, n_tokens + n_conv*(n_seqs - 1), 1] -> [channels, n_tokens, 1]
+    ggml_tensor * build_conv_out_ragged(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        conv_out);
+
+    ggml_tensor * build_recurrent_attn_ragged(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        ssm_states_all,
+            ggml_tensor *        q,
+            ggml_tensor *        k,
+            ggml_tensor *        v,
+            ggml_tensor *        g,
+            ggml_tensor *        b,
+            ggml_tensor *        s,
+            int                  il);
 };
 
 struct llm_build_lfm_base : public llm_graph_context {

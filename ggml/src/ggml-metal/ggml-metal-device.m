@@ -1747,6 +1747,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             if (op->src[5] != NULL) {
                 const struct ggml_tensor * kv_rows = op->src[5];
 
+                // slices with different column counts (ggml_flash_attn_ext_rows_ragged) are not implemented
+                if (op->src[6] != NULL) {
+                    return false;
+                }
+
                 if (kv_rows->type != GGML_TYPE_I32 ||
                     !ggml_is_contiguous(kv_rows) ||
                     kv_rows->ne[2] != 1 || kv_rows->ne[3] != 1 ||
@@ -1902,7 +1907,8 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_RWKV_WKV7:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
+            // the ragged layout (op param 3) is not implemented
+            return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0 && ((const int32_t *) op->op_params)[3] == 0;
         case GGML_OP_SOLVE_TRI:
             return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:

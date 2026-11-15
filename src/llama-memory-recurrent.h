@@ -81,6 +81,9 @@ public:
     // deferred commit: keep one state plane plus the inputs of the last ubatch, replay the accepted part in the next ubatch
     bool rs_replay = false;
 
+    // the owner can make ubatches where the seqs have different token counts (see llama_batch_allocr::split_ragged)
+    bool ragged = false;
+
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
     // computed before each graph build

@@ -8812,6 +8812,20 @@ void ggml_compute_forward_top_k(
     }
 }
 
+// length aware kv_rows: the slice of q column iq1 and the first column after it (see ggml_flash_attn_ext_rows_ragged)
+static int64_t ggml_fa_kv_rows_slice(const ggml_tensor * kv_rows_cols, int64_t iq1, int64_t * i_end) {
+    const int32_t * cols = (const int32_t *) kv_rows_cols->data;
+
+    for (int64_t s = 0; s < kv_rows_cols->ne[1]; ++s) {
+        if (iq1 >= cols[2*s] && iq1 < cols[2*s] + cols[2*s + 1]) {
+            *i_end = cols[2*s] + cols[2*s + 1];
+            return s;
+        }
+    }
+
+    GGML_ABORT("q column %d is not in a kv_rows slice", (int) iq1);
+}
+
 static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -8928,7 +8942,11 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
         q_to_vec_dot(pq, Q_q, DK);
 
-        const int32_t * rows = kv_rows ? (const int32_t *) ((const char *) kv_rows->data + iq3*kv_rows->nb[1]) : nullptr;
+        // length aware kv_rows: the slice of this q column
+        int64_t i_slice_end = 0;
+        const int64_t i_slice = dst->src[6] ? ggml_fa_kv_rows_slice(dst->src[6], iq1, &i_slice_end) : iq3;
+
+        const int32_t * rows = kv_rows ? (const int32_t *) ((const char *) kv_rows->data + i_slice*kv_rows->nb[1]) : nullptr;
 
         // online softmax / attention
         // loop over n_kv and n_head_kv
@@ -9120,15 +9138,20 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
         const int iq2 = (ir - iq3*neq2*neq1)/neq1;
         const int iq1 = (ir - iq3*neq2*neq1 - iq2*neq1);
 
+        // length aware kv_rows: the slice of the first q column of this tile and the end of the slice
+        int64_t i_slice_end = neq1;
+        const int64_t i_slice = dst->src[6] ? ggml_fa_kv_rows_slice(dst->src[6], iq1, &i_slice_end) : iq3;
+
         // padding rows are masked, read row 0 for them
-        const int32_t * rows = kv_rows ? (const int32_t *) ((const char *) kv_rows->data + iq3*kv_rows->nb[1]) : nullptr;
+        const int32_t * rows = kv_rows ? (const int32_t *) ((const char *) kv_rows->data + i_slice*kv_rows->nb[1]) : nullptr;
         auto kv_row = [rows](int64_t i) -> int64_t { return rows ? std::max<int32_t>(rows[i], 0) : i; };
 
         // Number of valid rows in this tile:
         // - limited by tile size (Q_TILE_SZ)
         // - limited by chunk boundary (ir1 - ir)
         // - limited by head boundary (neq1 - iq1) to avoid crossing into next head
-        const int tile_rows = MIN(Q_TILE_SZ, MIN((int)(ir1 - ir), (int)(neq1 - iq1)));
+        // - limited by the slice boundary, a tile reads K/V through a single row list
+        const int tile_rows = MIN(Q_TILE_SZ, MIN((int)(ir1 - ir), (int)(i_slice_end - iq1)));
         GGML_ASSERT(tile_rows > 0);
 
         const uint32_t h = iq2; // head index
@@ -11104,7 +11127,10 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     const int64_t S_v      = src_v->ne[0];
     const int64_t H        = src_v->ne[1];
     const int64_t n_tokens = src_v->ne[2];
-    const int64_t n_seqs   = src_v->ne[3];
+    const int64_t n_seqs   = src_state->ne[3];
+
+    // ragged: the token tensors hold the tokens of all the seqs in dim 2 (see ggml_gated_delta_net_ragged)
+    const bool ragged = ggml_get_op_params_i32(dst, 3) != 0;
 
     GGML_ASSERT(ggml_is_contiguous_rows(src_q));
     GGML_ASSERT(ggml_is_contiguous_rows(src_k));
@@ -11142,16 +11168,18 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
     const int64_t n_pend = src_pk ? ggml_get_op_params_i32(dst, 1) : 0;
     const bool    keep   = src_pk && ggml_get_op_params_i32(dst, 2) != 0;
 
-    const int64_t per_thread = S_v + (K > 1 || keep ? S_v * S_v : 0);
+    // a ragged seq can keep its own tokens pending
+    const bool    scratch    = K > 1 || keep || (ragged && src_pk);
+    const int64_t per_thread = S_v + (scratch ? S_v * S_v : 0);
     const int ith = params->ith;
 
     float * delta       = (float *)params->wdata + ith * per_thread + CACHE_LINE_SIZE_F32;
-    float * state_work  = K > 1 || keep ? (delta + S_v) : nullptr;
+    float * state_work  = scratch ? (delta + S_v) : nullptr;
 
     // output layout: [attn_scores | new_states]
     // attn_scores: S_v * H * n_tokens * n_seqs    floats
     // new_states:  S_v * S_v * H * n_seqs * K     floats  (K snapshot slots; last min(n_tokens, K))
-    const int64_t attn_score_elems    = S_v * H * n_tokens * n_seqs;
+    const int64_t attn_score_elems    = S_v * H * n_tokens * src_v->ne[3];
     const int64_t state_size_per_snap = S_v * S_v * H * n_seqs;
     float * attn_out_base  = (float *)dst->data;
     float * state_out_base = (float *)dst->data + attn_score_elems;
@@ -11170,7 +11198,17 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
     for (int64_t ir = ir0; ir < ir1; ++ir) {
         const int64_t iv1 = ir % H; // head_index
-        const int64_t iv3 = ir / H; // sequence
+        const int64_t is  = ir / H; // sequence
+
+        // tokens of this seq: [t0, t0 + n_t) of dim 2 if ragged, else all of dim 2 at index is of dim 3
+        const int32_t * seq_info = ragged ? (const int32_t *) src_n_rep->data + 4*is : nullptr;
+
+        const int64_t iv3    = ragged ? 0 : is;
+        const int64_t t0     = ragged ? seq_info[1] : 0;
+        const int64_t n_t    = ragged ? seq_info[2] : n_tokens;
+        const bool    keep_s = ragged ? src_pk && seq_info[3] != 0 : keep;
+
+        GGML_ASSERT(t0 >= 0 && n_t >= 0 && t0 + n_t <= n_tokens);
 
         const int64_t iq1 = iv1 % neq1;
         const int64_t ik1 = iv1 % nek1;
@@ -11180,22 +11218,22 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
 
         // For K=1, write directly to the single output slot to avoid an extra memcpy at the end.
         // For K>1, work in scratch and copy out per-token when the slot is in range.
-        float * s_out = (K > 1 || keep)
+        float * s_out = (K > 1 || keep_s)
             ? state_work
-            : state_out_base + (iv3 * H + iv1) * S_v * S_v;
+            : state_out_base + (is * H + iv1) * S_v * S_v;
 
         // copy input state into the working buffer and operate in-place
         // state layout [S_v, S_v, H, n_seqs]: seq iv3 starts at iv3 * state_seq_stride.
-        const float * s_in = state_in_base + iv3 * state_seq_stride + iv1 * S_v * S_v;
+        const float * s_in = state_in_base + is * state_seq_stride + iv1 * S_v * S_v;
         memcpy(s_out, s_in, S_v * S_v * sizeof(float));
 
         if (src_pk) {
-            const int64_t n_r = ((const int32_t *) src_n_rep->data)[iv3];
+            const int64_t n_r = ragged ? seq_info[0] : ((const int32_t *) src_n_rep->data)[is];
             GGML_ASSERT(n_r >= 0 && n_r <= n_pend);
 
-            const char * pk  = (const char *) src_pk->data  + iv3*src_pk->nb[3]  + ik1*src_pk->nb[1];
-            const char * pv  = (const char *) src_pv->data  + iv3*src_pv->nb[3]  + iv1*src_pv->nb[1];
-            const char * pgb = (const char *) src_pgb->data + iv3*src_pgb->nb[3] + iv1*src_pgb->nb[1];
+            const char * pk  = (const char *) src_pk->data  + is*src_pk->nb[3]  + ik1*src_pk->nb[1];
+            const char * pv  = (const char *) src_pv->data  + is*src_pv->nb[3]  + iv1*src_pv->nb[1];
+            const char * pgb = (const char *) src_pgb->data + is*src_pgb->nb[3] + iv1*src_pgb->nb[1];
 
             for (int64_t t = 0; t < n_r; t++) {
                 const float * k_d    = (const float *) (pk  + t*src_pk->nb[2]);
@@ -11226,15 +11264,15 @@ static void ggml_compute_forward_gated_delta_net_one_chunk(
             }
 
             // the committed state, the new tokens go on in the scratch
-            if (keep) {
-                memcpy(state_out_base + (iv3 * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
+            if (keep_s) {
+                memcpy(state_out_base + (is * H + iv1) * S_v * S_v, s_out, S_v * S_v * sizeof(float));
             }
         }
 
         // attn output pointer for first token of this (head, seq)
-        float * attn_data = attn_out_base + (iv3 * n_tokens * H + iv1) * S_v;
+        float * attn_data = attn_out_base + ((iv3 * n_tokens + t0) * H + iv1) * S_v;
 
-        for (int64_t t = 0; t < n_tokens; t++) {
+        for (int64_t t = t0; t < t0 + n_t; t++) {
             const float * q_d = (const float *)((const char *)src_q->data + iq3 * nbq3 + t * nbq2 + iq1 * nbq1);
             const float * k_d = (const float *)((const char *)src_k->data + ik3 * nbk3 + t * nbk2 + ik1 * nbk1);
             const float * v_d = (const float *)((const char *)src_v->data + iv3 * nbv3 + t * nbv2 + iv1 * nbv1);
@@ -11297,7 +11335,7 @@ static void ggml_compute_forward_gated_delta_net_f32(
         ggml_tensor * dst) {
 
     ggml_tensor * V = dst->src[2];
-    int64_t nr = V->ne[1] * V->ne[3];
+    int64_t nr = V->ne[1] * dst->src[5]->ne[3];
 
     // disable for NUMA
     const bool disable_chunking = ggml_is_numa();

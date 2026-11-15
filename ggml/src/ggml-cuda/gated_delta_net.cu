@@ -18,6 +18,9 @@ struct gdn_replay_args {
     int             n_pend;
     bool            keep;  // write the state after the replay, not the final one
 
+    // ragged: I32 [4, n_seqs], per seq: pending tokens to replay, first token, token count, keep
+    const int32_t * seq_info;
+
     // optional: store the k, v, g, beta inputs of the new tokens (fused cpys)
     float *         st[4];
     int64_t         st2[4]; // token stride in floats
@@ -79,12 +82,23 @@ gated_delta_net_cuda(const float * q,
     const int64_t state_out_offset     = (sequence * H + h_idx) * S_v * S_v;
     state += state_out_offset;
     curr_state += state_in_offset + col * S_v;
-    attn_data += (sequence * n_tokens * H + h_idx) * S_v;
+
+    ggml_cuda_pdl_sync();
+
+    // tokens of this seq: [t0, t0 + n_t) of dim 2 if ragged (the seq strides are 0), else all of dim 2
+    int64_t t0   = 0;
+    int     n_t  = n_tokens;
+    bool    keep = rep.keep;
+    if (rep.seq_info != nullptr && n_tokens > 0) {
+        t0   = rep.seq_info[4 * sequence + 1];
+        n_t  = rep.seq_info[4 * sequence + 2];
+        keep = rep.seq_info[4 * sequence + 3] != 0;
+    }
+    attn_data += ((rep.seq_info != nullptr ? t0 : sequence * n_tokens) * H + h_idx) * S_v;
 
     float         s_shard[rows_per_lane];
     // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
 
-    ggml_cuda_pdl_sync();
 #pragma unroll
     for (int r = 0; r < rows_per_lane; r++) {
         const int i = r * lanes_per_col + lane_in_col;
@@ -92,7 +106,7 @@ gated_delta_net_cuda(const float * q,
     }
 
     if constexpr (replay) {
-        const int     n_r = rep.n_rep[sequence];
+        const int     n_r = rep.seq_info != nullptr ? rep.seq_info[4 * sequence] : rep.n_rep[sequence];
         const float * pk  = rep.pk  + sequence * rep.sk3 + iq1   * rep.sk1;
         const float * pv  = rep.pv  + sequence * rep.sv3 + h_idx * rep.sv1;
         const float * pgb = rep.pgb + sequence * rep.sg3 + h_idx * rep.sg1;
@@ -130,7 +144,7 @@ gated_delta_net_cuda(const float * q,
             }
         }
 
-        if (rep.keep) {
+        if (keep) {
 #pragma unroll
             for (int r = 0; r < rows_per_lane; r++) {
                 state[col * S_v + r * lanes_per_col + lane_in_col] = s_shard[r];
@@ -138,12 +152,12 @@ gated_delta_net_cuda(const float * q,
         }
     }
 
-    for (int t = 0; t < n_tokens; t++) {
-        const float * q_t = q + iq3 * sq3 + t * sq2 + iq1 * sq1;
-        const float * k_t = k + iq3 * sq3 + t * sq2 + iq1 * sq1;
-        const float * v_t = v + sequence * sv3 + t * sv2 + h_idx * sv1;
+    for (int t = 0; t < n_t; t++) {
+        const float * q_t = q + iq3 * sq3 + (t0 + t) * sq2 + iq1 * sq1;
+        const float * k_t = k + iq3 * sq3 + (t0 + t) * sq2 + iq1 * sq1;
+        const float * v_t = v + sequence * sv3 + (t0 + t) * sv2 + h_idx * sv1;
 
-        const int64_t gb_offset = sequence * sb3 + t * sb2 + h_idx * sb1;
+        const int64_t gb_offset = sequence * sb3 + (t0 + t) * sb2 + h_idx * sb1;
         const float * beta_t = beta + gb_offset;
         const float * g_t    = g    + gb_offset * (KDA ? S_v : 1);
 
@@ -257,7 +271,7 @@ gated_delta_net_cuda(const float * q,
     }
 
     if constexpr (!keep_rs_t) {
-        if (replay && rep.keep) {
+        if (replay && keep) {
             return;
         }
 #pragma unroll
@@ -339,6 +353,9 @@ static ggml_cuda_gdn_mma_args ggml_cuda_gdn_mma_args_from_tensor(const ggml_tens
 
     const int64_t S_v = v->ne[0];
     const int64_t H   = v->ne[1];
+
+    // ragged: the tokens of all the seqs are in dim 2, the kernel reads the range of each seq from seq_info
+    const bool ragged = ggml_get_op_params_i32(dst, 3) != 0;
     return {
         (const float *) q->data,
         (const float *) k->data,
@@ -351,19 +368,21 @@ static ggml_cuda_gdn_mma_args ggml_cuda_gdn_mma_args_from_tensor(const ggml_tens
         H,
         q->ne[1],
         v->ne[2],
-        v->ne[3],
+        state->ne[3],
         v->ne[3] / q->ne[3],
         (int64_t) (q->nb[1] / sizeof(float)),
         (int64_t) (q->nb[2] / sizeof(float)),
-        (int64_t) (q->nb[3] / sizeof(float)),
+        ragged ? 0 : (int64_t) (q->nb[3] / sizeof(float)),
         (int64_t) (v->nb[1] / sizeof(float)),
         (int64_t) (v->nb[2] / sizeof(float)),
-        (int64_t) (v->nb[3] / sizeof(float)),
+        ragged ? 0 : (int64_t) (v->nb[3] / sizeof(float)),
         (int64_t) (beta->nb[1] / sizeof(float)),
         (int64_t) (beta->nb[2] / sizeof(float)),
-        (int64_t) (beta->nb[3] / sizeof(float)),
+        ragged ? 0 : (int64_t) (beta->nb[3] / sizeof(float)),
         1.0f / sqrtf((float) S_v),
         g->ne[0] == 1 && ggml_get_op_params_i32(dst, 0) < v->ne[2] && S_v == 128 && q->ne[0] == 128,
+        ragged ? (const int32_t *) dst->src[9]->data : nullptr,
+        ragged ? ggml_get_op_params_i32(dst, 4) : 0,
     };
 }
 
@@ -387,9 +406,12 @@ static void ggml_cuda_op_gated_delta_net_impl(
     const int64_t S_v      = nev0;
     const int64_t H        = nev1;
     const int64_t n_tokens = nev2;
-    const int64_t n_seqs   = nev3;
+    const int64_t n_seqs   = src_state->ne[3];
 
     const bool kda = (src_g->ne[0] == S_v);
+
+    // ragged: the tokens of all the seqs are in dim 2, the kernels read the range of each seq from seq_info
+    const bool ragged = ggml_get_op_params_i32(dst, 3) != 0;
 
     GGML_ASSERT(neq1 == nek1);
     const int64_t neqk1 = neq1;
@@ -419,13 +441,13 @@ static void ggml_cuda_op_gated_delta_net_impl(
     // strides in floats (beta strides used for both g and beta offset computation)
     const int64_t sq1 = nbq1 / sizeof(float);
     const int64_t sq2 = nbq2 / sizeof(float);
-    const int64_t sq3 = nbq3 / sizeof(float);
+    const int64_t sq3 = ragged ? 0 : nbq3 / sizeof(float);
     const int64_t sv1 = nbv1 / sizeof(float);
     const int64_t sv2 = nbv2 / sizeof(float);
-    const int64_t sv3 = nbv3 / sizeof(float);
+    const int64_t sv3 = ragged ? 0 : nbv3 / sizeof(float);
     const int64_t sb1 = nbb1 / sizeof(float);
     const int64_t sb2 = nbb2 / sizeof(float);
-    const int64_t sb3 = nbb3 / sizeof(float);
+    const int64_t sb3 = ragged ? 0 : nbb3 / sizeof(float);
 
     const float scale = 1.0f / sqrtf((float) S_v);
 
@@ -436,7 +458,7 @@ static void ggml_cuda_op_gated_delta_net_impl(
     const bool keep_rs = K > 1;
 
     // recurrent state -> gdn_out tail (after attention scores), or the cache when fusing
-    float * state_d           = dst_d + S_v * H * n_tokens * n_seqs;
+    float * state_d           = dst_d + S_v * H * n_tokens * nev3;
     int64_t state_slot_stride = S_v * S_v * H * n_seqs;
     if (cache != nullptr) {
         state_d           = cache->data;
@@ -446,6 +468,10 @@ static void ggml_cuda_op_gated_delta_net_impl(
     const ggml_tensor * src_pend  = dst->src[6];
 
     gdn_replay_args rep = {};
+    if (ragged) {
+        GGML_ASSERT(K == 1);
+        rep.seq_info = (const int32_t *) dst->src[9]->data;
+    }
     if (src_pend) {
         const ggml_tensor * src_pv  = dst->src[7];
         const ggml_tensor * src_pgb = dst->src[8];
@@ -454,7 +480,7 @@ static void ggml_cuda_op_gated_delta_net_impl(
         rep.pk     = (const float *) src_pend->data;
         rep.pv     = (const float *) src_pv->data;
         rep.pgb    = (const float *) src_pgb->data;
-        rep.n_rep  = (const int32_t *) dst->src[9]->data;
+        rep.n_rep  = ragged ? nullptr : (const int32_t *) dst->src[9]->data;
         rep.sk1    = src_pend->nb[1] / sizeof(float);
         rep.sk2    = src_pend->nb[2] / sizeof(float);
         rep.sk3    = src_pend->nb[3] / sizeof(float);
@@ -487,9 +513,10 @@ static void ggml_cuda_op_gated_delta_net_impl(
         if (ggml_cuda_gdn_mma_launch(ctx.device, args, stream)) {
             return;
         }
-    } else if (!rep.keep && rep.st[0] == nullptr) {
+    } else if ((!rep.keep || ragged) && rep.st[0] == nullptr) {
         // the chunked kernels (not KDA) do not replay: replay the pending tokens into the state output, then
         // run the new tokens from there in place (each thread reads and writes the same state elements)
+        // ragged: the chunked kernel leaves the state of the seqs that keep their tokens pending
         ggml_cuda_gdn_mma_args args = ggml_cuda_gdn_mma_args_from_tensor(dst);
         args.state     = state_d;
         args.state_out = state_d;

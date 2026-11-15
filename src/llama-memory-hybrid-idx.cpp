@@ -45,7 +45,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
         no_alloc,
         type_k, type_v, v_trans, kv_size, n_swa, swa_type,
         type_r, type_s, rs_size,
-        n_seq_max, n_rs_seq, rs_replay, offload, unified,
+        n_seq_max, n_rs_seq, rs_replay, /*ragged=*/false, offload, unified,
         filter_attn, filter_recr),
     hparams_idx(model.hparams),
     mem_idx(filter_idx == nullptr ? nullptr : [&] {

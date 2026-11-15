@@ -2536,6 +2536,25 @@ extern "C" {
             float                 max_bias,
             float                 logit_softcap);
 
+    // same as ggml_flash_attn_ext_rows, but the q slices have different column counts [EXPERIMENTAL]
+    // q:            [n_embd_k, n_batch, n_head, 1], the columns of slice 0, then of slice 1, ...
+    // mask:         [n_kv,     n_batch, ne32,   1]
+    // kv_rows:      [n_kv,     n_slices] I32
+    // kv_rows_cols: [2,        n_slices] I32, first q column and q column count of each slice
+    // n_cols_max is the largest column count of a slice, a hint to select the kernel
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_rows_ragged(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * kv_rows,
+            struct ggml_tensor  * kv_rows_cols,
+            int32_t               n_cols_max,
+            float                 scale,
+            float                 max_bias,
+            float                 logit_softcap);
+
     GGML_DEPRECATED(GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec),
@@ -2715,6 +2734,28 @@ extern "C" {
             struct ggml_tensor  * n_rep,
             int64_t               K,
             bool                  keep);
+
+    // ragged [EXPERIMENTAL]: the seqs have different token counts
+    //   q, k, v, g, beta : [.., n_tokens, 1], the tokens of seq 0, then the tokens of seq 1, ...
+    //   state            : [S_v, S_v, H_v, n_seqs]
+    //   seq_info         : I32 [4, n_seqs], per seq: pending tokens to replay, first token, token count, keep
+    // pend_k, pend_v and pend_gb are optional (all set or none)
+    // the state output of a seq is the state after the replay if its keep is set, else its final state
+    // n_seq_tokens_max is the largest token count of a seq, a hint to select the kernel
+    // op param 3 is set: backends that do not implement the ragged layout reject the op
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_ragged(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            struct ggml_tensor  * pend_k,
+            struct ggml_tensor  * pend_v,
+            struct ggml_tensor  * pend_gb,
+            struct ggml_tensor  * seq_info,
+            int64_t               n_seq_tokens_max);
 
     // DSA lightning indexer
     //

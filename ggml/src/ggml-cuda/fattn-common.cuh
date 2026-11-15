@@ -26,6 +26,7 @@ typedef void (* fattn_kernel_t)(
         const char * __restrict__ sinks,
         const int  * __restrict__ KV_max,
         const int  * __restrict__ KV_rows,
+        const int  * __restrict__ q_tiles,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -717,19 +718,46 @@ constexpr __device__ dequantize_V_t get_dequantize_V() {
     }
 }
 
+// length aware kv_rows: the q slices have different column counts (see ggml_flash_attn_ext_rows_ragged)
+// a tile is then a range of at most ncols1 columns of one slice, tile 0 has the first columns of slice 0
+// flash_attn_mask_to_KV_max writes the table of the tiles after KV_max, per tile: first column, column count, slice
+struct flash_attn_q_tile {
+    int   col0;  // first q column, 0 without a table
+    int   slice; // row list of kv_rows, 0 without a table
+    int   jt;    // tile index for the column math, 0 with a table: the columns then start at col0
+    uint3 ne01;  // fastdiv values of the column count, z == 0 if the tile has no columns
+};
+
+static __device__ __forceinline__ flash_attn_q_tile flash_attn_get_q_tile(const int * __restrict__ q_tiles, const int jt, const uint3 ne01) {
+    if (q_tiles == nullptr) {
+        return {0, 0, jt, ne01};
+    }
+
+    const uint32_t d = q_tiles[3*jt + 1];
+
+    // same values as init_fastdiv_values
+    uint32_t L = 0;
+    while (L < 32 && (uint32_t{ 1 } << L) < d) {
+        L++;
+    }
+    const uint32_t mp = d == 0 ? 0 : (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
+
+    return {q_tiles[3*jt + 0], q_tiles[3*jt + 2], 0, make_uint3(mp, L, d)};
+}
+
 template <int ncols1>
 __launch_bounds__(FATTN_KQ_STRIDE/2, 1)
 static __global__ void flash_attn_mask_to_KV_max(
-        const half2 * mask_ptr, int * KV_max_ptr, const int ne30, const int64_t s31, const int64_t s33) {
-    const half2 * GGML_CUDA_RESTRICT mask   = mask_ptr;
-    int         * GGML_CUDA_RESTRICT KV_max = KV_max_ptr;
+        const half2 * mask_ptr, int * KV_max_ptr, const int ne30, const int64_t s31, const int64_t s33,
+        const int * q_slices_ptr, const int n_slices) {
+    const half2 * GGML_CUDA_RESTRICT mask     = mask_ptr;
+    int         * GGML_CUDA_RESTRICT KV_max   = KV_max_ptr;
+    const int   * GGML_CUDA_RESTRICT q_slices = q_slices_ptr;
 
     const int ne31     = gridDim.x;
     const int tid      = threadIdx.x;
     const int sequence = blockIdx.y;
     const int jt       = blockIdx.x;
-
-    mask += sequence*s33 + jt*ncols1*s31;
 
     __shared__ int buf_iw[WARP_SIZE];
     if (tid < WARP_SIZE) {
@@ -738,13 +766,37 @@ static __global__ void flash_attn_mask_to_KV_max(
     ggml_cuda_pdl_sync();
     __syncthreads();
 
-    int KV_max_sj = (ne30 - 1) * FATTN_KQ_STRIDE;
+    // the columns of this tile and their slice
+    int col0   = jt*ncols1;
+    int n_cols = ncols1;
+    int slice  = sequence;
+    if (q_slices != nullptr) {
+        // length aware kv_rows: q_slices has the first column and the column count of each slice
+        int jt_slice = jt;
+
+        n_cols = 0;
+        for (slice = 0; slice < n_slices; ++slice) {
+            const int n      = q_slices[2*slice + 1];
+            const int ntiles = (n + ncols1 - 1) / ncols1;
+            if (jt_slice < ntiles) {
+                col0   = q_slices[2*slice] + jt_slice*ncols1;
+                n_cols = min(ncols1, n - jt_slice*ncols1);
+                break;
+            }
+            jt_slice -= ntiles;
+        }
+    }
+
+    mask += sequence*s33 + col0*s31;
+
+    // a tile without columns skips all of K/V
+    int KV_max_sj = n_cols > 0 ? (ne30 - 1) * FATTN_KQ_STRIDE : -FATTN_KQ_STRIDE;
     for (; KV_max_sj >= 0; KV_max_sj -= FATTN_KQ_STRIDE) {
         int all_inf = 1;
 
 #pragma unroll
         for (int j = 0; j < ncols1; ++j) {
-            const float2 tmp = __half22float2(mask[j*s31 + KV_max_sj/2 + tid]);
+            const float2 tmp = __half22float2(mask[(q_slices != nullptr ? min(j, n_cols - 1) : j)*s31 + KV_max_sj/2 + tid]);
             all_inf = all_inf && int(isinf(tmp.x)) && int(isinf(tmp.y));
         }
 
@@ -772,6 +824,14 @@ static __global__ void flash_attn_mask_to_KV_max(
     }
 
     KV_max[sequence*ne31 + jt] = KV_max_sj;
+
+    if (q_slices != nullptr) {
+        int * q_tile = KV_max + ne31 + 3*jt;
+
+        q_tile[0] = col0;
+        q_tile[1] = n_cols;
+        q_tile[2] = slice;
+    }
 }
 
 void ggml_cuda_flash_attn_ext_compact_mask(
@@ -788,11 +848,13 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
         const int blocks_per_tile,
         const uint3 fd_iter_j_z_ne12,
         const uint3 fd_iter_j_z,
-        const uint3 fd_iter_j) {
+        const uint3 fd_iter_j,
+        const int * q_tiles_ptr) {
     constexpr int ncols = ncols1*ncols2;
     ggml_cuda_pdl_lc();
     float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
     const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
+    const int    * GGML_CUDA_RESTRICT q_tiles   = q_tiles_ptr;
 
     const int tile_idx = blockIdx.x; // One block per output tile.
     const int j        = blockIdx.y;
@@ -818,13 +880,18 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
 
     const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 
-    if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
+    ggml_cuda_pdl_sync();
+
+    // length aware kv_rows: the columns of the tile come from the table, see flash_attn_q_tile
+    const int col0   = q_tiles != nullptr ? q_tiles[3*jt + 0] : sequence*ne01 + jt*ncols1;
+    const int n_cols = q_tiles != nullptr ? q_tiles[3*jt + 1] : ne01 - jt*ncols1;
+
+    if (j >= n_cols || zt_gqa*ncols2 + c >= gqa_ratio) {
         return;
     }
 
-    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+    dst += (int64_t(col0) + j)*ne02*D + zt_Q*D + c*D + tid;
 
-    ggml_cuda_pdl_sync();
     // Load the partial result that needs a fixup
     float dst_val = *dst;
     float max_val;
@@ -872,9 +939,11 @@ static __global__ void flash_attn_stream_k_fixup_general(
         const uint3 fd_iter_k_j_z_ne12,
         const uint3 fd_iter_k_j_z,
         const uint3 fd_iter_k_j,
-        const uint3 fd_iter_k) {
+        const uint3 fd_iter_k,
+        const int * q_tiles_ptr) {
     float        * GGML_CUDA_RESTRICT dst       = dst_ptr;
     const float2 * GGML_CUDA_RESTRICT dst_fixup = dst_fixup_ptr;
+    const int    * GGML_CUDA_RESTRICT q_tiles   = q_tiles_ptr;
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -908,17 +977,22 @@ static __global__ void flash_attn_stream_k_fixup_general(
 
     const int zt_Q = z_KV*gqa_ratio + zt_gqa*ncols2; // Global Q head start index.
 
-    if (jt*ncols1 + j >= ne01 || zt_gqa*ncols2 + c >= gqa_ratio) {
+    ggml_cuda_pdl_sync();
+
+    // length aware kv_rows: the columns of the tile come from the table, see flash_attn_q_tile
+    const int col0   = q_tiles != nullptr ? q_tiles[3*jt + 0] : sequence*ne01 + jt*ncols1;
+    const int n_cols = q_tiles != nullptr ? q_tiles[3*jt + 1] : ne01 - jt*ncols1;
+
+    if (j >= n_cols || zt_gqa*ncols2 + c >= gqa_ratio) {
         return;
     }
 
-    dst += sequence*ne02*ne01*D + jt*ne02*(ncols1*D) + zt_Q*D + (j*ne02 + c)*D + tid;
+    dst += (int64_t(col0) + j)*ne02*D + zt_Q*D + c*D + tid;
 
     // Load the partial result that needs a fixup:
     float dst_val = 0.0f;
     float max_val = 0.0f;
     float rowsum  = 0.0f;
-    ggml_cuda_pdl_sync();
     {
         dst_val = *dst;
 
@@ -1046,6 +1120,9 @@ void launch_fattn(
     const ggml_tensor * sinks   = dst->src[4];
     const ggml_tensor * kv_rows = dst->src[5];
 
+    // length aware kv_rows: the first q column and the q column count of each slice, see flash_attn_q_tile
+    const ggml_tensor * q_slices = dst->src[6];
+
     // with kv_rows the kernel iterates over the mask columns and reads K/V rows through kv_rows
     const int64_t n_kv_cols = kv_rows ? kv_rows->ne[0] : K->ne[1];
     GGML_ASSERT(!kv_rows || !use_sparse);
@@ -1148,7 +1225,9 @@ void launch_fattn(
         }
     }
 
-    const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
+    // length aware kv_rows: a tile has the columns of a single slice, so each slice can end with a partial tile
+    // this is an upper bound, the tiles after the last slice have no columns
+    const int ntiles_x     = q_slices ? std::min<int64_t>(Q->ne[1], Q->ne[1] / ncols1 + q_slices->ne[1]) : ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int gqa_ratio    = Q->ne[2] / K->ne[2];
     const int ntiles_z_gqa = ((gqa_ratio + ncols2 - 1) / ncols2);
     const int ntiles_dst   = ntiles_x * ntiles_z_gqa * K->ne[2] * Q->ne[3];
@@ -1171,6 +1250,7 @@ void launch_fattn(
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
     const bool scan_mask = !use_sparse && mask && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
+    GGML_ASSERT(!q_slices || scan_mask); // the scan also makes the table of the tiles
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
@@ -1181,12 +1261,15 @@ void launch_fattn(
         const int ne_KV_max = blocks_num_KV_max.x*blocks_num_KV_max.y;
         const int iter_k = n_kv_cols / FATTN_KQ_STRIDE;
 
-        KV_max.alloc(ne_KV_max);
+        KV_max.alloc(q_slices ? 4*ne_KV_max : ne_KV_max);
         ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_KV_max, block_dim_KV_max, 0, main_stream);
         ggml_cuda_kernel_launch(flash_attn_mask_to_KV_max<ncols1>, launch_params,
-            (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
+            (const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33,
+            q_slices ? (const int *) q_slices->data : nullptr, q_slices ? (int) q_slices->ne[1] : 0);
         CUDA_CHECK(cudaGetLastError());
     }
+
+    const int * q_tiles = q_slices ? KV_max.ptr + ntiles_x : nullptr;
 
     // K/V are shared by all slices when read through kv_rows
     if (kv_rows) {
@@ -1305,7 +1388,8 @@ void launch_fattn(
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
     // TODO other tensor dimensions after removal of WMMA kernel:
-    const uint3 ne01 = init_fastdiv_values(Q->ne[1]);
+    // length aware kv_rows: the kernel takes its tile count from ne01, the columns of each tile come from q_tiles
+    const uint3 ne01 = init_fastdiv_values(q_slices ? int64_t(ntiles_x)*ncols1 : Q->ne[1]);
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
 
@@ -1318,6 +1402,7 @@ void launch_fattn(
         sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
         kv_rows ? (const int *) kv_rows->data : nullptr,
+        q_tiles,
         !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], ne01,     Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
@@ -1345,7 +1430,7 @@ void launch_fattn(
             ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_uniform<DV, ncols1, ncols2>, launch_params,
                 (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], K->ne[2], nblocks_sk,
-                 gqa_ratio, bpt, fd0, fd1, fd2);
+                 gqa_ratio, bpt, fd0, fd1, fd2, q_tiles);
         } else if (ntiles_dst % blocks_num.x != 0) {
             // General fixup for the cases where nblocks_stream_k < ntiles_dst.
             const int total_work = ntiles_KV * ntiles_dst;
@@ -1362,7 +1447,7 @@ void launch_fattn(
             ggml_cuda_kernel_launch(flash_attn_stream_k_fixup_general<DV, ncols1, ncols2>, launch_params,
                 (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], gqa_ratio, total_work,
-                 fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k);
+                 fd_k_j_z_ne12, fd_k_j_z, fd_k_j, fd_k, q_tiles);
         }
     } else if (parallel_blocks > 1) {
         const dim3 block_dim_combine(DV, 1, 1);

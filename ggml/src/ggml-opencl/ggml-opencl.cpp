@@ -12039,8 +12039,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 if (op->src[0]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
                     return false;
                 }
-                // replay of pending tokens (op param 1) is not implemented
-                if (ggml_get_op_params_i32(op, 1) != 0) {
+                // replay of pending tokens (op param 1) and the ragged layout (op param 3) are not implemented
+                if (ggml_get_op_params_i32(op, 1) != 0 || ggml_get_op_params_i32(op, 3) != 0) {
                     return false;
                 }
                 const int64_t S_v = op->src[2]->ne[0];
