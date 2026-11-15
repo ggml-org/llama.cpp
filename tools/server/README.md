@@ -347,6 +347,27 @@ services:
       LLAMA_ARG_PORT: 8080
 ```
 
+### Prompt cache on disk
+
+With `--cache-disk PATH`, the prompts that no longer fit in the RAM cache (`--cache-ram`) are kept in a directory, and they are still there after a restart. The directory must exist, and the RAM cache must be enabled.
+
+```sh
+llama-server -m model.gguf --cache-disk /path/to/cache --cache-disk-limit 32768
+```
+
+- **Saving:** a prompt is saved when the RAM cache drops it, and when the server shuts down or goes to sleep (idle slots included). A server that is killed loses the prompts that were only in RAM.
+- **Loading:** for each request, the saved prompt that shares the longest prefix with it is loaded, if it shares more than the slot and the RAM cache do. It does not need to be a full prefix: the state is cut where the prompts differ. Context checkpoints are saved too.
+- **Size:** a file is about as large as the same prompt in the RAM cache. With `--cache-disk-limit N`, the least recently used files are removed to stay under `N` MiB. There is no limit by default.
+- **Compatibility:** a file is only used with the same model, mmproj, draft model, LoRA adapters, control vectors, KV cache types, `--swa-full` and RoPE/YaRN options. Other files are ignored, but they count in the size limit.
+- **Not saved:** prompts shorter than 64 tokens, prompts processed with a LoRA configuration other than the one given at startup, and prompts restored from a slot file.
+
+Notes:
+
+- The files hold the prompt tokens as they are, so anyone who can read the directory can read the prompts.
+- While a large state is written or read, the other requests wait.
+- Use one running server per model for a given directory.
+- With `--metrics`, see the `llamacpp:prompt_cache_disk_*` metrics in [`/metrics`](#get-metrics-prometheus-compatible-metrics-exporter).
+
 ### Multimodal support
 
 Multimodal support was added in [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) and is currently an experimental feature.
@@ -1253,6 +1274,15 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:spec_decode_num_draft_tokens_total` | Counter | Total draft tokens generated (0 when spec-decode is off). |
 | `llamacpp:spec_decode_num_accepted_tokens_total` | Counter | Total draft tokens accepted by the target model (0 when spec-decode is off). |
 | `llamacpp:spec_decode_num_drafts_total` | Counter | Total speculative decoding verification steps (0 when spec-decode is off). |
+| `llamacpp:prompt_cache_disk_saves_total` | Counter | Number of prompts saved to the disk prompt cache (the disk cache metrics are 0 without `--cache-disk`). |
+| `llamacpp:prompt_cache_disk_save_bytes_total` | Counter | Number of bytes written to the disk prompt cache. |
+| `llamacpp:prompt_cache_disk_save_seconds_total` | Counter | Time spent saving prompts to the disk prompt cache in seconds. |
+| `llamacpp:prompt_cache_disk_loads_total` | Counter | Number of prompts loaded from the disk prompt cache. |
+| `llamacpp:prompt_cache_disk_load_bytes_total` | Counter | Number of bytes read from the disk prompt cache. |
+| `llamacpp:prompt_cache_disk_load_seconds_total` | Counter | Time spent loading prompts from the disk prompt cache in seconds. |
+| `llamacpp:prompt_cache_disk_evictions_total` | Counter | Number of files removed from the disk prompt cache to stay under `--cache-disk-limit`. |
+| `llamacpp:prompt_cache_disk_files` | Gauge | Number of files in the disk prompt cache directory, the files of other models included. |
+| `llamacpp:prompt_cache_disk_bytes` | Gauge | Size of the disk prompt cache directory in bytes, the files of other models included. |
 | `llamacpp:spec_decode_num_accepted_tokens_per_pos_total` | Counter | Accepted tokens per draft position (labeled `position="N"`; absent when spec-decode is off or before the first completed speculative request). |
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
