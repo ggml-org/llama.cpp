@@ -35,7 +35,8 @@ void argsort(bool needs_bounds_check, const uint row) {
     // initialize indices
     ivec2 value = ivec2(col, 0);
     if (!needs_bounds_check || col < p.ncols) {
-        value.y = floatBitsToInt(data_a[row_offset + col]);
+        const float val = data_a[row_offset + col];
+        value.y = floatBitsToInt(isnan(val) ? uintBitsToFloat(0xFF7FFFFFu) : val);
     }
     dst_row[col] = value;
     barrier();

@@ -130,12 +130,22 @@ void main() {
         }
     }
 
+    [[unroll]]
+    for (int i = 0; i < experts_per_thread; i++) {
+        if (isnan(probs[i])) {
+            probs[i] = uintBitsToFloat(0xFF7FFFFFu);
+        }
+    }
+
     float selection_probs[experts_per_thread];
     if (has_bias != 0) {
         [[unroll]]
         for (uint i = 0; i < n_experts; i += WARP_SIZE) {
             const uint expert = i + lane;
             selection_probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? probs[i / WARP_SIZE] + bias[bias_offset + expert] : -INFINITY;
+            if (isnan(selection_probs[i / WARP_SIZE])) {
+                selection_probs[i / WARP_SIZE] = uintBitsToFloat(0xFF7FFFFFu);
+            }
         }
     } else {
         [[unroll]]
