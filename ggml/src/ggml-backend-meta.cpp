@@ -8,9 +8,13 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <thread>
 #include <map>
 #include <memory>
 #include <set>
@@ -1914,6 +1918,89 @@ static ggml_guid_t ggml_backend_meta_guid() {
     return &guid;
 }
 
+// CPU graph compute blocks, so the devices only run at the same time if each one has its own thread
+
+struct ggml_backend_meta_dispatch_pool {
+    std::vector<std::thread>   threads;
+    std::mutex                 mtx;
+    std::condition_variable    cv_work;
+    std::condition_variable    cv_done;
+    std::vector<ggml_status>   results;
+    const std::vector<ggml_backend_t> * backends = nullptr;
+    const std::vector<ggml_cgraph *>  * graphs = nullptr;
+    uint64_t                   epoch     = 0;
+    size_t                     n_pending = 0;
+    bool                       stop = false;
+
+    ~ggml_backend_meta_dispatch_pool() { shutdown(); }
+
+    void shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            stop = true;
+        }
+        cv_work.notify_all();
+        for (auto & t : threads) {
+            t.join();
+        }
+        threads.clear();
+    }
+
+    void worker(size_t k) {
+        std::unique_lock<std::mutex> lock(mtx);
+        uint64_t seen = 0;
+        while (true) {
+            cv_work.wait(lock, [&] {return stop || epoch != seen;});
+            if (stop) {
+                return;
+            }
+            seen = epoch;
+            ggml_backend_t b = (*backends)[k + 1];
+            ggml_cgraph *  g = (*graphs)[k + 1];
+            lock.unlock();
+            const ggml_status status = ggml_backend_graph_compute_async(b, g);
+            lock.lock();
+            results[k+1] = status;
+            if (--n_pending == 0) {
+                cv_done.notify_one();
+            }
+        }
+    }
+
+    ggml_status run(const std::vector<ggml_backend_t> &bs, const std::vector<ggml_cgraph *> &gs) {
+        const size_t n = bs.size();
+        if (n == 1) {
+            return ggml_backend_graph_compute_async(bs[0], gs[0]);
+        }
+        while (threads.size() < n - 1) {
+            const size_t k = threads.size();
+            threads.emplace_back([this, k] { worker(k); });
+        }
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            backends  = &bs;
+            graphs    = &gs;
+            results.assign(n, GGML_STATUS_SUCCESS);
+            n_pending = n - 1;
+            epoch++;
+        }
+        cv_work.notify_all();
+
+        results[0] = ggml_backend_graph_compute_async(bs[0], gs[0]);
+
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv_done.wait(lock, [&] { return n_pending == 0; });
+        }
+        for (const ggml_status status : results) {
+            if (status != GGML_STATUS_SUCCESS) {
+                return status;
+            }
+        }
+        return GGML_STATUS_SUCCESS;
+    }
+};
+
 struct ggml_backend_meta_context {
     struct cgraph_config {
         ggml_cgraph * cgraph_main = nullptr;
@@ -1947,6 +2034,12 @@ struct ggml_backend_meta_context {
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
 
+    // only CPU children block, GPU children return immediately
+    bool                            concurrent = false;
+    int                             n_threads  = 0; // last set_n_threads, before it is split over the children
+    std::vector<ggml_backend_t>     dispatch_backends;
+    ggml_backend_meta_dispatch_pool pool;
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         n_reduce_steps = std::ceil(std::log2(n_devs));
@@ -1978,9 +2071,20 @@ struct ggml_backend_meta_context {
                     ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
             GGML_ASSERT(comm_allreduce != nullptr);
         }
+
+        dispatch_backends = simple_backends;
+        concurrent = n_devs > 1;
+        for (ggml_backend_t b : simple_backends) {
+            ggml_backend_dev_t d = ggml_backend_get_device(b);
+            if (!d || ggml_backend_dev_type(d) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                concurrent = false;
+            }
+        }
+
     }
 
     ~ggml_backend_meta_context() {
+        pool.shutdown();
         if (comm_ctx != nullptr) {
             ggml_backend_comm_free_t comm_free = (ggml_backend_comm_free_t) ggml_backend_reg_get_proc_address(
                 ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_configs[0].backend)), "ggml_backend_comm_free");
@@ -2008,6 +2112,8 @@ static void ggml_backend_meta_free(ggml_backend_t backend) {
 
 static void ggml_backend_meta_set_n_threads(ggml_backend_t backend, int n_threads) {
     GGML_ASSERT(ggml_backend_is_meta(backend));
+    ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *)backend->context;
+    backend_ctx->n_threads = n_threads;
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     for (size_t i = 0; i < n_backends; i++) {
         ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, i);
@@ -2019,7 +2125,9 @@ static void ggml_backend_meta_set_n_threads(ggml_backend_t backend, int n_thread
         auto set_n_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(
             simple_reg, "ggml_backend_set_n_threads");
         if (set_n_threads) {
-            set_n_threads(simple_backend, n_threads);
+            // sub-graphs run at the same time and share the machine, so split the threads to avoid oversubscription
+            const int n = backend_ctx->concurrent ? std::max(1, n_threads / (int) n_backends) : n_threads;
+            set_n_threads(simple_backend, n);
         }
     }
 }
@@ -2125,6 +2233,13 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     GGML_ASSERT(cgraph->grads == nullptr);
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
+
+    // each concurrent CPU child runs n_threads / n_backends threads, reject a count that does not divide evenly
+    if (backend_ctx->concurrent && backend_ctx->n_threads % (int) n_backends != 0) {
+        GGML_LOG_ERROR("%s: %d threads do not divide evenly over %zu NUMA devices, use a multiple of %zu\n",
+            __func__, backend_ctx->n_threads, n_backends, n_backends);
+        return GGML_STATUS_FAILED;
+    }
 
     // If the previous cgraph had a defined UID it can be used to skip rebuilding the subgraphs per simple backend.
     const bool needs_rebuild = (cgraph->uid == 0) || (cgraph->uid != backend_ctx->uid);
@@ -2594,13 +2709,24 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         return GGML_STATUS_SUCCESS;
     };
 
+    std::vector<ggml_cgraph *> dispatch_graphs(n_backends, nullptr);
 
     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
-        for (size_t j = 0; j < n_backends; j++) {
-            auto & bcj = backend_ctx->backend_configs[j];
-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
+        if (backend_ctx->concurrent) {
+            for (size_t j = 0; j < n_backends; j++) {
+                dispatch_graphs[j] = backend_ctx->backend_configs[j].cgraphs[i].cgraph_main;
+            }
+            const ggml_status status = backend_ctx->pool.run(backend_ctx->dispatch_backends, dispatch_graphs);
             if (status != GGML_STATUS_SUCCESS) {
                 return status;
+            }
+        } else {
+            for (size_t j = 0; j < n_backends; j++) {
+                auto & bcj = backend_ctx->backend_configs[j];
+                const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
+                if (status != GGML_STATUS_SUCCESS) {
+                    return status;
+                }
             }
         }
 
