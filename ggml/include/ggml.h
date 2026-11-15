@@ -2523,7 +2523,7 @@ extern "C" {
     //
     // top_k, score, blocks, extra: as in ggml_top_k_mask
     // n_group == 1:
-    //   res: [n_res, ne1, ne2, ne3] i32: the cells of the live picks (n_blk per pick), then the extra cells, then padding
+    //   res: [n_res, ne1, ne2, ne3] i32: the cells of the live picks in top_k order (n_blk per pick), then the extra cells, then padding
     //        entries of dead picks, cells out of [0, n_kv) and the padding are -1
     //        f16 or f32: the matching mask, 0 for a listed cell and -inf for a -1 entry
     // n_group > 1, rows i1 = g*n_group + j form group g, n_grp1 = ceil(ne1/n_group) groups:
