@@ -25,9 +25,15 @@
 		inline?: boolean;
 		isLoading?: boolean;
 		isReasoning?: boolean;
-		isRecording?: boolean;
 		/** Why the microphone can't record, shown on its button. */
 		micWarning?: string | null;
+		/** Voice input: whether the microphone shows, what it does, and why it can't. */
+		voice?: {
+			action: string;
+			hint: string | null;
+			show: boolean;
+			unavailableReason: string | null;
+		};
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -47,7 +53,6 @@
 		inline = false,
 		isLoading = false,
 		isReasoning = false,
-		isRecording = false,
 		micWarning = null,
 		onFileUpload,
 		onMicClick,
@@ -57,6 +62,7 @@
 		showAddButton = true,
 		showModelSelector = true,
 		uploadedFiles = [],
+		voice,
 		workingDirectory = null
 	}: Props = $props();
 
@@ -81,7 +87,7 @@
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !canSend && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		!!voice?.show && !canSend && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
 
 	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
@@ -191,12 +197,13 @@
 		</Button>
 	{:else if shouldShowRecordButton}
 		<ChatFormActionRecord
+			action={voice?.action}
 			{disabled}
-			{hasAudioModality}
+			hint={voice?.hint}
 			{isLoading}
-			{isRecording}
 			{micWarning}
 			{onMicClick}
+			unavailableReason={voice?.unavailableReason}
 		/>
 	{:else}
 		<ChatFormActionSubmit

@@ -4,7 +4,7 @@
 // while staying tappable, so a tap on a phone, which shows no tooltip, can explain it.
 
 import ChatFormActionRecordWrapper from './components/ChatFormActionRecordWrapper.svelte';
-import { MICROPHONE_UNAVAILABLE_MESSAGE } from '#lib/constants/index.ts';
+import { MICROPHONE_UNAVAILABLE_MESSAGE, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 import { describeMicrophoneError, microphoneUnavailableReason } from '#lib/utils/browser-only.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -71,18 +71,18 @@ describe('the record button', () => {
 		const screen = render(ChatFormActionRecordWrapper, {});
 
 		await expect
-			.element(screen.getByRole('button', { name: 'Start recording' }).last())
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
 			.toBeEnabled();
 	});
 
-	it('stays disabled for a model without audio, whatever the microphone', async () => {
+	it('stays disabled when no model can take audio, whatever the microphone', async () => {
 		const screen = render(ChatFormActionRecordWrapper, {
-			hasAudioModality: false,
-			micWarning: MICROPHONE_UNAVAILABLE_MESSAGE.insecure
+			micWarning: MICROPHONE_UNAVAILABLE_MESSAGE.insecure,
+			unavailableReason: VOICE_MODE_MESSAGE.unavailable
 		});
 
 		await expect
-			.element(screen.getByRole('button', { name: 'Start recording' }).last())
+			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
 			.toBeDisabled();
 	});
 });

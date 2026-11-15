@@ -5,6 +5,7 @@
 		ActionIcon,
 		ChatAttachmentsList,
 		ChatFormActions,
+		ChatFormActionsRecording,
 		ChatFormCurrentWorkingDirectory,
 		ChatFormInput,
 		ChatFormInputFileInputInvisible,
@@ -31,6 +32,10 @@
 	import { useChatFormExpansion } from '#lib/hooks/use-chat-form-expansion.svelte.ts';
 	import { useChatFormPickers } from '#lib/hooks/use-chat-form-pickers.svelte.ts';
 	import {
+		useChatFormVoice,
+		type VoiceRecorderLike
+	} from '#lib/hooks/use-chat-form-voice.svelte.ts';
+	import {
 		chatStore,
 		conversationsStore,
 		deviceStore,
@@ -39,7 +44,8 @@
 		serverStore,
 		settingsStore,
 		toolsStore,
-		uiStore
+		uiStore,
+		voiceTranscriptsStore
 	} from '#lib/stores/index.ts';
 	import type {
 		FileMentionEntry,
@@ -48,14 +54,7 @@
 		MCPResourceInfo,
 		PromptMessage
 	} from '#lib/types/index.ts';
-	import {
-		AudioRecorder,
-		convertToWav,
-		createAudioFile,
-		describeMicrophoneError,
-		isAudioRecordingSupported,
-		microphoneUnavailableReason
-	} from '#lib/utils/browser-only.ts';
+	import { microphoneUnavailableReason } from '#lib/utils/browser-only.ts';
 	import {
 		buildMentionInsertion,
 		findCommandToken,
@@ -65,6 +64,7 @@
 		parseClipboardContent,
 		uuid
 	} from '#lib/utils/index.ts';
+	import { VoiceRecorder } from '#lib/voice/index.ts';
 	import { onMount, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';
@@ -96,6 +96,9 @@
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;
+
+		/** Records voice input; tests and stories pass a fake, the app a VoiceRecorder. */
+		voiceRecorder?: VoiceRecorderLike;
 	}
 
 	let {
@@ -117,21 +120,20 @@
 		showModelSelector = true,
 		singleRow = false,
 		uploadedFiles = $bindable([]),
-		value = $bindable('')
+		value = $bindable(''),
+		voiceRecorder
 	}: Props = $props();
 
 	// Component References
 
-	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormInputFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatFormInput | undefined = $state(undefined);
 
-	// Audio Recording State
-	let isRecording = $state(false);
-	let recordingSupported = $state(false);
+	// Voice input
+	const recorder: VoiceRecorderLike = untrack(() => voiceRecorder) ?? new VoiceRecorder();
 	/** Why this page can't record at all (no HTTPS, no recorder), which no tap fixes. */
 	let micUnavailableReason = $state<string | null>(null);
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
@@ -186,6 +188,25 @@
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
+		}
+	});
+
+	const voice = useChatFormVoice({
+		addVoiceFile: (file) => {
+			uploadedFiles = [...uploadedFiles, file];
+			onUploadedFilesChange?.(uploadedFiles);
+		},
+		getCaretOffset: () => inputRef?.getCaretOffset() ?? value.length,
+		getRecorder: () => recorder,
+		getValue: () => value,
+		onMicError: (message) => (micError = message),
+		// on a phone placing the caret would open the keyboard
+		setCaretOffset: (offset) => {
+			if (!deviceStore.isMobile) inputRef?.setCaretOffset(offset);
+		},
+		setValue: (next) => {
+			value = next;
+			onValueChange?.(next);
 		}
 	});
 
@@ -263,6 +284,7 @@
 		singleRow &&
 			!deviceStore.isMobile &&
 			!isExpanded &&
+			!voice.isActive &&
 			!hasAttachments &&
 			!mcpStore.resources.hasAttachments &&
 			!value.includes('\n')
@@ -327,9 +349,7 @@
 	);
 
 	onMount(() => {
-		recordingSupported = isAudioRecordingSupported();
 		micUnavailableReason = microphoneUnavailableReason();
-		audioRecorder = new AudioRecorder();
 	});
 
 	/** Expands for the message as it stands, e.g. one put back after a send failed. */
@@ -375,6 +395,10 @@
 				onAttachmentRemove?.(index);
 			}
 		} else {
+			const removed = uploadedFiles.find((file) => file.id === fileId);
+
+			if (removed?.voice) voiceTranscriptsStore.forget(removed.name);
+
 			onUploadedFileRemove?.(fileId);
 		}
 	}
@@ -586,7 +610,7 @@
 		inputRef?.replaceText(built.newValue, built.caretOffset);
 	}
 
-	async function handleMicClick() {
+	function handleMicClick() {
 		// a phone shows no tooltip on a tap, so the reason comes as a toast
 		if (micUnavailableReason) {
 			toast.error(micUnavailableReason);
@@ -594,35 +618,19 @@
 			return;
 		}
 
-		if (!audioRecorder || !recordingSupported) {
-			console.warn('Audio recording not supported');
+		void voice.start();
+	}
 
-			return;
-		}
+	// Escape drops a recording, wherever the focus is
+	function handleWindowKeydown(event: KeyboardEvent) {
+		if (event.key !== KeyboardKey.ESCAPE || !voice.isActive || event.defaultPrevented) return;
 
-		if (isRecording) {
-			isRecording = false;
-			try {
-				const audioBlob = await audioRecorder.stopRecording();
-				const wavBlob = await convertToWav(audioBlob);
-				const audioFile = createAudioFile(wavBlob);
-
-				onFilesAdd?.([audioFile]);
-			} catch (error) {
-				console.error('Failed to stop recording:', error);
-			}
-		} else {
-			try {
-				await audioRecorder.startRecording();
-				isRecording = true;
-				micError = null;
-			} catch (error) {
-				micError = describeMicrophoneError(error);
-				toast.error(micError);
-			}
-		}
+		event.preventDefault();
+		voice.cancel();
 	}
 </script>
+
+<svelte:window onkeydown={handleWindowKeydown} />
 
 <ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
@@ -753,6 +761,7 @@
 				{disabled}
 				expanded={isExpanded}
 				onInput={() => {
+					voice.handleUserInput();
 					expansion.handleInput();
 					pickers.handleInput();
 					onValueChange?.(value);
@@ -774,29 +783,50 @@
 
 			<!-- its own box, so the phone sheet can hold it by the bottom edge while it moves -->
 			<div bind:this={actionsEl} class={isSingleRow ? 'contents' : 'relative mt-auto'}>
-				<ChatFormActions
-					bind:this={chatFormActionsRef}
-					canSend={canSubmit}
-					class={isSingleRow ? undefined : 'px-3'}
-					{disabled}
-					inline={isSingleRow}
-					{isLoading}
-					isReasoning={chatStore.isReasoning}
-					{isRecording}
-					micWarning={micUnavailableReason ?? micError}
-					onFileUpload={handleFileUpload}
-					onMicClick={handleMicClick}
-					{onStop}
-					onSystemPromptClick={() =>
-						onSystemPromptClick?.({ files: uploadedFiles, message: value })}
-					onWorkingDirectoryClick={isWorkingDirectoryInAddMenu
-						? pickers.handleWorkingDirectoryOpen
-						: undefined}
-					{showAddButton}
-					{showModelSelector}
-					{uploadedFiles}
-					workingDirectory={cwd}
-				/>
+				{#if voice.isActive}
+					<ChatFormActionsRecording
+						class="px-3"
+						elapsedMs={voice.elapsedMs}
+						levels={voice.levels}
+						liveCaption={voice.liveCaption}
+						mode={voice.mode}
+						onCancel={voice.cancel}
+						onStop={() => void voice.stop()}
+						state={voice.state}
+					/>
+				{/if}
+
+				<!-- kept while recording, so its selector and menus keep their state -->
+				<div class={voice.isActive ? 'hidden' : 'contents'}>
+					<ChatFormActions
+						bind:this={chatFormActionsRef}
+						canSend={canSubmit}
+						class={isSingleRow ? undefined : 'px-3'}
+						{disabled}
+						inline={isSingleRow}
+						{isLoading}
+						isReasoning={chatStore.isReasoning}
+						micWarning={micUnavailableReason ?? micError}
+						onFileUpload={handleFileUpload}
+						onMicClick={handleMicClick}
+						{onStop}
+						onSystemPromptClick={() =>
+							onSystemPromptClick?.({ files: uploadedFiles, message: value })}
+						onWorkingDirectoryClick={isWorkingDirectoryInAddMenu
+							? pickers.handleWorkingDirectoryOpen
+							: undefined}
+						{showAddButton}
+						{showModelSelector}
+						{uploadedFiles}
+						voice={{
+							action: voice.label,
+							hint: voice.hint,
+							show: voice.showButton,
+							unavailableReason: voice.unavailableReason
+						}}
+						workingDirectory={cwd}
+					/>
+				</div>
 			</div>
 		</div>
 	</div>

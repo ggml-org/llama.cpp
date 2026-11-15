@@ -3,8 +3,11 @@ import { STORAGE_APP_NAME } from './storage.constants';
 /** What the chat form's microphone says it will do, or why it can't, on its button. */
 export const VOICE_MODE_MESSAGE = {
 	dictate: 'Dictate',
+	dictating: 'Dictating',
+	recording: 'Recording a voice message',
 	separateModelHint:
-		'It may be loaded on the server alongside the chat model, which a server that keeps one model at a time unloads.',
+		'The transcription model is loaded on the server alongside the chat model, which a server that keeps one model at a time unloads.',
+	transcribing: 'Transcribing...',
 	unavailable:
 		'No model with audio input is available. In router mode, pick a transcription model in Settings > Voice.',
 	voiceMessage: 'Send a voice message'

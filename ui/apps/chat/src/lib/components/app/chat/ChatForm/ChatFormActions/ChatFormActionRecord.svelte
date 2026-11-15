@@ -2,34 +2,44 @@
 	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Mic, MicOff, Square } from '@lucide/svelte';
-	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { ICON_CLASS_DEFAULT, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
 
 	interface Props {
+		/** What a press does: send a voice message or dictate. */
+		action?: string;
 		class?: string;
 		disabled?: boolean;
-		hasAudioModality?: boolean;
+		/** Said after the action in the tooltip, e.g. that another model may be loaded. */
+		hint?: string | null;
 		isLoading?: boolean;
 		isRecording?: boolean;
 		/** Why the microphone can't record (no HTTPS, access denied...), shown on the button. */
 		micWarning?: string | null;
+		/** Why no model can take the recording; disables the button. */
+		unavailableReason?: string | null;
 		onMicClick?: () => void;
 	}
 
 	let {
+		action = VOICE_MODE_MESSAGE.voiceMessage,
 		class: className = '',
 		disabled = false,
-		hasAudioModality = false,
+		hint = null,
 		isLoading = false,
 		isRecording = false,
 		micWarning = null,
-		onMicClick
+		onMicClick,
+		unavailableReason = null
 	}: Props = $props();
 
-	// a model without audio input disables the button; a microphone that can't record keeps it
+	// no model to take the recording disables the button; a microphone that can't record keeps it
 	// tappable, so a tap can say why
-	const showWarning = $derived(hasAudioModality && !isRecording && !!micWarning);
+	const showWarning = $derived(!unavailableReason && !isRecording && !!micWarning);
 	const tooltip = $derived(
-		!hasAudioModality ? 'Current model does not support audio' : showWarning ? micWarning : null
+		isRecording
+			? null
+			: (unavailableReason ??
+					(showWarning ? micWarning : [action, hint].filter(Boolean).join('. ')))
 	);
 </script>
 
@@ -38,11 +48,11 @@
 		<Tooltip.Trigger>
 			<Button
 				class="size-8 max-md:size-9 rounded-full p-0 {isRecording
-					? 'matte-orb orb-danger animate-pulse text-white! hover:bg-transparent'
+					? 'matte-orb orb-danger text-white! hover:bg-transparent'
 					: showWarning
 						? 'bg-surface-warning text-fg-warning hover:bg-surface-warning'
 						: ''}"
-				disabled={disabled || isLoading || !hasAudioModality}
+				disabled={disabled || isLoading || !!unavailableReason}
 				onclick={onMicClick}
 				type="button"
 				variant={isRecording || showWarning ? 'ghost' : 'default'}
@@ -52,11 +62,11 @@
 						? 'Stop recording'
 						: showWarning
 							? `Recording unavailable: ${micWarning}`
-							: 'Start recording'}</span
+							: action}</span
 				>
 
 				{#if isRecording}
-					<Square class="{ICON_CLASS_DEFAULT} animate-pulse fill-white" />
+					<Square class="{ICON_CLASS_DEFAULT} fill-white" />
 				{:else if showWarning}
 					<MicOff class={ICON_CLASS_DEFAULT} />
 				{:else}

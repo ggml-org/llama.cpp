@@ -50,5 +50,5 @@
 		{formatClipTime(elapsedMs)}
 	</span>
 
-	<ChatFormActionRecord hasAudioModality isRecording={active} />
+	<ChatFormActionRecord isRecording={active} />
 </div>
