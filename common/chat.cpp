@@ -827,6 +827,11 @@ static std::string string_lower(std::string s) {
     return s;
 }
 
+// VibeVoice-ASR: default system prompt of the template written by the converter
+static bool is_vibevoice_asr_template(const std::string & src) {
+    return src.find("transcribes audio input into text output in JSON format") != std::string::npos;
+}
+
 // LFM3-Audio: language code -> name
 static std::string lfm3_language_name(const std::string & language) {
     static const std::map<std::string, std::string> names = {
@@ -847,7 +852,8 @@ static std::string lfm3_asr_system_prompt(const std::string & language) {
     return "Perform ASR in " + lfm3_language_name(language) + ".";
 }
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language,
+                                                     double audio_length, const std::string & context) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
     asr_preset.user   = "Transcribe audio to text";
@@ -861,6 +867,17 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
             asr_preset.system = lfm3_asr_system_prompt(language);
             asr_preset.user   = "";
             asr_preset.has_language = true;
+        } else if (is_vibevoice_asr_template(src)) {
+            // without the audio length the model does not know where the audio ends and loops
+            const char * keys = "transcribe it with these keys: Start time, End time, Speaker ID, Content";
+            if (context.empty()) {
+                asr_preset.user = string_format("\nThis is a %.2f seconds audio, please %s", audio_length, keys);
+            } else {
+                asr_preset.user = string_format("\nThis is a %.2f seconds audio, with extra info: %s\n\nPlease %s", audio_length, context.c_str(), keys);
+                asr_preset.has_context = true;
+            }
+            asr_preset.media_first        = true;
+            asr_preset.needs_audio_length = true;
         }
     }
 
@@ -1608,6 +1625,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             if (!end_tag.empty()) {
                 auto_params.thinking_end_tags = {std::move(end_tag)};
             }
+        }
+        if (is_inkling2_template(src)) {
+            common_chat_inkling2_split_media(auto_params.prompt);
         }
         const auto & arena = auto_params.parser;
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());

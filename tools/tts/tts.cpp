@@ -39,7 +39,7 @@ static void print_usage(int, char ** argv) {
     LOG("\n    %s -hf user/model -p \"text to speak\" -o output.wav\n", argv[0]);
     LOG("\nnote: --tts-lang, --tts-voice and --tts-speaker-file may not be supported in all models");
     LOG("\n      use -n to limit the output length");
-    LOG("\n      see tts/README.md for per-model usage notes");
+    LOG("\n      see docs/multimodal/tts.md for per-model usage notes");
     LOG("\n\n");
 }
 

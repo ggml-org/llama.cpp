@@ -19,7 +19,6 @@
 #define GGML_COMMON_IMPL_MUSA
 #endif
 #endif
-#include "ggml-common.h"
 
 #include <array>
 #include <algorithm>
@@ -38,6 +37,8 @@
 #else
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
+
+#include "ggml-common.h"
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
@@ -125,6 +126,8 @@
     (CUDART_VERSION >= 12030 || (!(defined(_MSC_VER) && !defined(__clang__)) && CUDART_VERSION >= 11080))
 #    define GGML_CUDA_USE_PDL
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUDART_VERSION >= 12030 || (!(defined(_MSC_VER) && !defined(__clang__)) && CUDART_VERSION >= 11080))
+
+constexpr ggml_cuda_thread_mask_t GGML_CUDA_FULL_THREAD_MASK = (ggml_cuda_thread_mask_t)0xffffffffffffffffULL;
 
 static __device__ __forceinline__ void ggml_cuda_syncwarp() {
 #ifndef GGML_USE_HIP
@@ -430,6 +433,32 @@ static constexpr __device__ int ggml_cuda_get_max_cpy_bytes() {
 #endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 }
 
+template <typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl(T value, int src_lane, int width = ggml_cuda_get_physical_warp_size(), ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __shfl_sync(mask, value, src_lane, width);
+}
+
+template <typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl_up(T value, unsigned delta, int width = ggml_cuda_get_physical_warp_size(), ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __shfl_up_sync(mask, value, delta, width);
+}
+
+template <typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl_xor(T value, int lane_mask, int width = ggml_cuda_get_physical_warp_size(), ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __shfl_xor_sync(mask, value, lane_mask, width);
+}
+
+static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __ballot_sync(mask, predicate);
+}
+
+static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __all_sync(mask, predicate);
+}
+
+static __device__ __forceinline__ int ggml_cuda_any(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __any_sync(mask, predicate);
+}
 
 [[noreturn]]
 static __device__ void no_device_code(
@@ -476,11 +505,11 @@ struct ggml_cuda_unroll<1> {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-    return __reduce_add_sync(0xffffffff, x);
+    return __reduce_add_sync(GGML_CUDA_FULL_THREAD_MASK, x);
 #else
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
+        x += ggml_cuda_shfl_xor(x, offset, width);
     }
     return x;
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
@@ -490,7 +519,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
+        x += ggml_cuda_shfl_xor(x, offset, width);
     }
     return x;
 }
@@ -499,8 +528,8 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        a.x += __shfl_xor_sync(0xffffffff, a.x, offset, width);
-        a.y += __shfl_xor_sync(0xffffffff, a.y, offset, width);
+        a.x += ggml_cuda_shfl_xor(a.x, offset, width);
+        a.y += ggml_cuda_shfl_xor(a.y, offset, width);
     }
     return a;
 }
@@ -510,7 +539,7 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #ifdef FP16_AVAILABLE
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, width));
+        a = __hadd2(a, ggml_cuda_shfl_xor(a, offset, width));
     }
     return a;
 
@@ -523,11 +552,11 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_all(int x) {
     if (width == ggml_cuda_get_physical_warp_size()) {
-        return __all_sync(0xffffffff, x);
+        return ggml_cuda_all(x);
     } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
-            x = __shfl_xor_sync(0xffffffff, x, offset, width) && x;
+            x = ggml_cuda_shfl_xor(x, offset, width) && x;
         }
         return x;
     }
@@ -536,11 +565,11 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_any(int x) {
     if (width == ggml_cuda_get_physical_warp_size()) {
-        return __any_sync(0xffffffff, x);
+        return ggml_cuda_any(x);
     } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
-            x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
+            x = ggml_cuda_shfl_xor(x, offset, width) || x;
         }
         return x;
     }
@@ -550,7 +579,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+        x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
     }
     return x;
 }
@@ -560,7 +589,7 @@ static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const T t = __shfl_up_sync(0xffffffff, x, offset, width);
+        const T t = ggml_cuda_shfl_up(x, offset, width);
         if (lane_id >= offset) {
             x += t;
         }
@@ -573,8 +602,8 @@ static __device__ __forceinline__ float2 warp_prefix_inclusive_sum(float2 a) {
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const float t_x = __shfl_up_sync(0xffffffff, a.x, offset, width);
-        const float t_y = __shfl_up_sync(0xffffffff, a.y, offset, width);
+        const float t_x = ggml_cuda_shfl_up(a.x, offset, width);
+        const float t_y = ggml_cuda_shfl_up(a.y, offset, width);
         if (lane_id >= offset) {
             a.x += t_x;
             a.y += t_y;
@@ -589,7 +618,7 @@ static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const half2 t = __shfl_up_sync(0xffffffff, a, offset, width);
+        const half2 t = ggml_cuda_shfl_up(a, offset, width);
         if (lane_id >= offset) {
             a = __hadd2(a, t);
         }
@@ -716,7 +745,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
 #pragma unroll
    for (int offset = width/2; offset > 0; offset >>= 1) {
-       x = ggml_cuda_hmax2(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+       x = ggml_cuda_hmax2(x, ggml_cuda_shfl_xor(x, offset, width));
    }
    return x;
 }
@@ -867,7 +896,7 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 }
 
 static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
-#if defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
+#if defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE)
     // ROCm does not support fp8 in software on devices with fp8 hardware,
     // but CDNA3 supports only e4m3_fnuz (no inf).
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.

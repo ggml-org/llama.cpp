@@ -63,6 +63,7 @@ add_library(mtmd
             models/nemotron-transcribe.cpp
             models/muse-glimmer.cpp
             models/muse-spark-audio.cpp
+            models/vibevoice-asr.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
@@ -85,6 +86,8 @@ add_library(mtmd
             models/drama3-gen.cpp
             models/fish-s2-gen.cpp
             models/fish-s2-spkenc.cpp
+            models/zonos3-gen.cpp
+            models/zonos3-spkenc.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp
             models/pockettts-gen.cpp
