@@ -8998,6 +8998,68 @@ struct test_sum_rows : public test_case {
     }
 };
 
+struct test_sum_rows_f16_boundary : public test_case {
+    enum io_mode_t {
+        F16_TO_F16 = 0,
+        F16_TO_F32 = 1,
+        F32_TO_F16 = 2,
+    };
+
+    const std::array<int64_t, 4> ne;
+    const io_mode_t io_mode;
+    const bool permute;
+    const bool slice;
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SUM_ROWS";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR4(ne, io_mode, permute, slice);
+    }
+
+    test_sum_rows_f16_boundary(std::array<int64_t, 4> ne = {8, 64, 1, 1},
+            io_mode_t io_mode = F16_TO_F16, bool permute = false, bool slice = false)
+        : ne(ne), io_mode(io_mode), permute(permute), slice(slice) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * x = (io_mode == F32_TO_F16) ? a : ggml_dup(ctx, a);
+        if (x != a) {
+            ggml_set_name(x, "x_in");
+        }
+
+        if (slice) {
+            x = ggml_view_4d(ctx, x,
+                             ne[0], ne[1], ne[2] / 2, ne[3] - 1,
+                             x->nb[1], x->nb[2] * 2, x->nb[3], /*offset=*/x->nb[3]);
+            ggml_set_name(x, "x_slice");
+        }
+        if (permute) {
+            x = ggml_permute(ctx, x, 0, 2, 3, 1);
+            ggml_set_name(x, "x_perm");
+        }
+
+        ggml_tensor * y = ggml_sum_rows(ctx, x);
+        ggml_set_name(y, "sum_rows");
+
+        ggml_tensor * out = (io_mode == F16_TO_F32) ? y : ggml_dup(ctx, y);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    double max_nmse_err() override {
+        return 1e-3;
+    }
+};
+
 // GGML_OP_MEAN
 struct test_mean : public test_case {
     const ggml_type type;
@@ -13623,6 +13685,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 17, 65537, 1, 1 }));
+    for (auto io_mode : { test_sum_rows_f16_boundary::F16_TO_F16,
+                          test_sum_rows_f16_boundary::F16_TO_F32,
+                          test_sum_rows_f16_boundary::F32_TO_F16 }) {
+        for (int64_t ne0 : { 4, 8, 16 }) {
+            test_cases.emplace_back(new test_sum_rows_f16_boundary({ ne0, 2048, 64, 1 }, io_mode));
+        }
+        for (int64_t ne0 : { 1, 7, 31, 33, 65 }) {
+            test_cases.emplace_back(new test_sum_rows_f16_boundary({ ne0, 64, 2, 1 }, io_mode));
+        }
+        test_cases.emplace_back(new test_sum_rows_f16_boundary({ 256, 64, 2, 1 }, io_mode));
+        test_cases.emplace_back(new test_sum_rows_f16_boundary({ 4096, 32, 2, 1 }, io_mode));
+        test_cases.emplace_back(new test_sum_rows_f16_boundary({ 16, 5, 6, 3 }, io_mode, true, false));
+        test_cases.emplace_back(new test_sum_rows_f16_boundary({ 16, 5, 6, 3 }, io_mode, false, true));
+        test_cases.emplace_back(new test_sum_rows_f16_boundary({ 16, 5, 6, 3 }, io_mode, true, true));
+        test_cases.emplace_back(new test_sum_rows_f16_boundary({ 33, 5, 6, 3 }, io_mode, true, false));
+    }
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {3, 1, 1, 65537}, 1));

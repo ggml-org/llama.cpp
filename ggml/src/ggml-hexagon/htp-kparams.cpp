@@ -2097,12 +2097,97 @@ static bool htp_kparams_solve_rope(
 static bool htp_kparams_solve_sum_rows(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
     struct htp_sum_rows_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
+
+    const uint32_t ne00         = src0->ne[0];
+    const uint32_t src0_nrows   = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t max_hvx_sess = htp_session_n_hvx(sess);
+
+    if (op->op == GGML_OP_SUM_ROWS) {
+        if (!internal_f16) {
+            if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+                return false;
+            }
+        } else {
+            if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+                (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+                return false;
+            }
+        }
+        if (dst->ne[0] != 1 ||
+            dst->ne[1] != src0->ne[1] ||
+            dst->ne[2] != src0->ne[2] ||
+            dst->ne[3] != src0->ne[3]) {
+            return false;
+        }
+        if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous(dst)) {
+            return false;
+        }
+
+        const size_t src0_elem_size        = ggml_type_size(src0->type);
+        const size_t dst_elem_size         = ggml_type_size(dst->type);
+        const size_t src0_data_row_size    = (size_t) ne00 * src0_elem_size;
+        const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
+        const size_t vtcm_size             = htp_session_vtcm_size(sess);
+
+        const uint32_t min_rpt = (src0_data_row_size < 1024) ? 32 : 1;
+        const uint32_t max_hvx = (std::max)(1u, src0_nrows / min_rpt);
+        uint32_t       n_hvx   = (std::min)(max_hvx_sess, max_hvx);
+
+        while (n_hvx > 1 && 2 * (src0_row_size_aligned + 128) * n_hvx > vtcm_size) {
+            n_hvx--;
+        }
+        if (n_hvx == 0 || 2 * (src0_row_size_aligned + 128) * n_hvx > vtcm_size) {
+            return false;
+        }
+
+        const bool can_2d_dma  = (src0_nrows > 1) &&
+                                 (src0->nb[1] >= src0_data_row_size) &&
+                                 (src0->nb[1] <= 0xFFFFFFu);
+        const bool src0_contig = can_2d_dma && ggml_is_contiguous_1(src0);
+
+        const uint32_t src0_nrows_per_hvx = (src0_nrows + n_hvx - 1) / n_hvx;
+        const uint32_t min_block_rows     = (uint32_t) (std::max<size_t>(1, 2048 / src0_data_row_size));
+        uint32_t       max_block          = !can_2d_dma ? 1u : (src0_contig ? src0_nrows : (uint32_t) src0->ne[1]);
+        if (max_block > 1 && src0_nrows_per_hvx >= 2 * min_block_rows) {
+            max_block = (std::min)(max_block, (std::max)(min_block_rows, src0_nrows_per_hvx / 4));
+        }
+        max_block = (std::min)(max_block, 512u);
+        max_block = (std::max)(max_block, 1u);
+
+        const size_t per_thread_budget = vtcm_size / (2 * n_hvx);
+        uint32_t block = (per_thread_budget > 128)
+            ? (uint32_t) ((per_thread_budget - 128) / (src0_row_size_aligned + dst_elem_size))
+            : 1u;
+        block = (std::min)(block, max_block);
+        block = (std::max)(block, 1u);
+
+        struct htp_sum_rows_vtcm_layout L;
+        htp_sum_rows_vtcm_layout_build(&L, src0_data_row_size, dst_elem_size, block, n_hvx);
+        while (block > 1 && L.total_bytes > vtcm_size) {
+            block--;
+            htp_sum_rows_vtcm_layout_build(&L, src0_data_row_size, dst_elem_size, block, n_hvx);
+        }
+        if (L.total_bytes > vtcm_size) {
+            return false;
+        }
+
+        kparams->n_hvx       = n_hvx;
+        kparams->block       = block;
+        kparams->src0_contig = src0_contig ? 1 : 0;
+        kparams->vtcm_size   = (uint32_t) L.total_bytes;
+        kparams->div_ne01    = init_fastdiv_values((uint32_t) src0->ne[1]);
+        kparams->div_ne02    = init_fastdiv_values((uint32_t) src0->ne[2]);
+        kparams->div_ne012   = init_fastdiv_values((uint32_t) (src0->ne[1] * src0->ne[2]));
+
+        return true;
+    }
 
     if (src0->type != GGML_TYPE_F32) {
         return false;
@@ -2118,10 +2203,6 @@ static bool htp_kparams_solve_sum_rows(
         return false;
     }
 
-    const uint32_t ne00             = src0->ne[0];
-    const uint32_t src0_nrows       = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const uint32_t max_hvx_sess     = htp_session_n_hvx(sess);
-
     if (op->op == GGML_OP_SUM) {
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
         const uint32_t n_hvx       = (total_elems >= 1024) ? max_hvx_sess : 1;
@@ -2136,8 +2217,8 @@ static bool htp_kparams_solve_sum_rows(
         kparams->n_hvx         = n_hvx;
         kparams->elems_per_hvx = hex_round_up(raw_chunk, 32);
     } else {
-        const uint32_t min_rpt     = (src0->nb[1] < 1024) ? 32 : 1;
-        const uint32_t max_hvx     = (std::max)(1u, src0_nrows / min_rpt);
+        const uint32_t min_rpt = (src0->nb[1] < 1024) ? 32 : 1;
+        const uint32_t max_hvx = (std::max)(1u, src0_nrows / min_rpt);
 
         kparams->n_hvx = (std::min)(max_hvx_sess, max_hvx);
     }
@@ -5962,7 +6043,11 @@ bool htp_kparams_solve(
         case HTP_OP_SUM_ROWS:
         case HTP_OP_SUM:
         case HTP_OP_ARGMAX:
-            return htp_kparams_invoke<htp_kparams_solve_sum_rows>(sess, op, kparams);
+        {
+            struct htp_sum_rows_kernel_params tmp;
+            return htp_kparams_solve_sum_rows(sess, op, internal_f16,
+                                              kparams ? (struct htp_sum_rows_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_REPEAT:
             return htp_kparams_invoke<htp_kparams_solve_repeat>(sess, op, kparams);
