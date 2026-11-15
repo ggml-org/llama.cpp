@@ -141,7 +141,6 @@ struct lexer {
         {"~", token::additive_binary_operator},
         {"**", token::power_operator},
         {"*", token::multiplicative_binary_operator},
-        {"//", token::multiplicative_binary_operator},
         {"/", token::multiplicative_binary_operator},
         {"%", token::multiplicative_binary_operator},
         // Assignment operator

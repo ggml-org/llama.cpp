@@ -6,7 +6,6 @@
 #include <charconv>
 #include <functional>
 #include <map>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -272,12 +271,6 @@ lexer_result lexer::tokenize(const std::string & source) {
             token::type last_token_type = tokens.empty() ? token::eof : tokens.back().t;
             if (last_token_type == token::text || last_token_type == token::eof) {
                 throw lexer_exception(std::string("unexpected character: ") + ch, source, pos);
-            }
-            // keyword followed by an operand, e.g. `x if c else -1`; `a.else - 1` is still binary
-            static const std::set<std::string> operand_keywords = { "if", "else", "and", "or", "not", "in", "is" };
-            const bool is_attr = tokens.size() >= 2 && tokens[tokens.size() - 2].t == token::dot;
-            if (last_token_type == token::identifier && !is_attr && operand_keywords.count(tokens.back().value)) {
-                last_token_type = token::eof; // handle as unary below
             }
             switch (last_token_type) {
                 case token::identifier:

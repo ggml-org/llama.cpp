@@ -196,25 +196,6 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
         } else if (op.value == "/") {
             JJ_DEBUG("Division operation: %f / %f", a, b);
             return mk_val<value_float>(a / b);
-        } else if (op.value == "//") {
-            // python semantics: round toward -inf
-            if (is_val<value_int>(left_val) && is_val<value_int>(right_val)) {
-                const int64_t x = left_val->as_int();
-                const int64_t y = right_val->as_int();
-                if (y == 0) {
-                    throw std::runtime_error("integer division by zero");
-                }
-                if (y == -1) {
-                    // INT64_MIN / -1 is UB, wrap around instead
-                    return mk_val<value_int>((int64_t) (0 - (uint64_t) x));
-                }
-                int64_t q = x / y;
-                if (x % y != 0 && (x < 0) != (y < 0)) {
-                    q -= 1;
-                }
-                return mk_val<value_int>(q);
-            }
-            return mk_val<value_float>(std::floor(a / b));
         } else if (op.value == "%") {
             double rem = std::fmod(a, b);
             JJ_DEBUG("Modulo operation: %f %% %f = %f", a, b, rem);
@@ -293,17 +274,12 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
     // String membership
     if (is_val<value_string>(left_val) && is_val<value_string>(right_val)) {
         // case: "a" in "abc"
-        if (op.value == "in" || op.value == "not in") {
-            bool member = test_is_in();
-            return mk_val<value_bool>(op.value == "in" ? member : !member);
+        bool member = test_is_in();
+        if (op.value == "in") {
+            return mk_val<value_bool>(member);
+        } else if (op.value == "not in") {
+            return mk_val<value_bool>(!member);
         }
-        // case: "a" < "b"; UTF-8 byte order is the same as codepoint order, like python
-        const std::string a = left_val->as_string().str();
-        const std::string b = right_val->as_string().str();
-        if (op.value == "<")  { return mk_val<value_bool>(a <  b); }
-        if (op.value == ">")  { return mk_val<value_bool>(a >  b); }
-        if (op.value == "<=") { return mk_val<value_bool>(a <= b); }
-        if (op.value == ">=") { return mk_val<value_bool>(a >= b); }
     }
 
     // Value key in object

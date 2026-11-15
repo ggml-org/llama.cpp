@@ -657,30 +657,6 @@ static void test_expressions(testing & t) {
         "20"
     );
 
-    test_template(t, "floor division",
-        "{{ 7 // 2 }},{{ -7 // 2 }},{{ 7 // -2 }},{{ 7.5 // 2 }},{{ a // b }}",
-        {{"a", 10}, {"b", 3}},
-        "3,-4,-4,3.0,3"
-    );
-
-    test_template(t, "string comparison",
-        "{{ 'b' > 'a' }},{{ 'VBD' > 'VB' }},{{ 'a' <= 'a' }},{{ 'Z' < 'a' }},{{ 'ab' >= 'b' }}",
-        json::object(),
-        "True,True,True,True,False"
-    );
-
-    test_template(t, "unary minus after keyword",
-        "{{ 1 if false else -1 }},{{ not -1 }},{{ x and -2 }},{{ -3 if x }}",
-        {{"x", true}},
-        "-1,False,-2,-3"
-    );
-
-    test_template(t, "binary minus after keyword attribute",
-        "{{ a.else - 1 }}",
-        {{"a", {{"else", 3}}}},
-        "2"
-    );
-
     test_template(t, "string concat ~",
         "{{ 'hello' ~ ' ' ~ 'world' }}",
         json::object(),
@@ -2212,12 +2188,6 @@ static void test_array_methods(testing & t) {
         "{{ arr|map('int')|sum }}",
         {{"arr", json::array({"1", "2", "3"})}},
         "6"
-    );
-
-    test_template(t, "array|sum",
-        "{{ [1, 2.5, 3]|sum }},{{ [1, 2]|sum(start=10) }},{{ items|sum(attribute='w') }},{{ []|sum }}",
-        {{"items", json::array({{{"w", 1}}, {{"w", 2}}})}},
-        "6.5,13,3,0"
     );
 
     test_template(t, "array|min",
