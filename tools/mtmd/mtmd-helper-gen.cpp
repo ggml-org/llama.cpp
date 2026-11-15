@@ -2537,17 +2537,14 @@ public:
 
         int ret;
         if (!seg.tokens.empty()) {
-            llama_batch batch = llama_batch_init(n, 0, 1);
-            for (int i = 0; i < n; i++) {
-                batch.token   [i]    = seg.tokens[(size_t) (seg_pos + i)];
-                batch.pos     [i]    = pos + i;
-                batch.n_seq_id[i]    = 1;
-                batch.seq_id  [i][0] = seq_id;
-                batch.logits  [i]    = last && i == n - 1;
+            llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+            if (!batch_set_tokens(batch.get(), seg.tokens.data() + seg_pos, n, pos, seq_id)) {
+                return -1;
             }
-            batch.n_tokens = n;
-            ret = llama_decode(lctx, batch);
-            llama_batch_free(batch);
+            if (last) {
+                llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+            }
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         } else {
             decode_embd_batch batch(seg.embd.data() + (size_t) seg_pos * n_embd, n, 1, n_embd);
             batch.set_position_normal(pos, seq_id);
