@@ -2278,13 +2278,15 @@ bool rpc_server::graph_recompute(const rpc_msg_graph_recompute_req & request) {
     if (device >= backends.size()) {
         return false;
     }
-    auto it = stored_graphs[device].find(request.uid);
+    // rpc_msg_graph_recompute_req is packed: copy uid out before binding it to a reference
+    const uint64_t uid = request.uid;
+    auto it = stored_graphs[device].find(uid);
     if (it == stored_graphs[device].end() || it->second.graph == nullptr) {
-        LOG_ERROR("[%s] device: %u, graph with uid %" PRIu64 " not found\n", __func__, device, request.uid);
+        LOG_ERROR("[%s] device: %u, graph with uid %" PRIu64 " not found\n", __func__, device, uid);
         return false;
     }
     ggml_cgraph * graph = it->second.graph;
-    LOG_DBG("[%s] device: %u, uid: %" PRIu64 "\n", __func__, device, request.uid);
+    LOG_DBG("[%s] device: %u, uid: %" PRIu64 "\n", __func__, device, uid);
     ggml_status status = ggml_backend_graph_compute_async(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
     return true;
