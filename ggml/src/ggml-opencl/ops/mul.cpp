@@ -87,7 +87,7 @@ void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const ggml_te
         GGML_ASSERT(ne11 == 1);
 
         bcast_row = true;
-        int ne = ne00 / 4;
+        int ne = ne10 / 4;
 
         if (src0->type == GGML_TYPE_F32) {
             kernel = backend_ctx->mul.kernel_mul_row;

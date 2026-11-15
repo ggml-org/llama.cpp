@@ -115,6 +115,7 @@ struct ggml_opencl_glu_kernels {
     cl_kernel kernel_geglu_f16;
     cl_kernel kernel_reglu_f16;
     cl_kernel kernel_swiglu_f16;
+    cl_kernel kernel_swiglu_oai_f16;
     cl_kernel kernel_swiglu_clamp_f16;
     cl_kernel kernel_geglu_erf_f16;
     cl_kernel kernel_geglu_quick_f16;
@@ -748,6 +749,7 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemm_noshuffle_q6_K_f32;
     cl_kernel kernel_gemm_noshuffle_q6_K_f32_cok;
     cl_kernel kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin;
+    cl_kernel kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin;
     cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin;
     cl_kernel kernel_gemv_noshuffle_q6_k_f32_32b_trans;
     cl_kernel kernel_gemv_noshuffle_q5_k_f32;
