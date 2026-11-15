@@ -1439,21 +1439,23 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
                         ggml_openvino_model_cache_blob_path(model_cache_dir, candidate_fp);
                     const std::string candidate_manifest =
                         ggml_openvino_model_cache_manifest_path(model_cache_dir, candidate_fp);
-                    std::ifstream blob_in(candidate_blob, std::ios::binary);
                     std::vector<std::string> saved_inputs, saved_outputs;
-                    if (!blob_in.is_open() ||
+                    if (!std::ifstream(candidate_blob, std::ios::binary).is_open() ||
                         !ggml_openvino_model_cache_verify_manifest(candidate_manifest, cgraph, candidate_fp,
                                                                    saved_inputs, saved_outputs)) {
                         continue;
                     }
                     const int64_t import_start = ggml_time_us();
                     try {
+                        // Import from a memory-mapped tensor instead of a stream: a stream import reads the whole
+                        // blob into a heap buffer while the plugin builds its own copy of the weights.
+                        const ov::Tensor blob = ov::read_tensor_data(candidate_blob);
                         ov::CompiledModel cm;
                         auto remote_context = ggml_openvino_get_remote_context(device);
                         if (remote_context.has_value()) {
-                            cm = core.import_model(blob_in, remote_context.value(), mc_config);
+                            cm = core.import_model(blob, remote_context.value(), mc_config);
                         } else {
-                            cm = core.import_model(blob_in, device, mc_config);
+                            cm = core.import_model(blob, device, mc_config);
                         }
                         // CPU serialization can rename Results that share a name with a Parameter.
                         if (!saved_inputs.empty() || !saved_outputs.empty()) {
