@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <random>
 #include <regex>
 #include <string>
@@ -334,11 +335,16 @@ static void test_server_prompt_cache_disk(testing & t) {
     }
 
     {
+        // a file that is not a cache file is left alone
+        const fs::path path_other = dir / "notes.cache";
+        std::ofstream(path_other) << "not a cache file";
+
         // another model sees the files but cannot use them
         server_prompt_cache_disk disk(dir.string(), "fedcba9876543210", 0, false);
         t.assert_equal("other compat, files", (size_t) 2, disk.get_entries().size());
         t.assert_equal("other compat, n_tokens", (size_t) 0, disk.get_entries().front().n_tokens);
         t.assert_true("other compat, size", disk.size() > 2000);
+        t.assert_true("file name", string_starts_with(disk.get_entries().front().name, "0123456789abcdef-") && string_ends_with(disk.get_entries().front().name, ".cache"));
     }
 
     {
@@ -369,6 +375,8 @@ static void test_server_prompt_cache_disk(testing & t) {
         server_prompt_cache_disk disk_new(dir.string(), compat, 0, false);
         t.assert_equal("broken file removed by the scan", (size_t) 0, disk_new.get_entries().size());
     }
+
+    t.assert_true("other file is kept", fs::exists(dir / "notes.cache"));
 
     fs::remove_all(dir);
 }

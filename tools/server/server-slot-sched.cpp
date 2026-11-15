@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <regex>
 
 //
 // server_prompt
@@ -65,12 +66,12 @@ server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_toke
 
 namespace fs = std::filesystem;
 
-static const char * FILE_EXT     = ".kvc";
+static const char * FILE_EXT     = ".cache";
 static const char * FILE_EXT_TMP = ".tmp";
 
 struct server_cache_disk_header {
-    uint32_t magic   = 0x3243564b; // "KVC2"
-    uint32_t version = 1;
+    uint32_t magic   = 0x48434143; // "CACH"
+    uint32_t version = 1; // to be increased when the file format changes
 
     uint64_t n_tokens      = 0;
     uint64_t n_hashes      = 0;
@@ -173,7 +174,9 @@ void server_prompt_cache_disk::scan() {
             continue;
         }
 
-        if (!string_ends_with(name, FILE_EXT)) {
+        // of any compat id, other files in the directory are left alone
+        static const std::regex re_name("[0-9a-f]{16}-[0-9a-f]{32}\\.cache");
+        if (!std::regex_match(name, re_name)) {
             continue;
         }
 

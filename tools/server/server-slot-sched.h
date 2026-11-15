@@ -79,7 +79,7 @@ struct server_prompt_cache_state {
     }
 };
 
-// prompt cache on disk, one file per prompt in a flat directory: {compat}-{prompt hash}.kvc
+// prompt cache on disk, one file per prompt in a flat directory: {compat}-{prompt hash}.cache
 // file: header | hash chain | tokens | state | draft state | checkpoints
 
 struct server_prompt_cache_disk_entry {

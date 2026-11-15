@@ -23,7 +23,7 @@ def read_log() -> str:
 
 
 def cache_files() -> list[str]:
-    return sorted(glob.glob(os.path.join(cache_dir, "*.kvc")))
+    return sorted(glob.glob(os.path.join(cache_dir, "*.cache")))
 
 
 def process_prompt(prompt, **kwargs):
