@@ -34,7 +34,7 @@
 
 template<typename T>
 void destroy_and_reset(T& resource){
-    if (resource){
+    if (resource) {
         resource.Destroy();
         resource = nullptr; 
     }
@@ -264,15 +264,14 @@ struct webgpu_context_struct {
     uint32_t                                profile_timestamp_query_count = 0;
 #endif
 
-    ~webgpu_context_struct() 
-    {
+    ~webgpu_context_struct() {
 #ifdef GGML_WEBGPU_GPU_PROFILE
-    destroy_and_reset(profile_timestamp_host_buf);
-    destroy_and_reset(profile_timestamp_dev_buf);
-    destroy_and_reset(profile_timestamp_query_set);
+        destroy_and_reset(profile_timestamp_host_buf);
+        destroy_and_reset(profile_timestamp_dev_buf);
+        destroy_and_reset(profile_timestamp_query_set);
 #endif
-    destroy_and_reset(set_rows_host_error_buf);
-    destroy_and_reset(set_rows_dev_error_buf);
+        destroy_and_reset(set_rows_host_error_buf);
+        destroy_and_reset(set_rows_dev_error_buf);
     }
 };
 
