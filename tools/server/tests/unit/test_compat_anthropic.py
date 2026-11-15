@@ -11,7 +11,7 @@ server: ServerProcess
 def get_test_image_base64() -> str:
     """Get a test image in base64 format"""
     # Use the same test image as test_vision_api.py
-    IMG_URL = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+    IMG_URL = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
     response = requests.get(IMG_URL)
     response.raise_for_status()
     return base64.b64encode(response.content).decode("utf-8")

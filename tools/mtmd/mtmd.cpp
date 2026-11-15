@@ -905,6 +905,13 @@ struct mtmd_context {
                     img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_INKLING2V:
+                {
+                    // image goes in its own message block (always user role)
+                    img_beg = "<|end_message|><|message_user|><|content_image|>";
+                    img_end = "<|end_message|><|message_user|><|content_text|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2v>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
                     img_beg = "<|image_start|>";

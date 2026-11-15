@@ -15,6 +15,7 @@ export type {
 	ApiModelsSseProgress,
 	ApiModelsSseData,
 	ApiModelsSseDownloadProgressData,
+	ApiModelsSseDownloadFailedData,
 	ApiModelsSseEvent,
 	ApiModelsDownloadRequest,
 	ApiModelsDownloadResponse,
@@ -47,6 +48,7 @@ export type {
 	HfModelGguf,
 	HfModelInfo,
 	HfModelSearchParams,
+	HfMmprojEncoders,
 	HfModelSibling,
 	HfModelSiblingRef
 } from './huggingface';

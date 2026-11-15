@@ -13,11 +13,14 @@
 #include "llama.h"
 #include "log.h"
 
+#include <algorithm>
 #include <atomic>
 #include <clocale>
 #include <exception>
+#include <mutex>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
+#include <unordered_map>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -256,6 +259,17 @@ static bool server_setup_features(
         SRV_WRN("%s", "security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)\n");
     }
 
+    // tools can run shell commands: do not expose them to the network without auth
+    const bool tools_enabled = !params.server_tools.empty() || !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty() || params.ui_mcp_proxy;
+    const bool loopback_only = std::all_of(params.hostnames.begin(), params.hostnames.end(), [](const std::string & h) {
+        return string_ends_with(h, ".sock") || h == "localhost" || h == "::1" || h == "[::1]" || string_starts_with(h, "127.");
+    });
+    if (tools_enabled && !loopback_only && params.api_keys.empty() && !params.server_tools_allow_unauth) {
+        SRV_ERR("%s", "security: server tools, MCP servers or MCP proxy are enabled on a non-loopback address without an API key\n");
+        SRV_ERR("%s", "set --api-key, bind to 127.0.0.1, or pass --allow-unauthenticated-tools on a trusted network\n");
+        return false;
+    }
+
     std::vector<std::string> warn_names;
     if (role_type == SERVER_ROLE_ROUTER) {
         warn_names.push_back("router mode");
@@ -354,7 +368,10 @@ static bool server_on_listening(server_http_context & ctx_http, const common_par
 struct server_download_state : public common_download_callback {
     server_role * role;
     std::function<bool()> should_stop;
-    std::atomic<int64_t> last_progress_time{0}; // multiple files downloading in different threads
+    // files download in parallel threads: throttle each file on its own, a shared
+    // timer lets a small, fast file (e.g. a draft) starve the updates of the others
+    std::mutex progress_mutex;
+    std::unordered_map<std::string, int64_t> last_progress_time;
     bool is_ok = false;
 
     server_download_state(server_role * r) : role(r) {}
@@ -384,11 +401,17 @@ struct server_download_state : public common_download_callback {
     }
     void on_update(const common_download_progress & p) override {
         int64_t now = ggml_time_ms();
-        // throttle progress updates to avoid flooding logs
-        if (now - last_progress_time.load(std::memory_order_relaxed) >= 100) {
-            on_progress(p);
-            last_progress_time.store(now, std::memory_order_relaxed);
+        // throttle progress updates to avoid flooding logs; the first update of a file
+        // always passes, it carries the file's total size
+        {
+            std::lock_guard<std::mutex> lk(progress_mutex);
+            auto it = last_progress_time.find(p.url);
+            if (it != last_progress_time.end() && now - it->second < 100) {
+                return;
+            }
+            last_progress_time[p.url] = now;
         }
+        on_progress(p);
     }
     void on_done(const common_download_progress & p, bool) override {
         on_progress(p);

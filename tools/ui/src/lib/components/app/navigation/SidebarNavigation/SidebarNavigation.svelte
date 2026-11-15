@@ -648,12 +648,16 @@
 				{/if}
 			</div>
 
+			<!-- the hidden strip's content goes inert, not only invisible: descendants can opt
+			     back into visibility (an open CollapsibleRegion) and pointer events (the inline
+			     style of a context-menu trigger), and would catch clicks meant for the page -->
 			<div
 				in:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
 				out:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
 				class="mt-2 flex min-h-0 flex-1 flex-col gap-7 max-md:mt-6 md:gap-1 md:transition-opacity md:duration-150 md:ease-out {isStripHidden
 					? 'md:opacity-0 md:invisible'
 					: ''}"
+				inert={isStripHidden}
 			>
 				<!-- a phone has no footer: its items join these -->
 				<SidebarNavigationActions

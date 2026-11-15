@@ -4144,6 +4144,50 @@ static void ggml_compute_forward_rms_norm_f32(
     }
 }
 
+static void ggml_compute_forward_rms_norm_bf16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, dst));
+    GGML_ASSERT(src0->nb[0] == sizeof(ggml_bf16_t));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const ggml_bf16_t * x = (ggml_bf16_t *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                ggml_bf16_t       * y = (ggml_bf16_t *) ((char *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
+
+                ggml_float sum = 0.0;
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    const float v = GGML_BF16_TO_FP32(x[i00]);
+                    sum += (ggml_float)(v*v);
+                }
+
+                const float mean  = sum/ne00;
+                const float scale = 1.0f/sqrtf(mean + eps);
+
+                // if you hit this, likely you got an inf somewhere earlier
+                assert(scale > 0.0f);
+
+                for (int64_t i00 = 0; i00 < ne00; i00++) {
+                    y[i00] = GGML_FP32_TO_BF16(GGML_BF16_TO_FP32(x[i00])*scale);
+                }
+            }
+        }
+    }
+}
+
 void ggml_compute_forward_rms_norm(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -4154,6 +4198,10 @@ void ggml_compute_forward_rms_norm(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_rms_norm_f32<GGML_RMS_NORM_FUSE_OP_NONE>(params, dst);
+            } break;
+        case GGML_TYPE_BF16:
+            {
+                ggml_compute_forward_rms_norm_bf16(params, dst);
             } break;
         default:
             {
@@ -5696,94 +5744,6 @@ void ggml_compute_forward_diag(
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_diag_f32(params, dst);
-            } break;
-        default:
-            {
-                GGML_ABORT("fatal error");
-            }
-    }
-}
-
-// ggml_compute_forward_diag_mask_inf
-
-static void ggml_compute_forward_diag_mask_f32(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const float value) {
-
-    const ggml_tensor * src0 = dst->src[0];
-
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    const int  n_past  = ((int32_t *) dst->op_params)[0];
-    const bool inplace = src0->data == dst->data;
-
-    GGML_ASSERT(n_past >= 0);
-
-    if (!inplace) {
-        if (ith == 0) {
-            // memcpy needs to be synchronized across threads to avoid race conditions.
-            // => do it in INIT phase
-            GGML_ASSERT(ggml_nelements(dst) == ggml_nelements(src0));
-            GGML_ASSERT(ggml_is_contiguous(dst) && ggml_is_contiguous(src0));
-            memcpy(
-                ((char *)  dst->data),
-                ((char *) src0->data),
-                ggml_nbytes(dst));
-        }
-        ggml_barrier(params->threadpool);
-    }
-
-    // TODO: handle transposed/permuted matrices
-
-    const int n  = ggml_nrows(src0);
-    const int nc = src0->ne[0];
-    const int nr = src0->ne[1];
-    const int nz = n/nr;
-
-    GGML_ASSERT( dst->nb[0] == sizeof(float));
-    GGML_ASSERT(src0->nb[0] == sizeof(float));
-
-    for (int k = 0; k < nz; k++) {
-        for (int j = ith; j < nr; j += nth) {
-            for (int i = n_past; i < nc; i++) {
-                if (i > n_past + j) {
-                    *(float *)((char *) dst->data + k*dst->nb[2] + j*dst->nb[1] + i*dst->nb[0]) = value;
-                }
-            }
-        }
-    }
-}
-
-void ggml_compute_forward_diag_mask_inf(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-
-    const ggml_tensor * src0 = dst->src[0];
-
-    switch (src0->type) {
-        case GGML_TYPE_F32:
-            {
-                ggml_compute_forward_diag_mask_f32(params, dst, -INFINITY);
-            } break;
-        default:
-            {
-                GGML_ABORT("fatal error");
-            }
-    }
-}
-
-void ggml_compute_forward_diag_mask_zero(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-
-    const ggml_tensor * src0 = dst->src[0];
-
-    switch (src0->type) {
-        case GGML_TYPE_F32:
-            {
-                ggml_compute_forward_diag_mask_f32(params, dst, 0);
             } break;
         default:
             {
@@ -8911,14 +8871,9 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
         float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
         float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
-        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
 
-        if (v->type == GGML_TYPE_F16) {
-            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
-        } else {
-            memset(VKQ32, 0, DV*sizeof(float));
-        }
+        memset(VKQ32, 0, DV*sizeof(float));
 
         const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]) : NULL;
 
@@ -8970,51 +8925,30 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
 
             const char * v_data = ((const char *) v->data + (ik1*nbv1 + iv2*nbv2 + iv3*nbv3));
 
-            if (v->type == GGML_TYPE_F16) {
-                if (s > M) {
-                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                    M = s;
-                    ms = expf(Mold - M);
+            if (s > M) {
+                // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                M = s;
+                ms = expf(Mold - M);
 
-                    // V = V*expf(Mold - M)
-                    ggml_vec_scale_f16(DV, VKQ16, ms);
-                } else {
-                    // no new maximum, ms == 1.0f, vs != 1.0f
-                    vs = expf(s - M);
-                }
-
-                // V += v*expf(s - M)
-                ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
+                // V = V*expf(Mold - M)
+                ggml_vec_scale_f32(DV, VKQ32, ms);
             } else {
-                if (s > M) {
-                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                    M = s;
-                    ms = expf(Mold - M);
+                // no new maximum, ms == 1.0f, vs != 1.0f
+                vs = expf(s - M);
+            }
 
-                    // V = V*expf(Mold - M)
-                    ggml_vec_scale_f32(DV, VKQ32, ms);
-                } else {
-                    // no new maximum, ms == 1.0f, vs != 1.0f
-                    vs = expf(s - M);
-                }
-
-                // V += v*expf(s - M)
-                if (v_to_float) {
-                    v_to_float(v_data, V32, DV);
-                    ggml_vec_mad_f32(DV, VKQ32, V32, vs);
-                } else {
-                    // V is F32
-                    ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
-                }
+            // V += v*expf(s - M)
+            if (v->type == GGML_TYPE_F16) {
+                ggml_vec_mad_f16_f32(DV, VKQ32, (const ggml_fp16_t *) v_data, vs);
+            } else if (v_to_float) {
+                v_to_float(v_data, V32, DV);
+                ggml_vec_mad_f32(DV, VKQ32, V32, vs);
+            } else {
+                // V is F32
+                ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
             }
 
             S = S*ms + vs; // scale and increment sum with partial sum
-        }
-
-        if (v->type == GGML_TYPE_F16) {
-            for (int64_t d = 0; d < DV; ++d) {
-                VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
-            }
         }
 
         // sinks - apply only on the first kv-chunk
