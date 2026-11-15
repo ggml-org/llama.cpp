@@ -37,6 +37,7 @@ Rules of thumb:
 - Like the pp/tg graphs of `llama_context`, the subcontexts share one scheduler: each warmup reserves its worst-case graph on it, so the compute buffers fit the largest one, and switching modality re-plans inside them
 - A model declares its runtime needs (e.g. `max_nodes`, `flash_attn_auto`) in `load_hparams`, the subcontext applies them
 - Models and backends must outlive the subcontexts, `mtmd_context` declares them first for that reason
+- Models having both audio and vision encoders must have different arch names (projector types), postfixed by `a` and `v`. See Gemma 4 as an example (`gemma4a` / `gemma4v`)
 - Locking happens only at the public API boundary (`mtmd.cpp`): a new public function that runs a graph must take `compute_mutex`. The internals (subcontexts, preprocessors, `mtmd_audio_log_mel()`) assume it is held and never lock
 
 ## Pipeline

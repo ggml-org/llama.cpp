@@ -800,6 +800,19 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 tail.resize(hparams.n_embd, 0.0f);
                 set_input_f32("inp_stem_tail", tail);
             } break;
+        case PROJECTOR_TYPE_INKLING2V:
+            {
+                // CLS is at position 0, the patches are 1-indexed
+                std::vector<int32_t> positions_w{0}, positions_h{0};
+                for (int y = 0; y < pos_h; ++y) {
+                    for (int x = 0; x < pos_w; ++x) {
+                        positions_w.push_back(x + 1);
+                        positions_h.push_back(y + 1);
+                    }
+                }
+                set_input_i32("pos_w", positions_w);
+                set_input_i32("pos_h", positions_h);
+            } break;
         case PROJECTOR_TYPE_MUSE_GLIMMER:
             {
                 const int grid_w = pos_w;            // image_size_width  / patch_size
