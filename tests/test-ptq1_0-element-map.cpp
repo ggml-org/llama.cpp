@@ -1,6 +1,8 @@
 // Verifies that the element order of the CUDA PTQ1_0 accessor (ptq1_0_trit in
 // ggml-cuda/common.cuh) matches the CPU codec. The accessor is pure integer logic, so
 // it is checked on the host; keep the copy below in sync with common.cuh.
+#include "ggml.h"
+
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -20,45 +22,30 @@ static int ptq1_0_trit(const block_ptq1_0 * x, const int e) {
     return (int)((v * 3) >> 8) - 1;
 }
 
-// --- the CPU reference traversal from ggml-quants.c dequantize_row_ptq1_0 ---
-static void cpu_ref(const block_ptq1_0 * x, int * out) {
-    const uint8_t pow3[6] = {1,3,9,27,81,243};
-    const size_t stages[3] = {32,16,8};
-    int o = 0; size_t j = 0;
-    for (size_t s = 0; s < 3; ++s) {
-        const size_t c = stages[s];
-        for (; j + c <= sizeof(x->qs); j += c)
-            for (size_t n = 0; n < 5; ++n)
-                for (size_t m = 0; m < c; ++m) {
-                    uint8_t q = x->qs[j+m] * pow3[n];
-                    out[o++] = (int)(((uint16_t)q * 3) >> 8) - 1;
-                }
-    }
-    for (size_t n = 0; n < 4; ++n)
-        for (size_t h = 0; h < sizeof(x->qh); ++h) {
-            uint8_t q = x->qh[h] * pow3[n];
-            out[o++] = (int)(((uint16_t)q * 3) >> 8) - 1;
-        }
-}
-
 int main(void) {
+    const auto * traits = ggml_get_type_traits(GGML_TYPE_PTQ1_0);
+    if (traits->blck_size != QK_PTQ1_0 || traits->type_size != sizeof(block_ptq1_0)) {
+        return 1;
+    }
     unsigned seed = 12345;
     long bad = 0, total = 0;
     for (int trial = 0; trial < 20000; ++trial) {
         block_ptq1_0 blk;
         for (int i = 0; i < 24; ++i) { seed = seed*1103515245u+12345u; blk.qs[i] = (seed>>16)&0xFF; }
         for (int i = 0; i <  2; ++i) { seed = seed*1103515245u+12345u; blk.qh[i] = (seed>>16)&0xFF; }
-        int ref[QK_PTQ1_0]; cpu_ref(&blk, ref);
+        blk.d = 0x3c00; // fp16 1.0: compare integer accessor to the actual CPU dequantizer.
+        float ref[QK_PTQ1_0];
+        traits->to_float(&blk, ref, QK_PTQ1_0);
         for (int e = 0; e < QK_PTQ1_0; ++e) {
             ++total;
             if (ptq1_0_trit(&blk, e) != ref[e]) {
-                if (bad < 5) printf("  MISMATCH blk%d e=%d cuda=%d cpu=%d\n", trial, e, ptq1_0_trit(&blk,e), ref[e]);
+                if (bad < 5) printf("  MISMATCH blk%d e=%d accessor=%d cpu=%g\n", trial, e, ptq1_0_trit(&blk,e), ref[e]);
                 ++bad;
             }
         }
     }
     printf("  checked %ld element positions across 20000 random blocks\n", total);
     printf("  mismatches: %ld\n", bad);
-    printf("  %s\n", bad==0 ? "CUDA element mapping MATCHES the CPU codec exactly" : "MAPPING BUG");
+    printf("  %s\n", bad==0 ? "Host accessor replica matches production CPU codec; device execution not tested" : "MAPPING BUG");
     return bad != 0;
 }
