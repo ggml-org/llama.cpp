@@ -444,11 +444,13 @@ static bool fuse_unary_mul_glu(const ggml_hexagon_session * sess, htp_opnode & p
     const ggml_tensor * dst  = cur.dst();
     if (htp_inputs_overlap_unsafe(prev, dst, up)) return false;
 
-    prev.opcode  = glu_op;
-    prev.inputs  = { gate, up };
-    prev.outputs = { dst };
-    if (!htp_kparams_solve(sess, prev)) return false;
+    htp_opnode cand = prev;
+    cand.opcode  = glu_op;
+    cand.inputs  = { gate, up };
+    cand.outputs = { dst };
+    if (!htp_kparams_solve(sess, cand)) return false;
 
+    prev = std::move(cand);
     prev.fused.push_back(cur.node);
     memset(prev.params, 0, sizeof(prev.params));
     return true;

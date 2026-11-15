@@ -10897,6 +10897,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 }
                 test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 128, 2, 2, 2 }, v));
                 test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 5, 7, 11, 13 }, v));
+                if (type == GGML_TYPE_F16) {
+                    test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 33, 2, 2, 2 }, v));
+                    test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 65, 2, 2, 2 }, v));
+                    test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 127, 2, 2, 2 }, v));
+                    if (v == 0) {
+                        test_cases.emplace_back(new test_unary((ggml_unary_op) op, type, { 65536, 2, 1, 1 }, v));
+                    }
+                }
             }
         }
     }
@@ -12841,6 +12849,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_clamp     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_leaky_relu(type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_leaky_relu(type, {1024, 1024, 1, 1}));
+        if (type == GGML_TYPE_F16) {
+            test_cases.emplace_back(new test_leaky_relu(type, {33, 2, 2, 2}));
+            test_cases.emplace_back(new test_leaky_relu(type, {65, 2, 2, 2}));
+            test_cases.emplace_back(new test_leaky_relu(type, {127, 2, 2, 2}));
+            test_cases.emplace_back(new test_leaky_relu(type, {65536, 2, 1, 1}));
+        }
         test_cases.emplace_back(new test_floor     (type, {7, 1, 5, 3}));
         test_cases.emplace_back(new test_floor     (type, {1024, 1024, 1, 1}));
         test_cases.emplace_back(new test_ceil      (type, {7, 1, 5, 3}));

@@ -1613,10 +1613,21 @@ static bool htp_kparams_solve_unary_impl(
                 case HTP_OP_L2_NORM:
                 case HTP_OP_SCALE:
                 case HTP_OP_CLAMP:
+                case HTP_OP_LEAKY_RELU:
                 case HTP_OP_SQR:
                 case HTP_OP_SQRT:
+                case HTP_OP_UNARY_NEG:
+                case HTP_OP_UNARY_EXP:
+                case HTP_OP_UNARY_SIGMOID:
+                case HTP_OP_UNARY_SILU:
+                case HTP_OP_UNARY_GELU:
+                case HTP_OP_UNARY_GELU_QUICK:
+                case HTP_OP_UNARY_GELU_ERF:
+                case HTP_OP_UNARY_SOFTPLUS:
+                case HTP_OP_UNARY_TANH:
                 case HTP_OP_UNARY_LOG:
                 case HTP_OP_UNARY_ABS:
+                case HTP_OP_UNARY_RELU:
                 case HTP_OP_UNARY_STEP:
                 case HTP_OP_UNARY_CEIL:
                 case HTP_OP_UNARY_SGN:

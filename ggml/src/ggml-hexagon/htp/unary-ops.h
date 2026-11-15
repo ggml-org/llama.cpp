@@ -205,16 +205,9 @@ static inline void htp_unary_solve_layout(
     const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
                                op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD ||
                                op == HTP_OP_L2_NORM || op == HTP_OP_HADAMARD);
-    // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
-    // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
-    // NOTE: if F16 ends up with vtcm_row_per_hvx == 0 here (row too large for the VTCM
-    // budget), execute_op_unary() will see BLOCK == 0 and skip computation for that op
-    // (logged via FARF(ERROR, ...)) since there is no F16 tiled fallback. This is a known
-    // limitation; supporting it would require adding F16 tiled kernels.
-    const bool is_f16 = (elem_size == sizeof(_Float16));
     uint32_t col_tile = 0;
 
-    if (vtcm_row_per_hvx == 0 && !is_reduction && !is_f16) {
+    if (vtcm_row_per_hvx == 0 && !is_reduction) {
         const size_t per_hvx_budget = vtcm_size / n_hvx;
         const size_t col_tile_bytes = hex_align_down(per_hvx_budget / 4, 128);
         col_tile = (uint32_t) (col_tile_bytes / elem_size);
