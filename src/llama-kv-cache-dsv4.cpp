@@ -1950,6 +1950,7 @@ llama_kv_cache_dsv4_raw_context::llama_kv_cache_dsv4_raw_context(llama_kv_cache_
     kv_swa(kv->get_swa()),
     ctx_base_mem(nullptr),
     ctx_swa_mem(nullptr),
+    ctx_base_reserve(std::make_unique<llama_kv_cache_context>(kv->get_base())),
     n_kv(kv_swa->get_size()),
     status(LLAMA_MEMORY_STATUS_SUCCESS) {
     sinfos_read.push_back(dsv4_build_full_sinfo(kv_swa));
@@ -2093,6 +2094,60 @@ void llama_kv_cache_dsv4_raw_context::set_input_k_idxs(ggml_tensor * dst) const 
 
 void llama_kv_cache_dsv4_raw_context::set_input_attn_mask(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
     kv_swa->set_input_attn_mask(attn_mask, ubatch, causal_attn);
+}
+
+const llama_kv_cache_context * llama_kv_cache_dsv4_raw_context::get_base_ctx() const {
+    if (ctx_base_mem) {
+        return static_cast<const llama_kv_cache_context *>(ctx_base_mem.get());
+    }
+    GGML_ASSERT(ctx_base_reserve);
+    return ctx_base_reserve.get();
+}
+
+uint32_t llama_kv_cache_dsv4_raw_context::get_n_kv_full() const {
+    return get_base_ctx()->get_n_kv();
+}
+
+ggml_tensor * llama_kv_cache_dsv4_raw_context::get_k_full(ggml_context * ctx, int32_t il) const {
+    return get_base_ctx()->get_k(ctx, il);
+}
+
+ggml_tensor * llama_kv_cache_dsv4_raw_context::cpy_k_full(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
+    // coupled sequence sets fan the raw writes out per sequence, the full half does not support that yet
+    GGML_ASSERT(k_cur->ne[2] == k_idxs->ne[0] && "full-context layers do not support coupled sequences");
+    return get_base_ctx()->cpy_k(ctx, k_cur, k_idxs, il);
+}
+
+ggml_tensor * llama_kv_cache_dsv4_raw_context::build_input_k_idxs_full(ggml_context * ctx, const llama_ubatch & ubatch) const {
+    return get_base_ctx()->build_input_k_idxs(ctx, ubatch);
+}
+
+void llama_kv_cache_dsv4_raw_context::set_input_k_idxs_full(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    get_base_ctx()->set_input_k_idxs(dst, ubatch);
+}
+
+void llama_kv_cache_dsv4_raw_context::set_input_attn_mask_full(const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const {
+    get_base_ctx()->set_input_attn_mask(attn_mask, ubatch, causal_attn);
+}
+
+void llama_kv_cache_dsv4_raw_context::set_input_attn_mask_idx(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t n_window) const {
+    GGML_ASSERT(dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+
+    const int64_t n_kv     = dst->ne[0];
+    const int64_t n_stream = dst->ne[3];
+    const int64_t n        = ggml_nelements(dst);
+
+    std::vector<float> full(n);
+    std::vector<float> win(n);
+
+    get_base_ctx()->set_input_attn_mask_f32(full.data(), n_kv, n_stream, ubatch, 0, LLAMA_SWA_TYPE_NONE);
+    get_base_ctx()->set_input_attn_mask_f32(win.data(),  n_kv, n_stream, ubatch, n_window, LLAMA_SWA_TYPE_STANDARD);
+
+    ggml_fp16_t * data = (ggml_fp16_t *) dst->data;
+    for (int64_t i = 0; i < n; ++i) {
+        data[i] = ggml_fp32_to_fp16(win[i] == 0.0f ? INFINITY : full[i]);
+    }
 }
 
 void llama_kv_cache_dsv4_raw_context::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
