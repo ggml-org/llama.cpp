@@ -2751,11 +2751,6 @@ class TensorNameMap:
 
         # audio (mtmd)
 
-        MODEL_TENSOR.A_ENC_CODE_EMBD: (
-            "model.audio.encoder",
-            "model.audio_tower.embed_audio_tokens.embed_audio_tokens",
-        ),
-
         MODEL_TENSOR.A_ENC_EMBD_POS: (
             "audio_tower.embed_positions", # ultravox
             "audio_embedding.embedding", # lfm2
@@ -3060,6 +3055,8 @@ class TensorNameMap:
             "audio.multi_modal_projector.linear", # qwen2audio
             "audio_tower.proj", # qwen2omni
             "model.audio_tower.output_proj", # gemma4
+            "model.audio.encoder", # inkling
+            "model.audio_tower.embed_audio_tokens.embed_audio_tokens", # inkling
             "speaker_encoder.fc", # qwen3tts speaker encoder: final speaker embedding projection
             "perception.proj", # nemotron-transcribe
         ),

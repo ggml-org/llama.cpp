@@ -161,6 +161,9 @@ class InklingVisionModel(MmprojModel):
 
     def get_audio_config(self):
         config = dict(self.global_config["audio_config"])
+        if config.get("audio_mode") != "dmel" or not config.get("use_audio_norm") or (config["dmel_min_value"], config["dmel_max_value"]) != (-7.0, 2.0):
+            raise ValueError("Inkling audio requires normalized dMel input in the range [-7, 2]")
+        # dMel has no transformer
         config.update(hidden_size=self.n_embd_text, intermediate_size=0, num_attention_heads=1, n_layers=0)
         return config
 
@@ -194,4 +197,7 @@ class InklingVisionModel(MmprojModel):
         if name in ("model.visual.layers.linear_3.weight", "model.vision_tower.encoder_layers.3.projection.weight"):
             yield self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, 0, ".weight"), data_torch
             return
+        # the embedding lookup is a matmul on one-hot bins
+        if name in ("model.audio.encoder.weight", "model.audio_tower.embed_audio_tokens.embed_audio_tokens.weight"):
+            data_torch = data_torch.T
         yield from super().modify_tensors(data_torch, name, bid)

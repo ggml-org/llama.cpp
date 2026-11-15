@@ -323,6 +323,9 @@ bool mtmd_audio_log_mel(const mtmd_audio_mel_config & config, const float * samp
         cur = ggml_add(ctx0,
                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], 0),
                 ggml_view_2d(ctx0, cur, n_fft_bins, n_cur, cur->nb[1], n_fft_bins * ggml_element_size(cur)));
+        if (config.power_floor > 0.0f) {
+            cur = ggml_clamp(ctx0, cur, config.power_floor, FLT_MAX);
+        }
         if (config.use_magnitude) {
             cur = ggml_sqrt(ctx0, cur);
         }
@@ -1655,28 +1658,6 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
                 set_input_f32("inp_temb", temb);
             } break;
-        case PROJECTOR_TYPE_INKLINGA:
-            {
-                const auto & audio = imgs.entries[0];
-                const auto & codes = audio.get_ro_buf();
-                const int frames = audio.nx();
-                const int n_mel = hparams.n_mel_bins;
-                if (codes.size() != (size_t) n_mel * frames) {
-                    return false;
-                }
-                std::vector<int32_t> ids(codes.size());
-                for (int t = 0; t < frames; ++t) {
-                    for (int m = 0; m < n_mel; ++m) {
-                        const float code = codes[(size_t) m * frames + t];
-                        if (!(code >= 0 && code <= 15) || code != std::floor(code)) {
-                            LOG_ERR("%s: invalid Inkling audio code\n", __func__);
-                            return false;
-                        }
-                        ids[(size_t) m * frames + t] = (int32_t) code + m * 16;
-                    }
-                }
-                set_input_i32("inp_codes", ids);
-            } break;
         case PROJECTOR_TYPE_INKLINGV:
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
@@ -1703,6 +1684,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
         case PROJECTOR_TYPE_ZONOS3_SPKENC:
+        case PROJECTOR_TYPE_INKLINGA:
             {
                 // do nothing
             } break;

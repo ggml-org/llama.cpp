@@ -1267,7 +1267,6 @@ class MODEL_TENSOR(IntEnum):
     V_MULTI_PROJ_POST_NORM = auto()
 
     # audio (mtmd)
-    A_ENC_CODE_EMBD       = auto()
     A_ENC_EMBD_POS        = auto()
     A_ENC_EMBD_NORM       = auto()
     A_ENC_EMBD_TO_LOGITS  = auto() # lfm2
@@ -2213,7 +2212,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
 
     # audio (mtmd)
     # note: all audio tensor names must use prefix "a." or "mm.a."
-    MODEL_TENSOR.A_ENC_CODE_EMBD:           "a.code_embd",
     MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
     MODEL_TENSOR.A_ENC_EMBD_NORM:           "a.position_embd_norm",
     MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS:      "a.embd_to_logits",
@@ -2623,7 +2621,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MULTI_PROJ_NORM,
         MODEL_TENSOR.V_MULTI_PROJ_POST_NORM,
         # audio
-        MODEL_TENSOR.A_ENC_CODE_EMBD,
         MODEL_TENSOR.A_ENC_EMBD_POS,
         MODEL_TENSOR.A_ENC_EMBD_NORM,
         MODEL_TENSOR.A_ENC_EMBD_TO_LOGITS,

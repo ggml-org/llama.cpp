@@ -1178,9 +1178,6 @@ struct mtmd_model {
     ggml_tensor * downsample_norm_b = nullptr;
     ggml_tensor * rvq_codebook = nullptr; // merged 3D [n_q, max_bins, dim]
 
-    // inkling
-    ggml_tensor * a_code_embd = nullptr;
-
     // mimo-v2.5: text-side RVQ code embedding ("text codebook")
     ggml_tensor * mm_a_code_embd = nullptr; // merged 3D [n_channels, vocab, dim]
 

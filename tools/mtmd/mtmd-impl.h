@@ -219,7 +219,6 @@
 #define TN_GLM_ADAPTER_D_4H_2_H "adapter.linear.dense_4h_to_h.%s"
 
 // inkling
-#define TN_A_CODE_EMBD "a.code_embd.%s"
 
 // ultravox
 #define TN_CONV1D       "a.conv1d.%d.%s"

@@ -836,17 +836,11 @@ struct mtmd_model_loader {
                     } break;
                 case PROJECTOR_TYPE_INKLINGA:
                     {
+                        hparams.audio_chunk_len   = 0;
                         hparams.audio_sample_rate = 16000;
-                        if (hparams.n_mel_bins != 80 || hparams.eps != 1e-6f ||
-                            hparams.n_embd != hparams.projection_dim || hparams.n_layer != 0) {
-                            throw std::runtime_error("inklinga requires 80 mel bins, RMS epsilon 1e-6, LM-width embeddings and no encoder layers");
-                        }
-                        hparams.audio_n_fft = 1600;
-                        hparams.audio_window_len = 1600;
-                        hparams.audio_hop_len = 800;
-                        hparams.audio_chunk_len = 0;
-                        hparams.warmup_audio_size = 20;
-                        model.flash_attn_auto = false;
+                        hparams.audio_n_fft       = 1600;
+                        hparams.audio_window_len  = 1600;
+                        hparams.audio_hop_len     = 800;
                     } break;
                 case PROJECTOR_TYPE_INKLING2V:
                     {
@@ -2067,7 +2061,7 @@ struct mtmd_model_loader {
                     if (!model.post_ln_w) {
                         throw std::runtime_error(mtmd_format("%s: missing post_ln\n", __func__));
                     }
-                    model.a_code_embd = get_tensor(mtmd_format(TN_A_CODE_EMBD, "weight"));
+                    model.mm_fc_w = get_tensor(mtmd_format(TN_MM_AUDIO_FC, "weight"));
                 } break;
             case PROJECTOR_TYPE_INKLING2V:
                 {
@@ -4455,10 +4449,13 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
             {
                 n_patches = (img->nx() + (params.subsampling_factor - 1)) / params.subsampling_factor;
             } break;
-        case PROJECTOR_TYPE_INKLINGA:
         case PROJECTOR_TYPE_GEMMA4UA:
             {
-                n_patches = img->nx();  // no downsampling: one token per input frame
+                n_patches = img->nx();  // no downsampling: one token per raw waveform frame
+            } break;
+        case PROJECTOR_TYPE_INKLINGA:
+            {
+                n_patches = img->nx(); // one token per mel frame
             } break;
         case PROJECTOR_TYPE_MIMO_AUDIO:
             {
@@ -4585,8 +4582,6 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_MINIMAX_M3:
             return mm_merger_fc2_b->ne[0];
-        case PROJECTOR_TYPE_INKLINGA:
-            return a_code_embd->ne[0];
         case PROJECTOR_TYPE_INKLINGV:
             return mm_0_w->ne[1];
         case PROJECTOR_TYPE_MUSE_GLIMMER:
@@ -4639,6 +4634,7 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_NEMOTRON_TRANSCRIBE:
+        case PROJECTOR_TYPE_INKLINGA:
             return mm_fc_w->ne[1];
         case PROJECTOR_TYPE_QWEN3A:
         case PROJECTOR_TYPE_HIGGS_AUDIO:
