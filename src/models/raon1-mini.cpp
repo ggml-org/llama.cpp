@@ -59,10 +59,9 @@ void llama_model_raon1_mini::load_arch_hparams(llama_model_loader & ml) {
     require(hparams.hc_magnitude > 0, "hyper_connection.magnitude is not positive");
     require(hparams.situ_beta > 0 && hparams.situ_linear_beta > 0, "a SiTU beta is not positive");
     require(hparams.n_layer_dense_lead <= hparams.n_layer(), format("leading_dense_block_count %u is larger than block_count %u", hparams.n_layer_dense_lead, hparams.n_layer()));
-    if (hparams.n_embd_head_kda != 16 && hparams.n_embd_head_kda != 32 &&
-        hparams.n_embd_head_kda != 64 && hparams.n_embd_head_kda != 128) {
-        throw std::runtime_error(format("unsupported Raon-1 mini RDA head dimension %u (16, 32, 64 or 128)", hparams.n_embd_head_kda));
-    }
+    const auto head_dim = hparams.n_embd_head_kda;
+    require(head_dim == 16 || head_dim == 32 || head_dim == 64 || head_dim == 128,
+            format("RDA head dimension %u is not 16, 32, 64 or 128", head_dim));
 
     switch (hparams.n_layer()) {
         case 25: type = LLM_TYPE_29B_A4B; break;
@@ -377,13 +376,16 @@ ggml_tensor * llama_model_raon1_mini::graph::build_mla_layer(
     const int64_t nk = hparams.n_embd_head_k_mla();
     const int64_t nn = nk - nr;
     const int64_t rank = hparams.n_lora_kv;
+    // Raon defines a separate RMSNorm epsilon for its Q and KV latent projections.
     const float eps = hparams.f_norm_rms_eps_latent;
     ggml_tensor * q = build_lora_mm(layer.wq_a, cur);
     q = ggml_mul(ctx0, ggml_rms_norm(ctx0, q, eps), layer.attn_q_a_norm);
+    cb(q, "mla_q_norm", il);
     q = build_lora_mm(layer.wq_b, q);
     ggml_tensor * kv = build_lora_mm(layer.wkv_a_mqa, cur);
     ggml_tensor * latent = ggml_view_2d(ctx0, kv, rank, n_tokens, kv->nb[1], 0);
     latent = ggml_mul(ctx0, ggml_rms_norm(ctx0, latent, eps), layer.attn_kv_a_norm);
+    cb(latent, "mla_kv_norm", il);
     // NoPE: the "rope" dims of q and k are concatenated as they are, without rotation
     ggml_tensor * extra = ggml_view_3d(ctx0, kv, nr, 1, n_tokens, kv->nb[1], kv->nb[1], rank*kv->nb[0]);
     ggml_tensor * q_nope = ggml_view_3d(ctx0, q, nn, n_head, n_tokens, nk*q->nb[0], q->nb[1], 0);
@@ -503,5 +505,4 @@ llama_model_raon1_mini::graph::graph(const llm_graph_params & params) : llm_buil
     cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-    ggml_build_forward_expand(gf, cur);
 }
