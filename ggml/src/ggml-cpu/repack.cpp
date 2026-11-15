@@ -5150,6 +5150,14 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
             }
         }
     } else if (cur->type == GGML_TYPE_Q6_K) {
+#if defined(__AVX512BW__) && defined(__AVX512DQ__)
+        static const bool no_q6k = [] { const char * e = getenv("GGML_NO_Q6K_REPACK"); return e && *e && *e != '0'; }();
+        if (!no_q6k && ggml_cpu_has_avx512()) {
+            if (cur->ne[1] % 8 == 0) {
+                return &q6_K_8x8_q8_K;
+            }
+        }
+#endif
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q6_K_8x8_q8_K;
