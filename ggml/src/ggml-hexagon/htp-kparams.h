@@ -57,7 +57,8 @@ struct htp_opnode;
 
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
-    struct htp_opnode & node
+    struct htp_opnode & node,
+    bool internal_f16 = true
 );
 
 void htp_opnode_collapse(

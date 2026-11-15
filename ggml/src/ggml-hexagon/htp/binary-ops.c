@@ -46,7 +46,13 @@ struct htp_binary_context {
     size_t   src0_row_size_aligned;
     size_t   src1_row_size_aligned;
     size_t   dst_row_size_aligned;
-    size_t   row_size_bytes;
+    size_t   src0_row_size;
+    size_t   src1_row_size;
+    size_t   dst_row_size;
+    uint32_t src0_elem_size;
+    uint32_t src1_elem_size;
+    uint32_t dst_elem_size;
+    uint32_t src1_table_elem_size;
 
     bool split_at_ne01;
     bool split_at_ne02;
@@ -236,6 +242,160 @@ DEFINE_COMPUTE_REPEAT(mul_f16, _Float16, hvx_mul_f16_uuu)
 DEFINE_COMPUTE_REPEAT(div_f32, float,    hvx_div_f32_uuu)
 DEFINE_COMPUTE_REPEAT(div_f16, _Float16, hvx_div_f16_uuu)
 
+#define BINARY_LOAD_F32_F32(src, i) hvx_vmemu((src) + (size_t) (i) * sizeof(float))
+#define BINARY_LOAD_F32_F16(src, i)                                                                    \
+    ({                                                                                                 \
+        const uint32_t base = (i) & ~63u;                                                              \
+        HVX_VectorPair pair = hvx_vec_f16_to_f32(hvx_vmemu((src) + (size_t) base * sizeof(_Float16))); \
+        ((i) & 32u) ? Q6_V_hi_W(pair) : Q6_V_lo_W(pair);                                               \
+    })
+
+static inline HVX_Vector binary_clamp_f16_finite(HVX_Vector v) {
+    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
+    const HVX_Vector inf     = hvx_vec_splat_f32(INFINITY);
+    const HVX_VectorPred finite = Q6_Q_vcmp_gt_VsfVsf(inf, hvx_vec_abs_f32(v));
+    const HVX_VectorPred high = Q6_Q_and_QQ(finite, Q6_Q_vcmp_gt_VsfVsf(v, max_f16));
+    const HVX_VectorPred low  = Q6_Q_and_QQ(finite, Q6_Q_vcmp_gt_VsfVsf(min_f16, v));
+    v = Q6_V_vmux_QVV(high, max_f16, v);
+    return Q6_V_vmux_QVV(low, min_f16, v);
+}
+
+#define BINARY_OP_ADD(a, b, nan_inf_mask) ((void) (nan_inf_mask), hvx_vec_add_f32_f32(a, b))
+#define BINARY_OP_SUB(a, b, nan_inf_mask) ((void) (nan_inf_mask), hvx_vec_sub_f32_f32(a, b))
+#define BINARY_OP_MUL(a, b, nan_inf_mask) ((void) (nan_inf_mask), hvx_vec_mul_f32_f32(a, b))
+#define BINARY_OP_DIV(a, b, nan_inf_mask) hvx_vec_mul_f32_f32(a, hvx_vec_inverse_f32_guard(b, nan_inf_mask))
+
+#define DEFINE_BINARY_MIXED_F32(NAME, LOAD0, LOAD1, OP)                                         \
+static void NAME(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {       \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                  \
+    for (uint32_t i = 0; i < n; i += 32) {                                                      \
+        HVX_Vector out = OP(LOAD0(src0, i), LOAD1(src1, i), nan_inf_mask);                      \
+        hvx_vec_store_u(dst + (size_t) i * sizeof(float), MIN(32, n - i) * sizeof(float), out); \
+    }                                                                                           \
+}
+
+#define DEFINE_BINARY_MIXED_F16(NAME, LOAD0, LOAD1, OP)                                                \
+static void NAME(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {              \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                         \
+    for (uint32_t i = 0; i < n; i += 64) {                                                             \
+        HVX_Vector out0 = OP(LOAD0(src0, i), LOAD1(src1, i), nan_inf_mask);                            \
+        const uint32_t rem = n - i;                                                                    \
+        HVX_Vector out1 = Q6_V_vzero();                                                                \
+        if (rem > 32) {                                                                                \
+            out1 = OP(LOAD0(src0, i + 32), LOAD1(src1, i + 32), nan_inf_mask);                         \
+        }                                                                                              \
+        out0 = binary_clamp_f16_finite(out0);                                                          \
+        out1 = binary_clamp_f16_finite(out1);                                                          \
+        HVX_Vector packed = hvx_vec_f32_to_f16(out0, out1);                                            \
+        hvx_vec_store_u(dst + (size_t) i * sizeof(_Float16), MIN(64, rem) * sizeof(_Float16), packed); \
+    }                                                                                                  \
+}
+
+#define DEFINE_BINARY_MIXED_OP(OP_NAME, OP)                                                                    \
+    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f16_f32_f16, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F32, OP)      \
+    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f16_f32_f32, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F32, OP)      \
+    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f32_f16_f16, BINARY_LOAD_F32_F32, BINARY_LOAD_F32_F16, OP)      \
+    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f32_f16_f32, BINARY_LOAD_F32_F32, BINARY_LOAD_F32_F16, OP)      \
+    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f16_f16_f32, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F16, OP)      \
+    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f32_f32_f16, BINARY_LOAD_F32_F32, BINARY_LOAD_F32_F32, OP)
+
+DEFINE_BINARY_MIXED_OP(add, BINARY_OP_ADD)
+DEFINE_BINARY_MIXED_OP(sub, BINARY_OP_SUB)
+DEFINE_BINARY_MIXED_OP(mul, BINARY_OP_MUL)
+DEFINE_BINARY_MIXED_OP(div, BINARY_OP_DIV)
+
+#define DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, TYPES)                                                     \
+    DEFINE_COMPUTE_SAME_SHAPE(OP_NAME##_##TYPES, binary_##OP_NAME##_##TYPES)                            \
+    DEFINE_COMPUTE_ROW_BCAST(OP_NAME##_##TYPES, binary_##OP_NAME##_##TYPES)                             \
+    DEFINE_COMPUTE_COMPLEX(OP_NAME##_##TYPES, binary_##OP_NAME##_##TYPES)
+
+#define DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, TYPES, DST_TYPE, SRC0_TYPE)                               \
+static void compute_repeat_##OP_NAME##_##TYPES(                                                        \
+    uint8_t * dst, const uint8_t * src0, const uint8_t * src1_plane,                                   \
+    uint32_t i01, uint32_t ne11, const struct fastdiv_values * div11, uint32_t src1_stride,            \
+    uint32_t n_rows, size_t dst_stride, size_t src0_stride, uint32_t ne00, uint32_t ne10) {            \
+    for (uint32_t r = 0; r < n_rows; r++) {                                                            \
+        uint32_t i11 = fastmodulo(i01 + r, ne11, div11);                                               \
+        const uint8_t * r_src1 = src1_plane + i11 * src1_stride;                                       \
+        for (uint32_t c = 0; c < ne00; c += ne10) {                                                    \
+            binary_##OP_NAME##_##TYPES(dst + r * dst_stride + (size_t) c * sizeof(DST_TYPE),           \
+                src0 + r * src0_stride + (size_t) c * sizeof(SRC0_TYPE), r_src1, MIN(ne10, ne00 - c)); \
+        }                                                                                              \
+    }                                                                                                  \
+}
+
+#define DEFINE_COMPUTE_MIXED_ALL(OP_NAME)                                 \
+    DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, f16_f32_f16)                     \
+    DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, f16_f32_f32)                     \
+    DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, f32_f16_f16)                     \
+    DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, f32_f16_f32)                     \
+    DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, f16_f16_f32)                     \
+    DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, f32_f32_f16)                     \
+    DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, f16_f32_f16, _Float16, _Float16) \
+    DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, f16_f32_f32, float, _Float16)    \
+    DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, f32_f16_f16, _Float16, float)    \
+    DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, f32_f16_f32, float, float)       \
+    DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, f16_f16_f32, float, _Float16)    \
+    DEFINE_COMPUTE_MIXED_REPEAT(OP_NAME, f32_f32_f16, _Float16, float)
+
+DEFINE_COMPUTE_MIXED_ALL(add)
+DEFINE_COMPUTE_MIXED_ALL(sub)
+DEFINE_COMPUTE_MIXED_ALL(mul)
+DEFINE_COMPUTE_MIXED_ALL(div)
+
+#define DEFINE_BINARY_MIXED_SCALAR_F32(NAME, LOAD0, OP)                                         \
+static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {                  \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                  \
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);                                          \
+    for (uint32_t i = 0; i < n; i += 32) {                                                      \
+        HVX_Vector out = OP(LOAD0(src0, i), val_vec, nan_inf_mask);                             \
+        hvx_vec_store_u(dst + (size_t) i * sizeof(float), MIN(32, n - i) * sizeof(float), out); \
+    }                                                                                           \
+}
+
+#define DEFINE_BINARY_MIXED_SCALAR_F16(NAME, LOAD0, OP)                                                       \
+static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {                                \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                                \
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);                                                        \
+    for (uint32_t i = 0; i < n; i += 64) {                                                                    \
+        HVX_Vector out0 = OP(LOAD0(src0, i), val_vec, nan_inf_mask);                                          \
+        const uint32_t rem = n - i;                                                                           \
+        HVX_Vector out1 = rem > 32 ? OP(LOAD0(src0, i + 32), val_vec, nan_inf_mask) : Q6_V_vzero();           \
+        HVX_Vector packed = hvx_vec_f32_to_f16(binary_clamp_f16_finite(out0), binary_clamp_f16_finite(out1)); \
+        hvx_vec_store_u(dst + (size_t) i * sizeof(_Float16), MIN(64, rem) * sizeof(_Float16), packed);        \
+    }                                                                                                         \
+}
+
+#define DEFINE_COMPUTE_MIXED_SCALAR(NAME, SRC0_TYPE, DST_TYPE, FN)                                  \
+static void compute_scalar_##NAME(                                                                  \
+    uint8_t * dst, const uint8_t * src0, const void * s1_table,                                     \
+    uint32_t cur_i11, uint32_t ne11, uint32_t n_rows,                                               \
+    size_t dst_stride, size_t src0_stride, uint32_t ne00) {                                         \
+    const float * table = (const float *) s1_table;                                                 \
+    for (uint32_t r = 0; r < n_rows; r++) {                                                         \
+        FN(dst + r * dst_stride, src0 + r * src0_stride, table[cur_i11], ne00);                     \
+        if (ne11 > 1 && ++cur_i11 == ne11) cur_i11 = 0;                                             \
+    }                                                                                               \
+}
+
+#define DEFINE_COMPUTE_MIXED_SCALAR_OP(OP_NAME, OP)                                                           \
+    DEFINE_BINARY_MIXED_SCALAR_F16(binary_scalar_##OP_NAME##_f16_f16, BINARY_LOAD_F32_F16, OP)                \
+    DEFINE_BINARY_MIXED_SCALAR_F32(binary_scalar_##OP_NAME##_f16_f32, BINARY_LOAD_F32_F16, OP)                \
+    DEFINE_BINARY_MIXED_SCALAR_F16(binary_scalar_##OP_NAME##_f32_f16, BINARY_LOAD_F32_F32, OP)                \
+    DEFINE_BINARY_MIXED_SCALAR_F32(binary_scalar_##OP_NAME##_f32_f32, BINARY_LOAD_F32_F32, OP)                \
+    DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f16_f32_f16, _Float16, _Float16, binary_scalar_##OP_NAME##_f16_f16) \
+    DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f16_f32_f32, _Float16, float, binary_scalar_##OP_NAME##_f16_f32)    \
+    DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f32_f16_f16, float, _Float16, binary_scalar_##OP_NAME##_f32_f16)    \
+    DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f32_f16_f32, float, float, binary_scalar_##OP_NAME##_f32_f32)       \
+    DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f16_f16_f32, _Float16, float, binary_scalar_##OP_NAME##_f16_f32)    \
+    DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f32_f32_f16, float, _Float16, binary_scalar_##OP_NAME##_f32_f16)
+
+DEFINE_COMPUTE_MIXED_SCALAR_OP(add, BINARY_OP_ADD)
+DEFINE_COMPUTE_MIXED_SCALAR_OP(sub, BINARY_OP_SUB)
+DEFINE_COMPUTE_MIXED_SCALAR_OP(mul, BINARY_OP_MUL)
+DEFINE_COMPUTE_MIXED_SCALAR_OP(div, BINARY_OP_DIV)
+
 typedef void (*compute_add_id_t)(
     uint8_t * dst, const uint8_t * src0, const uint8_t * src1_data, const int32_t * src2_ids,
     uint32_t i01, uint32_t i02, uint32_t ne01, uint32_t src1_stride,
@@ -265,11 +425,11 @@ static void binary_thread_scalar(const htp_thread_t * th, unsigned int nth, unsi
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t elem_size = (src0->type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
-    const size_t plane_stride = (size_t) ne12 * ne11 * elem_size;
-    const size_t row_stride   = (size_t) ne11 * elem_size;
+    const size_t plane_stride = (size_t) ne12 * ne11 * bctx->src1_table_elem_size;
+    const size_t row_stride   = (size_t) ne11 * bctx->src1_table_elem_size;
 
-    const uint32_t row_size_bytes = bctx->row_size_bytes;
+    const uint32_t src0_row_size = bctx->src0_row_size;
+    const uint32_t dst_row_size  = bctx->dst_row_size;
     const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
@@ -302,8 +462,8 @@ static void binary_thread_scalar(const htp_thread_t * th, unsigned int nth, unsi
         uint8_t * s0_spad = src0_spad_base + spad_idx * src0_spad_half;
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes,
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, src0_row_size,
                                                              current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
@@ -336,7 +496,7 @@ static void binary_thread_scalar(const htp_thread_t * th, unsigned int nth, unsi
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         dma_addr_t dst_curr = dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes,
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size,
                                                                 current_block_size);
 
         if (ir_prefetch < end_row) {
@@ -347,7 +507,7 @@ static void binary_thread_scalar(const htp_thread_t * th, unsigned int nth, unsi
             p02 = fastdiv(prem, &bctx->src0_dim1_div);
             p01 = prem - p02 * ne01;
             dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes,
+            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, src0_row_size,
                                                                next_block_size);
             ir_prefetch += next_block_size;
         }
@@ -363,7 +523,9 @@ static void binary_thread_vector_same_shape(const htp_thread_t * th, unsigned in
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t row_size_bytes = bctx->row_size_bytes;
+    const uint32_t src0_row_size = bctx->src0_row_size;
+    const uint32_t src1_row_size = bctx->src1_row_size;
+    const uint32_t dst_row_size  = bctx->dst_row_size;
     const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
@@ -400,8 +562,8 @@ static void binary_thread_vector_same_shape(const htp_thread_t * th, unsigned in
         uint8_t * s1_spad = src1_spad_base + spad_idx * src1_spad_half;
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, src0_row_size, current_block_size);
         for (uint32_t s = 1; s < n_srcs; s++) {
             const struct htp_tensor * src_s = octx->src[s];
             uint32_t is3 = (src_s->ne[3] == 1) ? 0 : i03;
@@ -409,7 +571,7 @@ static void binary_thread_vector_same_shape(const htp_thread_t * th, unsigned in
             uint32_t is1 = (src_s->ne[1] == 1) ? 0 : i01;
             dma_addr_t s_curr = src_s->data + is3 * src_s->nb[3] + is2 * src_s->nb[2] + is1 * src_s->nb[1];
             uint8_t * s_spad = s1_spad + (s - 1) * 2 * src1_spad_half;
-            dma_queue_push(dma_q, dma_make_data(s_spad, s_curr), bctx->src1_row_size_aligned, src_s->nb[1], row_size_bytes, current_block_size);
+            dma_queue_push(dma_q, dma_make_data(s_spad, s_curr), bctx->src1_row_size_aligned, src_s->nb[1], src1_row_size, current_block_size);
         }
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
@@ -440,7 +602,7 @@ static void binary_thread_vector_same_shape(const htp_thread_t * th, unsigned in
         i02 = fastdiv(rem, &bctx->src0_dim1_div);
         i01 = rem - i02 * ne01;
         dma_addr_t dst_curr = dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, current_block_size);
 
         if (ir_prefetch < end_row) {
             uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -451,7 +613,7 @@ static void binary_thread_vector_same_shape(const htp_thread_t * th, unsigned in
             p01 = prem - p02 * ne01;
 
             dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
+            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, src0_row_size, next_block_size);
 
             for (uint32_t s = 1; s < n_srcs; s++) {
                 const struct htp_tensor * src_s = octx->src[s];
@@ -460,7 +622,7 @@ static void binary_thread_vector_same_shape(const htp_thread_t * th, unsigned in
                 uint32_t ps1 = (src_s->ne[1] == 1) ? 0 : p01;
                 dma_addr_t s_next = src_s->data + ps3 * src_s->nb[3] + ps2 * src_s->nb[2] + ps1 * src_s->nb[1];
                 uint8_t * s_spad = s1_spad + (s - 1) * 2 * src1_spad_half;
-                dma_queue_push(dma_q, dma_make_data(s_spad, s_next), bctx->src1_row_size_aligned, src_s->nb[1], row_size_bytes, next_block_size);
+                dma_queue_push(dma_q, dma_make_data(s_spad, s_next), bctx->src1_row_size_aligned, src_s->nb[1], src1_row_size, next_block_size);
             }
 
             ir_prefetch += next_block_size;
@@ -477,7 +639,8 @@ static void binary_thread_vector_row_broadcast(const htp_thread_t * th, unsigned
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t row_size_bytes = bctx->row_size_bytes;
+    const uint32_t src0_row_size = bctx->src0_row_size;
+    const uint32_t dst_row_size  = bctx->dst_row_size;
     const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
@@ -511,8 +674,8 @@ static void binary_thread_vector_row_broadcast(const htp_thread_t * th, unsigned
         uint8_t * s0_spad = src0_spad_base + spad_idx * src0_spad_half;
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, src0_row_size, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -535,7 +698,7 @@ static void binary_thread_vector_row_broadcast(const htp_thread_t * th, unsigned
         uint32_t i02 = fastdiv(rem, &bctx->src0_dim1_div);
         uint32_t i01 = rem - i02 * ne01;
         dma_addr_t dst_curr = dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, current_block_size);
 
         if (ir_prefetch < end_row) {
             uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -545,7 +708,7 @@ static void binary_thread_vector_row_broadcast(const htp_thread_t * th, unsigned
             p02  = fastdiv(prem, &bctx->src0_dim1_div);
             p01  = prem - p02 * ne01;
             dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
+            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, src0_row_size, next_block_size);
             ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -560,7 +723,8 @@ static void binary_thread_vector_complex(const htp_thread_t * th, unsigned int n
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t row_size_bytes = bctx->row_size_bytes;
+    const uint32_t src0_row_size = bctx->src0_row_size;
+    const uint32_t dst_row_size  = bctx->dst_row_size;
     const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
@@ -575,8 +739,7 @@ static void binary_thread_vector_complex(const htp_thread_t * th, unsigned int n
     size_t dst_spad_half     = layout->dst_spad_half_size;
     const uint8_t * vtcm_src1 = VTCM_LAYOUT_PTR(const uint8_t, bctx->vtcm_base, layout->off_src1);
 
-    const uint32_t elem_size = (src0->type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
-    const size_t vtcm_row_stride   = (size_t) ne10 * elem_size;
+    const size_t vtcm_row_stride   = (size_t) ne10 * bctx->src1_elem_size;
     const size_t vtcm_plane_stride = (size_t) ne11 * vtcm_row_stride;
     const size_t vtcm_vol_stride   = (size_t) ne12 * vtcm_plane_stride;
 
@@ -597,8 +760,8 @@ static void binary_thread_vector_complex(const htp_thread_t * th, unsigned int n
         uint8_t * s0_spad = src0_spad_base + spad_idx * src0_spad_half;
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, src0_row_size, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -626,7 +789,7 @@ static void binary_thread_vector_complex(const htp_thread_t * th, unsigned int n
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         dma_addr_t dst_curr = dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, current_block_size);
 
         if (ir_prefetch < end_row) {
             uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -636,7 +799,7 @@ static void binary_thread_vector_complex(const htp_thread_t * th, unsigned int n
             p02  = fastdiv(prem, &bctx->src0_dim1_div);
             p01  = prem - p02 * ne01;
             dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
+            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, src0_row_size, next_block_size);
             ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -651,7 +814,8 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
     struct htp_ops_context * octx = bctx->octx;
     htp_binary_preamble;
 
-    const uint32_t row_size_bytes = bctx->row_size_bytes;
+    const uint32_t src0_row_size = bctx->src0_row_size;
+    const uint32_t dst_row_size  = bctx->dst_row_size;
     const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
@@ -663,8 +827,7 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
     size_t dst_spad_half     = layout->dst_spad_half_size;
     const uint8_t * vtcm_src1 = VTCM_LAYOUT_PTR(const uint8_t, bctx->vtcm_base, layout->off_src1);
 
-    const uint32_t elem_size = (src0->type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
-    const size_t vtcm_row_stride   = (size_t) ne10 * elem_size;
+    const size_t vtcm_row_stride   = (size_t) ne10 * bctx->src1_elem_size;
     const size_t vtcm_plane_stride = (size_t) ne11 * vtcm_row_stride;
     const size_t vtcm_vol_stride   = (size_t) ne12 * vtcm_plane_stride;
 
@@ -688,8 +851,8 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
         uint8_t * s0_spad = src0_spad_base + spad_idx * src0_spad_half;
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, src0_row_size, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -717,7 +880,7 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         dma_addr_t dst_curr = dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, current_block_size);
 
         if (ir_prefetch < end_row) {
             uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -727,7 +890,7 @@ static void binary_thread_element_repeat(const htp_thread_t * th, unsigned int n
             p02  = fastdiv(prem, &bctx->src0_dim1_div);
             p01  = prem - p02 * ne01;
             dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
+            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, src0_row_size, next_block_size);
             ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -759,7 +922,8 @@ static void binary_thread_add_id_f32(const htp_thread_t * th, unsigned int nth, 
     const uint32_t nb2 = dst->nb[2];
     const uint32_t nb3 = dst->nb[3];
 
-    const uint32_t row_size_bytes = bctx->row_size_bytes;
+    const uint32_t src0_row_size = bctx->src0_row_size;
+    const uint32_t dst_row_size  = bctx->dst_row_size;
     const uint32_t start_row = bctx->row_start + bctx->nrows_per_hvx * ith;
     const uint32_t end_row   = MIN(start_row + bctx->nrows_per_hvx, bctx->row_start + bctx->total_rows);
     if (start_row >= end_row) return;
@@ -789,8 +953,8 @@ static void binary_thread_add_id_f32(const htp_thread_t * th, unsigned int nth, 
         uint8_t * s0_spad = src0_spad_base + spad_idx * src0_spad_half;
         uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_spad_half;
 
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, src0_curr), bctx->src0_row_size_aligned, nb01, src0_row_size, current_block_size);
         ir_prefetch += current_block_size;
         spad_idx ^= 1;
     }
@@ -815,7 +979,7 @@ static void binary_thread_add_id_f32(const htp_thread_t * th, unsigned int nth, 
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
         dma_addr_t dst_curr = dst->data + i03 * nb3 + i02 * nb2 + i01 * nb1;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, row_size_bytes, current_block_size);
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), nb1, bctx->dst_row_size_aligned, dst_row_size, current_block_size);
 
         if (ir_prefetch < end_row) {
              uint32_t next_block_size = calc_block_size(bctx, ir_prefetch, end_row, ne01, ne02);
@@ -825,7 +989,7 @@ static void binary_thread_add_id_f32(const htp_thread_t * th, unsigned int nth, 
              p02  = fastdiv(prem, &bctx->src0_dim1_div);
              p01  = prem - p02 * ne01;
              dma_addr_t s0_next = src0->data + p03 * nb03 + p02 * nb02 + p01 * nb01;
-             dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, row_size_bytes, next_block_size);
+             dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), bctx->src0_row_size_aligned, nb01, src0_row_size, next_block_size);
              ir_prefetch += next_block_size;
         }
         ir += current_block_size;
@@ -841,6 +1005,81 @@ static inline void hvx_div_scalar_f32(uint8_t * restrict dst, const uint8_t * re
 static inline void hvx_div_scalar_f16(uint8_t * restrict dst, const uint8_t * restrict src, const _Float16 val, const uint32_t num_elems) {
     hvx_div_scalar_f16_aa(dst, src, val, num_elems);
 }
+
+static void binary_expand_f16_to_f32(uint8_t * data, uint32_t n) {
+    uint32_t end = n;
+    while (end > 0) {
+        const uint32_t start = (end - 1) & ~63u;
+        const uint32_t count = end - start;
+        HVX_VectorPair pair = hvx_vec_f16_to_f32(hvx_vmemu(data + (size_t) start * sizeof(_Float16)));
+        hvx_vec_store_u(data + (size_t) start * sizeof(float), MIN(count, 32) * sizeof(float), Q6_V_lo_W(pair));
+        if (count > 32) {
+            hvx_vec_store_u(data + (size_t) (start + 32) * sizeof(float), (count - 32) * sizeof(float), Q6_V_hi_W(pair));
+        }
+        end = start;
+    }
+}
+
+#define SELECT_MIXED_COMPUTE(PREFIX, type_key, out)                                   \
+    do {                                                                              \
+        switch (type_key) {                                                           \
+            case 1:                                                                   \
+                switch (octx->op) {                                                   \
+                    case HTP_OP_ADD: out = PREFIX##_add_f16_f16_f32; break;           \
+                    case HTP_OP_SUB: out = PREFIX##_sub_f16_f16_f32; break;           \
+                    case HTP_OP_MUL: out = PREFIX##_mul_f16_f16_f32; break;           \
+                    case HTP_OP_DIV: out = PREFIX##_div_f16_f16_f32; break;           \
+                    default: break;                                                   \
+                }                                                                     \
+                break;                                                                \
+            case 2:                                                                   \
+                switch (octx->op) {                                                   \
+                    case HTP_OP_ADD: out = PREFIX##_add_f16_f32_f16; break;           \
+                    case HTP_OP_SUB: out = PREFIX##_sub_f16_f32_f16; break;           \
+                    case HTP_OP_MUL: out = PREFIX##_mul_f16_f32_f16; break;           \
+                    case HTP_OP_DIV: out = PREFIX##_div_f16_f32_f16; break;           \
+                    default: break;                                                   \
+                }                                                                     \
+                break;                                                                \
+            case 3:                                                                   \
+                switch (octx->op) {                                                   \
+                    case HTP_OP_ADD: out = PREFIX##_add_f16_f32_f32; break;           \
+                    case HTP_OP_SUB: out = PREFIX##_sub_f16_f32_f32; break;           \
+                    case HTP_OP_MUL: out = PREFIX##_mul_f16_f32_f32; break;           \
+                    case HTP_OP_DIV: out = PREFIX##_div_f16_f32_f32; break;           \
+                    default: break;                                                   \
+                }                                                                     \
+                break;                                                                \
+            case 4:                                                                   \
+                switch (octx->op) {                                                   \
+                    case HTP_OP_ADD: out = PREFIX##_add_f32_f16_f16; break;           \
+                    case HTP_OP_SUB: out = PREFIX##_sub_f32_f16_f16; break;           \
+                    case HTP_OP_MUL: out = PREFIX##_mul_f32_f16_f16; break;           \
+                    case HTP_OP_DIV: out = PREFIX##_div_f32_f16_f16; break;           \
+                    default: break;                                                   \
+                }                                                                     \
+                break;                                                                \
+            case 5:                                                                   \
+                switch (octx->op) {                                                   \
+                    case HTP_OP_ADD: out = PREFIX##_add_f32_f16_f32; break;           \
+                    case HTP_OP_SUB: out = PREFIX##_sub_f32_f16_f32; break;           \
+                    case HTP_OP_MUL: out = PREFIX##_mul_f32_f16_f32; break;           \
+                    case HTP_OP_DIV: out = PREFIX##_div_f32_f16_f32; break;           \
+                    default: break;                                                   \
+                }                                                                     \
+                break;                                                                \
+            case 6:                                                                   \
+                switch (octx->op) {                                                   \
+                    case HTP_OP_ADD: out = PREFIX##_add_f32_f32_f16; break;           \
+                    case HTP_OP_SUB: out = PREFIX##_sub_f32_f32_f16; break;           \
+                    case HTP_OP_MUL: out = PREFIX##_mul_f32_f32_f16; break;           \
+                    case HTP_OP_DIV: out = PREFIX##_div_f32_f32_f16; break;           \
+                    default: break;                                                   \
+                }                                                                     \
+                break;                                                                \
+            default: break;                                                           \
+        }                                                                             \
+    } while (0)
 
 typedef void (*compute_binary_chunked_t)(
     uint8_t * restrict dst,
@@ -873,6 +1112,9 @@ struct binary_chunked_context {
     uint32_t                 chunks_per_hvx;
     uint32_t                 total_chunks;
     uint32_t                 n_srcs;
+    uint32_t                 src0_elem_size;
+    uint32_t                 src1_elem_size;
+    uint32_t                 dst_elem_size;
     bool                     is_scalar;
     float                    scalar_f32;
     _Float16                 scalar_f16;
@@ -894,10 +1136,10 @@ static void binary_thread_chunked(const htp_thread_t * th, unsigned int nth, uns
         return;
     }
 
-    const uint32_t src0_type   = src0->type;
-    const size_t   elem_size   = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
     const uint32_t chunk_size  = ctx->chunk_size;
-    const size_t   chunk_bytes = ctx->vtcm_layout.src0_spad_half_size;
+    const size_t src0_chunk_bytes = ctx->vtcm_layout.src0_spad_half_size;
+    const size_t src1_chunk_bytes = ctx->vtcm_layout.src1_spad_half_size;
+    const size_t dst_chunk_bytes  = ctx->vtcm_layout.dst_spad_half_size;
 
     FARF(HIGH, "binary-chunked: %d/%d (%u:%u) chunks %u elems %u",
          ith, nth, start_chunk, end_chunk, ctx->total_chunks, ctx->nelem);
@@ -916,22 +1158,24 @@ static void binary_thread_chunked(const htp_thread_t * th, unsigned int nth, uns
         const uint32_t c_start   = ctx->elem_start + prefetch_chunk * chunk_size;
         const uint32_t c_end     = MIN(c_start + chunk_size, ctx->elem_start + ctx->nelem);
         const uint32_t cur_elems = c_end - c_start;
-        const uint32_t cur_bytes = cur_elems * elem_size;
+        const uint32_t src0_bytes = cur_elems * ctx->src0_elem_size;
+        const uint32_t src1_bytes = cur_elems * ctx->src1_elem_size;
+        const uint32_t dst_bytes  = cur_elems * ctx->dst_elem_size;
 
-        dma_addr_t s0_curr = src0->data + (size_t) c_start * elem_size;
-        dma_addr_t d_curr  = dst->data  + (size_t) c_start * elem_size;
+        dma_addr_t s0_curr = src0->data + (size_t) c_start * ctx->src0_elem_size;
+        dma_addr_t d_curr  = dst->data  + (size_t) c_start * ctx->dst_elem_size;
 
-        uint8_t * s0_spad = src0_spad_base + spad_idx * chunk_bytes;
-        uint8_t * d_spad  = dst_spad_base  + spad_idx * chunk_bytes;
+        uint8_t * s0_spad = src0_spad_base + spad_idx * src0_chunk_bytes;
+        uint8_t * d_spad  = dst_spad_base  + spad_idx * dst_chunk_bytes;
 
-        dma_queue_push(dma_q, dma_make_data(d_curr, d_spad), chunk_bytes, chunk_bytes, cur_bytes, 0);
-        dma_queue_push(dma_q, dma_make_data(s0_spad, s0_curr), chunk_bytes, chunk_bytes, cur_bytes, 1);
+        dma_queue_push(dma_q, dma_make_data(d_curr, d_spad), dst_chunk_bytes, dst_chunk_bytes, dst_bytes, 0);
+        dma_queue_push(dma_q, dma_make_data(s0_spad, s0_curr), src0_chunk_bytes, src0_chunk_bytes, src0_bytes, 1);
         if (!ctx->is_scalar) {
-            uint8_t * s1_spad = src1_spad_base + spad_idx * chunk_bytes;
+            uint8_t * s1_spad = src1_spad_base + spad_idx * src1_chunk_bytes;
             for (uint32_t s = 1; s < n_srcs; s++) {
-                dma_addr_t s_curr = octx->src[s]->data + (size_t) c_start * elem_size;
-                uint8_t * s_spad  = s1_spad + (s - 1) * 2 * chunk_bytes;
-                dma_queue_push(dma_q, dma_make_data(s_spad, s_curr), chunk_bytes, chunk_bytes, cur_bytes, 1);
+                dma_addr_t s_curr = octx->src[s]->data + (size_t) c_start * ctx->src1_elem_size;
+                uint8_t * s_spad  = s1_spad + (s - 1) * 2 * src1_chunk_bytes;
+                dma_queue_push(dma_q, dma_make_data(s_spad, s_curr), src1_chunk_bytes, src1_chunk_bytes, src1_bytes, 1);
             }
         }
 
@@ -945,7 +1189,7 @@ static void binary_thread_chunked(const htp_thread_t * th, unsigned int nth, uns
         const uint32_t c_start   = ctx->elem_start + c * chunk_size;
         const uint32_t c_end     = MIN(c_start + chunk_size, ctx->elem_start + ctx->nelem);
         const uint32_t cur_elems = c_end - c_start;
-        const uint32_t cur_bytes = cur_elems * elem_size;
+        const uint32_t dst_bytes = cur_elems * ctx->dst_elem_size;
 
         uint8_t * d_spad  = (uint8_t *) dma_queue_pop(dma_q).src;
         uint8_t * s0_spad = (uint8_t *) dma_queue_pop(dma_q).dst;
@@ -953,7 +1197,7 @@ static void binary_thread_chunked(const htp_thread_t * th, unsigned int nth, uns
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) c);
         if (ctx->is_scalar) {
-            if (src0_type == HTP_TYPE_F32) {
+            if (ctx->compute_scalar_f32) {
                 ctx->compute_scalar_f32(d_spad, s0_spad, ctx->scalar_f32, cur_elems);
             } else {
                 ctx->compute_scalar_f16(d_spad, s0_spad, ctx->scalar_f16, cur_elems);
@@ -967,22 +1211,23 @@ static void binary_thread_chunked(const htp_thread_t * th, unsigned int nth, uns
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) c);
 
-        dma_addr_t dst_curr = dst->data + (size_t) c_start * elem_size;
-        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), chunk_bytes, chunk_bytes, cur_bytes, 1);
+        dma_addr_t dst_curr = dst->data + (size_t) c_start * ctx->dst_elem_size;
+        dma_queue_push(dma_q, dma_make_data(dst_curr, d_spad), dst_chunk_bytes, dst_chunk_bytes, dst_bytes, 1);
 
         if (prefetch_chunk < end_chunk) {
             const uint32_t pc_start  = ctx->elem_start + prefetch_chunk * chunk_size;
             const uint32_t pc_end    = MIN(pc_start + chunk_size, ctx->elem_start + ctx->nelem);
             const uint32_t p_elems   = pc_end - pc_start;
-            const uint32_t p_bytes   = p_elems * elem_size;
+            const uint32_t p_src0_bytes = p_elems * ctx->src0_elem_size;
+            const uint32_t p_src1_bytes = p_elems * ctx->src1_elem_size;
 
-            dma_addr_t s0_next = src0->data + (size_t) pc_start * elem_size;
-            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), chunk_bytes, chunk_bytes, p_bytes, 1);
+            dma_addr_t s0_next = src0->data + (size_t) pc_start * ctx->src0_elem_size;
+            dma_queue_push(dma_q, dma_make_data(s0_spad, s0_next), src0_chunk_bytes, src0_chunk_bytes, p_src0_bytes, 1);
             if (!ctx->is_scalar) {
                 for (uint32_t s = 1; s < n_srcs; s++) {
-                    dma_addr_t s_next = octx->src[s]->data + (size_t) pc_start * elem_size;
-                    uint8_t * s_spad  = s1_spad + (s - 1) * 2 * chunk_bytes;
-                    dma_queue_push(dma_q, dma_make_data(s_spad, s_next), chunk_bytes, chunk_bytes, p_bytes, 1);
+                    dma_addr_t s_next = octx->src[s]->data + (size_t) pc_start * ctx->src1_elem_size;
+                    uint8_t * s_spad  = s1_spad + (s - 1) * 2 * src1_chunk_bytes;
+                    dma_queue_push(dma_q, dma_make_data(s_spad, s_next), src1_chunk_bytes, src1_chunk_bytes, p_src1_bytes, 1);
                 }
             }
 
@@ -1003,11 +1248,19 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
 
     // Use packed row sizes for VTCM allocation and alignment
-    const uint32_t src0_type = octx->src[0]->type;
-    const size_t elem_size = (src0_type == HTP_TYPE_F32) ? sizeof(float) : sizeof(_Float16);
-    const size_t src0_row_size = src0->ne[0] * elem_size;
-    const size_t src1_row_size = src1->ne[0] * elem_size;
-    const size_t dst_row_size  = dst->ne[0]  * elem_size;
+    const uint32_t src0_type = src0->type;
+    const uint32_t src1_type = src1->type;
+    const uint32_t dst_type  = dst->type;
+    const uint32_t src0_elem_size = kparams->src0_elem_size;
+    const uint32_t src1_elem_size = kparams->src1_elem_size;
+    const uint32_t dst_elem_size  = kparams->dst_elem_size;
+    const size_t src0_row_size = src0->ne[0] * src0_elem_size;
+    const size_t src1_row_size = src1->ne[0] * src1_elem_size;
+    const size_t dst_row_size  = dst->ne[0]  * dst_elem_size;
+    const uint32_t type_key = (src0_type == HTP_TYPE_F32 ? 4 : 0) |
+                              (src1_type == HTP_TYPE_F32 ? 2 : 0) |
+                              (dst_type  == HTP_TYPE_F32 ? 1 : 0);
+    const uint32_t table_type_key = type_key == 0 ? 0 : (type_key | 2);
 
     if (kparams->kernel_type == HTP_BINARY_KERNEL_CHUNKED) {
         const bool is_scalar = kparams->is_scalar;
@@ -1017,7 +1270,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         compute_binary_scalar_chunked_f16_t compute_scalar_f16 = NULL;
 
         if (is_scalar) {
-            if (src0_type == HTP_TYPE_F32) {
+            if (type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_scalar_f32 = hvx_add_scalar_f32; break;
                     case HTP_OP_SUB: compute_scalar_f32 = hvx_sub_scalar_f32; break;
@@ -1025,7 +1278,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_scalar_f32 = hvx_div_scalar_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_scalar_f16 = hvx_add_scalar_f16; break;
                     case HTP_OP_SUB: compute_scalar_f16 = hvx_sub_scalar_f16; break;
@@ -1033,12 +1286,44 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_scalar_f16 = hvx_div_scalar_f16; break;
                     default: break;
                 }
+            } else if (src0_type == HTP_TYPE_F16 && dst_type == HTP_TYPE_F16) {
+                switch (octx->op) {
+                    case HTP_OP_ADD: compute_scalar_f32 = binary_scalar_add_f16_f16; break;
+                    case HTP_OP_SUB: compute_scalar_f32 = binary_scalar_sub_f16_f16; break;
+                    case HTP_OP_MUL: compute_scalar_f32 = binary_scalar_mul_f16_f16; break;
+                    case HTP_OP_DIV: compute_scalar_f32 = binary_scalar_div_f16_f16; break;
+                    default: break;
+                }
+            } else if (src0_type == HTP_TYPE_F16) {
+                switch (octx->op) {
+                    case HTP_OP_ADD: compute_scalar_f32 = binary_scalar_add_f16_f32; break;
+                    case HTP_OP_SUB: compute_scalar_f32 = binary_scalar_sub_f16_f32; break;
+                    case HTP_OP_MUL: compute_scalar_f32 = binary_scalar_mul_f16_f32; break;
+                    case HTP_OP_DIV: compute_scalar_f32 = binary_scalar_div_f16_f32; break;
+                    default: break;
+                }
+            } else if (dst_type == HTP_TYPE_F16) {
+                switch (octx->op) {
+                    case HTP_OP_ADD: compute_scalar_f32 = binary_scalar_add_f32_f16; break;
+                    case HTP_OP_SUB: compute_scalar_f32 = binary_scalar_sub_f32_f16; break;
+                    case HTP_OP_MUL: compute_scalar_f32 = binary_scalar_mul_f32_f16; break;
+                    case HTP_OP_DIV: compute_scalar_f32 = binary_scalar_div_f32_f16; break;
+                    default: break;
+                }
+            } else {
+                switch (octx->op) {
+                    case HTP_OP_ADD: compute_scalar_f32 = binary_scalar_add_f32_f32; break;
+                    case HTP_OP_SUB: compute_scalar_f32 = binary_scalar_sub_f32_f32; break;
+                    case HTP_OP_MUL: compute_scalar_f32 = binary_scalar_mul_f32_f32; break;
+                    case HTP_OP_DIV: compute_scalar_f32 = binary_scalar_div_f32_f32; break;
+                    default: break;
+                }
             }
             if (!compute_scalar_f32 && !compute_scalar_f16) {
                 return HTP_STATUS_NO_SUPPORT;
             }
         } else {
-            if (src0_type == HTP_TYPE_F32) {
+            if (type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute = hvx_add_f32; break;
                     case HTP_OP_SUB: compute = hvx_sub_f32; break;
@@ -1046,7 +1331,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute = hvx_div_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute = hvx_add_f16; break;
                     case HTP_OP_SUB: compute = hvx_sub_f16; break;
@@ -1054,6 +1339,8 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute = hvx_div_f16; break;
                     default: break;
                 }
+            } else {
+                SELECT_MIXED_COMPUTE(binary, type_key, compute);
             }
             if (!compute) {
                 return HTP_STATUS_NO_SUPPORT;
@@ -1067,18 +1354,18 @@ static int execute_op_binary(struct htp_ops_context * octx) {
 
         uint32_t elem_start = 0;
         uint32_t nelem      = total_elems;
-        const uint32_t elems_per_line = (src0_type == HTP_TYPE_F32) ? 32 : 64;
+        const uint32_t elems_per_line = 128 / dst_elem_size;
 
         if (octx->ctx->mdev.count > 1) {
             bool can_split = htp_tensor_mdev_data_aligned(dst) &&
                              htp_tensor_mdev_data_aligned(src0) &&
                              (is_scalar || htp_tensor_mdev_data_aligned(src1)) &&
-                             htp_tensor_is_contiguous(dst, elem_size) &&
-                             htp_tensor_is_contiguous(src0, elem_size) &&
-                             (is_scalar || htp_tensor_is_contiguous(src1, elem_size));
+                             htp_tensor_is_contiguous(dst, dst_elem_size) &&
+                             htp_tensor_is_contiguous(src0, src0_elem_size) &&
+                             (is_scalar || htp_tensor_is_contiguous(src1, src1_elem_size));
             for (uint32_t s = 2; can_split && s < n_srcs; s++) {
                 can_split = htp_tensor_mdev_data_aligned(octx->src[s]) &&
-                            htp_tensor_is_contiguous(octx->src[s], elem_size);
+                            htp_tensor_is_contiguous(octx->src[s], src1_elem_size);
             }
             const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
                 total_elems, can_split ? elems_per_line : 0,
@@ -1111,10 +1398,13 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         if (is_scalar) {
             uint8_t * vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, octx->ctx->vtcm_base, vtcm_layout.off_src1);
             dma_queue * dma_q = octx->ctx->dma[0];
-            dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), 128, 0, elem_size, 1);
+            dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), 128, 0, src1_elem_size, 1);
             dma_queue_pop(dma_q);
 
-            if (src0_type == HTP_TYPE_F32) {
+            if (type_key != 0 && src1_type == HTP_TYPE_F16) {
+                binary_expand_f16_to_f32(vtcm_src1, 1);
+            }
+            if (type_key != 0) {
                 scalar_f32 = ((const float *) vtcm_src1)[0];
             } else {
                 scalar_f16 = ((const _Float16 *) vtcm_src1)[0];
@@ -1131,6 +1421,9 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             .chunks_per_hvx      = chunks_per_hvx,
             .total_chunks        = total_chunks,
             .n_srcs              = n_srcs,
+            .src0_elem_size      = src0_elem_size,
+            .src1_elem_size      = src1_elem_size,
+            .dst_elem_size       = dst_elem_size,
             .is_scalar           = is_scalar,
             .scalar_f32          = scalar_f32,
             .scalar_f16          = scalar_f16,
@@ -1148,7 +1441,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
 
     if (octx->ctx->mdev.count > 1) {
         uint32_t rows_per_chunk = 0;
-        htp_tensor_mdev_rows_per_chunk(dst, (uint32_t) elem_size, (uint32_t) dst_row_size, &rows_per_chunk);
+        htp_tensor_mdev_rows_per_chunk(dst, dst_elem_size, (uint32_t) dst_row_size, &rows_per_chunk);
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk,
                                                        octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_start = range.start;
@@ -1182,7 +1475,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     switch (kparams->kernel_type) {
         case HTP_BINARY_KERNEL_SAME_SHAPE:
             worker_func = binary_thread_vector_same_shape;
-            if (src0_type == HTP_TYPE_F32) {
+            if (type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_same_shape_add_f32; break;
                     case HTP_OP_SUB: compute_func = compute_same_shape_sub_f32; break;
@@ -1190,7 +1483,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_same_shape_div_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_same_shape_add_f16; break;
                     case HTP_OP_SUB: compute_func = compute_same_shape_sub_f16; break;
@@ -1198,11 +1491,13 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_same_shape_div_f16; break;
                     default: break;
                 }
+            } else {
+                SELECT_MIXED_COMPUTE(compute_same_shape, type_key, compute_func);
             }
             break;
         case HTP_BINARY_KERNEL_ROW_BCAST:
             worker_func = binary_thread_vector_row_broadcast;
-            if (src0_type == HTP_TYPE_F32) {
+            if (table_type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_row_bcast_add_f32; break;
                     case HTP_OP_SUB: compute_func = compute_row_bcast_sub_f32; break;
@@ -1210,7 +1505,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_row_bcast_div_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_row_bcast_add_f16; break;
                     case HTP_OP_SUB: compute_func = compute_row_bcast_sub_f16; break;
@@ -1218,11 +1513,13 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_row_bcast_div_f16; break;
                     default: break;
                 }
+            } else {
+                SELECT_MIXED_COMPUTE(compute_row_bcast, table_type_key, compute_func);
             }
             break;
         case HTP_BINARY_KERNEL_SCALAR:
             worker_func = binary_thread_scalar;
-            if (src0_type == HTP_TYPE_F32) {
+            if (table_type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_scalar_add_f32; break;
                     case HTP_OP_SUB: compute_func = compute_scalar_sub_f32; break;
@@ -1230,7 +1527,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_scalar_div_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_scalar_add_f16; break;
                     case HTP_OP_SUB: compute_func = compute_scalar_sub_f16; break;
@@ -1238,11 +1535,13 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_scalar_div_f16; break;
                     default: break;
                 }
+            } else {
+                SELECT_MIXED_COMPUTE(compute_scalar, table_type_key, compute_func);
             }
             break;
         case HTP_BINARY_KERNEL_COMPLEX:
             worker_func = binary_thread_vector_complex;
-            if (src0_type == HTP_TYPE_F32) {
+            if (type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_complex_add_f32; break;
                     case HTP_OP_SUB: compute_func = compute_complex_sub_f32; break;
@@ -1250,7 +1549,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_complex_div_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_complex_add_f16; break;
                     case HTP_OP_SUB: compute_func = compute_complex_sub_f16; break;
@@ -1258,11 +1557,13 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_complex_div_f16; break;
                     default: break;
                 }
+            } else {
+                SELECT_MIXED_COMPUTE(compute_complex, type_key, compute_func);
             }
             break;
         case HTP_BINARY_KERNEL_REPEAT:
             worker_func = binary_thread_element_repeat;
-            if (src0_type == HTP_TYPE_F32) {
+            if (type_key == 7) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_repeat_add_f32; break;
                     case HTP_OP_SUB: compute_func = compute_repeat_sub_f32; break;
@@ -1270,7 +1571,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_repeat_div_f32; break;
                     default: break;
                 }
-            } else if (src0_type == HTP_TYPE_F16) {
+            } else if (type_key == 0) {
                 switch (octx->op) {
                     case HTP_OP_ADD: compute_func = compute_repeat_add_f16; break;
                     case HTP_OP_SUB: compute_func = compute_repeat_sub_f16; break;
@@ -1278,6 +1579,8 @@ static int execute_op_binary(struct htp_ops_context * octx) {
                     case HTP_OP_DIV: compute_func = compute_repeat_div_f16; break;
                     default: break;
                 }
+            } else {
+                SELECT_MIXED_COMPUTE(compute_repeat, type_key, compute_func);
             }
             break;
         case HTP_BINARY_KERNEL_ADD_ID:
@@ -1296,12 +1599,16 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     dma_queue * dma_q = octx->ctx->dma[0];
     uint8_t * vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src1);
     if (kparams->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST) {
-        dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1->ne[0] * elem_size, 1);
+        if (!kparams->src1_strided) {
+            dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1->ne[0] * src1_elem_size, 1);
+        } else {
+            dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), src1_elem_size, src1->nb[0], src1_elem_size, src1->ne[0]);
+        }
     } else if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR ||
                kparams->kernel_type == HTP_BINARY_KERNEL_REPEAT ||
                kparams->kernel_type == HTP_BINARY_KERNEL_COMPLEX) {
         if (!kparams->src1_strided) {
-            const size_t src1_bytes = (size_t) src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3] * elem_size;
+            const size_t src1_bytes = (size_t) src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3] * src1_elem_size;
             dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), bctx.vtcm_layout.src1_size, 0, src1_bytes, 1);
             if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR && octx->src[2] != NULL) {
                 uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
@@ -1311,14 +1618,29 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             const uint32_t ne11 = src1->ne[1];
             const uint32_t ne12 = src1->ne[2];
             const uint32_t ne13 = src1->ne[3];
-            const size_t row_bytes = src1->ne[0] * elem_size;
-            for (uint32_t i13 = 0; i13 < ne13; i13++) {
-                for (uint32_t i12 = 0; i12 < ne12; i12++) {
-                    dma_addr_t src_addr = src1->data + i13 * src1->nb[3] + i12 * src1->nb[2];
-                    uint8_t * dst_ptr = vtcm_src1 + (i13 * ne12 * ne11 + i12 * ne11) * row_bytes;
-                    while (!dma_queue_push(dma_q, dma_make_data(dst_ptr, src_addr),
-                                           row_bytes, src1->nb[1], row_bytes, ne11)) {
-                        dma_queue_pop(dma_q);
+            const size_t row_bytes = src1->ne[0] * src1_elem_size;
+            if (src1->nb[0] == src1_elem_size) {
+                for (uint32_t i13 = 0; i13 < ne13; i13++) {
+                    for (uint32_t i12 = 0; i12 < ne12; i12++) {
+                        dma_addr_t src_addr = src1->data + i13 * src1->nb[3] + i12 * src1->nb[2];
+                        uint8_t * dst_ptr = vtcm_src1 + (i13 * ne12 * ne11 + i12 * ne11) * row_bytes;
+                        while (!dma_queue_push(dma_q, dma_make_data(dst_ptr, src_addr),
+                                               row_bytes, src1->nb[1], row_bytes, ne11)) {
+                            dma_queue_pop(dma_q);
+                        }
+                    }
+                }
+            } else {
+                for (uint32_t i13 = 0; i13 < ne13; i13++) {
+                    for (uint32_t i12 = 0; i12 < ne12; i12++) {
+                        for (uint32_t i11 = 0; i11 < ne11; i11++) {
+                            dma_addr_t src_addr = src1->data + i13 * src1->nb[3] + i12 * src1->nb[2] + i11 * src1->nb[1];
+                            uint8_t * dst_ptr = vtcm_src1 + ((i13 * ne12 * ne11 + i12 * ne11 + i11) * src1->ne[0]) * src1_elem_size;
+                            while (!dma_queue_push(dma_q, dma_make_data(dst_ptr, src_addr),
+                                                   src1_elem_size, src1->nb[0], src1_elem_size, src1->ne[0])) {
+                                dma_queue_pop(dma_q);
+                            }
+                        }
                     }
                 }
             }
@@ -1328,7 +1650,7 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
         dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data),
                        kparams->src1_row_size_aligned, src1->nb[1],
-                       src1->ne[0] * elem_size, src1->ne[1]);
+                       src1->ne[0] * src1_elem_size, src1->ne[1]);
         const size_t src2_row_bytes = src2->ne[0] * sizeof(int32_t);
         dma_queue_push(dma_q, dma_make_data(vtcm_src2, src2->data),
                        src2_row_bytes, src2->nb[1],
@@ -1344,7 +1666,13 @@ static int execute_op_binary(struct htp_ops_context * octx) {
     bctx.src0_row_size_aligned = src0_row_size_aligned;
     bctx.src1_row_size_aligned = src1_row_size_aligned;
     bctx.dst_row_size_aligned  = dst_row_size_aligned;
-    bctx.row_size_bytes        = src0_row_size;
+    bctx.src0_row_size         = src0_row_size;
+    bctx.src1_row_size         = src1_row_size;
+    bctx.dst_row_size          = dst_row_size;
+    bctx.src0_elem_size        = src0_elem_size;
+    bctx.src1_elem_size        = src1_elem_size;
+    bctx.dst_elem_size         = dst_elem_size;
+    bctx.src1_table_elem_size  = table_type_key == 0 ? sizeof(_Float16) : sizeof(float);
 
     bctx.src0_dim1_div  = kparams->div_ne01;
     bctx.src0_dim2_div  = kparams->div_ne02;
@@ -1364,6 +1692,10 @@ static int execute_op_binary(struct htp_ops_context * octx) {
         kparams->kernel_type == HTP_BINARY_KERNEL_COMPLEX ||
         kparams->kernel_type == HTP_BINARY_KERNEL_ADD_ID) {
         dma_queue_flush(dma_q);
+        if ((kparams->kernel_type == HTP_BINARY_KERNEL_ROW_BCAST || kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR) &&
+            type_key != 0 && src1_type == HTP_TYPE_F16) {
+            binary_expand_f16_to_f32(vtcm_src1, (uint32_t) (src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3]));
+        }
         if (kparams->kernel_type == HTP_BINARY_KERNEL_SCALAR && octx->src[2] != NULL && octx->op == HTP_OP_MUL) {
             uint8_t * vtcm_src2 = VTCM_LAYOUT_PTR(uint8_t, bctx.vtcm_base, bctx.vtcm_layout.off_src2);
             const uint32_t n_scalars = src1->ne[0] * src1->ne[1] * src1->ne[2] * src1->ne[3];

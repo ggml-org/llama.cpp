@@ -2567,6 +2567,7 @@ struct test_get_rows : public test_case {
             }
         }
     }
+
 };
 
 // GGML_OP_GET_ROWS on a weight also used by GGML_OP_MUL_MAT (tied embeddings)
@@ -3583,6 +3584,7 @@ struct test_bin_bcast : public test_case {
     bool src_overlap; // src0 and src1 are overlapping views of the same buffer
     const ggml_type type_b; // type of src1, GGML_TYPE_COUNT -> same as src0
     bool weights;
+    const ggml_type type_dst; // GGML_TYPE_COUNT -> op default
 
     bool run_whole_graph() override { return nf > 1; }
 
@@ -3593,6 +3595,9 @@ struct test_bin_bcast : public test_case {
         }
         if (weights) {
             s += ",weights=1";
+        }
+        if (type_dst != GGML_TYPE_COUNT) {
+            s += "," + VAR_TO_STR(type_dst);
         }
         return s;
     }
@@ -3606,8 +3611,9 @@ struct test_bin_bcast : public test_case {
             std::array<int, 4> nr = {1, 2, 1, 1},
             int nf = 1,
             bool perm1 = false, bool src_overlap = false,
-            ggml_type type_b = GGML_TYPE_COUNT, bool weights = false)
-        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap), type_b(type_b), weights(weights) {}
+            ggml_type type_b = GGML_TYPE_COUNT, bool weights = false,
+            ggml_type type_dst = GGML_TYPE_COUNT)
+        : op(op), type(type), ne(ne), nr(nr), nf(nf), perm1(perm1), src_overlap(src_overlap), type_b(type_b), weights(weights), type_dst(type_dst) {}
 
     bool use_weight_context() override {
         return weights;
@@ -3643,7 +3649,7 @@ struct test_bin_bcast : public test_case {
         }
 
         // The backward pass supports broadcasting only for GGML_ADD:
-        const bool grad_supported = op == ggml_add && ggml_are_same_shape(a, b[0]) && nf == 1 && !perm1;
+        const bool grad_supported = op == ggml_add && type_dst == GGML_TYPE_COUNT && ggml_are_same_shape(a, b[0]) && nf == 1 && !perm1;
         if (grad_supported) {
             ggml_set_param(a);
             ggml_set_param(b[0]);
@@ -3658,7 +3664,7 @@ struct test_bin_bcast : public test_case {
         }
 
         for (int i = 0; i < nf; ++i) {
-            out = op(ctx, out, b[i]);
+            out = type_dst == GGML_TYPE_COUNT ? op(ctx, out, b[i]) : ggml_add_cast(ctx, out, b[i], type_dst);
         }
 
         ggml_set_name(out, "out");
@@ -3700,6 +3706,74 @@ struct test_bin_bcast : public test_case {
 
     double max_maa_err() override {
         return op == ggml_add ? 1e-4 : 1e-3;
+    }
+};
+
+struct test_bin_bcast_f16_boundary : public test_case {
+    using op_t = ggml_tensor * (*) (ggml_context *, ggml_tensor *, ggml_tensor *);
+
+    enum boundary_type {
+        SRC1_F16_DST_F32,
+        SRC1_F16_DST_F16,
+        SRC0_F16_SRC1_F16_DST_F32,
+    };
+
+    op_t op;
+    const std::array<int64_t, 4> ne;
+    const std::array<int, 4> nr;
+    const boundary_type boundary;
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        if (op == ggml_add) return "ADD";
+        if (op == ggml_sub) return "SUB";
+        if (op == ggml_mul) return "MUL";
+        if (op == ggml_div) return "DIV";
+        GGML_ABORT("fatal error");
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR3(ne, nr, boundary);
+    }
+
+    test_bin_bcast_f16_boundary(op_t op, std::array<int64_t, 4> ne, std::array<int, 4> nr, boundary_type boundary)
+        : op(op), ne(ne), nr(nr), boundary(boundary) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
+        ggml_tensor * b = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_set_name(a, "a");
+        ggml_set_name(b, "b");
+
+        ggml_tensor * src0 = a;
+        ggml_tensor * src1 = ggml_dup(ctx, b);
+        ggml_set_name(src1, "src1_internal");
+        if (boundary == SRC0_F16_SRC1_F16_DST_F32) {
+            src0 = ggml_dup(ctx, a);
+            ggml_set_name(src0, "src0_internal");
+        }
+
+        ggml_tensor * binary = op(ctx, src0, src1);
+        ggml_set_name(binary, "binary");
+        ggml_tensor * out = boundary == SRC1_F16_DST_F16 ? ggml_dup(ctx, binary) : binary;
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (op == ggml_mul || op == ggml_div) {
+                init_tensor_uniform(t, 0.9f, 1.1f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
     }
 };
 
@@ -11684,6 +11758,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (auto op : {ggml_add, ggml_add_inplace}) {
         for (int64_t n : {1, 7, 33}) {
             test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F8_E4M3, {n, 5, 2, 1}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_F32));
+        }
+    }
+
+    for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F16, {33, 5, 2, 1}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_F32));
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F16, {127, 1, 1, 1}, {1, 5, 2, 1}, 1, false, false, GGML_TYPE_F32));
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F16, {1, 1, 1, 1}, {256, 5, 2, 1}, 1, false, false, GGML_TYPE_F32));
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F16, {33, 2, 1, 1}, {2, 3, 1, 1}, 1, false, false, GGML_TYPE_F32));
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F16, {33, 5, 4, 3}, {1, 1, 1, 1}, 1, true, false, GGML_TYPE_F32));
+        test_cases.emplace_back(new test_bin_bcast(op, GGML_TYPE_F16, {256, 3, 2, 1}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_F32));
+    }
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F16, {127, 5, 2, 1}, {1, 1, 1, 1}, 1, false, false, GGML_TYPE_F32, false, GGML_TYPE_F32));
+
+    for (auto op : {ggml_add, ggml_sub, ggml_mul, ggml_div}) {
+        for (auto boundary : {
+                test_bin_bcast_f16_boundary::SRC1_F16_DST_F32,
+                test_bin_bcast_f16_boundary::SRC1_F16_DST_F16,
+                test_bin_bcast_f16_boundary::SRC0_F16_SRC1_F16_DST_F32}) {
+            test_cases.emplace_back(new test_bin_bcast_f16_boundary(op, {33, 5, 2, 1}, {1, 1, 1, 1}, boundary));
+            test_cases.emplace_back(new test_bin_bcast_f16_boundary(op, {127, 1, 1, 1}, {1, 5, 2, 1}, boundary));
+            test_cases.emplace_back(new test_bin_bcast_f16_boundary(op, {1, 1, 1, 1}, {256, 5, 2, 1}, boundary));
+            test_cases.emplace_back(new test_bin_bcast_f16_boundary(op, {33, 2, 1, 1}, {2, 3, 1, 1}, boundary));
+            test_cases.emplace_back(new test_bin_bcast_f16_boundary(op, {256, 3, 2, 1}, {1, 1, 1, 1}, boundary));
         }
     }
 

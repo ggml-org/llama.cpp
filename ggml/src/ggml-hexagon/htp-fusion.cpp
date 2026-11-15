@@ -465,6 +465,7 @@ static bool fuse_mul_mul_scalar(const ggml_hexagon_session * sess, htp_opnode & 
 
     const ggml_tensor * src1 = prev.src1();
     const ggml_tensor * dst  = cur.dst();
+    if (prev.src0()->type != src1->type || prev.dst()->type != src1->type || src2->type != src1->type || dst->type != src1->type) return false;
     if (!ggml_are_same_shape(src1, src2) || !htp_same_shape_and_contiguity(prev.dst(), dst)) return false;
     if (htp_inputs_overlap_unsafe(prev, dst, src2)) return false;
 
@@ -508,6 +509,10 @@ static bool fuse_binary_nx(const ggml_hexagon_session * sess, htp_opnode & prev,
 
     const ggml_tensor * src0 = prev.inputs[0];
     const ggml_tensor * dst  = cur.dst();
+    if (prev.dst()->type != src0->type || new_src->type != src0->type || dst->type != src0->type) return false;
+    for (const auto * in : prev.inputs) {
+        if (in->type != src0->type) return false;
+    }
     if (!ggml_are_same_shape(src0, prev.inputs[1]) ||
         !ggml_are_same_shape(src0, new_src) ||
         !htp_same_shape_and_contiguity(prev.dst(), dst)) {
@@ -549,7 +554,7 @@ static bool fuse_binary_nx(const ggml_hexagon_session * sess, htp_opnode & prev,
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
         const uint32_t elem_size   = (uint32_t) ggml_type_size(src0->type);
         const uint32_t max_hvx     = htp_session_n_hvx(sess);
-        if (!htp_binary_solve_chunked(&L, &kparams, total_elems, elem_size, max_hvx, n_srcs, false, vtcm_size)) {
+        if (!htp_binary_solve_chunked(&L, &kparams, total_elems, elem_size, elem_size, elem_size, max_hvx, n_srcs, false, vtcm_size)) {
             return false;
         }
     }
