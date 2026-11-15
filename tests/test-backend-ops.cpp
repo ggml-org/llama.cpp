@@ -7870,6 +7870,88 @@ struct test_concat : public test_case {
     }
 };
 
+struct test_concat_f16_boundary : public test_case {
+    const std::array<int64_t, 4> ne_a;
+    const int64_t ne_b_d;
+    const int dim;
+    const int v;
+    const int io_mask; // bit 0: dup a, bit 1: dup b, bit 2: dup out
+
+    bool run_whole_graph() override { return true; }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CONCAT";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR5(ne_a, ne_b_d, dim, v, io_mask);
+    }
+
+    double max_nmse_err() override {
+        return 1e-5;
+    }
+
+    test_concat_f16_boundary(
+            std::array<int64_t, 4> ne_a = {11, 12, 13, 14},
+            int64_t ne_b_d = 7,
+            int dim = 0, int v = 0, int io_mask = 7)
+        : ne_a(ne_a), ne_b_d(ne_b_d), dim(dim), v(v), io_mask(io_mask) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        auto ne_b = ne_a;
+        ne_b[dim] = ne_b_d;
+
+        std::array<int64_t, 4> ne_a_alloc = ne_a;
+        if (v & 1) {
+            ne_a_alloc[0] *= 2; ne_a_alloc[1] *= 4; ne_a_alloc[2] *= 3;
+        } else if (v & 4) {
+            ne_a_alloc[2] *= 2; ne_a_alloc[3] *= 4;
+        }
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_a_alloc.data());
+        ggml_set_name(a, "a");
+        if (io_mask & 1) {
+            a = ggml_dup(ctx, a);
+            ggml_set_name(a, "a_internal");
+        }
+        if (v & 1 || v & 4) {
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+        }
+
+        std::array<int64_t, 4> ne_b_alloc = ne_b;
+        if (v & 2) {
+            ne_b_alloc[0] *= 3; ne_b_alloc[1] *= 2; ne_b_alloc[2] *= 4;
+        } else if (v & 8) {
+            ne_b_alloc[2] *= 3; ne_b_alloc[3] *= 2;
+        } else if (v & 16) {
+            std::swap(ne_b_alloc[0], ne_b_alloc[1]);
+        }
+        ggml_tensor * b = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_b_alloc.data());
+        ggml_set_name(b, "b");
+        if (io_mask & 2) {
+            b = ggml_dup(ctx, b);
+            ggml_set_name(b, "b_internal");
+        }
+        if (v & 2 || v & 8) {
+            b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
+            ggml_set_name(b, "view_of_b");
+        } else if (v & 16) {
+            b = ggml_transpose(ctx, b);
+            ggml_set_name(b, "transpose_of_b");
+        }
+
+        ggml_tensor * cat = ggml_concat(ctx, a, b, dim);
+        ggml_set_name(cat, "concat");
+
+        ggml_tensor * out = (io_mask & 4) ? ggml_dup(ctx, cat) : cat;
+        if (out != cat) {
+            ggml_set_name(out, "out");
+        }
+        return out;
+    }
+};
+
 // GGML_OP_ARGSORT
 struct test_argsort : public test_case {
     const ggml_type type;
@@ -13366,13 +13448,40 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // GDN conv_input
-    for (int64_t ne_b_d : { 31, 32, 33, 64 }) {
-        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {3, 10240, 1, 1}, ne_b_d, 0, 16));
-        test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {1, 37, 1, 1}, ne_b_d, 0, 16));
+    for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        for (int64_t ne_b_d : { 31, 32, 33, 64 }) {
+            test_cases.emplace_back(new test_concat(type, {3, 10240, 1, 1}, ne_b_d, 0, 16));
+            test_cases.emplace_back(new test_concat(type, {1, 37, 1, 1}, ne_b_d, 0, 16));
+        }
+        test_cases.emplace_back(new test_concat(type, {64, 37, 1, 1}, 32, 0, 16));
+        // Empty src0
+        test_cases.emplace_back(new test_concat(type, {0, 64, 1, 1}, 33, 0, 16));
     }
-    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {64, 37, 1, 1}, 32, 0, 16));
-    // Empty src0
-    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {0, 64, 1, 1}, 33, 0, 16));
+
+    // Qwen3.5 build_conv_state F16 promotion boundary shapes
+    for (int io_mask : { 2, 6 }) {
+        for (int64_t n_seqs : { 1, 2 }) {
+            for (int64_t d_inner : { 128, 6144 }) {
+                for (int64_t n_tokens : { 1, 16, 64, 256 }) {
+                    test_cases.emplace_back(new test_concat_f16_boundary({3, d_inner, n_seqs, 1}, n_tokens, 0, 16, io_mask));
+                }
+            }
+        }
+    }
+
+    for (int io_mask : { 1, 2, 3, 4, 5, 6, 7 }) {
+        for (int64_t ne_b_d : { 7, 31, 33, 64 }) {
+            test_cases.emplace_back(new test_concat_f16_boundary({3, 37, 2, 1}, ne_b_d, 0, 16, io_mask));
+            test_cases.emplace_back(new test_concat_f16_boundary({31, 37, 1, 1}, ne_b_d, 0, 16, io_mask));
+        }
+        for (int v : { 0, 1, 2 }) {
+            test_cases.emplace_back(new test_concat_f16_boundary({3, 64, 2, 1}, 7, 0, v, io_mask));
+            test_cases.emplace_back(new test_concat_f16_boundary({11, 12, 5, 2}, 7, 0, v, io_mask));
+            for (int dim : { 0, 1, 2, 3 }) {
+                test_cases.emplace_back(new test_concat_f16_boundary({31, 6, 5, 2}, dim == 0 ? 33 : 3, dim, v, io_mask));
+            }
+        }
+    }
 
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {
         for (uint32_t i = 4; i <= 1024*1024; i *= 2) {

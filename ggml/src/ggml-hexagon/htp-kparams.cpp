@@ -2843,6 +2843,7 @@ bool htp_kparams_solve_upscale(
 static bool htp_kparams_solve_concat(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    bool internal_f16,
     struct htp_concat_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -2862,14 +2863,26 @@ static bool htp_kparams_solve_concat(
     }
     kparams->dim = dim;
 
-    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_I32) {
-        return false;
-    }
-    if (src0->type != dst->type || src1->type != dst->type) {
-        return false;
+    const bool all_same = (src0->type == dst->type && src1->type == dst->type);
+    if (all_same) {
+        if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_I32) {
+            return false;
+        }
+    } else {
+        if (!internal_f16) {
+            return false;
+        }
+        const bool src0_fp = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+        const bool src1_fp = (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
+        const bool dst_fp  = (dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16);
+        if (!src0_fp || !src1_fp || !dst_fp) {
+            return false;
+        }
     }
 
-    const uint32_t type_size  = ggml_type_size(dst->type);
+    const uint32_t src0_es    = ggml_type_size(src0->type);
+    const uint32_t src1_es    = ggml_type_size(src1->type);
+    const uint32_t dst_es     = ggml_type_size(dst->type);
     const uint32_t n_hvx      = htp_session_n_hvx(sess);
     const uint32_t mdev_count = htp_session_mdev_count(sess);
     const size_t   vtcm_size  = htp_session_vtcm_size(sess);
@@ -2881,30 +2894,30 @@ static bool htp_kparams_solve_concat(
         }
     }
 
-    const uint32_t max_gather_ne0 = 128 / type_size;
+    const uint32_t max_gather_ne0 = 128 / dst_es;
     const uint32_t total_rows     = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
-    const bool     b_dense        = (src1->nb[0] == type_size);
+    const bool     b_dense        = (src1->nb[0] == src1_es);
     const bool     gather_strides_ok =
-        src0->nb[1] >= (size_t) src0->ne[0] * type_size &&
-        (b_dense ? src1->nb[1] >= (size_t) src1->ne[0] * type_size
-                 : src1->nb[0] >= (size_t) src1->ne[1] * type_size);
+        src0->nb[1] >= (size_t) src0->ne[0] * src0_es &&
+        (b_dense ? src1->nb[1] >= (size_t) src1->ne[0] * src1_es
+                 : src1->nb[0] >= (size_t) src1->ne[1] * src1_es);
 
     if (dim == 0 &&
         (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16) &&
         dst->ne[0] <= max_gather_ne0 &&
-        dst->nb[0] == type_size && dst->nb[1] == (size_t) dst->ne[0] * type_size &&
-        src0->nb[0] == type_size &&
-        (src1->nb[0] == type_size || src1->nb[1] == type_size) &&
+        dst->nb[0] == dst_es && dst->nb[1] == (size_t) dst->ne[0] * dst_es &&
+        src0->nb[0] == src0_es &&
+        (src1->nb[0] == src1_es || src1->nb[1] == src1_es) &&
         gather_strides_ok &&
         htp_gather_rows_tensor_outer_contiguous(dst) &&
         htp_gather_rows_tensor_outer_contiguous(src0) &&
         htp_gather_rows_tensor_outer_contiguous(src1)) {
 
-        if (htp_gather_rows_solve_layout(&kparams->u.gather,
-                                         (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
-                                         (uint32_t) src1->ne[0], (uint32_t) src1->nb[1], b_dense,
-                                         type_size, total_rows,
-                                         n_hvx, mdev_count, vtcm_size)) {
+        if (htp_concat_gather_rows_solve_layout(&kparams->u.gather,
+                                                (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
+                                                (uint32_t) src1->ne[0], (uint32_t) src1->nb[1], b_dense,
+                                                src0_es, src1_es, dst_es, total_rows,
+                                                n_hvx, mdev_count, vtcm_size)) {
             kparams->kernel_type = HTP_CONCAT_KERNEL_GATHER_ROWS;
             kparams->n_hvx       = (uint8_t) n_hvx;
             kparams->vtcm_size   = kparams->u.gather.slice * n_hvx;
@@ -2912,31 +2925,69 @@ static bool htp_kparams_solve_concat(
         }
     }
 
-    const bool dma_strides_ok = (src0->nb[0] == type_size && src1->nb[0] == type_size && dst->nb[0] == type_size);
+    const bool dma_strides_ok = (src0->nb[0] == src0_es && src1->nb[0] == src1_es && dst->nb[0] == dst_es);
     if (dma_strides_ok) {
         kparams->kernel_type = HTP_CONCAT_KERNEL_REGULAR;
-        kparams->n_hvx       = 1;
+        if (all_same) {
+            kparams->n_hvx     = 1;
+            kparams->vtcm_size = 0;
+        } else {
+            const uint32_t nth    = n_hvx > 0 ? n_hvx : 8;
+            const uint32_t req_vt = nth * 4 * HTP_CONCAT_REG_BLK_BYTES;
+            if (vtcm_size > 0 && req_vt > vtcm_size) {
+                return false;
+            }
+            kparams->n_hvx                   = (uint8_t) nth;
+            kparams->vtcm_size               = req_vt;
+            kparams->u.regular.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
+            kparams->u.regular.div_ne02_ne01 = init_fastdiv_values((uint32_t) (src0->ne[1] * src0->ne[2]));
+            kparams->u.regular.div_ne11      = init_fastdiv_values((uint32_t) src1->ne[1]);
+            kparams->u.regular.div_ne12_ne11 = init_fastdiv_values((uint32_t) (src1->ne[1] * src1->ne[2]));
+        }
         return true;
     }
 
     const bool is_src1_transposed = (src1->nb[0] > src1->nb[1]);
     const bool is_src0_transposed = (src0->nb[0] > src0->nb[1]);
-    const bool transposed_rows_ok = (src0->nb[0] == type_size && src1->nb[1] == type_size && dst->nb[0] == type_size);
+    const bool src0_trans_ok = is_src0_transposed ? (src0->nb[1] == src0_es) : (src0->nb[0] == src0_es);
+    const bool src1_trans_ok = is_src1_transposed ? (src1->nb[1] == src1_es) : (src1->nb[0] == src1_es);
 
-    if (dim == 0 && is_src1_transposed && !is_src0_transposed && transposed_rows_ok &&
+    if (dim == 0 && (is_src0_transposed || is_src1_transposed) &&
+        src0_trans_ok && src1_trans_ok && dst->nb[0] == dst_es &&
         (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16)) {
 
         const uint32_t nth = n_hvx > 0 ? n_hvx : 8;
-        struct htp_concat_transposed_vtcm_layout layout;
-        htp_concat_transposed_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src1->ne[0], type_size, nth);
+        uint32_t req_vtcm = 0;
 
-        if (vtcm_size > 0 && layout.total_bytes > vtcm_size) {
+        if (!is_src0_transposed && is_src1_transposed) {
+            struct htp_concat_transposed_vtcm_layout layout;
+            htp_concat_transposed_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src1->ne[0], src0_es, src1_es, dst_es, nth);
+            req_vtcm = layout.total_bytes;
+        } else {
+            struct htp_concat_transposed_vtcm_layout layout0;
+            htp_concat_transposed_vtcm_layout_build(&layout0, 0, (uint32_t) src0->ne[0], dst_es, src0_es, dst_es, nth);
+            req_vtcm = layout0.total_bytes;
+            if (is_src1_transposed) {
+                struct htp_concat_transposed_vtcm_layout layout1;
+                htp_concat_transposed_vtcm_layout_build(&layout1, 0, (uint32_t) src1->ne[0], dst_es, src1_es, dst_es, nth);
+                if (layout1.total_bytes > req_vtcm) {
+                    req_vtcm = layout1.total_bytes;
+                }
+            } else if (src1_es != dst_es) {
+                const uint32_t reg_vtcm = nth * 4 * HTP_CONCAT_REG_BLK_BYTES;
+                if (reg_vtcm > req_vtcm) {
+                    req_vtcm = reg_vtcm;
+                }
+            }
+        }
+
+        if (vtcm_size > 0 && req_vtcm > vtcm_size) {
             return false;
         }
 
         kparams->kernel_type          = HTP_CONCAT_KERNEL_TRANSPOSED;
-        kparams->n_hvx                = nth;
-        kparams->vtcm_size            = layout.total_bytes;
+        kparams->n_hvx                = (uint8_t) nth;
+        kparams->vtcm_size            = req_vtcm;
         kparams->u.transposed.div_ne2 = init_fastdiv_values((uint32_t) dst->ne[2]);
         return true;
     }
@@ -5883,7 +5934,11 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_pool_2d>(sess, op, kparams);
 
         case HTP_OP_CONCAT:
-            return htp_kparams_invoke<htp_kparams_solve_concat>(sess, op, kparams);
+        {
+            struct htp_concat_kernel_params tmp;
+            return htp_kparams_solve_concat(sess, op, internal_f16,
+                                            kparams ? (struct htp_concat_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_CPY:
         case HTP_OP_CPY_FENCE:
