@@ -1567,6 +1567,7 @@ struct ggml_hexagon_opbatch {
             return false;
         }
 
+        htp_opnode_collapse(sess, last_node);
         sync_op_desc(n_ops - 1);
         HEX_VERBOSE("ggml-hex: %s fused %s (N=%zu, #%u)\n",
                     sess->c_name(), last_node.name().c_str(), last_node.fused.size() + 1, n_ops - 1);
@@ -2583,14 +2584,16 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             htp_opnode node(opcode, n);
             GGML_ASSERT(htp_kparams_solve(sess, node));
-            if (!computed_nodes.empty() && opt_opfusion && htp_fusion_try_fuse(sess, computed_nodes.back(), node)) {
-                GGML_ASSERT(htp_kparams_solve(sess, computed_nodes.back()));
-            } else {
+            if (computed_nodes.empty() || !opt_opfusion || !htp_fusion_try_fuse(sess, computed_nodes.back(), node)) {
                 computed_nodes.push_back(std::move(node));
             }
         }
 
         htp_f16_promote(sess, graph, computed_nodes);
+
+        for (auto & node : computed_nodes) {
+            htp_opnode_collapse(sess, node);
+        }
 
         if (graph->uid != 0) {
             sess->cached_uid   = graph->uid;

@@ -66,9 +66,18 @@ static bool htp_f16_safe_class(const ggml_cgraph * graph, const ggml_tensor * ro
     return internal_uses >= 1;
 }
 
+static bool htp_f16_node_has_output(const htp_opnode & node, const ggml_tensor * tensor) {
+    for (const ggml_tensor * output : node.outputs) {
+        if (output == tensor) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool htp_f16_is_mm_root(const std::vector<htp_opnode> & nodes, const ggml_tensor * root) {
     for (const htp_opnode & node : nodes) {
-        if (node.node == root) {
+        if (htp_f16_node_has_output(node, root)) {
             return node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID || node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX;
         }
     }
@@ -77,8 +86,8 @@ static bool htp_f16_is_mm_root(const std::vector<htp_opnode> & nodes, const ggml
 
 static bool htp_f16_is_rms_root(const std::vector<htp_opnode> & nodes, const ggml_tensor * root) {
     for (const htp_opnode & node : nodes) {
-        if (node.node == root) {
-            return node.node->op == GGML_OP_RMS_NORM;
+        if (htp_f16_node_has_output(node, root)) {
+            return node.node && node.node->op == GGML_OP_RMS_NORM;
         }
     }
     return false;
@@ -89,25 +98,37 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
         return;
     }
 
+    std::vector<const ggml_tensor *> roots;
     std::unordered_map<const ggml_tensor *, std::vector<const ggml_tensor *>> classes;
+    std::unordered_set<const ggml_tensor *> seen;
     std::unordered_map<const ggml_tensor *, int> node_idx;
     std::unordered_set<const ggml_tensor *> produced;
+
+    auto add_to_class = [&](const ggml_tensor * tensor) {
+        if (!tensor || !seen.insert(tensor).second) {
+            return;
+        }
+        const ggml_tensor * root = htp_f16_root(tensor);
+        auto & cls = classes[root];
+        if (cls.empty()) {
+            roots.push_back(root);
+        }
+        cls.push_back(tensor);
+    };
+
     for (int i = 0; i < graph->n_nodes; ++i) {
         const ggml_tensor * tensor = graph->nodes[i];
         node_idx[tensor] = i;
         produced.insert(tensor);
-        classes[htp_f16_root(tensor)].push_back(tensor);
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
-            if (tensor->src[j]) {
-                classes[htp_f16_root(tensor->src[j])].push_back(tensor->src[j]);
-            }
+            add_to_class(tensor->src[j]);
         }
+        add_to_class(tensor);
     }
 
     std::unordered_set<const ggml_tensor *> promoted;
-    for (const auto & entry : classes) {
-        const ggml_tensor * root = entry.first;
-        const std::vector<const ggml_tensor *> & tensors = entry.second;
+    for (const ggml_tensor * root : roots) {
+        const std::vector<const ggml_tensor *> & tensors = classes[root];
         if (!htp_f16_is_root_candidate(root, produced) || !htp_f16_safe_class(graph, root, tensors, node_idx)) {
             continue;
         }
@@ -116,9 +137,9 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
         if (!selected && opt_mm_f16_out) {
             for (const ggml_tensor * tensor : tensors) {
                 for (const htp_opnode & node : nodes) {
-                    if (node.node == tensor) {
+                    if (htp_f16_node_has_output(node, tensor)) {
                         for (const ggml_tensor * input : node.inputs) {
-                            selected |= promoted.count(input) != 0;
+                            selected |= input && promoted.count(input) != 0;
                         }
                     }
                 }
@@ -130,18 +151,16 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
 
         htp_opnode * owner = nullptr;
         for (htp_opnode & node : nodes) {
-            for (const ggml_tensor * output : node.outputs) {
-                if (output == root) {
-                    owner = &node;
-                    break;
-                }
+            if (htp_f16_node_has_output(node, root)) {
+                owner = &node;
+                break;
             }
-            if (owner) break;
         }
         if (!owner) {
             continue;
         }
 
+        const size_t old_dummy_size = owner->dummy.size();
         std::unordered_map<const ggml_tensor *, const ggml_tensor *> dummies;
         for (const ggml_tensor * tensor : tensors) {
             ggml_tensor dummy = *tensor;
@@ -154,13 +173,22 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
         }
 
         struct replacement { const ggml_tensor ** slot; const ggml_tensor * old; };
+        struct saved_node {
+            htp_opnode * node;
+            int32_t      kernel_params[HTP_OP_MAX_KERN_PARAMS];
+        };
+
         std::vector<replacement> replacements;
+        std::vector<saved_node>  touched;
+
         for (htp_opnode & node : nodes) {
+            bool node_changed = false;
             for (const ggml_tensor * & input : node.inputs) {
                 auto it = dummies.find(input);
                 if (it != dummies.end()) {
                     replacements.push_back({ &input, input });
                     input = it->second;
+                    node_changed = true;
                 }
             }
             for (const ggml_tensor * & output : node.outputs) {
@@ -168,23 +196,37 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
                 if (it != dummies.end()) {
                     replacements.push_back({ &output, output });
                     output = it->second;
+                    node_changed = true;
                 }
+            }
+            if (node_changed) {
+                saved_node s;
+                s.node = &node;
+                memcpy(s.kernel_params, node.kernel_params, sizeof(s.kernel_params));
+                touched.push_back(s);
             }
         }
 
         bool solved = true;
-        for (htp_opnode & node : nodes) {
-            solved &= htp_kparams_solve(sess, node);
+        for (saved_node & s : touched) {
+            if (!htp_kparams_solve(sess, *s.node, true)) {
+                solved = false;
+                break;
+            }
         }
         if (!solved) {
             for (const replacement & replacement : replacements) {
                 *replacement.slot = replacement.old;
             }
-            for (htp_opnode & node : nodes) {
-                GGML_ASSERT(htp_kparams_solve(sess, node));
+            for (saved_node & s : touched) {
+                memcpy(s.node->kernel_params, s.kernel_params, sizeof(s.kernel_params));
             }
+            owner->dummy.resize(old_dummy_size);
             continue;
         }
         promoted.insert(tensors.begin(), tensors.end());
+        for (const auto & entry : dummies) {
+            promoted.insert(entry.second);
+        }
     }
 }

@@ -76,17 +76,20 @@ static bool fuse_allreduce_add(const ggml_hexagon_session * sess, htp_opnode & p
     const ggml_tensor * ar_local = prev.inputs[rank];
     if (!ggml_hexagon_tensor_is_fuseable(ar_local)) return false;
 
+    if (cur.inputs.size() < 2) return false;
+    const ggml_tensor * cur_src0   = cur.inputs[0];
+    const ggml_tensor * cur_src1   = cur.inputs[1];
     const ggml_tensor * add_dst    = cur.dst();
     const ggml_tensor * res_tensor = nullptr;
-    if (htp_same_tensor_data(cur.src0(), ar_local)) {
-        res_tensor = cur.src1();
-    } else if (htp_same_tensor_data(cur.src1(), ar_local)) {
-        res_tensor = cur.src0();
+    if (htp_same_tensor_data(cur_src0, ar_local)) {
+        res_tensor = cur_src1;
+    } else if (htp_same_tensor_data(cur_src1, ar_local)) {
+        res_tensor = cur_src0;
     } else {
         return false;
     }
 
-    if (ar_local->type != res_tensor->type) return false;
+    if (ar_local->type != res_tensor->type || ar_local->type != add_dst->type) return false;
 
     const bool is_same_shape = ggml_are_same_shape(ar_local, res_tensor);
     const bool is_row_bcast  = !is_same_shape && (ar_local->ne[0] == res_tensor->ne[0] &&
@@ -251,7 +254,6 @@ static bool fuse_mul_mat_add(const ggml_hexagon_session * sess, htp_opnode & pre
     prev.opcode  = HTP_OP_MUL_MAT_ADD;
     prev.inputs  = { src0, src1, src2 };
     prev.outputs = { dst };
-    htp_opnode_collapse(sess, prev);
     prev.fused.push_back(cur.node);
     prev.set_kparams(kparams);
     return true;
@@ -297,7 +299,7 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     }
 
     prev.inputs.insert(prev.inputs.begin() + curr_n, w_in);
-    prev.outputs.push_back(collapse ? prev.add_dummy(htp_tensor_collapse_rows(d_in)) : d_in);
+    prev.outputs.push_back(d_in);
     prev.fused.push_back(cur.node);
     return true;
 }

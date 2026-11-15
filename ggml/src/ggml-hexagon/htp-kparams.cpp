@@ -5555,6 +5555,24 @@ void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & 
         return;
     }
 
+    if (node.opcode == HTP_OP_MUL_MAT_NX) {
+        const size_t n_w = node.outputs.size();
+        if (n_w == 0 || node.inputs.size() != n_w + 1 || !node.inputs[n_w]) {
+            return;
+        }
+        const struct ggml_tensor * act = node.inputs[n_w];
+        for (size_t i = 0; i < n_w; ++i) {
+            if (!node.inputs[i] || !node.outputs[i] || !htp_matmul_can_collapse(node.inputs[i], act, node.outputs[i])) {
+                return;
+            }
+        }
+        node.inputs[n_w] = node.add_dummy(htp_tensor_collapse_rows(act));
+        for (size_t i = 0; i < n_w; ++i) {
+            node.outputs[i] = node.add_dummy(htp_tensor_collapse_rows(node.outputs[i]));
+        }
+        return;
+    }
+
     if (node.opcode == HTP_OP_UPSCALE) {
         if (node.inputs.empty() || !node.inputs[0] || node.outputs.empty() || !node.outputs[0]) {
             return;
@@ -5650,55 +5668,98 @@ bool htp_kparams_solve(
     htp_opnode & node,
     bool internal_f16
 ) {
-    htp_opnode_collapse(sess, node);
+    htp_opnode tmp = node;
+    htp_opnode_collapse(sess, tmp);
 
-    const ggml_tensor * src0 = node.inputs.empty() ? nullptr : node.inputs[0];
-    const ggml_tensor * src1 = node.inputs.size() > 1 ? node.inputs[1] : nullptr;
-    const ggml_tensor * dst  = node.dst();
+    const ggml_tensor * src0 = tmp.inputs.empty() ? nullptr : tmp.inputs[0];
+    const ggml_tensor * src1 = tmp.inputs.size() > 1 ? tmp.inputs[1] : nullptr;
+    const ggml_tensor * dst  = tmp.dst();
 
-    if (htp_op_is_unary(node.opcode)) {
-        return htp_kparams_solve_unary_impl(sess, node.opcode, src0, src1, dst, node.kparams<htp_unary_kernel_params>());
+    auto commit = [&](bool ok) {
+        if (ok) {
+            memcpy(node.kernel_params, tmp.kernel_params, sizeof(node.kernel_params));
+        }
+        return ok;
+    };
+
+    if (htp_op_is_unary(tmp.opcode)) {
+        if (tmp.opcode == HTP_OP_RMS_NORM_MUL) {
+            if (!src0 || !src1 || src1->type != src0->type) {
+                return false;
+            }
+        } else if (tmp.opcode == HTP_OP_RMS_NORM_MUL_ADD) {
+            if (!src0 || !src1 || src1->type != src0->type || tmp.inputs.size() < 3 || !tmp.inputs[2] || tmp.inputs[2]->type != src0->type) {
+                return false;
+            }
+        }
+        return commit(htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_unary_kernel_params>()));
     }
-    if (htp_op_is_glu(node.opcode)) {
-        return htp_kparams_solve_unary_mul_glu(sess, node.opcode, src0, src1, dst, node.kparams<htp_glu_kernel_params>());
+    if (htp_op_is_glu(tmp.opcode)) {
+        return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_MUL_MAT) {
+    if (tmp.opcode == HTP_OP_MUL_MAT) {
         if (!htp_matmul_check_types(src0, src1, dst)) {
             return false;
         }
-        return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, node.kparams<htp_mm_kernel_params>());
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, tmp.kparams<htp_mm_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_MUL_MAT_ADD) {
-        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
-        return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, node.kparams<htp_mm_kernel_params>());
+    if (tmp.opcode == HTP_OP_MUL_MAT_ADD) {
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        if (!src2 || src2->type != GGML_TYPE_F32 || !htp_matmul_check_types(src0, src1, dst)) {
+            return false;
+        }
+        const size_t src2_size = hex_round_up(ggml_nbytes(src2), 128);
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2->nb[1], src2_size, tmp.kparams<htp_mm_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_UPSCALE) {
-        return htp_kparams_solve_upscale(sess, src0, dst, node.kparams<htp_upscale_kernel_params>());
+    if (tmp.opcode == HTP_OP_MUL_MAT_NX) {
+        const size_t n_w = tmp.outputs.size();
+        if (n_w == 0 || tmp.inputs.size() != n_w + 1 || !tmp.inputs[n_w]) {
+            return false;
+        }
+        const ggml_tensor * act = tmp.inputs[n_w];
+        for (size_t i = 0; i < n_w; ++i) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
+                return false;
+            }
+        }
+        if (!htp_kparams_solve_mmnx(sess, tmp.inputs[0], act, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
+            return false;
+        }
+        const auto * kp = tmp.kparams<htp_mm_kernel_params>();
+        const bool ok = kp->n_hmx ? htp_mm_kernel_is_hmx_2d(kp->kernel_type)
+                                  : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) && kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW);
+        return commit(ok);
     }
-    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
-        return htp_kparams_solve_dsv4_hc_pre_impl(sess, src0, src1, dst, node.kparams<htp_dsv4_hc_pre_kernel_params>());
+    if (tmp.opcode == HTP_OP_UPSCALE) {
+        return commit(htp_kparams_solve_upscale(sess, src0, dst, tmp.kparams<htp_upscale_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_DSV4_HC_POST) {
-        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
-        return htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_dsv4_hc_post_kernel_params>());
+    if (tmp.opcode == HTP_OP_DSV4_HC_PRE) {
+        return commit(htp_kparams_solve_dsv4_hc_pre_impl(sess, src0, src1, dst, tmp.kparams<htp_dsv4_hc_pre_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
-        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
-        return htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_lid_kernel_params>());
+    if (tmp.opcode == HTP_OP_DSV4_HC_POST) {
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        const ggml_tensor * src3 = tmp.inputs.size() > 3 ? tmp.inputs[3] : nullptr;
+        return commit(htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, tmp.kparams<htp_dsv4_hc_post_kernel_params>()));
+    }
+    if (tmp.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        const ggml_tensor * src3 = tmp.inputs.size() > 3 ? tmp.inputs[3] : nullptr;
+        return commit(htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, tmp.kparams<htp_lid_kernel_params>()));
     }
 
-    ggml_tensor op_view = *node.dst();
-    op_view.op = node.node->op;
-    op_view.flags = node.node->flags;
-    memcpy(op_view.op_params, node.params, sizeof(op_view.op_params));
-    for (size_t i = 0; i < node.inputs.size(); ++i) {
-        op_view.src[i] = const_cast<ggml_tensor *>(node.inputs[i]);
+    if (!tmp.fused.empty()) {
+        return false;
     }
 
-    return htp_kparams_solve(sess, &op_view, node.kernel_params, internal_f16);
+    ggml_tensor op_view = *tmp.dst();
+    op_view.op = tmp.node->op;
+    op_view.flags = tmp.node->flags;
+    memcpy(op_view.op_params, tmp.params, sizeof(op_view.op_params));
+    for (size_t i = 0; i < tmp.inputs.size(); ++i) {
+        op_view.src[i] = const_cast<ggml_tensor *>(tmp.inputs[i]);
+    }
+
+    return commit(htp_kparams_solve(sess, &op_view, tmp.kernel_params, internal_f16));
 }
 
 bool htp_kparams_solve(

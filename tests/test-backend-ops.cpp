@@ -3966,14 +3966,19 @@ struct test_scale : public test_case {
 };
 
 struct test_hexagon_f16_promote : public test_case {
+    const int64_t ne0;
+
+    explicit test_hexagon_f16_promote(int64_t ne0 = 256) : ne0(ne0) {}
+
+    bool run_whole_graph() override { return true; }
+
     std::string vars() override {
-        return "f32_internal_views";
+        return VARS_TO_STR1(ne0);
     }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        const int64_t ne[4] = { 256, 2, 2, 1 };
+        const int64_t ne[4] = { ne0, 2, 2, 1 };
         ggml_tensor * inp = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
-        ggml_set_param(inp);
         ggml_set_name(inp, "inp_f32");
 
         ggml_tensor * scale = ggml_scale(ctx, inp, 0.5f);
@@ -11891,7 +11896,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, false, 1)); // view test
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true, 1));  // view test, inplace
     test_cases.emplace_back(new test_scale(GGML_TYPE_BF16, {10, 10, 10, 10}, 2.0f, 1.0f, true, 1)); // view test, inplace
-    test_cases.emplace_back(new test_hexagon_f16_promote());
+    test_cases.emplace_back(new test_hexagon_f16_promote(256));
+    test_cases.emplace_back(new test_hexagon_f16_promote(32));
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
