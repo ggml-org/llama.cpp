@@ -89,8 +89,11 @@ static inline ggml_cuda_flash_attn_ext_f16_extra_data ggml_cuda_flash_attn_ext_g
 template<int nthreads_KQ>
 static __device__ __forceinline__ float ggml_cuda_fattn_vec_reduce_max(float x) {
 #if defined(GGML_USE_HIP)
-    static_assert(nthreads_KQ == 4 || nthreads_KQ == 8, "unsupported nthreads_KQ");
-    if constexpr (nthreads_KQ == 4) {
+    static_assert(nthreads_KQ == 2 || nthreads_KQ == 4 || nthreads_KQ == 8, "unsupported nthreads_KQ");
+    if constexpr (nthreads_KQ == 2) {
+        asm volatile("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 quad_perm:[2,3,0,1]" : "+v"(x));
+    }
+    if constexpr (nthreads_KQ <= 4) {
         asm volatile("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:4" : "+v"(x));
     }
     asm volatile("v_nop\n\tv_nop\n\tv_max_f32_dpp %0, %0, %0 row_ror:8" : "+v"(x));
