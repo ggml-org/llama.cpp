@@ -32,6 +32,14 @@
 #include <utility>
 #include <vector>
 
+template<typename T>
+void destroy_and_reset(T& resource){
+    if (resource){
+        resource.Destroy();
+        resource = nullptr; 
+    }
+}
+
 #define ROUNDUP_POW2(x, pow2) (((x) + ((pow2) - 1)) & ~((pow2) - 1))
 #define CEIL_DIV(M, N)        (((M) + (N) - 1) / (N))
 
@@ -146,10 +154,7 @@ struct webgpu_param_arena {
     void reset() { next_slot = 0; }
 
     void cleanup() {
-        if (buffer) {
-            buffer.Destroy();
-            buffer = nullptr;
-        }
+        destroy_and_reset(buffer);
     }
 
     ~webgpu_param_arena() { this->cleanup(); }
@@ -223,31 +228,13 @@ struct webgpu_global_context_struct {
 #endif
 
     ~webgpu_global_context_struct() {
-        if (this->get_tensor_staging_buf) {
-            this->get_tensor_staging_buf.Destroy();
-            this->get_tensor_staging_buf = nullptr;
-        }
-        if (this->memset_params_buf) {
-            this->memset_params_buf.Destroy();
-            this->memset_params_buf = nullptr;
-        }
-        if (this->set_tensor_n_src_buf) {
-            this->set_tensor_n_src_buf.Destroy();
-            this->set_tensor_n_src_buf = nullptr;
-        }
-        if (this->set_tensor_n_descs_buf) {
-            this->set_tensor_n_descs_buf.Destroy();
-            this->set_tensor_n_descs_buf = nullptr;
-        }
+        destroy_and_reset(get_tensor_staging_buf);
+        destroy_and_reset(memset_params_buf);
+        destroy_and_reset(set_tensor_n_src_buf);
+        destroy_and_reset(set_tensor_n_descs_buf);
 #ifdef GGML_WEBGPU_DEBUG
-        if (this->debug_host_buf) {
-            this->debug_host_buf.Destroy();
-            this->debug_host_buf = nullptr;
-        }
-        if (this->debug_dev_buf) {
-            this->debug_dev_buf.Destroy();
-            this->debug_dev_buf = nullptr;
-        }
+        destroy_and_reset(debug_host_buf);
+        destroy_and_reset(debug_dev_buf);
 #endif
     }
 };
@@ -277,29 +264,15 @@ struct webgpu_context_struct {
     uint32_t                                profile_timestamp_query_count = 0;
 #endif
 
-    ~webgpu_context_struct() {
+    ~webgpu_context_struct() 
+    {
 #ifdef GGML_WEBGPU_GPU_PROFILE
-        if (this->profile_timestamp_host_buf) {
-            this->profile_timestamp_host_buf.Destroy();
-            this->profile_timestamp_host_buf = nullptr;
-        }
-        if (this->profile_timestamp_dev_buf) {
-            this->profile_timestamp_dev_buf.Destroy();
-            this->profile_timestamp_dev_buf = nullptr;
-        }
-        if (this->profile_timestamp_query_set) {
-            this->profile_timestamp_query_set.Destroy();
-            this->profile_timestamp_query_set = nullptr;
-        }
+    destroy_and_reset(profile_timestamp_host_buf);
+    destroy_and_reset(profile_timestamp_dev_buf);
+    destroy_and_reset(profile_timestamp_query_set);
 #endif
-        if (this->set_rows_host_error_buf) {
-            this->set_rows_host_error_buf.Destroy();
-            this->set_rows_host_error_buf = nullptr;
-        }
-        if (this->set_rows_dev_error_buf) {
-            this->set_rows_dev_error_buf.Destroy();
-            this->set_rows_dev_error_buf = nullptr;
-        }
+    destroy_and_reset(set_rows_host_error_buf);
+    destroy_and_reset(set_rows_dev_error_buf);
     }
 };
 
@@ -4034,7 +4007,7 @@ static void ggml_backend_webgpu_buffer_set_tensor_n(ggml_backend_buffer_t       
     auto grow_buffer = [&ctx](wgpu::Buffer & buf, size_t size, const char * label) {
         if (buf == nullptr || buf.GetSize() < size) {
             if (buf) {
-                buf.Destroy();
+                buf.Destroy(); // TODO: destroy_and_reset_template usefull? guess not as pointer get reallocated directly.
             }
             ggml_webgpu_create_buffer(ctx->device, buf, size, wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Storage,
                                       label);
