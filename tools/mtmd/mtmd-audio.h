@@ -243,6 +243,16 @@ struct mtmd_audio_preprocessor_chatterbox_ref : mtmd_audio_preprocessor {
     mtmd_audio_cache ve_cache;     // entry 4
 };
 
+// zonos3 speaker encoder front-end: kaldi fbank with a hamming window [80 x n_frames] (mel major)
+struct mtmd_audio_preprocessor_zonos3_spk : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_zonos3_spk(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_parakeet(const mtmd_model * model) : mtmd_audio_preprocessor(model) { }
     void initialize() override;
@@ -259,6 +269,51 @@ struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
 struct mtmd_audio_preprocessor_nemotron_transcribe : mtmd_audio_preprocessor_parakeet {
     mtmd_audio_preprocessor_nemotron_transcribe(const mtmd_model * model) : mtmd_audio_preprocessor_parakeet(model) { }
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
+//
+// zonos3 iSTFT head, streaming: 2 iSTFT branches, FIR mixer, 44160 -> 44100 Hz resampler
+// ported from the reference ggml runtime (zac.cpp)
+//
+struct mtmd_audio_zonos3_synth {
+    // mixer [2, fir_kernel], resample [rs_new, rs_orig + 2 * width]
+    mtmd_audio_zonos3_synth(const std::vector<float> & mixer, const std::vector<float> & resample,
+                            int n_fft0, int n_fft1, int hop, int rs_orig, int rs_new);
+
+    // spec: n_cols frames of [log magnitude, phase] of each branch
+    void push(const float * spec, int64_t n_cols, std::vector<float> & out);
+    void flush(std::vector<float> & out);
+
+  private:
+    struct branch {
+        int n_fft;
+        mtmd_audio_cache   cache;
+        std::vector<float> ola, env; // from ola_base on
+        int64_t ola_base = 0;
+        std::vector<float> mix_in;   // from mix_base on
+        int64_t mix_avail = 0;
+        std::vector<float> ifft_in, ifft_out;
+    };
+
+    void ola_finalize(branch & b, int64_t pf);
+    void mix_emit(std::vector<float> & out);
+    void resample(bool flush, std::vector<float> & out);
+
+    branch br[2];
+    std::vector<float> mixer;
+    int     fir_kernel;
+    int     hop;
+    int64_t n_frames = 0;
+    int64_t mix_base = 0;
+    int64_t mix_next = 0;
+    bool    done     = false;
+
+    std::vector<float> rs_kernel;
+    int     rs_orig, rs_new, rs_width;
+    std::vector<float> rs_buf; // from rs_base on
+    int64_t rs_base  = 0;
+    int64_t rs_in    = 0;
+    int64_t rs_block = 0;
 };
 
 //

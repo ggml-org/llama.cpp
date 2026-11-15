@@ -769,6 +769,28 @@ struct llama_model_pockettts : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_zonos3 : public llama_model_base {
+    llama_model_zonos3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llm_graph_params & params);
+    private:
+        // Full AttnRes bank: embedding + every sublayer output so far, [n_embd, n_src, n_tokens]
+        ggml_tensor * bank = nullptr;
+
+        void          attn_res_push(ggml_tensor * cur);
+        ggml_tensor * attn_res_route(ggml_tensor * query, int il);
+
+        ggml_tensor * build_layer_attn(llm_graph_input_attn_kv * inp, ggml_tensor * cur, ggml_tensor * inp_pos, int il);
+        ggml_tensor * build_layer_gdn(llm_graph_input_rs * inp, ggml_tensor * cur, int il);
+        ggml_tensor * build_layer_ffn(ggml_tensor * cur, int il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_codeshell : public llama_model_base {
     llama_model_codeshell(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

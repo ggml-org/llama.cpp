@@ -11,6 +11,7 @@ Supported models:
 - [LFM3-Audio](#lfm3-audio)
 - [Chatterbox](#chatterbox)
 - [Drama 3](#drama-3)
+- [ZONOS3](#zonos3)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -179,4 +180,38 @@ The routed experts of the checkpoint are FP8, they are dequantized at conversion
 ```sh
 python convert_hf_to_gguf.py path/to/drama-3 --outtype q8_0 --outfile drama3.gguf
 python convert_hf_to_gguf.py path/to/drama-3 --mmproj --outtype bf16 --outfile mmproj-drama3.gguf
+```
+
+## ZONOS3
+
+[Zyphra ZONOS3 Mini](https://huggingface.co/Zyphra/ZONOS3-Mini): a hybrid Gated DeltaNet / attention MoE backbone (800M, 100M active) predicts the 10 codebooks of each frame with an inter-codebook delay, and the ZAC codec decodes them to 44.1 kHz audio.
+
+Available params:
+- `--tts-voice` picks one of the predefined voices of the release (`Savannah_en-American_F_1` by default); `llama-server` lists them in `GET /props`. A voice is the prompt prefix of its reference codes, the default speaker mode of the reference
+- The language is the one of the text; `--tts-lang` (`lang` in `llama-server`) only selects the text normalization
+- Numbers are spelled out by the `tts` chat template of the GGUF: cardinals, decimals, money, percents, clock times, common ordinal forms (`1st`, `1er`, `1º`), English and German years. A 4-digit number is read as a year only after a word like `in`, `since`, a month name, or `im Jahr`, `seit` in German (`in 1990` -> "in nineteen ninety", `1234 people` -> "one thousand two hundred thirty-four people"). Languages: `en`, `fr`, `de`, `es`, `it`, `pt`, `ja` and `zh` (or `cmn`), the region is ignored (`fr_fr`, `pt_br`); English when the language is empty, other languages are left as written. Set the language to the one of the text: the separators differ, e.g. `1.234` is a thousand in German
+- Note: the reference uses NeMo text normalization, which also covers units, dates, abbreviations and Korean; supply normalized text for them
+- `--tts-speaker-file` clones the voice of a clip (the first 60 s are used) with the speaker encoder of the release, the "embedding" speaker mode of the reference
+- `llama-server` also takes `speed` (relative to 15 UTF-8 bytes per second) and `loudness` (LUFS), see the `/tts` endpoint; they pick the speaking-rate and loudness condition buckets of the checkpoint, the defaults leave them unknown
+- Note: `loudness` has a strong effect with a cloned voice; a predefined voice mostly keeps the loudness of its reference clip
+- Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference: temperature 0.75 (`--temp` changes it), top-k 80, top-p 0.69, repetition penalty 2.4 over the last 96 frames of codebooks 0 to 5
+- Each frame is 2940 samples (about 67 ms), generation stops at the end-of-audio code
+
+Example usage:
+
+```sh
+llama-tts -m zonos3-mini.gguf \
+    -mm mmproj-zonos3-mini.gguf \
+    -p "The old lighthouse keeper climbed the spiral stairs every evening." \
+    --tts-voice Imogen_en-British_F_1 \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+Convert the root of the release repository, not the `lm/` subdirectory. The mmproj holds the codebook heads, the predefined voices, the speaker encoder and the `keep2_plain` codec decoder, it is best kept in F32:
+
+```sh
+python convert_hf_to_gguf.py path/to/ZONOS3-Mini --outtype q8_0 --outfile zonos3-mini.gguf
+python convert_hf_to_gguf.py path/to/ZONOS3-Mini --mmproj --outtype f32 --outfile mmproj-zonos3-mini.gguf
 ```

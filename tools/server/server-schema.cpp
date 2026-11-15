@@ -555,6 +555,12 @@ std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
     add((new field_num("seed", task.tts_inp.data.seed))
         ->set_desc("RNG seed for the backbone sampler and the codec/vocoder (-1 = random)"));
 
+    add((new field_num("speed", task.tts_inp.data.speed))
+        ->set_desc("Speaking speed relative to a typical pace, for models that support it (1.0 = model default)"));
+
+    add((new field_num("loudness", task.tts_inp.data.loudness))
+        ->set_desc("Target loudness in LUFS, for models that support it (0.0 = model default)"));
+
     add((new field_num("n_predict", task.params.n_predict))
         ->set_hard_limits(-1, INT32_MAX)
         ->add_alias("max_tokens")

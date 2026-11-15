@@ -1176,45 +1176,102 @@ static float mtmd_audio_lufs(const float * samples, size_t n_samples, int sample
 // mtmd_audio_preprocessor_chatterbox_ref
 //
 
-void mtmd_audio_preprocessor_chatterbox_ref::initialize() {
-    // kaldi fbank: povey window, kaldi mel banks over the 512-point spectrum, the nyquist bin left out
-    {
-        const int frame_len = 400;
-        const int n_fft     = 512;
-        const int n_bins    = n_fft / 2 + 1;
-        const int n_mel     = hparams.n_mel_bins;
-        const double sr     = (double) hparams.audio_sample_rate;
+// torchaudio kaldi.fbank at 16 kHz, the nyquist bin is left out of the mel banks
+static constexpr int kaldi_frame_len = 400;
+static constexpr int kaldi_hop       = 160;
+static constexpr int kaldi_n_fft     = 512;
 
-        fbank_cache.fill_sin_cos_table(n_fft);
-        fbank_cache.hann_window.resize(frame_len);
-        for (int i = 0; i < frame_len; i++) {
-            fbank_cache.hann_window[(size_t) i] = (float) pow(0.5 - 0.5 * cos(2.0 * M_PI * i / (frame_len - 1)), 0.85);
-        }
+static void mtmd_audio_kaldi_fbank_init(mtmd_audio_cache & cache, int n_mel, double sr, bool povey) {
+    const int n_bins = kaldi_n_fft / 2 + 1;
 
-        auto mel = [](double f) { return 1127.0 * log(1.0 + f / 700.0); };
-        const double mel_lo = mel(20.0);
-        const double mel_hi = mel(sr / 2.0);
-        const double delta  = (mel_hi - mel_lo) / (n_mel + 1);
-        const double bin_hz = sr / n_fft;
+    cache.fill_sin_cos_table(kaldi_n_fft);
+    cache.hann_window.resize(kaldi_frame_len);
+    for (int i = 0; i < kaldi_frame_len; i++) {
+        const double c = cos(2.0 * M_PI * i / (kaldi_frame_len - 1));
+        cache.hann_window[(size_t) i] = (float) (povey ? pow(0.5 - 0.5 * c, 0.85) : 0.54 - 0.46 * c);
+    }
 
-        auto & filters = fbank_cache.filters;
-        filters.n_mel = n_mel;
-        filters.n_fft = n_fft;
-        filters.data.assign((size_t) n_mel * n_bins, 0.0f);
-        for (int m = 0; m < n_mel; m++) {
-            const double left   = mel_lo + m * delta;
-            const double center = left + delta;
-            const double right  = center + delta;
-            for (int i = 0; i < n_bins - 1; i++) {
-                const double f = mel(bin_hz * i);
-                if (f > left && f < right) {
-                    const double w = f <= center ? (f - left) / (center - left)
-                                                 : (right - f) / (right - center);
-                    filters.data[(size_t) m * n_bins + i] = (float) w;
-                }
+    auto mel = [](double f) { return 1127.0 * log(1.0 + f / 700.0); };
+    const double mel_lo = mel(20.0);
+    const double mel_hi = mel(sr / 2.0);
+    const double delta  = (mel_hi - mel_lo) / (n_mel + 1);
+    const double bin_hz = sr / kaldi_n_fft;
+
+    auto & filters = cache.filters;
+    filters.n_mel = n_mel;
+    filters.n_fft = kaldi_n_fft;
+    filters.data.assign((size_t) n_mel * n_bins, 0.0f);
+    for (int m = 0; m < n_mel; m++) {
+        const double left   = mel_lo + m * delta;
+        const double center = left + delta;
+        const double right  = center + delta;
+        for (int i = 0; i < n_bins - 1; i++) {
+            const double f = mel(bin_hz * i);
+            if (f > left && f < right) {
+                const double w = f <= center ? (f - left) / (center - left)
+                                             : (right - f) / (right - center);
+                filters.data[(size_t) m * n_bins + i] = (float) w;
             }
         }
     }
+}
+
+// snip edges, dc removal, preemphasis 0.97, log mel energies mean subtracted over time; out is mel major
+static bool mtmd_audio_kaldi_fbank(const mtmd_audio_cache & cache, const float * pcm, size_t n_samples, int n_mel, float scale,
+                                   mtmd_audio_mel & out) {
+    if ((int) n_samples < kaldi_frame_len) {
+        return false;
+    }
+    const int n_frames = 1 + ((int) n_samples - kaldi_frame_len) / kaldi_hop;
+
+    out.n_len     = n_frames;
+    out.n_len_org = n_frames;
+    out.n_mel     = n_mel;
+    out.data.assign((size_t) n_mel * n_frames, 0.0f);
+
+    const std::vector<float> & win = cache.hann_window;
+    std::vector<float>  fft_in((size_t) kaldi_n_fft * 2), fft_out((size_t) kaldi_n_fft * 8);
+    std::vector<double> e;
+    std::vector<float>  x(kaldi_frame_len);
+    for (int fr = 0; fr < n_frames; fr++) {
+        for (int i = 0; i < kaldi_frame_len; i++) {
+            x[(size_t) i] = pcm[(size_t) fr * kaldi_hop + i] * scale;
+        }
+
+        double mean = 0.0;
+        for (int i = 0; i < kaldi_frame_len; i++) {
+            mean += x[i];
+        }
+        mean /= kaldi_frame_len;
+
+        std::fill(fft_in.begin(), fft_in.end(), 0.0f);
+        fft_in[0] = (float) ((x[0] - mean) * (1.0 - 0.97) * win[0]);
+        for (int i = 1; i < kaldi_frame_len; i++) {
+            fft_in[(size_t) i] = (float) (((x[i] - mean) - 0.97 * (x[i - 1] - mean)) * win[(size_t) i]);
+        }
+        mtmd_audio_mel_energies(cache, fft_in, fft_out, false, e);
+        for (int m = 0; m < n_mel; m++) {
+            out.data[(size_t) m * n_frames + fr] = (float) log(std::max(e[(size_t) m], (double) FLT_EPSILON));
+        }
+    }
+
+    for (int m = 0; m < n_mel; m++) {
+        float * row = out.data.data() + (size_t) m * n_frames;
+        double mean = 0.0;
+        for (int fr = 0; fr < n_frames; fr++) {
+            mean += row[fr];
+        }
+        mean /= n_frames;
+        for (int fr = 0; fr < n_frames; fr++) {
+            row[fr] -= (float) mean;
+        }
+    }
+    return true;
+}
+
+void mtmd_audio_preprocessor_chatterbox_ref::initialize() {
+    // kaldi fbank of CAMPPlus: povey window
+    mtmd_audio_kaldi_fbank_init(fbank_cache, hparams.n_mel_bins, (double) hparams.audio_sample_rate, true);
 
     // s3 tokenizer: librosa slaney mel, 128 bands
     s3tok_cache.fill_sin_cos_table(400);
@@ -1253,59 +1310,12 @@ bool mtmd_audio_preprocessor_chatterbox_ref::process(const float *              
         }
     }
 
-    // entry 0: torchaudio kaldi.fbank of CAMPPlus (snip edges, dc removal, preemphasis 0.97), mean subtracted over time
+    // entry 0: torchaudio kaldi.fbank of CAMPPlus
     {
-        const int frame_len = 400;
-        const int hop       = 160;
-        const int n_fft     = 512;
-        const int n_mel     = hparams.n_mel_bins;
-
-        if ((int) pcm.size() < frame_len) {
+        mtmd_audio_mel out;
+        if (!mtmd_audio_kaldi_fbank(fbank_cache, pcm.data(), pcm.size(), hparams.n_mel_bins, 1.0f, out)) {
             return false;
         }
-        const int n_frames = 1 + ((int) pcm.size() - frame_len) / hop;
-
-        mtmd_audio_mel out;
-        out.n_len     = n_frames;
-        out.n_len_org = n_frames;
-        out.n_mel     = n_mel;
-        out.data.assign((size_t) n_mel * n_frames, 0.0f);
-
-        const std::vector<float> & win = fbank_cache.hann_window;
-        std::vector<float>  fft_in((size_t) n_fft * 2), fft_out((size_t) n_fft * 8);
-        std::vector<double> e;
-        for (int fr = 0; fr < n_frames; fr++) {
-            const float * x = pcm.data() + (size_t) fr * hop;
-
-            double mean = 0.0;
-            for (int i = 0; i < frame_len; i++) {
-                mean += x[i];
-            }
-            mean /= frame_len;
-
-            std::fill(fft_in.begin(), fft_in.end(), 0.0f);
-            fft_in[0] = (float) ((x[0] - mean) * (1.0 - 0.97) * win[0]);
-            for (int i = 1; i < frame_len; i++) {
-                fft_in[(size_t) i] = (float) (((x[i] - mean) - 0.97 * (x[i - 1] - mean)) * win[(size_t) i]);
-            }
-            mtmd_audio_mel_energies(fbank_cache, fft_in, fft_out, false, e);
-            for (int m = 0; m < n_mel; m++) {
-                out.data[(size_t) m * n_frames + fr] = (float) log(std::max(e[(size_t) m], (double) FLT_EPSILON));
-            }
-        }
-
-        for (int m = 0; m < n_mel; m++) {
-            float * row = out.data.data() + (size_t) m * n_frames;
-            double mean = 0.0;
-            for (int fr = 0; fr < n_frames; fr++) {
-                mean += row[fr];
-            }
-            mean /= n_frames;
-            for (int fr = 0; fr < n_frames; fr++) {
-                row[fr] -= (float) mean;
-            }
-        }
-
         output.push_back(std::move(out));
     }
 
@@ -1881,6 +1891,197 @@ bool mtmd_audio_preprocessor_gemma4ua::process(const float *                 sam
 
     output.push_back(std::move(mel));
     return true;
+}
+
+//
+// mtmd_audio_preprocessor_zonos3_spk
+//
+
+void mtmd_audio_preprocessor_zonos3_spk::initialize() {
+    mtmd_audio_kaldi_fbank_init(cache, hparams.n_mel_bins, (double) hparams.audio_sample_rate, false);
+}
+
+bool mtmd_audio_preprocessor_zonos3_spk::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output,
+                                                 bool /*shape_only*/) const {
+    // the reference uses the first 60 s, on the int16 sample scale
+    const size_t n = std::min(n_samples, (size_t) hparams.audio_sample_rate * 60);
+    mtmd_audio_mel out;
+    if (!mtmd_audio_kaldi_fbank(cache, samples, n, hparams.n_mel_bins, 32768.0f, out)) {
+        return false;
+    }
+    output.clear();
+    output.push_back(std::move(out));
+    return true;
+}
+
+//
+// mtmd_audio_zonos3_synth implementation
+//
+
+mtmd_audio_zonos3_synth::mtmd_audio_zonos3_synth(const std::vector<float> & mixer, const std::vector<float> & resample,
+                                                 int n_fft0, int n_fft1, int hop, int rs_orig, int rs_new)
+    : mixer(mixer), fir_kernel((int) (mixer.size() / 2)), hop(hop), rs_kernel(resample), rs_orig(rs_orig), rs_new(rs_new) {
+    GGML_ASSERT(mixer.size() % 2 == 0 && fir_kernel % 2 == 1);
+    GGML_ASSERT(resample.size() % (size_t) rs_new == 0);
+    const int rs_len = (int) (resample.size() / rs_new);
+    GGML_ASSERT(rs_len >= rs_orig && (rs_len - rs_orig) % 2 == 0);
+    rs_width = (rs_len - rs_orig) / 2;
+
+    const int n_fft[2] = { n_fft0, n_fft1 };
+    const int h = (fir_kernel - 1) / 2;
+    for (int i = 0; i < 2; i++) {
+        branch & b = br[i];
+        b.n_fft = n_fft[i];
+        b.cache.fill_sin_cos_table(b.n_fft);
+        b.cache.fill_hann_window(b.n_fft, true);
+        b.ifft_in.assign((size_t) b.n_fft * 2 * 4, 0.0f);
+        b.ifft_out.assign((size_t) b.n_fft * 2 * 4, 0.0f);
+        b.mix_in.assign((size_t) h, 0.0f);
+        b.mix_avail = h;
+    }
+}
+
+// the first n_fft / 2 samples are the centering pad
+void mtmd_audio_zonos3_synth::ola_finalize(branch & b, int64_t pf) {
+    const int64_t pad = b.n_fft / 2;
+    const int64_t n   = std::min<int64_t>(pf - b.ola_base, (int64_t) b.ola.size());
+    if (n <= 0) {
+        return;
+    }
+    for (int64_t j = 0; j < n; j++) {
+        if (b.ola_base + j < pad) {
+            continue;
+        }
+        b.mix_in.push_back(b.env[(size_t) j] > 1e-11f ? b.ola[(size_t) j] / b.env[(size_t) j] : 0.0f);
+        b.mix_avail++;
+    }
+    b.ola.erase(b.ola.begin(), b.ola.begin() + n);
+    b.env.erase(b.env.begin(), b.env.begin() + n);
+    b.ola_base += n;
+}
+
+void mtmd_audio_zonos3_synth::mix_emit(std::vector<float> & out) {
+    const int64_t avail = std::min(br[0].mix_avail, br[1].mix_avail);
+    const int64_t m1    = avail - fir_kernel + 1;
+    if (m1 <= mix_next) {
+        return;
+    }
+    const size_t n  = (size_t) (m1 - mix_next);
+    std::vector<float> y(n, 0.0f);
+    for (int c = 0; c < 2; c++) {
+        const float * w = mixer.data() + (size_t) c * fir_kernel;
+        const float * s = br[c].mix_in.data() + (mix_next - mix_base);
+        for (int k = 0; k < fir_kernel; k++) {
+            for (size_t i = 0; i < n; i++) {
+                y[i] += w[k] * s[i + k];
+            }
+        }
+    }
+    mix_next = m1;
+    for (int c = 0; c < 2; c++) {
+        br[c].mix_in.erase(br[c].mix_in.begin(), br[c].mix_in.begin() + (mix_next - mix_base));
+    }
+    mix_base = mix_next;
+
+    rs_buf.insert(rs_buf.end(), y.begin(), y.end());
+    rs_in += (int64_t) n;
+    resample(false, out);
+}
+
+// on flush, the input is zero-extended and the output is ceil(new * rs_in / orig) samples
+void mtmd_audio_zonos3_synth::resample(bool flush, std::vector<float> & out) {
+    const int     KL    = 2 * rs_width + rs_orig;
+    const int64_t total = flush ? ((int64_t) rs_new * rs_in + rs_orig - 1) / rs_orig : -1;
+    std::vector<float> xw(KL);
+    for (;; rs_block++) {
+        const int64_t x0 = rs_block * rs_orig - rs_width;
+        if (flush ? rs_block * rs_new >= total : x0 + KL > rs_in) {
+            break;
+        }
+        for (int k = 0; k < KL; k++) {
+            const int64_t j = x0 + k;
+            xw[k] = (j < 0 || j >= rs_in) ? 0.0f : rs_buf[(size_t) (j - rs_base)];
+        }
+        const int64_t n_emit = flush ? std::min<int64_t>(rs_new, total - rs_block * rs_new) : rs_new;
+        for (int64_t i = 0; i < n_emit; i++) {
+            const float * ki = rs_kernel.data() + (size_t) i * KL;
+            float acc = 0.0f;
+            for (int k = 0; k < KL; k++) {
+                acc += ki[k] * xw[k];
+            }
+            out.push_back(acc);
+        }
+    }
+    // drop the samples no later block reads
+    const int64_t keep_from = std::min(rs_in, std::max<int64_t>(0, rs_block * rs_orig - rs_width));
+    if (keep_from > rs_base) {
+        rs_buf.erase(rs_buf.begin(), rs_buf.begin() + (keep_from - rs_base));
+        rs_base = keep_from;
+    }
+}
+
+void mtmd_audio_zonos3_synth::push(const float * spec, int64_t n_cols, std::vector<float> & out) {
+    const int64_t n_rows = (br[0].n_fft + 2) + (br[1].n_fft + 2);
+    const float max_log_mag = logf(100.0f);
+    for (int i = 0; i < 2; i++) {
+        branch & b = br[i];
+        const int n    = b.n_fft;
+        const int bins = n / 2 + 1;
+        const int64_t row0 = i == 0 ? 0 : br[0].n_fft + 2;
+        for (int64_t c = 0; c < n_cols; c++) {
+            const float * logmag = spec + c * n_rows + row0;
+            const float * phase  = logmag + bins;
+            // irfft ignores the imaginary parts of DC and Nyquist
+            for (int k = 0; k < bins; k++) {
+                const float a = expf(std::min(logmag[k], max_log_mag));
+                b.ifft_in[2 * k + 0] = a * cosf(phase[k]);
+                b.ifft_in[2 * k + 1] = (k == 0 || k == n / 2) ? 0.0f : a * sinf(phase[k]);
+            }
+            for (int k = 1; k < n - bins + 1; k++) {
+                b.ifft_in[2 * (n - k) + 0] =  b.ifft_in[2 * k + 0];
+                b.ifft_in[2 * (n - k) + 1] = -b.ifft_in[2 * k + 1];
+            }
+            ifft(b.cache, b.ifft_in.data(), n, b.ifft_out.data());
+
+            const int64_t t = n_frames + c;
+            const size_t need = (size_t) (t * hop + n - b.ola_base);
+            if (b.ola.size() < need) {
+                b.ola.resize(need, 0.0f);
+                b.env.resize(need, 0.0f);
+            }
+            float * ola = b.ola.data() + (t * hop - b.ola_base);
+            float * env = b.env.data() + (t * hop - b.ola_base);
+            const float * win = b.cache.hann_window.data();
+            for (int j = 0; j < n; j++) {
+                ola[j] += win[j] * b.ifft_out[2 * j];
+                env[j] += win[j] * win[j];
+            }
+        }
+    }
+    n_frames += n_cols;
+    for (auto & b : br) {
+        ola_finalize(b, n_frames * hop);
+    }
+    mix_emit(out);
+}
+
+void mtmd_audio_zonos3_synth::flush(std::vector<float> & out) {
+    if (done || n_frames == 0) {
+        return;
+    }
+    done = true;
+    // the mixer has h zeros of right padding
+    const int h = (fir_kernel - 1) / 2;
+    const int64_t L = n_frames * hop;
+    for (auto & b : br) {
+        ola_finalize(b, b.ola_base + (int64_t) b.ola.size());
+        const int64_t keep = h + L - mix_base;
+        b.mix_in.resize((size_t) keep, 0.0f);
+        b.mix_in.resize((size_t) (keep + h), 0.0f);
+        b.mix_avail = mix_base + keep + h;
+    }
+    mix_emit(out);
+    resample(true, out);
 }
 
 //
