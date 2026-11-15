@@ -121,3 +121,5 @@ export {
 } from './tools.enums';
 
 export { SplashOrientation } from './splash.enums';
+
+export { VoiceInputMode, VoiceMode } from './voice.enums';

@@ -87,6 +87,11 @@ export const SETTINGS_KEYS = {
 	TYP_P: 'typ_p',
 	// General
 	USE_HUGGING_FACE_HUB: 'useHuggingFaceHub',
+	// Voice
+	VOICE_INPUT_MODE: 'voiceInputMode',
+	VOICE_TRANSCRIBE_MESSAGES: 'voiceTranscribeMessages',
+	VOICE_TRANSCRIPTION_LANGUAGE: 'voiceTranscriptionLanguage',
+	VOICE_TRANSCRIPTION_MODEL: 'voiceTranscriptionModel',
 	XTC_PROBABILITY: 'xtc_probability',
 	XTC_THRESHOLD: 'xtc_threshold'
 } as const;

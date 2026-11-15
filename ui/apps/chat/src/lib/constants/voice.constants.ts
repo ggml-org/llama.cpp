@@ -1,0 +1,17 @@
+import { STORAGE_APP_NAME } from './storage.constants';
+
+/** What the chat form's microphone says it will do, or why it can't, on its button. */
+export const VOICE_MODE_MESSAGE = {
+	dictate: 'Dictate',
+	separateModelHint:
+		'It may be loaded on the server alongside the chat model, which a server that keeps one model at a time unloads.',
+	unavailable:
+		'No model with audio input is available. In router mode, pick a transcription model in Settings > Voice.',
+	voiceMessage: 'Send a voice message'
+} as const;
+
+/** Where the chat form remembers that it showed the hint about a separate transcription model. */
+export const VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.voiceSeparateModelHintSeen`;
+
+/** Name prefix of a voice message's WAV file; the rest makes it unique per recording. */
+export const VOICE_CLIP_NAME_PREFIX = 'voice-';

@@ -5,18 +5,21 @@ import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
+import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
 import Database from '@lucide/svelte/icons/database';
 import File from '@lucide/svelte/icons/file';
 import Funnel from '@lucide/svelte/icons/funnel';
 import GlassWater from '@lucide/svelte/icons/glass-water';
 import ListRestart from '@lucide/svelte/icons/list-restart';
+import Mic from '@lucide/svelte/icons/mic';
 import Monitor from '@lucide/svelte/icons/monitor';
 import Moon from '@lucide/svelte/icons/moon';
 import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
 import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
 import Sun from '@lucide/svelte/icons/sun';
-import { SurfaceTheme, SyncableParameterType } from '#lib/enums/index.ts';
+import TextCursorInput from '@lucide/svelte/icons/text-cursor-input';
+import { SurfaceTheme, SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
@@ -35,7 +38,8 @@ export const SETTINGS_SECTIONS = {
 	GENERAL: { slug: 'general', title: 'General' },
 	IMPORT_EXPORT: { slug: 'import-export', title: 'Import/Export' },
 	SAMPLING_PENALTIES: { slug: 'sampling-penalties', title: 'Sampling & Penalties' },
-	TOOLS: { slug: 'tools', title: 'Tools' }
+	TOOLS: { slug: 'tools', title: 'Tools' },
+	VOICE: { slug: 'voice', title: 'Voice' }
 } as const;
 
 export const SETTINGS_SECTION_SLUGS = {
@@ -45,7 +49,8 @@ export const SETTINGS_SECTION_SLUGS = {
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.slug,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.slug,
-	TOOLS: SETTINGS_SECTIONS.TOOLS.slug
+	TOOLS: SETTINGS_SECTIONS.TOOLS.slug,
+	VOICE: SETTINGS_SECTIONS.VOICE.slug
 } as const;
 
 export const SETTINGS_SECTION_TITLES = {
@@ -55,7 +60,8 @@ export const SETTINGS_SECTION_TITLES = {
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.title,
 	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.title,
-	TOOLS: SETTINGS_SECTIONS.TOOLS.title
+	TOOLS: SETTINGS_SECTIONS.TOOLS.title,
+	VOICE: SETTINGS_SECTIONS.VOICE.title
 } as const;
 
 export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
@@ -404,6 +410,48 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		],
 		slug: SETTINGS_SECTION_SLUGS.DISPLAY,
 		title: SETTINGS_SECTION_TITLES.DISPLAY
+	},
+	// Voice: the transcription model picker lists the server's models (SettingsChatVoiceTab)
+	{
+		icon: Mic,
+		settings: [
+			{
+				defaultValue: VoiceInputMode.AUTO,
+				help: 'Automatic sends your voice to a model that understands audio, as a voice message with its transcript, and turns it into text in the message input for any other model. Always dictate turns it into text for every model, so only the text reaches the chat.',
+				key: SETTINGS_KEYS.VOICE_INPUT_MODE,
+				label: 'Voice input',
+				options: [
+					{ icon: AudioLines, label: 'Automatic', value: VoiceInputMode.AUTO },
+					{ icon: TextCursorInput, label: 'Always dictate', value: VoiceInputMode.DICTATION }
+				],
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: '',
+				help: 'The model that turns speech into text when the chat model has no audio input. Empty uses the chat model.',
+				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL,
+				label: 'Transcription model',
+				standaloneField: false,
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: true,
+				help: 'Write down what was said in each voice message, to read under its waveform. The chat model writes it, and a model without audio input gets it in place of the audio.',
+				key: SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES,
+				label: 'Transcribe voice messages',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: '',
+				help: 'The language you speak, as a two-letter code such as en or de, passed to the transcription. Leave it empty to let the model tell.',
+				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE,
+				label: 'Transcription language',
+				placeholder: 'Automatic',
+				type: SettingsFieldType.INPUT
+			}
+		],
+		slug: SETTINGS_SECTION_SLUGS.VOICE,
+		title: SETTINGS_SECTION_TITLES.VOICE
 	},
 	// MCP Servers (non-UI config object)
 	{
