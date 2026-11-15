@@ -37,10 +37,7 @@ class HiggsAudioModel(Qwen3Model):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        # audio input goes to the mmproj, audio output heads are for TTS only
-        if name.startswith(("audio_tower.", "audio_encoder_proj.", "audio_codebook_embeddings.", "audio_decoder_proj.audio_lm_head.")):
-            return None
-
+        # the audio_* tensors are dropped by TextModel, rename the text head before that
         if name == "audio_decoder_proj.text_lm_head.weight":
             name = "lm_head.weight"
         else:
