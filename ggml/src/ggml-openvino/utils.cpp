@@ -379,6 +379,20 @@ static std::string dynamic_graph_signature(const ggml_cgraph * graph,
     return key;
 }
 
+// The CPU plugin exports its MoE op (GatherMatmulCompressed) but cannot import it again ("unsupported opset",
+// OpenVINO 2026.4 and 2026.5). Writing such a blob makes every later run fail the import and compile again.
+static bool ggml_openvino_cpu_blob_importable(const std::string & device, const std::shared_ptr<ov::Model> & model) {
+    if (device != "CPU") {
+        return true;
+    }
+    for (const auto & op : model->get_ops()) {
+        if (std::string(op->get_type_name()).rfind("GatherMatmul", 0) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool compiled_model_matches_graph(const ov::CompiledModel & model,
                                          const std::vector<std::string> & inputs,
                                          const std::vector<std::string> & outputs,
@@ -1512,6 +1526,18 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
             std::shared_ptr<ov::Model> model;
             if (!imported && ggml_openvino_model_cache_only()) {
+                // No blob is ever written for these (see ggml_openvino_cpu_blob_importable), so the
+                // generic advice to run once without cache-only cannot help. MXFP4 does not use GatherMatmul.
+                const auto is_gather_matmul_moe = [](const ggml_tensor * n) {
+                    return n->op == GGML_OP_MUL_MAT_ID && n->src[0]->type != GGML_TYPE_MXFP4;
+                };
+                if (device == "CPU" &&
+                    std::any_of(cgraph->nodes, cgraph->nodes + cgraph->n_nodes, is_gather_matmul_moe)) {
+                    GGML_LOG_ERROR(
+                        "ggml-openvino: GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY does not work for MoE models on CPU: "
+                        "the CPU plugin cannot import MoE models with this OpenVINO version, so they are not cached\n");
+                    return GGML_STATUS_FAILED;
+                }
                 GGML_LOG_ERROR(
                     "ggml-openvino: missing or incompatible compiled model: %s; run once without "
                     "GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY\n",
@@ -1565,7 +1591,13 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::share
 
                 // Export to the frontend model cache for next time. Publish the blob first,
                 // then the manifest, so a cache hit only sees fully written artifacts.
-                if (!model_cache_dir.empty() && !model_is_splitted && model_fp != 0) {
+                const bool blob_importable = ggml_openvino_cpu_blob_importable(device, model);
+                if (!blob_importable && !model_cache_dir.empty()) {
+                    GGML_LOG_WARN(
+                        "ggml-openvino: model cache not written: the CPU plugin cannot import MoE models with this "
+                        "OpenVINO version\n");
+                }
+                if (!model_cache_dir.empty() && !model_is_splitted && model_fp != 0 && blob_importable) {
                     try {
                         const std::string blob_tmp = ggml_openvino_model_cache_temp_path(blob_path);
                         const std::string manifest_tmp = ggml_openvino_model_cache_temp_path(manifest_path);
