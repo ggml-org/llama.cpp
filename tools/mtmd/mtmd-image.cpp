@@ -2149,8 +2149,8 @@ mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const mt
 mtmd_image_preproc_out mtmd_image_preprocessor_inklingv::preprocess(const mtmd_image_u8 & input) const {
     auto size = input.get_size();
     const int patch = hparams.patch_size;
-    if (patch != 40 || size.width <= 0 || size.height <= 0) {
-        throw std::runtime_error("inklingv: invalid image dimensions or patch size");
+    if (size.width <= 0 || size.height <= 0) {
+        throw std::runtime_error("inklingv: invalid image dimensions");
     }
     const int max_tokens = hparams.image_max_pixels > 0 ? hparams.image_max_pixels / (patch * patch) : 4096;
     auto n_tokens = [&]() {

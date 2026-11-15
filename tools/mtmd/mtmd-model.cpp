@@ -827,8 +827,8 @@ struct mtmd_model_loader {
                     } break;
                 case PROJECTOR_TYPE_INKLINGV:
                     {
-                        if (hparams.patch_size != 40 || hparams.n_layer != 3 || hparams.eps != 1e-6f) {
-                            throw std::runtime_error("inklingv requires patch size 40, three encoder stages and RMS epsilon 1e-6");
+                        if (hparams.patch_size != mtmd_graph_inklingv::patch_size || hparams.n_layer != mtmd_graph_inklingv::n_stages || hparams.eps != 1e-6f) {
+                            throw std::runtime_error(mtmd_format("inklingv requires patch size %d, %d encoder stages and RMS epsilon 1e-6", mtmd_graph_inklingv::patch_size, mtmd_graph_inklingv::n_stages));
                         }
                         hparams.ffn_op = FFN_GELU_ERF;
                         log_ffn_op = "gelu_erf";
@@ -2052,34 +2052,24 @@ struct mtmd_model_loader {
                 } break;
             case PROJECTOR_TYPE_INKLINGV:
                 {
-                    const int widths[] = {128, 320, 4800};
-                    const int inputs[] = {75, 512, 5120};
-                    auto check_shape = [](ggml_tensor * tensor, int64_t nx, int64_t ny) {
-                        if (!tensor || tensor->ne[0] != nx || tensor->ne[1] != ny || tensor->ne[2] != 1 || tensor->ne[3] != 1) {
-                            throw std::runtime_error("inklingv: invalid or missing vision tensor");
-                        }
-                    };
-                    model.layers.resize(3);
-                    for (int i = 0; i < 3; ++i) {
+                    // post_ln comes from the generic path above, where it is optional
+                    if (!model.post_ln_w) {
+                        throw std::runtime_error(mtmd_format("%s: missing post_ln\n", __func__));
+                    }
+                    model.layers.resize(mtmd_graph_inklingv::n_stages);
+                    for (int i = 0; i < mtmd_graph_inklingv::n_stages; ++i) {
                         auto & layer = model.layers[i];
                         layer.ff_up_w = get_tensor(mtmd_format(TN_FFN_UP, "v", i, "weight"));
-                        layer.ln_1_w = get_tensor(mtmd_format(TN_LN_1, "v", i, "weight"));
-                        check_shape(layer.ff_up_w, inputs[i], widths[i]);
-                        check_shape(layer.ln_1_w, widths[i], 1);
+                        layer.ln_1_w  = get_tensor(mtmd_format(TN_LN_1, "v", i, "weight"));
                     }
                     model.mm_0_w = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
-                    check_shape(model.mm_0_w, 9600, hparams.projection_dim);
-                    check_shape(model.post_ln_w, hparams.projection_dim, 1);
                 } break;
             case PROJECTOR_TYPE_INKLINGA:
                 {
-                    model.a_code_embd = get_tensor(mtmd_format(TN_A_CODE_EMBD, "weight"));
-                    auto * table = model.a_code_embd;
-                    auto * norm = model.post_ln_w;
-                    if (!table || !norm || table->ne[0] != hparams.projection_dim || table->ne[1] != 1280 || table->ne[2] != 1 || table->ne[3] != 1 ||
-                        norm->ne[0] != hparams.projection_dim || ggml_nelements(norm) != hparams.projection_dim) {
-                        throw std::runtime_error("inklinga: invalid audio tensor shape");
+                    if (!model.post_ln_w) {
+                        throw std::runtime_error(mtmd_format("%s: missing post_ln\n", __func__));
                     }
+                    model.a_code_embd = get_tensor(mtmd_format(TN_A_CODE_EMBD, "weight"));
                 } break;
             case PROJECTOR_TYPE_INKLING2V:
                 {

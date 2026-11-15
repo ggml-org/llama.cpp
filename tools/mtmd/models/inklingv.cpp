@@ -7,8 +7,7 @@ ggml_cgraph * mtmd_graph_inklingv::build() {
     int width = img.nx();
     int height = img.ny();
     int channels = 3;
-    const int folds[] = {5, 2, 4};
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < n_stages; ++i) {
         const int fold = folds[i];
         // Fold in height-offset, width-offset, channel order, within each temporal slice.
         cur = ggml_reshape_4d(ctx0, cur, channels * fold, width / fold, height, n_batch);

@@ -707,6 +707,10 @@ struct mtmd_graph_muse_glimmer : mtmd_graph {
 };
 
 struct mtmd_graph_inklingv : mtmd_graph {
+    // each encoder stage folds a fold x fold block of pixels into one token
+    static constexpr int folds[] = {5, 2, 4};
+    static constexpr int n_stages = 3;
+    static constexpr int patch_size = folds[0] * folds[1] * folds[2];
     using mtmd_graph::mtmd_graph;
     ggml_cgraph * build() override;
 };
