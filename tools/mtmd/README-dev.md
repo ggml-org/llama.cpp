@@ -84,6 +84,18 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
 - Core API `mtmd.h`: handles main inference. Important: `mtmd_gen_state` holds only the per-sequence data that the mmproj itself writes and reads back (RNG, decoder KV / conv state, output buffers). Data that goes to or comes from the backbone (hidden states, codes, PCM) must stay explicit in `mtmd_gen_inp` / `mtmd_gen_out`; the caller drives the backbone and handles audio frame accumulation.
 - Helper API `mtmd-helper.h`: provides a model-agnostic stateful API. Usage example can be found in the `tools/tts` directory.
 
+### Running a transformer stage on libllama (mtmd-owned `llama_context`)
+
+Some stages are a full LLM-sized transformer that attends to the keys/values of the backbone, for example the flow-matching NAR of YuE2 (same layer shapes as the backbone, its own weights, bidirectional over its rows, and it reads the backbone KV). Do not re-implement it as an mtmd graph. Instead, mtmd can own a second `llama_model` + `llama_context` (see `mtmd_yue2_nar_load()` and `mtmd_gen_flow_yue2()` in `mtmd.cpp`):
+
+- Conversion: store the layers in the mmproj under `a.gen.<stage>.` with the libllama tensor names of an existing arch (e.g. `a.gen.nar.blk.0.attn_q.weight`)
+- Loading: build a synthetic `gguf_context` with the arch hparams (`general.architecture`, `tokenizer.ggml.model = none`, `vocab_size = 1`, ...) and one tensor info per mmproj tensor (only the type is used, the shapes come from the hparams), then call `llama_model_init_from_user()`. The `set_tensor_data` callback reads the data from the mmproj file, so no copy is kept in the mtmd model
+    - libllama also creates every optional tensor of the arch (biases, `*.scale`, `*.input_scale`, `dense_2`, ...) for a model built from metadata. The callback must fill them with values that leave the graph unchanged: 0 for biases, 1 for scales, identity for `dense_2`. Zeros everywhere silently make every matmul output 0
+- Backbone keys/values: the helper passes the backbone sequence state (`llama_state_seq_get_data()`) through `mtmd_gen_inp`, mtmd loads it into its context with `llama_state_seq_set_data()`. This only checks the layer count and the K/V types and row sizes, so it works across models with the same KV layout. The two contexts must agree on the KV type and on flash attention (`v_trans`)
+- Inputs and outputs are embedding rows (`llama_batch::embd`, `llama_get_embeddings()` with `LLAMA_POOLING_TYPE_NONE`), the projections around them stay small mtmd graphs
+- Non-causal rows: `LLAMA_ATTENTION_TYPE_NON_CAUSAL`, all rows in one ubatch (`n_ubatch` >= rows), they see every cached position of the sequence. Remove them with `llama_memory_seq_rm()` after each pass
+- Size the context per call (`n_ctx`, `n_ubatch`) instead of keeping one for the whole session
+
 ### Checklist for porting new audio generation models to mtmd
 
 1. Make sure to consult merged PRs about adding new TTS models, especially reviewer comments

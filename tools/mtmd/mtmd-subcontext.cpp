@@ -1506,6 +1506,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_SOPRANO:
+        case PROJECTOR_TYPE_YUE2_GEN:
             {
                 set_input_f32("inp_feats", *params->feats);
             } break;
@@ -2632,8 +2633,8 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             mtmd_graph_soprano::decode_spectrum(model, spectrum, out_audio);
         }
 
-        // drop the tail audio that comes from the code-0 rear padding, drama3 and fish_s2 have no padding
-        if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN && model.proj_type != PROJECTOR_TYPE_FISH_S2_GEN) {
+        // drop the tail audio that comes from the code-0 rear padding, drama3, fish_s2 and yue2 have no padding
+        if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN && model.proj_type != PROJECTOR_TYPE_FISH_S2_GEN && model.proj_type != PROJECTOR_TYPE_YUE2_GEN) {
             const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
             const int64_t n_frames_w = hparams.wav_tfm_swa;
             const int64_t n_frames   = params->codes ? (int64_t) params->codes->size() / n_codes : n_frames_w;

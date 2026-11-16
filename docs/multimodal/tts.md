@@ -13,6 +13,7 @@ Supported models:
 - [Drama 3](#drama-3)
 - [ZONOS3](#zonos3)
 - [Fish Audio S2 Pro](#fish-audio-s2-pro)
+- [YuE2](#yue2) (songs)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -258,3 +259,50 @@ The mmproj holds the fast AR and `codec.pth` (the encoder half for voice cloning
 python convert_hf_to_gguf.py path/to/s2-pro --outtype q8_0 --outfile s2-pro.gguf
 python convert_hf_to_gguf.py path/to/s2-pro --mmproj --outtype bf16 --outfile mmproj-s2-pro.gguf
 ```
+
+## YuE2
+
+[m-a-p/YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) generates songs (vocals and accompaniment) from a style prompt and lyrics, as 48 kHz stereo. The backbone (a Qwen3 text model) writes an ABC score, then one semantic code per 40 ms frame; the NAR half of the checkpoint turns the codes into VAE latents by flow matching, attending to the keys and values of the backbone, and the [YuE2-Vae](https://huggingface.co/m-a-p/YuE2-Vae) decoder makes the audio.
+
+The prompt is the text of the reference request:
+
+```
+[Tags]
+City Pop, upbeat, danceable, groovy bass, electric guitar, synth
+[Lyrics]
+[Verse]
+...
+```
+
+Available params:
+- `--tts-voice` picks the planning mode of the reference (`cot`): `full` (default, a chord-annotated score), `melody` (a melody-only score) or `off` (no score)
+- Cover mode: append the score to the prompt as `\n[ABC]\n<score>`, with `--tts-voice melody` or `full`; the model then goes straight to the codes
+- The generation stops at the limits of the reference (4096 score tokens, then 9000 codes, 6 minutes); `-n` sets a lower limit on the score tokens and the codes together
+- The context must keep the default size (24576 positions, the one of the reference): a smaller `-c` is rejected when the model is loaded
+- Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
+- Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
+- The codes are sampled with classifier-free guidance like the reference: scale 1.01 with `--tts-voice off`, off (1.0) otherwise. `llama-server` takes `cfg_scale` to change it, the reference suggests 1.2 for a stronger text guidance. The uncond prompt runs as a second sequence, so the context must also hold it (the instruction, the score and the codes once more)
+- The NAR pass solves the flow-matching ODE in 32 midpoint steps like the reference; `llama-server` takes `flow_steps` to change it. The NAR time is about proportional to it: 16 steps are about 35% faster for the NAR and the VAE together, with a small deviation from the reference (about 0.2 dB of spectral difference); it grows with fewer steps (about 0.4 dB at 8, 0.8 dB at 4)
+- The NAR pass runs on chunks of codes like the reference: one chunk for a song that fits in 24576 positions, so the audio arrives after the last code. When streaming, each 30 s of codes is a chunk, processed during the generation, so the audio arrives in 30 s steps; the chunks are independent (each sees the prompt, the score and its own codes), which may be audible at the boundaries
+
+Example usage:
+
+```sh
+llama-tts -m yue2-3b.gguf \
+    -mm mmproj-yue2-3b.gguf \
+    -f song.txt \
+    --output song.wav
+```
+
+**Note for GGUF conversion:**
+
+The VAE is a separate repository, download it into the `vae` subdirectory of the model:
+
+```sh
+hf download m-a-p/YuE2-3B --local-dir YuE2-3B
+hf download m-a-p/YuE2-Vae --local-dir YuE2-3B/vae
+python convert_hf_to_gguf.py YuE2-3B --outfile yue2-3b.gguf
+python convert_hf_to_gguf.py YuE2-3B --mmproj --outfile mmproj-yue2-3b.gguf
+```
+
+The mmproj holds the NAR transformer layers (loaded with libllama as a Qwen3 text model, in the `--outtype` type), and the latent projections and the VAE decoder, always in F32.
