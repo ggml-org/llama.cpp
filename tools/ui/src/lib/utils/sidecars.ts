@@ -1,4 +1,4 @@
-import { MODEL_ID, type ModelSidecar, SIDECAR_TOKENS } from '$lib/constants';
+import { MODEL_ID, type ModelSidecar, PATH_SEPARATOR, SIDECAR_TOKENS } from '$lib/constants';
 import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 
 const SIDECAR_TOKEN_SET = new Set<string>(SIDECAR_TOKENS);
@@ -27,4 +27,20 @@ export function isDraftSidecar(sidecar: ModelSidecar): sidecar is ModelDraftSide
 
 export function isAuxSidecar(sidecar: ModelSidecar): sidecar is ModelAuxSidecar {
 	return AUX_SIDECAR_SET.has(sidecar);
+}
+
+/** Directory of a repo-relative path, e.g. `MTP/mtp-x.gguf` -> `MTP`; empty at the repo root. */
+export function directoryOf(path: string): string {
+	const separator = path.lastIndexOf(PATH_SEPARATOR);
+
+	return separator === -1 ? '' : path.slice(0, separator);
+}
+
+/**
+ * True when llama-server's sidecar lookup matches `kind` in this file name: the
+ * case-sensitive `<kind>-` token find_best_sibling scans for. Mirrored here so
+ * the UI never offers a draft the server cannot resolve.
+ */
+export function isServerSidecarFile(path: string, kind: string): boolean {
+	return path.includes(`${kind}-`);
 }

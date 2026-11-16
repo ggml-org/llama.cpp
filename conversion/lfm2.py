@@ -15,25 +15,30 @@ from .base import MmprojModel, ModelBase, TextModel, gguf, jinja_str_or_json, lo
 from .gemma import ConformerAudioModel
 
 
+def lfm2_feed_forward_length(hparams: dict[str, Any]) -> int:
+    ff_dim = hparams.get("block_ff_dim", hparams.get("intermediate_size"))
+    assert ff_dim is not None
+    auto_adjust_ff_dim = hparams["block_auto_adjust_ff_dim"]
+    ffn_dim_multiplier = hparams["block_ffn_dim_multiplier"]
+    multiple_of = hparams["block_multiple_of"]
+
+    if auto_adjust_ff_dim:
+        ff_dim = int(2 * ff_dim / 3)
+        # custom dim factor multiplier
+        if ffn_dim_multiplier is not None:
+            ff_dim = int(ffn_dim_multiplier * ff_dim)
+        ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
+
+    return ff_dim
+
+
 @ModelBase.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
 @ModelBase.example("LiquidAI/LFM2-1.2B", "LiquidAI/LFM2.5-350M")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
 
     def _add_feed_forward_length(self):
-        ff_dim = self.find_hparam(["block_ff_dim", "intermediate_size"])
-        auto_adjust_ff_dim = self.hparams["block_auto_adjust_ff_dim"]
-        ffn_dim_multiplier = self.hparams["block_ffn_dim_multiplier"]
-        multiple_of = self.hparams["block_multiple_of"]
-
-        if auto_adjust_ff_dim:
-            ff_dim = int(2 * ff_dim / 3)
-            # custom dim factor multiplier
-            if ffn_dim_multiplier is not None:
-                ff_dim = int(ffn_dim_multiplier * ff_dim)
-            ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
-
-        self.gguf_writer.add_feed_forward_length(ff_dim)
+        self.gguf_writer.add_feed_forward_length(lfm2_feed_forward_length(self.hparams))
 
     def set_gguf_parameters(self):
         # set num_key_value_heads only for attention layers
@@ -72,7 +77,9 @@ def _is_d1_checkpoint(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
     with open(dir_model / "config.json", encoding="utf-8") as f:
-        return json.load(f).get("auto_map", {}).get("AutoModel", "").endswith(".D1Model")
+        config = json.load(f)
+    # d1 on LFM3 is converted by conversion/lfm3.py
+    return config.get("auto_map", {}).get("AutoModel", "").endswith(".D1Model") and not config.get("model_type", "").startswith("lfm3")
 
 
 @ModelBase.register_hparams_loader(_is_d1_checkpoint)
@@ -374,6 +381,16 @@ class LFM2VLModel(MmprojModel):
             if resize_algo is None:
                 raise ValueError(f"unsupported resample: {resample}")
             self.gguf_writer.add_vision_image_resize_algo(resize_algo)
+        # tiling params from processor_config.json (do_image_splitting=False -> single tile, i.e. no tiling)
+        preproc = self.preprocessor_config
+        if preproc.get("do_image_splitting", True):
+            self.gguf_writer.add_vision_preproc_min_tiles(preproc.get("min_tiles", 2))
+            self.gguf_writer.add_vision_preproc_max_tiles(preproc.get("max_tiles", 10))
+        else:
+            self.gguf_writer.add_vision_preproc_min_tiles(1)
+            self.gguf_writer.add_vision_preproc_max_tiles(1)
+        self.gguf_writer.add_vision_preproc_tile_size(preproc.get("tile_size", 512))
+        self.gguf_writer.add_vision_preproc_max_pixels_tolerance(preproc.get("max_pixels_tolerance", 2.0))
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

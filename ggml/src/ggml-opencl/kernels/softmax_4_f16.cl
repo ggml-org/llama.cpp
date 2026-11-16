@@ -106,3 +106,176 @@ kernel void kernel_soft_max_4_f16(
         pdst4[i00] /= sum;
     }
 }
+
+// Same as kernel_soft_max_4_f16, but leaves exp(x - max) in dst and writes the row sum to psums.
+// The decomposed flash attention applies 1/sum to the KQV result, which is much smaller than P.
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
+kernel void kernel_fa_decompose_soft_max_4_f16(
+        global char * src0,
+        ulong offset0,
+        global char * src1,
+        ulong offset1,
+        global char * src2,
+        ulong offset2,
+        global char * dst,
+        ulong offsetd,
+        global char * psums,
+        ulong offset_sums,
+        int ne00,
+        ulong nb01,
+        ulong nb02,
+        ulong nb03,
+        int ne12,
+        int ne13,
+        ulong nb11,
+        ulong nb12,
+        ulong nb13,
+        ulong nb1,
+        ulong nb2,
+        ulong nb3,
+        float scale,
+        float max_bias,
+        float m0,
+        float m1,
+        int n_head_log2
+) {
+    src0 = src0 + offset0;
+    src1 = src1 + offset1;
+    src2 = src2 + offset2;
+    dst  = dst  + offsetd;
+
+    int i03 = get_group_id(2);
+    int i02 = get_group_id(1);
+    int i01 = get_group_id(0);
+
+    int i13 = i03%ne13;
+    int i12 = i02%ne12;
+    int i11 = i01;
+
+    global float4 * psrc4 = (global float4 *)(src0 + i01*nb01 + i02*nb02 + i03*nb03);
+    global half4  * pmask = src1 != src0 ? (global half4 *)(src1 + i11*nb11 + i12*nb12 + i13*nb13) : 0;
+    global float  * psrc2 = src2 != src0 ? (global float *)(src2) : 0;
+    global float4 * pdst4 = (global float4 *)(dst  + i01*nb1 + i02*nb2 + i03*nb3);
+
+    float slope = 1.0f;
+
+    // ALiBi
+    if (max_bias > 0.0f) {
+        int h = i02;
+
+        float base = h < n_head_log2 ? m0 : m1;
+        int   exp  = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
+
+        slope = pow(base, exp);
+    }
+
+    // parallel max
+    float4 lmax4 = psrc2 ? psrc2[i02] : -INFINITY;
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        lmax4 = fmax(lmax4, psrc4[i00]*scale + slope*(pmask ? convert_float4(pmask[i00]) : 0.0f));
+    }
+    float lmax = fmax(fmax(lmax4.s0, lmax4.s1), fmax(lmax4.s2, lmax4.s3));
+
+    float max = sub_group_reduce_max(lmax);
+    // Avoid -inf - (-inf) for fully masked rows.
+    if (max == -INFINITY) {
+        max = 0.0f;
+    }
+
+    // parallel sum
+    float4 lsum4 = 0.0f;
+    for (int i00 = get_local_id(0); i00 < ne00/4; i00 += get_local_size(0)) {
+        const float4 exp_psrc4 = exp((psrc4[i00]*scale + slope*(pmask ? convert_float4(pmask[i00]) : 0.0f)) - max);
+        lsum4 += exp_psrc4;
+        pdst4[i00] = exp_psrc4;
+    }
+    float lsum = lsum4.s0 + lsum4.s1 + lsum4.s2 + lsum4.s3;
+
+    float sum = sub_group_reduce_add(lsum);
+
+    if (psrc2) {
+        sum += exp(psrc2[i02] - max);
+    }
+
+    if (get_local_id(0) == 0) {
+        global float * sums = (global float *)(psums + offset_sums);
+        sums[(i03*get_num_groups(1) + i02)*get_num_groups(0) + i01] = sum;
+    }
+}
+
+// out[:, n, h] *= 1/sums[h*ne1 + n], out is [dv, ne1, n_head] contiguous.
+kernel void kernel_fa_decompose_scale_rows_f32(
+        global char * dst,
+        ulong offsetd,
+        global char * psums,
+        ulong offset_sums,
+        int dv,
+        int ne1
+) {
+    global float * out  = (global float *)(dst + offsetd);
+    global float * sums = (global float *)(psums + offset_sums);
+
+    const int n = get_group_id(0);
+    const int h = get_group_id(1);
+
+    const float s = sums[h*ne1 + n];
+    const float r = s > 0.0f ? 1.0f/s : 0.0f;
+
+    global float * row = out + ((size_t)h*ne1 + n)*dv;
+    for (int i = get_local_id(0); i < dv; i += get_local_size(0)) {
+        row[i] *= r;
+    }
+}
+
+// Merge the P8 block maxima and sums into F32 block scales and row sums.
+#ifdef ADRENO_GPU
+REQD_SUBGROUP_SIZE_64
+#endif
+kernel void kernel_fa_p8_fixup(
+        global float * bmax,
+        global float * bsum,
+        global float * dp,
+        global float * psums,
+        global char  * sinks,
+        ulong offset_sinks,
+        int has_sinks,
+        int nblk,
+        int row_blk,                // blocks per row of bmax/bsum/dp (the padded pitch), >= nblk
+        int N
+) {
+    const int n    = get_group_id(0);
+    const int head = get_group_id(1);
+    const uint row = (uint)head*(uint)N + (uint)n;
+    global float * bm = bmax + (size_t)row*row_blk;
+    global float * bs = bsum + (size_t)row*row_blk;
+    global float * dr = dp   + (size_t)row*row_blk;
+
+    float lmax = -INFINITY;
+    for (int b = get_local_id(0); b < nblk; b += get_local_size(0)) {
+        lmax = fmax(lmax, bm[b]);
+    }
+    float rowmax = sub_group_reduce_max(lmax);
+    float sink = 0.0f;
+    if (has_sinks) {
+        sink = ((global float *)(sinks + offset_sinks))[head];
+        rowmax = fmax(rowmax, sink);
+    }
+
+    float lsum = 0.0f;
+    for (int b = get_local_id(0); b < nblk; b += get_local_size(0)) {
+        const float m = bm[b];
+        // Use a finite sentinel: -cl-finite-math-only can remove infinity checks.
+        const float f = (m > -1.0e30f && rowmax > -1.0e30f) ? exp(m - rowmax) : 0.0f;
+        dr[b] = f / 255.0f;
+        lsum += bs[b]*f;
+    }
+    float sum = sub_group_reduce_add(lsum);
+    if (has_sinks && rowmax > -1.0e30f) {
+        sum += exp(sink - rowmax);
+    }
+    if (get_local_id(0) == 0) {
+        psums[row] = sum;
+    }
+}

@@ -249,8 +249,9 @@ kernel void Q6K_O4_NAME(
     // ne01/4 apart) is slower because two distant cache-line streams have worse
     // locality than the adjacent pair whose reads interleave into the same lines
     // each iteration.
-    int gid_a = gid * 2;
-    int gid_b = gid * 2 + 1;
+    // Keep tail lanes active for subgroup ops, but read valid weight pairs.
+    int gid_a = min(gid * 2,     ne01 / 2 - 1);
+    int gid_b = min(gid * 2 + 1, ne01 / 2 - 1);
 
     int nb = ne00 / 32;
 

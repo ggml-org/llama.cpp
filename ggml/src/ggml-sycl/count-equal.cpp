@@ -74,6 +74,5 @@ void ggml_sycl_count_equal(ggml_backend_sycl_context &ctx, ggml_tensor *dst) {
     } break;
     default:
         GGML_ASSERT(false);
-        break;
     }
 }

@@ -84,6 +84,9 @@ RUN apt-get update \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
 
+# Some hosts (e.g. GKE) only mount the driver here, and CUDA 12.8.1-12.9.1 base images don't set these paths
+ENV LD_LIBRARY_PATH=/usr/local/nvidia/lib64:/usr/local/nvidia/lib:${LD_LIBRARY_PATH}
+
 COPY --from=build /app/lib/ /app
 
 ### Full
@@ -113,7 +116,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app/
 
 WORKDIR /app
 
@@ -125,7 +128,7 @@ FROM base AS server
 ENV LLAMA_ARG_HOST=0.0.0.0
 ENV LLAMA_ARG_PORT=8080
 
-COPY --from=build /app/full/llama /app/full/llama-server /app
+COPY --from=build /app/full/llama /app/full/llama-server /app/
 
 WORKDIR /app
 

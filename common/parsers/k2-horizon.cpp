@@ -48,6 +48,11 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tags  = { THINK_END };
 
+    // The models sometimes close medium/low reasoning with the generic </ifm|think>
+    if (think != "ifm|think") {
+        data.thinking_end_tags.push_back("</ifm|think>");
+    }
+
     data.preserved_tokens = data.thinking_end_tags;
     data.preserved_tokens.insert(data.preserved_tokens.end(), {
         THINK_START, SECTION_START, SECTION_END, CALL_START, CALL_END,
@@ -74,7 +79,7 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
             data.generation_prompt += THINK_END + msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
     data.parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {

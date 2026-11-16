@@ -114,9 +114,7 @@ void server_queue::pop_deferred_task(int id_slot) {
 
 void server_queue::wait_until_no_sleep() {
     std::unique_lock<std::mutex> lock(mutex_tasks);
-    if (!sleeping) {
-        return;
-    } else {
+    if (sleeping) {
         if (!req_stop_sleeping) {
             QUE_DBG("%s", "requesting to stop sleeping\n");
             req_stop_sleeping = true;
@@ -127,6 +125,13 @@ void server_queue::wait_until_no_sleep() {
             return !sleeping;
         });
     }
+    n_inflight++;
+}
+
+void server_queue::release_inflight() {
+    std::unique_lock<std::mutex> lock(mutex_tasks);
+    GGML_ASSERT(n_inflight > 0);
+    n_inflight--;
 }
 
 void server_queue::terminate() {
@@ -289,7 +294,7 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
     constexpr auto max_wait_time = std::chrono::seconds(1);
     auto should_sleep = [&]() -> bool {
         // caller must hold mutex_tasks
-        if (idle_sleep_ms < 0) {
+        if (idle_sleep_ms < 0 || n_inflight > 0) {
             return false;
         }
         int64_t now = ggml_time_ms();
@@ -448,6 +453,7 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
 }
 
 server_task_result_ptr server_response::recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout);
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
 
@@ -459,7 +465,7 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
             }
         }
 
-        std::cv_status cr_res = condition_results.wait_for(lock, std::chrono::seconds(timeout));
+        std::cv_status cr_res = condition_results.wait_until(lock, deadline);
         if (!running) {
             RES_DBG("%s : queue result stop\n", __func__);
             std::terminate(); // we cannot return here since the caller is HTTP code

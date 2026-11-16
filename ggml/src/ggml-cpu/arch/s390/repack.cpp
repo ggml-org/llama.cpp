@@ -70,23 +70,6 @@ void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTR
 #endif
 }
 
-#if defined(__VXE__) || defined(__VXE2__)
-static inline int16x8_t vxe_dot_acc(const int8x16_t v_x, const int8x16_t v_y, const int16x8_t v_acc) {
-    return vec_meadd(v_x, v_y, vec_moadd(v_x, v_y, v_acc));
-}
-
-static inline int8x16_t vxe_splat_granule(const int8_t * qs) {
-    uint32_t g;
-    memcpy(&g, qs, sizeof(g));
-    return (int8x16_t)vec_splats(g);
-}
-
-static inline int32x4_t vxe_fold(const int16x8_t v_sumi) {
-    const int16x8_t v_ones = vec_splats((int16_t)1);
-    return vec_add(vec_mule(v_sumi, v_ones), vec_mulo(v_sumi, v_ones));
-}
-#endif
-
 void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -131,21 +114,21 @@ void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
             int16x8_t v_sumi = vec_splats((int16_t)0);
 
-            v_sumi = vxe_dot_acc(v_x0l, vxe_splat_granule(y_lo +  0), v_sumi);
-            v_sumi = vxe_dot_acc(v_x1l, vxe_splat_granule(y_lo +  4), v_sumi);
-            v_sumi = vxe_dot_acc(v_x2l, vxe_splat_granule(y_lo +  8), v_sumi);
-            v_sumi = vxe_dot_acc(v_x3l, vxe_splat_granule(y_lo + 12), v_sumi);
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x0l, ggml_vec_xl_s8x4_splat(y_lo +  0));
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x1l, ggml_vec_xl_s8x4_splat(y_lo +  4));
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x2l, ggml_vec_xl_s8x4_splat(y_lo +  8));
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x3l, ggml_vec_xl_s8x4_splat(y_lo + 12));
 
-            v_sumi = vxe_dot_acc(v_x0h, vxe_splat_granule(y_hi +  0), v_sumi);
-            v_sumi = vxe_dot_acc(v_x1h, vxe_splat_granule(y_hi +  4), v_sumi);
-            v_sumi = vxe_dot_acc(v_x2h, vxe_splat_granule(y_hi +  8), v_sumi);
-            v_sumi = vxe_dot_acc(v_x3h, vxe_splat_granule(y_hi + 12), v_sumi);
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x0h, ggml_vec_xl_s8x4_splat(y_hi +  0));
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x1h, ggml_vec_xl_s8x4_splat(y_hi +  4));
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x2h, ggml_vec_xl_s8x4_splat(y_hi +  8));
+            v_sumi = ggml_vec_dot_s16(v_sumi, v_x3h, ggml_vec_xl_s8x4_splat(y_hi + 12));
 
             const float32x4_t v_yd = vec_splats(GGML_CPU_FP16_TO_FP32(a_ptr[l].d));
-            const float32x4_t v_xd = __lzs_f16cx4_load(b_ptr[l].d);
+            const float32x4_t v_xd = ggml_vec_xl_f16x4_finite(b_ptr[l].d);
             const float32x4_t v_d  = vec_mul(v_yd, v_xd);
 
-            v_sumf = vec_madd(vec_float(vxe_fold(v_sumi)), v_d, v_sumf);
+            v_sumf = vec_madd(vec_float(vec_paddl_s16(v_sumi)), v_d, v_sumf);
         }
 
         vec_xst(v_sumf, 0, res_ptr + x * ncols_interleaved);
@@ -192,24 +175,24 @@ void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const int8_t * y_lo = a_ptr[l].qs + 16 * k;
                     const int8_t * y_hi = y_lo + qk / 2 * 4;
 
-                    v_sumi0 = vxe_dot_acc(v_xl, vxe_splat_granule(y_lo +  0), v_sumi0);
-                    v_sumi1 = vxe_dot_acc(v_xl, vxe_splat_granule(y_lo +  4), v_sumi1);
-                    v_sumi2 = vxe_dot_acc(v_xl, vxe_splat_granule(y_lo +  8), v_sumi2);
-                    v_sumi3 = vxe_dot_acc(v_xl, vxe_splat_granule(y_lo + 12), v_sumi3);
+                    v_sumi0 = ggml_vec_dot_s16(v_sumi0, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  0));
+                    v_sumi1 = ggml_vec_dot_s16(v_sumi1, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  4));
+                    v_sumi2 = ggml_vec_dot_s16(v_sumi2, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  8));
+                    v_sumi3 = ggml_vec_dot_s16(v_sumi3, v_xl, ggml_vec_xl_s8x4_splat(y_lo + 12));
 
-                    v_sumi0 = vxe_dot_acc(v_xh, vxe_splat_granule(y_hi +  0), v_sumi0);
-                    v_sumi1 = vxe_dot_acc(v_xh, vxe_splat_granule(y_hi +  4), v_sumi1);
-                    v_sumi2 = vxe_dot_acc(v_xh, vxe_splat_granule(y_hi +  8), v_sumi2);
-                    v_sumi3 = vxe_dot_acc(v_xh, vxe_splat_granule(y_hi + 12), v_sumi3);
+                    v_sumi0 = ggml_vec_dot_s16(v_sumi0, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  0));
+                    v_sumi1 = ggml_vec_dot_s16(v_sumi1, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  4));
+                    v_sumi2 = ggml_vec_dot_s16(v_sumi2, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  8));
+                    v_sumi3 = ggml_vec_dot_s16(v_sumi3, v_xh, ggml_vec_xl_s8x4_splat(y_hi + 12));
                 }
 
                 const float32x4_t v_yd = __lzs_f16cx4_load(a_ptr[l].d);
-                const float32x4_t v_xd = __lzs_f16cx4_load(b_ptr[l].d);
+                const float32x4_t v_xd = ggml_vec_xl_f16x4_finite(b_ptr[l].d);
 
-                v_sumf[0] = vec_madd(vec_float(vxe_fold(v_sumi0)), vec_mul(v_xd, vec_splat(v_yd, 0)), v_sumf[0]);
-                v_sumf[1] = vec_madd(vec_float(vxe_fold(v_sumi1)), vec_mul(v_xd, vec_splat(v_yd, 1)), v_sumf[1]);
-                v_sumf[2] = vec_madd(vec_float(vxe_fold(v_sumi2)), vec_mul(v_xd, vec_splat(v_yd, 2)), v_sumf[2]);
-                v_sumf[3] = vec_madd(vec_float(vxe_fold(v_sumi3)), vec_mul(v_xd, vec_splat(v_yd, 3)), v_sumf[3]);
+                v_sumf[0] = vec_madd(vec_float(vec_paddl_s16(v_sumi0)), vec_mul(v_xd, vec_splat(v_yd, 0)), v_sumf[0]);
+                v_sumf[1] = vec_madd(vec_float(vec_paddl_s16(v_sumi1)), vec_mul(v_xd, vec_splat(v_yd, 1)), v_sumf[1]);
+                v_sumf[2] = vec_madd(vec_float(vec_paddl_s16(v_sumi2)), vec_mul(v_xd, vec_splat(v_yd, 2)), v_sumf[2]);
+                v_sumf[3] = vec_madd(vec_float(vec_paddl_s16(v_sumi3)), vec_mul(v_xd, vec_splat(v_yd, 3)), v_sumf[3]);
             }
 
             for (int m = 0; m < 4; m++) {

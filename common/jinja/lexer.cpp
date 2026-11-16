@@ -1,7 +1,9 @@
 #include "lexer.h"
 #include "runtime.h"
+#include "unicode.h"
 
 #include <cctype>
+#include <charconv>
 #include <functional>
 #include <map>
 #include <string>
@@ -75,6 +77,24 @@ lexer_result lexer::tokenize(const std::string & source) {
                 }
                 // add escaped char
                 char escaped_char = src[pos++];
+                if (escaped_char == 'x') {
+                    if (pos + 1 >= src.size()) {
+                        throw lexer_exception("incomplete hexadecimal escape", source, pos);
+                    }
+
+                    unsigned int value = 0;
+                    const char * first = &src[pos];
+                    const char * last  = first + 2;
+
+                    auto [ptr, ec] = std::from_chars(first, last, value, 16);
+                    if (ec != std::errc{} || ptr != last) {
+                        throw lexer_exception("invalid hexadecimal escape", source, pos);
+                    }
+
+                    str += common_unicode_cpt_to_utf8(value);
+                    pos += 2;
+                    continue;
+                }
                 if (escape_chars.find(escaped_char) == escape_chars.end()) {
                     throw lexer_exception(std::string("unknown escape character \\") + escaped_char, source, pos);
                 }
@@ -242,41 +262,6 @@ lexer_result lexer::tokenize(const std::string & source) {
         if (pos >= src.size()) break;
 
         char ch = src[pos];
-
-        bool is_closing_block = ch == '-' && next_pos_is( {'%', '}'} );
-
-        // Check for unary operators
-        if (!is_closing_block && (ch == '-' || ch == '+')) {
-            start_pos = pos;
-            token::type last_token_type = tokens.empty() ? token::eof : tokens.back().t;
-            if (last_token_type == token::text || last_token_type == token::eof) {
-                throw lexer_exception(std::string("unexpected character: ") + ch, source, pos);
-            }
-            switch (last_token_type) {
-                case token::identifier:
-                case token::numeric_literal:
-                case token::string_literal:
-                case token::close_paren:
-                case token::close_square_bracket:
-                    // Part of a binary operator
-                    // a - 1, 1 - 1, true - 1, "apple" - 1, (1) - 1, a[1] - 1
-                    // Continue parsing normally
-                    break;
-                default: {
-                    // Is part of a unary operator
-                    // (-1), [-1], (1 + -1), not -1, -apple
-                    ++pos; // Consume the operator
-
-                    // Check for numbers following the unary operator
-                    std::string num = consume_numeric();
-                    std::string value = std::string(1, ch) + num;
-                    token::type t = num.empty() ? token::unary_operator : token::numeric_literal;
-                    // JJ_DEBUG("consumed unary operator or numeric literal: '%s'", value.c_str());
-                    tokens.push_back({t, value, start_pos});
-                    continue;
-                }
-            }
-        }
 
         // Try to match one of the tokens in the mapping table
         bool matched = false;

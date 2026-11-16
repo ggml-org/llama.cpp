@@ -95,10 +95,20 @@ static void test(void) {
         common_params base;
         base.n_parallel = 4;
         base.n_outputs_max_per_seq = 8;
+        base.n_ubatch = 512;
 
-        const auto draft = common_base_params_to_speculative(base);
-        assert(draft.n_outputs_max == 4);
-        assert(draft.n_outputs_max_per_seq == 1);
+        {
+            const auto draft = common_base_params_to_speculative(base);
+            assert(draft.n_outputs_max == 4);
+            assert(draft.n_outputs_max_per_seq == 1);
+            assert(draft.n_ubatch == 512); // inherits the target by default
+        }
+
+        base.speculative.draft.n_ubatch = 8;
+        {
+            const auto draft = common_base_params_to_speculative(base);
+            assert(draft.n_ubatch == 8);
+        }
     }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
@@ -234,6 +244,26 @@ static void test(void) {
     argv = {"binary_name", "-m", "model_file.gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "model_file.gguf");
+
+    {
+        auto parse_shards = [&list_str_to_char](std::vector<std::string> args) {
+            common_params shard_params;
+            args.insert(args.begin(), {"binary_name", "-m", "model_file.gguf"});
+            assert(common_params_parse(args.size(), list_str_to_char(args).data(), shard_params, LLAMA_EXAMPLE_COMMON));
+            auto paths = shard_params.model.get_paths();
+            assert(paths.front() == "model_file.gguf");
+            return std::vector<std::string>(paths.begin() + 1, paths.end());
+        };
+        assert(parse_shards({"--shard", "a.gguf"}) == std::vector<std::string>({"a.gguf"}));
+        const std::vector<std::string> two = {"a.gguf", "b.gguf"};
+        assert(parse_shards({"--shard", "a.gguf", "--shard", "b.gguf"}) == two);
+        assert(parse_shards({"--shard", "a.gguf,b.gguf"}) == two);
+        const std::vector<std::string> three = {"a.gguf", "b.gguf", "c.gguf"};
+        assert(parse_shards({"--shard", "a.gguf,b.gguf", "--shard", "c.gguf"}) == three);
+        assert(parse_shards({"--shard", "a.gguf", "--shard", "b.gguf", "--shard", "c.gguf"}) == three);
+        assert(parse_shards({"--ple", "p.gguf"}) == parse_shards({"--shard", "p.gguf"}));
+        assert(parse_shards({"--shard", "model_file.gguf,a.gguf,b.gguf,a.gguf"}) == two);
+    }
 
     argv = {"binary_name", "-t", "1234"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));

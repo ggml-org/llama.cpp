@@ -114,13 +114,6 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	);
 	const emptyMessage = $derived(searchTerm ? 'No models found.' : 'No models yet.');
 
-	// the manager takes the focus, so the selector closes instead of sitting behind it
-	$effect(() => {
-		if (!uiStore.manageModelsOpen) return;
-
-		opts.onOpenChange?.(false);
-	});
-
 	onMount(() => {
 		modelsStore.fetch().catch((error) => {
 			console.error('Unable to load models:', error);
@@ -174,8 +167,14 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 			});
 		}
 
-		// only the built-in server loads on request, and only in router mode
-		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
+		// only the built-in server loads on request, and only in router mode; a model
+		// that is already loading is only selected, not loaded a second time
+		if (
+			!onModelChange &&
+			isRouter &&
+			!modelsStore.isModelLoaded(option.model) &&
+			!modelsStore.isModelLoading(option.model)
+		) {
 			isLoadingModel = true;
 
 			modelsStore.status

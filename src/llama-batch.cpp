@@ -52,25 +52,49 @@ bool llama_batch_allocr::init(
     // an entry can carry a token id, a token embedding, or both
     // all entries must carry the same combination, or be a mix of token and embd entries
     // a state embedding (e.g. MTP hook batches) is set on all entries or on none
+    // an embd row (embd read from a device buffer) is set on all entries or on none, with no token id or embedding
     //
 
     int32_t n_tok_only  = 0;
     int32_t n_embd_only = 0;
     int32_t n_both      = 0;
 
-    const bool has_state = batch_inp.tokens[0].has_state;
+    const bool has_state     = batch_inp.tokens[0].has_state;
+    const bool has_row       = batch_inp.tokens[0].embd_row >= 0;
+    const bool has_state_row = batch_inp.tokens[0].state_row >= 0;
+
+    if (has_state && has_state_row) {
+        LLAMA_LOG_ERROR("%s: the entries have a state embedding and a state row\n", __func__);
+        return false;
+    }
 
     for (int32_t i = 0; i < n_tok; ++i) {
         const bool is_tok = batch_inp.tokens[i].id != LLAMA_TOKEN_NULL;
         const bool is_emb = batch_inp.tokens[i].has_embd;
+        const bool is_row = batch_inp.tokens[i].embd_row >= 0;
 
-        if (!is_tok && !is_emb) {
+        if (is_row != has_row) {
+            LLAMA_LOG_ERROR("%s: all entries in the batch must have the same embd row presence\n", __func__);
+            return false;
+        }
+
+        if (is_row) {
+            if (is_tok || is_emb) {
+                LLAMA_LOG_ERROR("%s: entry %d has an embd row and a token id or embedding\n", __func__, i);
+                return false;
+            }
+        } else if (!is_tok && !is_emb) {
             LLAMA_LOG_ERROR("%s: entry %d has neither a token id nor an embedding\n", __func__, i);
             return false;
         }
 
         if (batch_inp.tokens[i].has_state != has_state) {
             LLAMA_LOG_ERROR("%s: all entries in the batch must have the same state embedding presence\n", __func__);
+            return false;
+        }
+
+        if ((batch_inp.tokens[i].state_row >= 0) != has_state_row) {
+            LLAMA_LOG_ERROR("%s: all entries in the batch must have the same state row presence\n", __func__);
             return false;
         }
 
@@ -135,6 +159,20 @@ bool llama_batch_allocr::init(
 
     if (has_state) {
         state_vec = batch_inp.state;
+    }
+
+    if (has_row) {
+        embd_row_vec.resize(n_tok);
+        for (int32_t i = 0; i < n_tok; ++i) {
+            embd_row_vec[i] = batch_inp.tokens[i].embd_row;
+        }
+    }
+
+    if (has_state_row) {
+        state_row_vec.resize(n_tok);
+        for (int32_t i = 0; i < n_tok; ++i) {
+            state_row_vec[i] = batch_inp.tokens[i].state_row;
+        }
     }
 
     //
@@ -306,6 +344,7 @@ bool llama_batch_allocr::init(
             /*.token        =*/ batch.token,
             /*.embd         =*/ batch.embd,
             /*.embd_state   =*/ state_vec.empty() ? nullptr : state_vec.data(),
+            /*.embd_row     =*/ embd_row_vec.empty() ? nullptr : embd_row_vec.data(),
             /*.pos          =*/ batch.pos,
             /*.n_seq_id     =*/ batch.n_seq_id,
             /*.seq_id       =*/ batch.seq_id,
@@ -531,6 +570,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.token        =*/ udata->token.data(),
         /*.embd         =*/ nullptr,
         /*.embd_state   =*/ nullptr,
+        /*.embd_row     =*/ nullptr,
         /*.pos          =*/ udata->pos.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
@@ -838,6 +878,8 @@ void llama_batch_allocr::clear() {
     embd_vec    .clear();
     is_embd_vec .clear();
     state_vec   .clear();
+    embd_row_vec.clear();
+    state_row_vec.clear();
     seq_id_data .clear();
     pos         .clear();
     n_seq_id    .clear();
@@ -881,6 +923,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     const bool use_token = batch.token && !(mixed_batch && n_embd_rows == n_tokens);
     const bool use_embd  = batch.embd  && !(mixed_batch && n_embd_rows == 0);
     const bool has_state = !state_vec.empty();
+    const bool has_row   = !embd_row_vec.empty();
+    const bool has_srow  = !state_row_vec.empty();
 
     const int64_t n_embd_all  = use_embd  ? (int64_t) n_tokens*n_embd       : 0;
     const int64_t n_state_all = has_state ? (int64_t) n_tokens*n_embd_state : 0;
@@ -889,6 +933,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->token     .resize(n_tokens);
     udata->embd      .resize(n_embd_all);
     udata->embd_state.resize(n_state_all);
+    udata->embd_row  .resize(has_row ? n_tokens : 0);
+    udata->embd_state_row.resize(has_srow ? n_tokens : 0);
     udata->pos       .resize(n_pos_all);
     udata->n_seq_id  .resize(n_tokens);
     udata->seq_id    .resize(n_tokens);
@@ -918,6 +964,14 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
         if (has_state) {
             memcpy(udata->embd_state.data() + i*n_embd_state, state_vec.data() + (int64_t) idxs[i]*n_embd_state, n_embd_state*sizeof(float));
+        }
+
+        if (has_row) {
+            udata->embd_row[i] = embd_row_vec[idxs[i]];
+        }
+
+        if (has_srow) {
+            udata->embd_state_row[i] = state_row_vec[idxs[i]];
         }
 
         for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {
@@ -967,6 +1021,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.token        =*/ use_token ? udata->token.data() : nullptr,
         /*.embd         =*/ use_embd  ? udata->embd.data()  : nullptr,
         /*.embd_state   =*/ has_state ? udata->embd_state.data() : nullptr,
+        /*.embd_row     =*/ has_row   ? udata->embd_row.data()   : nullptr,
         /*.pos          =*/ udata->pos.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
@@ -1019,6 +1074,7 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
         LLAMA_LOG_DEBUG("%s:   token      = %p\n", __func__, (void *) ubatch.token);
         LLAMA_LOG_DEBUG("%s:   embd       = %p\n", __func__, (void *) ubatch.embd);
         LLAMA_LOG_DEBUG("%s:   embd_state = %p\n", __func__, (void *) ubatch.embd_state);
+        LLAMA_LOG_DEBUG("%s:   embd_row   = %p\n", __func__, (void *) ubatch.embd_row);
         LLAMA_LOG_DEBUG("%s:   pos        = %p\n", __func__, (void *) ubatch.pos);
         LLAMA_LOG_DEBUG("%s:   n_seq_id   = %p\n", __func__, (void *) ubatch.n_seq_id);
         LLAMA_LOG_DEBUG("%s:   seq_id     = %p\n", __func__, (void *) ubatch.seq_id);
@@ -1146,6 +1202,10 @@ size_t llama_batch_ext_select_n_embd_inp(llama_context_type ctx_type, llm_arch a
 size_t llama_batch_ext_select_n_embd_state(llama_context_type ctx_type, const llama_hparams & hparams) {
     if (ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
         return hparams.n_embd_out();
+    }
+    // TODO: this probably should become a function of `llm_arch`
+    if (hparams.lilicorr_candidate_topk > 0) {
+        return hparams.n_embd_inp();
     }
     return 0;
 }
@@ -1299,6 +1359,43 @@ bool llama_batch_ext::set_token_state(int32_t idx, llama_embd state_in) {
     return true;
 }
 
+bool llama_batch_ext::set_token_embd_row(int32_t idx, int32_t row) {
+    if (idx < 0 || idx >= (int32_t) tokens.size()) {
+        return false;
+    }
+    if (row < 0) {
+        return false;
+    }
+
+    token & t = tokens[idx];
+
+    if (t.id != LLAMA_TOKEN_NULL || t.has_embd || t.embd_row >= 0) {
+        LLAMA_LOG_ERROR("%s: entry %d already has a token id, an embedding or an embd row\n", __func__, idx);
+        return false;
+    }
+
+    t.embd_row = row;
+
+    return true;
+}
+
+bool llama_batch_ext::set_token_state_row(int32_t idx, int32_t row) {
+    if (idx < 0 || idx >= (int32_t) tokens.size() || row < 0) {
+        return false;
+    }
+
+    token & t = tokens[idx];
+
+    if (t.has_state || t.state_row >= 0) {
+        LLAMA_LOG_ERROR("%s: entry %d already has a state embedding or a state row\n", __func__, idx);
+        return false;
+    }
+
+    t.state_row = row;
+
+    return true;
+}
+
 bool llama_batch_ext::set_token_pos(int32_t idx, const llama_pos * pos_in) {
     if (idx < 0 || idx >= (int32_t) tokens.size()) {
         return false;
@@ -1373,6 +1470,17 @@ int32_t llama_batch_ext_add_embd(llama_batch_ext * batch, llama_seq_id seq_id, l
     return idx;
 }
 
+int32_t llama_batch_ext_add_embd_row(llama_batch_ext * batch, llama_seq_id seq_id, int32_t row) {
+    int32_t idx = batch->add_token(seq_id);
+    if (idx < 0) {
+        return idx;
+    }
+    if (!batch->set_token_embd_row(idx, row)) {
+        return -2;
+    }
+    return idx;
+}
+
 bool llama_batch_ext_add_seq(llama_batch_ext * batch, int32_t idx, llama_seq_id seq_id) {
     return batch->add_seq(idx, seq_id);
 }
@@ -1387,6 +1495,10 @@ bool llama_batch_ext_set_embd_token(llama_batch_ext * batch, int32_t idx, llama_
 
 bool llama_batch_ext_set_embd_state(llama_batch_ext * batch, int32_t idx, llama_embd embd) {
     return batch->set_token_state(idx, embd);
+}
+
+bool llama_batch_ext_set_embd_state_row(llama_batch_ext * batch, int32_t idx, int32_t row) {
+    return batch->set_token_state_row(idx, row);
 }
 
 bool llama_batch_ext_set_output_embd(llama_batch_ext * batch, int32_t idx, bool value) {

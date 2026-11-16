@@ -131,44 +131,54 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
         if name.endswith("ple_embedding.layer_multipliers"):
             self._ple_multipliers = [int(x) for x in data_torch.tolist()]
-            return []
+            return
         if name.endswith("ple_embedding.ngram_heads_offsets"):
             self._ple_head_offsets = [int(x) for x in data_torch.tolist()]
-            return []
+            return
         if name.endswith("ple_embedding.ngram_heads_vocab_sizes"):
             self._ple_head_vocab_sizes = [int(x) for x in data_torch.tolist()]
-            return []
+            return
 
         if ".ngram_embedding.shard_" in name:
-            return self._place_ple_shard(data_torch, name)
+            yield from self._place_ple_shard(data_torch, name)
+            return
 
         # eh_proj([e ; h_s]) = fc_embedding(e) + fc_hidden(h_s) for every hc stream s
         if name.endswith((".nextn_fc_embedding.weight", ".nextn_fc_hidden.weight")):
             self._mtp_fc[name.rsplit(".", 2)[1]] = data_torch
             if len(self._mtp_fc) < 2:
-                return []
+                return
             eh = torch.cat([self._mtp_fc.pop("nextn_fc_embedding"), self._mtp_fc.pop("nextn_fc_hidden")], dim=1)
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ, bid, ".weight"), eh)]
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ, bid, ".weight"), eh)
+            return
 
         # one projection feeds indexer q and k; split it, as minimax-m3 does
         if ".indexer.index_qk_proj.weight" in name:
             n_q = self.hparams["indexer_n_heads"] * self.hparams["indexer_head_dim"]
-            q = data_torch[:n_q]
-            k = data_torch[n_q:]
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_Q_PROJ, bid, ".weight"), q),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_K_PROJ, bid, ".weight"), k),
-            ]
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_Q_PROJ, bid, ".weight"), data_torch[:n_q])
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_K_PROJ, bid, ".weight"), data_torch[n_q:])
+            return
 
         # Gemma zero-centred gammas the inherited norm.weight rule misses
         if name.endswith((".ple.norm_key.weight", ".ple.norm_query.weight", ".ple.norm_conv.weight",
                           ".indexer.q_layernorm.weight", ".indexer.k_layernorm.weight")):
-            return [(self.map_tensor_name(name), data_torch + 1)]
+            yield (self.map_tensor_name(name), data_torch + 1)
+            return
 
         if name.endswith(".ple.conv1d.weight"):
-            return [(self.map_tensor_name(name), data_torch.squeeze())]
+            yield (self.map_tensor_name(name), data_torch.squeeze())
+            return
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    # matmuls that read the same input, written as one weight [a | b] so the runtime does one matmul:
+    # (merged tensor, (a, b), linear-attention layers only)
+    _SHARED_INPUT_MERGES = (
+        (gguf.MODEL_TENSOR.HC_ATTN_DOWN_INJECT, (gguf.MODEL_TENSOR.HC_ATTN_DOWN, gguf.MODEL_TENSOR.HC_ATTN_INJECT), False),
+        (gguf.MODEL_TENSOR.HC_FFN_DOWN_INJECT,  (gguf.MODEL_TENSOR.HC_FFN_DOWN,  gguf.MODEL_TENSOR.HC_FFN_INJECT),  False),
+        (gguf.MODEL_TENSOR.ATTN_QKV_GATE,       (gguf.MODEL_TENSOR.ATTN_QKV,     gguf.MODEL_TENSOR.ATTN_GATE),      True),
+        (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT,  (gguf.MODEL_TENSOR.SSM_BETA,     gguf.MODEL_TENSOR.SSM_ALPHA),      True),
+    )
 
     # the shards concatenate into a tensor of well over 100 GB
     # use LazyChunkedTensor here, a single shard resident at a time

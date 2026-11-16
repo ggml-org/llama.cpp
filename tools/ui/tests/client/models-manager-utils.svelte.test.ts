@@ -9,7 +9,7 @@ import {
 	splitHiddenQuants
 } from '$lib/components/app/models/ModelsManager/utils';
 import { LOCAL_BACKEND_ID } from '$lib/constants';
-import { ModelGroupKind, ServerModelStatus } from '$lib/enums';
+import { ModelDraftSidecar, ModelGroupKind, ServerModelStatus } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import type { ApiModelDataEntry, ModelOption } from '$lib/types';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -84,23 +84,43 @@ describe('downloadGroups', () => {
 		const listed = option('org/Qwen3-8B:Q4_K_M');
 		const groups = downloadGroups(
 			[{ isPaused: false, progress: null, repoWithTag: 'org/Qwen3-8B:Q4_K_M' }],
-			[listed]
+			[listed],
+			() => []
 		);
 
 		expect(groups[0].key).toBe('download::org/Qwen3-8B:Q4_K_M');
-		expect(groups[0].base).toBe(listed);
+		expect(groups[0].base).toMatchObject(listed);
 	});
 
 	it('stands the download in for a row of its own when nothing is listed', () => {
 		const groups = downloadGroups(
 			[{ isPaused: true, progress: null, repoWithTag: 'org/Qwen3-8B:Q4_K_M' }],
-			[]
+			[],
+			(repo) =>
+				repo === 'org/Qwen3-8B' ? [{ kind: ModelDraftSidecar.MTP, quant: 'Q8_0', repo }] : []
 		);
 
+		// the sub-lines carry the sidecars, so the inline badges stay empty
 		expect(groups[0].base).toMatchObject({
 			backendId: LOCAL_BACKEND_ID,
+			draftSidecars: [],
 			model: 'org/Qwen3-8B:Q4_K_M'
 		});
+		expect(groups[0].sidecarBadges).toEqual([
+			{ kind: ModelDraftSidecar.MTP, quant: 'Q8_0', repo: 'org/Qwen3-8B' }
+		]);
+	});
+
+	it('keeps one row per tracked download, sidecars included', () => {
+		const main = { isPaused: false, progress: null, repoWithTag: 'org/Qwen3-8B:Q4_K_M' };
+		const other = { isPaused: true, progress: null, repoWithTag: 'org/Qwen3-8B:Q8_0' };
+		const groups = downloadGroups([main, other], [], () => []);
+
+		expect(groups).toHaveLength(2);
+		expect(groups.map((group) => group.key)).toEqual([
+			'download::org/Qwen3-8B:Q4_K_M',
+			'download::org/Qwen3-8B:Q8_0'
+		]);
 	});
 });
 

@@ -172,6 +172,12 @@ export interface HfModelDetailInfo extends HfModelInfo {
 }
 
 /** A single entry in a model repository's file tree (`/tree` responses) */
+/** Encoders an mmproj's header says it carries; vision is null when the header was cut short before it said. */
+export interface HfMmprojEncoders {
+	audio: boolean;
+	vision: boolean | null;
+}
+
 export interface HfModelSibling {
 	/** Relative path of the file or directory within the repo */
 	path: string;
@@ -229,6 +235,8 @@ export interface HfCatalogEntry {
 	released: string;
 	license: string;
 	featured?: boolean;
+	/** Decision models answer with probabilities, not text; llama-ui cannot use them. */
+	decision?: boolean;
 	maxMemGb?: number;
 	sizes: HfCatalogSize[];
 }

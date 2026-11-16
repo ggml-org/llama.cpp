@@ -42,6 +42,9 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x1f) << 6) | (utf8[offset + 1] & 0x3f);
+        if (result < 0x80) {
+            throw std::invalid_argument("invalid character");
+        }
         offset += 2;
         return result;
     }
@@ -50,6 +53,9 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x0f) << 12) | ((utf8[offset + 1] & 0x3f) << 6) | (utf8[offset + 2] & 0x3f);
+        if (result < 0x800) {
+            throw std::invalid_argument("invalid character");
+        }
         offset += 3;
         return result;
     }
@@ -58,6 +64,9 @@ uint32_t unicode_cpt_from_utf8(const std::string & utf8, size_t & offset) {
             throw std::invalid_argument("invalid character");
         }
         auto result = ((utf8[offset + 0] & 0x07) << 18) | ((utf8[offset + 1] & 0x3f) << 12) | ((utf8[offset + 2] & 0x3f) << 6) | (utf8[offset + 3] & 0x3f);
+        if (result < 0x10000 || result > 0x10ffff) {
+            throw std::invalid_argument("invalid character");
+        }
         offset += 4;
         return result;
     }
@@ -189,6 +198,19 @@ static std::unordered_map<std::string, uint8_t> unicode_utf8_to_byte_map() {
             map[unicode_cpt_to_utf8(256 + n)] = ch;
             ++n;
         }
+    }
+    return map;
+}
+
+static std::vector<int> unicode_cpt_to_byte_map() {
+    std::vector<int> map;
+    for (int ch = 0; ch < 256; ++ch) {
+        size_t offset = 0;
+        const uint32_t cpt = unicode_cpt_from_utf8(unicode_byte_to_utf8(ch), offset);
+        if (cpt >= map.size()) {
+            map.resize(cpt + 1, -1);
+        }
+        map[cpt] = ch;
     }
     return map;
 }
@@ -1279,6 +1301,92 @@ std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & c
     return result;
 }
 
+static uint8_t unicode_canonical_class(uint32_t cpt) {
+    const auto it = unicode_combining_class.find(cpt);
+    return it == unicode_combining_class.end() ? 0 : it->second;
+}
+
+static void unicode_canonical_decompose(uint32_t cpt, std::vector<uint32_t> & result, std::vector<uint32_t> & pending) {
+    pending.push_back(cpt);
+    while (!pending.empty()) {
+        cpt = pending.back();
+        pending.pop_back();
+        // Hangul syllables use algorithmic decomposition (UAX #15).
+        if (cpt >= 0xAC00 && cpt < 0xAC00 + 11172) {
+            const uint32_t index = cpt - 0xAC00;
+            result.push_back(0x1100 + index / 588);
+            result.push_back(0x1161 + (index % 588) / 28);
+            if (index % 28) {
+                result.push_back(0x11A7 + index % 28);
+            }
+            continue;
+        }
+        const auto it = unicode_decomposition.find(cpt);
+        if (it == unicode_decomposition.end()) {
+            result.push_back(cpt);
+            continue;
+        }
+        if (it->second.second) {
+            pending.push_back(it->second.second);
+        }
+        pending.push_back(it->second.first);
+    }
+}
+
+static uint32_t unicode_canonical_compose(uint32_t first, uint32_t second) {
+    if (first >= 0x1100 && first < 0x1100 + 19 && second >= 0x1161 && second < 0x1161 + 21) {
+        return 0xAC00 + ((first - 0x1100) * 21 + second - 0x1161) * 28;
+    }
+    if (first >= 0xAC00 && first < 0xAC00 + 11172 && (first - 0xAC00) % 28 == 0 && second > 0x11A7 && second < 0x11A7 + 28) {
+        return first + second - 0x11A7;
+    }
+    const auto it = unicode_composition.find((uint64_t(first) << 32) | second);
+    return it == unicode_composition.end() ? 0 : it->second;
+}
+
+std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & cpts) {
+    std::vector<uint32_t> decomposed;
+    decomposed.reserve(cpts.size());
+    std::vector<uint32_t> pending;
+    for (const uint32_t cpt : cpts) {
+        unicode_canonical_decompose(cpt, decomposed, pending);
+    }
+
+    // Sort each run of combining marks; equal classes retain their order.
+    for (size_t i = 0; i < decomposed.size();) {
+        if (unicode_canonical_class(decomposed[i]) == 0) {
+            ++i;
+        }
+        const size_t begin = i;
+        while (i < decomposed.size() && unicode_canonical_class(decomposed[i]) != 0) {
+            ++i;
+        }
+        std::stable_sort(decomposed.begin() + begin, decomposed.begin() + i, [](uint32_t a, uint32_t b) {
+            return unicode_canonical_class(a) < unicode_canonical_class(b);
+        });
+    }
+
+    std::vector<uint32_t> result;
+    result.reserve(decomposed.size());
+    size_t starter = 0;
+    uint8_t previous_class = 0;
+    for (const uint32_t cpt : decomposed) {
+        const uint8_t current_class = unicode_canonical_class(cpt);
+        const uint32_t composite = !result.empty() && (previous_class == 0 || previous_class < current_class)
+            ? unicode_canonical_compose(result[starter], cpt) : 0;
+        if (composite) {
+            result[starter] = composite;
+        } else {
+            if (current_class == 0) {
+                starter = result.size();
+            }
+            result.push_back(cpt);
+            previous_class = current_class;
+        }
+    }
+    return result;
+}
+
 std::vector<uint32_t> unicode_cpts_from_utf8(const std::string & utf8) {
     std::vector<uint32_t> result;
     result.reserve(utf8.size());
@@ -1319,6 +1427,14 @@ std::string unicode_byte_to_utf8(uint8_t byte) {
 uint8_t unicode_utf8_to_byte(const std::string & utf8) {
     static std::unordered_map<std::string, uint8_t> map = unicode_utf8_to_byte_map();
     return map.at(utf8);
+}
+
+uint8_t unicode_cpt_to_byte(uint32_t cpt) {
+    static const std::vector<int> map = unicode_cpt_to_byte_map();
+    if (cpt >= map.size() || map[cpt] < 0) {
+        throw std::out_of_range("unicode_cpt_to_byte: not a byte token code point");
+    }
+    return map[cpt];
 }
 
 uint32_t unicode_tolower(uint32_t cpt) {
