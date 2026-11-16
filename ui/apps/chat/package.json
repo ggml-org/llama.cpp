@@ -58,6 +58,7 @@
 		"@tailwindcss/forms": "0.5.10",
 		"@tailwindcss/typography": "0.5.20",
 		"@tailwindcss/vite": "4.1.11",
+		"@types/mdast": "4.0.4",
 		"@types/node": "24.13.0",
 		"@vite-pwa/assets-generator": "1.0.4",
 		"@vite-pwa/sveltekit": "1.1.0",
@@ -79,7 +80,6 @@
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
 		"llama-brand": "https://codeload.github.com/ggml-org/llama-brand/tar.gz/f05540643c1ca2a18d732ed6491c839686da9a3a",
-		"mdast": "3.0.0",
 		"mdsvex": "0.12.7",
 		"mermaid": "11.17.2",
 		"mode-watcher": "1.1.0",
@@ -121,9 +121,16 @@
 	"overrides": {
 		"@storybook/svelte": "10.6.2",
 		"cookie": "1.1.1",
-		"katex": "0.18.11",
+		"http-server": {
+			"html-encoding-sniffer": "6.0.0"
+		},
+		"katex": "0.19.0",
 		"postcss-selector-parser": "7.1.6",
 		"sharp": "0.35.5",
-		"valibot": "1.4.2"
+		"valibot": "1.4.2",
+		"workbox-build": {
+			"glob": "13.0.6",
+			"source-map": "0.8.0"
+		}
 	}
 }
