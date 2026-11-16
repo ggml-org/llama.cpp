@@ -7,7 +7,6 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
-#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -191,8 +190,7 @@ int main(int argc, char ** argv) {
         return t;
     };
 
-    // without -n, the helper stops at the frame limit of the model
-    const int max_new = params.n_predict > 0 ? params.n_predict : INT_MAX;
+    const int max_new = gen.max_frames(params.n_predict);
     int n_frames = 0;
     llama_token sampled = sample_semantic_code();
     const float * h_state = llama_get_embeddings_ith(lctx, -1);

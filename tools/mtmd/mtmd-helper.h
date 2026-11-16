@@ -344,6 +344,9 @@ MTMD_API void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx);
 
 MTMD_API void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx);
 
+// frame limit for a caller that has none of its own (e.g. no -n); 0 = step_gen() stops by itself
+MTMD_API int32_t mtmd_helper_gen_audio_max_frames(const mtmd_helper_gen_audio * ctx);
+
 // returns 0 on success, 2 if the input is invalid for the model (e.g. unsupported speed or loudness), 1 on other errors
 MTMD_API int32_t mtmd_helper_gen_audio_set_input(
                         mtmd_helper_gen_audio * ctx,
@@ -357,8 +360,7 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
 
 // generates one frame; must only be called after step_prompt() has returned 0
 // sampled can be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token
-// out_stop (optional) is set on end-of-speech or at the frame limit of the model, the caller must then stop the loop
-// the caller may stop earlier with its own limit (e.g. -n)
+// out_stop (optional) is set on end-of-speech, the caller must then stop the loop
 // h_state_out is valid until next step_gen() or reset() call, null if no frame is generated
 MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
                         mtmd_helper_gen_audio * ctx,
@@ -465,6 +467,11 @@ struct gen_audio {
     }
     bool valid() const {
         return ctx.get() != nullptr;
+    }
+    // caller's limit if > 0, else the limit of the model
+    int32_t max_frames(int32_t n_predict) const {
+        const int32_t n_model = mtmd_helper_gen_audio_max_frames(ctx.get());
+        return n_predict > 0 ? n_predict : n_model > 0 ? n_model : INT32_MAX;
     }
     void reset() {
         mtmd_helper_gen_audio_reset(ctx.get());
