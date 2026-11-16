@@ -2217,10 +2217,8 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             // A larger compiled prefill also serves a smaller attended length: the extra KV rows are masked, as with
             // the power-of-two rounding. Without this, a new prompt walks up the sizes again, and since only one
             // prefill model is kept, every prompt longer than one chunk recompiles. Head-major KV is bound at the
-            // storage size, so it keeps the exact match. With GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS every size keeps
-            // its own model, so each call runs at its own size.
-            const bool reuse_larger =
-                !ggml_openvino_npu_kv_head_major_enabled() && !ggml_openvino_npu_keep_prefill_models_enabled();
+            // storage size, so it keeps the exact match.
+            const bool reuse_larger = !ggml_openvino_npu_kv_head_major_enabled();
             cache_hit = reuse_larger ? entry->prefill_attention_size >= c_params.attention_size &&
                                            entry->prefill_attention_size_swa >= c_params.attention_size_swa :
                                        entry->prefill_attention_size == c_params.attention_size &&
