@@ -3328,7 +3328,7 @@ static void iq2_neighbour_cache_init(iq2_neighbour_cache * cache, const float * 
         const double w = (double)weight[i], x = (double)xval[i], abs_w = fabs(w), abs_x = fabs(x);
         cache->sum_w  += abs_w;     cache->sum_wx  += abs_w*abs_x;       cache->sum_wxx  += abs_w*abs_x*abs_x;
         cache->sum_w1 += 1 + abs_w; cache->sum_w1x += (1 + abs_w)*abs_x; cache->sum_w1xx += (1 + abs_w)*abs_x*abs_x;
-        for (int q = 1; q < 8; q += 2) {
+        for (int q = 0; q < 8; ++q) {
             cache->lin_term[i][q]  = 2*w*x*q;
             cache->quad_term[i][q] = w*q*q;
         }
@@ -3349,6 +3349,7 @@ static int iq2_find_best_neighbour_cached(iq2_neighbour_cache * cache, int patte
     // size of the numbers in the exact search, its rounding error is a multiple of 2^-24*size (+ size_subnormal for underflow)
     const double size           = max_level*max_level*cache->sum_w + 2*max_level*cache->sum_wx + cache->sum_wxx;
     const double size_subnormal = (1 + max_level)*(1 + max_level)*cache->sum_w1 + 2*(1 + max_level)*cache->sum_w1x + cache->sum_w1xx;
+    // the cached score is (exact score - const)/s, so the 2^-18*size margin on the exact score is divided by s
     const double tolerance = (0x1p-18*size + 0x1p-100*size_subnormal)/scale_d;
     if (num_neighbors <= 0 || num_neighbors > IQ2_NEIGHBOUR_CACHE_MAX || !(scale_d > 0 && size < 0x1p100 && size_subnormal < 0x1p100 && tolerance > 0)) {
         return iq2_find_best_neighbour(neighbours, grid, xval, weight, scale, L);
