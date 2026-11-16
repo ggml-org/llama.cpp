@@ -12,6 +12,7 @@ Supported models:
 - [Chatterbox](#chatterbox)
 - [Drama 3](#drama-3)
 - [ZONOS3](#zonos3)
+- [Kokoro](#kokoro)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -215,3 +216,62 @@ Convert the root of the release repository, not the `lm/` subdirectory. The mmpr
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --outtype q8_0 --outfile zonos3-mini.gguf
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --mmproj --outtype f32 --outfile mmproj-zonos3-mini.gguf
 ```
+
+## Kokoro
+
+Available params:
+- `--tts-voice` selects one of the voices shipped with the weights (default: `af_heart`); `llama-tts` lists them when the name is unknown. The first letter of a voice is its language: `a` American English, `b` British English, `e` Spanish, `f` French, `h` Hindi, `i` Italian, `p` Brazilian Portuguese, `j` Japanese, `z` Mandarin
+- `--tts-lang` can be `en-us` or `en-gb`; when it is not given, the voices named `b*` speak British English and those named `a*` American English
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the vocoder source
+- `speed` (`llama-server` only) changes the speaking rate, e.g. `1.5`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m kokoro.gguf \
+    -mm mmproj-kokoro.gguf \
+    -p "Hello world" \
+    --tts-voice am_michael \
+    --output out.wav
+```
+
+The model speaks phonemes. Only English has a text to phonemes step (the model's `tts` chat template, with the pronunciation dictionary stored in the model):
+- a word missing from the dictionary (mostly rare names) is skipped: the reference falls back to espeak-ng for it, which llama.cpp does not have
+- a text longer than 510 phonemes is split at sentence ends and spoken segment by segment
+
+**Other languages, or your own phonemes:**
+
+The prompt of a voice of another language must already be phonemes, in the symbols of the model (see `vocab` in its `config.json`). Run the text to phonemes step in your own code, for example with [espeak-ng](https://github.com/espeak-ng/espeak-ng), which the reference uses for Spanish, French, Hindi, Italian and Brazilian Portuguese:
+
+```sh
+PHONEMES=$(echo "El gobierno anunció nuevas medidas." | espeak-ng -q --ipa -v es --stdin | tr '\n' ' ')
+llama-tts -m kokoro.gguf \
+    -mm mmproj-kokoro.gguf \
+    -p "$PHONEMES" \
+    --tts-voice ef_dora \
+    --output out.wav
+```
+
+Notes:
+- espeak-ng drops the punctuation, which the model uses for pauses: phonemize the text between the marks and put them back for better prosody
+- the reference also replaces a few sounds by single symbols (e.g. `tʃ` by `ʧ`), see `espeak.py` of [misaki](https://github.com/hexgrad/misaki)
+- with `llama-server`, send `"raw_prompt": true` to pass phonemes with any voice, including the English ones
+
+**Note for GGUF conversion:**
+
+Download `config.json`, `kokoro-v1_0.pth` and the `voices/*.pt` files you want from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), every voice in the directory is stored in the mmproj:
+
+```sh
+python convert_hf_to_gguf.py path/to/Kokoro-82M --outfile kokoro.gguf
+python convert_hf_to_gguf.py path/to/Kokoro-82M --mmproj --outfile mmproj-kokoro.gguf
+```
+
+The pronunciation dictionary and the part-of-speech tagger of the `tts` template come from the `misaki` and `nltk` python packages:
+
+```sh
+pip install misaki nltk
+python -m nltk.downloader averaged_perceptron_tagger_eng
+```
+
+Without them the converter writes no `tts` template, and the prompt must be a phoneme string (as produced by misaki).
