@@ -1,26 +1,37 @@
 /**
- * DatabaseService - IndexedDB persistence for conversations and messages
+ * DatabaseService - IndexedDB persistence for conversations, messages and groups
  *
- * Thin Dexie layer over the conversations/messages tables: CRUD, tree
+ * Thin Dexie layer over the conversations/messages/groups tables: CRUD, tree
  * navigation (descendants, reparenting) and cascading deletes. No reactive
- * state; consumed by conversationsStore and the chat flows.
+ * state; consumed by conversationsStore, groupsStore and the chat flows.
  */
 
-import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
+import {
+	IDXDB_STORE_SCHEMAS,
+	IDXDB_STORES_V1,
+	IDXDB_TABLES,
+	IDXDB_VERSION,
+	STORAGE_APP_NAME
+} from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
+import type { Group } from '$lib/types/groups';
 import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
 import Dexie, { type EntityTable } from 'dexie';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
+	[IDXDB_TABLES.groups]!: EntityTable<Group, 'id'>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
-		this.version(1).stores(IDXDB_STORES);
+		this.version(1).stores(IDXDB_STORES_V1);
+		this.version(IDXDB_VERSION).stores({
+			[IDXDB_TABLES.groups]: IDXDB_STORE_SCHEMAS.groups
+		});
 	}
 }
 
@@ -144,6 +155,17 @@ export class DatabaseService {
 		await db[IDXDB_TABLES.conversations].add(conversation);
 
 		return conversation;
+	}
+
+	/**
+	 * Creates a new group.
+	 *
+	 * @returns The created group
+	 */
+	static async createGroup(group: Group): Promise<Group> {
+		await db[IDXDB_TABLES.groups].add(group);
+
+		return group;
 	}
 
 	/**
@@ -310,6 +332,26 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Deletes a group. Its conversations stay, out of any group.
+	 *
+	 * @param id - Group ID
+	 */
+	static async deleteGroup(id: string): Promise<void> {
+		await db.transaction(
+			'rw',
+			[db[IDXDB_TABLES.groups], db[IDXDB_TABLES.conversations]],
+			async () => {
+				await db[IDXDB_TABLES.groups].delete(id);
+				await db[IDXDB_TABLES.conversations]
+					.filter((conversation) => conversation.groupId === id)
+					.modify((conversation) => {
+						delete conversation.groupId;
+					});
+			}
+		);
+	}
+
+	/**
 	 * Deletes a message and removes it from its parent's children array.
 	 *
 	 * @param messageId - ID of the message to delete
@@ -421,7 +463,12 @@ export class DatabaseService {
 				const newConv: DatabaseConversation = {
 					currNode: lastClonedMessage.id,
 					cwd: sourceConv.cwd,
+					disabledToolCategories: sourceConv.disabledToolCategories
+						? [...sourceConv.disabledToolCategories]
+						: undefined,
+					disabledTools: sourceConv.disabledTools ? [...sourceConv.disabledTools] : undefined,
 					forkedFromConversationId: sourceConvId,
+					groupId: sourceConv.groupId,
 					id: newConvId,
 					lastModified: Date.now(),
 					mcpServerOverrides: sourceConv.mcpServerOverrides
@@ -448,6 +495,18 @@ export class DatabaseService {
 	 */
 	static async getAllConversations(): Promise<DatabaseConversation[]> {
 		return await db[IDXDB_TABLES.conversations].orderBy('lastModified').reverse().toArray();
+	}
+
+	/**
+	 * Gets all groups, newest first by creation, the order new ones join the
+	 * loaded list in, so a rename does not move a group on the next load.
+	 *
+	 * @returns Array of groups
+	 */
+	static async getAllGroups(): Promise<Group[]> {
+		const groups = await db[IDXDB_TABLES.groups].toArray();
+
+		return groups.sort((a, b) => b.createdAt - a.createdAt);
 	}
 
 	/**
@@ -521,24 +580,30 @@ export class DatabaseService {
 	 * @returns The conversations written to the database and the ones skipped
 	 */
 	static async importConversations(
-		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
+		data: ExportedConversation[]
 	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const imported: DatabaseConversation[] = [];
 		const skipped: DatabaseConversation[] = [];
 
 		return await db.transaction(
 			'rw',
-			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
+			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.groups], db[IDXDB_TABLES.messages]],
 			async () => {
 				for (const item of data) {
-					const { conv, messages } = item;
-					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
+					const { messages } = item;
+					const existing = await db[IDXDB_TABLES.conversations].get(item.conv.id);
 
 					if (existing) {
-						skipped.push(conv);
+						skipped.push(item.conv);
 
 						continue;
 					}
+
+					const conv = { ...item.conv };
+					const groupId = await DatabaseService.importGroup(item);
+
+					if (groupId) conv.groupId = groupId;
+					else delete conv.groupId;
 
 					await db[IDXDB_TABLES.conversations].add(conv);
 					for (const msg of messages) {
@@ -551,6 +616,37 @@ export class DatabaseService {
 				return { imported, skipped };
 			}
 		);
+	}
+
+	/** Run `fn` in a readonly transaction over all tables. `fn` must await only Dexie calls, else the transaction commits early */
+	static async readOnly<T>(
+		fn: (tables: Pick<LlamaUiDatabase, keyof typeof IDXDB_TABLES>) => Promise<T>
+	): Promise<T> {
+		return db.transaction('r', [db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]], () =>
+			fn(db)
+		);
+	}
+
+	/**
+	 * Puts conversations into a group, or out of any group when `groupId` is null.
+	 * A conversation that joins a group is unpinned.
+	 *
+	 * @param ids - Conversation IDs
+	 * @param groupId - Target group, null to take them out of their group
+	 */
+	static async setConversationsGroup(ids: string[], groupId: string | null): Promise<void> {
+		await db[IDXDB_TABLES.conversations]
+			.where('id')
+			.anyOf(ids)
+			.modify((conversation) => {
+				if (groupId) {
+					conversation.groupId = groupId;
+
+					if (conversation.pinned) conversation.pinned = false;
+				} else {
+					delete conversation.groupId;
+				}
+			});
 	}
 
 	/**
@@ -602,6 +698,17 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Updates a group. `updatedAt` is never stamped implicitly; pass it in
+	 * `updates` to bump the group in recency ordering.
+	 *
+	 * @param id - Group ID
+	 * @param updates - Partial group data to update
+	 */
+	static async updateGroup(id: string, updates: Partial<Omit<Group, 'id'>>): Promise<void> {
+		await db[IDXDB_TABLES.groups].update(id, updates);
+	}
+
+	/**
 	 * Updates a message.
 	 *
 	 * @param id - Message ID
@@ -626,6 +733,38 @@ export class DatabaseService {
 		await db[IDXDB_TABLES.messages].update(parentId, {
 			children: [...parent.children, childId]
 		});
+	}
+
+	/**
+	 * Finds the group an imported conversation goes into: the group of the same
+	 * id, else one of the same name, else a new one named after the file's. A
+	 * conversation whose group the file does not carry keeps it only if it exists.
+	 * Runs inside the import transaction.
+	 *
+	 * @returns The group id, or undefined for none
+	 */
+	private static async importGroup(item: ExportedConversation): Promise<string | undefined> {
+		const groups = db[IDXDB_TABLES.groups];
+
+		if (!item.group) {
+			const { groupId } = item.conv;
+
+			return groupId && (await groups.get(groupId)) ? groupId : undefined;
+		}
+
+		const { id, name } = item.group;
+
+		if (await groups.get(id)) return id;
+
+		const sameName = await groups.where('name').equals(name).first();
+
+		if (sameName) return sameName.id;
+
+		const now = Date.now();
+
+		await groups.add({ createdAt: now, id, name, updatedAt: now });
+
+		return id;
 	}
 
 	/**

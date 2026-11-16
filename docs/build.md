@@ -481,7 +481,7 @@ cmake --build build --config Release
 Now you can load the model in conversation mode using `Vulkan`
 
 ```sh
-build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2 -cnv
+build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2
 ```
 
 **MSYS2**
@@ -608,7 +608,7 @@ You can test with:
 If the following info is output on screen, you are using `llama.cpp` with the CANN backend:
 ```bash
 llm_load_tensors:       CANN model buffer size = 13313.00 MiB
-llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
+llama_init_from_model:       CANN compute buffer size =  1260.81 MiB
 ```
 
 For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).

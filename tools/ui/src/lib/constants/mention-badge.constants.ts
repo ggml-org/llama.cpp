@@ -1,7 +1,7 @@
 /**
  * Shared visual contract between the two DOM-only badge paths (the
- * ChatFormInputRich tokenizer + the rehype plugin). Svelte cannot be
- * mounted at the per-keystroke tokenizer hot path nor from a hast tree,
+ * chat form input's CodeMirror widget + the rehype plugin). Svelte cannot
+ * be mounted from a CodeMirror widget nor from a hast tree,
  * so both emit the badge with the same class string literal; Tailwind's
  * scanner picks it up in both sources.
  */
@@ -10,19 +10,12 @@ export const MENTION_BADGE_CLASSNAME =
 
 export const MENTION_BADGE_ICON_CLASSNAME = 'h-3 w-3 shrink-0';
 
-/** Full `data-*` attribute names that tag ChatFormInputRich mention badges. */
-export const MENTION_BADGE_DATA_ATTRS = {
-	BADGE: 'data-mention-badge',
-	NAME: 'data-mention-name',
-	PATH: 'data-mention-path'
-} as const;
-
 /** Regex flag that makes the mention scanner walk every link in a message instead of the first. */
 export const MENTION_LINK_SCAN_FLAGS = 'g';
 
 /**
  * SVG attributes shared by the DOM-built and hast-built badge icons.
- * The tokenizer applies them via `setAttribute`, the rehype plugin
+ * The editor widget applies them via `setAttribute`, the rehype plugin
  * spreads them onto the hast `<svg>` `properties`; string values are
  * valid for both.
  */

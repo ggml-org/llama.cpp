@@ -10,6 +10,7 @@
 
 #include "json.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -111,6 +112,13 @@ std::string gen_tool_call_id();
 const char * get_media_marker();
 
 //
+// audio utils
+//
+
+// float samples to signed 16-bit PCM bytes, clamped to [-1, 1]
+std::string pcm_f32_to_s16(const float * samples, size_t n);
+
+//
 // model output modalities
 //
 
@@ -160,6 +168,10 @@ std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_i
 struct server_tokens {
     bool has_mtmd = false;
 
+    static constexpr size_t hash_block_size = 64;
+
+    using prefix_hash = std::array<uint8_t, 32>; // SHA-256
+
 private: // disallow accessing these members directly, risking out-of-sync
 
     // map a **start** index in tokens to the image chunk
@@ -178,6 +190,12 @@ private: // disallow accessing these members directly, risking out-of-sync
     // idx  0   1   2   3   4   5      6      7      8      9      10
     // pos  0   1   2   3   4   5      5      5      7      7      7
     // map_idx_to_media will contain: {5, img0}, {8, img1}
+
+    // chained hashes: entry k covers the first (k + 1) * hash_block_size tokens
+    // set_token() drops the entries after the change, the next append brings them back
+    std::vector<prefix_hash> hashes;
+
+    void update_hashes();
 
 public:
     server_tokens() = default;
@@ -247,6 +265,7 @@ public:
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();
+        hashes.clear();
     }
 
     void keep_first(size_t n);
@@ -254,6 +273,12 @@ public:
     std::string detokenize(const llama_context * ctx, bool special) const;
 
     size_t get_common_prefix(const server_tokens & b) const;
+
+    const std::vector<prefix_hash> & get_prefix_hashes() const { return hashes; }
+
+    // lower bound of get_common_prefix(), b is known only by its prefix hashes
+    // the result is less than one block plus one media chunk below the exact value
+    size_t get_common_prefix_lower(const std::vector<prefix_hash> & b_hashes) const;
 
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
@@ -292,11 +317,19 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
 size_t validate_utf8(const std::string& text);
 
+// true if the address is publicly routable
+bool server_addr_is_public(const std::string & addr);
+
+// resolve host to an address to connect to; throws if not resolvable or not public (unless allow_private)
+std::string server_resolve_public_addr(const std::string & host, bool allow_private);
+
 // load a media file from an URL (http, file, data) or from raw base64 data
+// http(s) URLs must resolve to public addresses unless allow_private_urls
 void handle_media(
         std::vector<raw_buffer> & out_files,
         const std::string & url,
-        const std::string & media_path);
+        const std::string & media_path,
+        bool allow_private_urls = false);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
 // if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
@@ -308,7 +341,7 @@ server_tokens process_mtmd_prompt(
                                           bool is_placeholder = false);
 
 // decode one media url (http/file/data-uri) into out_files; throws on failure
-void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path);
+void handle_media(std::vector<raw_buffer> & out_files, const std::string & url, const std::string & media_path, bool allow_private_urls);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -358,6 +391,7 @@ struct server_chat_params {
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;
+    bool media_allow_private_urls = false;
     bool force_pure_content = false;
 };
 
@@ -737,6 +771,7 @@ enum server_role_type {
     SERVER_ROLE_ROUTER,   // no model: lists the models, spawns instances on demand and proxies requests to them
     SERVER_ROLE_INSTANCE, // serves one model, standalone or as a child of a router
     SERVER_ROLE_DOWNLOAD, // child of a router: download a model, report the progress, exit
+    SERVER_ROLE_MEASURE,  // child of a router: report the memory the model needs without loading it, exit
 };
 
 static inline const char * server_role_type_to_str(server_role_type role) {
@@ -744,6 +779,7 @@ static inline const char * server_role_type_to_str(server_role_type role) {
         case SERVER_ROLE_ROUTER:   return "router";
         case SERVER_ROLE_INSTANCE: return "instance";
         case SERVER_ROLE_DOWNLOAD: return "download";
+        case SERVER_ROLE_MEASURE:  return "measure";
         default: GGML_ASSERT(false && "invalid server_role_type");
     }
 }
@@ -752,6 +788,9 @@ static inline const char * server_role_type_to_str(server_role_type role) {
 static inline server_role_type server_role_type_from_str(const std::string & str) {
     if (str == "download") {
         return SERVER_ROLE_DOWNLOAD;
+    }
+    if (str == "measure") {
+        return SERVER_ROLE_MEASURE;
     }
     return SERVER_ROLE_INSTANCE;
 }
@@ -772,6 +811,7 @@ static inline server_role_type server_role_type_from_str(const std::string & str
 // the states a child reports to the router
 enum server_state {
     SERVER_STATE_DOWNLOADING,
+    SERVER_STATE_MEASURING, // sent by a measure child, see server_run_measure
     SERVER_STATE_LOADING,
     SERVER_STATE_READY,
     SERVER_STATE_SLEEPING,
@@ -780,6 +820,7 @@ enum server_state {
 static inline std::string server_state_to_str(server_state state) {
     switch (state) {
         case SERVER_STATE_DOWNLOADING: return "downloading";
+        case SERVER_STATE_MEASURING:   return "measuring";
         case SERVER_STATE_LOADING:     return "loading";
         case SERVER_STATE_READY:       return "ready";
         case SERVER_STATE_SLEEPING:    return "sleeping";
@@ -789,6 +830,7 @@ static inline std::string server_state_to_str(server_state state) {
 
 static inline server_state server_state_from_str(const std::string & str) {
     if (str == "downloading") return SERVER_STATE_DOWNLOADING;
+    if (str == "measuring")   return SERVER_STATE_MEASURING;
     if (str == "loading")     return SERVER_STATE_LOADING;
     if (str == "ready")       return SERVER_STATE_READY;
     if (str == "sleeping")    return SERVER_STATE_SLEEPING;

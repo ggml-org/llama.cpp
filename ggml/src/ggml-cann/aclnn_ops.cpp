@@ -1347,31 +1347,6 @@ void ggml_cann_rms_norm(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, RmsNorm, acl_src.get(), acl_gamma.get(), eps, acl_dst.get(), acl_rstd.get());
 }
 
-// TODO: performace is low.
-void ggml_cann_diag_mask(ggml_backend_cann_context & ctx, ggml_tensor * dst, float value) {
-    ggml_tensor * src = dst->src[0];
-
-    acl_tensor_ptr acl_src = ggml_cann_create_tensor(src);
-    acl_tensor_ptr acl_dst = ggml_cann_create_tensor(dst);
-
-    const int n_past = ((int32_t *) dst->op_params)[0];
-
-    ggml_cann_pool_alloc one_tensor_allocator(ctx.pool(), ggml_nbytes(src));
-    void *               buffer = one_tensor_allocator.get();
-
-    acl_tensor_ptr mask_tensor = ggml_cann_create_tensor(buffer, ggml_cann_type_mapping(src->type),
-                                                         ggml_type_size(src->type), src->ne, src->nb, GGML_MAX_DIMS);
-
-    aclnn_fill_scalar(ctx, value, mask_tensor.get());
-
-    float          alphaValue = 1.0f;
-    acl_scalar_ptr alpha      = ggml_cann_create_scalar(&alphaValue, aclDataType::ACL_FLOAT);
-
-    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceTriu, mask_tensor.get(), n_past + 1);
-    GGML_CANN_CALL_ACLNN_OP(ctx, Tril, acl_src.get(), n_past + 1, acl_dst.get());
-    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, acl_dst.get(), mask_tensor.get(), alpha.get());
-}
-
 /**
  * @brief Permutes the dimensions of a tensor according to a specified order.
  *
@@ -2934,7 +2909,7 @@ void ggml_cann_rope(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
     float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, true, corr_dims);
 
     bool       is_neox    = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_imrope  = mode == GGML_ROPE_TYPE_IMROPE;  // qwen3vl apply interleaved mrope
@@ -3289,7 +3264,7 @@ void ggml_cann_rope_cache_preload(ggml_backend_cann_context & ctx, ggml_tensor *
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
     float corr_dims[2];
-    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, true, corr_dims);
 
     bool       is_neox    = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_imrope  = mode == GGML_ROPE_TYPE_IMROPE;

@@ -26,7 +26,15 @@ export enum SidebarAction {
 	MANAGE_MODELS = 'manage-models',
 	MCP = 'mcp',
 	NEW_CHAT = 'new-chat',
+	SEARCH = 'search',
 	SETTINGS = 'settings'
+}
+
+/** Kind of a sidebar conversation section, which can be dragged into another order. */
+export enum SidebarSectionKind {
+	GROUP = 'group',
+	PINNED = 'pinned',
+	RECENT = 'recent'
 }
 
 /**
@@ -61,4 +69,12 @@ export enum ColorLevel {
 	NEUTRAL = 'neutral',
 	OK = 'ok',
 	WARNING = 'warning'
+}
+
+/**
+ * Which menu an item's actions render in.
+ */
+export enum MenuKind {
+	CONTEXT = 'context',
+	DROPDOWN = 'dropdown'
 }

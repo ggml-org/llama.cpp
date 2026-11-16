@@ -45,6 +45,7 @@ size_t ggml_metal_op_flash_attn_ext_extra_blk(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_tmp(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_kv_f16(const struct ggml_tensor * op);
 size_t ggml_metal_op_flash_attn_ext_extra_idx(const struct ggml_tensor * op);
+size_t ggml_metal_op_flash_attn_ext_extra_rows(const struct ggml_tensor * op);
 
 size_t ggml_metal_op_argmax_extra(const struct ggml_tensor * op);
 
@@ -60,6 +61,7 @@ int ggml_metal_op_get_rows          (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_set_rows          (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_diag              (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_lightning_indexer (ggml_metal_op_t ctx, int idx);
+int ggml_metal_op_top_k_mask        (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_dsv4_hc           (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_soft_max          (ggml_metal_op_t ctx, int idx);
 int ggml_metal_op_ssm_conv          (ggml_metal_op_t ctx, int idx);

@@ -155,29 +155,15 @@ void llama_model_bailingmoe3::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_bailingmoe3::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-static ggml_tensor * bailingmoe3_causal_conv1d(
-        ggml_cgraph * gf,
-        ggml_context * ctx0,
-        ggml_tensor * conv_states_all,
-        ggml_tensor * conv_state_all,
-        int64_t qkv,
-        ggml_tensor * x,
-        ggml_tensor * proj_w,
-        ggml_tensor * conv_w,
-        int64_t d_conv,
-        int64_t head_dim,
-        int64_t n_head,
-        int64_t n_seq_tokens,
-        int64_t n_seqs,
-        int64_t n_tokens,
-        int64_t cache_head,
-        uint32_t mem_size,
-        uint32_t n_rs_seq) {
+ggml_tensor * llama_model_bailingmoe3::graph::build_causal_conv1d(
+        llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
+        int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
+        int64_t d_conv, int64_t head_dim, int64_t n_head, int64_t n_seq_tokens, int64_t n_seqs) {
     const int64_t d_inner = head_dim * n_head;
     const int64_t conv_state_size = (d_conv - 1) * d_inner;
     const int64_t total_state_size = 3 * conv_state_size;
@@ -191,18 +177,8 @@ static ggml_tensor * bailingmoe3_causal_conv1d(
     x_proj = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
     ggml_tensor * conv_x = ggml_concat(ctx0, conv_state, ggml_transpose(ctx0, x_proj), 0);
 
-    const int64_t K = (int64_t) n_rs_seq + 1;
-    const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
-
-    for (int64_t slot = 0; slot < n_written; ++slot) {
-        ggml_tensor * conv_snap = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
-                conv_x->nb[1], conv_x->nb[2], (conv_x->ne[0] - (d_conv - 1) - slot) * conv_x->nb[0]);
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
-                ggml_view_3d(ctx0, conv_states_all, d_conv - 1, d_inner, n_seqs,
-                    (d_conv - 1) * ggml_element_size(conv_states_all),
-                    total_state_size * ggml_element_size(conv_states_all),
-                    ((slot * mem_size + cache_head) * total_state_size + qkv * conv_state_size) * ggml_element_size(conv_states_all))));
-    }
+    build_conv_state_store(inp_rs, conv_states_all, conv_x, d_conv - 1,
+            ggml_row_size(conv_states_all->type, qkv * conv_state_size));
 
     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
     ggml_tensor * out = ggml_ssm_conv(ctx0, conv_x, conv_weight);
@@ -210,8 +186,8 @@ static ggml_tensor * bailingmoe3_causal_conv1d(
     return ggml_reshape_4d(ctx0, out, head_dim, n_head, n_seq_tokens, n_seqs);
 }
 
-llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_bailingmoe3::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     cb(inpL, "model.input_embed", -1);
 
@@ -229,9 +205,6 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
     const int64_t n_seqs = ubatch.n_seqs;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
-    const bool use_mrope = hparams.use_mrope();
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
     const int64_t qk_head_dim = hparams.n_embd_head_k_mla();
     const int64_t v_head_dim = hparams.n_embd_head_v_mla();
     const int64_t qk_rope_head_dim = hparams.n_rot();
@@ -253,20 +226,18 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
 
         if (hparams.is_recr(il)) {
             const auto * mctx_cur = inp_rs->mctx;
-            const auto cache_head = mctx_cur->get_head();
-            const auto mem_size = mctx_cur->get_size();
             ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
             ggml_tensor * conv_state_all = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
 
-            ggml_tensor * q = bailingmoe3_causal_conv1d(
-                    gf, ctx0, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv,
-                    d_conv, head_dim, n_head, n_seq_tokens, n_seqs, n_tokens, cache_head, mem_size, cparams.n_rs_seq);
-            ggml_tensor * k = bailingmoe3_causal_conv1d(
-                    gf, ctx0, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv,
-                    d_conv, head_dim, n_head, n_seq_tokens, n_seqs, n_tokens, cache_head, mem_size, cparams.n_rs_seq);
-            ggml_tensor * v = bailingmoe3_causal_conv1d(
-                    gf, ctx0, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv,
-                    d_conv, head_dim, n_head, n_seq_tokens, n_seqs, n_tokens, cache_head, mem_size, cparams.n_rs_seq);
+            ggml_tensor * q = build_causal_conv1d(
+                    inp_rs, conv_states_all, conv_state_all, 0, cur, layer.wq, layer.ssm_q_conv,
+                    d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+            ggml_tensor * k = build_causal_conv1d(
+                    inp_rs, conv_states_all, conv_state_all, 1, cur, layer.wk, layer.ssm_k_conv,
+                    d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+            ggml_tensor * v = build_causal_conv1d(
+                    inp_rs, conv_states_all, conv_state_all, 2, cur, layer.wv, layer.ssm_v_conv,
+                    d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
 
             ggml_tensor * gate = ggml_mul_mat(ctx0, layer.ssm_f_a, cur);
             gate = ggml_add(ctx0, gate, layer.ssm_dt_b);
@@ -325,17 +296,8 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
                     ggml_row_size(kv_all->type, kv_lora_rank + qk_rope_head_dim),
                     ggml_row_size(kv_all->type, kv_lora_rank));
 
-            if (use_mrope) {
-                q_pe = ggml_rope_multi(ctx0, q_pe, inp_pos, nullptr, n_rot, sections, rope_type,
-                        n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-                k_pe = ggml_rope_multi(ctx0, k_pe, inp_pos, nullptr, n_rot, sections, rope_type,
-                        n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-            } else {
-                q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-            }
+            q_pe = build_rope(q_pe, inp_pos, il);
+            k_pe = build_rope(k_pe, inp_pos, il);
             kv = build_norm(kv, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
 
             q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
@@ -414,7 +376,7 @@ llama_model_bailingmoe3::graph::graph(const llama_model & model, const llm_graph
     res->t_logits = cur;
 }
 
-llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
+llama_model_bailingmoe3::graph_mtp::graph_mtp(const llm_graph_params & params) :
     llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "BailingMoE3 MTP requires one NextN layer");
 
@@ -442,9 +404,7 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
     ggml_set_input(inp->tokens);
     inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
     ggml_set_input(inp->embd);
-    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->h);
-    ggml_set_name(inp->h, "mtp_h_input");
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
 
     ggml_tensor * tok_embd = ubatch.token ? ggml_get_rows(ctx0, model.tok_embd, inp->tokens) : inp->embd;
     ggml_tensor * h_norm = build_norm(inp->h, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
@@ -489,21 +449,8 @@ llama_model_bailingmoe3::graph_mtp::graph_mtp(const llama_model & model, const l
             ggml_row_size(kv_all->type, kv_lora_rank + qk_rope_head_dim),
             ggml_row_size(kv_all->type, kv_lora_rank));
 
-    const bool use_mrope = hparams.use_mrope();
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
-
-    if (use_mrope) {
-        q_pe = ggml_rope_multi(ctx0, q_pe, inp_pos, nullptr, n_rot, sections, rope_type,
-                n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-        k_pe = ggml_rope_multi(ctx0, k_pe, inp_pos, nullptr, n_rot, sections, rope_type,
-                n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-    } else {
-        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-        k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-    }
+    q_pe = build_rope(q_pe, inp_pos, il);
+    k_pe = build_rope(k_pe, inp_pos, il);
     kv = build_norm(kv, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
 
     q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);

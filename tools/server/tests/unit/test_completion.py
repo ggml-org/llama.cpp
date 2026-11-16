@@ -1,3 +1,4 @@
+import http.client
 import pytest
 import requests
 import time
@@ -91,6 +92,30 @@ def test_completion_stream_vs_non_stream():
     for data in res_stream:
         content_stream += data["content"]
     assert content_stream == res_non_stream.body["content"]
+
+
+def test_completion_connection_reuse():
+    server.start()
+    conn = http.client.HTTPConnection(server.server_host, server.server_port, timeout=30)
+    try:
+        conn.connect()
+        conn.auto_open = 0
+        original_socket = conn.sock
+        conn.request("POST", "/completion", json.dumps({
+            "prompt": "Hello", "n_predict": 4, "stream": True,
+        }), {"Content-Type": "application/json"})
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert response.chunked
+            assert not response.will_close
+            assert response.read()
+        conn.request("GET", "/health")
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert json.loads(response.read())["status"] == "ok"
+        assert conn.sock is original_socket
+    finally:
+        conn.close()
 
 
 def test_completion_with_openai_library():
@@ -637,18 +662,23 @@ def test_cancel_request():
     server.n_predict = -1
     server.n_slots = 1
     server.server_slots = True
+    server.enable_ctx_shift = True
     server.start()
-    # send a request that will take a long time, but cancel it before it finishes
+    # context shift keeps the generation running until the request is cancelled
     try:
         server.make_request("POST", "/completion", data={
             "prompt": "I believe the meaning of life is",
         }, timeout=0.1)
     except requests.exceptions.ReadTimeout:
         pass # expected
-    # make sure the slot is free
-    time.sleep(2)
-    res = server.make_request("GET", "/slots")
-    assert res.body[0]["is_processing"] == False
+    # the slot is freed once the server notices the closed connection
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        res = server.make_request("GET", "/slots")
+        if not res.body[0]["is_processing"]:
+            return
+        time.sleep(0.1)
+    raise AssertionError("slot is still processing after the request was cancelled")
 
 
 # this test exercises the host-memory prompt cache
