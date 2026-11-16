@@ -2300,7 +2300,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
         return false;
     }
 
-    if (tensor->op == GGML_OP_MUL_MAT_ID && dst->ne[2] > get_mmvq_mmid_max_batch(src0->type, cc)) {
+    if (tensor->op == GGML_OP_MUL_MAT_ID && dst->ne[2] > ggml_cuda_mmvq_mmid_max_batch(src0, cc)) {
         return false;
     }
 
@@ -2459,7 +2459,7 @@ static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * up, const ggml_t
     const bool    is_id     = up->op == GGML_OP_MUL_MAT_ID;
     const int64_t ncols     = is_id ? y->ne[2]    : y->ne[1];
     const int64_t nchannels = is_id ? x_up->ne[2] : y->ne[2]*y->ne[3];
-    const bool    use_mmvq  = is_id ? ncols <= get_mmvq_mmid_max_batch(x_up->type, cc) : ggml_cuda_should_use_mmvq(x_up->type, cc, ncols);
+    const bool    use_mmvq  = is_id ? ncols <= ggml_cuda_mmvq_mmid_max_batch(x_up, cc) : ggml_cuda_should_use_mmvq(x_up->type, cc, ncols);
     // do not fuse the matmuls that few-row MMQ takes in ggml_cuda_mul_mat
     if (!is_id && ggml_cuda_should_use_mmq_few(x_up, y, cc)) {
         return false;
@@ -2555,7 +2555,7 @@ static bool ggml_cuda_mul_mat_id_needs_sync(const ggml_tensor * dst, const int c
 
     if (dst->ne[2] <= MMVQ_MAX_BATCH_SIZE) {
         if (ggml_is_quantized(src0->type)) {
-            if (dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc)) {
+            if (dst->ne[2] <= ggml_cuda_mmvq_mmid_max_batch(src0, cc)) {
                 return false;
             }
         } else if (src0->type == GGML_TYPE_F8_E4M3 &&
@@ -2595,7 +2595,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         static_assert(MMVQ_MAX_BATCH_SIZE == MMVF_MAX_BATCH_SIZE);
         if (ne2 <= MMVQ_MAX_BATCH_SIZE) {
             if (ggml_is_quantized(src0->type)) {
-                const int mmvq_mmid_max = get_mmvq_mmid_max_batch(src0->type, cc);
+                const int mmvq_mmid_max = ggml_cuda_mmvq_mmid_max_batch(src0, cc);
                 if (ne2 <= mmvq_mmid_max) {
                     ggml_cuda_mul_mat_vec_q(ctx, src0, src1, ids, dst);
                     return;
@@ -4379,7 +4379,8 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
-            ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {
+            ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1]) &&
+            cgraph->nodes[i + 2]->ne[2] <= get_mmvq_mmid_max_batch(cgraph->nodes[i]->src[0]->type, ggml_cuda_info().devices[cuda_ctx->device].cc)) {
         const int outputs[] = { i + 2, i + 5 };
         if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 6, outputs, 2)) {
             ggml_tensor * routed = cgraph->nodes[i + 2];

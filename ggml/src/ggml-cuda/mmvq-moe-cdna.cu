@@ -8,11 +8,12 @@
 // Rows are split into units of 32 values. A row has nlanes lanes, lane c of a row takes units c + nlanes*i, i < nu, with 16 byte loads.
 // The q8_1 values of the pair are copied to shared memory in unit order: values [0, 16) and [16, 32) of the unit and its scales.
 // For the K-quants the scales (and Q5_K qh) of the super-blocks of the tile are also copied to shared memory, the lanes only load qs.
+// Used on CDNA (wave64) and RDNA3/RDNA4 (wave32), the block has 256 threads on both.
 
-static constexpr int MMVQ_MOE_CDNA_NWARPS = 4;
+static constexpr int MMVQ_MOE_CDNA_NTHREADS = 256;
 static constexpr int MMVQ_MOE_CDNA_MAX_NU = 8;
 
-// limits for the search of pairs with the same expert, 2 ballots of 4 tokens x 16 slots per wave
+// limits for the search of pairs with the same expert, 128/warp_size ballots of warp_size/16 tokens x 16 slots per wave
 static constexpr int MMVQ_MOE_CDNA_DEDUP_MAX_TOKENS = 8;
 static constexpr int MMVQ_MOE_CDNA_DEDUP_MAX_SLOTS  = 16;
 
@@ -48,7 +49,7 @@ static constexpr __host__ __device__ int mmvq_moe_cdna_nshared(const ggml_type t
     return type == GGML_TYPE_Q4_K ? 1 : (type == GGML_TYPE_Q5_K ? 3 : 0);
 }
 
-#if defined(CDNA)
+#if defined(CDNA) || defined(RDNA3) || defined(RDNA4)
 static __device__ __forceinline__ int4 mmvq_moe_cdna_load_a4(const char * p) {
     int4 r;
     __builtin_memcpy(&r, __builtin_assume_aligned(p, 4), sizeof(r));
@@ -133,6 +134,13 @@ static __device__ __forceinline__ float mmvq_moe_cdna_dot(
         GGML_UNUSED(xs);
 #pragma unroll
         for (int k = 0; k < 4; ++k) {
+#if defined(RDNA3) || defined(RDNA4)
+            // VALU bound on RDNA: move the 4 bits of qh to bit 4 of the 4 bytes with one multiplication
+            const uint32_t hl = ((uint32_t(v[1]) >> (4*k +  0)) & 0xF) << 4;
+            const uint32_t hh = ((uint32_t(v[1]) >> (4*k + 16)) & 0xF) << 4;
+            const int vl = ((v[2 + k] >> 0) & 0x0F0F0F0F) | ((hl*0x00204081) & 0x10101010);
+            const int vh = ((v[2 + k] >> 4) & 0x0F0F0F0F) | ((hh*0x00204081) & 0x10101010);
+#else
             const int qh = v[1] >> (4*k);
             int vl = (v[2 + k] >> 0) & 0x0F0F0F0F;
             vl |= (qh <<  4) & 0x00000010;
@@ -144,6 +152,7 @@ static __device__ __forceinline__ float mmvq_moe_cdna_dot(
             vh |= (qh >>  5) & 0x00001000;
             vh |= (qh <<  2) & 0x00100000;
             vh |= (qh <<  9) & 0x10000000;
+#endif // defined(RDNA3) || defined(RDNA4)
             sl = ggml_cuda_dp4a(vl, ul[k], sl);
             sh = ggml_cuda_dp4a(vh, uh[k], sh);
         }
@@ -217,34 +226,41 @@ static __device__ __forceinline__ void mmvq_moe_cdna_store_y(const mmvq_moe_cdna
         aux = make_float4(ds.x, ds.y, 0.0f, 0.0f);
     }
 }
-#endif // defined(CDNA)
+#endif // defined(CDNA) || defined(RDNA3) || defined(RDNA4)
 
-// max. pairs per block in one pass: the y of the pairs in shared memory, at most 16 KB per block for 4 blocks per CU, one unit per thread, at most 4 sums
+// max. pairs per block in one pass: the y of the pairs in shared memory, one unit per thread, at most 4 sums.
+// At most 16 KB shared memory per block for 4 blocks per CU on CDNA, RDNA has more shared memory.
 template <ggml_type type, int nu, bool has_gate>
 static constexpr __host__ __device__ int mmvq_moe_cdna_npairs_max() {
+#if defined(RDNA3) || defined(RDNA4)
+    constexpr int lds_max = 32*1024;
+#else
+    constexpr int lds_max = 16*1024;
+#endif // defined(RDNA3) || defined(RDNA4)
     constexpr int nunits = mmvq_moe_cdna_nlanes(type)*nu;
-    constexpr int nxs    = (has_gate ? 2 : 1)*MMVQ_MOE_CDNA_NWARPS*64/mmvq_moe_cdna_nlanes(type)*(nunits/8)*mmvq_moe_cdna_nshared(type);
-    constexpr int n_lds  = (16*1024 - 16*nxs)/(3*16*nunits);
-    constexpr int n_thr  = MMVQ_MOE_CDNA_NWARPS*64/nunits;
+    constexpr int nxs    = (has_gate ? 2 : 1)*MMVQ_MOE_CDNA_NTHREADS/mmvq_moe_cdna_nlanes(type)*(nunits/8)*mmvq_moe_cdna_nshared(type);
+    constexpr int n_lds  = (lds_max - 16*nxs)/(3*16*nunits);
+    constexpr int n_thr  = MMVQ_MOE_CDNA_NTHREADS/nunits;
     constexpr int n      = n_lds < n_thr ? n_lds : n_thr;
     return n < 1 ? 1 : (n > 4 ? 4 : n);
 }
 
 // multi with gate: 3 waves per SIMD, with 4 the registers are too few to issue all weight loads at once
 template <ggml_type type, int nu, bool has_gate, bool multi>
-__launch_bounds__(MMVQ_MOE_CDNA_NWARPS*64, multi && has_gate ? 3 : MMVQ_MOE_CDNA_MIN_WAVES)
+__launch_bounds__(MMVQ_MOE_CDNA_NTHREADS, multi && has_gate ? 3 : MMVQ_MOE_CDNA_MIN_WAVES)
 static __global__ void mul_mat_vec_q_moe_cdna(
         const char * __restrict__ vx, const char * __restrict__ vy, const int32_t * __restrict__ ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * __restrict__ dst,
         const int nrows_x, const int64_t stride_row_x, const int64_t stride_channel_x,
         const int stride_col_y, const int stride_channel_y, const int nchannels_y,
         const int stride_col_dst, const int stride_channel_dst, const int ids_stride) {
-#if defined(CDNA)
+#if defined(CDNA) || defined(RDNA3) || defined(RDNA4)
+    constexpr int warp_size      = ggml_cuda_get_physical_warp_size();
     constexpr int nlanes         = mmvq_moe_cdna_nlanes(type);
     constexpr int nregs          = mmvq_moe_cdna_nregs(type);
     constexpr int nunits         = nlanes*nu;
-    constexpr int rows_per_warp  = 64/nlanes;
-    constexpr int rows_per_block = MMVQ_MOE_CDNA_NWARPS*rows_per_warp;
+    constexpr int rows_per_warp  = warp_size/nlanes;
+    constexpr int rows_per_block = MMVQ_MOE_CDNA_NTHREADS/nlanes;
     constexpr int nshared        = mmvq_moe_cdna_nshared(type);
     constexpr int nsb            = nshared > 0 ? nunits/8 : 1; // super-blocks per row
     constexpr int nmat           = has_gate ? 2 : 1;
@@ -253,7 +269,7 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     constexpr bool loop_pairs    = multi && nlanes == 4;
     static_assert(!loop_pairs || !has_gate, "no gate with loop_pairs");
     constexpr int npmax          = multi && !loop_pairs ? mmvq_moe_cdna_npairs_max<type, nu, has_gate>() : 1;
-    constexpr int nthreads       = MMVQ_MOE_CDNA_NWARPS*64;
+    constexpr int nthreads       = MMVQ_MOE_CDNA_NTHREADS;
     static_assert(npmax*nunits <= nthreads, "one y unit per thread");
 
     __shared__ int4   y_lo[npmax*nunits];
@@ -273,17 +289,25 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     uint64_t same0 = 0; // tokens 0-3
     uint64_t same1 = 0; // tokens 4-7
     if constexpr (multi) {
-        int e[2];
+        constexpr int nscan = 128/warp_size;
+        constexpr int tpb   = warp_size/16; // tokens per ballot
+        int e[nscan];
 #pragma unroll
-        for (int h = 0; h < 2; ++h) {
-            e[h] = ids[min(4*h + lane/16, int(gridDim.z) - 1)*ids_stride + min(lane % 16, int(gridDim.y) - 1)];
+        for (int h = 0; h < nscan; ++h) {
+            e[h] = ids[min(tpb*h + lane/16, int(gridDim.z) - 1)*ids_stride + min(lane % 16, int(gridDim.y) - 1)];
         }
 #pragma unroll
-        for (int h = 0; h < 2; ++h) {
-            const bool valid = (4*h + lane/16 < int(gridDim.z)) & (lane % 16 < int(gridDim.y));
+        for (int h = 0; h < nscan; ++h) {
+            const bool valid = (tpb*h + lane/16 < int(gridDim.z)) & (lane % 16 < int(gridDim.y));
             const uint64_t b = __ballot(valid & (e[h] == expert));
-            same0 = h == 0 ? b : same0;
-            same1 = h == 1 ? b : same1;
+            if constexpr (warp_size == 64) {
+                same0 = h == 0 ? b : same0;
+                same1 = h == 1 ? b : same1;
+            } else {
+                const uint64_t bs = b << (32*(h % 2));
+                same0 |= h < 2 ? bs : 0;
+                same1 |= h < 2 ? 0 : bs;
+            }
         }
         const int      q     = token*16 + slot;
         const uint64_t lt0   = q < 64 ? (uint64_t(1) << q) - 1 : ~uint64_t(0);
@@ -306,7 +330,7 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     if constexpr (loop_pairs) {
         const int c   = lane % nlanes;
         const int row = int(blockIdx.x)*rows_per_block + warp*rows_per_warp + lane/nlanes;
-        const int tid = warp*64 + lane;
+        const int tid = warp*warp_size + lane;
         const int uy  = min(tid, nunits - 1);
         const int64_t offset_x = expert*stride_channel_x + min(row, nrows_x - 1)*stride_row_x;
 
@@ -380,7 +404,7 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     auto compute_pairs = [&](const int (&pt)[npmax], const int (&ps)[npmax], const int np) {
         const int c   = lane % nlanes;
         const int row = int(blockIdx.x)*rows_per_block + warp*rows_per_warp + lane/nlanes;
-        const int tid = warp*64 + lane;
+        const int tid = warp*warp_size + lane;
         const int64_t offset_x = expert*stride_channel_x + min(row, nrows_x - 1)*stride_row_x;
 
         // Loads in the order y, x, x_sh: y has the shortest latency and s_waitcnt vmcnt counts in order.
@@ -516,7 +540,7 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     GGML_UNUSED_VARS(vx, vy, ids, fusion, dst, nrows_x, stride_row_x, stride_channel_x, stride_col_y, stride_channel_y,
         nchannels_y, stride_col_dst, stride_channel_dst, ids_stride);
     NO_DEVICE_CODE;
-#endif // defined(CDNA)
+#endif // defined(CDNA) || defined(RDNA3) || defined(RDNA4)
 }
 
 template <ggml_type type, int nu>
@@ -524,11 +548,12 @@ static void mul_mat_vec_q_moe_cdna_launch(
         const ggml_tensor * src0, const void * vy, const int32_t * ids, const ggml_cuda_mm_fusion_args_device & fusion, float * dst,
         const int64_t ncols_dst, const int64_t nchannels_dst, const int64_t nchannels_y, const int64_t stride_col_y, const int64_t stride_channel_y,
         const int64_t stride_col_dst, const int64_t stride_channel_dst, const int64_t ids_stride, cudaStream_t stream) {
-    constexpr int rows_per_block = MMVQ_MOE_CDNA_NWARPS*64/mmvq_moe_cdna_nlanes(type);
+    constexpr int rows_per_block = MMVQ_MOE_CDNA_NTHREADS/mmvq_moe_cdna_nlanes(type);
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
 
     const int nrows_x = src0->ne[1];
     const dim3 block_nums((nrows_x + rows_per_block - 1)/rows_per_block, nchannels_dst, ncols_dst);
-    const dim3 block_dims(64, MMVQ_MOE_CDNA_NWARPS, 1);
+    const dim3 block_dims(warp_size, MMVQ_MOE_CDNA_NTHREADS/warp_size, 1);
 
     // with 1 token only duplicate ids within the token could share a block
     const bool multi = ncols_dst > 1 && ncols_dst <= MMVQ_MOE_CDNA_DEDUP_MAX_TOKENS && nchannels_dst <= MMVQ_MOE_CDNA_DEDUP_MAX_SLOTS;
@@ -579,29 +604,35 @@ static void mul_mat_vec_q_moe_cdna_switch_nu(
     }
 }
 
-bool ggml_cuda_mmvq_moe_cdna_supported(const ggml_tensor * src0, const ggml_tensor * dst, const int cc, const ggml_cuda_mm_fusion_args_device & fusion) {
-    if (!GGML_CUDA_CC_IS_CDNA(cc) || !mmvq_moe_cdna_type_supported(src0->type)) {
+bool ggml_cuda_mmvq_moe_cdna_src0_supported(const ggml_tensor * src0, const int cc) {
+    if (!(GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA3_0(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) || !mmvq_moe_cdna_type_supported(src0->type)) {
         return false;
     }
-    if (fusion.x_scale || fusion.gate_scale || fusion.shared_up) {
-        return false;
-    }
-    // fused Q5_K is not faster than mul_mat_vec_q for 1-2 tokens
-    if (src0->type == GGML_TYPE_Q5_K && fusion.gate) {
-        return false;
-    }
-    if (src0->ne[3] != 1 || dst->ne[3] != 1) {
+    if (src0->ne[3] != 1) {
         return false;
     }
     const int64_t unit_k = QK8_1*mmvq_moe_cdna_nlanes(src0->type);
     if (src0->ne[0] % unit_k != 0 || src0->ne[0]/unit_k > MMVQ_MOE_CDNA_MAX_NU) {
         return false;
     }
-    const size_t alignment = mmvq_moe_cdna_alignment(src0->type);
-    if (!ggml_cuda_is_aligned(src0, alignment)) {
+    return ggml_cuda_is_aligned(src0, mmvq_moe_cdna_alignment(src0->type));
+}
+
+bool ggml_cuda_mmvq_moe_cdna_supported(const ggml_tensor * src0, const ggml_tensor * dst, const int cc, const ggml_cuda_mm_fusion_args_device & fusion) {
+    if (!ggml_cuda_mmvq_moe_cdna_src0_supported(src0, cc)) {
         return false;
     }
-    if (fusion.gate && (uintptr_t) fusion.gate % alignment != 0) {
+    if (fusion.x_scale || fusion.gate_scale || fusion.shared_up) {
+        return false;
+    }
+    // fused Q5_K is not faster than mul_mat_vec_q for 1-2 tokens on CDNA
+    if (src0->type == GGML_TYPE_Q5_K && fusion.gate && GGML_CUDA_CC_IS_CDNA(cc)) {
+        return false;
+    }
+    if (dst->ne[3] != 1) {
+        return false;
+    }
+    if (fusion.gate && (uintptr_t) fusion.gate % mmvq_moe_cdna_alignment(src0->type) != 0) {
         return false;
     }
     return true;

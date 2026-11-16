@@ -317,6 +317,14 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
+int ggml_cuda_mmvq_mmid_max_batch(const ggml_tensor * src0, int cc) {
+    // on RDNA3/RDNA4 the few-token MoE kernel is faster than MMQ up to 8 tokens
+    if ((GGML_CUDA_CC_IS_RDNA3_0(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) && ggml_cuda_mmvq_moe_cdna_src0_supported(src0, cc)) {
+        return MMVQ_MAX_BATCH_SIZE;
+    }
+    return get_mmvq_mmid_max_batch(src0->type, cc);
+}
+
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
     if (!ggml_is_quantized(type)) {
         return false;
@@ -1491,7 +1499,7 @@ void ggml_cuda_mul_mat_vec_q(
 
     if (fusion) {
         const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-        GGML_ASSERT( !ids || dst->ne[2] <= get_mmvq_mmid_max_batch(src0->type, cc));
+        GGML_ASSERT( !ids || dst->ne[2] <= ggml_cuda_mmvq_mmid_max_batch(src0, cc));
         GGML_ASSERT(  ids || dst->ne[1] == 1);
         // Scale fusion is only allowed for NVFP4 currently as the cost of checking this at run-time in the prologue is
         // non-negligible for some models such as gpt-oss-20b
@@ -1593,6 +1601,7 @@ void ggml_cuda_mul_mat_vec_q(
             stride_col_y, stride_channel_y, stride_col_dst, stride_channel_dst, ids_stride, stream);
         return;
     }
+    GGML_ASSERT(!ids || ncols_dst <= get_mmvq_mmid_max_batch(src0->type, ggml_cuda_info().devices[ggml_cuda_get_device()].cc));
 
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
