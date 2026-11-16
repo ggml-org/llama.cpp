@@ -3,11 +3,13 @@
 
 #include <array>
 #include <cstdint>
+#include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/gather.hpp>
 #include <openvino/op/pad.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
+#include <openvino/op/subtract.hpp>
 #include <utility>
 #include <vector>
 
@@ -101,7 +103,24 @@ OutputVector translate_pad(const NodeContext & context) {
     }
 
     auto pads_begin_node = ov::op::v0::Constant::create(ov::element::i64, {pads_begin.size()}, pads_begin);
-    auto pads_end_node = ov::op::v0::Constant::create(ov::element::i64, {pads_end.size()}, pads_end);
+    ov::Output<ov::Node> pads_end_node = ov::op::v0::Constant::create(ov::element::i64, {pads_end.size()}, pads_end);
+    // No-cache attention pads K and V on the token axis up to the mask width (TAG_NO_CACHE_PAD), which changes with
+    // the token count, so compute the end padding from the mask at run time
+    const int dyn = context.get_op_dynamic_dim();
+    const int axis = dyn >= 0 ? static_cast<int>(pads_end.size()) - 1 - dyn : -1;
+    if (axis >= 0 && pads_end[axis] != 0 && context.has_input("self_kq_mask")) {
+        auto mask = context.get_input("self_kq_mask");
+        auto mask_len = get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(mask),
+                                       {static_cast<int>(mask.get_partial_shape().rank().get_length()) - 1});
+        auto len = get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(input), {axis});
+        auto pad = std::make_shared<ov::op::v1::Subtract>(mask_len, len);
+        ov::OutputVector parts;
+        for (int i = 0; i < static_cast<int>(pads_end.size()); ++i) {
+            parts.push_back(i == axis ? ov::Output<ov::Node>(pad) :
+                                        ov::op::v0::Constant::create(ov::element::i64, {1}, {pads_end[i]})->output(0));
+        }
+        pads_end_node = std::make_shared<ov::op::v0::Concat>(parts, 0);
+    }
     auto pad_value = ov::op::v0::Constant::create(context.get_input_type(0), ov::Shape{}, {0});
     auto res =
         std::make_shared<ov::op::v1::Pad>(input, pads_begin_node, pads_end_node, pad_value, ov::op::PadMode::CONSTANT);

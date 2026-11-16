@@ -534,6 +534,30 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
         }
     }
 
+    // A row range of a 2D weight (BERT's token type row): slice the rows of the [rows, row_size] Constant
+    if (view_input_size == 1 && input.get_partial_shape().rank().is_static() &&
+        input.get_partial_shape().rank().get_length() == 2 &&
+        ov::is_type<ov::op::v0::Constant>(input.get_node_shared_ptr())) {
+        const auto view = context.get_view_input_ggml_shape(input_index, 0);
+        const auto source = context.get_view_input_src_ggml_shape(input_index, 0);
+        const auto view_stride = context.get_view_input_stride(input_index, 0);
+        const auto source_stride = context.get_view_input_src_stride(input_index, 0);
+        const size_t offset = context.get_view_input_offset(input_index, 0);
+        const size_t source_offset = context.get_view_input_src_offset(input_index, 0);
+        if (view.size() == 4 && source.size() == 4 && view[0] == 1 && view[1] == 1 && view[3] == source[3] &&
+            view_stride.size() == 4 && source_stride.size() == 4 && view_stride[2] == source_stride[2] &&
+            source_stride[2] > 0 && offset >= source_offset && (offset - source_offset) % source_stride[2] == 0) {
+            const int64_t begin = (offset - source_offset) / source_stride[2];
+            if (begin + int64_t(view[2]) <= int64_t(source[2])) {
+                return std::make_shared<ov::op::v8::Slice>(
+                    input, ov::op::v0::Constant::create(ov::element::i64, {1}, {begin}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {begin + int64_t(view[2])}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                    ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+            }
+        }
+    }
+
     // If translate_view already resolved this VIEW (produced a Slice), the input
     // will already have the expected shape — skip re-slicing.
     //

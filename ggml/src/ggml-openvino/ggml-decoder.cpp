@@ -2794,7 +2794,9 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
-                if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted) {
+                // a view of a model weight (BERT's token type row) has no token dim
+                if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted &&
+                    !(src->buffer != nullptr && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS)) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
