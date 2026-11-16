@@ -798,7 +798,6 @@ struct ggml_backend_opencl_context {
     cl_program program_moe_add_id_glu;
     cl_program program_clamp;
     cl_program program_cvt;
-    cl_program program_diag_mask_inf;
     cl_program program_gelu;
     cl_program program_gemv_noshuffle_general;
     cl_program program_gemv_noshuffle;
@@ -879,14 +878,13 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_arange;
     cl_kernel kernel_clamp, kernel_clamp_nc;
     cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_swiglu_oai, kernel_swiglu_clamp, kernel_geglu_erf,
-              kernel_geglu_quick, kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_swiglu_clamp_f16,
+              kernel_geglu_quick, kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_swiglu_oai_f16, kernel_swiglu_clamp_f16,
               kernel_geglu_erf_f16, kernel_geglu_quick_f16;
     cl_kernel kernel_norm, kernel_norm_mul_add;
     cl_kernel kernel_rms_norm, kernel_rms_norm_mul;
     cl_kernel kernel_rms_norm_mul_add = nullptr;   // fused rms_norm(x)*w + b (residual)
     cl_kernel kernel_l2_norm_f32;
     cl_kernel kernel_group_norm, kernel_group_norm_mul_add;
-    cl_kernel kernel_diag_mask_inf, kernel_diag_mask_inf_8;
     cl_kernel kernel_diag_f32;
     cl_kernel kernel_soft_max, kernel_soft_max_4;
     cl_kernel kernel_soft_max_f16, kernel_soft_max_4_f16;
@@ -1400,6 +1398,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_noshuffle_q4_0_f32;
     cl_kernel kernel_gemv_noshuffle_q4_0_f32_mc3;  // multi-column (N=3) verify GEMV (spec/MTP)
     cl_kernel kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin;
+    cl_kernel kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin;
     cl_kernel kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin;
     cl_kernel kernel_gemv_noshuffle_q4_0_f32_32b_trans;
     cl_kernel kernel_gemv_noshuffle_q4_0_f32_4096_1_11008;
@@ -1461,6 +1460,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_noshuffle_q6_K_f32;
     cl_kernel kernel_gemm_noshuffle_q6_K_f32_cok;
     cl_kernel kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin;
+    cl_kernel kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin;
     cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin;
     cl_kernel kernel_gemv_noshuffle_q6_k_f32_32b_trans;
     cl_kernel kernel_gemv_noshuffle_q5_k_f32;
@@ -2290,23 +2290,6 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         GGML_LOG_CONT(".");
     }
 
-    // diag_mask_inf
-    {
-#ifdef GGML_OPENCL_EMBED_KERNELS
-        const std::string kernel_src {
-            #include "diag_mask_inf.cl.h"
-        };
-#else
-        const std::string kernel_src = read_file("diag_mask_inf.cl");
-#endif
-        backend_ctx->program_diag_mask_inf =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-
-        CL_CHECK((backend_ctx->kernel_diag_mask_inf_8 = clCreateKernel(backend_ctx->program_diag_mask_inf, "kernel_diag_mask_inf_8", &err), err));
-        CL_CHECK((backend_ctx->kernel_diag_mask_inf   = clCreateKernel(backend_ctx->program_diag_mask_inf, "kernel_diag_mask_inf", &err), err));
-        GGML_LOG_CONT(".");
-    }
-
     // diag
     {
 #ifdef GGML_OPENCL_EMBED_KERNELS
@@ -2367,6 +2350,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_geglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_reglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_reglu_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_swiglu_f16      = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_oai_f16  = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_oai_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_swiglu_clamp_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_clamp_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_erf_f16   = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_geglu_quick_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick_f16", &err), err));
@@ -6166,6 +6150,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
     backend_ctx->kernel_gemv_noshuffle_q4_0_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin = nullptr;
+    backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin = nullptr;
     {
         {
@@ -6207,6 +6192,17 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
                 CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8_bin =
                     clCreateKernel(bin_prog, "kernel_gemm_noshuffle_q4_0_q8_1_dp4a_ila_a8", &err), err));
+                CL_CHECK(clReleaseProgram(bin_prog));
+                GGML_LOG_CONT(".");
+            }
+
+            kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_noshuffle_q4_0_f32_32b_trans_ila_a7", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program bin_prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, "", bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin =
+                    clCreateKernel(bin_prog, "kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7", &err), err));
                 CL_CHECK(clReleaseProgram(bin_prog));
                 GGML_LOG_CONT(".");
             }
@@ -6754,6 +6750,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
     backend_ctx->kernel_gemv_noshuffle_q6_k_f32_32b_trans = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin = nullptr;
+    backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin = nullptr;
     backend_ctx->kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin = nullptr;
     {
         if (backend_ctx->has_vector_subgroup_broadcast) {
@@ -6795,6 +6792,17 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 
                 CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8_bin =
                     clCreateKernel(bin_prog, "kernel_gemm_noshuffle_q6_k_q8_1_dp4a_ila_a8", &err), err));
+                CL_CHECK(clReleaseProgram(bin_prog));
+                GGML_LOG_CONT(".");
+            }
+
+            kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("gemm_noshuffle_q6_k_f32_32b_trans_ila_a7", &bin_size);
+            if (kernel_bin && bin_size > 0) {
+                cl_program bin_prog =
+                    build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, "", bin_size);
+
+                CL_CHECK((backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin =
+                    clCreateKernel(bin_prog, "kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7", &err), err));
                 CL_CHECK(clReleaseProgram(bin_prog));
                 GGML_LOG_CONT(".");
             }
@@ -11615,7 +11623,8 @@ inline bool enable_adreno_trans_weight_q5_K(const ggml_backend_opencl_context *b
 inline bool use_q4_0_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->kernel_gemv_noshuffle_q4_0_f32_32b_trans ||
-        !backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin) {
+        !(backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin ||
+          backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin)) {
         return false;
     }
 
@@ -11748,7 +11757,8 @@ static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_cont
 inline bool use_q6_k_bin_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if (!backend_ctx->kernel_gemv_noshuffle_q6_k_f32_32b_trans ||
-        !backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin) {
+        !(backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin ||
+          backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin)) {
         return false;
     }
     // bin kernels require ne2 == 1 and ne3 == 1 for weights
@@ -11971,7 +11981,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_NORM:
             return true;
         case GGML_OP_RMS_NORM:
-            return op->ne[0] % 4 == 0 && ggml_is_contiguous_rows(op->src[0]);
+            return op->src[0]->type == GGML_TYPE_F32 && op->ne[0] % 4 == 0 && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_L2_NORM:
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_REPEAT:
@@ -12200,8 +12210,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             return true;
         case GGML_OP_DIAG:
             return true;
-        case GGML_OP_DIAG_MASK_INF:
-            return op->ne[3] == 1;
         case GGML_OP_ROPE: {
             const int mode = ((const int32_t *) op->op_params)[2];
             if (!ggml_rope_get_truncate(op)) {
@@ -18513,7 +18521,7 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
         GGML_ASSERT(src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32);
         if (bcast_row) {
             kernel = backend_ctx->kernel_add_row;
-            const int ne = ne00 / 4;
+            const int ne = ne10 / 4;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra1->data_device));
@@ -18561,7 +18569,7 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
         const int type_src1 = (src1->type == GGML_TYPE_F32);
         if (bcast_row) {
             kernel = backend_ctx->kernel_add_row_f16;
-            const int ne = ne00 / 4;
+            const int ne = ne10 / 4;
             CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
             CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
             CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extra1->data_device));
@@ -18761,7 +18769,7 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
         GGML_ASSERT(ne11 == 1);
 
         bcast_row = true;
-        int ne = ne00 / 4;
+        int ne = ne10 / 4;
 
         if (src0->type == GGML_TYPE_F32) {
             kernel = backend_ctx->kernel_mul_row;
@@ -19670,6 +19678,10 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
         CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb1));
         CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb2));
         CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb3));
+        if (src0->type != GGML_TYPE_F32) {
+            const int is_bf16 = dst->type == GGML_TYPE_BF16;
+            CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int), &is_bf16));
+        }
 
         size_t global_work_size[] = {(size_t)ne01 * 64, (size_t)ne02, (size_t)ne03};
         size_t local_work_size[] = {64, 1, 1};
@@ -19693,6 +19705,11 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
+
+    if (src0->type != GGML_TYPE_F32) {
+        const int is_bf16 = dst->type == GGML_TYPE_BF16;
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &is_bf16));
+    }
 
     const int64_t n = ggml_nelements(dst);
 
@@ -20306,7 +20323,7 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
     CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &group_size));
     CL_CHECK(clSetKernelArg(kernel, 6, sizeof(float),    &eps));
 
-    size_t global_work_size[] = {(size_t)n_groups*sgs, 1, 1};
+    size_t global_work_size[] = {(size_t)n_groups*sgs, (size_t)src0->ne[3], 1};
     size_t local_work_size[] = {(size_t)sgs, 1, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
@@ -25357,7 +25374,8 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const gg
         CL_CHECK(clReleaseMemObject(b_sub_buf));
         CL_CHECK(clReleaseMemObject(b_img));
     } else {
-        const int gemm_tile_n = 64;
+        const bool have_a8 = backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin != nullptr;
+        const int gemm_tile_n = have_a8 ? 64 : 32;
         int N_pad = (N + gemm_tile_n - 1) & ~(gemm_tile_n - 1);
 
         cl_mem a_img = extra0_q4_0->q_img;
@@ -25457,6 +25475,53 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const gg
         cl_mem b_img;
         CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
+        int line_stride_matrix_A_in_bytes = M * 4;
+        int line_stride_matrix_S_in_bytes = M * 2;
+        int line_stride_matrix_B_in_bytes = K * 4;
+        int line_stride_matrix_C_in_bytes = M * 4;
+
+        const int b_offset_for_kernel = 0;
+
+        if (!have_a8) {
+            const int c_offset_for_kernel = (int)offsetd;
+
+            kernel = backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a7_bin;
+
+            cl_uint k_arg = 0;
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem), &a_img));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem), &extra0_q4_0->d));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem), &b_img));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &b_offset_for_kernel));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem), &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &c_offset_for_kernel));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &K));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_A_in_bytes));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_S_in_bytes));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_B_in_bytes));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &line_stride_matrix_C_in_bytes));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &M));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),    &N));
+
+            size_t m_tiles = (size_t)CEIL_DIV(M, 64);
+            if ((m_tiles % 2) != 0) {
+                // keep the work-group count in y even so every work-group is full
+                m_tiles += 1;
+            }
+
+            size_t local_work_size[3]  = { 64, 2, 4 };
+            size_t global_work_size[3] = { 64, m_tiles, (size_t)CEIL_DIV(N_pad, gemm_tile_n) };
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+
+            CL_CHECK(clReleaseMemObject(b_img));
+            if (b_sub_buf) {
+                CL_CHECK(clReleaseMemObject(b_sub_buf));
+            }
+            if (b_padded) {
+                CL_CHECK(clReleaseMemObject(b_padded));
+            }
+            return;
+        }
+
         region.origin = offsetd;
         region.size   = (size_t)M * N * sizeof(float);
         cl_mem d_sub_buf;
@@ -25470,13 +25535,7 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const gg
         cl_mem d_img;
         CL_CHECK((d_img = clCreateImage(context, CL_MEM_WRITE_ONLY, &img_fmt, &img_desc, NULL, &err), err));
 
-        int line_stride_matrix_A_in_bytes = M * 4;
-        int line_stride_matrix_S_in_bytes = M * 2;
-        int line_stride_matrix_B_in_bytes = K * 4;
-        int line_stride_matrix_C_in_bytes = M * 4;
-
-        int c_offset_for_kernel = 0;
-        int b_offset_for_kernel = 0;
+        const int c_offset_for_kernel = 0;
 
         kernel = backend_ctx->kernel_gemm_noshuffle_q4_0_f32_32b_trans_ila_a8_bin;
 
@@ -25496,19 +25555,19 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno_ila(ggml_backend_t backend, const gg
         CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int), &N));
 
         size_t local_work_size[3]  = { 64, 2, 2 };
-        size_t m_tiles = (size_t)CEIL_DIV(M, 64);
-        size_t global_work_size[3] = { 64, m_tiles, (size_t)CEIL_DIV(N_pad, gemm_tile_n) };
+        size_t global_work_size[3] = { 64, (size_t)CEIL_DIV(M, 64), (size_t)CEIL_DIV(N_pad, gemm_tile_n) };
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
+        CL_CHECK(clReleaseMemObject(d_img));
+        CL_CHECK(clReleaseMemObject(d_sub_buf));
         CL_CHECK(clReleaseMemObject(b_img));
+
         if (b_sub_buf) {
             CL_CHECK(clReleaseMemObject(b_sub_buf));
         }
         if (b_padded) {
             CL_CHECK(clReleaseMemObject(b_padded));
         }
-        CL_CHECK(clReleaseMemObject(d_img));
-        CL_CHECK(clReleaseMemObject(d_sub_buf));
     }
 }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
@@ -28460,6 +28519,8 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno_ila(ggml_backend_t backend, const gg
         const int gemm_tile_n = 64;
         int N_pad = CEIL_DIV(N, gemm_tile_n) * gemm_tile_n;
 
+        const bool have_a8 = backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a8_bin != nullptr;
+
         static const char * q6_k_bin_dp4a_env = getenv("GGML_OPENCL_Q6_K_BIN_DP4A");
                      bool   q6_k_bin_dp4a_on  = q6_k_bin_dp4a_env
                                                   ? (atoi(q6_k_bin_dp4a_env) != 0)
@@ -28525,6 +28586,73 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno_ila(ggml_backend_t backend, const gg
             CL_CHECK(clReleaseMemObject(b_sub));
             CL_CHECK(clReleaseMemObject(d_img));
             CL_CHECK(clReleaseMemObject(d_sub));
+            return;
+        }
+
+        if (!have_a8) {
+            cl_mem b_src_sub = nullptr;
+            cl_mem b_pad_sub = nullptr;
+            cl_mem b_buf     = nullptr;
+            region.origin = offset1;
+            region.size   = (size_t)K * N * sizeof(float);
+            CL_CHECK((b_src_sub = clCreateSubBuffer(extra1->data_device, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+            if (N_pad == N) {
+                b_buf = b_src_sub;
+            } else {
+                size_t padded_bytes = (size_t)K * N_pad * sizeof(float);
+                backend_ctx->prealloc_act_trans.allocate(context, padded_bytes);
+                region.origin = 0;
+                region.size   = padded_bytes;
+                CL_CHECK((b_pad_sub = clCreateSubBuffer(backend_ctx->prealloc_act_trans.buffer, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err), err));
+                const float b_pad_zero = 0.0f;
+                CL_CHECK(clEnqueueFillBuffer(backend_ctx->queue, b_pad_sub, &b_pad_zero, sizeof(float),
+                                             0, padded_bytes, 0, NULL, NULL));
+                CL_CHECK(clEnqueueCopyBuffer(backend_ctx->queue, b_src_sub, b_pad_sub, 0, 0, (size_t)K * N * sizeof(float), 0, NULL, NULL));
+                b_buf = b_pad_sub;
+            }
+
+            img_fmt = { CL_R, CL_FLOAT };
+            memset(&img_desc, 0, sizeof(img_desc));
+            img_desc.image_type  = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+            img_desc.image_width = (size_t)K * N_pad;
+            img_desc.buffer      = b_buf;
+            cl_mem b_img_a7;
+            CL_CHECK((b_img_a7 = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
+            const int c_offset_for_kernel = (int)offsetd;
+
+            int line_stride_B = K * (int)sizeof(float);
+            int line_stride_C = M * (int)sizeof(float);
+
+            kernel = backend_ctx->kernel_gemm_noshuffle_q6_k_f32_32b_trans_ila_a7_bin;
+            cl_uint k_arg = 0;
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem),  &extra0_q6_K->ql_img));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem),  &extra0_q6_K->d));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem),  &extra0_q6_K->s));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem),  &extra0_q6_K->qh));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem),  &b_img_a7));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),     &offset1));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_mem),  &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),     &c_offset_for_kernel));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_uint), &ne00));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(cl_uint), &ne01));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),     &line_stride_B));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),     &line_stride_C));
+            CL_CHECK(clSetKernelArg(kernel, k_arg++, sizeof(int),     &N));
+
+            size_t local_work_size[3]  = { 64, 2, 4 };
+            size_t m_tiles = (size_t)CEIL_DIV(M, 64);
+            size_t global_y = ((m_tiles + 1) / 2) * 2;
+            size_t global_work_size[3] = { 64, global_y, (size_t)CEIL_DIV(N_pad, 32) };
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+
+            CL_CHECK(clReleaseMemObject(b_img_a7));
+            if (b_src_sub) {
+                CL_CHECK(clReleaseMemObject(b_src_sub));
+            }
+            if (b_pad_sub) {
+                CL_CHECK(clReleaseMemObject(b_pad_sub));
+            }
             return;
         }
 
@@ -37892,68 +38020,6 @@ static void ggml_cl_set(ggml_backend_t backend, const ggml_tensor * src0, const 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
-static void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
-    GGML_ASSERT(src0);
-    GGML_ASSERT(src0->extra);
-    GGML_ASSERT(dst);
-    GGML_ASSERT(dst->extra);
-
-    UNUSED(src1);
-
-    int n_past = ((int32_t *)(dst->op_params))[0];
-
-    const int  ne00 = src0 ? src0->ne[0] : 0;
-    const int  ne01 = src0 ? src0->ne[1] : 0;
-    const int  ne02 = src0 ? src0->ne[2] : 0;
-
-    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-
-    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
-    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
-
-    cl_ulong offset0 = extra0->offset + src0->view_offs;
-    cl_ulong offsetd = extrad->offset + dst->view_offs;
-
-    cl_kernel kernel;
-
-    if (ne00%8 == 0) {
-        kernel = backend_ctx->kernel_diag_mask_inf_8;
-
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &ne00));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &ne01));
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_past));
-
-        size_t global_work_size[] = {(size_t)ne00*ne01*ne02/8, 1, 1};
-        size_t local_work_size[] = {64, 1, 1};
-
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
-    } else {
-        kernel = backend_ctx->kernel_diag_mask_inf;
-
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
-        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &ne00));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &ne01));
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_past));
-
-        size_t global_work_size[] = {(size_t)ne00, (size_t)ne01, (size_t)ne02};
-        size_t local_work_size[] = {64, 1, 1};
-
-        size_t * local_work_size_ptr = local_work_size;
-        if (ne00 % 64 != 0 && !backend_ctx->non_uniform_workgroups) {
-            local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
-        }
-
-        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
-    }
-}
-
 static void ggml_cl_diag(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -39261,7 +39327,11 @@ static void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const 
             }
             break;
         case GGML_GLU_OP_SWIGLU_OAI:
-            kernel = backend_ctx->kernel_swiglu_oai;
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_swiglu_oai;
+            } else {
+                kernel = backend_ctx->kernel_swiglu_oai_f16;
+            }
             break;
         case GGML_GLU_OP_SWIGLU_CLAMP:
             if (dst->type == GGML_TYPE_F32) {
@@ -39878,12 +39948,6 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 return false;
             }
             func = ggml_cl_diag;
-            break;
-        case GGML_OP_DIAG_MASK_INF:
-            if (!any_on_device) {
-                return false;
-            }
-            func = ggml_cl_diag_mask_inf;
             break;
         case GGML_OP_SOFT_MAX:
             if (!any_on_device) {
