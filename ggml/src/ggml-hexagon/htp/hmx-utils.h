@@ -268,7 +268,7 @@ static inline uint32_t hmx_cvt_ctrl(uint32_t bank, uint32_t frac_only, uint32_t 
 
 static inline void hmx_load_bias_bank(const void * addr, uint32_t bank) {
     uint32_t rs = ((uint32_t) (uintptr_t) addr & ~255u) | (bank & 3u);
-    asm volatile("bias = mxmem2(%0)\n" :: "r"(rs));
+    asm volatile("bias = mxmem2(%0)\n" :: "r"(rs) : "memory");
 }
 
 #endif // HMX_UTILS_H

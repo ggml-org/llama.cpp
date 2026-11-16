@@ -1751,7 +1751,11 @@ static void core_dot_chunk_w8a8_sm(
 
     assert(hex_is_aligned(vtcm_out, HTP_MM_HMX_TILE_SIZE));
     const uint32_t cvt_ctrl_hi = hmx_cvt_ctrl(0, 0, 0, 1);
+#if __HVX_ARCH__ >= 79
     const uint32_t cvt_ctrl_lo = hmx_cvt_ctrl(1, 0, 1, 0);
+#else
+    const uint32_t cvt_ctrl_lo = hmx_cvt_ctrl(0, 0, 1, 0);
+#endif
     const uint32_t out_cm_rng  = hmx_out_cm_range();
 
     for (uint32_t g = 0; g < n_groups; ++g) {
@@ -1761,8 +1765,10 @@ static void core_dot_chunk_w8a8_sm(
             const uint8_t * wt_base = vtcm_weight_tiles + ((size_t) j * n_k_tiles + kt_base) * HTP_MM_HMX_WEIGHT_B_TILE_SIZE;
             const uint8_t * bias_hi = vtcm_weight_bias  + (((size_t) j * n_groups + g) * 2 + 0) * HTP_MM_HMX_BIAS_BANK_SIZE;
             const uint8_t * bias_lo = vtcm_weight_bias  + (((size_t) j * n_groups + g) * 2 + 1) * HTP_MM_HMX_BIAS_BANK_SIZE;
+#if __HVX_ARCH__ >= 79
             hmx_load_bias_bank(bias_hi, 0);
             hmx_load_bias_bank(bias_lo, 1);
+#endif
 
             for (uint32_t i = 0; i < n_row_tiles_64; ++i) {
                 const uint8_t * act_base = vtcm_act + ((size_t) i * n_k_tiles + kt_base) * HTP_MM_HMX_TILE_SIZE;
@@ -1787,9 +1793,15 @@ static void core_dot_chunk_w8a8_sm(
                     rem   -= step;
                 }
 
+#if __HVX_ARCH__ < 79
+                hmx_load_bias_bank(bias_hi, 0);
+#endif
                 asm volatile(HMX_CVT_UB_ACC("%0") : : "r"(cvt_ctrl_hi) : "memory");
                 asm volatile(HMX_STORE_CVT_CM("%0", "%1") : : "r"(out_hi), "r"(out_cm_rng) : "memory");
 
+#if __HVX_ARCH__ < 79
+                hmx_load_bias_bank(bias_lo, 0);
+#endif
                 asm volatile(HMX_CVT_UB_ACC("%0") : : "r"(cvt_ctrl_lo) : "memory");
                 asm volatile(HMX_STORE_CVT_CM("%0", "%1") : : "r"(out_lo), "r"(out_cm_rng) : "memory");
             }
