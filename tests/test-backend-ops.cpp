@@ -9042,7 +9042,7 @@ struct test_flash_attn_ext_mask_bcast : public test_flash_attn_ext {
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, ref->src[0], ref->src[1], ref->src[2], m, 1.0f/sqrtf(hsk), max_bias, logit_softcap);
         ggml_flash_attn_ext_add_sinks(out, ref->src[4]);
-        ggml_prec_set_acc(out, prec);  
+        ggml_prec_set_acc(out, prec);
         ggml_set_name(out, "out");
 
         return out;
