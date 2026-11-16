@@ -121,7 +121,8 @@ static void common_fit_add_memory_extra(
         // the main context keeps the outputs that the speculative types read from it, as set up by common_speculative
         const auto has_type = [&](common_speculative_type type) { return (es.extra->spec_types & (1u << type)) != 0; };
         const bool eagle3 = has_type(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3);
-        const bool dflash = has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) || has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK);
+        const bool dflash = has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)  || has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) ||
+                            has_type(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH2) || has_type(COMMON_SPECULATIVE_TYPE_DRAFT_LILICORR);
         if (eagle3 || dflash) {
             const int32_t   n_layer = llama_model_n_layer(model);
             const int32_t * lids    = llama_model_target_layer_ids(model_extra);
