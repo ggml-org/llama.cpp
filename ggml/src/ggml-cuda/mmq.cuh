@@ -1079,8 +1079,14 @@ static __global__ void mul_mat_q(
         const uint2 tmp2 = fast_div_modulo(blockIdx.z, nchannels_y);
         const int wt = tmp2.x;
         int       zt = tmp2.y;
+#if defined(GGML_USE_HIP)
+        // Row tiles innermost for MoE, see launch_mul_mat_q.
+        const int jt = ids_dst ? blockIdx.y : blockIdx.x;
+        const int it = ids_dst ? blockIdx.x : blockIdx.y;
+#else
         const int jt = blockIdx.x;
         const int it = blockIdx.y;
+#endif // defined(GGML_USE_HIP)
 
         // Defaults for regular matrix multiplication:
         int col_low        = jt*J;
@@ -1483,8 +1489,15 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int I_dst = has_fusion ? config.I/2 : config.I; // Rows of dst per tile, see mul_mat_q.
     const int nti   = (args.nrows_x + I_dst - 1) / I_dst;
     const int ntzw  = args.nchannels_y * args.nsamples_y;
-    // Column tiles innermost so that the concurrently running blocks share the same tile of x and read it from L2.
-    const dim3 block_nums_xy_tiling(args.ntj, nti, ntzw);
+#if defined(GGML_USE_HIP)
+    // For MoE the column tiles are tied to experts, so the column-innermost order does not improve the reuse of x in L2.
+    // It also groups blocks with very different runtimes which schedules poorly on AMD GPUs, see #31599.
+    // Therefore the row tiles are innermost for MoE. The column-innermost order is kept for dense multiplication.
+    const bool rows_innermost = args.ids_dst != nullptr;
+#else
+    constexpr bool rows_innermost = false;
+#endif // defined(GGML_USE_HIP)
+    const dim3 block_nums_xy_tiling = rows_innermost ? dim3(nti, args.ntj, ntzw) : dim3(args.ntj, nti, ntzw);
 
     GGML_ASSERT(args.ids_dst || args.nchannels_y % args.nchannels_x == 0);
     GGML_ASSERT(                args.nsamples_y  % args.nsamples_x  == 0);
@@ -1499,7 +1512,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const uint3 sample_ratio_fd    = init_fastdiv_values(sample_ratio);
 
     if (has_fusion || !config.stream_k) {
-        GGML_ASSERT(nti <= 65535); // gridDim.y limit
+        GGML_ASSERT((rows_innermost ? args.ntj : nti) <= 65535); // gridDim.y limit
         mul_mat_q<type, J, fallback, prec_src1, has_fusion><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
             (args.x, (const char *) args.fusion.gate, args.y, args.ids_dst, args.tile_spec, args.dst, nullptr,
              args.y_scale, args.fusion.glu_op, args.fusion.glu_limit, (const float *) args.fusion.x_scale, (const float *) args.fusion.gate_scale,

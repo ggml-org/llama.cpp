@@ -16,6 +16,10 @@ on:
         description: "Skip the s390x build target (useful for fast test runs that do not need the IBM Z runner)"
         type: boolean
         default: false
+      skip_ref_check:
+        description: "Skip the requirement to run from a tag (allows branch refs)"
+        type: boolean
+        default: false
   schedule:
     # Rebuild daily rather than on every push because it is expensive
     - cron: '12 4 * * *'
@@ -38,6 +42,14 @@ jobs:
       source_tag: ${{ steps.srctag.outputs.name }}
 
     steps:
+      - name: Check manual run ref
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.skip_ref_check }}
+        run: |
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            echo "::error::Manual runs of this workflow must be started from a tag"
+            exit 1
+          fi
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
