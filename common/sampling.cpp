@@ -683,23 +683,6 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
 
-    // the grammar and the logit biases (e.g. ignore_eos) left no valid token: let the grammar decide
-    if (cur_p.data[cur_p.selected].logit == -INFINITY && grammar_should_apply(gsmpl)) {
-        gsmpl->set_logits(ctx, idx);
-
-        llama_sampler_apply(rbudget, &cur_p);
-        llama_sampler_apply(grmr,    &cur_p);
-
-        cur_p.selected = -1;
-        for (size_t i = 0; i < cur_p.size; ++i) {
-            if (cur_p.data[i].logit != -INFINITY && (cur_p.selected == -1 || cur_p.data[i].logit > cur_p.data[cur_p.selected].logit)) {
-                cur_p.selected = i;
-            }
-        }
-
-        GGML_ASSERT(cur_p.selected != -1 && "the grammar allows no token");
-    }
-
     id = cur_p.data[cur_p.selected].id;
 
     return id;

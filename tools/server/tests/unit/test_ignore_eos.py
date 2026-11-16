@@ -43,33 +43,34 @@ def test_ignore_eos_false_no_logit_bias():
     assert len(logit_bias) == 0
 
 
-def test_ignore_eos_with_completed_grammar():
-    """once the grammar is complete only EOG is allowed, so ignore_eos must not ban it"""
+@pytest.mark.parametrize("constraint", [
+    {"grammar": 'root ::= "ok"'},
+    {"grammar": 'root ::= [a-z ]*'},
+    {"json_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
+])
+def test_ignore_eos_with_grammar_rejected(constraint):
+    """ignore_eos is not supported together with a grammar"""
     global server
     server.start()
     res = server.make_request("POST", "/completion", data={
         "n_predict": 8,
         "prompt": "Once upon a time",
-        "grammar": 'root ::= "ok"',
         "ignore_eos": True,
         "temperature": 0.0,
+        **constraint,
     })
-    assert res.status_code == 200, res.body
-    assert res.body["content"] == "ok"
-    assert res.body["stop_type"] == "eos"
+    assert res.status_code == 400, res.body
+    assert res.body["error"]["type"] == "invalid_request_error"
 
 
-def test_ignore_eos_with_open_grammar():
-    """a grammar that can keep going must still respect ignore_eos"""
+def test_ignore_eos_with_response_format_rejected():
     global server
     server.start()
-    res = server.make_request("POST", "/completion", data={
-        "n_predict": 8,
-        "prompt": "Once upon a time",
-        "grammar": 'root ::= [a-z ]*',
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hello"}],
         "ignore_eos": True,
-        "temperature": 0.0,
+        "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object"}}},
     })
-    assert res.status_code == 200, res.body
-    assert res.body["tokens_predicted"] == 8
-    assert res.body["stop_type"] == "limit"
+    assert res.status_code == 400, res.body
+    assert res.body["error"]["type"] == "invalid_request_error"
