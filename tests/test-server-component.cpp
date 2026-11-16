@@ -4,6 +4,7 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-slot-sched.h"
 
 #include <algorithm>
 #include <cmath>
@@ -852,6 +853,57 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+static void test_server_prompt_get_reuse(testing & t) {
+    auto make_ckpt = [](int64_t n_tokens, llama_pos pos_min, llama_pos pos_max) {
+        auto ckpt = std::make_shared<common_prompt_checkpoint>();
+        ckpt->update_pos(n_tokens, pos_min, pos_max);
+        return ckpt;
+    };
+
+    // Hybrid/recurrent models report pos_min == pos_max in checkpoints.
+    // Even if they also have SWA layers (e.g. n_swa = 256), server-context passes n_swa = 0
+    // so checkpoints within n_swa of pos_eval are still restored.
+    {
+        server_prompt prompt;
+        prompt.tokens = server_tokens(llama_tokens(5414, 1), false);
+        auto ckpt1 = make_ckpt(4890, 4889, 4889);
+        auto ckpt2 = make_ckpt(5402, 5401, 5401);
+        prompt.checkpoints.push_back(ckpt1);
+        prompt.checkpoints.push_back(ckpt2);
+
+        // With n_swa = 0 (hybrid/recurrent): restores ckpt2 (within 256 tokens of 5406)
+        const auto reuse_recr = prompt.get_reuse(5406, true, 0, 5413);
+        t.assert_true ("recr restores ckpt2", reuse_recr.ckpt == ckpt2);
+        t.assert_equal("recr n_past",   (int32_t) 5402, reuse_recr.n_past);
+        t.assert_equal("recr pos_next", (llama_pos) 5402, reuse_recr.pos_next);
+
+        // Live state at pos_min = 5405 (< pos_eval = 5406) is reused directly
+        const auto reuse_live = prompt.get_reuse(5406, true, 0, 5405);
+        t.assert_true ("recr reuses live state", reuse_live.ckpt == nullptr);
+        t.assert_equal("recr live n_past",   (int32_t) 5406, reuse_live.n_past);
+        t.assert_equal("recr live pos_next", (llama_pos) 5406, reuse_live.pos_next);
+
+        // Exact prompt match (has_new_tokens = false) must leave at least 1 token to evaluate
+        auto ckpt3 = make_ckpt(5406, 5405, 5405);
+        prompt.checkpoints.push_back(ckpt3);
+        const auto reuse_exact = prompt.get_reuse(5406, false, 0, 5413);
+        t.assert_true ("recr exact skips ckpt3", reuse_exact.ckpt == ckpt2);
+        t.assert_equal("recr exact n_past", (int32_t) 5402, reuse_exact.n_past);
+    }
+
+    // Pure SWA models (n_swa = 256) store the full SWA window [pos_max - n_swa + 1, pos_max]
+    {
+        server_prompt prompt;
+        prompt.tokens = server_tokens(llama_tokens(5414, 1), false);
+        auto ckpt_swa = make_ckpt(5402, 5146, 5401);
+        prompt.checkpoints.push_back(ckpt_swa);
+
+        const auto reuse_swa = prompt.get_reuse(5406, true, 256, 5158);
+        t.assert_true ("swa restores ckpt", reuse_swa.ckpt == ckpt_swa);
+        t.assert_equal("swa n_past", (int32_t) 5401, reuse_swa.n_past);
+    }
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -880,6 +932,7 @@ int main(int argc, char ** argv) {
     t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("server_prompt_get_reuse", test_server_prompt_get_reuse);
 
     return t.summary();
 }

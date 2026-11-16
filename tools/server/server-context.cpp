@@ -4182,7 +4182,10 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                auto reuse = slot.prompt.get_reuse(n_past, has_new_tokens, n_swa, pos_min);
+                                // the recurrent state is valid only at its exact position, so the SWA slack does not apply
+                                const bool is_recr = llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt);
+
+                                auto reuse = slot.prompt.get_reuse(n_past, has_new_tokens, is_recr ? 0 : n_swa, pos_min);
 
                                 if (reuse.ckpt) {
                                     const auto & cur = *reuse.ckpt;
