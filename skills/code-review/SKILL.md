@@ -26,7 +26,15 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
 - anything else, plus all of the above -> **General** (always runs)
 
-Always run the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Additionally, if the diff introduces a new component, subsystem, or piece of infrastructure (a new file/class/module, a new abstraction, or hand-rolled machinery), run the **Approach and design** review. Tell the user which checklists you're running and why.
+Always run the **Prior review context** step, the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Additionally, if the diff introduces a new component, subsystem, or piece of infrastructure (a new file/class/module, a new abstraction, or hand-rolled machinery), run the **Approach and design** review. Tell the user which checklists you're running and why.
+
+## Prior review context (always)
+
+Maintainers tend to repeat the same comments on the same parts of the code. Before reviewing, find out what they said last time so this diff doesn't repeat a mistake that was already flagged.
+
+- For each touched file (or the hot spots in a large diff), find recent PRs that changed the same code: `git log --oneline -n 20 -- <file>` (merged PR numbers appear as `(#NNNNN)` in the subject), and `git blame -L <start>,<end> master -- <file>` for the exact lines being changed. For in-flight work, `gh pr list --state all --search "<file or symbol>"`.
+- Read the reviewer feedback on the most relevant few: `gh pr view <n> --comments` for the conversation and `gh api repos/ggml-org/llama.cpp/pulls/<n>/comments` for inline review comments.
+- Note recurring reviewer requests and frequently-occurring mistakes for this area (e.g. a helper that should be reused, a naming or layering rule, a backend that keeps getting broken, a test that is always asked for), then check the current diff against each one. Report a match as a finding and cite the earlier PR so the user can read the original context.
 
 ## Scope and quick-reject gate (always)
 
