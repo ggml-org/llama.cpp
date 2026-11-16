@@ -219,7 +219,7 @@ python convert_hf_to_gguf.py path/to/ZONOS3-Mini --mmproj --outtype f32 --outfil
 
 ## YuE2
 
-[m-a-p/YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) generates songs (vocals and accompaniment) from a style prompt and lyrics, as 48 kHz stereo. The backbone (a Qwen3 text model) writes an ABC score, then one semantic code per 40 ms frame; the NAR half of the checkpoint turns the codes into VAE latents by flow matching, attending to the keys and values of the backbone, and the [YuE2-Vae](https://huggingface.co/m-a-p/YuE2-Vae) decoder makes the audio. The NAR pass and the VAE run once, after the last code, so the audio arrives at the end, even when streaming.
+[m-a-p/YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) generates songs (vocals and accompaniment) from a style prompt and lyrics, as 48 kHz stereo. The backbone (a Qwen3 text model) writes an ABC score, then one semantic code per 40 ms frame; the NAR half of the checkpoint turns the codes into VAE latents by flow matching, attending to the keys and values of the backbone, and the [YuE2-Vae](https://huggingface.co/m-a-p/YuE2-Vae) decoder makes the audio.
 
 The prompt is the text of the reference request:
 
@@ -239,7 +239,7 @@ Available params:
 - Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
 - Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
 - The codes are sampled with classifier-free guidance like the reference: scale 1.01 with `--tts-voice off`, off (1.0) otherwise. The uncond prompt runs as a second sequence, so the context must also hold it (the instruction, the score and the codes once more)
-- Note: songs whose prompt, score and codes go over 24576 positions are rejected (the reference splits them into chunks)
+- The NAR pass runs on chunks of codes like the reference: one chunk for a song that fits in 24576 positions, so the audio arrives after the last code. When streaming, each 30 s of codes is a chunk, processed during the generation, so the audio arrives in 30 s steps; the chunks are independent (each sees the prompt, the score and its own codes), which may be audible at the boundaries
 
 Example usage:
 

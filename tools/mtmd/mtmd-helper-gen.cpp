@@ -2969,8 +2969,14 @@ public:
         upos = 0;
         neg_prefix.clear();
         abc_tail.clear();
+        prefix_tok.clear();
         history.clear();
         codes.clear();
+        latents.clear();
+        n_nar_done = 0;
+        n_vae_done = 0;
+        scratch.reset();
+        scratch_n_ctx = 0;
         done = false;
         decoded = false;
         audio_pcm.clear();
@@ -3012,6 +3018,7 @@ public:
             return 1;
         }
         abc_tail.assign(abc, prompt.end());
+        prefix_tok = prompt;
         if (prompt.size() >= llama_n_ctx_seq(lctx)) {
             LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
             return 1;
@@ -3095,6 +3102,7 @@ public:
                     return 1;
                 }
                 abc_tail.insert(abc_tail.end(), next, next + 2);
+                prefix_tok.insert(prefix_tok.end(), next, next + 2);
                 in_codes = true;
                 history.clear();
                 if (!start_uncond()) {
@@ -3103,6 +3111,7 @@ public:
             } else {
                 history.push_back(tok);
                 abc_tail.push_back(tok);
+                prefix_tok.push_back(tok);
                 if (!decode(&tok, 1)) {
                     return 1;
                 }
@@ -3133,6 +3142,13 @@ public:
         const float * h = llama_get_embeddings_ith(lctx, i_out);
         h_state_buf.assign(h, h + n_embd);
         *h_state_out = h_state_buf.data();
+
+        // streaming: each full chunk of codes goes through the NAR pass and the VAE right away
+        if (stream && in_codes && codes.size() - n_nar_done >= chunk_size()) {
+            if (!nar_chunk(n_nar_done, n_nar_done + chunk_size(), false) || !vae_emit(false)) {
+                return 1;
+            }
+        }
         return 0;
     }
 
@@ -3201,36 +3217,19 @@ public:
             done = true;
         }
 
-        std::vector<uint8_t> state(llama_state_seq_get_size(lctx, seq_id));
-        if (state.empty() || llama_state_seq_get_data(lctx, state.data(), state.size(), seq_id) != state.size()) {
-            LOG_ERR("mtmd_helper_gen_audio: cannot read the backbone state\n");
+        // a song that fits in one chunk uses the backbone sequence itself, as it holds <|music_end|> now
+        const size_t n_codes = codes.size();
+        while (n_nar_done < n_codes) {
+            const size_t a = n_nar_done;
+            const size_t b = std::min(a + chunk_size(), n_codes);
+            if (!nar_chunk(a, b, a == 0 && b == n_codes)) {
+                return 1;
+            }
+        }
+        if (!vae_emit(true)) {
             return 1;
         }
-
-        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
-        inp.type                = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
-        inp.codes               = codes.data();
-        inp.n_codes             = codes.size();
-        inp.backbone_state      = state.data();
-        inp.backbone_state_size = state.size();
-        inp.backbone_n_past     = pos;
-        mtmd_gen_out out{};
-        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
-            LOG_ERR("mtmd_helper_gen_audio: flow matching failed\n");
-            return 1;
-        }
-        const std::vector<float> latents(out.feats, out.feats + out.n_feats);
-
-        inp = mtmd_gen_inp_default(mctx);
-        inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
-        inp.feats   = latents.data();
-        inp.n_feats = latents.size();
-        out = {};
-        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
-            LOG_ERR("mtmd_helper_gen_audio: VAE decode failed\n");
-            return 1;
-        }
-        audio_pcm.assign(out.audio, out.audio + out.n_samples);
+        scratch.reset();
         decoded = true;
         return 0;
     }
@@ -3245,6 +3244,15 @@ private:
     static constexpr llama_token tok_codec0      = 151853;
     static constexpr int32_t     n_codec         = 32768;
 
+    // NAR chunks and VAE tiles, see synthesize() and decode_tiled() of the reference
+    static constexpr int64_t n_ctx_max    = 24576;
+    static constexpr size_t  stream_chunk = 750; // 30 s
+    static constexpr size_t  n_latent     = 64;
+    static constexpr size_t  vae_core     = 128;
+    static constexpr size_t  vae_halo     = 16;
+    static constexpr size_t  vae_ratio    = 1920;
+    static constexpr size_t  vae_trim     = 64;
+
     struct sampling {
         float   temp;
         float   top_p;
@@ -3258,6 +3266,10 @@ private:
     sampling code_cfg = { 1.0f, 0.95f, 100, 1.2f,   50,  200, 9000 };
 
     bool decode(const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
+        return decode_ctx(lctx, toks, n, seq, p);
+    }
+
+    bool decode_ctx(llama_context * ctx, const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
         llama_batch batch = llama_batch_init(n, 0, 1);
         for (int32_t i = 0; i < n; i++) {
             batch.token   [i]    = toks[i];
@@ -3267,7 +3279,7 @@ private:
             batch.logits  [i]    = i == n - 1;
         }
         batch.n_tokens = n;
-        const int32_t ret = llama_decode(lctx, batch);
+        const int32_t ret = llama_decode(ctx, batch);
         llama_batch_free(batch);
         if (ret != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
@@ -3340,6 +3352,119 @@ private:
         pos++;
         upos++;
         cfg_mix(llama_get_logits_ith(lctx, 0), llama_get_logits_ith(lctx, 1));
+        return true;
+    }
+
+    // song_chunks() of the reference: one NAR pass per chunk of codes, each chunk sees the prefix and its own codes
+    // the reference size is the largest one that fits in n_ctx_max, streaming uses smaller chunks
+    size_t chunk_size() const {
+        const int64_t ref = std::max<int64_t>(1, (n_ctx_max - (int64_t) prefix_tok.size() - 3) / 2);
+        return (size_t) (stream ? std::min<int64_t>(ref, stream_chunk) : ref);
+    }
+
+    // backbone keys/values of [prefix, codes[a, b), <|music_end|>] -> latents of the chunk
+    bool nar_chunk(size_t a, size_t b, bool use_main) {
+        llama_context * ctx = lctx;
+        llama_seq_id    seq = seq_id;
+        llama_pos       n_past = pos;
+        if (!use_main) {
+            // a scratch context on the backbone model, the prefix is decoded once
+            const llama_pos n_prefix = (llama_pos) prefix_tok.size();
+            const uint32_t  n_need   = (uint32_t) (n_prefix + (b - a) + 1);
+            if (!scratch || scratch_n_ctx < n_need) {
+                llama_context_params cparams = llama_context_default_params();
+                cparams.n_ctx           = n_need;
+                cparams.n_seq_max       = 1;
+                cparams.n_threads       = llama_n_threads(lctx);
+                cparams.n_threads_batch = llama_n_threads_batch(lctx);
+                cparams.no_perf         = true;
+                scratch.reset(llama_init_from_model(const_cast<llama_model *>(model), cparams));
+                if (!scratch) {
+                    LOG_ERR("mtmd_helper_gen_audio: cannot create the yue2 chunk context\n");
+                    return false;
+                }
+                scratch_n_ctx = n_need;
+                llama_pos p = 0;
+                const int32_t n_batch = (int32_t) llama_n_batch(scratch.get());
+                for (size_t i = 0; i < prefix_tok.size(); i += (size_t) n_batch) {
+                    const int32_t n = std::min(n_batch, (int32_t) (prefix_tok.size() - i));
+                    if (!decode_ctx(scratch.get(), prefix_tok.data() + i, n, 0, p)) {
+                        return false;
+                    }
+                }
+            }
+            llama_memory_seq_rm(llama_get_memory(scratch.get()), 0, n_prefix, -1);
+            std::vector<llama_token> toks;
+            for (size_t i = a; i < b; i++) {
+                toks.push_back(codes[i] + tok_codec0);
+            }
+            toks.push_back(tok_music_end);
+            llama_pos p = n_prefix;
+            const int32_t n_batch = (int32_t) llama_n_batch(scratch.get());
+            for (size_t i = 0; i < toks.size(); i += (size_t) n_batch) {
+                const int32_t n = std::min(n_batch, (int32_t) (toks.size() - i));
+                if (!decode_ctx(scratch.get(), toks.data() + i, n, 0, p)) {
+                    return false;
+                }
+            }
+            ctx    = scratch.get();
+            seq    = 0;
+            n_past = p;
+        }
+
+        std::vector<uint8_t> state(llama_state_seq_get_size(ctx, seq));
+        if (state.empty() || llama_state_seq_get_data(ctx, state.data(), state.size(), seq) != state.size()) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot read the backbone state\n");
+            return false;
+        }
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type                = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+        inp.codes               = codes.data() + a;
+        inp.n_codes             = b - a;
+        inp.backbone_state      = state.data();
+        inp.backbone_state_size = state.size();
+        inp.backbone_n_past     = n_past;
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: flow matching failed\n");
+            return false;
+        }
+        latents.insert(latents.end(), out.feats, out.feats + out.n_feats);
+        n_nar_done = b;
+        return true;
+    }
+
+    // VAE tiles whose context on both sides is known, the same cropping as decode_tiled() of the reference
+    bool vae_emit(bool final) {
+        const size_t n_lat = latents.size() / n_latent;
+        while (n_vae_done < n_lat) {
+            const size_t start = n_vae_done;
+            const size_t end   = std::min(start + vae_core, n_lat);
+            if (!final && end + vae_halo > n_lat) {
+                break;
+            }
+            const size_t left  = start >= vae_halo ? start - vae_halo : 0;
+            const size_t right = std::min(end + vae_halo, n_lat);
+            mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+            inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+            inp.feats   = latents.data() + left * n_latent;
+            inp.n_feats = (right - left) * n_latent;
+            mtmd_gen_out out{};
+            if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+                LOG_ERR("mtmd_helper_gen_audio: VAE decode failed\n");
+                return false;
+            }
+            // the whole song has vae_ratio * n - vae_trim samples
+            const size_t n_ch   = (size_t) info.n_channels;
+            const size_t crop0  = (start - left) * vae_ratio;
+            const size_t n_keep = (end - start) * vae_ratio - (final && end == n_lat ? vae_trim : 0);
+            if (out.n_samples < (crop0 + n_keep) * n_ch) {
+                LOG_ERR("mtmd_helper_gen_audio: VAE tile is too short\n");
+                return false;
+            }
+            audio_pcm.insert(audio_pcm.end(), out.audio + crop0 * n_ch, out.audio + (crop0 + n_keep) * n_ch);
+            n_vae_done = end;
+        }
         return true;
     }
 
@@ -3423,6 +3548,12 @@ private:
     std::vector<llama_token> neg_prefix; // EOD + instruction
     std::vector<llama_token> abc_tail;   // the cond tokens from <abc> on
     std::vector<float>       cfg_logits;
+    std::vector<llama_token> prefix_tok; // the cond tokens before the first code
+    std::vector<float>       latents;    // of the chunks done so far
+    size_t n_nar_done = 0; // codes
+    size_t n_vae_done = 0; // latent frames
+    llama_context_ptr scratch; // backbone keys/values of a chunk other than the first
+    uint32_t scratch_n_ctx = 0;
     std::vector<llama_token> history; // tokens sampled in the current phase
     std::vector<int32_t> codes;
     bool done    = false;
