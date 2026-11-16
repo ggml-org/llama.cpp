@@ -338,7 +338,6 @@ struct ggml_hexagon_session {
     std::atomic<uint32_t> last_error{HTP_STATUS_OK};
 
     uint64_t                cached_uid = 0;
-    std::vector<uintptr_t>  cached_signature;
     std::vector<htp_opnode> cached_nodes;
 
     ggml_hexagon_mdev_group                mdev;
@@ -2530,24 +2529,6 @@ static void ggml_hexagon_graph_repack(const ggml_cgraph * graph, ggml_hexagon_se
     }
 }
 
-static std::vector<uintptr_t> ggml_hexagon_graph_signature(const ggml_cgraph * graph) {
-    std::vector<uintptr_t> signature;
-    signature.reserve(3 + graph->n_nodes * (GGML_MAX_SRC + 1) * 3);
-    signature.push_back((uintptr_t) opt_opfusion);
-    signature.push_back((uintptr_t) opt_opf16);
-    signature.push_back((uintptr_t) opt_f16_test);
-    for (int i = 0; i < graph->n_nodes; ++i) {
-        const ggml_tensor * node = graph->nodes[i];
-        for (int j = -1; j < GGML_MAX_SRC; ++j) {
-            const ggml_tensor * tensor = j < 0 ? node : node->src[j];
-            signature.push_back((uintptr_t) tensor);
-            signature.push_back(tensor ? (uintptr_t) tensor->data : 0);
-            signature.push_back(tensor ? (uintptr_t) tensor->buffer : 0);
-        }
-    }
-    return signature;
-}
-
 static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
 
@@ -2557,8 +2538,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     HEX_VERBOSE("ggml-hex: %s graph-compute n_nodes %d\n", sess->c_name(), graph->n_nodes);
 
-    std::vector<uintptr_t> signature = graph->uid ? ggml_hexagon_graph_signature(graph) : std::vector<uintptr_t>{};
-    const bool cache_hit = graph->uid != 0 && sess->cached_uid == graph->uid && sess->cached_signature == signature;
+    const bool cache_hit = graph->uid != 0 && sess->cached_uid == graph->uid;
     if (!cache_hit) {
         ggml_hexagon_graph_repack(graph, sess);
 
@@ -2588,8 +2568,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
         htp_lower_graph(sess, graph, nodes);
 
-        sess->cached_uid       = graph->uid;
-        sess->cached_signature = std::move(signature);
+        sess->cached_uid = graph->uid;
     }
 
     for (const auto & node : sess->cached_nodes) {
