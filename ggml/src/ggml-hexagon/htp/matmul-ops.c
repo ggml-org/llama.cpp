@@ -272,7 +272,8 @@ static inline void hvx_mm_iq2xxs_lut_init(uint8_t * restrict base, const struct 
 // hvx kernels first: the HMX Q6_K dequantizer reuses unpack_q6_k_group from there
 #include "hvx-mm-kernels-tiled.h"
 #include "hvx-mm-kernels-float.h"
-#include "hmx-mm-kernels-tiled.h"
+#include "hmx-mm-kernels-tiled-fp.h"
+#include "hmx-mm-kernels-tiled-int.h"
 
 static void hvx_mm_2d_tiled(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
@@ -2817,7 +2818,7 @@ static void transfer_activation_chunk_threaded(const struct activation_transfer_
 
 // --- INT HMX (W8A8 SM and W8A16 :2x1) Threaded Helpers ---
 
-static void rescale_q4_0_weight_worker_loop(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
+static void rescale_int_weight_worker_loop(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
     int_weight_rescale_state_t * state = (int_weight_rescale_state_t *) data;
     struct htp_thread_trace * tr = th->trace;
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
@@ -2827,12 +2828,12 @@ static void rescale_q4_0_weight_worker_loop(const htp_thread_t * th, unsigned in
             break;
         }
         uint32_t end = hex_smin(start + state->n_units_per_task, state->n_tot_units);
-        rescale_q4_0_weight_to_int8_task(state, start, end);
+        rescale_int_weight_to_int8_task(state, start, end);
     }
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_W_DEQUANT, i);
 }
 
-static void rescale_q4_0_weight_chunk_to_int8_tiles(
+static void rescale_int_weight_chunk_to_int8_tiles(
         struct htp_ops_context * octx,
         void * vtcm_weight_buf,
         size_t weight_bias_offset,
@@ -2844,7 +2845,8 @@ static void rescale_q4_0_weight_chunk_to_int8_tiles(
         int n_groups,
         const struct fastdiv_values * n_groups_div,
         int aligned_tile_size,
-        int32_t kernel_type) {
+        int32_t kernel_type,
+        int32_t weight_type) {
 
     const int n_hvx                = (int) octx->n_hvx;
     const uint32_t n_col_tiles     = (uint32_t) hmx_ceil_div(n_cols, 32);
@@ -2869,12 +2871,13 @@ static void rescale_q4_0_weight_chunk_to_int8_tiles(
     state.tiles_per_group   = tiles_per_group;
     state.aligned_tile_size = (uint32_t) aligned_tile_size;
     state.kernel_type       = kernel_type;
+    state.weight_type       = weight_type;
     state.n_tot_units       = n_tot_units;
     state.n_units_per_task  = n_units_per_task;
     state.n_tasks           = hex_smin(n_tot_units, (uint32_t) n_hvx);
     state.n_groups_div      = *n_groups_div;
 
-    work_queue_run(octx->ctx->hvx_queue, rescale_q4_0_weight_worker_loop, &state, (int) state.n_tasks);
+    work_queue_run(octx->ctx->hvx_queue, rescale_int_weight_worker_loop, &state, (int) state.n_tasks);
 }
 
 typedef struct {
@@ -3584,9 +3587,9 @@ static int hmx_mm_2d_f32(struct htp_ops_context *octx,
 
                 // 2. dequantize / rescale A_i
                 if (is_int_hmx) {
-                    rescale_q4_0_weight_chunk_to_int8_tiles(
+                    rescale_int_weight_chunk_to_int8_tiles(
                         octx, vtcm_weight_bufs[i % 4], L.weight_bias_offset, L.weight_scales_offset,
-                        curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type);
+                        curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type, weight_type);
                 } else {
                     dequantize_tiled_weight_chunk_to_fp16_tiles(
                         octx, vtcm_weight_bufs[i % 4], curr_raw,
@@ -3715,9 +3718,9 @@ static int hmx_mm_2d_f32(struct htp_ops_context *octx,
 
                 // B: Weight Dequantize / Rescale (Threaded)
                 if (is_int_hmx) {
-                    rescale_q4_0_weight_chunk_to_int8_tiles(
+                    rescale_int_weight_chunk_to_int8_tiles(
                         octx, vtcm_weight_bufs[i % 2], L.weight_bias_offset, L.weight_scales_offset,
-                        curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type);
+                        curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type, weight_type);
                 } else {
                     dequantize_tiled_weight_chunk_to_fp16_tiles(
                         octx, vtcm_weight_bufs[i % 2], curr_raw,
@@ -3973,9 +3976,9 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
                     void * curr_raw = (void *) dma_queue_pop(weight_dma).dst;
 
                     if (is_int_hmx) {
-                        rescale_q4_0_weight_chunk_to_int8_tiles(
+                        rescale_int_weight_chunk_to_int8_tiles(
                             octx, vtcm_weight_bufs[i % 4], L.weight_bias_offset, L.weight_scales_offset,
-                            curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type);
+                            curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type, weight_type);
                     } else {
                         dequantize_tiled_weight_chunk_to_fp16_tiles(
                             octx, vtcm_weight_bufs[i % 4], curr_raw,
@@ -4113,9 +4116,9 @@ static int hmx_mm_nx_2d_f32(struct htp_ops_context * octx, const struct htp_mm_k
                     void * curr_raw = (void *) dma_queue_pop(weight_dma).dst;
 
                     if (is_int_hmx) {
-                        rescale_q4_0_weight_chunk_to_int8_tiles(
+                        rescale_int_weight_chunk_to_int8_tiles(
                             octx, vtcm_weight_bufs[i % 2], L.weight_bias_offset, L.weight_scales_offset,
-                            curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type);
+                            curr_raw, (int) n_cols, k, k_group, n_groups, &n_groups_div, aligned_tile_size, kernel_type, weight_type);
                     } else {
                         dequantize_tiled_weight_chunk_to_fp16_tiles(
                             octx, vtcm_weight_bufs[i % 2], curr_raw,

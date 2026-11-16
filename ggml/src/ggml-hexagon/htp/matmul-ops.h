@@ -83,6 +83,14 @@ static inline bool htp_mm_kernel_is_hmx_batched(int32_t kt) {
     return kt == HTP_MM_KERNEL_HMX_BATCHED || kt == HTP_MM_KERNEL_HMX_W8A8_BATCHED || kt == HTP_MM_KERNEL_HMX_W8A16_BATCHED;
 }
 
+static inline bool htp_is_int_hmx_weight_type(int wtype) {
+    return wtype == HTP_TYPE_Q4_0   || wtype == HTP_TYPE_Q8_0  ||
+           wtype == HTP_TYPE_IQ4_NL || wtype == HTP_TYPE_MXFP4 ||
+           wtype == HTP_TYPE_Q5_0   || wtype == HTP_TYPE_Q1_0  ||
+           wtype == HTP_TYPE_Q2_0   || wtype == HTP_TYPE_NVFP4 ||
+           wtype == HTP_TYPE_Q3_K   || wtype == HTP_TYPE_Q6_K;
+}
+
 // Op-specific struct for precomputed matmul params
 struct htp_mm_kernel_params {
     uint8_t  kernel_type;        // enum htp_mm_kernel_type

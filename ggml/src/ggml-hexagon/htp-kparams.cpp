@@ -720,7 +720,7 @@ static bool htp_kparams_solve_hmx_mm(
     const uint8_t fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
     uint8_t       kernel_type      = fp16_kernel_type;
     uint32_t      k_group          = 0;
-    if (is_tiled && !is_matmul_id && wtype == GGML_TYPE_Q4_0 && (opt_mm_select == 3 || opt_mm_select == 4) &&
+    if (is_tiled && !is_matmul_id && htp_is_int_hmx_weight_type((int) wtype) && (opt_mm_select == 3 || opt_mm_select == 4) &&
         ne00_padded >= 128 && (ne00_padded % 128) == 0) {
         uint32_t target_kgroup = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(std::min(opt_hmx_kgroup, 4096), 128)
                                                       : ((opt_mm_select == 3) ? 256u : 512u);
