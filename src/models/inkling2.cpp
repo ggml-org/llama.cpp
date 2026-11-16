@@ -16,8 +16,9 @@ void llama_model_inkling2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_VOCAB_SIZE_UNPADDED, hparams.n_vocab_unpadded);
     ml.get_key(LLM_KV_ACTIVATION_SITU_BETA, hparams.situ_beta);
     ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, hparams.situ_linear_beta);
-    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale);
-    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping);
+    hparams.f_final_logit_softcapping = 0.0f;
+    ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE, hparams.expert_weights_scale, false);
+    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
     uint32_t n_pattern = 0;
@@ -29,7 +30,7 @@ void llama_model_inkling2::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("inkling2: invalid dimensions, vocabulary, or layer pattern");
     }
     for (float value : {hparams.f_norm_rms_eps, hparams.f_qk_clip, hparams.f_relative_clip, hparams.situ_beta,
-                       hparams.situ_linear_beta, hparams.expert_weights_scale, hparams.f_final_logit_softcapping}) {
+                       hparams.situ_linear_beta}) {
         if (!std::isfinite(value) || value <= 0.0f) {
             throw std::runtime_error("inkling2: normalization, clipping and scaling parameters must be finite and positive");
         }
@@ -256,8 +257,10 @@ llama_model_inkling2::graph::graph(const llm_graph_params & params) : llm_graph_
     res->t_embd = cur;
     cur = build_lora_mm(model.output, cur);
     ggml_prec_set_acc(cur, GGML_PREC_F32);
-    const float cap = hparams.f_final_logit_softcapping;
-    cur = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/cap)), cap);
+    if (hparams.f_final_logit_softcapping != 0.0f) {
+        const float cap = hparams.f_final_logit_softcapping;
+        cur = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, cur, 1.0f/cap)), cap);
+    }
     cur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, hparams.n_vocab_unpadded, cur->ne[1], cur->nb[1], 0));
     res->t_logits = cur;
     cb(cur, "result_output", -1);
