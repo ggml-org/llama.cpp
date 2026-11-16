@@ -59,12 +59,16 @@ std::vector<common_tts_norm_segment> common_tts_norm_scan(const std::string & te
 // repl references: %0 (whole match), %1..%9 (groups), %% (literal percent)
 std::string common_tts_norm_sub(const std::string & text, const common_tts_norm_pattern & pattern, const std::string & repl);
 
-// dictionaries of a model (e.g. a pronunciation lexicon), by name
-// a dictionary is a string of lines "key<TAB>value", sorted by the bytes of the key; value is a JSON document
-using common_tts_dicts = std::map<std::string, std::string>;
+// a dictionary of the model, e.g. a pronunciation lexicon
+struct common_tts_dict {
+    std::vector<std::string> keys;   // sorted by their bytes
+    std::vector<std::string> values; // the JSON document of each key
+};
+
+using common_tts_dicts = std::map<std::string, common_tts_dict>;
 
 // binary search of key in a dictionary; on success, value is set to the JSON document
-bool common_tts_dict_find(const std::string & dict, const std::string & key, std::string & value);
+bool common_tts_dict_find(const common_tts_dict & dict, const std::string & key, std::string & value);
 
 // add tts_norm_scan(), tts_norm_sub() and tts_dict() to the context of a task template
 // they are not jinja global builtins on purpose: chat templates are not affected

@@ -8,7 +8,7 @@ Usage with jinja2:
 
     env.globals["tts_norm_scan"] = chat_tts_norm.tts_norm_scan
     env.globals["tts_norm_sub"] = chat_tts_norm.tts_norm_sub
-    env.globals["tts_dict"] = chat_tts_norm.make_tts_dict(dicts)  # dicts: name -> value of tokenizer.tts_dict.<name>
+    env.globals["tts_dict"] = chat_tts_norm.make_tts_dict(dicts)  # dicts: name -> {"keys", "values"} of tokenizer.tts_dict.<name>
 """
 
 from __future__ import annotations
@@ -558,8 +558,8 @@ def tts_norm_sub(text: str, pattern: str, repl: str) -> str:
     return "".join(out)
 
 
-def make_tts_dict(dicts: dict[str, str]) -> Callable[[str, str], Any]:
-    # a dictionary is a string of lines "key<TAB>value", sorted by the bytes of the key; value is a JSON document
+def make_tts_dict(dicts: dict[str, dict[str, list[str]]]) -> Callable[[str, str], Any]:
+    # a dictionary is {"keys": [...], "values": [...]}, the values are JSON documents
     parsed: dict[str, dict[str, str]] = {}
 
     def tts_dict(name: str, key: str) -> Any:
@@ -568,10 +568,10 @@ def make_tts_dict(dicts: dict[str, str]) -> Callable[[str, str], Any]:
         if name not in dicts:
             raise KeyError(f"tts_dict: unknown dictionary '{name}'")
         if name not in parsed:
-            lines = dicts[name].split("\n") if dicts[name] else []
-            if any("\t" not in line for line in lines):
-                raise ValueError("tts_dict: malformed dictionary, expected key<TAB>value on each line")
-            parsed[name] = dict(line.split("\t", 1) for line in lines)
+            keys, values = dicts[name]["keys"], dicts[name]["values"]
+            if len(keys) != len(values):
+                raise ValueError("tts_dict: malformed dictionary, a key has no value")
+            parsed[name] = dict(zip(keys, values))
         doc = parsed[name].get(key)
         return None if doc is None else json.loads(doc)
 

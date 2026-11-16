@@ -85,7 +85,7 @@ Looks up `key` in the dictionary `name` of the model and returns its value, or `
 
 The lookup is exact: no case folding and no normalization, do them in the template.
 
-A dictionary is stored in the GGUF as one string, `tokenizer.tts_dict.<name>`: one `key<TAB>value` line per entry, lines separated by `\n` and sorted by the UTF-8 bytes of the key. `value` is a JSON document (string, number, list, object, ...) and is returned decoded. A key cannot contain a tab or a newline. `GGUFWriter.add_tts_dict(name, mapping)` writes this format.
+The GGUF lists the names of the dictionaries in `tokenizer.tts_dicts`. Each one is stored as two arrays of strings of the same length: `tokenizer.tts_dict.<name>.keys`, sorted by the UTF-8 bytes of the key, and `tokenizer.tts_dict.<name>.values`. A value is a JSON document (string, number, list, object, ...) and is returned decoded. `GGUFWriter.add_tts_dicts(dicts)` writes all of this.
 
 ## Pattern syntax
 

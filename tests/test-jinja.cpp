@@ -52,26 +52,18 @@ static void test_shared_render(testing & t);
 
 static bool g_python_mode = false;
 
-// dictionaries given to tts_dict() in tests: lines "key<TAB>json", sorted by the bytes of the key
+// dictionaries given to tts_dict() in tests
 static std::shared_ptr<const common_tts_dicts> test_tts_dicts() {
     static const auto dicts = std::make_shared<const common_tts_dicts>(common_tts_dicts{
-        {"lex",
-            "\t\"empty\"\n"
-            "Zed\t\"z3d\"\n"
-            "big\t123456789012345678901234567890\n"
-            "hello\t\"h@loU\"\n"
-            "list\t[1,2,null]\n"
-            "null\tnull\n"
-            "read\t{\"DEFAULT\":\"rid\",\"VBD\":\"rEd\"}\n"
-            "w1\t{\"a\":1.5,\"b\":-2}\n"
-            "w2\t{\"a\":0.25}\n"
-            "zoo\t\"zu\"\n"
-            "\xc3\xa9t\xc3\xa9\t\"ete\"\n"
-            "\xe6\x97\xa5\t\"ni\""},
-        {"other", "hello\t\"bonjour\""},
-        {"empty", ""},
+        {"lex", {
+            {"", "Zed", "big", "hello", "list", "null", "read", "w1", "w2", "zoo", "\xc3\xa9t\xc3\xa9", "\xe6\x97\xa5"},
+            {"\"empty\"", "\"z3d\"", "123456789012345678901234567890", "\"h@loU\"", "[1,2,null]", "null",
+             "{\"DEFAULT\":\"rid\",\"VBD\":\"rEd\"}", "{\"a\":1.5,\"b\":-2}", "{\"a\":0.25}", "\"zu\"", "\"ete\"", "\"ni\""},
+        }},
+        {"other", {{"hello"}, {"\"bonjour\""}}},
+        {"empty", {}},
         // values that must be rejected: nested deeper than the engine allows, and not JSON
-        {"bad", "deep\t" + std::string(200, '[') + std::string(200, ']') + "\njson\t{not json"},
+        {"bad", {{"deep", "json"}, {std::string(200, '[') + std::string(200, ']'), "{not json"}}},
     });
     return dicts;
 }
@@ -3101,38 +3093,38 @@ static void test_tts_dict(testing & t) {
         test_template_error(t, "error: value is not JSON",       "{{ tts_dict('bad', 'json') }}", "parse error", true);
         test_template_error(t, "error: value nested too deep",   "{{ tts_dict('bad', 'deep') }}", "levels deep", true);
 
-        t.test("malformed dictionary line", [](testing & t) {
+        t.test("a key without a value is an error", [](testing & t) {
             std::string value;
             bool thrown = false;
             try {
-                common_tts_dict_find("a\t1\nno tab here\nz\t2", "m", value);
+                common_tts_dict_find(common_tts_dict{{"a", "m"}, {"1"}}, "m", value);
             } catch (const std::exception &) {
                 thrown = true;
             }
             t.assert_true("throws", thrown);
+            t.assert_true("the first key still has its value", common_tts_dict_find(common_tts_dict{{"a", "m"}, {"1"}}, "a", value) && value == "1");
         });
 
         t.test("every key of a large dictionary is found", [](testing & t) {
-            std::string dict;
+            common_tts_dict dict;
             for (int i = 0; i < 1000; i++) {
-                char line[32];
-                snprintf(line, sizeof(line), "%sk%04d\t%d", i ? "\n" : "", i, i);
-                dict += line;
+                char key[16];
+                snprintf(key, sizeof(key), "k%04d", i);
+                dict.keys.push_back(key);
+                dict.values.push_back(std::to_string(i));
             }
             bool ok = true;
             std::string value;
             for (int i = 0; i < 1000; i++) {
-                char key[16];
-                snprintf(key, sizeof(key), "k%04d", i);
-                ok = ok && common_tts_dict_find(dict, key, value) && value == std::to_string(i);
+                ok = ok && common_tts_dict_find(dict, dict.keys[i], value) && value == std::to_string(i);
             }
             ok = ok && !common_tts_dict_find(dict, "k", value) && !common_tts_dict_find(dict, "k10000", value) && !common_tts_dict_find(dict, "a", value);
             t.assert_true("all found, none extra", ok);
         });
 
-        // a dictionary comes from the GGUF and cannot be trusted: any bytes must give a miss, an exception, or a real line of it
-        t.test("random bytes as dictionary", [](testing & t) {
-            static const char raw[] = "ab\t\n\n\t\0\xff\"{}[]";
+        // the GGUF is not trusted: with keys in any order, a hit must be an entry of the dictionary
+        t.test("random keys in any order", [](testing & t) {
+            static const char raw[] = "ab\t\n\xff\"{";
             const std::string alphabet(raw, sizeof(raw) - 1);
             std::mt19937 rng(42);
             auto random_str = [&](size_t max_len) {
@@ -3144,19 +3136,23 @@ static void test_tts_dict(testing & t) {
             };
             bool ok = true;
             for (int i = 0; i < 20000; i++) {
-                const std::string dict = random_str(40);
-                const std::string key  = random_str(3);
+                common_tts_dict dict;
+                const size_t n = rng() % 8;
+                for (size_t j = 0; j < n; j++) {
+                    dict.keys.push_back(random_str(2));
+                    dict.values.push_back(std::to_string(j));
+                }
+                const std::string key = random_str(2);
                 std::string value;
-                try {
-                    if (common_tts_dict_find(dict, key, value)) {
-                        const std::string line = "\n" + key + "\t" + value + "\n";
-                        ok = ok && ("\n" + dict + "\n").find(line) != std::string::npos;
+                if (common_tts_dict_find(dict, key, value)) {
+                    bool found = false;
+                    for (size_t j = 0; j < n; j++) {
+                        found = found || (dict.keys[j] == key && dict.values[j] == value);
                     }
-                } catch (const std::exception &) {
-                    // malformed line
+                    ok = ok && found;
                 }
             }
-            t.assert_true("every hit is a line of the dictionary", ok);
+            t.assert_true("every hit is an entry of the dictionary", ok);
         });
     }
 }
@@ -3338,7 +3334,10 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         merged["vars"] = vars;
         if (tts_norm) {
             merged["tts_norm_ref"] = tts_norm_ref_path();
-            merged["tts_dicts"]    = *test_tts_dicts();
+            merged["tts_dicts"]    = json::object();
+            for (const auto & d : *test_tts_dicts()) {
+                merged["tts_dicts"][d.first] = {{"keys", d.second.keys}, {"values", d.second.values}};
+            }
         }
 
 #ifdef _WIN32
