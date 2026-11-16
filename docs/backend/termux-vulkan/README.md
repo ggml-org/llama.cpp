@@ -8,13 +8,13 @@ First, download and install the Termux app from its [GitHub releases page](https
 > Before proceeding to the next step, make sure you have switched the package sources to a mirror closest to you (e.g. via `termux-change-repo`). Otherwise, package downloads may be extremely slow or fail entirely. Additionally, before starting the build, run `termux-wake-lock` to acquire a wake lock on your device. Otherwise, Android may kill Termux or throttle it in the background, causing the build to fail unexpectedly. Note that the wake lock is only active for the current session; if you exit Termux or reboot your device, you must run this command again before performing another build.
 
 Then update the Termux environment and install the dependencies.
-```
+```bash
 $ apt update && apt upgrade
 $ apt install git ccache cmake clang ninja vulkan-headers vulkan-loader-android vulkan-tools glslang spirv-headers spirv-tools vulkan-extension-layer shaderc -y
 ```
 
 Check your environment.
-```
+```bash
 $ vulkaninfo --summary
 # Output something like this:
 Devices:
@@ -37,24 +37,23 @@ But you at least need Vulkan 1.2. If you don't meet this requirement, you can ch
 
 ## How to build
 
-### Using build.py script (Recommended)
-
-The easiest way to build llama.cpp is by using the `scripts/termux-vulkan/build.py` script. It will automatically perform native compilation for the SoC.
-
 Build:
+```bash
+$ cmake -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -G Ninja \
+  -DCMAKE_CXX_FLAGS="-mcpu=native -O3 -ffp-model=fast -fvectorize -flto -D_GNU_SOURCE" \
+  -DGGML_VULKAN=1
+$ ninja -C build
 ```
-$ cd ./scripts/termux-vulkan
-# You have to run the compile script in this directory
-$ python build.py --release # Or --debug
-```
-
-### Manual CMake Build
-
-You can also manually compile it after installing the dependencies, the method is the same as on desktop Linux.
 
 ## How to run
 
-Use it the same way you usually use llama.cpp.
+Remember to use the "-ngl" parameter
+
+```bash
+./build/bin/llama-cli -m test.gguf -t 4 -c 4096 -ngl 99
+```
 
 ## Benchmark data
 
