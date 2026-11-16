@@ -1,6 +1,7 @@
 #include "llama-kv-cache.h"
 #include "llama-model.h"
 
+#include <algorithm>
 #include <numeric>
 #include <string>
 
@@ -102,6 +103,74 @@ int main() {
                 GGML_ASSERT(shared.get_k_scale(1) == nullptr);
                 GGML_ASSERT(shared.get_v_scale(1) == nullptr);
             }
+        }
+    }
+
+    // SWA cells shared by several sequences (e.g. after seq_cp in a unified cache) must be reused once they
+    // are masked for all of their sequences, otherwise they stay occupied forever
+    // ref: https://github.com/ggml-org/llama.cpp/issues/32258
+    {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
+        init_model(*model, 1);
+
+        const uint32_t kv_size = 8;
+        const uint32_t n_swa   = 4;
+
+        llama_kv_cache kv(*model, false, model->hparams, GGML_TYPE_F16, GGML_TYPE_F16,
+                false, false, true, kv_size, 2, n_swa, LLAMA_SWA_TYPE_STANDARD, nullptr, nullptr, nullptr, nullptr);
+        GGML_ASSERT(kv.get_size() == kv_size);
+
+        auto add = [&](llama_seq_id seq_id, llama_pos pos) {
+            llama_token  token    = 0;
+            int32_t      n_seq_id = 1;
+            llama_seq_id seq_ids[1] = { seq_id };
+            llama_seq_id * seq_id_ptr = seq_ids;
+            int32_t      seq_idx[LLAMA_MAX_SEQ];
+            int8_t       output   = 1;
+            std::fill(seq_idx, seq_idx + LLAMA_MAX_SEQ, -1);
+            seq_idx[seq_id] = 0;
+
+            llama_ubatch ubatch = {};
+            ubatch.b_equal_seqs = 1;
+            ubatch.n_tokens     = 1;
+            ubatch.n_seq_tokens = 1;
+            ubatch.n_seqs       = 1;
+            ubatch.n_seqs_unq   = 1;
+            ubatch.n_pos        = 1;
+            ubatch.token        = &token;
+            ubatch.pos          = &pos;
+            ubatch.n_seq_id     = &n_seq_id;
+            ubatch.seq_id       = &seq_id_ptr;
+            ubatch.seq_id_unq   = seq_ids;
+            ubatch.seq_idx      = seq_idx;
+            ubatch.output       = &output;
+
+            const auto sinfo = kv.find_slot(ubatch, false);
+            if (sinfo.empty()) {
+                return false;
+            }
+            kv.apply_ubatch(sinfo, ubatch);
+            return true;
+        };
+
+        // shared prefix [0, 1] of seq 0 and seq 1
+        GGML_ASSERT(add(0, 0));
+        GGML_ASSERT(add(0, 1));
+        kv.seq_cp(0, 1, -1, -1);
+
+        // fill the rest of the cache with tokens of each sequence that are still inside the window
+        for (llama_pos pos = 2; pos < 5; ++pos) {
+            GGML_ASSERT(add(0, pos));
+            GGML_ASSERT(add(1, pos));
+        }
+
+        // the cache is full and only the shared cells are masked for both sequences
+        for (llama_pos pos = 5; pos < 16; ++pos) {
+            GGML_ASSERT(add(0, pos));
+            GGML_ASSERT(add(1, pos));
+            GGML_ASSERT(kv.seq_pos_max(0) == pos && kv.seq_pos_max(1) == pos);
+            GGML_ASSERT(kv.seq_pos_min(0) == kv.seq_pos_min(1));
+            GGML_ASSERT(kv.seq_pos_max(0) - kv.seq_pos_min(0) + 1 >= (llama_pos) n_swa);
         }
     }
 

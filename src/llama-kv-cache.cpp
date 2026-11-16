@@ -1091,6 +1091,8 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                 //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
                 //    - mask SWA, using current max pos for that sequence in the cache
                 //                always insert in the cell with minimum pos
+                //  - the cell is shared by several sequences (e.g. after llama_memory_seq_cp in a unified cache):
+                //    - mask SWA, the cell must be masked for all of its sequences
                 bool can_use = cells.is_empty(idx);
 
                 if (!can_use && cells.seq_count(idx) == 1) {
@@ -1108,6 +1110,20 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                         // SWA mask
                         if (llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
                             can_use = true;
+                        }
+                    }
+                } else if (!can_use && n_swa > 0 && swa_type != LLAMA_SWA_TYPE_NONE) {
+                    const llama_pos pos_cell = cells.pos_get(idx);
+                    const auto &    seq_set  = cells.seq_get_all(idx);
+
+                    // SWA mask
+                    can_use = true;
+
+                    for (uint32_t seq_id_cell = 0; seq_id_cell < LLAMA_MAX_SEQ; ++seq_id_cell) {
+                        if (seq_set.test(seq_id_cell) &&
+                            !llama_hparams::is_masked_swa(n_swa, swa_type, pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                            can_use = false;
+                            break;
                         }
                     }
                 }
@@ -1170,12 +1186,15 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
             const auto idx = sinfo.idxs[s][ii];
 
             if (!cells.is_empty(idx)) {
-                assert(cells.seq_count(idx) == 1);
+                // the cell can be shared by several sequences (see find_slot)
+                const auto &    seq_set = cells.seq_get_all(idx);
+                const llama_pos pos     = cells.pos_get(idx);
 
-                const llama_seq_id seq_id = cells.seq_get(idx);
-                const llama_pos    pos    = cells.pos_get(idx);
-
-                seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+                for (uint32_t seq_id = 0; seq_id < LLAMA_MAX_SEQ; ++seq_id) {
+                    if (seq_set.test(seq_id)) {
+                        seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+                    }
+                }
 
                 cells.rm(idx);
             }
