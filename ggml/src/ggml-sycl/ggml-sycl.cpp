@@ -5737,6 +5737,17 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
         static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     const bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
 
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+    // reads the f32 activation itself, so the q8_1 quantize below is skipped
+    if (use_reorder && g_ggml_sycl_enable_esimd && src0->type == GGML_TYPE_Q3_K &&
+        ggml_sycl_mul_mat_vec_q_id_reorder_esimd(src0->type, src0->data, (const float *) src1->data,
+            (const int32_t *) ids->data, (float *) dst->data, (int) ne10, nrows, n_experts_used,
+            /*expert_weight_stride=*/ src0->nb[2], /*dst_row_stride=*/ dst->nb[1],
+            /*src1_row_stride=*/ ne11 == 1 ? 0 : src1->nb[1], stream)) {
+        return true;
+    }
+#endif
+
     ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(),
         (size_t) ne11 * src1_padded_cols * sizeof(block_q8_1) / QK8_1);
     char * src1_ddq = src1_q8_alloc.get();
