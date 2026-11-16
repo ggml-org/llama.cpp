@@ -49,7 +49,7 @@ jobs:
 
     env:
       BENCH_DIR: tools/server/bench/nightly
-      # rebuilt in every container; pip's cache stays in NIGHTLY_HOME, so crick is built once
+      # rebuilt in every container (~1 min)
       VENV: /opt/bench-venv
 
     steps:
@@ -61,7 +61,6 @@ jobs:
           home="$(dirname "$RUNNER_WORKSPACE")/llama-nightly"
           {
             echo "NIGHTLY_HOME=$home"
-            echo "PIP_CACHE_DIR=$home/container/pip-cache"
             echo "HF_HOME=$home/container/hf-cache"
           } >> "$GITHUB_ENV"
 
