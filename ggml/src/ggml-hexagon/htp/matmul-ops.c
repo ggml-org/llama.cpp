@@ -2142,13 +2142,8 @@ static void transfer_output_chunk_worker_fn(const htp_thread_t * th, unsigned in
 
         void *       dst  = (uint8_t *) st->dst + (size_t) chunk_idx * st->dst_stride * st->dst_elem_size;
         const void * src2 = st->src2 ? ((const uint8_t *) st->src2 + (size_t) chunk_idx * st->src2_stride * st->src2_elem_size) : NULL;
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_fp16_to_fp16((__fp16 *) dst, src2, st->vtcm_src, chunk_idx, chunk_size,
-                                               st->n_cols, st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
-        } else {
-            transfer_output_chunk_fp16_to_fp32((float *) dst, src2, st->vtcm_src, chunk_idx, chunk_size,
-                                               st->n_cols, st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
-        }
+        st->col_chunk_fn(dst, src2, st->vtcm_src, chunk_idx, chunk_size,
+                         st->n_cols, st->n_cols, st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
@@ -2436,6 +2431,7 @@ typedef struct {
 } activation_transfer_gathered_task_state_t;
 
 typedef struct {
+    hmx_fp16_output_scattered_fn_t  scattered_fn;
     const struct mmid_row_mapping * matrix_rows;
     const __fp16                  * vtcm_src;
     void                          * dst;
@@ -2512,17 +2508,10 @@ static void transfer_output_chunk_scattered_worker_fn(const htp_thread_t * th, u
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_fp16_to_fp16_scattered(
-                (__fp16 *) st->dst, st->vtcm_src, start_row, vtcm_start_row, n_rows, st->n_cols,
-                st->matrix_rows, st->cur_a, st->mapping_stride,
-                st->dst_nb1, st->dst_nb2, st->cne1);
-        } else {
-            transfer_output_chunk_fp16_to_fp32_scattered(
-                (float *) st->dst, st->vtcm_src, start_row, vtcm_start_row, n_rows, st->n_cols,
-                st->matrix_rows, st->cur_a, st->mapping_stride,
-                st->dst_nb1, st->dst_nb2, st->cne1);
-        }
+        st->scattered_fn(
+            st->dst, st->vtcm_src, start_row, vtcm_start_row, n_rows, st->n_cols,
+            st->matrix_rows, st->cur_a, st->mapping_stride,
+            st->dst_nb1, st->dst_nb2, st->cne1);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
     }
 }
@@ -2598,6 +2587,7 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
 }
 
 typedef struct {
+    hmx_fp16_output_col_chunk_fn_t col_chunk_fn;
     void *                dst;
     const __fp16 *        vtcm_src;
     const void *          src2;
@@ -2642,17 +2632,8 @@ static void transfer_output_chunk_col_chunk_worker_fn(const htp_thread_t * th, u
 
     int chunk_dst_cols = (int)st->dst_cols - (int)c_first;
     if (chunk_dst_cols > 0) {
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_fp16_to_fp16_col_chunk(
-                (__fp16 *) dst, src2, vtcm_src, 0, st->n_rows, c_len, st->n_cols,
-                st->dst_stride, st->src2_stride, (uint32_t)chunk_dst_cols, st->src2_elem_size
-            );
-        } else {
-            transfer_output_chunk_fp16_to_fp32_col_chunk(
-                (float *) dst, src2, vtcm_src, 0, st->n_rows, c_len, st->n_cols,
-                st->dst_stride, st->src2_stride, (uint32_t)chunk_dst_cols, st->src2_elem_size
-            );
-        }
+        st->col_chunk_fn(dst, src2, vtcm_src, 0, st->n_rows, c_len, st->n_cols,
+                         st->dst_stride, st->src2_stride, (uint32_t)chunk_dst_cols, st->src2_elem_size);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
@@ -2663,11 +2644,16 @@ static void transfer_output_chunk_threaded(struct htp_ops_context *octx, void *d
                                            size_t dst_elem_size, size_t src2_elem_size) {
     if (n_rows <= 0) return;
 
+    const hmx_fp16_output_col_chunk_fn_t col_chunk_fn = (dst_elem_size == sizeof(__fp16))
+        ? transfer_output_chunk_fp16_to_fp16_col_chunk
+        : transfer_output_chunk_fp16_to_fp32_col_chunk;
+
     const int n_hvx = (int) octx->n_hvx;
     uint32_t n_blocks = hmx_ceil_div((uint32_t) n_cols, 32);
     uint32_t n_units  = (dst_elem_size == sizeof(__fp16)) ? hmx_ceil_div(n_blocks, 2) : n_blocks;
     if (n_hvx > 1 && n_units >= (uint32_t)n_hvx) {
         output_transfer_col_chunk_state_t col_state;
+        col_state.col_chunk_fn = col_chunk_fn;
         col_state.dst = dst;
         col_state.src2 = src2;
         col_state.vtcm_src = vtcm_src;
@@ -2691,6 +2677,7 @@ static void transfer_output_chunk_threaded(struct htp_ops_context *octx, void *d
     int actual_hvx = hmx_ceil_div(n_rows, n_chunks_per_task);
 
     output_transfer_task_state_t state;
+    state.col_chunk_fn      = col_chunk_fn;
     state.n_tasks           = actual_hvx;
     state.n_tot_chunks      = n_tot_chunks;
     state.n_chunks_per_task = n_chunks_per_task;
@@ -2860,46 +2847,32 @@ static void rescale_int_weight_chunk_to_int8_tiles(
     const uint32_t n_units_per_task = (n_hvx <= 1) ? n_tot_units
                                     : fastdiv(n_tot_units + (uint32_t) n_hvx - 1, &octx->n_hvx_div);
 
+    const bool is_w8a8 = htp_mm_kernel_is_hmx_w8a8(kernel_type);
+
     int_weight_rescale_state_t state;
+    state.rescale_fn        = resolve_int_weight_rescale_fn(weight_type);
     state.dst_wt_base       = (uint8_t *) vtcm_weight_buf;
     state.dst_bias_base     = (uint8_t *) vtcm_weight_buf + weight_bias_offset;
     state.dst_scales_base   = (float *) ((uint8_t *) vtcm_weight_buf + weight_scales_offset);
     state.src_raw           = (const uint8_t *) weight_src_raw;
+    state.bias_stride       = is_w8a8 ? (2 * HTP_MM_HMX_BIAS_BANK_SIZE) : HTP_MM_HMX_BIAS_BANK_SIZE;
     state.n_col_tiles       = n_col_tiles;
     state.n_k_tiles         = n_k_tiles;
     state.n_groups          = (uint32_t) n_groups;
     state.tiles_per_group   = tiles_per_group;
     state.aligned_tile_size = (uint32_t) aligned_tile_size;
-    state.kernel_type       = kernel_type;
-    state.weight_type       = weight_type;
+    state.raw_shift         = (weight_type == HTP_TYPE_Q1_0) ? 2u
+                            : ((weight_type == HTP_TYPE_Q2_0) ? 1u : 0u);
     state.n_tot_units       = n_tot_units;
     state.n_units_per_task  = n_units_per_task;
     state.n_tasks           = hex_smin(n_tot_units, (uint32_t) n_hvx);
+    state.is_w8a8           = is_w8a8;
     state.n_groups_div      = *n_groups_div;
 
     work_queue_run(octx->ctx->hvx_queue, rescale_int_weight_worker_loop, &state, (int) state.n_tasks);
 }
 
-typedef struct {
-    uint8_t *  vtcm_act_dst;
-    float *    vtcm_act_scales;
-    dma_addr_t act_dma_addr;
-    float *    vtcm_f32_act;
-    uint32_t   n_tasks;
-    uint32_t   n_rows;
-    uint32_t   mc_pad;
-    uint32_t   n_rows_per_task;
-    uint32_t   k_block;
-    uint32_t   k_stride;
-    uint32_t   k_valid;
-    uint32_t   k_group;
-    uint32_t   n_groups;
-    int32_t    kernel_type;
-    uint32_t   act_elem_size;
-    size_t     vtcm_f32_act_bytes_per_hvx;
-} int_activation_transfer_task_state_t;
-
-static void transfer_activation_chunk_to_int_dma_pipelined(
+typedef void (*int_act_dma_pipelined_fn_t)(
         dma_queue * dma_q,
         uint8_t * restrict vtcm_act_dst,
         float * restrict vtcm_act_scales,
@@ -2913,67 +2886,108 @@ static void transfer_activation_chunk_to_int_dma_pipelined(
         uint32_t k_valid,
         uint32_t k_group,
         uint32_t n_groups,
-        int32_t kernel_type,
         uint8_t * thread_act,
         size_t thread_scratch_bytes,
-        uint32_t act_elem_size,
-        struct htp_thread_trace * tr) {
+        struct htp_thread_trace * tr);
 
-    const bool is_w8a8         = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-    const uint32_t step_rows   = is_w8a8 ? 4u : 2u;
-    const bool act_is_f16      = (act_elem_size == sizeof(__fp16));
-    const size_t row_bytes     = (size_t) k_block * act_elem_size;
-    const size_t src_row_bytes = (size_t) k_stride * act_elem_size;
-    const size_t width_bytes   = (size_t) k_valid * act_elem_size;
-    const bool double_buf      = (thread_scratch_bytes >= 2 * step_rows * row_bytes);
-    const uint32_t n_k_tiles   = k_block >> 5;
+typedef struct {
+    int_act_dma_pipelined_fn_t dma_pipelined_fn;
+    uint8_t *                  vtcm_act_dst;
+    float *                    vtcm_act_scales;
+    dma_addr_t                 act_dma_addr;
+    float *                    vtcm_f32_act;
+    uint32_t                   n_tasks;
+    uint32_t                   n_rows;
+    uint32_t                   mc_pad;
+    uint32_t                   n_rows_per_task;
+    uint32_t                   k_block;
+    uint32_t                   k_stride;
+    uint32_t                   k_valid;
+    uint32_t                   k_group;
+    uint32_t                   n_groups;
+    size_t                     vtcm_f32_act_bytes_per_hvx;
+} int_activation_transfer_task_state_t;
 
-    if (double_buf) {
-        if (row_start < row_end && row_start < n_rows) {
-            uint32_t nrows_to_fetch = hex_smin(n_rows - row_start, step_rows);
-            dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + (size_t) row_start * src_row_bytes),
-                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
-        }
-        if (row_start + step_rows < row_end && row_start + step_rows < n_rows) {
-            uint32_t next_r = row_start + step_rows;
-            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);
-            uint8_t * next_buf = thread_act + step_rows * row_bytes;
-            dma_queue_push(dma_q, dma_make_data(next_buf, act_dma_addr + (size_t) next_r * src_row_bytes),
-                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
-        }
+#define DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(SFX, ACT_T, STEP_ROWS)                                          \
+static void transfer_activation_chunk_##SFX##_dma_pipelined(                                                    \
+        dma_queue * dma_q,                                                                                      \
+        uint8_t * restrict vtcm_act_dst,                                                                        \
+        float * restrict vtcm_act_scales,                                                                       \
+        dma_addr_t act_dma_addr,                                                                                \
+        uint32_t row_start,                                                                                     \
+        uint32_t row_end,                                                                                       \
+        uint32_t n_rows,                                                                                        \
+        uint32_t mc_pad,                                                                                        \
+        uint32_t k_block,                                                                                       \
+        uint32_t k_stride,                                                                                      \
+        uint32_t k_valid,                                                                                       \
+        uint32_t k_group,                                                                                       \
+        uint32_t n_groups,                                                                                      \
+        uint8_t * thread_act,                                                                                   \
+        size_t thread_scratch_bytes,                                                                            \
+        struct htp_thread_trace * tr) {                                                                         \
+    const uint32_t step_rows     = (STEP_ROWS);                                                                 \
+    const size_t   row_bytes     = (size_t) k_block * sizeof(ACT_T);                                            \
+    const size_t   src_row_bytes = (size_t) k_stride * sizeof(ACT_T);                                           \
+    const size_t   width_bytes   = (size_t) k_valid * sizeof(ACT_T);                                            \
+    const bool     double_buf    = (thread_scratch_bytes >= 2 * step_rows * row_bytes);                         \
+    const uint32_t n_k_tiles     = k_block >> 5;                                                                \
+    if (double_buf) {                                                                                           \
+        if (row_start < row_end && row_start < n_rows) {                                                        \
+            uint32_t nrows_to_fetch = hex_smin(n_rows - row_start, step_rows);                                  \
+            dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + (size_t) row_start * src_row_bytes), \
+                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                              \
+        }                                                                                                       \
+        if (row_start + step_rows < row_end && row_start + step_rows < n_rows) {                                \
+            uint32_t next_r = row_start + step_rows;                                                            \
+            uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);                                     \
+            uint8_t * next_buf = thread_act + step_rows * row_bytes;                                            \
+            dma_queue_push(dma_q, dma_make_data(next_buf, act_dma_addr + (size_t) next_r * src_row_bytes),      \
+                           row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                              \
+        }                                                                                                       \
+    }                                                                                                           \
+    for (uint32_t r = row_start; r < row_end; r += step_rows) {                                                 \
+        uint8_t * curr_buf = thread_act;                                                                        \
+        if (r < n_rows) {                                                                                       \
+            if (double_buf) {                                                                                   \
+                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;                                                \
+            } else {                                                                                            \
+                uint32_t nrows_to_fetch = hex_smin(n_rows - r, step_rows);                                      \
+                dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + (size_t) r * src_row_bytes),     \
+                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                          \
+                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;                                                \
+            }                                                                                                   \
+        }                                                                                                       \
+        const uint32_t valid_rows = (r < n_rows) ? hex_smin(n_rows - r, step_rows) : 0u;                        \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);                                                \
+        quantize_act_step_rows_##SFX(                                                                           \
+            vtcm_act_dst, vtcm_act_scales, curr_buf, row_bytes,                                                 \
+            r, valid_rows, mc_pad, n_k_tiles, k_group, n_groups, k_valid);                                      \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);                                                 \
+        if (double_buf) {                                                                                       \
+            uint32_t next_r = r + 2 * step_rows;                                                                \
+            if (next_r < row_end && next_r < n_rows) {                                                          \
+                uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);                                 \
+                dma_queue_push(dma_q, dma_make_data(curr_buf, act_dma_addr + (size_t) next_r * src_row_bytes),  \
+                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);                          \
+            }                                                                                                   \
+        }                                                                                                       \
+    }                                                                                                           \
+}
+
+DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(f16_w8a8,  __fp16, 4u)
+DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(f32_w8a8,  float,  4u)
+DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(f16_w8a16, __fp16, 2u)
+DEFINE_TRANSFER_ACT_CHUNK_DMA_PIPELINED(f32_w8a16, float,  2u)
+
+static inline int_act_dma_pipelined_fn_t resolve_int_act_dma_pipelined_fn(bool is_w8a8, uint32_t act_elem_size) {
+    const bool act_is_f16 = (act_elem_size == sizeof(__fp16));
+    if (is_w8a8) {
+        return act_is_f16 ? transfer_activation_chunk_f16_w8a8_dma_pipelined
+                          : transfer_activation_chunk_f32_w8a8_dma_pipelined;
     }
-
-    for (uint32_t r = row_start; r < row_end; r += step_rows) {
-        uint8_t * curr_buf = thread_act;
-        if (r < n_rows) {
-            if (double_buf) {
-                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;
-            } else {
-                uint32_t nrows_to_fetch = hex_smin(n_rows - r, step_rows);
-                dma_queue_push(dma_q, dma_make_data(thread_act, act_dma_addr + (size_t) r * src_row_bytes),
-                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
-                curr_buf = (uint8_t *) dma_queue_pop(dma_q).dst;
-            }
-        }
-
-        const uint32_t valid_rows = (r < n_rows) ? hex_smin(n_rows - r, step_rows) : 0u;
-
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);
-        quantize_act_step_rows_to_int_tiles(
-            vtcm_act_dst, vtcm_act_scales, curr_buf, row_bytes,
-            r, valid_rows, mc_pad, n_k_tiles, k_group, n_groups, k_valid,
-            is_w8a8, act_is_f16);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, r);
-
-        if (double_buf) {
-            uint32_t next_r = r + 2 * step_rows;
-            if (next_r < row_end && next_r < n_rows) {
-                uint32_t nrows_to_fetch = hex_smin(n_rows - next_r, step_rows);
-                dma_queue_push(dma_q, dma_make_data(curr_buf, act_dma_addr + (size_t) next_r * src_row_bytes),
-                               row_bytes, src_row_bytes, width_bytes, nrows_to_fetch);
-            }
-        }
-    }
+    return act_is_f16 ? transfer_activation_chunk_f16_w8a16_dma_pipelined
+                      : transfer_activation_chunk_f32_w8a16_dma_pipelined;
 }
 
 static void transfer_activation_chunk_int_worker_fn(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
@@ -2987,11 +3001,11 @@ static void transfer_activation_chunk_int_worker_fn(const htp_thread_t * th, uns
         }
         uint32_t row_end   = hex_smin(row_start + st->n_rows_per_task, st->mc_pad);
         uint8_t * thread_act = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
-        transfer_activation_chunk_to_int_dma_pipelined(
+        st->dma_pipelined_fn(
             th->dma_q, st->vtcm_act_dst, st->vtcm_act_scales, st->act_dma_addr,
             row_start, row_end, st->n_rows, st->mc_pad,
             st->k_block, st->k_stride, st->k_valid, st->k_group, st->n_groups,
-            st->kernel_type, thread_act, st->vtcm_f32_act_bytes_per_hvx, st->act_elem_size, tr);
+            thread_act, st->vtcm_f32_act_bytes_per_hvx, tr);
     }
 }
 
@@ -3017,53 +3031,53 @@ static void transfer_activation_chunk_int_threaded(
         return;
     }
 
-    const bool is_w8a8       = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-    const uint32_t m_align   = is_w8a8 ? 64u : 32u;
-    const uint32_t row_step  = is_w8a8 ? 4u : 2u;
-    const uint32_t mc_pad    = hex_align_up((uint32_t) n_rows, m_align);
-    uint32_t rows_per_task   = (n_hvx <= 1) ? mc_pad : fastdiv(mc_pad + (uint32_t) n_hvx - 1, act_hvx_div);
-    rows_per_task            = hex_align_up(rows_per_task, row_step);
+    const bool     is_w8a8        = htp_mm_kernel_is_hmx_w8a8(kernel_type);
+    const uint32_t m_align        = is_w8a8 ? 64u : 32u;
+    const uint32_t row_step       = is_w8a8 ? 4u : 2u;
+    const uint32_t mc_pad         = hex_align_up((uint32_t) n_rows, m_align);
+    const uint32_t resolved_esize = act_elem_size ? act_elem_size : (uint32_t) sizeof(float);
+    uint32_t       rows_per_task  = (n_hvx <= 1) ? mc_pad : fastdiv(mc_pad + (uint32_t) n_hvx - 1, act_hvx_div);
+    rows_per_task                 = hex_align_up(rows_per_task, row_step);
 
     int_activation_transfer_task_state_t state;
-    state.vtcm_act_dst              = vtcm_act_dst;
-    state.vtcm_act_scales           = vtcm_act_scales;
-    state.act_dma_addr              = act_dma_addr;
-    state.vtcm_f32_act              = vtcm_f32_act;
-    state.n_rows                    = (uint32_t) n_rows;
-    state.mc_pad                    = mc_pad;
-    state.n_rows_per_task           = rows_per_task;
-    state.n_tasks                   = (uint32_t) hex_smin(n_hvx, (int) (is_w8a8 ? (mc_pad >> 2) : (mc_pad >> 1)));
-    state.k_block                   = (uint32_t) k_block;
-    state.k_stride                  = (uint32_t) k_stride;
-    state.k_valid                   = (uint32_t) k_valid;
-    state.k_group                   = (uint32_t) k_group;
-    state.n_groups                  = (uint32_t) n_groups;
-    state.kernel_type               = kernel_type;
-    state.act_elem_size             = act_elem_size ? act_elem_size : (uint32_t) sizeof(float);
+    state.dma_pipelined_fn           = resolve_int_act_dma_pipelined_fn(is_w8a8, resolved_esize);
+    state.vtcm_act_dst               = vtcm_act_dst;
+    state.vtcm_act_scales            = vtcm_act_scales;
+    state.act_dma_addr               = act_dma_addr;
+    state.vtcm_f32_act               = vtcm_f32_act;
+    state.n_rows                     = (uint32_t) n_rows;
+    state.mc_pad                     = mc_pad;
+    state.n_rows_per_task            = rows_per_task;
+    state.n_tasks                    = (uint32_t) hex_smin(n_hvx, (int) (is_w8a8 ? (mc_pad >> 2) : (mc_pad >> 1)));
+    state.k_block                    = (uint32_t) k_block;
+    state.k_stride                   = (uint32_t) k_stride;
+    state.k_valid                    = (uint32_t) k_valid;
+    state.k_group                    = (uint32_t) k_group;
+    state.n_groups                   = (uint32_t) n_groups;
     state.vtcm_f32_act_bytes_per_hvx = hex_align_down(fastdiv(vtcm_f32_act_bytes, act_hvx_div), 128);
 
     work_queue_run(ctx->hvx_queue, transfer_activation_chunk_int_worker_fn, &state, (int) state.n_tasks);
 }
 
 typedef struct {
-    void *                dst;
-    const void *          src2;
-    const uint8_t *       vtcm_src;
-    const float *         vtcm_act_scales;
-    const float *         vtcm_weight_scales;
-    uint32_t              n_rows;
-    uint32_t              mc_pad;
-    uint32_t              n_cols;
-    uint32_t              n_groups;
-    int32_t               kernel_type;
-    uint32_t              dst_stride;
-    uint32_t              src2_stride;
-    uint32_t              dst_cols;
-    uint32_t              n_tasks;
-    uint32_t              n_chunks_per_task;
-    size_t                dst_elem_size;
-    size_t                src2_elem_size;
-    struct fastdiv_values n_hvx_div;
+    int_output_col_chunk_fn_t col_chunk_fn;
+    void *                    dst;
+    const void *              src2;
+    const uint8_t *           vtcm_src;
+    const float *             vtcm_act_scales;
+    const float *             vtcm_weight_scales;
+    uint32_t                  n_rows;
+    uint32_t                  mc_pad;
+    uint32_t                  n_cols;
+    uint32_t                  n_groups;
+    uint32_t                  dst_stride;
+    uint32_t                  src2_stride;
+    uint32_t                  dst_cols;
+    uint32_t                  n_tasks;
+    uint32_t                  n_chunks_per_task;
+    size_t                    dst_elem_size;
+    size_t                    src2_elem_size;
+    struct fastdiv_values     n_hvx_div;
 } int_output_transfer_state_t;
 
 static void transfer_output_chunk_int_col_chunk_worker_fn(const htp_thread_t * th, unsigned int n, unsigned int i, void * data) {
@@ -3098,31 +3112,10 @@ static void transfer_output_chunk_int_col_chunk_worker_fn(const htp_thread_t * t
     const void * src2 = st->src2 ? ((const uint8_t *) st->src2 + (size_t) c_first * st->src2_elem_size) : NULL;
     void *       dst  = (uint8_t *) st->dst + (size_t) c_first * st->dst_elem_size;
 
-    if (htp_mm_kernel_is_hmx_w8a8(st->kernel_type)) {
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_w8a8_sm_to_fp16_col_chunk(
-                (__fp16 *) dst, src2, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols, st->n_groups,
-                st->dst_stride, st->src2_stride, (uint32_t) chunk_dst_cols, st->src2_elem_size);
-        } else {
-            transfer_output_chunk_w8a8_sm_to_fp32_col_chunk(
-                (float *) dst, src2, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols, st->n_groups,
-                st->dst_stride, st->src2_stride, (uint32_t) chunk_dst_cols, st->src2_elem_size);
-        }
-    } else {
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_w8a16_sm_to_fp16_col_chunk(
-                (__fp16 *) dst, src2, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols, st->n_groups,
-                st->dst_stride, st->src2_stride, (uint32_t) chunk_dst_cols, st->src2_elem_size);
-        } else {
-            transfer_output_chunk_w8a16_sm_to_fp32_col_chunk(
-                (float *) dst, src2, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols, st->n_groups,
-                st->dst_stride, st->src2_stride, (uint32_t) chunk_dst_cols, st->src2_elem_size);
-        }
-    }
+    st->col_chunk_fn(
+        dst, src2, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
+        0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols, st->n_groups,
+        st->dst_stride, st->src2_stride, (uint32_t) chunk_dst_cols, st->src2_elem_size);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
 }
 
@@ -3142,31 +3135,10 @@ static void transfer_output_chunk_int_worker_fn(const htp_thread_t * th, unsigne
         void *       dst  = (uint8_t *) st->dst + (size_t) chunk_idx * st->dst_stride * st->dst_elem_size;
         const void * src2 = st->src2 ? ((const uint8_t *) st->src2 + (size_t) chunk_idx * st->src2_stride * st->src2_elem_size) : NULL;
 
-        if (htp_mm_kernel_is_hmx_w8a8(st->kernel_type)) {
-            if (st->dst_elem_size == sizeof(__fp16)) {
-                transfer_output_chunk_w8a8_sm_to_fp16_col_chunk(
-                    (__fp16 *) dst, src2, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    chunk_idx, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols, st->n_groups,
-                    st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
-            } else {
-                transfer_output_chunk_w8a8_sm_to_fp32_col_chunk(
-                    (float *) dst, src2, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    chunk_idx, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols, st->n_groups,
-                    st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
-            }
-        } else {
-            if (st->dst_elem_size == sizeof(__fp16)) {
-                transfer_output_chunk_w8a16_sm_to_fp16_col_chunk(
-                    (__fp16 *) dst, src2, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    chunk_idx, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols, st->n_groups,
-                    st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
-            } else {
-                transfer_output_chunk_w8a16_sm_to_fp32_col_chunk(
-                    (float *) dst, src2, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    chunk_idx, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols, st->n_groups,
-                    st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
-            }
-        }
+        st->col_chunk_fn(
+            dst, src2, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
+            chunk_idx, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols, st->n_groups,
+            st->dst_stride, st->src2_stride, st->dst_cols, st->src2_elem_size);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
@@ -3200,6 +3172,7 @@ static void transfer_output_chunk_int_threaded(
     const uint32_t mc_pad   = hex_align_up((uint32_t) n_rows, m_align);
 
     int_output_transfer_state_t state;
+    state.col_chunk_fn       = resolve_int_output_col_chunk_fn(is_w8a8, dst_elem_size, src2, src2_elem_size);
     state.dst                = dst;
     state.src2               = src2;
     state.vtcm_src           = (const uint8_t *) vtcm_src;
@@ -3209,7 +3182,6 @@ static void transfer_output_chunk_int_threaded(
     state.mc_pad             = mc_pad;
     state.n_cols             = (uint32_t) n_cols;
     state.n_groups           = (uint32_t) n_groups;
-    state.kernel_type        = kernel_type;
     state.dst_stride         = (uint32_t) dst_stride;
     state.src2_stride        = src2_stride;
     state.dst_cols           = (uint32_t) dst_cols;
@@ -3237,6 +3209,7 @@ static void transfer_output_chunk_int_threaded(
 }
 
 typedef struct {
+    int_act_gathered_fn_t           gathered_fn;
     const struct mmid_row_mapping * matrix_rows;
     uint8_t *                       vtcm_act_dst;
     float *                         vtcm_act_scales;
@@ -3246,12 +3219,11 @@ typedef struct {
     uint32_t                        n_rows;
     uint32_t                        mc_pad;
     uint32_t                        n_rows_per_task;
+    uint32_t                        step_rows;
     uint32_t                        k_block;
     uint32_t                        k_valid;
     uint32_t                        k_group;
     uint32_t                        n_groups;
-    int32_t                         kernel_type;
-    uint32_t                        act_elem_size;
     size_t                          vtcm_f32_act_bytes_per_hvx;
     uint32_t                        start_row;
     uint32_t                        cur_a;
@@ -3266,7 +3238,7 @@ static void transfer_activation_chunk_int_gathered_worker_fn(const htp_thread_t 
     int_activation_transfer_gathered_state_t * st = (int_activation_transfer_gathered_state_t *) data;
     struct htp_thread_trace * tr = th->trace;
 
-    const uint32_t step_rows  = htp_mm_kernel_is_hmx_w8a8(st->kernel_type) ? 4u : 2u;
+    const uint32_t step_rows  = st->step_rows;
     const uint32_t row_start  = i * step_rows;
     const uint32_t row_stride = n * step_rows;
     if (row_start >= st->mc_pad) {
@@ -3275,11 +3247,10 @@ static void transfer_activation_chunk_int_gathered_worker_fn(const htp_thread_t 
     uint8_t * thread_act = (uint8_t *) st->vtcm_f32_act + i * st->vtcm_f32_act_bytes_per_hvx;
 
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_QUANT, row_start);
-    transfer_activation_chunk_to_int_gathered(
+    st->gathered_fn(
         st->vtcm_act_dst, st->vtcm_act_scales, st->src, thread_act,
         st->start_row, row_start, st->mc_pad, row_stride, st->n_rows, st->mc_pad,
         st->k_block, st->k_valid, st->k_group, st->n_groups,
-        st->kernel_type, st->act_elem_size,
         st->matrix_rows, st->cur_a, st->mapping_stride,
         st->ne11, &st->ne11_div, st->nb11, st->nb12);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_QUANT, row_start);
@@ -3313,16 +3284,18 @@ static void transfer_activation_chunk_int_gathered_threaded(
         return;
     }
 
-    const bool     is_w8a8    = htp_mm_kernel_is_hmx_w8a8(kernel_type);
-    const uint32_t m_align    = is_w8a8 ? 64u : 32u;
-    const uint32_t row_step   = is_w8a8 ? 4u : 2u;
-    const uint32_t mc_pad     = hex_align_up((uint32_t) n_rows, m_align);
-    const int      valid_rows = (start_row < cne1) ? hex_smin(cne1 - start_row, n_rows) : 0;
+    const bool     is_w8a8        = htp_mm_kernel_is_hmx_w8a8(kernel_type);
+    const uint32_t m_align        = is_w8a8 ? 64u : 32u;
+    const uint32_t row_step       = is_w8a8 ? 4u : 2u;
+    const uint32_t mc_pad         = hex_align_up((uint32_t) n_rows, m_align);
+    const int      valid_rows     = (start_row < cne1) ? hex_smin(cne1 - start_row, n_rows) : 0;
+    const uint32_t resolved_esize = act_elem_size ? act_elem_size : (uint32_t) sizeof(float);
 
     uint32_t rows_per_task = (n_hvx <= 1) ? mc_pad : fastdiv(mc_pad + (uint32_t) n_hvx - 1, act_hvx_div);
     rows_per_task          = hex_align_up(rows_per_task, row_step);
 
     int_activation_transfer_gathered_state_t state = {
+        .gathered_fn                = resolve_int_act_gathered_fn(is_w8a8, resolved_esize),
         .matrix_rows                = matrix_rows,
         .vtcm_act_dst               = vtcm_act_dst,
         .vtcm_act_scales            = vtcm_act_scales,
@@ -3332,12 +3305,11 @@ static void transfer_activation_chunk_int_gathered_threaded(
         .n_rows                     = (uint32_t) valid_rows,
         .mc_pad                     = mc_pad,
         .n_rows_per_task            = rows_per_task,
+        .step_rows                  = row_step,
         .k_block                    = (uint32_t) k_block,
         .k_valid                    = (uint32_t) k_valid,
         .k_group                    = (uint32_t) k_group,
         .n_groups                   = (uint32_t) n_groups,
-        .kernel_type                = kernel_type,
-        .act_elem_size              = act_elem_size ? act_elem_size : (uint32_t) sizeof(float),
         .vtcm_f32_act_bytes_per_hvx = hex_align_down(fastdiv(vtcm_f32_act_bytes, act_hvx_div), 128),
         .start_row                  = (uint32_t) start_row,
         .cur_a                      = (uint32_t) cur_a,
@@ -3352,6 +3324,7 @@ static void transfer_activation_chunk_int_gathered_threaded(
 }
 
 typedef struct {
+    int_output_scattered_fn_t       scattered_fn;
     const struct mmid_row_mapping * matrix_rows;
     void *                          dst;
     const uint8_t *                 vtcm_src;
@@ -3362,7 +3335,6 @@ typedef struct {
     uint32_t                        mc_pad;
     uint32_t                        n_cols;
     uint32_t                        n_groups;
-    int32_t                         kernel_type;
     uint32_t                        n_tasks;
     uint32_t                        n_chunks_per_task;
     uint32_t                        cur_a;
@@ -3402,35 +3374,11 @@ static void transfer_output_chunk_int_scattered_col_chunk_worker_fn(const htp_th
     void * dst = (uint8_t *) st->dst + (size_t) c_first * st->dst_elem_size;
 
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
-    if (htp_mm_kernel_is_hmx_w8a8(st->kernel_type)) {
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_w8a8_cm_to_fp16_scattered(
-                (__fp16 *) dst, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                st->start_row, 0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols,
-                st->n_groups, chunk_dst_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                st->dst_nb1, st->dst_nb2);
-        } else {
-            transfer_output_chunk_w8a8_cm_to_fp32_scattered(
-                (float *) dst, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                st->start_row, 0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols,
-                st->n_groups, chunk_dst_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                st->dst_nb1, st->dst_nb2);
-        }
-    } else {
-        if (st->dst_elem_size == sizeof(__fp16)) {
-            transfer_output_chunk_w8a16_sm_to_fp16_scattered(
-                (__fp16 *) dst, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                st->start_row, 0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols,
-                st->n_groups, chunk_dst_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                st->dst_nb1, st->dst_nb2);
-        } else {
-            transfer_output_chunk_w8a16_sm_to_fp32_scattered(
-                (float *) dst, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                st->start_row, 0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols,
-                st->n_groups, chunk_dst_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                st->dst_nb1, st->dst_nb2);
-        }
-    }
+    st->scattered_fn(
+        dst, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
+        st->start_row, 0, st->n_rows, st->mc_pad, c_first, c_len, st->n_cols,
+        st->n_groups, chunk_dst_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
+        st->dst_nb1, st->dst_nb2);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
 }
 
@@ -3449,35 +3397,11 @@ static void transfer_output_chunk_int_scattered_worker_fn(const htp_thread_t * t
         const uint32_t chunk_size       = hex_smin(st->n_rows - vtcm_start_row, st->n_chunks_per_task);
         const uint32_t global_start_row = st->start_row + vtcm_start_row;
 
-        if (htp_mm_kernel_is_hmx_w8a8(st->kernel_type)) {
-            if (st->dst_elem_size == sizeof(__fp16)) {
-                transfer_output_chunk_w8a8_cm_to_fp16_scattered(
-                    (__fp16 *) st->dst, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    global_start_row, vtcm_start_row, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols,
-                    st->n_groups, st->n_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                    st->dst_nb1, st->dst_nb2);
-            } else {
-                transfer_output_chunk_w8a8_cm_to_fp32_scattered(
-                    (float *) st->dst, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    global_start_row, vtcm_start_row, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols,
-                    st->n_groups, st->n_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                    st->dst_nb1, st->dst_nb2);
-            }
-        } else {
-            if (st->dst_elem_size == sizeof(__fp16)) {
-                transfer_output_chunk_w8a16_sm_to_fp16_scattered(
-                    (__fp16 *) st->dst, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    global_start_row, vtcm_start_row, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols,
-                    st->n_groups, st->n_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                    st->dst_nb1, st->dst_nb2);
-            } else {
-                transfer_output_chunk_w8a16_sm_to_fp32_scattered(
-                    (float *) st->dst, (const uint16_t *) st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
-                    global_start_row, vtcm_start_row, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols,
-                    st->n_groups, st->n_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
-                    st->dst_nb1, st->dst_nb2);
-            }
-        }
+        st->scattered_fn(
+            st->dst, st->vtcm_src, st->vtcm_act_scales, st->vtcm_weight_scales,
+            global_start_row, vtcm_start_row, chunk_size, st->mc_pad, 0, st->n_cols, st->n_cols,
+            st->n_groups, st->n_cols, st->matrix_rows, st->cur_a, st->mapping_stride,
+            st->dst_nb1, st->dst_nb2);
     }
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, start_chunk_idx);
@@ -3513,6 +3437,7 @@ static void transfer_output_chunk_int_scattered_threaded(
     const uint32_t mc_pad   = hex_align_up((uint32_t) n_rows, m_align);
 
     int_output_transfer_scattered_state_t state = {
+        .scattered_fn       = resolve_int_output_scattered_fn(is_w8a8, dst_elem_size),
         .matrix_rows        = matrix_rows,
         .dst                = dst,
         .vtcm_src           = (const uint8_t *) vtcm_src,
@@ -3523,7 +3448,6 @@ static void transfer_output_chunk_int_scattered_threaded(
         .mc_pad             = mc_pad,
         .n_cols             = (uint32_t) n_cols,
         .n_groups           = (uint32_t) n_groups,
-        .kernel_type        = kernel_type,
         .cur_a              = (uint32_t) cur_a,
         .mapping_stride     = (uint32_t) mapping_stride,
         .dst_elem_size      = dst_elem_size,
@@ -4703,6 +4627,9 @@ static void transfer_output_chunk_scattered_threaded(
     int actual_hvx = hmx_ceil_div(n_rows, chunks_per_hvx);
 
     output_transfer_scattered_task_state_t state = {
+        .scattered_fn      = (dst_elem_size == sizeof(__fp16))
+                             ? transfer_output_chunk_fp16_to_fp16_scattered
+                             : transfer_output_chunk_fp16_to_fp32_scattered,
         .vtcm_src          = vtcm_src,
         .dst               = dst,
         .dst_elem_size     = dst_elem_size,
