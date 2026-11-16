@@ -352,7 +352,8 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
 
 // generates one frame; must only be called after step_prompt() has returned 0
 // sampled can be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token
-// out_stop (optional) is set on end-of-speech, the caller must then stop the loop
+// out_stop (optional) is set on end-of-speech or at the frame limit of the model, the caller must then stop the loop
+// the caller may stop earlier with its own limit (e.g. -n)
 // h_state_out is valid until next step_gen() or reset() call, null if no frame is generated
 MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
                         mtmd_helper_gen_audio * ctx,

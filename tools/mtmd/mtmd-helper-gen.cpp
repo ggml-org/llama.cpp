@@ -97,6 +97,8 @@ public:
 
     // false if the backbone context cannot run the pipeline, checked once by mtmd_helper_gen_audio_init()
     virtual bool check_context() const { return true; }
+    // frames generated before step_gen() stops, when the caller sets no limit; 0 = the pipeline stops by itself
+    virtual int32_t max_frames() const { return 512; }
     virtual void reset() = 0;
     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
     // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
@@ -2963,6 +2965,9 @@ public:
 
     bool supports_cfg() const override { return true; }
 
+    // the score and code budgets of the reference are enforced in step_gen()
+    int32_t max_frames() const override { return 0; }
+
     // the generation budgets and the NAR chunks of the reference are sized for the training context (24576 positions)
     // the cfg sequence shares the unified KV cache, a song with cfg may still need to stop early (see step_gen())
     bool check_context() const override {
@@ -3616,6 +3621,7 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
 
 struct mtmd_helper_gen_audio {
     std::unique_ptr<mtmd_gen_audio_pipeline> pipeline;
+    int32_t n_frames = 0; // since the last set_input()
 };
 
 mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(struct llama_context * lctx, struct mtmd_context * mctx) {
@@ -3635,6 +3641,7 @@ void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx) {
 void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx) {
     if (ctx && ctx->pipeline) {
         ctx->pipeline->reset();
+        ctx->n_frames = 0;
     }
 }
 
@@ -3677,6 +3684,7 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
         return 2;
     }
     ctx->pipeline->logit_bias.clear();
+    ctx->n_frames = 0;
     return ctx->pipeline->set_input(inp);
 }
 
@@ -3723,6 +3731,10 @@ int32_t mtmd_helper_gen_audio_step_gen(mtmd_helper_gen_audio * ctx, llama_token 
     }
     bool stop = false;
     const int32_t ret = ctx->pipeline->step_gen(sampled, h_state_in, h_state_out, &stop);
+    const int32_t n_max = ctx->pipeline->max_frames();
+    if (ret == 0 && *h_state_out && n_max > 0 && ++ctx->n_frames >= n_max) {
+        stop = true;
+    }
     if (out_stop) {
         *out_stop = stop;
     }

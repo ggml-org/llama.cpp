@@ -880,7 +880,7 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list 
 
 `cfg_scale`: Classifier-free guidance scale of the audio codes, `> 0`, `1.0` disables it (default `0.0`, the model's own). Only for models that support it (YuE2), others reject a value other than `0.0` with a 400 error.
 
-`n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
+`n_predict`: Max number of audio frames to generate. Defaults to the limit of the model (`512` for most models); generation normally stops earlier once the model emits an end-of-speech token.
 
 `response_format`: `wav` (default), `pcm` (raw `float32` little-endian samples, no header, channels interleaved; the response `Content-Type` carries the sample rate and, for stereo models, the channel count, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`) or `pcm16` (same, as signed 16-bit samples, e.g. `audio/pcm;rate=24000;encoding=signed-int;bits=16`).
 

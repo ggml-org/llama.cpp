@@ -189,7 +189,8 @@ int main(int argc, char ** argv) {
         return t;
     };
 
-    const int max_new = params.n_predict > 0 ? params.n_predict : 512;
+    // without -n, the helper stops at the frame limit of the model
+    const int max_new = params.n_predict > 0 ? params.n_predict : INT_MAX;
     int n_frames = 0;
     llama_token sampled = sample_semantic_code();
     const float * h_state = llama_get_embeddings_ith(lctx, -1);

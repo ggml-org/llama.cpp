@@ -234,7 +234,7 @@ City Pop, upbeat, danceable, groovy bass, electric guitar, synth
 Available params:
 - `--tts-voice` picks the planning mode of the reference (`cot`): `full` (default, a chord-annotated score), `melody` (a melody-only score) or `off` (no score)
 - Cover mode: append the score to the prompt as `\n[ABC]\n<score>`, with `--tts-voice melody` or `full`; the model then goes straight to the codes
-- `-n` counts the score tokens and the codes together, a song needs several thousands: use `-n 16000` (at most 4096 score tokens and 9000 codes, 6 minutes, are generated as in the reference)
+- The generation stops at the limits of the reference (4096 score tokens, then 9000 codes, 6 minutes); `-n` sets a lower limit on the score tokens and the codes together
 - The context must keep the default size (24576 positions, the one of the reference): a smaller `-c` is rejected when the model is loaded
 - Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
 - Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
@@ -247,7 +247,6 @@ Example usage:
 llama-tts -m yue2-3b.gguf \
     -mm mmproj-yue2-3b.gguf \
     -f song.txt \
-    -n 16000 \
     --output song.wav
 ```
 

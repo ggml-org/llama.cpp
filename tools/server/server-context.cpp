@@ -3651,7 +3651,8 @@ private:
                 return;
             }
 
-            const int32_t n_predict = slot.n_predict_max > 0 ? slot.n_predict_max : 512;
+            // without n_predict, the helper stops at the frame limit of the model
+            const int32_t n_predict = slot.n_predict_max > 0 ? slot.n_predict_max : INT32_MAX;
             if (slot.tts.stop || slot.tts.n_decoded >= n_predict) {
                 int32_t      sample_rate = 0;
                 const char * data        = nullptr;
