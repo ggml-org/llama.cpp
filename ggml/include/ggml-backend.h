@@ -225,8 +225,6 @@ extern "C" {
 
     typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
     typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
-    //NUMA all-reduce as a graph node: fills the custom op to be run by all the threads of the device "rank", false if not supported
-    typedef bool   (*ggml_backend_comm_get_allreduce_op_t)(void * comm_ctx, size_t rank, size_t size, ggml_custom_op_t * fun, void ** userdata);
 
     // Split buffer type for tensor parallelism (old)
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
