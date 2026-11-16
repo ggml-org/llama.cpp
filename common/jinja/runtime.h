@@ -87,6 +87,24 @@ struct context {
         env->has_builtins = false;
     }
 
+    context(context &&) = default;
+
+    // copy with all visible variables flattened in, for a scope that can outlive its parents (caller() of a call block)
+    context snapshot() const {
+        std::vector<const context *> chain;
+        for (const context * c = this; c; c = c->parent) {
+            chain.push_back(c);
+        }
+        context res(*this);
+        res.parent = nullptr;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            for (const auto & kv : (*it)->env->as_ordered_object()) {
+                res.env->insert(kv.first, kv.second);
+            }
+        }
+        return res;
+    }
+
     // returns nullptr if not found
     value find_val(const value & key) {
         for (const context * c = this; c; c = c->parent) {
