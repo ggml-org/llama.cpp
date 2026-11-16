@@ -2823,7 +2823,8 @@ bool rpc_server::get_device_supports_op(const std::vector<uint8_t> & input, std:
     std::unordered_map<uint64_t, ggml_tensor*> tensor_map;
     tensor_map.reserve(graph.n_tensors);
 
-    // an op that cannot be created is answered as unsupported, and does not change the answers for the others
+    // an op that cannot be created is answered as unsupported, and so is an op in the request that uses it; the other
+    // answers do not change
     response.assign(graph.n_nodes, 0);
     for (uint32_t k = 0; k < graph.n_nodes; k++) {
         ggml_tensor * op = create_node(graph.node_id(k), ctx, tensor_ptrs, tensor_map);
