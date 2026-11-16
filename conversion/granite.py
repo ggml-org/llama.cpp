@@ -552,7 +552,12 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             or not self._ssm_layers
         )
         self.gguf_writer.add_rope_scaling_finetuned(use_rope)
-        if not use_rope:
+        # If rope not used AND no max_position_embeddings value present, use an
+        # arbitrary large value. Despite position embeddings being unused in
+        # these models, max_position_embeddings is typically used to store the
+        # max length of trained contexts, so it is the right value here even for
+        # NoPE models.
+        if not use_rope and "max_position_embeddings" not in self.hparams:
             self.gguf_writer.add_context_length(2**20)
 
         ## Validation ##
