@@ -73,7 +73,12 @@ std::vector<case_run> run_cases(model_run & mr, const std::vector<const ctx_test
                 // the recurrent cases are also run against a cache pre-filled with a known
                 // pattern, so that a restore reading cells it never wrote cannot pass
 
-                for (const uint8_t fill : { 0, 0x3e }) {
+                for (const uint8_t fill : { 0, 0x3e, 0xff }) {
+                    // with 0xff repeated every float becomes NaN to test that the next sequence is not affected
+                    if (fill == 0xff && llama_model_is_hybrid(mr.model)) {
+                        continue;
+                    }
+
                     TLOG_INF("(fill 0x%02x)\n", fill);
 
                     mr.fill = fill;
