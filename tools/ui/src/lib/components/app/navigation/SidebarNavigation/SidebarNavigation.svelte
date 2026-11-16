@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
+	import { PanelLeftClose, PanelLeftOpen, Search } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
@@ -7,21 +7,28 @@
 		DialogConversationDelete,
 		DialogConversationRename,
 		DialogDiscoverModels,
+		DialogGroup,
+		DialogGroupPicker,
 		DialogMcpServers,
 		DialogSearch,
 		DialogSettingsChat,
 		Logo,
 		ModelsManagerModelDrawer,
 		SidebarNavigationActions,
-		SidebarNavigationConversationList
+		SidebarNavigationConversationList,
+		SidebarNavigationFooter
 	} from '$lib/components/app';
 	import {
 		ROUTES,
+		SIDEBAR_ACTIONS_ITEMS,
 		SIDEBAR_COLLAPSE_WIDTH,
 		SIDEBAR_COLLAPSED_WIDTH,
+		SIDEBAR_CONTENT_FADE_MS,
+		SIDEBAR_FOOTER_ITEMS,
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
+		SIDEBAR_REVEAL_ACTION_DELAY_MS,
 		SIDEBAR_SETTLE_MS,
 		SIDEBAR_TOGGLE_MS
 	} from '$lib/constants';
@@ -31,7 +38,7 @@
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
 	import { buildConversationTree, remToPx } from '$lib/utils';
-	import { circIn } from 'svelte/easing';
+	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
 
@@ -55,6 +62,9 @@
 	let dockTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	const isOnMobile = $derived(deviceStore.isMobile);
+	const isHiddenByChatForm = $derived(
+		isOnMobile && uiStore.isComposerExpanded && !uiStore.isSidebarExpanded
+	);
 	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 	// the collapsed sidebar shows only its logo until it is peeked at, which fades the rest in
 	const isStripHidden = $derived(!uiStore.isSidebarExpanded && !isOnMobile && !isPeeking);
@@ -135,8 +145,6 @@
 	$effect(() => {
 		if (!uiStore.isSidebarExpanded) {
 			if (isSelectionMode) exitSelectionMode();
-
-			cancelMobileCollapse();
 		}
 	});
 
@@ -149,15 +157,9 @@
 	let currentChatId = $derived(page.params.id);
 	let searchOpen = $state(false);
 
-	// a phone shows the search page instead of the spotlight overlay
+	// a phone shows the search as a full-height sheet, once the sidebar has stepped aside
 	function openSearch() {
-		if (deviceStore.isMobile) {
-			void goto(ROUTES.SEARCH);
-
-			return;
-		}
-
-		searchOpen = true;
+		afterMobileClose(() => (searchOpen = true));
 	}
 
 	let isSelectionMode = $state(false);
@@ -300,12 +302,8 @@
 		marquee.rowClick(id, options.shiftKey);
 	}
 
-	async function selectConversation(id: string) {
-		if (deviceStore.isMobile) {
-			scheduleMobileCollapse();
-		}
-
-		await goto(RouterService.chat(id));
+	function selectConversation(id: string) {
+		navigateBehind(() => goto(RouterService.chat(id)));
 	}
 
 	async function handleEditConversation(id: string) {
@@ -371,24 +369,37 @@
 		chatStore.stopGenerationForChat(id);
 	}
 
-	let pendingCollapse = $state<ReturnType<typeof setTimeout> | null>(null);
+	/**
+	 * A phone opens the page a tap in its sidebar goes to while the current one is still aside,
+	 * and slides the sidebar shut once that page has rendered, so it is ready, settled, as it
+	 * slides back. Anything else navigates at once.
+	 */
+	function navigateBehind(go: () => Promise<unknown>): void {
+		if (!deviceStore.isMobile || !uiStore.isSidebarExpanded) {
+			void go();
 
-	function scheduleMobileCollapse() {
-		if (pendingCollapse) {
-			clearTimeout(pendingCollapse);
+			return;
 		}
 
-		pendingCollapse = setTimeout(() => {
-			uiStore.isSidebarExpanded = false;
-			pendingCollapse = null;
-		}, 100);
+		void go()
+			.then(tick)
+			.finally(() => requestAnimationFrame(() => (uiStore.isSidebarExpanded = false)));
 	}
 
-	function cancelMobileCollapse() {
-		if (pendingCollapse) {
-			clearTimeout(pendingCollapse);
-			pendingCollapse = null;
+	/**
+	 * A phone slides its open sidebar shut first, and only then opens what a tap in it asks for,
+	 * so a dialog or the search screen appears once the sidebar is out of the way. Anything else
+	 * acts at once.
+	 */
+	function afterMobileClose(run: () => void): void {
+		if (!deviceStore.isMobile || !uiStore.isSidebarExpanded) {
+			run();
+
+			return;
 		}
+
+		uiStore.isSidebarExpanded = false;
+		setTimeout(run, SIDEBAR_REVEAL_ACTION_DELAY_MS);
 	}
 
 	let asideEl = $state<HTMLElement | null>(null);
@@ -507,22 +518,14 @@
 
 	/** A dialog owns the screen on a phone, so the expanded list steps aside for it. */
 	function openDialog(open: () => void): void {
-		if (deviceStore.isMobile) {
-			scheduleMobileCollapse();
-		}
-
-		open();
+		afterMobileClose(open);
 	}
 
 	/** Runs a sidebar action, whether picked from the icon strip, the search dialog or a shortcut. */
 	function handleSidebarAction(action: SidebarAction): void {
 		switch (action) {
 			case SidebarAction.NEW_CHAT:
-				if (deviceStore.isMobile) {
-					scheduleMobileCollapse();
-				}
-
-				void conversationsStore.openNewChat();
+				navigateBehind(() => conversationsStore.openNewChat({ inNewTab: true }));
 
 				break;
 			case SidebarAction.SEARCH:
@@ -533,12 +536,15 @@
 				openDialog(() => uiStore.openModelsManager());
 
 				break;
+			// dialogs on a desktop or tablet; on a phone, pages of their own
 			case SidebarAction.MCP:
-				openDialog(() => (mcpDialogOpen = true));
+				if (isOnMobile) navigateBehind(() => goto(ROUTES.MCP_SERVERS));
+				else openDialog(() => (mcpDialogOpen = true));
 
 				break;
 			case SidebarAction.SETTINGS:
-				openDialog(() => (settingsDialogOpen = true));
+				if (isOnMobile) navigateBehind(() => goto(ROUTES.SETTINGS));
+				else openDialog(() => (settingsDialogOpen = true));
 
 				break;
 		}
@@ -552,141 +558,152 @@
 	<aside
 		bind:this={asideEl}
 		class={[
-			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 md:z-20 w-[calc(100dvw-1rem)]',
-			'md:h-[calc(100dvh-1.125rem)]',
-			uiStore.isSidebarExpanded &&
-				(deviceStore.isStandalone
-					? 'h-[calc(100dvh-2rem)]'
-					: deviceStore.isIOSDevice
-						? 'h-[calc(100dvh-0.5rem)]'
-						: 'h-[calc(100dvh-1rem)]'),
-			'rounded-3xl md:rounded-2xl',
+			'fixed md:sticky top-0 left-0 md:top-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-0 md:z-20 w-(--sidebar-reveal)',
+			'h-dvh md:h-[calc(100dvh-1.125rem)]',
+			// phone: it stays put under the page, which slides aside to uncover it
+			isOnMobile && 'bg-(--sidebar-reveal-bg)',
+			'md:rounded-2xl',
 			'flex flex-col justify-between',
-			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] duration-200 ease-out',
+			// desktop only: on a phone the background follows the reveal frame by frame
+			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] md:duration-200 md:ease-out',
 			(uiStore.isSidebarResizing || isSnapping) && 'md:duration-0',
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
 			isDocked && !uiStore.isSidebarExpanded ? 'md:w-12' : 'md:w-(--sidebar-width)',
 			(uiStore.isSidebarExpanded || (isFloating && isPeeking)) &&
-				'md:bg-muted/60 md:backdrop-blur-xl shadow-md',
+				'md:bg-muted/60 md:backdrop-blur-xl max-md:shadow-md',
 			isFloating && 'md:-mr-[calc(var(--sidebar-width)-3rem)]',
 			isStripHidden && 'md:pointer-events-none',
+			// on a phone the expanded chat form fills the screen, so the logo button over
+			// its corner fades away (and goes inert) until the form collapses
+			'max-md:transition-opacity',
+			isHiddenByChatForm && 'opacity-0',
 			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
+		inert={isHiddenByChatForm || (isOnMobile && !uiStore.isSidebarExpanded)}
 		onfocusin={peek}
 		onfocusout={handleAsideFocusOut}
 		onmouseleave={() => (isPeeking = false)}
 	>
-		<div class="px-2 flex items-center justify-between">
-			<div
-				class="relative"
-				onmouseenter={() => {
-					logoHovered = true;
-					peek();
-				}}
-				onmouseleave={() => {
-					logoHovered = false;
-					isPeekSuppressed = false;
-				}}
-				role="button"
-				tabindex="0"
-			>
-				<ActionIcon
-					ariaLabel={!uiStore.isSidebarExpanded
-						? 'Expand navigation'
-						: isLogoToggle
-							? 'Collapse navigation'
-							: 'Go to start'}
-					class="{uiStore.isSidebarExpanded
-						? 'bg-muted! md:bg-foreground/5!'
-						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
-					href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
-					icon={isLogoToggle && logoHovered
-						? uiStore.isSidebarExpanded
-							? PanelLeftClose
-							: PanelLeftOpen
-						: Logo}
-					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-					onclick={!uiStore.isSidebarExpanded || isLogoToggle ? toggleExpandedMode : undefined}
-					size="lg"
-					tooltip={!uiStore.isSidebarExpanded
-						? 'Open Sidebar'
-						: isLogoToggle
-							? 'Close Sidebar'
-							: undefined}
-					tooltipSide={TooltipSide.RIGHT}
-				/>
-			</div>
-
-			{#if isOnMobile}
+		<!-- phone: inset so the logo lands where the page's menu toggle sits -->
+		<div
+			class={[
+				'flex min-h-0 flex-1 flex-col',
+				isOnMobile && 'sidebar-reveal-content px-2 pt-[calc(var(--corner-control-top)-0.5rem)]'
+			]}
+		>
+			<div class="px-2 flex items-center justify-between">
 				<div
-					in:fade={{ delay: 50, duration: 150, easing: circIn }}
-					out:fade={{ duration: 100 }}
-					class="flex items-center transition-all duration-150 ease-out {!uiStore.isSidebarExpanded
-						? 'opacity-0 h-0!'
-						: ''}"
+					class="relative"
+					onmouseenter={() => {
+						logoHovered = true;
+						peek();
+					}}
+					onmouseleave={() => {
+						logoHovered = false;
+						isPeekSuppressed = false;
+					}}
+					role="button"
+					tabindex="0"
 				>
+					<!-- the chat form's add-button key whenever the sidebar shows, open or peeking;
+					     no fill while it is hidden; hover and focus never change the fill -->
 					<ActionIcon
-						ariaLabel="Collapse navigation"
-						class="backdrop-blur-none h-10 w-10 rounded-full -mr-1 -mt-1 hover:bg-accent!"
-						icon={X}
-						iconSize="h-4 w-4"
-						onclick={toggleExpandedMode}
+						ariaLabel={!uiStore.isSidebarExpanded
+							? 'Expand navigation'
+							: isLogoToggle
+								? 'Collapse navigation'
+								: 'Go to start'}
+						class="pointer-events-auto size-10 rounded-full! md:size-9 {isStripHidden
+							? 'bg-transparent! hover:bg-transparent!'
+							: 'bg-muted/60 border border-border/20 backdrop-blur-sm bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
+						href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
+						icon={isLogoToggle && logoHovered
+							? uiStore.isSidebarExpanded
+								? PanelLeftClose
+								: PanelLeftOpen
+							: Logo}
+						iconSize="size-4.5 md:size-4"
+						onclick={!uiStore.isSidebarExpanded || isLogoToggle ? toggleExpandedMode : undefined}
 						size="lg"
-						tooltip="Close Sidebar"
-						tooltipSide={TooltipSide.LEFT}
+						tooltip={!uiStore.isSidebarExpanded
+							? 'Open Sidebar'
+							: isLogoToggle
+								? 'Close Sidebar'
+								: undefined}
+						tooltipSide={TooltipSide.RIGHT}
 					/>
 				</div>
-			{/if}
-		</div>
 
-		<div
-			in:fade={{ duration: 200 }}
-			out:fade={{ duration: 200 }}
-			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
-				? 'transition-[opacity,height] duration-200 ease-out'
-				: 'md:transition-opacity md:duration-150 md:ease-out'} {deviceStore.isMobile &&
-			!uiStore.isSidebarExpanded
-				? 'opacity-0 !h-0'
-				: ''} {isStripHidden ? 'md:opacity-0' : ''}"
-		>
-			<SidebarNavigationActions
-				class="px-2"
-				onAction={handleSidebarAction}
-				onNavigate={() => {
-					if (deviceStore.isMobile) {
-						scheduleMobileCollapse();
-					}
-				}}
-			/>
+				<!-- a phone reaches search from a round key across from the logo, in place of the
+				     Search row among the sidebar's actions -->
+				{#if isOnMobile}
+					<ActionIcon
+						ariaLabel="Search"
+						class="bg-muted/60 border border-border/20 backdrop-blur-sm size-10 rounded-full! bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
+						icon={Search}
+						iconSize="size-4.5"
+						onclick={() => handleSidebarAction(SidebarAction.SEARCH)}
+						size="lg"
+					/>
+				{/if}
+			</div>
 
-			<div class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade)">
-				<SidebarNavigationConversationList
-					{allSelectedArePinned}
-					allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
-						visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
-					class="px-2"
-					conversations={conversationsStore.conversations}
-					{currentChatId}
-					{isSelectionMode}
-					onBulkDelete={handleBulkDelete}
-					onBulkExport={handleBulkExport}
-					onBulkPinToggle={handleBulkPinToggle}
-					onCloseSelection={exitSelectionMode}
-					onDelete={handleDeleteConversation}
-					onEdit={handleEditConversation}
-					onEnterSelectionMode={enterSelectionMode}
-					onRowMouseDown={handleRowMouseDown}
-					onSelect={selectConversation}
-					onSelectAllToggle={toggleSelectAllVisible}
-					onSelectionClick={handleSelectionClick}
-					onStop={handleStopGeneration}
-					onToggleSelect={toggleSelected}
-					{pinStateIsMixed}
-					{selectedIds}
-					someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
-						visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
-					visibleCount={visibleSelectionStats.visibleCount}
+			<!-- the hidden strip's content goes inert, not only invisible: descendants can opt
+			     back into visibility (an open CollapsibleRegion) and pointer events (the inline
+			     style of a context-menu trigger), and would catch clicks meant for the page -->
+			<div
+				in:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
+				out:fade={{ duration: SIDEBAR_CONTENT_FADE_MS }}
+				class="mt-2 flex min-h-0 flex-1 flex-col gap-7 max-md:mt-6 md:gap-1 md:transition-opacity md:duration-150 md:ease-out {isStripHidden
+					? 'md:opacity-0 md:invisible'
+					: ''}"
+				inert={isStripHidden}
+			>
+				<!-- a phone has no footer: its items join these -->
+				<SidebarNavigationActions
+					class="px-2 md:my-3"
+					items={isOnMobile ? [...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS] : undefined}
+					onAction={handleSidebarAction}
+					onNavigate={navigateBehind}
 				/>
+
+				<div
+					class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade) max-md:pb-safe-2"
+				>
+					<SidebarNavigationConversationList
+						{allSelectedArePinned}
+						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
+							visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
+						class="px-2"
+						conversations={conversationsStore.conversations}
+						{currentChatId}
+						{isSelectionMode}
+						onBulkDelete={handleBulkDelete}
+						onBulkExport={handleBulkExport}
+						onBulkPinToggle={handleBulkPinToggle}
+						onCloseSelection={exitSelectionMode}
+						onDelete={handleDeleteConversation}
+						onEdit={handleEditConversation}
+						onEnterSelectionMode={enterSelectionMode}
+						onRowMouseDown={handleRowMouseDown}
+						onSelect={selectConversation}
+						onSelectAllToggle={toggleSelectAllVisible}
+						onSelectionClick={handleSelectionClick}
+						onStop={handleStopGeneration}
+						onToggleSelect={toggleSelected}
+						{pinStateIsMixed}
+						{selectedIds}
+						someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
+							visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
+						visibleCount={visibleSelectionStats.visibleCount}
+					/>
+				</div>
+
+				<!-- the footer, at the bottom of the sidebar and of its collapsed strip alike (a
+				     phone lists its items with the actions above) -->
+				{#if !isOnMobile}
+					<SidebarNavigationFooter onAction={handleSidebarAction} />
+				{/if}
 			</div>
 		</div>
 
@@ -741,33 +758,16 @@
 
 <DialogDiscoverModels bind:open={uiStore.discoverModelsOpen} />
 
+<DialogGroup />
+
+<DialogGroupPicker />
+
 <ModelsManagerModelDrawer />
 
 <style>
 	aside {
 		@media (max-width: 768px) {
 			--size: 1.125rem;
-		}
-	}
-
-	@media (max-width: 768px) {
-		aside {
-			&:not(.is-expanded) {
-				pointer-events: none;
-			}
-		}
-
-		aside.is-expanded::before {
-			content: '';
-			position: fixed;
-			top: -0.5rem;
-			bottom: -0.25rem;
-			left: -0.5rem;
-			right: -0.5rem;
-			z-index: -1;
-			background: var(--background);
-			backdrop-filter: blur(1rem);
-			pointer-events: none;
 		}
 	}
 </style>

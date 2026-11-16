@@ -684,6 +684,19 @@ llama-server serves the UI with `Cross-Origin-Embedder-Policy: require-corp` and
 - **MCP server icons and web-search result favicons** have no CORS guarantee, so they go through the server's `/cors-proxy` when the user started llama-server with `--ui-mcp-proxy`; without it they fall back to the bundled glyph
 - **Per-row Hub lookups** wait until the row is near the viewport (the `nearViewport` action), so a long model list does not fire one request per row on mount
 
+### 10. Nested Surfaces
+
+The sidebar stacks four surfaces, outermost first:
+
+| Layer | Example                            | Corners                            |
+| ----- | ---------------------------------- | ---------------------------------- |
+| Page  | the body background                | none                               |
+| Panel | the sidebar                        | `rounded-2xl`                      |
+| Group | the sidebar's footer, inset in it  | `rounded-(--surface-group-radius)` |
+| Row   | Models, MCP or Settings in a group | `rounded-(--surface-row-radius)`   |
+
+A row keeps its corners concentric with its group's: its radius is the group's less the padding between their edges, so the curves run parallel instead of pinching at the corners. `app.css` holds the three tokens (`--surface-group-radius`, `--surface-group-padding` and the derived `--surface-row-radius`); change the group's radius or padding there and the rows follow. A group pads its rows with `p-(--surface-group-padding)`. `SidebarNavigationActions` rounds every row from the token, so the actions at the top of the sidebar (New chat, Search) match the footer's rows; a phone sizes its rows for a thumb instead. A selected row is raised and edged (`bg-background`, `shadow-sm`, `ring-1`), where a hovered one is only tinted, so the two never look alike. The group's hairline border is left out of the sum. `tests/client/nested-surfaces.svelte.test.ts` checks the rule on the rendered footer.
+
 ---
 
 ## Testing
@@ -709,6 +722,8 @@ npm run test:client   # Client-side unit tests
 npm run test:server   # Server-side unit tests
 npm run test:ui       # Storybook visual tests
 ```
+
+Locally, the browser tests (e2e, client and Storybook) run in your installed Google Chrome with its sandbox on, since Chrome updates itself and Playwright's bundled Chromium lags behind security fixes. CI (`CI` set) uses the bundled Chromium from `npx playwright install`.
 
 ### Storybook Development
 

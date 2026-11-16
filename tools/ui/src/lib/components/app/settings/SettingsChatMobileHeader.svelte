@@ -7,14 +7,33 @@
 	import { onMount, tick } from 'svelte';
 
 	interface Props {
+		/** Where the tabs pin as the page scrolls and what they lie over: under a dialog's
+		 *  header by default. While pinned they carry `data-stuck`, for a page to fill above them */
+		class?: string;
 		sections: SettingsSection[];
 		isActive: (section: SettingsSection) => boolean;
 		onSectionChange?: (section: SettingsSectionTitle) => void;
 	}
 
-	let { isActive, onSectionChange, sections }: Props = $props();
+	let { class: className = 'top-13 z-50', isActive, onSectionChange, sections }: Props = $props();
 
 	const carousel = useScrollCarousel();
+
+	let root = $state<HTMLDivElement>();
+	let stuck = $state(false);
+
+	// pinned once the page has scrolled them up to their sticky offset; a dialog scrolls its
+	// own content, not the window, so there they never report it
+	function updateStuck() {
+		if (!root) return;
+
+		const top = getComputedStyle(root).top;
+
+		stuck =
+			window.scrollY > 0 &&
+			top !== 'auto' &&
+			root.getBoundingClientRect().top <= parseFloat(top) + 0.5;
+	}
 
 	onMount(async () => {
 		await tick();
@@ -35,7 +54,13 @@
 	}
 </script>
 
-<div class="flex flex-col bg-background md:hidden sticky top-13 z-50">
+<svelte:window onresize={updateStuck} onscroll={updateStuck} />
+
+<div
+	bind:this={root}
+	class={['sticky flex flex-col bg-background md:hidden', className]}
+	data-stuck={stuck || undefined}
+>
 	<div class="border-b border-border/30">
 		<ScrollCarousel alwaysShowArrows {carousel} containerClass="py-2" innerClass="gap-2">
 			{#each sections as section (section.title)}

@@ -73,12 +73,11 @@ void llama_model_gemma_embedding2::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma_embedding2::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_graph_params & params) :
-        llm_graph_context(params),
-        model(model) {
+llama_model_gemma_embedding2::graph::graph(const llm_graph_params & params) :
+        llm_graph_context(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -100,10 +99,6 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         const int64_t n_head      = hparams.n_head(il);
         const int64_t n_head_kv   = hparams.n_head_kv(il);
-
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-        const int   n_rot_l      = hparams.n_rot(il);
 
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -129,10 +124,8 @@ llama_model_gemma_embedding2::graph::graph(const llama_model & model, const llm_
             cb(Kcur, "Kcur_normed", il);
             cb(Vcur, "Vcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
             cb(Qcur, "Qcur_pos", il);
             cb(Kcur, "Kcur_pos", il);
 

@@ -68,8 +68,9 @@ log = logging.getLogger(__name__)
 
 POLL_INTERVAL        = 30
 JOB_TIMEOUT          = 3600
+RUNNER_TIMEOUT       = 300
 LOG_UPLOAD_TIMEOUT   = 600
-CAPACITY_TIMEOUT     = 1800
+CAPACITY_TIMEOUT     = 300
 CAPACITY_POLL        = 60
 MAX_CONCURRENT_JOBS  = 5
 DEFAULT_RETRIES      = 0
@@ -80,6 +81,10 @@ NON_TERMINAL_STATES = {JobState.DISPATCHED, JobState.RUNNING, JobState.SETUP, Jo
 
 class DeviceUnavailableError(Exception):
     """Raised when the QDC device resource is not available (retryable)."""
+
+
+class RunnerUnavailableError(Exception):
+    """Raised when QDC runner or capacity is not available within timeout (non-retryable)."""
 
 
 _SCRIPTS_DIR = Path(__file__).parent
@@ -253,8 +258,9 @@ DEVICE_PLATFORM: dict[str, Platform] = {
 # =============================================================================
 
 
-def wait_for_job(client, job_id: str, timeout: int) -> str:
+def wait_for_job(client, job_id: str, timeout: int, runner_timeout: int = RUNNER_TIMEOUT) -> str:
     elapsed = 0
+    submitted_elapsed = 0
     last_state = None
     consecutive_errors = 0
     max_consecutive_errors = 5
@@ -285,6 +291,26 @@ def wait_for_job(client, job_id: str, timeout: int) -> str:
         if raw != last_state:
             log.info("Job %s: %s", job_id, raw)
             last_state = raw
+
+        is_submitted = (status == JobState.SUBMITTED) or (
+            isinstance(raw, str) and raw.lower() == "submitted"
+        )
+        if is_submitted:
+            submitted_elapsed += POLL_INTERVAL
+            if submitted_elapsed >= runner_timeout:
+                try:
+                    qdc_api.abort_job(client, job_id)
+                    log.warning(
+                        "Aborted job %s: runner did not pick up job within %ds",
+                        job_id,
+                        runner_timeout,
+                    )
+                except Exception as e:
+                    log.warning("Failed to abort job %s: %s", job_id, e)
+                raise RunnerUnavailableError(
+                    f"Runner did not pick up job {job_id} within {runner_timeout}s"
+                )
+
         time.sleep(POLL_INTERVAL)
         elapsed += POLL_INTERVAL
     # Abort to free the QDC concurrency slot instead of leaking it.
@@ -312,10 +338,10 @@ def wait_for_log_upload(client, job_id: str) -> None:
     log.warning("Timed out waiting for log upload after %ds", LOG_UPLOAD_TIMEOUT)
 
 
-def wait_for_capacity(client, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
+def wait_for_capacity(client, timeout: int = CAPACITY_TIMEOUT, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
     """Block until the user's active (non-terminal) QDC job count is below max_jobs."""
     elapsed = 0
-    while elapsed < CAPACITY_TIMEOUT:
+    while elapsed < timeout:
         jobs_page = qdc_api.get_jobs_list(client, page_number=0, page_size=50)
         if jobs_page is None:
             log.warning(
@@ -338,7 +364,7 @@ def wait_for_capacity(client, max_jobs: int = MAX_CONCURRENT_JOBS) -> None:
         time.sleep(CAPACITY_POLL)
         elapsed += CAPACITY_POLL
     raise TimeoutError(
-        f"Capacity wait timed out after {CAPACITY_TIMEOUT}s"
+        f"Capacity wait timed out after {timeout}s"
     )
 
 
@@ -445,7 +471,11 @@ def fetch_logs_and_parse_tests(
     )
 
 
-def write_summary(result: JobResult, title: str = "QDC Test Results") -> None:
+def write_summary(
+    result: JobResult,
+    title: str = "QDC Test Results",
+    note: str | None = None,
+) -> None:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary_path:
         return
@@ -454,8 +484,12 @@ def write_summary(result: JobResult, title: str = "QDC Test Results") -> None:
 
     lines = [
         f"## {title}\n",
-        f"Overall: {icon} {'PASSED' if result.passed else 'FAILED'}\n",
     ]
+    if note:
+        lines.append(f"{note}\n")
+    else:
+        lines.append(f"Overall: {icon} {'PASSED' if result.passed else 'FAILED'}\n")
+
     reportable = {n: ok for n, ok in result.tests.items() if "test_install" not in n}
     if reportable:
         lines += ["| Test | Result |", "| ---- | ------ |"]
@@ -464,7 +498,7 @@ def write_summary(result: JobResult, title: str = "QDC Test Results") -> None:
         passed_n = sum(1 for v in reportable.values() if v)
         failed_n = sum(1 for v in reportable.values() if not v)
         lines += ["", f"**{passed_n} passed, {failed_n} failed**"]
-    else:
+    elif not note:
         lines.append("_No per-test data available._")
 
     failed_names = [n for n, ok in reportable.items() if not ok]
@@ -519,6 +553,8 @@ def parse_args() -> argparse.Namespace:
                    help="Test suite to run (default: bench)")
     p.add_argument("--job-timeout", type=int, default=JOB_TIMEOUT, metavar="SECONDS",
                    help=f"Max seconds to wait for job completion (default: {JOB_TIMEOUT})")
+    p.add_argument("--runner-timeout", type=int, default=RUNNER_TIMEOUT, metavar="SECONDS",
+                   help=f"Max seconds to wait for runner to pick up job (default: {RUNNER_TIMEOUT})")
     p.add_argument("--retries", type=int, default=DEFAULT_RETRIES, metavar="N",
                    help="Number of retries when device is unavailable (default: 0)")
     p.add_argument("--retry-delay", type=int, default=RETRY_DELAY, metavar="SECONDS",
@@ -537,9 +573,11 @@ def _submit_and_run_job(client, args, spec, target_id, artifact_id) -> JobResult
     test failure).
     """
     try:
-        wait_for_capacity(client)
+        wait_for_capacity(client, timeout=args.runner_timeout)
     except TimeoutError:
-        raise DeviceUnavailableError("Capacity wait timed out — device busy")
+        raise RunnerUnavailableError(
+            f"Capacity wait timed out after {args.runner_timeout}s - device busy"
+        )
 
     job_name = spec.job_name_fmt.format(base="llama.cpp Hexagon tests")
 
@@ -559,11 +597,16 @@ def _submit_and_run_job(client, args, spec, target_id, artifact_id) -> JobResult
         job_parameters=[JobSubmissionParameter.WIFIENABLED],
     )
     if job_id is None:
-        raise DeviceUnavailableError("Job submission failed — device may be unavailable")
+        raise DeviceUnavailableError("Job submission failed - device may be unavailable")
     log.info("Job submitted: %s  (device=%s)", job_id, args.device)
 
     try:
-        job_status = wait_for_job(client, job_id, timeout=args.job_timeout)
+        job_status = wait_for_job(
+            client,
+            job_id,
+            timeout=args.job_timeout,
+            runner_timeout=args.runner_timeout,
+        )
     except TimeoutError as e:
         raise DeviceUnavailableError(str(e))
     log.info("Job %s finished: %s", job_id, job_status)
@@ -637,6 +680,14 @@ def main() -> int:
         try:
             result = _submit_and_run_job(client, args, spec, target_id, artifact_id)
             break
+        except RunnerUnavailableError as e:
+            log.warning("QDC runner unavailable for %s after %ds - job skipped: %s", args.device, args.runner_timeout, e)
+            write_summary(
+                JobResult(passed=True, tests={}),
+                title=f"QDC Tests ({args.device})",
+                note=f"SKIPPED: Runner did not pick up job within {args.runner_timeout}s. Skipped to avoid stalling CI.",
+            )
+            return 0
         except DeviceUnavailableError as e:
             if attempt < max_attempts:
                 log.warning(

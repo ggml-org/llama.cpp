@@ -211,6 +211,11 @@ uint32_t llama_hparams::n_embd_r() const {
         return token_shift_count * n_embd;
     }
 
+    if (n_sconv_channels != 0) {
+        // for Inkling2 models, checked before LFM2 as they set n_shortconv_l_cache too
+        return n_sconv_channels * (n_shortconv_l_cache - 1);
+    }
+
     if (n_shortconv_l_cache != 0) {
         // for LFM2 models
         return n_embd * (n_shortconv_l_cache - 1);
@@ -319,20 +324,7 @@ uint32_t llama_hparams::n_embd_head_v_mla() const {
 }
 
 bool llama_hparams::has_kv(uint32_t il) const {
-    if (kv_source(il) != il) {
-        return false;
-    }
-
-    if (n_layer_kv_from_start >= 0) {
-        if (il < (uint32_t) n_layer_kv_from_start) {
-            return true;
-        }
-
-        return false;
-    }
-
-    // by default, all layers have kv
-    return true;
+    return kv_source(il) == il;
 }
 
 uint32_t llama_hparams::kv_source(uint32_t il) const {

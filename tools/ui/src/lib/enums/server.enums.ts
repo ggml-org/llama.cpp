@@ -27,6 +27,16 @@ export enum ServerModelStatus {
 }
 
 /**
+ * Where the router found a model - matches server_model_source in
+ * tools/server/server-models.h. Only a cached model can be removed from disk.
+ */
+export enum ServerModelSource {
+	CACHE = 'cache',
+	MODELS_DIR = 'models_dir',
+	PRESET = 'preset'
+}
+
+/**
  * /models/sse event type enum - discriminates the records broadcast on the
  * model status feed in ROUTER mode. Matches the event names emitted by
  * tools/server/server-models.cpp from the C++ server.

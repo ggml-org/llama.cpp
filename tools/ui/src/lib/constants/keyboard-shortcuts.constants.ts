@@ -7,3 +7,4 @@ export const SHORTCUT_SETTINGS = ['cmd', ','];
 export const SHORTCUT_EDIT_CONVERSATION = ['shift', 'cmd', 'e'];
 export const SHORTCUT_EXPORT_CONVERSATION = ['shift', 'cmd', 's'];
 export const SHORTCUT_DELETE_CONVERSATION = ['shift', 'cmd', 'd'];
+export const SHORTCUT_CLOSE_TAB = ['shift', 'cmd', 'x'];

@@ -3,6 +3,7 @@ import type { ModelSidecar } from '$lib/constants';
 import type {
 	ContentPartType,
 	FileTypeAudio,
+	ServerModelSource,
 	ServerModelsSseEventType,
 	ServerModelStatus,
 	ServerRole
@@ -95,6 +96,10 @@ export interface ApiModelDataEntry {
 	path: string;
 	/** Current status of the model */
 	status: ApiModelStatus;
+	/** Where the router found the model: the HF cache, --models-dir or a preset */
+	source?: ServerModelSource;
+	/** Whether the router can delete the model's files (only cached models) */
+	can_remove?: boolean;
 	/** Alternative names that resolve to this model */
 	aliases?: string[];
 	/** Informational tags for this model */
@@ -151,6 +156,11 @@ export interface ApiModelsSseDownloadProgressData {
 	progress: Record<string, { done: number; total: number }>;
 }
 
+/** download_failed data: `stopped` when a client paused or cancelled the download. */
+export interface ApiModelsSseDownloadFailedData {
+	stopped?: boolean;
+}
+
 /**
  * Event kind multiplexed on the /models/sse feed.
  * Only the status_* events carry a status payload, models_reload signals a
@@ -163,7 +173,7 @@ export interface ApiModelsSseDownloadProgressData {
 export interface ApiModelsSseEvent {
 	model: string;
 	event: ServerModelsSseEventType;
-	data?: ApiModelsSseData | ApiModelsSseDownloadProgressData;
+	data?: ApiModelsSseData | ApiModelsSseDownloadProgressData | ApiModelsSseDownloadFailedData;
 }
 
 /**
