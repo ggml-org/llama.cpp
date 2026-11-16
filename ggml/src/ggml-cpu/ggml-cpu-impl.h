@@ -30,7 +30,7 @@ struct ggml_compute_params {
 };
 
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(__clang__)
 
 #define m512bh(p) p
 #define m512i(p) p
@@ -345,7 +345,7 @@ static inline int32x4_t ggml_nvfp4_dot8(const int8x8_t q4_lo, const int8x8_t q8_
 #include <immintrin.h>
 #endif
 
-#ifdef __riscv_v_intrinsic
+#if defined(__riscv_v)
 #include <riscv_vector.h>
 #endif
 

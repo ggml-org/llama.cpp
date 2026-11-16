@@ -19,15 +19,16 @@ class DreamModel(TextModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        assert tokenizer is not None
 
-        vocab_dict = tokenizer.get_vocab()  # ty: ignore[unresolved-attribute]
+        vocab_dict = tokenizer.get_vocab()
         vocab_size = self.hparams.get("vocab_size", len(vocab_dict))
         assert max(vocab_dict.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
 
         reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab_dict.items()}
-        added_vocab = tokenizer.get_added_vocab()  # ty: ignore[unresolved-attribute]
+        added_vocab = tokenizer.get_added_vocab()
 
         for i in range(vocab_size):
             if i not in reverse_vocab:

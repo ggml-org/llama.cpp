@@ -5,7 +5,7 @@
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, isRowControlClick } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
-	import { DropdownMenuActions } from '$lib/components/app';
+	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
 	import { Badge } from '$lib/components/ui/badge';
 	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
 	import { modelsStore } from '$lib/stores';
@@ -26,53 +26,62 @@
 	let favorite = $derived(isFavorite(option));
 	let isHidden = $derived(modelsStore.isHidden(option.id));
 	let quant = $derived(option.parsedId?.quantization ?? option.model);
+
+	// the "more actions" dropdown and the right-click menu offer the same actions
+	let actions = $derived(modelRowActions(option, favorite, isHidden, onDelete));
+	let contextMenuOpen = $state(false);
 </script>
 
-<!-- the whole row opens the quant for a pointer; keyboard users reach the same action
+<ContextMenuActions bind:open={contextMenuOpen} {actions}>
+	<!-- the whole row opens the quant for a pointer; keyboard users reach the same action
      through the quant's own button -->
-<!-- svelte-ignore a11y_click_events_have_key_events -->
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div
-	class={[
-		MODEL_ROW_GRID_CLASS,
-		'group relative cursor-pointer rounded-md px-2 py-2 transition max-md:px-3 max-md:py-3',
-		isHidden && 'opacity-60',
-		selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40'
-	]}
-	onclick={(event) => {
-		if (!isRowControlClick(event)) onSelect(option);
-	}}
->
-	<!-- the row holds a load control and an actions menu, so only the quant itself is
-	     the button: a button nested in a role="button" row is invalid -->
-	<button
-		aria-pressed={selected}
-		class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:pr-9"
-		onclick={() => onSelect(option)}
-		style="padding-left: {indent}px"
-		type="button"
+	<!-- svelte-ignore a11y_click_events_have_key_events -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class={[
+			MODEL_ROW_GRID_CLASS,
+			'group relative cursor-pointer rounded-md px-2 py-2 transition max-md:px-3 max-md:py-3',
+			isHidden && 'opacity-60',
+			selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/40',
+			contextMenuOpen && !selected && 'bg-muted/40'
+		]}
+		onclick={(event) => {
+			if (!isRowControlClick(event)) onSelect(option);
+		}}
 	>
-		<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
+		<!-- the row holds a load control and an actions menu, so only the quant itself is
+	     the button: a button nested in a role="button" row is invalid -->
+		<button
+			aria-pressed={selected}
+			class="flex min-w-0 cursor-pointer items-center gap-3 text-left max-md:pr-9"
+			onclick={() => onSelect(option)}
+			style="padding-left: {indent}px"
+			type="button"
+		>
+			<Badge class="h-5 shrink-0 px-1.5 text-[10px]" variant="secondary">{quant}</Badge>
 
-		<ModelDraftSidecars draftSidecars={option.draftSidecars} />
+			<ModelDraftSidecars draftSidecars={option.draftSidecars} />
 
-		<span class="truncate text-sm text-muted-foreground">{option.model}</span>
-	</button>
+			<span class="truncate text-sm text-muted-foreground">{option.model}</span>
+		</button>
 
-	<ModelContext
-		class="justify-self-end max-md:hidden"
-		configured={configuredContext(option)}
-		{option}
-	/>
-
-	<ModelsManagerStatusCell class="max-md:hidden" {option} />
-
-	<div class="flex items-center justify-center justify-self-center {MODEL_ROW_TRAILING_CELL_CLASS}">
-		<DropdownMenuActions
-			actions={modelRowActions(option, favorite, isHidden, onDelete)}
-			align="end"
-			triggerIcon={MoreHorizontal}
-			triggerTooltip="Model actions"
+		<ModelContext
+			class="justify-self-end max-md:hidden"
+			configured={configuredContext(option)}
+			{option}
 		/>
+
+		<ModelsManagerStatusCell class="max-md:hidden" {option} />
+
+		<div
+			class="flex items-center justify-center justify-self-center {MODEL_ROW_TRAILING_CELL_CLASS}"
+		>
+			<DropdownMenuActions
+				{actions}
+				align="end"
+				triggerIcon={MoreHorizontal}
+				triggerTooltip="Model actions"
+			/>
+		</div>
 	</div>
-</div>
+</ContextMenuActions>

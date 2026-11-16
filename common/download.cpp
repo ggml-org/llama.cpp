@@ -45,7 +45,7 @@ static const std::string PARTIAL_SUFFIX = ".downloadInProgress";
 
 static void write_etag(const std::string & path, const std::string & etag) {
     const std::string etag_path = path + ".etag";
-    fs_write_atomic(std::filesystem::u8path(etag_path), etag);
+    fs_write_atomic(etag_path, etag);
     LOG_DBG("%s: file etag saved: %s\n", __func__, etag_path.c_str());
 }
 
@@ -293,8 +293,7 @@ static int common_download_file_single_online(const std::string & url,
 
     // alt_path is the HF snapshot: the blob may have been moved there when symlinks are unavailable
     auto cache_hit = [&] {
-        return std::filesystem::exists(std::filesystem::u8path(path)) ||
-               (!alt_path.empty() && std::filesystem::exists(std::filesystem::u8path(alt_path)));
+        return std::filesystem::exists(path) || (!alt_path.empty() && std::filesystem::exists(alt_path));
     };
 
     if (skip_etag && cache_hit()) {
@@ -462,38 +461,55 @@ static int common_download_file_single_online(const std::string & url,
     return finish(success ? head->status : -1);
 }
 
-std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url_in,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = common_http_client(url);
+    static constexpr int max_redirects = 5;
+    std::string url = url_in;
+    for (int n_redirects = 0; ; n_redirects++) {
+        auto [cli, parts] = common_http_client(url);
 
-    httplib::Headers headers;
-    for (const auto & h : params.headers) {
-        headers.emplace(h.first, h.second);
+        httplib::Headers headers;
+        for (const auto & h : params.headers) {
+            headers.emplace(h.first, h.second);
+        }
+        if (headers.find("User-Agent") == headers.end()) {
+            headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
+        }
+
+        if (params.timeout > 0) {
+            cli.set_read_timeout(params.timeout, 0);
+            cli.set_write_timeout(params.timeout, 0);
+        }
+        if (params.resolve_host) {
+            // pin checked address, follow redirects manually to check each hop
+            cli.set_direct_hostname_addr_map({{parts.host, params.resolve_host(parts.host)}});
+            cli.set_follow_location(false);
+        }
+
+        std::vector<char> buf;
+        auto res = cli.Get(parts.path, headers,
+            [&](const char *data, size_t len) {
+                buf.insert(buf.end(), data, data + len);
+                return params.max_size == 0 ||
+                       buf.size() <= static_cast<size_t>(params.max_size);
+            },
+            nullptr
+        );
+
+        if (!res) {
+            throw std::runtime_error("error: cannot make GET request");
+        }
+
+        if (params.resolve_host && res->status >= 300 && res->status < 400 && res->has_header("Location")) {
+            if (n_redirects >= max_redirects) {
+                throw std::runtime_error("error: too many redirects");
+            }
+            url = common_http_resolve_location(url, res->get_header_value("Location"));
+            continue;
+        }
+
+        return { res->status, std::move(buf) };
     }
-    if (headers.find("User-Agent") == headers.end()) {
-        headers.emplace("User-Agent", "llama-cpp/" + std::string(llama_build_info()));
-    }
-
-    if (params.timeout > 0) {
-        cli.set_read_timeout(params.timeout, 0);
-        cli.set_write_timeout(params.timeout, 0);
-    }
-
-    std::vector<char> buf;
-    auto res = cli.Get(parts.path, headers,
-        [&](const char *data, size_t len) {
-            buf.insert(buf.end(), data, data + len);
-            return params.max_size == 0 ||
-                   buf.size() <= static_cast<size_t>(params.max_size);
-        },
-        nullptr
-    );
-
-    if (!res) {
-        throw std::runtime_error("error: cannot make GET request");
-    }
-
-    return { res->status, std::move(buf) };
 }
 
 int common_download_file_single(const std::string & url,
@@ -511,7 +527,7 @@ int common_download_file_single(const std::string & url,
         return common_download_file_single_online(url, path, online_opts, skip_etag, lock_path, alt_path);
     }
 
-    if (!std::filesystem::exists(std::filesystem::u8path(path))) {
+    if (!std::filesystem::exists(path)) {
         LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
         return -1;
     }
@@ -748,7 +764,8 @@ static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
     }
 
     for (const auto & t : tags) {
-        std::regex pattern(t + "[.-]", std::regex::icase);
+        // match the tag as a full token, so ":F16" does not match a BF16 file
+        std::regex pattern("(^|[-./])" + t + "[.-]", std::regex::icase);
         for (const auto & f : files) {
             if (gguf_filename_is_model(f.path) &&
                 std::regex_search(f.path, pattern)) {
@@ -1005,7 +1022,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         std::string model_filename = repo;
         std::replace(model_filename.begin(), model_filename.end(), '/', '_');
         model_filename += "_" + tag + ".gguf";
-        std::string local_path = fs_path_to_utf8(fs_get_cache_file(model_filename));
+        std::string local_path = fs_get_cache_file(model_filename).string();
 
         const std::string blob_url = url_prefix + "/blobs/" + gguf_digest;
         common_download_opts opts;
@@ -1211,7 +1228,7 @@ bool common_download_remove_sidecars(const std::string & hf_repo_with_tag, const
     for (const auto & s : sidecars) {
         const auto & f = plan.*s.file;
         if (!f.local_path.empty()) {
-            to_remove.emplace_back(std::filesystem::u8path(f.local_path));
+            to_remove.emplace_back(f.local_path);
         }
     }
     if (to_remove.empty()) {

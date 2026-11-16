@@ -70,7 +70,7 @@ OutputVector translate_scale(const NodeContext & context) {
         return rename_outputs_with_suffix({cleared_cache_rs}, context.get_name());
     }
 
-    auto scaled = std::make_shared<ov::op::v1::Multiply>(context.get_input(0), scale_node);
+    auto scaled = std::make_shared<ov::op::v1::Multiply>(process_view_input_new(context, 0), scale_node);
 
     std::shared_ptr<ov::Node> res;
     if (bias != 0.0f) {

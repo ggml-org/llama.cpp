@@ -1,4 +1,4 @@
-ARG ONEAPI_VERSION=2026.1.1-devel-ubuntu24.04
+ARG ONEAPI_VERSION=2026.2.0-devel-ubuntu24.04
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
@@ -22,20 +22,20 @@ RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 RUN echo "Download oneDNN installation package" && \
-    wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/94c3dbac-0852-45be-a57d-21c204cada3e/intel-onednn-2026.0.2.46_offline.sh -O intel-onednn_offline.sh && \
+    wget https://registrationcenter-download.intel.com/akdlm/IRC_NAS/46452a4a-7b7f-49f2-be4c-602a900180bb/intel-onednn-2026.1.0.625_offline.sh -O intel-onednn_offline.sh && \
     echo "Install oneDNN components" && \
     bash intel-onednn_offline.sh -s -a --silent --eula accept
 
 ARG GGML_SYCL_F16=ON
-ARG LEVEL_ZERO_VERSION=1.28.2
+ARG LEVEL_ZERO_VERSION=1.34.0
 ARG LEVEL_ZERO_UBUNTU_VERSION=u24.04
 RUN apt-get update && \
     apt-get install -y git libssl-dev wget ca-certificates && \
     cd /tmp && \
-    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero.deb && \
-    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb && \
-    apt-get -o Dpkg::Options::="--force-overwrite" install -y ./level-zero.deb ./level-zero-devel.deb && \
-    rm -f /tmp/level-zero.deb /tmp/level-zero-devel.deb
+    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/libze1_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O libze1.deb && \
+    wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/libze-dev_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O libze-dev.deb && \
+    apt-get -o Dpkg::Options::="--force-overwrite" install -y ./libze1.deb ./libze-dev.deb && \
+    rm -f /tmp/libze1.deb /tmp/libze-dev.deb
 
 WORKDIR /app
 
@@ -64,7 +64,7 @@ RUN mkdir -p /app/full \
     && cp requirements.txt /app/full \
     && cp .devops/tools.sh /app/full/tools.sh
 
-FROM docker.io/intel/oneapi-toolkit:$ONEAPI_VERSION AS base
+FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS base
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
@@ -79,6 +79,8 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.url=$IMAGE_URL \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
+COPY --from=build /opt/intel/oneapi/dnnl /opt/intel/oneapi/dnnl
+
 #Following versions are for multiple GPUs, since 26.x has known issue:
 #   https://github.com/ggml-org/llama.cpp/issues/21747,
 #   https://github.com/intel/compute-runtime/issues/921.
@@ -89,11 +91,11 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
 #ARG IGDGMM_VERSION=22.8.2
 
 
-ARG IGC_VERSION=v2.34.4
-ARG IGC_VERSION_FULL=2_2.34.4+21428
-ARG COMPUTE_RUNTIME_VERSION=26.18.38308.1
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.18.38308.1-0
-ARG IGDGMM_VERSION=22.10.0
+ARG IGC_VERSION=v2.42.6
+ARG IGC_VERSION_FULL=2_2.42.6+23070
+ARG COMPUTE_RUNTIME_VERSION=26.40.40196.8
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.40.40196.8-0
+ARG IGDGMM_VERSION=22.10.2
 RUN mkdir /tmp/neo/ && cd /tmp/neo/ \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-core-${IGC_VERSION_FULL}_amd64.deb \
   && wget https://github.com/intel/intel-graphics-compiler/releases/download/$IGC_VERSION/intel-igc-opencl-${IGC_VERSION_FULL}_amd64.deb \
