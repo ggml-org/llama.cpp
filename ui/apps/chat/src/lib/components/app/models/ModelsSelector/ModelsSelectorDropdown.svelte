@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import ModelsSelectorReasoning from './ModelsSelectorReasoning.svelte';
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
@@ -33,6 +34,8 @@
 		onManageModels?: () => void;
 		onModelKeyAction?: (modelId: string, unload: boolean) => void;
 		onSearchKeyDown?: (event: KeyboardEvent) => void;
+		/** The chat's reasoning effort in place of the manager entry at the foot. */
+		showReasoning?: boolean;
 	}
 
 	let {
@@ -45,7 +48,8 @@
 		onModelKeyAction,
 		onSearchKeyDown,
 		open = $bindable(false),
-		showOrgName = true
+		showOrgName = true,
+		showReasoning = false
 	}: Props = $props();
 
 	const selectedOption = $derived(ms.getDisplayOption());
@@ -194,7 +198,7 @@
 	>
 		<DropdownMenuSearchable
 			emptyMessage={ms.emptyMessage}
-			footer={uiStore.isModelsManagerShown ? manageModelsFooter : undefined}
+			footer={showReasoning || uiStore.isModelsManagerShown ? pickerFooter : undefined}
 			isEmpty={ms.isEmpty && ms.isCurrentModelInCache}
 			onSearchChange={(v) => ms.setSearchTerm(v)}
 			{onSearchKeyDown}
@@ -209,15 +213,20 @@
 	</DropdownMenu.Content>
 </DropdownMenu.Root>
 
-<!-- the way into the full manager, so it hides with the manager's other entry points -->
-{#snippet manageModelsFooter()}
-	<DropdownMenu.Group class="px-2">
-		<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
-			<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
+<!-- the reasoning effort when the model has one; otherwise the way into the full manager, which hides with the
+manager's other entry points -->
+{#snippet pickerFooter()}
+	{#if showReasoning}
+		<ModelsSelectorReasoning />
+	{:else}
+		<DropdownMenu.Group class="px-2">
+			<DropdownMenu.Item class="gap-2" onSelect={handleManageModels}>
+				<MODEL_ICON class="size-icon-md shrink-0 text-muted-foreground" />
 
-			Manage models
-		</DropdownMenu.Item>
-	</DropdownMenu.Group>
+				Manage models
+			</DropdownMenu.Item>
+		</DropdownMenu.Group>
+	{/if}
 {/snippet}
 
 {#snippet pickerContent(listClass: string)}
