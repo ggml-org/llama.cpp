@@ -481,6 +481,24 @@ static void test_errors(testing & t) {
         assert_error(t, R"({"properties": {"a": {"type": "nope"}}})", "#/properties/a: unrecognized type nope");
         assert_error(t, R"({"additionalProperties": null})", "#: additionalProperties must be a boolean or a schema");
     });
+
+    t.test("parse_error_redaction", [](testing & t) {
+        const std::string secret = "MARKER_SECRET_PROMPT";
+        const std::string bad_ctrl = std::string(R"({"messages":[{"role":"user","content":")") + secret + "\x01\"}]}";
+        for (const std::string & input : { bad_ctrl, std::string(R"({"key": )") + secret + "}" }) {
+            bool threw = false;
+            try {
+                common_json::parse(input);
+            } catch (const common_json_error & e) {
+                threw = true;
+                const std::string what = e.what();
+                t.assert_true("contains parse error", what.find("parse error") != std::string::npos);
+                t.assert_true("omits last read", what.find("last read") == std::string::npos);
+                t.assert_true("omits input excerpt", what.find(secret) == std::string::npos);
+            }
+            t.assert_true("throws common_json_error", threw);
+        }
+    });
 }
 
 int main(int argc, char * argv[]) {

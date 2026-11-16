@@ -204,6 +204,15 @@ common_json common_json::parse(const std::string & text) {
         common_json out;
         as_json(&out) = ordered_json::parse(text);
         return out;
+    } catch (const ordered_json::parse_error & e) {
+        std::string msg = e.what();
+        // Strip nlohmann::json's "last read: '<excerpt>'" suffix so malformed
+        // inputs (such as request bodies) are not echoed into error messages or logs.
+        const auto pos = msg.find("; last read: '");
+        if (pos != std::string::npos) {
+            msg.erase(pos);
+        }
+        throw common_json_error(msg);
     } catch (const std::exception & e) {
         throw common_json_error(e.what());
     }
