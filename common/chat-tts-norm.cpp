@@ -858,31 +858,17 @@ static value tts_norm_builtin_sub(const func_args & args) {
     return mk_val<value_string>(string(res, text_val.all_parts_are_input()));
 }
 
-bool common_tts_dict_find(const std::string & dict, const std::string & key, std::string & value) {
-    size_t lo = 0;
-    size_t hi = dict.size();
-    while (lo < hi) {
-        // the line that contains the middle byte
-        const size_t mid   = lo + (hi - lo) / 2;
-        const size_t nl    = mid == 0 ? std::string::npos : dict.rfind('\n', mid - 1);
-        const size_t start = nl == std::string::npos ? 0 : nl + 1;
-        const size_t end   = std::min(dict.find('\n', start), dict.size());
-        const size_t tab   = dict.find('\t', start);
-        if (tab >= end) {
-            throw std::runtime_error("tts_dict: malformed dictionary, expected key<TAB>value on each line");
-        }
-        const int cmp = key.compare(0, std::string::npos, dict, start, tab - start);
-        if (cmp == 0) {
-            value = dict.substr(tab + 1, end - tab - 1);
-            return true;
-        }
-        if (cmp < 0) {
-            hi = start;
-        } else {
-            lo = end + 1;
-        }
+bool common_tts_dict_find(const common_tts_dict & dict, const std::string & key, std::string & value) {
+    const auto it = std::lower_bound(dict.keys.begin(), dict.keys.end(), key);
+    if (it == dict.keys.end() || *it != key) {
+        return false;
     }
-    return false;
+    const size_t idx = it - dict.keys.begin();
+    if (idx >= dict.values.size()) {
+        throw std::runtime_error("tts_dict: malformed dictionary, a key has no value");
+    }
+    value = dict.values[idx];
+    return true;
 }
 
 void common_chat_tts_norm_add_builtins(context & ctx, std::shared_ptr<const common_tts_dicts> dicts) {
