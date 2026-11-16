@@ -52,6 +52,20 @@ static llama_token find_special_token(const llama_vocab * vocab, const std::stri
     return LLAMA_TOKEN_NULL;
 }
 
+static bool batch_set_tokens(llama_batch_ext * batch, const llama_token * tokens, int32_t n, llama_pos pos_0, llama_seq_id seq_id) {
+    llama_batch_ext_clear(batch);
+    for (int32_t i = 0; i < n; i++) {
+        const int32_t   idx = llama_batch_ext_add_token(batch, seq_id, tokens[i]);
+        const llama_pos pos = pos_0 + i;
+        if (idx < 0) {
+            LOG_ERR("mtmd_helper_gen_audio: failed to add token %d to batch (error %d)\n", tokens[i], idx);
+            return false;
+        }
+        llama_batch_ext_set_pos(batch, idx, &pos);
+    }
+    return true;
+}
+
 static void put_bytes(std::vector<char> & buf, const void * p, size_t n) {
     const char * c = (const char *) p;
     buf.insert(buf.end(), c, c + n);
@@ -1206,18 +1220,12 @@ private:
     }
 
     bool decode(llama_token * tokens, int n) {
-        llama_batch batch = llama_batch_init(n, 0, 1);
-        batch.n_tokens = n;
-        for (int i = 0; i < n; ++i) {
-            batch.token[i] = tokens[i];
-            batch.pos[i] = pos + i;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = seq_id;
-            batch.logits[i] = i == n - 1;
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        if (!batch_set_tokens(batch.get(), tokens, n, pos, seq_id)) {
+            return false;
         }
-        const int ret = llama_decode(lctx, batch);
-        llama_batch_free(batch);
-        if (ret != 0) {
+        llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: soprano backbone decode failed\n");
             return false;
         }
@@ -1330,18 +1338,14 @@ public:
             return 0;
         }
         const int n = std::min(n_batch, n_prompt - prompt_pos);
-        llama_batch batch = llama_batch_init(n, 0, 1);
-        for (int i = 0; i < n; i++) {
-            batch.token   [i]    = prompt_tokens[(size_t) (prompt_pos + i)];
-            batch.pos     [i]    = pos + i;
-            batch.n_seq_id[i]    = 1;
-            batch.seq_id  [i][0] = seq_id;
-            batch.logits  [i]    = prompt_pos + i == n_prompt - 1;
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        if (!batch_set_tokens(batch.get(), prompt_tokens.data() + prompt_pos, n, pos, seq_id)) {
+            return -1;
         }
-        batch.n_tokens = n;
-        const int ret = llama_decode(lctx, batch);
-        llama_batch_free(batch);
-        if (ret != 0) {
+        if (prompt_pos + n == n_prompt) {
+            llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+        }
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
             return -1;
         }
@@ -1382,8 +1386,7 @@ public:
                 text_done = true;
                 speaking  = true;
             }
-            llama_batch batch = llama_batch_get_one(&sampled, 1);
-            if (!decode(batch)) {
+            if (!decode(sampled)) {
                 return 1;
             }
         } else {
@@ -1626,25 +1629,17 @@ private:
         return true;
     }
 
-    bool decode(llama_batch batch) {
-        std::vector<llama_pos>      positions(batch.n_tokens);
-        std::vector<int32_t>        n_seq(batch.n_tokens, 1);
-        std::vector<llama_seq_id>   seq(batch.n_tokens, seq_id);
-        std::vector<llama_seq_id *> seq_ptr(batch.n_tokens);
-        std::vector<int8_t>         logits(batch.n_tokens, 1);
-        for (int i = 0; i < batch.n_tokens; i++) {
-            positions[i] = pos + i;
-            seq_ptr[i]   = &seq[i];
+    bool decode(llama_token token) {
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        if (!batch_set_tokens(batch.get(), &token, 1, pos, seq_id)) {
+            return false;
         }
-        batch.pos      = positions.data();
-        batch.n_seq_id = n_seq.data();
-        batch.seq_id   = seq_ptr.data();
-        batch.logits   = logits.data();
-        if (llama_decode(lctx, batch) != 0) {
+        llama_batch_ext_set_output_logits(batch.get(), 0, true);
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return false;
         }
-        pos += batch.n_tokens;
+        pos += 1;
         return true;
     }
 
@@ -2160,18 +2155,14 @@ public:
         }
         // small batches: every row also outputs logits
         const int n = std::min({ n_batch, n_prompt - prompt_pos, 64 });
-        llama_batch batch = llama_batch_init(n, 0, 1);
-        for (int i = 0; i < n; i++) {
-            batch.token   [i]    = prompt_tokens[(size_t) (prompt_pos + i)];
-            batch.pos     [i]    = pos + i;
-            batch.n_seq_id[i]    = 1;
-            batch.seq_id  [i][0] = seq_id;
-            batch.logits  [i]    = 1;
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        if (!batch_set_tokens(batch.get(), prompt_tokens.data() + prompt_pos, n, pos, seq_id)) {
+            return -1;
         }
-        batch.n_tokens = n;
-        const int ret = llama_decode(lctx, batch);
-        llama_batch_free(batch);
-        if (ret != 0) {
+        for (int i = 0; i < n; i++) {
+            llama_batch_ext_set_output_logits(batch.get(), i, true);
+        }
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
             return -1;
         }
@@ -2546,17 +2537,14 @@ public:
 
         int ret;
         if (!seg.tokens.empty()) {
-            llama_batch batch = llama_batch_init(n, 0, 1);
-            for (int i = 0; i < n; i++) {
-                batch.token   [i]    = seg.tokens[(size_t) (seg_pos + i)];
-                batch.pos     [i]    = pos + i;
-                batch.n_seq_id[i]    = 1;
-                batch.seq_id  [i][0] = seq_id;
-                batch.logits  [i]    = last && i == n - 1;
+            llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+            if (!batch_set_tokens(batch.get(), seg.tokens.data() + seg_pos, n, pos, seq_id)) {
+                return -1;
             }
-            batch.n_tokens = n;
-            ret = llama_decode(lctx, batch);
-            llama_batch_free(batch);
+            if (last) {
+                llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+            }
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         } else {
             decode_embd_batch batch(seg.embd.data() + (size_t) seg_pos * n_embd, n, 1, n_embd);
             batch.set_position_normal(pos, seq_id);
