@@ -27,7 +27,9 @@ on:
         type: string
 
 # never on pull requests: the runner is a shared, persistent box
+cache-mode: none
 permissions:
+  actions: write
   contents: read
 
 concurrency:
@@ -56,7 +58,7 @@ jobs:
       - name: Bench home
         id: home
         # models, builds and earlier nights: next to the checkouts in the runner's work folder, which the runner
-        # mounts into the container and keeps between jobs (the weekly on the host uses the same folder)
+        # mounts into the container and keeps between jobs (the weekly uses the same folder)
         run: |
           home="$(dirname "$RUNNER_WORKSPACE")/llama-nightly"
           {
@@ -114,7 +116,7 @@ jobs:
 
       - name: Return files to the host user
         if: ${{ always() }}
-        # the container runs as root; jobs on the host (the weekly) share NIGHTLY_HOME and the runner's work folder
+        # the container runs as root; the runner on the host reuses the work folder
         run: |
           owner=$(stat -c %u:%g "$(dirname "$NIGHTLY_HOME")")
           find "$NIGHTLY_HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" ! -uid "${owner%:*}" -exec chown -h "$owner" {} +

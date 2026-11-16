@@ -43,7 +43,7 @@ Traces use the [Mooncake](https://github.com/kvcache-ai/Mooncake) JSONL format (
 
 ## Weekly vLLM comparison
 
-Once a week (Saturday, after the nightly) the serving and agentic workloads run against vLLM in docker, with the same AIPerf commands, tokenizer and seed. The llama.cpp side is the paired model's rows from that day's nightly; the weekly runs vLLM only.
+Once a week (Saturday, after the nightly) the serving and agentic workloads run against vLLM, inside each column's vLLM image, with the same AIPerf commands, tokenizer and seed. The llama.cpp side is the paired model's rows from that day's nightly; the weekly runs vLLM only.
 
 | Column | Pair | Checkpoint | Quant | Size | Image |
 |---|---|---|---|---|---|
@@ -74,4 +74,4 @@ A configuration that fails is recorded with its error and the night continues. A
 | Nightly, all five models | 49 | 6.8 h (measured, b12345) | 157 GiB (measured) |
 | Weekly vLLM, 3 columns | 33 | 6.2 h (measured) | ~135 GiB + 2 images |
 
-The nightly and weekly times are the 2026-11-13 runs, with serving caches off and backend sampling, prefetch included. The nightly workflow allows 480 min, the weekly 600 min.
+The nightly and weekly times are the 2026-11-13 runs, with serving caches off and backend sampling, prefetch included. The nightly workflow allows 480 min, the weekly 300 min per column.

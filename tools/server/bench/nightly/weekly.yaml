@@ -22,6 +22,7 @@ recipes:
   # the image of each column follows what this catalog names today; `image` below is the fallback
   url: https://nvidia.github.io/local-ai-inference-recipes/hardware/dgx-spark/index.html
 
+# docker_args: options of the column's job container; mounts: image cache dirs kept in <home>/vllm-cache
 x-ngc-docker: &ngc-docker [--shm-size=16g, --ulimit, memlock=-1, --ulimit, stack=67108864]
 x-qwen27-tokenizer: &qwen27-tokenizer
   repo: Qwen/Qwen3.8-27B

@@ -25,8 +25,8 @@ The agentic traces are Mooncake JSONL (`timestamp`, `input_length`, `output_leng
 
 - NVIDIA driver, Docker with the NVIDIA Container Toolkit, and a runner that can use Docker (it needs that for container jobs anyway). The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
 - The bench venv needs Python 3.11-3.13 with its headers: AIPerf 0.13.0 rejects 3.14 and builds `crick` from source on arm64. Dependencies are pinned in `requirements.txt`.
-- The nightly job runs in `nvidia/cuda:13.5.0-devel-ubuntu24.04` and installs what it needs there, with the image's Python 3.12 and `python3-dev`. The weekly runs on the host, since it starts vLLM in docker, and needs only `curl` there: it installs a pinned standalone uv into `uv-bin/`, which brings its own Python 3.12.
-- About 160 GiB free in the runner's work folder for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. Both workflows use `NIGHTLY_HOME` = `<work folder>/llama-nightly`, next to the checkouts: the runner mounts the work folder into the nightly's container and keeps it between jobs. The nightly runs as root in its container and hands what it wrote back to the work folder's owner at the end. Runs by hand default to `/opt/llama-nightly` (`--home` or `NIGHTLY_HOME` overrides it). Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the nightly's Hugging Face cache), and `uv-bin/`, `venv/` and `vllm-cache/` for the weekly. The weekly and runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
+- The nightly job runs in `nvidia/cuda:13.5.0-devel-ubuntu24.04` and installs what it needs there, with the image's Python 3.12 and `python3-dev`. The weekly's prefetch job runs in the same image and builds the bench venv in `NIGHTLY_HOME` with a pinned standalone uv (`uv-bin/`) and uv's own Python 3.12. Then one job per vLLM column runs in that column's image (by digest, with the recipe's docker options), uses that venv and starts `vllm serve` there.
+- About 160 GiB free in the runner's work folder for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. Both workflows use `NIGHTLY_HOME` = `<work folder>/llama-nightly`, next to the checkouts: the runner mounts the work folder into every job container and keeps it between jobs. The jobs run as root in their containers and hand what they wrote back to the work folder's owner at the end. Runs by hand default to `/opt/llama-nightly` (`--home` or `NIGHTLY_HOME` overrides it). Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the Hugging Face cache of both workflows, and the weekly's `weekly-venv/`, `uv-python/` and `uv-cache/`), and `uv-bin/` and `vllm-cache/` for the weekly. Runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
 - A self-hosted runner with the labels `self-hosted, Linux, gb10, perf`. Nothing else may run on the box during a night: a concurrent job corrupts the numbers.
 
 ## Run by hand
@@ -61,10 +61,14 @@ vLLM only: each vLLM row is shown next to the llama.cpp row of its paired nightl
 - **Flags:** copied from the recipes, minus speculative decoding and the reasoning/tool parsers (the llama.cpp runs use neither), with `--max-num-seqs` / `--max-model-len` per config and `--max-num-batched-tokens 2048` (llama.cpp runs `-ub 2048`). Serving runs with prefix caching off on both engines (`serving.vllm_args` / `serving.server_args` in `suite.yaml`). Prefetch warns when a recipe was re-validated after the flags were copied (`recipe_validated_at`).
 - **Known difference:** vLLM runs with an FP8 KV cache (as the recipes do), llama.cpp with f16.
 - **Inputs and schedule:** `workflow_dispatch` takes optional `columns`, `suites`, `configs`, `vllm_image` (`COLUMN=IMAGE` overrides) and `resume` inputs. Scheduled Saturdays at 02:00 UTC, it queues behind that night's nightly.
+- **Jobs:** a prefetch job, then one job per column, one after the other, each in its column's image. They all add to one night (`results/<date>_vllm/`), and each uploads it, so the last upload has every column.
+
+By hand, `run` goes inside the column's image, like the workflow's column jobs. The venv's Python must be visible there, so create the venv with `UV_PYTHON_INSTALL_DIR=/opt/llama-nightly/uv-python`:
 
 ```bash
+export HF_HOME=/opt/llama-nightly/container/hf-cache
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py prefetch --config tools/server/bench/nightly/weekly.yaml --home /opt/llama-nightly
-/opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --config tools/server/bench/nightly/weekly.yaml --home /opt/llama-nightly --models M3-vllm-nvfp4 --configs 'depth0_*_c1'
+docker run --rm --gpus all --ipc host --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 -v /opt/llama-nightly:/opt/llama-nightly -v "$PWD:/src" -w /src -e HF_HOME --entrypoint /opt/llama-nightly/venv/bin/python nvcr.io/nvidia/vllm:26.10.pre1-py3 tools/server/bench/nightly/nightly.py run --config tools/server/bench/nightly/weekly.yaml --home /opt/llama-nightly --models M3-vllm-nvfp4 --configs 'depth0_*_c1'
 ```
 
 Not covered: the greedy spec on/off check, the decision accuracy set, vLLM with speculative decoding, SGLang, llama.cpp NVFP4 GGUFs, the rolling-baseline compare and the dashboard.

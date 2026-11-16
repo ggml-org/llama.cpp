@@ -4,8 +4,8 @@
   nightly.py prefetch --home DIR [--tag bNNNN]   pick + download a pre-release build, models and data
   nightly.py run      --home DIR [--suites ...]  run the suites on the prefetched build, write night.json
 
-With --config weekly.yaml the same commands pull the vLLM images named by NVIDIA's DGX Spark recipes,
-download the checkpoints, and run the serving and agentic suites against vLLM in docker.
+With --config weekly.yaml, prefetch picks the vLLM images named by NVIDIA's DGX Spark recipes and downloads the
+checkpoints, and run, inside a column's vLLM image, runs the serving and agentic suites against its `vllm serve`.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ ENGINES = ["llama.cpp", "vllm"]
 # the AIPerf suites; the others drive llama.cpp tools
 VLLM_SUITES = {"serving", "agentic"}
 TOKENIZER_SUITES = {"serving", "agentic"}
-# host cache dir under <home>/vllm-cache -> container path; huggingface is always mounted
+# cache dir under <home>/vllm-cache -> the image's path, linked there before vLLM starts; huggingface is always used
 VLLM_CACHE_MOUNTS = {
     "huggingface": "/root/.cache/huggingface",
     "vllm": "/root/.cache/vllm",
@@ -221,13 +221,50 @@ def fetch_recipes(url: str) -> dict[str, dict[str, Any]]:
     return {r["id"]: r for m in catalog for r in m.get("recipes") or []}
 
 
-def docker_image_info(image: str) -> dict[str, str]:
-    out = subprocess.run(["docker", "image", "inspect", image], capture_output=True, text=True, check=True).stdout
-    meta = json.loads(out)[0]
-    repo = image.rsplit(":", 1)[0] if ":" in image.rsplit("/", 1)[-1] else image
-    digests = [d for d in meta.get("RepoDigests") or [] if d.split("@")[0] == repo] or meta.get("RepoDigests") or [""]
-    env = dict(e.split("=", 1) for e in (meta.get("Config") or {}).get("Env") or [] if "=" in e)
-    return {"digest": digests[0], "image_vllm_version": env.get("VLLM_VERSION", "")}
+REGISTRY_ACCEPT = ", ".join([
+    "application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json",
+    "application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"])
+
+
+def registry_image_info(image: str) -> dict[str, str]:
+    # digest and vLLM version from the registry, without pulling: the workflow's job container pulls the image
+    if "@" in image:
+        repo, tag = image.split("@", 1)
+    elif ":" in image.rsplit("/", 1)[-1]:
+        repo, tag = image.rsplit(":", 1)
+    else:
+        repo, tag = image, "latest"
+    first = repo.split("/", 1)[0]
+    registry, path = (first, repo.split("/", 1)[1]) if "/" in repo and ("." in first or ":" in first) else ("registry-1.docker.io", repo)
+    if registry == "registry-1.docker.io" and "/" not in path:
+        path = f"library/{path}"
+    session = requests.Session()
+
+    def get(ref: str, kind: str) -> requests.Response:
+        url = f"https://{registry}/v2/{path}/{kind}/{ref}"
+        resp = session.get(url, headers={"Accept": REGISTRY_ACCEPT}, timeout=60)
+        if resp.status_code == 401 and "Authorization" not in session.headers:
+            # anonymous pull token from the realm the registry names
+            params = dict(re.findall(r'(\w+)="([^"]*)"', resp.headers.get("WWW-Authenticate", "")))
+            body = session.get(params.pop("realm"), params=params, timeout=60).json()
+            session.headers["Authorization"] = f"Bearer {body.get('token') or body.get('access_token')}"
+            resp = session.get(url, headers={"Accept": REGISTRY_ACCEPT}, timeout=60)
+        resp.raise_for_status()
+        return resp
+
+    resp = get(tag, "manifests")
+    # the digest of what the tag names (the multi-arch index), as `docker pull` records it
+    digest = resp.headers.get("Docker-Content-Digest", "")
+    manifest = resp.json()
+    if "manifests" in manifest:
+        arch = {"aarch64": "arm64", "x86_64": "amd64"}.get(os.uname().machine, os.uname().machine)
+        mine = [m for m in manifest["manifests"] if (m.get("platform") or {}).get("architecture") == arch]
+        if not mine:
+            raise BenchError(f"{image} has no {arch} image")
+        manifest = get(mine[0]["digest"], "manifests").json()
+    config = get(manifest["config"]["digest"], "blobs").json().get("config") or {}
+    env = dict(e.split("=", 1) for e in config.get("Env") or [] if "=" in e)
+    return {"digest": f"{repo}@{digest}" if digest else "", "image_vllm_version": env.get("VLLM_VERSION", "")}
 
 
 def resolve_vllm_images(cfg: dict[str, Any], models: list[str], overrides: dict[str, str]) -> dict[str, Any]:
@@ -264,21 +301,34 @@ def resolve_vllm_images(cfg: dict[str, Any], models: list[str], overrides: dict[
     return {"columns": columns, "warnings": warnings}
 
 
-def prefetch_vllm(cfg: dict[str, Any], home: Path, models: list[str], overrides: dict[str, str]) -> None:
+def prefetch_vllm(cfg: dict[str, Any], home: Path, models: list[str], overrides: dict[str, str],
+                  resume: dict[str, Any] | None = None) -> None:
     from huggingface_hub import snapshot_download
 
-    selected = resolve_vllm_images(cfg, models, overrides)
+    if resume is not None:
+        # finishing an earlier night: its images, by digest
+        models = [n for n in models if n in resume.get("columns", {})]
+        if not models:
+            raise BenchError("--resume: that night has none of these columns")
+        selected = {"columns": {n: resume["columns"][n] for n in models}, "warnings": []}
+    else:
+        selected = resolve_vllm_images(cfg, models, overrides)
     for w in selected["warnings"]:
         log(f"warning: {w}")
-    pulled: dict[str, dict[str, str]] = {}
+    looked_up: dict[str, dict[str, str]] = {}
     for name in models:
         col = selected["columns"][name]
-        if col["image"] not in pulled:
-            log(f"docker pull {col['image']}")
-            subprocess.run(["docker", "pull", "-q", col["image"]], check=True)
-            pulled[col["image"]] = docker_image_info(col["image"])
-        col.update(pulled[col["image"]])
+        if resume is None:
+            if col["image"] not in looked_up:
+                looked_up[col["image"]] = registry_image_info(col["image"])
+            col.update(looked_up[col["image"]])
         log(f"{name}: {col['image']} ({col['image_source']}) {col['digest']}")
+    # one workflow job per column, each in the column's image
+    jobs = [{"column": name, "image": selected["columns"][name].get("digest") or selected["columns"][name]["image"],
+             "docker_args": " ".join(str(a) for a in cfg["models"][name].get("docker_args") or [])} for name in models]
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"vllm_jobs={json.dumps(jobs)}\n")
     for name in models:
         model = cfg["models"][name]
         hf = vllm_cache(home, "huggingface")
@@ -287,6 +337,8 @@ def prefetch_vllm(cfg: dict[str, Any], home: Path, models: list[str], overrides:
         snapshot_download(repo_id=model["repo"], revision=model["revision"], cache_dir=hf / "hub")
         for mount in ["huggingface", *(model.get("mounts") or [])]:
             vllm_cache(home, mount).mkdir(parents=True, exist_ok=True)
+    if resume is not None:
+        return
     # a partial pick (--models) keeps the columns it did not touch
     path = home / "selected_vllm.json"
     if path.exists():
@@ -296,7 +348,7 @@ def prefetch_vllm(cfg: dict[str, Any], home: Path, models: list[str], overrides:
 
 
 def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str],
-             image_overrides: dict[str, str] | None = None) -> None:
+             image_overrides: dict[str, str] | None = None, resume: str | None = None) -> None:
     from huggingface_hub import HfApi, hf_hub_download
 
     llama = [n for n in models if engine_of(cfg["models"][n]) == "llama.cpp"]
@@ -306,7 +358,13 @@ def prefetch(cfg: dict[str, Any], home: Path, tag: str | None, models: list[str]
         write_json(home / "selected_build.json", info)
         log(f"build {info['tag']} ({info['commit']})")
     if vllm:
-        prefetch_vllm(cfg, home, vllm, image_overrides or {})
+        resume_images = None
+        if resume:
+            night = home / "results" / resume / "night.json"
+            if not night.exists():
+                raise BenchError(f"--resume: {night} not found")
+            resume_images = json.loads(night.read_text()).get("images") or {}
+        prefetch_vllm(cfg, home, vllm, image_overrides or {}, resume_images)
 
     for name in models:
         model = cfg["models"][name]
@@ -426,6 +484,7 @@ class Server:
         self.cmd = [str(ctx.bin_dir / "llama-server"), "--host", "127.0.0.1", "--port", str(ctx.port), *args]
         self.log_path = log_path
         self.proc: subprocess.Popen | None = None
+        self.env: dict[str, str] | None = None
 
     def before_start(self) -> None:
         pass
@@ -452,7 +511,7 @@ class Server:
         log(" ".join(self.cmd))
         self.logf = open(self.log_path, "ab")
         try:
-            self.proc = subprocess.Popen(self.cmd, stdout=self.logf, stderr=subprocess.STDOUT, start_new_session=True)
+            self.proc = subprocess.Popen(self.cmd, stdout=self.logf, stderr=subprocess.STDOUT, start_new_session=True, env=self.env)
         except OSError as exc:
             self.logf.close()
             raise BenchError(f"cannot start llama-server: {exc}") from exc
@@ -505,41 +564,40 @@ class Server:
 
 
 class VllmServer(Server):
-    # `vllm serve` in docker, set up the way NVIDIA's DGX Spark recipe runs it, minus the deviations in weekly.yaml
+    # `vllm serve` as NVIDIA's DGX Spark recipe runs it, minus the deviations in weekly.yaml; runs inside the column's image
     def __init__(self, ctx: Context, name: str, model: dict[str, Any], slots: int, slot_tokens: int, log_path: Path,
                  extra: list[str] | None = None):
         self.ctx = ctx
         self.log_path = log_path
         self.proc = None
-        self.container = f"bench-vllm-{os.getpid()}"
-        # by digest when prefetch recorded one: every run of a night, resumed parts included, uses the same image
-        col = ctx.images.get(name) or {}
-        image = col.get("digest") or col.get("image") or model["image"]
-        hf_mount = VLLM_CACHE_MOUNTS["huggingface"]
-        cmd = ["docker", "run", "--rm", "--name", self.container, "--gpus", "all", "--ipc", "host", "--network", "host",
-               *[str(a) for a in model.get("docker_args") or []],
-               # the checkpoint is a local snapshot: no hub lookups from inside the container
-               "-e", "HF_HUB_OFFLINE=1",
-               *[x for k, v in (model.get("env") or {}).items() for x in ("-e", f"{k}={v}")],
-               "-v", f"{vllm_cache(ctx.home, 'huggingface')}:{hf_mount}"]
-        for mount in model.get("mounts") or []:
-            cmd += ["-v", f"{vllm_cache(ctx.home, mount)}:{VLLM_CACHE_MOUNTS[mount]}"]
-        cmd += ["--entrypoint", "vllm", image, "serve", f"{hf_mount}/{hf_snapshot_rel(model)}",
-                "--served-model-name", "bench", "--host", "127.0.0.1", "--port", str(ctx.port),
-                "--max-num-seqs", str(slots), "--max-model-len", str(slot_tokens),
-                *[str(a) for a in model.get("args") or []],
-                # last, so a suite's flags win over the recipe's
-                *[str(a) for a in extra or []]]
-        self.cmd = cmd
+        self.mounts = model.get("mounts") or []
+        import pwd
+        hf = vllm_cache(ctx.home, "huggingface")
+        # local snapshot: no hub lookups; HOME as in `docker run` (a job container has /github/home), so vLLM finds /root/.cache
+        self.env = {**os.environ, "HOME": pwd.getpwuid(os.getuid()).pw_dir, "HF_HUB_OFFLINE": "1", "HF_HOME": str(hf),
+                    **{k: str(v) for k, v in (model.get("env") or {}).items()}}
+        self.cmd = ["vllm", "serve", str(hf / hf_snapshot_rel(model)),
+                    "--served-model-name", "bench", "--host", "127.0.0.1", "--port", str(ctx.port),
+                    "--max-num-seqs", str(slots), "--max-model-len", str(slot_tokens),
+                    *[str(a) for a in model.get("args") or []],
+                    # last, so a suite's flags win over the recipe's
+                    *[str(a) for a in extra or []]]
 
     def before_start(self) -> None:
-        # a container left over from a killed run would hold the port and the memory
-        subprocess.run(["docker", "rm", "-f", self.container], capture_output=True, timeout=120)
-
-    def __exit__(self, *exc: Any) -> None:
-        if self.proc is not None:
-            subprocess.run(["docker", "stop", "-t", "60", self.container], capture_output=True, timeout=180)
-        super().__exit__(*exc)
+        # link the image's cache dirs into <home>/vllm-cache, so they outlive the job container; not on a host
+        if not (Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()):
+            raise BenchError("vLLM runs inside the column's image: start this in a container of it")
+        for mount in self.mounts:
+            link, target = Path(VLLM_CACHE_MOUNTS[mount]), vllm_cache(self.ctx.home, mount)
+            target.mkdir(parents=True, exist_ok=True)
+            if link.is_symlink() and link.resolve() == target.resolve():
+                continue
+            if link.is_symlink() or link.is_file():
+                link.unlink()
+            elif link.exists():
+                shutil.rmtree(link)
+            link.parent.mkdir(parents=True, exist_ok=True)
+            link.symlink_to(target)
 
     def runtime_info(self) -> dict[str, Any]:
         text = self.log_path.read_text(encoding="utf-8", errors="replace") if self.log_path.exists() else ""
@@ -1071,7 +1129,7 @@ def parts_line(manifest: dict[str, Any]) -> list[str]:
 
 
 def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], dry_run: bool, summary_path: Path | None,
-        configs: list[str] | None = None, resume: str | None = None) -> int:
+        configs: list[str] | None = None, resume: str | None = None, date: str | None = None) -> int:
     kind = cfg.get("kind", "nightly")
     part = {"workflow_url": os.environ.get("NIGHTLY_WORKFLOW_URL", ""),
             "started": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")}
@@ -1105,7 +1163,7 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
                 build = {"tag": "dry-run", "commit": "", "bin_dir": str(home / "builds" / "dry-run")}
             else:
                 raise BenchError(f"{selected} not found, run prefetch first")
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date = date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         night_id = f"{date}_{build['tag']}" + ("_dry-run" if dry_run else "")
         out_dir = home / "results" / night_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1167,7 +1225,8 @@ def run(cfg: dict[str, Any], home: Path, suites: list[str], models: list[str], d
         with open(summary_path, "a", encoding="utf-8") as f:
             f.write(summary + "\n")
     print(summary)
-    return 1 if any(r["status"] == "failed" for r in manifest["records"]) else 0
+    # this part's runs only: the weekly's column jobs add to one night
+    return 1 if any(r["status"] == "failed" for r in manifest["records"][initial:]) else 0
 
 
 def split_list(value: str | None, allowed: list[str]) -> list[str]:
@@ -1191,7 +1250,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--configs", default=None, help="comma-separated shell patterns on config names, e.g. 'mooncake_T02*,depth32768*_c8'")
     parser.add_argument("--dry-run", action="store_true", help="print the commands, start nothing")
     parser.add_argument("--resume", metavar="NIGHT_ID", default=None,
-                        help="run: finish an earlier night (e.g. 2026-11-11_vllm) into one report; its ok runs are kept, the rest run")
+                        help="run: finish an earlier night (e.g. 2026-11-11_vllm) into one report; its ok runs are kept, the rest run; "
+                             "prefetch: with weekly.yaml, use that night's images")
+    parser.add_argument("--date", default=None, help="run: the night's date, YYYY-MM-DD (default: today, UTC); the weekly's column jobs share one")
     parser.add_argument("--summary", type=Path, default=None, help="append the Markdown summary to this file")
     parser.add_argument("--vllm-image", default=None,
                         help="prefetch: comma-separated COLUMN=IMAGE overrides of the recipe images, e.g. 'Q27-NVFP4=nvcr.io/nvidia/vllm:26.10-py3'")
@@ -1208,10 +1269,12 @@ def main(argv: list[str] | None = None) -> int:
         unknown = sorted(set(overrides) - set(cfg["models"]))
         if unknown:
             raise SystemExit(f"--vllm-image: unknown columns {unknown}, choose from {list(cfg['models'])}")
-        prefetch(cfg, args.home, args.tag, models, overrides)
+        prefetch(cfg, args.home, args.tag, models, overrides, args.resume)
         return 0
     configs = [c.strip() for c in args.configs.split(",") if c.strip()] if args.configs else None
-    return run(cfg, args.home, suites, models, args.dry_run, args.summary, configs, args.resume)
+    if args.date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", args.date):
+        raise SystemExit(f"--date: {args.date!r} is not YYYY-MM-DD")
+    return run(cfg, args.home, suites, models, args.dry_run, args.summary, configs, args.resume, args.date)
 
 
 if __name__ == "__main__":
