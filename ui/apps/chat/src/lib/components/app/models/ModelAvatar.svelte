@@ -89,7 +89,7 @@
 
 {#if orgName && hubEnabled}
 	<span
-		use:nearViewport={() => (isNearViewport = true)}
+		{@attach nearViewport(() => (isNearViewport = true))}
 		class={['inline-flex shrink-0', className]}
 	>
 		<ModelOrgAvatar

@@ -135,8 +135,7 @@
 >
 	<div
 		bind:this={scrollEl}
-		class:is-streaming={isPending}
-		class="reasoning-content"
+		class={['reasoning-content', isPending && 'is-streaming']}
 		onscroll={handleScrollEvent}
 	>
 		{#if currentConfig.renderThinkingAsMarkdown}

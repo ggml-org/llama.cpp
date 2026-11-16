@@ -267,8 +267,7 @@
 		{:else if section.toolResult}
 			<div
 				bind:this={scrollEl}
-				class:is-clamped={!useFullHeightCodeBlocks}
-				class="terminal-output"
+				class={['terminal-output', !useFullHeightCodeBlocks && 'is-clamped']}
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}

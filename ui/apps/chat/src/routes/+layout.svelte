@@ -57,9 +57,8 @@
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean
 	);
 
-	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
+	// Keep the hook object intact: destructuring would read its getters once and freeze them
 	const pwa = usePwa();
-	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
 		const dark = deviceStore.systemTheme.isDark;
@@ -240,12 +239,10 @@
 		}
 	});
 
-	// Inject custom CSS at runtime through an action on the head style node
-	// textContent keeps the value as text, never parsed as HTML
+	// Inject custom CSS at runtime through an attachment on the head style node, which reruns when
+	// the setting changes; textContent keeps the value as text, never parsed as HTML
 	function customCss(node: HTMLStyleElement) {
-		$effect(() => {
-			node.textContent = (settingsStore.config.customCss as string | undefined) ?? '';
-		});
+		node.textContent = (settingsStore.config.customCss as string | undefined) ?? '';
 	}
 
 	// Fetch router models when in router mode (for status and modalities)
@@ -314,7 +311,7 @@
 
 <svelte:head>
 	{#if settingsStore.config.customCss}
-		<style use:customCss></style>
+		<style {@attach customCss}></style>
 	{/if}
 
 	<PwaMetaTags />
@@ -459,9 +456,5 @@
 		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
-	<PwaRefreshAlert
-		forceReload={pwa.needRefreshByStorage}
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
-		{updateServiceWorker}
-	/>
+	<PwaRefreshAlert needRefresh={pwa.needRefresh} updateServiceWorker={pwa.updateServiceWorker} />
 </div>

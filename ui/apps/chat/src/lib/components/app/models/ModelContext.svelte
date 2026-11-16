@@ -51,7 +51,7 @@
 </script>
 
 <span
-	use:nearViewport={() => (isNearViewport = true)}
+	{@attach nearViewport(() => (isNearViewport = true))}
 	class={['text-sm text-muted-foreground', className]}
 >
 	{formatContextLength(values)}

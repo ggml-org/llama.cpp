@@ -1,27 +1,29 @@
-import { BUILD_VERSION_LOCALSTORAGE_KEY, PWA_FILE_PATHS, SW_CONFIG } from '#lib/constants/index.ts';
-import { versionStore } from '#lib/stores/index.ts';
+import { PWA_FILE_PATHS, SW_CONFIG } from '#lib/constants/index.ts';
 import { withBase } from '#lib/utils/base-path.ts';
-import { browser, dev } from '$app/env';
-import { writable } from 'svelte/store';
+import { dev } from '$app/env';
+import { updated } from '$app/state';
 
 /**
- * Hook for PWA service worker registration, update polling, and build version mismatch detection.
+ * Hook for the service worker and for noticing a new build of the app.
  *
- * Combines two concerns that always belong together:
- * 1. SW registration with periodic polling for updates
- * 2. localStorage-based version tracking for non-PWA users
+ * 1. A page the service worker controls updates through it: the worker is registered and polled,
+ *    and a new one waiting to take over is a new build.
+ * 2. Any other page relies on SvelteKit, which checks `_app/version.json` on navigation, on focus
+ *    and every hour, and sets `updated.current` once the server has a newer build.
  */
 export function usePwa() {
-	const needRefresh = writable(false);
-
-	let needRefreshByStorage = $state(false);
+	let needRefresh = $state(false);
 	let registration: ServiceWorkerRegistration | undefined;
+
+	// read once: the worker serves its precached version.json, so `updated` only means something
+	// for a page it doesn't control
+	const controlled = !dev && !!globalThis.navigator?.serviceWorker?.controller;
 
 	// an installed worker next to an active one is a new build waiting for the reload
 	function watchInstalling(worker: ServiceWorker | null) {
 		worker?.addEventListener('statechange', () => {
 			if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-				needRefresh.set(true);
+				needRefresh = true;
 			}
 		});
 	}
@@ -40,7 +42,7 @@ export function usePwa() {
 				registration = r;
 
 				if (r.waiting && navigator.serviceWorker.controller) {
-					needRefresh.set(true);
+					needRefresh = true;
 				}
 
 				r.addEventListener('updatefound', () => watchInstalling(r.installing));
@@ -72,49 +74,48 @@ export function usePwa() {
 		return () => clearInterval(swCheckInterval);
 	});
 
-	// Detect version mismatch via localStorage.
-	// _app/version.json is SvelteKit's native version file for PWA cache invalidation.
-	// This comparison detects server upgrades for non-PWA users.
-	$effect(() => {
-		if (!browser) return;
+	/** Settles once the worker reaches the state, gives up on it, or the wait runs out */
+	function workerState(worker: ServiceWorker, state: ServiceWorkerState): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer);
+				resolve();
+			};
+			const timer = setTimeout(done, SW_CONFIG.ACTIVATE_TIMEOUT_MS);
 
-		// PWA pages update via the service worker path; the storage check is the non-PWA fallback only
-		if (navigator.serviceWorker?.controller) return;
+			if (worker.state === state || worker.state === 'redundant') return done();
 
-		const currentVersion = versionStore.frontend;
-
-		if (!currentVersion) return;
-
-		try {
-			const storedVersion = localStorage.getItem(BUILD_VERSION_LOCALSTORAGE_KEY);
-
-			needRefreshByStorage = !!storedVersion && storedVersion !== currentVersion;
-			localStorage.setItem(BUILD_VERSION_LOCALSTORAGE_KEY, currentVersion);
-		} catch {
-			needRefreshByStorage = false;
-		}
-	});
-
-	/** Activate the waiting worker, then reload once it controls the page */
-	function updateServiceWorker() {
-		const waiting = registration?.waiting;
-
-		if (!waiting) return;
-
-		navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), {
-			once: true
+			worker.addEventListener('statechange', () => {
+				if (worker.state === state || worker.state === 'redundant') done();
+			});
 		});
-		waiting.postMessage({ type: 'SKIP_WAITING' });
+	}
+
+	/**
+	 * Load the new build. A worker for it is fetched if the page has not seen one yet (as on a page
+	 * the worker doesn't control), activated in place of the one serving the old build, and then
+	 * the page reloads, so a single reload lands on the new build.
+	 */
+	async function updateServiceWorker() {
+		if (registration) {
+			await registration.update().catch(() => {});
+
+			const next = registration.installing ?? registration.waiting;
+
+			if (next) {
+				await workerState(next, 'installed');
+				next.postMessage({ type: 'SKIP_WAITING' });
+				await workerState(next, 'activated');
+			}
+		}
+
+		window.location.reload();
 	}
 
 	return {
-		/** Writable that is true when a PWA service worker update is available */
+		/** A new build is waiting: in the service worker, or on the server for an uncontrolled page */
 		get needRefresh() {
-			return needRefresh;
-		},
-		/** Version mismatch detected via localStorage (non-PWA users) */
-		get needRefreshByStorage() {
-			return needRefreshByStorage;
+			return needRefresh || (!controlled && updated.current);
 		},
 		updateServiceWorker
 	};

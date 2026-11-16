@@ -29,8 +29,10 @@
 </script>
 
 <span
-	class:text-foreground={directory}
-	class="text-muted-foreground inline-flex items-center gap-1 text-xs group"
+	class={[
+		'text-muted-foreground inline-flex items-center gap-1 text-xs group',
+		directory && 'text-foreground'
+	]}
 >
 	<div class="flex min-w-0 items-center gap-1 cursor-pointer">
 		<Folder class="w-3.5 h-3.5" />

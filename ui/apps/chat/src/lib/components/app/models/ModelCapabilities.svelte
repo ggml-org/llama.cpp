@@ -58,7 +58,7 @@
 	);
 </script>
 
-<span use:nearViewport={() => (isNearViewport = true)} class={className}>
+<span {@attach nearViewport(() => (isNearViewport = true))} class={className}>
 	<ModelCapabilityIcons
 		{hideModalities}
 		modalities={option.modalities}

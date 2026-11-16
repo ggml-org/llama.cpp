@@ -4,9 +4,13 @@
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { copyToClipboard } from '#lib/utils/index.ts';
 
-	export let ariaLabel: string = 'Copy to clipboard';
-	export let canCopy: boolean = true;
-	export let text: string;
+	interface Props {
+		ariaLabel?: string;
+		canCopy?: boolean;
+		text: string;
+	}
+
+	let { ariaLabel = 'Copy to clipboard', canCopy = true, text }: Props = $props();
 </script>
 
 <ActionIcon

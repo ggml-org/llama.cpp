@@ -252,6 +252,8 @@ export const PWA_ASSET_GENERATOR = {
 } as const;
 
 export const SW_CONFIG = {
+	/** How long the update waits for the new worker to install and activate before reloading */
+	ACTIVATE_TIMEOUT_MS: 10000,
 	CHECK_INTERVAL_MS: 60000,
 	UPDATE_FETCH_OPTIONS: {
 		CACHE: 'no-store',

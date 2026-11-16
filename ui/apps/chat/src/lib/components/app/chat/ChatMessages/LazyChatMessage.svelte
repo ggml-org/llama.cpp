@@ -78,10 +78,11 @@
 
 <div
 	bind:this={wrapperEl}
-	class:chat-message--eager={eager}
-	class:chat-message--synthetic={Boolean(message.isSynthetic) &&
-		message.type !== MessageType.COMPACTION}
-	class="chat-message"
+	class={[
+		'chat-message',
+		eager && 'chat-message--eager',
+		message.isSynthetic && message.type !== MessageType.COMPACTION && 'chat-message--synthetic'
+	]}
 >
 	{#if shouldMount}
 		<ChatMessage
