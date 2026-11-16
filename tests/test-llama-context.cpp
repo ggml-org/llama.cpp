@@ -25,6 +25,22 @@
 #include <thread>
 #include <vector>
 
+#ifdef LLAMA_TEST_OPENMP_CLEANUP
+#include <omp.h>
+#endif
+
+static int finish_test(int result) {
+#ifdef LLAMA_TEST_OPENMP_CLEANUP
+    // Release OpenMP workers before Windows starts DLL teardown.
+    const int status = omp_pause_resource_all(omp_pause_hard);
+    if (status != 0) {
+        fprintf(stderr, "failed to release OpenMP resources: %d\n", status);
+        return 1;
+    }
+#endif
+    return result;
+}
+
 // the state file of a model, named after it so that models running in parallel do not collide
 static std::string test_state_path(const std::string & model_name) {
     return "dump_state." + model_name + ".bin";
@@ -411,7 +427,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "skipped  : %zu\n", n_skip);
         fprintf(stderr, "failed   : %zu\n", n_fail);
 
-        return n_fail == 0 ? 0 : 1;
+        return finish_test(n_fail == 0 ? 0 : 1);
     }
 
     // table mode: run the suite for every model in the directory
@@ -575,5 +591,5 @@ int main(int argc, char ** argv) {
     }
     LOG_INF("%s: models: %zu passed, %zu failed (of %zu)\n", __func__, models.size() - n_model_fail, n_model_fail, models.size());
 
-    return n_model_fail == 0 ? 0 : 1;
+    return finish_test(n_model_fail == 0 ? 0 : 1);
 }
