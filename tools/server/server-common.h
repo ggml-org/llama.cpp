@@ -837,6 +837,9 @@ static inline server_state server_state_from_str(const std::string & str) {
     GGML_ASSERT(false && "invalid server_state string");
 }
 
+// the model name reported by the server: the first alias, else the model's repo or path
+std::string server_get_model_name(const common_params & params);
+
 // the role of this process and, when it is a child of a router, its side of the protocol
 struct server_role {
     // serializes the notify_to_router writes
