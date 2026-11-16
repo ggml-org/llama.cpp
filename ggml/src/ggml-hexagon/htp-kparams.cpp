@@ -720,17 +720,18 @@ static bool htp_kparams_solve_hmx_mm(
     const uint8_t fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
     uint8_t       kernel_type      = fp16_kernel_type;
     uint32_t      k_group          = 0;
+    const uint32_t min_kgroup = (wtype == GGML_TYPE_IQ2_XXS || wtype == GGML_TYPE_Q2_K) ? 256u : 128u;
     if (is_tiled && !is_matmul_id && htp_is_int_hmx_weight_type((int) wtype) && (opt_mm_select == 3 || opt_mm_select == 4) &&
-        ne00_padded >= 128 && (ne00_padded % 128) == 0) {
-        uint32_t target_kgroup = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(std::min(opt_hmx_kgroup, 4096), 128)
+        ne00_padded >= (int) min_kgroup && (ne00_padded % min_kgroup) == 0) {
+        uint32_t target_kgroup = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(std::min(opt_hmx_kgroup, 4096), min_kgroup)
                                                       : ((opt_mm_select == 3) ? 256u : 512u);
         target_kgroup = std::min(target_kgroup, std::min((uint32_t) ne00_padded, 4096u));
-        for (uint32_t g = (target_kgroup / 128u) * 128u; g >= 128u; g -= 128u) {
+        for (uint32_t g = (target_kgroup / min_kgroup) * min_kgroup; g >= min_kgroup; g -= min_kgroup) {
             if (((uint32_t) ne00_padded % g) == 0) {
                 k_group = g;
                 break;
             }
-            if (g == 128u) {
+            if (g == min_kgroup) {
                 break;
             }
         }
