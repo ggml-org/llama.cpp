@@ -54,8 +54,14 @@ ggml_cgraph * mtmd_graph_yue2_gen::build() {
         const int stride = (int) (blk.up_w->ne[0] / 2);
         const int pad    = (stride + 1) / 2; // ceil(stride / 2) of the reference
         x = snake(x, blk.act);
-        x = ggml_conv_transpose_1d(ctx0, blk.up_w, x, stride, 0, 1);
-        x = ggml_view_2d(ctx0, x, x->ne[0] - 2 * pad, x->ne[1], x->nb[1], pad * x->nb[0]);
+        {
+            // ConvTranspose1d as GEMM + col2im, same as qwen3tts; up_w: [K, OC, IC]
+            const int64_t K  = blk.up_w->ne[0];
+            const int64_t OC = blk.up_w->ne[1];
+            ggml_tensor * w2  = ggml_cont(ctx0, ggml_transpose(ctx0, ggml_reshape_2d(ctx0, blk.up_w, K * OC, blk.up_w->ne[2])));
+            ggml_tensor * col = ggml_mul_mat(ctx0, w2, ggml_cont(ctx0, ggml_transpose(ctx0, x))); // [K * OC, T]
+            x = ggml_col2im_1d(ctx0, col, stride, (int) OC, pad);
+        }
         x = ggml_add(ctx0, x, ggml_reshape_2d(ctx0, blk.up_b, 1, blk.up_b->ne[0]));
         for (size_t ir = 0; ir < blk.res.size(); ir++) {
             const auto & ru = blk.res[ir];
