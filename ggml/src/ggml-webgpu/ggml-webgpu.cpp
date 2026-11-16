@@ -90,7 +90,7 @@ static inline uint32_t ggml_webgpu_u32_from_f32(float value) {
 #define WEBGPU_NUM_PARAM_SLOT_SAFETY_MARGIN      10u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_MS           30000u
 #define WEBGPU_RUNTIME_WAIT_TIMEOUT_NS           (WEBGPU_RUNTIME_WAIT_TIMEOUT_MS * 1e6)
-#define WEBGPU_PARAMS_BUF_SIZE_BYTES             128  // enough for 32 parameters
+#define WEBGPU_PARAMS_BUF_SIZE_BYTES             256  // enough for 64 parameters
 #define WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES     4
 #define WEBGPU_STORAGE_BUF_BINDING_MULT          4    // a storage buffer binding size must be a multiple of 4
 
@@ -2104,8 +2104,10 @@ static ggml_webgpu_flash_attn_op ggml_webgpu_flash_attn_prepare(webgpu_context &
         (uint32_t) (V->nb[2] / ggml_type_size(V->type)),  // stride (elements/blocks) of V in dimension 2
         (uint32_t) (V->nb[3] / ggml_type_size(V->type)),  // stride (elements/blocks) of V in dimension 3
         op.has_mask ? (uint32_t) (mask->nb[3] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 3
-        (uint32_t) (Q->ne[2] / K->ne[2]),  // repeat factor for K/V in dim 2 (MHA/MQA/GQA)
-        ggml_webgpu_u32_from_f32(scale),   // scale (possibly adjusted for logit softcap)
+        op.has_mask ? (uint32_t) (mask->nb[2] / ggml_type_size(mask->type)) : 0,  // stride of mask dim 2
+        op.has_mask ? (uint32_t) mask->ne[2] : 1u,  // mask heads, broadcast over the Q heads
+        (uint32_t) (Q->ne[2] / K->ne[2]),           // repeat factor for K/V in dim 2 (MHA/MQA/GQA)
+        ggml_webgpu_u32_from_f32(scale),            // scale (possibly adjusted for logit softcap)
         ggml_webgpu_u32_from_f32(max_bias),
         ggml_webgpu_u32_from_f32(logit_softcap),
         ggml_webgpu_u32_from_f32(n_head_log2),
@@ -2211,7 +2213,9 @@ static webgpu_encoded_op ggml_webgpu_flash_attn_vec(webgpu_context &          ct
         blk_nblk1                   = (uint32_t) Q->ne[1];
         blk_buf                     = ggml_webgpu_tensor_buf(dst);
         const uint32_t stride_mask3 = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
-        blk_batch_count             = stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u;
+        const uint32_t stride_mask2 = (uint32_t) (mask->nb[2] / ggml_type_size(mask->type));
+        const uint32_t mask_ne2     = (uint32_t) mask->ne[2];
+        blk_batch_count             = (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) * mask_ne2;
         const uint64_t blk_elems    = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
         blk_size_bytes              = ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
         const ggml_webgpu_shader_lib_context blk_shader_ctx = op.shader_lib_ctx;
@@ -2222,6 +2226,8 @@ static webgpu_encoded_op ggml_webgpu_flash_attn_vec(webgpu_context &          ct
             (uint32_t) Q->ne[1],                                                                   // seq_len_q
             (uint32_t) K->ne[1],                                                                   // seq_len_kv
             stride_mask3,                                                                          // stride_mask3
+            stride_mask2,                                                                          // stride_mask2
+            mask_ne2,                                                                              // mask_ne2
             blk_nblk0,                                                                             // nblk0
             blk_nblk1,                                                                             // nblk1
         };
@@ -4381,12 +4387,11 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                 // longest vec batch and the size stays monotonic in the batch length
                 const int64_t       n_q = std::min<int64_t>(Q->ne[1], GGML_WEBGPU_FLASH_ATTN_VEC_MAX_SEQ_LEN - 1);
                 if (ggml_webgpu_flash_attn_use_vec_path(ctx->webgpu_global_ctx, Q, K, V, n_q)) {
-                    const bool kv_direct =
-                        ggml_webgpu_flash_attn_k_direct(Q, K, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH) ||
-                        ggml_webgpu_flash_attn_v_direct(Q, V, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH);
                     const uint32_t kv_tile = ggml_webgpu_flash_attn_get_vec_kv_tile(
                         capabilities.limits.maxComputeWorkgroupStorageSize, (uint32_t) Q->ne[0], (uint32_t) V->ne[0],
-                        mask != nullptr, kv_direct);
+                        mask != nullptr,
+                        ggml_webgpu_flash_attn_k_direct(Q, K, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH),
+                        ggml_webgpu_flash_attn_v_direct(Q, V, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH));
 
                     const uint32_t vec_nwg_cap = capabilities.min_subgroup_size;
                     uint32_t       nwg = ggml_webgpu_flash_attn_vec_nwg(vec_nwg_cap, kv_tile, (uint32_t) K->ne[1]);
@@ -4403,11 +4408,12 @@ static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer
                         res += WEBGPU_STORAGE_BUF_BINDING_MULT + align;
                     }
                     if (mask != nullptr) {
-                        const uint32_t blk_nblk0       = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
-                        const uint32_t blk_nblk1       = (uint32_t) n_q;
-                        const uint32_t stride_mask3    = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
-                        const uint32_t blk_batch_count = stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u;
-                        const uint64_t blk_elems       = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
+                        const uint32_t blk_nblk0    = CEIL_DIV((uint32_t) K->ne[1], kv_tile);
+                        const uint32_t blk_nblk1    = (uint32_t) n_q;
+                        const uint32_t stride_mask3 = (uint32_t) (mask->nb[3] / ggml_type_size(mask->type));
+                        const uint32_t blk_batch_count =
+                            (stride_mask3 > 0 ? (uint32_t) Q->ne[3] : 1u) * (uint32_t) mask->ne[2];
+                        const uint64_t blk_elems = (uint64_t) blk_nblk0 * blk_nblk1 * blk_batch_count;
                         const size_t   blk_size_bytes =
                             ROUNDUP_POW2(blk_elems * sizeof(uint32_t), WEBGPU_STORAGE_BUF_BINDING_MULT);
                         res += blk_size_bytes + align;
@@ -5014,14 +5020,22 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 const uint32_t q_tile =
                     use_subgroup_matrix ? capabilities.sg_mat_m : GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE;
                 const uint32_t kv_granularity = use_subgroup_matrix ? capabilities.sg_mat_n : 1u;
-                const bool     kv_direct = use_subgroup_matrix ?
-                                               ggml_webgpu_flash_attn_k_direct(src0, src1, capabilities.sg_mat_k) ||
-                                                   ggml_webgpu_flash_attn_v_direct(src0, src2, capabilities.sg_mat_k) :
-                                               false;
-                const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
+                // same direct read rule as get_flash_attn_pipeline: F16 only, on the subgroup matrix path
+                const bool     kv_direct      = use_subgroup_matrix && src1->type == GGML_TYPE_F16 &&
+                                                src2->type == GGML_TYPE_F16 &&
+                                                ggml_webgpu_flash_attn_k_direct(src0, src1, capabilities.sg_mat_k) &&
+                                                ggml_webgpu_flash_attn_v_direct(src0, src2, capabilities.sg_mat_k);
+                const uint32_t max_kv_tile    = ggml_webgpu_flash_attn_max_kv_tile(
                     capabilities.limits.maxComputeWorkgroupStorageSize, q_tile, kv_granularity, (uint32_t) src0->ne[0],
                     (uint32_t) src2->ne[0], op->src[3] != nullptr, kv_direct);
-                supports_op = max_kv_tile > 0;
+                // get_flash_attn_pipeline falls back to the register tile path when the subgroup matrix tile does not fit
+                const uint32_t fallback_kv_tile =
+                    use_subgroup_matrix ?
+                        ggml_webgpu_flash_attn_max_kv_tile(
+                            capabilities.limits.maxComputeWorkgroupStorageSize, GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE, 1u,
+                            (uint32_t) src0->ne[0], (uint32_t) src2->ne[0], op->src[3] != nullptr, false) :
+                        0u;
+                supports_op = max_kv_tile > 0 || fallback_kv_tile > 0;
                 break;
             }
         case GGML_OP_GROUP_NORM:
