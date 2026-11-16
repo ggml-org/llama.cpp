@@ -96,6 +96,28 @@ Some stages are a full LLM-sized transformer that attends to the keys/values of 
 - Non-causal rows: `LLAMA_ATTENTION_TYPE_NON_CAUSAL`, all rows in one ubatch (`n_ubatch` >= rows), they see every cached position of the sequence. Remove them with `llama_memory_seq_rm()` after each pass
 - Size the context per call (`n_ctx`, `n_ubatch`) instead of keeping one for the whole session
 
+### Text preprocessing (the `tts` chat template)
+
+Anything a model needs done to the input text before tokenization (prompt format, text normalization, text to phonemes) goes in `tokenizer.chat_template.tts`, as a jinja program. It receives the text as `messages[0].content`, plus `language` and `voice`.
+
+Examples:
+- Prompt format: `conversion/lfm3.py`
+- Text normalization: `models/templates/Zyphra-ZONOS3-Mini-tts.jinja`
+- Text to phonemes (G2P): `models/templates/hexgrad-Kokoro-82M-tts.jinja`
+
+Functions available to the template (see `docs/tts-norm-patterns.md`):
+- `tts_norm_scan()` / `tts_norm_sub()`: pattern matching for text normalization
+- `tts_dict()`: lookup in a dictionary stored in the GGUF, such as a pronunciation lexicon
+
+Add test cases to `tests/test-jinja.cpp`, which also checks them against the python reference with `-py`.
+
+Rules for phoneme-based models:
+- C++ only holds the pieces that every such model needs (the functions above). The rules of one model (lexicon handling, stress, suffixes, number spelling, ...) live in its jinja template
+- The reason is binary size: phoneme logic compiled into C++ is shipped to every user, and most of them never run a TTS model. A template only costs the users of that model
+- Do not add a model-specific or language-specific G2P step in C++, and do not add a dependency for it (e.g. espeak-ng)
+
+G2P in jinja has limits, mostly for languages other than English (no lexicon, or rules that need a real morphological analyzer). For now the escape hatch is on the application side: the user runs the text to phonemes step in their own code and sends the phonemes with `raw_prompt` (see the `/tts` endpoint of `llama-server`), which skips the template. Document it in `docs/multimodal/tts.md` when a model relies on it.
+
 ### Checklist for porting new audio generation models to mtmd
 
 1. Make sure to consult merged PRs about adding new TTS models, especially reviewer comments
@@ -116,7 +138,7 @@ Some stages are a full LLM-sized transformer that attends to the keys/values of 
         - In most cases, you can hard-code model configs in the model graph class, or in `mtmd_hparams`
         - If some values need to be exposed to the `mtmd_helper` layer, hard-code them in `mtmd_helper` and distinguish by pipeline and `mtmd_gen_audio_info::model_variant` if necessary
         - Do NOT add new GGUF metadata or new fields to `mtmd_gen_audio_info` unless you can prove that you absolutely need them
-    - If the model requires special preprocessing of the input text prompt (prompt format, text normalization), put it in `tokenizer.chat_template.tts` as a jinja program. It receives the text as `messages[0].content`, plus `language` and `voice`. See `conversion/lfm3.py` (prompt format) and `models/templates/Zyphra-ZONOS3-Mini-tts.jinja` (text normalization) as examples. For text normalization, use `tts_norm_scan()` / `tts_norm_sub()`, and `tts_dict()` for dictionaries stored in the GGUF such as a pronunciation lexicon (see `docs/tts-norm-patterns.md`), and add test cases to `tests/test-jinja.cpp`, which also checks them against the python reference with `-py`
+    - If the model requires special preprocessing of the input text prompt, see [Text preprocessing](#text-preprocessing-the-tts-chat-template)
 4. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
     - 10-20% changes is to add new backbone (text) model and conversion
     - 60% changes inside `mtmd-helper-gen.cpp`
