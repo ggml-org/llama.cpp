@@ -809,6 +809,12 @@ static __device__ __forceinline__ void flash_attn_tile_iter(
 #define FATTN_TILE_SPARSE_CPT    16
 #define FATTN_TILE_SPARSE_NMAX 3072
 
+// RDNA3/4: a block takes every gridDim.y-th group of CPT columns instead of a contiguous segment,
+// so that clustered visible columns are spread evenly over the blocks
+#if defined(RDNA3) || defined(RDNA4)
+#define FATTN_TILE_SPARSE_INTERLEAVE
+#endif // defined(RDNA3) || defined(RDNA4)
+
 template<int DKQ, int DV, int ncols1, int ncols2, bool use_logit_softcap, bool use_sparse = false> // D == head size
 __launch_bounds__(ggml_cuda_fattn_tile_get_nthreads(DKQ, DV, ncols1*ncols2), ggml_cuda_fattn_tile_get_occupancy(DKQ, DV, ncols1*ncols2))
 static __global__ void flash_attn_tile(
@@ -930,12 +936,19 @@ static __global__ void flash_attn_tile(
     constexpr int cpt = FATTN_TILE_SPARSE_CPT;
     __align__(16) half mask_seg[use_sparse ? ncols1 : 1][cpt];
     if constexpr (use_sparse) {
+#ifdef FATTN_TILE_SPARSE_INTERLEAVE
+        const int i_seg   = cpt*(blockIdx.y + gridDim.y*(threadIdx.y*warp_size + threadIdx.x));
+#pragma unroll
+        for (int j = 0; j < ncols1; ++j) {
+            if (i_seg < ne11 && (ncols1 == 1 || col_Q_0 + j < int(ne01.z))) {
+#else
         const int seg_len = ((ne11 + gridDim.y - 1)/gridDim.y + cpt - 1) / cpt * cpt;
         const int i_tid   = cpt*(threadIdx.y*warp_size + threadIdx.x);
         const int i_seg   = blockIdx.y*seg_len + i_tid;
 #pragma unroll
         for (int j = 0; j < ncols1; ++j) {
             if (i_tid < seg_len && i_seg < ne11 && (ncols1 == 1 || col_Q_0 + j < int(ne01.z))) {
+#endif // FATTN_TILE_SPARSE_INTERLEAVE
 #pragma unroll
                 for (int l = 0; l < cpt; l += 8) {
                     ggml_cuda_memcpy_1<16>(mask_seg[j] + l, maskh + (col_Q_0 + j)*stride_mask + i_seg + l);
@@ -1004,8 +1017,12 @@ static __global__ void flash_attn_tile(
         __shared__ int idx_sel[FATTN_TILE_SPARSE_NMAX];
         __shared__ int nsel_warp[nwarps];
 
+#ifdef FATTN_TILE_SPARSE_INTERLEAVE
+        const int i_seg   = cpt*(blockIdx.y + gridDim.y*(threadIdx.y*warp_size + threadIdx.x));
+#else
         const int seg_len = ((ne11 + gridDim.y - 1)/gridDim.y + cpt - 1) / cpt * cpt;
         const int i_seg   = blockIdx.y*seg_len + cpt*(threadIdx.y*warp_size + threadIdx.x);
+#endif // FATTN_TILE_SPARSE_INTERLEAVE
 
         uint32_t sel = 0;
 #pragma unroll
@@ -1338,7 +1355,9 @@ static void launch_fattn_tile_sparse(ggml_backend_cuda_context & ctx, ggml_tenso
     const int ntiles_x     = (Q->ne[1] + cols_per_block/ncols2 - 1) / (cols_per_block/ncols2);
     const int ntiles_other = ntiles_x * (Q->ne[2]/ncols2) * Q->ne[3];
     const int seg_len_max  = std::min(FATTN_TILE_SPARSE_NMAX, FATTN_TILE_SPARSE_CPT*nthreads);
-    const int nblocks_KV   = std::max<int>((K->ne[1] + seg_len_max - 1) / seg_len_max, nsm / ntiles_other);
+    // RDNA3/4: nsm counts WGPs, two blocks fit into the SRAM of a WGP
+    const int nblocks_min  = GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc) ? 2*nsm / ntiles_other : nsm / ntiles_other;
+    const int nblocks_KV   = std::max<int>((K->ne[1] + seg_len_max - 1) / seg_len_max, nblocks_min);
 
     constexpr bool use_sparse = true;
     fattn_kernel_t fattn_kernel = flash_attn_tile<DKQ, DV, cols_per_block/ncols2, ncols2, use_logit_softcap, use_sparse>;

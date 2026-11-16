@@ -150,7 +150,7 @@ static __global__ void top_k_radix_select(
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
 
-#if defined(CDNA)
+#if defined(CDNA) || defined(RDNA3) || defined(RDNA4)
     // find the bin with prefix sums over all bins instead of a serial walk in one thread, same bin and rank
     static_assert(BLOCK_SIZE == NBINS, "one thread per bin");
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -205,7 +205,7 @@ static __global__ void top_k_radix_select(
         state.prefix_mask |= (uint32_t) (NBINS - 1) << shift;
         states[row] = state;
     }
-#endif // defined(CDNA)
+#endif // defined(CDNA) || defined(RDNA3) || defined(RDNA4)
 }
 
 template<int BLOCK_SIZE, int RADIX_BITS>
@@ -333,6 +333,273 @@ static void top_k_radix_cuda(
     }
 }
 
+// RDNA3/4 with few rows: one block per row does all radix passes in one launch, the keys stay in registers.
+// Same result as top_k_radix_cuda: the keys above the threshold, then the ties in column order.
+#define TOP_K_RADIX_BLOCK_SIZE 1024
+
+template <int KPT>
+__launch_bounds__(TOP_K_RADIX_BLOCK_SIZE, 1)
+static __global__ void top_k_radix_block(const float * __restrict__ src, int * __restrict__ dst, const int ncols, const int k) {
+#if defined(RDNA3) || defined(RDNA4)
+    constexpr int BLOCK     = TOP_K_RADIX_BLOCK_SIZE;
+    constexpr int NBINS     = 256;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = BLOCK/warp_size;
+    constexpr int NSUB      = 8;               // histogram copies, lane l adds to copy l % NSUB
+    constexpr int SUB_S     = NBINS + 4;       // the copies of a bin are in different banks, rows stay 16 byte aligned
+    constexpr int BPL       = NBINS/warp_size; // bins per lane in the bin search
+    static_assert(warp_size == 32, "wave32 only");
+
+    const int tid  = threadIdx.x;
+    const int lane = tid % warp_size;
+    const int warp = tid / warp_size;
+    const float * row_src = src + (int64_t) blockIdx.x*ncols;
+    int         * row_dst = dst + (int64_t) blockIdx.x*k;
+
+    // the histogram of the next pass is cleared while the current one is filled
+    __shared__ __align__(16) int hist[2][NSUB*SUB_S];
+    __shared__ int      warp_cnt[nwarps];
+    __shared__ uint32_t s_prefix;
+    __shared__ int      s_rank;
+    __shared__ int      s_greater;
+    __shared__ int      s_ties;
+
+    // unconditional loads: a conditional load is waited for before the next one is issued
+    uint32_t key[KPT];
+#pragma unroll
+    for (int i = 0; i < KPT; ++i) {
+        key[i] = __float_as_uint(row_src[min(i*BLOCK + tid, ncols - 1)]);
+    }
+#pragma unroll
+    for (int i = 0; i < KPT; ++i) {
+        key[i] = top_k_float_to_ordered(__uint_as_float(key[i]));
+    }
+
+    for (int i = tid; i < NSUB*SUB_S; i += BLOCK) {
+        hist[0][i] = 0;
+    }
+    if (tid == 0) {
+        s_prefix  = 0;
+        s_rank    = k;
+        s_greater = 0;
+        s_ties    = 0;
+    }
+
+    // slots of this thread whose key matches the prefix found so far
+    uint32_t act = 0;
+#pragma unroll
+    for (int i = 0; i < KPT; ++i) {
+        act |= uint32_t(i*BLOCK + tid < ncols) << i;
+    }
+    __syncthreads();
+
+#pragma unroll 1
+    for (int pass = 0; pass < 4; ++pass) {
+        const int shift = 24 - 8*pass;
+        int * h = hist[pass % 2];
+
+        // LDS atomics on one address serialize, and most keys usually fall into a few bins:
+        // the two bins of the first active keys of a wave are counted in registers
+        if (__ballot(act != 0)) {
+            auto first_bin = [&](const uint32_t other) {
+                uint32_t slots = 0;
+#pragma unroll
+                for (int i = 0; i < KPT; ++i) {
+                    slots |= uint32_t(__ballot((act >> i & 1) && ((key[i] >> shift) & (NBINS - 1)) != other) != 0) << i;
+                }
+                if (slots == 0) {
+                    return (uint32_t) NBINS;
+                }
+                const int      i   = __builtin_ctz(slots);
+                const uint32_t bin = (key[i] >> shift) & (NBINS - 1);
+                const uint32_t b   = (uint32_t) __ballot((act >> i & 1) && bin != other);
+                return (uint32_t) __builtin_amdgcn_readlane(bin, __builtin_ctz(b));
+            };
+            const uint32_t c0 = first_bin(NBINS);
+            const uint32_t c1 = first_bin(c0);
+            int * hist_w = h + (lane % NSUB)*SUB_S;
+            int n0 = 0;
+            int n1 = 0;
+#pragma unroll
+            for (int i = 0; i < KPT; ++i) {
+                const uint32_t bin = (key[i] >> shift) & (NBINS - 1);
+                if (act >> i & 1) {
+                    if (bin == c0) {
+                        ++n0;
+                    } else if (bin == c1) {
+                        ++n1;
+                    } else {
+                        atomicAdd(&hist_w[bin], 1);
+                    }
+                }
+            }
+            n0 = warp_reduce_sum<warp_size>(n0);
+            n1 = warp_reduce_sum<warp_size>(n1);
+            if (lane == 0 && n0 > 0) {
+                atomicAdd(&hist_w[c0], n0);
+            }
+            if (lane == 0 && n1 > 0) {
+                atomicAdd(&hist_w[c1], n1);
+            }
+        }
+        for (int i = tid; i < NSUB*SUB_S; i += BLOCK) {
+            hist[(pass + 1) % 2][i] = 0;
+        }
+        __syncthreads();
+
+        // wave 0 finds the bin with S(b) >= rank > S(b + 1), S(b) = keys in bins (b, NBINS); lane l holds bins BPL*l ..
+        if (warp == 0) {
+            const uint32_t prefix = s_prefix;
+            const int      rank   = s_rank;
+            int cnt[BPL] = {0};
+#pragma unroll
+            for (int c = 0; c < NSUB; ++c) {
+#pragma unroll
+                for (int j = 0; j < BPL; j += 4) {
+                    const int4 v = *(const int4 *) &h[c*SUB_S + BPL*lane + j];
+                    cnt[j + 0] += v.x;
+                    cnt[j + 1] += v.y;
+                    cnt[j + 2] += v.z;
+                    cnt[j + 3] += v.w;
+                }
+            }
+            int sum = 0;
+#pragma unroll
+            for (int j = 0; j < BPL; ++j) {
+                sum += cnt[j];
+            }
+            // inclusive prefix sum over the lanes: DPP row_shr within the rows of 16, then the second row adds lane 15
+            int incl = sum;
+            incl += __builtin_amdgcn_mov_dpp(incl, 0x111, 0xf, 0xf, true);
+            incl += __builtin_amdgcn_mov_dpp(incl, 0x112, 0xf, 0xf, true);
+            incl += __builtin_amdgcn_mov_dpp(incl, 0x114, 0xf, 0xf, true);
+            incl += __builtin_amdgcn_mov_dpp(incl, 0x118, 0xf, 0xf, true);
+            incl += lane >= 16 ? __builtin_amdgcn_readlane(incl, 15) : 0;
+            int above = __builtin_amdgcn_readlane(incl, warp_size - 1) - incl;
+#pragma unroll
+            for (int j = BPL - 1; j >= 0; --j) {
+                const int b = BPL*lane + j;
+                if (b == 0 ? above < rank : above < rank && above + cnt[j] >= rank) {
+                    s_rank   = rank - above;
+                    s_prefix = prefix | ((uint32_t) b << shift);
+                }
+                above += cnt[j];
+            }
+        }
+        __syncthreads();
+
+        if (__ballot(act != 0)) {
+            const uint32_t bin_sel = (s_prefix >> shift) & (NBINS - 1);
+#pragma unroll
+            for (int i = 0; i < KPT; ++i) {
+                act &= ~(uint32_t(((key[i] >> shift) & (NBINS - 1)) != bin_sel) << i);
+            }
+        }
+    }
+
+    const uint32_t threshold = s_prefix;
+    const int      rank      = s_rank; // ties to take, they go to the last rank slots
+
+    int nties = 0;
+#pragma unroll
+    for (int i = 0; i < KPT; ++i) {
+        const bool valid = i*BLOCK + tid < ncols;
+        const bool gt    = valid && key[i] > threshold;
+        nties += valid && key[i] == threshold;
+        const uint32_t b = (uint32_t) __ballot(gt);
+        if (b) {
+            int base = 0;
+            if (lane == __builtin_ctz(b)) {
+                base = atomicAdd(&s_greater, __popc(b));
+            }
+            base = __builtin_amdgcn_readlane(base, __builtin_ctz(b));
+            if (gt) {
+                row_dst[base + __builtin_amdgcn_mbcnt_lo(b, 0)] = i*BLOCK + tid;
+            }
+        }
+    }
+    nties = warp_reduce_sum<warp_size>(nties);
+    if (lane == 0) {
+        warp_cnt[warp] = nties;
+    }
+    __syncthreads();
+    int nties_total = 0;
+#pragma unroll
+    for (int w = 0; w < nwarps; ++w) {
+        nties_total += warp_cnt[w];
+    }
+    __syncthreads();
+
+    if (nties_total == rank) {
+        // all ties are taken, the order does not matter
+#pragma unroll
+        for (int i = 0; i < KPT; ++i) {
+            const bool tie = i*BLOCK + tid < ncols && key[i] == threshold;
+            const uint32_t b = (uint32_t) __ballot(tie);
+            if (b) {
+                int base = 0;
+                if (lane == __builtin_ctz(b)) {
+                    base = atomicAdd(&s_ties, __popc(b));
+                }
+                base = __builtin_amdgcn_readlane(base, __builtin_ctz(b));
+                if (tie) {
+                    row_dst[k - rank + base + __builtin_amdgcn_mbcnt_lo(b, 0)] = i*BLOCK + tid;
+                }
+            }
+        }
+        return;
+    }
+
+    // the lowest columns win: columns are ordered by (i, tid)
+    int pos0 = 0;
+#pragma unroll
+    for (int i = 0; i < KPT; ++i) {
+        const bool tie = i*BLOCK + tid < ncols && key[i] == threshold;
+        const uint32_t b = (uint32_t) __ballot(tie);
+        if (lane == 0) {
+            warp_cnt[warp] = __popc(b);
+        }
+        __syncthreads();
+        int pos = pos0 + __builtin_amdgcn_mbcnt_lo(b, 0);
+#pragma unroll
+        for (int w = 0; w < nwarps; ++w) {
+            pos  += w < warp ? warp_cnt[w] : 0;
+            pos0 += warp_cnt[w];
+        }
+        if (tie && pos < rank) {
+            row_dst[k - rank + pos] = i*BLOCK + tid;
+        }
+        __syncthreads();
+        if (pos0 >= rank) {
+            break;
+        }
+    }
+#else
+    GGML_UNUSED_VARS(src, dst, ncols, k);
+    NO_DEVICE_CODE;
+#endif // defined(RDNA3) || defined(RDNA4)
+}
+
+static bool top_k_radix_block_supported(const int cc, const int64_t ncols, const int64_t nrows, const int nsm) {
+    return (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) && nrows <= nsm &&
+        ncols > 1024 && ncols <= 32*TOP_K_RADIX_BLOCK_SIZE;
+}
+
+static void top_k_radix_block_cuda(const float * src, int * dst, const int ncols, const int64_t nrows, const int k, cudaStream_t stream) {
+    const int kpt = (ncols + TOP_K_RADIX_BLOCK_SIZE - 1) / TOP_K_RADIX_BLOCK_SIZE;
+    const dim3 grid(nrows);
+    if (kpt <= 8) {
+        top_k_radix_block< 8><<<grid, TOP_K_RADIX_BLOCK_SIZE, 0, stream>>>(src, dst, ncols, k);
+    } else if (kpt <= 16) {
+        top_k_radix_block<16><<<grid, TOP_K_RADIX_BLOCK_SIZE, 0, stream>>>(src, dst, ncols, k);
+    } else if (kpt <= 24) {
+        top_k_radix_block<24><<<grid, TOP_K_RADIX_BLOCK_SIZE, 0, stream>>>(src, dst, ncols, k);
+    } else {
+        GGML_ASSERT(kpt <= 32);
+        top_k_radix_block<32><<<grid, TOP_K_RADIX_BLOCK_SIZE, 0, stream>>>(src, dst, ncols, k);
+    }
+}
+
 static void top_k_argsort_cuda(
         ggml_cuda_pool & pool,
         const float * src, int * dst, int ncols, int64_t nrows, int k, bool use_cub, cudaStream_t stream) {
@@ -396,6 +663,11 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
             top_k_argsort_cuda(pool, src0_d, dst_d, ncols, nrows, k, false, stream);
             return;
         }
+    }
+
+    if (top_k_radix_block_supported(ggml_cuda_info().devices[device].cc, ncols, nrows, ggml_cuda_info().devices[device].nsm)) {
+        top_k_radix_block_cuda(src0_d, dst_d, ncols, nrows, k, stream);
+        return;
     }
 
     if (nrows > GGML_CUDA_TOP_K_NROWS_THRESHOLD) {
