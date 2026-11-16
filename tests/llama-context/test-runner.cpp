@@ -89,6 +89,9 @@ std::vector<case_run> run_cases(model_run & mr, const std::vector<const ctx_test
                     }
                 }
             }
+        } catch (const std::exception & e) {
+            run.status = test_status::FAIL;
+            run.reason = std::string("exception: ") + e.what();
         } catch (...) {
             run.status = test_status::FAIL;
             run.reason = "unhandled exception";
