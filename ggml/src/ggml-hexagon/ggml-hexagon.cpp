@@ -2557,19 +2557,16 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
     HEX_VERBOSE("ggml-hex: %s graph-compute n_nodes %d\n", sess->c_name(), graph->n_nodes);
 
-    const std::vector<htp_opnode> * nodes_ptr = nullptr;
-    std::vector<htp_opnode> computed_nodes;
-
-    const std::vector<uintptr_t> signature = ggml_hexagon_graph_signature(graph);
-    bool cache_hit = graph->uid != 0 && sess->cached_uid == graph->uid && sess->cached_signature == signature;
-    if (cache_hit) {
-        nodes_ptr = &sess->cached_nodes;
-    } else {
+    std::vector<uintptr_t> signature = graph->uid ? ggml_hexagon_graph_signature(graph) : std::vector<uintptr_t>{};
+    const bool cache_hit = graph->uid != 0 && sess->cached_uid == graph->uid && sess->cached_signature == signature;
+    if (!cache_hit) {
         ggml_hexagon_graph_repack(graph, sess);
 
         htp_fusion_tag_graph(graph);
 
-        computed_nodes.reserve(graph->n_nodes);
+        auto & nodes = sess->cached_nodes;
+        nodes.clear();
+        nodes.reserve(graph->n_nodes);
 
         for (int i = 0; i < graph->n_nodes; ++i) {
             ggml_tensor * n = graph->nodes[i];
@@ -2584,24 +2581,18 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             htp_opnode node(opcode, n);
             GGML_ASSERT(htp_kparams_solve(sess, node));
-            if (computed_nodes.empty() || !opt_opfusion || !htp_fusion_try_fuse(sess, computed_nodes.back(), node)) {
-                computed_nodes.push_back(std::move(node));
+            if (nodes.empty() || !opt_opfusion || !htp_fusion_try_fuse(sess, nodes.back(), node)) {
+                nodes.push_back(std::move(node));
             }
         }
 
-        htp_lower_graph(sess, graph, computed_nodes);
+        htp_lower_graph(sess, graph, nodes);
 
-        if (graph->uid != 0) {
-            sess->cached_uid   = graph->uid;
-            sess->cached_signature = signature;
-            sess->cached_nodes = std::move(computed_nodes);
-            nodes_ptr = &sess->cached_nodes;
-        } else {
-            nodes_ptr = &computed_nodes;
-        }
+        sess->cached_uid       = graph->uid;
+        sess->cached_signature = std::move(signature);
     }
 
-    for (const auto & node : *nodes_ptr) {
+    for (const auto & node : sess->cached_nodes) {
         sess->enqueue_op(node);
     }
 
