@@ -197,8 +197,10 @@ The models below were tested with `llama-cli` and `Q4_K_M` files on an Intel® C
 | [bartowski/inclusionAI_Ling-mini-2.0-Q4_K_M](https://huggingface.co/bartowski/inclusionAI_Ling-mini-2.0-GGUF) | ✓ | ✓ | ✗ |
 |  |  |  |  |
 | [Qwen/Qwen3-Embedding-0.6B-Q8_0](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF) | ✓ | ✓ | ✗ |
+| [ggml-org/bge-m3-Q8_0](https://huggingface.co/ggml-org/bge-m3-Q8_0-GGUF) | ✓ | ✓ | ✗ |
+| [nomic-ai/nomic-embed-text-v1.5-Q8_0](https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF) | ✓ | ✓ | ✗ |
 
-Qwen3-Embedding-0.6B was tested with `llama-embedding` and a `Q8_0` file.
+The embedding models were tested with `llama-embedding` and `Q8_0` files.
 
 </details>
 
@@ -986,7 +988,7 @@ build\ReleaseOV\bin\llama-simple.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.
 
 - Llama.cpp OpenVINO backend currently supports a subset of GGML ops and text-only models. Unsupported ops or unsupported op shapes/cases fail during OpenVINO translation.
 - Multimodal features (audio/image/video) are a work in progress.
-- Embedding models: BERT-based models (`bge-m3`, `nomic-embed-text-v1.5`) fail on all devices. `Qwen3-Embedding-0.6B` runs on CPU and GPU. Reranking models are not validated.
+- Embedding models: reranking models are not validated.
 - Llama.cpp tool coverage across CPU/GPU/NPU is not uniform.
 
 **GPU-specific**
