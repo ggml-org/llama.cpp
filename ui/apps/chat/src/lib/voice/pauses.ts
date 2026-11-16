@@ -31,6 +31,11 @@ export class PauseDetector {
 	private segmentMs = 0;
 	private speechMs = 0;
 
+	/** Whether speech was heard since the last cut. */
+	get heardSpeech(): boolean {
+		return this.speechMs > 0;
+	}
+
 	constructor(options: PauseDetectorOptions) {
 		this.intervalMs = options.intervalMs;
 		this.pauseMs = options.pauseMs ?? 500;

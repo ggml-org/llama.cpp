@@ -187,10 +187,12 @@ export class RealtimeTranscriber {
 
 	/**
 	 * Ends the input (`input_audio_buffer.commit` with `final: true`) and resolves with
-	 * the whole transcript once the last item completes.
+	 * the whole transcript once the last item completes. With `commitRest: false`, a
+	 * session that transcribes per commit leaves out the audio after the last piece,
+	 * e.g. when it is silence, which such a model may hear a word in.
 	 * @throws RealtimeError when the session fails, closes or times out first
 	 */
-	async finish(): Promise<string> {
+	async finish(options: { commitRest?: boolean } = {}): Promise<string> {
 		if (this.state === 'connecting') await this.connecting;
 
 		if (this.state !== 'open') throw new RealtimeError('The realtime session is not open.');
@@ -219,13 +221,15 @@ export class RealtimeTranscriber {
 
 		if (this.state !== 'finishing') return done;
 
-		if (this.audioSinceCommit) {
+		const commitRest = this.live || options.commitRest !== false || this.completedText === '';
+
+		if (this.audioSinceCommit && commitRest) {
 			this.finalSent = true;
 			this.inFlight++;
 			this.audioSinceCommit = false;
 			this.send({ final: true, type: VOICE_REALTIME_EVENTS.COMMIT });
 		} else {
-			// everything was committed in pieces already
+			// everything was committed in pieces already, or what is left holds no speech
 			this.resolveFinish();
 		}
 

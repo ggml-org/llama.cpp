@@ -37,6 +37,17 @@ export const VOICE_MICROPHONE_CONSTRAINTS: MediaTrackConstraints = {
 	noiseSuppression: false
 };
 
+/**
+ * How live text is cut into pieces for a model that transcribes per commit: at a pause
+ * after speech, or at the next quiet moment once a piece is this long. Short pieces keep
+ * the text close behind the speaker; the cut always falls between words.
+ */
+export const VOICE_PIECE = {
+	MAX_MS: 3000,
+	MIN_SPEECH_MS: 250,
+	PAUSE_MS: 350
+} as const;
+
 /** How long a started capture waits for its first audio before it counts as recording anyway. */
 export const VOICE_FIRST_AUDIO_TIMEOUT_MS = 1500;
 

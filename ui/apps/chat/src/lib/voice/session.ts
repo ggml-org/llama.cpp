@@ -1,5 +1,5 @@
 import { VoiceCapture } from './capture';
-import { VOICE_LEVELS_INTERVAL_MS } from './constants';
+import { VOICE_LEVELS_INTERVAL_MS, VOICE_PIECE } from './constants';
 import { RealtimeUnsupportedError } from './errors';
 import { PauseDetector } from './pauses';
 import { RealtimeTranscriber } from './realtime';
@@ -31,6 +31,8 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 	const transcribe = options.transcribe;
 
 	let transcriber: RealtimeTranscriber | null = null;
+	// speech heard since the last piece was committed; until pieces are cut, assume so
+	let speechSinceCommit = true;
 	let liveText: string | null = null;
 	let ended = false;
 
@@ -59,15 +61,26 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 
 				options.onRealtime?.(realtime.live);
 
-				// a model that transcribes per commit gets the speech piece by piece, at its pauses
+				// a model that transcribes per commit gets the speech piece by piece, at its pauses:
+				// short ones, so the text keeps up with the speaker
 				if (!realtime.live) {
 					const pauses = new PauseDetector({
-						intervalMs: capture.levelsIntervalMs ?? VOICE_LEVELS_INTERVAL_MS
+						intervalMs: capture.levelsIntervalMs ?? VOICE_LEVELS_INTERVAL_MS,
+						maxSegmentMs: VOICE_PIECE.MAX_MS,
+						minSpeechMs: VOICE_PIECE.MIN_SPEECH_MS,
+						pauseMs: VOICE_PIECE.PAUSE_MS
 					});
 
 					unsubscribers.push(
 						capture.onLevels((levels) => {
-							if (pauses.push(levels[levels.length - 1] ?? 0)) realtime.commitSegment();
+							const cut = pauses.push(levels[levels.length - 1] ?? 0);
+
+							if (pauses.heardSpeech) speechSinceCommit = true;
+
+							if (cut && realtime.canCommitSegment) {
+								realtime.commitSegment();
+								speechSinceCommit = false;
+							}
 						})
 					);
 				}
@@ -130,7 +143,8 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 			let transcript: Promise<string>;
 
 			if (realtime?.ready) {
-				transcript = realtime.finish().catch((error) => {
+				// a silent rest is left out: a model may hear a word ("yeah") in silence
+				transcript = realtime.finish({ commitRest: speechSinceCommit }).catch((error) => {
 					console.warn('Realtime transcript failed, transcribing over HTTP:', error);
 
 					return overHttp();

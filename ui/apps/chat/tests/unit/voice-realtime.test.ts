@@ -237,6 +237,44 @@ describe('RealtimeTranscriber', () => {
 		).toHaveLength(1);
 	});
 
+	it('leaves out a silent rest after the last piece, but never the only one', async () => {
+		const commits = () =>
+			socket().sent.filter((event) => event.type === 'input_audio_buffer.commit');
+		const transcriber = new RealtimeTranscriber(context, { sampleRate: 16_000 });
+		const connected = transcriber.connect();
+
+		socket().emit(sessionCreated('realtime'));
+		await connected;
+		transcriber.append(Int16Array.from([1]));
+		transcriber.commitSegment();
+		socket().emit({
+			transcript: 'All said.',
+			type: 'conversation.item.input_audio_transcription.completed'
+		});
+		// silence after the last piece: a model may hear "yeah" in it
+		transcriber.append(Int16Array.from([0]));
+
+		await expect(transcriber.finish({ commitRest: false })).resolves.toBe('All said.');
+		expect(commits()).toHaveLength(1);
+
+		// with nothing transcribed yet, the rest is all there is: it is committed
+		const second = new RealtimeTranscriber(context, { sampleRate: 16_000 });
+		const secondConnected = second.connect();
+
+		socket().emit(sessionCreated('realtime'));
+		await secondConnected;
+		second.append(Int16Array.from([1]));
+
+		const finished = second.finish({ commitRest: false });
+
+		await vi.waitFor(() => expect(commits()).toHaveLength(1));
+		socket().emit({
+			transcript: 'Short.',
+			type: 'conversation.item.input_audio_transcription.completed'
+		});
+		await expect(finished).resolves.toBe('Short.');
+	});
+
 	it('marks a conversation session switched to transcription as not live', async () => {
 		const transcriber = new RealtimeTranscriber(context, { sampleRate: 16_000 });
 		const connected = transcriber.connect();
