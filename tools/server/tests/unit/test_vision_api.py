@@ -253,7 +253,7 @@ def test_vision_ocr(name: str, text: str):
     global server
     server = ServerPreset.small_test()
     server.start()
-    response = requests.get(f"https://huggingface.co/Serveurperso/small-test/resolve/main/test/{name}.png")
+    response = requests.get(f"https://huggingface.co/ggml-org-dev/small-test/resolve/main/test/{name}.png")
     response.raise_for_status()
     body = server.make_any_request("POST", "/v1/chat/completions", data={
         "max_tokens": 32,
