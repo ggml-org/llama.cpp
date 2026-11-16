@@ -143,7 +143,7 @@ json server_model_architecture_json(
 bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras);
 
 // if the two sets of loras are different, they require a cache clear unless the
-// change is only from aloras to aloras.
+// change is only from aloras to aloras. equal sets never require a clear.
 bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next);

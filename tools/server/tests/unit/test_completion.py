@@ -811,3 +811,59 @@ def test_completion_checkpoint_kept_after_restore():
     for suffix in suffixes[1:]:
         assert len(suffix) > server.n_ubatch + 4
         assert cache_n(prefix + suffix) == len(prefix) - 1
+
+
+# hybrid model with SWA: a checkpoint or a state right before the new tokens must be reused, even if it is less than n_swa tokens away
+def test_completion_checkpoint_hybrid_swa():
+    global server
+    server = ServerPreset.tinylfm3omni()
+    server.n_slots = 1
+    server.n_batch = 16
+    server.n_ubatch = 16
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def complete(prompt, cache_prompt=True, n_predict=4):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": n_predict,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+            "return_tokens": True,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    def top_logprobs(body):
+        return [(p["id"], p["logprob"]) for p in body["completion_probabilities"][0]["top_logprobs"]]
+
+    def assert_same_output(actual, expected):
+        assert actual["tokens"] == expected["tokens"]
+        assert [tid for tid, _ in top_logprobs(actual)] == [tid for tid, _ in top_logprobs(expected)]
+        # the batches are not split the same way with and without the cache, which moves the logprobs of this model by up to 0.01
+        for (_, lp), (_, lp_expected) in zip(top_logprobs(actual), top_logprobs(expected)):
+            assert lp == pytest.approx(lp_expected, abs=0.02)
+
+    # shorter than n_swa (256), so that every checkpoint is within the SWA window of the prompt end
+    prefix = [1000 + i for i in range(200)]
+    suffix = [5000 + i for i in range(20)]
+
+    # the new prompt drops the generated tokens: the state is rolled back to the checkpoint 4 tokens before the end
+    expected = complete(prefix + suffix, cache_prompt=False)
+    complete(prefix)
+    actual = complete(prefix + suffix)
+    assert actual["timings"]["cache_n"] == len(prefix) - 4
+    assert_same_output(actual, expected)
+
+    # the new prompt continues after the generated tokens: the state is used as it is
+    first = complete(prefix)
+    prompt = prefix + first["tokens"] + suffix
+    expected = complete(prompt, cache_prompt=False)
+    first = complete(prefix)
+    assert prefix + first["tokens"] + suffix == prompt
+    actual = complete(prompt)
+    # the last generated token was sampled, but never processed
+    assert actual["timings"]["cache_n"] == len(prefix) + len(first["tokens"]) - 1
+    assert actual["timings"]["prompt_n"] == len(suffix) + 1
+    assert_same_output(actual, expected)
