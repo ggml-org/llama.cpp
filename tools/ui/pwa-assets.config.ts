@@ -1,6 +1,5 @@
-import { writeThemeFavicons } from './scripts/favicon-colorize';
+import { writeBrandFavicons } from './scripts/brand-favicons';
 import {
-	FAVICON_COLORS,
 	PWA_ASSET_GENERATOR,
 	PWA_GENERATOR_DEVICES,
 	THEME_COLORS
@@ -14,9 +13,7 @@ import {
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-writeThemeFavicons(FAVICON_COLORS.LIGHT, FAVICON_COLORS.DARK, {
-	padding: PWA_ASSET_GENERATOR.FAVICON_PADDING
-});
+writeBrandFavicons();
 
 export default defineConfig({
 	headLinkOptions: {
@@ -26,7 +23,7 @@ export default defineConfig({
 	preset: combinePresetAndAppleSplashScreens(
 		{
 			...minimal2023Preset,
-			// tiny margin so favicon.ico / pwa-*.png breathe inside the canvas
+			// llama-brand's favicons carry their own margin
 			transparent: {
 				...minimal2023Preset.transparent,
 				padding: PWA_ASSET_GENERATOR.FAVICON_PADDING

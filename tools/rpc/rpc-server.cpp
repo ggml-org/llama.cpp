@@ -10,7 +10,6 @@
 #endif
 #include <algorithm>
 #include <clocale>
-#include <codecvt>
 #include <filesystem>
 #include <regex>
 #include <stdio.h>
@@ -24,25 +23,16 @@
 #endif
 
 
-// common_get_path_from_env() is adapted to avoid utf8_to_wstring
-static std::filesystem::path common_get_path_from_env(const std::string & name) {
-#ifdef _WIN32
-    std::wstring wname;
-    for (const char * p = name.c_str(); *p; ++p) {
-        wname.push_back((wchar_t)*p);
-    }
-    const wchar_t * wvalue = _wgetenv(wname.c_str());
-    return wvalue ? std::filesystem::path(wvalue) : std::filesystem::path();
-#else
+// NOTE: this is copied from common.cpp to avoid linking with libcommon
+static std::string common_get_env(const std::string & name) {
     const char * value = std::getenv(name.c_str());
-    return value ? std::filesystem::path(value) : std::filesystem::path();
-#endif
+    return value == nullptr ? "" : value;
 }
 
 // NOTE: this is copied from common.cpp to avoid linking with libcommon
 #if !defined(_WIN32)
 static std::filesystem::path get_home_directory() {
-    std::filesystem::path home = common_get_path_from_env("HOME");
+    std::filesystem::path home = common_get_env("HOME");
     if (!home.empty()) {
         return home;
     }
@@ -56,19 +46,19 @@ static std::filesystem::path get_home_directory() {
 
 // NOTE: this is copied from common.cpp to avoid linking with libcommon
 static std::filesystem::path fs_get_cache_directory() {
-    std::filesystem::path cache_directory = common_get_path_from_env("LLAMA_CACHE");
+    std::filesystem::path cache_directory = common_get_env("LLAMA_CACHE");
     if (!cache_directory.empty()) {
         return cache_directory;
     }
 #if defined(_WIN32)
-    cache_directory = common_get_path_from_env("LOCALAPPDATA");
+    cache_directory = common_get_env("LOCALAPPDATA");
     if (cache_directory.empty()) {
         throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
     }
 #elif defined(__APPLE__)
     cache_directory = get_home_directory() / "Library/Caches";
 #else
-    cache_directory = common_get_path_from_env("XDG_CACHE_HOME");
+    cache_directory = common_get_env("XDG_CACHE_HOME");
     if (cache_directory.empty()) {
         cache_directory = get_home_directory() / ".cache";
     }

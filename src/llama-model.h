@@ -290,6 +290,8 @@ struct llama_layer {
     struct ggml_tensor * wq        = nullptr;
     struct ggml_tensor * wk        = nullptr;
     struct ggml_tensor * wv        = nullptr;
+    struct ggml_tensor * k_cache_s = nullptr;
+    struct ggml_tensor * v_cache_s = nullptr;
     struct ggml_tensor * wo        = nullptr;
     struct ggml_tensor * wqkv      = nullptr;
     struct ggml_tensor * wg        = nullptr;
@@ -376,6 +378,9 @@ struct llama_layer {
     struct ggml_tensor * attn_resid_beta  = nullptr;
     struct ggml_tensor * ffn_resid_alpha  = nullptr;
     struct ggml_tensor * ffn_resid_beta   = nullptr;
+
+    // value residual mix
+    struct ggml_tensor * attn_vres_lambda = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
@@ -668,6 +673,24 @@ struct llama_layer {
     struct ggml_tensor * mudd_up          = nullptr;
     struct ggml_tensor * mudd_up_b        = nullptr;
 
+    // inkling2
+    struct ggml_tensor * attn_rel         = nullptr;
+    struct ggml_tensor * attn_rel_bias    = nullptr;
+    struct ggml_tensor * attn_q_clip      = nullptr;
+    struct ggml_tensor * attn_rel_clip    = nullptr;
+    struct ggml_tensor * attn_sink_proj   = nullptr;
+    struct ggml_tensor * attn_q_inp_norm  = nullptr;
+    struct ggml_tensor * attn_k_inp_norm  = nullptr;
+    struct ggml_tensor * attn_v_inp_norm  = nullptr;
+    struct ggml_tensor * attn_k_conv      = nullptr;
+    struct ggml_tensor * attn_v_conv      = nullptr;
+    struct ggml_tensor * attn_k_conv_proj = nullptr;
+    struct ggml_tensor * attn_v_conv_proj = nullptr;
+    struct ggml_tensor * attn_post_conv   = nullptr;
+    struct ggml_tensor * attn_res_query   = nullptr;
+    struct ggml_tensor * ffn_post_conv    = nullptr;
+    struct ggml_tensor * ffn_res_query    = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
@@ -743,6 +766,23 @@ struct llama_hadamard {
     llama_hadamard_rotations inv; // latent lookup table -> inverse transform
 };
 
+struct llama_rope_params {
+    int32_t n_rot      = 0; // 0 if the layer has no RoPE
+    int32_t n_offs     = 0; // first rotated dim in a cached K head
+    int32_t type       = LLAMA_ROPE_TYPE_NONE;
+    int32_t n_ctx_orig = 0;
+
+    float freq_base   = 0.0f;
+    float freq_scale  = 0.0f;
+    float ext_factor  = 0.0f;
+    float attn_factor = 0.0f;
+    float beta_fast   = 0.0f;
+    float beta_slow   = 0.0f;
+
+    ggml_tensor * factors = nullptr;
+    ggml_tensor * k_norm  = nullptr; // K norm weight applied after RoPE, a K-shift has to undo it
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -775,6 +815,7 @@ struct llama_model {
 
     struct ggml_tensor * output_norm     = nullptr;
     struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
+    struct ggml_tensor * output_res_query = nullptr; // inkling2: query of the final attention-residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
@@ -967,6 +1008,12 @@ struct llama_model {
     bool has_tensor_overrides() const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+
+    // the RoPE of a layer, used by both the model graph and the K-shift
+    virtual llama_rope_params get_rope_params(const llama_cparams & cparams, int il) const;
+
+    // same, for the keys of the lightning indexer
+    virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;
 
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;

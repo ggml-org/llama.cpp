@@ -2,7 +2,7 @@
 
 // the input holds 2 context mel frames followed by the new frames, so the causal conv stem
 // sees the same left context as on the full spectrogram
-ggml_cgraph * clip_graph_voxtral_rt::build() {
+ggml_cgraph * mtmd_graph_voxtral_rt::build() {
     const int n_frames_in = img.nx();
     const int n_new       = (n_frames_in - 2) / 2; // encoder frames, the conv stem has stride 2
     const int n_window    = hparams.attn_window_size;

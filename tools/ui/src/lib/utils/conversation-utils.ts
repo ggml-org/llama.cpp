@@ -60,6 +60,36 @@ const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversatio
 };
 
 /**
+ * Collects the whole fork family of a conversation: the original it was forked
+ * from, up the chain, and every fork below that original, at any depth.
+ *
+ * @param convs - Conversations to search
+ * @param convId - Any conversation of the family
+ * @returns IDs of every conversation in the family, the original first
+ */
+export function collectForkFamily(convs: DatabaseConversation[], convId: string): string[] {
+	const byId = new Map(convs.map((conv) => [conv.id, conv]));
+
+	let rootId = convId;
+	let parentId = byId.get(convId)?.forkedFromConversationId;
+
+	while (parentId && byId.has(parentId)) {
+		rootId = parentId;
+		parentId = byId.get(parentId)?.forkedFromConversationId;
+	}
+
+	const ids = [rootId];
+
+	for (let i = 0; i < ids.length; i++) {
+		for (const conv of convs) {
+			if (conv.forkedFromConversationId === ids[i]) ids.push(conv.id);
+		}
+	}
+
+	return ids;
+}
+
+/**
  * Builds a flat tree of conversations with depth levels for nested forks.
  * Accepts a pre-filtered list so search filtering stays in the component.
  *

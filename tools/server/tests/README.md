@@ -39,6 +39,47 @@ To run slow tests (will download many models, make sure to set `LLAMA_CACHE` if 
 SLOW_TESTS=1 ./tests.sh
 ```
 
+The speculative-decoding method tests are opt-in and marked `heavy`. The compact suite covers MTP,
+DFlash, DSpark, and EAGLE-3 with five pinned files totaling 6.271 GiB:
+
+```shell
+SPEC_METHODS=compact SPEC_MODEL_DIR=/path/to/model-cache PYTEST_WORKERS=1 ./tests.sh -s -v unit/test_spec_methods.py
+```
+
+- MTP target: `Qwen3.5-4B-MTP-Q4_K_M.gguf`, 2.904 GiB.
+- Shared DFlash/DSpark/EAGLE-3 target: `Qwen3-4B-Q4_K_M.gguf`, 2.326 GiB.
+- DFlash draft: `dflash-Qwen3-4B-Q4_K_M.gguf`, 294.065 MiB.
+- DSpark draft: `dspark-Qwen3-4B-Q4_K_M.gguf`, 544.453 MiB.
+- EAGLE-3 draft: `eagle3-Qwen3-4B-Q8_0.gguf`, 227.075 MiB.
+
+All files come from `ggml-org/spec-for-testing-GGUF`, pinned to revision
+`a0736c8e98d3fe580352dacffa3fbd5e9c22a437` in `unit/test_spec_methods.py`.
+The consolidated repository retains the licenses of its source models; review its model card and
+the source model cards before use.
+
+Use `SPEC_METHODS=nightly` for DFlash2 and LiLiCorr, or a comma-separated subset such as
+`SPEC_METHODS=mtp,dflash`. The nightly pair requires 41.422 GiB and remains separate because no
+verified compact DFlash2 GGUF or compact LiLiCorr checkpoint is available. `SPEC_METHODS=all` runs both
+tiers and downloads about 47.693 GiB.
+
+The `Server (speculative decoding)` workflow runs only by explicit manual dispatch on the dedicated
+DGX Spark runner. It does not use the GitHub Actions cache. Set the `SPEC_METHOD_MODEL_DIR` repository
+variable to the runner's persistent model directory when its mount path is confirmed. Heavyweight
+DFlash2 and LiLiCorr measurements belong in the internal nightly performance/quality runs.
+
+The acceptance floors use one-sided regression checks: improvements do not fail. Three identical
+runs on the GB10 runner against the PR merged with current master produced MTP `0.6640 / 2.9766`,
+DFlash `0.2004 / 2.3687`, DSpark `0.3367 / 3.3246`, and EAGLE-3 `0.2606 / 1.7757` for acceptance
+rate and length. The compact floors subtract six percentage points and 0.2 accepted tokens per
+verification step. The six-point rate margin is wider than the largest observed cross-environment
+shift of 0.0506. Warm compact runs completed in about 40 seconds. The DFlash2 and LiLiCorr nightly
+floors retain their earlier three-point rate and 0.2 length margins.
+
+DFlash's token-acceptance rate is lower because the denominator counts every token proposed in each
+seven-token draft block. It accepted 219 of 1,093 proposed tokens over 160 verification steps,
+equivalent to 1.369 accepted draft tokens per step and a mean acceptance length of 2.3687. The floor
+is intended to detect regressions from that deterministic baseline, not to define a quality target.
+
 To run with stdout/stderr display in real time (verbose output, but useful for debugging):
 
 ```shell
@@ -76,7 +117,7 @@ Example using `gdb`:
 $ gdb --args ../../../build/bin/llama-server \
     --host 127.0.0.1 --port 8080 \
     --temp 0.8 --seed 42 \
-    --hf-repo ggml-org/models --hf-file tinyllamas/stories260K.gguf \
+    --hf-repo ggml-org-dev/stories260K --hf-file stories260K.gguf \
     --batch-size 32 --no-slots --alias tinyllama-2 --ctx-size 512 \
     --parallel 2 --n-predict 64
 ```

@@ -25,6 +25,7 @@
 		openModelSelector: () => {
 			calls.push('openModelSelector');
 		},
+		opensOnInput: () => true,
 		setCaretOffset: (o) => {
 			caretOffset = o;
 		},

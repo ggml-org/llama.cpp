@@ -14,12 +14,12 @@ except ImportError:
     SentencePieceProcessor: Any = None
 
 try:
-    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found, ty:unresolved-import]
-    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # ty: ignore[import-not-found]
+    from mistral_common.tokens.tokenizers.utils import ( # ty: ignore[import-not-found]
         _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # ty: ignore[import-not-found]
         SentencePieceTokenizer,
     )
 except ImportError:
@@ -32,7 +32,7 @@ else:
     _mistral_common_installed = True
 
 try:
-    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.utils import ( # ty: ignore[import-not-found]
         get_one_valid_tokenizer_file,
     )
 except ImportError:
@@ -352,21 +352,20 @@ class SpecialVocab:
                         continue
         if not tokenizer_config:
             return True
-        chat_template_alt = None
+        chat_template = tokenizer_config.get('chat_template')
         chat_template_json = path / 'chat_template.json'
         chat_template_jinja = path / 'chat_template.jinja'
         if chat_template_jinja.is_file():
             with open(chat_template_jinja, encoding = 'utf-8') as f:
-                chat_template_alt = f.read()
+                chat_template = f.read()
             if additional_templates := list((path / 'additional_chat_templates').glob('*.jinja')):
-                chat_template_alt = [{'name': 'default', 'template': chat_template_alt}]
+                chat_template = [{'name': 'default', 'template': chat_template}]
                 for template_path in additional_templates:
                     with open(template_path, encoding = 'utf-8') as fp:
-                        chat_template_alt.append({'name': template_path.stem, 'template': fp.read()})
+                        chat_template.append({'name': template_path.stem, 'template': fp.read()})
         elif chat_template_json.is_file():
             with open(chat_template_json, encoding = 'utf-8') as f:
-                chat_template_alt = json.load(f).get('chat_template')
-        chat_template = tokenizer_config.get('chat_template', chat_template_alt)
+                chat_template = json.load(f).get('chat_template')
         if chat_template is None or isinstance(chat_template, (str, list)):
             self.chat_template = chat_template
         else:
@@ -630,7 +629,8 @@ class LlamaHfVocab(Vocab):
             cache_dir=base_path,
             local_files_only=True,
         )
-        assert self.tokenizer.is_fast  # assume tokenizer.json is used  # ty: ignore[unresolved-attribute]
+        assert self.tokenizer is not None
+        assert self.tokenizer.is_fast  # assume tokenizer.json is used
 
         # Initialize lists and dictionaries for added tokens
         self.added_tokens_list = []
@@ -639,30 +639,31 @@ class LlamaHfVocab(Vocab):
 
         # Process added tokens
         for tok, tokidx in sorted(
-            self.tokenizer.get_added_vocab().items(), key=lambda x: x[1]  # ty: ignore[unresolved-attribute]
+            self.tokenizer.get_added_vocab().items(), key=lambda x: x[1]
         ):
             # Only consider added tokens that are not in the base vocabulary
-            if tokidx >= self.tokenizer.vocab_size:  # ty: ignore[unresolved-attribute]
+            if tokidx >= self.tokenizer.vocab_size:
                 self.added_tokens_list.append(tok)
                 self.added_tokens_dict[tok] = tokidx
                 self.added_tokens_ids.add(tokidx)
 
         # Store special tokens and their IDs
         self.specials = {
-            tok: self.tokenizer.get_vocab()[tok]  # ty: ignore[unresolved-attribute]
-            for tok in self.tokenizer.all_special_tokens  # ty: ignore[unresolved-attribute]
+            tok: self.tokenizer.get_vocab()[tok]
+            for tok in self.tokenizer.all_special_tokens
         }
-        self.special_ids = set(self.tokenizer.all_special_ids)  # ty: ignore[unresolved-attribute]
+        self.special_ids = set(self.tokenizer.all_special_ids)
 
         # Set vocabulary sizes
-        self.vocab_size_base = self.tokenizer.vocab_size  # ty: ignore[unresolved-attribute]
+        self.vocab_size_base = self.tokenizer.vocab_size
         self.vocab_size      = self.vocab_size_base + len(self.added_tokens_list)
 
         self.fname_tokenizer = fname_tokenizer
 
     def hf_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
+        assert self.tokenizer is not None
         reverse_vocab = {
-            id: encoded_tok for encoded_tok, id in self.tokenizer.get_vocab().items()  # ty: ignore[unresolved-attribute]
+            id: encoded_tok for encoded_tok, id in self.tokenizer.get_vocab().items()
         }
 
         for token_id in range(self.vocab_size_base):
@@ -703,7 +704,8 @@ class LlamaHfVocab(Vocab):
             yield text.encode("utf-8"), score, toktype
 
     def has_newline_token(self):
-        return "<0x0A>" in self.tokenizer.vocab or "\n" in self.tokenizer.vocab  # ty: ignore[unresolved-attribute]
+        assert self.tokenizer is not None
+        return "<0x0A>" in self.tokenizer.vocab or "\n" in self.tokenizer.vocab
 
     def all_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         yield from self.hf_tokens()

@@ -15,7 +15,8 @@ struct Params {
 
     ne0: u32,
     ne1: u32,
-    ne2: u32
+    ne2: u32,
+    nrows: u32
 };
 
 @group(0) @binding(2)
@@ -28,7 +29,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         @builtin(num_workgroups) num_wg: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
 
-    var i = wid.x + wid.y * num_wg.x;
+    let row = wid.x + wid.y * num_wg.x;
+    if (row >= params.nrows) {
+        return;
+    }
+    var i = row;
     let i3 = i / (params.ne2 * params.ne1);
     i = i % (params.ne2 * params.ne1);
     let i2 = i / params.ne1;
@@ -51,6 +56,10 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     }
 
     if (lid.x == 0) {
-        dst[params.offset_dst + wid.x] = shared_sum[0];
+#ifdef MEAN
+        dst[params.offset_dst + row] = shared_sum[0] / f32(params.ne0);
+#else
+        dst[params.offset_dst + row] = shared_sum[0];
+#endif
     }
 }

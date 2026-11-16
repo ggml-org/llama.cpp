@@ -1918,10 +1918,14 @@ select_read_interruptible(socket_t sock, time_t sec, time_t usec,
   while (!interrupted()) {
     auto left = std::chrono::duration_cast<std::chrono::microseconds>(
         deadline - std::chrono::steady_clock::now());
-    auto wait =
-        (std::max)((std::min)(left, slice), std::chrono::microseconds(0));
-    auto ret = select_impl(sock, POLLIN, 0, static_cast<time_t>(wait.count()));
-    if (ret != 0 || wait < slice) { return ret; }
+    auto last = left < slice;
+    // poll() takes whole milliseconds, so round the last wait up to keep it
+    // from ending before the deadline.
+    auto wait_usec = last ? (std::max)((left.count() + 999) / 1000 * 1000,
+                                       static_cast<decltype(left.count())>(0))
+                          : slice.count();
+    auto ret = select_impl(sock, POLLIN, 0, static_cast<time_t>(wait_usec));
+    if (ret != 0 || last) { return ret; }
   }
   return 0;
 }
@@ -4413,6 +4417,7 @@ bool redirect(T &cli, Request &req, Response &res,
                      Error &error) {
   Request new_req = req;
   new_req.path = path;
+  new_req.params.clear();
   new_req.redirect_count_ -= 1;
 
   if (res.status == StatusCode::SeeOther_303 &&
@@ -7698,7 +7703,16 @@ bool ThreadPool::enqueue(std::function<void()> fn) {
     if (jobs_.size() > idle_thread_count_ &&
         threads_.size() + dynamic_threads_.size() < max_thread_count_) {
       cleanup_finished_threads();
-      dynamic_threads_.emplace_back(std::thread([this]() { worker(true); }));
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+      try {
+#endif
+        dynamic_threads_.emplace_back(std::thread([this]() { worker(true); }));
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+      } catch (const std::system_error &) {
+        // No thread budget left: keep the job queued for an existing worker
+        // instead of letting the exception escape the accept loop.
+      }
+#endif
     }
   }
 
@@ -7937,7 +7951,8 @@ ssize_t SocketStream::read(char *ptr, size_t size) {
 ssize_t SocketStream::write(const char *ptr, size_t size) {
   if (!wait_writable()) { return -1; }
 
-#if defined(_WIN32) && !defined(_WIN64)
+  // Winsock's send() takes an int length, even on 64-bit Windows
+#ifdef _WIN32
   size =
       (std::min)(size, static_cast<size_t>((std::numeric_limits<int>::max)()));
 #endif
@@ -8152,14 +8167,22 @@ make_host_and_port_string_always_port(const std::string &host, int port) {
   return prepare_host_string(host) + ":" + std::to_string(port);
 }
 
+// Where a client connects for `host`, as one string: the mapped address or
+// name, or `host` itself.
+std::string
+addr_map_target(const std::map<std::string, std::string> &addr_map,
+                const std::string &host) {
+  std::string connect_host;
+  std::string ip;
+  apply_addr_map(addr_map, host, connect_host, ip);
+  return ip.empty() ? connect_host : ip;
+}
+
 // Request target of a CONNECT for `host`, with `addr_map` applied.
 std::string
 make_connect_request_target(const std::map<std::string, std::string> &addr_map,
                             const std::string &host, int port) {
-  std::string connect_host;
-  std::string ip;
-  apply_addr_map(addr_map, host, connect_host, ip);
-  return make_host_and_port_string_always_port(ip.empty() ? connect_host : ip,
+  return make_host_and_port_string_always_port(addr_map_target(addr_map, host),
                                                port);
 }
 
@@ -10352,7 +10375,10 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   if ((req.method == "GET" || req.method == "HEAD") &&
       req.has_header("Range")) {
     const auto &range_header_value = req.get_header_value("Range");
-    if (!detail::parse_range_header(range_header_value, req.ranges)) {
+    // RFC 9110 14.2: a range unit other than bytes must be ignored
+    auto unit = range_header_value.substr(0, range_header_value.find('='));
+    if (detail::case_ignore::equal(unit, "bytes") &&
+        !detail::parse_range_header(range_header_value, req.ranges)) {
       connection_closed = true;
       res.status = StatusCode::RangeNotSatisfiable_416;
       output_error_log(Error::InvalidRangeHeader, &req);
@@ -10881,6 +10907,9 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
     // socket.
     socket_should_be_closed_when_request_is_done_ = false;
 
+    // A redirect or a retry sent inside a request keeps its stop()
+    if (socket_requests_in_flight_ == 0) { stop_requested_ = false; }
+
     if (!socket_reusable()) {
       if (!ensure_socket_connection(socket_, error)) { return false; }
 
@@ -10928,6 +10957,7 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
   });
 
   ret = process_socket(socket_, req.start_time_, [&](Stream &strm) {
+    strm.set_read_interrupt([this] { return stop_requested_.load(); });
     return handle_request(strm, req, res, close_connection, error);
   });
 
@@ -11540,8 +11570,13 @@ bool ClientImpl::redirect(Request &req, Response &res, Error &error) {
 
   auto path = std::move(next_path) + next_query;
 
+  // A Unix socket client sends "Host: localhost", so a Location naming
+  // localhost names this client too.
+  auto is_same_host = next_host == host_ ||
+                      (address_family_ == AF_UNIX && next_host == "localhost");
+
   // Same host redirect - use current client
-  if (next_scheme == scheme && next_host == host_ && next_port == port_) {
+  if (next_scheme == scheme && is_same_host && next_port == port_) {
     return detail::redirect(*this, req, res, path, location, error);
   }
 
@@ -11692,6 +11727,14 @@ void ClientImpl::setup_redirect_client(ClientType &client) {
   // Copy network and socket settings
   client.addr_map_ = addr_map_;
   client.tunnel_addr_map_ = tunnel_addr_map_;
+
+  // A Unix socket client reaches every host through its own socket, as curl's
+  // --unix-socket does, unless the caller mapped that host elsewhere. The
+  // Location's host is never taken as a socket path.
+  if (address_family_ == AF_UNIX) {
+    auto &target = client.addr_map_[client.host()];
+    if (target.empty()) { target = detail::addr_map_target(addr_map_, host_); }
+  }
   client.set_address_family(address_family_);
   client.set_tcp_nodelay(tcp_nodelay_);
   client.set_ipv6_v6only(ipv6_v6only_);
@@ -13146,6 +13189,9 @@ void ClientImpl::stop() {
   // are not thread-safe.
   if (socket_requests_in_flight_ > 0) {
     shutdown_socket(socket_);
+    // shutdown() does not wake a read waiting in WSAPoll on Windows, so the
+    // request's reads also give up once they see this flag.
+    stop_requested_ = true;
 
     // Aside from that, we set a flag for the socket to be closed when we're
     // done.
@@ -18108,6 +18154,9 @@ ssize_t read(session_t session, void *buf, size_t len, TlsError &err) {
   }
 
   auto wsession = static_cast<impl::WolfSSLSession *>(session);
+  constexpr auto max_len =
+      static_cast<size_t>((std::numeric_limits<int>::max)());
+  if (len > max_len) { len = max_len; }
   int ret = wolfSSL_read(wsession->ssl, buf, static_cast<int>(len));
 
   if (ret > 0) {

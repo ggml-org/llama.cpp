@@ -566,7 +566,7 @@ static std::optional<gguf_remote_model> fetch_and_parse(
 
 static std::filesystem::path get_cache_file_path(const std::filesystem::path & cdir, const std::string & repo_part, const std::string & filename) {
     std::string fname_part = sanitize_for_path(filename);
-    return cdir / std::filesystem::u8path(repo_part + "--" + fname_part + ".partial");
+    return cdir / std::filesystem::path(repo_part + "--" + fname_part + ".partial");
 }
 
 // Try cache first, then fetch and parse a single GGUF shard.
@@ -601,7 +601,7 @@ std::optional<gguf_remote_model> gguf_fetch_model_meta(
         const std::string & quant,
         const std::string & cache_dir,
         bool verbose) {
-    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::u8path(cache_dir);
+    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::path(cache_dir);
     std::string repo_part = sanitize_for_path(repo);
 
     std::string split_prefix;
@@ -662,7 +662,7 @@ gguf_context_ptr gguf_fetch_gguf_ctx(
         const std::string & quant,
         const std::string & cache_dir,
         bool verbose) {
-    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::u8path(cache_dir);
+    const std::filesystem::path cdir = cache_dir.empty() ? get_default_cache_dir() : std::filesystem::path(cache_dir);
     std::string repo_part = sanitize_for_path(repo);
 
     std::string split_prefix;

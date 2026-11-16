@@ -16,6 +16,7 @@
 #include <atomic>
 #include <clocale>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -202,6 +203,30 @@ static void print_cases() {
     printf("\nthe [rs] cases are also run against a cache pre-filled with a known pattern\n\n");
 }
 
+static unsigned test_hardware_concurrency() {
+    const char * env = std::getenv("TEST_ARG_HARDWARE_CONCURRENCY");
+    if (env != nullptr) {
+        const long n = std::strtol(env, nullptr, 10);
+        if (n > 0) {
+            return (unsigned) n;
+        }
+    }
+
+    return std::thread::hardware_concurrency();
+}
+
+static int test_parallel_workers(int default_workers) {
+    const char * env = std::getenv("TEST_ARG_PARALLEL_WORKERS");
+    if (env != nullptr) {
+        const long n = std::strtol(env, nullptr, 10);
+        if (n > 0) {
+            return (int) n;
+        }
+    }
+
+    return default_workers;
+}
+
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -220,7 +245,7 @@ int main(int argc, char ** argv) {
     bool list_cases        = false;
     bool dump_logs_on_fail = true;
 
-    int parallel_workers = 0; // 0 = auto, same flag as in test-backend-ops
+    int parallel_workers = test_parallel_workers(0);
 
     auto parse_parallel_workers = [&](const char * flag, const char * value) {
         try {
@@ -401,7 +426,7 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    const unsigned n_hw_2 = std::thread::hardware_concurrency() / 2;
+    const unsigned n_hw_2 = test_hardware_concurrency() / 2;
     const size_t   n_auto = std::max<size_t>(1, std::min<size_t>(n_hw_2, 4));
     const size_t   n_pool = parallel_workers > 0
         ? std::min<size_t>((size_t) parallel_workers, models.size())

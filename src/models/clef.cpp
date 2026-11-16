@@ -99,7 +99,7 @@ void llama_model_clef::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_clef::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // spans read by the head, [start, end) in ubatch token indices
@@ -243,14 +243,11 @@ public:
 };
 
 // the backbone is copied from llama_model_qwen35::graph, without the memory module
-llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(static_cast<const llama_model_clef &>(model_base)) {
+llama_model_clef::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params), model(static_cast<const llama_model_clef &>(*params.model)) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
-
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
     ggml_tensor * cur;
     ggml_tensor * inpL;
@@ -274,7 +271,7 @@ llama_model_clef::graph::graph(const llama_model & model_base, const llm_graph_p
         if (hparams.is_recr(il)) {
             cur = build_layer_attn_linear(cur, il);
         } else {
-            cur = build_layer_attn(inp_attn, cur, inp_pos, sections, il);
+            cur = build_layer_attn(inp_attn, cur, inp_pos, il);
         }
 
         cur = ggml_add(ctx0, cur, inpSA);
@@ -359,7 +356,6 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
         llm_graph_input_attn_no_cache * inp,
         ggml_tensor *                   cur,
         ggml_tensor *                   inp_pos,
-        int *                           sections,
         int                             il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -389,17 +385,8 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = ggml_rope_multi(
-            ctx0, Qcur, inp_pos, nullptr,
-            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow
-            );
-
-    Kcur = ggml_rope_multi(
-            ctx0, Kcur, inp_pos, nullptr,
-            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow
-            );
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
@@ -470,16 +457,9 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn_linear(
     q_conv = build_gdn_l2_norm(ctx0, q_conv, hparams.f_norm_rms_eps);
     k_conv = build_gdn_l2_norm(ctx0, k_conv, hparams.f_norm_rms_eps);
 
-    // note: need explicit repeat only if we are not using the fused GDN
-    if (num_k_heads != num_v_heads && (!cparams.fused_gdn_ar || !cparams.fused_gdn_ch)) {
-        GGML_ASSERT(num_v_heads % num_k_heads == 0);
-        q_conv = ggml_repeat_4d(ctx0, q_conv, head_k_dim, num_v_heads, n_tokens, n_seqs);
-        k_conv = ggml_repeat_4d(ctx0, k_conv, head_k_dim, num_v_heads, n_tokens, n_seqs);
-    }
-
     ggml_tensor * state = ggml_fill(ctx0, ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, head_v_dim, head_v_dim, num_v_heads, n_seqs), 0.0f);
 
-    ggml_tensor * output = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state, il).first;
+    ggml_tensor * output = build_delta_net(q_conv, k_conv, v_conv, gate, beta, state).first;
     cb(output, "attn_output", il);
 
     // gated normalization

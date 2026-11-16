@@ -90,7 +90,7 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_minimax_m3::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 class llm_graph_input_msa : public llm_graph_input_i {
@@ -207,7 +207,7 @@ ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_fa(
     return ggml_reshape_2d(ctx0, o, D*HQ, T);
 }
 
-llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_minimax_m3::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     const auto & mm = static_cast<const llama_model_minimax_m3 &>(model);
 
@@ -318,14 +318,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             cb(Kcur, "Kcur_normed", il);
 
             // partial rotary: only the first n_rot dims are rotated
-            Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
-            Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -347,10 +341,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 ik = ggml_reshape_3d(ctx0, ik, n_idx_dim, 1,  n_tokens);
                 iq = build_norm(iq, model.layers[il].index_q_norm, NULL, LLM_NORM_RMS, il);  // +1 baked
                 ik = build_norm(ik, model.layers[il].index_k_norm, NULL, LLM_NORM_RMS, il);
-                iq = ggml_rope_ext(ctx0, iq, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
-                                   freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
-                ik = ggml_rope_ext(ctx0, ik, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig,
-                                   freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                iq = build_rope(iq, inp_pos, il);
+                ik = build_rope(ik, inp_pos, il);
 
                 const auto * mctx_msa_l = static_cast<const llama_kv_cache_msa_context *>(mctx);
                 const auto * mctx_cur = mctx_msa_l->get_base();
@@ -394,6 +386,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                     ggml_tensor * iq4 = ggml_reshape_4d(ctx0, iq, n_idx_dim, Hd, 1, ns);
                     ggml_tensor * sc  = ggml_mul_mat(ctx0,
                             ggml_reshape_4d(ctx0, ikp, n_idx_dim, n_ps, 1, ns), iq4);
+                    // the reference computes the indexer scores in F32: https://github.com/huggingface/transformers/blob/0f53828e83f2212060233d2ea552cc76617b8712/src/transformers/models/minimax_m3_vl/modeling_minimax_m3_vl.py#L562
                     ggml_prec_set_acc(sc, GGML_PREC_F32);
                     // unmapped positions come out -inf, so they can never rank into the top-k
                     sc = ggml_add_inplace(ctx0, sc,
@@ -475,7 +468,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         ggml_tensor * ikp = ggml_get_rows(ctx0, ik_s, psl_s);   // [n_idx_dim, n_ps]
                         ggml_tensor * sc = ggml_mul_mat(ctx0, ikp,
                                 ggml_reshape_2d(ctx0, iq_s, n_idx_dim, Hd*n_tps));
-                        // indexer scores run in F32
+                        // the reference computes the indexer scores in F32: https://github.com/huggingface/transformers/blob/0f53828e83f2212060233d2ea552cc76617b8712/src/transformers/models/minimax_m3_vl/modeling_minimax_m3_vl.py#L562
                         ggml_prec_set_acc(sc, GGML_PREC_F32);
                         sc = ggml_reshape_3d(ctx0, sc, n_ps, Hd, n_tps);
                         // unmapped positions (holes, padding, empty cells) come out -inf

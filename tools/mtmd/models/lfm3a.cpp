@@ -2,7 +2,7 @@
 
 // streaming encoder state: base position, conv left context, short-conv taps and attention window
 // a zero state gives the same result as encoding the whole clip
-std::vector<c2w_state_slot> list_lfm3a_state_slots(const clip_hparams & hparams, const clip_model & model) {
+std::vector<c2w_state_slot> list_lfm3a_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     std::vector<c2w_state_slot> slots;
 
     const int64_t n_mel  = hparams.n_mel_bins;
@@ -27,7 +27,7 @@ std::vector<c2w_state_slot> list_lfm3a_state_slots(const clip_hparams & hparams,
 }
 
 // LFM3-Audio encoder: conv downsampler (8x in time) -> causal LFM2 stack -> MLP projector
-ggml_cgraph * clip_graph_lfm3a::build() {
+ggml_cgraph * mtmd_graph_lfm3a::build() {
     const norm_type norm_t = NORM_TYPE_RMS;
     const float rope_theta = hparams.rope_theta;
     const int64_t prefix   = hparams.attn_window_size - 1;

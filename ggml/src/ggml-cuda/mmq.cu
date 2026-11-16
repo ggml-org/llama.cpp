@@ -169,21 +169,27 @@ void ggml_cuda_mul_mat_q(
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     // Fused gate/up/GLU: src0 is the up weight, dst the GLU output.
+    // Fused scale (no gate): dst is the MUL that applies the weight scale to the MUL_MAT.
     const ggml_tensor * gate = fusion ? fusion->gate : nullptr;
     ggml_cuda_mm_fusion_args_device fusion_device = {};
     if (fusion) {
-        GGML_ASSERT(gate && !fusion->x_bias && !fusion->gate_bias && !fusion->x_scale == !fusion->gate_scale);
-        GGML_ASSERT(gate->type == src0->type && ggml_are_same_shape(gate, src0) && ggml_are_same_stride(gate, src0));
+        GGML_ASSERT(!fusion->x_bias && !fusion->gate_bias);
         // NVFP4 weight scales (only applied for NVFP4): one value per tensor, or one per expert with ids.
         for (const ggml_tensor * scale : { fusion->x_scale, fusion->gate_scale }) {
             GGML_ASSERT(!scale || (src0->type == GGML_TYPE_NVFP4 && scale->type == GGML_TYPE_F32 && ggml_is_contiguous(scale) &&
                 ggml_nelements(scale) == (ids ? src0->ne[2] : 1)));
         }
-        fusion_device.gate       = gate->data;
-        fusion_device.x_scale    = fusion->x_scale    ? fusion->x_scale->data    : nullptr;
-        fusion_device.gate_scale = fusion->gate_scale ? fusion->gate_scale->data : nullptr;
-        fusion_device.glu_op     = fusion->glu_op;
-        fusion_device.glu_limit  = fusion->glu_limit;
+        if (gate) {
+            GGML_ASSERT(!fusion->x_scale == !fusion->gate_scale);
+            GGML_ASSERT(gate->type == src0->type && ggml_are_same_shape(gate, src0) && ggml_are_same_stride(gate, src0));
+            fusion_device.gate       = gate->data;
+            fusion_device.gate_scale = fusion->gate_scale ? fusion->gate_scale->data : nullptr;
+            fusion_device.glu_op     = fusion->glu_op;
+            fusion_device.glu_limit  = fusion->glu_limit;
+        } else {
+            GGML_ASSERT(!fusion->gate_scale && fusion->x_scale);
+        }
+        fusion_device.x_scale = fusion->x_scale ? fusion->x_scale->data : nullptr;
     }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
@@ -231,8 +237,8 @@ void ggml_cuda_mul_mat_q(
 
     const bool fallback = ggml_cuda_mmq_needs_fallback(ne01);
 
-    // With fusion dst is the GLU output, not a MUL_MAT; the src1 precision requested by both fused MUL_MATs is in the fusion args.
-    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, gate ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
+    // With fusion dst is the GLU output or the scale node, not a MUL_MAT; the src1 precision requested by the fused MUL_MATs is in the fusion args.
+    const ggml_prec prec_src1 = ggml_cuda_mmq_get_prec_src1(src0->type, fusion ? fusion->prec_src1 : ggml_prec_get_src(dst, 1), cc);
 
     const bool use_native_fp4 = prec_src1 == GGML_PREC_Q4;
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
@@ -247,10 +253,7 @@ void ggml_cuda_mul_mat_q(
             ncols_opt = ne12;
 
             // Each expert only sees ne12*n_expert_used/ne02 tokens on average.
-            // On RDNA3 and RDNA4 it is faster to pick the tile size against this value instead of ne12.
-            if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-                ncols_opt = (ne12*n_expert_used + ne02 - 1) / ne02;
-            }
+            ncols_opt = (ne12*n_expert_used + ne02 - 1) / ne02;
         }
 
         J_best = ggml_cuda_mmq_get_J_best(src0->type, ncols_opt, fallback, cc, smpbo, prec_src1, &nthreads_best);
@@ -264,6 +267,8 @@ void ggml_cuda_mul_mat_q(
         * src1_load_chunk_size;
 
     if (!ids) {
+        const int ntj = (ne1 + J_best - 1) / J_best;
+
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * y_block_size/y_values_per_block + src1_q8_1_padding;
         ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
         ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
@@ -301,7 +306,7 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            ne1, J_best, fusion_device};
+            ntj, J_best, fusion_device};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, prec_src1);
         return;
     }
@@ -316,7 +321,9 @@ void ggml_cuda_mul_mat_q(
 
     ggml_cuda_pool_alloc<int32_t> ids_src1(ctx.pool(), ne_get_rows);
     ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool(), ne_get_rows + J_best-1); // Needs to be padded for unconditional memory access.
-    ggml_cuda_pool_alloc<int32_t> expert_bounds(ctx.pool(), ne02 + 1);
+
+    const int ntj = (ne_get_rows + J_best - 1) / J_best + ne02;
+    ggml_cuda_pool_alloc<ggml_cuda_mm_id_tile_spec> tile_spec(ctx.pool(), ntj);
 
     // gate/up activations are broadcast across experts (ne11 == 1): quantize each token once and
     // scatter to its slots. ids_src1 then holds the inverse map (token slot -> compact row).
@@ -327,8 +334,8 @@ void ggml_cuda_mul_mat_q(
         const int si1  = ids->nb[1] / ggml_element_size(ids);
         const int sis1 = nb12 / nb11;
 
-        ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-            ne02, ne12, n_expert_used, ne11, si1, sis1, /*write_inverse =*/ dedup_bcast, stream);
+        ggml_cuda_launch_mm_ids_helper((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), tile_spec.get(),
+            ne02, ne12, n_expert_used, ne11, J_best, si1, sis1, /*write_inverse =*/ dedup_bcast, stream);
         CUDA_CHECK(cudaGetLastError());
     }
 
@@ -375,12 +382,12 @@ void ggml_cuda_mul_mat_q(
 
     // Note that ne02 is used instead of ne12 because the number of y channels determines the z dimension of the CUDA grid.
     const mmq_args args = {
-        src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), expert_bounds.get(), dst_d,
+        src0_d, src0->type, (const int *) src1_q8_1.get(), ids_dst.get(), tile_spec.get(), dst_d,
         src1_scale.ptr,
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
-        ne02, ne02, s02, s12, s2,
+        ne02,    1, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        ne12, J_best, fusion_device};
+        ntj, J_best, fusion_device};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream, prec_src1);
 }
