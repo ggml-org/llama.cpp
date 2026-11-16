@@ -1,5 +1,6 @@
 #include "mmvq-q8-cdna.cuh"
 #include "ggml-cuda/quantize.cuh"
+#include "ggml-cuda/unary.cuh"
 
 #include <algorithm>
 #include <climits>
@@ -75,14 +76,17 @@ static __device__ __forceinline__ float mmvq_q8_cdna_group_sum(float x) {
 
 // ks == 1: a group of lpr lanes of a wave per row, the waves work on different rows.
 // ks  > 1: the ks waves of a block split the row, each wave then needs lpr == 64. For matrices with few rows.
-template <int ncols, int nsteps, int lpr, int ks>
+// has_gate: dst = glu(gate*y, x*y), gate has the same layout as x.
+template <int ncols, int nsteps, int lpr, int ks, bool has_gate>
 __launch_bounds__(MMVQ_Q8_CDNA_NWARPS*64, 1)
 static __global__ void mul_mat_vec_q8_cdna(
-        const char * __restrict__ x, const block_q8_1 * __restrict__ y, float * __restrict__ dst,
-        const int nb, const int nrows, const int stride_row, const int stride_col_y, const int stride_col_dst) {
+        const char * __restrict__ x, const char * __restrict__ gate, const block_q8_1 * __restrict__ y, float * __restrict__ dst,
+        const int nb, const int nrows, const int stride_row, const int stride_col_y, const int stride_col_dst,
+        const ggml_glu_op glu_op, const float glu_limit) {
 #if defined(CDNA)
     constexpr int nwarps = MMVQ_Q8_CDNA_NWARPS;
     static_assert(ks == 1 || (ks == nwarps && lpr == 64), "unsupported split");
+    static_assert(!has_gate || (ncols == 1 && ks == 1), "unsupported gate");
     constexpr int lprt   = lpr*ks;                   // lanes per row
     constexpr int gpw    = ks == 1 ? 64/lpr : 1;     // rows per group of a wave resp. block
     constexpr int ncp    = mmvq_q8_cdna_ncp(ncols);
@@ -106,7 +110,7 @@ static __global__ void mul_mat_vec_q8_cdna(
     const int last    = nb - 1 - j; // steps beyond the row load its last block again
 
     // rows beyond nrows load the last row again. 32 bit offsets from the uniform x take fewer registers than 64 bit addresses.
-    auto load = [&](mmvq_q8_cdna_x (&xb)[nsteps], int & off, const int g) {
+    auto load = [&](mmvq_q8_cdna_x (&xb)[nsteps], mmvq_q8_cdna_x (&xg)[nsteps], int & off, const int g) {
         const int      row = min(g*gpw + (ks == 1 ? lane/lpr : 0), nrows - 1);
         const uint32_t o   = row*stride_row + 34*j;
         off = o % 4;
@@ -118,13 +122,24 @@ static __global__ void mul_mat_vec_q8_cdna(
             xb[s].b = mmvq_q8_cdna_load_b4(x + (ob & ~3u) + 16);
             xb[s].c = mmvq_q8_cdna_load_b2(x + (ob + 30));
         }
+        if constexpr (has_gate) {
+#pragma unroll
+            for (int s = 0; s < nsteps; ++s) {
+                const uint32_t ob = o + 34*min(lprt*s, last);
+                xg[s].a = mmvq_q8_cdna_load_b4(gate + (ob & ~3u));
+                xg[s].b = mmvq_q8_cdna_load_b4(gate + (ob & ~3u) + 16);
+                xg[s].c = mmvq_q8_cdna_load_b2(gate + (ob + 30));
+            }
+        }
     };
 
     mmvq_q8_cdna_x xb0[nsteps];
     mmvq_q8_cdna_x xb1[nsteps];
+    [[maybe_unused]] mmvq_q8_cdna_x xg0[nsteps];
+    [[maybe_unused]] mmvq_q8_cdna_x xg1[nsteps];
     int off0;
     int off1;
-    load(xb0, off0, unit);
+    load(xb0, xg0, off0, unit);
 
     int4  yra[y_lds ? 1 : ncp*nsteps];
     int4  yrb[y_lds ? 1 : ncp*nsteps];
@@ -162,9 +177,7 @@ static __global__ void mul_mat_vec_q8_cdna(
 
     // lane j keeps the result of column min(j, ncols - 1), all lanes store: a branch at the store makes the waits for the loads conservative
     const int jc = min(j, ncols - 1);
-    auto compute = [&](const mmvq_q8_cdna_x (&xb)[nsteps], const int off, const int g, const int buf) {
-        int   qs[nsteps][8];
-        float dx[nsteps];
+    auto decode = [&](const mmvq_q8_cdna_x (&xb)[nsteps], const int off, int (&qs)[nsteps][8], float (&dx)[nsteps]) {
         const unsigned int sel = off == 0 ? 0x05040302 : 0x07060504; // bytes [2 + off, 6 + off) of w[i], w[i + 1]
 #pragma unroll
         for (int s = 0; s < nsteps; ++s) {
@@ -177,29 +190,53 @@ static __global__ void mul_mat_vec_q8_cdna(
             const int d = __builtin_amdgcn_alignbyte(w[1], w[0], off) & 0xFFFF;
             dx[s] = lprt*s <= last ? __half2float(__ushort_as_half((unsigned short) d)) : 0.0f;
         }
+    };
+
+    auto dot = [&](const int (&q)[8], const int4 ua, const int4 ub) {
+        int sumi = 0;
+        sumi = ggml_cuda_dp4a(q[0], ua.x, sumi);
+        sumi = ggml_cuda_dp4a(q[1], ua.y, sumi);
+        sumi = ggml_cuda_dp4a(q[2], ua.z, sumi);
+        sumi = ggml_cuda_dp4a(q[3], ua.w, sumi);
+        sumi = ggml_cuda_dp4a(q[4], ub.x, sumi);
+        sumi = ggml_cuda_dp4a(q[5], ub.y, sumi);
+        sumi = ggml_cuda_dp4a(q[6], ub.z, sumi);
+        sumi = ggml_cuda_dp4a(q[7], ub.w, sumi);
+        return sumi;
+    };
+
+    auto compute = [&](const mmvq_q8_cdna_x (&xb)[nsteps], const mmvq_q8_cdna_x (&xg)[nsteps], const int off, const int g, const int buf) {
+        int   qs[nsteps][8];
+        float dx[nsteps];
+        decode(xb, off, qs, dx);
+        [[maybe_unused]] int   qsg[nsteps][8];
+        [[maybe_unused]] float dxg[nsteps];
+        if constexpr (has_gate) {
+            decode(xg, off, qsg, dxg);
+        }
 
         float res = 0.0f;
+        [[maybe_unused]] float res_gate = 0.0f;
 #pragma unroll 2
         for (int c = 0; c < ncp; ++c) {
             float sum = 0.0f;
+            [[maybe_unused]] float sum_gate = 0.0f;
 #pragma unroll
             for (int s = 0; s < nsteps; ++s) {
                 const int   ib = c*nb + j + min(lprt*s, last);
                 const int4  ua = y_lds ? yqa[ib] : yra[c*nsteps + s];
                 const int4  ub = y_lds ? yqb[ib] : yrb[c*nsteps + s];
                 const float dy = y_lds ? yd[ib]  : yrd[c*nsteps + s];
-                int sumi = 0;
-                sumi = ggml_cuda_dp4a(qs[s][0], ua.x, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][1], ua.y, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][2], ua.z, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][3], ua.w, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][4], ub.x, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][5], ub.y, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][6], ub.z, sumi);
-                sumi = ggml_cuda_dp4a(qs[s][7], ub.w, sumi);
-                sum += dx[s]*dy*float(sumi);
+                sum += dx[s]*dy*float(dot(qs[s], ua, ub));
+                if constexpr (has_gate) {
+                    sum_gate += dxg[s]*dy*float(dot(qsg[s], ua, ub));
+                }
             }
             sum = mmvq_q8_cdna_group_sum<lpr>(sum);
+            if constexpr (has_gate) {
+                sum_gate = mmvq_q8_cdna_group_sum<lpr>(sum_gate);
+                res_gate = c == jc ? sum_gate : res_gate;
+            }
             if constexpr (ks == 1) {
                 res = c == jc ? sum : res;
             } else {
@@ -213,6 +250,9 @@ static __global__ void mul_mat_vec_q8_cdna(
                 res += ps[(buf*ncp + jc)*ks + k];
             }
         }
+        if constexpr (has_gate) {
+            res = ggml_cuda_op_glu_single(glu_op, res_gate, res, glu_limit);
+        }
         // rows beyond nrows store the last row again, with the same value
         const int row = min(g*gpw + (ks == 1 ? lane/lpr : 0), nrows - 1);
         dst[jc*stride_col_dst + row] = res;
@@ -220,16 +260,16 @@ static __global__ void mul_mat_vec_q8_cdna(
 
     int g = unit;
     for (; g + nunits < ngroups; g += 2*nunits) {
-        load(xb1, off1, g + nunits);
-        compute(xb0, off0, g, 0);
-        load(xb0, off0, g + 2*nunits);
-        compute(xb1, off1, g + nunits, 1);
+        load(xb1, xg1, off1, g + nunits);
+        compute(xb0, xg0, off0, g, 0);
+        load(xb0, xg0, off0, g + 2*nunits);
+        compute(xb1, xg1, off1, g + nunits, 1);
     }
     if (g < ngroups) {
-        compute(xb0, off0, g, 0);
+        compute(xb0, xg0, off0, g, 0);
     }
 #else
-    GGML_UNUSED_VARS(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst);
+    GGML_UNUSED_VARS(x, gate, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu_op, glu_limit);
     NO_DEVICE_CODE;
 #endif // defined(CDNA)
 }
@@ -261,10 +301,17 @@ static size_t mmvq_q8_cdna_nbytes_shared(const int ncols, const int nb, const mm
     return cfg.ks == 1 ? ncp*nb*(2*sizeof(int4) + sizeof(float)) : 2*ncp*cfg.ks*sizeof(float);
 }
 
-template <int ncols, int nsteps, int lpr, int ks>
+// optional gate matrix and GLU applied to (gate*y, x*y)
+struct mmvq_q8_cdna_glu {
+    const char * gate;
+    ggml_glu_op  op;
+    float        limit;
+};
+
+template <int ncols, int nsteps, int lpr, int ks, bool has_gate = false>
 static void launch_mul_mat_vec_q8_cdna(
         const char * x, const block_q8_1 * y, float * dst, const int nb, const int nrows, const int stride_row,
-        const int stride_col_y, const int stride_col_dst, const int nsm, cudaStream_t stream) {
+        const int stride_col_y, const int stride_col_dst, const mmvq_q8_cdna_glu & glu, const int nsm, cudaStream_t stream) {
     constexpr int gpw = ks == 1 ? 64/lpr : 1;
     constexpr int upb = ks == 1 ? MMVQ_Q8_CDNA_NWARPS : 1; // row groups per block
     const int ngroups = (nrows + gpw - 1)/gpw;
@@ -274,28 +321,40 @@ static void launch_mul_mat_vec_q8_cdna(
 
     // all blocks at once, each wave gets the same number of row groups
     int max_blocks_per_cu = 1;
-    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_cu, mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks>,
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_cu, mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks, has_gate>,
         block_dims.x*block_dims.y, nbytes_shared));
     const int max_units = std::max(max_blocks_per_cu, 1)*nsm*upb;
     const int nrounds   = (ngroups + max_units - 1)/max_units;
     const int nunits    = (ngroups + nrounds - 1)/nrounds;
 
     const dim3   block_nums((nunits + upb - 1)/upb, 1, 1);
-    mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks><<<block_nums, block_dims, nbytes_shared, stream>>>
-        (x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst);
+    mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks, has_gate><<<block_nums, block_dims, nbytes_shared, stream>>>
+        (x, glu.gate, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu.op, glu.limit);
 }
 
 template <int ncols>
 static void mul_mat_vec_q8_cdna_switch_config(
         const char * x, const block_q8_1 * y, float * dst, const int nb, const int nrows, const int stride_row,
-        const int stride_col_y, const int stride_col_dst, const int nsm, cudaStream_t stream) {
+        const int stride_col_y, const int stride_col_dst, const mmvq_q8_cdna_glu & glu, const int nsm, cudaStream_t stream) {
     const mmvq_q8_cdna_config cfg = mmvq_q8_cdna_get_config(nb, nrows, nsm);
     if constexpr (ncols == 1) {
+        if (glu.gate) {
+            GGML_ASSERT(cfg.ks == 1);
+            switch (cfg.lpr*16 + cfg.nsteps) {
+                case 16*16 + 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 16, 1, true>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+                case 16*16 + 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 16, 1, true>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+                case 64*16 + 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 64, 1, true>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+                case 64*16 + 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 64, 1, true>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+                case 64*16 + 3: launch_mul_mat_vec_q8_cdna<ncols, 3, 64, 1, true>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+                default: GGML_ABORT("fatal error");
+            }
+            return;
+        }
         if (cfg.ks > 1) {
             GGML_ASSERT(cfg.ks == MMVQ_Q8_CDNA_NWARPS && cfg.lpr == 64);
             switch (cfg.nsteps) {
-                case 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 64, MMVQ_Q8_CDNA_NWARPS>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
-                case 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 64, MMVQ_Q8_CDNA_NWARPS>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
+                case 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 64, MMVQ_Q8_CDNA_NWARPS>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+                case 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 64, MMVQ_Q8_CDNA_NWARPS>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
                 default: GGML_ABORT("fatal error");
             }
             return;
@@ -303,18 +362,29 @@ static void mul_mat_vec_q8_cdna_switch_config(
     }
     GGML_ASSERT(cfg.ks == 1);
     switch (cfg.lpr*16 + cfg.nsteps) {
-        case 16*16 + 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 16, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 16*16 + 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 16, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 64*16 + 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 64, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 64*16 + 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 64, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 64*16 + 3: launch_mul_mat_vec_q8_cdna<ncols, 3, 64, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, nsm, stream); break;
+        case 16*16 + 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 16, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 16*16 + 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 16, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 64*16 + 1: launch_mul_mat_vec_q8_cdna<ncols, 1, 64, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 64*16 + 2: launch_mul_mat_vec_q8_cdna<ncols, 2, 64, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 64*16 + 3: launch_mul_mat_vec_q8_cdna<ncols, 3, 64, 1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); break;
         default: GGML_ABORT("fatal error");
     }
 }
 
-bool ggml_hip_should_use_mmvq_q8_cdna(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst, const int cc) {
+bool ggml_hip_should_use_mmvq_q8_cdna(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst, const int cc,
+        const ggml_cuda_mm_fusion_args_host * fusion) {
     if (!GGML_CUDA_CC_IS_CDNA1(cc) || src0->type != GGML_TYPE_Q8_0) {
         return false;
+    }
+    // fusion: only gate + GLU for 1 column
+    if (fusion) {
+        if (!fusion->gate || fusion->x_bias || fusion->gate_bias || fusion->x_scale || fusion->gate_scale || fusion->shared_up) {
+            return false;
+        }
+        if (src1->ne[1] != 1 || fusion->gate->type != src0->type || !ggml_are_same_stride(fusion->gate, src0) ||
+                (uintptr_t) fusion->gate->data % 4 != 0) {
+            return false;
+        }
     }
     const int64_t ncols = src1->ne[1];
     const int64_t nb    = src0->ne[0]/QK8_0;
@@ -342,11 +412,15 @@ bool ggml_hip_should_use_mmvq_q8_cdna(const ggml_tensor * src0, const ggml_tenso
     if ((cfg.ks > 1 && ncols > 1) || (ncols == 2 && nb > 2*64)) {
         return false;
     }
+    if (fusion && cfg.ks > 1) {
+        return false;
+    }
     // with more LDS a CU fits only one block of 4 waves, too few for the memory latency
     return mmvq_q8_cdna_nbytes_shared(ncols, nb, cfg) <= 32*1024;
 }
 
-void ggml_hip_mul_mat_vec_q8_cdna(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+void ggml_hip_mul_mat_vec_q8_cdna(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const ggml_cuda_mm_fusion_args_host * fusion) {
     GGML_TENSOR_BINARY_OP_LOCALS;
 
     GGML_ASSERT(src0->type == GGML_TYPE_Q8_0);
@@ -370,15 +444,18 @@ void ggml_hip_mul_mat_vec_q8_cdna(ggml_backend_cuda_context & ctx, const ggml_te
     const int stride_col_y   = ne10_padded/QK8_1;
     const int stride_col_dst = nb1/sizeof(float);
 
+    const mmvq_q8_cdna_glu glu = {
+        fusion ? (const char *) fusion->gate->data : nullptr, fusion ? fusion->glu_op : GGML_GLU_OP_SWIGLU, fusion ? fusion->glu_limit : 0.0f};
+
     switch (ne11) {
-        case 1: mul_mat_vec_q8_cdna_switch_config<1>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 2: mul_mat_vec_q8_cdna_switch_config<2>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 3: mul_mat_vec_q8_cdna_switch_config<3>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 4: mul_mat_vec_q8_cdna_switch_config<4>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 5: mul_mat_vec_q8_cdna_switch_config<5>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 6: mul_mat_vec_q8_cdna_switch_config<6>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 7: mul_mat_vec_q8_cdna_switch_config<7>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
-        case 8: mul_mat_vec_q8_cdna_switch_config<8>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, nsm, stream); break;
+        case 1: mul_mat_vec_q8_cdna_switch_config<1>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 2: mul_mat_vec_q8_cdna_switch_config<2>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 3: mul_mat_vec_q8_cdna_switch_config<3>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 4: mul_mat_vec_q8_cdna_switch_config<4>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 5: mul_mat_vec_q8_cdna_switch_config<5>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 6: mul_mat_vec_q8_cdna_switch_config<6>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 7: mul_mat_vec_q8_cdna_switch_config<7>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
+        case 8: mul_mat_vec_q8_cdna_switch_config<8>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
         default: GGML_ABORT("fatal error");
     }
 }

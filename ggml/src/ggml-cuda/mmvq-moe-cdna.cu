@@ -2,12 +2,19 @@
 #include "unary.cuh"
 
 // A CUDA block computes a tile of rows of one expert for one (token, slot) pair.
+// With several tokens (multi) a block also computes the other pairs with the same expert, their blocks exit. So the weights are read once:
+// - Q4_K, Q5_K: up to npmax pairs in one pass over the weights, with a sum per pair.
+// - Q5_1, Q8_0 (loop_pairs): the weights stay in registers and the pairs are computed one after another, several sums take too many registers.
 // Rows are split into units of 32 values. A row has nlanes lanes, lane c of a row takes units c + nlanes*i, i < nu, with 16 byte loads.
 // The q8_1 values of the pair are copied to shared memory in unit order: values [0, 16) and [16, 32) of the unit and its scales.
 // For the K-quants the scales (and Q5_K qh) of the super-blocks of the tile are also copied to shared memory, the lanes only load qs.
 
 static constexpr int MMVQ_MOE_CDNA_NWARPS = 4;
 static constexpr int MMVQ_MOE_CDNA_MAX_NU = 8;
+
+// limits for the search of pairs with the same expert, 2 ballots of 4 tokens x 16 slots per wave
+static constexpr int MMVQ_MOE_CDNA_DEDUP_MAX_TOKENS = 8;
+static constexpr int MMVQ_MOE_CDNA_DEDUP_MAX_SLOTS  = 16;
 
 // min. waves per SIMD for the register allocation, with 1 the compiler hoists all shared memory loads and only 1-2 waves fit
 static constexpr int MMVQ_MOE_CDNA_MIN_WAVES = 4;
@@ -212,8 +219,20 @@ static __device__ __forceinline__ void mmvq_moe_cdna_store_y(const mmvq_moe_cdna
 }
 #endif // defined(CDNA1)
 
+// max. pairs per block in one pass: the y of the pairs in shared memory, at most 16 KB per block for 4 blocks per CU, one unit per thread, at most 4 sums
 template <ggml_type type, int nu, bool has_gate>
-__launch_bounds__(MMVQ_MOE_CDNA_NWARPS*64, MMVQ_MOE_CDNA_MIN_WAVES)
+static constexpr __host__ __device__ int mmvq_moe_cdna_npairs_max() {
+    constexpr int nunits = mmvq_moe_cdna_nlanes(type)*nu;
+    constexpr int nxs    = (has_gate ? 2 : 1)*MMVQ_MOE_CDNA_NWARPS*64/mmvq_moe_cdna_nlanes(type)*(nunits/8)*mmvq_moe_cdna_nshared(type);
+    constexpr int n_lds  = (16*1024 - 16*nxs)/(3*16*nunits);
+    constexpr int n_thr  = MMVQ_MOE_CDNA_NWARPS*64/nunits;
+    constexpr int n      = n_lds < n_thr ? n_lds : n_thr;
+    return n < 1 ? 1 : (n > 4 ? 4 : n);
+}
+
+// multi with gate: 3 waves per SIMD, with 4 the registers are too few to issue all weight loads at once
+template <ggml_type type, int nu, bool has_gate, bool multi>
+__launch_bounds__(MMVQ_MOE_CDNA_NWARPS*64, multi && has_gate ? 3 : MMVQ_MOE_CDNA_MIN_WAVES)
 static __global__ void mul_mat_vec_q_moe_cdna(
         const char * __restrict__ vx, const char * __restrict__ vy, const int32_t * __restrict__ ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * __restrict__ dst,
@@ -230,103 +249,269 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     constexpr int nsb            = nshared > 0 ? nunits/8 : 1; // super-blocks per row
     constexpr int nmat           = has_gate ? 2 : 1;
     constexpr int nxs            = nmat*rows_per_block*nsb*nshared;
+    // Q5_1, Q8_0: x has too many registers for several sums, the block keeps x and computes the pairs one after another
+    constexpr bool loop_pairs    = multi && nlanes == 4;
+    static_assert(!loop_pairs || !has_gate, "no gate with loop_pairs");
+    constexpr int npmax          = multi && !loop_pairs ? mmvq_moe_cdna_npairs_max<type, nu, has_gate>() : 1;
+    constexpr int nthreads       = MMVQ_MOE_CDNA_NWARPS*64;
+    static_assert(npmax*nunits <= nthreads, "one y unit per thread");
 
-    __shared__ int4   y_lo[nunits];
-    __shared__ int4   y_hi[nunits];
-    __shared__ float4 y_aux[nunits];
+    __shared__ int4   y_lo[npmax*nunits];
+    __shared__ int4   y_hi[npmax*nunits];
+    __shared__ float4 y_aux[npmax*nunits];
     __shared__ int4   x_sh[nxs > 0 ? nxs : 1];
 
-    const int lane  = threadIdx.x;
-    const int warp  = __builtin_amdgcn_readfirstlane(threadIdx.y);
-    const int slot  = blockIdx.y;
-    const int token = blockIdx.z;
-    const int c     = lane % nlanes;
-    const int row   = int(blockIdx.x)*rows_per_block + warp*rows_per_warp + lane/nlanes;
-
+    const int lane   = threadIdx.x;
+    const int warp   = __builtin_amdgcn_readfirstlane(threadIdx.y);
+    const int token  = blockIdx.z;
+    const int slot   = blockIdx.y;
     const int expert = ids[token*ids_stride + slot];
-    const int64_t offset_x = expert*stride_channel_x + min(row, nrows_x - 1)*stride_row_x;
 
-    // Loads in the order y, x, x_sh: y has the shortest latency and s_waitcnt vmcnt counts in order.
-    // Threads past the end load and store a copy of the last element.
-    const int tid = warp*64 + lane;
-    const int uy  = min(tid, nunits - 1);
-    const mmvq_moe_cdna_y ys = mmvq_moe_cdna_load_y<type>(
-        vy + (token*stride_col_y + (slot % nchannels_y)*stride_channel_y)*sizeof(block_q8_1), uy);
-
-    int x[nu][nregs];
+    // multi: the pairs with the same expert as bits token*16 + slot.
+    // The pair with rank r among them computes the pairs r, ..., r + npmax - 1 if r % npmax == 0, else nothing.
+    // loop_pairs: the pair with rank 0 computes all of them.
+    uint64_t same0 = 0; // tokens 0-3
+    uint64_t same1 = 0; // tokens 4-7
+    if constexpr (multi) {
+        int e[2];
 #pragma unroll
-    for (int i = 0; i < nu; ++i) {
-        mmvq_moe_cdna_load_x<type>(x[i], vx + offset_x, c, i);
+        for (int h = 0; h < 2; ++h) {
+            e[h] = ids[min(4*h + lane/16, int(gridDim.z) - 1)*ids_stride + min(lane % 16, int(gridDim.y) - 1)];
+        }
+#pragma unroll
+        for (int h = 0; h < 2; ++h) {
+            const bool valid = (4*h + lane/16 < int(gridDim.z)) & (lane % 16 < int(gridDim.y));
+            const uint64_t b = __ballot(valid & (e[h] == expert));
+            same0 = h == 0 ? b : same0;
+            same1 = h == 1 ? b : same1;
+        }
+        const int      q     = token*16 + slot;
+        const uint64_t lt0   = q < 64 ? (uint64_t(1) << q) - 1 : ~uint64_t(0);
+        const uint64_t lt1   = q < 64 ? 0 : (uint64_t(1) << (q - 64)) - 1;
+        const int      rank  = __builtin_popcountll(same0 & lt0) + __builtin_popcountll(same1 & lt1);
+        if (loop_pairs ? rank != 0 : rank % npmax != 0) {
+            return;
+        }
+        same0 &= ~lt0;
+        same1 &= ~lt1;
     }
-    [[maybe_unused]] int xg[has_gate ? nu : 1][nregs];
-    if constexpr (has_gate) {
+
+    // No reference to the kernel argument fusion in a lambda, that puts it into scratch memory.
+    const char  * gate      = (const char *) fusion.gate;
+    const float * x_bias    = (const float *) fusion.x_bias;
+    const float * gate_bias = (const float *) fusion.gate_bias;
+    const ggml_glu_op glu_op    = fusion.glu_op;
+    const float       glu_limit = fusion.glu_limit;
+
+    if constexpr (loop_pairs) {
+        const int c   = lane % nlanes;
+        const int row = int(blockIdx.x)*rows_per_block + warp*rows_per_warp + lane/nlanes;
+        const int tid = warp*64 + lane;
+        const int uy  = min(tid, nunits - 1);
+        const int64_t offset_x = expert*stride_channel_x + min(row, nrows_x - 1)*stride_row_x;
+
+        auto y_ptr = [&](const int t, const int s) {
+            return vy + (t*stride_col_y + (s % nchannels_y)*stride_channel_y)*sizeof(block_q8_1);
+        };
+
+        const mmvq_moe_cdna_y ys = mmvq_moe_cdna_load_y<type>(y_ptr(token, slot), uy);
+        int x[nu][nregs];
 #pragma unroll
         for (int i = 0; i < nu; ++i) {
-            mmvq_moe_cdna_load_x<type>(xg[i], (const char *) fusion.gate + offset_x, c, i);
+            mmvq_moe_cdna_load_x<type>(x[i], vx + offset_x, c, i);
         }
-    }
+        mmvq_moe_cdna_store_y<type>(ys, y_lo[uy], y_hi[uy], y_aux[uy]);
+        __syncthreads();
 
-    constexpr int nxs_thread = (nxs + MMVQ_MOE_CDNA_NWARPS*64 - 1)/(MMVQ_MOE_CDNA_NWARPS*64);
-    [[maybe_unused]] int4 xs[nxs_thread > 0 ? nxs_thread : 1];
-    if constexpr (nshared > 0) {
+        const int      q0  = token*16 + slot;
+        const uint64_t own = uint64_t(1) << (q0 % 64);
+        same0 &= q0 < 64 ? ~own : ~uint64_t(0);
+        same1 &= q0 < 64 ? ~uint64_t(0) : ~own;
+        int t = token;
+        int s = slot;
+        while (true) {
+            // keep the unpacking of x in the loop, out of it the unpacked x takes twice the registers
 #pragma unroll
-        for (int j = 0; j < nxs_thread; ++j) {
-            const int k  = min(j*MMVQ_MOE_CDNA_NWARPS*64 + tid, nxs - 1);
-            const int m  = k / (rows_per_block*nsb*nshared);
-            const int r  = (k / (nsb*nshared)) % rows_per_block;
-            const int sb = (k / nshared) % nsb;
-            const int p  = k % nshared;
-            const int rx = min(int(blockIdx.x)*rows_per_block + r, nrows_x - 1);
-            const char * px = (m == 0 ? vx : (const char *) fusion.gate) + expert*stride_channel_x + rx*stride_row_x;
-            xs[j] = *(const int4 *) (px + sb*ggml_cuda_type_traits<type>::bs + 16*p);
-        }
-    }
-
-    mmvq_moe_cdna_store_y<type>(ys, y_lo[uy], y_hi[uy], y_aux[uy]);
-    if constexpr (nshared > 0) {
+            for (int i = 0; i < nu; ++i) {
 #pragma unroll
-        for (int j = 0; j < nxs_thread; ++j) {
-            x_sh[min(j*MMVQ_MOE_CDNA_NWARPS*64 + tid, nxs - 1)] = xs[j];
-        }
-    }
-    __syncthreads();
+                for (int k = 0; k < nregs; ++k) {
+                    asm volatile("" : "+v"(x[i][k]));
+                }
+            }
 
-    float sum      = 0.0f;
-    float sum_gate = 0.0f;
+            // the y of the next pair is loaded during the computation of this one. No ctz of 0, it is undefined.
+            const bool     lo = same0 != 0;
+            const uint64_t m  = lo ? same0 : same1;
+            const int      qn = m != 0 ? (lo ? 0 : 64) + __builtin_ctzll(m) : -1;
+            same0 = lo ? m & (m - 1) : same0;
+            same1 = lo ? same1 : m & (m - 1);
+            mmvq_moe_cdna_y yn;
+            if (qn >= 0) {
+                yn = mmvq_moe_cdna_load_y<type>(y_ptr(qn/16, qn % 16), uy);
+            }
+
+            float sum = 0.0f;
 #pragma unroll
-    for (int i = 0; i < nu; ++i) {
-        const int    u   = c + nlanes*i;
-        const int4   ylo = y_lo[u];
-        const int4   yhi = y_hi[u];
-        const float4 aux = y_aux[u];
-        // super-block of the unit in x_sh
-        const int    js  = ((warp*rows_per_warp + lane/nlanes)*nsb + (nshared > 0 ? u/8 : 0))*nshared;
-        sum += mmvq_moe_cdna_dot<type>(x[i], x_sh + js, ylo, yhi, aux, c);
-        if constexpr (has_gate) {
-            sum_gate += mmvq_moe_cdna_dot<type>(xg[i], x_sh + js + rows_per_block*nsb*nshared, ylo, yhi, aux, c);
+            for (int i = 0; i < nu; ++i) {
+                const int u = c + nlanes*i;
+                sum += mmvq_moe_cdna_dot<type>(x[i], x_sh, y_lo[u], y_hi[u], y_aux[u], c);
+            }
+            sum = warp_reduce_sum<nlanes>(sum);
+            if (c == 0 && row < nrows_x) {
+                if (x_bias) {
+                    sum += x_bias[expert*stride_channel_dst + row];
+                }
+                dst[t*stride_col_dst + s*stride_channel_dst + row] = sum;
+            }
+
+            if (qn < 0) {
+                break;
+            }
+            __syncthreads();
+            mmvq_moe_cdna_store_y<type>(yn, y_lo[uy], y_hi[uy], y_aux[uy]);
+            __syncthreads();
+            t = qn/16;
+            s = qn % 16;
         }
-    }
-
-    sum = warp_reduce_sum<nlanes>(sum);
-    if constexpr (has_gate) {
-        sum_gate = warp_reduce_sum<nlanes>(sum_gate);
-    }
-
-    if (c != 0 || row >= nrows_x) {
         return;
     }
 
-    const int bias_idx = expert*stride_channel_dst + row;
-    if (fusion.x_bias) {
-        sum += ((const float *) fusion.x_bias)[bias_idx];
-    }
-    if constexpr (has_gate) {
-        if (fusion.gate_bias) {
-            sum_gate += ((const float *) fusion.gate_bias)[bias_idx];
+    // The block computes np <= npmax pairs (token pt[p], slot ps[p]) in one pass over x, x[i] is not needed after unit i.
+    auto compute_pairs = [&](const int (&pt)[npmax], const int (&ps)[npmax], const int np) {
+        const int c   = lane % nlanes;
+        const int row = int(blockIdx.x)*rows_per_block + warp*rows_per_warp + lane/nlanes;
+        const int tid = warp*64 + lane;
+        const int64_t offset_x = expert*stride_channel_x + min(row, nrows_x - 1)*stride_row_x;
+
+        // Loads in the order y, x, x_sh: y has the shortest latency and s_waitcnt vmcnt counts in order.
+        // Threads past the end load and store a copy of the last element. Thread k stages unit k % nunits of pair k / nunits.
+        const int ky = min(tid, npmax*nunits - 1);
+        int ty = pt[0];
+        int sy = ps[0];
+#pragma unroll
+        for (int p = 1; p < npmax; ++p) {
+            ty = ky/nunits == p && p < np ? pt[p] : ty;
+            sy = ky/nunits == p && p < np ? ps[p] : sy;
         }
-        sum = ggml_cuda_op_glu_single(fusion.glu_op, sum_gate, sum, fusion.glu_limit);
+        const mmvq_moe_cdna_y ys = mmvq_moe_cdna_load_y<type>(
+            vy + (ty*stride_col_y + (sy % nchannels_y)*stride_channel_y)*sizeof(block_q8_1), ky % nunits);
+
+        int x[nu][nregs];
+#pragma unroll
+        for (int i = 0; i < nu; ++i) {
+            mmvq_moe_cdna_load_x<type>(x[i], vx + offset_x, c, i);
+        }
+        [[maybe_unused]] int xg[has_gate ? nu : 1][nregs];
+        if constexpr (has_gate) {
+#pragma unroll
+            for (int i = 0; i < nu; ++i) {
+                mmvq_moe_cdna_load_x<type>(xg[i], gate + offset_x, c, i);
+            }
+        }
+
+        constexpr int nxs_thread = (nxs + nthreads - 1)/nthreads;
+        [[maybe_unused]] int xs[nxs_thread > 0 ? nxs_thread : 1][4]; // no int4: its copies are memcpy and keep the array in scratch memory
+        if constexpr (nshared > 0) {
+#pragma unroll
+            for (int j = 0; j < nxs_thread; ++j) {
+                const int k  = min(j*nthreads + tid, nxs - 1);
+                const int m  = k / (rows_per_block*nsb*nshared);
+                const int r  = (k / (nsb*nshared)) % rows_per_block;
+                const int sb = (k / nshared) % nsb;
+                const int p  = k % nshared;
+                const int rx = min(int(blockIdx.x)*rows_per_block + r, nrows_x - 1);
+                const char * px = (m == 0 ? vx : gate) + expert*stride_channel_x + rx*stride_row_x;
+                mmvq_moe_cdna_put(xs[j], *(const int4 *) (px + sb*ggml_cuda_type_traits<type>::bs + 16*p));
+            }
+        }
+
+        mmvq_moe_cdna_store_y<type>(ys, y_lo[ky], y_hi[ky], y_aux[ky]);
+        if constexpr (nshared > 0) {
+#pragma unroll
+            for (int j = 0; j < nxs_thread; ++j) {
+                x_sh[min(j*nthreads + tid, nxs - 1)] = make_int4(xs[j][0], xs[j][1], xs[j][2], xs[j][3]);
+            }
+        }
+        __syncthreads();
+
+        float sum[npmax];
+        [[maybe_unused]] float sum_gate[npmax];
+#pragma unroll
+        for (int p = 0; p < npmax; ++p) {
+            sum[p]      = 0.0f;
+            sum_gate[p] = 0.0f;
+        }
+#pragma unroll
+        for (int i = 0; i < nu; ++i) {
+            const int u  = c + nlanes*i;
+            // super-block of the unit in x_sh
+            const int js = ((warp*rows_per_warp + lane/nlanes)*nsb + (nshared > 0 ? u/8 : 0))*nshared;
+#pragma unroll
+            for (int p = 0; p < npmax; ++p) {
+                if (p < np) {
+                    const int4   ylo = y_lo[p*nunits + u];
+                    const int4   yhi = y_hi[p*nunits + u];
+                    const float4 aux = y_aux[p*nunits + u];
+                    sum[p] += mmvq_moe_cdna_dot<type>(x[i], x_sh + js, ylo, yhi, aux, c);
+                    if constexpr (has_gate) {
+                        sum_gate[p] += mmvq_moe_cdna_dot<type>(xg[i], x_sh + js + rows_per_block*nsb*nshared, ylo, yhi, aux, c);
+                    }
+                }
+            }
+        }
+
+#pragma unroll
+        for (int p = 0; p < npmax; ++p) {
+            if (p < np) {
+                float r = warp_reduce_sum<nlanes>(sum[p]);
+                [[maybe_unused]] float rg = 0.0f;
+                if constexpr (has_gate) {
+                    rg = warp_reduce_sum<nlanes>(sum_gate[p]);
+                }
+                if (c == 0 && row < nrows_x) {
+                    const int bias_idx = expert*stride_channel_dst + row;
+                    if (x_bias) {
+                        r += x_bias[bias_idx];
+                    }
+                    if constexpr (has_gate) {
+                        if (gate_bias) {
+                            rg += gate_bias[bias_idx];
+                        }
+                        r = ggml_cuda_op_glu_single(glu_op, rg, r, glu_limit);
+                    }
+                    dst[pt[p]*stride_col_dst + ps[p]*stride_channel_dst + row] = r;
+                }
+            }
+        }
+    };
+
+    // the own pair and the next pairs with the same expert
+    int pt[npmax];
+    int ps[npmax];
+    auto next_pairs = [&]() {
+        const int n  = __builtin_popcountll(same0) + __builtin_popcountll(same1);
+        const int np = n < npmax ? n : npmax;
+#pragma unroll
+        for (int p = 0; p < npmax; ++p) {
+            // no ctz of 0, it is undefined. Selects, not branches: with branches same0 and same1 end up in scratch memory.
+            const bool     lo = same0 != 0;
+            const uint64_t m  = lo ? same0 : same1;
+            const int      q  = m != 0 ? (lo ? 0 : 64) + __builtin_ctzll(m) : 0;
+            same0 = lo ? m & (m - 1) : same0;
+            same1 = lo ? same1 : m & (m - 1);
+            pt[p] = p < np ? q/16 : pt[0];
+            ps[p] = p < np ? q % 16 : ps[0];
+        }
+        return np;
+    };
+
+    if constexpr (!multi) {
+        pt[0] = token;
+        ps[0] = slot;
+        compute_pairs(pt, ps, 1);
+        return;
     }
-    dst[token*stride_col_dst + slot*stride_channel_dst + row] = sum;
+    compute_pairs(pt, ps, next_pairs());
 #else
     GGML_UNUSED_VARS(vx, vy, ids, fusion, dst, nrows_x, stride_row_x, stride_channel_x, stride_col_y, stride_channel_y,
         nchannels_y, stride_col_dst, stride_channel_dst, ids_stride);
@@ -345,16 +530,33 @@ static void mul_mat_vec_q_moe_cdna_launch(
     const dim3 block_nums((nrows_x + rows_per_block - 1)/rows_per_block, nchannels_dst, ncols_dst);
     const dim3 block_dims(64, MMVQ_MOE_CDNA_NWARPS, 1);
 
+    // with 1 token only duplicate ids within the token could share a block
+    const bool multi = ncols_dst > 1 && ncols_dst <= MMVQ_MOE_CDNA_DEDUP_MAX_TOKENS && nchannels_dst <= MMVQ_MOE_CDNA_DEDUP_MAX_SLOTS;
+
     const char * vx = (const char *) src0->data;
     const char * y  = (const char *) vy;
+    // the fused Q5_1 and Q8_0 kernels with several pairs per block spill registers
+    constexpr bool multi_gate = mmvq_moe_cdna_nlanes(type) == 16;
     if (fusion.gate) {
-        mul_mat_vec_q_moe_cdna<type, nu, true><<<block_nums, block_dims, 0, stream>>>(
-            vx, y, ids, fusion, dst, nrows_x, src0->nb[1], src0->nb[2], stride_col_y, stride_channel_y, nchannels_y,
-            stride_col_dst, stride_channel_dst, ids_stride);
+        if (multi_gate && multi) {
+            mul_mat_vec_q_moe_cdna<type, nu, true, multi_gate><<<block_nums, block_dims, 0, stream>>>(
+                vx, y, ids, fusion, dst, nrows_x, src0->nb[1], src0->nb[2], stride_col_y, stride_channel_y, nchannels_y,
+                stride_col_dst, stride_channel_dst, ids_stride);
+        } else {
+            mul_mat_vec_q_moe_cdna<type, nu, true, false><<<block_nums, block_dims, 0, stream>>>(
+                vx, y, ids, fusion, dst, nrows_x, src0->nb[1], src0->nb[2], stride_col_y, stride_channel_y, nchannels_y,
+                stride_col_dst, stride_channel_dst, ids_stride);
+        }
     } else {
-        mul_mat_vec_q_moe_cdna<type, nu, false><<<block_nums, block_dims, 0, stream>>>(
-            vx, y, ids, fusion, dst, nrows_x, src0->nb[1], src0->nb[2], stride_col_y, stride_channel_y, nchannels_y,
-            stride_col_dst, stride_channel_dst, ids_stride);
+        if (multi) {
+            mul_mat_vec_q_moe_cdna<type, nu, false, true><<<block_nums, block_dims, 0, stream>>>(
+                vx, y, ids, fusion, dst, nrows_x, src0->nb[1], src0->nb[2], stride_col_y, stride_channel_y, nchannels_y,
+                stride_col_dst, stride_channel_dst, ids_stride);
+        } else {
+            mul_mat_vec_q_moe_cdna<type, nu, false, false><<<block_nums, block_dims, 0, stream>>>(
+                vx, y, ids, fusion, dst, nrows_x, src0->nb[1], src0->nb[2], stride_col_y, stride_channel_y, nchannels_y,
+                stride_col_dst, stride_channel_dst, ids_stride);
+        }
     }
 }
 

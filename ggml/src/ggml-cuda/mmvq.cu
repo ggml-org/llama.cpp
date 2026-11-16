@@ -4,6 +4,10 @@
 #include "unary.cuh"
 #include "vecdotq.cuh"
 
+#if defined(GGML_USE_HIP)
+#include "ggml-hip/mmvq-q8-cdna.cuh"
+#endif // defined(GGML_USE_HIP)
+
 #include <cstdint>
 #include <type_traits>
 
@@ -1471,6 +1475,13 @@ void ggml_cuda_mul_mat_vec_q(
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
 
     GGML_ASSERT(!ids || ne12 <= MMVQ_MAX_BATCH_SIZE);
+
+#if defined(GGML_USE_HIP)
+    if (!ids && fusion && ggml_hip_should_use_mmvq_q8_cdna(src0, src1, dst, ggml_cuda_info().devices[ggml_cuda_get_device()].cc, fusion)) {
+        ggml_hip_mul_mat_vec_q8_cdna(ctx, src0, src1, dst, fusion);
+        return;
+    }
+#endif // defined(GGML_USE_HIP)
 
     const float   * src1_d =       (const float   *) src1->data;
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;

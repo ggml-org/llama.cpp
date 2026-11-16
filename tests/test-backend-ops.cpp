@@ -5968,6 +5968,56 @@ struct test_mul_mat_id_dup : public test_mul_mat_id {
     }
 };
 
+// Expert ids of few tokens that share experts, e.g. draft tokens of speculative decoding.
+// A slot of token r > 0 takes an expert of token 0 with probability overlap, else an expert that no other slot uses.
+static void init_mul_mat_id_ids_overlap(ggml_context * ctx, int n_mats, int n_used, float overlap, std::default_random_engine & rng) {
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->type != GGML_TYPE_I32 || ggml_is_view_op(t->op)) {
+            continue;
+        }
+        GGML_ASSERT(n_used <= t->ne[0]);
+        std::vector<int32_t> perm(n_mats);
+        std::iota(perm.begin(), perm.end(), 0);
+        std::shuffle(perm.begin(), perm.end(), rng);
+        int next = n_used; // perm[0, n_used) are the experts of token 0
+        for (int64_t r = 0; r < ggml_nrows(t); r++) {
+            std::vector<int32_t> shared(perm.begin(), perm.begin() + n_used);
+            std::shuffle(shared.begin(), shared.end(), rng);
+            std::vector<int32_t> data(t->ne[0], 0);
+            for (int i = 0; i < n_used; i++) {
+                if (r == 0 || dist(rng) < overlap) {
+                    data[i] = shared[i];
+                } else {
+                    GGML_ASSERT(next < n_mats);
+                    data[i] = perm[next++];
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+        }
+    }
+}
+
+// MUL_MAT_ID with controlled expert overlap between the tokens
+struct test_mul_mat_id_overlap : public test_mul_mat_id {
+    const float overlap;
+    std::default_random_engine rng{1234};
+
+    test_mul_mat_id_overlap(ggml_type type_a, int n_mats, int n_used, bool b, int64_t m, int64_t n, int64_t k, float overlap)
+        : test_mul_mat_id(type_a, GGML_TYPE_F32, n_mats, n_used, b, m, n, k), overlap(overlap) {}
+
+    std::string vars() override { return test_mul_mat_id::vars() + ",overlap=" + std::to_string(overlap); }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_mul_mat_id::initialize_tensors(ctx);
+        init_mul_mat_id_ids_overlap(ctx, n_mats, n_used, overlap, rng);
+    }
+
+    void reinit_perf_iter(ggml_context * ctx) override {
+        init_mul_mat_id_ids_overlap(ctx, n_mats, n_used, overlap, rng);
+    }
+};
+
 // FP4 W4A8 path on the MoE path (GGML_PREC_Q8 on src1 disallows 4-bit activations)
 struct test_mul_mat_id_w4a8 : public test_mul_mat_id {
     test_mul_mat_id_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
@@ -8354,6 +8404,27 @@ struct test_mul_mat_fusion_w4a8 : public test_mul_mat_fusion {
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
         return "MUL_MAT_FUSION_W4A8";
+    }
+};
+
+// fused MUL_MAT_ID gate/up with controlled expert overlap between the tokens, see init_mul_mat_id_ids_overlap
+struct test_mul_mat_fusion_overlap : public test_mul_mat_fusion {
+    const float overlap;
+    std::default_random_engine rng{1234};
+
+    test_mul_mat_fusion_overlap(ggml_type type, ggml_glu_op op, int64_t m, int64_t n, int64_t k, int n_mats, int n_used, bool b, float overlap,
+                                bool with_bias = false)
+        : test_mul_mat_fusion(type, op, m, n, k, true, n_mats, n_used, b, with_bias), overlap(overlap) {}
+
+    std::string vars() override { return test_mul_mat_fusion::vars() + ",overlap=" + std::to_string(overlap); }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_mul_mat_fusion::initialize_tensors(ctx);
+        init_mul_mat_id_ids_overlap(ctx, n_mats, n_used, overlap, rng);
+    }
+
+    void reinit_perf_iter(ggml_context * ctx) override {
+        init_mul_mat_id_ids_overlap(ctx, n_mats, n_used, overlap, rng);
     }
 };
 
@@ -12211,6 +12282,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
             test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_GEGLU, n, 72, 2560, true, 32, 6, true));
         }
+        // fused dense gate/up with 1 column, e.g. a shared expert
+        if (type == GGML_TYPE_Q8_0) {
+            for (int64_t k : {256, 1024, 2560, 6144, 8192}) {
+                for (ggml_glu_op op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI}) {
+                    test_cases.emplace_back(new test_mul_mat_fusion(type, op, 1, 640, k, false, 1, 1, false, false, true, false, {1, 1}));
+                }
+                test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, 1, 77, k, false, 1, 1, false, false, true, false, {1, 1}));
+                test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, 1, 640, k, false, 1, 1, false, true, true, false, {1, 1}));
+            }
+        }
+        // tokens that share experts
+        for (float overlap : {0.5f, 1.0f}) {
+            for (int n : {2, 8}) {
+                test_cases.emplace_back(new test_mul_mat_id_overlap(type, 64, 10, false, 77, n, 1024, overlap));
+                test_cases.emplace_back(new test_mul_mat_id_overlap(type, 64, 10, true,  77, n, 2560, overlap));
+                test_cases.emplace_back(new test_mul_mat_fusion_overlap(type, GGML_GLU_OP_SWIGLU, n, 72, 1024, 64, 10, true, overlap, true));
+            }
+        }
     }
 
     // Both experts receive every token
@@ -13857,6 +13946,24 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+
+    // few-token MoE with shared experts between the tokens (speculative decoding), 512 experts, top-10
+    for (int bs : {1, 2, 4, 8}) {
+        for (float overlap : {0.0f, 0.5f, 1.0f}) {
+            if (bs == 1 && overlap > 0.0f) {
+                continue;
+            }
+            for (ggml_type type_a : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+                test_cases.emplace_back(new test_mul_mat_id_overlap(type_a, 512, 10, true, 640, bs, 2560, overlap));
+                test_cases.emplace_back(new test_mul_mat_fusion_overlap(type_a, GGML_GLU_OP_SWIGLU, bs, 640, 2560, 512, 10, true, overlap));
+            }
+            for (ggml_type type_a : {GGML_TYPE_Q5_1, GGML_TYPE_Q8_0}) {
+                test_cases.emplace_back(new test_mul_mat_id_overlap(type_a, 512, 10, false, 2560, bs, 640, overlap));
+            }
+        }
+    }
+    // shared expert gate/up
+    test_cases.emplace_back(new test_mul_mat_fusion(GGML_TYPE_Q8_0, GGML_GLU_OP_SWIGLU, 1, 640, 2560, false, 1, 1, false, false, true, false, {1, 1}));
 
     // gpt-oss-20b
     for (int bs : {1, 4, 8, 512}) {
