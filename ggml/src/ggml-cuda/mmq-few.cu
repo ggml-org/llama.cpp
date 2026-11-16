@@ -1185,15 +1185,18 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1_few(
 }
 
 static __device__ __forceinline__ float vec_dot_nvfp4_q8_1_few(
-        const int (&v0)[VDR_NVFP4_Q8_1_MMVQ/2], const int (&v1)[VDR_NVFP4_Q8_1_MMVQ/2],
+        const int2 (&v0)[VDR_NVFP4_Q8_1_MMVQ/2], const int2 (&v1)[VDR_NVFP4_Q8_1_MMVQ/2],
         const int (&sc)[VDR_NVFP4_Q8_1_MMVQ/2], const block_q8_1 * y, const int iqs) {
     float sum = 0.0f;
 #pragma unroll
     for (int i = 0; i < VDR_NVFP4_Q8_1_MMVQ/2; ++i) {
-        const int i8 = ((iqs + 2*i) & 1) << 2;
-        const block_q8_1 * yb = y + ((iqs + 2*i) >> 2);
-        int sumi = ggml_cuda_dp4a(v0[i], get_int_b4(yb->qs, i8 + 0), 0);
-        sumi = ggml_cuda_dp4a(v1[i], get_int_b4(yb->qs, i8 + 2), sumi);
+        const int is = (iqs + 2*i) >> 1;
+        const block_q8_1 * yb = y + (is >> 1);
+        const int i8 = (is & 1) << 2;
+        int sumi = ggml_cuda_dp4a(v0[i].x, get_int_b4(yb->qs, i8 + 0), 0);
+        sumi = ggml_cuda_dp4a(v0[i].y, get_int_b4(yb->qs, i8 + 2), sumi);
+        sumi = ggml_cuda_dp4a(v1[i].x, get_int_b4(yb->qs, i8 + 1), sumi);
+        sumi = ggml_cuda_dp4a(v1[i].y, get_int_b4(yb->qs, i8 + 3), sumi);
         const float d = ggml_cuda_ue4m3_to_fp32(sc[i]) * __low2float(yb->ds);
         sum += d * float(sumi);
     }
@@ -1578,17 +1581,15 @@ static __global__ void mul_mat_q_few_gcn(
         // NVFP4 blocks cover QK_NVFP4 values with a UE4M3 scale per 16-value sub-block
         for (int64_t kbx = tid/(qi/vdr); kbx < nblocks; kbx += vdr*warp_size/qi) {
             const block_nvfp4 * bx = (const block_nvfp4 *) (x + row*nblocks*sizeof(block_nvfp4)) + kbx;
-            int v0[VDR_NVFP4_Q8_1_MMVQ/2];
-            int v1[VDR_NVFP4_Q8_1_MMVQ/2];
+            int2 v0[VDR_NVFP4_Q8_1_MMVQ/2];
+            int2 v1[VDR_NVFP4_Q8_1_MMVQ/2];
             int sc[VDR_NVFP4_Q8_1_MMVQ/2];
 #pragma unroll
             for (int i = 0; i < VDR_NVFP4_Q8_1_MMVQ/2; ++i) {
                 const int iqs0 = iqs + 2*i;
-                const int2 va = get_int_from_table_16(get_int_b4(bx->qs, iqs0 + 0), kvalues_mxfp4);
-                const int2 vb = get_int_from_table_16(get_int_b4(bx->qs, iqs0 + 1), kvalues_mxfp4);
-                v0[i] = va.x | (vb.x << 16);
-                v1[i] = va.y | (vb.y << 16);
-                sc[i] = bx->d[(iqs0 + 0) >> 1];
+                v0[i] = get_int_from_table_16(get_int_b4(bx->qs, iqs0 + 0), kvalues_mxfp4);
+                v1[i] = get_int_from_table_16(get_int_b4(bx->qs, iqs0 + 1), kvalues_mxfp4);
+                sc[i] = bx->d[iqs0 >> 1];
             }
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
