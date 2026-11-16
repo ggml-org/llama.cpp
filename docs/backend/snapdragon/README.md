@@ -398,3 +398,10 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   # Disable ADD and SUB on Hexagon (fall back to CPU or GPU)
   ./scripts/snapdragon/run.py --target adb --hex-opfilter "ADD|SUB" -- llama-cli ...
   ```
+
+- `GGML_HEXAGON_OPF16=N`
+  Controls internal FP32-to-FP16 activation tensor promotion inside HTP opbatches (configurable via `--hex-opf16` in `run.py`):
+
+  - `0`: Disabled (default) - keep internal activations in FP32
+  - `1`: Intra-layer FP16 with FP32 residual spine - promote internal `MUL_MAT*` and `FLASH_ATTN_EXT` outputs and downstream intra-layer ops to FP16 while keeping cross-layer residual merges (`ADD`, `RMS_NORM_MUL_ADD`, `MUL_MAT_ADD` with FP32 residual) and `GGML_PREC_F32`-hinted matmuls in FP32
+  - `2`: Full opbatch FP16 - also promote internal `RMS_NORM*` and intra-opbatch residual merges to FP16

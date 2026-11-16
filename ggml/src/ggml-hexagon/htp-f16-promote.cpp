@@ -75,12 +75,130 @@ static bool htp_f16_node_has_output(const htp_opnode & node, const ggml_tensor *
     return false;
 }
 
+static bool htp_f16_inplace_types_ok(const htp_opnode & node) {
+    for (const ggml_tensor * inp : node.inputs) {
+        if (!inp || (inp->type != GGML_TYPE_F32 && inp->type != GGML_TYPE_F16)) {
+            continue;
+        }
+        for (const ggml_tensor * out : node.outputs) {
+            if (!out || (out->type != GGML_TYPE_F32 && out->type != GGML_TYPE_F16)) {
+                continue;
+            }
+            if (inp->type != out->type && htp_tensors_overlap(inp, out)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool htp_f16_is_mm_opcode(uint32_t opcode) {
+    return opcode == HTP_OP_MUL_MAT || opcode == HTP_OP_MUL_MAT_ADD ||
+           opcode == HTP_OP_MUL_MAT_ID || opcode == HTP_OP_MUL_MAT_NX ||
+           opcode == HTP_OP_MUL_MAT_ID_NX;
+}
+
+static const ggml_tensor * htp_f16_orig_mm_for_output(const htp_opnode & node, const ggml_tensor * tensor) {
+    if (!htp_f16_is_mm_opcode(node.opcode)) {
+        return nullptr;
+    }
+    if (node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX) {
+        for (size_t p = 0; p < node.outputs.size(); ++p) {
+            if (node.outputs[p] == tensor) {
+                if (p == 0) {
+                    return node.node;
+                }
+                return (p - 1 < node.fused.size()) ? node.fused[p - 1] : nullptr;
+            }
+        }
+        return nullptr;
+    }
+    return node.node;
+}
+
+static bool htp_f16_mm_blocks_output_f16(const ggml_tensor * orig_mm) {
+    if (!orig_mm) {
+        return false;
+    }
+    if (ggml_prec_get_acc(orig_mm) == GGML_PREC_F32) {
+        return true;
+    }
+    const ggml_prec src1_prec = ggml_prec_get_src(orig_mm, 1);
+    return src1_prec == GGML_PREC_BF16 || src1_prec == GGML_PREC_F32;
+}
+
+static bool htp_f16_respect_prec_hints(const htp_opnode & owner, const ggml_tensor * r, const std::vector<const ggml_tensor *> & cls, const std::vector<htp_opnode> & nodes) {
+    if (htp_f16_is_mm_opcode(owner.opcode)) {
+        const ggml_tensor * orig_mm = htp_f16_orig_mm_for_output(owner, r);
+        if (htp_f16_mm_blocks_output_f16(orig_mm)) {
+            return false;
+        }
+    }
+    if (owner.opcode == HTP_OP_SOFTMAX && !owner.inputs.empty() && owner.inputs[0]) {
+        const ggml_tensor * in_root = htp_f16_root(owner.inputs[0]);
+        for (const htp_opnode & node : nodes) {
+            if (htp_f16_node_has_output(node, in_root) && htp_f16_is_mm_opcode(node.opcode)) {
+                if (htp_f16_mm_blocks_output_f16(htp_f16_orig_mm_for_output(node, in_root))) {
+                    return false;
+                }
+            }
+        }
+    }
+    for (const htp_opnode & node : nodes) {
+        if (!htp_f16_is_mm_opcode(node.opcode)) {
+            continue;
+        }
+        const size_t act_idx = (node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX)
+                                   ? node.outputs.size()
+                                   : 1;
+        if (act_idx >= node.inputs.size()) {
+            continue;
+        }
+        const ggml_tensor * act = node.inputs[act_idx];
+        bool uses_cls = false;
+        for (const ggml_tensor * tensor : cls) {
+            if (act == tensor) {
+                uses_cls = true;
+                break;
+            }
+        }
+        if (!uses_cls && (!act || htp_f16_root(act) != r)) {
+            continue;
+        }
+        auto blocks_src1 = [](const ggml_tensor * orig_mm) -> bool {
+            if (!orig_mm) {
+                return false;
+            }
+            const ggml_prec src1_prec = ggml_prec_get_src(orig_mm, 1);
+            return src1_prec == GGML_PREC_BF16 || src1_prec == GGML_PREC_F32;
+        };
+        if (blocks_src1(node.node)) {
+            return false;
+        }
+        if (node.opcode == HTP_OP_MUL_MAT_NX || node.opcode == HTP_OP_MUL_MAT_ID_NX) {
+            for (const ggml_tensor * f : node.fused) {
+                if (f && (f->op == GGML_OP_MUL_MAT || f->op == GGML_OP_MUL_MAT_ID) && blocks_src1(f)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static bool htp_f16_is_mm_root(const std::vector<htp_opnode> & nodes, const ggml_tensor * root) {
     for (const htp_opnode & node : nodes) {
         if (htp_f16_node_has_output(node, root)) {
-            return node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ADD ||
-                   node.opcode == HTP_OP_MUL_MAT_ID || node.opcode == HTP_OP_MUL_MAT_NX ||
-                   node.opcode == HTP_OP_MUL_MAT_ID_NX;
+            return htp_f16_is_mm_opcode(node.opcode);
+        }
+    }
+    return false;
+}
+
+static bool htp_f16_is_fa_root(const std::vector<htp_opnode> & nodes, const ggml_tensor * root) {
+    for (const htp_opnode & node : nodes) {
+        if (htp_f16_node_has_output(node, root)) {
+            return node.opcode == HTP_OP_FLASH_ATTN_EXT;
         }
     }
     return false;
@@ -89,7 +207,8 @@ static bool htp_f16_is_mm_root(const std::vector<htp_opnode> & nodes, const ggml
 static bool htp_f16_is_rms_root(const std::vector<htp_opnode> & nodes, const ggml_tensor * root) {
     for (const htp_opnode & node : nodes) {
         if (htp_f16_node_has_output(node, root)) {
-            return node.node && node.node->op == GGML_OP_RMS_NORM;
+            return node.opcode == HTP_OP_RMS_NORM || node.opcode == HTP_OP_RMS_NORM_MUL ||
+                   node.opcode == HTP_OP_RMS_NORM_MUL_ADD;
         }
     }
     return false;
@@ -118,7 +237,7 @@ static bool htp_f16_safe_gdn_output(const htp_opnode & owner, const ggml_tensor 
 }
 
 void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * graph, std::vector<htp_opnode> & nodes) {
-    if (opt_mm_f16_out == 0 && opt_f16_test == 0) {
+    if (opt_opf16 <= 0 && opt_f16_test == 0) {
         return;
     }
 
@@ -151,6 +270,10 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
     }
 
     std::unordered_set<const ggml_tensor *> promoted;
+    size_t n_candidates     = 0;
+    size_t n_promoted_roots = 0;
+    size_t n_promoted_mm    = 0;
+    size_t bytes_saved      = 0;
 
     auto find_owner = [&](const ggml_tensor * r) -> htp_opnode * {
         for (htp_opnode & node : nodes) {
@@ -159,6 +282,48 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
             }
         }
         return nullptr;
+    };
+
+    auto is_f16_tensor = [&](const ggml_tensor * t) -> bool {
+        if (!t) {
+            return false;
+        }
+        return t->type == GGML_TYPE_F16 || promoted.count(t) != 0 || promoted.count(htp_f16_root(t)) != 0;
+    };
+
+    auto is_weight_or_bcast = [](const ggml_tensor * inp, const ggml_tensor * dst) -> bool {
+        if (!inp) {
+            return true;
+        }
+        if ((inp->flags & GGML_TENSOR_FLAG_PARAM) != 0) {
+            return true;
+        }
+        if (inp->buffer && ggml_backend_buffer_get_usage(inp->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            return true;
+        }
+        return ggml_nelements(inp) < ggml_nelements(dst);
+    };
+
+    // Under OPF16=1, keep cross-layer residual spine merges in F32 when the residual input is F32.
+    auto is_residual_spine_stop = [&](const htp_opnode & owner, const ggml_tensor * r) -> bool {
+        if (opt_opf16 != 1 || opt_f16_test != 0) {
+            return false;
+        }
+        if (owner.opcode == HTP_OP_ADD) {
+            for (const ggml_tensor * inp : owner.inputs) {
+                if (inp && !is_f16_tensor(inp) && !is_weight_or_bcast(inp, r)) {
+                    return true;
+                }
+            }
+        } else if (owner.opcode == HTP_OP_RMS_NORM_MUL_ADD || owner.opcode == HTP_OP_MUL_MAT_ADD) {
+            if (owner.inputs.size() >= 3 && owner.inputs[2]) {
+                const ggml_tensor * res = owner.inputs[2];
+                if (!is_f16_tensor(res) && !is_weight_or_bcast(res, r)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     };
 
     auto can_promote = [&](const ggml_tensor * r) -> bool {
@@ -173,6 +338,12 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
         if (!owner) {
             return false;
         }
+        if (!htp_f16_respect_prec_hints(*owner, r, it->second, nodes)) {
+            return false;
+        }
+        if (is_residual_spine_stop(*owner, r)) {
+            return false;
+        }
         if (owner->opcode == HTP_OP_GATED_DELTA_NET && !htp_f16_safe_gdn_output(*owner, r, nodes)) {
             return false;
         }
@@ -180,10 +351,11 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
     };
 
     auto is_selected_root = [&](const ggml_tensor * r) -> bool {
-        if (opt_f16_test != 0 || htp_f16_is_mm_root(nodes, r) || (opt_mm_f16_out >= 2 && htp_f16_is_rms_root(nodes, r))) {
+        if (opt_f16_test != 0 || htp_f16_is_mm_root(nodes, r) || htp_f16_is_fa_root(nodes, r) ||
+            (opt_opf16 >= 2 && htp_f16_is_rms_root(nodes, r))) {
             return true;
         }
-        if (opt_mm_f16_out) {
+        if (opt_opf16 >= 1) {
             for (const ggml_tensor * tensor : classes[r]) {
                 for (const htp_opnode & node : nodes) {
                     if (htp_f16_node_has_output(node, tensor)) {
@@ -198,6 +370,14 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
         }
         return false;
     };
+
+    for (const ggml_tensor * root : roots) {
+        auto it = classes.find(root);
+        if (it != classes.end() && htp_f16_is_root_candidate(root, produced) &&
+            htp_f16_safe_class(graph, root, it->second, node_idx) && find_owner(root)) {
+            ++n_candidates;
+        }
+    }
 
     struct replacement { const ggml_tensor ** slot; const ggml_tensor * old; };
     struct saved_node {
@@ -290,7 +470,7 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
             bool expanded = false;
             for (size_t i = 0; i < touched.size(); ++i) {
                 htp_opnode * tnode = touched[i].node;
-                if (htp_kparams_solve(sess, *tnode, true)) {
+                if (htp_f16_inplace_types_ok(*tnode) && htp_kparams_solve(sess, *tnode, true)) {
                     continue;
                 }
                 solved = false;
@@ -302,7 +482,9 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
                 }
                 for (const ggml_tensor * inp : tnode->inputs) {
                     const ggml_tensor * inp_root = inp ? htp_f16_root(inp) : nullptr;
-                    if (inp_root && can_promote(inp_root) && is_selected_root(inp_root) && apply_root(inp_root)) {
+                    if (inp_root && can_promote(inp_root) &&
+                        (is_selected_root(inp_root) || htp_f16_is_rms_root(nodes, inp_root)) &&
+                        apply_root(inp_root)) {
                         expanded = true;
                     }
                 }
@@ -330,9 +512,20 @@ void htp_f16_promote(const ggml_hexagon_session * sess, const ggml_cgraph * grap
         for (const ggml_tensor * r : tx_roots) {
             const auto & cls = classes[r];
             promoted.insert(cls.begin(), cls.end());
+            ++n_promoted_roots;
+            bytes_saved += ggml_nbytes(r) / 2;
+            auto dit = dummies.find(r);
+            if (dit != dummies.end() && htp_f16_is_mm_root(nodes, dit->second)) {
+                ++n_promoted_mm;
+            }
         }
         for (const auto & entry : dummies) {
             promoted.insert(entry.second);
         }
+    }
+
+    if (n_promoted_roots > 0 || opt_opf16 > 0) {
+        HEX_VERBOSE("ggml-hex: %s f16-promote opf16=%d roots=%zu/%zu mm_out=%zu saved=%zuB\n",
+                    htp_session_name(sess), opt_opf16, n_promoted_roots, n_candidates, n_promoted_mm, bytes_saved);
     }
 }

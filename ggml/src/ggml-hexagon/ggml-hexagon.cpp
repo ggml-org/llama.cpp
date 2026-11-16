@@ -153,7 +153,7 @@ int    opt_opqueue   = 8;    // max number of pending batches
 int    opt_optrace   = 0;    // trace buffer size per thread (0 means default)
 int    opt_oppoll    = 0;    // polling for batch completions
 int    opt_opfusion  = 1;    // enable/disable op fusion
-int    opt_mm_f16_out = 0;   // promote internal F32 MUL_MAT outputs to F16
+int    opt_opf16     = 0;    // promote internal F32 ops to F16 (0: off, 1: intra-layer, 2: full opbatch)
 int    opt_f16_test  = 0;    // promote any supported internal F32 output to F16
 int    opt_rt_repack = 1;    // runtime repacking: 0 = disabled, 1 = all tileable weights (default)
 
@@ -2534,7 +2534,7 @@ static std::vector<uintptr_t> ggml_hexagon_graph_signature(const ggml_cgraph * g
     std::vector<uintptr_t> signature;
     signature.reserve(3 + graph->n_nodes * (GGML_MAX_SRC + 1) * 3);
     signature.push_back((uintptr_t) opt_opfusion);
-    signature.push_back((uintptr_t) opt_mm_f16_out);
+    signature.push_back((uintptr_t) opt_opf16);
     signature.push_back((uintptr_t) opt_f16_test);
     for (int i = 0; i < graph->n_nodes; ++i) {
         const ggml_tensor * node = graph->nodes[i];
@@ -3568,7 +3568,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_opqueue  = getenv("GGML_HEXAGON_OPQUEUE");
     const char * str_oppoll   = getenv("GGML_HEXAGON_OPPOLL");
     const char * str_opfusion = getenv("GGML_HEXAGON_OPFUSION");
-    const char * str_mm_f16_out = getenv("GGML_HEXAGON_MM_F16_OUT");
+    const char * str_opf16    = getenv("GGML_HEXAGON_OPF16");
     const char * str_f16_test = getenv("GGML_HEXAGON_F16_TEST");
     const char * str_rt_repack = getenv("GGML_HEXAGON_RT_REPACK");
     const char * str_opfilter = getenv("GGML_HEXAGON_OPFILTER");
@@ -3632,7 +3632,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * HTP_TRACE_MAX_EVENTS + 131072);
     opt_oppoll    = str_oppoll   ? strtoul(str_oppoll,  NULL, 0)          : opt_oppoll;
     opt_opfusion  = str_opfusion ? atoi(str_opfusion)                     : opt_opfusion;
-    opt_mm_f16_out = str_mm_f16_out ? atoi(str_mm_f16_out)                : opt_mm_f16_out;
+    opt_opf16     = str_opf16    ? atoi(str_opf16)                        : opt_opf16;
     opt_f16_test  = str_f16_test ? atoi(str_f16_test)                     : opt_f16_test;
     opt_rt_repack = str_rt_repack ? atoi(str_rt_repack)                   : opt_rt_repack;
     opt_profile   = str_profile  ? atoi(str_profile)                      : 0;

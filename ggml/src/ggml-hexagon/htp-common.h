@@ -35,7 +35,7 @@ extern int    opt_opqueue;
 extern int    opt_optrace;
 extern int    opt_oppoll;
 extern int    opt_opfusion;
-extern int    opt_mm_f16_out;
+extern int    opt_opf16;
 extern int    opt_f16_test;
 extern int    opt_rt_repack;
 

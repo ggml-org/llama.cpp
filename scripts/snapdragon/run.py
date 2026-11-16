@@ -27,6 +27,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_OPPOLL",
     "GGML_HEXAGON_OPFILTER",
     "GGML_HEXAGON_OPFUSION",
+    "GGML_HEXAGON_OPF16",
     "GGML_HEXAGON_RT_REPACK",
     "GGML_HEXAGON_VMEM",
     "GGML_HEXAGON_MBUF",
@@ -216,6 +217,7 @@ def main():
     parser.add_argument("--hex-oppoll", default="1", help="Enable (1) or Disable (0) polling for NPU opbatch completion (GGML_HEXAGON_OPPOLL) (default: 1)")
     parser.add_argument("--hex-opfilter", help="Regex pattern to filter/select which operators are offloaded to NPU (GGML_HEXAGON_OPFILTER)")
     parser.add_argument("--hex-opfusion", help="NPU graph node fusion optimization level (0: disabled, 1: enabled) (GGML_HEXAGON_OPFUSION)")
+    parser.add_argument("--hex-opf16", help="NPU FP16 operator promotion policy (0: disabled, 1: intra-layer F16 with F32 residual spine, 2: full opbatch F16) (GGML_HEXAGON_OPF16)")
     parser.add_argument("--hex-rt-repack", help="Runtime weight repacking mode (0: disabled, 1: quantized only, 2: always) (GGML_HEXAGON_RT_REPACK)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
     parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 512,1024,0) (GGML_HEXAGON_MBUF)")
@@ -373,6 +375,7 @@ def main():
     set_env("GGML_HEXAGON_OPPOLL", args.hex_oppoll)
     set_env("GGML_HEXAGON_OPFILTER", args.hex_opfilter)
     set_env("GGML_HEXAGON_OPFUSION", args.hex_opfusion)
+    set_env("GGML_HEXAGON_OPF16", args.hex_opf16)
     set_env("GGML_HEXAGON_RT_REPACK", args.hex_rt_repack)
     set_env("GGML_HEXAGON_VMEM", args.hex_vmem)
     set_env("GGML_HEXAGON_MBUF", args.hex_mbuf)
@@ -410,7 +413,7 @@ def main():
 
     # Resolve executable path
     executable = cmd_args[0]
-    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops", "test-llama-archs"]
+    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "llama-perplexity", "test-backend-ops", "test-llama-archs"]
     if executable in known_binaries:
         if target_type in ("android", "linux"):
             resolved_exec = f"./bin/{executable}"

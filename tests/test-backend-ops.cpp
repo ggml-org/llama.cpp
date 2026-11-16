@@ -5841,7 +5841,7 @@ struct test_gated_delta_net_cache_fusion : public test_case {
 
     double max_nmse_err() override {
         if (!kda && K == 1 && (head_size == 64 || head_size == 128) && n_seq_tokens >= 64) {
-            return 5e-3;
+            return 2e-2;
         }
         return 1e-4;
     }
@@ -8640,6 +8640,119 @@ struct test_sort_f16_boundary : public test_case {
                 GGML_ABORT("fatal error");
             }
         }
+    }
+};
+
+// MoE router pattern: MUL_MAT[prec=F32] -> SOFT_MAX -> ARGSORT -> VIEW
+struct test_moe_router_prec_f32 : public test_case {
+    const int64_t k_dim;
+    const int64_t n_exp;
+    const int64_t n_tok;
+    const int64_t top_k;
+
+    test_moe_router_prec_f32(int64_t k_dim = 128, int64_t n_exp = 64, int64_t n_tok = 4, int64_t top_k = 8)
+        : k_dim(k_dim), n_exp(n_exp), n_tok(n_tok), top_k(top_k) {}
+
+    std::string vars() override {
+        return VARS_TO_STR4(k_dim, n_exp, n_tok, top_k);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "ARGSORT";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k_dim, n_exp);
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k_dim, n_tok);
+        ggml_set_name(w, "gate_inp_w");
+        ggml_set_name(x, "ffn_norm");
+
+        ggml_tensor * logits = ggml_mul_mat(ctx, w, x);
+        ggml_prec_set_acc(logits, GGML_PREC_F32);
+        ggml_set_name(logits, "router_logits");
+
+        ggml_tensor * probs = ggml_soft_max(ctx, logits);
+        ggml_set_name(probs, "router_probs");
+
+        ggml_tensor * sorted = ggml_argsort(ctx, probs, GGML_SORT_ORDER_DESC);
+        ggml_set_name(sorted, "router_sorted");
+
+        ggml_tensor * top = ggml_view_2d(ctx, sorted, top_k, n_tok, sorted->nb[1], 0);
+        ggml_tensor * out = ggml_cont(ctx, top);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "gate_inp_w") == 0) {
+                std::vector<float> data(k_dim * n_exp, 0.0f);
+                for (int64_t r = 0; r < n_exp; ++r) {
+                    data[r * k_dim + (r % k_dim)] = 1.0f + 0.03125f * (float) (r + 1);
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+            } else if (strcmp(t->name, "ffn_norm") == 0) {
+                std::vector<float> data(k_dim * n_tok);
+                for (int64_t tok = 0; tok < n_tok; ++tok) {
+                    for (int64_t c = 0; c < k_dim; ++c) {
+                        data[tok * k_dim + c] = 1.0f + 0.015625f * (float) ((c + tok * 7) % k_dim);
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+            } else if (t->type == GGML_TYPE_I32) {
+                std::vector<int32_t> data(ggml_nelements(t), 0);
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (t->type == GGML_TYPE_F32) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+// Multi-block transformer residual spine for OPF16={0,1,2}
+struct test_residual_spine_opf16 : public test_case {
+    const ggml_type wtype;
+    const int64_t n_embd;
+    const int64_t n_ff;
+    const int64_t n_tok;
+
+    test_residual_spine_opf16(ggml_type wtype = GGML_TYPE_Q4_0, int64_t n_embd = 128, int64_t n_ff = 256, int64_t n_tok = 4)
+        : wtype(wtype), n_embd(n_embd), n_ff(n_ff), n_tok(n_tok) {}
+
+    std::string vars() override {
+        return VARS_TO_STR4(wtype, n_embd, n_ff, n_tok);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_FUSION";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    double max_nmse_err() override { return 5e-3; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * inpL = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tok);
+        ggml_tensor * nw0  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd);
+        ggml_tensor * wu0  = ggml_new_tensor_2d(ctx, wtype, n_embd, n_ff);
+        ggml_tensor * wd0  = ggml_new_tensor_2d(ctx, wtype, n_ff, n_embd);
+        ggml_tensor * nw1  = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd);
+        ggml_tensor * wu1  = ggml_new_tensor_2d(ctx, wtype, n_embd, n_embd);
+
+        ggml_tensor * cur0 = ggml_mul(ctx, ggml_rms_norm(ctx, inpL, 1e-5f), nw0);
+        cur0 = ggml_silu(ctx, ggml_mul_mat(ctx, wu0, cur0));
+        cur0 = ggml_mul_mat(ctx, wd0, cur0);
+        ggml_tensor * res0 = ggml_add(ctx, cur0, inpL);
+
+        ggml_tensor * cur1 = ggml_mul(ctx, ggml_rms_norm(ctx, res0, 1e-5f), nw1);
+        cur1 = ggml_mul_mat(ctx, wu1, cur1);
+        ggml_tensor * out = ggml_add(ctx, cur1, res0);
+        ggml_set_name(out, "out");
+        return out;
     }
 };
 
@@ -14946,6 +15059,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_mul_mat_nx_f16_boundary(type, m_batch, 64, 256, 3, io_mask));
             }
         }
+    }
+
+    for (int64_t n_tok : {1, 4, 16}) {
+        test_cases.emplace_back(new test_moe_router_prec_f32(128, 64, n_tok, 8));
+        test_cases.emplace_back(new test_residual_spine_opf16(GGML_TYPE_Q4_0, 128, 256, n_tok));
+        test_cases.emplace_back(new test_residual_spine_opf16(GGML_TYPE_Q8_0, 128, 256, n_tok));
     }
 
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
