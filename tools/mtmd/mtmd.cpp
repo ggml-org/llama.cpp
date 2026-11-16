@@ -2056,6 +2056,11 @@ struct mtmd_tokenizer {
             // sanity check
             GGML_ASSERT(ctx->audio_preproc != nullptr);
 
+            // qwen3tts: the clip also gives the reference codes for cloning with a transcript, see mtmd_qwen3tts_ref_encode()
+            mtmd_image_f32 ref_wav;
+            const bool with_ref_codes = ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
+                                        ctx->ctx_gen_a && ctx->ctx_gen_a->model.has_ref_encoder();
+
             // preprocess audio
             auto source = std::make_shared<mtmd_audio_preproc_out>();
             {
@@ -2080,6 +2085,18 @@ struct mtmd_tokenizer {
                 if (!ctx->audio_preproc) {
                     LOG_ERR("%s: this model takes audio input only via mtmd_audio_stream\n", __func__);
                     return 2;
+                }
+                if (with_ref_codes) {
+                    const size_t sample_rate = (size_t) ctx->ctx_gen_a->model.hparams.audio_sample_rate;
+                    const size_t max_samples = (size_t) mtmd_hparams::qwen3tts_max_ref_seconds * sample_rate;
+                    if (n_samples > max_samples) {
+                        LOG_WRN("%s: speaker reference is %.1f s, its codes come from the first %d s\n", __func__,
+                                (double) n_samples / sample_rate, mtmd_hparams::qwen3tts_max_ref_seconds);
+                    }
+                    std::vector<float> wav(samples, samples + std::min(n_samples, max_samples));
+                    wav.resize(wav.size() + (size_t) mtmd_hparams::qwen3tts_ref_silence_ms * sample_rate / 1000, 0.0f);
+                    ref_wav.set_size({(int) wav.size(), 1}, false, true);
+                    ref_wav.cpy_buf(wav);
                 }
                 *source = ctx->audio_preproc->preprocess(samples, n_samples);
                 if (source->entries.empty()) {
@@ -2122,6 +2139,17 @@ struct mtmd_tokenizer {
                 mtmd_image_f32_batch batch_f32;
                 batch_f32.is_audio = true;
                 batch_f32.entries.push_back(std::move(mel_f32));
+
+                // the reference waveform is a second entry, its frames follow the speaker row
+                if (with_ref_codes && i == 0) {
+                    const auto & gen_hparams = ctx->ctx_gen_a->model.hparams;
+                    int64_t samples_per_frame = gen_hparams.mimi_downsample;
+                    for (int32_t ratio : gen_hparams.seanet_ratios) {
+                        samples_per_frame *= ratio;
+                    }
+                    n_tokens += (ref_wav.nx() + samples_per_frame - 1) / samples_per_frame;
+                    batch_f32.entries.push_back(std::move(ref_wav));
+                }
 
                 mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
                 audio_tokens->n_tokens = n_tokens;
@@ -2470,6 +2498,51 @@ static bool mtmd_audio_batch_encode(mtmd_context * ctx, const mtmd_image_f32_bat
     return ctx->ctx_a->encode_batch(ctx->n_threads, &batch, out_embd);
 }
 
+// qwen3tts: the speaker row, then one talker input row per reference frame
+// the reference codes go to ctx->gen_ref, so GEN_WAV continues from them, see mtmd_gen_state_set_ref()
+static int32_t mtmd_qwen3tts_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audio_tokens, std::vector<float> & out_embd) {
+    const size_t n_embd  = ctx->n_embd_out();
+    const auto & entries = audio_tokens->batch_f32.entries;
+    GGML_ASSERT(entries.size() == 2);
+
+    mtmd_image_f32_batch mel;
+    mel.is_audio = true;
+    mel.entries.push_back(entries[0]);
+
+    std::vector<float> speaker(n_embd);
+    if (!mtmd_audio_batch_encode(ctx, mel, audio_tokens->source.get(), audio_tokens->source_idx, speaker)) {
+        return 1;
+    }
+
+    mtmd_image_f32_batch wav;
+    wav.is_audio = true;
+    wav.entries.push_back(entries[1]);
+
+    std::vector<int32_t> codes;
+    std::vector<float>   rows;
+
+    mtmd_subctx_encode_params params;
+    params.imgs          = &wav;
+    params.n_threads     = ctx->n_threads;
+    params.gen_process   = MTMD_SUBCTX_GEN_PROCESS_TOKENIZE;
+    params.out_codes     = &codes;
+    params.out_code_embd = &rows;
+
+    if (!ctx->ctx_gen_a->encode(&params)) {
+        LOG_ERR("%s: encode failed (reference codes)\n", __func__);
+        return 1;
+    }
+    if (rows.size() != (size_t) (audio_tokens->n_tokens - 1) * n_embd) {
+        LOG_ERR("%s: %zu reference rows, expected %u\n", __func__, rows.size() / n_embd, audio_tokens->n_tokens - 1);
+        return 1;
+    }
+
+    out_embd = std::move(speaker);
+    out_embd.insert(out_embd.end(), rows.begin(), rows.end());
+    ctx->gen_ref.tokens = std::move(codes);
+    return 0;
+}
+
 static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
     ctx->gen_ref = {}; // see mtmd_gen_state_set_ref()
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
@@ -2523,6 +2596,9 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         }
         if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
             return cbx_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
+        }
+        if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC && chunk->tokens_audio->batch_f32.entries.size() == 2) {
+            return mtmd_qwen3tts_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
         }
         out_embd.resize((size_t)chunk->tokens_audio->n_tokens * ctx->n_embd_out());
         bool ok = mtmd_audio_batch_encode(ctx, chunk->tokens_audio->batch_f32, chunk->tokens_audio->source.get(), chunk->tokens_audio->source_idx, out_embd);
@@ -3068,7 +3144,9 @@ struct mtmd_gen_state {
     std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
 
     // voice reference for GEN_WAV, from a speaker clip or a predefined voice (chatterbox)
+    // qwen3tts: the reference codes, decoded once before the first GEN_WAV call so the speech continues from them
     mtmd_gen_ref ref;
+    bool ref_decoded = false;
 
     // lfm3a: the codec graph yields STFT frames, the ISTFT runs on the host
     std::unique_ptr<mtmd_audio_streaming_istft> istft;
@@ -3111,6 +3189,7 @@ void mtmd_gen_state_free(mtmd_gen_state * state) {
 
 void mtmd_gen_state_reset(mtmd_gen_state * state) {
     state->gen_state->reset();
+    state->ref_decoded = false;
     if (state->istft) {
         const auto * hparams = &state->sctx->model.hparams;
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
@@ -3456,6 +3535,7 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
         return 1;
     }
     state->ref = ctx->gen_ref;
+    state->ref_decoded = false;
     return 0;
 }
 
@@ -3614,11 +3694,27 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     params.imgs        = &batch;
     params.n_threads   = ctx->n_threads;
     params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
-    params.codes       = has_codes ? &in_codes : nullptr;
-    params.feats       = has_feats ? &in_feats : nullptr;
     params.out_audio   = &state->out_audio;
     params.gen_state   = state->gen_state;
 
+    // qwen3tts: decode the end of the reference first, its audio is dropped and the speech continues from it
+    if (sctx->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && !state->ref.tokens.empty() && !state->ref_decoded) {
+        state->ref_decoded = true;
+
+        const size_t n_codes = (size_t) sctx->model.gen_code_head_w->ne[2] + 1;
+        const size_t n_ref   = state->ref.tokens.size() / n_codes;
+        const size_t n_tail  = std::min(n_ref, (size_t) sctx->model.hparams.wav_tfm_swa);
+        std::vector<int32_t> tail(state->ref.tokens.end() - (std::ptrdiff_t) (n_tail * n_codes), state->ref.tokens.end());
+
+        params.codes = &tail;
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: encode failed (reference codes)\n", __func__);
+            return 1;
+        }
+    }
+
+    params.codes = has_codes ? &in_codes : nullptr;
+    params.feats = has_feats ? &in_feats : nullptr;
     if (!sctx->encode(&params)) {
         LOG_ERR("%s: encode failed (code2wav)\n", __func__);
         return 1;

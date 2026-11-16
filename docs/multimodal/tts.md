@@ -22,6 +22,7 @@ The sections below list the params supported by each model, with `llama-tts` exa
 Available params:
 - `--tts-lang` can be `zh`, `en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, `ru` (default: `en`)
 - `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3)
+- `--tts-speaker-text` is the transcript of the speaker file. With it, the speech continues from the reference codes (the "ICL" mode of the reference), which clones the voice more closely. The codes come from the first 30 s of the clip. It needs an mmproj converted with the speech tokenizer encoder, older files fall back to the speaker embedding only
 
 Example usage:
 
@@ -30,6 +31,16 @@ llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
     -p "Hello world" \
     --tts-lang english \
     --tts-speaker-file speaker.mp3 \
+    --output out.wav
+```
+
+Voice cloning with the transcript of the reference:
+
+```sh
+llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF \
+    -p "Hello world" \
+    --tts-speaker-file speaker.wav \
+    --tts-speaker-text "The words spoken in speaker.wav." \
     --output out.wav
 ```
 

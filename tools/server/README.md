@@ -866,7 +866,7 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list 
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
-`speaker_ref_text`: Transcript of the reference audio, put in the prompt by some models (e.g. Fish Audio S2 Pro). Optional.
+`speaker_ref_text`: Transcript of the reference audio, put in the prompt by some models (e.g. Fish Audio S2 Pro, Qwen3-TTS). Optional.
 
 `top_k`, `top_p`: Sampling params for both the backbone sampler and the acoustic code predictor. Optional, `0` or absent keeps the server `--top-k`/`--top-p` for the backbone and the model defaults for the code predictor.
 
