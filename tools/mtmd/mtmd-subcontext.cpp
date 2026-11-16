@@ -1596,6 +1596,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_SOPRANO:
         case PROJECTOR_TYPE_YUE2_GEN:
+        case PROJECTOR_TYPE_TINY_VOCA:
             {
                 set_input_f32("inp_feats", *params->feats);
             } break;

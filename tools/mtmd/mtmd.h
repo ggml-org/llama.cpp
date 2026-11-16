@@ -479,6 +479,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
     MTMD_GEN_AUDIO_TYPE_FISH_S2,
     MTMD_GEN_AUDIO_TYPE_KOKORO,
+    MTMD_GEN_AUDIO_TYPE_TINY_VOCA,
 };
 
 struct mtmd_gen_audio_info {

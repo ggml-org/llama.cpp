@@ -177,6 +177,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_POCKETTTS,        "pockettts"        },
     { LLM_ARCH_ZONOS3,           "zonos3"           },
     { LLM_ARCH_KOKORO,           "kokoro"           },
+    { LLM_ARCH_TINY_VOCA,        "tiny-voca"        },
     { LLM_ARCH_K2_HORIZON,       "k2-horizon"       },
     { LLM_ARCH_BEAM,             "beam"             },
     { LLM_ARCH_KOLIBRI1,         "kolibri1"         },

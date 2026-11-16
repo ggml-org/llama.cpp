@@ -945,6 +945,34 @@ struct mtmd_zonos3_wav {
     int64_t rs_kernel_len = 0;
 };
 
+// tiny-voca: duration predictor and source-filter heads (graphs), the small linear layers between the stacks (host)
+// the prosody and acoustic stacks are loaded by libllama, see mtmd_owned_llama_load()
+struct mtmd_tiny_voca {
+    ggml_tensor * dur_conv1_w = nullptr; // [3, n_embd, n_pred]
+    ggml_tensor * dur_conv1_b = nullptr;
+    ggml_tensor * dur_norm1_w = nullptr;
+    ggml_tensor * dur_norm1_b = nullptr;
+    ggml_tensor * dur_conv2_w = nullptr; // [3, n_pred, n_pred]
+    ggml_tensor * dur_conv2_b = nullptr;
+    ggml_tensor * dur_norm2_w = nullptr;
+    ggml_tensor * dur_norm2_b = nullptr;
+    ggml_tensor * dur_out_w   = nullptr; // [n_pred, 2]: log(1 + frames), pause logit
+    ggml_tensor * dur_out_b   = nullptr;
+    ggml_tensor * harm_w      = nullptr; // [n_embd, n_cep_causal + n_cep_anti + harm_steps]
+    ggml_tensor * harm_b      = nullptr;
+    ggml_tensor * noise_w     = nullptr; // [n_embd, n_noise_cep + noise_steps]
+    ggml_tensor * noise_b     = nullptr;
+
+    // read on the host, row-major as in the reference
+    std::vector<float> token_class;    // [n_vocab]: 0 = pause, 1 = consonant, 2 = vowel
+    std::vector<float> frame_pos_w;    // [n_embd, 3]
+    std::vector<float> frame_pos_b;    // [n_embd]
+    std::vector<float> prosody_head_w; // [3, n_embd]: log(F0 / 200 Hz), voiced logit, energy
+    std::vector<float> prosody_head_b;
+    std::vector<float> prosody_proj_w; // [n_embd, 3]
+    std::vector<float> prosody_proj_b;
+};
+
 // snake-activated conv decoder of the DAC / Oobleck family (a.gen.vae.*): yue2 VAE, minimax_music3 vocoder
 struct mtmd_snake_vae {
     // x + beta * sin(alpha * x)^2, alpha and beta folded at conversion
@@ -1320,6 +1348,7 @@ struct mtmd_model {
     mtmd_yue2 yue2;
     mtmd_music3 music3;
     mtmd_snake_vae snake_vae; // yue2, minimax_music3
+    mtmd_tiny_voca tiny_voca;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     mtmd_seanet seanet;

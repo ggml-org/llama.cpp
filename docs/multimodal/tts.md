@@ -16,6 +16,7 @@ Supported models:
 - [YuE2](#yue2) (songs)
 - [MiniMax Music 3](#minimax-music-3) (songs)
 - [Kokoro](#kokoro)
+- [tiny-voca](#tiny-voca)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -423,3 +424,44 @@ python -m nltk.downloader averaged_perceptron_tagger_eng
 ```
 
 Without them the converter writes no `tts` template, and the prompt must be a phoneme string (as produced by misaki).
+
+## tiny-voca
+
+[tiny-voca](https://huggingface.co/n4ze3m/tiny-voca): a 4.5M-parameter English TTS model. A phoneme encoder (the text model), then a duration predictor, two frame transformers and a source-filter synthesizer (in the mmproj).
+
+Available params:
+- `--tts-voice` can be `M2` (default) or `F2`
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the synthesizer
+- `speed` (`llama-server` only) changes the speaking rate, from `0.25` to `4`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m tiny-voca.gguf \
+    -mm mmproj-tiny-voca.gguf \
+    -p "Hello! The meeting moved to 3:30 pm." \
+    --tts-voice F2 \
+    --output out.wav
+```
+
+The model speaks phonemes. The text to phonemes step is the model's `tts` chat template, a partial port of [dizione](https://github.com/n4ze3m/dizione) (the reference one), with its pronunciation dictionary and tables stored in the model:
+- a word missing from the dictionary is spelled letter by letter: the unknown-word model of dizione is not ported
+- not ported yet: homographs, word endings of unknown words, most of the text normalization (numbers, money, percent, times, ordinals and the common abbreviations are read)
+
+With `llama-server`, send `"raw_prompt": true` to pass phonemes directly, in the format printed by dizione: symbols separated by spaces, `<sp>` between words, a stress mark (`ˈ` or `ˌ`) before a stressed vowel, e.g. `h ə l ˈoʊ <sp> w ˈɜː l d .`
+
+Each sentence is spoken as one utterance, a full stop is added when a sentence ends without a mark.
+
+**Note for GGUF conversion:**
+
+Convert the root of the repository (it needs `config.json`, `tiny-voca.pt` and `phonemizer/lexicon.tsv`). The other tables of the `tts` template come from the `dizione` python package; without it the converter writes no `tts` template, and the prompt must be phonemes:
+
+```sh
+pip install git+https://github.com/n4ze3m/dizione
+```
+
+```sh
+python convert_hf_to_gguf.py path/to/tiny-voca --outfile tiny-voca.gguf
+python convert_hf_to_gguf.py path/to/tiny-voca --mmproj --outfile mmproj-tiny-voca.gguf
+```
