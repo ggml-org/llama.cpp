@@ -38,7 +38,8 @@ jobs:
   bench:
     runs-on: [self-hosted, Linux, gb10, perf]
     container:
-      image: "nvidia/cuda:13.5.0-devel-ubuntu26.04"
+      # 24.04: its Python 3.12 suits aiperf (<3.14)
+      image: "nvidia/cuda:13.5.0-devel-ubuntu24.04"
       options: --gpus all
     # M1-M5: ~6.8 h measured (tools/server/bench/nightly/BENCHMARKS.md)
     timeout-minutes: 480
@@ -48,9 +49,8 @@ jobs:
 
     env:
       BENCH_DIR: tools/server/bench/nightly
-      # rebuilt in every container; uv's cache and Python stay in NIGHTLY_HOME to keep that quick
+      # rebuilt in every container; pip's cache stays in NIGHTLY_HOME, so crick is built once
       VENV: /opt/bench-venv
-      UV_LINK_MODE: copy
 
     steps:
       - name: Bench home
@@ -61,8 +61,7 @@ jobs:
           home="$(dirname "$RUNNER_WORKSPACE")/llama-nightly"
           {
             echo "NIGHTLY_HOME=$home"
-            echo "UV_CACHE_DIR=$home/container/uv-cache"
-            echo "UV_PYTHON_INSTALL_DIR=$home/container/uv-python"
+            echo "PIP_CACHE_DIR=$home/container/pip-cache"
             echo "HF_HOME=$home/container/hf-cache"
           } >> "$GITHUB_ENV"
 
@@ -72,7 +71,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates git curl unzip python3 python3-venv
+          apt-get install -y --no-install-recommends ca-certificates git curl unzip python3 python3-dev python3-venv
 
       - name: Clone
         id: checkout
@@ -80,12 +79,10 @@ jobs:
 
       - name: Python venv
         id: venv
-        # uv-managed Python 3.12: aiperf needs <3.14 and Python headers to build crick on arm64
+        # python3-dev: aiperf builds crick from source on arm64
         run: |
-          python3 -m venv /opt/uv-venv
-          /opt/uv-venv/bin/pip install -q uv
-          /opt/uv-venv/bin/uv venv -q --python 3.12 --managed-python "$VENV"
-          VIRTUAL_ENV="$VENV" /opt/uv-venv/bin/uv pip install -q -r "$BENCH_DIR/requirements.txt"
+          python3 -m venv "$VENV"
+          "$VENV/bin/pip" install -q -r "$BENCH_DIR/requirements.txt"
 
       - name: Prefetch build, models and data
         id: prefetch
