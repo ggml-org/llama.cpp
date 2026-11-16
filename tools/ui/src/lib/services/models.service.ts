@@ -189,6 +189,14 @@ export class ModelsService {
 		// parses like a clean repo id; the HF `org/model` form is preserved
 		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
 
+		const bareSidecar = sidecarFromFileToken(source.toLowerCase());
+
+		if (bareSidecar) {
+			result.sidecar = bareSidecar;
+
+			return result;
+		}
+
 		// 0. Detect sidecar prefix (mtp-, dflash-, mmproj-) before any other
 		//    splitting so the inner id parses cleanly.
 		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_REGEX);

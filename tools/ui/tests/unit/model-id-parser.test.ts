@@ -369,6 +369,10 @@ describe('parseModelId', () => {
 			sidecar: ModelAuxSidecar.MMPROJ
 		});
 
+		expect(parseModelId('imatrix.gguf')).toMatchObject({
+			sidecar: ModelAuxSidecar.IMATRIX
+		});
+
 		// embedded-draft suffix: -<type> only strips when preceded by a quant
 		expect(parseModelId('ggml-org/Hy3-IQ1_M-mtp')).toMatchObject({
 			modelName: 'Hy3',
