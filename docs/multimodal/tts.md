@@ -235,7 +235,7 @@ Available params:
 - `--tts-voice` picks the planning mode of the reference (`cot`): `full` (default, a chord-annotated score), `melody` (a melody-only score) or `off` (no score)
 - Cover mode: append the score to the prompt as `\n[ABC]\n<score>`, with `--tts-voice melody` or `full`; the model then goes straight to the codes
 - `-n` counts the score tokens and the codes together, a song needs several thousands: use `-n 16000` (at most 4096 score tokens and 9000 codes, 6 minutes, are generated as in the reference)
-- `-c` must hold the prompt, the score and the codes, e.g. `-c 24576`
+- The context must keep the default size (24576 positions, the one of the reference): a smaller `-c` is rejected when the model is loaded
 - Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
 - Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
 - The codes are sampled with classifier-free guidance like the reference: scale 1.01 with `--tts-voice off`, off (1.0) otherwise. `llama-server` takes `cfg_scale` to change it, the reference suggests 1.2 for a stronger text guidance. The uncond prompt runs as a second sequence, so the context must also hold it (the instruction, the score and the codes once more)
@@ -247,7 +247,7 @@ Example usage:
 llama-tts -m yue2-3b.gguf \
     -mm mmproj-yue2-3b.gguf \
     -f song.txt \
-    -n 16000 -c 24576 \
+    -n 16000 \
     --output song.wav
 ```
 

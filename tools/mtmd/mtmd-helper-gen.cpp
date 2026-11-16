@@ -95,6 +95,8 @@ public:
           n_embd(llama_model_n_embd(model)), info(mtmd_gen_audio_get_info(mctx)) {}
     virtual ~mtmd_gen_audio_pipeline() = default;
 
+    // false if the backbone context cannot run the pipeline, checked once by mtmd_helper_gen_audio_init()
+    virtual bool check_context() const { return true; }
     virtual void reset() = 0;
     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
     // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
@@ -2961,6 +2963,18 @@ public:
 
     bool supports_cfg() const override { return true; }
 
+    // the generation budgets and the NAR chunks of the reference are sized for the training context (24576 positions)
+    // the cfg sequence shares the unified KV cache, a song with cfg may still need to stop early (see step_gen())
+    bool check_context() const override {
+        const uint32_t n_ctx_train = (uint32_t) llama_model_n_ctx_train(model);
+        if (llama_n_ctx_seq(lctx) < n_ctx_train) {
+            LOG_ERR("mtmd_helper_gen_audio: yue2 needs a context of %u positions per sequence, got %u (use the default context size)\n",
+                    n_ctx_train, llama_n_ctx_seq(lctx));
+            return false;
+        }
+        return true;
+    }
+
     void reset() override {
         seq_id = 0;
         pos = 0;
@@ -3607,6 +3621,10 @@ struct mtmd_helper_gen_audio {
 mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(struct llama_context * lctx, struct mtmd_context * mctx) {
     auto * ctx = new mtmd_helper_gen_audio();
     ctx->pipeline = make_pipeline(lctx, mctx);
+    if (ctx->pipeline && !ctx->pipeline->check_context()) {
+        delete ctx;
+        return nullptr;
+    }
     return ctx;
 }
 

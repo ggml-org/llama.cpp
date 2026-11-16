@@ -1540,6 +1540,10 @@ private:
 
             if (has_cap_tts()) {
                 slot.tts.ctx.init(ctx_tgt, mctx);
+                if (!slot.tts.is_supported()) {
+                    SRV_ERR("%s", "the context cannot run the audio generation of this model\n");
+                    return false;
+                }
             }
 
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);

@@ -142,6 +142,10 @@ int main(int argc, char ** argv) {
 
     mtmd_helper::gen_audio gen;
     gen.init(lctx, mctx.get());
+    if (!gen.valid()) {
+        LOG_ERR("the context cannot run the audio generation of this model\n");
+        return 1;
+    }
     mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
     inp.prompt      = prompt.c_str();

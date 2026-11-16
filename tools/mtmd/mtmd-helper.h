@@ -330,6 +330,7 @@ struct mtmd_helper_gen_audio_inp {
 
 MTMD_API struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void);
 
+// returns nullptr if the context cannot run the pipeline of the model (e.g. a context too small)
 MTMD_API mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(
                                     struct llama_context * lctx,
                                     struct mtmd_context * mctx);
