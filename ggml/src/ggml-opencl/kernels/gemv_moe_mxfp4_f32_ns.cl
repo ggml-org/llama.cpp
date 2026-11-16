@@ -80,7 +80,8 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns(
     int           ids_stride
 ) {
     uint i01  = get_global_id(0);
-    uint i20  = get_global_id(2);
+    uint slot = get_global_id(2);  // expert slot of the token
+    uint tok  = get_group_id(1);   // token
     uint sgid = get_local_id(1);
     uint slid = get_sub_group_local_id();
 
@@ -88,11 +89,12 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns(
         return;
     }
 
-    // i20 runs over n_tokens x n_expert_used routings; src1 has ne11 = 1 (shared input)
-    // or ne20 rows per token
-    uint i11 = (i20 / ne20) * ne11 + (i20 % ne20) % ne11;
+    // dim 1 runs over tokens (4 subgroups each), dim 2 over expert slots; src1 has
+    // ne11 = 1 (shared input) or ne20 rows per token
+    uint i20 = tok * ne20 + slot;
+    uint i11 = tok * ne11 + slot % ne11;
 
-    uint expert_id = src2[(i20 / ne20) * ids_stride + i20 % ne20];
+    uint expert_id = src2[tok * ids_stride + slot];
     if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
         return;
     }
@@ -186,7 +188,8 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns_wimg(
     int           ids_stride
 ) {
     uint i01  = get_global_id(0);
-    uint i20  = get_global_id(2);
+    uint slot = get_global_id(2);  // expert slot of the token
+    uint tok  = get_group_id(1);   // token
     uint sgid = get_local_id(1);
     uint slid = get_sub_group_local_id();
 
@@ -194,11 +197,12 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns_wimg(
         return;
     }
 
-    // i20 runs over n_tokens x n_expert_used routings; src1 has ne11 = 1 (shared input)
-    // or ne20 rows per token
-    uint i11 = (i20 / ne20) * ne11 + (i20 % ne20) % ne11;
+    // dim 1 runs over tokens (4 subgroups each), dim 2 over expert slots; src1 has
+    // ne11 = 1 (shared input) or ne20 rows per token
+    uint i20 = tok * ne20 + slot;
+    uint i11 = tok * ne11 + slot % ne11;
 
-    uint expert_id = src2[(i20 / ne20) * ids_stride + i20 % ne20];
+    uint expert_id = src2[tok * ids_stride + slot];
     if ((int)expert_id == -1) { // skipped slot, the dst row is zeroed by kernel_moe_zero_dst
         return;
     }

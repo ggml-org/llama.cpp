@@ -36701,8 +36701,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                     // set thread grid
                     global_size[0] = static_cast<size_t>(((ne01 + 63) / 64) * 64);
-                    global_size[1] = 4;
-                    global_size[2] = static_cast<size_t>(ne20 * ne12);
+                    global_size[1] = static_cast<size_t>(4 * ne12); // 4 subgroups per token
+                    global_size[2] = static_cast<size_t>(ne20);
                     local_size[1] = 4;
 
                     // create a sub_buffer for src1
