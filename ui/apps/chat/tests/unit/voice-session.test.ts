@@ -45,10 +45,16 @@ const clip: VoiceClip = {
 
 function fakeCapture() {
 	const pcm = new Set<VoicePcmListener>();
+	const levels = new Set<(levels: number[]) => void>();
 	const capture = {
 		cancel: vi.fn(),
 		levels: [0, 0],
-		onLevels: vi.fn(() => () => {}),
+		levelsIntervalMs: 50,
+		onLevels: vi.fn((listener: (levels: number[]) => void) => {
+			levels.add(listener);
+
+			return () => levels.delete(listener);
+		}),
 		onPcm: (listener: VoicePcmListener) => {
 			pcm.add(listener);
 
@@ -67,6 +73,10 @@ function fakeCapture() {
 	return {
 		capture: capture as unknown as VoiceCapture,
 		emitPcm: (chunk: Int16Array) => pcm.forEach((listener) => listener(chunk)),
+		/** Holds one input level for `ms`, as the capture reports it every 50 ms. */
+		holdLevel: (level: number, ms: number) => {
+			for (let t = 0; t < ms; t += 50) levels.forEach((listener) => listener([level]));
+		},
 		raw: capture
 	};
 }
@@ -139,6 +149,65 @@ describe('startVoiceSession', () => {
 
 		await expect(result.transcript).resolves.toBe('Hi.');
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	describe('a recording transcribed in pieces', () => {
+		const COMPLETED = 'conversation.item.input_audio_transcription.completed';
+
+		/** Speaks two pieces with a pause between them and stops. */
+		async function speakTwoPieces(fetchMock: ReturnType<typeof vi.fn>) {
+			const onText = vi.fn();
+			const { capture, emitPcm, holdLevel } = fakeCapture();
+			const session = await startVoiceSession({
+				capture,
+				onText,
+				transcribe: { context: serverContext(fetchMock as unknown as typeof fetch) }
+			});
+			const ws = FakeWebSocket.instances[0];
+
+			// a model that holds conversations transcribes per commit
+			ws.emit({ session: { type: 'realtime' }, type: 'session.created' });
+			await flush();
+
+			emitPcm(Int16Array.from([1]));
+			holdLevel(0.05, 200);
+			holdLevel(0.6, 500);
+			holdLevel(0.05, 400);
+
+			expect(ws.sent.filter((event) => event.type === 'input_audio_buffer.commit')).toHaveLength(1);
+
+			ws.emit({ transcript: 'I went.', type: COMPLETED });
+			expect(onText).toHaveBeenLastCalledWith('I went.');
+
+			emitPcm(Int16Array.from([2]));
+			holdLevel(0.6, 500);
+
+			const result = await session.stop();
+
+			ws.emit({ transcript: 'To the store.', type: COMPLETED });
+
+			return result;
+		}
+
+		it('is transcribed once more as a whole, punctuated by meaning', async () => {
+			const fetchMock = vi.fn(
+				async () => new Response(JSON.stringify({ text: 'I went to the store.' }))
+			);
+			const result = await speakTwoPieces(fetchMock);
+
+			expect(result.liveText).toBe('I went.');
+			await expect(result.transcript).resolves.toBe('I went to the store.');
+			expect(fetchMock).toHaveBeenCalledOnce();
+		});
+
+		it('keeps its pieces when the whole pass fails', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			const fetchMock = vi.fn(async () => new Response('busy', { status: 503 }));
+			const result = await speakTwoPieces(fetchMock);
+
+			await expect(result.transcript).resolves.toBe('I went. To the store.');
+			warn.mockRestore();
+		});
 	});
 
 	it('falls back to HTTP when the model cannot stream', async () => {

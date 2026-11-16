@@ -83,6 +83,7 @@ export class RealtimeTranscriber {
 	private readonly options: RealtimeTranscriberOptions;
 	private pendingConnect: Pending<void> | null = null;
 	private pendingFinish: Pending<string> | null = null;
+	private pieces = 0;
 	private queue: string[] = [];
 	private sentAudio = false;
 	private socket: WebSocket | null = null;
@@ -95,6 +96,11 @@ export class RealtimeTranscriber {
 	 */
 	get canCommitSegment(): boolean {
 		return this.state === 'open' && !this.live && this.audioSinceCommit && this.inFlight === 0;
+	}
+
+	/** Pieces committed with commitSegment(), the final commit not counted. */
+	get piecesCommitted(): number {
+		return this.pieces;
 	}
 
 	/** True between session.created and finish() or close(). */
@@ -138,6 +144,7 @@ export class RealtimeTranscriber {
 		if (!this.canCommitSegment) return;
 
 		this.inFlight++;
+		this.pieces++;
 		this.audioSinceCommit = false;
 		this.send({ type: VOICE_REALTIME_EVENTS.COMMIT });
 	}

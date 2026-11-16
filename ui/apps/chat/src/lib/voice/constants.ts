@@ -48,6 +48,13 @@ export const VOICE_PIECE = {
 	PAUSE_MS: 350
 } as const;
 
+/**
+ * Longest recording that is transcribed once more as a whole when it ends. Pieces cut at
+ * the speaker's pauses come back as sentences of their own ("I went. To the store."); one
+ * pass over the whole clip punctuates by meaning. Past this, the pieces' text is kept.
+ */
+export const VOICE_RETRANSCRIBE_MAX_MS = 120_000;
+
 /** How long a started capture waits for its first audio before it counts as recording anyway. */
 export const VOICE_FIRST_AUDIO_TIMEOUT_MS = 1500;
 

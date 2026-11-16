@@ -111,7 +111,10 @@ export interface VoiceSessionResult {
 	clip: VoiceClip;
 	/** Text the realtime socket gave while speaking, null when it streamed none */
 	liveText: string | null;
-	/** Resolves with the final transcript (realtime, else HTTP); null when not asked to transcribe */
+	/**
+	 * Resolves with the final transcript (realtime, else HTTP; a recording transcribed in pieces
+	 * once more as a whole); null when not asked to transcribe
+	 */
 	transcript: Promise<string> | null;
 }
 

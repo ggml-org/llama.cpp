@@ -1,5 +1,5 @@
 import { VoiceCapture } from './capture';
-import { VOICE_LEVELS_INTERVAL_MS, VOICE_PIECE } from './constants';
+import { VOICE_LEVELS_INTERVAL_MS, VOICE_PIECE, VOICE_RETRANSCRIBE_MAX_MS } from './constants';
 import { RealtimeUnsupportedError } from './errors';
 import { PauseDetector } from './pauses';
 import { RealtimeTranscriber } from './realtime';
@@ -143,12 +143,30 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 			let transcript: Promise<string>;
 
 			if (realtime?.ready) {
+				// more than one piece: the text was cut at pauses, maybe inside a sentence
+				const split = !realtime.live && realtime.piecesCommitted + (speechSinceCommit ? 1 : 0) > 1;
 				// a silent rest is left out: a model may hear a word ("yeah") in silence
-				transcript = realtime.finish({ commitRest: speechSinceCommit }).catch((error) => {
+				const pieces = realtime.finish({ commitRest: speechSinceCommit }).catch((error) => {
 					console.warn('Realtime transcript failed, transcribing over HTTP:', error);
 
 					return overHttp();
 				});
+
+				transcript =
+					split && clip.durationMs <= VOICE_RETRANSCRIBE_MAX_MS
+						? // the whole clip once more, punctuated by meaning, not by the pauses
+							overHttp().then(
+								(text) => text || pieces,
+								(error) => {
+									console.warn(
+										'Transcribing the whole recording failed, keeping its pieces:',
+										error
+									);
+
+									return pieces;
+								}
+							)
+						: pieces;
 			} else {
 				// still connecting at the end: the HTTP request is the shorter wait
 				realtime?.close();
