@@ -3346,15 +3346,7 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
         return o;
     };
 
-    llama_batch batch = llama_batch_init((int32_t) n_rows, (int32_t) n_embd, 1);
-    batch.n_tokens = (int32_t) n_rows;
-    for (int64_t i = 0; i < n_rows; i++) {
-        batch.pos[i]       = (llama_pos) (n_past + i);
-        batch.n_seq_id[i]  = 1;
-        batch.seq_id[i][0] = 0;
-        batch.logits[i]    = 1;
-    }
-
+    llama_batch_ext_ptr batch(llama_batch_ext_init(lctx.get()));
     std::vector<float> x_rows((size_t) (n_rows * g::n_latent), 0.0f);
     std::vector<float> embd, hidden, vel;
     auto velocity = [&](const std::vector<float> & x, double t, std::vector<float> & v) -> bool {
@@ -3363,12 +3355,22 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
             return false;
         }
         const std::vector<float> temb = time_embd(t);
+        llama_batch_ext_clear(batch.get());
         for (int64_t i = 0; i < n_rows; i++) {
             for (int64_t j = 0; j < n_embd; j++) {
-                batch.embd[i * n_embd + j] = embd[i * n_embd + j] + temb[j] + pos_embd[i * n_embd + j];
+                embd[i * n_embd + j] = embd[i * n_embd + j] + temb[j] + pos_embd[i * n_embd + j];
             }
+            const llama_embd row = { embd.data() + i * n_embd, 1, (size_t) n_embd };
+            const llama_pos  p   = (llama_pos) (n_past + i);
+            const int32_t    idx = llama_batch_ext_add_embd(batch.get(), 0, row);
+            if (idx < 0) {
+                LOG_ERR("%s: failed to add a row to the batch (error %d)\n", __func__, idx);
+                return false;
+            }
+            llama_batch_ext_set_pos(batch.get(), idx, &p);
+            llama_batch_ext_set_output_embd(batch.get(), idx, true);
         }
-        if (llama_decode(lctx.get(), batch) != 0) {
+        if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("%s: NAR decode failed\n", __func__);
             return false;
         }
@@ -3404,7 +3406,6 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
             x[i] -= v2[i] * (float) dt;
         }
     }
-    llama_batch_free(batch);
     if (!ok) {
         return 1;
     }

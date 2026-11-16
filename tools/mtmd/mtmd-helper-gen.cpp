@@ -3286,18 +3286,12 @@ private:
     sampling code_cfg = { 1.0f, 0.95f, 100, 1.2f,   50,  200, 9000 };
 
     bool decode_ctx(llama_context * ctx, const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
-        llama_batch batch = llama_batch_init(n, 0, 1);
-        for (int32_t i = 0; i < n; i++) {
-            batch.token   [i]    = toks[i];
-            batch.pos     [i]    = p + i;
-            batch.n_seq_id[i]    = 1;
-            batch.seq_id  [i][0] = seq;
-            batch.logits  [i]    = i == n - 1;
+        llama_batch_ext_ptr batch(llama_batch_ext_init(ctx));
+        if (!batch_set_tokens(batch.get(), toks, n, p, seq)) {
+            return false;
         }
-        batch.n_tokens = n;
-        const int32_t ret = llama_decode(ctx, batch);
-        llama_batch_free(batch);
-        if (ret != 0) {
+        llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return false;
         }
@@ -3348,20 +3342,19 @@ private:
     }
 
     bool decode_pair(llama_token tok) {
-        llama_batch batch = llama_batch_init(2, 0, 1);
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
         const llama_seq_id seqs[2] = { seq_id, seq_uncond };
         const llama_pos    p[2]    = { pos, upos };
         for (int i = 0; i < 2; i++) {
-            batch.token   [i]    = tok;
-            batch.pos     [i]    = p[i];
-            batch.n_seq_id[i]    = 1;
-            batch.seq_id  [i][0] = seqs[i];
-            batch.logits  [i]    = 1;
+            const int32_t idx = llama_batch_ext_add_token(batch.get(), seqs[i], tok);
+            if (idx < 0) {
+                LOG_ERR("mtmd_helper_gen_audio: failed to add token %d to batch (error %d)\n", tok, idx);
+                return false;
+            }
+            llama_batch_ext_set_pos(batch.get(), idx, &p[i]);
+            llama_batch_ext_set_output_logits(batch.get(), idx, true);
         }
-        batch.n_tokens = 2;
-        const int32_t ret = llama_decode(lctx, batch);
-        llama_batch_free(batch);
-        if (ret != 0) {
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return false;
         }
