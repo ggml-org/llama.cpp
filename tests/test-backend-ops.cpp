@@ -11715,6 +11715,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F16, 1, 0, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F16, 1, 0, 1, true));
+    // 5x5 s=1 p=2 d=1 (dedicated HTP kernel)
+    test_cases.emplace_back(new test_conv_2d_dw({32, 24, 16, 1}, {5, 5, 1, 16}, GGML_TYPE_F16, 1, 2, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({33, 17, 9, 2},  {5, 5, 1, 9},  GGML_TYPE_F16, 1, 2, 1, false));
+    // batched, fewer channels than HVX threads
+    test_cases.emplace_back(new test_conv_2d_dw({16, 16, 2, 4},  {5, 5, 1, 2},  GGML_TYPE_F16, 1, 2, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({16, 16, 1, 4},  {5, 5, 1, 1},  GGML_TYPE_F16, 1, 2, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({104, 80, 32, 1}, {5, 5, 1, 32}, GGML_TYPE_F16, 1, 2, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F16, 2, 1, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F16, 2, 1, 1, true));
 
@@ -14770,6 +14777,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_conv_2d_dw({112, 112, 32,  1}, {3, 3, 1, 32},  GGML_TYPE_F32, 1, 1, 1, true));
     test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, GGML_TYPE_F32, 2, 2, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, GGML_TYPE_F32, 2, 2, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, GGML_TYPE_F16, 1, 2, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({112, 112, 64,  1}, {5, 5, 1, 64},  GGML_TYPE_F16, 1, 2, 1, false));
 
     for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1, kernel_type));

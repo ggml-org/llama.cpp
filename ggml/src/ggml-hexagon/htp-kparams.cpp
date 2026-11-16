@@ -4632,6 +4632,37 @@ static bool htp_kparams_solve_conv2d_dw(
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
+    // 5x5 s=1 p=2 d=1 f16-weight depthwise: DMA/HVX kernel.
+    if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        src0->ne[0] == 5 && src0->ne[1] == 5 && src0->ne[2] == 1 && src0->ne[3] == src1->ne[2] &&
+        dst->ne[0] == src1->ne[0] && dst->ne[1] == src1->ne[1] && dst->ne[2] == src1->ne[2] && dst->ne[3] == src1->ne[3] &&
+        ggml_get_op_params_i32(op, 0) == 1 && ggml_get_op_params_i32(op, 1) == 1 &&
+        ggml_get_op_params_i32(op, 2) == 2 && ggml_get_op_params_i32(op, 3) == 2 &&
+        ggml_get_op_params_i32(op, 4) == 1 && ggml_get_op_params_i32(op, 5) == 1 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
+        const uint32_t n_threads = htp_session_n_hvx(sess);
+        const size_t   vtcm_sz   = htp_session_vtcm_size(sess);
+        const uint64_t planes    = (uint64_t) dst->ne[2] * dst->ne[3];
+        const uint64_t row_stride = ((uint64_t) (src1->ne[0] + 4) * sizeof(float) + 127) & ~UINT64_C(127);
+        const uint64_t src_slot   = ((uint64_t) (src1->ne[1] + 4) * row_stride + HTP_CONV2D_DW5_SRC_TAIL + 127) & ~UINT64_C(127);
+        const uint64_t dst_slot   = ((uint64_t) dst->ne[0] * dst->ne[1] * sizeof(float) + 127) & ~UINT64_C(127);
+        uint32_t nth = (uint32_t) (std::min)(planes, (uint64_t) (std::min)(n_threads, 255u));
+        for (; nth > 0; --nth) {
+            const uint64_t total = (uint64_t) nth * (2 * (src_slot + dst_slot) + HTP_CONV2D_DW5_W_BYTES);
+            if (planes <= UINT32_MAX && row_stride <= UINT32_MAX && src_slot <= UINT32_MAX &&
+                dst_slot <= UINT32_MAX && total <= UINT32_MAX && total <= vtcm_sz) {
+                kparams->kernel_type    = HTP_CONV2D_DW_KERNEL_WHCN_5X5_DMA;
+                kparams->n_hvx          = (uint8_t) nth;
+                kparams->total_tasks    = (uint32_t) planes;
+                kparams->vtcm_size      = (uint32_t) total;
+                kparams->row_src_bytes  = (uint32_t) row_stride;
+                kparams->pad_top_stride = (uint32_t) src_slot;
+                kparams->row_dst_bytes  = (uint32_t) dst_slot;
+                return true;
+            }
+        }
+    }
+
     if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) ||
         src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
         return false;

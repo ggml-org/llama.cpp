@@ -93,8 +93,14 @@ enum htp_conv2d_dw_kernel_type {
     HTP_CONV2D_DW_KERNEL_WHCN_S2_K3X3_W32, // WHCN w=32->ow=16, 3x3 s=2 p=1 d=1 (2 rows per vector)
     HTP_CONV2D_DW_KERNEL_WHCN_S2_K3X3_W64, // WHCN w=64->ow=32, 3x3 s=2 p=1 d=1 (1 vector rolling kh)
     HTP_CONV2D_DW_KERNEL_WHCN_S2_K3X3,     // WHCN aligned w%32==0 (w>=96), 3x3 s=2 p=1 d=1
+    HTP_CONV2D_DW_KERNEL_WHCN_5X5_DMA,     // WHCN 5x5 s=1 p=2 d=1, f16 weights, DMA row halo
     HTP_CONV2D_DW_KERNEL_COUNT,
 };
+
+// WHCN_5X5_DMA VTCM layout shared by host and NPU: per-thread weight area (2 f16 slots + 25 f32 splats, rounded
+// up) and the source slot tail for the valign over-read past the last row.
+#define HTP_CONV2D_DW5_W_BYTES   (32 * 128)
+#define HTP_CONV2D_DW5_SRC_TAIL  (3 * 128)
 
 struct htp_conv2d_dw_kernel_params {
     uint8_t  kernel_type;

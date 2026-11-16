@@ -3203,6 +3203,10 @@ int op_conv_2d_dw(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
+    if (kp->kernel_type == HTP_CONV2D_DW_KERNEL_WHCN_5X5_DMA) {
+        return op_conv_2d_dw5(octx);
+    }
+
     const uint32_t pad_rows      = (kp->pad_top_stride > 0) ? 4 : 0;
     const uint32_t max_ih_chunk  = MIN(kp->h, (kp->oh_chunk - 1) * (uint32_t) kp->s1 + (kp->kh - 1) * (uint32_t) kp->d1 + 1);
     const uint32_t max_src_bytes = (max_ih_chunk + pad_rows) * kp->row_src_bytes + 128;
