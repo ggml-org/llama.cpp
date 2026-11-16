@@ -15,8 +15,8 @@ while read local_ref local_sha remote_ref remote_sha; do
         continue
     fi
 
-    # Check for changes in tools/ui/ between remote and local
-    if git diff --name-only "$remote_sha...$local_sha" -- tools/ui/ | grep -q .; then
+    # Check for changes in ui/apps/chat/ between remote and local
+    if git diff --name-only "$remote_sha...$local_sha" -- ui/apps/chat/ | grep -q .; then
         needs_check=true
     fi
 done
@@ -26,7 +26,7 @@ if [ "$needs_check" = false ]; then
 fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT/tools/ui"
+cd "$REPO_ROOT/ui/apps/chat"
 
 # Check that node_modules exists
 if [ ! -d "node_modules" ]; then
@@ -36,7 +36,7 @@ fi
 
 # Stash unstaged changes so they don't interfere with checks
 stash_name="pi-ui-prepush"
-git stash push -u -m "$stash_name" -- tools/ui/ 2>/dev/null || true
+git stash push -u -m "$stash_name" -- ui/apps/chat/ 2>/dev/null || true
 
 echo "Running pre-push checks for llama-ui..."
 

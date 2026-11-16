@@ -13,7 +13,7 @@ on:
     paths: [
       '.github/workflows/ui.yml',
       '.github/workflows/ui-build.yml',
-      'tools/ui/**.*',
+      'ui/apps/chat/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
@@ -21,7 +21,7 @@ on:
     paths: [
       '.github/workflows/ui.yml',
       '.github/workflows/ui-build.yml',
-      'tools/ui/**.*',
+      'ui/apps/chat/**.*',
       'tools/server/tests/**.*'
     ]
 
@@ -66,46 +66,46 @@ jobs:
         with:
           node-version: "24"
           # cache: "npm"
-          # cache-dependency-path: "tools/ui/package-lock.json"
+          # cache-dependency-path: "ui/apps/chat/package-lock.json"
           package-manager-cache: false
 
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
 
       - name: Install dependencies
         id: setup
         if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run type checking
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run check
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run linting
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run lint
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Install Playwright browsers
         id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npx playwright install --with-deps
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run Client tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:client
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run Unit tests (uses pre-built dist/ from ui-build)
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
   e2e-tests:
     name: E2E Tests
@@ -124,38 +124,38 @@ jobs:
         with:
           node-version: "24"
           # cache: "npm"
-          # cache-dependency-path: "tools/ui/package-lock.json"
+          # cache-dependency-path: "ui/apps/chat/package-lock.json"
           package-manager-cache: false
 
       - name: Install dependencies
         id: setup
         if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Download built UI artifacts (reuses ui-build)
         uses: actions/download-artifact@v6
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
 
       - name: Install Playwright browsers
         id: playwright
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npx playwright install --with-deps
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Build Storybook
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run UI tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run E2E tests (uses pre-built dist/ from ui-build)
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:e2e
-        working-directory: tools/ui
+        working-directory: ui/apps/chat

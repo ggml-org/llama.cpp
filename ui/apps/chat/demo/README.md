@@ -40,7 +40,7 @@ The bucket must be public, since GitHub loads the preview from it:
 hf buckets create <owner>/llama-ui-demos
 ```
 
-Then set it in `tools/ui/.env` (see `.env.example`):
+Then set it in `ui/apps/chat/.env` (see `.env.example`):
 
 ```bash
 DEMO_STORAGE='hf://buckets/<owner>/llama-ui-demos'

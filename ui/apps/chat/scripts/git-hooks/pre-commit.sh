@@ -4,13 +4,13 @@
 # Runs: format (staged files only) + type-check
 # Stashes unstaged changes temporarily and restores them after.
 
-# Only run when there are staged changes in tools/ui/
-if ! git diff --cached --name-only | grep -q "^tools/ui/"; then
+# Only run when there are staged changes in ui/apps/chat/
+if ! git diff --cached --name-only | grep -q "^ui/apps/chat/"; then
     exit 0
 fi
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
-cd "$REPO_ROOT/tools/ui"
+cd "$REPO_ROOT/ui/apps/chat"
 
 # Check that node_modules exists
 if [ ! -d "node_modules" ]; then
@@ -18,19 +18,19 @@ if [ ! -d "node_modules" ]; then
     exit 1
 fi
 
-# Stash unstaged changes in tools/ui/ so they don't interfere
+# Stash unstaged changes in ui/apps/chat/ so they don't interfere
 stash_name="pi-ui-precommit"
-git stash push --keep-index -u -m "$stash_name" -- tools/ui/ 2>/dev/null || true
+git stash push --keep-index -u -m "$stash_name" -- ui/apps/chat/ 2>/dev/null || true
 
 echo "Running pre-commit checks for llama-ui..."
 
 # Format only staged files
-staged_ui=$(git diff --cached --name-only -- tools/ui/)
+staged_ui=$(git diff --cached --name-only -- ui/apps/chat/)
 if [ -n "$staged_ui" ]; then
     echo "$staged_ui" | xargs npm run format
     format_ok=$?
     # Re-stage formatted files
-    git add tools/ui/
+    git add ui/apps/chat/
 else
     format_ok=0
 fi
