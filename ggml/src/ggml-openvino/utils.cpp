@@ -2214,8 +2214,21 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
         old_m_params = ggml_decoder->get_model_params();
         cache_hit = old_m_params.can_reuse_statically(m_params);
         if (cache_hit && is_prefill && ggml_openvino_kv_slice_enabled()) {
-            cache_hit = entry->prefill_attention_size == c_params.attention_size &&
-                        entry->prefill_attention_size_swa == c_params.attention_size_swa;
+            // A larger compiled prefill also serves a smaller attended length: the extra KV rows are masked, as with
+            // the power-of-two rounding. Without this, a new prompt walks up the sizes again, and since only one
+            // prefill model is kept, every prompt longer than one chunk recompiles. Head-major KV is bound at the
+            // storage size, so it keeps the exact match. With GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS every size keeps
+            // its own model, so each call runs at its own size.
+            const bool reuse_larger =
+                !ggml_openvino_npu_kv_head_major_enabled() && !ggml_openvino_npu_keep_prefill_models_enabled();
+            cache_hit = reuse_larger ? entry->prefill_attention_size >= c_params.attention_size &&
+                                           entry->prefill_attention_size_swa >= c_params.attention_size_swa :
+                                       entry->prefill_attention_size == c_params.attention_size &&
+                                           entry->prefill_attention_size_swa == c_params.attention_size_swa;
+            if (cache_hit) {
+                c_params.attention_size = entry->prefill_attention_size;
+                c_params.attention_size_swa = entry->prefill_attention_size_swa;
+            }
             prefill_size_changed = !cache_hit;
         }
     }
@@ -2296,6 +2309,10 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
             r_ctx->ov_output_names_cache_prefill[key] = compiled.prefill_output_names;
             decoder_end_time = conversion_end_time = compile_end_time = ggml_time_us();
             GGML_LOG_DEBUG("ggml-openvino: shared compiled model HIT (static)\n");
+            if (prefill_size_changed) {
+                GGML_LOG_INFO("ggml-openvino: reuse the compiled prefill model of attention size %d\n",
+                              c_params.attention_size);
+            }
         } else {
             auto decode_c_params = c_params;
             if (ggml_openvino_kv_slice_enabled()) {
@@ -2338,7 +2355,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, const std::shared
                         decode_source->decode = window_model;
                         decode_c_params.attention_size = decode_window;
                     }
-                    if (shared_cache->backend_count == 1) {
+                    // GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS keeps the pair: its requests are already released above,
+                    // and a later prompt at its size finds it in the shared cache instead of compiling again.
+                    if (shared_cache->backend_count == 1 && !ggml_openvino_npu_keep_prefill_models_enabled()) {
                         shared_cache->graphs.erase(source_it);
                     }
                 }

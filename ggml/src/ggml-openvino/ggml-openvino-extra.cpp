@@ -157,6 +157,7 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY", env_type::BOOL},
     {"GGML_OPENVINO_NPU_BLOB_PREBUILD", env_type::BOOL},
     {"GGML_OPENVINO_NPU_KV_ON_DEMAND", env_type::BOOL},
+    {"GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS", env_type::BOOL},
     {"GGML_OPENVINO_STATEFUL_EXECUTION", env_type::BOOL},
     {"GGML_OPENVINO_DUMP_CGRAPH", env_type::BOOL},
     {"GGML_OPENVINO_DUMP_IR", env_type::BOOL},
@@ -668,6 +669,10 @@ int ggml_openvino_static_kv_window(int rows, int ctx) {
 
 bool ggml_openvino_npu_kv_on_demand_enabled() {
     return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KV_ON_DEMAND") != 0;
+}
+
+bool ggml_openvino_npu_keep_prefill_models_enabled() {
+    return ggml_openvino_is_npu() && ggml_openvino_getenv_int("GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS") != 0;
 }
 
 bool ggml_openvino_npu_kv_head_major_enabled() {

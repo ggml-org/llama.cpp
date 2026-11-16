@@ -167,6 +167,10 @@ int ggml_openvino_static_kv_window(int rows, int ctx);
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
 // NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
 bool ggml_openvino_npu_kv_on_demand_enabled();
+// Experimental (GGML_OPENVINO_NPU_KEEP_PREFILL_MODELS): with KV slicing, keep the compiled prefill model of every
+// attended size instead of only the last one. Only the infer requests of the active size are kept, so a size seen
+// before needs no recompile.
+bool ggml_openvino_npu_keep_prefill_models_enabled();
 // On-demand KV with BLOB_PREBUILD and KV_SLICE: K storage is [heads][rows][head_size] and V storage is
 // [heads][head_size][rows] (head-major with heads * head_size channels); every static graph binds the whole storage
 // as [1, heads, rows, head_size] / [1, heads, head_size, rows], and attention uses V^T.
