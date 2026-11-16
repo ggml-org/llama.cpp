@@ -2931,10 +2931,10 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.penalty_last_n = 96;
             break;
         case PROJECTOR_TYPE_FISH_S2_GEN:
-            // fast AR is greedy in the reference (sglang-omni fishaudio_s2_pro), temp > 0 samples instead
+            // fast AR, same as the reference (fish-speech text2semantic/sampling.py)
             inp.top_k = 30;
-            inp.top_p = 0.9f;
-            inp.temp  = 0.0f;
+            inp.top_p = 0.7f;
+            inp.temp  = 0.7f;
             break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {

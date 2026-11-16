@@ -29,6 +29,7 @@ ggml_tensor * mtmd_graph_fish_s2_spkenc::conv(ggml_tensor * x, ggml_tensor * w, 
 }
 
 // x + sin(alpha * x)^2 / alpha, beta = 1 / alpha is folded at conversion
+// TODO @ngxson: on Metal, residual codes match the reference less often than on CPU (89-98% vs 99%), maybe the fast-math sin
 ggml_tensor * mtmd_graph_fish_s2_spkenc::snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const {
     ggml_tensor * s = ggml_sqr(ctx0, ggml_sin(ctx0, ggml_mul(ctx0, x, alpha)));
     return ggml_add(ctx0, x, ggml_mul(ctx0, s, beta));
