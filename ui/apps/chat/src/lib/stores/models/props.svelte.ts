@@ -15,16 +15,16 @@ import {
 	REASONING_EFFORT_BASE_LEVELS,
 	REASONING_EFFORT_BUDGET_LEVELS,
 	REASONING_EFFORT_LABELS
-} from '$lib/constants';
-import { FileTypeCategory, ModelModality, ReasoningEffort } from '$lib/enums';
-import { PropsService } from '$lib/services/props.service';
+} from '#lib/constants/index.ts';
+import { FileTypeCategory, ModelModality, ReasoningEffort } from '#lib/enums/index.ts';
+import { PropsService } from '#lib/services/props.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { serverStore } from '$lib/stores/server.svelte';
-import type { ReasoningEffortLevel } from '$lib/types';
-// deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import type { ReasoningEffortLevel } from '#lib/types/index.ts';
+// deep imports, not the '#lib/utils/index.ts' barrel: it re-exports modules that reach back
 // into the stores, and going through it here would read a half-built module
-import { TTLCache } from '$lib/utils/cache-ttl';
-import { detectThinkingSupport } from '$lib/utils/chat-template-thinking-detector';
+import { TTLCache } from '#lib/utils/cache-ttl.ts';
+import { detectThinkingSupport } from '#lib/utils/chat-template-thinking-detector.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 /**

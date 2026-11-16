@@ -1,5 +1,5 @@
-import { AttachmentType, UrlProtocol } from '$lib/enums';
-import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
+import { AttachmentType, UrlProtocol } from '#lib/enums/index.ts';
+import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '#lib/types/database.js';
 import type { Root as HastRoot } from 'hast';
 import { visit } from 'unist-util-visit';
 

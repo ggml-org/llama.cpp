@@ -1,5 +1,5 @@
-import { CONTEXT_KEY_CHAT_FORM_ACTIONS } from '$lib/constants';
-import type { ChatFormActionsContext } from '$lib/types';
+import { CONTEXT_KEY_CHAT_FORM_ACTIONS } from '#lib/constants/index.ts';
+import type { ChatFormActionsContext } from '#lib/types/index.ts';
 import { getContext, setContext } from 'svelte';
 
 const CHAT_FORM_ACTIONS_KEY = Symbol.for(CONTEXT_KEY_CHAT_FORM_ACTIONS);

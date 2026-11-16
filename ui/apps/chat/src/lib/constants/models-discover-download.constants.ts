@@ -3,7 +3,7 @@
  * the bit-depth buckets, and the standalone command builder.
  */
 
-import { ModelDraftSidecar } from '$lib/enums';
+import { ModelDraftSidecar } from '#lib/enums/index.ts';
 
 /**
  * `--spec-type` value for each draft sidecar.

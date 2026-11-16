@@ -3,10 +3,10 @@
 // streaming text tokens trigger redundant JSON.parse calls on unchanged
 // tool call data.
 
-import { AgenticSectionType, MessageRole } from '$lib/enums';
-import type { ApiChatCompletionToolCall } from '$lib/types/api';
-import type { DatabaseMessage } from '$lib/types/database';
-import { deriveAgenticSections } from '$lib/utils/agentic';
+import { AgenticSectionType, MessageRole } from '#lib/enums/index.ts';
+import type { ApiChatCompletionToolCall } from '#lib/types/api.js';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import { deriveAgenticSections } from '#lib/utils/agentic.ts';
 import { describe, expect, it, vi } from 'vitest';
 
 function makeMessage(overrides: Partial<DatabaseMessage>): DatabaseMessage {

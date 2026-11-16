@@ -345,7 +345,7 @@ export { RouterService } from './router.service';
  *
  * **Usage:**
  * ```typescript
- * import { MigrationService } from '$lib/services';
+ * import { MigrationService } from '#lib/services/index.ts';
  *
  * // Run all migrations on app startup (non-destructive)
  * await MigrationService.runAllMigrations();

@@ -1,10 +1,10 @@
 <script lang="ts">
 	import ModelOrgAvatar from './ModelOrgAvatar.svelte';
-	import { HF_BASE_MODEL_TAG_REGEX, SETTINGS_KEYS } from '$lib/constants';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { settingsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
-	import { nearViewport, orgOf } from '$lib/utils';
+	import { HF_BASE_MODEL_TAG_REGEX, SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { HuggingFaceService, ModelsService } from '#lib/services/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { nearViewport, orgOf } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

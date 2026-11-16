@@ -2,12 +2,12 @@
 // filters once a model's context is known, from the option or the Hub record.
 
 import ModelsManagerWrapper from './components/ModelsManagerWrapper.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
-import { HuggingFaceService } from '$lib/services';
-import { modelsStore, settingsStore } from '$lib/stores';
-import type { ApiModelDataEntry } from '$lib/types';
-import type { ModelOption } from '$lib/types/models';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { ServerModelStatus } from '#lib/enums/index.ts';
+import { HuggingFaceService } from '#lib/services/index.ts';
+import { modelsStore, settingsStore } from '#lib/stores/index.ts';
+import type { ApiModelDataEntry } from '#lib/types/index.ts';
+import type { ModelOption } from '#lib/types/models.js';
 import { SvelteMap } from 'svelte/reactivity';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';

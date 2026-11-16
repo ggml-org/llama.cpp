@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatAttachmentsPreview from '$lib/components/app/chat/ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreview.svelte';
-	import { AttachmentType } from '$lib/enums';
+	import ChatAttachmentsPreview from '#lib/components/app/chat/ChatAttachments/ChatAttachmentsPreview/ChatAttachmentsPreview.svelte';
+	import { AttachmentType } from '#lib/enums/index.ts';
 	import { expect, waitFor } from 'storybook/test';
 
 	const { Story } = defineMeta({

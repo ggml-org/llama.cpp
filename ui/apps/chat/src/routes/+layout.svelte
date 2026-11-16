@@ -1,12 +1,8 @@
 <script lang="ts">
 	import '../app.css';
-	import { browser } from '$app/environment';
-	import { afterNavigate, goto } from '$app/navigation';
-	import { base } from '$app/paths';
-	import { page } from '$app/state';
-	import { GlassKey, MenuIcon, SidebarNavigation } from '$lib/components/app';
-	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { GlassKey, MenuIcon, SidebarNavigation } from '#lib/components/app/index.ts';
+	import { PwaMetaTags, PwaRefreshAlert } from '#lib/components/pwa/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		BOX_BORDER,
 		CHAT_FORM_CHROME_FADE_MS,
@@ -18,11 +14,11 @@
 		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
-	} from '$lib/constants';
-	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { usePwa } from '$lib/hooks/use-pwa.svelte';
-	import { useSidebarReveal } from '$lib/hooks/use-sidebar-reveal.svelte';
-	import { RouterService } from '$lib/services/router.service';
+	} from '#lib/constants/index.ts';
+	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
+	import { usePwa } from '#lib/hooks/use-pwa.svelte.ts';
+	import { useSidebarReveal } from '#lib/hooks/use-sidebar-reveal.svelte.ts';
+	import { RouterService } from '#lib/services/router.service.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -34,15 +30,18 @@
 		tabsStore,
 		uiStore,
 		versionStore
-	} from '$lib/stores';
-	import { initStores } from '$lib/stores/init';
-	import { hapticTap } from '$lib/utils';
+	} from '#lib/stores/index.ts';
+	import { initStores } from '#lib/stores/init.ts';
+	import { withBase } from '#lib/utils/base-path.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
+	import { browser } from '$app/env';
+	import { afterNavigate, goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { Toaster } from 'svelte-sonner';
-	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
 
@@ -147,7 +146,12 @@
 	});
 
 	// the models page returns to wherever it was reached from, by any kind of navigation
-	afterNavigate(() => uiStore.rememberModelsReturnRoute());
+	afterNavigate(({ shallow, type }) => {
+		// clearing deep-link params is a shallow goto, not a visit to another page
+		if (shallow && type === 'goto') return;
+
+		uiStore.rememberModelsReturnRoute();
+	});
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
@@ -181,7 +185,7 @@
 					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKey.trim()}`
 				};
 
-				fetch(`${base}/props`, { headers })
+				fetch(withBase('/props'), { headers })
 					.then((response) => {
 						if (response.status === 401 || response.status === 403) {
 							window.location.reload();
@@ -309,17 +313,9 @@
 </script>
 
 <svelte:head>
-	{#if pwaAssetsHead.themeColor}
-		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
-	{/if}
-
 	{#if settingsStore.config.customCss}
 		<style use:customCss></style>
 	{/if}
-
-	{#each pwaAssetsHead.links as link (link.href)}
-		<link {...link} />
-	{/each}
 
 	<PwaMetaTags />
 </svelte:head>

@@ -11,14 +11,14 @@
 	import ChatMessageToolCallBlockRunJavascript from './ChatMessageToolCallBlockRunJavascript.svelte';
 	import ChatMessageToolCallBlockSearchResults from './ChatMessageToolCallBlockSearchResults.svelte';
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
-	import { BuiltInTool } from '$lib/enums';
-	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
+	import { BuiltInTool } from '#lib/enums/index.ts';
+	import type { AgenticSection, DatabaseMessageExtra } from '#lib/types/index.ts';
 	import {
 		extractSearchQuery,
 		extractSearchResults,
 		isWebSearchToolName,
 		looksLikeSearchResult
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;

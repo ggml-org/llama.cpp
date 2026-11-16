@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import SidebarNavigationConversationItem from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte';
+	import SidebarNavigationConversationItem from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte';
 	import { expect } from 'storybook/test';
 
 	const mockForkedConversation: DatabaseConversation = {

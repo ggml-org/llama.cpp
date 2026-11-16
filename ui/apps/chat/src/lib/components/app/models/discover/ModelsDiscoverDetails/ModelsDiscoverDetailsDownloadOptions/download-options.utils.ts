@@ -1,8 +1,8 @@
-import { DRAFT_FILE_LABEL, MODEL_ID, PATH_SEPARATOR } from '$lib/constants';
-import { ModelDraftSidecar, ModelSelectableFileKind } from '$lib/enums';
-import { HuggingFaceService } from '$lib/services';
-import type { ModelSelectableFile } from '$lib/types';
-import { isAuxSidecar, isDraftSidecar } from '$lib/utils';
+import { DRAFT_FILE_LABEL, MODEL_ID, PATH_SEPARATOR } from '#lib/constants/index.ts';
+import { ModelDraftSidecar, ModelSelectableFileKind } from '#lib/enums/index.ts';
+import { HuggingFaceService } from '#lib/services/index.ts';
+import type { ModelSelectableFile } from '#lib/types/index.ts';
+import { isAuxSidecar, isDraftSidecar } from '#lib/utils/index.ts';
 
 /**
  * Draft kinds in the order a chip lists them. DFlash wins: on the models that

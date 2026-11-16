@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { UseProcessingStateReturn } from '$lib/hooks/use-processing-state.svelte';
+	import type { UseProcessingStateReturn } from '#lib/hooks/use-processing-state.svelte.ts';
 	import { fade } from 'svelte/transition';
 
 	interface Props {

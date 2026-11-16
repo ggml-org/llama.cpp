@@ -2,9 +2,13 @@
 	import McpResourcesBrowserEmptyState from './McpResourcesBrowserEmptyState.svelte';
 	import McpResourcesBrowserHeader from './McpResourcesBrowserHeader.svelte';
 	import McpResourcesBrowserServerItem from './McpResourcesBrowserServerItem.svelte';
-	import { mcpStore } from '$lib/stores';
-	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
-	import { parseResourcePath } from '$lib/utils';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type {
+		MCPResourceInfo,
+		MCPResourceTemplateInfo,
+		MCPServerResources
+	} from '#lib/types/index.ts';
+	import { parseResourcePath } from '#lib/utils/index.ts';
 	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {

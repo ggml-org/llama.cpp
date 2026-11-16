@@ -3,8 +3,8 @@
  * Handles PDF text extraction and image conversion in the browser
  */
 
-import { browser } from '$app/environment';
-import { MimeTypeApplication, MimeTypeImage } from '$lib/enums';
+import { MimeTypeApplication, MimeTypeImage } from '#lib/enums/index.ts';
+import { browser } from '$app/env';
 import * as pdfjs from 'pdfjs-dist';
 
 type TextContent = {

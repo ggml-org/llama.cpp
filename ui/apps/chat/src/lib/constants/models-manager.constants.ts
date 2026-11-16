@@ -1,6 +1,6 @@
 /** Labels of the models manager table sections. */
 
-import { ModelsTableGroupKind, ServerModelSource } from '$lib/enums';
+import { ModelsTableGroupKind, ServerModelSource } from '#lib/enums/index.ts';
 
 export const MODELS_TABLE_GROUP_LABELS: Record<ModelsTableGroupKind, string> = {
 	[ModelsTableGroupKind.DOWNLOADING]: 'Downloading',

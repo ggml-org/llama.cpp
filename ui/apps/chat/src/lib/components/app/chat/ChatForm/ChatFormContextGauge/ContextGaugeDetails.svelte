@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
-	import { STATS_UNITS } from '$lib/constants';
+	import { STATS_UNITS } from '#lib/constants/index.ts';
 
 	interface Props {
 		currentRead: number;

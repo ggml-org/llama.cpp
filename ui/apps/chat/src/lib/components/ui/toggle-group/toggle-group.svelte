@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import { toggleVariants } from '$lib/components/ui/toggle/index.js';
+	import { toggleVariants } from '#lib/components/ui/toggle/index.ts';
 	import { getContext, setContext } from 'svelte';
 	import type { VariantProps } from 'tailwind-variants';
 
@@ -20,7 +20,7 @@
 </script>
 
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils.js';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import { ToggleGroup as ToggleGroupPrimitive } from 'bits-ui';
 
 	let {

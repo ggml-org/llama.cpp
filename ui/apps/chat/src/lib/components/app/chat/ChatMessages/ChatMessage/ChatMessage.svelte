@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import {
 		ChatMessageAssistant,
 		ChatMessageCompaction,
@@ -7,24 +6,30 @@
 		ChatMessageSynthetic,
 		ChatMessageSystem,
 		ChatMessageUser
-	} from '$lib/components/app/chat';
+	} from '#lib/components/app/chat/index.ts';
 	import {
 		AGENTIC_TEXT_COPY_SEPARATOR,
 		REASONING_TAGS,
 		ROUTES,
 		SYSTEM_MESSAGE_PLACEHOLDER
-	} from '$lib/constants';
-	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
-	import { AgenticSectionType, AttachmentType, MessageRole, MessageType } from '$lib/enums';
-	import { DatabaseService } from '$lib/services/database.service';
-	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
+	} from '#lib/constants/index.ts';
+	import { setChatMessageActionsContext, setChatMessageEditContext } from '#lib/contexts/index.ts';
+	import {
+		AgenticSectionType,
+		AttachmentType,
+		MessageRole,
+		MessageType
+	} from '#lib/enums/index.ts';
+	import { DatabaseService } from '#lib/services/database.service.ts';
+	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
 	import type {
 		ChatMessageActions,
 		ChatMessageDeletionInfo,
 		DatabaseMessageExtraMcpPrompt
-	} from '$lib/types';
-	import { deriveAgenticSections } from '$lib/utils';
-	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	} from '#lib/types/index.ts';
+	import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
+	import { deriveAgenticSections } from '#lib/utils/index.ts';
+	import { goto } from '$app/navigation';
 
 	interface Props {
 		class?: string;

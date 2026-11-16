@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import type { MCPConnectionLog } from '$lib/types';
-	import { formatTime, getMcpLogLevelClass, getMcpLogLevelIcon } from '$lib/utils';
+	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
+	import type { MCPConnectionLog } from '#lib/types/index.ts';
+	import { formatTime, getMcpLogLevelClass, getMcpLogLevelIcon } from '#lib/utils/index.ts';
 
 	interface Props {
 		logs: MCPConnectionLog[];

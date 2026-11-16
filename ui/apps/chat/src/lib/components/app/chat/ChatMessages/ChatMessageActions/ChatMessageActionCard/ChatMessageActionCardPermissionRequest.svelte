@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { ChevronDown, ShieldQuestion } from '@lucide/svelte';
-	import { ChatMessageActionCard } from '$lib/components/app';
-	import { Button, buttonVariants } from '$lib/components/ui/button';
-	import * as ButtonGroup from '$lib/components/ui/button-group';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { cn } from '$lib/components/ui/utils';
-	import { TOOL_SERVER_LABELS } from '$lib/constants';
-	import { ToolPermissionDecision, ToolSource } from '$lib/enums';
-	import { toolsStore } from '$lib/stores';
+	import { ChatMessageActionCard } from '#lib/components/app/index.ts';
+	import { Button, buttonVariants } from '#lib/components/ui/button/index.ts';
+	import * as ButtonGroup from '#lib/components/ui/button-group/index.ts';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import { cn } from '#lib/components/ui/utils.ts';
+	import { TOOL_SERVER_LABELS } from '#lib/constants/index.ts';
+	import { ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
+	import { toolsStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		toolName: string;

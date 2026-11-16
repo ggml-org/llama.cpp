@@ -3,8 +3,6 @@
 	import ChatScreenDialogsAndAlerts from './ChatScreenDialogsAndAlerts.svelte';
 	import ChatScreenGreeting from './ChatScreenGreeting.svelte';
 	import ChatScreenMobileHeader from './ChatScreenMobileHeader.svelte';
-	import { disableScrollHandling, onNavigate } from '$app/navigation';
-	import { page } from '$app/state';
 	import {
 		ChatFormContextGauge,
 		ChatMessages,
@@ -13,7 +11,7 @@
 		ChatScreenServerError,
 		ChatScreenStreamResumeStatus,
 		ServerLoadingSplash
-	} from '$lib/components/app';
+	} from '#lib/components/app/index.ts';
 	import {
 		CHAT_FORM_BOTTOM_OFFSET,
 		CHAT_FORM_CHROME_FADE_MS,
@@ -27,13 +25,13 @@
 		CHAT_FORM_MOVE_TO_BOTTOM_IN_MS,
 		CHAT_FORM_MOVE_TO_BOTTOM_OUT_MS,
 		ROUTES
-	} from '$lib/constants';
-	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
-	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
-	import { useChatScreenFileUpload } from '$lib/hooks/use-chat-screen-file-upload.svelte';
-	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
+	} from '#lib/constants/index.ts';
+	import { useChatScreenActiveModel } from '#lib/hooks/use-chat-screen-active-model.svelte.ts';
+	import { useChatScreenDragAndDrop } from '#lib/hooks/use-chat-screen-drag-and-drop.svelte.ts';
+	import { useChatScreenFileUpload } from '#lib/hooks/use-chat-screen-file-upload.svelte.ts';
+	import { useShowContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
+	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
+	import { createStickToBottom } from '#lib/hooks/use-stick-to-bottom.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -41,8 +39,10 @@
 		serverStore,
 		settingsStore,
 		uiStore
-	} from '$lib/stores';
-	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	} from '#lib/stores/index.ts';
+	import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
+	import { disableScrollHandling, onNavigate } from '$app/navigation';
+	import { page } from '$app/state';
 	import { tick, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 

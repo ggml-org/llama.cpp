@@ -1,7 +1,8 @@
-import { browser } from '$app/environment';
-import { BUILD_VERSION_LOCALSTORAGE_KEY, SW_CONFIG } from '$lib/constants';
-import { versionStore } from '$lib/stores';
-import { useRegisterSW } from 'virtual:pwa-register/svelte';
+import { BUILD_VERSION_LOCALSTORAGE_KEY, PWA_FILE_PATHS, SW_CONFIG } from '#lib/constants/index.ts';
+import { versionStore } from '#lib/stores/index.ts';
+import { withBase } from '#lib/utils/base-path.ts';
+import { browser, dev } from '$app/env';
+import { writable } from 'svelte/store';
 
 /**
  * Hook for PWA service worker registration, update polling, and build version mismatch detection.
@@ -11,42 +12,64 @@ import { useRegisterSW } from 'virtual:pwa-register/svelte';
  * 2. localStorage-based version tracking for non-PWA users
  */
 export function usePwa() {
-	let swCheckInterval: ReturnType<typeof setInterval> | null = null;
+	const needRefresh = writable(false);
+
 	let needRefreshByStorage = $state(false);
+	let registration: ServiceWorkerRegistration | undefined;
 
-	const {
-		// offlineReady, // to do - add installation banners for iOS
-		needRefresh: pwaNeedRefresh,
-		updateServiceWorker
-	} = useRegisterSW({
-		onRegisteredSW(swUrl: string, r: ServiceWorkerRegistration | undefined) {
-			if (swCheckInterval) {
-				clearInterval(swCheckInterval);
+	// an installed worker next to an active one is a new build waiting for the reload
+	function watchInstalling(worker: ServiceWorker | null) {
+		worker?.addEventListener('statechange', () => {
+			if (worker.state === 'installed' && navigator.serviceWorker.controller) {
+				needRefresh.set(true);
 			}
+		});
+	}
 
-			swCheckInterval = setInterval(async () => {
-				if (!r || r.installing || !navigator?.onLine) return;
+	$effect(() => {
+		// SvelteKit only builds the service worker for production
+		if (dev || !('serviceWorker' in navigator)) return;
 
-				try {
-					const resp = await fetch(swUrl, {
-						cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.CACHE,
-						headers: {
-							cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE,
-							'cache-control': SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE_CONTROL
-						}
-					});
+		const swUrl = withBase(PWA_FILE_PATHS.SERVICE_WORKER);
 
-					if (resp?.status === 200) {
-						await r.update();
-					}
-				} catch (e) {
-					console.error(e);
+		let swCheckInterval: ReturnType<typeof setInterval> | undefined;
+
+		navigator.serviceWorker
+			.register(swUrl, { type: 'module' })
+			.then((r) => {
+				registration = r;
+
+				if (r.waiting && navigator.serviceWorker.controller) {
+					needRefresh.set(true);
 				}
-			}, SW_CONFIG.CHECK_INTERVAL_MS);
-		},
-		onRegisterError(error: unknown) {
-			console.error('[PWA] SW registration error:', error);
-		}
+
+				r.addEventListener('updatefound', () => watchInstalling(r.installing));
+
+				swCheckInterval = setInterval(async () => {
+					if (r.installing || !navigator?.onLine) return;
+
+					try {
+						const resp = await fetch(swUrl, {
+							cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.CACHE,
+							headers: {
+								cache: SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE,
+								'cache-control': SW_CONFIG.UPDATE_FETCH_OPTIONS.HEADERS.CACHE_CONTROL
+							}
+						});
+
+						if (resp?.status === 200) {
+							await r.update();
+						}
+					} catch (e) {
+						console.error(e);
+					}
+				}, SW_CONFIG.CHECK_INTERVAL_MS);
+			})
+			.catch((error: unknown) => {
+				console.error('[PWA] SW registration error:', error);
+			});
+
+		return () => clearInterval(swCheckInterval);
 	});
 
 	// Detect version mismatch via localStorage.
@@ -72,10 +95,22 @@ export function usePwa() {
 		}
 	});
 
+	/** Activate the waiting worker, then reload once it controls the page */
+	function updateServiceWorker() {
+		const waiting = registration?.waiting;
+
+		if (!waiting) return;
+
+		navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), {
+			once: true
+		});
+		waiting.postMessage({ type: 'SKIP_WAITING' });
+	}
+
 	return {
 		/** Writable that is true when a PWA service worker update is available */
 		get needRefresh() {
-			return pwaNeedRefresh;
+			return needRefresh;
 		},
 		/** Version mismatch detected via localStorage (non-PWA users) */
 		get needRefreshByStorage() {

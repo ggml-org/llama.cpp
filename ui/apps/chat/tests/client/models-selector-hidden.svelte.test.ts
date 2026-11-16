@@ -3,10 +3,10 @@
 // can be hidden and selected at the same time.
 
 import ModelsSelectorHookHarness from './components/ModelsSelectorHookHarness.svelte';
-import { ServerModelStatus, ServerRole } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import type { ApiModelDataEntry, ModelOption } from '$lib/types';
+import { ServerModelStatus, ServerRole } from '#lib/enums/index.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import type { ApiModelDataEntry, ModelOption } from '#lib/types/index.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 

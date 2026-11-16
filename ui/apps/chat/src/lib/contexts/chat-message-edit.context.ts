@@ -1,5 +1,5 @@
-import { CONTEXT_KEY_CHAT_MESSAGE_EDIT } from '$lib/constants';
-import type { ChatMessageEditContext } from '$lib/types';
+import { CONTEXT_KEY_CHAT_MESSAGE_EDIT } from '#lib/constants/index.ts';
+import type { ChatMessageEditContext } from '#lib/types/index.ts';
 import { getContext, setContext } from 'svelte';
 
 const CHAT_MESSAGE_EDIT_KEY = Symbol.for(CONTEXT_KEY_CHAT_MESSAGE_EDIT);

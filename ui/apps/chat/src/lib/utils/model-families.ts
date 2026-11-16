@@ -1,4 +1,4 @@
-import { nameOf } from '$lib/utils/model-names';
+import { nameOf } from '#lib/utils/model-names.ts';
 
 /** One family of a model list, and the entries it covers. */
 export interface ModelFamilyGroup<T> {

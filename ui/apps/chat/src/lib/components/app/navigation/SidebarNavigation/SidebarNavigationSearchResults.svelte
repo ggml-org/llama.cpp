@@ -1,6 +1,6 @@
 <script lang="ts">
 	import SidebarNavigationConversationItem from './SidebarNavigationConversationItem.svelte';
-	import { buildConversationTree } from '$lib/utils';
+	import { buildConversationTree } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;

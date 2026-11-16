@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { downloadProgressFor } from './utils';
-	import { ActionIcon } from '$lib/components/app';
-	import { MODEL_DOWNLOAD_ICONS } from '$lib/constants';
-	import { ModelRowDownloadState } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { MODEL_DOWNLOAD_ICONS } from '#lib/constants/index.ts';
+	import { ModelRowDownloadState } from '#lib/enums/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		class?: string;

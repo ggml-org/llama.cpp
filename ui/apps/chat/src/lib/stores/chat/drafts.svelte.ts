@@ -6,7 +6,7 @@
  * its content when switching conversations.
  */
 
-import { NEW_CHAT_DRAFT_KEY } from '$lib/constants';
+import { NEW_CHAT_DRAFT_KEY } from '#lib/constants/index.ts';
 
 interface DraftMessage {
 	message: string;

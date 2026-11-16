@@ -6,7 +6,7 @@
  * the model props manager.
  */
 
-import { apiFetchWithParams } from '$lib/utils';
+import { apiFetchWithParams } from '#lib/utils/index.ts';
 
 export class PropsService {
 	/**

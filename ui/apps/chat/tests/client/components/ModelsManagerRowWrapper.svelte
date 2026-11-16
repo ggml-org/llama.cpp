@@ -1,7 +1,7 @@
 <script lang="ts">
-	import ModelsManagerModelRow from '$lib/components/app/models/ModelsManager/ModelsManagerModelRow.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import type { ModelOption } from '$lib/types/models';
+	import ModelsManagerModelRow from '#lib/components/app/models/ModelsManager/ModelsManagerModelRow.svelte';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		option: ModelOption;

@@ -1,4 +1,4 @@
-import { isExitCodeSummaryLine, parseExecShellCommandExitStatus } from '$lib/utils';
+import { isExitCodeSummaryLine, parseExecShellCommandExitStatus } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('parseExecShellCommandExitStatus', () => {

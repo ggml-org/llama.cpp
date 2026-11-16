@@ -1,6 +1,10 @@
-import { STATS_UNITS } from '$lib/constants';
-import { chatStore } from '$lib/stores';
-import type { ApiProcessingState, LiveGenerationStats, LiveProcessingStats } from '$lib/types';
+import { STATS_UNITS } from '#lib/constants/index.ts';
+import { chatStore } from '#lib/stores/index.ts';
+import type {
+	ApiProcessingState,
+	LiveGenerationStats,
+	LiveProcessingStats
+} from '#lib/types/index.ts';
 
 export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;

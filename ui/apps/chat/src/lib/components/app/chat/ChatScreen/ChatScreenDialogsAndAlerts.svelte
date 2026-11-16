@@ -4,8 +4,8 @@
 		DialogConversationDelete,
 		DialogEmptyFileAlert,
 		DialogFileUploadError
-	} from '$lib/components/app';
-	import { ErrorDialogType } from '$lib/enums';
+	} from '#lib/components/app/index.ts';
+	import { ErrorDialogType } from '#lib/enums/index.ts';
 
 	let {
 		activeErrorDialog,

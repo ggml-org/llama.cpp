@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
-	import * as Alert from '$lib/components/ui/alert';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { serverStore } from '$lib/stores';
+	import * as Alert from '#lib/components/ui/alert/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { serverStore } from '#lib/stores/index.ts';
 
 	let hasError = $derived(!!serverStore.error);
 	let isLoadingModel = $derived(serverStore.status === 503);

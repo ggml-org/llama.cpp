@@ -1,4 +1,4 @@
-import { findCommandToken, takeCommandDismissSnapshot } from '$lib/utils';
+import { findCommandToken, takeCommandDismissSnapshot } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('findCommandToken', () => {

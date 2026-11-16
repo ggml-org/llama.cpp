@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { Check, X } from '@lucide/svelte';
-	import { ChatMessageActionIcons, MarkdownContent } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { Card } from '$lib/components/ui/card';
-	import { INPUT_CLASSES } from '$lib/constants';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey } from '$lib/enums';
-	import { settingsStore } from '$lib/stores';
-	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
+	import { ChatMessageActionIcons, MarkdownContent } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { Card } from '#lib/components/ui/card/index.ts';
+	import { INPUT_CLASSES } from '#lib/constants/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { KeyboardKey } from '#lib/enums/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import { autoResizeTextarea, isIMEComposing } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;

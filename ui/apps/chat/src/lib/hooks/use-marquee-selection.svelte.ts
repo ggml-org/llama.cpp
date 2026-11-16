@@ -9,7 +9,7 @@
  * matches what the user sees on screen.
  */
 
-import { UI_DATA_ATTRS } from '$lib/constants';
+import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
 import { SvelteSet } from 'svelte/reactivity';
 
 interface UseMarqueeSelectionOptions {

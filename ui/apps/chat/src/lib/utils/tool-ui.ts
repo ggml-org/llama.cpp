@@ -1,5 +1,5 @@
-import { TOOL_UI } from '$lib/constants';
-import type { ToolUiEntry } from '$lib/types';
+import { TOOL_UI } from '#lib/constants/index.ts';
+import type { ToolUiEntry } from '#lib/types/index.ts';
 
 /**
  * Resolve the UI metadata (label + icon) for a server or browser tool by its

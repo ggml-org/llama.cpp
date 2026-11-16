@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import * as Collapsible from '$lib/components/ui/collapsible';
+	import { Badge } from '#lib/components/ui/badge/index.ts';
+	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
 
 	interface Tool {
 		name: string;

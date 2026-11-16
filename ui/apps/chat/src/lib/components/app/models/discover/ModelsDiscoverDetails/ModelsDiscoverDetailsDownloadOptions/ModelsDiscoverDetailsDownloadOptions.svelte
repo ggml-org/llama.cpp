@@ -1,23 +1,23 @@
 <script lang="ts">
 	import { classify, draftBadgeOf, sortDraftKinds } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Select from '$lib/components/ui/select';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import * as Select from '#lib/components/ui/select/index.ts';
 	import {
 		ModelDownloadConfirmAction,
 		ModelDraftSidecar,
 		ModelSelectableFileKind
-	} from '$lib/enums';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
+	} from '#lib/enums/index.ts';
+	import { HuggingFaceService, ModelsService } from '#lib/services/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import type {
 		ModelBitDepthRow,
 		ModelCompanionDraft,
 		ModelDownloadEntryState,
 		ModelSelectableFile
-	} from '$lib/types';
-	import { directoryOf, isServerSidecarFile } from '$lib/utils';
+	} from '#lib/types/index.ts';
+	import { directoryOf, isServerSidecarFile } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Full HuggingFace repo id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */

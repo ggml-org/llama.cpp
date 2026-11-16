@@ -26,7 +26,7 @@ import {
 	LATEX_TRIGGER_REGEXP,
 	MHCHEM_PATTERN_MAP,
 	NEWLINE
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 /**
  * Replaces inline LaTeX expressions enclosed in `$...$` with placeholders, avoiding dollar signs

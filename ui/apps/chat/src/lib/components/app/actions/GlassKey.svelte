@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { deviceStore } from '$lib/stores';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
 	import type { Component, Snippet } from 'svelte';
 	import type { HTMLButtonAttributes } from 'svelte/elements';
 

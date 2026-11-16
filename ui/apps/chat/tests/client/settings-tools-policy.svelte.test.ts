@@ -1,10 +1,10 @@
 // Settings > Tools must edit the active conversation policy, not the defaults for future chats.
 
-import SettingsChatToolsTab from '$lib/components/app/settings/SettingsChat/SettingsChatToolsTab.svelte';
-import { DatabaseService } from '$lib/services/database.service';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
-import type { DatabaseConversation, OpenAIToolDefinition } from '$lib/types';
+import SettingsChatToolsTab from '#lib/components/app/settings/SettingsChat/SettingsChatToolsTab.svelte';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
+import type { DatabaseConversation, OpenAIToolDefinition } from '#lib/types/index.ts';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';

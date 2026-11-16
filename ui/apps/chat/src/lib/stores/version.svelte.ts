@@ -11,8 +11,8 @@
  * In dev mode both fall back to `'dev'`.
  */
 
-import { browser } from '$app/environment';
-import { base } from '$app/paths';
+import { withBase } from '#lib/utils/base-path.ts';
+import { browser } from '$app/env';
 
 class VersionStore {
 	build = $state<string>('');
@@ -37,7 +37,7 @@ class VersionStore {
 
 	private async load(): Promise<void> {
 		try {
-			const res = await fetch(`${base}/build.json`, { cache: 'no-store' });
+			const res = await fetch(withBase('/build.json'), { cache: 'no-store' });
 
 			if (res.ok) {
 				const data = await res.json();
@@ -49,7 +49,7 @@ class VersionStore {
 		}
 
 		try {
-			const res = await fetch(`${base}/_app/version.json`, { cache: 'no-store' });
+			const res = await fetch(withBase('/_app/version.json'), { cache: 'no-store' });
 
 			if (res.ok) {
 				const data = await res.json();

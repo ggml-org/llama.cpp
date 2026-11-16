@@ -1,5 +1,5 @@
-import { FileTypeAudio, MimeTypeAudio } from '$lib/enums';
-import type { AudioInputFormat } from '$lib/types/api';
+import { FileTypeAudio, MimeTypeAudio } from '#lib/enums/index.ts';
+import type { AudioInputFormat } from '#lib/types/api.js';
 
 const WAV_MIME_TYPES: string[] = [
 	MimeTypeAudio.WAV,

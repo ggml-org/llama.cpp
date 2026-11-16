@@ -1,6 +1,6 @@
 import { getJpegOrientationFromDataURL, isJpegMimeType } from './jpeg-orientation';
-import { BASE64_IMAGE_URI_REGEX, IMAGE } from '$lib/constants';
-import { MimeTypeImage } from '$lib/enums';
+import { BASE64_IMAGE_URI_REGEX, IMAGE } from '#lib/constants/index.ts';
+import { MimeTypeImage } from '#lib/enums/index.ts';
 
 /**
  * Converts an Image base64 data URL to another Image data URL with capped dimensions to reduce file size.

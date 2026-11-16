@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Card from '$lib/components/ui/card';
-	import type { RecommendedMCPServer } from '$lib/types';
+	import * as Card from '#lib/components/ui/card/index.ts';
+	import type { RecommendedMCPServer } from '#lib/types/index.ts';
 	import { mode } from 'mode-watcher';
 
 	interface Props {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import MentionBadge from './MentionBadge.svelte';
-	import { splitMentionSegments } from '$lib/utils';
+	import { splitMentionSegments } from '#lib/utils/index.ts';
 
 	interface Props {
 		content: string;

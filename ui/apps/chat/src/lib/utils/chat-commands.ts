@@ -1,14 +1,14 @@
-import { SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
-import { ChatFormCommandAction } from '$lib/enums';
-import type { ChatCommandsOptions, ChatFormCommand } from '$lib/types';
+import { SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
+import { ChatFormCommandAction } from '#lib/enums/index.ts';
+import type { ChatCommandsOptions, ChatFormCommand } from '#lib/types/index.ts';
 
 /**
  * The slash commands surfaced by the `/` command picker, in display order.
  *
  * Availability is supplied as predicates rather than store imports: this
- * module is re-exported through the `$lib/utils` barrel, and importing
+ * module is re-exported through the `#lib/utils/index.ts` barrel, and importing
  * stores at module load would create a circular dependency (the stores
- * themselves import from `$lib/utils`).
+ * themselves import from `#lib/utils/index.ts`).
  */
 export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[] {
 	return [

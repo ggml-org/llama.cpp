@@ -7,8 +7,8 @@
  * as reactive getters so validation tracks the model in real time.
  */
 
-import { filterFilesByModalities, isFileTypeSupported } from '$lib/utils';
-import { processFilesToChatUploaded } from '$lib/utils/browser-only';
+import { processFilesToChatUploaded } from '#lib/utils/browser-only.ts';
+import { filterFilesByModalities, isFileTypeSupported } from '#lib/utils/index.ts';
 
 interface UseChatScreenFileUploadOptions {
 	capabilities: () => { hasVision: boolean; hasAudio: boolean; hasVideo: boolean };

@@ -16,7 +16,7 @@ import {
 	QUANT_WEIGHT,
 	RAM_BUDGET_RATIO,
 	RAM_OVERHEAD_MB
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 /**
  * Smallest memory tier (GB) that can run a model of the given file size,

@@ -1,18 +1,18 @@
 <script lang="ts">
 	import { AlertCircle, Download, FileText, Loader2 } from '@lucide/svelte';
-	import { ActionIconCopyToClipboard } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { MCPResourceContent, MCPResourceInfo } from '$lib/types';
+	import { ActionIconCopyToClipboard } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { MimeTypeApplication, MimeTypeText } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { MCPResourceContent, MCPResourceInfo } from '#lib/types/index.ts';
 	import {
 		createBase64DataUrl,
 		downloadResourceContent,
 		getResourceBlobContent,
 		getResourceTextContent,
 		isImageMimeType
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		resource: MCPResourceInfo | null;

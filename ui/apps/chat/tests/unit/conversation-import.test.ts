@@ -1,7 +1,7 @@
-import { NEWLINE } from '$lib/constants';
-import { MessageRole, MessageType } from '$lib/enums';
-import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
-import type { ExportedConversation } from '$lib/types/database';
+import { NEWLINE } from '#lib/constants/index.ts';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
+import type { ExportedConversation } from '#lib/types/database.js';
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 

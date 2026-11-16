@@ -1,5 +1,5 @@
-import { capImageDataURLSize } from '$lib/utils/cap-img-size';
-import { getJpegOrientationFromDataURL } from '$lib/utils/jpeg-orientation';
+import { capImageDataURLSize } from '#lib/utils/cap-img-size.ts';
+import { getJpegOrientationFromDataURL } from '#lib/utils/jpeg-orientation.ts';
 import { describe, expect, it } from 'vitest';
 
 // Real 64x32 jpegs generated with Pillow, quality 90. The upright picture is

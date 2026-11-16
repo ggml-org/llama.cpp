@@ -10,16 +10,21 @@
  */
 
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
-import { browser } from '$app/environment';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { CACHE, DEFAULT_MCP_CONFIG, MCP_RECONNECT, MCP_SERVER_ID_PREFIX } from '$lib/constants';
-import { ColorMode, HealthCheckStatus, MCPConnectionPhase, MCPRefType } from '$lib/enums';
-import { MCPService } from '$lib/services/mcp.service';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import {
+	CACHE,
+	DEFAULT_MCP_CONFIG,
+	MCP_RECONNECT,
+	MCP_SERVER_ID_PREFIX
+} from '#lib/constants/index.ts';
+import { ColorMode, HealthCheckStatus, MCPConnectionPhase, MCPRefType } from '#lib/enums/index.ts';
+import { MCPService } from '#lib/services/mcp.service.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { MCPHealthCheckManager, type McpHealthHost } from '$lib/stores/mcp/health.svelte';
-import { mcpResourceStore } from '$lib/stores/mcp/resources.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { MCPHealthCheckManager, type McpHealthHost } from '#lib/stores/mcp/health.svelte.ts';
+import { mcpResourceStore } from '#lib/stores/mcp/resources.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import type { DatabaseMessageExtraMcpResource } from '#lib/types/database.js';
 import type {
 	GetPromptResult,
 	HealthCheckParams,
@@ -36,9 +41,8 @@ import type {
 	ServerStatus,
 	Tool,
 	ToolExecutionResult
-} from '$lib/types';
-import type { DatabaseMessageExtraMcpResource } from '$lib/types/database';
-import type { SettingsConfigType } from '$lib/types/settings';
+} from '#lib/types/index.ts';
+import type { SettingsConfigType } from '#lib/types/settings.js';
 import {
 	buildProxiedIconUrl,
 	detectMcpTransportFromUrl,
@@ -47,7 +51,8 @@ import {
 	getMcpServerLabel,
 	parseMcpServerSettings,
 	uuid
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
+import { browser } from '$app/env';
 import { mode } from 'mode-watcher';
 
 class MCPStore implements McpHealthHost {

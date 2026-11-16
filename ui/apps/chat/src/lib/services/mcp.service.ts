@@ -28,14 +28,14 @@ import {
 	DEFAULT_MCP_CONFIG,
 	HEADERS,
 	NEWLINE
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	MCPConnectionPhase,
 	MCPContentType,
 	MCPLogLevel,
 	MCPRefType,
 	MCPTransportType
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 import type {
 	ClientCapabilities,
 	Implementation,
@@ -51,7 +51,7 @@ import type {
 	MCPServerInfo,
 	ToolCallParams,
 	ToolExecutionResult
-} from '$lib/types';
+} from '#lib/types/index.ts';
 import {
 	buildProxiedHeaders,
 	buildProxiedUrl,
@@ -67,7 +67,7 @@ import {
 	sanitizeHeaders,
 	summarizeRequestBody,
 	throwIfAborted
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 
 interface ToolResultContentItem {
 	type: string;

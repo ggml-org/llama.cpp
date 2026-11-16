@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { X } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
+	import { ActionIcon } from '#lib/components/app/index.ts';
 
 	interface Props {
 		class?: string;

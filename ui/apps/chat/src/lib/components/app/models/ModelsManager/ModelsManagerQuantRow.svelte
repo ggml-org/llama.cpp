@@ -5,11 +5,11 @@
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, isRowControlClick } from './utils';
 	import { MoreHorizontal } from '@lucide/svelte';
-	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
-	import { Badge } from '$lib/components/ui/badge';
-	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
-	import { modelsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
+	import { Badge } from '#lib/components/ui/badge/index.ts';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '#lib/constants/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		isFavorite: (option: ModelOption) => boolean;

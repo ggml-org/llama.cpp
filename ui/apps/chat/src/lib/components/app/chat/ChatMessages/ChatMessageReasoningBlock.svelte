@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { Lightbulb } from '@lucide/svelte';
-	import { CollapsibleContentBlock, MarkdownContent } from '$lib/components/app';
-	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
-	import { AgenticSectionType } from '$lib/enums';
-	import { settingsStore } from '$lib/stores';
-	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
+	import { CollapsibleContentBlock, MarkdownContent } from '#lib/components/app/index.ts';
+	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '#lib/constants/index.ts';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, DatabaseMessageExtra } from '#lib/types/index.ts';
 
 	interface Props {
 		section: AgenticSection;

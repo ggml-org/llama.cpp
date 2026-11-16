@@ -9,8 +9,8 @@
  * track live media query changes.
  */
 
-import { browser } from '$app/environment';
-import { DEFAULT_MOBILE_BREAKPOINT, MEDIA_QUERIES } from '$lib/constants';
+import { DEFAULT_MOBILE_BREAKPOINT, MEDIA_QUERIES } from '#lib/constants/index.ts';
+import { browser } from '$app/env';
 import { MediaQuery } from 'svelte/reactivity';
 
 /**

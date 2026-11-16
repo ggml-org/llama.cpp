@@ -1,5 +1,5 @@
 // Central constants export file
-// All constants should be imported from '$lib/constants'
+// All constants should be imported from '#lib/constants/index.ts'
 
 export * from './agentic.constants';
 export * from './api-endpoints.constants';

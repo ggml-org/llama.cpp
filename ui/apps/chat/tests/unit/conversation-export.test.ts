@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/services/database.service', () => ({
+vi.mock('#lib/services/database.service.ts', () => ({
 	DatabaseService: { getAllGroups: vi.fn(async () => []), getConversationsWithMessages: vi.fn() }
 }));
 
-import { MessageRole, MessageType } from '$lib/enums';
-import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
-import { DatabaseService } from '$lib/services/database.service';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
-import { filterByLeafNodeId } from '$lib/utils/branching';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import { ConversationTransferService } from '#lib/services/conversation-transfer.service.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import type { DatabaseConversation, DatabaseMessage } from '#lib/types/database.js';
+import { filterByLeafNodeId } from '#lib/utils/branching.ts';
 
 /**
  * Reproduces the exported-conversation bug:
