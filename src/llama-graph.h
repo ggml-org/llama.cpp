@@ -759,6 +759,46 @@ public:
     const llama_memory_hybrid_iswa_context * mctx;
 };
 
+// attention over a hybrid iswa memory with a per-head bias that depends on the distance from the query to the cell (Inkling)
+// the input owns dense KQ masks and fills them from the same cells as the distances, so that a bias gathered by distance lines up
+// with the mask; kv_rows is not used, its masks follow the per-sequence cell lists and have no head dimension
+class llm_graph_input_attn_rel_pos : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_rel_pos(
+            const llama_cparams & cparams,
+            llm_graph_input_attn_kv_iswa * inp_attn,
+            const llama_memory_hybrid_iswa_context * mctx,
+            uint32_t extent,
+            uint32_t extent_swa) :
+        inp_attn(inp_attn),
+        extent(extent),
+        extent_swa(extent_swa),
+        cparams(cparams),
+        mctx(mctx) { }
+    ~llm_graph_input_attn_rel_pos() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    // distance from the token to the cell, extent for the empty, future and more distant cells
+    ggml_tensor * self_rel_pos     = nullptr; // I32 [n_kv,     n_batch]
+    ggml_tensor * self_rel_pos_swa = nullptr; // I32 [n_kv_swa, n_batch]
+
+    llm_attn_mask self_attn_mask;     // rows == nullptr
+    llm_attn_mask self_attn_mask_swa; // rows == nullptr
+
+    // K/V indices and rotations, owned by the memory input
+    llm_graph_input_attn_kv_iswa * inp_attn;
+
+    const uint32_t extent;
+    const uint32_t extent_swa;
+
+    const llama_cparams cparams;
+
+    const llama_memory_hybrid_iswa_context * mctx;
+};
+
 class llm_graph_input_sampling : public llm_graph_input_i {
 public:
     llm_graph_input_sampling(std::map<llama_seq_id, llama_sampler *> samplers) :
@@ -1387,8 +1427,43 @@ struct llm_graph_context {
             ggml_tensor * sinks, // [n_head_q]
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                   float   kq_scale,
-                    int   il,
-            ggml_tensor * kq_mask = nullptr) const;
+                    int   il) const;
+
+    // the iswa build_attn with the KQ mask and kv_rows given by the caller, which has to keep them in sync
+    ggml_tensor * build_attn_iswa_impl(
+            llm_graph_input_attn_kv_iswa * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur,
+            ggml_tensor * k_cur,
+            ggml_tensor * v_cur,
+            ggml_tensor * kq_b,
+            ggml_tensor * kq_mask,
+            ggml_tensor * kv_rows,
+            ggml_tensor * sinks,
+            ggml_tensor * v_mla,
+                  float   kq_scale,
+                    int   il) const;
+
+    llm_graph_input_attn_rel_pos * build_inp_attn_rel_pos(
+            llm_graph_input_mem_hybrid_iswa * inp,
+                               uint32_t   extent,
+                               uint32_t   extent_swa) const;
+
+    // kq_b is added to the KQ mask, after the KQ scale
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_rel_pos * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,  // [n_kv, n_tokens/n_stream, n_head_q, n_stream]
+            ggml_tensor * sinks, // [n_head_q]
+                  float   kq_scale,
+                    int   il) const;
 
     llm_graph_input_attn_k_iswa * build_attn_inp_k_iswa() const;
 
