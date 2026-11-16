@@ -29,7 +29,7 @@ static const char * KEY_SCALE_FACTOR  = "clip.vision.projector.scale_factor";
 static const char * KEY_SPATIAL_MERGE = "clip.vision.spatial_merge_size";
 static const char * KEY_MIN_PIXELS    = "clip.vision.image_min_pixels";
 static const char * KEY_MAX_PIXELS    = "clip.vision.image_max_pixels";
-static const char * KEY_WA_LAYERS     = "clip.vision.wa_layer_indexes";
+static const char * KEY_WA_PATTERN    = "clip.vision.n_wa_pattern";
 static const char * KEY_WINDOW_SIZE   = "clip.vision.window_size";
 static const char * KEY_DEEPSTACK     = "clip.vision.is_deepstack_layers";
 
@@ -150,15 +150,18 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
             {
                 vhp.n_merge = 2;
                 clip_get_i32(ml, KEY_SPATIAL_MERGE, vhp.n_merge, false);
+                if (vhp.n_merge != 2) {
+                    throw std::runtime_error("clip: Qwen-VL needs spatial_merge_size = 2");
+                }
                 vhp.n_temporal_merge = 2;
-                // defaults of mtmd: 8 to 4096 tokens
+                // defaults of the HF processor: 8 to 4096 tokens, the file can override them
                 const int32_t patch_area = vhp.patch_size * vhp.patch_size * vhp.n_merge * vhp.n_merge;
                 vhp.image_min_pixels = 8    * patch_area;
                 vhp.image_max_pixels = 4096 * patch_area;
-                clip_get_i32(ml, KEY_MIN_PIXELS, vhp.image_min_pixels, false);
-                clip_get_i32(ml, KEY_MAX_PIXELS, vhp.image_max_pixels, false);
+                clip_get_i32(ml, KEY_MIN_PIXELS, vhp.file_min_pixels, false);
+                clip_get_i32(ml, KEY_MAX_PIXELS, vhp.file_max_pixels, false);
                 if (vhp.proj == LLAMA_CLIP_PROJ_QWEN25VL) {
-                    ml.get_arr(std::string(KEY_WA_LAYERS), vhp.wa_layers, false);
+                    clip_get_i32(ml, KEY_WA_PATTERN, vhp.n_wa_pattern);
                     clip_get_i32(ml, KEY_WINDOW_SIZE, vhp.attn_window, false);
                 }
                 if (vhp.proj == LLAMA_CLIP_PROJ_QWEN3VL) {
@@ -566,10 +569,258 @@ struct llama_model_clip::graph_gemma3 : public llama_model_clip::graph_vit {
     }
 };
 
+// Qwen-VL: patch embedding of one frame or a merged frame pair, rows in 2x2 merge order, [n_embd, n_patches]
+static ggml_tensor * clip_qwen_patches(ggml_context * ctx0, const llama_model_clip & clip, ggml_tensor * raw,
+        const llama_media_input & media, int64_t n_embd, int64_t px, int64_t py) {
+    const int p = clip.vhp.patch_size;
+    ggml_tensor * f0 = raw;
+    ggml_tensor * f1 = raw;
+    if (media.n_frames == 2) {
+        const size_t nb1 = ggml_row_size(raw->type, media.nx);
+        const size_t nb2 = ggml_row_size(raw->type, (int64_t) media.nx * media.ny);
+        f0 = ggml_view_3d(ctx0, raw, media.nx, media.ny, 3, nb1, nb2, 0);
+        f1 = ggml_view_3d(ctx0, raw, media.nx, media.ny, 3, nb1, nb2, nb2 * 3);
+    }
+    ggml_tensor * inp = ggml_add(ctx0,
+            ggml_conv_2d(ctx0, clip.v_patch_embd,   f0, p, p, 0, 0, 1, 1),
+            ggml_conv_2d(ctx0, clip.v_patch_embd_1, f1, p, p, 0, 0, 1, 1));
+
+    inp = ggml_permute(ctx0, inp, 1, 2, 0, 3); // [w, h, c, b] -> [c, w, h, b]
+    inp = ggml_cont_4d(ctx0, inp, n_embd * 2, px / 2, py, 1);
+    inp = ggml_reshape_4d(ctx0, inp, n_embd * 2, px / 2, 2, py / 2);
+    inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
+    inp = ggml_cont_2d(ctx0, inp, n_embd, px * py);
+    return inp;
+}
+
+// vision M-RoPE positions [y, x, y, x] of each patch in 2x2 merge order, optionally remapped by window order
+static void clip_qwen_positions(std::vector<int32_t> & out, int px, int py, const std::vector<int32_t> * win_idx) {
+    const int n = px * py;
+    out.assign((size_t) n * 4, 0);
+    int ptr = 0;
+    for (int ty = 0; ty < py / 2; ty++) {
+        for (int tx = 0; tx < px / 2; tx++) {
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dx = 0; dx < 2; dx++) {
+                    int dst = ptr;
+                    if (win_idx) {
+                        dst = (*win_idx)[ptr / 4] * 4 + ptr % 4;
+                    }
+                    const int y = ty * 2 + dy;
+                    const int x = tx * 2 + dx;
+                    out[          dst] = y;
+                    out[    n   + dst] = x;
+                    out[2 * n   + dst] = y;
+                    out[3 * n   + dst] = x;
+                    ptr++;
+                }
+            }
+        }
+    }
+}
+
+// Qwen2.5-VL windows: merged-token order inside windows, and the patch-level block mask
+static void clip_qwen_windows(int px, int py, int patch_size, int attn_window,
+        std::vector<int32_t> & idx, std::vector<int32_t> & inv_idx, std::vector<float> & mask) {
+    const int pw = px / 2;
+    const int ph = py / 2;
+    const int n  = px * py;
+    const int grid_window = attn_window / patch_size / 2;
+
+    idx.assign((size_t) pw * ph, 0);
+    inv_idx.assign((size_t) pw * ph, 0);
+    mask.assign((size_t) n * n, -INFINITY);
+
+    int dst = 0;
+    int mask_row = 0;
+    for (int y = 0; y < ph; y += grid_window) {
+        for (int x = 0; x < pw; x += grid_window) {
+            const int win_h = std::min(grid_window, ph - y);
+            const int win_w = std::min(grid_window, pw - x);
+            const int dst_0 = dst;
+            for (int dy = 0; dy < win_h; dy++) {
+                for (int dx = 0; dx < win_w; dx++) {
+                    const int src = (y + dy) * pw + (x + dx);
+                    idx[src]     = dst;
+                    inv_idx[dst] = src;
+                    dst++;
+                }
+            }
+            for (int r = 0; r < win_h * win_w * 4; r++) {
+                float * row = mask.data() + (size_t) mask_row * n;
+                std::fill(row + dst_0 * 4, row + dst * 4, 0.0f);
+                mask_row++;
+            }
+        }
+    }
+}
+
+struct llama_model_clip::graph_qwen2vl : public llama_model_clip::graph_vit {
+    graph_qwen2vl(const llama_model_clip & clip, const llm_graph_params & params) : graph_vit(clip, params) {
+        const bool    is_25  = clip.vhp.proj == LLAMA_CLIP_PROJ_QWEN25VL;
+        const bool    use_wa = is_25 && clip.vhp.n_wa_pattern > 0;
+        const int64_t n_pos  = n_patches;
+        const int64_t d_head = hparams.n_embd_head_k();
+
+        ggml_tensor * cur = clip_qwen_patches(ctx0, clip, inp_media->inp_raw, media, n_embd, n_patches_x, n_patches_y);
+
+        ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos * 4);
+        ggml_set_input(positions);
+        cb(positions, "positions", -1);
+
+        ggml_tensor * win_idx  = nullptr;
+        ggml_tensor * win_inv  = nullptr;
+        ggml_tensor * win_mask = nullptr;
+        if (use_wa) {
+            win_idx  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
+            win_inv  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos / 4);
+            win_mask = ggml_new_tensor_2d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, n_pos, n_pos);
+            ggml_set_input(win_idx);
+            ggml_set_input(win_inv);
+            ggml_set_input(win_mask);
+            cb(win_mask, "window_mask", -1);
+
+            cur = ggml_reshape_2d(ctx0, cur, n_embd * 4, n_pos / 4);
+            cur = ggml_get_rows(ctx0, cur, win_inv);
+            cur = ggml_reshape_2d(ctx0, cur, n_embd, n_pos);
+        }
+
+        const int     patch_size  = clip.vhp.patch_size;
+        const int     attn_window = clip.vhp.attn_window;
+        inp_media->extra.push_back([=](const llama_media_input & m) {
+            const int px = m.nx / patch_size;
+            const int py = m.ny / patch_size;
+            std::vector<int32_t> idx;
+            std::vector<int32_t> inv;
+            std::vector<float>   mask;
+            if (use_wa) {
+                clip_qwen_windows(px, py, patch_size, attn_window, idx, inv, mask);
+                ggml_backend_tensor_set(win_idx, idx.data(), 0, ggml_nbytes(win_idx));
+                ggml_backend_tensor_set(win_inv, inv.data(), 0, ggml_nbytes(win_inv));
+                if (win_mask->type == GGML_TYPE_F16) {
+                    std::vector<ggml_fp16_t> m16(mask.size());
+                    ggml_fp32_to_fp16_row(mask.data(), m16.data(), (int64_t) mask.size());
+                    ggml_backend_tensor_set(win_mask, m16.data(), 0, ggml_nbytes(win_mask));
+                } else {
+                    ggml_backend_tensor_set(win_mask, mask.data(), 0, ggml_nbytes(win_mask));
+                }
+            }
+            std::vector<int32_t> pos;
+            clip_qwen_positions(pos, px, py, use_wa ? &idx : nullptr);
+            ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
+        });
+
+        int sections[4] = { (int) d_head/4, (int) d_head/4, (int) d_head/4, (int) d_head/4 };
+        auto add_pos = [&](ggml_tensor * x, int) {
+            return ggml_rope_multi(ctx0, x, positions, nullptr, d_head/2, sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
+        };
+        const int n_wa_pattern = clip.vhp.n_wa_pattern;
+        auto get_mask = [&](int il) -> ggml_tensor * {
+            const bool full = !use_wa || (il + 1) % n_wa_pattern == 0;
+            return full ? nullptr : win_mask;
+        };
+
+        cur = build_vit(cur, n_pos, is_25 ? LLM_NORM_RMS : LLM_NORM, nullptr, add_pos, get_mask);
+
+        cur = ggml_reshape_2d(ctx0, cur, n_embd * 4, n_pos / 4);
+        cur = build_ffn(cur,
+                clip.mm_0_w, clip.mm_0_b, nullptr,
+                nullptr, nullptr, nullptr,
+                clip.mm_2_w, clip.mm_2_b, nullptr,
+                nullptr, LLM_FFN_GELU, LLM_FFN_SEQ, -1);
+
+        if (use_wa) {
+            cur = ggml_get_rows(ctx0, cur, win_idx);
+        }
+
+        finish(cur);
+    }
+};
+
+struct llama_model_clip::graph_qwen3vl : public llama_model_clip::graph_vit {
+    graph_qwen3vl(const llama_model_clip & clip, const llm_graph_params & params) : graph_vit(clip, params) {
+        const int64_t n_pos  = n_patches;
+        const int64_t d_head = hparams.n_embd_head_k();
+
+        ggml_tensor * cur = clip_qwen_patches(ctx0, clip, inp_media->inp_raw, media, n_embd, n_patches_x, n_patches_y);
+        cur = ggml_add(ctx0, cur, clip.v_patch_bias);
+
+        // learned position embedding, resized to the patch grid and put in merge order
+        {
+            ggml_tensor * pe = clip.v_pos_embd;
+            const int n_side = (int) std::sqrt((double) pe->ne[1]);
+            if (n_patches_x != n_side || n_patches_y != n_side) {
+                pe = ggml_reshape_3d(ctx0, pe, n_embd, n_side, n_side);
+                pe = ggml_permute(ctx0, pe, 2, 0, 1, 3);
+                pe = ggml_interpolate(ctx0, pe, n_patches_x, n_patches_y, n_embd, 1, GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ALIGN_CORNERS);
+                pe = ggml_permute(ctx0, pe, 1, 2, 0, 3);
+                pe = ggml_cont_2d(ctx0, pe, n_embd, n_patches_x * n_patches_y);
+            }
+            pe = ggml_cont_4d(ctx0, pe, n_embd * 2, n_patches_x / 2, n_patches_y, 1);
+            pe = ggml_reshape_4d(ctx0, pe, n_embd * 2, n_patches_x / 2, 2, n_patches_y / 2);
+            pe = ggml_permute(ctx0, pe, 0, 2, 1, 3);
+            pe = ggml_cont_2d(ctx0, pe, n_embd, n_patches_x * n_patches_y);
+            cur = ggml_add(ctx0, cur, pe);
+        }
+
+        ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos * 4);
+        ggml_set_input(positions);
+        cb(positions, "positions", -1);
+
+        const int patch_size = clip.vhp.patch_size;
+        inp_media->extra.push_back([=](const llama_media_input & m) {
+            std::vector<int32_t> pos;
+            clip_qwen_positions(pos, m.nx / patch_size, m.ny / patch_size, nullptr);
+            ggml_backend_tensor_set(positions, pos.data(), 0, ggml_nbytes(positions));
+        });
+
+        int sections[4] = { (int) d_head/4, (int) d_head/4, (int) d_head/4, (int) d_head/4 };
+        auto add_pos = [&](ggml_tensor * x, int) {
+            return ggml_rope_multi(ctx0, x, positions, nullptr, d_head/2, sections, GGML_ROPE_TYPE_VISION, 32768, 10000, 1, 0, 1, 32, 1);
+        };
+
+        ggml_tensor * deepstack = nullptr;
+        auto layer_out = [&](ggml_tensor * x, int il) {
+            const auto & ds = clip.deepstack.empty() ? deepstack_layer() : clip.deepstack[il];
+            if (ds.fc1_w == nullptr) {
+                return;
+            }
+            ggml_tensor * feat = ggml_reshape_2d(ctx0, x, n_embd * 4, n_pos / 4);
+            feat = build_norm(feat, ds.norm_w, ds.norm_b, LLM_NORM, il);
+            feat = build_ffn(feat,
+                    ds.fc1_w, ds.fc1_b, nullptr,
+                    nullptr, nullptr, nullptr,
+                    ds.fc2_w, ds.fc2_b, nullptr,
+                    nullptr, LLM_FFN_GELU, LLM_FFN_SEQ, il);
+            deepstack = deepstack ? ggml_concat(ctx0, deepstack, feat, 0) : feat;
+        };
+
+        cur = build_vit(cur, n_pos, LLM_NORM, nullptr, add_pos, nullptr, layer_out);
+
+        cur = ggml_reshape_2d(ctx0, cur, n_embd * 4, n_pos / 4);
+        cur = build_ffn(cur,
+                clip.mm_0_w, clip.mm_0_b, nullptr,
+                nullptr, nullptr, nullptr,
+                clip.mm_2_w, clip.mm_2_b, nullptr,
+                nullptr, LLM_FFN_GELU, LLM_FFN_SEQ, -1);
+
+        if (deepstack) {
+            cur = ggml_concat(ctx0, cur, deepstack, 0);
+        }
+
+        finish(cur);
+    }
+};
+
 std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params & params) const {
     switch (vhp.proj) {
         case LLAMA_CLIP_PROJ_GEMMA3:
             return std::make_unique<graph_gemma3>(*this, params);
+        case LLAMA_CLIP_PROJ_QWEN2VL:
+        case LLAMA_CLIP_PROJ_QWEN25VL:
+            return std::make_unique<graph_qwen2vl>(*this, params);
+        case LLAMA_CLIP_PROJ_QWEN3VL:
+            return std::make_unique<graph_qwen3vl>(*this, params);
         default:
             GGML_ABORT("clip: no graph for projector type '%s'", vhp.proj_name.c_str());
     }
@@ -605,6 +856,47 @@ bool llama_model_clip::media_preprocess_image(const llama_media_proc & proc, con
                 m.grid_x   = side;
                 m.grid_y   = side;
                 m.n_tokens = side * side;
+            } break;
+        case LLAMA_CLIP_PROJ_QWEN2VL:
+        case LLAMA_CLIP_PROJ_QWEN25VL:
+        case LLAMA_CLIP_PROJ_QWEN3VL:
+            {
+                if (n_frames > vhp.n_temporal_merge) {
+                    return false;
+                }
+                const int32_t align = vhp.patch_size * vhp.n_merge;
+                const int64_t area  = (int64_t) align * align;
+
+                // user limits, then file limits, then model defaults
+                int64_t min_px = proc.params.image_min_tokens > 0 ? proc.params.image_min_tokens * area
+                               : vhp.file_min_pixels > 0         ? vhp.file_min_pixels : vhp.image_min_pixels;
+                int64_t max_px = proc.params.image_max_tokens > 0 ? proc.params.image_max_tokens * area
+                               : vhp.file_max_pixels > 0         ? vhp.file_max_pixels : vhp.image_max_pixels;
+                // the encoder context takes at most n_rows_max rows
+                max_px = std::min<int64_t>(max_px, (int64_t) proc.n_rows_max * area);
+                min_px = std::min(min_px, max_px);
+
+                calc_size_opt opt;
+                opt.align_size      = align;
+                opt.min_pixels      = (int) min_px;
+                opt.max_pixels      = (int) max_px;
+                opt.round_half_even = true;
+                const image_size target = calc_size_preserved_ratio(frames[0].get_size(), opt);
+
+                m.inp.nx = target.width;
+                m.inp.ny = target.height;
+                for (int f = 0; f < n_frames; ++f) {
+                    image_u8 resized;
+                    resize(frames[f], resized, target, RESIZE_ALGO_BICUBIC, PAD_NONE, {0, 0, 0});
+                    if (!frames[f].is_placeholder()) {
+                        std::vector<float> one;
+                        to_f32_normalized(resized, vhp.image_mean, vhp.image_std, one);
+                        m.inp.data.insert(m.inp.data.end(), one.begin(), one.end());
+                    }
+                }
+                m.grid_x   = target.width  / align;
+                m.grid_y   = target.height / align;
+                m.n_tokens = m.grid_x * m.grid_y;
             } break;
         default:
             return false;

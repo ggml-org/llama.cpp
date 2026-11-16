@@ -306,6 +306,17 @@ int64_t llama_media_get_rows(const struct llama_media * m, int64_t row0, int64_t
     return m->n_embd;
 }
 
+bool llama_media_get_row_pos(const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos) {
+    if (row >= m->n_tokens || n_pos == 0 || n_pos > GGML_MROPE_SECTIONS) {
+        return false;
+    }
+    if (m->pos_type == LLAMA_MEDIA_POS_MROPE && n_pos < 3) {
+        return false;
+    }
+    llama_media_row_pos(*m, pos_0, row, pos, n_pos);
+    return true;
+}
+
 //
 // batch
 //

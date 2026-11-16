@@ -815,6 +815,9 @@ struct mtmd_lm {
 static bool mtmd_lm_ported(projector_type proj) {
     switch (proj) {
         case PROJECTOR_TYPE_GEMMA3:
+        case PROJECTOR_TYPE_QWEN2VL:
+        case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_QWEN3VL:
             return true;
         default:
             return false;
@@ -2010,6 +2013,21 @@ struct mtmd_tokenizer {
             image_tokens->id     = b0->id;
             image_tokens->lmedia = mtmd_lmedia_ref(m);
 
+            // grid and a placeholder entry, so the chunk keeps its counts once serialized without the media
+            const uint32_t n_rows = llama_media_n_tokens(m);
+            if (ctx->pos_type == MTMD_POS_TYPE_MROPE) {
+                llama_pos p[4];
+                llama_media_get_row_pos(m, 0, n_rows - 1, p, 4);
+                image_tokens->nx = p[2] + 1;
+                image_tokens->ny = p[1] + 1;
+            } else {
+                image_tokens->nx = n_rows;
+                image_tokens->ny = 1;
+            }
+            mtmd_image_f32 ph;
+            ph.set_size({ 1, 1 }, /* is_placeholder */ true, /* is_audio */ false);
+            image_tokens->batch_f32.entries.push_back(std::move(ph));
+
             mtmd_input_chunk chunk{
                 MTMD_INPUT_CHUNK_TYPE_IMAGE,
                 {}, // text tokens
@@ -2033,7 +2051,9 @@ struct mtmd_tokenizer {
         }
         const bool is_vision = !bitmaps[0]->is_audio;
 
-        if (is_vision && ctx->lm) {
+        // Qwen3-VL sizes video frames differently from images, not ported yet
+        const bool lm_video_todo = ctx->ctx_v && ctx->ctx_v->model.proj_type == PROJECTOR_TYPE_QWEN3VL && bitmaps[0]->is_video_frame();
+        if (is_vision && ctx->lm && !lm_video_todo) {
             return add_media_lm(bitmaps);
         }
 
@@ -4976,6 +4996,18 @@ static mtmd_decoder_pos mtmd_canvas_decoder_pos(const mtmd_image_tokens * image_
 
 mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
     mtmd_decoder_pos pos;
+    if (image_tokens->lmedia.m) {
+        llama_pos p[4] = { 0, 0, 0, 0 };
+        llama_media_get_row_pos(image_tokens->lmedia.m, pos_0, (uint32_t) i, p, 4);
+        pos.t = p[0];
+        pos.y = p[1];
+        pos.x = p[2];
+        pos.z = p[3];
+        if (image_tokens->pos == MTMD_POS_TYPE_NORMAL) {
+            pos.x = pos.y = pos.z = pos.t;
+        }
+        return pos;
+    }
     switch (image_tokens->pos) {
         case MTMD_POS_TYPE_MROPE:
             {

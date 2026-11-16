@@ -34,7 +34,7 @@ Rules enforced by `llama_init_from_model`: an mmproj (`general.architecture = cl
 | Function | Status |
 |---|---|
 | `llama_media_proc_default_params`, `llama_media_proc_init(ctx_enc, model_dec, params)`, `llama_media_proc_free`, `llama_media_proc_has`, `llama_media_proc_sample_rate` | done (images; `sample_rate` returns -1 until audio is ported) |
-| `llama_media_layout_init(proc, pos_0)`, `_free`, `_add_tokens`, `_add_image`, `_add_frames`, `_n_pieces`, `_get_tokens`, `_get_media` | done (`_add_frames` lands with the Qwen-VL milestone) |
+| `llama_media_layout_init(proc, pos_0)`, `_free`, `_add_tokens`, `_add_image`, `_add_frames`, `_n_pieces`, `_get_tokens`, `_get_media` | done |
 
 Difference from the accepted plan (`llama-ext-plan.md`):
 - `llama_media_proc_init` takes the decoder **model**, not the decoder context. The only decoder-context value the proc needed was `n_ubatch`, which the caller passes as `params.n_span_max`. This lets libmtmd, which receives only the text model, create a proc.
@@ -46,6 +46,9 @@ Difference from the accepted plan (`llama-ext-plan.md`):
 | Function | Status |
 |---|---|
 | `llama_media_get_type`, `_n_tokens`, `_n_pos`, `_is_atomic`, `_get_id`, `_is_placeholder`, `_is_encoded`, `_ref`, `_free`, `_release_rows`, `_get_rows` | done |
+| `llama_media_get_row_pos(m, pos_0, row, pos, n_pos)` | done, TRANSITIONAL |
+
+`llama_media_get_row_pos` is not in the accepted plan. Callers that still decode host rows with `llama_batch_ext_add_embd` (the server mixed batch, the speculative-decoding callback of `mtmd-helper`) need the decoder positions of each row; the libmtmd shim uses it to keep `mtmd_image_tokens_get_decoder_pos` working. It goes away once every caller uses `llama_batch_ext_add_media`.
 
 `llama_media` is refcounted and thread-safe to reference from several threads. Encoded rows live in host memory in this version (phase 2 of the plan moves them to the device behind the same calls).
 
@@ -72,13 +75,15 @@ On a batch of an ENCODER context it queues the media for `llama_process(ctx, LLA
 | `mtmd_input_chunk_get_llama_media(chunk)` | done | TRANSITIONAL. Returns the `llama_media` behind an image chunk, nullptr for chunks of the old engine. Needed because `mtmd-helper` may only use the public mtmd API. |
 
 Behaviour of libmtmd with the shim:
-- For ported projectors (Gemma 3 so far), `mtmd_init_from_file` also loads the mmproj with `llama_model_load_from_file`, creates an ENCODER context and a media proc, and routes images through them. Everything else (marker parsing, chunk API, audio, video helpers, TTS) is unchanged.
+- For ported projectors (Gemma 3, Qwen2-VL, Qwen2.5-VL, Qwen3-VL), `mtmd_init_from_file` also loads the mmproj with `llama_model_load_from_file`, creates an ENCODER context and a media proc, and routes images through them. Everything else (marker parsing, chunk API, audio, video helpers, TTS) is unchanged.
 - The mmproj is loaded twice (old engine and libllama) while the shim exists. This costs one extra copy of the vision weights. The old engine is still needed by functions that read its hparams directly (video config, memory estimate).
 - `MTMD_LEGACY_ENGINE=1` forces the old engine at runtime. `MTMD_LM_LOAD_MODE=dio` loads the libllama copy with direct I/O (mtmd has no load-mode parameter).
 - If the libllama engine fails to load, mtmd logs a warning and falls back to the old engine.
 - `mtmd_get_output_embd` and `mtmd_batch_get_output_embd` still return host rows (copied from the media).
 - `mtmd_helper_decode_image_chunk` uses `llama_batch_ext_add_media` for libllama media when no post-decode callback is set: no `llama_set_causal_attn` toggle, positions and span set by libllama. With a callback (speculative decoding mirror), it keeps the old path.
 - `MTMD_DEBUG_EMBEDDINGS=<path>` dumps the libllama rows in the same format as the old engine.
+- Image chunks of libllama media carry their grid (`nx`, `ny`) and one placeholder entry, so `mtmd_image_tokens_get_nx/ny`, `mtmd_input_chunk_get_n_tokens` and serialized chunks keep the same counts.
+- Qwen3-VL video frames stay on the old engine: the model sizes video frames differently from images and that preprocessing is not ported yet.
 
 ## Internal changes (no API, no ABI)
 
@@ -93,7 +98,7 @@ Behaviour of libmtmd with the shim:
 | `llama_model_base::load_hparams` | for `clip`, calls the arch's `load_arch_hparams` instead of returning early |
 | `llama_model::create_memory` | `clip` keeps no memory |
 | `src/llama.cpp` | the "CLIP cannot be used as main model" error is gone; the context-type check replaces it |
-| `src/models/clip.cpp` | real arch: vision tower hparams (`clip.vision.*` via `LLM_KV` prefix), tensors through `create_tensor` (mmap, `-ot`, device split, repack apply), legacy FFN up/down swap, Gemma 3 graph on libllama helpers (`build_norm`, `build_ffn`, `build_attn_mha`, `build_lora_mm`) |
+| `src/models/clip.cpp` | real arch: vision tower hparams (`clip.vision.*` via `LLM_KV` prefix), tensors through `create_tensor` (mmap, `-ot`, device split, repack apply), legacy FFN up/down swap, graphs on libllama helpers (`build_norm`, `build_ffn`, `build_attn_mha`, `build_lora_mm`): Gemma 3 (SigLIP + pooling), Qwen2-VL / Qwen2.5-VL (M-RoPE patch positions, temporal merge, window attention with permutation and block mask), Qwen3-VL (learned position embedding resized in graph, deepstack rows concatenated after the main row). Per-media inputs are computed from the media geometry in `llm_graph_input_media` |
 | `src/llama-media*.{h,cpp}` | media objects, layout, preprocessing; the image resampler is a copy of mtmd's `img_tool` (kept bit-identical, to be shared once mtmd uses it) |
 | `llm_ffn_op_type` | new `LLM_FFN_GELU_QUICK` |
 | `LLM_KV` | optional prefix that replaces the arch name (`clip.vision`) |

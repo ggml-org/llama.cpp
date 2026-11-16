@@ -420,8 +420,13 @@ struct llama_model_clip : public llama_model_base {
 
         int32_t n_temporal_merge = 1;
 
-        std::vector<int32_t> wa_layers;       // full-attention layers of window-attention towers
-        int32_t              attn_window = 0; // window size in pixels
+        int32_t n_wa_pattern = 0;   // window-attention towers: every n_wa_pattern-th layer has full attention
+        int32_t attn_window  = 112; // window size in pixels
+
+        // limits read from the file, 0 = model default
+        int32_t file_min_pixels = 0;
+        int32_t file_max_pixels = 0;
+
         std::vector<int32_t> deepstack_layers;
     } vhp;
 
