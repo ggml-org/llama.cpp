@@ -73,6 +73,52 @@ a wide range of hardware - locally and in the cloud.
 
 The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
 
+## Elbrus (e2k)
+
+This fork adds Elbrus support: cmake routes `e2k` to the x86 SIMD path and lcc
+1.29 translates the SSE2/AVX2 intrinsics into native e2k-v6 vector operations,
+so every quantized dot/gemm/repack kernel works on Elbrus without hand-written
+e2k code. Full notes: [docs/backend/ELBRUS.md](docs/backend/ELBRUS.md).
+
+Hardware under test: Elbrus E16C, 8 cores (e2k-v6) @ 2 GHz, 62 GB RAM,
+~56 GB/s STREAM, ALT Linux 11, lcc 1.29.16. All numbers are `llama-bench -t 8`.
+
+### Prompt/generation, Qwen3-8B Q4_K_M (build evolution)
+
+| Build                    | pp512  | tg128 |
+|--------------------------|--------|-------|
+| Baseline (scalar path)   | 1.96   | 0.90  |
+| x86-SIMD (this fork)     | 17.89  | 1.78  |
+| x86-SIMD + `--repack 0`  | 14.06  | 2.14  |
+| x86-SIMD + LTO           | 17.63  | 2.05  |
+
+### Threading: libomp sleep barriers (Qwen3.8-27B Q4_K_M)
+
+| config                        | tg64 | pp512 |
+|-------------------------------|------|-------|
+| libomp default                | 0.73 | 3.54  |
+| `OMP_WAIT_POLICY=active`      | 1.09 | 3.54  |
+| + `OMP_PROC_BIND=spread`      | 1.11 | 3.54  |
+| `GGML_OPENMP=OFF` (installed) | 1.12 | 3.47  |
+
+### Model choice on the same box (noomp build)
+
+| model                       | size   | tg64 | pp512 |
+|-----------------------------|--------|------|-------|
+| Qwen3-30B-A3B Q4_K_S (MoE)  | 16.3G  | 6.90 | 21.26 |
+| Qwen3.8-27B Q4_K_M (dense)  | 15.3G  | 1.12 | 4.07  |
+
+MoE wins because generation reads only routed experts per token (~3B params,
+~6x less weight traffic). Tested and rejected on this backend: PGO, LTO,
+clang-19, tmpfs/mlock/cpu-strict, q8_0 KV as a default, EAGLE3/ngram spec
+decoding for MoE targets, and q5_K/q6_K kernel hoist patches (all measured,
+see docs/backend/ELBRUS.md). Recommended:
+
+```sh
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON -DLLAMA_CURL=OFF -DGGML_OPENMP=OFF
+llama-server -m Qwen3-30B-A3B-Instruct-2507-Q4_K_S.gguf -t 8 --port 8080
+```
+
 ## Supported backends
 
 | Backend | Target devices |
@@ -80,6 +126,7 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 | [BLAS](docs/build.md#blas-build) | All |
 | [BLIS](docs/backend/BLIS.md) | All |
 | [CANN](docs/build.md#cann) | Huawei Ascend NPU |
+| [Elbrus (e2k)](#elbrus-e2k) | MCST Elbrus CPUs (via x86 SIMD path) |
 | [CUDA](docs/build.md#cuda) | Nvidia GPU |
 | [HIP](docs/build.md#hip) | AMD GPU |
 | [Hexagon](docs/backend/snapdragon/README.md) | Snapdragon |

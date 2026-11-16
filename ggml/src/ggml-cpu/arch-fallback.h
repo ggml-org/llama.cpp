@@ -85,7 +85,7 @@
 #define ggml_gemm_iq4_nl_8x8_q8_0_generic ggml_gemm_iq4_nl_8x8_q8_0
 #define ggml_gemm_mxfp4_8x8_q8_0_generic ggml_gemm_mxfp4_8x8_q8_0
 #define ggml_gemm_q2_K_8x8_q8_K_generic ggml_gemm_q2_K_8x8_q8_K
-#elif defined(__x86_64__) || defined(__i386__) || defined(_M_IX86) || defined(_M_X64)
+#elif defined(__x86_64__) || defined(__i386__) || defined(_M_IX86) || defined(_M_X64) || defined(__e2k__) /* lcc x86 intrinsics */
 // repack.cpp
 #define ggml_quantize_mat_q8_0_4x4_generic ggml_quantize_mat_q8_0_4x4
 #define ggml_quantize_mat_q8_K_4x4_generic ggml_quantize_mat_q8_K_4x4
