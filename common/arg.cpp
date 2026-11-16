@@ -4522,6 +4522,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.tts_speaker_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_TTS}));
+    add_opt(common_arg(
+        {"--tts-speaker-text"}, "TEXT",
+        "transcript of --tts-speaker-file, for models that need it to clone the voice\n"
+        "see docs/multimodal/tts.md for per-model usage notes",
+        [](common_params & params, const std::string & value) {
+            params.tts_speaker_text = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_TTS}));
 
     //
     // diffusion params

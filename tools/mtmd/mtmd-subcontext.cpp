@@ -389,6 +389,7 @@ bool mtmd_subcontext::encode_batch(int n_threads, const mtmd_image_f32_batch * i
 static std::vector<c2w_state_slot> list_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     switch (model.proj_type) {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:  return list_c2w_state_slots(hparams, model);
+        case PROJECTOR_TYPE_FISH_S2_GEN:   return list_c2w_state_slots(hparams, model);
         case PROJECTOR_TYPE_DRAMA3_GEN:    return list_drama3_state_slots(hparams, model);
         case PROJECTOR_TYPE_POCKETTTS_GEN: return list_pockettts_state_slots(hparams, model);
         case PROJECTOR_TYPE_LFM3A_GEN:     return list_lfm3a_gen_state_slots(hparams, model);
@@ -1680,6 +1681,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_MUSE_SPARK_AUDIO:
         case PROJECTOR_TYPE_QWEN3TTS_SPKENC:
         case PROJECTOR_TYPE_ZONOS3_SPKENC:
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
             {
                 // do nothing
             } break;
@@ -1789,6 +1791,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                 }
             } break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
             {
                 const int64_t n_cb      = model.gen_code_embd_w->ne[2];
                 const int64_t n_vocab   = model.gen_code_embd_w->ne[1];
@@ -1807,6 +1810,13 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     }
                     set_input_i32("inp_codes", codes);
                     set_gen_state_in();
+                } else if (model.proj_type == PROJECTOR_TYPE_FISH_S2_GEN) {
+                    if (params->code0 < 0 || params->code0 >= n_vocab) {
+                        LOG_ERR("%s: code0 out of range (%d, vocab %lld)\n", __func__, params->code0, (long long) n_vocab);
+                        return false;
+                    }
+                    std::vector<int32_t> code0 = { params->code0 };
+                    set_input_i32("inp_code0", code0);
                 } else {
                     // code0 < 0: next row is text (prompt), the tower only fills its KV
                     // codes: input frame codes for a speech row, empty for a text row
@@ -2622,8 +2632,8 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             mtmd_graph_soprano::decode_spectrum(model, spectrum, out_audio);
         }
 
-        // drop the tail audio that comes from the code-0 rear padding, drama3 has no padding
-        if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN) {
+        // drop the tail audio that comes from the code-0 rear padding, drama3 and fish_s2 have no padding
+        if (model.proj_type != PROJECTOR_TYPE_DRAMA3_GEN && model.proj_type != PROJECTOR_TYPE_FISH_S2_GEN) {
             const int64_t n_codes    = params->codes ? model.gen_code_head_w->ne[2] + 1 : 0;
             const int64_t n_frames_w = hparams.wav_tfm_swa;
             const int64_t n_frames   = params->codes ? (int64_t) params->codes->size() / n_codes : n_frames_w;

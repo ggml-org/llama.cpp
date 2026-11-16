@@ -2242,6 +2242,16 @@ bool mtmd_audio_preprocessor_pockettts::process(const float *                 sa
     return true;
 }
 
+bool mtmd_audio_preprocessor_fish_s2::process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const {
+    const size_t max_samples = (size_t) mtmd_hparams::fish_s2_max_spk_seconds * hparams.audio_sample_rate;
+    if (n_samples > max_samples) {
+        LOG_WRN("%s: speaker reference is %.1f s, truncating to the first %d s\n", __func__,
+                (double) n_samples / hparams.audio_sample_rate, mtmd_hparams::fish_s2_max_spk_seconds);
+        n_samples = max_samples;
+    }
+    return mtmd_audio_preprocessor_muse_spark_audio::process(samples, n_samples, output, shape_only);
+}
+
 //
 // mtmd_audio_preprocessor_vibevoice_asr
 //

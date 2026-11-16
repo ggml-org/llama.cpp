@@ -2088,6 +2088,7 @@ public:
         prompt_tokens.clear();
         prompt_pos = 0;
         frame.clear();
+        main_logits.clear();
         hist.clear();
         codes_buf.clear();
         n_decoded = 0;
@@ -2110,31 +2111,16 @@ public:
 
         sem_begin = find_special_token(vocab, "<|semantic:0|>");
         eos       = find_special_token(vocab, "<|im_end|>");
-        if (sem_begin == LLAMA_TOKEN_NULL || eos == LLAMA_TOKEN_NULL) {
-            LOG_ERR("mtmd_helper_gen_audio: missing Drama 3 tokens in vocab\n");
+        if (sem_begin == LLAMA_TOKEN_NULL || eos == LLAMA_TOKEN_NULL ||
+                sem_begin + n_cb_vocab > llama_vocab_n_tokens(vocab)) {
+            LOG_ERR("mtmd_helper_gen_audio: missing semantic tokens in vocab\n");
             return 1;
         }
 
-        // reference-bracket-v1 prompt without references, tokenize each segment alone as the reference does
-        std::string text(inp->prompt, inp->prompt_len);
-        if (text.rfind("<|speaker:", 0) != 0) {
-            text = "<|speaker:0|> " + text;
+        if (!tokenize_segments(prompt_segments(std::string(inp->prompt, inp->prompt_len)), prompt_tokens)) {
+            return 1;
         }
-        const char * segments[] = {
-            "<|im_start|>system\n", "convert the provided text to speech", "<|im_end|>\n",
-            "<|im_start|>user\n", text.c_str(), "<|im_end|>\n", "<|im_start|>assistant\n<|voice|>",
-        };
-        for (const char * seg : segments) {
-            const int32_t len = (int32_t) strlen(seg);
-            std::vector<llama_token> ids(len + 16);
-            const int32_t n = llama_tokenize(vocab, seg, len, ids.data(), (int32_t) ids.size(), false, true);
-            if (n < 0) {
-                LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
-                return 1;
-            }
-            prompt_tokens.insert(prompt_tokens.end(), ids.begin(), ids.begin() + n);
-        }
-        if (prompt_tokens.size() >= llama_n_ctx_seq(lctx) || prompt_tokens.size() > n_tower_rows) {
+        if (prompt_tokens.size() >= llama_n_ctx_seq(lctx) || prompt_tokens.size() > max_rows()) {
             LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
             return 1;
         }
@@ -2170,6 +2156,7 @@ public:
             const float * h = llama_get_embeddings_ith(lctx, i);
             if (prompt_pos + i == n_prompt - 1) {
                 h_state_buf.assign(h, h + n_embd); // first frame comes from the last prompt row
+                save_main_logits(i);
                 break;
             }
             if (!run_tower(-1, h)) {
@@ -2188,9 +2175,9 @@ public:
         *h_state_out = nullptr;
         *out_stop    = false;
 
-        const llama_token main = sample_main(llama_get_logits_ith(lctx, -1));
+        const llama_token main = sample_main(main_logits.data());
         const size_t n_rows = prompt_tokens.size() - 1 + codes_buf.size() / n_cb;
-        if (main == eos || (uint32_t) pos >= llama_n_ctx_seq(lctx) || n_rows >= n_tower_rows) {
+        if (main == eos || (uint32_t) pos >= llama_n_ctx_seq(lctx) || n_rows >= max_rows()) {
             *out_stop = true;
             return 0;
         }
@@ -2222,6 +2209,7 @@ public:
         pos++;
         const float * h = llama_get_embeddings_ith(lctx, -1);
         h_state_buf.assign(h, h + n_embd);
+        save_main_logits(-1);
         *h_state_out = h_state_buf.data();
 
         if (stream && codes_buf.size() / n_cb - n_decoded >= stream_frames) {
@@ -2282,7 +2270,44 @@ public:
         return decode_wav() ? 0 : 1;
     }
 
-private:
+protected:
+    // tokenize each segment alone as the reference does
+    bool tokenize_segments(const std::vector<std::string> & segments, std::vector<llama_token> & out) const {
+        for (const std::string & seg : segments) {
+            std::vector<llama_token> ids(seg.size() + 16);
+            const int32_t n = llama_tokenize(vocab, seg.c_str(), (int32_t) seg.size(), ids.data(), (int32_t) ids.size(), false, true);
+            if (n < 0) {
+                LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
+                return false;
+            }
+            out.insert(out.end(), ids.begin(), ids.begin() + n);
+        }
+        return true;
+    }
+
+    // reference-bracket-v1 prompt without references
+    virtual std::vector<std::string> prompt_segments(std::string text) const {
+        if (text.rfind("<|speaker:", 0) != 0) {
+            text = "<|speaker:0|> " + text;
+        }
+        return {
+            "<|im_start|>system\n", "convert the provided text to speech", "<|im_end|>\n",
+            "<|im_start|>user\n", text, "<|im_end|>\n", "<|im_start|>assistant\n<|voice|>",
+        };
+    }
+
+    // prompt rows but the last + generated frames
+    virtual size_t max_rows() const { return n_tower_rows; }
+
+    // copy right after our own decode, other sequences may decode on lctx before the next step_gen
+    // layout: eos, then semantic codes 0..n_cb_vocab-1
+    void save_main_logits(int32_t i) {
+        const float * logits = llama_get_logits_ith(lctx, i);
+        main_logits.resize(n_cb_vocab + 1);
+        main_logits[0] = logits[eos];
+        std::copy(logits + sem_begin, logits + sem_begin + n_cb_vocab, main_logits.begin() + 1);
+    }
+
     // repetition-aware sampling: if a semantic draw repeats one of the last ras_window main tokens, draw again with fixed settings
     static constexpr size_t ras_window = 16;
     static constexpr size_t n_cb       = 10;
@@ -2332,11 +2357,12 @@ private:
     }
 
     // candidates: eos, then semantic codes 1.. (the reference never samples code 0)
-    llama_token sample_main(const float * logits) {
+    // logits as saved by save_main_logits()
+    virtual llama_token sample_main(const float * logits) {
         std::vector<float> cand(n_cb_vocab);
-        cand[0] = logits[eos];
+        cand[0] = logits[0];
         for (int i = 1; i < n_cb_vocab; i++) {
-            cand[i] = logits[sem_begin + i];
+            cand[i] = logits[1 + i];
         }
         auto to_token = [&](int i) { return i == 0 ? eos : sem_begin + i; };
         const llama_token first = to_token(draw(cand, 1.0f, 0, 0.9f));
@@ -2397,6 +2423,7 @@ private:
     int prompt_pos = 0;
 
     std::mt19937 rng;
+    std::vector<float>       main_logits; // see save_main_logits()
     std::vector<int32_t>     frame;     // codes of the last frame, input of the next tower row
     std::vector<llama_token> hist;      // last main tokens, for repetition-aware sampling
     std::vector<int32_t>     codes_buf; // frame-major
@@ -2409,6 +2436,195 @@ private:
     bool   stream          = false;
     size_t pcm_sent        = 0; // samples already returned by get_output()
     bool   wav_header_sent = false;
+};
+
+// Fish Audio S2 Pro: same tokens, main-token loop and Fish DAC as drama3
+// the fast AR only runs on generated frames, so the prompt is a plain decode
+class fish_s2_gen_audio_pipeline : public drama3_gen_audio_pipeline {
+public:
+    using drama3_gen_audio_pipeline::drama3_gen_audio_pipeline;
+
+    void reset() override {
+        drama3_gen_audio_pipeline::reset();
+        parts.clear();
+        part_idx = 0;
+        part_pos = 0;
+    }
+
+    // voice cloning (sglang-omni fishaudio_s2_pro): a system message with the transcript and the codec rows of the clip
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        std::vector<float> ref_rows;
+        if (inp->speaker_ref && !encode_speaker(inp->speaker_ref, ref_rows)) {
+            return 1;
+        }
+        mtmd_helper_gen_audio_inp text_inp = *inp;
+        text_inp.speaker_ref = nullptr;
+        if (drama3_gen_audio_pipeline::set_input(&text_inp) != 0) {
+            return 1;
+        }
+
+        size_t n_total = prompt_tokens.size();
+        if (!ref_rows.empty()) {
+            // optional, the reference leaves the text empty when it has none
+            std::string ref_text = inp->speaker_ref_text ? inp->speaker_ref_text : "";
+            if (!ref_text.empty() && ref_text.rfind("<|speaker:", 0) != 0) {
+                ref_text = "<|speaker:0|>" + ref_text;
+            }
+            prompt_part head, rows, tail;
+            if (!tokenize_segments({ "<|im_start|>system\n", "convert the provided text to speech reference to the following:\n\nText:\n",
+                                     ref_text, "\n\nSpeech:\n" }, head.tokens) ||
+                !tokenize_segments({ "<|im_end|>\n" }, tail.tokens)) {
+                return 1;
+            }
+            rows.rows = std::move(ref_rows);
+            for (auto * part : { &head, &rows, &tail }) {
+                n_total += part->size(n_embd);
+                parts.push_back(std::move(*part));
+            }
+        }
+        if (n_total >= llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
+            return 1;
+        }
+        prompt_part text;
+        text.tokens = prompt_tokens;
+        parts.push_back(std::move(text));
+        return 0;
+    }
+
+    // the first frame comes from the last prompt row
+    int32_t step_prompt(int32_t n_batch) override {
+        GGML_ASSERT(n_batch > 0);
+        if (part_idx >= parts.size()) {
+            return 0;
+        }
+        const prompt_part & part = parts[part_idx];
+        const int  n_part = part.size(n_embd);
+        const int  n      = std::min(n_batch, n_part - part_pos);
+        const bool last   = part_idx + 1 == parts.size() && part_pos + n == n_part;
+
+        int ret = 0;
+        if (part.rows.empty()) {
+            llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+            if (!batch_set_tokens(batch.get(), part.tokens.data() + part_pos, n, pos, seq_id)) {
+                return -1;
+            }
+            if (last) {
+                llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+            }
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
+        } else {
+            decode_embd_batch batch(part.rows.data() + (size_t) part_pos * n_embd, n, 1, n_embd);
+            batch.set_position_normal(pos, seq_id);
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.render(lctx, 0, n));
+        }
+        if (ret != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
+            return -1;
+        }
+        if (last) {
+            const float * h = llama_get_embeddings_ith(lctx, -1);
+            h_state_buf.assign(h, h + n_embd);
+            save_main_logits(-1);
+        }
+        pos      += n;
+        part_pos += n;
+        if (part_pos == n_part) {
+            part_idx++;
+            part_pos = 0;
+        }
+        int32_t n_left = -part_pos;
+        for (size_t i = part_idx; i < parts.size(); i++) {
+            n_left += parts[i].size(n_embd);
+        }
+        return n_left;
+    }
+
+protected:
+    // reference (sglang-omni fishaudio_s2_pro) has no system message
+    std::vector<std::string> prompt_segments(std::string text) const override {
+        if (text.rfind("<|speaker:", 0) != 0) {
+            text = "<|speaker:0|>" + text;
+        }
+        return {
+            "<|im_start|>user\n", text, "<|im_end|>\n", "<|im_start|>assistant\n<|voice|>",
+        };
+    }
+
+    // no codebook tower, only the context limits the length
+    size_t max_rows() const override { return SIZE_MAX; }
+
+    // token ids, or backbone input rows of n_embd floats
+    struct prompt_part {
+        std::vector<llama_token> tokens;
+        std::vector<float>       rows;
+        int size(int n_embd) const { return rows.empty() ? (int) tokens.size() : (int) (rows.size() / n_embd); }
+    };
+    std::vector<prompt_part> parts;
+    size_t part_idx = 0;
+    int    part_pos = 0;
+
+    // same as the reference: repetition penalty over the last ras_window main tokens, top-k, top-p on the
+    // untempered logits (the crossing token is dropped), then temperature
+    // a repeat within the last 4 main tokens switches to the RAS settings
+    llama_token sample_main(const float * logits) override {
+        static constexpr int32_t top_k       = 30;
+        static constexpr float   rep_penalty = 1.1f;
+
+        std::vector<std::pair<float, llama_token>> cand;
+        cand.reserve(n_cb_vocab + 1);
+        cand.push_back({ logits[0], eos });
+        for (int i = 0; i < n_cb_vocab; i++) {
+            cand.push_back({ logits[1 + i], sem_begin + i });
+        }
+        for (auto & c : cand) {
+            if (std::find(hist.begin(), hist.end(), c.second) != hist.end()) {
+                c.first = c.first < 0.0f ? c.first * rep_penalty : c.first / rep_penalty;
+            }
+        }
+
+        bool ras = false;
+        if (hist.size() >= 4) {
+            std::vector<llama_token> last4(hist.end() - 4, hist.end());
+            std::sort(last4.begin(), last4.end());
+            ras = std::adjacent_find(last4.begin(), last4.end()) != last4.end();
+        }
+        const float temp  = ras ? 1.0f : 0.8f;
+        const float top_p = ras ? 0.9f : 0.8f;
+
+        const size_t k = std::min<size_t>(top_k, cand.size());
+        std::partial_sort(cand.begin(), cand.begin() + k, cand.end(), [](const auto & a, const auto & b) { return a.first > b.first; });
+
+        std::vector<double> prob(k);
+        double sum = 0.0;
+        for (size_t i = 0; i < k; i++) {
+            prob[i] = std::exp((double) (cand[i].first - cand[0].first));
+            sum += prob[i];
+        }
+        size_t n_keep = k;
+        double cum = 0.0;
+        for (size_t i = 0; i < k; i++) {
+            cum += prob[i];
+            if (i > 0 && cum > top_p * sum) {
+                n_keep = i;
+                break;
+            }
+        }
+
+        double kept = 0.0;
+        for (size_t i = 0; i < n_keep; i++) {
+            prob[i] = std::exp((double) (cand[i].first - cand[0].first) / temp);
+            kept += prob[i];
+        }
+        double r = std::uniform_real_distribution<double>(0.0, 1.0)(rng) * kept;
+        for (size_t i = 0; i < n_keep; i++) {
+            r -= prob[i];
+            if (r <= 0.0) {
+                return cand[i].second;
+            }
+        }
+        return cand[n_keep - 1].second;
+    }
 };
 
 // ZONOS3: one backbone row per frame of 10 codebooks, codebook j lags j frames
@@ -2953,17 +3169,21 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new drama3_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_ZONOS3:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new zonos3_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_FISH_S2:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new fish_s2_gen_audio_pipeline(lctx, mctx));
         default:
             return nullptr;
     }
 }
 
 struct mtmd_helper_gen_audio {
+    llama_context * lctx = nullptr;
     std::unique_ptr<mtmd_gen_audio_pipeline> pipeline;
 };
 
 mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(struct llama_context * lctx, struct mtmd_context * mctx) {
     auto * ctx = new mtmd_helper_gen_audio();
+    ctx->lctx     = lctx;
     ctx->pipeline = make_pipeline(lctx, mctx);
     return ctx;
 }
@@ -3013,6 +3233,11 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
 
 int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n_batch) {
     if (!ctx->pipeline) {
+        return -1;
+    }
+    // the context may use a smaller n_batch than requested (e.g. clamped to n_ctx), llama_process() would fail above it
+    if (n_batch <= 0 || (uint32_t) n_batch > llama_n_batch(ctx->lctx)) {
+        LOG_ERR("mtmd_helper_gen_audio: n_batch must be in [1, %u], got %d\n", llama_n_batch(ctx->lctx), n_batch);
         return -1;
     }
     return ctx->pipeline->step_prompt(n_batch);

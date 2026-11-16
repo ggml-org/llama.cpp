@@ -12,6 +12,7 @@ Supported models:
 - [Chatterbox](#chatterbox)
 - [Drama 3](#drama-3)
 - [ZONOS3](#zonos3)
+- [Fish Audio S2 Pro](#fish-audio-s2-pro)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -214,4 +215,46 @@ Convert the root of the release repository, not the `lm/` subdirectory. The mmpr
 ```sh
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --outtype q8_0 --outfile zonos3-mini.gguf
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --mmproj --outtype f32 --outfile mmproj-zonos3-mini.gguf
+```
+
+## Fish Audio S2 Pro
+
+[Fish Audio S2 Pro](https://huggingface.co/fishaudio/s2-pro): a Qwen3 backbone (4B) samples each frame's semantic token, a 4-layer fast AR predicts the 9 other codes, and the Fish DAC (same as Drama 3) decodes them to 44.1 kHz audio.
+
+Available params:
+- Speaker tags `<|speaker:0|>`, `<|speaker:1|>`, ... in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
+- Inline instructions in brackets control the delivery, for example `[laughing]`, `[whisper]` or `[pause]`
+- The language is the one of the text, `--tts-lang` is not used
+- Voice cloning: `--tts-speaker-file` with the reference clip, optionally `--tts-speaker-text` with its transcript (it is put in the prompt as the reference does). The clip is encoded by the codec encoder half of `codec.pth`, it is truncated to the first 30 s
+- Note: `--temp`, `--top-k` and `--top-p` are not used (only `--seed`), frames are sampled with the settings of the reference (semantic token: repetition penalty 1.1 over the last 16 frames, top-k 30, top-p 0.8, temperature 0.8, or top-p 0.9 and temperature 1.0 when the last 4 frames repeat a token; other codes: greedy)
+- Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
+
+Example usage:
+
+```sh
+llama-tts -m s2-pro.gguf \
+    -mm mmproj-s2-pro.gguf \
+    -p "<|speaker:0|>Did you remember to buy the bread? <|speaker:1|>Of course I did [laughing] it is on the kitchen table." \
+    -n 1000 \
+    --output out.wav
+```
+
+Voice cloning (`--tts-speaker-text` can be left out):
+
+```sh
+llama-tts -m s2-pro.gguf \
+    -mm mmproj-s2-pro.gguf \
+    --tts-speaker-file reference.wav \
+    --tts-speaker-text "The words spoken in reference.wav." \
+    -p "Hello, this is a cloned voice." \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+The mmproj holds the fast AR and `codec.pth` (the encoder half for voice cloning, the decoder half for the audio), it is best kept in BF16. The codec encoder is always stored in F16/F32, small errors in it change the codes picked by its VQ:
+
+```sh
+python convert_hf_to_gguf.py path/to/s2-pro --outtype q8_0 --outfile s2-pro.gguf
+python convert_hf_to_gguf.py path/to/s2-pro --mmproj --outtype bf16 --outfile mmproj-s2-pro.gguf
 ```

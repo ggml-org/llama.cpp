@@ -147,6 +147,7 @@ int main(int argc, char ** argv) {
     inp.prompt      = prompt.c_str();
     inp.prompt_len  = prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
+    inp.speaker_ref_text = params.tts_speaker_text.empty() ? nullptr : params.tts_speaker_text.c_str();
     inp.lang        = params.tts_lang.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
@@ -168,7 +169,7 @@ int main(int argc, char ** argv) {
     const int64_t t_prompt_start_us = ggml_time_us();
 
     for (;;) {
-        int32_t ret = gen.step_prompt(params.n_batch);
+        int32_t ret = gen.step_prompt(llama_n_batch(lctx));
         if (ret < 0) {
             LOG_ERR("prompt processing failed\n");
             return 1;

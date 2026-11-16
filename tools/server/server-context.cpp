@@ -6992,6 +6992,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     }
     task.tts_inp.set_prompt(tts_prompt.empty() ? prompt : tts_prompt);
     task.tts_inp.set_lang(lang);
+    task.tts_inp.set_speaker_ref_text(json_value(body, "speaker_ref_text", std::string()));
     task.tts_inp.data.stream    = stream;
     task.tts_inp.data.out_type  = response_format == "pcm" || pcm16
         ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM

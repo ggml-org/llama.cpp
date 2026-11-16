@@ -336,6 +336,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "XverseForCausalLM": "xverse",
     "YoutuForCausalLM": "deepseek",
     "YoutuVLForConditionalGeneration": "deepseek",
+    "fish_qwen3_omni": "fish_s2",
     "modeling_grove_moe.GroveMoeForCausalLM": "grovemoe",
     "modeling_sarvam_moe.SarvamMoEForCausalLM": "bailingmoe",
 }
@@ -438,6 +439,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "VoxtralForConditionalGeneration": "ultravox",
     "VoxtralRealtimeForConditionalGeneration": "ultravox",
     "YoutuVLForConditionalGeneration": "youtuvl",
+    "fish_qwen3_omni": "fish_s2",
 }
 
 

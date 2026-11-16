@@ -39,6 +39,7 @@ Rules of thumb:
 - Models and backends must outlive the subcontexts, `mtmd_context` declares them first for that reason
 - Models having both audio and vision encoders must have different arch names (projector types), postfixed by `a` and `v`. See Gemma 4 as an example (`gemma4a` / `gemma4v`)
 - Locking happens only at the public API boundary (`mtmd.cpp`): a new public function that runs a graph must take `compute_mutex`. The internals (subcontexts, preprocessors, `mtmd_audio_log_mel()`) assume it is held and never lock
+- No magic numbers for a model's fixed shapes (layer counts, codebook sizes, window lengths...): define them once as `static constexpr` in the graph struct in `models/models.h`, and refer to them from the loader or the subcontext (e.g. `mtmd_graph_zonos3_gen::n_codebooks`, `mtmd_graph_fish_s2_spkenc::n_tfm_layer`)
 
 ## Pipeline
 
@@ -109,7 +110,9 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
     - 60% changes inside `mtmd-helper-gen.cpp`
     - 10% changes inside `libmtmd` core (`mtmd-model`, `mtmd-subcontext`, `models/`)
     - The rest downstream code (CLI, server) should have no changes at all
-5. Update usage documentation in `docs/multimodal/tts.md`
+5. Validate with several concurrent requests on `llama-server` (e.g. `-np 2`, one plain and one streaming request at the same time), not only with `llama-tts`
+    - The server interleaves the slots on one `llama_context`, so a pipeline must copy what it needs (hidden state, logits) right after its own decode, not read it at the next step
+6. Update usage documentation in `docs/multimodal/tts.md`
 
 IMPORTANT: If your model needs changes that don't fit the existing infrastructure, **open an issue first for discussion**.
 

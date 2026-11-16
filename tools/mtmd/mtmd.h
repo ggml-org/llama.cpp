@@ -473,6 +473,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
     MTMD_GEN_AUDIO_TYPE_DRAMA3,
     MTMD_GEN_AUDIO_TYPE_ZONOS3,
+    MTMD_GEN_AUDIO_TYPE_FISH_S2,
 };
 
 struct mtmd_gen_audio_info {
