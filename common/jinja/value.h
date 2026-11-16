@@ -105,6 +105,10 @@ struct context; // forward declaration
 template<typename T_JSON>
 void global_from_json(context & ctx, const T_JSON & json_obj, bool mark_input);
 
+// convert a single JSON value, same rules as global_from_json()
+template<typename T_JSON>
+value value_from_json(const T_JSON & json_val, bool mark_input);
+
 //
 // base value type
 //

@@ -2,6 +2,7 @@
 
 #include "jinja/runtime.h"
 #include "jinja/value.h"
+#include "json.h"
 
 #include <algorithm>
 #include <climits>
@@ -857,8 +858,49 @@ static value tts_norm_builtin_sub(const func_args & args) {
     return mk_val<value_string>(string(res, text_val.all_parts_are_input()));
 }
 
-void common_chat_tts_norm_add_builtins(context & ctx) {
+bool common_tts_dict_find(const std::string & dict, const std::string & key, std::string & value) {
+    size_t lo = 0;
+    size_t hi = dict.size();
+    while (lo < hi) {
+        // the line that contains the middle byte
+        const size_t mid   = lo + (hi - lo) / 2;
+        const size_t nl    = mid == 0 ? std::string::npos : dict.rfind('\n', mid - 1);
+        const size_t start = nl == std::string::npos ? 0 : nl + 1;
+        const size_t end   = std::min(dict.find('\n', start), dict.size());
+        const size_t tab   = dict.find('\t', start);
+        if (tab >= end) {
+            throw std::runtime_error("tts_dict: malformed dictionary, expected key<TAB>value on each line");
+        }
+        const int cmp = key.compare(0, std::string::npos, dict, start, tab - start);
+        if (cmp == 0) {
+            value = dict.substr(tab + 1, end - tab - 1);
+            return true;
+        }
+        if (cmp < 0) {
+            hi = start;
+        } else {
+            lo = end + 1;
+        }
+    }
+    return false;
+}
+
+void common_chat_tts_norm_add_builtins(context & ctx, std::shared_ptr<const common_tts_dicts> dicts) {
     ctx.set_val("tts_norm_scan", mk_val<value_func>("tts_norm_scan", tts_norm_builtin_scan));
     ctx.set_val("tts_norm_sub",  mk_val<value_func>("tts_norm_sub",  tts_norm_builtin_sub));
+    ctx.set_val("tts_dict",      mk_val<value_func>("tts_dict", [dicts](const func_args & args) -> value {
+        args.ensure_count(2, 2);
+        args.ensure_vals<value_string, value_string>();
+        const std::string name = args.get_pos(0)->as_string().str();
+        const auto it = dicts ? dicts->find(name) : common_tts_dicts::const_iterator();
+        if (!dicts || it == dicts->end()) {
+            throw std::runtime_error("tts_dict: unknown dictionary '" + name + "'");
+        }
+        std::string doc;
+        if (!common_tts_dict_find(it->second, args.get_pos(1)->as_string().str(), doc)) {
+            return mk_val<value_none>();
+        }
+        return value_from_json(common_json::parse(doc), false);
+    }));
 }
 

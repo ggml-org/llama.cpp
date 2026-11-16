@@ -1675,6 +1675,11 @@ bool value_compare(const value & a, const value & b, value_compare_op op) {
 }
 
 template<>
+value value_from_json(const common_json & json_val, bool mark_input) {
+    return from_json(json_val, mark_input);
+}
+
+template<>
 void global_from_json(context & ctx, const common_json & json_obj, bool mark_input) {
     // printf("global_from_json: %s\n" , json_obj.dump(2).c_str());
     if (json_obj.is_null() || !json_obj.is_object()) {

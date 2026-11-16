@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -1457,6 +1458,15 @@ class GGUFWriter:
             value = template_default
 
         self.add_string(Keys.Tokenizer.CHAT_TEMPLATE, value)
+
+    def add_tts_dict(self, name: str, value: Mapping[str, Any]) -> None:
+        # dictionary for tts_dict() of task templates: lines "key<TAB>json", sorted by the bytes of the key
+        lines = []
+        for key in sorted(value, key=lambda k: k.encode("utf-8")):
+            if "\t" in key or "\n" in key:
+                raise ValueError(f"tts dict {name!r}: key {key!r} contains a tab or a newline")
+            lines.append(key + "\t" + json.dumps(value[key], ensure_ascii=False, separators=(",", ":")))
+        self.add_string(Keys.Tokenizer.TTS_DICT_N.format(name=name), "\n".join(lines))
 
     def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
         self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)
