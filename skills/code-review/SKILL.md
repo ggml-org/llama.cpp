@@ -22,7 +22,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `ggml/` (any backend, op, or `ggml.h`) -> **ggml / backend**
 - `include/llama.h` and other public headers -> **Public API**
 - `tools/server/` -> **Server**
-- `ui/apps/chat/` (or the legacy `tools/server/webui/`) -> **Llama Chat**
+- `ui/apps/chat/` (or the legacy `tools/ui/`, `tools/server/webui/`) -> **Llama Chat**
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
 - anything else, plus all of the above -> **General** (always runs)
 
@@ -121,7 +121,7 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 
 ## Llama Chat (`ui/apps/chat/`)
 
-These apply only to changes under `ui/apps/chat/` (formerly `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
+These apply only to changes under `ui/apps/chat/` (formerly `tools/ui/`, `tools/server/webui/`) - the SvelteKit + Svelte 5 frontend. They are frontend conventions, not repo-wide ones, so do not apply them to C++ or other tool code.
 
 The dominant review theme in this area is placement: most accepted nits are about putting a value, function, or piece of logic in the layer where it belongs.
 
