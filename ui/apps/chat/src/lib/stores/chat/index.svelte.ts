@@ -135,7 +135,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		if (!activeConv) throw new Error('No active conversation');
 
-		let parentId: string | null = null;
+		let parentId: string | null;
 
 		if (parent === '-1') {
 			const am = conversationsStore.activeMessages;

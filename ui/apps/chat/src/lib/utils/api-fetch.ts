@@ -77,7 +77,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 			headers
 		});
 	} catch (e) {
-		throw new Error(beautifyNetworkError(e));
+		throw new Error(beautifyNetworkError(e), { cause: e });
 	}
 
 	if (!response.ok) {

@@ -372,7 +372,9 @@ class MCPStore implements McpHealthHost {
 
 				const newConnection = this.connections.get(serverName);
 
-				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
+				if (!newConnection) {
+					throw new Error(`Failed to reconnect to "${serverName}"`, { cause: error });
+				}
 
 				return MCPService.callTool(newConnection, { arguments: args, name: toolName }, signal);
 			}
@@ -1348,7 +1350,9 @@ class MCPStore implements McpHealthHost {
 
 				return parsed as Record<string, unknown>;
 			} catch (error) {
-				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`);
+				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`, {
+					cause: error
+				});
 			}
 		}
 

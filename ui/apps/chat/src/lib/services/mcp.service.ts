@@ -138,7 +138,7 @@ export class MCPService {
 
 			throw new Error(
 				`Tool "${params.name}" execution failed on server "${connection.serverName}": ${message}`,
-				{ cause: error instanceof Error ? error : undefined }
+				{ cause: error }
 			);
 		}
 	}
@@ -576,7 +576,9 @@ export class MCPService {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
 				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
 
-				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
+				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`, {
+					cause: sseError
+				});
 			}
 		}
 	}
