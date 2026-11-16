@@ -67,9 +67,16 @@
 				{levels}
 			/>
 
-			<span class="w-10 shrink-0 text-right text-caption text-fg-muted tabular-nums">
-				{formatClipTime(elapsedMs)}
-			</span>
+			<!-- the timer starts with the first audio: until then, what is said is not recorded yet -->
+			{#if state === 'starting'}
+				<span class="shrink-0 text-caption text-fg-muted" role="status">
+					{VOICE_MODE_MESSAGE.starting}
+				</span>
+			{:else}
+				<span class="w-10 shrink-0 text-right text-caption text-fg-muted tabular-nums">
+					{formatClipTime(elapsedMs)}
+				</span>
+			{/if}
 		{/if}
 
 		<ChatFormActionRecord

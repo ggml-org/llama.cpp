@@ -4,6 +4,7 @@
  * stores or components; the app passes in how to reach a server (VoiceServerContext).
  */
 
+export { warmUpVoiceCapture } from './audio-context';
 export { VoiceCapture } from './capture';
 export * from './constants';
 export {
@@ -23,6 +24,14 @@ export {
 	pcm16ToFloat,
 	type Resampler
 } from './pcm';
+export {
+	listMicrophones,
+	type Microphone,
+	pickMicrophone,
+	resolveMicrophone,
+	VOICE_MICROPHONE_AUTO,
+	VOICE_MICROPHONE_DEFAULT
+} from './microphone';
 export { computePeaks, computePeaksFromAudio, decodeAudio, mixToMono } from './peaks';
 export { RealtimeTranscriber, realtimeUrl } from './realtime';
 export { startVoiceSession } from './session';

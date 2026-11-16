@@ -1,6 +1,8 @@
+import { captureContext, idleCaptureContext } from './audio-context';
 import {
 	VOICE_ANALYSER_FFT_SIZE,
 	VOICE_CHUNK_MS,
+	VOICE_FIRST_AUDIO_TIMEOUT_MS,
 	VOICE_LEVELS_INTERVAL_MS,
 	VOICE_LEVELS_LENGTH,
 	VOICE_MICROPHONE_CONSTRAINTS,
@@ -35,8 +37,10 @@ interface CaptureGraph {
 /**
  * Microphone capture for voice input. One `start()` gives, at once: a live level
  * history for the waveform, PCM16 mono chunks for streaming, and the recording,
- * returned by `stop()` as a WAV clip with its peaks. Every path (stop, cancel, a
- * failed start, the page going away) releases the tracks, the nodes and the context.
+ * returned by `stop()` as a WAV clip with its peaks. `start()` resolves once audio
+ * flows, so what is said after it is in the clip. Every path (stop, cancel, a failed
+ * start, the page going away) releases the tracks and the nodes; the page's shared
+ * AudioContext is suspended for the next recording (see audio-context.ts).
  */
 export class VoiceCapture {
 	readonly sampleRate: number;
@@ -44,6 +48,8 @@ export class VoiceCapture {
 	private chunks: Int16Array[] = [];
 	private readonly chunkSamples: number;
 	private currentState: VoiceCaptureState = 'idle';
+	// resolves the wait of start() for the first audio
+	private firstAudio: (() => void) | null = null;
 	private frame: number | null = null;
 	// bumped by every start, stop and cancel, so a start still awaiting the microphone can tell it was dropped
 	private generation = 0;
@@ -78,6 +84,7 @@ export class VoiceCapture {
 	/** Drops the capture, including one still asking for the microphone. */
 	cancel(): void {
 		this.generation++;
+		this.firstAudio?.();
 		this.teardown();
 		this.chunks = [];
 		this.partial = [];
@@ -133,17 +140,31 @@ export class VoiceCapture {
 		let context: AudioContext | null = null;
 		let started = false;
 
+		const timing = startTiming();
+
 		try {
+			const shared = captureContext();
+
+			context = shared.context;
+
+			// resumed now, while the click still allows it: the microphone may take a while
+			if (context.state === 'suspended') context.resume().catch(() => {});
+
+			const deviceId = this.options.deviceId;
+
 			stream ??= await navigator.mediaDevices.getUserMedia({
-				audio: { ...VOICE_MICROPHONE_CONSTRAINTS, ...this.options.constraints }
+				audio: {
+					...VOICE_MICROPHONE_CONSTRAINTS,
+					...(deviceId ? { deviceId } : {}),
+					...this.options.constraints
+				}
 			});
+			timing.mark('microphone');
 
 			if (dropped()) throw new DOMException('Voice capture cancelled', 'AbortError');
 
-			context = new AudioContext();
-
-			// a context made outside a user gesture starts suspended; resume() resolves once allowed
-			if (context.state === 'suspended') context.resume().catch(() => {});
+			await shared.ready;
+			timing.mark('audio context');
 
 			const source = context.createMediaStreamSource(stream);
 			const analyser = context.createAnalyser();
@@ -172,6 +193,12 @@ export class VoiceCapture {
 			this.currentState = 'recording';
 			this.watchLevels(analyser);
 			addEventListener('pagehide', this.handlePageHide);
+
+			await this.waitForFirstAudio();
+			timing.mark('first audio');
+			timing.report();
+
+			if (dropped()) throw new DOMException('Voice capture cancelled', 'AbortError');
 		} catch (error) {
 			if (!started) releaseDevice(stream, context);
 
@@ -229,6 +256,8 @@ export class VoiceCapture {
 	private handleBlock(block: Float32Array): void {
 		if (!this.resampler || this.currentState !== 'recording') return;
 
+		this.firstAudio?.();
+
 		const resampled = this.resampler.process(block);
 
 		for (let i = 0; i < resampled.length; i++) {
@@ -258,6 +287,20 @@ export class VoiceCapture {
 		graph.analyser.disconnect();
 		graph.mute.disconnect();
 		releaseDevice(graph.stream, graph.context);
+	}
+
+	/** Resolves with the first audio block, or after a timeout so a silent device still records. */
+	private waitForFirstAudio(): Promise<void> {
+		return new Promise((resolve) => {
+			const done = () => {
+				clearTimeout(timer);
+				this.firstAudio = null;
+				resolve();
+			};
+			const timer = setTimeout(done, VOICE_FIRST_AUDIO_TIMEOUT_MS);
+
+			this.firstAudio = done;
+		});
 	}
 
 	private watchLevels(analyser: AnalyserNode): void {
@@ -291,7 +334,29 @@ export class VoiceCapture {
 function releaseDevice(stream: MediaStream | null, context: AudioContext | null): void {
 	for (const track of stream?.getTracks() ?? []) track.stop();
 
-	if (context && context.state !== 'closed') {
-		context.close().catch(() => {});
-	}
+	if (context) idleCaptureContext(context);
+}
+
+/** How long each step of a start took, logged in development to see where a slow start goes. */
+function startTiming() {
+	const startedAt = performance.now();
+	const steps: string[] = [];
+
+	let last = startedAt;
+
+	return {
+		mark(step: string) {
+			const now = performance.now();
+
+			steps.push(`${step} ${Math.round(now - last)} ms`);
+			last = now;
+		},
+		report() {
+			if (!import.meta.env?.DEV) return;
+
+			console.debug(
+				`[voice] recording after ${Math.round(performance.now() - startedAt)} ms: ${steps.join(', ')}`
+			);
+		}
+	};
 }

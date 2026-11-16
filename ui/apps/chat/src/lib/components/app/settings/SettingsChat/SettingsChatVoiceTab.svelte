@@ -1,6 +1,7 @@
 <!--
-	Voice section of the settings: the registry's fields, with the transcription model between them. That one lists the
-	server's models with audio input, which a static field cannot, so it is drawn here.
+	Voice section of the settings: the registry's fields, with the microphone and the transcription model between them.
+	Those list this device's microphones and the server's models with audio input, which a static field cannot, so they
+	are drawn here.
 -->
 <script lang="ts">
 	import { Label } from '@ggml-org/llama-ui/ui/label';
@@ -12,6 +13,13 @@
 		VOICE_TRANSCRIPTION_MODEL_AUTO
 	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
+	import {
+		listMicrophones,
+		type Microphone,
+		VOICE_MICROPHONE_AUTO,
+		VOICE_MICROPHONE_DEFAULT
+	} from '#lib/voice/index.ts';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		fields: SettingsFieldConfig[];
@@ -52,6 +60,49 @@
 		options.find((option) => option.value === current)?.label ?? AUTO_LABEL
 	);
 
+	const MIC_KEY = SETTINGS_KEYS.VOICE_MICROPHONE;
+
+	let microphones = $state<Microphone[]>([]);
+	let micCurrent = $derived(String(localConfig[MIC_KEY] ?? VOICE_MICROPHONE_AUTO));
+	// the browser names its microphones only once the page may use one
+	let micNamesHidden = $derived(microphones.some((mic) => !mic.label));
+	let micOptions = $derived.by(() => {
+		const list = microphones.map((mic, index) => ({
+			label: mic.label || `Microphone ${index + 1}`,
+			value: mic.deviceId
+		}));
+		const fixed = [VOICE_MICROPHONE_AUTO, VOICE_MICROPHONE_DEFAULT];
+
+		// a microphone picked earlier that is not plugged in now stays visible as the choice
+		if (!fixed.includes(micCurrent) && !list.some((option) => option.value === micCurrent)) {
+			list.push({ label: 'A microphone that is not connected', value: micCurrent });
+		}
+
+		return [
+			{ label: 'Automatic', value: VOICE_MICROPHONE_AUTO },
+			{ label: 'System default', value: VOICE_MICROPHONE_DEFAULT },
+			...list.filter((option) => option.value)
+		];
+	});
+	let micLabel = $derived(
+		micOptions.find((option) => option.value === micCurrent)?.label ?? 'Automatic'
+	);
+
+	onMount(() => {
+		const devices = navigator.mediaDevices;
+		const refresh = () => {
+			listMicrophones().then(
+				(list) => (microphones = list),
+				() => (microphones = [])
+			);
+		};
+
+		refresh();
+		devices?.addEventListener('devicechange', refresh);
+
+		return () => devices?.removeEventListener('devicechange', refresh);
+	});
+
 	let singleModelId = $derived(modelsStore.activeModelId);
 	// the file's name, not the GGUF path a single-model server reports
 	let singleModel = $derived(
@@ -64,6 +115,33 @@
 
 <div class="space-y-6">
 	<SettingsChatFields fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
+
+	<div class="space-y-2" data-slot="voice-microphone">
+		<Label class="text-sm font-medium" for={MIC_KEY}>Microphone</Label>
+
+		<Select.Root
+			onValueChange={(value) => onConfigChange(MIC_KEY, value)}
+			type="single"
+			value={micCurrent}
+		>
+			<Select.Trigger class="w-full" id={MIC_KEY}>{micLabel}</Select.Trigger>
+
+			<Select.Content>
+				{#each micOptions as option (option.value)}
+					<Select.Item label={option.label} value={option.value}>{option.label}</Select.Item>
+				{/each}
+			</Select.Content>
+		</Select.Root>
+
+		<p class="mt-1 text-xs text-muted-foreground">{SETTING_CONFIG_INFO[MIC_KEY]}</p>
+
+		{#if micNamesHidden}
+			<p class="text-xs text-muted-foreground">
+				The browser names your microphones once you have allowed one, e.g. after your first
+				recording.
+			</p>
+		{/if}
+	</div>
 
 	<div class="space-y-2" data-slot="voice-transcription-model">
 		<Label class="text-sm font-medium" for={KEY}>Transcription model</Label>

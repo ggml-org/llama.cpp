@@ -24,12 +24,21 @@ export const VOICE_ANALYSER_FFT_SIZE = 1024;
 /** Number of peaks of a clip's static waveform. */
 export const VOICE_PEAKS_COUNT = 64;
 
-/** Microphone constraints: the same clean-up the chat form's recorder asks for. */
+/**
+ * Microphone constraints: the raw signal. Echo cancellation makes the system treat the
+ * recording as a call, which lowers or interrupts what else is playing (Apple's voice
+ * processing, Windows' communications ducking); nothing plays while we record, so it
+ * has nothing to cancel. Auto gain fades the input in, losing the first words, and
+ * speech models take unprocessed audio well.
+ */
 export const VOICE_MICROPHONE_CONSTRAINTS: MediaTrackConstraints = {
-	autoGainControl: true,
-	echoCancellation: true,
-	noiseSuppression: true
+	autoGainControl: false,
+	echoCancellation: false,
+	noiseSuppression: false
 };
+
+/** How long a started capture waits for its first audio before it counts as recording anyway. */
+export const VOICE_FIRST_AUDIO_TIMEOUT_MS = 1500;
 
 /** Name of the PCM tap worklet processor. */
 export const VOICE_WORKLET_PROCESSOR = 'llama-voice-pcm-tap';

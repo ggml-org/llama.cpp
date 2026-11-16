@@ -64,7 +64,7 @@
 		parseClipboardContent,
 		uuid
 	} from '#lib/utils/index.ts';
-	import { VoiceRecorder } from '#lib/voice/index.ts';
+	import { VoiceRecorder, warmUpVoiceCapture } from '#lib/voice/index.ts';
 	import { onMount, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';
@@ -621,6 +621,12 @@
 		void voice.start();
 	}
 
+	// the audio set-up takes a moment, so it is made while the message is being written;
+	// it asks for no microphone, so the browser shows no recording indicator
+	function handleFocusIn() {
+		if (voice.showButton && !voice.isActive) warmUpVoiceCapture();
+	}
+
 	// Escape drops a recording, wherever the focus is
 	function handleWindowKeydown(event: KeyboardEvent) {
 		if (event.key !== KeyboardKey.ESCAPE || !voice.isActive || event.defaultPrevented) return;
@@ -644,6 +650,7 @@
 			'max-h-[calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-2rem)] max-md:max-h-dvh',
 		className
 	]}
+	onfocusin={handleFocusIn}
 	onsubmit={(event) => {
 		event.preventDefault();
 

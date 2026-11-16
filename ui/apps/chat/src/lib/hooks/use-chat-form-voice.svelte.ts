@@ -28,6 +28,8 @@ import { DictationSpan } from '#lib/utils/dictation-span.ts';
 import { uuid } from '#lib/utils/index.ts';
 import { resolveVoiceMode, voiceModeLabel } from '#lib/utils/voice-mode.ts';
 import {
+	resolveMicrophone,
+	VOICE_MICROPHONE_AUTO,
 	VoiceCaptureError,
 	type VoiceRecorderStatus,
 	type VoiceServerContext,
@@ -198,6 +200,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const model = resolution.transcriptionModel;
 		const { context, realtime } = serverContext();
 		const language = String(config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE] ?? '').trim();
+		const microphone = String(config[SETTINGS_KEYS.VOICE_MICROPHONE] ?? VOICE_MICROPHONE_AUTO);
 		const transcribe =
 			mode === VoiceMode.DICTATION || config[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES] !== false;
 
@@ -218,7 +221,10 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		const run = ++generation;
 
 		try {
+			const deviceId = await resolveMicrophone(microphone);
+
 			await recorder.start({
+				capture: deviceId ? { deviceId } : undefined,
 				onText: mode === VoiceMode.DICTATION ? (text) => writeDictation(text) : undefined,
 				realtime,
 				transcribe: transcribe

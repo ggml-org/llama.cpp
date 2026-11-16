@@ -35,6 +35,32 @@
 	// no model to take the recording disables the button; a microphone that can't record keeps it
 	// tappable, so a tap can say why
 	const showWarning = $derived(!unavailableReason && !isRecording && !!micWarning);
+	// a mouse starts recording on press, not on release, so the first words are not lost;
+	// a touch or a key goes through the click, which is when the browser allows it
+	const PRESS_CLICK_MS = 1000;
+	let pressedAt = -Infinity;
+
+	function handlePointerDown(event: PointerEvent) {
+		if (isRecording || disabled || isLoading || unavailableReason) return;
+
+		if (event.pointerType !== 'mouse' || event.button !== 0) return;
+
+		pressedAt = performance.now();
+		onMicClick?.();
+	}
+
+	function handleClick() {
+		// the click that ends the press that already started it; the recording bar may have
+		// taken the button's place meanwhile, so this one can also never come
+		if (performance.now() - pressedAt < PRESS_CLICK_MS) {
+			pressedAt = -Infinity;
+
+			return;
+		}
+
+		onMicClick?.();
+	}
+
 	const tooltip = $derived(
 		isRecording
 			? null
@@ -53,7 +79,8 @@
 						? 'bg-surface-warning text-fg-warning hover:bg-surface-warning'
 						: ''}"
 				disabled={disabled || isLoading || !!unavailableReason}
-				onclick={onMicClick}
+				onclick={handleClick}
+				onpointerdown={handlePointerDown}
 				type="button"
 				variant={isRecording || showWarning ? 'ghost' : 'default'}
 			>

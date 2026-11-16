@@ -75,17 +75,32 @@ export async function createPcmTap(
 	return createScriptProcessorTap(context, onBlock);
 }
 
+// a context loads the worklet once, however many recordings it serves
+const modules = new WeakMap<BaseAudioContext, Promise<void>>();
+
+/** Loads the tap's worklet into `context`, once; later calls wait for the same load. */
+export function loadPcmTapModule(context: BaseAudioContext): Promise<void> {
+	let loading = modules.get(context);
+
+	if (!loading) {
+		if (!context.audioWorklet) return Promise.reject(new Error('AudioWorklet unavailable'));
+
+		const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'text/javascript' }));
+
+		loading = context.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+		// a failed load may be tried again
+		loading.catch(() => modules.delete(context));
+		modules.set(context, loading);
+	}
+
+	return loading;
+}
+
 async function createWorkletTap(
 	context: AudioContext,
 	onBlock: (block: Float32Array) => void
 ): Promise<PcmTap> {
-	const url = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: 'text/javascript' }));
-
-	try {
-		await context.audioWorklet.addModule(url);
-	} finally {
-		URL.revokeObjectURL(url);
-	}
+	await loadPcmTapModule(context);
 
 	const node = new AudioWorkletNode(context, VOICE_WORKLET_PROCESSOR, {
 		channelCount: 1,

@@ -32,8 +32,10 @@ export interface VoiceCaptureOptions {
 	levelsIntervalMs?: number;
 	/** Peaks of the clip (default 64) */
 	peaksCount?: number;
-	/** Extra constraints merged over echo cancellation, noise suppression and auto gain */
+	/** Extra constraints merged over the raw-signal ones (no echo cancellation, noise suppression or auto gain) */
 	constraints?: MediaTrackConstraints;
+	/** Microphone to record from, see resolveMicrophone(); left out, the system default */
+	deviceId?: string;
 	/** Use this stream instead of asking for the microphone; the capture stops its tracks too */
 	stream?: MediaStream;
 }

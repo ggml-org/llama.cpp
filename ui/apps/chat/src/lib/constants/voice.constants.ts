@@ -7,6 +7,7 @@ export const VOICE_MODE_MESSAGE = {
 	recording: 'Recording a voice message',
 	separateModelHint:
 		'The transcription model is loaded on the server alongside the chat model, which a server that keeps one model at a time unloads.',
+	starting: 'Starting...',
 	transcribing: 'Transcribing...',
 	unavailable:
 		'No model with audio input is available. In router mode, load one or pick a transcription model in Settings > Voice.',

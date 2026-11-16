@@ -158,7 +158,7 @@ describe('VoiceCapture', () => {
 		expect(stream.getTracks().every((track) => track.readyState === 'ended')).toBe(true);
 	});
 
-	it('asks for the microphone with the clean-up constraints and names a refusal', async () => {
+	it('asks for the raw microphone signal and names a refusal', async () => {
 		const getUserMedia = vi
 			.spyOn(navigator.mediaDevices, 'getUserMedia')
 			.mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
@@ -166,7 +166,7 @@ describe('VoiceCapture', () => {
 		const error = await capture.start().catch((e) => e);
 
 		expect(getUserMedia).toHaveBeenCalledWith({
-			audio: { autoGainControl: true, echoCancellation: true, noiseSuppression: true }
+			audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false }
 		});
 		expect(error).toBeInstanceOf(VoiceCaptureError);
 		expect(error.message).toBe(MICROPHONE_UNAVAILABLE_MESSAGE.denied);

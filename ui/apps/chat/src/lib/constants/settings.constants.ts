@@ -30,6 +30,7 @@ import type {
 	SettingsSection,
 	SettingsSectionEntry
 } from '#lib/types/index.ts';
+import { VOICE_MICROPHONE_AUTO } from '#lib/voice/microphone.ts';
 
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {
@@ -432,6 +433,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'The model that turns speech into text when the chat model has no audio input. Automatic uses a model with audio input that is already loaded, so dictating loads nothing.',
 				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL,
 				label: 'Transcription model',
+				standaloneField: false,
+				type: SettingsFieldType.SELECT
+			},
+			{
+				defaultValue: VOICE_MICROPHONE_AUTO,
+				help: "The microphone you record from. Automatic takes the system's default one, unless that is a Bluetooth headset's: recording from it switches the headset to its call mode, which plays music in low quality, so the built-in microphone is used instead.",
+				key: SETTINGS_KEYS.VOICE_MICROPHONE,
+				label: 'Microphone',
 				standaloneField: false,
 				type: SettingsFieldType.SELECT
 			},
