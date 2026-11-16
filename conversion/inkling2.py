@@ -302,6 +302,10 @@ class Inkling2VisionModel(MmprojModel):
         w.add_vision_attention_layernorm_eps(config["layer_norm_eps"])
         w.add_vision_spatial_merge_size(config["spatial_merge_size"])
 
+    def dequant_model(self):
+        # vision tensors are BF16, only the text experts are quantized
+        return
+
     @classmethod
     def filter_tensors(cls, item):
         name, gen = item
