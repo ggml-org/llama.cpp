@@ -26,6 +26,11 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `tests/`, `tools/server/tests/`, or any other added/changed test -> **Tests**
 - anything else, plus all of the above -> **General** (always runs)
 
+Some areas have a developer README that documents internals and conventions the review must enforce. If the diff touches one of these areas, read the matching file into context before reviewing (required, not optional):
+
+- `tools/server/` -> [tools/server/README-dev.md](../../tools/server/README-dev.md)
+- `tools/mtmd/` -> [tools/mtmd/README-dev.md](../../tools/mtmd/README-dev.md)
+
 Always run the **Prior review context** step, the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Additionally, if the diff introduces a new component, subsystem, or piece of infrastructure (a new file/class/module, a new abstraction, or hand-rolled machinery), run the **Approach and design** review. Tell the user which checklists you're running and why.
 
 ## Prior review context (always)
