@@ -59,12 +59,14 @@ jobs:
 
       - name: Python venv
         id: venv
+        # uv's standalone binary: no system Python or root needed on the host
+        env:
+          UV_VERSION: 0.13.7
         run: |
-          if [ ! -x "$NIGHTLY_HOME/uv-venv/bin/uv" ]; then
-            python3 -m venv "$NIGHTLY_HOME/uv-venv"
-            "$NIGHTLY_HOME/uv-venv/bin/pip" install -q uv
+          UV="$NIGHTLY_HOME/uv-bin/uv"
+          if ! "$UV" --version 2>/dev/null | grep -qF " $UV_VERSION "; then
+            curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | env UV_UNMANAGED_INSTALL="$NIGHTLY_HOME/uv-bin" sh
           fi
-          UV="$NIGHTLY_HOME/uv-venv/bin/uv"
           "$UV" venv -q --allow-existing --python 3.12 --managed-python "$NIGHTLY_HOME/venv"
           VIRTUAL_ENV="$NIGHTLY_HOME/venv" "$UV" pip install -q -r "$BENCH_DIR/requirements.txt"
 

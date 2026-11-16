@@ -23,18 +23,18 @@ The agentic traces are Mooncake JSONL (`timestamp`, `input_length`, `output_leng
 
 ## Box setup
 
-- NVIDIA driver, Docker with the NVIDIA Container Toolkit, and the runner user in the `docker` group. The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
-- The nightly job runs in `nvidia/cuda:13.5.0-devel-ubuntu26.04` and installs what it needs there. The weekly runs on the host, since it starts vLLM in docker, and needs `python3` with `venv` there.
+- NVIDIA driver, Docker with the NVIDIA Container Toolkit, and a runner that can use Docker (it needs that for container jobs anyway). The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
+- The nightly job runs in `nvidia/cuda:13.5.0-devel-ubuntu26.04` and installs what it needs there. The weekly runs on the host, since it starts vLLM in docker, and needs only `curl` there: it installs a pinned standalone uv into `uv-bin/`.
 - Either way the bench venv uses a uv-managed Python 3.12: AIPerf 0.13.0 needs Python < 3.14 (Ubuntu 26.04 ships 3.14) and builds `crick` from source on arm64, which needs the Python headers.
-- About 160 GiB free in the runner's work folder for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. Both workflows use `NIGHTLY_HOME` = `<work folder>/llama-nightly`, next to the checkouts: the runner mounts the work folder into the nightly's container and keeps it between jobs. The nightly runs as root in its container and hands what it wrote back to the work folder's owner at the end. Runs by hand default to `/opt/llama-nightly` (`--home` or `NIGHTLY_HOME` overrides it). Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the nightly's uv cache, uv Python and Hugging Face cache), and `venv/` and `vllm-cache/` for the weekly. The weekly and runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
+- About 160 GiB free in the runner's work folder for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. Both workflows use `NIGHTLY_HOME` = `<work folder>/llama-nightly`, next to the checkouts: the runner mounts the work folder into the nightly's container and keeps it between jobs. The nightly runs as root in its container and hands what it wrote back to the work folder's owner at the end. Runs by hand default to `/opt/llama-nightly` (`--home` or `NIGHTLY_HOME` overrides it). Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the nightly's uv cache, uv Python and Hugging Face cache), and `uv-bin/`, `venv/` and `vllm-cache/` for the weekly. The weekly and runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
 - A self-hosted runner with the labels `self-hosted, Linux, gb10, perf`. Nothing else may run on the box during a night: a concurrent job corrupts the numbers.
 
 ## Run by hand
 
 ```bash
-python3 -m venv /opt/llama-nightly/uv-venv && /opt/llama-nightly/uv-venv/bin/pip install uv
-/opt/llama-nightly/uv-venv/bin/uv venv --python 3.12 --managed-python /opt/llama-nightly/venv
-VIRTUAL_ENV=/opt/llama-nightly/venv /opt/llama-nightly/uv-venv/bin/uv pip install -r tools/server/bench/nightly/requirements.txt
+curl -LsSf https://astral.sh/uv/0.13.7/install.sh | env UV_UNMANAGED_INSTALL=/opt/llama-nightly/uv-bin sh
+/opt/llama-nightly/uv-bin/uv venv --python 3.12 --managed-python /opt/llama-nightly/venv
+VIRTUAL_ENV=/opt/llama-nightly/venv /opt/llama-nightly/uv-bin/uv pip install -r tools/server/bench/nightly/requirements.txt
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py prefetch --home /opt/llama-nightly
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py run --home /opt/llama-nightly --suites engine --models M3
 ```
