@@ -3,6 +3,7 @@
 #include "download.h"
 #include "llama.h"
 #include "speculative.h"
+#include "configuration-options.h"
 
 #include <cmath>
 #include <limits>
@@ -182,68 +183,25 @@ static void test(void) {
 
     std::vector<std::string> argv;
 
-    printf("test-arg-parser: test invalid usage\n\n");
-
-    // missing value
-    argv = {"binary_name", "-m"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-
-    // wrong value (int)
-    argv = {"binary_name", "-ngl", "hello"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-
-    // wrong value (enum)
-    argv = {"binary_name", "-sm", "hello"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    printf("test-arg-parser: test configuration options\n\n");
+    for (const auto & test_case : configuration_options) {
+        common_params output;
+        output.model.path = "model_file.gguf";
+        argv = test_case.args;
+        argv.insert(argv.begin(), "binary_name");
+        printf("test-arg-parser: %s\n", test_case.ini.c_str());
+        const bool valid = common_params_parse(argv.size(), list_str_to_char(argv).data(), output, test_case.example);
+        assert(valid == test_case.valid);
+        if (valid) {
+            test_case.check(output);
+        }
+    }
 
     {
         common_params penalty_params;
         assert(penalty_params.sampling.penalty_last_n == 64);
         assert(penalty_params.sampling.dry_penalty_last_n == 64);
-
-        argv = {"binary_name", "--repeat-last-n", "-1"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        argv = {"binary_name", "--dry-penalty-last-n", "-1"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        argv = {"binary_name", "--repeat-penalty", "0"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        argv = {"binary_name", "--repeat-penalty", "-1"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        argv = {"binary_name", "--repeat-penalty", "nan"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        argv = {"binary_name", "--repeat-penalty", "inf"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        argv = {"binary_name", "--repeat-penalty", "-inf"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-
-        const char * penalty_options[] = {"--frequency-penalty", "--presence-penalty"};
-        const char * nonfinite_values[] = {"nan", "inf", "-inf"};
-        for (const char * option : penalty_options) {
-            for (const char * value : nonfinite_values) {
-                argv = {"binary_name", option, value};
-                assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
-            }
-        }
     }
-
-    // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
-    argv = {"binary_name", "--draft", "123"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
-
-    argv = {"binary_name", "-lm", "hello"};
-    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-
-    printf("test-arg-parser: test valid usage\n\n");
-
-    argv = {"binary_name", "-m", "model_file.gguf"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model.path == "model_file.gguf");
 
     {
         auto parse_shards = [&list_str_to_char](std::vector<std::string> args) {
@@ -264,74 +222,6 @@ static void test(void) {
         assert(parse_shards({"--ple", "p.gguf"}) == parse_shards({"--shard", "p.gguf"}));
         assert(parse_shards({"--shard", "model_file.gguf,a.gguf,b.gguf,a.gguf"}) == two);
     }
-
-    argv = {"binary_name", "-t", "1234"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.cpuparams.n_threads == 1234);
-
-    argv = {"binary_name", "--verbose"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.verbosity > 1);
-
-    argv = {"binary_name", "-m", "abc.gguf", "--predict", "6789", "--batch-size", "9090"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.model.path == "abc.gguf");
-    assert(params.n_predict == 6789);
-    assert(params.n_batch == 9090);
-
-    // --draft cannot be used outside llama-speculative
-    argv = {"binary_name", "--spec-draft-n-max", "123"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
-    assert(params.speculative.draft.n_max == 123);
-
-    {
-        common_params synth_params;
-        argv = {"binary_name", "--spec-synth-len", "3.4"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
-        assert(synth_params.speculative.synth_len == 3.4);
-    }
-
-    {
-        common_params synth_params;
-        argv = {"binary_name", "--spec-synth-rates", "0.8,0.6,0.2"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
-        assert(synth_params.speculative.synth_rates == std::vector<double>({0.8, 0.6, 0.2}));
-    }
-
-    {
-        common_params synth_params;
-        argv = {"binary_name", "--spec-synth-len", "3.4x"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
-    }
-
-    argv = {"binary_name", "-lm", "none"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
-
-    argv = {"binary_name", "-lm", "mmap"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
-
-    argv = {"binary_name", "-lm", "mlock"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
-
-    argv = {"binary_name", "-lm", "mmap+mlock"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK);
-
-    argv = {"binary_name", "-lm", "dio"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
-
-    // multi-value args (CSV)
-    argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.lora_adapters.size() == 4);
-    assert(params.lora_adapters[0].path == "file1.gguf");
-    assert(params.lora_adapters[1].path == "file2,2.gguf");
-    assert(params.lora_adapters[2].path == "file3\"3\".gguf");
-    assert(params.lora_adapters[3].path == "file4\".gguf");
 
 // skip this part on windows, because setenv is not supported
 #ifdef _WIN32
