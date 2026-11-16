@@ -152,7 +152,7 @@ def test_server_models_sse_single_model():
     with requests.get(server.make_url("/models/sse"), stream=True, timeout=10) as res:
         assert res.status_code == 200
         assert res.headers["Content-Type"].startswith("text/event-stream")
-        line = next(l for l in res.iter_lines() if l)
+        line = next(x for x in res.iter_lines() if x)
     event = json.loads(line.decode("utf-8").removeprefix("data: "))
     model_id = server.make_request("GET", "/models").body["data"][0]["id"]
     assert event["model"] == model_id

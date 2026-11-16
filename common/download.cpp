@@ -98,6 +98,9 @@ class ProgressBar : public common_download_callback {
     std::string filename;
     size_t len = 0;
 
+    // the caller's callback, if any, still receives every event
+    common_download_callback * next;
+
     static void cleanup(const ProgressBar * line) {
         lines.erase(line);
         if (lines.empty()) {
@@ -110,10 +113,7 @@ class ProgressBar : public common_download_callback {
     }
 
 public:
-    // the caller's callback, if any, still receives every event
-    common_download_callback * next = nullptr;
-
-    ProgressBar(common_download_callback * next = nullptr) : next(next) {}
+    ProgressBar(common_download_callback * next) : next(next) {}
 
     void on_start(const common_download_progress & p) override {
         if (next) {
