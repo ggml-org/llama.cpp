@@ -69,6 +69,8 @@ enum mtmd_subctx_gen_process {
     MTMD_SUBCTX_GEN_PROCESS_TTS,        // full utterance of codes to raw PCM audio
     MTMD_SUBCTX_GEN_PROCESS_TTS_VOCODE, // internal: mel + source stft to istft input
     MTMD_SUBCTX_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
+    MTMD_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows
+    MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows
 };
 
 // persistent state of a causal audio encoder, for streaming input (one per stream)

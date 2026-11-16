@@ -943,6 +943,46 @@ struct mtmd_zonos3_wav {
     int64_t rs_kernel_len = 0;
 };
 
+// yue2: projections of the flow-matching NAR (a.gen.nar.*) and the Oobleck VAE decoder (a.gen.vae.*)
+// the NAR transformer layers are loaded by libllama, see mtmd_yue2_nar_load()
+struct mtmd_yue2 {
+    struct snake {
+        ggml_tensor * alpha = nullptr; // exp(alpha)
+        ggml_tensor * beta  = nullptr; // 1 / (exp(beta) + eps)
+    };
+    struct res_unit {
+        snake         act1;
+        ggml_tensor * conv1_w = nullptr; // k = 7, dilated
+        ggml_tensor * conv1_b = nullptr;
+        snake         act2;
+        ggml_tensor * conv2_w = nullptr; // k = 1
+        ggml_tensor * conv2_b = nullptr;
+    };
+    struct block {
+        snake         act;
+        ggml_tensor * up_w = nullptr; // ConvTranspose1d, k = 2 * stride
+        ggml_tensor * up_b = nullptr;
+        std::vector<res_unit> res;
+    };
+
+    ggml_tensor * inp_w = nullptr; // latent -> backbone embd
+    ggml_tensor * inp_b = nullptr;
+    ggml_tensor * out_w = nullptr; // backbone hidden -> velocity
+    ggml_tensor * out_b = nullptr;
+
+    // time embedder MLP, read on the host
+    std::vector<float> time0_w; // [256, n_embd]
+    std::vector<float> time0_b;
+    std::vector<float> time2_w; // [n_embd, n_embd]
+    std::vector<float> time2_b;
+
+    ggml_tensor * vae_in_w = nullptr;
+    ggml_tensor * vae_in_b = nullptr;
+    std::vector<block> vae;
+    snake         vae_post;
+    ggml_tensor * vae_out_w = nullptr;
+};
+
 struct mtmd_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -1226,6 +1266,7 @@ struct mtmd_model {
     mtmd_code2wav c2w;
     std::vector<mtmd_drama3_layer> drama3_layers;
     mtmd_zonos3_wav zonos3;
+    mtmd_yue2 yue2;
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     mtmd_seanet seanet;
