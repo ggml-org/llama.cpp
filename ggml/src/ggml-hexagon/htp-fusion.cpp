@@ -58,7 +58,7 @@ static bool is_supported_mul_mat_nx_kernel(const ggml_tensor * src0, const struc
 
 static bool is_supported_mul_mat_id_nx_kernel(const ggml_tensor * src0, const struct htp_mm_kernel_params * kparams) {
     if (kparams->n_hmx) {
-        return kparams->kernel_type == HTP_MM_KERNEL_HMX_2D;
+        return htp_mm_kernel_is_hmx_2d(kparams->kernel_type);
     }
     return ggml_hexagon_tensor_is_tiled(src0) &&
            (kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kparams->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK);

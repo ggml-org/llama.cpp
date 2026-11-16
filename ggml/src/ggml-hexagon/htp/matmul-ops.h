@@ -921,7 +921,7 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
     size_t best_vtcm_size = 0;
 
     for (int act_hvx = n_hvx; act_hvx >= 1; act_hvx = (act_hvx == 1) ? 0 : (act_hvx / 2)) {
-        const uint32_t layout_act_hvx = is_matmul_id ? 0u : (uint32_t) act_hvx;
+        const uint32_t layout_act_hvx = (uint32_t) act_hvx;
 
         for (size_t nc = nc_hi; nc >= HTP_MM_HMX_TILE_N_COLS; nc -= HTP_MM_HMX_TILE_N_COLS) {
             size_t n_fixed = 0, ncmn = 0, mc_denom = 0;
@@ -982,8 +982,9 @@ static inline bool htp_mm_int_hmx_solve_2d_params(
                 mc -= m_align;
             }
 
-            if (nc == HTP_MM_HMX_TILE_N_COLS) break;
+            if ((best_mblocks == 1u && best_nc >= n_total) || nc == HTP_MM_HMX_TILE_N_COLS) break;
         }
+        if (best_mblocks == 1u && (best_nc >= n_total || best_nc >= 128u)) break;
     }
 
     if (best_act_hvx > 0) {

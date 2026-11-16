@@ -1583,6 +1583,150 @@ static __attribute__((noinline)) void quantize_act_superblock_pair_f16_to_u16_sm
     }
 }
 
+static __attribute__((noinline)) void copy_gathered_act_row_to_vtcm(
+        uint8_t * restrict dst_row,
+        const uint8_t * restrict src_row,
+        size_t valid_bytes) {
+    size_t b = 0;
+    for (; b + 128 <= valid_bytes; b += 128) {
+        hvx_vmem(dst_row + b) = hvx_vmemu(src_row + b);
+    }
+    if (b < valid_bytes) {
+        hvx_vmem(dst_row + b) = hvx_vec_load_u(src_row + b, valid_bytes - b);
+    }
+}
+
+static __attribute__((noinline)) void quantize_act_step_rows_to_int_tiles(
+        uint8_t * restrict vtcm_act_dst,
+        float * restrict vtcm_act_scales,
+        const uint8_t * restrict curr_buf,
+        size_t row_bytes,
+        uint32_t r,
+        uint32_t valid_rows,
+        uint32_t mc_pad,
+        uint32_t n_k_tiles,
+        uint32_t k_group,
+        uint32_t n_groups,
+        uint32_t k_valid,
+        bool is_w8a8,
+        bool act_is_f16) {
+    if (is_w8a8) {
+        const uint32_t r0 = r >> 6;
+        const uint32_t rg = (r & 63u) >> 2;
+        uint8_t * tile_row_base = vtcm_act_dst + (size_t) r0 * n_k_tiles * HTP_MM_HMX_TILE_SIZE;
+        if (valid_rows == 0) {
+            const HVX_Vector v_zero = Q6_V_vzero();
+            const HVX_Vector v_zp   = Q6_Vb_vsplat_R(0x80);
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                hvx_vec_store_u(vtcm_act_scales + (size_t) g * mc_pad + r, 4 * sizeof(float), v_zero);
+            }
+            for (uint32_t kt = 0; kt < n_k_tiles; ++kt) {
+                ((HVX_Vector *) (tile_row_base + (size_t) kt * HTP_MM_HMX_TILE_SIZE))[rg] = v_zp;
+            }
+        } else {
+            const uint8_t * p0 = curr_buf;
+            const uint8_t * p1 = (valid_rows > 1) ? (curr_buf + 1 * row_bytes) : curr_buf;
+            const uint8_t * p2 = (valid_rows > 2) ? (curr_buf + 2 * row_bytes) : curr_buf;
+            const uint8_t * p3 = (valid_rows > 3) ? (curr_buf + 3 * row_bytes) : curr_buf;
+
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                float * d_a_out = vtcm_act_scales + (size_t) g * mc_pad + r;
+                const uint32_t k_start = g * k_group;
+                if (act_is_f16) {
+                    quantize_act_superblock_quad_f16_to_u8_sm(
+                        tile_row_base, d_a_out,
+                        (const __fp16 *) p0, (const __fp16 *) p1, (const __fp16 *) p2, (const __fp16 *) p3,
+                        rg, k_start, k_group, k_valid, valid_rows);
+                } else {
+                    quantize_act_superblock_quad_f32_to_u8_sm(
+                        tile_row_base, d_a_out,
+                        (const float *) p0, (const float *) p1, (const float *) p2, (const float *) p3,
+                        rg, k_start, k_group, k_valid, valid_rows);
+                }
+            }
+        }
+    } else {
+        const uint32_t r0 = r >> 5;
+        const uint32_t r1 = (r & 31u) >> 1;
+        uint16_t * tile_row_base = (uint16_t *) vtcm_act_dst + (size_t) r0 * n_k_tiles * HTP_MM_HMX_TILE_N_ELMS;
+        if (valid_rows == 0) {
+            const HVX_Vector v_zero = Q6_V_vzero();
+            const HVX_Vector v_zp   = Q6_Vh_vsplat_R(0x8000);
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                hvx_vec_store_u(vtcm_act_scales + (size_t) g * mc_pad + r, 2 * sizeof(float), v_zero);
+            }
+            for (uint32_t kt = 0; kt < n_k_tiles; ++kt) {
+                ((HVX_Vector *) (tile_row_base + (size_t) kt * HTP_MM_HMX_TILE_N_ELMS))[r1] = v_zp;
+            }
+        } else {
+            const uint8_t * p0 = curr_buf;
+            const uint8_t * p1 = (valid_rows > 1) ? (curr_buf + 1 * row_bytes) : curr_buf;
+
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                float * d_a_out = vtcm_act_scales + (size_t) g * mc_pad + r;
+                const uint32_t k_start = g * k_group;
+                if (act_is_f16) {
+                    quantize_act_superblock_pair_f16_to_u16_sm(
+                        tile_row_base, d_a_out,
+                        (const __fp16 *) p0, (const __fp16 *) p1,
+                        r1, k_start, k_group, k_valid, valid_rows);
+                } else {
+                    quantize_act_superblock_pair_f32_to_u16_sm(
+                        tile_row_base, d_a_out,
+                        (const float *) p0, (const float *) p1,
+                        r1, k_start, k_group, k_valid, valid_rows);
+                }
+            }
+        }
+    }
+}
+
+static __attribute__((noinline)) void transfer_activation_chunk_to_int_gathered(
+        uint8_t * restrict vtcm_act_dst,
+        float * restrict vtcm_act_scales,
+        const void * restrict src,
+        uint8_t * restrict thread_act,
+        uint32_t start_row,
+        uint32_t row_start,
+        uint32_t row_end,
+        uint32_t row_stride,
+        uint32_t n_rows,
+        uint32_t mc_pad,
+        uint32_t k_block,
+        uint32_t k_valid,
+        uint32_t k_group,
+        uint32_t n_groups,
+        int32_t kernel_type,
+        uint32_t act_elem_size,
+        const struct mmid_row_mapping * matrix_rows,
+        uint32_t cur_a,
+        uint32_t mapping_stride,
+        uint32_t ne11,
+        const struct fastdiv_values * ne11_div,
+        size_t nb11,
+        size_t nb12) {
+    const bool     is_w8a8     = htp_mm_kernel_is_hmx_w8a8(kernel_type);
+    const uint32_t step_rows   = is_w8a8 ? 4u : 2u;
+    const bool     act_is_f16  = (act_elem_size == sizeof(__fp16));
+    const size_t   row_bytes   = hex_align_up((size_t) k_block * act_elem_size, 128);
+    const size_t   valid_bytes = (size_t) k_valid * act_elem_size;
+    const uint32_t n_k_tiles   = k_block >> 5;
+
+    for (uint32_t r = row_start; r < row_end; r += row_stride) {
+        const uint32_t valid_rows = (r < n_rows) ? hex_smin(n_rows - r, step_rows) : 0u;
+        for (uint32_t s = 0; s < valid_rows; ++s) {
+            const struct mmid_row_mapping mapping = matrix_rows[(size_t) cur_a * mapping_stride + start_row + r + s];
+            const uint32_t i11 = (ne11 > 1) ? fastmodulo(mapping.i1, ne11, ne11_div) : 0u;
+            const uint8_t * src_row = (const uint8_t *) src + (size_t) i11 * nb11 + (size_t) mapping.i2 * nb12;
+            copy_gathered_act_row_to_vtcm(thread_act + (size_t) s * row_bytes, src_row, valid_bytes);
+        }
+        quantize_act_step_rows_to_int_tiles(
+            vtcm_act_dst, vtcm_act_scales, thread_act, row_bytes,
+            r, valid_rows, mc_pad, n_k_tiles, k_group, n_groups, k_valid,
+            is_w8a8, act_is_f16);
+    }
+}
+
 // Core HMX W8A8 SM dot-product kernel over all superblocks g = 0..n_groups-1.
 static void core_dot_chunk_w8a8_sm(
         uint8_t * restrict vtcm_out,
@@ -2924,6 +3068,646 @@ static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_fp16_col
                 if (has_row1) {
                     hvx_vec_store_u(out_row_base + dst_stride + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
                 }
+            }
+        }
+        r_base = r_end;
+    }
+}
+
+static inline void hmx_store_vec_nt_or_u(void * restrict ptr, bool aligned_128, HVX_Vector v) {
+    if (aligned_128) {
+        hvx_vmem_store_nt(ptr, v);
+    } else {
+        hvx_vmemu(ptr) = v;
+    }
+}
+
+static __attribute__((noinline)) void transfer_output_chunk_w8a8_cm_to_fp32_scattered(
+        float * restrict dst,
+        const uint8_t * restrict vtcm_src,
+        const float * restrict vtcm_act_scales,
+        const float * restrict vtcm_weight_scales,
+        uint32_t global_start_row,
+        uint32_t vtcm_start_row,
+        uint32_t n_rows,
+        uint32_t mc_pad,
+        uint32_t c_first,
+        uint32_t c_len,
+        uint32_t total_n_cols,
+        uint32_t n_groups,
+        uint32_t dst_cols,
+        const struct mmid_row_mapping * matrix_rows,
+        uint32_t cur_a,
+        uint32_t mapping_stride,
+        size_t dst_nb1,
+        size_t dst_nb2) {
+
+    const size_t total_col_tiles = hmx_ceil_div(total_n_cols, 32);
+    const size_t n_row_tiles_64  = mc_pad / 64;
+    const size_t group_stride    = n_row_tiles_64 * total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;
+    const size_t row_tile_stride = total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;
+    const size_t c0_first        = c_first / 32;
+
+    const HVX_Vector sign_80     = Q6_Vb_vsplat_R(0x80);
+    const size_t limit_c         = hex_smin(c_len, dst_cols);
+    const size_t limit_c_aligned = (limit_c & ~31u);
+
+    uint32_t da_buf[16][32] __attribute__((aligned(128)));
+    uint32_t (*da_ptr)[32] = htp_da_buf_ptr(da_buf);
+
+    if (n_groups <= 1) {
+        for (size_t r_base = 0; r_base < n_rows; ) {
+            const size_t r_idx_base = vtcm_start_row + r_base;
+            const size_t r_blk      = r_idx_base >> 5;
+            const size_t r0         = r_idx_base >> 6;
+            const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+            const size_t r_end      = r_base + r_step;
+
+            *(HVX_Vector *) da_ptr[0] = hvx_vmem(vtcm_act_scales + (r_blk << 5));
+
+            for (size_t r = r_base; r < r_end; r += 4) {
+                const size_t   r_idx0 = vtcm_start_row + r;
+                const size_t   rg     = (r_idx0 & 63u) >> 2;
+                const size_t   lane   = r_idx0 & 31u;
+                const uint32_t da0    = da_ptr[0][lane + 0];
+                const uint32_t da1    = da_ptr[0][lane + 1];
+                const uint32_t da2    = da_ptr[0][lane + 2];
+                const uint32_t da3    = da_ptr[0][lane + 3];
+
+                const uint8_t * tile_base = vtcm_src + r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128;
+                const float *   dw_base   = vtcm_weight_scales + c0_first * 32;
+
+                const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+                float * out_row0 = (float *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+                float * out_row1 = (r + 1 < n_rows) ? (float *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+                float * out_row2 = (r + 2 < n_rows) ? (float *) ((uint8_t *) dst + map_base[2].i1 * dst_nb1 + map_base[2].i2 * dst_nb2) : NULL;
+                float * out_row3 = (r + 3 < n_rows) ? (float *) ((uint8_t *) dst + map_base[3].i1 * dst_nb1 + map_base[3].i2 * dst_nb2) : NULL;
+                const bool aligned0 = hex_is_aligned(out_row0, 128);
+                const bool aligned1 = out_row1 && hex_is_aligned(out_row1, 128);
+                const bool aligned2 = out_row2 && hex_is_aligned(out_row2, 128);
+                const bool aligned3 = out_row3 && hex_is_aligned(out_row3, 128);
+
+                for (size_t c = 0; c < limit_c_aligned; c += 32) {
+                    HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();
+                    w8a8_sm_eval_tile_quad_1g(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,
+                                              NULL, 0, 0, n_rows, r, &v0, &v1, &v2, &v3);
+                    hmx_store_vec_nt_or_u(out_row0 + c, aligned0, v0);
+                    if (out_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, v1);
+                    if (out_row2) hmx_store_vec_nt_or_u(out_row2 + c, aligned2, v2);
+                    if (out_row3) hmx_store_vec_nt_or_u(out_row3 + c, aligned3, v3);
+                }
+
+                if (limit_c_aligned < limit_c) {
+                    const size_t c           = limit_c_aligned;
+                    const size_t valid_bytes = (limit_c - c) * sizeof(float);
+                    HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();
+                    w8a8_sm_eval_tile_quad_1g(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,
+                                              NULL, 0, 0, n_rows, r, &v0, &v1, &v2, &v3);
+                    hvx_vec_store_u(out_row0 + c, valid_bytes, v0);
+                    if (out_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, v1);
+                    if (out_row2) hvx_vec_store_u(out_row2 + c, valid_bytes, v2);
+                    if (out_row3) hvx_vec_store_u(out_row3 + c, valid_bytes, v3);
+                }
+            }
+            r_base = r_end;
+        }
+        return;
+    }
+
+    for (size_t r_base = 0; r_base < n_rows; ) {
+        const size_t r_idx_base = vtcm_start_row + r_base;
+        const size_t r_blk      = r_idx_base >> 5;
+        const size_t r0         = r_idx_base >> 6;
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+        const size_t r_end      = r_base + r_step;
+
+        if (n_groups <= 16u) {
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                *(HVX_Vector *) da_ptr[g] = hvx_vmem(vtcm_act_scales + (size_t) g * mc_pad + (r_blk << 5));
+            }
+        }
+
+        for (size_t r = r_base; r < r_end; r += 4) {
+            const size_t r_idx0 = vtcm_start_row + r;
+            const size_t rg     = (r_idx0 & 63u) >> 2;
+            const size_t lane   = r_idx0 & 31u;
+
+            const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+            float * out_row0 = (float *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+            float * out_row1 = (r + 1 < n_rows) ? (float *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+            float * out_row2 = (r + 2 < n_rows) ? (float *) ((uint8_t *) dst + map_base[2].i1 * dst_nb1 + map_base[2].i2 * dst_nb2) : NULL;
+            float * out_row3 = (r + 3 < n_rows) ? (float *) ((uint8_t *) dst + map_base[3].i1 * dst_nb1 + map_base[3].i2 * dst_nb2) : NULL;
+            const bool aligned0 = hex_is_aligned(out_row0, 128);
+            const bool aligned1 = out_row1 && hex_is_aligned(out_row1, 128);
+            const bool aligned2 = out_row2 && hex_is_aligned(out_row2, 128);
+            const bool aligned3 = out_row3 && hex_is_aligned(out_row3, 128);
+
+            for (size_t c = 0; c < limit_c_aligned; c += 32) {
+                const size_t c0_glob = c0_first + (c >> 5);
+                HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();
+                w8a8_sm_eval_tile_quad_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                          group_stride, row_tile_stride, r0, r_blk, rg, lane,
+                                          mc_pad, c0_glob, n_groups, da_ptr, sign_80,
+                                          NULL, c, 0, 0, n_rows, r, &v0, &v1, &v2, &v3);
+                hmx_store_vec_nt_or_u(out_row0 + c, aligned0, v0);
+                if (out_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, v1);
+                if (out_row2) hmx_store_vec_nt_or_u(out_row2 + c, aligned2, v2);
+                if (out_row3) hmx_store_vec_nt_or_u(out_row3 + c, aligned3, v3);
+            }
+
+            if (limit_c_aligned < limit_c) {
+                const size_t c           = limit_c_aligned;
+                const size_t c0_glob     = c0_first + (c >> 5);
+                const size_t valid_bytes = (limit_c - c) * sizeof(float);
+                HVX_Vector v0, v1 = Q6_V_vzero(), v2 = Q6_V_vzero(), v3 = Q6_V_vzero();
+                w8a8_sm_eval_tile_quad_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                          group_stride, row_tile_stride, r0, r_blk, rg, lane,
+                                          mc_pad, c0_glob, n_groups, da_ptr, sign_80,
+                                          NULL, c, 0, 0, n_rows, r, &v0, &v1, &v2, &v3);
+                hvx_vec_store_u(out_row0 + c, valid_bytes, v0);
+                if (out_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, v1);
+                if (out_row2) hvx_vec_store_u(out_row2 + c, valid_bytes, v2);
+                if (out_row3) hvx_vec_store_u(out_row3 + c, valid_bytes, v3);
+            }
+        }
+        r_base = r_end;
+    }
+}
+
+static __attribute__((noinline)) void transfer_output_chunk_w8a8_cm_to_fp16_scattered(
+        __fp16 * restrict dst,
+        const uint8_t * restrict vtcm_src,
+        const float * restrict vtcm_act_scales,
+        const float * restrict vtcm_weight_scales,
+        uint32_t global_start_row,
+        uint32_t vtcm_start_row,
+        uint32_t n_rows,
+        uint32_t mc_pad,
+        uint32_t c_first,
+        uint32_t c_len,
+        uint32_t total_n_cols,
+        uint32_t n_groups,
+        uint32_t dst_cols,
+        const struct mmid_row_mapping * matrix_rows,
+        uint32_t cur_a,
+        uint32_t mapping_stride,
+        size_t dst_nb1,
+        size_t dst_nb2) {
+
+    const size_t total_col_tiles   = hmx_ceil_div(total_n_cols, 32);
+    const size_t n_row_tiles_64    = mc_pad / 64;
+    const size_t group_stride      = n_row_tiles_64 * total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;
+    const size_t row_tile_stride   = total_col_tiles * 2 * HTP_MM_HMX_TILE_SIZE;
+    const size_t c0_first          = c_first / 32;
+
+    const HVX_Vector sign_80       = Q6_Vb_vsplat_R(0x80);
+    const size_t limit_c           = hex_smin(c_len, dst_cols);
+    const size_t limit_c_aligned64 = (limit_c & ~63u);
+
+    uint32_t da_buf[16][32] __attribute__((aligned(128)));
+    uint32_t (*da_ptr)[32] = htp_da_buf_ptr(da_buf);
+
+    if (n_groups <= 1) {
+        for (size_t r_base = 0; r_base < n_rows; ) {
+            const size_t r_idx_base = vtcm_start_row + r_base;
+            const size_t r_blk      = r_idx_base >> 5;
+            const size_t r0         = r_idx_base >> 6;
+            const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+            const size_t r_end      = r_base + r_step;
+
+            *(HVX_Vector *) da_ptr[0] = hvx_vmem(vtcm_act_scales + (r_blk << 5));
+
+            for (size_t r = r_base; r < r_end; r += 4) {
+                const size_t   r_idx0 = vtcm_start_row + r;
+                const size_t   rg     = (r_idx0 & 63u) >> 2;
+                const size_t   lane   = r_idx0 & 31u;
+                const uint32_t da0    = da_ptr[0][lane + 0];
+                const uint32_t da1    = da_ptr[0][lane + 1];
+                const uint32_t da2    = da_ptr[0][lane + 2];
+                const uint32_t da3    = da_ptr[0][lane + 3];
+
+                const uint8_t * tile_base = vtcm_src + r0 * row_tile_stride + c0_first * 2 * HTP_MM_HMX_TILE_SIZE + rg * 128;
+                const float *   dw_base   = vtcm_weight_scales + c0_first * 32;
+
+                const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+                __fp16 * out_row0 = (__fp16 *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+                __fp16 * out_row1 = (r + 1 < n_rows) ? (__fp16 *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+                __fp16 * out_row2 = (r + 2 < n_rows) ? (__fp16 *) ((uint8_t *) dst + map_base[2].i1 * dst_nb1 + map_base[2].i2 * dst_nb2) : NULL;
+                __fp16 * out_row3 = (r + 3 < n_rows) ? (__fp16 *) ((uint8_t *) dst + map_base[3].i1 * dst_nb1 + map_base[3].i2 * dst_nb2) : NULL;
+                const bool aligned0 = hex_is_aligned(out_row0, 128);
+                const bool aligned1 = out_row1 && hex_is_aligned(out_row1, 128);
+                const bool aligned2 = out_row2 && hex_is_aligned(out_row2, 128);
+                const bool aligned3 = out_row3 && hex_is_aligned(out_row3, 128);
+
+                for (size_t c = 0; c < limit_c_aligned64; c += 64) {
+                    HVX_Vector v0_lo, v1_lo = Q6_V_vzero(), v2_lo = Q6_V_vzero(), v3_lo = Q6_V_vzero();
+                    HVX_Vector v0_hi, v1_hi = Q6_V_vzero(), v2_hi = Q6_V_vzero(), v3_hi = Q6_V_vzero();
+
+                    w8a8_sm_eval_tile_quad_1g(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,
+                                              NULL, 0, 0, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);
+                    w8a8_sm_eval_tile_quad_1g(tile_base, dw_base, c + 32, da0, da1, da2, da3, sign_80,
+                                              NULL, 0, 0, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);
+
+                    hmx_store_vec_nt_or_u(out_row0 + c, aligned0, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                    if (out_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+                    if (out_row2) hmx_store_vec_nt_or_u(out_row2 + c, aligned2, hmx_pack_f32_to_f16_clamped(v2_lo, v2_hi));
+                    if (out_row3) hmx_store_vec_nt_or_u(out_row3 + c, aligned3, hmx_pack_f32_to_f16_clamped(v3_lo, v3_hi));
+                }
+
+                if (limit_c_aligned64 < limit_c) {
+                    const size_t c           = limit_c_aligned64;
+                    const size_t valid_c     = limit_c - c;
+                    const size_t valid_bytes = valid_c * sizeof(__fp16);
+
+                    HVX_Vector v0_lo, v1_lo = Q6_V_vzero(), v2_lo = Q6_V_vzero(), v3_lo = Q6_V_vzero();
+                    HVX_Vector v0_hi = Q6_V_vzero(), v1_hi = Q6_V_vzero(), v2_hi = Q6_V_vzero(), v3_hi = Q6_V_vzero();
+
+                    w8a8_sm_eval_tile_quad_1g(tile_base, dw_base, c, da0, da1, da2, da3, sign_80,
+                                              NULL, 0, 0, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);
+                    if (valid_c > 32) {
+                        w8a8_sm_eval_tile_quad_1g(tile_base, dw_base, c + 32, da0, da1, da2, da3, sign_80,
+                                                  NULL, 0, 0, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);
+                    }
+
+                    hvx_vec_store_u(out_row0 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                    if (out_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+                    if (out_row2) hvx_vec_store_u(out_row2 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v2_lo, v2_hi));
+                    if (out_row3) hvx_vec_store_u(out_row3 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v3_lo, v3_hi));
+                }
+            }
+            r_base = r_end;
+        }
+        return;
+    }
+
+    for (size_t r_base = 0; r_base < n_rows; ) {
+        const size_t r_idx_base = vtcm_start_row + r_base;
+        const size_t r_blk      = r_idx_base >> 5;
+        const size_t r0         = r_idx_base >> 6;
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+        const size_t r_end      = r_base + r_step;
+
+        if (n_groups <= 16u) {
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                *(HVX_Vector *) da_ptr[g] = hvx_vmem(vtcm_act_scales + (size_t) g * mc_pad + (r_blk << 5));
+            }
+        }
+
+        for (size_t r = r_base; r < r_end; r += 4) {
+            const size_t r_idx0 = vtcm_start_row + r;
+            const size_t rg     = (r_idx0 & 63u) >> 2;
+            const size_t lane   = r_idx0 & 31u;
+
+            const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+            __fp16 * out_row0 = (__fp16 *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+            __fp16 * out_row1 = (r + 1 < n_rows) ? (__fp16 *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+            __fp16 * out_row2 = (r + 2 < n_rows) ? (__fp16 *) ((uint8_t *) dst + map_base[2].i1 * dst_nb1 + map_base[2].i2 * dst_nb2) : NULL;
+            __fp16 * out_row3 = (r + 3 < n_rows) ? (__fp16 *) ((uint8_t *) dst + map_base[3].i1 * dst_nb1 + map_base[3].i2 * dst_nb2) : NULL;
+            const bool aligned0 = hex_is_aligned(out_row0, 128);
+            const bool aligned1 = out_row1 && hex_is_aligned(out_row1, 128);
+            const bool aligned2 = out_row2 && hex_is_aligned(out_row2, 128);
+            const bool aligned3 = out_row3 && hex_is_aligned(out_row3, 128);
+
+            for (size_t c = 0; c < limit_c_aligned64; c += 64) {
+                const size_t c0_glob = c0_first + (c >> 5);
+                HVX_Vector v0_lo, v1_lo = Q6_V_vzero(), v2_lo = Q6_V_vzero(), v3_lo = Q6_V_vzero();
+                HVX_Vector v0_hi, v1_hi = Q6_V_vzero(), v2_hi = Q6_V_vzero(), v3_hi = Q6_V_vzero();
+
+                w8a8_sm_eval_tile_quad_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                          group_stride, row_tile_stride, r0, r_blk, rg, lane,
+                                          mc_pad, c0_glob, n_groups, da_ptr, sign_80,
+                                          NULL, c, 0, 0, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);
+                w8a8_sm_eval_tile_quad_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                          group_stride, row_tile_stride, r0, r_blk, rg, lane,
+                                          mc_pad, c0_glob + 1, n_groups, da_ptr, sign_80,
+                                          NULL, c + 32, 0, 0, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);
+
+                hmx_store_vec_nt_or_u(out_row0 + c, aligned0, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                if (out_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+                if (out_row2) hmx_store_vec_nt_or_u(out_row2 + c, aligned2, hmx_pack_f32_to_f16_clamped(v2_lo, v2_hi));
+                if (out_row3) hmx_store_vec_nt_or_u(out_row3 + c, aligned3, hmx_pack_f32_to_f16_clamped(v3_lo, v3_hi));
+            }
+
+            if (limit_c_aligned64 < limit_c) {
+                const size_t c           = limit_c_aligned64;
+                const size_t c0_glob     = c0_first + (c >> 5);
+                const size_t valid_c     = limit_c - c;
+                const size_t valid_bytes = valid_c * sizeof(__fp16);
+
+                HVX_Vector v0_lo, v1_lo = Q6_V_vzero(), v2_lo = Q6_V_vzero(), v3_lo = Q6_V_vzero();
+                HVX_Vector v0_hi = Q6_V_vzero(), v1_hi = Q6_V_vzero(), v2_hi = Q6_V_vzero(), v3_hi = Q6_V_vzero();
+
+                w8a8_sm_eval_tile_quad_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                          group_stride, row_tile_stride, r0, r_blk, rg, lane,
+                                          mc_pad, c0_glob, n_groups, da_ptr, sign_80,
+                                          NULL, c, 0, 0, n_rows, r, &v0_lo, &v1_lo, &v2_lo, &v3_lo);
+                if (valid_c > 32) {
+                    w8a8_sm_eval_tile_quad_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                              group_stride, row_tile_stride, r0, r_blk, rg, lane,
+                                              mc_pad, c0_glob + 1, n_groups, da_ptr, sign_80,
+                                              NULL, c + 32, 0, 0, n_rows, r, &v0_hi, &v1_hi, &v2_hi, &v3_hi);
+                }
+
+                hvx_vec_store_u(out_row0 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                if (out_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+                if (out_row2) hvx_vec_store_u(out_row2 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v2_lo, v2_hi));
+                if (out_row3) hvx_vec_store_u(out_row3 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v3_lo, v3_hi));
+            }
+        }
+        r_base = r_end;
+    }
+}
+
+static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_fp32_scattered(
+        float * restrict dst,
+        const uint16_t * restrict vtcm_src,
+        const float * restrict vtcm_act_scales,
+        const float * restrict vtcm_weight_scales,
+        uint32_t global_start_row,
+        uint32_t vtcm_start_row,
+        uint32_t n_rows,
+        uint32_t mc_pad,
+        uint32_t c_first,
+        uint32_t c_len,
+        uint32_t total_n_cols,
+        uint32_t n_groups,
+        uint32_t dst_cols,
+        const struct mmid_row_mapping * matrix_rows,
+        uint32_t cur_a,
+        uint32_t mapping_stride,
+        size_t dst_nb1,
+        size_t dst_nb2) {
+
+    const size_t total_col_tiles = hmx_ceil_div(total_n_cols, 32);
+    const size_t n_row_tiles_32  = mc_pad / 32;
+    const size_t group_stride    = n_row_tiles_32 * total_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t row_tile_stride = total_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t c0_first        = c_first / 32;
+
+    const HVX_Vector sign_8000   = Q6_Vh_vsplat_R(0x8000);
+    const size_t limit_c         = hex_smin(c_len, dst_cols);
+    const size_t limit_c_aligned = (limit_c & ~31u);
+
+    uint32_t da_buf[16][32] __attribute__((aligned(128)));
+    uint32_t (*da_ptr)[32] = htp_da_buf_ptr(da_buf);
+
+    if (n_groups <= 1) {
+        for (size_t r_base = 0; r_base < n_rows; ) {
+            const size_t r_idx_base = vtcm_start_row + r_base;
+            const size_t r0         = r_idx_base >> 5;
+            const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+            const size_t r_end      = r_base + r_step;
+
+            *(HVX_Vector *) da_ptr[0] = hvx_vmem(vtcm_act_scales + (r0 << 5));
+
+            for (size_t r = r_base; r < r_end; r += 2) {
+                const size_t   lane     = (vtcm_start_row + r) & 31u;
+                const size_t   r1       = lane >> 1;
+                const uint32_t da0      = da_ptr[0][lane + 0];
+                const uint32_t da1      = da_ptr[0][lane + 1];
+                const bool     has_row1 = (r + 1 < n_rows);
+
+                const uint16_t * tile_base = vtcm_src + r0 * row_tile_stride + c0_first * HTP_MM_HMX_TILE_N_ELMS + r1 * 64;
+                const float *    dw_base   = vtcm_weight_scales + c0_first * 32;
+
+                const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+                float * out_row0 = (float *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+                float * out_row1 = has_row1 ? (float *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+                const bool aligned0 = hex_is_aligned(out_row0, 128);
+                const bool aligned1 = has_row1 && hex_is_aligned(out_row1, 128);
+
+                for (size_t c = 0; c < limit_c_aligned; c += 32) {
+                    HVX_Vector v0, v1 = Q6_V_vzero();
+                    w8a16_sm_eval_tile_pair_1g(tile_base, dw_base, c, da0, da1, sign_8000,
+                                               NULL, 0, 0, has_row1, &v0, &v1);
+                    hmx_store_vec_nt_or_u(out_row0 + c, aligned0, v0);
+                    if (has_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, v1);
+                }
+
+                if (limit_c_aligned < limit_c) {
+                    const size_t c           = limit_c_aligned;
+                    const size_t valid_bytes = (limit_c - c) * sizeof(float);
+                    HVX_Vector v0, v1 = Q6_V_vzero();
+                    w8a16_sm_eval_tile_pair_1g(tile_base, dw_base, c, da0, da1, sign_8000,
+                                               NULL, 0, 0, has_row1, &v0, &v1);
+                    hvx_vec_store_u(out_row0 + c, valid_bytes, v0);
+                    if (has_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, v1);
+                }
+            }
+            r_base = r_end;
+        }
+        return;
+    }
+
+    for (size_t r_base = 0; r_base < n_rows; ) {
+        const size_t r_idx_base = vtcm_start_row + r_base;
+        const size_t r0         = r_idx_base >> 5;
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+        const size_t r_end      = r_base + r_step;
+
+        if (n_groups <= 16u) {
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                *(HVX_Vector *) da_ptr[g] = hvx_vmem(vtcm_act_scales + (size_t) g * mc_pad + (r0 << 5));
+            }
+        }
+
+        for (size_t r = r_base; r < r_end; r += 2) {
+            const size_t lane     = (vtcm_start_row + r) & 31u;
+            const size_t r1       = lane >> 1;
+            const bool   has_row1 = (r + 1 < n_rows);
+
+            const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+            float * out_row0 = (float *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+            float * out_row1 = has_row1 ? (float *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+            const bool aligned0 = hex_is_aligned(out_row0, 128);
+            const bool aligned1 = has_row1 && hex_is_aligned(out_row1, 128);
+
+            for (size_t c = 0; c < limit_c_aligned; c += 32) {
+                const size_t c0_glob = c0_first + (c >> 5);
+                HVX_Vector v0, v1 = Q6_V_vzero();
+                w8a16_sm_eval_tile_pair_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                           group_stride, row_tile_stride, r0, r1, lane,
+                                           mc_pad, c0_glob, n_groups, da_ptr, sign_8000,
+                                           NULL, c, 0, 0, has_row1, &v0, &v1);
+                hmx_store_vec_nt_or_u(out_row0 + c, aligned0, v0);
+                if (has_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, v1);
+            }
+
+            if (limit_c_aligned < limit_c) {
+                const size_t c           = limit_c_aligned;
+                const size_t c0_glob     = c0_first + (c >> 5);
+                const size_t valid_bytes = (limit_c - c) * sizeof(float);
+                HVX_Vector v0, v1 = Q6_V_vzero();
+                w8a16_sm_eval_tile_pair_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                           group_stride, row_tile_stride, r0, r1, lane,
+                                           mc_pad, c0_glob, n_groups, da_ptr, sign_8000,
+                                           NULL, c, 0, 0, has_row1, &v0, &v1);
+                hvx_vec_store_u(out_row0 + c, valid_bytes, v0);
+                if (has_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, v1);
+            }
+        }
+        r_base = r_end;
+    }
+}
+
+static __attribute__((noinline)) void transfer_output_chunk_w8a16_sm_to_fp16_scattered(
+        __fp16 * restrict dst,
+        const uint16_t * restrict vtcm_src,
+        const float * restrict vtcm_act_scales,
+        const float * restrict vtcm_weight_scales,
+        uint32_t global_start_row,
+        uint32_t vtcm_start_row,
+        uint32_t n_rows,
+        uint32_t mc_pad,
+        uint32_t c_first,
+        uint32_t c_len,
+        uint32_t total_n_cols,
+        uint32_t n_groups,
+        uint32_t dst_cols,
+        const struct mmid_row_mapping * matrix_rows,
+        uint32_t cur_a,
+        uint32_t mapping_stride,
+        size_t dst_nb1,
+        size_t dst_nb2) {
+
+    const size_t total_col_tiles   = hmx_ceil_div(total_n_cols, 32);
+    const size_t n_row_tiles_32    = mc_pad / 32;
+    const size_t group_stride      = n_row_tiles_32 * total_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t row_tile_stride   = total_col_tiles * HTP_MM_HMX_TILE_N_ELMS;
+    const size_t c0_first          = c_first / 32;
+
+    const HVX_Vector sign_8000     = Q6_Vh_vsplat_R(0x8000);
+    const size_t limit_c           = hex_smin(c_len, dst_cols);
+    const size_t limit_c_aligned64 = (limit_c & ~63u);
+
+    uint32_t da_buf[16][32] __attribute__((aligned(128)));
+    uint32_t (*da_ptr)[32] = htp_da_buf_ptr(da_buf);
+
+    if (n_groups <= 1) {
+        for (size_t r_base = 0; r_base < n_rows; ) {
+            const size_t r_idx_base = vtcm_start_row + r_base;
+            const size_t r0         = r_idx_base >> 5;
+            const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+            const size_t r_end      = r_base + r_step;
+
+            *(HVX_Vector *) da_ptr[0] = hvx_vmem(vtcm_act_scales + (r0 << 5));
+
+            for (size_t r = r_base; r < r_end; r += 2) {
+                const size_t   lane     = (vtcm_start_row + r) & 31u;
+                const size_t   r1       = lane >> 1;
+                const uint32_t da0      = da_ptr[0][lane + 0];
+                const uint32_t da1      = da_ptr[0][lane + 1];
+                const bool     has_row1 = (r + 1 < n_rows);
+
+                const uint16_t * tile_base = vtcm_src + r0 * row_tile_stride + c0_first * HTP_MM_HMX_TILE_N_ELMS + r1 * 64;
+                const float *    dw_base   = vtcm_weight_scales + c0_first * 32;
+
+                const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+                __fp16 * out_row0 = (__fp16 *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+                __fp16 * out_row1 = has_row1 ? (__fp16 *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+                const bool aligned0 = hex_is_aligned(out_row0, 128);
+                const bool aligned1 = has_row1 && hex_is_aligned(out_row1, 128);
+
+                for (size_t c = 0; c < limit_c_aligned64; c += 64) {
+                    HVX_Vector v0_lo, v1_lo = Q6_V_vzero();
+                    HVX_Vector v0_hi, v1_hi = Q6_V_vzero();
+
+                    w8a16_sm_eval_tile_pair_1g(tile_base, dw_base, c, da0, da1, sign_8000,
+                                               NULL, 0, 0, has_row1, &v0_lo, &v1_lo);
+                    w8a16_sm_eval_tile_pair_1g(tile_base, dw_base, c + 32, da0, da1, sign_8000,
+                                               NULL, 0, 0, has_row1, &v0_hi, &v1_hi);
+
+                    hmx_store_vec_nt_or_u(out_row0 + c, aligned0, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                    if (has_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+                }
+
+                if (limit_c_aligned64 < limit_c) {
+                    const size_t c           = limit_c_aligned64;
+                    const size_t valid_c     = limit_c - c;
+                    const size_t valid_bytes = valid_c * sizeof(__fp16);
+
+                    HVX_Vector v0_lo, v1_lo = Q6_V_vzero();
+                    HVX_Vector v0_hi = Q6_V_vzero(), v1_hi = Q6_V_vzero();
+
+                    w8a16_sm_eval_tile_pair_1g(tile_base, dw_base, c, da0, da1, sign_8000,
+                                               NULL, 0, 0, has_row1, &v0_lo, &v1_lo);
+                    if (valid_c > 32) {
+                        w8a16_sm_eval_tile_pair_1g(tile_base, dw_base, c + 32, da0, da1, sign_8000,
+                                                   NULL, 0, 0, has_row1, &v0_hi, &v1_hi);
+                    }
+
+                    hvx_vec_store_u(out_row0 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                    if (has_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+                }
+            }
+            r_base = r_end;
+        }
+        return;
+    }
+
+    for (size_t r_base = 0; r_base < n_rows; ) {
+        const size_t r_idx_base = vtcm_start_row + r_base;
+        const size_t r0         = r_idx_base >> 5;
+        const size_t r_step     = hex_smin((size_t) n_rows - r_base, (size_t) (32u - (r_idx_base & 31u)));
+        const size_t r_end      = r_base + r_step;
+
+        if (n_groups <= 16u) {
+            for (uint32_t g = 0; g < n_groups; ++g) {
+                *(HVX_Vector *) da_ptr[g] = hvx_vmem(vtcm_act_scales + (size_t) g * mc_pad + (r0 << 5));
+            }
+        }
+
+        for (size_t r = r_base; r < r_end; r += 2) {
+            const size_t lane     = (vtcm_start_row + r) & 31u;
+            const size_t r1       = lane >> 1;
+            const bool   has_row1 = (r + 1 < n_rows);
+
+            const struct mmid_row_mapping * map_base = matrix_rows + (size_t) cur_a * mapping_stride + global_start_row + r;
+            __fp16 * out_row0 = (__fp16 *) ((uint8_t *) dst + map_base[0].i1 * dst_nb1 + map_base[0].i2 * dst_nb2);
+            __fp16 * out_row1 = has_row1 ? (__fp16 *) ((uint8_t *) dst + map_base[1].i1 * dst_nb1 + map_base[1].i2 * dst_nb2) : NULL;
+            const bool aligned0 = hex_is_aligned(out_row0, 128);
+            const bool aligned1 = has_row1 && hex_is_aligned(out_row1, 128);
+
+            for (size_t c = 0; c < limit_c_aligned64; c += 64) {
+                const size_t c0_glob = c0_first + (c >> 5);
+                HVX_Vector v0_lo, v1_lo = Q6_V_vzero();
+                HVX_Vector v0_hi, v1_hi = Q6_V_vzero();
+
+                w8a16_sm_eval_tile_pair_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                           group_stride, row_tile_stride, r0, r1, lane,
+                                           mc_pad, c0_glob, n_groups, da_ptr, sign_8000,
+                                           NULL, c, 0, 0, has_row1, &v0_lo, &v1_lo);
+                w8a16_sm_eval_tile_pair_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                           group_stride, row_tile_stride, r0, r1, lane,
+                                           mc_pad, c0_glob + 1, n_groups, da_ptr, sign_8000,
+                                           NULL, c + 32, 0, 0, has_row1, &v0_hi, &v1_hi);
+
+                hmx_store_vec_nt_or_u(out_row0 + c, aligned0, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                if (has_row1) hmx_store_vec_nt_or_u(out_row1 + c, aligned1, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
+            }
+
+            if (limit_c_aligned64 < limit_c) {
+                const size_t c           = limit_c_aligned64;
+                const size_t c0_glob     = c0_first + (c >> 5);
+                const size_t valid_c     = limit_c - c;
+                const size_t valid_bytes = valid_c * sizeof(__fp16);
+
+                HVX_Vector v0_lo, v1_lo = Q6_V_vzero();
+                HVX_Vector v0_hi = Q6_V_vzero(), v1_hi = Q6_V_vzero();
+
+                w8a16_sm_eval_tile_pair_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                           group_stride, row_tile_stride, r0, r1, lane,
+                                           mc_pad, c0_glob, n_groups, da_ptr, sign_8000,
+                                           NULL, c, 0, 0, has_row1, &v0_lo, &v1_lo);
+                if (valid_c > 32) {
+                    w8a16_sm_eval_tile_pair_ng(vtcm_src, vtcm_act_scales, vtcm_weight_scales,
+                                               group_stride, row_tile_stride, r0, r1, lane,
+                                               mc_pad, c0_glob + 1, n_groups, da_ptr, sign_8000,
+                                               NULL, c + 32, 0, 0, has_row1, &v0_hi, &v1_hi);
+                }
+
+                hvx_vec_store_u(out_row0 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v0_lo, v0_hi));
+                if (has_row1) hvx_vec_store_u(out_row1 + c, valid_bytes, hmx_pack_f32_to_f16_clamped(v1_lo, v1_hi));
             }
         }
         r_base = r_end;
