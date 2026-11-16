@@ -71,15 +71,15 @@ static __device__ __forceinline__ void topk_moe_wave_argmax(float & sel, float &
     sel    = max_sel;
     expert = winner;
 }
-#endif // defined(TOPK_MOE_DPP_ARGMAX)
 
-#if defined(RDNA3) || defined(RDNA4)
 // float -> int with the same order (-0 counts as +0), the int max folds into DPP
 static __device__ __forceinline__ int topk_moe_key(const float x) {
     const int b = __float_as_int(x + 0.0f);
     return b ^ ((b >> 31) & 0x7fffffff);
 }
+#endif // defined(TOPK_MOE_DPP_ARGMAX)
 
+#if defined(RDNA3) || defined(RDNA4)
 // top-k selection without branches, ties go to the lower expert. Needs n_experts % warp_size == 0.
 template <int experts_per_thread>
 static __device__ __forceinline__ void topk_moe_select_rdna(const float (&wt)[experts_per_thread],
@@ -142,6 +142,113 @@ static __device__ __forceinline__ void topk_moe_select_rdna(const float (&wt)[ex
     wt_sum = lane == 0 ? sum : 0.0f;
 }
 #endif // defined(RDNA3) || defined(RDNA4)
+
+#if defined(CDNA)
+// wave max / min of an int. The identity as old value lets the op fold into the DPP form.
+template <bool is_max>
+static __device__ __forceinline__ int topk_moe_wave_minmax_cdna(int x) {
+    constexpr int id = is_max ? INT_MIN : INT_MAX;
+    auto step = [&](const int y) {
+        x = is_max ? max(x, y) : min(x, y);
+    };
+    step(__builtin_amdgcn_update_dpp(id, x, GGML_HIP_DPP_QUAD_PERM_1032, 0xf, 0xf, false));
+    step(__builtin_amdgcn_update_dpp(id, x, GGML_HIP_DPP_QUAD_PERM_2301, 0xf, 0xf, false));
+    step(__builtin_amdgcn_update_dpp(id, x, GGML_HIP_DPP_ROW_HALF_MIRROR, 0xf, 0xf, false));
+    step(__builtin_amdgcn_update_dpp(id, x, GGML_HIP_DPP_ROW_ROR_8, 0xf, 0xf, false));
+    step(__builtin_amdgcn_update_dpp(id, x, GGML_HIP_DPP_ROW_BCAST_15, 0xa, 0xf, false));
+    step(__builtin_amdgcn_update_dpp(id, x, GGML_HIP_DPP_ROW_BCAST_31, 0xc, 0xf, false));
+    return __builtin_amdgcn_readlane(x, 63);
+}
+
+// v_writelane: no clang builtin for it in some ROCm versions
+extern "C" __device__ int topk_moe_writelane_cdna(int value, int lane, int old) __asm("llvm.amdgcn.writelane.i32");
+
+// top-k selection for wave64, ties go to the lower expert. Needs n_experts % 64 == 0, n_experts <= 512 and n_expert_used <= 64.
+// Each lane sorts its slots once, then a pick is a wave max over the lane heads and a pop in the winner lane.
+// Lane k of out_w / ids gets the k-th pick.
+template <int experts_per_thread>
+static __device__ __forceinline__ void topk_moe_select_cdna(const float (&wt)[experts_per_thread],
+                                                            float &     out_w,
+                                                            int32_t *   ids,
+                                                            const int   n_expert_used,
+                                                            float &     wt_sum) {
+    constexpr int E         = experts_per_thread;
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int lane = threadIdx.x;
+
+    // key in the high half, E-1-slot in the low half: the lower slot wins ties
+    int64_t p[E];
+#pragma unroll
+    for (int i = 0; i < E; i++) {
+        p[i] = (int64_t) ((uint64_t) (uint32_t) topk_moe_key(wt[i]) << 32 | (uint32_t) (E - 1 - i));
+    }
+
+    // Batcher odd-even merge sort, descending
+#pragma unroll
+    for (int q = 1; q < E; q *= 2) {
+#pragma unroll
+        for (int d = q; d >= 1; d /= 2) {
+#pragma unroll
+            for (int j = d % q; j + d < E; j += 2*d) {
+#pragma unroll
+                for (int i = 0; i < d && i + j + d < E; i++) {
+                    const int a = i + j;
+                    const int b = i + j + d;
+                    if (a / (2*q) == b / (2*q)) {
+                        const bool    sw = p[b] > p[a];
+                        const int64_t pa = p[a];
+                        p[a] = sw ? p[b] : pa;
+                        p[b] = sw ? pa   : p[b];
+                    }
+                }
+            }
+        }
+    }
+
+    // sorted keys, and the slots as a list of nibbles (head in the low nibble)
+    int key[E];
+    int slots = 0;
+#pragma unroll
+    for (int i = 0; i < E; i++) {
+        key[i] = (int) (p[i] >> 32);
+        slots |= (E - 1 - (int) (uint32_t) p[i]) << 4*i;
+    }
+
+    int w_key  = 0;
+    int out_id = 0;
+    for (int k = 0; k < n_expert_used; k++) {
+        const int kmax = topk_moe_wave_minmax_cdna<true>(key[0]);
+        const int head = (slots & 0xf)*warp_size + lane;
+
+        // lanes to pop, a uniform mask
+        uint64_t lanes  = __ballot(key[0] == kmax);
+        int      winner = __builtin_amdgcn_readlane(head, __builtin_ctzll(lanes));
+        if (__builtin_expect(__popcll(lanes) != 1, 0)) {
+            winner = topk_moe_wave_minmax_cdna<false>(key[0] == kmax ? head : INT_MAX);
+            lanes  = 1ull << (winner & (warp_size - 1));
+        }
+        const bool pop = __builtin_amdgcn_inverse_ballot_w64(lanes);
+
+#pragma unroll
+        for (int i = 0; i < E - 1; i++) {
+            key[i] = pop ? key[i + 1] : key[i];
+        }
+        key[E - 1] = pop ? INT_MIN : key[E - 1];
+        slots      = pop ? (int) ((uint32_t) slots >> 4) : slots;
+
+        w_key  = topk_moe_writelane_cdna(kmax, k, w_key);
+        out_id = topk_moe_writelane_cdna(winner, k, out_id);
+    }
+
+    // lanes >= n_expert_used keep key 0, i.e. weight +0
+    const float w = __int_as_float(w_key ^ ((w_key >> 31) & 0x7fffffff));
+    if (lane < n_expert_used) {
+        ids[lane] = out_id;
+    }
+    out_w  = w;
+    wt_sum = w;
+}
+#endif // defined(CDNA)
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
 template <int experts_per_thread, bool use_limit>
@@ -400,6 +507,11 @@ __global__ void topk_moe_cuda(const float *         logits,
         topk_moe_select_rdna(wt, output_weights, ids, n_expert_used, wt_sum);
     } else
 #endif // defined(RDNA3) || defined(RDNA4)
+#if defined(CDNA)
+    if (!has_bias && n_experts % warp_size == 0 && n_experts <= 8*warp_size && n_expert_used <= warp_size) {
+        topk_moe_select_cdna(wt, output_weights[0], ids, n_expert_used, wt_sum);
+    } else
+#endif // defined(CDNA)
     for (int k = 0; k < n_expert_used; k++) {
         float max_val    = wt[0];
         int   max_expert = threadIdx.x;
@@ -515,8 +627,19 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
                                  const topk_moe_config       config) {
     GGML_ASSERT(!(config.with_norm && config.delayed_softmax) &&
                 "delayed softmax is not supported with weight normalization");
-    const int    rows_per_block = TOPK_MOE_ROWS_PER_BLOCK;
+    int          rows_per_block = TOPK_MOE_ROWS_PER_BLOCK;
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    if (GGML_CUDA_CC_IS_CDNA(ggml_cuda_info().devices[ggml_cuda_get_device()].cc) && n_rows > 4) {
+        // one wave per SIMD is faster, but a block must read all logits before it writes if the outputs alias them
+        const char * lb = (const char *) logits;
+        const char * le = (const char *) (logits + (size_t) n_rows*n_expert);
+        auto overlaps = [&](const void * p, const size_t nbytes) {
+            return (const char *) p < le && (const char *) p + nbytes > lb;
+        };
+        if (!overlaps(weights, (size_t) n_rows*n_expert_used*sizeof(float)) && !overlaps(ids, (size_t) n_rows*n_expert*sizeof(int32_t))) {
+            rows_per_block = 4;
+        }
+    }
     dim3         grid_dims((n_rows + rows_per_block - 1) / rows_per_block, 1, 1);
     dim3         block_dims(warp_size, rows_per_block, 1);
     cudaStream_t stream = ctx.stream();
