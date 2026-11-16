@@ -26,7 +26,7 @@ The agentic traces are Mooncake JSONL (`timestamp`, `input_length`, `output_leng
 - NVIDIA driver, Docker with the NVIDIA Container Toolkit, and the runner user in the `docker` group. The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
 - The nightly job runs in `nvidia/cuda:13.5.0-devel-ubuntu26.04` and installs what it needs there. The weekly runs on the host, since it starts vLLM in docker, and needs `python3` with `venv` there.
 - Either way the bench venv uses a uv-managed Python 3.12: AIPerf 0.13.0 needs Python < 3.14 (Ubuntu 26.04 ships 3.14) and builds `crick` from source on arm64, which needs the Python headers.
-- A writable `NIGHTLY_HOME` on the host (default `/opt/llama-nightly`, `SPARK_BENCH_HOME` overrides it) with about 160 GiB free for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. The nightly mounts it into its container at the same path and hands its files back to the directory's owner at the end. Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the nightly's uv cache, uv Python and Hugging Face cache), and `venv/` and `vllm-cache/` for the weekly. The weekly and runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
+- About 160 GiB free in the runner's work folder for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. Both workflows use `NIGHTLY_HOME` = `<work folder>/llama-nightly`, next to the checkouts: the runner mounts the work folder into the nightly's container and keeps it between jobs. The nightly runs as root in its container and hands what it wrote back to the work folder's owner at the end. Runs by hand default to `/opt/llama-nightly` (`--home` or `NIGHTLY_HOME` overrides it). Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the nightly's uv cache, uv Python and Hugging Face cache), and `venv/` and `vllm-cache/` for the weekly. The weekly and runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
 - A self-hosted runner with the labels `self-hosted, Linux, gb10, perf`. Nothing else may run on the box during a night: a concurrent job corrupts the numbers.
 
 ## Run by hand
@@ -44,7 +44,7 @@ VIRTUAL_ENV=/opt/llama-nightly/venv /opt/llama-nightly/uv-venv/bin/uv pip instal
 ## Workflow
 
 - `workflow_dispatch` with optional `tag`, `suites`, `models`, `configs` and `resume` inputs.
-- The 01:00 UTC schedule only runs when the repository variable `SPARK_BENCH_NIGHTLY` is `true`. `SPARK_BENCH_HOME` overrides `NIGHTLY_HOME`.
+- Scheduled at 01:00 UTC. On a fork without the runner, disable the workflow (`gh workflow disable`), or its scheduled jobs wait for a runner that never comes.
 - The run step writes a summary table to the job summary, with a compare link to the previous night's commit, and uploads `results/<night>/` as an artifact for 30 days. It fails if any run failed.
 
 ## Weekly vLLM comparison
@@ -60,7 +60,7 @@ vLLM only: each vLLM row is shown next to the llama.cpp row of its paired nightl
 - **Images:** each week prefetch reads the image of each column from [NVIDIA's DGX Spark recipes](https://nvidia.github.io/local-ai-inference-recipes/hardware/dgx-spark/index.html), so the weekly follows NVIDIA's updates. It falls back to the `image` in `weekly.yaml` when the catalog can't be read. Each run records the digest, the vLLM version and the kernel/backend lines from the server log.
 - **Flags:** copied from the recipes, minus speculative decoding and the reasoning/tool parsers (the llama.cpp runs use neither), with `--max-num-seqs` / `--max-model-len` per config and `--max-num-batched-tokens 2048` (llama.cpp runs `-ub 2048`). Serving runs with prefix caching off on both engines (`serving.vllm_args` / `serving.server_args` in `suite.yaml`). Prefetch warns when a recipe was re-validated after the flags were copied (`recipe_validated_at`).
 - **Known difference:** vLLM runs with an FP8 KV cache (as the recipes do), llama.cpp with f16.
-- **Inputs and schedule:** `workflow_dispatch` takes optional `columns`, `suites`, `configs`, `vllm_image` (`COLUMN=IMAGE` overrides) and `resume` inputs. The Saturday schedule only runs when `SPARK_BENCH_WEEKLY` is `true`, and it queues behind that night's nightly.
+- **Inputs and schedule:** `workflow_dispatch` takes optional `columns`, `suites`, `configs`, `vllm_image` (`COLUMN=IMAGE` overrides) and `resume` inputs. Scheduled Saturdays at 02:00 UTC, it queues behind that night's nightly.
 
 ```bash
 /opt/llama-nightly/venv/bin/python tools/server/bench/nightly/nightly.py prefetch --config tools/server/bench/nightly/weekly.yaml --home /opt/llama-nightly

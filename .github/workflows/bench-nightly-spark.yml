@@ -36,33 +36,36 @@ concurrency:
 
 jobs:
   bench:
-    # the schedule stays off until the repo variable SPARK_BENCH_NIGHTLY is 'true'
-    if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_NIGHTLY == 'true'
     runs-on: [self-hosted, Linux, gb10, perf]
     container:
       image: "nvidia/cuda:13.5.0-devel-ubuntu26.04"
       options: --gpus all
-      # models, builds and earlier nights live on the host, mounted at the same path so the paths in their manifests hold
-      volumes:
-        - ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}:${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
-    # M1-M5: ~5.5 h measured and estimated (tools/server/bench/nightly/BENCHMARKS.md)
+    # M1-M5: ~6.8 h measured (tools/server/bench/nightly/BENCHMARKS.md)
     timeout-minutes: 480
     defaults:
       run:
         shell: bash
 
     env:
-      NIGHTLY_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
       BENCH_DIR: tools/server/bench/nightly
-      # the venv is rebuilt in every container; uv's cache and Python stay on the host to keep that quick
+      # rebuilt in every container; uv's cache and Python stay in NIGHTLY_HOME to keep that quick
       VENV: /opt/bench-venv
-      UV_CACHE_DIR: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}/container/uv-cache
-      UV_PYTHON_INSTALL_DIR: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}/container/uv-python
       UV_LINK_MODE: copy
-      # tokenizers and SPEED-Bench
-      HF_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}/container/hf-cache
 
     steps:
+      - name: Bench home
+        id: home
+        # models, builds and earlier nights: next to the checkouts in the runner's work folder, which the runner
+        # mounts into the container and keeps between jobs (the weekly on the host uses the same folder)
+        run: |
+          home="$(dirname "$RUNNER_WORKSPACE")/llama-nightly"
+          {
+            echo "NIGHTLY_HOME=$home"
+            echo "UV_CACHE_DIR=$home/container/uv-cache"
+            echo "UV_PYTHON_INSTALL_DIR=$home/container/uv-python"
+            echo "HF_HOME=$home/container/hf-cache"
+          } >> "$GITHUB_ENV"
+
       - name: Dependencies
         id: depends
         env:
@@ -117,5 +120,5 @@ jobs:
         if: ${{ always() }}
         # the container runs as root; jobs on the host (the weekly) share NIGHTLY_HOME and the runner's work folder
         run: |
-          owner=$(stat -c %u:%g "$NIGHTLY_HOME")
+          owner=$(stat -c %u:%g "$(dirname "$NIGHTLY_HOME")")
           find "$NIGHTLY_HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" ! -uid "${owner%:*}" -exec chown -h "$owner" {} +

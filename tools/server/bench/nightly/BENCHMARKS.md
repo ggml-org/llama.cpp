@@ -71,7 +71,7 @@ A configuration that fails is recorded with its error and the night continues. A
 | | Runs | Wall time | Disk |
 |---|---|---|---|
 | M3 + M5 (measured) | 28 | 3.1 h | 21 GiB |
-| Nightly, all five models | 49 | ~5.5 h (estimated) | 157 GiB (measured) |
-| Weekly vLLM, 3 columns | 33 | ~5.5-6.5 h (estimated) | ~135 GiB + 2 images |
+| Nightly, all five models | 49 | 6.8 h (measured, b12345) | 157 GiB (measured) |
+| Weekly vLLM, 3 columns | 33 | 6.2 h (measured) | ~135 GiB + 2 images |
 
-The nightly time scales M3's measured runs by M2's measured prefill and decode speeds (M2: 1232 / 30.5 tok/s vs M3: 1039 / 13.7 tok/s at depth 0), plus M2's 77 s load per server start; M1, M2 and M4 engine runs took 126 / 274 / 116 s. These times predate serving with caches off, which makes the 32k-depth configs longer. The nightly workflow allows 480 min, the weekly 600 min.
+The nightly and weekly times are the 2026-11-13 runs, with serving caches off and backend sampling, prefetch included. The nightly workflow allows 480 min, the weekly 600 min.

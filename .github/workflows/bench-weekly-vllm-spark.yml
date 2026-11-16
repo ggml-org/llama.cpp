@@ -38,18 +38,21 @@ concurrency:
 
 jobs:
   bench:
-    # the schedule stays off until the repo variable SPARK_BENCH_WEEKLY is 'true'
-    if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_WEEKLY == 'true'
     # on the host, not in a container: vLLM runs in docker, with the checkpoints mounted from NIGHTLY_HOME
     runs-on: [self-hosted, Linux, gb10, perf]
-    # 3 columns x 11 runs: ~5.5-6.5 h estimated (tools/server/bench/nightly/BENCHMARKS.md)
+    # 3 columns x 11 runs: ~6.2 h measured (tools/server/bench/nightly/BENCHMARKS.md)
     timeout-minutes: 600
 
     env:
-      NIGHTLY_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
       BENCH_DIR: tools/server/bench/nightly
 
     steps:
+      - name: Bench home
+        id: home
+        # the nightly's folder, next to the checkouts in the runner's work folder
+        run: |
+          echo "NIGHTLY_HOME=$(dirname "$RUNNER_WORKSPACE")/llama-nightly" >> "$GITHUB_ENV"
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
