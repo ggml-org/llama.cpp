@@ -2,6 +2,7 @@
 #define HTP_KPARAMS_H
 
 #include "htp-common.h"
+#include "htp-lower.h"
 
 #include "htp/allreduce-ops.h"
 #include "htp/argsort-ops.h"
@@ -39,11 +40,6 @@
 #include <type_traits>
 #include <utility>
 
-bool        htp_rows_stride(const int64_t * ne, const size_t * nb, size_t * stride);
-bool        htp_matmul_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst);
-bool        htp_matmul_add_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * src2, const struct ggml_tensor * dst);
-ggml_tensor htp_tensor_collapse_rows(const struct ggml_tensor * t);
-
 template <typename... Args>
 auto htp_kparams_type(bool (*)(Args...)) -> std::remove_pointer_t<std::remove_reference_t<decltype((std::declval<Args>(), ...))>>;
 
@@ -59,11 +55,6 @@ bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     struct htp_opnode & node,
     bool internal_f16 = true
-);
-
-void htp_opnode_collapse(
-    const struct ggml_hexagon_session * sess,
-    struct htp_opnode & node
 );
 
 bool htp_kparams_solve(

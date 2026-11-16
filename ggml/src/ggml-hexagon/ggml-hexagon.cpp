@@ -62,7 +62,7 @@
 #include "htp-common.h"
 #include "htp-kparams.h"
 #include "htp-fusion.h"
-#include "htp-f16-promote.h"
+#include "htp-lower.h"
 
 using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
@@ -1567,7 +1567,7 @@ struct ggml_hexagon_opbatch {
             return false;
         }
 
-        htp_opnode_collapse(sess, last_node);
+        htp_lower_opnode(sess, last_node);
         sync_op_desc(n_ops - 1);
         HEX_VERBOSE("ggml-hex: %s fused %s (N=%zu, #%u)\n",
                     sess->c_name(), last_node.name().c_str(), last_node.fused.size() + 1, n_ops - 1);
@@ -2589,11 +2589,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
             }
         }
 
-        htp_f16_promote(sess, graph, computed_nodes);
-
-        for (auto & node : computed_nodes) {
-            htp_opnode_collapse(sess, node);
-        }
+        htp_lower_graph(sess, graph, computed_nodes);
 
         if (graph->uid != 0) {
             sess->cached_uid   = graph->uid;

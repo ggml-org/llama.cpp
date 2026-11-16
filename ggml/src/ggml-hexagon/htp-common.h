@@ -64,6 +64,44 @@ static inline bool ggml_hexagon_tensor_is_tiled(const struct ggml_tensor * t) {
     return (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_TILED) != 0;
 }
 
+static inline bool ggml_hexagon_tensor_is_f16(const struct ggml_tensor * t) {
+    return t && (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_F16) != 0;
+}
+
+static inline enum ggml_type htp_effective_type(const struct ggml_tensor * t) {
+    return ggml_hexagon_tensor_is_f16(t) ? GGML_TYPE_F16 : t->type;
+}
+
+static inline uint8_t * htp_tensor_data_ptr(const struct ggml_tensor * t) {
+    if (!ggml_hexagon_tensor_is_f16(t) || !t->view_src) {
+        return (uint8_t *) t->data;
+    }
+    const struct ggml_tensor * root = t;
+    while (root->view_src) {
+        root = root->view_src;
+    }
+    return (uint8_t *) root->data + ((const uint8_t *) t->data - (const uint8_t *) root->data) / 2;
+}
+
+static inline size_t htp_tensor_nbytes(const struct ggml_tensor * t) {
+    return ggml_hexagon_tensor_is_f16(t) ? (ggml_nbytes(t) / 2) : ggml_nbytes(t);
+}
+
+// Lower a tagged F32 tensor to F16 on the stack and clear HTP_TENSOR_F16 so lowering is idempotent.
+static inline struct ggml_tensor htp_tensor_lower_f16(const struct ggml_tensor * t) {
+    struct ggml_tensor m = *t;
+    if (ggml_hexagon_tensor_is_f16(t)) {
+        m.type = GGML_TYPE_F16;
+        for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+            m.nb[d] /= 2;
+        }
+        m.view_offs /= 2;
+        m.data       = htp_tensor_data_ptr(t);
+        m.extra      = (void *) (uintptr_t) (ggml_hexagon_tensor_get_flags(t) & ~HTP_TENSOR_F16);
+    }
+    return m;
+}
+
 static inline bool ggml_hexagon_tensor_can_tile(const struct ggml_tensor * t) {
     if (opt_rt_repack == 0) {
         return false;
@@ -82,10 +120,10 @@ static inline bool ggml_hexagon_tensor_will_tile(const struct ggml_tensor * t) {
 }
 
 static inline bool htp_tensors_overlap(const struct ggml_tensor * a, const struct ggml_tensor * b) {
-    const uintptr_t a0 = (uintptr_t) a->data;
-    const uintptr_t b0 = (uintptr_t) b->data;
-    const uintptr_t a1 = a0 + ggml_nbytes(a);
-    const uintptr_t b1 = b0 + ggml_nbytes(b);
+    const uintptr_t a0 = (uintptr_t) htp_tensor_data_ptr(a);
+    const uintptr_t b0 = (uintptr_t) htp_tensor_data_ptr(b);
+    const uintptr_t a1 = a0 + htp_tensor_nbytes(a);
+    const uintptr_t b1 = b0 + htp_tensor_nbytes(b);
 
     return a0 < b1 && b0 < a1;
 }
