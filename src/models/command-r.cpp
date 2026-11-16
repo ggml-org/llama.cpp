@@ -40,10 +40,10 @@ void llama_model_command_r::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_command_r::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_params & params) :
+llama_model_command_r::graph::graph(const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
@@ -80,15 +80,13 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
                 Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM, il);
                 cb(Qcur, "Qcur", il);
             }
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
 
             if (model.layers[il].attn_k_norm) {
                 Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM, il);
                 cb(Kcur, "Kcur", il);
             }
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur", il);
             cb(Kcur, "Kcur", il);
@@ -139,6 +137,4 @@ llama_model_command_r::graph::graph(const llama_model & model, const llm_graph_p
     }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

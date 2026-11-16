@@ -59,6 +59,10 @@ class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
     def set_vocab(self):
+        # HuggingFaceBio/Carbon-14B: Qwen3 with the HybridDNATokenizer (Qwen3 BPE plus DNA 6-mers)
+        if self._is_hybriddna():
+            self._set_vocab_hybriddna()
+            return
         try:
             self._set_vocab_sentencepiece()
         except FileNotFoundError:
@@ -78,6 +82,15 @@ class Qwen2Model(TextModel):
 @ModelBase.example("Qwen/Qwen1.5-MoE-A2.7B")
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.removesuffix(".weight").endswith(".mlp.experts.gate_up_proj"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
+            )
+        return super()._map_fp8_weight_names(name)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -157,7 +170,7 @@ class Qwen2MoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model", "LlavaOnevision2ForConditionalGeneration")
 @ModelBase.example("Qwen/Qwen3-8B")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
@@ -212,12 +225,13 @@ class Qwen3Model(Qwen2Model):
     def _find_rerank_config(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
 
         self.is_rerank = True
         self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
-        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[unresolved-attribute, invalid-assignment]
-        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[unresolved-attribute, invalid-assignment]
-        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")  # ty: ignore[unresolved-attribute]
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[invalid-assignment]
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[invalid-assignment]
+        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")
 
         assert self.token_false_id is not None and self.token_true_id is not None
 
@@ -252,6 +266,11 @@ class Qwen3Model(Qwen2Model):
                 if is_tied_head:
                     yield from super().modify_tensors(data_torch, name, bid)
                 return
+
+        # output embedding projection (voyage-4-nano)
+        if name == "linear.weight":
+            self.gguf_writer.add_embedding_length_out(data_torch.shape[0])
+            name = "dense_2_out.weight"
 
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -311,7 +330,7 @@ class _QwenMtpMixin:
         key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
         type(self)._original_block_count = hparams.get(key)
         type(self).opt_num_mtp_layers = 0
-        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[missing-attribute]
 
     @classmethod
     def filter_tensors(cls, item):
@@ -348,7 +367,7 @@ class _QwenMtpMixin:
         return name, gen
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()  # ty: ignore[missing-attribute]
         if self.no_mtp:
             return
         if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
@@ -356,15 +375,15 @@ class _QwenMtpMixin:
 
     def prepare_metadata(self, vocab_only: bool):
         from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
+        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[missing-attribute]
 
         if not self.mtp_only or not from_dir:
             return
 
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
@@ -372,6 +391,16 @@ class _QwenMtpMixin:
 @ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
+
+    def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
+            # Both split projections keep the original per-tensor scales.
+            return (
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
+                self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
+            )
+        return super()._map_fp8_weight_names(name)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -463,6 +492,45 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
     We reorder V heads to tiled order so ggml_repeat can replace the expensive
     interleaved repeat: [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...].
     """
+
+    _SHARED_INPUT_MERGES: tuple[tuple[gguf.MODEL_TENSOR, tuple[gguf.MODEL_TENSOR, gguf.MODEL_TENSOR], bool], ...] = ()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._merge_parts: dict[tuple[int, gguf.MODEL_TENSOR], dict[int, Tensor]] = {}
+
+    # caches one half of a merged weight until the other half arrives, then yields [a | b]
+    def _merge_shared_input(self, new_name: str, data: Tensor, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # a pre-quantized checkpoint carries per-tensor scales, which one merged weight cannot hold
+        if not self._SHARED_INPUT_MERGES or bid is None or self.hparams.get("quantization_config") or self._fp8_e4m3_preserved or self.hadamard_folded_names() or hasattr(data, "get_lora_A_B"):
+            yield (new_name, data)
+            return
+
+        layer_types = self.hparams.get("layer_types")
+        if layer_types is None:
+            is_linear = bid < self.hparams["num_hidden_layers"] and (bid + 1) % self.hparams.get("full_attention_interval", 4) != 0
+        else:
+            is_linear = bid < len(layer_types) and layer_types[bid] == "linear_attention"
+
+        match = next(((merged, parts.index(part)) for merged, parts, linear_only in self._SHARED_INPUT_MERGES
+                      if merged in gguf.MODEL_TENSORS[self.model_arch]
+                      for part in parts
+                      if (is_linear or not linear_only) and self.match_model_tensor_name(new_name, part, bid)), None)
+        if match is None:
+            yield (new_name, data)
+            return
+
+        merged, idx = match
+        halves = self._merge_parts.setdefault((bid, merged), {})
+        halves[idx] = data
+        if len(halves) == 2:
+            del self._merge_parts[(bid, merged)]
+            yield (self.format_tensor_name(merged, bid), torch.cat([halves[0], halves[1]], dim=0))
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._merge_parts:
+            raise ValueError(f"merged weights missing a half: {sorted((bid, t.name) for bid, t in self._merge_parts)}")
 
     @staticmethod
     def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
@@ -570,17 +638,25 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
         elif name.endswith((".linear_attn.in_proj_a.weight", ".linear_attn.in_proj_b.weight")):
             weight, scale = reorder_rows(weight, scale, 1)
         elif name.endswith(".linear_attn.out_proj.weight"):
-            col_perm = self._reorder_v_heads(
-                torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
-                1, num_k_heads, num_v_per_k, head_v_dim,
-            ).squeeze(0)
-            weight, scale = apply_col_perm(weight, scale, col_perm)
+            if self._hadamard_folds_tensor(name):
+                # folded weight: keep the grouped V order, the runtime permutes the activation instead
+                self._hadamard_gdn_v_grouped = True
+            else:
+                col_perm = self._reorder_v_heads(
+                    torch.arange(num_v_heads * head_v_dim, dtype=torch.long).unsqueeze(0),
+                    1, num_k_heads, num_v_per_k, head_v_dim,
+                ).squeeze(0)
+                weight, scale = apply_col_perm(weight, scale, col_perm)
 
         return weight, scale
 
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         weight, scale = self._transform_nvfp4_weight(name, weight, scale)
         super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
+
+    def _hadamard_folds_tensor(self, name: str) -> bool:
+        # a manifest name and `name` can differ only by leading wrapper prefixes
+        return any(name.endswith(n) or n.endswith(name) for n in self.hadamard_folded_names())
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_k_heads = self.hparams.get("linear_num_key_heads", 0)
@@ -628,10 +704,15 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                 data_torch = torch.cat([qk_part, v_part], dim=0)
 
             elif ".out_proj." in name:
-                # Out projection weight: reorder columns (input dimension)
-                data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
+                if self._hadamard_folds_tensor(name):
+                    # folded weight: keep the grouped V order, the runtime permutes the activation instead
+                    self._hadamard_gdn_v_grouped = True
+                else:
+                    # Out projection weight: reorder columns (input dimension)
+                    data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        for new_name, data in super().modify_tensors(data_torch, name, bid):
+            yield from self._merge_shared_input(new_name, data, bid)
 
 
 class _Qwen35MRopeMixin:
@@ -645,15 +726,79 @@ class _Qwen35MRopeMixin:
     rope_parameters: dict
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()  # ty: ignore[missing-attribute]
         if "mrope_section" not in self.rope_parameters:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM", "Qwen3_5TextModel")
 @ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    _SHARED_INPUT_MERGES = (
+        (gguf.MODEL_TENSOR.ATTN_QKV_GATE,      (gguf.MODEL_TENSOR.ATTN_QKV, gguf.MODEL_TENSOR.ATTN_GATE), True),
+        (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT, (gguf.MODEL_TENSOR.SSM_BETA, gguf.MODEL_TENSOR.SSM_ALPHA), True),
+    )
+
+    def __init__(self, dir_model, *args, **kwargs):
+        # Inner TextModel does not own mtp.*. Set no_mtp before mixin bumps block_count.
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, self.is_mistral_format)
+        if get_model_architecture(hparams, ModelType.TEXT) == "Qwen3_5TextModel":
+            self.no_mtp = True
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+
+
+@ModelBase.register("MiniCPMOCRForSequenceClassification")
+class MiniCPMOCRSeqClsModel(Qwen3_5TextModel):
+    # OCR consistency judge: Qwen3.5 VL trunk with a value head read at the last token
+    # the class scores are [inconsistent, consistent], the softmax temperature is 1
+    model_arch = gguf.MODEL_ARCH.QWEN35
+    no_mtp = True  # the checkpoint has no MTP head
+
+    CLASS_LABELS = ["inconsistent", "consistent"]
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_chat_template([{"name": "systemone", "template": self._systemone_template()}])
+
+    def _systemone_template(self) -> str:
+        # the prompt of the training data, the two images are the original page and the one
+        # rendered from the OCR text; the task is fixed, there is nothing to fill in
+        # the trailing newlines are in an expression, so the template does not drop them
+        return (
+            "<|im_start|>user\n{{ images[0] }}\nOCR文本：\n{{ state }}\n{{ images[1] }}\n"
+            "第一张图是原图，第二张图是上述 OCR 文本渲染得到的图片。\n"
+            "请判断该 OCR 文本及其对应渲染图是否与原图内容一致。\n"
+            "这是一个二分类任务：一致标为 1，不一致标为 0。"
+            "{{ '<|im_end|>\\n<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n' }}"
+        )
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # the config.json of the checkpoint keeps the one of the base model, it has no num_labels / id2label
+        if "score.weight" not in self.model_tensors:
+            raise ValueError("the checkpoint has no score.weight classification head")
+
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.LAST)
+        self.gguf_writer.add_embedding_length_out(len(self.CLASS_LABELS))
+        self.gguf_writer.add_classifier_output_labels(self.CLASS_LABELS)
+        self.gguf_writer.add_decision_type(gguf.DecisionType.MINICPM_OCR_JEV)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "score.weight":
+            if data_torch.shape[0] != len(self.CLASS_LABELS):
+                raise ValueError(f"score.weight must have {len(self.CLASS_LABELS)} rows, got {data_torch.shape[0]}")
+            yield (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", data_torch)
+            return
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 def _is_openjev_checkpoint(dir_model: Path) -> bool:
@@ -744,7 +889,7 @@ class DFlashModel(Qwen3Model):
         if target_cls is not type(self):
             if target_arch == "NemotronHForCausalLM":
                 setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
-            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+            target_cls.set_vocab(self)  # ty: ignore[missing-attribute]
         else:
             super().set_vocab()
 

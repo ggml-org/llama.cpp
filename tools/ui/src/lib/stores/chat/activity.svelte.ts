@@ -16,14 +16,13 @@
  * Composed under chatStore.activity; not exported from the stores barrel.
  */
 
-import { SvelteSet } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export class ChatActivityStore {
 	/** Convs this browser is piping a stream for (send, attach, resume-wait). */
 	private local = new SvelteSet<string>();
 	/** Convs the backend reports as having a running session (snapshot sync). */
 	private remote = new SvelteSet<string>();
-
 	/** Convs with any activity, the union the sidebar spinners render. */
 	loadingConvs = $derived.by(() => {
 		const out = new SvelteSet<string>(this.local);
@@ -32,6 +31,13 @@ export class ChatActivityStore {
 
 		return Array.from(out);
 	});
+
+	/**
+	 * Convs whose in-flight run is a compaction summary, mapped to the node
+	 * being summarized. That row reports the progress itself, so the chat
+	 * turns it summarizes must not repeat the same indicator.
+	 */
+	private compacting = new SvelteMap<string, string>();
 
 	/**
 	 * Apply a backend snapshot of running sessions (mount / visibilitychange).
@@ -45,6 +51,20 @@ export class ChatActivityStore {
 		}
 
 		for (const id of next) this.remote.add(id);
+	}
+
+	/** The conv's compaction summary ended, however it ended. */
+	endCompacting(convId: string): void {
+		this.compacting.delete(convId);
+	}
+
+	/** Node id of the summary running for the conv, or null when none runs. */
+	getCompactingNodeId(convId: string): string | null {
+		return this.compacting.get(convId) ?? null;
+	}
+
+	isCompacting(convId: string): boolean {
+		return this.compacting.has(convId);
 	}
 
 	isLocal(convId: string): boolean {
@@ -63,6 +83,11 @@ export class ChatActivityStore {
 	localEnded(convId: string): void {
 		this.local.delete(convId);
 		this.remote.delete(convId);
+	}
+
+	/** A compaction summary started for the conv. */
+	markCompacting(convId: string, nodeId: string): void {
+		this.compacting.set(convId, nodeId);
 	}
 
 	/** A local pipe (send, attach or resume-wait) started for the conv. */

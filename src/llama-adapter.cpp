@@ -179,13 +179,13 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
                 ? format("%s[%s,%zu]", gguf_type_name(type), gguf_type_name(gguf_get_arr_type(gguf_ctx, i)), gguf_get_arr_n(gguf_ctx, i))
                 : gguf_type_name(type);
             const char * name = gguf_get_key(gguf_ctx, i);
-            const std::string value = gguf_kv_to_str(gguf_ctx, i);
+            const size_t MAX_VALUE_LEN = 40;
+            const std::string value = gguf_kv_to_str(gguf_ctx, i, MAX_VALUE_LEN);
 
             if (type != GGUF_TYPE_ARRAY) {
                 adapter.gguf_kv.emplace(name, value);
             }
 
-            const size_t MAX_VALUE_LEN = 40;
             std::string print_value = value.size() > MAX_VALUE_LEN ? format("%s...", value.substr(0, MAX_VALUE_LEN - 3).c_str()) : value;
             replace_all(print_value, "\n", "\\n");
 
@@ -333,6 +333,11 @@ static void llama_adapter_lora_init_impl(llama_model & model, FILE * file, llama
         const auto * model_tensor = model.get_tensor(name.c_str());
         if (!model_tensor) {
             throw std::runtime_error("LoRA tensor '" + name + "' does not exist in base model (hint: maybe wrong base model?)");
+        }
+        // build_lora_mm feeds a folded weight's LoRA delta the primal input, so folded matmul weights are fine;
+        // a latent lookup table (token_embd, also the head when the output is tied) stores rotated rows, refuse it
+        if (model.hdmd.inverse_blocks.count(name)) {
+            throw std::runtime_error("LoRA tensor '" + name + "' targets a prism.hadamard latent lookup table, which is not supported");
         }
 
         auto * buft = ggml_backend_buffer_get_type(model_tensor->buffer);

@@ -63,7 +63,7 @@ struct vk_mat_mat_id_push_constants {
     uint32_t batch_stride_a; uint32_t batch_stride_b; uint32_t batch_stride_d;
     uint32_t nei0; uint32_t nei1; uint32_t nbi1; uint32_t ne11;
     uint32_t n_experts;
-    uint32_t hoist_row_ids;
+    uint32_t row_ids_offset;
 };
 
 struct vk_mat_vec_id_push_constants {
@@ -124,22 +124,30 @@ struct vk_flash_attn_push_constants {
 
 static_assert(sizeof(vk_flash_attn_push_constants) <= 128, "sizeof(vk_flash_attn_push_constants) must be <= 128");
 
-struct vk_fa_xe_opt_push_constants {
-    uint32_t kv_seq_len;
-    uint32_t activation_length;
-    uint32_t q_head;
-    uint32_t kv_head;
-    uint32_t qk_ratio;
-    uint32_t qk_sub_groups;
+struct vk_xe_fa_push_constants {
+    uint32_t neq1;
+    uint32_t neq2;
+    uint32_t neq3;
+    uint32_t nek1;
+    uint32_t nek2;
+    uint32_t nek3;
+    uint32_t nev2;
+    uint32_t nev3;
+    uint32_t nem1;
+    uint32_t nem2;
+    uint32_t nem3;
+    uint32_t nbq1;
+    uint32_t nbq2;
+    uint32_t nbk1;
+    uint32_t nbk2;
+    uint32_t nbv1;
+    uint32_t nbv2;
+    uint32_t nbq3;
+    uint32_t nbk3;
+    uint32_t nbv3;
+    uint32_t nb3;
     uint32_t flag;
-    uint32_t nbkv_tok;
-    uint32_t nbkv_head;
-    uint32_t batch_stride_q;
-    uint32_t batch_stride_k;
-    uint32_t batch_stride_v;
-    uint32_t batch_stride_m;
-    uint32_t batch_stride_o;
-    float softmax_scale;
+    float scale;
 };
 
 struct vk_op_push_constants {
@@ -218,9 +226,13 @@ struct vk_op_count_experts_push_constants {
     uint32_t nb01;
     uint32_t a_offset;
     uint32_t n_experts;
-    uint32_t hoist_row_ids;
     uint32_t ne00mp;
     uint32_t ne00L;
+    uint32_t row_tile_size;
+    uint32_t row_ids_offset;
+    uint32_t ne0_dst;
+    uint32_t stride_dst;
+    uint32_t batch_stride_dst;
 };
 
 struct vk_op_glu_push_constants {
@@ -448,12 +460,6 @@ struct vk_op_add_id_push_constants {
     uint32_t s02;
     uint32_t s11;
     uint32_t s21;
-};
-
-struct vk_op_diag_mask_push_constants {
-    uint32_t ncols;
-    uint32_t rows_per_channel;
-    int32_t n_past;
 };
 
 struct vk_op_rope_push_constants {
@@ -825,7 +831,7 @@ struct vk_op_upscale_push_constants {
 struct vk_op_sum_rows_push_constants
 {
     uint32_t n_cols;
-    uint32_t ne01, ne02;
+    uint32_t ne01, ne02, ne03;
     uint32_t nb01, nb02, nb03;
     uint32_t nb11, nb12, nb13;
     float weight;
@@ -840,6 +846,7 @@ static vk_op_sum_rows_push_constants vk_op_sum_rows_push_constants_init(const gg
     p.n_cols = (uint32_t)n_cols;
     p.ne01 = (uint32_t)src->ne[1];
     p.ne02 = (uint32_t)src->ne[2];
+    p.ne03 = (uint32_t)src->ne[3];
     p.nb01 = (uint32_t)src->nb[1] / type_size;
     p.nb02 = (uint32_t)src->nb[2] / type_size;
     p.nb03 = (uint32_t)src->nb[3] / type_size;

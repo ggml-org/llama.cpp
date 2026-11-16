@@ -1,8 +1,9 @@
 #include "ggml.h"
 #include "mmf.hpp"
+#include "utils.hpp"
 
 void ggml_zdnn_mul_mat_f(
-    const ggml_backend_zdnn_context * ctx,
+          ggml_backend_zdnn_context * ctx,
     const               ggml_tensor * src0,
     const               ggml_tensor * src1,
                         ggml_tensor * dst) {
@@ -30,9 +31,13 @@ void ggml_zdnn_mul_mat_f(
           ggml_tensor * output  = dst;
 
     ggml_backend_zdnn_buffer * weights_extra = (ggml_backend_zdnn_buffer *)weights->extra;
-    ggml_backend_zdnn_buffer * inputs_extra  = (ggml_backend_zdnn_buffer *)inputs->extra;
     ggml_backend_zdnn_buffer * output_extra  = (ggml_backend_zdnn_buffer *)output->extra;
     ggml_backend_zdnn_buffer * bias_extra    = (ggml_backend_zdnn_buffer *)output_extra->extra;
+
+    zdnn_tensor_desc              inputs_pre_tfm_desc;
+    zdnn_tensor_desc              inputs_tfm_desc;
+    zdnn_ztensor                  inputs_ztensor;
+    ggml_zdnn_pool_alloc<uint8_t> inputs_ztensor_alloc;
 
     const int64_t weights_rows = ne01;
     const int64_t weights_cols = ne00;
@@ -52,29 +57,29 @@ void ggml_zdnn_mul_mat_f(
     //               weights_extra->pre_tfm_desc.dim3,
     //               weights_extra->pre_tfm_desc.dim4);
 
-    // GGML_LOG_INFO("%s: tensor '%s' tensor dimensions: [%ld, %ld, %ld, %ld] pre_tfm_desc dimensions: [%ld, %ld, %ld, %ld]\n",
-    //               __func__, inputs_extra->name,
-    //               inputs->ne[3], inputs->ne[2], inputs->ne[1], inputs->ne[0],
-    //               inputs_extra->pre_tfm_desc.dim1,
-    //               inputs_extra->pre_tfm_desc.dim2,
-    //               inputs_extra->pre_tfm_desc.dim3,
-    //               inputs_extra->pre_tfm_desc.dim4);
-
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim1 == weights->ne[0] && "weights_extra->pre_tfm_desc.dim1 must match weights->ne[0]");
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim2 == weights->ne[1] && "weights_extra->pre_tfm_desc.dim2 must match weights->ne[1]");
-    GGML_ASSERT(inputs_extra->pre_tfm_desc.dim1  == inputs->ne[0]  && "inputs_extra->pre_tfm_desc.dim1 must match inputs->ne[0]");
-    GGML_ASSERT(inputs_extra->pre_tfm_desc.dim2  == inputs->ne[1]  && "inputs_extra->pre_tfm_desc.dim2 must match inputs->ne[1]");
 
-    ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
+    // weights read straight into a host buffer skip set_tensor, so transform them on first use
+    if (!weights_extra->ztensor.is_transformed) {
+        ggml_zdnn_load_tensor(weights_extra->ztensor, weights->data);
+    }
+
+    // the inputs can be in any host buffer or be a view, so transform them from their data on every call
+    {
+        zdnn_init_pre_transformed_desc(ZDNN_2D, ggml_zdnn_type_mapping(inputs->type), &inputs_pre_tfm_desc, inputs_rows, inputs_cols);
+        ZDNN_CHECK(zdnn_generate_transformed_desc(&inputs_pre_tfm_desc, &inputs_tfm_desc));
+        ggml_zdnn_init_scratch_ztensor_dlf16(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc);
+        ggml_zdnn_load_tensor(inputs_ztensor, inputs->data);
+    }
+
+    ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
                                         false, true, MATMUL_OP_ADDITION, &output_extra->ztensor));
     // TODO: Remove in the future as we are currently DLF16 -> FP32 then in the next op, FP32 -> DLF16 again. Inefficient.
     ZDNN_CHECK(zdnn_transform_origtensor(&output_extra->ztensor, output->data));
 
-    GGML_UNUSED(ctx);
     GGML_UNUSED(weights_rows);
     GGML_UNUSED(weights_cols);
-    GGML_UNUSED(inputs_rows);
-    GGML_UNUSED(inputs_cols);
     GGML_UNUSED(output_rows);
     GGML_UNUSED(output_cols);
 }

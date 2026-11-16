@@ -28,6 +28,10 @@ const config = {
 
 	// Consult https://svelte.dev/docs/kit/integrations
 	// for more information about preprocessors
+	// mdsvex is for content pages we write ourselves (e.g. release notes reachable from the
+	// chat app): .svx files compiled to components at build time. No page uses it yet.
+	// It can't render chat input or messages, which are typed at runtime and go through
+	// the remark/rehype pipeline in MarkdownContent instead.
 	preprocess: [vitePreprocess(), mdsvex()]
 };
 

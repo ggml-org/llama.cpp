@@ -58,6 +58,8 @@ struct context {
 
     bool is_get_stats = false; // whether to collect stats
 
+    int macro_depth = 0;
+
     visitor_fn visitor;
 
     // src is optional, used for error reporting
@@ -74,16 +76,13 @@ struct context {
     }
     ~context() = default;
 
-    context(const context & parent) : context() {
+    context(const context & parent) :
+        src(parent.src),
+        current_time(parent.current_time),
+        is_get_stats(parent.is_get_stats),
+        macro_depth(parent.macro_depth),
         // inherit variables (for example, when entering a new scope)
-        auto & pvar = parent.env->as_ordered_object();
-        for (const auto & pair : pvar) {
-            set_val(pair.first, pair.second);
-        }
-        current_time = parent.current_time;
-        is_get_stats = parent.is_get_stats;
-        src = parent.src;
-    }
+        env(mk_val<value_object>(*parent.env)) {}
 
     value get_val(const std::string & name) {
         value default_val = mk_val<value_undefined>(name);
@@ -473,6 +472,28 @@ struct binary_expression : public expression {
 };
 
 /**
+ * Two or more comparisons in a row, e.g. `a < b <= c`
+ * It is the same as `a < b and b <= c`, but each operand is executed only one time.
+ */
+struct comparison_chain_expression : public expression {
+    statements operands;
+    std::vector<token> ops;
+
+    comparison_chain_expression(statements && operands, std::vector<token> && ops)
+        : operands(std::move(operands)), ops(std::move(ops)) {
+        assert(this->operands.size() == this->ops.size() + 1);
+        for (const auto & operand : this->operands) chk_type<expression>(operand);
+    }
+    std::string type() const override { return "ComparisonChainExpression"; }
+    value execute_impl(context & ctx) const override;
+    void visit(context & ctx) const override {
+        ctx.visitor(false, this, {
+            {"operands", stmts_to_ptr(operands)}
+        });
+    }
+};
+
+/**
  * An operation with two sides, separated by the | operator.
  * Operator precedence: https://github.com/pallets/jinja/issues/379#issuecomment-168076202
  */
@@ -634,7 +655,9 @@ struct keyword_argument_expression : public expression {
 
 struct spread_expression : public expression {
     statement_ptr argument;
-    explicit spread_expression(statement_ptr && argument) : argument(std::move(argument)) {
+    bool is_kwargs;
+    spread_expression(statement_ptr && argument, bool is_kwargs)
+        : argument(std::move(argument)), is_kwargs(is_kwargs) {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "SpreadExpression"; }
@@ -714,7 +737,7 @@ struct rethrown_exception : public std::exception {
 
 //////////////////////
 
-static void gather_string_parts_recursive(const value & val, value_string & parts) {
+static void gather_string_parts_recursive(const value & val, value_string & parts, int depth = 0) {
     // TODO: probably allow print value_none as "None" string? currently this breaks some templates
     if (is_val<value_string>(val)) {
         const auto & str_val = cast_val<value_string>(val)->val_str;
@@ -722,10 +745,12 @@ static void gather_string_parts_recursive(const value & val, value_string & part
     } else if (is_val<value_int>(val) || is_val<value_float>(val) || is_val<value_bool>(val)) {
         std::string str_val = val->as_string().str();
         parts->val_str.append(str_val);
+    } else if (is_val<value_array>(val) && depth >= JINJA_RECURSIVE_LIMIT) {
+        throw std::runtime_error("value is nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
     } else if (is_val<value_array>(val)) {
         auto items = cast_val<value_array>(val)->as_array();
         for (const auto & item : items) {
-            gather_string_parts_recursive(item, parts);
+            gather_string_parts_recursive(item, parts, depth + 1);
         }
     }
 }

@@ -11,12 +11,20 @@ export const REASONING_EFFORT_LABELS: Record<string, string> = {
 	[ReasoningEffort.LOW]: 'Low',
 	[ReasoningEffort.MAX]: 'Max',
 	[ReasoningEffort.MEDIUM]: 'Medium',
-	[ReasoningEffort.OFF]: 'Off'
+	[ReasoningEffort.MINIMAL]: 'Minimal',
+	[ReasoningEffort.OFF]: 'Off',
+	[ReasoningEffort.XHIGH]: 'Extra High'
 };
 
-export const REASONING_EFFORT_LEVELS: ReasoningEffortLevel[] = [
+/** Levels of every menu, ahead of the template levels or the budget levels. */
+export const REASONING_EFFORT_BASE_LEVELS: ReasoningEffortLevel[] = [
 	{ label: 'Default', value: ReasoningEffort.DEFAULT },
-	{ label: 'Off', value: ReasoningEffort.OFF },
+	{ label: 'Off', value: ReasoningEffort.OFF }
+];
+
+/** Menu of a chat template that honors no effort level: each level is a token budget. */
+export const REASONING_EFFORT_BUDGET_LEVELS: ReasoningEffortLevel[] = [
+	...REASONING_EFFORT_BASE_LEVELS,
 	{ label: 'Low', value: ReasoningEffort.LOW },
 	{ label: 'Medium', value: ReasoningEffort.MEDIUM },
 	{ label: 'High', value: ReasoningEffort.HIGH },

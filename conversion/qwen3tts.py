@@ -218,8 +218,10 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
         hparams["text_config"] = {"hidden_size": hparams["talker_config"]["hidden_size"]}
-        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys
-        hparams["speaker_encoder_config"]["n_layers"] = 4
+        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys.
+        # The CustomVoice variant ships no speaker encoder, so its config lacks this key entirely.
+        if "speaker_encoder_config" in hparams:
+            hparams["speaker_encoder_config"]["n_layers"] = 4
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self._wav_config_cache = None
 
@@ -233,11 +235,11 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
 
         # handle speaker encoder config
         self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
-        # mel_spectrogram() front-end: sr=24000, n_fft=1024, hop=256, n_mels=128, fmin=0, fmax=12000 (=sr/2, the clip.cpp default)
+        # mel_spectrogram() front-end: sr=24000, n_fft=1024, hop=256, n_mels=128, fmin=0, fmax=12000 (=sr/2, the mtmd default)
         self.gguf_writer.add_audio_num_mel_bins(128)
         # 3 SE-Res2Net stages; the stem conv, mfa, asp and fc are not counted here
         self.gguf_writer.add_audio_block_count(3)
-        # ECAPA-TDNN has no attention/FFN, these are dummy to allow clip.cpp to load it
+        # ECAPA-TDNN has no attention/FFN, these are dummy to allow mtmd to load it
         self.gguf_writer.add_audio_embedding_length(1536)
         self.gguf_writer.add_audio_head_count(1)
         self.gguf_writer.add_audio_feed_forward_length(1536)
@@ -254,7 +256,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(code_predictor_config["num_attention_heads"])
         self.gguf_writer.add_gen_audio_head_count_kv(code_predictor_config["num_key_value_heads"])
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(code_predictor_config["rms_norm_eps"])
-        # note: code2wav hparams are hardcoded on the mtmd/clip.cpp side for now, not written here
+        # note: code2wav hparams are hardcoded on the mtmd side for now, not written here
 
     def _wav_decoder_config(self) -> dict[str, Any] | None:
         # code2wav has its own config.json, inside the speech_tokenizer dir
