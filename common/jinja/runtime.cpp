@@ -191,7 +191,7 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
             if (is_float) {
                 return mk_val<value_float>(res);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(res));
+                return mk_val<value_int>(float_to_int(res));
             }
         } else if (op.value == "/") {
             JJ_DEBUG("Division operation: %f / %f", a, b);
@@ -222,7 +222,7 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
             if (is_float) {
                 return mk_val<value_float>(rem);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(rem));
+                return mk_val<value_int>(float_to_int(rem));
             }
         } else if (op.value == "<") {
             JJ_DEBUG("Comparison operation: %f < %f is %d", a, b, a < b);
