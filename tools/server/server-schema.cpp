@@ -561,6 +561,9 @@ std::vector<std::unique_ptr<field>> make_tts_schema(server_task & task) {
     add((new field_num("loudness", task.tts_inp.data.loudness))
         ->set_desc("Target loudness in LUFS, for models that support it (0.0 = model default)"));
 
+    add((new field_num("cfg_scale", task.tts_inp.data.cfg_scale))
+        ->set_desc("Classifier-free guidance scale of the audio codes, for models that support it (0.0 = model default, 1.0 = no guidance)"));
+
     add((new field_num("n_predict", task.params.n_predict))
         ->set_hard_limits(-1, INT32_MAX)
         ->add_alias("max_tokens")

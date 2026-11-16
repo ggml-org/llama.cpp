@@ -321,6 +321,10 @@ struct mtmd_helper_gen_audio_inp {
     float speed;    // speaking speed relative to a typical pace, > 0 (default: 1.0 = the model's own pace)
     float loudness; // target loudness in LUFS, < 0 (default: 0.0 = the model's own loudness)
 
+    // classifier-free guidance scale of the audio codes, > 0, 1.0 = no guidance (only for models that support it)
+    // default: 0.0 = the model's own; other models reject non-default values
+    float cfg_scale;
+
     enum mtmd_helper_gen_audio_outtype out_type;
 };
 

@@ -110,6 +110,8 @@ public:
     virtual bool supports_continue() const { return false; }
     // mtmd_helper_gen_audio_inp::speed and loudness other than the defaults
     virtual bool supports_delivery() const { return false; }
+    // mtmd_helper_gen_audio_inp::cfg_scale other than the default
+    virtual bool supports_cfg() const { return false; }
     virtual bool next_is_text() const { return false; }
 
     std::vector<llama_logit_bias> logit_bias; // see mtmd_helper_gen_audio_get_logit_bias()
@@ -2957,6 +2959,8 @@ class yue2_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
 
+    bool supports_cfg() const override { return true; }
+
     void reset() override {
         seq_id = 0;
         pos = 0;
@@ -3030,12 +3034,16 @@ public:
         }
 
         // classifier-free guidance of the codes, defaults of the reference (protocol.py)
-        cfg_scale = mode_off ? 1.01f : 1.0f;
+        cfg_scale = inp->cfg_scale > 0.0f ? inp->cfg_scale : mode_off ? 1.01f : 1.0f;
         if (cfg_scale != 1.0f) {
             // the uncond sequence lives half a seq space away from the cond one
             const int32_t n_seq_max = (int32_t) llama_n_seq_max(lctx);
             seq_uncond = (llama_seq_id) (n_seq_max / 2 + seq_id);
             if (!llama_model_classifier_free_guidance(model) || seq_id >= n_seq_max / 2) {
+                if (inp->cfg_scale > 0.0f) {
+                    LOG_ERR("mtmd_helper_gen_audio: cfg_scale needs a paired sequence (n_seq_max = %d, seq_id = %d), reconvert the model\n", n_seq_max, seq_id);
+                    return 1;
+                }
                 LOG_WRN("mtmd_helper_gen_audio: no paired cfg sequence (n_seq_max = %d, seq_id = %d), cfg is disabled\n", n_seq_max, seq_id);
                 cfg_scale = 1.0f;
             } else if (!llama_memory_seq_rm(mem, seq_uncond, 0, -1)) {
@@ -3614,13 +3622,14 @@ void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx) {
 
 struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
     mtmd_helper_gen_audio_inp inp{};
-    inp.top_k    = 50;
-    inp.top_p    = 1.0f;
-    inp.temp     = -1.0f; // model default
-    inp.seed     = UINT32_MAX; // random
-    inp.speed    = 1.0f;
-    inp.loudness = 0.0f;
-    inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    inp.top_k     = 50;
+    inp.top_p     = 1.0f;
+    inp.temp      = -1.0f; // model default
+    inp.seed      = UINT32_MAX; // random
+    inp.speed     = 1.0f;
+    inp.loudness  = 0.0f;
+    inp.cfg_scale = 0.0f; // model default
+    inp.out_type  = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     return inp;
 }
 
@@ -3639,6 +3648,14 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
     }
     if ((inp->speed != 1.0f || inp->loudness != 0.0f) && !ctx->pipeline->supports_delivery()) {
         LOG_ERR("mtmd_helper_gen_audio: the model does not support speed or loudness\n");
+        return 2;
+    }
+    if (!std::isfinite(inp->cfg_scale) || inp->cfg_scale < 0.0f) {
+        LOG_ERR("mtmd_helper_gen_audio: cfg_scale must be > 0 (0 = model default)\n");
+        return 2;
+    }
+    if (inp->cfg_scale != 0.0f && !ctx->pipeline->supports_cfg()) {
+        LOG_ERR("mtmd_helper_gen_audio: the model does not support cfg_scale\n");
         return 2;
     }
     ctx->pipeline->logit_bias.clear();
