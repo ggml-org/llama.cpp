@@ -247,8 +247,15 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
 #define HMX_STORE_CVT_SM(out, range) \
     "mxmem(" out ", " range ") = cvt\n"
 
+#define HMX_STORE_CVT_CM(out, range) \
+    "mxmem(" out ", " range "):cm = cvt\n"
+
 static inline uint32_t hmx_act_sm_range(uint32_t n_tiles) {
     return 2048u * n_tiles - 1u;
+}
+
+static inline uint32_t hmx_out_cm_range(void) {
+    return 0x3Fu << 5;
 }
 
 static inline uint32_t hmx_wt_b_range(uint32_t n_bytes) {
