@@ -140,11 +140,16 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
     const int                                      h     = (blockIdx.x / (D / V)) % a.H;
     const int                                      seq   = blockIdx.x / ((D / V) * a.H);
     const int                                      v0    = slice * V;
+    // ragged: the tokens of this seq are [tok0, tok0 + n_tokens) of dim 2, the seq strides are 0
+    const bool                                     ragged   = a.seq_info != nullptr;
+    const int64_t                                  tok0     = ragged ? a.seq_info[4 * seq + 1] : 0;
+    const int64_t                                  n_tokens = ragged ? a.seq_info[4 * seq + 2] : a.n_tokens;
+    const bool                                     keep     = ragged && a.seq_info[4 * seq + 3] != 0;
     const int64_t                                  soff  = ((int64_t) seq * a.H + h) * D * D;
-    const int64_t                                  qoff  = (seq / a.rq3) * a.sq3 + (h % a.H_k) * a.sq1;
-    const int64_t                                  voff  = seq * a.sv3 + h * a.sv1 + v0;
-    const int64_t                                  goff  = seq * a.sb3 + h * a.sb1;
-    float *                                        out   = a.dst + ((int64_t) seq * a.n_tokens * a.H + h) * D + v0;
+    const int64_t                                  qoff  = (seq / a.rq3) * a.sq3 + (h % a.H_k) * a.sq1 + tok0 * a.sq2;
+    const int64_t                                  voff  = seq * a.sv3 + h * a.sv1 + v0 + tok0 * a.sv2;
+    const int64_t                                  goff  = seq * a.sb3 + h * a.sb1 + tok0 * a.sb2;
+    float *                                        out   = a.dst + ((ragged ? tok0 : (int64_t) seq * a.n_tokens) * a.H + h) * D + v0;
     constexpr int                                  STATE_TILES = (D / 16) * (V / N);
     constexpr int                                  PER_WARP    = STATE_TILES / WARPS;
     static_assert(STATE_TILES % WARPS == 0, "state must divide across warps");
@@ -160,7 +165,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
     auto read_qk = [&](int64_t t, float4 & q, float4 & k) {
         t += warp;
         q = k = make_float4(0, 0, 0, 0);
-        if (t < a.n_tokens) {
+        if (t < n_tokens) {
             const int64_t off = qoff + t * a.sq2 + 4 * lane;
             if ((((uintptr_t) (a.q + off) | (uintptr_t) (a.k + off)) & 15) == 0) {
                 q = *reinterpret_cast<const float4 *>(a.q + off);
@@ -177,8 +182,8 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
     if constexpr (PREFETCH) {
         read_qk(0, next_q, next_k);
     }
-    for (int64_t t0 = 0; t0 < a.n_tokens; t0 += C) {
-        const int valid = min((int64_t) C, a.n_tokens - t0);
+    for (int64_t t0 = 0; t0 < n_tokens; t0 += C) {
+        const int valid = min((int64_t) C, n_tokens - t0);
 #pragma unroll
         for (int j = 0; j < C / 8; ++j) {
             const int t = warp + 8 * j, d = 4 * lane;
@@ -223,7 +228,7 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
         }
         __syncthreads();
         if constexpr (PREFETCH) {
-            if (t0 + C < a.n_tokens) {
+            if (t0 + C < n_tokens) {
                 read_qk(t0 + C, next_q, next_k);
             }
         }
@@ -349,6 +354,10 @@ static __global__ __launch_bounds__(256, BLOCKS) void gdn_single(ggml_cuda_gdn_m
         }
         __syncthreads();
     }
+    // a ragged seq that keeps its tokens pending already has its state in place
+    if (keep) {
+        return;
+    }
 #pragma unroll
     for (int j = 0; j < PER_WARP; ++j) {
         const int ti = warp + j * WARPS, r = (ti / (V / N)) * 16, c = (ti % (V / N)) * N;
@@ -385,13 +394,15 @@ enum class gdn_path { ar, slice32_one_block, slice32_two_blocks, slice64, whole_
 
 static gdn_path select_gdn_mma_path(int device, const ggml_cuda_gdn_mma_args & a) {
     GGML_ASSERT(device >= 0 && device < GGML_CUDA_MAX_DEVICES);
-    if (!a.eligible || a.H_k != 16 || (a.H != 16 && a.H != 32 && a.H != 48 && a.H != 64) || a.n_tokens < 64 ||
+    // ragged: the longest seq selects the path, the shorter ones run the same kernel
+    const int64_t n_tokens = a.seq_info != nullptr ? a.n_seq_tokens_max : a.n_tokens;
+    if (!a.eligible || a.H_k != 16 || (a.H != 16 && a.H != 32 && a.H != 48 && a.H != 64) || n_tokens < 64 ||
         a.n_tokens > INT64_MAX - 32 || a.rq3 <= 0 || a.n_seqs <= 0 || a.n_seqs > INT_MAX / (a.H * 4)) {
         return gdn_path::ar;
     }
     const auto & info = ggml_cuda_info().devices[device];
 #ifdef GGML_USE_HIP
-    if (!GGML_CUDA_CC_IS_RDNA3_5(info.cc) || a.n_tokens < 2048) {
+    if (!GGML_CUDA_CC_IS_RDNA3_5(info.cc) || n_tokens < 2048) {
         return gdn_path::ar;
     }
     return init<16, 64>(device) ? gdn_path::slice64 : gdn_path::ar;

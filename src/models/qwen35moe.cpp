@@ -246,8 +246,9 @@ llama_model_qwen35moe::graph::graph(const llm_graph_params & params) :
 std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35moe::graph::build_qkvz(
                 ggml_tensor * input,
                         int   il) {
-    const int64_t n_seqs       = ubatch.n_seqs;
-    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+    // ragged: all the tokens in one row [TAG_RECURRENT_RAGGED]
+    const int64_t n_seqs       = ubatch.is_ragged() ? 1 : ubatch.n_seqs;
+    const int64_t n_seq_tokens = ubatch.is_ragged() ? ubatch.n_tokens : ubatch.n_seq_tokens;
 
     ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
     qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
@@ -347,16 +348,17 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
         int                  il) {
     const auto * mctx_cur = inp->mctx;
 
+    // ragged: the token tensors hold the tokens of all the seqs in one row, only the states are per seq [TAG_RECURRENT_RAGGED]
     const int64_t d_inner      = hparams.ssm_d_inner;
-    const int64_t n_seqs       = ubatch.n_seqs;
+    const int64_t n_seqs       = ubatch.is_ragged() ? 1 : ubatch.n_seqs;
     const int64_t head_k_dim   = hparams.ssm_d_state;
     const int64_t num_k_heads  = hparams.ssm_n_group;
     const int64_t num_v_heads  = hparams.ssm_dt_rank;
     const int64_t head_v_dim   = d_inner / num_v_heads;
-    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+    const int64_t n_seq_tokens = ubatch.is_ragged() ? ubatch.n_tokens : ubatch.n_seq_tokens;
 
     GGML_ASSERT(n_seqs != 0);
-    GGML_ASSERT(ubatch.equal_seqs());
+    GGML_ASSERT(ubatch.equal_seqs() || ubatch.is_ragged());
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
     // Input projections
@@ -393,11 +395,14 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
 
     ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
 
-    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
-    state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
+    ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs);
+    state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, ubatch.n_seqs);
     cb(state, "state_predelta", il);
 
     ggml_tensor * conv_output_proper = ggml_ssm_conv(ctx0, conv_input, conv_kernel);
+    if (ubatch.is_ragged()) {
+        conv_output_proper = build_conv_out_ragged(inp, conv_output_proper);
+    }
     cb(conv_output_proper, "conv_output_raw", il);
 
     ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_proper);

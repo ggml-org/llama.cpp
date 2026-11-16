@@ -5367,6 +5367,89 @@ struct test_gated_delta_net_replay : public test_case {
     }
 };
 
+// GGML_OP_GATED_DELTA_NET with seqs of different token counts (ggml_gated_delta_net_ragged)
+struct test_gated_delta_net_ragged : public test_gated_delta_net_replay {
+    const int64_t n_seq_tokens_max;
+
+    std::vector<int32_t> seq_info; // per seq: pending tokens to replay, first token, token count, keep
+
+    std::string vars() override {
+        return VARS_TO_STR8(head_count, head_size, n_seq_tokens, n_seq_tokens_max, n_seqs, v_repeat, kda, n_pend);
+    }
+
+    // token counts in [n_seq_tokens, n_seq_tokens_max], n_pend == 0 is without replay
+    test_gated_delta_net_ragged(int64_t head_count = 4, int64_t head_size = 32, int64_t n_seq_tokens = 1, int64_t n_seq_tokens_max = 8,
+            int64_t n_seqs = 3, int v_repeat = 1, bool kda = false, int64_t n_pend = 4)
+        : test_gated_delta_net_replay(head_count, head_size, n_seq_tokens, n_seqs, v_repeat, kda, n_pend, false),
+          n_seq_tokens_max(n_seq_tokens_max) {
+        std::mt19937 rng(0x7a66);
+
+        int32_t i0 = 0;
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            // the first seq is the longest one
+            const int32_t n = s == 0 ? n_seq_tokens_max : std::uniform_int_distribution<int32_t>(n_seq_tokens, n_seq_tokens_max)(rng);
+
+            seq_info.push_back(n_pend > 0 ? std::uniform_int_distribution<int32_t>(0, n_pend)(rng) : 0);
+            seq_info.push_back(i0);
+            seq_info.push_back(n);
+            seq_info.push_back(n_pend > 0 ? std::uniform_int_distribution<int32_t>(0, 1)(rng) : 0);
+
+            i0 += n;
+        }
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t S   = head_size;
+        const int64_t H_k = head_count;
+        const int64_t H   = head_count * v_repeat;
+        const int64_t g0  = kda ? S : 1;
+
+        int64_t n_tokens = 0;
+        for (int64_t s = 0; s < n_seqs; ++s) {
+            n_tokens += seq_info[4*s + 2];
+        }
+
+        ggml_tensor * q     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S, H_k, n_tokens, 1);
+        ggml_tensor * k     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S, H_k, n_tokens, 1);
+        ggml_tensor * v     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S, H,   n_tokens, 1);
+        ggml_tensor * g     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, g0, H,  n_tokens, 1);
+        ggml_tensor * beta  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, H,   n_tokens, 1);
+        ggml_tensor * state = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S, S, H, n_seqs);
+        ggml_tensor * info  = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 4, n_seqs);
+        ggml_set_name(g,    "g");
+        ggml_set_name(beta, "beta");
+        ggml_set_name(v,    "v");
+        ggml_set_name(info, "seq_info");
+
+        ggml_tensor * pk  = nullptr;
+        ggml_tensor * pv  = nullptr;
+        ggml_tensor * pgb = nullptr;
+        if (n_pend > 0) {
+            pk  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S,  H_k, n_pend,   n_seqs);
+            pv  = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, S,  H,   n_pend,   n_seqs);
+            pgb = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, g0, H,   2*n_pend, n_seqs);
+            ggml_set_name(pk,  "pend_k");
+            ggml_set_name(pv,  "pend_v");
+            ggml_set_name(pgb, "pend_gb");
+        }
+
+        q = ggml_l2_norm(ctx, q, 1e-6f);
+        k = ggml_l2_norm(ctx, k, 1e-6f);
+
+        return ggml_gated_delta_net_ragged(ctx, q, k, v, g, beta, state, pk, pv, pgb, info, n_seq_tokens_max);
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_gated_delta_net_replay::initialize_tensors(ctx);
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "seq_info") == 0) {
+                ggml_backend_tensor_set(t, seq_info.data(), 0, seq_info.size()*sizeof(int32_t));
+            }
+        }
+    }
+};
+
 // GGML_OP_GATED_DELTA_NET + GGML_OP_CPY (recurrent cache fusion)
 struct test_gated_delta_net_cache_fusion : public test_case {
     const ggml_type type;
@@ -9255,11 +9338,13 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     const int64_t nb;       // queries per slice
     const int64_t n_slices;
     const ggml_type type_KV;
+    const bool ragged;      // the slices have different query counts, nb is the largest (ggml_flash_attn_ext_rows_ragged)
 
     std::vector<int32_t> rows;
+    std::vector<int32_t> cols; // per slice: first query and query count
 
     std::string vars() override {
-        return VARS_TO_STR8(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV);
+        return VARS_TO_STR9(hs, nh, gqa, n_cells, kv, nb, n_slices, type_KV, ragged);
     }
 
     double max_nmse_err() override {
@@ -9267,11 +9352,28 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     }
 
     test_flash_attn_ext_kv_rows(int64_t hs = 256, int64_t nh = 2, int64_t gqa = 8, int64_t n_cells = 2048, int64_t kv = 512,
-                                int64_t nb = 8, int64_t n_slices = 4, ggml_type type_KV = GGML_TYPE_F16)
-        : hs(hs), nh(nh), gqa(gqa), n_cells(n_cells), kv(kv), nb(nb), n_slices(n_slices), type_KV(type_KV) {}
+                                int64_t nb = 8, int64_t n_slices = 4, ggml_type type_KV = GGML_TYPE_F16, bool ragged = false)
+        : hs(hs), nh(nh), gqa(gqa), n_cells(n_cells), kv(kv), nb(nb), n_slices(n_slices), type_KV(type_KV), ragged(ragged) {
+        std::mt19937 gen(0x7261);
+
+        int32_t i0 = 0;
+        for (int64_t s = 0; s < n_slices; ++s) {
+            // the second slice is the longest one
+            const int32_t n = !ragged || s == 1 ? nb : std::uniform_int_distribution<int32_t>(1, nb)(gen);
+
+            cols.push_back(i0);
+            cols.push_back(n);
+
+            i0 += n;
+        }
+    }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*gqa, n_slices);
+        const int64_t nb_all = cols[2*(n_slices - 1)] + cols[2*(n_slices - 1) + 1];
+
+        ggml_tensor * q = ragged ?
+            ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb_all, nh*gqa, 1) :
+            ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*gqa, n_slices);
         ggml_set_name(q, "q");
 
         // cache layout [hs, nh, n_cells], shared by all slices
@@ -9283,13 +9385,23 @@ struct test_flash_attn_ext_kv_rows : public test_case {
         ggml_tensor * k = ggml_permute(ctx, k0, 0, 2, 1, 3);
         ggml_tensor * v = ggml_permute(ctx, v0, 0, 2, 1, 3);
 
-        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, n_slices);
+        ggml_tensor * m = ragged ?
+            ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb_all, 1, 1) :
+            ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, n_slices);
         ggml_set_name(m, "m");
 
         ggml_tensor * r = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, n_slices);
         ggml_set_name(r, "r");
 
-        ggml_tensor * out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+        ggml_tensor * out;
+        if (ragged) {
+            ggml_tensor * c = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 2, n_slices);
+            ggml_set_name(c, "c");
+
+            out = ggml_flash_attn_ext_rows_ragged(ctx, q, k, v, m, r, c, nb, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+        } else {
+            out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, 0.0f);
+        }
         ggml_prec_set_acc(out, GGML_PREC_F32);
         ggml_set_name(out, "out");
 
@@ -9319,15 +9431,17 @@ struct test_flash_attn_ext_kv_rows : public test_case {
             }
             if (strcmp(t->name, "r") == 0) {
                 ggml_backend_tensor_set(t, rows.data(), 0, rows.size()*sizeof(int32_t));
+            } else if (strcmp(t->name, "c") == 0) {
+                ggml_backend_tensor_set(t, cols.data(), 0, cols.size()*sizeof(int32_t));
             } else if (strcmp(t->name, "m") == 0) {
                 std::vector<float> f(ggml_nelements(t));
                 std::uniform_real_distribution<float> dis(-1.0f, 1.0f);
                 for (int64_t s = 0; s < n_slices; ++s) {
-                    for (int64_t j = 0; j < nb; ++j) {
+                    for (int64_t j = 0; j < cols[2*s + 1]; ++j) {
                         for (int64_t i = 0; i < kv; ++i) {
                             const bool pad = rows[s*kv + i] < 0;
                             const bool drop = (i + 3*j + 5*s) % 11 == 0;
-                            f[(s*nb + j)*kv + i] = pad || drop ? -INFINITY : dis(gen);
+                            f[(cols[2*s] + j)*kv + i] = pad || drop ? -INFINITY : dis(gen);
                         }
                     }
                 }
@@ -13141,6 +13255,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // the same with slices of different query counts, nb is the largest count
+    for (int64_t nb : {2, 5, 8, 64, 300}) {
+        for (int64_t n_slices : {2, 5, 16}) {
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 2, 8, 4096, 1024, nb, n_slices, GGML_TYPE_F16,  true));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 8, 4, 4096, 512,  nb, n_slices, GGML_TYPE_F16,  true));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(128, 4, 1, 1000, 256,  nb, n_slices, GGML_TYPE_F16,  true));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows( 64, 4, 2, 3000, 768,  nb, n_slices, GGML_TYPE_Q8_0, true));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(512, 2, 8, 4096, 1024, nb, n_slices, GGML_TYPE_F16,  true));
+            test_cases.emplace_back(new test_flash_attn_ext_kv_rows(256, 8, 2, 4096, 1280, nb, n_slices, GGML_TYPE_F16,  true));
+        }
+    }
+
     // sparse mask with large batch size
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false, 2048));
@@ -13428,6 +13554,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,  257, 1, 3, false, 4, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128,  513, 2, 2, false, 8, false));
     test_cases.emplace_back(new test_gated_delta_net_replay(16, 128, 2048, 1, 3, false, 4, false));
+    // ragged: seqs with different token counts, without replay (n_pend 0) and with it
+    test_cases.emplace_back(new test_gated_delta_net_ragged(4,  32,  1, 8, 3, 1, false, 0));
+    test_cases.emplace_back(new test_gated_delta_net_ragged(4,  64,  1, 8, 4, 2, false, 4));
+    test_cases.emplace_back(new test_gated_delta_net_ragged(16, 128, 1, 8, 5, 3, false, 0));
+    test_cases.emplace_back(new test_gated_delta_net_ragged(16, 128, 1, 9, 5, 3, false, 8));
+    test_cases.emplace_back(new test_gated_delta_net_ragged(4,  64,  1, 5, 3, 1, true,  4));
+    // one long seq selects the chunked kernels for all the seqs (CUDA from 64 tokens, HIP from 2048)
+    test_cases.emplace_back(new test_gated_delta_net_ragged(16, 128, 1,  257,  4, 3, false, 0));
+    test_cases.emplace_back(new test_gated_delta_net_ragged(16, 128, 1,  513,  3, 3, false, 4));
+    test_cases.emplace_back(new test_gated_delta_net_ragged(16, 128, 60, 2048, 2, 3, false, 8));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, true, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1, 1, false, true));

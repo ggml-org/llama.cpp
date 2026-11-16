@@ -88,13 +88,17 @@ static bool can_reuse_attn_mask(
         return can_reuse_kq_mask(attn_mask.raw, mctx, ubatch, cparams);
     }
 
+    // the slices of a ragged ubatch have different token counts, its mask is [n_kv_rows, n_tokens]
+    const bool ragged = ubatch.is_ragged() && n_slices > 1;
+
     bool res = true;
+    res &= ragged == (attn_mask.rows_cols != nullptr);
     res &= attn_mask.n_kv == mctx->get_n_kv();
     res &= attn_mask.rows->ne[0] == n_kv_rows;
     res &= attn_mask.rows->ne[1] == n_slices;
     res &= attn_mask.raw->ne[0] == n_kv_rows;
-    res &= attn_mask.raw->ne[1] == n_tokens/n_slices;
-    res &= attn_mask.raw->ne[3] == n_slices;
+    res &= attn_mask.raw->ne[1] == (ragged ? n_tokens : n_tokens/n_slices);
+    res &= attn_mask.raw->ne[3] == (ragged ? 1 : n_slices);
 
     return res;
 }
@@ -121,7 +125,16 @@ static llm_attn_mask build_attn_inp_attn_mask(
         ggml_set_input(attn_mask.rows);
         ggml_set_name(attn_mask.rows, "attn_inp_kv_rows");
 
-        attn_mask.raw = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv_rows, ubatch.n_tokens/n_slices, 1, n_slices);
+        // the slices of a ragged ubatch have different token counts, see ggml_flash_attn_ext_rows_ragged
+        if (ubatch.is_ragged() && n_slices > 1) {
+            attn_mask.rows_cols = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, 2, n_slices);
+            ggml_set_input(attn_mask.rows_cols);
+            ggml_set_name(attn_mask.rows_cols, "attn_inp_kv_rows_cols");
+
+            attn_mask.raw = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv_rows, ubatch.n_tokens, 1, 1);
+        } else {
+            attn_mask.raw = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv_rows, ubatch.n_tokens/n_slices, 1, n_slices);
+        }
         ggml_set_input(attn_mask.raw);
         ggml_set_name(attn_mask.raw, "attn_inp_kq_mask");
     }
@@ -509,7 +522,70 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
     set_input_rep(mctx, ubatch);
 }
 
+void llm_graph_input_rs::set_input_rag(const llama_memory_recurrent_context * mctx, const llama_ubatch * ubatch) {
+    const int64_t n_seqs = ubatch->n_seqs;
+    const int64_t n_conv = rag_n_conv;
+    const int64_t n_hist = rag_conv_hist->ne[0]/n_seqs;
+
+    GGML_ASSERT(ubatch->is_ragged());
+    GGML_ASSERT(ggml_backend_buffer_is_host(rag_seq->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(rag_conv_in->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(rag_conv_out->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(rag_conv_hist->buffer));
+
+    int32_t * seq  = (int32_t *) rag_seq->data;
+    int32_t * in   = (int32_t *) rag_conv_in->data;
+    int32_t * out  = (int32_t *) rag_conv_out->data;
+    int32_t * hist = (int32_t *) rag_conv_hist->data;
+    int32_t * pend = rag_pend ? (int32_t *) rag_pend->data : nullptr;
+
+    int64_t i0 = 0;
+    for (int64_t s = 0; s < n_seqs; ++s) {
+        const int64_t n     = ubatch->seq_tokens[s];
+        const int64_t n_rep = has_rep ? mctx->get_rs_rep(s) : 0;
+        GGML_ASSERT(n_rep <= n_pend);
+
+        // must match the rule in llama_memory_recurrent::find_slot
+        const bool keep = has_rep && n >= 2 && n <= n_pend;
+
+        seq[4*s + 0] = n_rep;
+        seq[4*s + 1] = i0;
+        seq[4*s + 2] = n;
+        seq[4*s + 3] = keep;
+
+        // first conv input column of this seq
+        const int64_t b0 = i0 + s*n_conv;
+
+        // the source columns are the histories of all the seqs, then all the tokens
+        // the history is [window | pending]: the window after the kept tokens
+        for (int64_t c = 0; c < n_conv; ++c) {
+            in[b0 + c] = s*n_hist + n_rep + c;
+        }
+        for (int64_t t = 0; t < n; ++t) {
+            in[b0 + n_conv + t] = n_hist*n_seqs + i0 + t;
+            out[i0 + t]         = b0 + t;
+        }
+
+        // keep: the window, then the new tokens stay pending. else the last n_conv columns
+        for (int64_t j = 0; j < n_hist; ++j) {
+            hist[s*n_hist + j] = keep ? b0 + std::min(j, n_conv + n - 1) : b0 + n + std::min(j, n_conv - 1);
+        }
+
+        // the first n_pend tokens, only used when keep
+        for (int64_t t = 0; pend && t < n_pend; ++t) {
+            pend[s*n_pend + t] = i0 + std::min(t, n - 1);
+        }
+
+        i0 += n;
+    }
+}
+
 void llm_graph_input_rs::set_input_rep(const llama_memory_recurrent_context * mctx, const llama_ubatch * ubatch) {
+    if (rag_seq) {
+        set_input_rag(mctx, ubatch);
+        return;
+    }
+
     if (!has_rep) {
         return;
     }
@@ -3098,11 +3174,13 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * v_mla,
              int64_t   n_kv_max,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * kv_rows_cols) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
-    const auto n_stream = kv_rows ? kv_rows->ne[1] : k->ne[3];
+    // streams with different token counts stay in dim 2, kv_rows_cols has the tokens of each stream
+    const auto n_stream = kv_rows_cols ? 1 : kv_rows ? kv_rows->ne[1] : k->ne[3];
 
     // the stream dim steps over one stream's worth of dim-2 (tokens): (ne[2]/n_stream) rows of stride nb[2].
     // q->nb[3]/n_stream only equals that for a contiguous q; nope-only MLA (glm5-next) passes a permuted
@@ -3133,7 +3211,11 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-        if (kv_rows) {
+        if (kv_rows_cols) {
+            cur = ggml_flash_attn_ext_rows_ragged(ctx0, q, k, v, kq_mask, kv_rows, kv_rows_cols, ubatch.n_seq_tokens_max(),
+                                                  kq_scale, hparams.f_max_alibi_bias,
+                                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+        } else if (kv_rows) {
             cur = ggml_flash_attn_ext_rows(ctx0, q, k, v, kq_mask, kv_rows, kq_scale, hparams.f_max_alibi_bias,
                                            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
         } else {
@@ -3281,6 +3363,7 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
+    const auto & kv_cols = is_swa ? inp->self_attn_mask_swa.rows_cols : inp->self_attn_mask.rows_cols;
 
     // [TAG_NO_CACHE_PAD]
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
@@ -3301,7 +3384,7 @@ ggml_tensor * llm_graph_context::build_attn(
         kq_b = ggml_pad(ctx0, kq_b, n_kv_pad, 0, 0, 0);
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, kv_cols);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3449,8 +3532,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
+    const auto & kv_cols = inp->self_attn_mask.rows_cols;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, kv_cols);
     cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
@@ -3539,12 +3623,13 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
+    const auto & kv_cols = inp->self_attn_mask.rows_cols;
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, kv_cols);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3751,12 +3836,13 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
+    const auto & kv_cols = is_swa ? inp->self_attn_mask_swa.rows_cols : inp->self_attn_mask.rows_cols;
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = use_kv_cur ? k_cur : mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, kv_cols);
     cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     cb(cur, "kqv_out", il);
 
@@ -3823,13 +3909,14 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
+    const auto & kv_cols = is_swa ? inp->self_attn_mask_swa.rows_cols : inp->self_attn_mask.rows_cols;
 
     // MLA-style attention: the cached K is used as V
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, kv_cols);
     cb(cur, "kqv_out", il);
 
     if (k_rot) {
@@ -3882,12 +3969,13 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & kq_mask = inp->cross_attn_mask.raw;
     const auto & kv_rows = inp->cross_attn_mask.rows;
+    const auto & kv_cols = inp->cross_attn_mask.rows_cols;
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, kv_cols);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -4160,6 +4248,27 @@ static std::unique_ptr<llm_graph_input_rs> build_rs_inp_impl(
         inp->rep_n = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_seqs);
         ggml_set_input(inp->rep_n);
         ggml_set_name(inp->rep_n, "rs_rep_n");
+    }
+
+    // a ragged ubatch has its own inputs, the graph does not use rep_n and rep_cols
+    if (ubatch.is_ragged()) {
+        const int64_t n_tokens = ubatch.n_tokens;
+        const int64_t n_conv   = hparams.ssm_d_conv - 1;
+        const int64_t n_hist   = inp->has_rep ? n_conv + inp->n_pend : n_conv;
+
+        const auto new_input = [&](const char * name, int64_t ne0, int64_t ne1) {
+            ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, ne0, ne1);
+            ggml_set_input(t);
+            ggml_set_name(t, name);
+            return t;
+        };
+
+        inp->rag_n_conv    = n_conv;
+        inp->rag_seq       = new_input("rs_rag_seq", 4, n_seqs);
+        inp->rag_conv_in   = new_input("rs_rag_conv_in", n_tokens + n_conv*n_seqs, 1);
+        inp->rag_conv_out  = new_input("rs_rag_conv_out", n_tokens, 1);
+        inp->rag_conv_hist = new_input("rs_rag_conv_hist", n_hist*n_seqs, 1);
+        inp->rag_pend      = inp->has_rep ? new_input("rs_rag_pend", inp->n_pend*n_seqs, 1) : nullptr;
     }
 
     return inp;

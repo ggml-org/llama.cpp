@@ -59,6 +59,10 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
         int                  il) {
     const int64_t n_seqs = ubatch.n_seqs;
 
+    if (ubatch.is_ragged()) {
+        return build_conv_state_ragged(inp, conv_states_all, qkv_mixed, conv_kernel_size - 1, conv_channels, il);
+    }
+
     if (cparams.rs_replay) {
         return build_conv_state_replay(inp, conv_states_all, qkv_mixed, conv_kernel_size - 1, conv_channels, il);
     }
@@ -239,6 +243,168 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
     return output;
 }
 
+// [TAG_RECURRENT_RAGGED]
+// a ragged ubatch holds all the tokens of seq 0, then of seq 1, ... and each seq has its own token count
+// the token tensors of the recurrent layers are [.., n_tokens, 1], only the states are per seq
+// the conv runs once over the columns [window 0 | tokens 0 | window 1 | tokens 1 | ...], the outputs that cross two seqs are dropped
+// the gdn op reads the tokens of each seq from the ranges in inp->rag_seq
+// with rs_replay each seq keeps or commits its own tokens, by the rule of rs_replay_keep
+ggml_tensor * llm_build_delta_net_base::build_conv_state_ragged(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        conv_states_all,
+        ggml_tensor *        x,
+        int64_t              n_conv,
+        int64_t              channels,
+        int                  il) {
+    const auto * mctx_cur = inp->mctx;
+
+    const auto kv_head = mctx_cur->get_head();
+
+    const bool    replay   = cparams.rs_replay;
+    const int64_t n_hist   = replay ? n_conv + cparams.n_rs_seq + 1 : n_conv;
+    const int64_t n_seqs   = ubatch.n_seqs;
+    const int64_t n_tokens = ubatch.n_tokens;
+
+    GGML_ASSERT(conv_states_all->ne[0] == channels*n_hist);
+    GGML_ASSERT(x->ne[0] == channels && x->ne[1] == n_tokens && x->ne[2] == 1);
+    GGML_ASSERT(n_conv == inp->rag_n_conv);
+
+    // the history of the seqs, channels first: [window | pending] with rs_replay, else the window is stored time first
+    ggml_tensor * hist = build_rs(inp, conv_states_all, conv_states_all->ne[0], n_seqs);
+    if (replay) {
+        hist = ggml_reshape_2d(ctx0, hist, channels, n_hist*n_seqs);
+    } else {
+        hist = ggml_permute(ctx0, ggml_reshape_3d(ctx0, hist, n_conv, channels, n_seqs), 1, 0, 2, 3);
+        hist = ggml_cont_2d(ctx0, hist, channels, n_conv*n_seqs);
+    }
+    cb(hist, "conv_hist", il);
+
+    // [channels, n_tokens + n_conv*n_seqs]: per seq its window after the kept pending tokens, then its new tokens
+    ggml_tensor * cols = ggml_concat(ctx0, hist, ggml_reshape_2d(ctx0, x, channels, n_tokens), 1);
+    cols = ggml_get_rows(ctx0, cols, inp->rag_conv_in);
+
+    ggml_tensor * conv_input = ggml_cont(ctx0, ggml_transpose(ctx0, cols));
+    conv_input = ggml_reshape_3d(ctx0, conv_input, conv_input->ne[0], channels, 1);
+    cb(conv_input, "conv_input", il);
+
+    // the new history of each seq: its window and its pending tokens if it keeps them, else its last n_conv columns
+    ggml_tensor * hist_new = ggml_get_rows(ctx0, cols, inp->rag_conv_hist);
+    if (replay) {
+        hist_new = ggml_reshape_2d(ctx0, hist_new, channels*n_hist, n_seqs);
+    } else {
+        hist_new = ggml_permute(ctx0, ggml_reshape_3d(ctx0, hist_new, channels, n_conv, n_seqs), 1, 0, 2, 3);
+        hist_new = ggml_cont_2d(ctx0, hist_new, n_conv*channels, n_seqs);
+    }
+
+    ggml_tensor * hist_dst = ggml_view_2d(ctx0, conv_states_all, conv_states_all->ne[0], n_seqs, conv_states_all->nb[1],
+            kv_head*conv_states_all->nb[1]);
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, hist_new, hist_dst));
+
+    return conv_input;
+}
+
+ggml_tensor * llm_build_delta_net_base::build_conv_out_ragged(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        conv_out) {
+    const int64_t channels = conv_out->ne[0];
+
+    conv_out = ggml_reshape_2d(ctx0, conv_out, channels, conv_out->ne[1]);
+    conv_out = ggml_get_rows(ctx0, conv_out, inp->rag_conv_out);
+
+    return ggml_reshape_3d(ctx0, conv_out, channels, ubatch.n_tokens, 1);
+}
+
+ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_ragged(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        ssm_states_all,
+        ggml_tensor *        q,
+        ggml_tensor *        k,
+        ggml_tensor *        v,
+        ggml_tensor *        g,
+        ggml_tensor *        b,
+        ggml_tensor *        s,
+        int                  il) {
+    const auto * mctx_cur = inp->mctx;
+
+    const auto kv_head = mctx_cur->get_head();
+
+    const bool    replay   = cparams.rs_replay;
+    const int64_t n_pend   = cparams.n_rs_seq + 1;
+    const int64_t n_seqs   = ubatch.n_seqs;
+    const int64_t n_tokens = ubatch.n_tokens;
+
+    const int64_t S_k = k->ne[0];
+    const int64_t H_k = k->ne[1];
+    const int64_t S_v = v->ne[0];
+    const int64_t H_v = v->ne[1];
+    const int64_t g0  = g->ne[0];
+
+    GGML_ASSERT(q->ne[2] == n_tokens && q->ne[3] == 1 && s->ne[3] == n_seqs);
+
+    // the pending inputs of the cells, see build_recurrent_attn_replay
+    ggml_tensor * ck  = nullptr;
+    ggml_tensor * cv  = nullptr;
+    ggml_tensor * cgb = nullptr;
+    ggml_tensor * pk  = nullptr;
+    ggml_tensor * pv  = nullptr;
+    ggml_tensor * pgb = nullptr;
+
+    if (replay) {
+        ggml_tensor * spk  = mctx_cur->get_spk_l(il);
+        ggml_tensor * spv  = mctx_cur->get_spv_l(il);
+        ggml_tensor * spgb = mctx_cur->get_spgb_l(il);
+
+        ck  = ggml_reshape_4d(ctx0, spk,  S_k, H_k,   n_pend, spk->ne[1]);
+        cv  = ggml_reshape_4d(ctx0, spv,  S_v, H_v,   n_pend, spv->ne[1]);
+        cgb = ggml_reshape_4d(ctx0, spgb, g0,  H_v, 2*n_pend, spgb->ne[1]);
+
+        const auto gather = [&](ggml_tensor * rows, ggml_tensor * c) {
+            return ggml_reshape_4d(ctx0, build_rs(inp, rows, rows->ne[0], n_seqs), c->ne[0], c->ne[1], c->ne[2], n_seqs);
+        };
+
+        pk  = gather(spk,  ck);
+        pv  = gather(spv,  cv);
+        pgb = gather(spgb, cgb);
+    }
+
+    // the gdn op replays the kept pending tokens of each seq, then runs its new tokens
+    ggml_tensor * result = ggml_gated_delta_net_ragged(ctx0, q, k, v, g, b, s, pk, pv, pgb, inp->rag_seq, ubatch.n_seq_tokens_max());
+
+    ggml_tensor * output = ggml_view_4d(ctx0, result, S_v, H_v, n_tokens, 1,
+            ggml_row_size(result->type, S_v),
+            ggml_row_size(result->type, S_v*H_v),
+            ggml_row_size(result->type, S_v*H_v*n_tokens), 0);
+    cb(output, "attn_output", il);
+
+    // per seq: the state after the replay if it keeps its tokens, else the final state
+    ggml_tensor * new_state = ggml_view_2d(ctx0, result, hparams.n_embd_s(), n_seqs,
+            ggml_row_size(result->type, hparams.n_embd_s()),
+            ggml_row_size(result->type, S_v*H_v*n_tokens));
+    ggml_tensor * state_dst = ggml_view_2d(ctx0, ssm_states_all, hparams.n_embd_s(), n_seqs, ssm_states_all->nb[1],
+            kv_head*ssm_states_all->nb[1]);
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_state, state_dst));
+
+    if (replay) {
+        // store the inputs of the first n_pend tokens of each seq as pending, only used by the seqs that keep them
+        const auto store = [&](ggml_tensor * x, ggml_tensor * c, int64_t t0) {
+            ggml_tensor * x_st = ggml_view_2d(ctx0, x, x->ne[0]*x->ne[1], n_tokens, x->nb[2], 0);
+            x_st = ggml_get_rows(ctx0, x_st, inp->rag_pend);
+            x_st = ggml_reshape_4d(ctx0, x_st, x->ne[0], x->ne[1], n_pend, n_seqs);
+
+            ggml_tensor * dst = ggml_view_4d(ctx0, c, x->ne[0], x->ne[1], n_pend, n_seqs, c->nb[1], c->nb[2], c->nb[3],
+                    kv_head*c->nb[3] + t0*c->nb[2]);
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, x_st, dst));
+        };
+
+        store(k, ck,  0);
+        store(v, cv,  0);
+        store(g, cgb, 0);
+        store(b, cgb, n_pend);
+    }
+
+    return output;
+}
+
 ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
         llm_graph_input_rs * inp,
         ggml_tensor *        ssm_states_all,
@@ -252,6 +418,10 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn(
     const auto * mctx_cur   = inp->mctx;
     const auto   kv_head    = mctx_cur->get_head();
     const uint32_t mem_size = mctx_cur->get_size();
+
+    if (ubatch.is_ragged()) {
+        return build_recurrent_attn_ragged(inp, ssm_states_all, q, k, v, g, b, s, il);
+    }
 
     if (cparams.rs_replay) {
         return build_recurrent_attn_replay(inp, ssm_states_all, q, k, v, g, b, s, il);

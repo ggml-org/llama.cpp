@@ -322,6 +322,17 @@ public:
 
     void set_input_rep(const llama_memory_recurrent_context * mctx, const llama_ubatch * ubatch);
 
+    // ragged ubatch: the seqs have different token counts, these replace rep_n and rep_cols [TAG_RECURRENT_RAGGED]
+    // conv input columns: per seq its conv window, then its tokens
+    int64_t       rag_n_conv    = 0;       // conv window columns
+    ggml_tensor * rag_seq       = nullptr; // I32 [4, n_seqs], per seq: kept pending tokens, first token, token count, keep
+    ggml_tensor * rag_conv_in   = nullptr; // I32 [n_tokens + n_conv*n_seqs], source column of each conv input column
+    ggml_tensor * rag_conv_out  = nullptr; // I32 [n_tokens], conv output column of each token
+    ggml_tensor * rag_conv_hist = nullptr; // I32 [n_hist*n_seqs], conv input columns that are the new history of each seq
+    ggml_tensor * rag_pend      = nullptr; // I32 [n_pend*n_seqs], tokens whose inputs are stored as pending (rs_replay)
+
+    void set_input_rag(const llama_memory_recurrent_context * mctx, const llama_ubatch * ubatch);
+
     const llama_memory_recurrent_context * mctx;
 
     // used in view offsets, need to match for valid graph reuse
@@ -346,9 +357,13 @@ public:
 // the mask has two shapes depending on whether `rows` is used:
 //   rows != nullptr: [n_kv_rows, n_batch/n_slices, 1, n_slices]
 //   rows == nullptr: [n_kv,      n_batch/n_stream, 1, n_stream]
+// ragged ubatch with rows: [n_kv_rows, n_batch, 1, 1], the tokens of slice 0, then of slice 1, ...
 struct llm_attn_mask {
     ggml_tensor * raw  = nullptr;
     ggml_tensor * rows = nullptr; // I32 [n_kv_rows, n_slices]
+
+    // ragged ubatch with rows: first token and token count of each slice (see ggml_flash_attn_ext_rows_ragged)
+    ggml_tensor * rows_cols = nullptr; // I32 [2, n_slices]
     uint32_t      n_kv = 0;
 
     // fill every token of a sequence with the mask row of its first token (dspark draft blocks)
@@ -861,6 +876,7 @@ struct llm_graph_params {
             ubatch.n_seqs       == other.ubatch.n_seqs &&
             ubatch.n_seqs_unq   == other.ubatch.n_seqs_unq &&
             ubatch.is_mixed()   == other.ubatch.is_mixed() &&
+            ubatch.is_ragged()  == other.ubatch.is_ragged() &&
             (
                 (!ubatch.token && !other.ubatch.token) ||
                 (!ubatch.embd  && !other.ubatch.embd)  ||
@@ -881,6 +897,11 @@ struct llm_graph_params {
                     can_reuse_ubatch &= ubatch.seq_id_unq[s] == other.ubatch.seq_id_unq[s];
                 }
             }
+        }
+
+        // a ragged graph selects its kernels by the largest token count of a seq
+        if (can_reuse_ubatch && ubatch.is_ragged()) {
+            can_reuse_ubatch = ubatch.data && ubatch.n_seq_tokens_max() == other.ubatch.n_seq_tokens_max();
         }
 
         if (!can_reuse_ubatch) {
@@ -1315,7 +1336,8 @@ struct llm_graph_context {
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                 int64_t   n_kv_max,
                   float   kq_scale,
-                    int   il) const;
+                    int   il,
+            ggml_tensor * kv_rows_cols = nullptr) const; // [2, n_stream], the streams have different token counts
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 

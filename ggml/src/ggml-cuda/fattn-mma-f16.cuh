@@ -1916,6 +1916,7 @@ static __global__ void flash_attn_ext_f16(
         const char * sinks_ptr,
         const int  * KV_max_ptr,
         const int  * KV_rows_ptr,
+        const int  * q_tiles_ptr,
         float      * dst_ptr,
         float2     * dst_meta_ptr,
         const float scale,
@@ -2048,17 +2049,29 @@ static __global__ void flash_attn_ext_f16(
         } else if (KV_max) {
             kb0_stop = min(kb0_stop, KV_max[sequence*iter_j + jt] / nbatch_fa);
         }
+
+        // length aware kv_rows: the tile is a column range of one slice, see flash_attn_q_tile
+        const flash_attn_q_tile q_tile = flash_attn_get_q_tile(q_tiles_ptr, jt, ne01);
+        if (q_tiles_ptr) {
+            Q_f2    = (const float2 *) (Q + int64_t(nb01)*q_tile.col0 + nb02*zt_Q);
+            mask_h  = (const half *) (mask + int64_t(nb31)*q_tile.col0);
+            dstk    = ((float2 *) dst) + (int64_t(q_tile.col0)*ne02 + zt_Q) * (DV/2);
+            indices = KV_rows_ptr + int64_t(q_tile.slice)*ne11;
+        }
+
         constexpr bool is_fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
-        if (kb0_start == 0) {
+        if (q_tile.ne01.z == 0) {
+            // no columns, the upper bound of the tile count is not reached
+        } else if (kb0_start == 0) {
             constexpr bool needs_fixup = false; // CUDA block is working on an entire tile.
             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
                 (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
-                 ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
+                 q_tile.ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, q_tile.jt, zt_gqa, kb0_start, kb0_stop);
         } else {
             constexpr bool needs_fixup = true; // CUDA block is missing the beginning of a tile.
             flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
                 (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
-                 ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
+                 q_tile.ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, q_tile.jt, zt_gqa, kb0_start, kb0_stop);
         }
 
         kbc += iter_k;
@@ -2099,13 +2112,25 @@ static __global__ void flash_attn_ext_f16(
         kb0_stop = min(kb0_stop, KV_max[sequence*iter_j + jt] / nbatch_fa);
     }
 
+    // length aware kv_rows: the tile is a column range of one slice, see flash_attn_q_tile
+    const flash_attn_q_tile q_tile = flash_attn_get_q_tile(q_tiles_ptr, jt, ne01);
+    if (q_tiles_ptr) {
+        Q_f2    = (const float2 *) (Q + int64_t(nb01)*q_tile.col0 + nb02*zt_Q);
+        mask_h  = (const half *) (mask + int64_t(nb31)*q_tile.col0);
+        dstk    = ((float2 *) dst) + (int64_t(q_tile.col0)*ne02 + zt_Q) * (DV/2);
+        indices = KV_rows_ptr + int64_t(q_tile.slice)*ne11;
+    }
+    if (q_tile.ne01.z == 0) {
+        return;
+    }
+
     constexpr bool is_fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
     constexpr bool needs_fixup = false;
     flash_attn_ext_f16_process_tile<DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup>
         (Q_f2, K_h2, V_h2, mask_h, indices, sinks_f, dstk, dst_meta, scale, slope, logit_softcap,
-         ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, jt, zt_gqa, kb0_start, kb0_stop);
+         q_tile.ne01, ne02, gqa_ratio, ne11, stride_Q1, stride_Q2, stride_K, stride_V, stride_mask, q_tile.jt, zt_gqa, kb0_start, kb0_stop);
 #else
-    GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, KV_rows_ptr, dst_ptr, dst_meta_ptr, scale,
+    GGML_UNUSED_VARS(Q_ptr, K_ptr, V_ptr, mask_ptr, sinks_ptr, KV_max_ptr, KV_rows_ptr, q_tiles_ptr, dst_ptr, dst_meta_ptr, scale,
         max_bias, m0, m1, n_head_log2, logit_softcap,
         ne00, ne01, ne02, ne03,
               nb01, nb02, nb03,

@@ -395,6 +395,15 @@ llama_context::llama_context(
 
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
+
+    // [EXPERIMENTAL] ragged ubatches for delta-net: the seqs of a ubatch can have different token counts
+    // LLAMA_RAGGED=1: needs a unified KV cache, and LLAMA_RS_REPLAY if the context can roll back
+    {
+        const char * env = getenv("LLAMA_RAGGED");
+        const bool supported = model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE;
+        cparams.ragged = env && atoi(env) != 0 && supported && cparams.kv_unified &&
+            (cparams.n_rs_seq == 0 || cparams.rs_replay) && model.split_mode() != LLAMA_SPLIT_MODE_TENSOR;
+    }
     cparams.moe_cache_size      = params.moe_cache_size;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
@@ -455,6 +464,7 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
     LLAMA_LOG_INFO("%s: rs_replay             = %s\n",   __func__, cparams.rs_replay ? "true" : "false");
+    LLAMA_LOG_INFO("%s: ragged                = %s\n",   __func__, cparams.ragged ? "true" : "false");
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 

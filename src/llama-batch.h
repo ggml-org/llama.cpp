@@ -5,6 +5,7 @@
 #include "llama-arch.h"
 #include "llama-cparams.h"
 
+#include <algorithm>
 #include <array>
 #include <vector>
 #include <set>
@@ -34,12 +35,25 @@ struct llama_ubatch {
         return type != nullptr;
     }
 
+    // ragged: the tokens of sequence set 0, then of sequence set 1, ... with seq_tokens[s] tokens each
+    bool is_ragged() const {
+        return seq_tokens != nullptr;
+    }
+
+    uint32_t n_seq_tokens_max() const {
+        uint32_t res = n_seq_tokens;
+        for (uint32_t s = 0; is_ragged() && s < n_seqs; ++s) {
+            res = std::max(res, (uint32_t) seq_tokens[s]);
+        }
+        return res;
+    }
+
     uint32_t b_equal_seqs; // note: this is a boolean, but we use an int32_t for alignment
                            //       otherwise address sanitizer complains
     // TODO: whole_seqs for embeddings?
 
     uint32_t n_tokens;     // total tokens (n_seq_tokens * n_seqs)
-    uint32_t n_seq_tokens; // tokens per sequence set
+    uint32_t n_seq_tokens; // tokens per sequence set (0 if ragged)
     uint32_t n_seqs;       // sequence sets in the ubatch
     uint32_t n_seqs_unq;   // unique sequence ids in the ubatch
     uint32_t n_pos;        // number of position inputs for each token/embedding
@@ -61,6 +75,7 @@ struct llama_ubatch {
     int8_t       *  output;     // [n_tokens]         | i   | -
     int8_t       *  type;       // [n_tokens]         | i   | -     (mixed ubatch only, 0 - token, 1 - embd)
     int32_t      *  decision_order; // [n_tokens], NULL if no entry has one, see llama_batch_ext_set_decision_order()
+    int32_t      *  seq_tokens; // [n_seqs]           | s   | tokens of the sequence set (ragged ubatch only)
 
     struct data_t {
         std::vector<llama_token>    token;
@@ -77,6 +92,7 @@ struct llama_ubatch {
         std::vector<int8_t>         type;
         std::vector<int32_t>        batch_idxs;  // original batch index for each token
         std::vector<int32_t>        decision_order;
+        std::vector<int32_t>        seq_tokens;
 
         std::vector<llama_seq_id> seq_id_data;
     };
@@ -191,6 +207,10 @@ public:
     // if sequential == true, the tokens in the ubatch will have increasing sequential sequence ids
     // n_keep_tail = minimum trailing tokens of a seq that must land in the same ubatch
     llama_ubatch split_equal(uint32_t n_ubatch, bool sequential, uint32_t n_keep_tail);
+
+    // make ubatches of whole sequence sets with different token counts (ragged if the counts differ)
+    // n_keep_tail has the same meaning as in split_equal()
+    llama_ubatch split_ragged(uint32_t n_ubatch, uint32_t n_keep_tail);
 
     // sequence-set-wise split - each ubatch contains a single sequence-set
     // TODO: extend to support multiple _full_ sequences in the ubatch
