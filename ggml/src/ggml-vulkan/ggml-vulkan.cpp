@@ -2478,6 +2478,10 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         bool create_aligned = true, bool pin_subgroup_to_warp = false
     ) {
         GGML_ASSERT(!key.stream_k || (!key.mul_mat_id && param_count == 3 && push_constant_size == sizeof(vk_mat_mat_push_constants) && create_aligned));
+        // Non-ID matmul shaders declare the Stream-K scratch binding in all specializations.
+        if (!key.mul_mat_id) {
+            ++param_count;
+        }
         auto& vec = device->pipeline_matmul[key];
         const bool first_call = vec.empty();
         for (size_t i = 0; i < tile_configs.size(); i++) {
@@ -2527,7 +2531,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 const std::string name = shader_name + (key.stream_k ? "_stream_k_" : "_aligned_") + std::to_string(i);
                 ggml_vk_create_pipeline(device, vec[i].aligned,
                     vec[i].aligned->name.empty() ? name.c_str() : vec[i].aligned->name.c_str(),
-                    spv_len, spv_data, "main", param_count + (key.stream_k ? 1 : 0), push_constant_size,
+                    spv_len, spv_data, "main", param_count, push_constant_size,
                     tc.wg_denoms, spec, tc.align,
                     disable_robustness, rfs, rsgs);
             }
@@ -6528,9 +6532,12 @@ void ggml_vk_matmul(
             while (base_work_group_z < batch) {
                 uint32_t groups_z = std::min(batch - base_work_group_z, ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
 
-                vk_mat_mat_push_constants pc = { m, n_chunk, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d, base_work_group_z, batch, k, ne02, ne12, broadcast2, broadcast3, uint32_t(padded_n - n_base) };
+                vk_mat_mat_push_constants pc = {
+                    m, n_chunk, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d, base_work_group_z, batch, k, ne02, ne12, broadcast2, broadcast3, uint32_t(padded_n - n_base),
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+                };
                 init_pushconst_fastdiv(pc);
-                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b_chunk, d_chunk }, pc, { m, n_chunk, groups_z });
+                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b_chunk, d_chunk, d_chunk }, pc, { m, n_chunk, groups_z });
                 base_work_group_z += groups_z;
             }
         }
@@ -6559,7 +6566,7 @@ void ggml_vk_matmul(
         };
         init_pushconst_fastdiv(pc1);
         // Make sure enough workgroups get assigned for split k to work
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, split_k_buffer }, pc1, { (CEIL_DIV(m, pipeline->wg_denoms[0]) * pipeline->wg_denoms[0]) * split_k, n, groups_z });
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, split_k_buffer, split_k_buffer }, pc1, { (CEIL_DIV(m, pipeline->wg_denoms[0]) * pipeline->wg_denoms[0]) * split_k, n, groups_z });
         base_work_group_z += groups_z;
     }
     ggml_vk_sync_buffers(ctx, subctx);
