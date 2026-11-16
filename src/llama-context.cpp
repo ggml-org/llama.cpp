@@ -202,7 +202,10 @@ llama_context::llama_context(
     if (cparams.n_rs_seq > 0) {
         const char * env = getenv("LLAMA_RS_REPLAY");
         const bool supported = model.arch == LLM_ARCH_QWEN35 || model.arch == LLM_ARCH_QWEN35MOE || model.arch == LLM_ARCH_QWEN3NEXT ||
-                               model.arch == LLM_ARCH_QWEN4EXP;
+                               model.arch == LLM_ARCH_QWEN4EXP || model.arch == LLM_ARCH_CLOVER_MOE ||
+                               // KDA
+                               model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
+                               model.arch == LLM_ARCH_BAILINGMOE3;
         cparams.rs_replay = env && atoi(env) != 0 && supported;
         if (cparams.rs_replay && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR && model.arch == LLM_ARCH_QWEN3NEXT) {
             // its conv channels split in two segments, which the channels-first replay conv history cannot keep

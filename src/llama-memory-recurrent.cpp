@@ -119,12 +119,15 @@ llama_memory_recurrent::llama_memory_recurrent(
         s_l[i] = s;
 
         if (this->rs_replay) {
-            // k [S_k, H_k, n_pend], v [S_v, H_v, n_pend], gb [1, H_v, 2*n_pend]: separate rows, so that a split by heads
-            // is one axis of each (-sm tensor)
-            const int64_t n_k = (int64_t) hparams.ssm_d_state*hparams.ssm_n_group;
+            // k [S_k, H_k, n_pend], v [S_v, H_v, n_pend], gb [g0, H_v, 2*n_pend]: separate rows, so that a split by heads
+            // is one axis of each (-sm tensor). The gate is a scalar per head (g0 = 1), or per key dim for KDA (g0 = S_v)
+            const bool    kda  = hparams.n_embd_head_kda != 0;
+            const int64_t n_k  = kda ? (int64_t) hparams.n_embd_head_kda*hparams.n_head() : (int64_t) hparams.ssm_d_state*hparams.ssm_n_group;
+            const int64_t n_v  = kda ? n_k : (int64_t) hparams.ssm_d_inner;
+            const int64_t n_gb = kda ? n_k : (int64_t) hparams.ssm_dt_rank;
             ggml_tensor * spk  = ggml_new_tensor_2d(ctx, type_s, n_k*n_pend, mem_size);
-            ggml_tensor * spv  = ggml_new_tensor_2d(ctx, type_s, (int64_t) hparams.ssm_d_inner*n_pend, mem_size);
-            ggml_tensor * spgb = ggml_new_tensor_2d(ctx, type_s, (int64_t) hparams.ssm_dt_rank*2*n_pend, mem_size);
+            ggml_tensor * spv  = ggml_new_tensor_2d(ctx, type_s, n_v*n_pend, mem_size);
+            ggml_tensor * spgb = ggml_new_tensor_2d(ctx, type_s, n_gb*2*n_pend, mem_size);
             ggml_format_name(spk,  "cache_spk_l%d",  i);
             ggml_format_name(spv,  "cache_spv_l%d",  i);
             ggml_format_name(spgb, "cache_spgb_l%d", i);

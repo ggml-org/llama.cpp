@@ -96,7 +96,9 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
         ggml_tensor *        x,
         int64_t              n_conv,
         int64_t              channels,
-        int                  il) {
+        int                  il,
+        ggml_tensor *        hist_rows,
+        int64_t              blk) {
     const auto * mctx_cur = inp->mctx;
 
     const auto kv_head = mctx_cur->get_head();
@@ -105,13 +107,26 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
     const int64_t n_seqs       = ubatch.n_seqs;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
-    GGML_ASSERT(conv_states_all->ne[0] == channels*n_hist);
+    GGML_ASSERT(conv_states_all->ne[0] % (channels*n_hist) == 0);
+    const int64_t n_blk = conv_states_all->ne[0] / (channels*n_hist);
+
+    GGML_ASSERT(blk >= 0 && blk < n_blk);
     GGML_ASSERT(x->ne[0] == channels && x->ne[1] == n_seq_tokens && x->ne[2] == n_seqs);
     GGML_ASSERT(n_conv <= inp->n_conv);
 
-    // channels first: [window | pending]
-    ggml_tensor * hist = build_rs(inp, conv_states_all, conv_states_all->ne[0], n_seqs);
-    hist = ggml_reshape_3d(ctx0, hist, channels, n_hist, n_seqs);
+    if (hist_rows == nullptr) {
+        hist_rows = build_rs(inp, conv_states_all, conv_states_all->ne[0], n_seqs);
+    }
+    GGML_ASSERT(hist_rows->ne[0] == conv_states_all->ne[0] && hist_rows->ne[1] == n_seqs);
+
+    // channels first: [window | pending], the histories of a row one after the other
+    ggml_tensor * hist = nullptr;
+    if (n_blk == 1) {
+        hist = ggml_reshape_3d(ctx0, hist_rows, channels, n_hist, n_seqs);
+    } else {
+        hist = ggml_reshape_4d(ctx0, hist_rows, channels, n_hist, n_blk, n_seqs);
+        hist = ggml_view_3d(ctx0, hist, channels, n_hist, n_seqs, hist->nb[1], hist->nb[3], blk*hist->nb[2]);
+    }
     cb(hist, "conv_hist", il);
 
     ggml_tensor * win_cols = n_conv == inp->rep_cols_r->ne[0] ? inp->rep_cols_r : inp->rep_cols_p;
@@ -129,10 +144,10 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state_replay(
 
     ggml_tensor * tail = ggml_view_3d(ctx0, cols, channels, n_dst, n_seqs, cols->nb[1], cols->nb[2],
             (n_conv + n_seq_tokens - n_dst)*cols->nb[1]);
-    // the rows as [channels, n_hist, cells], so that the view of the ubatch cells keeps their strides (-sm tensor)
-    ggml_tensor * hist_all = ggml_reshape_3d(ctx0, conv_states_all, channels, n_hist, conv_states_all->ne[1]);
+    // the rows as [channels, n_blk*n_hist, cells], so that the view of the ubatch cells keeps their strides (-sm tensor)
+    ggml_tensor * hist_all = ggml_reshape_3d(ctx0, conv_states_all, channels, n_blk*n_hist, conv_states_all->ne[1]);
     ggml_tensor * hist_dst = ggml_view_3d(ctx0, hist_all, channels, n_dst, n_seqs, hist_all->nb[1], hist_all->nb[2],
-            kv_head*hist_all->nb[2]);
+            kv_head*hist_all->nb[2] + blk*n_hist*hist_all->nb[1]);
     ggml_build_forward_expand(gf, ggml_cpy(ctx0, tail, hist_dst));
 
     return conv_input;
