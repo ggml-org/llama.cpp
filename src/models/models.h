@@ -380,19 +380,102 @@ struct llama_model_bloom : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
-// Quant-only stub for mmproj GGUFs
-// none of these are ever called, they only exist to satisfy the llama_model_base interface
+// mmproj GGUFs: media encoder towers (see src/models/clip.cpp)
+enum llama_clip_projector {
+    LLAMA_CLIP_PROJ_UNKNOWN,
+    LLAMA_CLIP_PROJ_GEMMA3,
+    LLAMA_CLIP_PROJ_QWEN2VL,
+    LLAMA_CLIP_PROJ_QWEN25VL,
+    LLAMA_CLIP_PROJ_QWEN3VL,
+};
+
+struct llama_media_input;
+struct llama_media;
+struct llama_media_proc;
+namespace llama_media_img { struct image_u8; }
+
 struct llama_model_clip : public llama_model_base {
     llama_model_clip(const struct llama_model_params & params) : llama_model_base(params) {}
 
-    [[noreturn]]
-    void load_arch_hparams(llama_model_loader & ml) override;
+    // vision tower hparams that have no place in llama_hparams
+    struct vision_hparams {
+        bool has_vision = false;
 
-    [[noreturn]]
+        llama_clip_projector proj = LLAMA_CLIP_PROJ_UNKNOWN;
+        std::string          proj_name;
+
+        int32_t image_size = 0;
+        int32_t patch_size = 0;
+        int32_t n_merge    = 1; // spatial merge (or pooling kernel) per side
+        int32_t n_embd_out = 0; // projector output width, = decoder input width
+
+        float image_mean[3] = { 0.0f, 0.0f, 0.0f };
+        float image_std [3] = { 1.0f, 1.0f, 1.0f };
+
+        llm_ffn_op_type ffn_op = LLM_FFN_GELU;
+
+        // dynamic resolution limits, 0 = fixed size
+        int32_t image_min_pixels = 0;
+        int32_t image_max_pixels = 0;
+
+        int32_t n_temporal_merge = 1;
+
+        std::vector<int32_t> wa_layers;       // full-attention layers of window-attention towers
+        int32_t              attn_window = 0; // window size in pixels
+        std::vector<int32_t> deepstack_layers;
+    } vhp;
+
+    // vision stem and projector
+    ggml_tensor * v_patch_embd   = nullptr;
+    ggml_tensor * v_patch_embd_1 = nullptr; // second temporal kernel (qwen-vl)
+    ggml_tensor * v_patch_bias   = nullptr;
+    ggml_tensor * v_pos_embd     = nullptr;
+    ggml_tensor * v_pre_ln_w     = nullptr;
+    ggml_tensor * v_pre_ln_b     = nullptr;
+    ggml_tensor * v_post_ln_w    = nullptr;
+    ggml_tensor * v_post_ln_b    = nullptr;
+
+    ggml_tensor * mm_inp_proj      = nullptr;
+    ggml_tensor * mm_soft_emb_norm = nullptr;
+    ggml_tensor * mm_0_w = nullptr;
+    ggml_tensor * mm_0_b = nullptr;
+    ggml_tensor * mm_2_w = nullptr;
+    ggml_tensor * mm_2_b = nullptr;
+
+    struct deepstack_layer {
+        ggml_tensor * norm_w = nullptr;
+        ggml_tensor * norm_b = nullptr;
+        ggml_tensor * fc1_w  = nullptr;
+        ggml_tensor * fc1_b  = nullptr;
+        ggml_tensor * fc2_w  = nullptr;
+        ggml_tensor * fc2_b  = nullptr;
+    };
+    std::vector<deepstack_layer> deepstack; // indexed by vision layer, empty entries for normal layers
+
+    void load_vocab(llama_model_loader & ml) override;
+    void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    [[noreturn]]
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    //
+    // media support, called by llama-media.cpp
+    //
+
+    // the largest media the encoder graph is reserved for, given the output row budget
+    llama_media_input reserve_media(uint32_t n_rows_max) const;
+
+    // preprocess an image (or a merged frame pair), fill the input and the output geometry of m
+    // returns false if the projector does not take this input
+    bool media_preprocess_image(const llama_media_proc & proc, const llama_media_img::image_u8 * frames, int n_frames, llama_media & m) const;
+
+    // tokens placed before and after an image span
+    void media_image_wrap(const llama_media_proc & proc, std::vector<llama_token> & beg, std::vector<llama_token> & end) const;
+
+    struct graph_vit;
+    struct graph_gemma3;
+    struct graph_qwen2vl;
+    struct graph_qwen3vl;
 };
 
 struct llama_model_mpt : public llama_model_base {
@@ -895,6 +978,9 @@ struct llama_model_gemma3 : public llama_model_base {
     llama_model_gemma3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
+
+    // image tokens attend to each other in both directions
+    bool media_bidirectional(enum llama_media_type type) const override { return type == LLAMA_MEDIA_TYPE_IMAGE; }
 
     template <bool iswa>
     struct graph : public llm_graph_context {

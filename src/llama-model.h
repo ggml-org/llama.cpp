@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "llama-arch.h"
+#include "llama-ext.h"
 #include "llama-graph.h"
 #include "llama-hparams.h"
 #include "llama-memory.h"
@@ -1016,6 +1017,12 @@ struct llama_model {
 
     // the RoPE of a layer, used by both the model graph and the K-shift
     virtual llama_rope_params get_rope_params(const llama_cparams & cparams, int il) const;
+
+    // decoder side of media: whether attention is bidirectional inside a media span of this type
+    virtual bool media_bidirectional(enum llama_media_type type) const {
+        GGML_UNUSED(type);
+        return false;
+    }
 
     // same, for the keys of the lightning indexer
     virtual llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const;

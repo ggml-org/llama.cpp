@@ -11,6 +11,7 @@
 #include "llama-model.h"
 #include "llama-moe-cache.h"
 #include "llama-ext.h"
+#include "llama-media.h"
 #include "llama-sampler.h"
 #include "llama.h"
 
@@ -111,6 +112,10 @@ static void llama_verify_hadamard_graph(
 }
 
 static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
+    // staging value, not part of enum llama_context_type yet
+    if (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
+        return LLM_GRAPH_TYPE_ENCODER;
+    }
     switch (ctx_type) {
         case LLAMA_CONTEXT_TYPE_DEFAULT: return LLM_GRAPH_TYPE_DEFAULT;
         case LLAMA_CONTEXT_TYPE_MTP    : return LLM_GRAPH_TYPE_DECODER_MTP;
@@ -317,6 +322,13 @@ llama_context::llama_context(
         cparams.causal_attn = hparams.causal_attn;
     } else {
         cparams.causal_attn = params.attention_type == LLAMA_ATTENTION_TYPE_CAUSAL;
+    }
+
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
+        // media encoders output one embedding row per media token, with full attention inside a media
+        cparams.embeddings   = true;
+        cparams.causal_attn  = false;
+        cparams.pooling_type = LLAMA_POOLING_TYPE_NONE;
     }
 
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
@@ -1889,7 +1901,101 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     return res;
 }
 
+int llama_context::encode_media(const llama_batch_ext & batch_inp) {
+    if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_ENCODER) {
+        LLAMA_LOG_ERROR("%s: media can only be encoded by an ENCODER context\n", __func__);
+        return -1;
+    }
+
+    if (t_compute_start_us == 0) {
+        t_compute_start_us = ggml_time_us();
+    }
+
+    sched_reserve();
+
+    // one media per ubatch; media of equal geometry could share one in the future
+    for (llama_media * m : batch_inp.media) {
+        const uint32_t n_rows = m->n_tokens;
+        if (n_rows == 0 || m->inp.data.empty()) {
+            LLAMA_LOG_ERROR("%s: cannot encode a placeholder media\n", __func__);
+            return -1;
+        }
+        if (n_rows > cparams.n_ubatch) {
+            LLAMA_LOG_ERROR("%s: media with %u rows exceeds n_ubatch = %u of the encoder context\n", __func__, n_rows, cparams.n_ubatch);
+            return -1;
+        }
+
+        auto udata = std::make_shared<llama_ubatch::data_t>();
+        udata->pos       .resize(n_rows);
+        udata->n_seq_id  .assign(n_rows, 1);
+        udata->seq_id_data.assign(n_rows, 0);
+        udata->seq_id    .resize(n_rows);
+        udata->seq_id_unq = { 0 };
+        udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
+        udata->seq_idx[0] = 0;
+        udata->output    .assign(n_rows, 1);
+        for (uint32_t i = 0; i < n_rows; ++i) {
+            udata->pos[i]    = i;
+            udata->seq_id[i] = udata->seq_id_data.data() + i;
+        }
+
+        llama_ubatch ubatch {
+            /*.b_equal_seqs =*/ true,
+            /*.n_tokens     =*/ n_rows,
+            /*.n_seq_tokens =*/ n_rows,
+            /*.n_seqs       =*/ 1,
+            /*.n_seqs_unq   =*/ 1,
+            /*.n_pos        =*/ 1,
+            /*.token        =*/ nullptr,
+            /*.embd         =*/ nullptr,
+            /*.embd_state   =*/ nullptr,
+            /*.embd_row     =*/ nullptr,
+            /*.pos          =*/ udata->pos.data(),
+            /*.n_seq_id     =*/ udata->n_seq_id.data(),
+            /*.seq_id       =*/ udata->seq_id.data(),
+            /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
+            /*.seq_idx      =*/ udata->seq_idx.data(),
+            /*.output       =*/ udata->output.data(),
+            /*.type         =*/ nullptr,
+            /*.decision_order =*/ nullptr,
+            /*.span         =*/ nullptr,
+            /*.media        =*/ &m->inp,
+            /*.data         =*/ udata,
+        };
+
+        n_queued_tokens += n_rows;
+        n_outputs = n_rows;
+
+        ggml_status status;
+        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
+        if (!res) {
+            switch (status) {
+                case GGML_STATUS_ABORTED:      return  2;
+                case GGML_STATUS_ALLOC_FAILED: return -2;
+                case GGML_STATUS_FAILED:       return -3;
+                case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
+            }
+        }
+
+        ggml_tensor * t_embd = res->get_embd();
+        GGML_ASSERT(t_embd != nullptr);
+        GGML_ASSERT(t_embd->ne[1] == (int64_t) n_rows && "the encoder graph output does not match the media rows");
+
+        synchronize();
+
+        m->n_embd = t_embd->ne[0];
+        m->rows.resize((size_t) m->n_embd * n_rows);
+        ggml_backend_tensor_get(t_embd, m->rows.data(), 0, ggml_nbytes(t_embd));
+    }
+
+    return 0;
+}
+
 int llama_context::encode(const llama_batch_ext & batch_inp) {
+    if (!batch_inp.media.empty()) {
+        return encode_media(batch_inp);
+    }
+
     if (batch_inp.tokens.empty()) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
@@ -4578,6 +4684,11 @@ llama_context * llama_init_from_model(
         //user-specified pooling-type is different from the model default
         LLAMA_LOG_WARN("%s: model default pooling_type is [%d], but [%d] was specified\n", __func__,
                        model->hparams.pooling_type, params.pooling_type);
+    }
+
+    if ((model->arch == LLM_ARCH_CLIP) != (params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER)) {
+        LLAMA_LOG_ERROR("%s: mmproj models need an ENCODER context, and ENCODER contexts need an mmproj model\n", __func__);
+        return nullptr;
     }
 
     // router_layer >= 0 means n_layer_nextn is repurposed for a router layer, not real MTP

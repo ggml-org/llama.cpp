@@ -61,6 +61,7 @@ enum llm_ffn_op_type : int {
     LLM_FFN_SILU,
     LLM_FFN_GELU,
     LLM_FFN_GELU_ERF,
+    LLM_FFN_GELU_QUICK,     // vision towers (CLIP default)
     LLM_FFN_RELU,
     LLM_FFN_RELU_SQR,
     LLM_FFN_SWIGLU,

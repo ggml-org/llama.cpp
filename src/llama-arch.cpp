@@ -853,6 +853,28 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_POS_NET_ATTN_K,                         "posnet.%d.attn_k" },
     { LLM_TENSOR_POS_NET_ATTN_V,                         "posnet.%d.attn_v" },
     { LLM_TENSOR_POS_NET_ATTN_OUT,                       "posnet.%d.attn_output" },
+    { LLM_TENSOR_V_ENC_EMBD_PATCH,                       "v.patch_embd" },
+    { LLM_TENSOR_V_ENC_EMBD_POS,                         "v.position_embd" },
+    { LLM_TENSOR_V_ENC_ATTN_QKV,                         "v.blk.%d.attn_qkv" },
+    { LLM_TENSOR_V_ENC_ATTN_Q,                           "v.blk.%d.attn_q" },
+    { LLM_TENSOR_V_ENC_ATTN_K,                           "v.blk.%d.attn_k" },
+    { LLM_TENSOR_V_ENC_ATTN_V,                           "v.blk.%d.attn_v" },
+    { LLM_TENSOR_V_ENC_ATTN_Q_NORM,                      "v.blk.%d.attn_q_norm" },
+    { LLM_TENSOR_V_ENC_ATTN_K_NORM,                      "v.blk.%d.attn_k_norm" },
+    { LLM_TENSOR_V_ENC_ATTN_O,                           "v.blk.%d.attn_out" },
+    { LLM_TENSOR_V_ENC_INPUT_NORM,                       "v.blk.%d.ln1" },
+    { LLM_TENSOR_V_ENC_POST_ATTN_NORM,                   "v.blk.%d.ln2" },
+    { LLM_TENSOR_V_ENC_FFN_UP,                           "v.blk.%d.ffn_up" },
+    { LLM_TENSOR_V_ENC_FFN_GATE,                         "v.blk.%d.ffn_gate" },
+    { LLM_TENSOR_V_ENC_FFN_DOWN,                         "v.blk.%d.ffn_down" },
+    { LLM_TENSOR_V_PRE_NORM,                             "v.pre_ln" },
+    { LLM_TENSOR_V_POST_NORM,                            "v.post_ln" },
+    { LLM_TENSOR_V_MMPROJ,                               "mm.%d" },
+    { LLM_TENSOR_V_MM_INP_PROJ,                          "mm.input_projection" },
+    { LLM_TENSOR_V_MM_SOFT_EMB_NORM,                     "mm.soft_emb_norm" },
+    { LLM_TENSOR_V_DS_NORM,                              "v.deepstack.%d.norm" },
+    { LLM_TENSOR_V_DS_FC1,                               "v.deepstack.%d.fc1" },
+    { LLM_TENSOR_V_DS_FC2,                               "v.deepstack.%d.fc2" },
     { LLM_TENSOR_ATTN_SINKS,                             "blk.%d.attn_sinks" },
     { LLM_TENSOR_ATTN_SSMAX,                             "blk.%d.attn_ssmax" },
     { LLM_TENSOR_SHORTCONV_CONV,                         "blk.%d.shortconv.conv" },
@@ -1201,6 +1223,29 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_POS_NET_ATTN_K,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_POS_NET_ATTN_V,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_POS_NET_ATTN_OUT,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    // media encoder towers: stem and projector tensors follow the output device
+    {LLM_TENSOR_V_ENC_EMBD_PATCH,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_EMBD_POS,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_ADD}},
+    {LLM_TENSOR_V_ENC_ATTN_QKV,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_ATTN_Q,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_ATTN_K,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_ATTN_V,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_ATTN_Q_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_ENC_ATTN_K_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_ENC_ATTN_O,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_INPUT_NORM,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_ENC_POST_ATTN_NORM,       {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_ENC_FFN_UP,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_FFN_GATE,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_ENC_FFN_DOWN,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_PRE_NORM,                 {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+    {LLM_TENSOR_V_POST_NORM,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+    {LLM_TENSOR_V_MMPROJ,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_MM_INP_PROJ,              {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_MM_SOFT_EMB_NORM,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+    {LLM_TENSOR_V_DS_NORM,                  {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_V_DS_FC1,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_V_DS_FC2,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_DW,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_IM2COL}},
     {LLM_TENSOR_CONVNEXT_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_CONVNEXT_PW1,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -1321,10 +1366,10 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_ATTN_V_EXPS,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
 };
 
-LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
+LLM_KV::LLM_KV(llm_arch arch, const char * suffix, const char * prefix) : arch(arch), suffix(suffix), prefix(prefix) {}
 
 std::string LLM_KV::operator()(llm_kv kv) const {
-    std::string name = ::format(LLM_KV_NAMES.at(kv), LLM_ARCH_NAMES.at(arch));
+    std::string name = ::format(LLM_KV_NAMES.at(kv), prefix ? prefix : LLM_ARCH_NAMES.at(arch));
 
     if (suffix != nullptr) {
         name += ".";

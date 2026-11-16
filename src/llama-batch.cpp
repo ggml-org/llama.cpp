@@ -1,4 +1,5 @@
 #include "llama-batch.h"
+#include "llama-ext.h"
 
 #include "llama-impl.h"
 #include "llama-vocab.h"
@@ -196,6 +197,23 @@ bool llama_batch_allocr::init(
     }
 
     //
+    // bidirectional spans (media rows of some decoders)
+    //
+
+    for (int32_t i = 0; i < n_tok; ++i) {
+        if (batch_inp.tokens[i].span_lo >= 0) {
+            span_vec.resize((size_t) 2*n_tok, -1);
+            break;
+        }
+    }
+    if (!span_vec.empty()) {
+        for (int32_t i = 0; i < n_tok; ++i) {
+            span_vec[2*i + 0] = batch_inp.tokens[i].span_lo;
+            span_vec[2*i + 1] = batch_inp.tokens[i].span_hi;
+        }
+    }
+
+    //
     // build n_seq_id / seq_id arrays
     //
 
@@ -353,6 +371,8 @@ bool llama_batch_allocr::init(
             /*.output       =*/ batch.logits,
             /*.type         =*/ is_embd_vec.empty() ? nullptr : is_embd_vec.data(),
             /*.decision_order =*/ decision_order.empty() ? nullptr : decision_order.data(),
+            /*.span         =*/ span_vec.empty() ? nullptr : span_vec.data(),
+            /*.media        =*/ nullptr,
             /*.data         =*/ {},
         };
 
@@ -579,6 +599,8 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.output       =*/ udata->output.data(),
         /*.type         =*/ nullptr,
         /*.decision_order =*/ nullptr,
+        /*.span         =*/ nullptr,
+        /*.media        =*/ nullptr,
         /*.data         =*/ std::move(udata),
     };
 
@@ -653,7 +675,35 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
         }
     }
 
+    // do not cut a bidirectional span: give back its head, unless the span starts the ubatch
+    if (cur_idx < used.size() && same_span(idxs.back(), cur_idx)) {
+        size_t n_keep = idxs.size();
+        while (n_keep > 0 && same_span(idxs[n_keep - 1], cur_idx)) {
+            --n_keep;
+        }
+        if (n_keep > 0) {
+            for (size_t k = n_keep; k < idxs.size(); ++k) {
+                used[idxs[k]] = false;
+                --n_used;
+            }
+            idxs.resize(n_keep);
+        } else {
+            LLAMA_LOG_WARN("%s: a bidirectional span is longer than n_ubatch = %u, it is split\n", __func__, n_ubatch);
+        }
+    }
+
     return ubatch_add(idxs, idxs.size(), false);
+}
+
+bool llama_batch_allocr::same_span(int32_t i, int32_t j) const {
+    if (span_vec.empty()) {
+        return false;
+    }
+    const llama_pos lo = span_vec[2*i];
+    if (lo < 0 || lo != span_vec[2*j] || span_vec[2*i + 1] != span_vec[2*j + 1]) {
+        return false;
+    }
+    return seq_set[i] == seq_set[j];
 }
 
 llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential, uint32_t n_keep_tail) {
@@ -852,6 +902,21 @@ llama_ubatch llama_batch_allocr::split_seq(uint32_t n_ubatch) {
         ++n_used;
 
         if (idxs.size() >= n_ubatch) {
+            // do not cut a bidirectional span: give back its head, unless the span starts the ubatch
+            const uint32_t next = cur_idx + 1;
+            if (next < get_n_tokens() && !used[next] && same_span(idxs.back(), next)) {
+                size_t n_keep = idxs.size();
+                while (n_keep > 0 && same_span(idxs[n_keep - 1], next)) {
+                    --n_keep;
+                }
+                if (n_keep > 0) {
+                    for (size_t k = n_keep; k < idxs.size(); ++k) {
+                        used[idxs[k]] = false;
+                        --n_used;
+                    }
+                    idxs.resize(n_keep);
+                }
+            }
             break;
         }
 
@@ -887,6 +952,7 @@ void llama_batch_allocr::clear() {
     seq_id_unq  .clear();
     output      .clear();
     decision_order.clear();
+    span_vec.clear();
 
     for (auto & cur : seq_pos) {
         cur.clear();
@@ -943,6 +1009,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->output    .resize(n_tokens);
     udata->type      .resize(mixed ? n_tokens : 0);
     udata->decision_order.resize(decision_order.empty() ? 0 : n_tokens);
+    udata->span      .resize(span_vec.empty() ? 0 : 2*n_tokens);
 
     udata->batch_idxs = idxs;
     udata->seq_id_data.reserve(n_tokens);
@@ -983,6 +1050,11 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
         if (!decision_order.empty()) {
             udata->decision_order[i] = decision_order[idxs[i]];
+        }
+
+        if (!span_vec.empty()) {
+            udata->span[2*i + 0] = span_vec[2*idxs[i] + 0];
+            udata->span[2*i + 1] = span_vec[2*idxs[i] + 1];
         }
 
         for (int s = 0; s < udata->n_seq_id[i]; ++s) {
@@ -1030,6 +1102,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.output       =*/ udata->output.data(),
         /*.type         =*/ mixed ? udata->type.data() : nullptr,
         /*.decision_order =*/ udata->decision_order.empty() ? nullptr : udata->decision_order.data(),
+        /*.span         =*/ udata->span.empty() ? nullptr : udata->span.data(),
+        /*.media        =*/ nullptr,
         /*.data         =*/ std::move(udata),
     };
 
@@ -1218,7 +1292,13 @@ llama_batch_ext::llama_batch_ext(llama_context * ctx) :
         n_seq_max(llama_n_seq_max(ctx)),
         mem(llama_get_memory(ctx)),
         n_vocab(llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(ctx)))),
-        n_pos_per_embd(llama_get_model(ctx)->hparams.n_pos_per_embd()) {
+        n_pos_per_embd(llama_get_model(ctx)->hparams.n_pos_per_embd()),
+        model(llama_get_model(ctx)),
+        ctx_type(ctx->get_cparams().ctx_type) {
+    clear();
+}
+
+llama_batch_ext::~llama_batch_ext() {
     clear();
 }
 
@@ -1246,6 +1326,10 @@ void llama_batch_ext::clear() {
     embd  .clear();
     state .clear();
     n_embd = 0;
+    for (auto * m : media) {
+        llama_media_free(m);
+    }
+    media.clear();
 }
 
 int32_t llama_batch_ext::add_token(llama_seq_id seq_id) {

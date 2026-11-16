@@ -159,3 +159,78 @@ LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
 
 // each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
 LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);
+
+//
+// media (mmproj) models: encoder context, preprocessing, layout and media rows
+// staging API for retiring libmtmd, see docs/mtmd-libllama-api-changes.md
+//
+
+// context role for mmproj models: runs the vision / audio input towers
+// n_ubatch of such a context bounds the output rows of one encode, and sets its compute reservation
+static const enum llama_context_type LLAMA_CONTEXT_TYPE_ENCODER = (enum llama_context_type) 16;
+
+LLAMA_API bool llama_model_has_context_type(const struct llama_model * model, enum llama_context_type type);
+
+struct llama_media_proc;
+struct llama_media_layout;
+struct llama_media;
+
+enum llama_media_type {
+    LLAMA_MEDIA_TYPE_IMAGE = 0,
+    LLAMA_MEDIA_TYPE_AUDIO = 1,
+};
+
+struct llama_media_proc_params {
+    int32_t image_min_tokens; // <= 0: model default
+    int32_t image_max_tokens; // <= 0: model default, capped by n_ubatch of the encoder context
+    int32_t n_span_max;       // largest atomic span the decoder takes in one ubatch, 0 = no limit
+};
+
+LLAMA_API struct llama_media_proc_params llama_media_proc_default_params(void);
+
+// preprocessing and layout for an (encoder context, decoder model) pair
+// thread-safe, reads only constant state, allocates no compute resources
+LLAMA_API struct llama_media_proc * llama_media_proc_init(
+        const struct llama_context * ctx_enc,
+        const struct llama_model   * model_dec,
+        struct llama_media_proc_params params);
+
+LLAMA_API void    llama_media_proc_free       (struct llama_media_proc * proc);
+LLAMA_API bool    llama_media_proc_has        (const struct llama_media_proc * proc, enum llama_media_type type);
+LLAMA_API int32_t llama_media_proc_sample_rate(const struct llama_media_proc * proc); // -1 without audio
+
+// builder: pieces in prompt order; pos_0 is the position of the first piece
+// rgb == nullptr gives a placeholder: exact counts, cannot be encoded
+LLAMA_API struct llama_media_layout * llama_media_layout_init(const struct llama_media_proc * proc, llama_pos pos_0);
+LLAMA_API void    llama_media_layout_free      (struct llama_media_layout * lay);
+LLAMA_API int32_t llama_media_layout_add_tokens(struct llama_media_layout * lay, const llama_token * tokens, size_t n);
+LLAMA_API int32_t llama_media_layout_add_image (struct llama_media_layout * lay, uint32_t nx, uint32_t ny, const uint8_t * rgb, const char * id);
+// a video frame pair that the model merges into one span (temporal merge); rgb1 may be null for a lone last frame
+LLAMA_API int32_t llama_media_layout_add_frames(struct llama_media_layout * lay, uint32_t nx, uint32_t ny,
+                                                const uint8_t * rgb0, const uint8_t * rgb1, const char * id);
+
+LLAMA_API size_t              llama_media_layout_n_pieces  (const struct llama_media_layout * lay);
+LLAMA_API const llama_token * llama_media_layout_get_tokens(const struct llama_media_layout * lay, size_t i, size_t * n); // nullptr for media
+LLAMA_API struct llama_media * llama_media_layout_get_media(const struct llama_media_layout * lay, size_t i);             // new reference
+
+LLAMA_API enum llama_media_type llama_media_get_type      (const struct llama_media * m);
+LLAMA_API uint32_t              llama_media_n_tokens      (const struct llama_media * m); // KV cells it takes
+LLAMA_API llama_pos             llama_media_n_pos         (const struct llama_media * m); // positions it advances
+LLAMA_API bool                  llama_media_is_atomic     (const struct llama_media * m); // must sit in one decoder ubatch
+LLAMA_API const char *          llama_media_get_id        (const struct llama_media * m);
+LLAMA_API bool                  llama_media_is_placeholder(const struct llama_media * m);
+LLAMA_API bool                  llama_media_is_encoded    (const struct llama_media * m);
+LLAMA_API struct llama_media *  llama_media_ref           (struct llama_media * m);
+LLAMA_API void                  llama_media_free          (struct llama_media * m); // drops one reference
+LLAMA_API void                  llama_media_release_rows  (struct llama_media * m); // keep the handle, free the rows
+// read back encoded rows; returns the row width, 0 if not encoded
+LLAMA_API int64_t               llama_media_get_rows      (const struct llama_media * m, int64_t row0, int64_t n_rows, float * out);
+
+// meaning depends on the context type of the batch:
+// ENCODER context: queue the media for encoding (row0, n_rows and pos_0 are ignored); llama_process(ENCODE) writes the rows into the media
+// decoder context: add rows [row0, row0 + n_rows) of an encoded media to seq_id, the media starting at pos_0 (n_rows = 0: all)
+//                  libllama sets the positions and the attention span of the rows
+// returns the batch index of the first row, or: -1 full, -3 bad seq_id, -4 not encoded, -5 would split an atomic media,
+//                                               -6 the context cannot take this media
+LLAMA_API int32_t llama_batch_ext_add_media(struct llama_batch_ext * batch, llama_seq_id seq_id,
+                                            struct llama_media * media, uint32_t row0, uint32_t n_rows, llama_pos pos_0);

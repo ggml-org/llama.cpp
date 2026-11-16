@@ -2105,6 +2105,15 @@ ggml_tensor * llm_graph_context::build_ffn(
                     cb(cur, "ffn_act", il);
                 }
             } break;
+        case LLM_FFN_GELU_QUICK:
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_geglu_quick_split(ctx0, cur, tmp);
+                cb(cur, "ffn_geglu_quick", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
+                cur = ggml_gelu_quick(ctx0, cur);
+                cb(cur, "ffn_gelu_quick", il);
+            } break;
         case LLM_FFN_GELU_ERF:
             if (gate && type_gate == LLM_FFN_PAR) {
                 cur = ggml_geglu_erf_split(ctx0, cur, tmp);

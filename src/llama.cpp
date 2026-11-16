@@ -348,9 +348,6 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
-        if (model->arch == LLM_ARCH_CLIP) {
-            throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
-        }
         try {
             model->load_vocab(ml);
         } catch(const std::exception & e) {

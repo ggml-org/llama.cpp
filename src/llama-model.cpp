@@ -1502,8 +1502,19 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_GENERAL_NAME, name, false);
 
     // everything past this point is not vocab-related
-    // for CLIP models, we only need to load tensors, no hparams
-    if (hparams.vocab_only || ml.get_arch() == LLM_ARCH_CLIP) {
+    if (hparams.vocab_only) {
+        return;
+    }
+
+    // mmproj (CLIP) models keep their hparams under clip.<tower>.*, the arch reads them
+    if (ml.get_arch() == LLM_ARCH_CLIP) {
+        load_arch_hparams(ml);
+
+        pimpl->n_bytes  = ml.n_bytes;
+        pimpl->desc_str = arch_name() + " " + type_name() + " " + ml.ftype_name();
+        pimpl->ftype    = ml.ftype;
+
+        hparams.rope_type = llama_model_rope_type(this);
         return;
     }
 
@@ -2831,7 +2842,9 @@ void llama_model::print_info() const {
         }
     }
 
-    vocab.print_info();
+    if (vocab.n_tokens() > 0) {
+        vocab.print_info();
+    }
 }
 
 ggml_backend_dev_t llama_model::dev_layer(int il) const {
@@ -2983,6 +2996,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_EUROBERT:
         case LLM_ARCH_WAVTOKENIZER_DEC:
+        case LLM_ARCH_CLIP:
         case LLM_ARCH_MODERN_BERT:
         case LLM_ARCH_GEMMA_EMBEDDING:
         case LLM_ARCH_GEMMA_EMBEDDING2:

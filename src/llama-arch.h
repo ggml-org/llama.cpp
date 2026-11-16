@@ -851,6 +851,29 @@ enum llm_tensor {
     LLM_TENSOR_POS_NET_ATTN_K,
     LLM_TENSOR_POS_NET_ATTN_V,
     LLM_TENSOR_POS_NET_ATTN_OUT,
+    // media encoder towers (mmproj), names follow gguf-py MODEL_TENSOR.V_*
+    LLM_TENSOR_V_ENC_EMBD_PATCH,
+    LLM_TENSOR_V_ENC_EMBD_POS,
+    LLM_TENSOR_V_ENC_ATTN_QKV,
+    LLM_TENSOR_V_ENC_ATTN_Q,
+    LLM_TENSOR_V_ENC_ATTN_K,
+    LLM_TENSOR_V_ENC_ATTN_V,
+    LLM_TENSOR_V_ENC_ATTN_Q_NORM,
+    LLM_TENSOR_V_ENC_ATTN_K_NORM,
+    LLM_TENSOR_V_ENC_ATTN_O,
+    LLM_TENSOR_V_ENC_INPUT_NORM,
+    LLM_TENSOR_V_ENC_POST_ATTN_NORM,
+    LLM_TENSOR_V_ENC_FFN_UP,
+    LLM_TENSOR_V_ENC_FFN_GATE,
+    LLM_TENSOR_V_ENC_FFN_DOWN,
+    LLM_TENSOR_V_PRE_NORM,
+    LLM_TENSOR_V_POST_NORM,
+    LLM_TENSOR_V_MMPROJ,
+    LLM_TENSOR_V_MM_INP_PROJ,
+    LLM_TENSOR_V_MM_SOFT_EMB_NORM,
+    LLM_TENSOR_V_DS_NORM,
+    LLM_TENSOR_V_DS_FC1,
+    LLM_TENSOR_V_DS_FC2,
     LLM_TENSOR_SHORTCONV_CONV,
     LLM_TENSOR_SHORTCONV_INPROJ,
     LLM_TENSOR_SHORTCONV_OUTPROJ,
@@ -929,10 +952,12 @@ enum llm_tensor_layer {
 };
 
 struct LLM_KV {
-    LLM_KV(llm_arch arch, const char * suffix = nullptr);
+    // prefix replaces the arch name, e.g. "clip.vision" for the vision tower of an mmproj
+    LLM_KV(llm_arch arch, const char * suffix = nullptr, const char * prefix = nullptr);
 
     llm_arch arch;
     const char * suffix;
+    const char * prefix;
 
     std::string operator()(llm_kv kv) const;
 };

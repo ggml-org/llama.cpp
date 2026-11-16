@@ -279,6 +279,39 @@ enum mtmd_pos_type {
 };
 
 
+// reference to a media of the libllama engine (llama-ext.h), used for the projectors already ported to libllama
+struct mtmd_lmedia_ref {
+    llama_media * m = nullptr;
+
+    mtmd_lmedia_ref() = default;
+    explicit mtmd_lmedia_ref(llama_media * m) : m(m) {}
+    mtmd_lmedia_ref(const mtmd_lmedia_ref & o) : m(o.m ? llama_media_ref(o.m) : nullptr) {}
+    mtmd_lmedia_ref(mtmd_lmedia_ref && o) noexcept : m(o.m) { o.m = nullptr; }
+    mtmd_lmedia_ref & operator=(const mtmd_lmedia_ref & o) {
+        if (this != &o) {
+            reset();
+            m = o.m ? llama_media_ref(o.m) : nullptr;
+        }
+        return *this;
+    }
+    mtmd_lmedia_ref & operator=(mtmd_lmedia_ref && o) noexcept {
+        if (this != &o) {
+            reset();
+            m = o.m;
+            o.m = nullptr;
+        }
+        return *this;
+    }
+    ~mtmd_lmedia_ref() { reset(); }
+
+    void reset() {
+        if (m) {
+            llama_media_free(m);
+            m = nullptr;
+        }
+    }
+};
+
 struct mtmd_image_tokens {
     uint32_t nx = 0; // number of tokens in x direction
     uint32_t ny = 0; // number of tokens in y direction
@@ -286,6 +319,9 @@ struct mtmd_image_tokens {
     uint32_t image_idx = 0; // 0-based position of this image among image chunks in the prompt(used by pos == MTMD_POS_TYPE_HUNYUANVL)
     uint32_t n_temporal_merge = 1; // for qwen-vl style temporal merge
     uint32_t n_tokens() const {
+        if (lmedia.m) {
+            return llama_media_n_tokens(lmedia.m);
+        }
         if (pos == MTMD_POS_TYPE_HUNYUANVL) {
             // [BOI] [row0 tokens + newline] ... [row(ny-1) tokens + newline] [EOI]
             return (nx + 1) * ny + 2;
@@ -313,8 +349,13 @@ struct mtmd_image_tokens {
     mtmd_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
+    mtmd_lmedia_ref lmedia; // set when the libllama engine handles this image
+
     // true if one of entries in batch_f32 is a placeholder
     bool is_placeholder() const {
+        if (lmedia.m) {
+            return llama_media_is_placeholder(lmedia.m);
+        }
         for (const auto & entry : batch_f32.entries) {
             if (entry.is_placeholder()) {
                 return true;
@@ -344,7 +385,8 @@ struct mtmd_image_tokens {
             image_idx,
             n_temporal_merge,
             batch_f32.clone(),
-            id
+            id,
+            lmedia,
         };
     }
 
@@ -758,6 +800,27 @@ static llama_model * mtmd_tiny_voca_stack_load(const char * fname, ggml_backend_
     return model;
 }
 
+// the libllama media engine (llama-ext.h): mmproj as a llama_model, an ENCODER context and a media proc
+struct mtmd_lm {
+    llama_model_ptr   model;
+    llama_context_ptr ctx;
+    llama_media_proc * proc = nullptr;
+
+    ~mtmd_lm() {
+        llama_media_proc_free(proc);
+    }
+};
+
+// projectors that run on libllama unless MTMD_LEGACY_ENGINE is set
+static bool mtmd_lm_ported(projector_type proj) {
+    switch (proj) {
+        case PROJECTOR_TYPE_GEMMA3:
+            return true;
+        default:
+            return false;
+    }
+}
+
 struct mtmd_context {
     // must outlive the subcontexts below
     mtmd_models models;
@@ -829,6 +892,9 @@ struct mtmd_context {
 
     // batching
     int32_t batch_max_tokens;
+
+    // libllama engine for ported projectors, nullptr otherwise
+    std::unique_ptr<mtmd_lm> lm;
 
     // TODO @ngxson : add timings
 
@@ -970,6 +1036,63 @@ struct mtmd_context {
         if (ctx_a) {
             init_audio();
         }
+        if (ctx_v && text_model && !no_alloc && mtmd_lm_ported(ctx_v->model.proj_type) && std::getenv("MTMD_LEGACY_ENGINE") == nullptr) {
+            init_lm(mmproj_fname, ctx_params, device);
+        }
+    }
+
+    // load the mmproj a second time, as a llama_model, and run ported projectors on libllama
+    void init_lm(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
+        const auto & hp = ctx_v->model.hparams;
+        const int32_t align = hp.patch_size * std::max(hp.n_merge, 1);
+        const int32_t max_rows = hp.image_max_pixels > 0
+            ? hp.image_max_pixels / (align * align)
+            : (hp.image_size / align) * (hp.image_size / align);
+
+        auto lm_new = std::make_unique<mtmd_lm>();
+
+        llama_model_params mp = llama_model_default_params();
+        ggml_backend_dev_t devs[2] = { device, nullptr };
+        mp.n_gpu_layers = device ? 999 : 0;
+        mp.devices      = device ? devs : nullptr;
+        if (const char * lm_mode = std::getenv("MTMD_LM_LOAD_MODE")) {
+            if (strcmp(lm_mode, "dio") == 0) {
+                mp.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
+            }
+        }
+        lm_new->model.reset(llama_model_load_from_file(mmproj_fname, mp));
+        if (!lm_new->model) {
+            LOG_WRN("%s: libllama could not load %s, using the mtmd engine\n", __func__, mmproj_fname);
+            return;
+        }
+
+        llama_context_params cp = llama_context_default_params();
+        cp.ctx_type        = LLAMA_CONTEXT_TYPE_ENCODER;
+        cp.n_ctx           = max_rows;
+        cp.n_batch         = max_rows;
+        cp.n_ubatch        = max_rows;
+        cp.n_seq_max       = 1;
+        cp.n_threads       = ctx_params.n_threads;
+        cp.n_threads_batch = ctx_params.n_threads;
+        cp.flash_attn_type = ctx_params.flash_attn_type;
+        cp.no_perf         = true;
+        lm_new->ctx.reset(llama_init_from_model(lm_new->model.get(), cp));
+        if (!lm_new->ctx) {
+            LOG_WRN("%s: libllama could not create the encoder context, using the mtmd engine\n", __func__);
+            return;
+        }
+
+        llama_media_proc_params pp = llama_media_proc_default_params();
+        pp.image_min_tokens = ctx_params.image_min_tokens;
+        pp.image_max_tokens = ctx_params.image_max_tokens;
+        lm_new->proc = llama_media_proc_init(lm_new->ctx.get(), text_model, pp);
+        if (!lm_new->proc) {
+            LOG_WRN("%s: libllama could not create the media proc, using the mtmd engine\n", __func__);
+            return;
+        }
+
+        LOG_WRN("%s: %s runs on the libllama engine (MTMD_LEGACY_ENGINE=1 to disable)\n", __func__, PROJECTOR_TYPE_NAMES[ctx_v->model.proj_type].c_str());
+        lm = std::move(lm_new);
     }
 
     void init_vision() {
@@ -1846,6 +1969,60 @@ struct mtmd_tokenizer {
         }
     }
 
+    // libllama engine: the layout builder emits the begin/end tokens and the media span
+    int32_t add_media_lm(std::vector<const mtmd_bitmap *> & bitmaps) {
+        for (const auto * bmp : bitmaps) {
+            if (bmp->nx <= 0 || bmp->ny <= 0) {
+                LOG_ERR("%s: error: invalid bitmap dimensions: nx = %d, ny = %d\n", __func__, bmp->nx, bmp->ny);
+                return 2;
+            }
+        }
+
+        llama_media_layout * lay = llama_media_layout_init(ctx->lm->proc, 0);
+        const auto * b0 = bitmaps[0];
+        const uint8_t * d0 = b0->is_placeholder() ? nullptr : b0->get_ro_buf().data();
+        int32_t res;
+        if (bitmaps.size() == 1) {
+            res = llama_media_layout_add_image(lay, b0->nx, b0->ny, d0, b0->id.c_str());
+        } else {
+            GGML_ASSERT(bitmaps.size() == 2);
+            const auto * b1 = bitmaps[1];
+            const uint8_t * d1 = b1->is_placeholder() ? nullptr : b1->get_ro_buf().data();
+            res = llama_media_layout_add_frames(lay, b0->nx, b0->ny, d0, d1, b0->id.c_str());
+        }
+        if (res != 0) {
+            llama_media_layout_free(lay);
+            LOG_ERR("%s: libllama could not lay out the image (%d)\n", __func__, res);
+            return 2;
+        }
+
+        for (size_t i = 0; i < llama_media_layout_n_pieces(lay); ++i) {
+            size_t n = 0;
+            const llama_token * toks = llama_media_layout_get_tokens(lay, i, &n);
+            if (toks) {
+                add_text(std::vector<llama_token>(toks, toks + n));
+                continue;
+            }
+            llama_media * m = llama_media_layout_get_media(lay, i);
+
+            mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+            image_tokens->pos    = ctx->pos_type;
+            image_tokens->id     = b0->id;
+            image_tokens->lmedia = mtmd_lmedia_ref(m);
+
+            mtmd_input_chunk chunk{
+                MTMD_INPUT_CHUNK_TYPE_IMAGE,
+                {}, // text tokens
+                std::move(image_tokens),
+                nullptr, // audio tokens
+            };
+            cur.entries.emplace_back(std::move(chunk));
+        }
+
+        llama_media_layout_free(lay);
+        return 0;
+    }
+
     int32_t add_media(std::vector<const mtmd_bitmap *> & bitmaps) {
         GGML_ASSERT(!bitmaps.empty());
 
@@ -1855,6 +2032,10 @@ struct mtmd_tokenizer {
             return add_voice(*bitmaps[0]);
         }
         const bool is_vision = !bitmaps[0]->is_audio;
+
+        if (is_vision && ctx->lm) {
+            return add_media_lm(bitmaps);
+        }
 
         if (is_vision) {
             // handle image
@@ -2503,7 +2684,50 @@ int32_t mtmd_tokenize_from_parts(const mtmd_context * ctx,
     }
 }
 
+// encode on the libllama engine, rows are copied back for mtmd_get_output_embd()
+static int32_t mtmd_encode_lm(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
+    llama_media * m = image_tokens->lmedia.m;
+    if (llama_media_is_placeholder(m)) {
+        LOG_ERR("%s: image tokens batch is placeholder\n", __func__);
+        return 1;
+    }
+    if (!llama_media_is_encoded(m)) {
+        llama_batch_ext * batch = llama_batch_ext_init(ctx->lm->ctx.get());
+        int32_t res = llama_batch_ext_add_media(batch, 0, m, 0, 0, 0);
+        if (res >= 0) {
+            res = llama_process(ctx->lm->ctx.get(), LLAMA_PROCESS_TYPE_ENCODE, batch);
+        }
+        llama_batch_ext_free(batch);
+        if (res != 0) {
+            LOG_ERR("%s: libllama failed to encode the image (%d)\n", __func__, res);
+            return 1;
+        }
+    }
+
+    const int64_t n_rows = llama_media_n_tokens(m);
+    const int64_t n_embd = llama_media_get_rows(m, 0, 0, nullptr);
+    out_embd.resize((size_t) n_rows * n_embd);
+    llama_media_get_rows(m, 0, n_rows, out_embd.data());
+
+    // same dump format as mtmd_subcontext (MTMD_DEBUG_EMBEDDINGS=<path>)
+    const char * dump_path = std::getenv("MTMD_DEBUG_EMBEDDINGS");
+    if (dump_path && strcmp(dump_path, "1") != 0) {
+        FILE * f = fopen(dump_path, "wb");
+        if (f) {
+            const int32_t hdr[2] = { (int32_t) n_rows, (int32_t) n_embd };
+            fwrite(hdr, sizeof(hdr), 1, f);
+            fwrite(out_embd.data(), sizeof(float), out_embd.size(), f);
+            fclose(f);
+        }
+    }
+    return 0;
+}
+
 static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * image_tokens, std::vector<float> & out_embd) {
+    if (image_tokens->lmedia.m) {
+        return mtmd_encode_lm(ctx, image_tokens, out_embd);
+    }
+
     mtmd_subcontext * sctx = ctx->ctx_v.get();
     if (!sctx) {
         LOG_ERR("%s: this API does not support non-vision input, please use mtmd_encode_chunk instead\n", __func__);
@@ -4821,6 +5045,9 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 }
 
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
+    if (image_tokens->lmedia.m) {
+        return llama_media_n_pos(image_tokens->lmedia.m);
+    }
     switch (image_tokens->pos) {
         case MTMD_POS_TYPE_MROPE:
             return std::max(image_tokens->nx, image_tokens->ny);
@@ -6218,4 +6445,11 @@ int64_t mtmd_audio_stream_get_n_rows(const mtmd_audio_stream * s) {
 
 int64_t mtmd_audio_stream_get_n_rows_flushed(const mtmd_audio_stream * s) {
     return s->n_rows_flushed;
+}
+
+struct llama_media * mtmd_input_chunk_get_llama_media(const mtmd_input_chunk * chunk) {
+    if (chunk && chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE && chunk->tokens_image) {
+        return chunk->tokens_image->lmedia.m;
+    }
+    return nullptr;
 }

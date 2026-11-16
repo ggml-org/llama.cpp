@@ -272,6 +272,11 @@ MTMD_API const char *               mtmd_input_chunk_get_id          (const mtmd
 // number of temporal positions (equals to max(t,h,w) for M-RoPE; equals to n_tokens otherwise)
 MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd_input_chunk * chunk);
 
+// TRANSITIONAL: the libllama media (src/llama-ext.h) behind an image chunk, nullptr for chunks of the mtmd engine
+// the chunk keeps the reference, use llama_media_ref() to keep the media longer than the chunk
+struct llama_media;
+MTMD_API struct llama_media * mtmd_input_chunk_get_llama_media(const mtmd_input_chunk * chunk);
+
 // in case you want to use custom logic to handle the chunk (i.e. KV cache management)
 // you can move the chunk ownership to your own code by copying it
 // remember to free the chunk when you are done with it

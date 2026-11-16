@@ -161,6 +161,8 @@ struct llama_context {
                        ggml_status & ret);
 
     int encode(const llama_batch_ext & batch_inp);
+    // encode the media of an ENCODER batch into their rows
+    int encode_media(const llama_batch_ext & batch_inp);
     int decode(const llama_batch_ext & batch_inp);
 
     // compat version

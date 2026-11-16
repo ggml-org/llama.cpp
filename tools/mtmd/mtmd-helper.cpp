@@ -127,6 +127,34 @@ int32_t mtmd_helper_decode_image_chunk(
         return -1;
     }
 
+    // libllama engine: the media rows carry their positions and attention span, no causal toggle
+    if (llama_media * lmedia = mtmd_input_chunk_get_llama_media(chunk); lmedia && callback == nullptr && llama_media_is_encoded(lmedia)) {
+        const uint32_t n_rows = llama_media_n_tokens(lmedia);
+        const uint32_t step   = llama_media_is_atomic(lmedia) ? n_rows : (uint32_t) n_batch;
+        llama_batch_ext * batch = llama_batch_ext_init(lctx);
+        for (uint32_t r = 0; r < n_rows; r += step) {
+            llama_batch_ext_clear(batch);
+            const uint32_t n = std::min(step, n_rows - r);
+            int32_t ret = llama_batch_ext_add_media(batch, seq_id, lmedia, r, n, n_past);
+            if (ret < 0) {
+                LOG_ERR("failed to add the %s rows to the batch (%d)\n", name, ret);
+                llama_batch_ext_free(batch);
+                return -1;
+            }
+            int64_t t1 = ggml_time_ms();
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch);
+            if (ret != 0) {
+                LOG_ERR("failed to decode %s\n", name);
+                llama_batch_ext_free(batch);
+                return ret;
+            }
+            LOG_WRN("%s decoded (libllama media rows %u-%u) in %" PRId64 " ms\n", name, r, r + n - 1, ggml_time_ms() - t1);
+        }
+        llama_batch_ext_free(batch);
+        *new_n_past = n_past + llama_media_n_pos(lmedia);
+        return 0;
+    }
+
     const llama_model * model = llama_get_model(lctx);
     int n_mmproj_embd = llama_model_n_embd_inp(model);
     int n_pos_per_embd = mtmd_decode_use_mrope(ctx) ? 4 : 1;

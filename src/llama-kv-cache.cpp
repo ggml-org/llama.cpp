@@ -1756,6 +1756,10 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
                   llama_pos p0 = -1;
             const llama_pos p1 = ubatch->pos[iq];
 
+            // bidirectional span of the query (media rows of some decoders), -1 if none
+            const llama_pos span_lo = ubatch->span ? ubatch->span[2*iq + 0] : -1;
+            const llama_pos span_hi = ubatch->span ? ubatch->span[2*iq + 1] : -1;
+
             // for M-RoPE
             const llama_pos p1_x = is_2d ? ubatch->pos[iq + ubatch->n_tokens*2] : 0;
             const llama_pos p1_y = is_2d ? ubatch->pos[iq + ubatch->n_tokens]   : 0;
@@ -1828,8 +1832,8 @@ static void set_input_attn_mask_impl(const args_set_input_attn_mask & args, T * 
                 }
 
                 if (causal) {
-                    // mask future tokens
-                    if (p0 > p1) {
+                    // mask future tokens, except the keys of the query's bidirectional span
+                    if (p0 > p1 && !(span_lo >= 0 && p0 >= span_lo && p0 <= span_hi)) {
                         goto skip;
                     }
 

@@ -61,6 +61,10 @@ struct llama_ubatch {
     int8_t       *  output;     // [n_tokens]         | i   | -
     int8_t       *  type;       // [n_tokens]         | i   | -     (mixed ubatch only, 0 - token, 1 - embd)
     int32_t      *  decision_order; // [n_tokens], NULL if no entry has one, see llama_batch_ext_set_decision_order()
+    llama_pos    *  span;       // [2*n_tokens]       | i   | first and last position of the bidirectional span of the row, -1 if none; NULL if no row has one
+
+    // encoder ubatch of a media model: the media to encode, n_tokens = its output rows
+    const struct llama_media_input * media;
 
     struct data_t {
         std::vector<llama_token>    token;
@@ -77,6 +81,7 @@ struct llama_ubatch {
         std::vector<int8_t>         type;
         std::vector<int32_t>        batch_idxs;  // original batch index for each token
         std::vector<int32_t>        decision_order;
+        std::vector<llama_pos>      span;
 
         std::vector<llama_seq_id> seq_id_data;
     };
@@ -121,12 +126,21 @@ struct llama_batch_ext {
         int32_t      state_row = -1; // row of ctx_state_src's h_nextn device buffer used as state, -1 if none
         bool         output = false; // TODO: have dedicated output flags
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        llama_pos    span_lo = -1; // bidirectional span of the entry (positions), -1 if none
+        llama_pos    span_hi = -1;
         std::unordered_set<llama_seq_id> seq_ids;
         std::array<llama_pos, GGML_MROPE_SECTIONS> pos = {0, 0, 0, 0};
     };
     std::vector<token> tokens;
     std::vector<float> embd;
     std::vector<float> state;
+
+    // role of the batch, taken from the context it was created for
+    const struct llama_model * model = nullptr;
+    enum llama_context_type ctx_type = LLAMA_CONTEXT_TYPE_DEFAULT;
+
+    // ENCODER context: media to encode, one reference each
+    std::vector<struct llama_media *> media;
 
     llama_batch_ext(llama_context * ctx);
 
@@ -139,6 +153,8 @@ struct llama_batch_ext {
             llama_memory_i * mem,
             llama_token n_vocab,
             size_t n_pos_per_embd);
+
+    ~llama_batch_ext();
 
     void clear();
 
@@ -241,6 +257,10 @@ private:
     std::vector<int32_t>        seq_idx;
     std::vector<int8_t>         output;
     std::vector<int32_t>        decision_order; // empty if no entry has one
+    std::vector<llama_pos>      span_vec;       // [2*n_tokens] span bounds of each entry, empty if no entry has one
+
+    // true if entries i and j belong to the same bidirectional span, which must not be cut
+    bool same_span(int32_t i, int32_t j) const;
 
     using pos_set_t = std::set<llama_pos>;
     using seq_cpl_t = std::vector<bool>;
