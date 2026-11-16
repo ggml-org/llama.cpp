@@ -970,7 +970,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     *dst = dst_val / rowsum;
 }
 
-template<int D> // D == head size
+template<int D, bool unroll_parts = false> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_combine_results(
         const float  * VKQ_parts_ptr,
@@ -1018,7 +1018,26 @@ static __global__ void flash_attn_combine_results(
 
     float VKQ_numerator   = 0.0f;
     float VKQ_denominator = 0.0f;
-    for (int l = 0; l < parallel_blocks; ++l) {
+    int l0 = 0;
+    if constexpr (unroll_parts) {
+        // many parallel blocks: keep several loads in flight
+        constexpr int nunroll = 8;
+        for (; l0 + nunroll <= parallel_blocks; l0 += nunroll) {
+            float parts[nunroll];
+#pragma unroll
+            for (int l1 = 0; l1 < nunroll; ++l1) {
+                parts[l1] = VKQ_parts[(l0 + l1)*D + tid];
+            }
+#pragma unroll
+            for (int l1 = 0; l1 < nunroll; ++l1) {
+                const float KQ_max_scale = expf(meta[l0 + l1].x - kqmax);
+
+                VKQ_numerator   += KQ_max_scale * parts[l1];
+                VKQ_denominator += KQ_max_scale * meta[l0 + l1].y;
+            }
+        }
+    }
+    for (int l = l0; l < parallel_blocks; ++l) {
         const float KQ_max_scale = expf(meta[l].x - kqmax);
 
         VKQ_numerator   += KQ_max_scale * VKQ_parts[l*D + tid];
@@ -1032,7 +1051,7 @@ template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const bool use_sparse,
-    const int warp_size = WARP_SIZE, const bool async_kv_preload = false
+    const int warp_size = WARP_SIZE, const bool async_kv_preload = false, const int nblocks_KV = 0
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1276,6 +1295,12 @@ void launch_fattn(
             }
         }
 
+        // the kernel splits the KV cache into a fixed number of segments
+        if (nblocks_KV > 0) {
+            GGML_ASSERT(!use_sparse);
+            parallel_blocks = nblocks_KV;
+        }
+
         blocks_num.x = ntiles_x;
         blocks_num.y = parallel_blocks;
         blocks_num.z = ntiles_z_gqa*K->ne[2]*Q->ne[3];
@@ -1370,6 +1395,12 @@ void launch_fattn(
         const size_t nbytes_shared_combine = parallel_blocks*sizeof(float2);
 
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream);
+#ifdef GGML_USE_HIP
+        if (nblocks_KV > 0) {
+            ggml_cuda_kernel_launch(flash_attn_combine_results<DV, true>, launch_params,
+                dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+        } else
+#endif // GGML_USE_HIP
         ggml_cuda_kernel_launch(flash_attn_combine_results<DV>, launch_params,
             dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
     }

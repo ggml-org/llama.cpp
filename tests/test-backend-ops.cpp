@@ -10084,7 +10084,11 @@ struct test_generic_op : public test_case {
 
             // FLASH_ATTN_EXT: src[3] is the KQ mask
             if (op == GGML_OP_FLASH_ATTN_EXT && i == 3) {
-                init_tensor_kq_mask(t);
+                if (op_params[4] > 0) {
+                    init_tensor_kq_mask_sparse(t, op_params[4]);
+                } else {
+                    init_tensor_kq_mask(t);
+                }
                 continue;
             }
 

@@ -747,6 +747,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
+    // On AMD the tile kernel gathers the visible K/V rows of a sparse mask at small batch sizes.
+    if (ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst)) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
+
     // On CDNA, the sparse MMA kernel is used for DKQ=576 regardless of the head size heuristics.
     if (amd_mfma_available(cc) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, 16)) {
         return BEST_FATTN_KERNEL_MMA_F16;
