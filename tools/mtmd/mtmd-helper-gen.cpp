@@ -2505,17 +2505,14 @@ public:
 
         int ret = 0;
         if (part.rows.empty()) {
-            llama_batch batch = llama_batch_init(n, 0, 1);
-            for (int i = 0; i < n; i++) {
-                batch.token   [i]    = part.tokens[(size_t) (part_pos + i)];
-                batch.pos     [i]    = pos + i;
-                batch.n_seq_id[i]    = 1;
-                batch.seq_id  [i][0] = seq_id;
-                batch.logits  [i]    = last && i == n - 1;
+            llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+            if (!batch_set_tokens(batch.get(), part.tokens.data() + part_pos, n, pos, seq_id)) {
+                return -1;
             }
-            batch.n_tokens = n;
-            ret = llama_decode(lctx, batch);
-            llama_batch_free(batch);
+            if (last) {
+                llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+            }
+            ret = llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         } else {
             decode_embd_batch batch(part.rows.data() + (size_t) part_pos * n_embd, n, 1, n_embd);
             batch.set_position_normal(pos, seq_id);
@@ -3238,7 +3235,7 @@ int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n
     if (!ctx->pipeline) {
         return -1;
     }
-    // the context may use a smaller n_batch than requested (e.g. clamped to n_ctx), llama_decode() would fail above it
+    // the context may use a smaller n_batch than requested (e.g. clamped to n_ctx), llama_process() would fail above it
     if (n_batch <= 0 || (uint32_t) n_batch > llama_n_batch(ctx->lctx)) {
         LOG_ERR("mtmd_helper_gen_audio: n_batch must be in [1, %u], got %d\n", llama_n_batch(ctx->lctx), n_batch);
         return -1;

@@ -111,7 +111,7 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
     - 10% changes inside `libmtmd` core (`mtmd-model`, `mtmd-subcontext`, `models/`)
     - The rest downstream code (CLI, server) should have no changes at all
 5. Validate with several concurrent requests on `llama-server` (e.g. `-np 2`, one plain and one streaming request at the same time), not only with `llama-tts`
-    - The server interleaves the slots on one `llama_context`, so a pipeline must copy what it needs (hidden state, logits) right after its own `llama_decode`, not read it at the next step
+    - The server interleaves the slots on one `llama_context`, so a pipeline must copy what it needs (hidden state, logits) right after its own decode, not read it at the next step
 6. Update usage documentation in `docs/multimodal/tts.md`
 
 IMPORTANT: If your model needs changes that don't fit the existing infrastructure, **open an issue first for discussion**.
