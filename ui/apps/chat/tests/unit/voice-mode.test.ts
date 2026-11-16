@@ -138,6 +138,7 @@ describe('voice settings', () => {
 	it('default to automatic voice input and transcription model', () => {
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_INPUT_MODE]).toBe(VoiceInputMode.AUTO);
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES]).toBe(true);
+		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS]).toBe(false);
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]).toBe(
 			VOICE_TRANSCRIPTION_MODEL_AUTO
 		);
@@ -150,6 +151,7 @@ describe('voice settings', () => {
 		expect(keys).toEqual([
 			SETTINGS_KEYS.VOICE_INPUT_MODE,
 			SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES,
+			SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS,
 			SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE
 		]);
 		expect(section?.fields?.[0].type).toBe(SettingsFieldType.SELECT);

@@ -68,15 +68,16 @@ export function resamplePeaks(peaks: readonly number[], count: number): number[]
 }
 
 /**
- * The last `count` live levels, newest last, filling the width: missing older bars are `null` (drawn as the
- * resting dot).
+ * `count` bars of the live levels, newest last, always filling the width: a recording with fewer levels than
+ * bars is stretched over all of them, a longer one shows its last `count` levels. Before the first level every
+ * bar is `null` (drawn as the resting dot).
  */
 export function liveBars(levels: readonly number[], count: number): (number | null)[] {
 	if (count <= 0) return [];
+	if (levels.length === 0) return Array.from({ length: count }, () => null);
+	if (levels.length < count) return resamplePeaks(levels, count);
 
-	const recent = levels.slice(-count).map(clampUnit);
-
-	return [...Array.from({ length: count - recent.length }, () => null), ...recent];
+	return levels.slice(-count).map(clampUnit);
 }
 
 /** A bar's height in percent of the waveform's, never under `MIN_BAR_HEIGHT`. */

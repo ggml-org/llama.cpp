@@ -1,7 +1,8 @@
 <!--
-	A voice clip with its transcript under it. Only the clip (the `children`, usually a VoiceWaveform) shows at first; the
-	transcript opens below on hover and on keyboard focus inside, or with a tap where there is no hover (a toggle key
-	beside the clip, or a tap on the clip outside its controls).
+	A voice clip with its transcript under it, open from the start with `defaultOpen` (a toggle key beside the clip folds
+	it). Otherwise only the clip (the `children`, usually a VoiceWaveform) shows at first; the transcript opens below on
+	hover and on keyboard focus inside, or with a tap where there is no hover (the toggle key, or a tap on the clip
+	outside its controls). While it is transcribing, the open transcript shows that it is on its way.
 	The transcript stays in the DOM while closed, so screen readers always reach it.
 -->
 <script lang="ts">
@@ -18,16 +19,25 @@
 		transcript?: string | null;
 		/** Left out: `done` with a transcript, `idle` without. */
 		status?: VoiceTranscriptStatus;
+		/** Start with the transcript open; read once, the toggle key changes it after that. */
+		defaultOpen?: boolean;
 		class?: string;
 	}
 
-	let { children, class: className, status, transcript = null }: Props = $props();
+	let {
+		children,
+		class: className,
+		defaultOpen = false,
+		status,
+		transcript = null
+	}: Props = $props();
 
 	const INTERACTIVE = 'button, a, input, textarea, select, [role="slider"], [tabindex]';
 	const id = $props.id();
 
 	let root = $state<HTMLDivElement>();
-	let open = $state(false);
+	const initiallyOpen = () => defaultOpen;
+	let open = $state(initiallyOpen());
 	let noHover = $state(false);
 	let hovered = $state(false);
 	let keyboardFocus = $state(false);

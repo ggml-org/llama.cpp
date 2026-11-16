@@ -1,6 +1,7 @@
 <!--
-	An audio attachment drawn as a clip: a playable waveform, and for a voice message its transcript, which opens under
-	it on hover, keyboard focus or a tap. `sm` is the chip in the chat form, `md` the clip in a sent message. A clip
+	An audio attachment drawn as a clip: a playable waveform, and for a voice message its transcript under it, open while
+	it comes in and after, unless the Collapse transcripts setting folds it (then it opens on hover, keyboard focus or a
+	tap). `sm` is the chip in the chat form, `md` the clip in a sent message. A clip
 	stored without peaks (an older message, an uploaded file) gets them computed from its audio.
 -->
 <script lang="ts">
@@ -11,7 +12,8 @@
 	} from '@ggml-org/llama-ui/voice';
 	import { X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
-	import { voiceTranscriptsStore } from '#lib/stores/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { settingsStore, voiceTranscriptsStore } from '#lib/stores/index.ts';
 	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
 	import { audioUrl, lazyPeaks, voiceAttachmentSource } from '#lib/utils/voice-attachment.ts';
 
@@ -44,6 +46,7 @@
 					: 'idle'
 	);
 	let label = $derived(source.voice ? 'Voice message' : source.name);
+	let collapsed = $derived(settingsStore.config[SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS] === true);
 
 	// an object URL lives as long as the clip is on screen
 	$effect(() => {
@@ -94,9 +97,11 @@
 	data-slot="chat-attachment-voice"
 	data-voice={source.voice || undefined}
 >
-	<VoiceTranscriptReveal {status} {transcript}>
-		<VoiceWaveform durationMs={source.durationMs} {label} {peaks} {size} {src} />
-	</VoiceTranscriptReveal>
+	{#key collapsed}
+		<VoiceTranscriptReveal defaultOpen={!collapsed} {status} {transcript}>
+			<VoiceWaveform durationMs={source.durationMs} {label} {peaks} {size} {src} />
+		</VoiceTranscriptReveal>
+	{/key}
 
 	{#if !source.voice}
 		<p class="mt-1 truncate px-1 text-caption text-fg-muted">{source.name}</p>

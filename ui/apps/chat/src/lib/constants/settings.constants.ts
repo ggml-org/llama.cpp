@@ -443,6 +443,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: false,
+				help: 'Show the transcript of a voice message folded under its waveform, to open on hover or with a tap, instead of open.',
+				key: SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS,
+				label: 'Collapse transcripts',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: '',
 				help: 'The language you speak, as a two-letter code such as en or de, passed to the transcription. Leave it empty to let the model tell.',
 				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE,

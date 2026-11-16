@@ -61,8 +61,13 @@ describe('waveform bars', () => {
 	});
 
 	it('fills the live width with the newest levels last', () => {
-		expect(liveBars([0.1, 0.2, 0.3], 5)).toEqual([null, null, 0.1, 0.2, 0.3]);
+		// fewer levels than bars: stretched over the whole width
+		expect(liveBars([0.1, 0.2, 0.3], 5).map((bar) => Number(bar?.toFixed(2)))).toEqual([0.1, 0.15, 0.2, 0.25, 0.3]);
+		expect(liveBars([0.4], 3)).toEqual([0.4, 0.4, 0.4]);
+		// more levels than bars: the newest ones scroll in from the right
 		expect(liveBars([0.1, 0.2, 0.3, 2], 2)).toEqual([0.3, 1]);
+		// nothing heard yet: the resting dots
+		expect(liveBars([], 3)).toEqual([null, null, null]);
 		expect(liveBars([0.5], 0)).toEqual([]);
 	});
 

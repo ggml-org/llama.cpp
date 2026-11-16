@@ -1,6 +1,7 @@
 <!--
-	The waveform while recording, sized to sit in the chat form's input row: the newest level on the right, older ones
-	moving left, as many bars as fit the width. The app passes the levels; this only draws them.
+	The waveform while recording, sized to sit in the chat form's input row and always filling its width: a short
+	recording is stretched over all the bars, a longer one scrolls with the newest level on the right. The app passes
+	the levels; this only draws them.
 	Decorative: hidden from screen readers, with an optional visually hidden `label` (e.g. `Recording`) in its place.
 	With reduced motion the bars stay still.
 -->
