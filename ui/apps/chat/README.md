@@ -54,7 +54,7 @@ npx llama-chat --host 0.0.0.0 --port 3000 --no-open
 
 The bare command is the documented form; `start` is accepted as an alias for it.
 
-How it works: the app calls its server on its own origin (`./v1/...`, `./props`, ...), as it does when llama-server serves it. The CLI answers a request from `dist` when a file there matches its path and forwards everything else to the llama-server, without an `Origin` header, so the server needs no `--cors-origins`. It sends the response headers llama-server sends for the UI: `index.html` is cross-origin isolated (`Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy`) and revalidated, `sw.js`, `manifest.webmanifest`, `build.json` and `_app/version.json` are revalidated, and every other file is cached for good. It is plain Node.js (`node:http`) with no dependencies.
+How it works: the app calls its server on its own origin (`./v1/...`, `./props`, ...), as it does when llama-server serves it. The CLI answers a request from `dist` when a file there matches its path and forwards everything else to the llama-server, without an `Origin` header, so the server needs no `--cors-origins`. It sends the response headers llama-server sends for the UI: `index.html` is cross-origin isolated (`Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy`) and revalidated, `service-worker.js`, `sw.js`, `manifest.webmanifest`, `build.json` and `_app/version.json` are revalidated, and every other file is cached for good. It is plain Node.js (`node:http`) with no dependencies.
 
 An `http://` page can call a plain `http://` llama-server on the LAN, which an `https://` page cannot (browsers block it as mixed content). That is why the npx command matters next to a hosted copy.
 
@@ -824,16 +824,18 @@ Two packages go out with the same version: `@ggml-org/llama-chat`, which carries
 cd ui/apps/chat
 npm version <version> --no-git-tag-version
 # then set the same version, and the same @ggml-org/llama-chat dependency, in alias/package.json
+npm run build
 npm pack --dry-run
 npm publish --otp <code>
 cd alias && npm publish --otp <code>
 ```
 
-`npm pack` and `npm publish` build `dist` first (`prepack`), so the package always carries a build of the sources it was packed from. Source maps stay out of the package.
+Build right before packing: the package carries whatever is in `dist`. This folder's `.npmrc` sets `ignore-scripts`, so npm runs no lifecycle script such as `prepack` that could build it for you. Check that `npm pack --dry-run` lists `dist/index.html` and about 77 files. Source maps stay out of the package.
 
 To try a package before publishing it:
 
 ```bash
+npm run build
 npm pack
 npx ./ggml-org-llama-chat-<version>.tgz --server http://127.0.0.1:8080
 ```

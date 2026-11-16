@@ -32,6 +32,7 @@ export const DEFAULTS = Object.freeze({
 // index.html and the PWA's update checks are revalidated, hashed assets are cached for good.
 const NO_CACHE = new Set([
 	'/index.html',
+	'/service-worker.js',
 	'/sw.js',
 	'/manifest.webmanifest',
 	'/_app/version.json',

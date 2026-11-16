@@ -69,7 +69,6 @@
 		"storybook": "svelte-kit sync && storybook dev -p 6006",
 		"build-storybook": "svelte-kit sync && storybook build",
 		"cleanup": "rm -rf .svelte-kit build node_modules test-results dist dev-dist debug-storybook.log static/pwa-*.png static/maskable-icon-*.png static/apple-touch-icon-*.png static/apple-splash-*.png static/favicon*.ico",
-		"prepack": "npm run build",
 		"start": "node bin/cli.js"
 	},
 	"devDependencies": {

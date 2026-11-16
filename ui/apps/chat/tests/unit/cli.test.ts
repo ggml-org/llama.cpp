@@ -89,6 +89,7 @@ describe('llama-chat server', () => {
 		await mkdir(join(dist, '_app', 'immutable'), { recursive: true });
 		await writeFile(join(dist, 'index.html'), '<!doctype html><title>Llama Chat</title>');
 		await writeFile(join(dist, 'sw.js'), 'self;');
+		await writeFile(join(dist, 'service-worker.js'), 'self;');
 		await writeFile(join(dist, '_app', 'immutable', 'app.abc123.js'), 'export {};');
 
 		upstream = http.createServer((req, res) => {
@@ -139,6 +140,10 @@ describe('llama-chat server', () => {
 		const sw = await fetch(`${chatUrl}/sw.js`);
 
 		expect(sw.headers.get('cache-control')).toBe('no-cache');
+
+		const worker = await fetch(`${chatUrl}/service-worker.js`);
+
+		expect(worker.headers.get('cache-control')).toBe('no-cache');
 	});
 
 	it('forwards API calls to the llama-server as its own page', async () => {
