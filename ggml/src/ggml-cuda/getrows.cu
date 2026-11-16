@@ -129,6 +129,49 @@ static __global__ void k_get_rows_float_vec(
     }
 }
 
+// short rows: blockDim.x threads per row, 16 bytes of dst per thread, blockDim.y rows per block
+template<typename src0_t, typename dst_t>
+static __global__ void k_get_rows_float_short(
+        const src0_t * src0, const int32_t * src1, dst_t * dst,
+        const int64_t ne00v, const int64_t ne10, const int64_t ne11, const uint3 ne12_fdv,
+        const size_t s1, const size_t s2, const size_t s3,
+        const size_t nb01, const size_t nb02, const size_t nb03,
+        const size_t s10, const size_t s11, const size_t s12) {
+    constexpr int VEC   = 16 / sizeof(dst_t);
+    constexpr int nb_x  = VEC*sizeof(src0_t);
+    constexpr int cpy_x = nb_x < 16 ? nb_x : 16;
+
+    const int i10 = blockIdx.x*blockDim.y + threadIdx.y;
+    const int iv  = threadIdx.x;
+    if (i10 >= ne10 || iv >= ne00v) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+    for (int64_t z = blockIdx.z; z < ne11*(int64_t)ne12_fdv.z; z += gridDim.z) {
+        const uint2 dm = fast_div_modulo((uint32_t)z, ne12_fdv);
+        const int i11 = dm.x;
+        const int i12 = dm.y;
+
+        const int i01 = src1[i10*s10 + i11*s11 + i12*s12];
+
+        const char * src0_row = (const char *) src0 + i01*nb01 + i11*nb02 + i12*nb03;
+        dst_t      * dst_row  = dst + i10*s1 + i11*s2 + i12*s3;
+
+        alignas(16) src0_t x[VEC];
+#pragma unroll
+        for (int k = 0; k < nb_x/cpy_x; ++k) {
+            ggml_cuda_memcpy_1<cpy_x>((char *) x + k*cpy_x, src0_row + iv*nb_x + k*cpy_x);
+        }
+        alignas(16) dst_t y[VEC];
+#pragma unroll
+        for (int k = 0; k < VEC; ++k) {
+            y[k] = ggml_cuda_cast<dst_t>(x[k]);
+        }
+        ggml_cuda_memcpy_1<16>(dst_row + iv*VEC, y);
+    }
+}
+
 template<typename grad_t, typename dst_t>
 static __global__ void k_get_rows_back_float(
         const grad_t * __restrict__ grad, const int32_t * __restrict__ rows, dst_t * __restrict__ dst,
@@ -253,6 +296,31 @@ static void get_rows_cuda_float(
     GGML_ASSERT(ne12 > 0);
     GGML_ASSERT(ne11 <= std::numeric_limits<uint32_t>::max() / ne12);
     const uint3 ne12_fdv = init_fastdiv_values(ne12);
+
+#if defined(GGML_USE_HIP)
+    {
+        constexpr int VEC   = 16 / sizeof(dst_t);
+        constexpr int nb_x  = VEC*sizeof(src0_t);
+        constexpr int al_x  = nb_x < 16 ? nb_x : 16;
+        const int64_t ne00v = ne00 / VEC;
+        const bool can_short = VEC > 1 && ne00 % VEC == 0 && ne00v <= 64 &&
+            (nb01 % al_x == 0) && (nb02 % al_x == 0) && (nb03 % al_x == 0) && (((uintptr_t) src0_d) % al_x == 0) &&
+            (nb1  % 16   == 0) && (nb2  % 16   == 0) && (nb3  % 16   == 0) && (((uintptr_t) dst_d)  % 16   == 0);
+        if (can_short) {
+            const int rows_per_block = CUDA_GET_ROWS_BLOCK_SIZE / ne00v;
+            const dim3 block_dims_short(ne00v, rows_per_block, 1);
+            const dim3 block_nums((ne10 + rows_per_block - 1) / rows_per_block, 1, MIN(ne11*ne12, UINT16_MAX));
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params{block_nums, block_dims_short, 0, stream};
+            ggml_cuda_kernel_launch(k_get_rows_float_short<src0_t, dst_t>, launch_params,
+                src0_d, src1_d, dst_d,
+                ne00v, ne10, ne11, ne12_fdv,
+                s1, s2, s3,
+                nb01, nb02, nb03,
+                s10, s11, s12);
+            return;
+        }
+    }
+#endif // defined(GGML_USE_HIP)
 
     if constexpr (std::is_same<src0_t, dst_t>::value) {
         constexpr int VEC = 16 / sizeof(dst_t);

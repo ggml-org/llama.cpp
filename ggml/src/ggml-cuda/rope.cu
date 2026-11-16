@@ -33,8 +33,15 @@ static __device__ void rope_yarn(
         // Get n-d magnitude scaling corrected for interpolation
         mscale *= 1.0f + 0.1f * logf(1.0f / freq_scale);
     }
+#if defined(GGML_USE_HIP)
+    // same result as sinf/cosf with one range reduction, less code to fetch
+    sincosf(theta, &sin_theta, &cos_theta);
+    cos_theta *= mscale;
+    sin_theta *= mscale;
+#else
     cos_theta = cosf(theta) * mscale;
     sin_theta = sinf(theta) * mscale;
+#endif // defined(GGML_USE_HIP)
     if (!forward) {
         sin_theta *= -1.0f;
     }
@@ -262,6 +269,32 @@ static __global__ void rope_multi(const T *            x,
     const int sec_w = sections.v[1] + sections.v[0];
     const int sector = (iw / 2) % sect_dims;
 
+#if defined(GGML_USE_HIP)
+    // pick the position first so that powf is inlined once, the lanes of a wave usually take several sections
+    int ip;
+    if (is_imrope) {
+        if (sector % 3 == 1 && sector < 3 * sections.v[1]) {         // h
+            ip = 1;
+        } else if (sector % 3 == 2 && sector < 3 * sections.v[2]) {  // w
+            ip = 2;
+        } else if (sector % 3 == 0 && sector < 3 * sections.v[0]) {  // t
+            ip = 0;
+        } else {
+            ip = 3;
+        }
+    } else {
+        if (sector < sections.v[0]) {
+            ip = 0;
+        } else if (sector < sec_w) {
+            ip = 1;
+        } else if (sector < sec_w + sections.v[2]) {
+            ip = 2;
+        } else {
+            ip = 3;
+        }
+    }
+    const float theta_base = pos[i2 + ne02 * ip] * powf(theta_scale, iw / 2.0f);
+#else
     float theta_base = 0.0;
     if (is_imrope) {
         if (sector % 3 == 1 && sector < 3 * sections.v[1]) {         // h
@@ -284,6 +317,7 @@ static __global__ void rope_multi(const T *            x,
             theta_base = pos[i2 + ne02 * 3] * powf(theta_scale, iw / 2.0f);
         }
     }
+#endif // defined(GGML_USE_HIP)
 
     const float freq_factor = has_ff ? freq_factors[iw/2] : 1.0f;
 

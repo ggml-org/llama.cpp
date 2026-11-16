@@ -176,6 +176,35 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst, const int64_t ne,
     cpy_blck(cx + x_offset, cdst + dst_offset);
 }
 
+#if defined(GGML_USE_HIP)
+// cpy_scalar with 32-bit fastdiv index math, the 64-bit divisions are slow on AMD
+template <cpy_kernel_t cpy_1>
+static __global__ void cpy_scalar_fastdiv(const char * cx, char * cdst, const uint32_t ne,
+                                          const uint3 ne00_fdv, const uint3 ne01_fdv, const uint3 ne02_fdv,
+                                          const int64_t nb00, const int64_t nb01, const int64_t nb02, const int64_t nb03,
+                                          const uint3 ne10_fdv, const uint3 ne11_fdv, const uint3 ne12_fdv,
+                                          const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13) {
+    const uint32_t i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= ne) {
+        return;
+    }
+
+    const uint2 d00 = fast_div_modulo(i,     ne00_fdv);
+    const uint2 d01 = fast_div_modulo(d00.x, ne01_fdv);
+    const uint2 d02 = fast_div_modulo(d01.x, ne02_fdv);
+    const int64_t x_offset = d00.y*nb00 + d01.y*nb01 + d02.y*nb02 + d02.x*nb03;
+
+    const uint2 d10 = fast_div_modulo(i,     ne10_fdv);
+    const uint2 d11 = fast_div_modulo(d10.x, ne11_fdv);
+    const uint2 d12 = fast_div_modulo(d11.x, ne12_fdv);
+    const int64_t dst_offset = d10.y*nb10 + d11.y*nb11 + d12.y*nb12 + d12.x*nb13;
+
+    ggml_cuda_pdl_sync();
+    cpy_1(cx + x_offset, cdst + dst_offset);
+}
+#endif // defined(GGML_USE_HIP)
+
 template<typename src_t, typename dst_t>
 static __global__ void cpy_scalar_contiguous(const char * cx, char * cdst, const int64_t ne) {
     const int64_t i = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
@@ -211,6 +240,16 @@ static void ggml_cpy_scalar_cuda(
     const auto launch_scalar_generic = [&]() {
         const int64_t num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
         GGML_ASSERT(num_blocks <= INT_MAX);
+#if defined(GGML_USE_HIP)
+        if (ne <= INT32_MAX) {
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream);
+            ggml_cuda_kernel_launch(cpy_scalar_fastdiv<cpy_1_scalar<src_t, dst_t>>, launch_params,
+                cx, cdst, (uint32_t) ne,
+                init_fastdiv_values(ne00), init_fastdiv_values(ne01), init_fastdiv_values(ne02), nb00, nb01, nb02, nb03,
+                init_fastdiv_values(ne10), init_fastdiv_values(ne11), init_fastdiv_values(ne12), nb10, nb11, nb12, nb13);
+            return;
+        }
+#endif // defined(GGML_USE_HIP)
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream);
         ggml_cuda_kernel_launch(cpy_scalar<cpy_1_scalar<src_t, dst_t>>, launch_params,
             cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13);
