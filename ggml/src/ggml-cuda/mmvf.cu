@@ -439,6 +439,242 @@ static __global__ void mul_mat_vec_f(
     }
 }
 
+// 16 B of x as floats: 4 for f32, 8 for f16/bf16
+template <typename T>
+static __device__ __forceinline__ void mmvf_cdna_unpack(const int4 v, float * f) {
+    const int w[4] = {v.x, v.y, v.z, v.w};
+#pragma unroll
+    for (int i = 0; i < 4; ++i) {
+        if constexpr (std::is_same_v<T, float>) {
+            f[i] = __int_as_float(w[i]);
+        } else if constexpr (std::is_same_v<T, half>) {
+            const float2 t = __half22float2(*(const half2 *) &w[i]);
+            f[2*i + 0] = t.x;
+            f[2*i + 1] = t.y;
+        } else {
+            f[2*i + 0] = __int_as_float(w[i] << 16);
+            f[2*i + 1] = __int_as_float(w[i] & 0xFFFF0000);
+        }
+    }
+}
+
+// CDNA1 version for MUL_MAT without ids or fusion. Each lane loads 16 B chunks of x. A warp is split into nrg groups of lanes,
+// each group works on its own rows_per_lane rows, so all groups and rows share the y loads. The warps of a block split K.
+// Loads of several chunks are issued before the FMAs to keep enough bytes in flight.
+template <typename T, int ncols_dst, int rows_per_lane, int nrg, int max_threads>
+__launch_bounds__(max_threads, 1)
+static __global__ void mul_mat_vec_f_cdna(
+        const T * __restrict__ x, const float * __restrict__ y, float * __restrict__ dst, const int nchunks, const int nrows,
+        const int stride_row, const int stride_col_y, const int stride_col_dst,
+        const uint3 channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
+        const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
+#if defined(CDNA1)
+    constexpr int nx         = 16/sizeof(T);
+    constexpr int ny4        = nx/4;
+    constexpr int lanes_k    = 64/nrg;
+    constexpr int rows_block = nrg*rows_per_lane;
+    constexpr int nregs      = 4*(rows_per_lane + ncols_dst*ny4) + (sizeof(T) == 4 ? 0 : rows_per_lane*nx);
+    constexpr int budget     = 104 - rows_per_lane*ncols_dst;
+    constexpr int nunroll    = budget/nregs >= 4 ? 4 : (budget/nregs >= 2 ? 2 : 1);
+    constexpr int nwarps_max = max_threads/64;
+
+    const int row0        = blockIdx.x*rows_block;
+    const int channel_dst = blockIdx.y;
+    const int sample_dst  = blockIdx.z;
+    const int channel_x   = fastdiv((uint32_t) channel_dst, channel_ratio);
+    const int sample_x    = fastdiv((uint32_t) sample_dst,  sample_ratio);
+    const int lane        = threadIdx.x % 64;
+    const int group       = lane / lanes_k;
+    const int lane_k      = lane % lanes_k;
+    const int warp        = __builtin_amdgcn_readfirstlane(threadIdx.x / 64);
+    const int kstride     = blockDim.x / nrg;
+
+    x   += int64_t(sample_x)  *stride_sample_x   + int64_t(channel_x)  *stride_channel_x;
+    y   += int64_t(sample_dst)*stride_sample_y   + int64_t(channel_dst)*stride_channel_y;
+    dst += int64_t(sample_dst)*stride_sample_dst + int64_t(channel_dst)*stride_channel_dst + row0;
+
+    // rows past the end load the last row, their results are not written
+    const T * xr[rows_per_lane];
+#pragma unroll
+    for (int r = 0; r < rows_per_lane; ++r) {
+        xr[r] = x + int64_t(min(row0 + group*rows_per_lane + r, nrows - 1))*stride_row;
+    }
+
+    float sum[rows_per_lane][ncols_dst];
+#pragma unroll
+    for (int r = 0; r < rows_per_lane; ++r) {
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            sum[r][j] = 0.0f;
+        }
+    }
+
+    auto load = [&](const int c, int4 * xv, float4 * yv) {
+#pragma unroll
+        for (int r = 0; r < rows_per_lane; ++r) {
+            xv[r] = ((const int4 *) xr[r])[c];
+        }
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+#pragma unroll
+            for (int q = 0; q < ny4; ++q) {
+                yv[j*ny4 + q] = ((const float4 *) (y + int64_t(j)*stride_col_y))[c*ny4 + q];
+            }
+        }
+    };
+    auto dot = [&](const int4 * xv, const float4 * yv) {
+#pragma unroll
+        for (int r = 0; r < rows_per_lane; ++r) {
+            float xf[nx];
+            mmvf_cdna_unpack<T>(xv[r], xf);
+#pragma unroll
+            for (int j = 0; j < ncols_dst; ++j) {
+                const float * yf = (const float *) &yv[j*ny4];
+#pragma unroll
+                for (int e = 0; e < nx; ++e) {
+                    sum[r][j] = fmaf(xf[e], yf[e], sum[r][j]);
+                }
+            }
+        }
+    };
+
+    int base = warp*lanes_k;
+    for (; base + (nunroll - 1)*kstride + lanes_k <= nchunks; base += nunroll*kstride) {
+        int4   xv[nunroll][rows_per_lane];
+        float4 yv[nunroll][ncols_dst*ny4];
+#pragma unroll
+        for (int u = 0; u < nunroll; ++u) {
+            load(base + u*kstride + lane_k, xv[u], yv[u]);
+        }
+        // keep all loads in front of the FMAs, the scheduler would otherwise serialize them to save registers
+        __builtin_amdgcn_sched_barrier(0);
+#pragma unroll
+        for (int u = 0; u < nunroll; ++u) {
+            dot(xv[u], yv[u]);
+        }
+    }
+    for (; base < nchunks; base += kstride) {
+        if (base + lane_k < nchunks) {
+            int4   xv[rows_per_lane];
+            float4 yv[ncols_dst*ny4];
+            load(base + lane_k, xv, yv);
+            __builtin_amdgcn_sched_barrier(0);
+            dot(xv, yv);
+        }
+    }
+
+    __shared__ float buf[nwarps_max][rows_block*ncols_dst];
+#pragma unroll
+    for (int r = 0; r < rows_per_lane; ++r) {
+#pragma unroll
+        for (int j = 0; j < ncols_dst; ++j) {
+            sum[r][j] = warp_reduce_sum<lanes_k>(sum[r][j]);
+            if (lane_k == 0) {
+                buf[warp][(group*rows_per_lane + r)*ncols_dst + j] = sum[r][j];
+            }
+        }
+    }
+    __syncthreads();
+
+    const int tid = threadIdx.x;
+    if (tid < rows_block*ncols_dst && row0 + tid/ncols_dst < nrows) {
+        float value = 0.0f;
+        for (int w = 0; w < blockDim.x/64; ++w) {
+            value += buf[w][tid];
+        }
+        dst[(tid % ncols_dst)*stride_col_dst + tid/ncols_dst] = value;
+    }
+#else
+    GGML_UNUSED_VARS(x, y, dst, nchunks, nrows, stride_row, stride_col_y, stride_col_dst,
+        channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
+        sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
+    NO_DEVICE_CODE;
+#endif // defined(CDNA1)
+}
+
+template <typename T, int ncols_dst>
+static void launch_mul_mat_vec_f_cdna(
+        const T * x, const float * y, float * dst, const int64_t ncols, const int64_t nrows,
+        const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+        const int64_t nchannels_x, const int64_t nchannels_dst,
+        const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst,
+        const int64_t nsamples_x, const int64_t nsamples_dst,
+        const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst, cudaStream_t stream) {
+    constexpr int nx = 16/sizeof(T);
+    const int nchunks = ncols/nx;
+
+    // more rows per block share more y loads, then add warps until there are about 512 waves
+    const int64_t nrows_total = nrows*nchannels_dst*nsamples_dst;
+    int rows_per_lane = 1;
+    int nrg           = 1;
+    if (ncols_dst*sizeof(float) >= 3*sizeof(T) && nrows_total >= 512) {
+        rows_per_lane = 2;
+        nrg           = 4;
+    } else if (nrows_total >= 128) {
+        rows_per_lane = 2;
+    }
+    const int rows_block = rows_per_lane*nrg;
+    const int64_t nblocks = (nrows + rows_block - 1)/rows_block * nchannels_dst*nsamples_dst;
+    int nwarps = std::min<int64_t>(512/nblocks, rows_block == 1 ? 8 : 4);
+    nwarps = std::max(1, std::min(nwarps, nchunks/(64/nrg)));
+
+    const uint3 channel_ratio_fd = init_fastdiv_values(nchannels_dst / nchannels_x);
+    const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst  / nsamples_x);
+    const dim3 block_nums((nrows + rows_block - 1)/rows_block, nchannels_dst, nsamples_dst);
+    const dim3 block_dims(nwarps*64, 1, 1);
+
+#define MMVF_CDNA_LAUNCH(R, G, MT) \
+    mul_mat_vec_f_cdna<T, ncols_dst, R, G, MT><<<block_nums, block_dims, 0, stream>>>( \
+        x, y, dst, nchunks, nrows, stride_row, stride_col_y, stride_col_dst, \
+        channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst, \
+        sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst)
+    if (nrg == 4) {
+        MMVF_CDNA_LAUNCH(2, 4, 256);
+    } else if (rows_per_lane == 2) {
+        MMVF_CDNA_LAUNCH(2, 1, 256);
+    } else if (nwarps > 4) {
+        MMVF_CDNA_LAUNCH(1, 1, 512);
+    } else {
+        MMVF_CDNA_LAUNCH(1, 1, 256);
+    }
+#undef MMVF_CDNA_LAUNCH
+}
+
+// returns false if the CDNA kernel cannot be used
+template <typename T>
+static bool mul_mat_vec_f_cdna_cuda(
+        const T * x, const float * y, float * dst, const int64_t ncols, const int64_t nrows, const int64_t ncols_dst,
+        const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst,
+        const int64_t nchannels_x, const int64_t nchannels_dst,
+        const int64_t stride_channel_x, const int64_t stride_channel_y, const int64_t stride_channel_dst,
+        const int64_t nsamples_x, const int64_t nsamples_dst,
+        const int64_t stride_sample_x, const int64_t stride_sample_y, const int64_t stride_sample_dst, cudaStream_t stream) {
+    constexpr int nx = 16/sizeof(T);
+    if ((uintptr_t) x % 16 != 0 || (uintptr_t) y % 16 != 0 || ncols % nx != 0 ||
+            stride_row % nx != 0 || stride_channel_x % nx != 0 || stride_sample_x % nx != 0 ||
+            stride_col_y % 4 != 0 || stride_channel_y % 4 != 0 || stride_sample_y % 4 != 0 ||
+            ncols_dst < 1 || ncols_dst > MMVF_MAX_BATCH_SIZE) {
+        return false;
+    }
+    switch (ncols_dst) {
+#define MMVF_CDNA_CASE(N) \
+        case N: launch_mul_mat_vec_f_cdna<T, N>(x, y, dst, ncols, nrows, stride_row, stride_col_y, stride_col_dst, \
+            nchannels_x, nchannels_dst, stride_channel_x, stride_channel_y, stride_channel_dst, \
+            nsamples_x, nsamples_dst, stride_sample_x, stride_sample_y, stride_sample_dst, stream); break;
+        MMVF_CDNA_CASE(1)
+        MMVF_CDNA_CASE(2)
+        MMVF_CDNA_CASE(3)
+        MMVF_CDNA_CASE(4)
+        MMVF_CDNA_CASE(5)
+        MMVF_CDNA_CASE(6)
+        MMVF_CDNA_CASE(7)
+        MMVF_CDNA_CASE(8)
+#undef MMVF_CDNA_CASE
+        default: GGML_ABORT("fatal error");
+    }
+    return true;
+}
+
 template<typename T, typename type_acc, int ncols_dst, int block_size, bool is_multi_token_id = false>
 static void mul_mat_vec_f_switch_fusion(
         const T * x, const float * y, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -775,6 +1011,29 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
+    if (GGML_CUDA_CC_IS_CDNA1(cc) && !ids && !fusion) {
+        bool done = false;
+        switch (src0->type) {
+            case GGML_TYPE_F32:
+                done = mul_mat_vec_f_cdna_cuda((const float *) src0->data, src1_d, dst_d, ne00, ne01, ne1, s01, s11, s1,
+                    ne02, ne2, s02, s12, s2, ne03, ne3, s03, s13, s3, ctx.stream());
+                break;
+            case GGML_TYPE_F16:
+                done = mul_mat_vec_f_cdna_cuda((const half *) src0->data, src1_d, dst_d, ne00, ne01, ne1, s01, s11, s1,
+                    ne02, ne2, s02, s12, s2, ne03, ne3, s03, s13, s3, ctx.stream());
+                break;
+            case GGML_TYPE_BF16:
+                done = mul_mat_vec_f_cdna_cuda((const nv_bfloat16 *) src0->data, src1_d, dst_d, ne00, ne01, ne1, s01, s11, s1,
+                    ne02, ne2, s02, s12, s2, ne03, ne3, s03, s13, s3, ctx.stream());
+                break;
+            default:
+                break;
+        }
+        if (done) {
+            return;
+        }
+    }
+
     switch (src0->type) {
         case GGML_TYPE_F32: {
             const float * src0_d = (const float *) src0->data;
@@ -895,6 +1154,10 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
                 }
                 return ne11 <= 3;
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
+                // on CDNA1 MMF and BLAS are much slower than MMVF for few columns
+                if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+                    return ne11 <= MMVF_MAX_BATCH_SIZE;
+                }
                 if (fp32_mma_hardware_available(cc)) {
                     return ne11 <= 3;
                 }
@@ -921,6 +1184,10 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
                 if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
+                }
+                // MMVF reads y once per few rows, BLAS is faster for large matrices from 4 columns on
+                if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+                    return ne11 <= 3 || (ne11 <= MMVF_MAX_BATCH_SIZE && ggml_nbytes(src0) <= 8*1024*1024);
                 }
                 if (fp16_mma_hardware_available(cc)) {
                     if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4_M(cc)) {
@@ -966,6 +1233,9 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
                 if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
+                }
+                if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+                    return ne11 <= 3 || (ne11 <= MMVF_MAX_BATCH_SIZE && ggml_nbytes(src0) <= 8*1024*1024);
                 }
                 if (bf16_mma_hardware_available(cc)) {
                     return ne11 <= 3;

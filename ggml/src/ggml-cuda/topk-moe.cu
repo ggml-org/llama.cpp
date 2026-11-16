@@ -15,6 +15,49 @@ struct topk_moe_config {
     int  n_group_used;
 };
 
+#if defined(CDNA1)
+// wave64 reductions with DPP, the shuffle butterfly costs a ds_bpermute round trip per step
+template <int dpp_ctrl, int row_mask = 0xf>
+static __device__ __forceinline__ int topk_moe_dpp(const int x) {
+    return __builtin_amdgcn_update_dpp(x, x, dpp_ctrl, row_mask, 0xf, false);
+}
+
+template <typename T, typename F>
+static __device__ __forceinline__ T topk_moe_wave_reduce(T x, const F & op) {
+    auto step = [&](const int y) {
+        x = op(x, *(const T *) &y);
+    };
+    step(topk_moe_dpp<GGML_HIP_DPP_QUAD_PERM_1032>(*(const int *) &x));
+    step(topk_moe_dpp<GGML_HIP_DPP_QUAD_PERM_2301>(*(const int *) &x));
+    step(topk_moe_dpp<GGML_HIP_DPP_ROW_HALF_MIRROR>(*(const int *) &x));
+    step(topk_moe_dpp<GGML_HIP_DPP_ROW_ROR_8>(*(const int *) &x));
+    step(topk_moe_dpp<GGML_HIP_DPP_ROW_BCAST_15, 0xa>(*(const int *) &x));
+    step(topk_moe_dpp<GGML_HIP_DPP_ROW_BCAST_31, 0xc>(*(const int *) &x));
+    const int r = __builtin_amdgcn_readlane(*(const int *) &x, 63);
+    return *(const T *) &r;
+}
+
+static __device__ __forceinline__ float topk_moe_wave_max(const float x) {
+    return topk_moe_wave_reduce(x, [](const float a, const float b) { return fmaxf(a, b); });
+}
+
+// argmax over the wave, ties go to the lower expert. sel is the selection value, val the weight of the same expert.
+// The result is the same in all lanes.
+static __device__ __forceinline__ void topk_moe_wave_argmax(float & sel, float & val, int & expert) {
+    const float    max_sel = topk_moe_wave_max(sel);
+    const uint64_t lanes   = __ballot(sel == max_sel);
+    int winner;
+    if (__popcll(lanes) == 1) {
+        winner = __builtin_amdgcn_readlane(expert, __ffsll((unsigned long long) lanes) - 1);
+    } else {
+        winner = topk_moe_wave_reduce(sel == max_sel ? expert : INT_MAX, [](const int a, const int b) { return min(a, b); });
+    }
+    val    = __int_as_float(__builtin_amdgcn_readlane(__float_as_int(val), winner & 63));
+    sel    = max_sel;
+    expert = winner;
+}
+#endif // defined(CDNA1)
+
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
 template <int experts_per_thread, bool use_limit>
 __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const int limit, const int lane) {
@@ -31,7 +74,11 @@ __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const in
         }
     }
 
+#if defined(CDNA1)
+    max_val = topk_moe_wave_max(max_val);
+#else
     max_val = warp_reduce_max<warp_size>(max_val);
+#endif // defined(CDNA1)
 
     float sum = 0.f;
 
@@ -280,6 +327,9 @@ __global__ void topk_moe_cuda(const float *         logits,
                 }
             }
 
+#if defined(CDNA1)
+            topk_moe_wave_argmax(max_val_s, max_val, max_expert);
+#else
 #pragma unroll
             for (int mask = warp_size / 2; mask > 0; mask /= 2) {
                 const float val    = ggml_cuda_shfl_xor(max_val, mask, warp_size);
@@ -291,6 +341,7 @@ __global__ void topk_moe_cuda(const float *         logits,
                     max_expert = expert;
                 }
             }
+#endif // defined(CDNA1)
 
             if ((max_expert & (warp_size - 1)) == threadIdx.x) {
                 selection_wt[max_expert / warp_size] = -INFINITY;
@@ -305,6 +356,10 @@ __global__ void topk_moe_cuda(const float *         logits,
                 }
             }
 
+#if defined(CDNA1)
+            float max_val_w = max_val;
+            topk_moe_wave_argmax(max_val, max_val_w, max_expert);
+#else
 #pragma unroll
             for (int mask = warp_size / 2; mask > 0; mask /= 2) {
                 const float val    = ggml_cuda_shfl_xor(max_val, mask, warp_size);
@@ -314,6 +369,7 @@ __global__ void topk_moe_cuda(const float *         logits,
                     max_expert = expert;
                 }
             }
+#endif // defined(CDNA1)
 
             if ((max_expert & (warp_size - 1)) == threadIdx.x) {
                 wt[max_expert / warp_size] = -INFINITY;

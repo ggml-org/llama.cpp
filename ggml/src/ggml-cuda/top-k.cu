@@ -149,6 +149,42 @@ static __global__ void top_k_radix_select(
 
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
+
+#if defined(CDNA1)
+    // find the bin with prefix sums over all bins instead of a serial walk in one thread, same bin and rank
+    static_assert(BLOCK_SIZE == NBINS, "one thread per bin");
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    __shared__ int warp_sums[BLOCK_SIZE/warp_size];
+
+    int count = 0;
+#pragma unroll 8
+    for (int row_block = 0; row_block < blocks_per_row; ++row_block) {
+        count += block_histograms[((size_t) row * blocks_per_row + row_block) * NBINS + tid];
+    }
+
+    // prefix: number of keys in bins [0, tid]
+    int prefix = warp_prefix_inclusive_sum<int, warp_size>(count);
+    const int warp = tid / warp_size;
+    if (tid % warp_size == warp_size - 1) {
+        warp_sums[warp] = prefix;
+    }
+    __syncthreads();
+    int total = 0;
+#pragma unroll
+    for (int w = 0; w < BLOCK_SIZE/warp_size; ++w) {
+        prefix += w < warp ? warp_sums[w] : 0;
+        total  += warp_sums[w];
+    }
+
+    top_k_radix_state state = states[row];
+    const int above = total - prefix; // keys in bins (tid, NBINS)
+    if (tid == 0 ? above < state.rank : above < state.rank && above + count >= state.rank) {
+        state.rank -= above;
+        state.prefix |= (uint32_t) tid << shift;
+        state.prefix_mask |= (uint32_t) (NBINS - 1) << shift;
+        states[row] = state;
+    }
+#else
     __shared__ int histogram[NBINS];
 
     int count = 0;
@@ -169,6 +205,7 @@ static __global__ void top_k_radix_select(
         state.prefix_mask |= (uint32_t) (NBINS - 1) << shift;
         states[row] = state;
     }
+#endif // defined(CDNA1)
 }
 
 template<int BLOCK_SIZE, int RADIX_BITS>
