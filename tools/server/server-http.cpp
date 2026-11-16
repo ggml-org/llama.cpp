@@ -54,6 +54,13 @@ server_http_context::~server_http_context() {
     }
 }
 
+void server_http_context::set_load_progress(float progress, const std::string & message) {
+    std::lock_guard<std::mutex> lock(mutex_load_progress);
+    load_progress     = std::min(std::max(progress, 0.0f), 1.0f);
+    load_message      = message;
+    has_load_progress = true;
+}
+
 static void log_server_request(const httplib::Request & req, const httplib::Response & res) {
     // skip logging requests that are regularly sent, to avoid log spam
     if (req.path == "/health"
@@ -399,16 +406,22 @@ bool server_http_context::init_listener(const common_params & params) {
             // no endpoints are allowed to be accessed when the server is not ready
             // this is to prevent any data races or inconsistent states
             res.status = 503;
-            res.set_content(
-                safe_json_to_str(json {
-                    {"error", {
-                        {"message", "Loading model"},
-                        {"type", "unavailable_error"},
-                        {"code", 503}
-                    }}
-                }),
-                "application/json; charset=utf-8"
-            );
+            json body = {
+                {"error", {
+                    {"message", "Loading model"},
+                    {"type", "unavailable_error"},
+                    {"code", 503}
+                }}
+            };
+            // only the health endpoints report loading progress (top-level "progress" and "message")
+            if (req.path == "/health" || req.path == "/v1/health") {
+                std::lock_guard<std::mutex> lock(mutex_load_progress);
+                if (has_load_progress) {
+                    body["progress"] = load_progress;
+                    body["message"]  = load_message;
+                }
+            }
+            res.set_content(safe_json_to_str(body), "application/json; charset=utf-8");
             return false;
         }
         return true;

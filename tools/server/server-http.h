@@ -4,6 +4,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -69,6 +70,18 @@ struct server_http_context {
     std::unique_ptr<Impl> pimpl;
 
     std::atomic<bool> is_ready = false;
+
+    // model loading progress, reported in the /health body while is_ready is false
+    // overall fraction in [0, 1] across all loading stages
+    void set_load_progress(float progress, const std::string & message);
+
+private:
+    std::mutex  mutex_load_progress;
+    float       load_progress = 0.0f;
+    std::string load_message;
+    bool        has_load_progress = false;
+
+public:
 
     // note: the handler should never throw exceptions
     using handler_t = std::function<server_http_res_ptr(const server_http_req & req)>;
