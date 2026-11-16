@@ -20,9 +20,11 @@
 ## Description
 
 The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
-a wide range of hardware - locally and in the cloud. Read more: https://huggingface.co/blog/ggml-org/llama-cpp-v1
+a wide range of hardware - locally and in the cloud.
 
 The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
+
+- [llama.cpp v1.0.0](https://huggingface.co/blog/ggml-org/llama-cpp-v1)
 
 ## Quick start
 
