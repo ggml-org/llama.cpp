@@ -7,6 +7,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include <climits>
 #include <cstdio>
 #include <cstring>
 #include <string>
