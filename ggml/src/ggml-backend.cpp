@@ -1727,6 +1727,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         split->i_start = 0;
         split->n_inputs = 0;
         int cur_backend_id = split->backend_id;
+        bool split_has_nodes = false;
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
 
@@ -1739,8 +1740,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             GGML_ASSERT(node_backend_id != -1); // all nodes should be assigned by now, this can happen if there is no CPU fallback
 
             // check if we should start a new split based on the sources of the current node
+            // this also applies to a split without inputs, e.g. one that follows a split that only writes to a host buffer
             bool need_new_split = false;
-            if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
+            if (node_backend_id == cur_backend_id && split_has_nodes) {
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     struct ggml_tensor * src = node->src[j];
                     if (src == NULL) {
@@ -1777,6 +1779,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 split->n_inputs = 0;
                 cur_backend_id = node_backend_id;
             }
+            split_has_nodes = true;
 
             // find inputs that are not on the same backend
             for (int j = 0; j < GGML_MAX_SRC; j++) {
@@ -2172,8 +2175,13 @@ static void ggml_backend_sched_prefetch_inputs(ggml_backend_sched_t sched, int s
             continue;
         }
 
-        // not if this split computes or writes the input
+        // only results of earlier splits, the copy callback of this split runs later and can write other tensors (e.g. the MoE cache)
         const struct ggml_tensor * base = input->view_src ? input->view_src : input;
+        if (base->buffer == NULL || ggml_backend_buffer_get_usage(base->buffer) != GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
+            continue;
+        }
+
+        // not if this split computes or writes the input
         bool written = false;
         for (int j = 0; j < split->graph.n_nodes && !written; j++) {
             const struct ggml_tensor * node = split->graph.nodes[j];

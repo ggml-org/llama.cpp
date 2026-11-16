@@ -3,6 +3,7 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
+#include "chat-tts-norm.h"
 #include "common.h"
 #include "ggml.h"
 #include "json-schema-to-grammar.h"
@@ -807,6 +808,8 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 // renders a task template (e.g. "tts") with the given variables
 static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
     jinja::context ctx(tmpl.source());
+    // text normalization helpers: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
@@ -822,6 +825,11 @@ static bool is_lfm3_template(const std::string & src) {
 static std::string string_lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char) std::tolower(c); });
     return s;
+}
+
+// VibeVoice-ASR: default system prompt of the template written by the converter
+static bool is_vibevoice_asr_template(const std::string & src) {
+    return src.find("transcribes audio input into text output in JSON format") != std::string::npos;
 }
 
 // LFM3-Audio: language code -> name
@@ -844,7 +852,8 @@ static std::string lfm3_asr_system_prompt(const std::string & language) {
     return "Perform ASR in " + lfm3_language_name(language) + ".";
 }
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language) {
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language,
+                                                     double audio_length, const std::string & context) {
     common_chat_prompt_preset asr_preset;
     asr_preset.system = "";
     asr_preset.user   = "Transcribe audio to text";
@@ -858,6 +867,17 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
             asr_preset.system = lfm3_asr_system_prompt(language);
             asr_preset.user   = "";
             asr_preset.has_language = true;
+        } else if (is_vibevoice_asr_template(src)) {
+            // without the audio length the model does not know where the audio ends and loops
+            const char * keys = "transcribe it with these keys: Start time, End time, Speaker ID, Content";
+            if (context.empty()) {
+                asr_preset.user = string_format("\nThis is a %.2f seconds audio, please %s", audio_length, keys);
+            } else {
+                asr_preset.user = string_format("\nThis is a %.2f seconds audio, with extra info: %s\n\nPlease %s", audio_length, context.c_str(), keys);
+                asr_preset.has_context = true;
+            }
+            asr_preset.media_first        = true;
+            asr_preset.needs_audio_length = true;
         }
     }
 
@@ -949,18 +969,6 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
         string_replace_all(default_template_src,
                            "{%- if \"<|channel|>analysis<|message|>\" in message.content or "
                            "\"<|channel|>final<|message|>\" in message.content %}",
-                           "{%- if false %}");
-    }
-
-    // TODO @aldehir : this is a temporary fix, pending Minja changes
-    // Ref: https://github.com/ggml-org/llama.cpp/pull/17713#issuecomment-3631342664
-    if (default_template_src.find("[TOOL_CALLS]") != std::string::npos
-        // search for the error message and patch it
-        && default_template_src.find("if (message['content'] is none or") != std::string::npos) {
-        string_replace_all(default_template_src,
-                           "{%- if (message['content'] is none or message['content'] == '' or "
-                           "message['content']|length == 0) and (message['tool_calls'] is not defined or "
-                           "message['tool_calls'] is none or message['tool_calls']|length == 0) %}",
                            "{%- if false %}");
     }
 
@@ -1274,13 +1282,6 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
     return common_chat_params_init_lfm2(tmpl, inputs, /* tool_list_tokens = */ false);
 }
 
-// Older gemma4 templates need their tool responses rewritten before rendering
-static common_chat_params common_chat_params_init_gemma4_legacy(const common_chat_template & tmpl, const autoparser::generation_params & inputs) {
-    auto adjusted = inputs;
-    workaround::convert_tool_responses_gemma4(adjusted.messages);
-    return common_chat_params_init_gemma4(tmpl, adjusted);
-}
-
 // Pick the dedicated handler for a template from its source, or null for the autoparser.
 // Order matters: the first match wins, and later checks assume the earlier ones did not match.
 static common_chat_params_init_fn common_chat_template_detect_params_init(const std::string & src) {
@@ -1415,11 +1416,6 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
     // Gemma4 format detection
     if (src.find("'<|tool_call>call:'") != std::string::npos) {
         LOG_DBG("Using specialized template: Gemma4\n");
-        if (src.find("{#- OpenAI Chat Completions:") == std::string::npos) {
-            LOG_WRN("%s: detected an outdated gemma4 chat template, applying compatibility workarounds. "
-                    "Consider updating to the official template.\n", __func__);
-            return common_chat_params_init_gemma4_legacy;
-        }
         return common_chat_params_init_gemma4;
     }
 
@@ -1629,6 +1625,9 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             if (!end_tag.empty()) {
                 auto_params.thinking_end_tags = {std::move(end_tag)};
             }
+        }
+        if (is_inkling2_template(src)) {
+            common_chat_inkling2_split_media(auto_params.prompt);
         }
         const auto & arena = auto_params.parser;
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
@@ -1980,5 +1979,6 @@ common_json common_chat_templates_get_caps(const common_chat_templates * chat_te
                                                                       : chat_templates->template_default->caps;
     common_json result = caps.to_map();
     result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
+    result["reasoning_effort_rejected"] = caps.reasoning_effort_rejected;
     return result;
 }

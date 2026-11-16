@@ -19,7 +19,6 @@
 #define GGML_COMMON_IMPL_MUSA
 #endif
 #endif
-#include "ggml-common.h"
 
 #include <array>
 #include <algorithm>
@@ -38,6 +37,8 @@
 #else
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
+
+#include "ggml-common.h"
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
@@ -126,10 +127,20 @@
 #    define GGML_CUDA_USE_PDL
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUDART_VERSION >= 12030 || (!(defined(_MSC_VER) && !defined(__clang__)) && CUDART_VERSION >= 11080))
 
+constexpr ggml_cuda_thread_mask_t GGML_CUDA_FULL_THREAD_MASK = (ggml_cuda_thread_mask_t)0xffffffffffffffffULL;
+
 static __device__ __forceinline__ void ggml_cuda_syncwarp() {
 #ifndef GGML_USE_HIP
     __syncwarp();
 #endif // GGML_USE_HIP
+}
+
+static __device__ __forceinline__ void ggml_cuda_prefetch_l2(const void * p) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    asm volatile("prefetch.global.L2 [%0];" :: "l"(p));
+#else
+    GGML_UNUSED(p);
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 static __device__ __forceinline__ void ggml_cuda_pdl_sync() {
@@ -388,6 +399,10 @@ static bool blackwell_mma_available(const int cc) {
            ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_RUBIN;
 }
 
+static bool fp8_mma_hardware_available(const int cc) {
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && cc >= GGML_CUDA_CC_ADA_LOVELACE && cc < GGML_CUDA_CC_RUBIN;
+}
+
 // Checks whether the tensor's base data pointer and higher-dimensional strides are byte-aligned to `alignment` bytes.
 static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignment) {
     GGML_ASSERT(tensor != nullptr);
@@ -418,6 +433,32 @@ static constexpr __device__ int ggml_cuda_get_max_cpy_bytes() {
 #endif // defined(GGML_USE_HIP) || defined(GGML_USE_MUSA)
 }
 
+template <typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl(T value, int src_lane, int width = ggml_cuda_get_physical_warp_size(), ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __shfl_sync(mask, value, src_lane, width);
+}
+
+template <typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl_up(T value, unsigned delta, int width = ggml_cuda_get_physical_warp_size(), ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __shfl_up_sync(mask, value, delta, width);
+}
+
+template <typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl_xor(T value, int lane_mask, int width = ggml_cuda_get_physical_warp_size(), ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __shfl_xor_sync(mask, value, lane_mask, width);
+}
+
+static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __ballot_sync(mask, predicate);
+}
+
+static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __all_sync(mask, predicate);
+}
+
+static __device__ __forceinline__ int ggml_cuda_any(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
+    return __any_sync(mask, predicate);
+}
 
 [[noreturn]]
 static __device__ void no_device_code(
@@ -464,11 +505,11 @@ struct ggml_cuda_unroll<1> {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
-    return __reduce_add_sync(0xffffffff, x);
+    return __reduce_add_sync(GGML_CUDA_FULL_THREAD_MASK, x);
 #else
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
+        x += ggml_cuda_shfl_xor(x, offset, width);
     }
     return x;
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
@@ -478,7 +519,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(0xffffffff, x, offset, width);
+        x += ggml_cuda_shfl_xor(x, offset, width);
     }
     return x;
 }
@@ -487,8 +528,8 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        a.x += __shfl_xor_sync(0xffffffff, a.x, offset, width);
-        a.y += __shfl_xor_sync(0xffffffff, a.y, offset, width);
+        a.x += ggml_cuda_shfl_xor(a.x, offset, width);
+        a.y += ggml_cuda_shfl_xor(a.y, offset, width);
     }
     return a;
 }
@@ -498,7 +539,7 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #ifdef FP16_AVAILABLE
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        a = __hadd2(a, __shfl_xor_sync(0xffffffff, a, offset, width));
+        a = __hadd2(a, ggml_cuda_shfl_xor(a, offset, width));
     }
     return a;
 
@@ -511,11 +552,11 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_all(int x) {
     if (width == ggml_cuda_get_physical_warp_size()) {
-        return __all_sync(0xffffffff, x);
+        return ggml_cuda_all(x);
     } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
-            x = __shfl_xor_sync(0xffffffff, x, offset, width) && x;
+            x = ggml_cuda_shfl_xor(x, offset, width) && x;
         }
         return x;
     }
@@ -524,11 +565,11 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_any(int x) {
     if (width == ggml_cuda_get_physical_warp_size()) {
-        return __any_sync(0xffffffff, x);
+        return ggml_cuda_any(x);
     } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
-            x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
+            x = ggml_cuda_shfl_xor(x, offset, width) || x;
         }
         return x;
     }
@@ -538,7 +579,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+        x = fmaxf(x, ggml_cuda_shfl_xor(x, offset, width));
     }
     return x;
 }
@@ -548,7 +589,7 @@ static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const T t = __shfl_up_sync(0xffffffff, x, offset, width);
+        const T t = ggml_cuda_shfl_up(x, offset, width);
         if (lane_id >= offset) {
             x += t;
         }
@@ -561,8 +602,8 @@ static __device__ __forceinline__ float2 warp_prefix_inclusive_sum(float2 a) {
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const float t_x = __shfl_up_sync(0xffffffff, a.x, offset, width);
-        const float t_y = __shfl_up_sync(0xffffffff, a.y, offset, width);
+        const float t_x = ggml_cuda_shfl_up(a.x, offset, width);
+        const float t_y = ggml_cuda_shfl_up(a.y, offset, width);
         if (lane_id >= offset) {
             a.x += t_x;
             a.y += t_y;
@@ -577,7 +618,7 @@ static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
-        const half2 t = __shfl_up_sync(0xffffffff, a, offset, width);
+        const half2 t = ggml_cuda_shfl_up(a, offset, width);
         if (lane_id >= offset) {
             a = __hadd2(a, t);
         }
@@ -704,7 +745,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
 #pragma unroll
    for (int offset = width/2; offset > 0; offset >>= 1) {
-       x = ggml_cuda_hmax2(x, __shfl_xor_sync(0xffffffff, x, offset, width));
+       x = ggml_cuda_hmax2(x, ggml_cuda_shfl_xor(x, offset, width));
    }
    return x;
 }
@@ -855,7 +896,7 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 }
 
 static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
-#if defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
+#if defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE)
     // ROCm does not support fp8 in software on devices with fp8 hardware,
     // but CDNA3 supports only e4m3_fnuz (no inf).
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
@@ -881,6 +922,67 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     return static_cast<float>(raw / 2);
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
+}
+
+static __host__ __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8_t x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    __nv_fp8_e4m3 xf;
+    xf.__x = x;
+    return static_cast<float>(xf);
+#else
+    const uint8_t magnitude = x & 0x7F;
+    if (magnitude == 0x7F) {
+        return NAN;
+    }
+
+    const int exp = (magnitude >> 3) & 0x0F;
+    const int man = magnitude & 0x07;
+    float value;
+    if (exp == 0) {
+        value = ldexpf((float) man, -9);
+    } else {
+        value = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
+    }
+    return x & 0x80 ? -value : value;
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+}
+
+static __host__ __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_f8_e4m3(float x) {
+#if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+    return __nv_cvt_float_to_fp8(x, __NV_SATFINITE, __NV_E4M3);
+#elif !defined(__CUDA_ARCH__) && !defined(__HIP_DEVICE_COMPILE__) && !defined(__MUSA_ARCH__)
+    // ggml_cuda_cast also runs on the host, where __float2int_rn is not available.
+    return ggml_fp32_to_f8_e4m3(x);
+#else
+    const uint8_t sign = signbit(x) ? 0x80 : 0;
+    x = fabsf(x);
+
+    if (isnan(x)) {
+        return sign | 0x7F;
+    }
+    if (x == 0.0f) {
+        return sign;
+    }
+    if (isinf(x) || x >= 448.0f) {
+        return sign | 0x7E;
+    }
+    if (x < 0.015625f) {
+        return sign | (uint8_t) __float2int_rn(x * 512.0f);
+    }
+
+    int exp;
+    const float mantissa = frexpf(x, &exp) * 2.0f;
+    int encoded_exp = exp + 6;
+    int encoded_man = __float2int_rn((mantissa - 1.0f) * 8.0f);
+    if (encoded_man == 8) {
+        encoded_man = 0;
+        encoded_exp++;
+    }
+    if (encoded_exp > 15 || (encoded_exp == 15 && encoded_man > 6)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
+#endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
@@ -1206,6 +1308,8 @@ const ggml_cuda_device_info & ggml_cuda_info();
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
 
+bool ggml_cuda_pool_debug_enabled();
+
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
@@ -1283,6 +1387,9 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {};
     size_t cublas_workspace_sizes[GGML_CUDA_MAX_DEVICES] = {};
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+    cublasLtHandle_t cublaslt_handles[GGML_CUDA_MAX_DEVICES] = {};
+#endif
 
     int curr_stream_no = 0;
 
@@ -1329,10 +1436,14 @@ struct ggml_backend_cuda_context {
             CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
             CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device][curr_stream_no], CUBLAS_TF32_TENSOR_OP_MATH));
             CUBLAS_CHECK(cublasSetStream(cublas_handles[device][curr_stream_no], stream()));
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2))
+#if (defined(GGML_USE_HIP) && HIP_VERSION >= 70000000) || (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2)))
             if (cublas_workspace_sizes[device] == 0) {
+#if defined(GGML_USE_HIP)
+                cublas_workspace_sizes[device] = 32 * 1024 * 1024;
+#else
                 const int cc = ggml_cuda_info().devices[device].cc;
                 cublas_workspace_sizes[device] = (cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
+#endif
             }
             CUDA_CHECK(cudaMalloc(&cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
             CUBLAS_CHECK(cublasSetWorkspace(cublas_handles[device][curr_stream_no], cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
@@ -1340,6 +1451,16 @@ struct ggml_backend_cuda_context {
         }
         return cublas_handles[device][curr_stream_no];
     }
+
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
+    cublasLtHandle_t cublaslt_handle() {
+        if (cublaslt_handles[device] == nullptr) {
+            ggml_cuda_set_device(device);
+            CUBLAS_CHECK(cublasLtCreate(&cublaslt_handles[device]));
+        }
+        return cublaslt_handles[device];
+    }
+#endif
 
     // pool
     std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];

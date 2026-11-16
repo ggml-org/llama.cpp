@@ -117,7 +117,7 @@ Example using `gdb`:
 $ gdb --args ../../../build/bin/llama-server \
     --host 127.0.0.1 --port 8080 \
     --temp 0.8 --seed 42 \
-    --hf-repo ggml-org/models --hf-file tinyllamas/stories260K.gguf \
+    --hf-repo ggml-org-dev/stories260K --hf-file stories260K.gguf \
     --batch-size 32 --no-slots --alias tinyllama-2 --ctx-size 512 \
     --parallel 2 --n-predict 64
 ```
