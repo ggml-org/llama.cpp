@@ -711,7 +711,7 @@ const func_builtins & value_float_t::get_builtins() const {
         }},
         {"int", [](const func_args & args) -> value {
             args.ensure_vals<value_float>();
-            int64_t val = static_cast<int64_t>(args.get_pos(0)->as_float());
+            int64_t val = float_to_int(args.get_pos(0)->as_float());
             return mk_val<value_int>(val);
         }},
         {"float", [](const func_args & args) -> value {
@@ -1120,7 +1120,7 @@ static value array_sum(const func_args & args) {
         is_float = is_float || is_val<value_float>(v);
         sum += v->as_float();
     }
-    return is_float ? value(mk_val<value_float>(sum)) : value(mk_val<value_int>(static_cast<int64_t>(sum)));
+    return is_float ? value(mk_val<value_float>(sum)) : value(mk_val<value_int>(float_to_int(sum)));
 }
 
 const func_builtins & value_array_t::get_builtins() const {

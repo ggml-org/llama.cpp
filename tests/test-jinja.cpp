@@ -58,6 +58,7 @@ static std::shared_ptr<const common_tts_dicts> test_tts_dicts() {
         {"lex",
             "\t\"empty\"\n"
             "Zed\t\"z3d\"\n"
+            "big\t123456789012345678901234567890\n"
             "hello\t\"h@loU\"\n"
             "list\t[1,2,null]\n"
             "null\tnull\n"
@@ -3088,6 +3089,10 @@ static void test_tts_dict(testing & t) {
     test_template(t, "tts_dict null value is none, like a missing key",
         "{{ tts_dict('lex', 'null') is none }}",
         json::object(), "True", true);
+
+    test_template(t, "tts_dict number outside the int64 range",
+        "{{ tts_dict('lex', 'big') > 9000000000000000000 }}|{{ tts_dict('lex', 'big') is number }}",
+        json::object(), "True|True", true);
 
     test_template(t, "tts_dict selects the dictionary by name",
         "{{ tts_dict('other', 'hello') }}|{{ tts_dict('other', 'zoo') is none }}|{{ tts_dict('empty', 'hello') is none }}",
