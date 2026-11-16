@@ -62,6 +62,11 @@ class YuE2TextModel(Qwen3Model):
             return None
         return super().filter_tensors(item)
 
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # the codes are sampled with classifier-free guidance, the uncond prompt runs as a second sequence
+        self.gguf_writer.add_classifier_free_guidance(True)
+
     def set_vocab(self):
         # checkpoint-native tiktoken file, see tokenization_yue2.py
         ranks: dict[bytes, int] = {}

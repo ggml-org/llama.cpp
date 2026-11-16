@@ -2963,6 +2963,12 @@ public:
         prompt.clear();
         prompt_pos = 0;
         in_codes = false;
+        mode_off = false;
+        cfg_scale = 1.0f;
+        seq_uncond = 0;
+        upos = 0;
+        neg_prefix.clear();
+        abc_tail.clear();
         history.clear();
         codes.clear();
         done = false;
@@ -2997,19 +3003,56 @@ public:
         }
         prompt.resize((size_t) n);
         // cover mode and cot=off give the score in the prompt, the codes come next
-        if (prompt.back() == tok_music_start) {
+        auto abc = std::find(prompt.begin(), prompt.end(), tok_abc_start);
+        if (prompt.back() == tok_music_start && abc != prompt.end()) {
             in_codes = true;
+            mode_off = prompt.end() - abc == 3; // empty score
         } else if (prompt.back() != tok_abc_start) {
             LOG_ERR("mtmd_helper_gen_audio: yue2 prompt must end with <abc> or <|music_start|>\n");
             return 1;
         }
+        abc_tail.assign(abc, prompt.end());
         if (prompt.size() >= llama_n_ctx_seq(lctx)) {
             LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
             return 1;
         }
-        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+        llama_memory_t mem = llama_get_memory(lctx);
+        if (!llama_memory_seq_rm(mem, seq_id, 0, -1)) {
             LOG_ERR("mtmd_helper_gen_audio: cannot reset the sequence\n");
             return 1;
+        }
+
+        // classifier-free guidance of the codes, defaults of the reference (protocol.py)
+        cfg_scale = mode_off ? 1.01f : 1.0f;
+        if (cfg_scale != 1.0f) {
+            // the uncond sequence lives half a seq space away from the cond one
+            const int32_t n_seq_max = (int32_t) llama_n_seq_max(lctx);
+            seq_uncond = (llama_seq_id) (n_seq_max / 2 + seq_id);
+            if (!llama_model_classifier_free_guidance(model) || seq_id >= n_seq_max / 2) {
+                LOG_WRN("mtmd_helper_gen_audio: no paired cfg sequence (n_seq_max = %d, seq_id = %d), cfg is disabled\n", n_seq_max, seq_id);
+                cfg_scale = 1.0f;
+            } else if (!llama_memory_seq_rm(mem, seq_uncond, 0, -1)) {
+                LOG_ERR("mtmd_helper_gen_audio: cannot reset the cfg sequence\n");
+                return 1;
+            }
+        }
+        if (cfg_scale != 1.0f) {
+            // the negative prompt is the bare instruction, tokenized alone like the reference
+            const size_t i0 = text.find("<|endoftext|>");
+            const size_t i1 = text.find('\n');
+            if (i0 != 0 || i1 == std::string::npos) {
+                LOG_ERR("mtmd_helper_gen_audio: yue2 expects the prompt of its tts template\n");
+                return 1;
+            }
+            const std::string instr = text.substr(13, i1 - 13);
+            neg_prefix.resize(instr.size() + 16);
+            const int32_t n_instr = llama_tokenize(vocab, instr.c_str(), (int32_t) instr.size(), neg_prefix.data() + 1, (int32_t) neg_prefix.size() - 1, false, false);
+            if (n_instr < 1) {
+                LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
+                return 1;
+            }
+            neg_prefix[0] = tok_eod;
+            neg_prefix.resize((size_t) n_instr + 1);
         }
         return 0;
     }
@@ -3025,6 +3068,9 @@ public:
             return -1;
         }
         prompt_pos += n;
+        if (n == n_left && in_codes && !start_uncond()) {
+            return -1;
+        }
         return n_left - n;
     }
 
@@ -3038,7 +3084,9 @@ public:
             return 0;
         }
 
-        const llama_token tok = sample(llama_get_logits_ith(lctx, -1));
+        const bool use_cfg = in_codes && cfg_scale != 1.0f;
+        const llama_token tok = sample(use_cfg ? cfg_logits.data() : llama_get_logits_ith(lctx, -1));
+        int32_t i_out = -1; // output row of the cond sequence
         if (!in_codes) {
             // the score ends with </abc>, or is cut at max_tokens like the reference
             if (tok == tok_abc_end || (int32_t) history.size() + 1 >= abc_cfg.max_tokens) {
@@ -3046,17 +3094,22 @@ public:
                 if (!decode(next, 2)) {
                     return 1;
                 }
+                abc_tail.insert(abc_tail.end(), next, next + 2);
                 in_codes = true;
                 history.clear();
+                if (!start_uncond()) {
+                    return 1;
+                }
             } else {
                 history.push_back(tok);
+                abc_tail.push_back(tok);
                 if (!decode(&tok, 1)) {
                     return 1;
                 }
             }
         } else {
-            // the NAR pass also attends to <|music_end|>
-            const bool full = (int32_t) codes.size() + 1 >= code_cfg.max_tokens || pos + 1 >= (llama_pos) llama_n_ctx_seq(lctx);
+            // the NAR pass also attends to <|music_end|>, the uncond sequence shares the unified KV cache
+            const bool full = (int32_t) codes.size() + 1 >= code_cfg.max_tokens || pos + upos + 2 >= (llama_pos) llama_n_ctx_seq(lctx);
             if (tok == tok_music_end || full) {
                 if (!decode(&tok_music_end, 1)) {
                     return 1;
@@ -3067,11 +3120,17 @@ public:
             }
             history.push_back(tok);
             codes.push_back(tok - tok_codec0);
-            if (!decode(&tok, 1)) {
+            if (use_cfg) {
+                // the sampled code feeds both branches, in one decode
+                if (!decode_pair(tok)) {
+                    return 1;
+                }
+                i_out = 0;
+            } else if (!decode(&tok, 1)) {
                 return 1;
             }
         }
-        const float * h = llama_get_embeddings_ith(lctx, -1);
+        const float * h = llama_get_embeddings_ith(lctx, i_out);
         h_state_buf.assign(h, h + n_embd);
         *h_state_out = h_state_buf.data();
         return 0;
@@ -3198,13 +3257,13 @@ private:
     sampling abc_cfg  = { 0.7f, 0.9f,  30,  1.005f, 100, 32,  4096 };
     sampling code_cfg = { 1.0f, 0.95f, 100, 1.2f,   50,  200, 9000 };
 
-    bool decode(const llama_token * toks, int32_t n) {
+    bool decode(const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
         llama_batch batch = llama_batch_init(n, 0, 1);
         for (int32_t i = 0; i < n; i++) {
             batch.token   [i]    = toks[i];
-            batch.pos     [i]    = pos + i;
+            batch.pos     [i]    = p + i;
             batch.n_seq_id[i]    = 1;
-            batch.seq_id  [i][0] = seq_id;
+            batch.seq_id  [i][0] = seq;
             batch.logits  [i]    = i == n - 1;
         }
         batch.n_tokens = n;
@@ -3214,7 +3273,73 @@ private:
             LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
             return false;
         }
-        pos += n;
+        p += n;
+        return true;
+    }
+
+    bool decode(const llama_token * toks, int32_t n) {
+        return decode(toks, n, seq_id, pos);
+    }
+
+    // logits = uncond + scale * (cond - uncond), on the codes and <|music_end|> only
+    void cfg_mix(const float * cond, const float * uncond) {
+        cfg_logits.resize((size_t) llama_vocab_n_tokens(vocab));
+        for (llama_token t = tok_music_end; t < tok_codec0 + n_codec; t++) {
+            cfg_logits[t] = uncond[t] + cfg_scale * (cond[t] - uncond[t]);
+        }
+    }
+
+    // the negative prompt of the reference (negative_prefix): the instruction, then the score of the cond prompt
+    // the logits of the cond prompt must be the last ones when this is called
+    bool start_uncond() {
+        if (cfg_scale == 1.0f) {
+            return true;
+        }
+        const float * c = llama_get_logits_ith(lctx, -1);
+        std::vector<float> cond(c, c + llama_vocab_n_tokens(vocab));
+
+        std::vector<llama_token> neg = neg_prefix;
+        if (mode_off) {
+            neg.push_back(tok_music_start);
+        } else {
+            neg.insert(neg.end(), abc_tail.begin(), abc_tail.end());
+        }
+        if (pos + (llama_pos) neg.size() + 2 >= (llama_pos) llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: the cfg prompt does not fit in the context\n");
+            return false;
+        }
+        const int32_t n_batch = (int32_t) llama_n_batch(lctx);
+        for (size_t i = 0; i < neg.size(); i += (size_t) n_batch) {
+            const int32_t n = std::min(n_batch, (int32_t) (neg.size() - i));
+            if (!decode(neg.data() + i, n, seq_uncond, upos)) {
+                return false;
+            }
+        }
+        cfg_mix(cond.data(), llama_get_logits_ith(lctx, -1));
+        return true;
+    }
+
+    bool decode_pair(llama_token tok) {
+        llama_batch batch = llama_batch_init(2, 0, 1);
+        const llama_seq_id seqs[2] = { seq_id, seq_uncond };
+        const llama_pos    p[2]    = { pos, upos };
+        for (int i = 0; i < 2; i++) {
+            batch.token   [i]    = tok;
+            batch.pos     [i]    = p[i];
+            batch.n_seq_id[i]    = 1;
+            batch.seq_id  [i][0] = seqs[i];
+            batch.logits  [i]    = 1;
+        }
+        batch.n_tokens = 2;
+        const int32_t ret = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+            return false;
+        }
+        pos++;
+        upos++;
+        cfg_mix(llama_get_logits_ith(lctx, 0), llama_get_logits_ith(lctx, 1));
         return true;
     }
 
@@ -3262,11 +3387,12 @@ private:
             p[i] = std::exp((double) ((cand[i].first - cand[0].first) / c.temp));
             sum += p[i];
         }
-        // keep the smallest prefix whose mass reaches top_p, the first token always stays
+        // keep the smallest prefix whose mass reaches top_p, the first token always stays (3 for the codes of cot=off)
+        const size_t n_keep = in_codes && mode_off ? 3 : 1;
         double before = 0.0;
         for (size_t i = 0; i < k; i++) {
             const double pi = p[i];
-            if (i > 0 && before > c.top_p * sum) {
+            if (i >= n_keep && before > c.top_p * sum) {
                 p[i] = 0.0;
             }
             before += pi;
@@ -3290,6 +3416,13 @@ private:
     std::vector<llama_token> prompt;
     int32_t prompt_pos = 0;
     bool in_codes = false;
+    bool mode_off = false; // cot=off: no score
+    float        cfg_scale  = 1.0f;
+    llama_seq_id seq_uncond = 0;
+    llama_pos    upos       = 0;
+    std::vector<llama_token> neg_prefix; // EOD + instruction
+    std::vector<llama_token> abc_tail;   // the cond tokens from <abc> on
+    std::vector<float>       cfg_logits;
     std::vector<llama_token> history; // tokens sampled in the current phase
     std::vector<int32_t> codes;
     bool done    = false;

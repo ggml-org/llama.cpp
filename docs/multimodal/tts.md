@@ -238,7 +238,7 @@ Available params:
 - `-c` must hold the prompt, the score and the codes, e.g. `-c 24576`
 - Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
 - Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
-- Note: classifier-free guidance is not supported (the reference default is 1.0, and 1.01 with `--tts-voice off`)
+- The codes are sampled with classifier-free guidance like the reference: scale 1.01 with `--tts-voice off`, off (1.0) otherwise. The uncond prompt runs as a second sequence, so the context must also hold it (the instruction, the score and the codes once more)
 - Note: songs whose prompt, score and codes go over 24576 positions are rejected (the reference splits them into chunks)
 
 Example usage:
