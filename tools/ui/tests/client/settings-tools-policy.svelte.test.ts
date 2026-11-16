@@ -41,7 +41,9 @@ describe('SettingsChatToolsTab', () => {
 		conversationsStore.conversations = [conversation];
 		setServerTools([TOOL]);
 		const screen = render(SettingsChatToolsTab);
-		const trigger = screen.container.querySelector<HTMLElement>('[data-slot="collapsible-trigger"]');
+		const trigger = screen.container.querySelector<HTMLElement>(
+			'[data-slot="collapsible-trigger"]'
+		);
 
 		if (!trigger) throw new Error('tool group trigger not found');
 

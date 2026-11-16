@@ -108,7 +108,8 @@
 									<Checkbox
 										checked={isEnabled}
 										class={ICON_CLASS_DEFAULT}
-										onCheckedChange={() => void conversationsStore.preferences.toggleTool(entry.key)}
+										onCheckedChange={() =>
+											void conversationsStore.preferences.toggleTool(entry.key)}
 									/>
 								</div>
 
