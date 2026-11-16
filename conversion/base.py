@@ -1979,6 +1979,12 @@ class TextModel(ModelBase):
         if (local_rope_theta := self.rope_parameters.get("sliding_attention", {}).get("rope_theta")) is not None:
             self.gguf_writer.add_rope_freq_base_swa(local_rope_theta)
             logger.info(f"gguf: rope theta swa = {local_rope_theta}")
+        # Add rope_pattern from no_rope_layers
+        if no_rope_layers := self.hparams.get("no_rope_layers"):
+            # Convert 1/0 to bool (1 = use RoPE, 0 = NoPE)
+            rope_pattern = [bool(x) for x in no_rope_layers]
+            self.gguf_writer.add_rope_pattern(rope_pattern)
+            logger.info(f"gguf: rope_pattern = {sum(rope_pattern)} RoPE layers / {len(rope_pattern)} total")
         if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_rms_eps(f_rms_eps)
             logger.info(f"gguf: rms norm epsilon = {f_rms_eps}")
@@ -2432,6 +2438,9 @@ class TextModel(ModelBase):
         if chkhsh == "a9af07a84191f55098b248ae6f3dfe9e32d3190bebe8eafd91c1ddec9bc3449f":
             # ref: https://huggingface.co/IFM/K2-Horizon-36B
             res = "k2-horizon"
+        if chkhsh == "5635e1c8d621dff7b4825f41f2f97b6ceb39bcf2d5c541db28577080d6efd5e5":
+            # ref: https://huggingface.co/thinkingmachines/Inkling-2-Small
+            res = "inkling2"
 
         if res is None:
             logger.warning("\n")

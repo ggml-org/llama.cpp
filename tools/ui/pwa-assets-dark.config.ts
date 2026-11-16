@@ -1,10 +1,8 @@
-import { writeThemeFavicons } from './scripts/favicon-colorize';
-import { FAVICON_COLORS, PWA_ASSET_GENERATOR } from './src/lib/constants/pwa.constants';
+import { writeBrandFavicons } from './scripts/brand-favicons';
+import { PWA_ASSET_GENERATOR } from './src/lib/constants/pwa.constants';
 import { defineConfig } from '@vite-pwa/assets-generator/config';
 
-writeThemeFavicons(FAVICON_COLORS.LIGHT, FAVICON_COLORS.DARK, {
-	padding: PWA_ASSET_GENERATOR.FAVICON_PADDING
-});
+writeBrandFavicons();
 
 export default defineConfig({
 	headLinkOptions: {

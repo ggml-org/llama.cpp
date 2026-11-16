@@ -31,6 +31,10 @@ set(MTMD_CORE_SOURCES
     mtmd-graph.h
 )
 
+if (MTMD_VIDEO)
+    list(APPEND MTMD_CORE_SOURCES mtmd-helper-video-ffmpeg.cpp)
+endif()
+
 add_library(mtmd
             ${MTMD_CORE_SOURCES}
             models/models.h
@@ -50,6 +54,7 @@ add_library(mtmd
             models/granite-speech.cpp
             models/granite4-vision.cpp
             models/hunyuanvl.cpp
+            models/inkling2v.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/kimik25.cpp

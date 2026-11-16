@@ -905,6 +905,12 @@ struct mtmd_context {
                     img_end = "</img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(models.v.get());
                 } break;
+            case PROJECTOR_TYPE_INKLING2V:
+                {
+                    // the chat template code gives the image its own message block
+                    img_beg = "<|content_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling2v>(models.v.get());
+                } break;
             case PROJECTOR_TYPE_MUSE_GLIMMER:
                 {
                     img_beg = "<|image_start|>";

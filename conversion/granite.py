@@ -14,7 +14,7 @@ from .llama import LlamaModel
 from .mamba import Mamba2Model
 
 
-@ModelBase.register("GraniteForCausalLM")
+@ModelBase.register("GraniteForCausalLM", "Granite4VisionForConditionalGeneration")
 @ModelBase.example("ibm-granite/granite-3.3-2b-instruct")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
@@ -111,14 +111,6 @@ class GraniteSWAModel(GraniteModel):
             self.gguf_writer.add_sliding_window_pattern(is_swa)
             logger.info("gguf: (granite_swa) sliding_window_pattern (inferred) = %d SWA layers / %d total",
                         sum(is_swa), n_layers)
-
-        # Add rope_pattern from no_rope_layers
-        if no_rope_layers := self.hparams.get("no_rope_layers"):
-            # Convert 1/0 to bool (1 = use RoPE, 0 = NoPE)
-            rope_pattern = [bool(x) for x in no_rope_layers]
-            self.gguf_writer.add_rope_pattern(rope_pattern)
-            logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
-                        sum(rope_pattern), len(rope_pattern))
 
 
 @ModelBase.register("GraniteMoeSWAForCausalLM")
