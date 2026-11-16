@@ -112,14 +112,6 @@ class GraniteSWAModel(GraniteModel):
             logger.info("gguf: (granite_swa) sliding_window_pattern (inferred) = %d SWA layers / %d total",
                         sum(is_swa), n_layers)
 
-        # Add rope_pattern from no_rope_layers
-        if no_rope_layers := self.hparams.get("no_rope_layers"):
-            # Convert 1/0 to bool (1 = use RoPE, 0 = NoPE)
-            rope_pattern = [bool(x) for x in no_rope_layers]
-            self.gguf_writer.add_rope_pattern(rope_pattern)
-            logger.info("gguf: (granite_swa) rope_pattern = %d RoPE layers / %d total",
-                        sum(rope_pattern), len(rope_pattern))
-
 
 @ModelBase.register("GraniteMoeSWAForCausalLM")
 class GraniteMoeSWAModel(GraniteSWAModel):

@@ -491,10 +491,16 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 struct common_chat_prompt_preset {
     std::string system;
     std::string user;
-    bool has_language = false; // the preset already names the requested language
+    bool has_language       = false; // the preset already names the requested language
+    bool has_context        = false; // the user text already holds the context
+    bool media_first        = false; // the media goes before the user text
+    bool needs_audio_length = false; // the user text depends on the audio length, call again with it
 };
 
-common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language = "");
+// audio_length: in seconds, 0 if unknown
+// context: extra info from the user (e.g. names, hotwords), only used by some presets, see has_context
+common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates, const std::string & language = "",
+                                                     double audio_length = 0.0, const std::string & context = "");
 
 // prompt of the model's "tts" chat template for the text to speak, empty if the model has none
 // language and voice are optional, the template defines their defaults

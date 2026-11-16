@@ -37,6 +37,7 @@ Rules of thumb:
 - Like the pp/tg graphs of `llama_context`, the subcontexts share one scheduler: each warmup reserves its worst-case graph on it, so the compute buffers fit the largest one, and switching modality re-plans inside them
 - A model declares its runtime needs (e.g. `max_nodes`, `flash_attn_auto`) in `load_hparams`, the subcontext applies them
 - Models and backends must outlive the subcontexts, `mtmd_context` declares them first for that reason
+- Models having both audio and vision encoders must have different arch names (projector types), postfixed by `a` and `v`. See Gemma 4 as an example (`gemma4a` / `gemma4v`)
 - Locking happens only at the public API boundary (`mtmd.cpp`): a new public function that runs a graph must take `compute_mutex`. The internals (subcontexts, preprocessors, `mtmd_audio_log_mel()`) assume it is held and never lock
 
 ## Pipeline
@@ -102,12 +103,13 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
         - In most cases, you can hard-code model configs in the model graph class, or in `mtmd_hparams`
         - If some values need to be exposed to the `mtmd_helper` layer, hard-code them in `mtmd_helper` and distinguish by pipeline and `mtmd_gen_audio_info::model_variant` if necessary
         - Do NOT add new GGUF metadata or new fields to `mtmd_gen_audio_info` unless you can prove that you absolutely need them
+    - If the model requires special preprocessing of the input text prompt (prompt format, text normalization), put it in `tokenizer.chat_template.tts` as a jinja program. It receives the text as `messages[0].content`, plus `language` and `voice`. See `conversion/lfm3.py` (prompt format) and `models/templates/Zyphra-ZONOS3-Mini-tts.jinja` (text normalization) as examples. For text normalization, use `tts_norm_scan()` / `tts_norm_sub()` (see `docs/tts-norm-patterns.md`) and add test cases to `tests/test-jinja.cpp`, which also checks them against the python reference with `-py`
 4. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
     - 10-20% changes is to add new backbone (text) model and conversion
     - 60% changes inside `mtmd-helper-gen.cpp`
     - 10% changes inside `libmtmd` core (`mtmd-model`, `mtmd-subcontext`, `models/`)
     - The rest downstream code (CLI, server) should have no changes at all
-5. Update usage documentation in `tools/tts/README.md`
+5. Update usage documentation in `docs/multimodal/tts.md`
 
 IMPORTANT: If your model needs changes that don't fit the existing infrastructure, **open an issue first for discussion**.
 
