@@ -16,17 +16,6 @@ from .qwen import Qwen3Model
 # text model: Qwen3 backbone (slow AR), samples the semantic code of each frame
 # mmproj: fast AR code predictor (other codebooks) and Fish DAC decoder (codec.pth, same as drama3)
 
-_TEXT_RENAME = (
-    (".attention.wo.",     ".self_attn.o_proj."),
-    (".attention.q_norm.", ".self_attn.q_norm."),
-    (".attention.k_norm.", ".self_attn.k_norm."),
-    (".attention_norm.",   ".input_layernorm."),
-    (".ffn_norm.",         ".post_attention_layernorm."),
-    (".feed_forward.w1.",  ".mlp.gate_proj."),
-    (".feed_forward.w3.",  ".mlp.up_proj."),
-    (".feed_forward.w2.",  ".mlp.down_proj."),
-)
-
 # residual codebook size of codec.pth, the fast AR head is cut to it
 _N_RESIDUAL_CODES = 1024
 
@@ -74,31 +63,25 @@ class FishS2TextModel(Qwen3Model):
         kwargs.pop("hparams", None)
         super().__init__(dir_model, *args, hparams=_load_hparams(dir_model), **kwargs)
 
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        if item[0].startswith("audio_decoder."):
-            return None
-        return super().filter_tensors(item)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # the rest is mapped by tensor_mapping.py
         name = name.removeprefix("text_model.")
-        if name == "model.embeddings.weight":
-            name = "model.embed_tokens.weight"
-        for src, dst in _TEXT_RENAME:
-            name = name.replace(src, dst)
-
+        T = gguf.MODEL_TENSOR
         head_dim = self.hparams["head_dim"]
         if name.endswith(".attention.wqkv.weight"):
             n_q  = self.hparams["num_attention_heads"] * head_dim
             n_kv = self.hparams["num_key_value_heads"] * head_dim
             q, k, v = data_torch.split([n_q, n_kv, n_kv], dim=0)
-            prefix = name.removesuffix("attention.wqkv.weight")
-            yield from super().modify_tensors(_neox_rows(q, head_dim), prefix + "self_attn.q_proj.weight", bid)
-            yield from super().modify_tensors(_neox_rows(k, head_dim), prefix + "self_attn.k_proj.weight", bid)
-            yield from super().modify_tensors(v,                       prefix + "self_attn.v_proj.weight", bid)
+            yield (self.format_tensor_name(T.ATTN_Q, bid), _neox_rows(q, head_dim))
+            yield (self.format_tensor_name(T.ATTN_K, bid), _neox_rows(k, head_dim))
+            yield (self.format_tensor_name(T.ATTN_V, bid), v)
             return
-        if name.endswith((".q_norm.weight", ".k_norm.weight")):
-            data_torch = _neox_rows(data_torch, head_dim)
+        if name.endswith(".attention.q_norm.weight"):
+            yield (self.format_tensor_name(T.ATTN_Q_NORM, bid), _neox_rows(data_torch, head_dim))
+            return
+        if name.endswith(".attention.k_norm.weight"):
+            yield (self.format_tensor_name(T.ATTN_K_NORM, bid), _neox_rows(data_torch, head_dim))
+            return
         yield from super().modify_tensors(data_torch, name, bid)
 
 

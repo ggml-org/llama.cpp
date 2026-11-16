@@ -2592,32 +2592,9 @@ struct mtmd_model_loader {
                         down.gamma    = get_tensor(mtmd_format(TN_A_CODEC_DOWN_GAMMA,  il));
                     }
                     c2w.tfm_output_norm_w = get_tensor(mtmd_format(TN_A_CODEC_PRE_NORM, "weight"));
-                    if (!model.post_ln_w || hparams.n_layer != 12) {
-                        throw std::runtime_error(mtmd_format("%s: fish_s2_spkenc expects 12 transformer layers and a.post_ln\n", __func__));
+                    if (hparams.n_layer != mtmd_graph_fish_s2_spkenc::n_tfm_layer) {
+                        throw std::runtime_error(mtmd_format("%s: fish_s2_spkenc expects %d transformer layers\n", __func__, mtmd_graph_fish_s2_spkenc::n_tfm_layer));
                     }
-                    // the graph takes the strides from the taps-major kernels [stride * IC, OC, K / stride], they must give one row per patch
-                    int64_t n_ch = 1;
-                    int64_t hop  = 1;
-                    auto add_stride = [&](ggml_tensor * w) {
-                        if (w->ne[0] % n_ch != 0) {
-                            throw std::runtime_error(mtmd_format("%s: fish_s2_spkenc: bad strided conv shape\n", __func__));
-                        }
-                        hop *= w->ne[0] / n_ch;
-                        n_ch = w->ne[1];
-                    };
-                    n_ch = c2w.dac_entry_w->ne[1];
-                    for (const auto & blk : c2w.dac) {
-                        add_stride(blk.conv_w);
-                    }
-                    n_ch = c2w.dac_post_conv_w->ne[1];
-                    for (const auto & down : c2w.upsample) {
-                        add_stride(down.conv_w);
-                    }
-                    if (hop != hparams.audio_samples_per_token()) {
-                        throw std::runtime_error(mtmd_format("%s: fish_s2_spkenc: conv strides give %lld samples per row, expected %d\n",
-                                                             __func__, (long long) hop, hparams.audio_samples_per_token()));
-                    }
-
                     // VQ: search with the normalized codebooks, subtract the codec decoder's out_proj tables
                     c2w.quant_first_in_w      = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_IN, "weight"));
                     c2w.quant_first_in_b      = get_tensor(mtmd_format(TN_A_CODEC_VQ_FIRST_IN, "bias"));
@@ -2942,6 +2919,10 @@ struct mtmd_model_loader {
                     model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight")); // merged 3D, backbone input tables
                     model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight")); // backbone rows of the semantic band
                     load_code2wav(false);
+                    // the graph reads model.layers[0]
+                    if (hparams.n_layer < 1) {
+                        throw std::runtime_error(mtmd_format("%s: fish_s2_gen has no fast AR layer\n", __func__));
+                    }
                 } break;
             case PROJECTOR_TYPE_CHATTERBOX:
                 {

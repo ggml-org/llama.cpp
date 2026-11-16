@@ -1336,26 +1336,27 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_BLK_EMBD    = auto() # drama3: per-layer code embedding table
     A_GEN_CODE_BLK_OUT_NORM = auto() # drama3: per-layer output norm
     A_GEN_CODE_TOK_EMBD    = auto() # fish_s2: code predictor input embedding, shared by all codebooks
-    A_CODEC_ENC_ENTRY      = auto() # fish_s2: codec encoder, entry conv
-    A_CODEC_ENC_SNAKE      = auto() # fish_s2: codec encoder block, Snake before the strided conv
-    A_CODEC_ENC_CONV       = auto() # fish_s2: codec encoder block, strided conv
+    # fish_s2 codec encoder (voice cloning): reference clip -> codes
+    A_CODEC_ENC_ENTRY      = auto() # entry conv
+    A_CODEC_ENC_SNAKE      = auto() # encoder block, Snake before the strided conv
+    A_CODEC_ENC_CONV       = auto() # encoder block, strided conv
     A_CODEC_ENC_RES_ACT1   = auto()
     A_CODEC_ENC_RES_CONV1  = auto()
     A_CODEC_ENC_RES_ACT2   = auto()
     A_CODEC_ENC_RES_CONV2  = auto()
     A_CODEC_ENC_POST_SNAKE = auto()
     A_CODEC_ENC_POST_CONV  = auto()
-    A_CODEC_DOWN_CONV      = auto() # fish_s2: quantizer downsample, strided conv + ConvNeXt
+    A_CODEC_DOWN_CONV      = auto() # quantizer downsample, strided conv + ConvNeXt
     A_CODEC_DOWN_DWCONV    = auto()
     A_CODEC_DOWN_NORM      = auto()
     A_CODEC_DOWN_PW1       = auto()
     A_CODEC_DOWN_PW2       = auto()
     A_CODEC_DOWN_GAMMA     = auto()
-    A_CODEC_PRE_NORM       = auto() # fish_s2: output norm of the quantizer pre_module
-    A_CODEC_VQ_FIRST_IN    = auto() # fish_s2: semantic VQ input projection
-    A_CODEC_VQ_FIRST_CB    = auto() # fish_s2: semantic VQ codebook, l2-normalized
-    A_CODEC_VQ_REST_IN     = auto() # fish_s2: residual VQ input projections, merged 3D
-    A_CODEC_VQ_REST_CB     = auto() # fish_s2: residual VQ codebooks, l2-normalized, merged 3D
+    A_CODEC_PRE_NORM       = auto() # output norm of the quantizer pre_module
+    A_CODEC_VQ_FIRST_IN    = auto() # semantic VQ input projection
+    A_CODEC_VQ_FIRST_CB    = auto() # semantic VQ codebook, l2-normalized
+    A_CODEC_VQ_REST_IN     = auto() # residual VQ input projections, merged 3D
+    A_CODEC_VQ_REST_CB     = auto() # residual VQ codebooks, l2-normalized, merged 3D
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj

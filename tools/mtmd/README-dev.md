@@ -39,6 +39,7 @@ Rules of thumb:
 - Models and backends must outlive the subcontexts, `mtmd_context` declares them first for that reason
 - Models having both audio and vision encoders must have different arch names (projector types), postfixed by `a` and `v`. See Gemma 4 as an example (`gemma4a` / `gemma4v`)
 - Locking happens only at the public API boundary (`mtmd.cpp`): a new public function that runs a graph must take `compute_mutex`. The internals (subcontexts, preprocessors, `mtmd_audio_log_mel()`) assume it is held and never lock
+- No magic numbers for a model's fixed shapes (layer counts, codebook sizes, window lengths...): define them once as `static constexpr` in the graph struct in `models/models.h`, and refer to them from the loader or the subcontext (e.g. `mtmd_graph_zonos3_gen::n_codebooks`, `mtmd_graph_fish_s2_spkenc::n_tfm_layer`)
 
 ## Pipeline
 

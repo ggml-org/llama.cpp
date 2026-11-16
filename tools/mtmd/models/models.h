@@ -589,6 +589,7 @@ struct mtmd_graph_fish_s2_spkenc : mtmd_graph {
 
     // codec encoder transformer layers, the rest of model.layers is the quantizer pre_module
     static constexpr int n_enc_tfm_layer = 4;
+    static constexpr int n_tfm_layer     = 12;
 
     ggml_tensor * conv(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation) const;
     ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
