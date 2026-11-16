@@ -3192,11 +3192,13 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
 }
 
 struct mtmd_helper_gen_audio {
+    llama_context * lctx = nullptr;
     std::unique_ptr<mtmd_gen_audio_pipeline> pipeline;
 };
 
 mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(struct llama_context * lctx, struct mtmd_context * mctx) {
     auto * ctx = new mtmd_helper_gen_audio();
+    ctx->lctx     = lctx;
     ctx->pipeline = make_pipeline(lctx, mctx);
     return ctx;
 }
@@ -3246,6 +3248,11 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
 
 int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n_batch) {
     if (!ctx->pipeline) {
+        return -1;
+    }
+    // the context may use a smaller n_batch than requested (e.g. clamped to n_ctx), llama_decode() would fail above it
+    if (n_batch <= 0 || (uint32_t) n_batch > llama_n_batch(ctx->lctx)) {
+        LOG_ERR("mtmd_helper_gen_audio: n_batch must be in [1, %u], got %d\n", llama_n_batch(ctx->lctx), n_batch);
         return -1;
     }
     return ctx->pipeline->step_prompt(n_batch);

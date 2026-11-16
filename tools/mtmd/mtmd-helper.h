@@ -340,7 +340,7 @@ MTMD_API int32_t mtmd_helper_gen_audio_set_input(
                         mtmd_helper_gen_audio * ctx,
                         const struct mtmd_helper_gen_audio_inp * inp);
 
-// processes at most n_batch prompt tokens per call
+// processes at most n_batch prompt tokens per call, n_batch must not exceed llama_n_batch() of the context
 // returns: >0 = number of prompt tokens remaining, 0 = done, <0 = error
 MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
                         mtmd_helper_gen_audio * ctx,

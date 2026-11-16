@@ -2930,12 +2930,6 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.penalty_repeat = 2.4f;
             inp.penalty_last_n = 96;
             break;
-        case PROJECTOR_TYPE_FISH_S2_GEN:
-            // fast AR is greedy in the reference (sglang-omni fishaudio_s2_pro), temp > 0 samples instead
-            inp.top_k = 30;
-            inp.top_p = 0.9f;
-            inp.temp  = 0.0f;
-            break;
         case PROJECTOR_TYPE_LFM3A_GEN:
             {
                 // MaskGIT sampling runs in the helper, with the settings of the checkpoint

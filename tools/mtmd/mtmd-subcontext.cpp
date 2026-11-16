@@ -1817,15 +1817,6 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     }
                     std::vector<int32_t> code0 = { params->code0 };
                     set_input_i32("inp_code0", code0);
-
-                    if (ggml_graph_get_tensor(gf, "inp_rand") != nullptr) {
-                        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-                        std::vector<float> r(n_cb - 1);
-                        for (auto & v : r) {
-                            v = dist(params->gen_state->rng);
-                        }
-                        set_input_f32("inp_rand", r);
-                    }
                 } else {
                     // code0 < 0: next row is text (prompt), the tower only fills its KV
                     // codes: input frame codes for a speech row, empty for a text row

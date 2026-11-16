@@ -226,7 +226,7 @@ Available params:
 - Inline instructions in brackets control the delivery, for example `[laughing]`, `[whisper]` or `[pause]`
 - The language is the one of the text, `--tts-lang` is not used
 - Voice cloning: `--tts-speaker-file` with the reference clip, optionally `--tts-speaker-text` with its transcript (it is put in the prompt as the reference does). The clip is encoded by the codec encoder half of `codec.pth`, it is truncated to the first 30 s
-- Note: `--top-k` and `--top-p` are not used, frames are sampled with the settings of the reference (semantic token: repetition penalty 1.1 over the last 16 frames, top-k 30, top-p 0.8, temperature 0.8, or top-p 0.9 and temperature 1.0 when the last 4 frames repeat a token; other codes: greedy)
+- Note: `--temp`, `--top-k` and `--top-p` are not used (only `--seed`), frames are sampled with the settings of the reference (semantic token: repetition penalty 1.1 over the last 16 frames, top-k 30, top-p 0.8, temperature 0.8, or top-p 0.9 and temperature 1.0 when the last 4 frames repeat a token; other codes: greedy)
 - Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
 
 Example usage:

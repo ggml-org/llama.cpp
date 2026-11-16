@@ -4,7 +4,7 @@
 #include <vector>
 
 // one frame: backbone hidden + semantic code -> the codes of this frame + next backbone input
-// fast AR row 0 is the backbone hidden, row p > 0 is the embedding of code p - 1 and samples code p
+// fast AR row 0 is the backbone hidden, row p > 0 is the embedding of code p - 1 and picks code p (greedy, as the reference)
 ggml_cgraph * mtmd_graph_fish_s2_gen::build_fast_ar() {
     const int64_t n_cb      = model.gen_code_embd_w->ne[2];
     const int64_t n_embd_cb = model.gen_code_embd_w->ne[0];
@@ -19,14 +19,6 @@ ggml_cgraph * mtmd_graph_fish_s2_gen::build_fast_ar() {
     ggml_tensor * inp_code0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
     ggml_set_name(inp_code0, "inp_code0");
     ggml_set_input(inp_code0);
-
-    // temp <= 0 is greedy, no random draws
-    ggml_tensor * inp_rand = nullptr;
-    if (temp > 0.0f) {
-        inp_rand = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_cb - 1);
-        ggml_set_name(inp_rand, "inp_rand");
-        ggml_set_input(inp_rand);
-    }
 
     mtmd_graph_qwen3tts_gen::code_gen cg(*this, top_k, top_p);
 
@@ -54,14 +46,7 @@ ggml_cgraph * mtmd_graph_fish_s2_gen::build_fast_ar() {
         }
         cur = ggml_mul(ctx0, ggml_rms_norm(ctx0, cur, hparams.eps), model.gen_code_norm_w);
         ggml_tensor * logits = ggml_mul_mat(ctx0, model.gen_code_head_w, cur);
-        ggml_tensor * code   = nullptr;
-        if (!inp_rand) {
-            code = ggml_argmax(ctx0, logits);
-        } else {
-            logits = ggml_scale(ctx0, logits, 1.0f / temp);
-            code = cg.do_sampling(logits, ggml_view_1d(ctx0, inp_rand, 1, (size_t) (p - 1) * sizeof(float)));
-        }
-        out_codes = cg.cache_set(out_codes, p, code);
+        out_codes = cg.cache_set(out_codes, p, ggml_argmax(ctx0, logits));
     }
 
     out_codes = ggml_cont(ctx0, out_codes);
