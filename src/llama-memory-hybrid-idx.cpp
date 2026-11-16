@@ -372,40 +372,6 @@ int64_t kpool_rank(const std::vector<std::pair<llama_pos, uint32_t>> & cells, ll
     return it != cells.end() && it->second == cell && it->first == pos ? it - cells.begin() : -1;
 }
 
-// adds the pools that start at or after sq.j_next
-void kpool_scan(llama_memory_hybrid_idx::kpool_layout::seq & sq, uint32_t kpool, bool by_order) {
-    // Pools start at the first valid token
-    size_t j = sq.j_next;
-    if (by_order) {
-        // consecutive cells in sequence order, whatever their positions
-        for (; j + kpool <= sq.cells.size(); j += kpool) {
-            sq.pools.push_back((uint32_t) j);
-        }
-    } else {
-        while (j + kpool <= sq.cells.size()) {
-            const llama_pos p0 = sq.cells[j].first;
-            if ((p0 - sq.pos_min) % (llama_pos) kpool != 0) {
-                ++j;
-                continue;
-            }
-            bool ok = true;
-            for (uint32_t k = 1; k < kpool; ++k) {
-                if (sq.cells[j + k].first != p0 + (llama_pos) k) {
-                    ok = false;
-                    break;
-                }
-            }
-            if (ok) {
-                sq.pools.push_back((uint32_t) j);
-                j += kpool;
-            } else {
-                ++j;
-            }
-        }
-    }
-    sq.j_next = j;
-}
-
 }
 
 llama_memory_hybrid_idx::~llama_memory_hybrid_idx() = default;
@@ -476,7 +442,36 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
             sq.pos_min = sp.empty() ? 0 : sp.begin()->first;
         }
 
-        kpool_scan(sq, kpool, hparams_idx.indexer_kpool_by_order);
+        // Pools start at the first valid token
+        size_t j = sq.j_next;
+        if (hparams_idx.indexer_kpool_by_order) {
+            // consecutive cells in sequence order, whatever their positions
+            for (; j + kpool <= sq.cells.size(); j += kpool) {
+                sq.pools.push_back((uint32_t) j);
+            }
+        } else {
+            while (j + kpool <= sq.cells.size()) {
+                const llama_pos p0 = sq.cells[j].first;
+                if ((p0 - sq.pos_min) % (llama_pos) kpool != 0) {
+                    ++j;
+                    continue;
+                }
+                bool ok = true;
+                for (uint32_t k = 1; k < kpool; ++k) {
+                    if (sq.cells[j + k].first != p0 + (llama_pos) k) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok) {
+                    sq.pools.push_back((uint32_t) j);
+                    j += kpool;
+                } else {
+                    ++j;
+                }
+            }
+        }
+        sq.j_next = j;
 
         lay.n_pool_real += (uint32_t) sq.pools.size();
     }
