@@ -3259,6 +3259,14 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
     }
 
     if (backend_src != backend_dst) {
+        // the copy runs on the src stream, so it must wait for the work queued on the dst stream that still reads dst
+        if (!cuda_ctx_dst->copy_event) {
+            ggml_cuda_set_device(cuda_ctx_dst->device);
+            CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx_dst->copy_event, cudaEventDisableTiming));
+        }
+        CUDA_CHECK(cudaEventRecord(cuda_ctx_dst->copy_event, cuda_ctx_dst->stream()));
+        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx_src->stream(), cuda_ctx_dst->copy_event, 0));
+
         // copy on src stream
         // compare the backing physical devices: distinct virtual devices may share one physical GPU,
         // in which case a same-device copy (not a peer copy) is required

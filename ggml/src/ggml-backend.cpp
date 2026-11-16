@@ -2148,14 +2148,8 @@ static bool ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
     }
 
     // wait for the split backend to finish using the input before overwriting it
-    ggml_backend_event_t event = sched->events[split_backend_id][sched->cur_copy];
-    if (event != NULL) {
-        ggml_backend_event_wait(split_backend, event);
-        // async copies can run on the input backend (e.g. CUDA peer copies), so it has to wait too
-        if (input_backend->iface.event_wait != NULL &&
-            ggml_backend_dev_backend_reg(ggml_backend_get_device(input_backend)) == ggml_backend_dev_backend_reg(event->device)) {
-            ggml_backend_event_wait(input_backend, event);
-        }
+    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+        ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
     } else {
         ggml_backend_synchronize(split_backend);
     }
