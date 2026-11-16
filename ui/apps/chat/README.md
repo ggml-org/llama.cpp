@@ -11,6 +11,8 @@ Llama UI supports two server operation modes:
 
 ## Table of Contents
 
+- [Run it with npx](#run-it-with-npx)
+- [Self-hosting](#self-hosting)
 - [Features](#features)
 - [Getting Started](#getting-started)
 - [Tech Stack](#tech-stack)
@@ -19,8 +21,51 @@ Llama UI supports two server operation modes:
 - [Data Flows](#data-flows)
 - [Architectural Patterns](#architectural-patterns)
 - [Testing](#testing)
+- [Publishing to npm](#publishing-to-npm)
 
 ---
+
+## Run it with npx
+
+Llama Chat is published to npm as [`@ggml-org/llama-chat`](https://www.npmjs.com/package/@ggml-org/llama-chat), with [`llama-chat`](https://www.npmjs.com/package/llama-chat) as its short name. It serves the prebuilt app on localhost and connects it to a llama-server you run yourself; it brings no server and no models of its own. It needs Node.js 20 or later.
+
+```bash
+# start llama-server, then serve Llama Chat on http://127.0.0.1:3000 and open the browser
+npx @ggml-org/llama-chat
+```
+
+```bash
+# the same, by its short name, against a llama-server elsewhere on the network
+npx llama-chat --server http://192.168.1.20:8080
+```
+
+```bash
+# reachable from other devices, without opening a browser
+npx llama-chat --host 0.0.0.0 --port 3000 --no-open
+```
+
+| Flag                              | Default                 | What it does                                                                                |
+| --------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------- |
+| `--server <url>`                  | `http://127.0.0.1:8080` | The llama-server to connect to. A path is kept, for a server started with `--api-prefix`    |
+| `--port <n>`                      | `3000`                  | Fixed, so the origin, and the chats the browser stores under it, stay the same between runs |
+| `--host <addr>`                   | `127.0.0.1`             | `0.0.0.0` to open it to the LAN                                                             |
+| `--open` / `--no-open`            | open                    | Opens the default browser once it listens                                                   |
+| `-v`, `--version`, `-h`, `--help` |                         | As usual                                                                                    |
+
+The bare command is the documented form; `start` is accepted as an alias for it.
+
+How it works: the app calls its server on its own origin (`./v1/...`, `./props`, ...), as it does when llama-server serves it. The CLI answers a request from `dist` when a file there matches its path and forwards everything else to the llama-server, without an `Origin` header, so the server needs no `--cors-origins`. It sends the response headers llama-server sends for the UI: `index.html` is cross-origin isolated (`Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy`) and revalidated, `sw.js`, `manifest.webmanifest`, `build.json` and `_app/version.json` are revalidated, and every other file is cached for good. It is plain Node.js (`node:http`) with no dependencies.
+
+An `http://` page can call a plain `http://` llama-server on the LAN, which an `https://` page cannot (browsers block it as mixed content). That is why the npx command matters next to a hosted copy.
+
+## Self-hosting
+
+The build in `dist` is static and uses relative paths and a hash router, so any static host can serve it at any path. Two ways to host it:
+
+- **Run the CLI behind your reverse proxy**: `npx @ggml-org/llama-chat --host 0.0.0.0 --no-open --server <llama-server>`, then proxy your domain to its port. Long chat responses stream as server-sent events, so turn off response buffering in the proxy.
+- **Serve `dist` yourself**: `npm run build`, or take `dist` from the npm package (`node_modules/@ggml-org/llama-chat/dist`). Serve it from the same origin as the llama-server API: forward `/v1`, `/props`, `/models`, `/slots`, `/tools` and `/cors-proxy` to llama-server, and everything else from `dist`. Send the headers listed above with `index.html` and the PWA files, so the app behaves as it does under llama-server (see [Remote Assets Under Cross-Origin Isolation](#9-remote-assets-under-cross-origin-isolation)).
+
+Until the app can add a server by URL, it reaches only the llama-server on its own origin: through the CLI, a reverse proxy, or llama-server itself (`--path dist`).
 
 ## Features
 
@@ -768,3 +813,27 @@ ui/apps/chat/
 - [llama.cpp Server README](../../../tools/server/README.md) - Full server documentation
 - [Multimodal Documentation](../../../docs/multimodal.md) - Image and audio support
 - [Function Calling](../../../docs/function-calling.md) - Tool use capabilities
+
+---
+
+## Publishing to npm
+
+Two packages go out with the same version: `@ggml-org/llama-chat`, which carries the app and the CLI, and `llama-chat` (in `alias/`), which depends on it and only forwards to its CLI so that `npx llama-chat` works. A unit test (`tests/unit/cli.test.ts`) fails when their versions drift apart.
+
+```bash
+cd ui/apps/chat
+npm version <version> --no-git-tag-version
+# then set the same version, and the same @ggml-org/llama-chat dependency, in alias/package.json
+npm pack --dry-run
+npm publish --otp <code>
+cd alias && npm publish --otp <code>
+```
+
+`npm pack` and `npm publish` build `dist` first (`prepack`), so the package always carries a build of the sources it was packed from. Source maps stay out of the package.
+
+To try a package before publishing it:
+
+```bash
+npm pack
+npx ./ggml-org-llama-chat-<version>.tgz --server http://127.0.0.1:8080
+```
