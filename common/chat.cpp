@@ -1979,5 +1979,6 @@ common_json common_chat_templates_get_caps(const common_chat_templates * chat_te
                                                                       : chat_templates->template_default->caps;
     common_json result = caps.to_map();
     result["reasoning_effort_levels"] = caps.reasoning_effort_levels;
+    result["reasoning_effort_rejected"] = caps.reasoning_effort_rejected;
     return result;
 }

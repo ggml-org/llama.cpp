@@ -8614,6 +8614,17 @@ static void test_reasoning_effort_caps() {
     assert_effort_levels("models/templates/openai-gpt-oss-120b.jinja", all_levels);
     assert_effort_levels("models/templates/Cohere2MoE.jinja", {});
     assert_effort_levels("models/templates/Qwen-Qwen3-0.6B.jinja", {});
+
+    auto assert_effort_rejected = [](const std::string & path, const std::vector<std::string> & expected) {
+        auto tmpls = read_templates(path);
+        assert_equals(json(expected).dump(), common_chat_templates_get_caps(tmpls.get()).at("reasoning_effort_rejected").dump());
+    };
+
+    assert_effort_rejected("models/templates/IFM-K2-Horizon.jinja", { "minimal", "xhigh", "max" });
+    assert_effort_rejected("models/templates/tencent-Hy3.jinja", { "minimal", "medium", "xhigh", "max" });
+    assert_effort_rejected("models/templates/deepseek-ai-DeepSeek-V4.jinja", {});
+    assert_effort_rejected("models/templates/openai-gpt-oss-120b.jinja", {});
+    assert_effort_rejected("models/templates/Cohere2MoE.jinja", {});
 }
 
 static void test_msg_diffs_compute() {
