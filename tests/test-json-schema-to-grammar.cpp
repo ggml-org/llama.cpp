@@ -1551,6 +1551,36 @@ static void test_all(const std::string & title, std::function<void(const TestCas
 
     test({
         SUCCESS,
+        "regexp with minLength only on an open-ended quantifier",
+        R"""({
+            "type": "string",
+            "pattern": "^[a-z]{2,}$",
+            "minLength": 4
+        })""",
+        R"""(
+            root ::= "\"" (root-1{4,}) "\""
+            root-1 ::= [a-z]
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
+        "regexp with maxLength 0 on a star-quantified character class",
+        R"""({
+            "type": "string",
+            "pattern": "^[a-z]*$",
+            "maxLength": 0
+        })""",
+        R"""(
+            root ::= "\"" () "\""
+            root-1 ::= [a-z]
+            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+        )"""
+    });
+
+    test({
+        SUCCESS,
         "regexp with escaped hyphen outside a character class",
         R"""({
             "type": "string",

@@ -389,13 +389,16 @@ static int fixed_regex_atom_width(const std::string & atom) {
     int width = 0;
     for (size_t i = 0; i < atom.size();) {
         if (atom[i] == '\\') {
-            if (i + 1 >= atom.size()) {
+            // only 2-char escapes are one unit wide; multi-char escapes (\x.., \u....) are not measured
+            if (i + 1 >= atom.size() || atom[i + 1] == 'x' || atom[i + 1] == 'u') {
                 return -1;
             }
             i += 2;
             width++;
         } else {
-            if (std::string("|()[]{}*+?^$").find(atom[i]) != std::string::npos) {
+            // a multi-byte UTF-8 literal is one char but several bytes, so it is not measured either
+            if (static_cast<unsigned char>(atom[i]) >= 0x80 ||
+                std::string("|()[]{}*+?^$").find(atom[i]) != std::string::npos) {
                 return -1;
             }
             width++;
@@ -422,11 +425,26 @@ static std::string format_regex_quantifier(int min_times, int max_times) {
     return "{" + std::to_string(min_times) + "," + (has_max ? std::to_string(max_times) : "") + "}";
 }
 
+static bool is_escaped_at(const std::string & s, size_t pos) {
+    size_t n_backslashes = 0;
+    while (pos > 0 && s[pos - 1] == '\\') {
+        n_backslashes++;
+        pos--;
+    }
+    return n_backslashes % 2 == 1;
+}
+
 static bool parse_trailing_regex_quantifier(std::string & body, int & min_times, int & max_times) {
     if (body.empty()) {
         return false;
     }
     const char last = body.back();
+    if (is_escaped_at(body, body.size() - 1)) {
+        // an escaped quantifier char (e.g. \? or \}) is a literal, not a quantifier
+        min_times = 1;
+        max_times = 1;
+        return true;
+    }
     if (last == '+') {
         body.pop_back();
         min_times = 1;
@@ -446,6 +464,7 @@ static bool parse_trailing_regex_quantifier(std::string & body, int & min_times,
         return true;
     }
     if (last == '}') {
+        // keep the {m,n} parsing in sync with the curly-bracket branch of _pattern_to_rule
         const size_t open = body.rfind('{');
         if (open == std::string::npos) {
             return false;
@@ -473,57 +492,69 @@ static bool parse_trailing_regex_quantifier(std::string & body, int & min_times,
     return true;
 }
 
+enum class pattern_length_bounds_result {
+    HONORED,     // pattern (possibly rewritten) honors minLength/maxLength
+    UNSUPPORTED, // the intersection cannot be expressed by rewriting the pattern
+    CONFLICTING, // the pattern's length range and minLength/maxLength do not overlap
+};
+
 // intersect JSON Schema minLength/maxLength into a fully-anchored pattern when it is a single fixed-width atom with a quantifier
-static bool try_intersect_pattern_length_bounds(std::string & pattern, int min_length, int max_length) {
-    const int schema_max = max_length < 0 ? std::numeric_limits<int>::max() : max_length;
+static pattern_length_bounds_result try_intersect_pattern_length_bounds(std::string & pattern, int min_length, int max_length) {
+    using result = pattern_length_bounds_result;
+    constexpr int64_t unbounded = std::numeric_limits<int>::max();
+    const int64_t schema_min = min_length;
+    const int64_t schema_max = max_length < 0 ? unbounded : max_length;
 
     if (pattern.size() < 2 || pattern.front() != '^' || pattern.back() != '$') {
-        return false;
+        return result::UNSUPPORTED;
     }
 
     std::string body = pattern.substr(1, pattern.size() - 2);
+    if (body.empty()) {
+        // ^$ only matches the empty string
+        return schema_min == 0 ? result::HONORED : result::CONFLICTING;
+    }
     int rep_min = 0;
     int rep_max = 0;
     const size_t body_len = body.size();
     if (!parse_trailing_regex_quantifier(body, rep_min, rep_max)) {
-        return false;
+        return result::UNSUPPORTED;
     }
     const bool has_quantifier = body.size() != body_len;
     // a trailing quantifier binds to the last atom only, so a multi-char literal body cannot be scaled
     if (has_quantifier && body.size() > 1 && body[0] != '[' && body[0] != '(' && !(body[0] == '\\' && body.size() == 2)) {
-        return false;
+        return result::UNSUPPORTED;
     }
 
     const int unit_width = fixed_regex_atom_width(body);
-    if (unit_width <= 0) {
-        return false;
+    if (unit_width <= 0 || rep_min < 0 || rep_max < rep_min) {
+        return result::UNSUPPORTED;
     }
 
-    const int pattern_min = rep_min * unit_width;
-    const int pattern_max = rep_max == std::numeric_limits<int>::max()
-        ? std::numeric_limits<int>::max()
-        : rep_max * unit_width;
+    // 64-bit products: quantifier counts come from the pattern text and may be up to INT_MAX
+    const int64_t pattern_min = std::min<int64_t>(int64_t(rep_min) * unit_width, unbounded);
+    const int64_t pattern_max = rep_max == std::numeric_limits<int>::max()
+        ? unbounded
+        : std::min<int64_t>(int64_t(rep_max) * unit_width, unbounded);
 
-    const int eff_min = std::max(pattern_min, min_length);
-    const int eff_max = std::min(pattern_max, schema_max);
+    const int64_t eff_min = std::max(pattern_min, schema_min);
+    const int64_t eff_max = std::min(pattern_max, schema_max);
     if (eff_min > eff_max) {
-        return false;
+        return result::CONFLICTING;
     }
 
     if (eff_min == pattern_min && eff_max == pattern_max) {
-        return true;
+        return result::HONORED;
     }
 
-    const int new_rep_min = (eff_min + unit_width - 1) / unit_width;
-    const int new_rep_max = eff_max == std::numeric_limits<int>::max()
-        ? std::numeric_limits<int>::max()
-        : eff_max / unit_width;
+    const int64_t new_rep_min = (eff_min + unit_width - 1) / unit_width;
+    const int64_t new_rep_max = eff_max == unbounded ? unbounded : eff_max / unit_width;
     if (new_rep_min > new_rep_max) {
-        return false;
+        return result::CONFLICTING;
     }
 
-    pattern = "^" + body + format_regex_quantifier(new_rep_min, new_rep_max) + "$";
-    return true;
+    pattern = "^" + body + format_regex_quantifier((int) new_rep_min, (int) new_rep_max) + "$";
+    return result::HONORED;
 }
 
 class common_chat_schema_converter {
@@ -1141,9 +1172,19 @@ public:
                 if (!str.pattern.empty()) {
                     std::string pattern = str.pattern;
                     const bool has_length = str.min_length > 0 || str.max_length >= 0;
-                    if (has_length && !try_intersect_pattern_length_bounds(pattern, str.min_length, str.max_length)) {
-                        _warnings.push_back(
-                            "pattern combined with minLength/maxLength is not fully supported; ignoring minLength/maxLength");
+                    if (has_length) {
+                        switch (try_intersect_pattern_length_bounds(pattern, str.min_length, str.max_length)) {
+                            case pattern_length_bounds_result::HONORED:
+                                break;
+                            case pattern_length_bounds_result::UNSUPPORTED:
+                                _warnings.push_back(
+                                    "pattern combined with minLength/maxLength is not fully supported; ignoring minLength/maxLength");
+                                break;
+                            case pattern_length_bounds_result::CONFLICTING:
+                                _warnings.push_back(
+                                    "pattern length range does not overlap minLength/maxLength (schema is unsatisfiable); ignoring minLength/maxLength");
+                                break;
+                        }
                     }
                     return _visit_pattern(pattern, rule_name);
                 }
