@@ -74,11 +74,11 @@
 		<span class="flex-1 whitespace-nowrap">{label}</span>
 	</Menu.SubTrigger>
 
+	<!-- the actions menu it opens from sits above dialogs and toasts (z-[999999]); a submenu renders
+	     apart from it, so it takes the same layer -->
 	<Menu.SubContent
-		alignOffset={-6}
-		class="w-64 p-1.5"
+		class="z-[999999] w-64 p-1.5"
 		onOpenAutoFocus={(event) => event.preventDefault()}
-		sideOffset={6}
 	>
 		<SearchInput
 			bind:ref={searchInput}
