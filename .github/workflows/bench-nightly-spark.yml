@@ -38,30 +38,51 @@ jobs:
   bench:
     # the schedule stays off until the repo variable SPARK_BENCH_NIGHTLY is 'true'
     if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_NIGHTLY == 'true'
-    runs-on: [self-hosted, Linux, ARM64, spark-nightly-bench]
+    runs-on: [self-hosted, Linux, gb10, perf]
+    container:
+      image: "nvidia/cuda:13.5.0-devel-ubuntu26.04"
+      options: --gpus all
+      # models, builds and earlier nights live on the host, mounted at the same path so the paths in their manifests hold
+      volumes:
+        - ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}:${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
     # M1-M5: ~5.5 h measured and estimated (tools/server/bench/nightly/BENCHMARKS.md)
     timeout-minutes: 480
+    defaults:
+      run:
+        shell: bash
 
     env:
       NIGHTLY_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}
       BENCH_DIR: tools/server/bench/nightly
+      # the venv is rebuilt in every container; uv's cache and Python stay on the host to keep that quick
+      VENV: /opt/bench-venv
+      UV_CACHE_DIR: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}/container/uv-cache
+      UV_PYTHON_INSTALL_DIR: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}/container/uv-python
+      UV_LINK_MODE: copy
+      # tokenizers and SPEED-Bench
+      HF_HOME: ${{ vars.SPARK_BENCH_HOME || '/opt/llama-nightly' }}/container/hf-cache
 
     steps:
+      - name: Dependencies
+        id: depends
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git curl unzip python3 python3-venv
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
       - name: Python venv
         id: venv
-        # uv-managed Python ships its headers; aiperf needs them to build crick on arm64
+        # uv-managed Python 3.12: aiperf needs <3.14 and Python headers to build crick on arm64
         run: |
-          if [ ! -x "$NIGHTLY_HOME/uv-venv/bin/uv" ]; then
-            python3 -m venv "$NIGHTLY_HOME/uv-venv"
-            "$NIGHTLY_HOME/uv-venv/bin/pip" install -q uv
-          fi
-          UV="$NIGHTLY_HOME/uv-venv/bin/uv"
-          "$UV" venv -q --allow-existing --python 3.12 --managed-python "$NIGHTLY_HOME/venv"
-          VIRTUAL_ENV="$NIGHTLY_HOME/venv" "$UV" pip install -q -r "$BENCH_DIR/requirements.txt"
+          python3 -m venv /opt/uv-venv
+          /opt/uv-venv/bin/pip install -q uv
+          /opt/uv-venv/bin/uv venv -q --python 3.12 --managed-python "$VENV"
+          VIRTUAL_ENV="$VENV" /opt/uv-venv/bin/uv pip install -q -r "$BENCH_DIR/requirements.txt"
 
       - name: Prefetch build, models and data
         id: prefetch
@@ -70,7 +91,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           MODELS: ${{ inputs.models }}
         run: |
-          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" prefetch ${TAG:+--tag "$TAG"} ${MODELS:+--models "$MODELS"}
+          "$VENV/bin/python" "$BENCH_DIR/nightly.py" prefetch ${TAG:+--tag "$TAG"} ${MODELS:+--models "$MODELS"}
 
       - name: Run suites
         id: run
@@ -82,7 +103,7 @@ jobs:
           RESUME: ${{ inputs.resume }}
           NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          "$NIGHTLY_HOME/venv/bin/python" "$BENCH_DIR/nightly.py" run ${SUITES:+--suites "$SUITES"} ${MODELS:+--models "$MODELS"} ${CONFIGS:+--configs "$CONFIGS"} ${RESUME:+--resume "$RESUME"} --summary "$GITHUB_STEP_SUMMARY"
+          "$VENV/bin/python" "$BENCH_DIR/nightly.py" run ${SUITES:+--suites "$SUITES"} ${MODELS:+--models "$MODELS"} ${CONFIGS:+--configs "$CONFIGS"} ${RESUME:+--resume "$RESUME"} --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload results
         if: ${{ always() && steps.run.outputs.night_dir != '' }}
@@ -91,3 +112,10 @@ jobs:
           name: bench-nightly-${{ steps.run.outputs.night_id }}
           path: ${{ steps.run.outputs.night_dir }}
           retention-days: 30
+
+      - name: Return files to the host user
+        if: ${{ always() }}
+        # the container runs as root; jobs on the host (the weekly) share NIGHTLY_HOME and the runner's work folder
+        run: |
+          owner=$(stat -c %u:%g "$NIGHTLY_HOME")
+          find "$NIGHTLY_HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" ! -uid "${owner%:*}" -exec chown -h "$owner" {} +

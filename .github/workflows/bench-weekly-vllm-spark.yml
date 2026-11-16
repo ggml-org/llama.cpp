@@ -40,7 +40,8 @@ jobs:
   bench:
     # the schedule stays off until the repo variable SPARK_BENCH_WEEKLY is 'true'
     if: github.event_name == 'workflow_dispatch' || vars.SPARK_BENCH_WEEKLY == 'true'
-    runs-on: [self-hosted, Linux, ARM64, spark-nightly-bench]
+    # on the host, not in a container: vLLM runs in docker, with the checkpoints mounted from NIGHTLY_HOME
+    runs-on: [self-hosted, Linux, gb10, perf]
     # 3 columns x 11 runs: ~5.5-6.5 h estimated (tools/server/bench/nightly/BENCHMARKS.md)
     timeout-minutes: 600
 

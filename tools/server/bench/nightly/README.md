@@ -23,11 +23,11 @@ The agentic traces are Mooncake JSONL (`timestamp`, `input_length`, `output_leng
 
 ## Box setup
 
-- NVIDIA driver only. The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
-- `python3` with `venv`, plus `tar`, `unzip` and `curl` or `wget`. The bench venv uses a uv-managed Python 3.12, because AIPerf builds `crick` from source on arm64 and the system Python often has no headers (`python3-dev`).
-- A writable `NIGHTLY_HOME` (default `/opt/llama-nightly`) with about 160 GiB free for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `venv/`, and `vllm-cache/` for the weekly. Tokenizers and SPEED-Bench go to the default Hugging Face cache.
-- For the weekly: Docker with the NVIDIA Container Toolkit, and the runner user in the `docker` group.
-- A self-hosted runner with the labels `self-hosted, Linux, ARM64, spark-nightly-bench`, used by nothing else (a concurrent job corrupts the numbers).
+- NVIDIA driver, Docker with the NVIDIA Container Toolkit, and the runner user in the `docker` group. The binaries come from the release tarballs, no CUDA toolkit or compiler is needed.
+- The nightly job runs in `nvidia/cuda:13.5.0-devel-ubuntu26.04` and installs what it needs there. The weekly runs on the host, since it starts vLLM in docker, and needs `python3` with `venv` there.
+- Either way the bench venv uses a uv-managed Python 3.12: AIPerf 0.13.0 needs Python < 3.14 (Ubuntu 26.04 ships 3.14) and builds `crick` from source on arm64, which needs the Python headers.
+- A writable `NIGHTLY_HOME` on the host (default `/opt/llama-nightly`, `SPARK_BENCH_HOME` overrides it) with about 160 GiB free for the nightly, plus about 135 GiB of checkpoints and two images for the weekly. The nightly mounts it into its container at the same path and hands its files back to the directory's owner at the end. Layout: `builds/<tag>/`, `models/`, `data/`, `results/<date>_<tag>/`, `container/` (the nightly's uv cache, uv Python and Hugging Face cache), and `venv/` and `vllm-cache/` for the weekly. The weekly and runs by hand use the default Hugging Face cache for tokenizers and SPEED-Bench.
+- A self-hosted runner with the labels `self-hosted, Linux, gb10, perf`. Nothing else may run on the box during a night: a concurrent job corrupts the numbers.
 
 ## Run by hand
 
