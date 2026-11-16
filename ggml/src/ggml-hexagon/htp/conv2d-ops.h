@@ -21,6 +21,9 @@ enum htp_conv2d_kernel_type {
 // HMX scales of one row tile at the start of VTCM: 32 (scale, bias) fp16 pairs and 128 zero bytes
 #define HTP_CONV2D_HMX_SCALES_SIZE 256
 
+// Max bytes of one staged input buffer (the DMA descriptor row/stride limits are far below VTCM size)
+#define HTP_CONV2D_STAGE_MAX ((size_t) 128 * 1024)
+
 struct htp_conv2d_tiled_params {
     uint32_t w_kstride;
     uint32_t k_size;
@@ -31,12 +34,17 @@ struct htp_conv2d_tiled_params {
     uint32_t n_ow_tiles;
     uint32_t seg_tiles;
     uint32_t stage_row;
-    uint32_t n_stage;
+    uint16_t n_stage;
+    uint16_t stage_pc;   // WHCN channel stride too large for a 2D DMA: stage cc * KD DMAs (per channel, kd) instead of KH
+    uint32_t cin_chunk;
     uint32_t wk_chunk;
+    uint32_t n_cin_chunks;
+    uint32_t kd;
     struct fastdiv_values div_ow_tiles;
     struct fastdiv_values div_oh;
     struct fastdiv_values div_khr;  // kernel ne[1], unfolds conv_3d kh = kd * KHr + kh'
     struct fastdiv_values div_ohr;  // dst ne[1], unfolds conv_3d oh = od * OHr + oh'
+    struct fastdiv_values div_d1;   // dilation along H
 };
 
 struct htp_conv2d_window_params {
