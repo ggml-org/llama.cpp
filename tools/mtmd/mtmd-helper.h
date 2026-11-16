@@ -107,6 +107,32 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
                     bool placeholder,
                     struct mtmd_helper_init_opt opt);
 
+enum mtmd_helper_media_type {
+    MTMD_HELPER_MEDIA_TYPE_UNKNOWN,
+    MTMD_HELPER_MEDIA_TYPE_IMAGE,
+    MTMD_HELPER_MEDIA_TYPE_AUDIO,
+    MTMD_HELPER_MEDIA_TYPE_VIDEO,
+};
+
+struct mtmd_helper_media_meta {
+    enum mtmd_helper_media_type type;
+    uint32_t width;       // image, video (frame size)
+    uint32_t height;
+    int32_t  sample_rate; // audio, at the source rate
+    float    duration;    // audio, video: in seconds, -1 if unknown
+    int32_t  n_frames;    // video: -1 if unknown
+};
+typedef struct mtmd_helper_media_meta mtmd_helper_media_meta;
+
+// metadata of a media file in a buffer, the same formats as mtmd_helper_bitmap_init_from_buf()
+// only the headers are read (ffprobe or opt.video_params.decoder for video), nothing is decoded
+// returns 0 on success, 1 if the format is not recognized
+// this function is thread-safe
+MTMD_API int32_t mtmd_helper_get_media_meta(
+                    const unsigned char * buf, size_t len,
+                    struct mtmd_helper_init_opt opt,
+                    struct mtmd_helper_media_meta * out);
+
 // streaming resampler for raw mono F32 PCM (e.g. realtime input), to match mtmd_get_audio_sample_rate()
 // it keeps state between calls, use one per stream
 struct mtmd_helper_resampler;
@@ -291,6 +317,10 @@ struct mtmd_helper_gen_audio_inp {
     float    temp; // audio frame temperature if the model supports it, < 0 = model default, 0 = greedy
     uint32_t seed; // UINT32_MAX for random (default: random)
 
+    // delivery (only for models that support it); other models reject non-default values
+    float speed;    // speaking speed relative to a typical pace, > 0 (default: 1.0 = the model's own pace)
+    float loudness; // target loudness in LUFS, < 0 (default: 0.0 = the model's own loudness)
+
     enum mtmd_helper_gen_audio_outtype out_type;
 };
 
@@ -304,6 +334,7 @@ MTMD_API void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx);
 
 MTMD_API void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx);
 
+// returns 0 on success, 2 if the input is invalid for the model (e.g. unsupported speed or loudness), 1 on other errors
 MTMD_API int32_t mtmd_helper_gen_audio_set_input(
                         mtmd_helper_gen_audio * ctx,
                         const struct mtmd_helper_gen_audio_inp * inp);

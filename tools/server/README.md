@@ -295,8 +295,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-ngram-size-n N` | the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match |
 | `--spec-ngram-size-m N` | the argument has been removed. use the respective --spec-ngram-*-size-m |
 | `--spec-ngram-min-hits N` | the argument has been removed. use the respective --spec-ngram-*-min-hits |
-| `--tts-lang FNAME` | language (ISO 639-1) for audio generation<br/>see tts/README.md for per-model usage notes |
-| `--tts-voice VOICE` | voice for audio generation (model-dependent)<br/>see tts/README.md for per-model usage notes |
+| `--tts-lang FNAME` | language (ISO 639-1) for audio generation<br/>see docs/multimodal/tts.md for per-model usage notes |
+| `--tts-voice VOICE` | voice for audio generation (model-dependent)<br/>see docs/multimodal/tts.md for per-model usage notes |
 | `--embd-gemma-default` | use default EmbeddingGemma model (note: can download weights from the internet) |
 | `--fim-qwen-1.5b-default` | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet) |
 | `--fim-qwen-3b-default` | use default Qwen 2.5 Coder 3B (note: can download weights from the internet) |
@@ -854,7 +854,7 @@ Causal decoder rerankers (e.g. `Qwen3-VL-Reranker`) have no such limitation.
 
 ### POST `/tts`: Generate speech audio from text
 
-Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info, see [tts/README.md](../tts/README.md)
+Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list of supported models and their params, see [docs/multimodal/tts.md](../../docs/multimodal/tts.md)
 
 *Options:*
 
@@ -873,6 +873,10 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 `repeat_penalty`: Repetition penalty applied to the backbone sampler over the whole generation (default `1.05`). Without this, the backbone can loop and re-generate the same utterance.
 
 `seed`: RNG seed for both the backbone sampler and the codec/vocoder (`-1` = random, the default). Set to a fixed value for reproducible output.
+
+`speed`: Speaking speed relative to a typical pace, `> 0` (default `1.0`, the model's own pace). Only for models that support it, others reject a value other than `1.0` with a 400 error.
+
+`loudness`: Target loudness in LUFS, `< 0` (default `0.0`, the model's own loudness). Only for models that support it, others reject a value other than `0.0` with a 400 error.
 
 `n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
 
@@ -1668,7 +1672,7 @@ Generates speech from text, for models that can generate audio. The request is c
 
 `stream_format`: `audio` streams the response as it becomes available, see `stream` in `/tts` for the WAV header it writes. `sse` is rejected. The response is not streamed when omitted.
 
-`speed`: Only `1.0` is accepted.
+`speed`: Speaking speed, see `speed` in `/tts`. Only models that support it accept a value other than `1.0`. `loudness` of `/tts` can be used as well.
 
 `instructions`: Ignored.
 

@@ -3,6 +3,9 @@
 #include <random>
 #include <cstdlib>
 #include <future>
+#include <array>
+#include <fstream>
+#include <iterator>
 
 #include "chat-tts-norm.h"
 #include "json.h"
@@ -42,6 +45,7 @@ static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 static void test_tts_norm_patterns(testing & t);
+static void test_tts_template_zonos3(testing & t);
 
 static void test_shared_render(testing & t);
 
@@ -81,6 +85,7 @@ int main(int argc, char *argv[]) {
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
     t.test("tts norm patterns", test_tts_norm_patterns);
+    t.test("tts template zonos3", test_tts_template_zonos3);
     if (!g_python_mode) {
         t.test("shared render", test_shared_render);
         t.test("hasher", test_hasher);
@@ -655,6 +660,42 @@ static void test_expressions(testing & t) {
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},
         "20"
+    );
+
+    test_template(t, "floor division",
+        "{{ 7 // 2 }},{{ -7 // 2 }},{{ 7 // -2 }},{{ 7.5 // 2 }},{{ a // b }}",
+        {{"a", 10}, {"b", 3}},
+        "3,-4,-4,3.0,3"
+    );
+
+    test_template(t, "string comparison",
+        "{{ 'b' > 'a' }},{{ 'VBD' > 'VB' }},{{ 'a' <= 'a' }},{{ 'Z' < 'a' }},{{ 'ab' >= 'b' }}",
+        json::object(),
+        "True,True,True,True,False"
+    );
+
+    test_template(t, "unary minus after keyword",
+        "{{ 1 if false else -1 }},{{ not -1 }},{{ x and -2 }},{{ -3 if x }}",
+        {{"x", true}},
+        "-1,False,-2,-3"
+    );
+
+    test_template(t, "unary minus after elif",
+        "{% if false %}a{% elif -1 < 0 %}b{% endif %}",
+        json::object(),
+        "b"
+    );
+
+    test_template(t, "unary and binary sign",
+        "{{ -x }},{{ - 1 }},{{ --x }},{{ 1 - -x }},{{ 1 -1 }},{{ x -1 }},{{ [x, -1][-1] }},{{ +x }},{{ -x|abs }}",
+        {{"x", 3}},
+        "-3,-1,3,4,0,2,-1,3,3"
+    );
+
+    test_template(t, "binary minus after keyword attribute",
+        "{{ a.else - 1 }}",
+        {{"a", {{"else", 3}}}},
+        "2"
     );
 
     test_template(t, "string concat ~",
@@ -2190,6 +2231,12 @@ static void test_array_methods(testing & t) {
         "6"
     );
 
+    test_template(t, "array|sum",
+        "{{ [1, 2.5, 3]|sum }},{{ [1, 2]|sum(start=10) }},{{ items|sum(attribute='w') }},{{ []|sum }}",
+        {{"items", json::array({{{"w", 1}}, {{"w", 2}}})}},
+        "6.5,13,3,0"
+    );
+
     test_template(t, "array|min",
         "{{ [tool_calls_count, tool_sep_count]|min }}",
         {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
@@ -2976,6 +3023,72 @@ static void test_tts_norm_patterns(testing & t) {
         test_template_error(t, "error: wide lookbehind",              "{{ tts_norm_scan('x', '(?<=ab)c') }}",  "lookbehind must contain exactly one codepoint matcher", true);
         test_template_error(t, "error: missing group in replacement", "{{ tts_norm_sub('x', '(a)', '%2') }}",  "group %2 does not exist", true);
         test_template_error(t, "error: bad rules",                    "{{ tts_norm_scan('x', 1) }}",           "rules must be a string, a dict or a list", true);
+    }
+}
+
+// the ZONOS3 "tts" template spells out numbers in en, fr, de, es, it, pt, ja and zh, other languages pass through
+static void test_tts_template_zonos3(testing & t) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/Zyphra-ZONOS3-Mini-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const std::vector<std::array<std::string, 3>> cases = {
+        { "en", "I have 3 cats and 21 dogs.",                "I have three cats and twenty-one dogs." },
+        { "en", "1,234,567 people, 1,2345 and 12345",        "one million two hundred thirty-four thousand five hundred sixty-seven people, one,two thousand three hundred forty-five and twelve thousand three hundred forty-five" },
+        { "en", "$1, $0.99, $5.32 and $2.5 billion",         "one dollar, ninety-nine cents, five dollars and thirty-two cents and two point five billion dollars" },
+        { "en", "\xe2\x82\xac" "20 and \xc2\xa3" "3.50",     "twenty euros and three pounds and fifty pence" },
+        { "en", "3.5% then 10%",                             "three point five percent then ten percent" },
+        { "en", "1st, 22nd, 103rd, 12th",                    "first, twenty-second, one hundred third, twelfth" },
+        { "en", "in 1990, since 1905, by 2005, in 2000, from 1900, the 1990s, 1234 people",
+                "in nineteen ninety, since nineteen oh five, by two thousand five, in two thousand, from nineteen hundred, the nineteen nineties, one thousand two hundred thirty-four people" },
+        { "en", "at 3:30, 10:05 or 7:00, not 25:00",         "at three thirty, ten oh five or seven o'clock, not twenty-five:zero zero" },
+        { "en", "pi is 3.14, it hit -5 today, range 10-20",  "pi is three point one four, it hit minus five today, range ten-twenty" },
+        { "en", "agent 007 ran 5km with an mp3",             "agent zero zero seven ran five km with an mp three" },
+        { "en", "caf\xc3\xa9 42.",                           "caf\xc3\xa9 forty-two." },
+        { "",   "no language 42",                            "no language forty-two" },
+        { "en", "no digits here",                            "no digits here" },
+        { "ko", "3\xea\xb0\x9c",                                 "3\xea\xb0\x9c" },
+        // other languages
+        { "fr_fr", "J'ai 21 chats, 71 chiens, 80 oiseaux et 91 souris.",
+                   "J'ai vingt et un chats, soixante et onze chiens, quatre-vingts oiseaux et quatre-vingt-onze souris." },
+        { "fr", "200 ans, 2 345 678 habitants et 80 000 euros.",
+                "deux cents ans, deux millions trois cent quarante-cinq mille six cent soixante-dix-huit habitants et quatre-vingt mille euros." },
+        { "fr", "Ça coûte 5,32 €, hausse de 12,05 %.",
+                "Ça coûte cinq euros et trente-deux centimes, hausse de douze virgule zéro cinq pour cent." },
+        { "fr", "Le 1er mai, la 1re fois, le 21e siècle, à 15h30, à 1h ou à 21:05, -5 degrés.",
+                "Le premier mai, la première fois, le vingt et unième siècle, à quinze heures trente, à une heure ou à vingt et une heures cinq, moins cinq degrés." },
+        { "de", "21 Katzen, 101 Hunde, 1.234 Bücher, 1.000.000 Einwohner, im Jahr 1990.",
+                "einundzwanzig Katzen, einhunderteins Hunde, eintausendzweihundertvierunddreißig Bücher, eine Million Einwohner, im Jahr neunzehnhundertneunzig." },
+        { "fr", "2 000 000 €, 3 000 000 $ et 2 500 000 €.",
+                "deux millions d'euros, trois millions de dollars et deux millions cinq cent mille euros." },
+        { "es", "2.000.000 € y 1.000.000 $.", "dos millones de euros y un millón de dólares." },
+        { "de", "Im Jahr 1990 waren 1500 Leute da.", "Im Jahr neunzehnhundertneunzig waren eintausendfünfhundert Leute da." },
+        { "de", "5,32 € oder 1 €, plus 3,5 % um 15:30 Uhr, am 3.10.2024.",
+                "fünf Euro und zweiunddreißig Cent oder ein Euro, plus drei Komma fünf Prozent um fünfzehn Uhr dreißig, am drei zehn zweitausendvierundzwanzig." },
+        { "es", "100, 101, 21.000 personas, 2.500.000 habitantes, 21 €, a las 1:00, el 3.º y la 2ª vez.",
+                "cien, ciento uno, veintiún mil personas, dos millones quinientos mil habitantes, veintiún euros, a las una en punto, el tercero y la segunda vez." },
+        { "it", "21, 23, 28, 180, 3.003, 1.000.000 di euro, 5,32 €, all'1:00, l'11º e il 23º.",
+                "ventuno, ventitré, ventotto, centottanta, tremilatré, un milione di euro, cinque euro e trentadue centesimi, all'una, l'undicesimo e il ventitreesimo." },
+        { "pt_br", "101, 1.200, 1.234, R$ 5,32, às 2:00, o 1º e a 2ª vez.",
+                   "cento e um, mil e duzentos, mil duzentos e trinta e quatro, cinco reais e trinta e dois centavos, às duas horas, o primeiro e a segunda vez." },
+        { "ja", "3個、1000円、10000人、123456789人、1.5キロ、30%、$5、午後3:30、-5度、2024年。",
+                "三個、千円、一万人、一億二千三百四十五万六千七百八十九人、一点五キロ、三十パーセント、五ドル、午後三時三十分、マイナス五度、二千二十四年。" },
+        { "cmn", "10005人，115人，2000人，20000人，316，2:30，2002年，-5度，3.5%，$23。",
+                 "一万零五人，一百一十五人，两千人，两万人，三百一十六，两点三十分，二零零二年，负五度，百分之三点五，二十三美元。" },
+    };
+    for (const auto & c : cases) {
+        // same variables as common_chat_get_tts_prompt()
+        const json vars = {
+            {"messages", json::array({{{"role", "user"}, {"content", c[1]}}})},
+            {"language", c[0]},
+            {"voice",    ""},
+        };
+        test_template(t, c[0] + ": " + c[1], tmpl, vars, c[2], true);
     }
 }
 
