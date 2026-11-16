@@ -5,6 +5,11 @@
 ggml_tensor * mtmd_graph_yue2_gen::snake(ggml_tensor * x, const mtmd_yue2::snake & s) const {
     ggml_tensor * a = ggml_reshape_2d(ctx0, s.alpha, 1, s.alpha->ne[0]);
     ggml_tensor * b = ggml_reshape_2d(ctx0, s.beta,  1, s.beta->ne[0]);
+
+    // expand reshapes first so mul/sin/sqr/mul/add lands as consecutive nodes, letting backends fuse them
+    ggml_build_forward_expand(gf, a);
+    ggml_build_forward_expand(gf, b);
+
     ggml_tensor * y = ggml_sqr(ctx0, ggml_sin(ctx0, ggml_mul(ctx0, x, a)));
     return ggml_add(ctx0, x, ggml_mul(ctx0, y, b));
 }
