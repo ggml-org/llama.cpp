@@ -48,7 +48,7 @@ static constexpr __host__ __device__ int mmvq_moe_cdna_nshared(const ggml_type t
     return type == GGML_TYPE_Q4_K ? 1 : (type == GGML_TYPE_Q5_K ? 3 : 0);
 }
 
-#if defined(CDNA1)
+#if defined(CDNA)
 static __device__ __forceinline__ int4 mmvq_moe_cdna_load_a4(const char * p) {
     int4 r;
     __builtin_memcpy(&r, __builtin_assume_aligned(p, 4), sizeof(r));
@@ -217,7 +217,7 @@ static __device__ __forceinline__ void mmvq_moe_cdna_store_y(const mmvq_moe_cdna
         aux = make_float4(ds.x, ds.y, 0.0f, 0.0f);
     }
 }
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 
 // max. pairs per block in one pass: the y of the pairs in shared memory, at most 16 KB per block for 4 blocks per CU, one unit per thread, at most 4 sums
 template <ggml_type type, int nu, bool has_gate>
@@ -239,7 +239,7 @@ static __global__ void mul_mat_vec_q_moe_cdna(
         const int nrows_x, const int64_t stride_row_x, const int64_t stride_channel_x,
         const int stride_col_y, const int stride_channel_y, const int nchannels_y,
         const int stride_col_dst, const int stride_channel_dst, const int ids_stride) {
-#if defined(CDNA1)
+#if defined(CDNA)
     constexpr int nlanes         = mmvq_moe_cdna_nlanes(type);
     constexpr int nregs          = mmvq_moe_cdna_nregs(type);
     constexpr int nunits         = nlanes*nu;
@@ -516,7 +516,7 @@ static __global__ void mul_mat_vec_q_moe_cdna(
     GGML_UNUSED_VARS(vx, vy, ids, fusion, dst, nrows_x, stride_row_x, stride_channel_x, stride_col_y, stride_channel_y,
         nchannels_y, stride_col_dst, stride_channel_dst, ids_stride);
     NO_DEVICE_CODE;
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 }
 
 template <ggml_type type, int nu>
@@ -580,7 +580,7 @@ static void mul_mat_vec_q_moe_cdna_switch_nu(
 }
 
 bool ggml_cuda_mmvq_moe_cdna_supported(const ggml_tensor * src0, const ggml_tensor * dst, const int cc, const ggml_cuda_mm_fusion_args_device & fusion) {
-    if (!GGML_CUDA_CC_IS_CDNA1(cc) || !mmvq_moe_cdna_type_supported(src0->type)) {
+    if (!GGML_CUDA_CC_IS_CDNA(cc) || !mmvq_moe_cdna_type_supported(src0->type)) {
         return false;
     }
     if (fusion.x_scale || fusion.gate_scale || fusion.shared_up) {

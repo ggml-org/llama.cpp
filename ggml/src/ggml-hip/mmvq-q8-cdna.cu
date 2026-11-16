@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <climits>
 
-// Q8_0 matrix-vector product for few src1 columns on CDNA1, the src1 columns are quantized to q8_1.
+// Q8_0 matrix-vector product for few src1 columns on CDNA, the src1 columns are quantized to q8_1.
 // A group of lpr lanes works on 64/lpr rows per wave, lane j handles the blocks j + lpr*s, s < nsteps, of its row.
 // So 16 lanes read 16 consecutive blocks of 34 bytes, few 64 byte lines per load.
 // The waves are persistent and loop over the row groups, the loads of the next group are issued before the current one is computed.
@@ -373,7 +373,7 @@ static void mul_mat_vec_q8_cdna_switch_config(
 
 bool ggml_hip_should_use_mmvq_q8_cdna(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst, const int cc,
         const ggml_cuda_mm_fusion_args_host * fusion) {
-    if (!GGML_CUDA_CC_IS_CDNA1(cc) || src0->type != GGML_TYPE_Q8_0) {
+    if (!GGML_CUDA_CC_IS_CDNA(cc) || src0->type != GGML_TYPE_Q8_0) {
         return false;
     }
     // fusion: only gate + GLU for 1 column

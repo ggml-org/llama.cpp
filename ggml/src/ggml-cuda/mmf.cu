@@ -175,7 +175,7 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
         } else if (GGML_CUDA_CC_IS_CDNA2(cc) && (type == GGML_TYPE_F16 || type == GGML_TYPE_BF16)) {
             //TODO: truse CDNA2 as CDNA1, tune the perf when CDNA2 is available.
             return false;
-        } else if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+        } else if (GGML_CUDA_CC_IS_CDNA1(cc) || (GGML_CUDA_CC_IS_CDNA(cc) && type == GGML_TYPE_F32)) {
             // F32 MMF is also 2-4x slower than BLAS on CDNA1
             return false;
         } else if (src1_ncols > 16) {

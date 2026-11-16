@@ -150,7 +150,7 @@ static __global__ void top_k_radix_select(
     const int row = blockIdx.x;
     const int tid = threadIdx.x;
 
-#if defined(CDNA1)
+#if defined(CDNA)
     // find the bin with prefix sums over all bins instead of a serial walk in one thread, same bin and rank
     static_assert(BLOCK_SIZE == NBINS, "one thread per bin");
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -205,7 +205,7 @@ static __global__ void top_k_radix_select(
         state.prefix_mask |= (uint32_t) (NBINS - 1) << shift;
         states[row] = state;
     }
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 }
 
 template<int BLOCK_SIZE, int RADIX_BITS>

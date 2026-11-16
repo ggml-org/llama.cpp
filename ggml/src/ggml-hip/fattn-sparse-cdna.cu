@@ -75,7 +75,7 @@ static __global__ void flash_attn_sparse_cdna(
         const int nb11, const int nb12, const int64_t nb13,
         const int nb21, const int nb22, const int64_t nb23,
         const int ne33, const int nb31, const int64_t nb33) {
-#if defined(CDNA1)
+#if defined(CDNA)
     using cfg = fattn_sparse_cdna_config<ncols>;
     constexpr int gqa      = FATTN_SPARSE_CDNA_GQA;
     constexpr int D        = FATTN_SPARSE_CDNA_D;
@@ -452,7 +452,7 @@ static __global__ void flash_attn_sparse_cdna(
     GGML_UNUSED_VARS(Q, K, V, mask, dst_parts, dst_meta, scale, ne01, ne11, seg_len,
         nb01, nb02, nb03, nb11, nb12, nb13, nb21, nb22, nb23, ne33, nb31, nb33);
     NO_DEVICE_CODE;
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 }
 
 // one block per output row: 32 lanes read 16 bytes of a segment row, the 8 groups of 32 lanes take every 8th segment
@@ -540,7 +540,7 @@ static __global__ void flash_attn_sparse_cdna_combine(
 }
 
 bool ggml_hip_flash_attn_ext_sparse_cdna_supported(const int cc, const ggml_tensor * dst) {
-    if (!GGML_CUDA_CC_IS_CDNA1(cc) || !ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst)) {
+    if (!GGML_CUDA_CC_IS_CDNA(cc) || !ggml_cuda_flash_attn_ext_tile_shall_use_sparse(cc, dst)) {
         return false;
     }
     const ggml_tensor * Q     = dst->src[0];

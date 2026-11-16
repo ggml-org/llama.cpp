@@ -15,7 +15,7 @@ struct topk_moe_config {
     int  n_group_used;
 };
 
-#if defined(CDNA1)
+#if defined(CDNA)
 // wave64 reductions with DPP, the shuffle butterfly costs a ds_bpermute round trip per step
 template <int dpp_ctrl, int row_mask = 0xf>
 static __device__ __forceinline__ int topk_moe_dpp(const int x) {
@@ -56,7 +56,7 @@ static __device__ __forceinline__ void topk_moe_wave_argmax(float & sel, float &
     sel    = max_sel;
     expert = winner;
 }
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 
 // Warp-local softmax used for both the pre-top-k logits and the post-top-k delayed path.
 template <int experts_per_thread, bool use_limit>
@@ -74,11 +74,11 @@ __device__ void softmax_warp_inplace(float (&vals)[experts_per_thread], const in
         }
     }
 
-#if defined(CDNA1)
+#if defined(CDNA)
     max_val = topk_moe_wave_max(max_val);
 #else
     max_val = warp_reduce_max<warp_size>(max_val);
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 
     float sum = 0.f;
 
@@ -327,7 +327,7 @@ __global__ void topk_moe_cuda(const float *         logits,
                 }
             }
 
-#if defined(CDNA1)
+#if defined(CDNA)
             topk_moe_wave_argmax(max_val_s, max_val, max_expert);
 #else
 #pragma unroll
@@ -341,7 +341,7 @@ __global__ void topk_moe_cuda(const float *         logits,
                     max_expert = expert;
                 }
             }
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 
             if ((max_expert & (warp_size - 1)) == threadIdx.x) {
                 selection_wt[max_expert / warp_size] = -INFINITY;
@@ -356,7 +356,7 @@ __global__ void topk_moe_cuda(const float *         logits,
                 }
             }
 
-#if defined(CDNA1)
+#if defined(CDNA)
             float max_val_w = max_val;
             topk_moe_wave_argmax(max_val, max_val_w, max_expert);
 #else
@@ -369,7 +369,7 @@ __global__ void topk_moe_cuda(const float *         logits,
                     max_expert = expert;
                 }
             }
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 
             if ((max_expert & (warp_size - 1)) == threadIdx.x) {
                 wt[max_expert / warp_size] = -INFINITY;

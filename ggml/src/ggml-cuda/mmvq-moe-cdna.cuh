@@ -2,7 +2,7 @@
 
 #include "common.cuh"
 
-// MUL_MAT_ID with few tokens on CDNA1 (MI100) for Q4_K, Q5_K, Q5_1 and Q8_0, see mmvq-moe-cdna.cu.
+// MUL_MAT_ID with few tokens on CDNA for Q4_K, Q5_K, Q5_1 and Q8_0, see mmvq-moe-cdna.cu.
 bool ggml_cuda_mmvq_moe_cdna_supported(const ggml_tensor * src0, const ggml_tensor * dst, int cc, const ggml_cuda_mm_fusion_args_device & fusion);
 
 void ggml_cuda_mmvq_moe_cdna(

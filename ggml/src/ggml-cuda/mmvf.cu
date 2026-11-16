@@ -458,7 +458,7 @@ static __device__ __forceinline__ void mmvf_cdna_unpack(const int4 v, float * f)
     }
 }
 
-// CDNA1 version for MUL_MAT without ids or fusion. Each lane loads 16 B chunks of x. A warp is split into nrg groups of lanes,
+// CDNA version for MUL_MAT without ids or fusion. Each lane loads 16 B chunks of x. A warp is split into nrg groups of lanes,
 // each group works on its own rows_per_lane rows, so all groups and rows share the y loads. The warps of a block split K.
 // Loads of several chunks are issued before the FMAs to keep enough bytes in flight.
 template <typename T, int ncols_dst, int rows_per_lane, int nrg, int max_threads>
@@ -468,7 +468,7 @@ static __global__ void mul_mat_vec_f_cdna(
         const int stride_row, const int stride_col_y, const int stride_col_dst,
         const uint3 channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const uint3 sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
-#if defined(CDNA1)
+#if defined(CDNA)
     constexpr int nx         = 16/sizeof(T);
     constexpr int ny4        = nx/4;
     constexpr int lanes_k    = 64/nrg;
@@ -589,7 +589,7 @@ static __global__ void mul_mat_vec_f_cdna(
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst);
     NO_DEVICE_CODE;
-#endif // defined(CDNA1)
+#endif // defined(CDNA)
 }
 
 template <typename T, int ncols_dst>
@@ -1011,7 +1011,7 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
-    if (GGML_CUDA_CC_IS_CDNA1(cc) && !ids && !fusion) {
+    if (GGML_CUDA_CC_IS_CDNA(cc) && !ids && !fusion) {
         bool done = false;
         switch (src0->type) {
             case GGML_TYPE_F32:
@@ -1154,8 +1154,8 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
                 }
                 return ne11 <= 3;
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
-                // on CDNA1 MMF and BLAS are much slower than MMVF for few columns
-                if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+                // on CDNA MMF and BLAS are much slower than MMVF for few columns
+                if (GGML_CUDA_CC_IS_CDNA(cc)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 if (fp32_mma_hardware_available(cc)) {
@@ -1186,7 +1186,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 // MMVF reads y once per few rows, BLAS is faster for large matrices from 4 columns on
-                if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+                if (GGML_CUDA_CC_IS_CDNA(cc)) {
                     return ne11 <= 3 || (ne11 <= MMVF_MAX_BATCH_SIZE && ggml_nbytes(src0) <= 8*1024*1024);
                 }
                 if (fp16_mma_hardware_available(cc)) {
@@ -1234,7 +1234,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, int cc, int warp_size, 
                 if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
-                if (GGML_CUDA_CC_IS_CDNA1(cc)) {
+                if (GGML_CUDA_CC_IS_CDNA(cc)) {
                     return ne11 <= 3 || (ne11 <= MMVF_MAX_BATCH_SIZE && ggml_nbytes(src0) <= 8*1024*1024);
                 }
                 if (bf16_mma_hardware_available(cc)) {
