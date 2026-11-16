@@ -7062,8 +7062,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     task.id = rd.get_new_id();
     rd.post_task(std::move(task));
 
-    // raw LE mono samples; audio/L16 would imply 16-bit big-endian (RFC 2586)
-    const std::string pcm_type = "audio/pcm;rate=" + std::to_string(info.sample_rate);
+    // raw LE samples, channels interleaved; audio/L16 would imply 16-bit big-endian (RFC 2586)
+    const std::string pcm_type = "audio/pcm;rate=" + std::to_string(info.sample_rate) +
+        (info.n_channels > 1 ? ";channels=" + std::to_string(info.n_channels) : "");
     const std::string content_type = pcm16 ? pcm_type + ";encoding=signed-int;bits=16"
         : response_format == "pcm" ? pcm_type + ";encoding=float;bits=32"
         : "audio/wav";

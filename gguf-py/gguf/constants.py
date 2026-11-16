@@ -7223,6 +7223,7 @@ class VisionProjectorType:
     DRAMA3_GEN = "drama3_gen" # audio generation: codebook tower + Fish DAC decoder
     ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
     ZONOS3_SPKENC = "zonos3_spkenc" # audio: MECT-B2 speaker encoder
+    YUE2_GEN = "yue2_gen" # audio generation: flow-matching NAR + Oobleck VAE decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"

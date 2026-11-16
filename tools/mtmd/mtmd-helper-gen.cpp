@@ -58,10 +58,11 @@ static void put_bytes(std::vector<char> & buf, const void * p, size_t n) {
 }
 
 // data_sz == UINT32_MAX writes the "unknown length" sentinel (streaming), same as ffmpeg does on a pipe
-static void write_wav16_header(std::vector<char> & buf, uint32_t data_sz, int32_t rate) {
+// multi-channel PCM is interleaved
+static void write_wav16_header(std::vector<char> & buf, uint32_t data_sz, int32_t rate, uint16_t ch = 1) {
     const uint32_t riff_sz   = data_sz == UINT32_MAX ? UINT32_MAX : 36 + data_sz;
-    const uint32_t fmt_sz    = 16, byte_rate = (uint32_t) rate * 2;
-    const uint16_t fmt = 1, ch = 1, align = 2, bits = 16;
+    const uint32_t fmt_sz    = 16, byte_rate = (uint32_t) rate * 2 * ch;
+    const uint16_t fmt = 1, align = 2 * ch, bits = 16;
     const uint32_t rate32    = (uint32_t) rate;
     put_bytes(buf, "RIFF", 4); put_bytes(buf, &riff_sz, 4); put_bytes(buf, "WAVE", 4);
     put_bytes(buf, "fmt ", 4); put_bytes(buf, &fmt_sz, 4);
@@ -77,12 +78,12 @@ static void append_wav16_pcm(std::vector<char> & buf, const float * pcm, size_t 
     }
 }
 
-static bool write_wav16(std::vector<char> & buf, const std::vector<float> & pcm, int32_t rate) {
+static bool write_wav16(std::vector<char> & buf, const std::vector<float> & pcm, int32_t rate, uint16_t ch = 1) {
     // RIFF chunk sizes are 32-bit; refuse to emit a file with a truncated header
     if (pcm.size() > ((size_t) UINT32_MAX - 36) / 2) {
         return false;
     }
-    write_wav16_header(buf, (uint32_t) (pcm.size() * 2), rate);
+    write_wav16_header(buf, (uint32_t) (pcm.size() * 2), rate, ch);
     append_wav16_pcm(buf, pcm.data(), pcm.size());
     return true;
 }
@@ -2949,6 +2950,361 @@ private:
     bool   wav_header_sent = false;
 };
 
+// YuE2: the backbone writes an ABC score (text) then the semantic codes, one sequence for both
+// then the NAR flow matching (in mtmd, on the backbone keys/values) and the VAE make the stereo PCM, after the last code
+// both phases are sampled here, with the settings of the reference (sampling.py, yue2_generation_config.json)
+class yue2_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    void reset() override {
+        seq_id = 0;
+        pos = 0;
+        prompt.clear();
+        prompt_pos = 0;
+        in_codes = false;
+        history.clear();
+        codes.clear();
+        done = false;
+        decoded = false;
+        audio_pcm.clear();
+        h_state_buf.clear();
+        out_buf.clear();
+        stream = false;
+        pcm_sent = 0;
+        wav_header_sent = false;
+        gen_state.reset();
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        seq_id   = inp->seq_id;
+        out_type = inp->out_type;
+        stream   = inp->stream;
+        code_cfg.temp = inp->temp >= 0.0f ? inp->temp : 1.0f;
+        rng.seed(inp->seed == UINT32_MAX ? std::random_device{}() : inp->seed);
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
+
+        // the "tts" template renders the whole prompt, special tokens included
+        const std::string text(inp->prompt, inp->prompt_len);
+        prompt.resize(text.size() + 16);
+        const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), prompt.data(), (int32_t) prompt.size(), false, true);
+        if (n < 2 || prompt[0] != tok_eod) {
+            LOG_ERR("mtmd_helper_gen_audio: yue2 expects the prompt of its tts template\n");
+            return 1;
+        }
+        prompt.resize((size_t) n);
+        // cover mode and cot=off give the score in the prompt, the codes come next
+        if (prompt.back() == tok_music_start) {
+            in_codes = true;
+        } else if (prompt.back() != tok_abc_start) {
+            LOG_ERR("mtmd_helper_gen_audio: yue2 prompt must end with <abc> or <|music_start|>\n");
+            return 1;
+        }
+        if (prompt.size() >= llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt does not fit in the context\n");
+            return 1;
+        }
+        if (!llama_memory_seq_rm(llama_get_memory(lctx), seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset the sequence\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    int32_t step_prompt(int32_t n_batch) override {
+        GGML_ASSERT(n_batch > 0);
+        const int32_t n_left = (int32_t) prompt.size() - prompt_pos;
+        if (n_left <= 0) {
+            return 0;
+        }
+        const int32_t n = std::min(n_batch, n_left);
+        if (!decode(prompt.data() + prompt_pos, n)) {
+            return -1;
+        }
+        prompt_pos += n;
+        return n_left - n;
+    }
+
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
+        GGML_UNUSED(sampled);
+        GGML_UNUSED(h_state_in);
+        *h_state_out = nullptr;
+        *out_stop    = false;
+        if (done) {
+            *out_stop = true;
+            return 0;
+        }
+
+        const llama_token tok = sample(llama_get_logits_ith(lctx, -1));
+        if (!in_codes) {
+            // the score ends with </abc>, or is cut at max_tokens like the reference
+            if (tok == tok_abc_end || (int32_t) history.size() + 1 >= abc_cfg.max_tokens) {
+                const llama_token next[2] = { tok_abc_end, tok_music_start };
+                if (!decode(next, 2)) {
+                    return 1;
+                }
+                in_codes = true;
+                history.clear();
+            } else {
+                history.push_back(tok);
+                if (!decode(&tok, 1)) {
+                    return 1;
+                }
+            }
+        } else {
+            // the NAR pass also attends to <|music_end|>
+            const bool full = (int32_t) codes.size() + 1 >= code_cfg.max_tokens || pos + 1 >= (llama_pos) llama_n_ctx_seq(lctx);
+            if (tok == tok_music_end || full) {
+                if (!decode(&tok_music_end, 1)) {
+                    return 1;
+                }
+                done = true;
+                *out_stop = true;
+                return 0;
+            }
+            history.push_back(tok);
+            codes.push_back(tok - tok_codec0);
+            if (!decode(&tok, 1)) {
+                return 1;
+            }
+        }
+        const float * h = llama_get_embeddings_ith(lctx, -1);
+        h_state_buf.assign(h, h + n_embd);
+        *h_state_out = h_state_buf.data();
+        return 0;
+    }
+
+    int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
+        *out_sample_rate = info.sample_rate;
+        const uint16_t n_ch = (uint16_t) info.n_channels;
+
+        if (!stream) {
+            if (flush() != 0) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) (audio_pcm.size() / n_ch);
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate, n_ch)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
+        }
+
+        // streaming: the NAR pass covers the whole song, so all the audio arrives after flush()
+        const size_t n_new = audio_pcm.size() - pcm_sent;
+        if (out_n_samples) {
+            *out_n_samples = (int64_t) (n_new / n_ch);
+        }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
+            return 0;
+        }
+        out_buf.clear();
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate, n_ch);
+            wav_header_sent = true;
+        }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
+        *out_data     = out_buf.data();
+        *out_data_len = out_buf.size();
+        return 0;
+    }
+
+    int32_t flush() override {
+        if (decoded) {
+            return 0;
+        }
+        if (codes.empty()) {
+            LOG_ERR("mtmd_helper_gen_audio: yue2 generated no codes, the score may need more tokens (-n)\n");
+            return 1;
+        }
+        if (!done) {
+            // stopped by the caller: the NAR pass still needs <|music_end|>
+            if (!decode(&tok_music_end, 1)) {
+                return 1;
+            }
+            done = true;
+        }
+
+        std::vector<uint8_t> state(llama_state_seq_get_size(lctx, seq_id));
+        if (state.empty() || llama_state_seq_get_data(lctx, state.data(), state.size(), seq_id) != state.size()) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot read the backbone state\n");
+            return 1;
+        }
+
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type                = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+        inp.codes               = codes.data();
+        inp.n_codes             = codes.size();
+        inp.backbone_state      = state.data();
+        inp.backbone_state_size = state.size();
+        inp.backbone_n_past     = pos;
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: flow matching failed\n");
+            return 1;
+        }
+        const std::vector<float> latents(out.feats, out.feats + out.n_feats);
+
+        inp = mtmd_gen_inp_default(mctx);
+        inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+        inp.feats   = latents.data();
+        inp.n_feats = latents.size();
+        out = {};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: VAE decode failed\n");
+            return 1;
+        }
+        audio_pcm.assign(out.audio, out.audio + out.n_samples);
+        decoded = true;
+        return 0;
+    }
+
+private:
+    // token ids of the yue2_infer protocol (protocol.py)
+    static constexpr llama_token tok_eod         = 151643;
+    static constexpr llama_token tok_abc_start   = 151847;
+    static constexpr llama_token tok_abc_end     = 151848;
+    static constexpr llama_token tok_music_start = 151851;
+    static constexpr llama_token tok_music_end   = 151852;
+    static constexpr llama_token tok_codec0      = 151853;
+    static constexpr int32_t     n_codec         = 32768;
+
+    struct sampling {
+        float   temp;
+        float   top_p;
+        int32_t top_k;
+        float   penalty;
+        int32_t penalty_window;
+        int32_t min_tokens;
+        int32_t max_tokens;
+    };
+    sampling abc_cfg  = { 0.7f, 0.9f,  30,  1.005f, 100, 32,  4096 };
+    sampling code_cfg = { 1.0f, 0.95f, 100, 1.2f,   50,  200, 9000 };
+
+    bool decode(const llama_token * toks, int32_t n) {
+        llama_batch batch = llama_batch_init(n, 0, 1);
+        for (int32_t i = 0; i < n; i++) {
+            batch.token   [i]    = toks[i];
+            batch.pos     [i]    = pos + i;
+            batch.n_seq_id[i]    = 1;
+            batch.seq_id  [i][0] = seq_id;
+            batch.logits  [i]    = i == n - 1;
+        }
+        batch.n_tokens = n;
+        const int32_t ret = llama_decode(lctx, batch);
+        llama_batch_free(batch);
+        if (ret != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+            return false;
+        }
+        pos += n;
+        return true;
+    }
+
+    // distribution() of the reference: allowed range, end token held back before min_tokens, windowed penalty, top-k, top-p
+    llama_token sample(const float * logits) {
+        const sampling & c = in_codes ? code_cfg : abc_cfg;
+        const llama_token end = in_codes ? tok_music_end : tok_abc_end;
+        const llama_token lo  = in_codes ? tok_codec0 : 0;
+        const llama_token hi  = in_codes ? tok_codec0 + n_codec : tok_eod;
+
+        std::unordered_map<llama_token, int> freq;
+        const size_t n_win = std::min(history.size(), (size_t) c.penalty_window);
+        for (size_t i = history.size() - n_win; i < history.size(); i++) {
+            freq[history[i]]++;
+        }
+
+        std::vector<std::pair<float, llama_token>> cand;
+        cand.reserve((size_t) (hi - lo) + 1);
+        auto push = [&](llama_token t) {
+            float l = logits[t];
+            auto it = freq.find(t);
+            if (it != freq.end()) {
+                const float alpha = std::pow(c.penalty, (float) it->second);
+                l = l < 0.0f ? l * alpha : l / alpha;
+            }
+            cand.emplace_back(l, t);
+        };
+        for (llama_token t = lo; t < hi; t++) {
+            push(t);
+        }
+        if ((int32_t) history.size() >= c.min_tokens) {
+            push(end);
+        }
+
+        if (c.temp <= 0.0f) {
+            return std::max_element(cand.begin(), cand.end())->second;
+        }
+        const size_t k = std::min(cand.size(), (size_t) std::max(c.top_k, 1));
+        std::partial_sort(cand.begin(), cand.begin() + k, cand.end(), std::greater<std::pair<float, llama_token>>());
+        cand.resize(k);
+
+        std::vector<double> p(k);
+        double sum = 0.0;
+        for (size_t i = 0; i < k; i++) {
+            p[i] = std::exp((double) ((cand[i].first - cand[0].first) / c.temp));
+            sum += p[i];
+        }
+        // keep the smallest prefix whose mass reaches top_p, the first token always stays
+        double before = 0.0;
+        for (size_t i = 0; i < k; i++) {
+            const double pi = p[i];
+            if (i > 0 && before > c.top_p * sum) {
+                p[i] = 0.0;
+            }
+            before += pi;
+        }
+        double kept = 0.0;
+        for (double v : p) {
+            kept += v;
+        }
+        double u = std::uniform_real_distribution<double>(0.0, kept)(rng);
+        for (size_t i = 0; i < k; i++) {
+            u -= p[i];
+            if (u <= 0.0 && p[i] > 0.0) {
+                return cand[i].second;
+            }
+        }
+        return cand[0].second;
+    }
+
+    llama_seq_id seq_id = 0;
+    llama_pos    pos    = 0;
+    std::vector<llama_token> prompt;
+    int32_t prompt_pos = 0;
+    bool in_codes = false;
+    std::vector<llama_token> history; // tokens sampled in the current phase
+    std::vector<int32_t> codes;
+    bool done    = false;
+    bool decoded = false;
+    std::mt19937 rng;
+
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    bool stream = false;
+    std::vector<float> h_state_buf;
+    std::vector<float> audio_pcm; // interleaved
+    std::vector<char>  out_buf;
+    size_t pcm_sent        = 0;
+    bool   wav_header_sent = false;
+};
+
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
     switch (mtmd_gen_audio_get_info(mctx).type) {
         case MTMD_GEN_AUDIO_TYPE_QWEN3TTS:
@@ -2965,6 +3321,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new drama3_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_ZONOS3:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new zonos3_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_YUE2:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new yue2_gen_audio_pipeline(lctx, mctx));
         default:
             return nullptr;
     }

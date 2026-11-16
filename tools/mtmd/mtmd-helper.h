@@ -287,8 +287,8 @@ struct mtmd_helper_gen_audio;
 typedef struct mtmd_helper_gen_audio mtmd_helper_gen_audio;
 
 enum mtmd_helper_gen_audio_outtype {
-    MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM, // raw PCM
-    MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
+    MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM, // raw F32 PCM, channels interleaved
+    MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE
 };
 // what a response that continues a sequence (n_past > 0) outputs
 enum mtmd_helper_gen_audio_out_mode {
@@ -369,7 +369,7 @@ MTMD_API int32_t mtmd_helper_audio_stream_get_logit_bias(const mtmd_context * mc
                                                          llama_logit_bias * out, int32_t n_max);
 
 // out_data valid until next get_output() or reset() call
-// out_n_samples (optional, can be NULL) receives the number of generated PCM samples
+// out_n_samples (optional, can be NULL) receives the number of generated PCM samples per channel (see mtmd_gen_audio_info::n_channels)
 // if inp->stream is true: returns only audio produced since the previous call, and
 // *out_data_len == 0 whenever a full window_frames batch hasn't accumulated yet
 MTMD_API int32_t mtmd_helper_gen_audio_get_output(

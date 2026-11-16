@@ -12,6 +12,7 @@ Supported models:
 - [Chatterbox](#chatterbox)
 - [Drama 3](#drama-3)
 - [ZONOS3](#zonos3)
+- [YuE2](#yue2) (songs)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -215,3 +216,50 @@ Convert the root of the release repository, not the `lm/` subdirectory. The mmpr
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --outtype q8_0 --outfile zonos3-mini.gguf
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --mmproj --outtype f32 --outfile mmproj-zonos3-mini.gguf
 ```
+
+## YuE2
+
+[m-a-p/YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) generates songs (vocals and accompaniment) from a style prompt and lyrics, as 48 kHz stereo. The backbone (a Qwen3 text model) writes an ABC score, then one semantic code per 40 ms frame; the NAR half of the checkpoint turns the codes into VAE latents by flow matching, attending to the keys and values of the backbone, and the [YuE2-Vae](https://huggingface.co/m-a-p/YuE2-Vae) decoder makes the audio. The NAR pass and the VAE run once, after the last code, so the audio arrives at the end, even when streaming.
+
+The prompt is the text of the reference request:
+
+```
+[Tags]
+City Pop, upbeat, danceable, groovy bass, electric guitar, synth
+[Lyrics]
+[Verse]
+...
+```
+
+Available params:
+- `--tts-voice` picks the planning mode of the reference (`cot`): `full` (default, a chord-annotated score), `melody` (a melody-only score) or `off` (no score)
+- Cover mode: append the score to the prompt as `\n[ABC]\n<score>`, with `--tts-voice melody` or `full`; the model then goes straight to the codes
+- `-n` counts the score tokens and the codes together, a song needs several thousands: use `-n 16000` (at most 4096 score tokens and 9000 codes, 6 minutes, are generated as in the reference)
+- `-c` must hold the prompt, the score and the codes, e.g. `-c 24576`
+- Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
+- Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
+- Note: classifier-free guidance is not supported (the reference default is 1.0, and 1.01 with `--tts-voice off`)
+- Note: songs whose prompt, score and codes go over 24576 positions are rejected (the reference splits them into chunks)
+
+Example usage:
+
+```sh
+llama-tts -m yue2-3b.gguf \
+    -mm mmproj-yue2-3b.gguf \
+    -f song.txt \
+    -n 16000 -c 24576 \
+    --output song.wav
+```
+
+**Note for GGUF conversion:**
+
+The VAE is a separate repository, download it into the `vae` subdirectory of the model:
+
+```sh
+hf download m-a-p/YuE2-3B --local-dir YuE2-3B
+hf download m-a-p/YuE2-Vae --local-dir YuE2-3B/vae
+python convert_hf_to_gguf.py YuE2-3B --outfile yue2-3b.gguf
+python convert_hf_to_gguf.py YuE2-3B --mmproj --outfile mmproj-yue2-3b.gguf
+```
+
+The mmproj holds the NAR transformer layers (loaded with libllama as a Qwen3 text model, in the `--outtype` type), and the latent projections and the VAE decoder, always in F32.
