@@ -93,8 +93,13 @@ describe('VoiceCapture', () => {
 		expect(clip.durationMs).toBeLessThan(5000);
 		expect(clip.peaks).toHaveLength(64);
 		expect(Math.max(...clip.peaks)).toBe(1);
-		// a steady tone: no span of the clip is silent
-		expect(clip.peaks.filter((peak) => peak > 0.5).length).toBeGreaterThan(48);
+		// a steady tone: once it reaches the capture, no span of the clip is silent. The capture
+		// starts with its first audio block, which can come before the tone stream's first sound
+		const toneFrom = clip.peaks.findIndex((peak) => peak > 0.5);
+
+		expect(toneFrom).toBeGreaterThanOrEqual(0);
+		expect(clip.peaks.slice(toneFrom).every((peak) => peak > 0.5)).toBe(true);
+		expect(clip.peaks.length - toneFrom).toBeGreaterThan(16);
 
 		const header = new DataView(await clip.blob.slice(0, 44).arrayBuffer());
 		const pcmBytes = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
