@@ -1314,6 +1314,8 @@ struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
     virtual void * alloc(size_t size, size_t * actual_size) = 0;
+    // returns nullptr on OOM instead of aborting, only the VMM pool does
+    virtual void * try_alloc(size_t size, size_t * actual_size) { return alloc(size, actual_size); }
     virtual void free(void * ptr, size_t size) = 0;
 };
 
@@ -1343,6 +1345,13 @@ struct ggml_cuda_pool_alloc {
         GGML_ASSERT(pool != nullptr);
         GGML_ASSERT(ptr == nullptr);
         ptr = (T *) pool->alloc(size * sizeof(T), &this->actual_size);
+        return ptr;
+    }
+
+    T * try_alloc(size_t size) {
+        GGML_ASSERT(pool != nullptr);
+        GGML_ASSERT(ptr == nullptr);
+        ptr = (T *) pool->try_alloc(size * sizeof(T), &this->actual_size);
         return ptr;
     }
 
@@ -1392,6 +1401,9 @@ struct ggml_backend_cuda_context {
 #endif
 
     int curr_stream_no = 0;
+
+    // set by an op that could not get its pool memory, see ggml_backend_cuda_graph_compute
+    bool pool_oom = false;
 
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context

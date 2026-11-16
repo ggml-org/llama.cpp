@@ -270,10 +270,12 @@ void ggml_cuda_mul_mat_q(
         const int ntj = (ne1 + J_best - 1) / J_best;
 
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * y_block_size/y_values_per_block + src1_q8_1_padding;
-        ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
+        ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
         ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
-        if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
-            src1_scale.alloc(ne13*ne12*ne11);
+        if (!src1_q8_1.try_alloc(nbytes_src1_q8_1) ||
+                (src0->type == GGML_TYPE_NVFP4 && use_native_fp4 && !src1_scale.try_alloc(ne13*ne12*ne11))) {
+            ctx.pool_oom = true;
+            return;
         }
 
         {
@@ -319,11 +321,16 @@ void ggml_cuda_mul_mat_q(
     const int64_t ne_get_rows = ne12 * n_expert_used;
     GGML_ASSERT(ne1 == n_expert_used);
 
-    ggml_cuda_pool_alloc<int32_t> ids_src1(ctx.pool(), ne_get_rows);
-    ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool(), ne_get_rows + J_best-1); // Needs to be padded for unconditional memory access.
+    ggml_cuda_pool_alloc<int32_t> ids_src1(ctx.pool());
+    ggml_cuda_pool_alloc<int32_t> ids_dst(ctx.pool());
 
     const int ntj = (ne_get_rows + J_best - 1) / J_best + ne02;
-    ggml_cuda_pool_alloc<ggml_cuda_mm_id_tile_spec> tile_spec(ctx.pool(), ntj);
+    ggml_cuda_pool_alloc<ggml_cuda_mm_id_tile_spec> tile_spec(ctx.pool());
+    // ids_dst needs to be padded for unconditional memory access.
+    if (!ids_src1.try_alloc(ne_get_rows) || !ids_dst.try_alloc(ne_get_rows + J_best-1) || !tile_spec.try_alloc(ntj)) {
+        ctx.pool_oom = true;
+        return;
+    }
 
     // gate/up activations are broadcast across experts (ne11 == 1): quantize each token once and
     // scatter to its slots. ids_src1 then holds the inverse map (token slot -> compact row).
@@ -340,10 +347,12 @@ void ggml_cuda_mul_mat_q(
     }
 
     const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * y_block_size/y_values_per_block + src1_q8_1_padding;
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), nbytes_src1_q8_1);
+    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
     ggml_cuda_pool_alloc<float> src1_scale(ctx.pool());
-    if (src0->type == GGML_TYPE_NVFP4 && use_native_fp4) {
-        src1_scale.alloc(ne12*n_expert_used);
+    if (!src1_q8_1.try_alloc(nbytes_src1_q8_1) ||
+            (src0->type == GGML_TYPE_NVFP4 && use_native_fp4 && !src1_scale.try_alloc(ne12*n_expert_used))) {
+        ctx.pool_oom = true;
+        return;
     }
 
     const int64_t ne11_flat = ne12*n_expert_used;
