@@ -367,6 +367,27 @@ class TestFP8Conversion(unittest.TestCase):
         self.assertEqual(dtype, gguf.GGMLQuantizationType.Q8_0)
         np.testing.assert_allclose(gguf.dequantize(data, dtype), np.full((4, 32), 0.25), atol=1e-4)
 
+    def test_modelopt_block_scale_inv(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        weight = (torch.arange(32, dtype=torch.float32).reshape(4, 8) - 16).to(torch.float8_e4m3fn)
+        scale = torch.tensor([[0.25, 0.5], [1.0, 2.0]])
+        expected = weight.float() * scale.repeat_interleave(2, 0).repeat_interleave(4, 1)
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": scale}, eager=eager, check_lazy=not eager)
+                self.assertEqual(set(result), {"blk.0.attn_q.weight"})
+                dtype, data = result["blk.0.attn_q.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                np.testing.assert_array_equal(data, expected.numpy())
+
+        with self.assertRaisesRegex(ValueError, "not tiled"):
+            self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": torch.ones((3, 2))})
+
+        # a scalar scale keeps the FP8 bytes, as with weight_scale
+        result = self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": torch.tensor([0.25])}, check_lazy=True)
+        self.assertEqual(result["blk.0.attn_q.weight"][0], gguf.GGMLQuantizationType.F8_E4M3)
+        np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
+
 
 class TestInkling2PackedConversion(unittest.TestCase):
     """Conversion of the packed Inkling2 expert weights (see _dequant_expert_chunk in conversion/inkling2.py).
