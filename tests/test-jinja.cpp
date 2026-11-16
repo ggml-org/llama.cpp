@@ -69,6 +69,8 @@ static std::shared_ptr<const common_tts_dicts> test_tts_dicts() {
             "\xe6\x97\xa5\t\"ni\""},
         {"other", "hello\t\"bonjour\""},
         {"empty", ""},
+        // values that must be rejected: nested deeper than the engine allows, and not JSON
+        {"bad", "deep\t" + std::string(200, '[') + std::string(200, ']') + "\njson\t{not json"},
     });
     return dicts;
 }
@@ -3100,6 +3102,8 @@ static void test_tts_dict(testing & t) {
         test_template_error(t, "error: unknown dictionary",      "{{ tts_dict('nope', 'a') }}", "unknown dictionary 'nope'", true);
         test_template_error(t, "error: key must be a string",    "{{ tts_dict('lex', 1) }}",    "expected value of type", true);
         test_template_error(t, "error: missing argument",        "{{ tts_dict('lex') }}",       "expected between 2 and 2 arguments", true);
+        test_template_error(t, "error: value is not JSON",       "{{ tts_dict('bad', 'json') }}", "parse error", true);
+        test_template_error(t, "error: value nested too deep",   "{{ tts_dict('bad', 'deep') }}", "levels deep", true);
 
         t.test("malformed dictionary line", [](testing & t) {
             std::string value;
@@ -3128,6 +3132,35 @@ static void test_tts_dict(testing & t) {
             }
             ok = ok && !common_tts_dict_find(dict, "k", value) && !common_tts_dict_find(dict, "k10000", value) && !common_tts_dict_find(dict, "a", value);
             t.assert_true("all found, none extra", ok);
+        });
+
+        // a dictionary comes from the GGUF and cannot be trusted: any bytes must give a miss, an exception, or a real line of it
+        t.test("random bytes as dictionary", [](testing & t) {
+            static const char raw[] = "ab\t\n\n\t\0\xff\"{}[]";
+            const std::string alphabet(raw, sizeof(raw) - 1);
+            std::mt19937 rng(42);
+            auto random_str = [&](size_t max_len) {
+                std::string res(rng() % (max_len + 1), '\0');
+                for (auto & c : res) {
+                    c = alphabet[rng() % alphabet.size()];
+                }
+                return res;
+            };
+            bool ok = true;
+            for (int i = 0; i < 20000; i++) {
+                const std::string dict = random_str(40);
+                const std::string key  = random_str(3);
+                std::string value;
+                try {
+                    if (common_tts_dict_find(dict, key, value)) {
+                        const std::string line = "\n" + key + "\t" + value + "\n";
+                        ok = ok && ("\n" + dict + "\n").find(line) != std::string::npos;
+                    }
+                } catch (const std::exception &) {
+                    // malformed line
+                }
+            }
+            t.assert_true("every hit is a line of the dictionary", ok);
         });
     }
 }
