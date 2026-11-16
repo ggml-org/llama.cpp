@@ -502,6 +502,7 @@ enum mtmd_gen_process_type {
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
                                     // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
+                                    // for yue2, this is one VAE pass, the caller splits a long song into tiles
 };
 
 struct mtmd_gen_inp {
@@ -525,8 +526,8 @@ struct mtmd_gen_inp {
     const float * feats;
     size_t        n_feats;
 
-    // yue2 GEN_CODE: codes are the semantic codes, the backbone sequence state (see llama_state_seq_get_data)
-    // holds the keys and values of its n_past positions (prompt and codes), the flow-matching pass attends to them
+    // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
+    // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
     const uint8_t * backbone_state;
     size_t          backbone_state_size;
     int32_t         backbone_n_past;

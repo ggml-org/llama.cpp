@@ -614,20 +614,15 @@ static bool cbx_is_mtl(const mtmd_model & model) {
     return model.cbx_read_tensor("a.cenc.perceiver.pre_attention_query", nullptr, 0) > 0;
 }
 
-// yue2: the NAR layers have the names and shapes of a qwen3 text model, libllama loads them from a synthetic GGUF
-// the tensor data is read from the mmproj file, no copy is kept in the mtmd model
+// yue2: the NAR layers are a qwen3 text model, libllama loads them from a synthetic GGUF
+// the tensor data is read from the mmproj file, mtmd keeps no copy
 struct yue2_nar_source {
-    FILE * f = nullptr;
+    std::ifstream f;
     std::map<std::string, std::pair<size_t, size_t>> tensors; // name in the synthetic model -> offset and size in the mmproj
-    ~yue2_nar_source() {
-        if (f) {
-            fclose(f);
-        }
-    }
 };
 
 static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
-    const auto * src = (const yue2_nar_source *) user_data;
+    auto * src = (yue2_nar_source *) user_data;
     std::vector<uint8_t> buf(ggml_nbytes(t), 0);
     const std::string name = t->name;
     auto it = src->tensors.find(name);
@@ -635,12 +630,12 @@ static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
         if (it->second.second != buf.size()) {
             throw std::runtime_error(mtmd_format("yue2: unexpected size of %s", t->name));
         }
-        if (fseek(src->f, (long) it->second.first, SEEK_SET) != 0 || fread(buf.data(), 1, buf.size(), src->f) != buf.size()) {
+        src->f.seekg((std::streamoff) it->second.first, std::ios::beg);
+        if (!src->f.read((char *) buf.data(), (std::streamsize) buf.size())) {
             throw std::runtime_error(mtmd_format("yue2: failed to read %s", t->name));
         }
     } else {
-        // libllama also creates the optional tensors of the arch (biases, scales, output projection) for a model
-        // built from metadata: they get the values that leave the graph unchanged
+        // optional tensors that libllama creates by itself, give them neutral values (scale = 1, dense_2 = identity, others = 0)
         GGML_ASSERT(t->type == GGML_TYPE_F32);
         float * w = (float *) buf.data();
         if (name.size() >= 5 && name.compare(name.size() - 5, 5, "scale") == 0) {
@@ -695,7 +690,7 @@ static llama_model * mtmd_yue2_nar_load(const char * fname, ggml_backend_dev_t d
     if (src.tensors.size() != (size_t) hparams.n_layer * 11 + 1) {
         throw std::runtime_error("yue2: unexpected NAR tensors in the mmproj");
     }
-    src.f = fopen(fname, "rb");
+    src.f = open_ifstream_binary(fname);
     if (!src.f) {
         throw std::runtime_error(mtmd_format("yue2: failed to open %s", fname));
     }
@@ -3230,8 +3225,8 @@ static int32_t mtmd_gen_wav_lfm3a(mtmd_context * ctx, mtmd_gen_state * state, co
     return 0;
 }
 
-// yue2 internal passes of the projections: rows of n_in floats -> rows of the other side
-static bool yue2_project(mtmd_context * ctx, mtmd_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
+// yue2: one pass of an mtmd graph, rows in -> rows out (PCM for GEN_WAV)
+static bool yue2_encode(mtmd_context * ctx, mtmd_gen_state * state, mtmd_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
     mtmd_image_f32 dummy;
     dummy.set_size({1, 1}, false, true);
     dummy.cpy_buf(std::vector<float>(1, 0.0f));
@@ -3244,12 +3239,17 @@ static bool yue2_project(mtmd_context * ctx, mtmd_subctx_gen_process proc, const
     params.n_threads   = ctx->n_threads;
     params.gen_process = proc;
     params.feats       = &in;
-    params.out_feats   = &out;
+    if (proc == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+        params.out_audio = &out;
+        params.gen_state = state->gen_state;
+    } else {
+        params.out_feats = &out;
+    }
     return ctx->ctx_gen_a->encode(&params);
 }
 
-// the NAR context holds the backbone keys/values, then the NAR rows of each pass after them
-// the state only loads into a context with the same KV layout, try both flash attention settings
+// NAR context: the backbone keys/values, then the NAR rows of each pass
+// the state only loads into the same KV layout, try both flash attention settings
 static llama_context_ptr yue2_nar_context(mtmd_context * ctx, const mtmd_gen_inp * inp, int32_t n_rows) {
     llama_context_params cparams = llama_context_default_params();
     cparams.n_ctx          = (uint32_t) (inp->backbone_n_past + n_rows);
@@ -3286,15 +3286,14 @@ static llama_context_ptr yue2_nar_context(mtmd_context * ctx, const mtmd_gen_inp
     return nullptr;
 }
 
-// yue2 GEN_CODE: flow matching from noise to the VAE latents of the codes, see synthesize() in the reference (nar.py)
-// one chunk only: the AR prefix and the NAR rows must fit in n_ctx_max positions
+// yue2 GEN_CODE: flow matching from noise to the VAE latents of one chunk, see synthesize() in the reference (nar.py)
 static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     using g = mtmd_graph_yue2_gen;
     const auto & y = ctx->ctx_gen_a->model.yue2;
     const int64_t n_embd = ctx->ctx_gen_a->model.hparams.n_embd;
 
-    if (!ctx->yue2_nar || !inp->codes || inp->n_codes == 0 || !inp->backbone_state || inp->backbone_n_past <= 0) {
-        LOG_ERR("%s: yue2 needs the codes and the backbone state\n", __func__);
+    if (!ctx->yue2_nar || inp->n_codes == 0 || !inp->backbone_state || inp->backbone_n_past <= 0) {
+        LOG_ERR("%s: yue2 needs the frame count and the backbone state\n", __func__);
         return 1;
     }
     const int64_t n_frames = (int64_t) inp->n_codes;
@@ -3360,7 +3359,7 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
     std::vector<float> embd, hidden, vel;
     auto velocity = [&](const std::vector<float> & x, double t, std::vector<float> & v) -> bool {
         std::copy(x.begin(), x.end(), x_rows.begin() + g::n_latent); // the start and end rows stay 0
-        if (!yue2_project(ctx, MTMD_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
+        if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
             return false;
         }
         const std::vector<float> temb = time_embd(t);
@@ -3376,7 +3375,7 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
         const float * h = llama_get_embeddings(lctx.get());
         hidden.assign(h, h + n_rows * n_embd);
         llama_memory_seq_rm(mem, 0, (llama_pos) n_past, -1);
-        if (!yue2_project(ctx, MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
+        if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
             return false;
         }
         v.assign(vel.begin() + g::n_latent, vel.end() - g::n_latent);
@@ -3416,55 +3415,21 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
     return 0;
 }
 
-// yue2 GEN_WAV: latents -> interleaved stereo PCM, decoded in tiles with enough context to match the full decode
+// yue2 GEN_WAV: latents -> interleaved stereo PCM in one VAE pass, the caller splits a long song into tiles
 static int32_t mtmd_gen_wav_yue2(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     using g = mtmd_graph_yue2_gen;
     if (!inp->feats || inp->n_feats == 0 || inp->n_feats % g::n_latent != 0) {
         LOG_ERR("%s: yue2 needs whole latent frames\n", __func__);
         return 1;
     }
-    const int64_t n_frames = (int64_t) (inp->n_feats / g::n_latent);
-    const int64_t total    = n_frames * g::vae_ratio - g::vae_trim;
-    if (total <= 0) {
-        LOG_ERR("%s: too few latent frames\n", __func__);
+    const std::vector<float> feats(inp->feats, inp->feats + inp->n_feats);
+    auto & audio = state->out_audio;
+    if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_GEN_WAV, feats, audio)) {
+        LOG_ERR("%s: encode failed (vae)\n", __func__);
         return 1;
     }
-
-    auto & audio = state->out_audio;
-    audio.assign((size_t) (total * g::n_channels), 0.0f);
-    std::vector<float> tile, pcm;
-    for (int64_t start = 0; start < n_frames; start += g::vae_core) {
-        const int64_t end   = std::min(n_frames, start + g::vae_core);
-        const int64_t left  = std::max<int64_t>(0, start - g::vae_halo);
-        const int64_t right = std::min(n_frames, end + g::vae_halo);
-        tile.assign(inp->feats + left * g::n_latent, inp->feats + right * g::n_latent);
-
-        mtmd_image_f32 dummy;
-        dummy.set_size({1, 1}, false, true);
-        dummy.cpy_buf(std::vector<float>(1, 0.0f));
-        mtmd_image_f32_batch batch;
-        batch.is_audio = true;
-        batch.entries.push_back(std::move(dummy));
-
-        mtmd_subctx_encode_params params;
-        params.imgs        = &batch;
-        params.n_threads   = ctx->n_threads;
-        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
-        params.feats       = &tile;
-        params.out_audio   = &pcm;
-        params.gen_state   = state->gen_state;
-        if (!ctx->ctx_gen_a->encode(&params)) {
-            LOG_ERR("%s: encode failed (vae)\n", __func__);
-            return 1;
-        }
-
-        const int64_t out_start  = start * g::vae_ratio;
-        const int64_t out_end    = std::min(end * g::vae_ratio, total);
-        const int64_t crop_start = (start - left) * g::vae_ratio;
-        GGML_ASSERT((int64_t) pcm.size() >= (crop_start + out_end - out_start) * g::n_channels);
-        for (int64_t i = 0; i < (out_end - out_start) * g::n_channels; i++) {
-            audio[out_start * g::n_channels + i] = std::clamp(pcm[crop_start * g::n_channels + i], -1.0f, 1.0f);
-        }
+    for (auto & v : audio) {
+        v = std::clamp(v, -1.0f, 1.0f);
     }
 
     out->audio     = audio.data();

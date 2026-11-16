@@ -625,12 +625,10 @@ struct mtmd_graph_yue2_gen : mtmd_graph {
     static constexpr int   n_freq     = 256;   // time embedder input
     static constexpr int   n_channels = 2;
     static constexpr int   vae_ratio  = 1920;  // output samples per latent frame
-    static constexpr int   vae_trim   = 64;    // the full decode has vae_ratio * n - vae_trim samples
+    static constexpr int   vae_trim   = 64;    // a decode of n frames has vae_ratio * n - vae_trim samples
     static constexpr float rope_theta = 1000000.0f;
     static constexpr int   n_ctx_max  = 24576; // the AR prefix and the NAR rows of one chunk
     static constexpr int   ode_steps  = 32;    // midpoint solver
-    static constexpr int   vae_core   = 128;   // VAE tiles: frames kept per tile, and frames of context on each side
-    static constexpr int   vae_halo   = 16;
 
     mtmd_subctx_gen_process gen_process;
     int n_rows;

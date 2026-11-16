@@ -95,9 +95,9 @@ public:
           n_embd(llama_model_n_embd(model)), info(mtmd_gen_audio_get_info(mctx)) {}
     virtual ~mtmd_gen_audio_pipeline() = default;
 
-    // false if the backbone context cannot run the pipeline, checked once by mtmd_helper_gen_audio_init()
+    // false if the backbone context cannot run the pipeline, checked by mtmd_helper_gen_audio_init()
     virtual bool check_context() const { return true; }
-    // frames generated before step_gen() stops, when the caller sets no limit; 0 = the pipeline stops by itself
+    // step_gen() stops after this many frames; 0 = the pipeline stops by itself
     virtual int32_t max_frames() const { return 512; }
     virtual void reset() = 0;
     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
@@ -2958,9 +2958,8 @@ private:
     bool   wav_header_sent = false;
 };
 
-// YuE2: the backbone writes an ABC score (text) then the semantic codes, one sequence for both
-// then the NAR flow matching (in mtmd, on the backbone keys/values) and the VAE make the stereo PCM, after the last code
-// both phases are sampled here, with the settings of the reference (sampling.py, yue2_generation_config.json)
+// YuE2: the backbone writes an ABC score (text), then the semantic codes; both are sampled here like the reference (sampling.py)
+// the NAR flow matching (in mtmd, on the backbone keys/values) and the VAE then make the stereo PCM
 class yue2_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
@@ -2968,12 +2967,15 @@ public:
     bool supports_cfg() const override { return true; }
     bool supports_flow_steps() const override { return true; }
 
-    // the score and code budgets of the reference are enforced in step_gen()
+    // step_gen() stops at the score and code limits of the reference
     int32_t max_frames() const override { return 0; }
 
-    // the generation budgets and the NAR chunks of the reference are sized for the training context (24576 positions)
-    // the cfg sequence shares the unified KV cache, a song with cfg may still need to stop early (see step_gen())
+    // the limits and the NAR chunks of the reference need the training context (24576 positions)
     bool check_context() const override {
+        if (llama_vocab_n_tokens(vocab) < tok_codec0 + n_codec) {
+            LOG_ERR("mtmd_helper_gen_audio: the vocab of the backbone has no yue2 codec tokens\n");
+            return false;
+        }
         const uint32_t n_ctx_train = (uint32_t) llama_model_n_ctx_train(model);
         if (llama_n_ctx_seq(lctx) < n_ctx_train) {
             LOG_ERR("mtmd_helper_gen_audio: yue2 needs a context of %u positions per sequence, got %u (use the default context size)\n",
@@ -3209,7 +3211,6 @@ public:
             return 0;
         }
 
-        // streaming: the NAR pass covers the whole song, so all the audio arrives after flush()
         const size_t n_new = audio_pcm.size() - pcm_sent;
         if (out_n_samples) {
             *out_n_samples = (int64_t) (n_new / n_ch);
@@ -3237,7 +3238,7 @@ public:
             return 0;
         }
         if (codes.empty()) {
-            LOG_ERR("mtmd_helper_gen_audio: yue2 generated no codes, the score may need more tokens (-n)\n");
+            LOG_ERR("mtmd_helper_gen_audio: yue2 stopped before the first code\n");
             return 1;
         }
         if (!done) {
@@ -3279,8 +3280,8 @@ private:
     static constexpr int64_t n_ctx_max    = 24576;
     static constexpr size_t  stream_chunk = 750; // 30 s
     static constexpr size_t  n_latent     = 64;
-    static constexpr size_t  vae_core     = 128;
-    static constexpr size_t  vae_halo     = 16;
+    static constexpr size_t  vae_core     = 128; // frames kept per tile
+    static constexpr size_t  vae_halo     = 16;  // frames of context on each side
     static constexpr size_t  vae_ratio    = 1920;
     static constexpr size_t  vae_trim     = 64;
 
@@ -3295,10 +3296,6 @@ private:
     };
     sampling abc_cfg  = { 0.7f, 0.9f,  30,  1.005f, 100, 32,  4096 };
     sampling code_cfg = { 1.0f, 0.95f, 100, 1.2f,   50,  200, 9000 };
-
-    bool decode(const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
-        return decode_ctx(lctx, toks, n, seq, p);
-    }
 
     bool decode_ctx(llama_context * ctx, const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
         llama_batch batch = llama_batch_init(n, 0, 1);
@@ -3321,7 +3318,7 @@ private:
     }
 
     bool decode(const llama_token * toks, int32_t n) {
-        return decode(toks, n, seq_id, pos);
+        return decode_ctx(lctx, toks, n, seq_id, pos);
     }
 
     // logits = uncond + scale * (cond - uncond), on the codes and <|music_end|> only
@@ -3354,7 +3351,7 @@ private:
         const int32_t n_batch = (int32_t) llama_n_batch(lctx);
         for (size_t i = 0; i < neg.size(); i += (size_t) n_batch) {
             const int32_t n = std::min(n_batch, (int32_t) (neg.size() - i));
-            if (!decode(neg.data() + i, n, seq_uncond, upos)) {
+            if (!decode_ctx(lctx, neg.data() + i, n, seq_uncond, upos)) {
                 return false;
             }
         }
@@ -3386,8 +3383,8 @@ private:
         return true;
     }
 
-    // song_chunks() of the reference: one NAR pass per chunk of codes, each chunk sees the prefix and its own codes
-    // the reference size is the largest one that fits in n_ctx_max, streaming uses smaller chunks
+    // song_chunks() of the reference: each NAR chunk sees the prefix and its own codes
+    // the reference uses the largest chunk that fits in n_ctx_max, streaming uses smaller ones
     size_t chunk_size() const {
         const int64_t ref = std::max<int64_t>(1, (n_ctx_max - (int64_t) prefix_tok.size() - 3) / 2);
         return (size_t) (stream ? std::min<int64_t>(ref, stream_chunk) : ref);
@@ -3450,7 +3447,6 @@ private:
         }
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type                = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
-        inp.codes               = codes.data() + a;
         inp.n_codes             = b - a;
         inp.backbone_state      = state.data();
         inp.backbone_state_size = state.size();
@@ -3466,7 +3462,7 @@ private:
         return true;
     }
 
-    // VAE tiles whose context on both sides is known, the same cropping as decode_tiled() of the reference
+    // decodes the VAE tiles whose context on both sides is known, same cropping as decode_tiled() of the reference
     bool vae_emit(bool final) {
         const size_t n_lat = latents.size() / n_latent;
         while (n_vae_done < n_lat) {
@@ -3500,7 +3496,7 @@ private:
         return true;
     }
 
-    // distribution() of the reference: allowed range, end token held back before min_tokens, windowed penalty, top-k, top-p
+    // distribution() of the reference: allowed range, no end token before min_tokens, windowed penalty, top-k, top-p
     llama_token sample(const float * logits) {
         const sampling & c = in_codes ? code_cfg : abc_cfg;
         const llama_token end = in_codes ? tok_music_end : tok_abc_end;
@@ -3653,15 +3649,15 @@ void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx) {
 
 struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
     mtmd_helper_gen_audio_inp inp{};
-    inp.top_k     = 50;
-    inp.top_p     = 1.0f;
-    inp.temp      = -1.0f; // model default
-    inp.seed      = UINT32_MAX; // random
-    inp.speed     = 1.0f;
-    inp.loudness  = 0.0f;
-    inp.cfg_scale = 0.0f; // model default
-    inp.flow_steps = 0;   // model default
-    inp.out_type  = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    inp.top_k    = 50;
+    inp.top_p    = 1.0f;
+    inp.temp     = -1.0f; // model default
+    inp.seed     = UINT32_MAX; // random
+    inp.speed    = 1.0f;
+    inp.loudness = 0.0f;
+    inp.cfg_scale  = 0.0f; // model default
+    inp.flow_steps = 0;    // model default
+    inp.out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     return inp;
 }
 
