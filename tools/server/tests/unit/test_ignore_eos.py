@@ -45,7 +45,6 @@ def test_ignore_eos_false_no_logit_bias():
 
 @pytest.mark.parametrize("constraint", [
     {"grammar": 'root ::= "ok"'},
-    {"grammar": 'root ::= [a-z ]*'},
     {"json_schema": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}},
 ])
 def test_ignore_eos_with_grammar_rejected(constraint):
@@ -71,6 +70,34 @@ def test_ignore_eos_with_response_format_rejected():
         "messages": [{"role": "user", "content": "hello"}],
         "ignore_eos": True,
         "response_format": {"type": "json_schema", "json_schema": {"schema": {"type": "object"}}},
+    })
+    assert res.status_code == 400, res.body
+    assert res.body["error"]["type"] == "invalid_request_error"
+
+
+def test_eog_ban_with_grammar_rejected():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "Once upon a time",
+        "grammar": 'root ::= "ok"',
+        "logit_bias": [[2, False]],  # 2 is EOS for this model
+    })
+    assert res.status_code == 400, res.body
+    assert res.body["error"]["type"] == "invalid_request_error"
+
+
+def test_ignore_eos_with_tools_rejected():
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/Qwen-Qwen3-0.6B.jinja'
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "hello"}],
+        "ignore_eos": True,
+        "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {"a": {"type": "string"}}}}}],
     })
     assert res.status_code == 400, res.body
     assert res.body["error"]["type"] == "invalid_request_error"
