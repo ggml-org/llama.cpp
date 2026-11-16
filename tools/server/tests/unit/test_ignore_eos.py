@@ -41,3 +41,35 @@ def test_ignore_eos_false_no_logit_bias():
     assert res.status_code == 200
     logit_bias = res.body["generation_settings"]["logit_bias"]
     assert len(logit_bias) == 0
+
+
+def test_ignore_eos_with_completed_grammar():
+    """once the grammar is complete only EOG is allowed, so ignore_eos must not ban it"""
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "Once upon a time",
+        "grammar": 'root ::= "ok"',
+        "ignore_eos": True,
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200, res.body
+    assert res.body["content"] == "ok"
+    assert res.body["stop_type"] == "eos"
+
+
+def test_ignore_eos_with_open_grammar():
+    """a grammar that can keep going must still respect ignore_eos"""
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "Once upon a time",
+        "grammar": 'root ::= [a-z ]*',
+        "ignore_eos": True,
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200, res.body
+    assert res.body["tokens_predicted"] == 8
+    assert res.body["stop_type"] == "limit"
