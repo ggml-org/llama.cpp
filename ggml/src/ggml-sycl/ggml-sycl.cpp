@@ -14,6 +14,7 @@
 #include <array>
 #include <assert.h>
 #include <atomic>
+#include <thread>
 #include <cctype>
 #include <cinttypes>
 #include <cstddef>
@@ -744,6 +745,8 @@ struct ggml_backend_sycl_buffer_context {
     optimize_feature opt_feature;
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
     host_staging staging;
+    // pinned block for get_tensor, one slot per download worker
+    char * download_staging = nullptr;
     bool is_usm_system;
 
     ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
@@ -769,6 +772,10 @@ struct ggml_backend_sycl_buffer_context {
 
     ~ggml_backend_sycl_buffer_context() {
         drop_host_staging();
+        if (download_staging != nullptr) {
+            sycl::free(download_staging, *stream);
+            download_staging = nullptr;
+        }
         if (dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
             if (is_usm_system)
@@ -977,6 +984,54 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// Reads go through a pinned block, as a copy into pageable memory is slow, and the caller often hands over fresh
+// memory, where the first write to each 4 KiB page takes a page fault. Each worker owns one slot and loops over the
+// chunks: queue the device copy, touch the destination pages while it is in flight, wait, copy out. So the faults
+// overlap the transfer and run on several threads. Returns false when the pinned block is not available.
+static bool ggml_sycl_buffer_download_staged(ggml_backend_sycl_buffer_context * ctx, char * dst, const char * src,
+                                             size_t size) {
+    constexpr size_t min_size = 64*1024;
+    constexpr size_t chunk    = 1*1024*1024;
+    constexpr size_t n_max    = 4;
+    constexpr size_t page     = 4096;
+    if (size < min_size) {
+        return false;
+    }
+    sycl::queue & q = *ctx->stream;
+    if (ctx->download_staging == nullptr) {
+        ctx->download_staging = (char *) sycl::malloc_host(n_max * chunk, q);
+        if (ctx->download_staging == nullptr) {
+            return false;
+        }
+    }
+    const size_t n_chnk = (size + chunk - 1) / chunk;
+    const size_t n_work = std::min(n_max, n_chnk);
+
+    std::atomic<size_t> next{ 0 };
+    auto work = [&](size_t w) {
+        char * stage = ctx->download_staging + w * chunk;
+        for (size_t i = next++; i < n_chnk; i = next++) {
+            const size_t off = i * chunk;
+            const size_t n   = std::min(chunk, size - off);
+            sycl::event  ev  = q.memcpy(stage, src + off, n);
+            for (size_t j = 0; j < n; j += page) {
+                ((volatile char *) dst)[off + j] = 0;
+            }
+            ev.wait_and_throw();
+            memcpy(dst + off, stage, n);
+        }
+    };
+    std::vector<std::thread> workers;
+    for (size_t w = 1; w < n_work; ++w) {
+        workers.emplace_back(work, w);
+    }
+    work(0);
+    for (auto & t : workers) {
+        t.join();
+    }
+    return true;
+}
+
 static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *tensor,
                                                 void *data, size_t offset,
@@ -989,9 +1044,11 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     ggml_sycl_set_device(ctx->device);
     auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
 
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        stream.memcpy(data, (const char *)tensor->data + offset, size)
-            .wait()));
+    if (!ggml_sycl_buffer_download_staged(ctx, (char *) data, (const char *) tensor->data + offset, size)) {
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            stream.memcpy(data, (const char *)tensor->data + offset, size)
+                .wait()));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
