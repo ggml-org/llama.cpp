@@ -2,11 +2,20 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 #extension GL_EXT_shader_16bit_storage : require
+#if USE_SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#endif
 
 #include "types.glsl"
 
 layout(constant_id = 0) const int BLOCK_SIZE = 1024;
 layout(constant_id = 1) const int QSA = 0; // 1: fuse the qwen4 QSA indexer gather + f16 mask
+#if USE_SUBGROUPS
+layout(constant_id = 2) const int SUBGROUP_SIZE = 32;
+
+const uint NUM_SUBGROUPS = BLOCK_SIZE / SUBGROUP_SIZE;
+#endif
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -26,12 +35,19 @@ layout (push_constant) uniform parameter {
 } p;
 
 #define RADIX_BITS 8
+#define UNROLL 4
 #define RADIX_SIZE (1 << RADIX_BITS)
 
 shared uint histo[RADIX_SIZE];
 shared uint sh_bucket;
 shared uint sh_above;
+shared uint sh_tied;
 shared uint out_count;
+#if USE_SUBGROUPS
+shared uint sg_tied[NUM_SUBGROUPS];
+#else
+shared uint tie_scan[2 * BLOCK_SIZE];
+#endif
 
 // order-preserving float -> uint mapping
 uint f2ui(float x) {
@@ -87,52 +103,155 @@ void topk(const uint row) {
         const bool first     = (shift == 32 - RADIX_BITS);
         const uint hi_mask   = (shift + RADIX_BITS >= 32) ? 0u : (0xFFFFFFFFu << uint(shift + RADIX_BITS));
         const uint prefix_hi = prefix & hi_mask;
-        for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-            const uint key = f2ui(load(row, i, first));
-            if ((key & hi_mask) == prefix_hi) {
-                atomicAdd(histo[(key >> uint(shift)) & (RADIX_SIZE - 1)], 1u);
+        uint run_b = RADIX_SIZE;
+        uint run_n = 0;
+        for (uint i0 = tid; i0 < ncols; i0 += UNROLL * BLOCK_SIZE) {
+            uint keys[UNROLL];
+            [[unroll]] for (uint u = 0; u < UNROLL; ++u) {
+                const uint i = i0 + u * BLOCK_SIZE;
+                keys[u] = f2ui(load(row, min(i, ncols - 1), first));
             }
+            [[unroll]] for (uint u = 0; u < UNROLL; ++u) {
+                const uint key = keys[u];
+                if (i0 + u * BLOCK_SIZE < ncols && (key & hi_mask) == prefix_hi) {
+                    const uint b = (key >> uint(shift)) & (RADIX_SIZE - 1);
+                    if (b != run_b) {
+                        if (run_n != 0) {
+                            atomicAdd(histo[run_b], run_n);
+                        }
+                        run_b = b;
+                        run_n = 0;
+                    }
+                    run_n++;
+                }
+            }
+        }
+        if (run_n != 0) {
+            atomicAdd(histo[run_b], run_n);
         }
         barrier();
 
         // top-down scan for the bucket holding the K-th value
-        if (tid == 0) {
-            uint acc = 0;
-            uint b   = 0;
-            for (int bb = RADIX_SIZE - 1; bb >= 0; --bb) {
-                const uint c = histo[bb];
-                if (acc + c >= desired) { b = uint(bb); break; }
-                acc += c;
+#if USE_SUBGROUPS
+        uint c = 0, incl = 0;
+        if (tid < RADIX_SIZE) {
+            c = histo[RADIX_SIZE - 1 - tid];
+            incl = subgroupInclusiveAdd(c);
+            if (gl_SubgroupInvocationID == gl_SubgroupSize - 1) {
+                sg_tied[gl_SubgroupID] = incl;
             }
-            sh_bucket = b;
-            sh_above  = acc;
         }
         barrier();
+        if (tid < RADIX_SIZE) {
+            for (uint s = 0; s < gl_SubgroupID; ++s) {
+                incl += sg_tied[s];
+            }
+            if (incl - c < desired && incl >= desired) {
+                sh_bucket = RADIX_SIZE - 1 - tid;
+                sh_above  = incl - c;
+                sh_tied   = c;
+            }
+        }
+        barrier();
+#else
+        uint c = 0;
+        if (tid < RADIX_SIZE) {
+            c = histo[RADIX_SIZE - 1 - tid];
+            tie_scan[tid] = c;
+        }
+        barrier();
+        uint src = 0;
+        [[unroll]] for (uint off = 1; off < RADIX_SIZE; off <<= 1) {
+            if (tid < RADIX_SIZE) {
+                const uint v = tie_scan[src + tid];
+                tie_scan[(RADIX_SIZE - src) + tid] = tid >= off ? v + tie_scan[src + tid - off] : v;
+            }
+            src = RADIX_SIZE - src;
+            barrier();
+        }
+        if (tid < RADIX_SIZE) {
+            const uint incl = tie_scan[src + tid];
+            if (incl - c < desired && incl >= desired) {
+                sh_bucket = RADIX_SIZE - 1 - tid;
+                sh_above  = incl - c;
+                sh_tied   = c;
+            }
+        }
+        barrier();
+#endif
 
         prefix  |= sh_bucket << uint(shift);
         desired -= sh_above;
         barrier();
     }
 
+    const uint threshold = prefix;
+    const bool all_ties  = sh_tied == desired;
+
     if (tid == 0) {
         out_count = 0;
     }
     barrier();
 
-    // emit everything above the threshold, then fill the rest from ties
-    const uint threshold = prefix;
+    if (all_ties) {
+        for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+            if (f2ui(load(row, i, false)) >= threshold) {
+                data_d[row_out + atomicAdd(out_count, 1u)] = int(i);
+            }
+        }
+        return;
+    }
+
+    // more ties than slots: rank them in invocation order, which does not depend on the scheduling
+    uint ct = 0;
     for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
-        if (f2ui(load(row, i, false)) > threshold) {
+        const uint key = f2ui(load(row, i, false));
+        if (key > threshold) {
             data_d[row_out + atomicAdd(out_count, 1u)] = int(i);
+        }
+        ct += key == threshold ? 1u : 0u;
+    }
+#if USE_SUBGROUPS
+    const uint sg = gl_SubgroupID;
+    const uint st = subgroupAdd(ct);
+    if (subgroupElect()) {
+        sg_tied[sg] = st;
+    }
+    barrier();
+
+    if (sg == 0) {
+        const uint lane = gl_SubgroupInvocationID;
+        uint acc = 0;
+        for (uint c0 = 0; c0 < NUM_SUBGROUPS; c0 += SUBGROUP_SIZE) {
+            const uint c = c0 + lane;
+            const uint t = c < NUM_SUBGROUPS ? sg_tied[c] : 0u;
+            const uint e = subgroupExclusiveAdd(t);
+            if (c < NUM_SUBGROUPS) {
+                sg_tied[c] = acc + e;
+            }
+            acc += subgroupAdd(t);
         }
     }
     barrier();
-    for (uint i = tid; i < ncols; i += BLOCK_SIZE) {
+
+    uint pos = p.k - desired + sg_tied[sg] + subgroupExclusiveAdd(ct);
+#else
+    // inclusive Hillis-Steele scan, ping-ponging between the two halves
+    uint src = 0;
+    tie_scan[tid] = ct;
+    barrier();
+    for (uint off = 1; off < BLOCK_SIZE; off <<= 1) {
+        const uint v = tie_scan[src + tid];
+        tie_scan[(BLOCK_SIZE - src) + tid] = tid >= off ? v + tie_scan[src + tid - off] : v;
+        src = BLOCK_SIZE - src;
+        barrier();
+    }
+    uint pos = p.k - desired + tie_scan[src + tid] - ct;
+#endif
+    const uint pos_end = min(p.k, pos + ct);
+    for (uint i = tid; i < ncols && pos < pos_end; i += BLOCK_SIZE) {
         if (f2ui(load(row, i, false)) == threshold) {
-            const uint pos = atomicAdd(out_count, 1u);
-            if (pos < p.k) {
-                data_d[row_out + pos] = int(i);
-            }
+            data_d[row_out + pos++] = int(i);
         }
     }
 }
