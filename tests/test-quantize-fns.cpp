@@ -426,6 +426,45 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
     return num_failed;
 }
 
+// Regression test for #32401: an all-zero 32-element sub-block in IQ3_S must still
+// advance the rolling qs and signs pointers so subsequent sub-blocks stay aligned.
+static int test_quantize_iq3_s_zero_subblock(bool verbose) {
+    const int64_t n = 256;
+    const int64_t subblock_size = 32;
+    std::vector<float> x(n);
+    std::vector<float> out(n);
+
+    for (int64_t i = 0; i < n; ++i) {
+        x[i] = (float)(((i * 37) % 64) - 32) / 16.0f + 0.03125f * (i % 5);
+    }
+    // Zero out sub-block 1 (elements 32..63)
+    for (int64_t i = subblock_size; i < 2 * subblock_size; ++i) {
+        x[i] = 0.0f;
+    }
+
+    std::vector<uint8_t> q(ggml_row_size(GGML_TYPE_IQ3_S, n));
+    ggml_quantize_init(GGML_TYPE_IQ3_S);
+    ggml_quantize_chunk(GGML_TYPE_IQ3_S, x.data(), q.data(), 0, 1, n, nullptr);
+    ggml_get_type_traits(GGML_TYPE_IQ3_S)->to_float(q.data(), out.data(), n);
+
+    int num_failed = 0;
+    printf("Testing iq3_s zero sub-block:\n");
+    for (int64_t ib = 0; ib < n / subblock_size; ++ib) {
+        double err = 0.0;
+        for (int64_t i = ib * subblock_size; i < (ib + 1) * subblock_size; ++i) {
+            err += fabs(out[i] - x[i]);
+        }
+        err /= subblock_size;
+        const bool failed = !(err < 0.3);
+        num_failed += failed;
+        if (failed || verbose) {
+            printf("  iq3_s sub-block %lld mean |decoded - x|: %s (%f)\n", (long long) ib, RESULT_STR[failed], err);
+        }
+    }
+
+    return num_failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -449,6 +488,7 @@ int main(int argc, char * argv[]) {
     num_failed += test_f8_e4m3(verbose);
     num_failed += test_vec_dot_q(verbose);
     num_failed += test_quantize_imatrix_degenerate(verbose);
+    num_failed += test_quantize_iq3_s_zero_subblock(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
