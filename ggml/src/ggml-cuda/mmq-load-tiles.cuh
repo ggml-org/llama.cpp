@@ -246,6 +246,14 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_qs[i*sram_stride + kbx*(2*QI4_0) + kqsx + 0]     = __vsub4((qs0 >> 0) & 0x0F0F0F0F, 0x08080808);
         x_qs[i*sram_stride + kbx*(2*QI4_0) + kqsx + QI4_0] = __vsub4((qs0 >> 4) & 0x0F0F0F0F, 0x08080808);
+#elif defined(GGML_MMQ_Q40_PK)
+        {
+            // nibbles to 16-bit lanes: [lo b0 b2] [lo b1 b3] [hi b0 b2] [hi b1 b3]
+            const int L = qs0 & 0x0F0F0F0F, H = (qs0 >> 4) & 0x0F0F0F0F;
+            int * d = x_qs + i*130 + 4*txi;
+            *(int2 *) (d + 0) = make_int2(L & 0x00FF00FF, (L >> 8) & 0x00FF00FF);
+            *(int2 *) (d + 2) = make_int2(H & 0x00FF00FF, (H >> 8) & 0x00FF00FF);
+        }
 #else
         x_qs[i*(MMQ_TILE_NE_K + 1) + txi] = qs0;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
@@ -311,6 +319,13 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_qs[i*sram_stride + kbx*(2*QI4_1) + kqsx + 0]     = (qs0 >> 0) & 0x0F0F0F0F;
         x_qs[i*sram_stride + kbx*(2*QI4_1) + kqsx + QI4_1] = (qs0 >> 4) & 0x0F0F0F0F;
+#elif defined(GGML_MMQ_Q41_PK)
+        {
+            const int L = qs0 & 0x0F0F0F0F, H = (qs0 >> 4) & 0x0F0F0F0F;
+            int * d = x_qs + i*130 + 4*txi;
+            *(int2 *) (d + 0) = make_int2(L & 0x00FF00FF, (L >> 8) & 0x00FF00FF);
+            *(int2 *) (d + 2) = make_int2(H & 0x00FF00FF, (H >> 8) & 0x00FF00FF);
+        }
 #else
         x_qs[i*(MMQ_TILE_NE_K + 1) + txi] = qs0;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -392,6 +407,19 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_qs[i*sram_stride + kbx*(2*QI5_0) + kqsx + 0]     = qs0;
         x_qs[i*sram_stride + kbx*(2*QI5_0) + kqsx + QI5_0] = qs1;
+#elif defined(GGML_MMQ_Q50_PK)
+        {
+            // qs0/qs1 are signed bytes (-16..15): sign-extend to 16-bit lanes [b0 b2] / [b1 b3]
+            int a, b, c, d, t0, t1;
+            asm("v_pk_lshlrev_b16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(t0) : "v"(qs0));
+            asm("v_pk_ashrrev_i16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(a)  : "v"(t0));
+            asm("v_pk_ashrrev_i16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(b)  : "v"(qs0));
+            asm("v_pk_lshlrev_b16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(t1) : "v"(qs1));
+            asm("v_pk_ashrrev_i16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(c)  : "v"(t1));
+            asm("v_pk_ashrrev_i16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(d)  : "v"(qs1));
+            *(int2 *) &x_qs[i*130 + 2*(kbx*(2*QI5_0) + kqsx + 0)]     = make_int2(a, b);
+            *(int2 *) &x_qs[i*130 + 2*(kbx*(2*QI5_0) + kqsx + QI5_0)] = make_int2(c, d);
+        }
 #else
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + kbx*(2*QI5_0) + kqsx + 0]     = qs0;
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + kbx*(2*QI5_0) + kqsx + QI5_0] = qs1;
@@ -608,6 +636,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
             x_qs[i*sram_stride           + k] = x_qs_k;
+#elif defined(GGML_MMQ_Q2K_PK)
+            *(int2 *) &x_qs[i*130 + 2*k] = make_int2(x_qs_k & 0x00FF00FF, (x_qs_k >> 8) & 0x00FF00FF);
 #else
             x_qs[i*(2*MMQ_TILE_NE_K + 1) + k] = x_qs_k;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -683,6 +713,16 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
             x_qs[i*sram_stride           + k] = x_qs_k;
+#elif defined(GGML_MMQ_Q3K_PK)
+            {
+                // 3-bit values (0..7) to 16-bit lanes [b0 b2] / [b1 b3], minus 4 per lane
+                const int u = x_ql_k | x_qh_k;
+                const int c4 = 0x00040004;
+                int a, b;
+                asm("v_pk_sub_i16 %0, %1, %2" : "=v"(a) : "v"( u       & 0x00FF00FF), "v"(c4));
+                asm("v_pk_sub_i16 %0, %1, %2" : "=v"(b) : "v"((u >> 8) & 0x00FF00FF), "v"(c4));
+                *(int2 *) &x_qs[i*130 + 2*k] = make_int2(a, b);
+            }
 #else
             x_qs[i*(2*MMQ_TILE_NE_K + 1) + k] = x_qs_k;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
@@ -779,7 +819,16 @@ template <ggml_type type, int J, bool fallback, bool has_fusion> static __device
         x_qs[i*sram_stride + 16*(txi/8) + txi % 8 + 0] = (qs0 >> 0) & 0x0F0F0F0F;
         x_qs[i*sram_stride + 16*(txi/8) + txi % 8 + 8] = (qs0 >> 4) & 0x0F0F0F0F;
 #else
+#ifdef GGML_MMQ_Q4K_PK
+        {
+            const int L = qs0 & 0x0F0F0F0F, H = (qs0 >> 4) & 0x0F0F0F0F;
+            int * d = x_qs + i*130 + 4*txi;
+            d[0] = L & 0x00FF00FF; d[1] = (L >> 8) & 0x00FF00FF;
+            d[2] = H & 0x00FF00FF; d[3] = (H >> 8) & 0x00FF00FF;
+        }
+#else
         x_qs[i*(MMQ_TILE_NE_K + 1) + txi] = qs0;
+#endif
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     }
 
@@ -900,6 +949,13 @@ template <ggml_type type, int J, bool fallback, bool has_fusion> static __device
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_qs[i*sram_stride + kq0] = ql0 | qh0;
         x_qs[i*sram_stride + kq1] = ql1 | qh1;
+#elif defined(GGML_MMQ_Q5K_PK)
+        {
+            // 5-bit values to 16-bit lanes [b0 b2] / [b1 b3]
+            const int u0 = ql0 | qh0, u1 = ql1 | qh1;
+            *(int2 *) &x_qs[i*130 + 2*kq0] = make_int2(u0 & 0x00FF00FF, (u0 >> 8) & 0x00FF00FF);
+            *(int2 *) &x_qs[i*130 + 2*kq1] = make_int2(u1 & 0x00FF00FF, (u1 >> 8) & 0x00FF00FF);
+        }
 #else
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + kq0] = ql0 | qh0;
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + kq1] = ql1 | qh1;
@@ -1024,6 +1080,19 @@ template <ggml_type type, int J, bool fallback, bool has_fusion> static __device
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         x_qs[i*sram_stride + kq0] = __vsub4(ql0 | qh0, 0x20202020);
         x_qs[i*sram_stride + kq1] = __vsub4(ql1 | qh1, 0x20202020);
+#elif defined(GGML_MMQ_Q6K_PK)
+        {
+            // unsigned 6-bit values (0..63) to 16-bit lanes [b0 b2] / [b1 b3], then minus 32 per lane
+            const int u0 = ql0 | qh0, u1 = ql1 | qh1;
+            const int c32 = 0x00200020;
+            int a, b, c, d;
+            asm("v_pk_sub_i16 %0, %1, %2" : "=v"(a) : "v"( u0       & 0x00FF00FF), "v"(c32));
+            asm("v_pk_sub_i16 %0, %1, %2" : "=v"(b) : "v"((u0 >> 8) & 0x00FF00FF), "v"(c32));
+            asm("v_pk_sub_i16 %0, %1, %2" : "=v"(c) : "v"( u1       & 0x00FF00FF), "v"(c32));
+            asm("v_pk_sub_i16 %0, %1, %2" : "=v"(d) : "v"((u1 >> 8) & 0x00FF00FF), "v"(c32));
+            *(int2 *) &x_qs[i*130 + 2*kq0] = make_int2(a, b);
+            *(int2 *) &x_qs[i*130 + 2*kq1] = make_int2(c, d);
+        }
 #else
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + kq0] = __vsub4(ql0 | qh0, 0x20202020);
         x_qs[i*(2*MMQ_TILE_NE_K + 1) + kq1] = __vsub4(ql1 | qh1, 0x20202020);

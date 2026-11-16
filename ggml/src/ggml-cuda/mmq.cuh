@@ -392,15 +392,72 @@ static constexpr __device__ int ggml_cuda_mmq_get_rows_per_warp(ggml_type type, 
 }
 
 #define MMQ_DP4A_TXS_Q4_0    tile_x_sizes{I*MMQ_TILE_NE_K   + I, I*MMQ_TILE_NE_K/QI4_0   + I/QI4_0,     0}
+#if defined(GGML_USE_HIP) && defined(RDNA1) && !defined(GGML_NO_Q40_PK)
+#undef MMQ_DP4A_TXS_Q4_0
+#define MMQ_DP4A_TXS_Q4_0    tile_x_sizes{I*130, I*MMQ_TILE_NE_K/QI4_0   + I/QI4_0,     0}
+#endif
 #define MMQ_DP4A_TXS_Q4_1    tile_x_sizes{I*MMQ_TILE_NE_K   + I, I*MMQ_TILE_NE_K/QI4_1   + I/QI4_1,     0}
+#if defined(GGML_USE_HIP) && defined(RDNA1) && !defined(GGML_NO_Q41_PK)
+#undef MMQ_DP4A_TXS_Q4_1
+#define MMQ_DP4A_TXS_Q4_1    tile_x_sizes{I*130, I*MMQ_TILE_NE_K/QI4_1   + I/QI4_1,     0}
+#endif
+#if defined(GGML_USE_HIP) && defined(RDNA1) && !defined(GGML_NO_Q50_PK)
+#define MMQ_DP4A_TXS_Q5_0_PK tile_x_sizes{I*130, I*MMQ_TILE_NE_K*2/QI8_0 + I/(QI8_0/2), 0}
+#endif
 #define MMQ_DP4A_TXS_Q8_0    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K*2/QI8_0 + I/(QI8_0/2), 0}
 #define MMQ_DP4A_TXS_Q8_0_16 tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K*4/QI8_0 + I/(QI8_0/4), 0}
 #define MMQ_DP4A_TXS_Q8_1    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K*2/QI8_1 + I/(QI8_1/2), 0}
 #define MMQ_DP4A_TXS_Q2_K    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K         + I,           0}
+#if defined(GGML_USE_HIP) && defined(RDNA1) && !defined(GGML_NO_Q2K_PK)
+#undef MMQ_DP4A_TXS_Q2_K
+#define MMQ_DP4A_TXS_Q2_K    tile_x_sizes{I*130, I*MMQ_TILE_NE_K         + I,                           0}
+#endif
 #define MMQ_DP4A_TXS_Q3_K    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I,                                     I*MMQ_TILE_NE_K/8 + I/8}
+#if defined(GGML_USE_HIP) && defined(RDNA1) && !defined(GGML_NO_Q3K_PK)
+#undef MMQ_DP4A_TXS_Q3_K
+#define MMQ_DP4A_TXS_Q3_K    tile_x_sizes{I*130, I,                                                     I*MMQ_TILE_NE_K/8 + I/8}
+#endif
+#if defined(GGML_USE_HIP) && defined(RDNA1)
+#define GGML_MMQ_Q4K_PK
+#ifndef GGML_NO_Q6K_PK
+#define GGML_MMQ_Q6K_PK
+#endif
+#ifndef GGML_NO_Q5K_PK
+#define GGML_MMQ_Q5K_PK
+#endif
+#ifndef GGML_NO_Q40_PK
+#define GGML_MMQ_Q40_PK
+#endif
+#ifndef GGML_NO_Q3K_PK
+#define GGML_MMQ_Q3K_PK
+#endif
+#ifndef GGML_NO_Q41_PK
+#define GGML_MMQ_Q41_PK
+#endif
+#ifndef GGML_NO_Q2K_PK
+#define GGML_MMQ_Q2K_PK
+#endif
+#ifndef GGML_NO_Q50_PK
+#define GGML_MMQ_Q50_PK
+#endif
+#endif
+#ifdef GGML_MMQ_Q4K_PK
+// gfx1010 path: nibbles pre-unpacked to 16-bit lanes (4 ints per qs int), row stride 130 ints (odd in b64 units)
+#define MMQ_DP4A_TXS_Q4_K    tile_x_sizes{I*130, I*MMQ_TILE_NE_K/QI4_K,                 I*MMQ_TILE_NE_K/8 + I/8}
+#else
 #define MMQ_DP4A_TXS_Q4_K    tile_x_sizes{I*MMQ_TILE_NE_K   + I, I*MMQ_TILE_NE_K/QI4_K,                 I*MMQ_TILE_NE_K/8 + I/8}
+#endif
+#ifdef GGML_MMQ_Q5K_PK
+#define MMQ_DP4A_TXS_Q5_K    tile_x_sizes{I*130, I*MMQ_TILE_NE_K/QI5_K   + I/QI5_K,     I*MMQ_TILE_NE_K/8 + I/8}
+#else
 #define MMQ_DP4A_TXS_Q5_K    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K/QI5_K   + I/QI5_K,     I*MMQ_TILE_NE_K/8 + I/8}
+#endif
+#ifdef GGML_MMQ_Q6K_PK
+// 256 signed values per row as 16-bit lanes (2 ints per weight int), same 130-int stride as Q4_K
+#define MMQ_DP4A_TXS_Q6_K    tile_x_sizes{I*130, I*MMQ_TILE_NE_K/QI6_K   + I/QI6_K,     I*MMQ_TILE_NE_K/8 + I/8}
+#else
 #define MMQ_DP4A_TXS_Q6_K    tile_x_sizes{I*MMQ_TILE_NE_K*2 + I, I*MMQ_TILE_NE_K/QI6_K   + I/QI6_K,     I*MMQ_TILE_NE_K/8 + I/8}
+#endif
 
 static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml_type type, int I) {
     switch (type) {
@@ -408,7 +465,11 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
         case GGML_TYPE_Q2_0:    return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_Q4_0:    return MMQ_DP4A_TXS_Q4_0;
         case GGML_TYPE_Q4_1:    return MMQ_DP4A_TXS_Q4_1;
+#if defined(GGML_USE_HIP) && defined(RDNA1) && !defined(GGML_NO_Q50_PK)
+        case GGML_TYPE_Q5_0:    return MMQ_DP4A_TXS_Q5_0_PK;
+#else
         case GGML_TYPE_Q5_0:    return MMQ_DP4A_TXS_Q8_0;
+#endif
         case GGML_TYPE_Q5_1:    return MMQ_DP4A_TXS_Q8_1;
         case GGML_TYPE_Q8_0:    return MMQ_DP4A_TXS_Q8_0;
         case GGML_TYPE_MXFP4:   return MMQ_DP4A_TXS_Q8_1;
@@ -435,7 +496,10 @@ static __host__ int ggml_cuda_mmq_get_nbytes_shared_x(const ggml_cuda_mmq_config
     if (config.use_mma_data_layout(cc)) {
         return config.I * ggml_cuda_mmq_get_sram_stride(config.sram_layout) * 4;
     }
-    const tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(config.type, config.I);
+    tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(config.type, config.I);
+    if ((config.type == GGML_TYPE_Q4_K || config.type == GGML_TYPE_Q5_K || config.type == GGML_TYPE_Q6_K || config.type == GGML_TYPE_Q4_0 || config.type == GGML_TYPE_Q3_K || config.type == GGML_TYPE_Q4_1 || config.type == GGML_TYPE_Q5_0 || config.type == GGML_TYPE_Q2_K) && GGML_CUDA_CC_IS_RDNA1(cc)) {
+        txs.qs = config.I*130; // pre-unpacked layout used by the RDNA1 kernel
+    }
     return (txs.qs + txs.dm + txs.sc) * 4;
 }
 
@@ -635,7 +699,11 @@ static constexpr __device__ ggml_cuda_mmq_util_funcs ggml_cuda_mmq_get_util_func
                 return ggml_cuda_mmq_util_funcs(
                     VDR_Q5_0_Q8_1_MMQ,
                     ggml_cuda_mmq_load_tiles_q5_0<type, J, fallback>,
+#ifdef GGML_MMQ_Q50_PK
+                    ggml_cuda_mmq_vec_dot_q5_0_q8_1_dp4a<type, J, fallback>,
+#else
                     ggml_cuda_mmq_vec_dot_q8_0_q8_1_dp4a<type, J, fallback>,
+#endif
                     ggml_cuda_mmq_write_back_dp4a<type, J, fallback, prec_src1>);
             case GGML_TYPE_Q5_1:
                 return ggml_cuda_mmq_util_funcs(

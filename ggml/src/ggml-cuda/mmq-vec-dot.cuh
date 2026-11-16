@@ -7,6 +7,65 @@ using namespace ggml_cuda_mma;
 
 #include "mmq.cuh"
 
+#if defined(GGML_MMQ_Q40_PK) || defined(GGML_MMQ_Q3K_PK) || defined(GGML_MMQ_Q41_PK) || defined(GGML_MMQ_Q50_PK) || defined(GGML_MMQ_Q2K_PK)
+// pk helpers are defined with the Q4_K path further down: declare what we need here.
+static __device__ __forceinline__ int q40_pk_mad(int a, int b, int c) { asm("v_pk_mad_i16 %0, %1, %2, %0" : "+v"(c) : "v"(a), "v"(b)); return c; }
+static __device__ __forceinline__ int q40_ashr8(int a) { asm("v_pk_ashrrev_i16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(a) : "v"(a)); return a; }
+static __device__ __forceinline__ int q40_shl8(int a) { asm("v_pk_lshlrev_b16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(a) : "v"(a)); return a; }
+
+#endif
+#ifdef GGML_MMQ_Q40_PK
+// 32 values per q8_1 block: per lane 16 products of at most 15*127, fits in int16.
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_0_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_0, I);
+    const int   * x_qs = (const int   *) x;
+    const float * x_df = (const float *) x_qs + txs.qs;
+    const int   * y_qs = (const int   *) y + 4;
+    const half2 * y_ds = (const half2 *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_0*VDR_Q4_0_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            int ue[8], uo[8];
+#pragma unroll
+            for (int l = 0; l < 8; ++l) {
+                const int u = y_qs[j*MMQ_TILE_Y_K + k01 + l];
+                uo[l] = q40_ashr8(u);
+                ue[l] = q40_ashr8(q40_shl8(u));
+            }
+            const float2 ds8f = __half22float2(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                const int i = i0 + threadIdx.x;
+                const int2 * xw = (const int2 *) &x_qs[i*130 + 4*(k0/QR4_0)];
+                int acc = 0;
+#pragma unroll
+                for (int l = 0; l < 4; ++l) {
+                    const int2 lo = xw[2*l], hi = xw[2*l + 1]; // [Le Lo] [He Ho]
+                    acc = q40_pk_mad(lo.x, ue[l],     acc);
+                    acc = q40_pk_mad(lo.y, uo[l],     acc);
+                    acc = q40_pk_mad(hi.x, ue[l + 4], acc);
+                    acc = q40_pk_mad(hi.y, uo[l + 4], acc);
+                }
+                const int sumi = ((acc << 16) >> 16) + (acc >> 16);
+                // second term subtracts 8 from each quant value
+                sum[j0/nwarps*I/warp_size + i0/warp_size] +=
+                    x_df[i*(MMQ_TILE_NE_K/QI4_0) + i/QI4_0 + k0/(QR4_0*QI4_0)] * (sumi*ds8f.x - 8*ds8f.y);
+            }
+        }
+    }
+}
+#else
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_0_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -56,7 +115,58 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
+#endif // GGML_MMQ_Q40_PK
 
+#ifdef GGML_MMQ_Q41_PK
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_1_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_1, I);
+    const int   * x_qs = (const int   *) x;
+    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
+    const int   * y_qs = (const int   *) y + 4;
+    const half2 * y_ds = (const half2 *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_1*VDR_Q4_1_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            int ue[8], uo[8];
+#pragma unroll
+            for (int l = 0; l < 8; ++l) {
+                const int u = y_qs[j*MMQ_TILE_Y_K + k01 + l];
+                uo[l] = q40_ashr8(u);
+                ue[l] = q40_ashr8(q40_shl8(u));
+            }
+            const float2 ds8f = __half22float2(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                const int i = i0 + threadIdx.x;
+                const int2 * xw = (const int2 *) &x_qs[i*130 + 4*(k0/QR4_1)];
+                int acc = 0;
+#pragma unroll
+                for (int l = 0; l < 4; ++l) {
+                    const int2 lo = xw[2*l], hi = xw[2*l + 1];
+                    acc = q40_pk_mad(lo.x, ue[l],     acc);
+                    acc = q40_pk_mad(lo.y, uo[l],     acc);
+                    acc = q40_pk_mad(hi.x, ue[l + 4], acc);
+                    acc = q40_pk_mad(hi.y, uo[l + 4], acc);
+                }
+                const int sumi = ((acc << 16) >> 16) + (acc >> 16);
+                const float2 dm4f = __half22float2(x_dm[i*(MMQ_TILE_NE_K/QI4_1) + i/QI4_1 + k0/(QR4_1*QI4_1)]);
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += sumi*(dm4f.x*ds8f.x) + dm4f.y*ds8f.y; // QI8_1/(vdr*QR4_1) == 1
+            }
+        }
+    }
+}
+#else
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_1_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -106,6 +216,57 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
+#endif // GGML_MMQ_Q41_PK
+
+#ifdef GGML_MMQ_Q50_PK
+// Q5_0: signed values -16..15, 16 products per lane of at most 16*127 fit in int16 (32512 < 32767).
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_0_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_0, I);
+    const int   * x_qs = (const int   *) x;
+    const float * x_df = (const float *) x_qs + txs.qs;
+    const int   * y_qs = (const int   *) y + 4;
+    const float * y_df = (const float *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += VDR_Q8_0_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            int ue[8], uo[8];
+#pragma unroll
+            for (int l = 0; l < 8; ++l) {
+                const int u = y_qs[j*MMQ_TILE_Y_K + k0 % MMQ_TILE_NE_K + l];
+                uo[l] = q40_ashr8(u);
+                ue[l] = q40_ashr8(q40_shl8(u));
+            }
+            const float d8 = y_df[j*MMQ_TILE_Y_K + (k0/QI8_1) % (MMQ_TILE_NE_K/QI8_1)];
+
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                const int i = i0 + threadIdx.x;
+                const int2 * xw = (const int2 *) &x_qs[i*130 + 2*k0];
+                int acc = 0;
+#pragma unroll
+                for (int l = 0; l < 8; ++l) {
+                    const int2 w = xw[l];
+                    acc = q40_pk_mad(w.x, ue[l], acc);
+                    acc = q40_pk_mad(w.y, uo[l], acc);
+                }
+                const int sumi = ((acc << 16) >> 16) + (acc >> 16);
+                sum[j0/nwarps*I/warp_size + i0/warp_size] +=
+                    x_df[i*(2*MMQ_TILE_NE_K/QI8_0) + i/(QI8_0/2) + k0/QI8_0] * d8 * sumi;
+            }
+        }
+    }
+}
+#endif // GGML_MMQ_Q50_PK
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
@@ -607,6 +768,69 @@ template <ggml_type type, int J, bool fallback, ggml_prec prec_src1> static __de
 #endif // AMD_MFMA_AVAILABLE || AMD_WMMA_AVAILABLE
 }
 
+#ifdef GGML_MMQ_Q2K_PK
+// Same as vec_dot_q2_K_q8_1_impl_mmq, but the weight products use the 16-bit-lane tile (2 ints per weight int);
+// 2-bit weights give at most 4 products of 3*127 per lane per 16-value group.
+template <int ns8>
+static __device__ __forceinline__ float vec_dot_q2_K_q8_1_impl_pk(
+    const int * __restrict__ v, const int * __restrict__ u, const half2 * dm2, const float & d8, const half2 * s8) {
+
+    float sumf    = 0.0f;
+    float sumf_d8 = 0.0f;
+
+#pragma unroll
+    for (int i0 = 0; i0 < QR2_K*VDR_Q2_K_Q8_1_MMQ; i0 += QI8_1) {
+        const float2 dm2f0 = __half22float2(dm2[i0/(QI8_1/2) + 0]);
+        const float2 dm2f1 = __half22float2(dm2[i0/(QI8_1/2) + 1]);
+        int acc0 = 0, acc1 = 0;
+
+#pragma unroll
+        for (int i = i0; i < i0 + QI8_1/2; ++i) {
+            const int2 w = *(const int2 *) &v[2*i];
+            acc0 = q40_pk_mad(w.x, q40_ashr8(q40_shl8(u[i])), acc0);
+            acc0 = q40_pk_mad(w.y, q40_ashr8(u[i]),           acc0);
+        }
+#pragma unroll
+        for (int i = i0 + QI8_1/2; i < i0 + QI8_1; ++i) {
+            const int2 w = *(const int2 *) &v[2*i];
+            acc1 = q40_pk_mad(w.x, q40_ashr8(q40_shl8(u[i])), acc1);
+            acc1 = q40_pk_mad(w.y, q40_ashr8(u[i]),           acc1);
+        }
+        sumf_d8 += dm2f0.x * (((acc0 << 16) >> 16) + (acc0 >> 16));
+        sumf_d8 += dm2f1.x * (((acc1 << 16) >> 16) + (acc1 >> 16));
+
+        if (i0/QI8_1 < ns8) {
+            const float2 s8f = __half22float2(s8[i0/QI8_1]);
+            sumf -= dm2f0.y*s8f.x;
+            sumf -= dm2f1.y*s8f.y;
+        } else {
+            int sumi_m0 = 0;
+#pragma unroll
+            for (int i = i0; i < i0 + QI8_1/2; ++i) {
+                sumi_m0 = ggml_cuda_dp4a(0x01010101, u[i], sumi_m0);
+            }
+            sumf_d8 -= dm2f0.y * sumi_m0;
+
+            int sumi_m1 = 0;
+#pragma unroll
+            for (int i = i0 + QI8_1/2; i < i0 + QI8_1; ++i) {
+                sumi_m1 = ggml_cuda_dp4a(0x01010101, u[i], sumi_m1);
+            }
+            sumf_d8 -= dm2f1.y * sumi_m1;
+        }
+    }
+
+    return sumf + d8*sumf_d8;
+}
+#define Q2K_IMPL vec_dot_q2_K_q8_1_impl_pk
+#define Q2K_JUNROLL _Pragma("unroll 2")
+#define Q2K_XPTR(i, k0) (&x_qs[(i)*130 + 2*(k0)])
+#else
+#define Q2K_IMPL vec_dot_q2_K_q8_1_impl_mmq
+#define Q2K_JUNROLL _Pragma("unroll")
+#define Q2K_XPTR(i, k0) (&x_qs[(i)*(2*MMQ_TILE_NE_K + 1) + (k0)])
+#endif
+
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q2_K_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -631,7 +855,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     for (int k01 = 0; k01 < MMQ_TILE_NE_K/2; k01 += QR2_K*VDR_Q2_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
-#pragma unroll
+        Q2K_JUNROLL
         for (int j0 = 0; j0 < J; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
 
@@ -640,8 +864,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 const int i = i0 + threadIdx.x;
 
                 constexpr int ns = 2;
-                sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
-                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += Q2K_IMPL<ns>(
+                    Q2K_XPTR(i, k0), &y_qs[j*MMQ_TILE_Y_K + k01],
                     &x_dm[i*(MMQ_TILE_NE_K + 1) + k0/4], k01 < MMQ_TILE_NE_K/2 ? y_df[j0/nwarps].x : y_df[j0/nwarps].y,
                     &y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
             }
@@ -654,7 +878,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     for (int k01 = MMQ_TILE_NE_K/2; k01 < MMQ_TILE_NE_K; k01 += QR2_K*VDR_Q2_K_Q8_1_MMQ) {
         const int k0 = k00 + k01;
 
-#pragma unroll
+        Q2K_JUNROLL
         for (int j0 = 0; j0 < J; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
 
@@ -663,8 +887,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 const int i = i0 + threadIdx.x;
 
                 constexpr int ns = 1;
-                sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q2_K_q8_1_impl_mmq<ns>(
-                    &x_qs[i*(2*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01],
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += Q2K_IMPL<ns>(
+                    Q2K_XPTR(i, k0), &y_qs[j*MMQ_TILE_Y_K + k01],
                     &x_dm[i*(MMQ_TILE_NE_K + 1) + k0/4], k01 < MMQ_TILE_NE_K/2 ? y_df[j0/nwarps].x : y_df[j0/nwarps].y,
                     &y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
             }
@@ -867,6 +1091,60 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #endif // AMD_MFMA_AVAILABLE || AMD_WMMA_AVAILABLE
 }
 
+#ifdef GGML_MMQ_Q3K_PK
+// two 16-value groups per q8_1 block, 8 products per lane each (3-bit weights, no overflow risk).
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q3_K_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q3_K, I);
+    const int   * x_qs = (const int   *) x;
+    const float * x_df = (const float *) x_qs + txs.qs;
+    const int   * x_sc = (const int   *) x_df + txs.dm;
+    const int   * y_qs = (const int   *) y + 4;
+    const float * y_df = (const float *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR3_K*VDR_Q3_K_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            int ue[8], uo[8];
+#pragma unroll
+            for (int l = 0; l < 8; ++l) {
+                const int u = y_qs[j*MMQ_TILE_Y_K + k01 + l];
+                uo[l] = q40_ashr8(u);
+                ue[l] = q40_ashr8(q40_shl8(u));
+            }
+            const float d8 = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
+
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                const int i = i0 + threadIdx.x;
+                const int2 * xw = (const int2 *) &x_qs[i*130 + 2*k0];
+                const int8_t * scales = ((const int8_t *) (x_sc + i*(MMQ_TILE_NE_K/8) + i/8)) + k0/4;
+                int sumi = 0;
+#pragma unroll
+                for (int g = 0; g < 2; ++g) {
+                    int acc = 0;
+#pragma unroll
+                    for (int l = 0; l < 4; ++l) {
+                        const int2 w = xw[4*g + l];
+                        acc = q40_pk_mad(w.x, ue[4*g + l], acc);
+                        acc = q40_pk_mad(w.y, uo[4*g + l], acc);
+                    }
+                    sumi += (((acc << 16) >> 16) + (acc >> 16)) * scales[g];
+                }
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += x_df[i]*d8 * sumi;
+            }
+        }
+    }
+}
+#else
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q3_K_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -901,7 +1179,76 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
+#endif // GGML_MMQ_Q3K_PK
 
+#ifdef GGML_MMQ_Q4K_PK
+static __device__ __forceinline__ int pk_mad_i16(int a, int b, int c) { asm("v_pk_mad_i16 %0, %1, %2, %0" : "+v"(c) : "v"(a), "v"(b)); return c; }
+static __device__ __forceinline__ int pk_ashr8(int a) { asm("v_pk_ashrrev_i16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(a) : "v"(a)); return a; }
+static __device__ __forceinline__ int pk_shl8(int a) { asm("v_pk_lshlrev_b16 %0, 8, %1 op_sel_hi:[0,1]" : "=v"(a) : "v"(a)); return a; }
+
+// gfx1010 has no dot4: weights are pre-unpacked to 16-bit lanes in the tile (see load_tiles_q4_K); a 16-bit lane holds
+// 16 products of at most 15*128, so 8 ints x 2 mads cannot overflow before the final lo+hi fold.
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q4_K, I);
+    const int   * x_qs = (const int   *) x;
+    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
+    const int   * x_sc = (const int   *) x_dm + txs.dm;
+    const int   * y_qs = (const int   *) y + 4;
+    const half2 * y_ds = (const half2 *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR4_K*VDR_Q4_K_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            float sumf_d[I/warp_size] = {};
+            float sumf_m[I/warp_size] = {};
+
+#pragma unroll
+            for (int sub = 0; sub < 2; ++sub) {
+                int ue[QI8_1], uo[QI8_1];
+#pragma unroll
+                for (int l = 0; l < QI8_1; ++l) {
+                    const int u = y_qs[j*MMQ_TILE_Y_K + k01 + sub*QI8_1 + l];
+                    uo[l] = pk_ashr8(u);
+                    ue[l] = pk_ashr8(pk_shl8(u));
+                }
+                const float2 ds8f = __half22float2(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1 + sub]);
+
+#pragma unroll
+                for (int i0 = 0; i0 < I; i0 += warp_size) {
+                    const int i = i0 + threadIdx.x;
+                    const int2 * xw = (const int2 *) &x_qs[i*130 + 4*(k0/2) + 2*sub];
+                    int acc = 0;
+#pragma unroll
+                    for (int l = 0; l < QI8_1; ++l) {
+                        const int2 w = xw[2*l]; // 4 ints per qs int: [Le Lo He Ho], b64 at 2*sub
+                        acc = pk_mad_i16(w.x, ue[l], acc);
+                        acc = pk_mad_i16(w.y, uo[l], acc);
+                    }
+                    const int sumi = ((acc << 16) >> 16) + (acc >> 16);
+
+                    const uint8_t * sc = (const uint8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k0/32] + 2*(k01/16);
+                    sumf_d[i0/warp_size] += ds8f.x * (sc[sub] * sumi);
+                    sumf_m[i0/warp_size] += ds8f.y * sc[8 + sub];
+                }
+            }
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                const float2 dm4f = __half22float2(x_dm[i0 + threadIdx.x]);
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += dm4f.x*sumf_d[i0/warp_size] - dm4f.y*sumf_m[i0/warp_size];
+            }
+        }
+    }
+}
+#else
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_K_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -937,6 +1284,74 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 }
 
+#endif
+
+#ifdef GGML_MMQ_Q5K_PK
+// 5-bit weights: per lane at most 8 products of 31*127 fit in int16, so each 32-value sub-block is two 16-value halves.
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_K_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_K, I);
+    const int   * x_qs = (const int   *) x;
+    const half2 * x_dm = (const half2 *) x_qs + txs.qs;
+    const int   * x_sc = (const int   *) x_dm + txs.dm;
+    const int   * y_qs = (const int   *) y + 4;
+    const half2 * y_ds = (const half2 *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR5_K*VDR_Q5_K_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            float sumf_d[I/warp_size] = {};
+            float sumf_m[I/warp_size] = {};
+
+#pragma unroll
+            for (int sub = 0; sub < 2; ++sub) {
+                int ue[QI8_1], uo[QI8_1];
+#pragma unroll
+                for (int l = 0; l < QI8_1; ++l) {
+                    const int u = y_qs[j*MMQ_TILE_Y_K + k01 + sub*QI8_1 + l];
+                    uo[l] = pk_ashr8(u);
+                    ue[l] = pk_ashr8(pk_shl8(u));
+                }
+                const float2 ds8f = __half22float2(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1 + sub]);
+
+#pragma unroll
+                for (int i0 = 0; i0 < I; i0 += warp_size) {
+                    const int i = i0 + threadIdx.x;
+                    const int2 * xw = (const int2 *) &x_qs[i*130 + 2*(k0 + sub*QI8_1)];
+                    int accA = 0, accB = 0;
+#pragma unroll
+                    for (int l = 0; l < 4; ++l) {
+                        const int2 wa = xw[l];
+                        const int2 wb = xw[l + 4];
+                        accA = pk_mad_i16(wa.x, ue[l],     accA);
+                        accA = pk_mad_i16(wa.y, uo[l],     accA);
+                        accB = pk_mad_i16(wb.x, ue[l + 4], accB);
+                        accB = pk_mad_i16(wb.y, uo[l + 4], accB);
+                    }
+                    const int sumi = ((accA << 16) >> 16) + (accA >> 16) + ((accB << 16) >> 16) + (accB >> 16);
+
+                    const uint8_t * sc = ((const uint8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k00/32]) + 2*(k01/16);
+                    sumf_d[i0/warp_size] += ds8f.x * (sc[sub] * sumi);
+                    sumf_m[i0/warp_size] += ds8f.y * sc[8 + sub];
+                }
+            }
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                const float2 dm4f = __half22float2(x_dm[i0 + threadIdx.x]);
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += dm4f.x*sumf_d[i0/warp_size] - dm4f.y*sumf_m[i0/warp_size];
+            }
+        }
+    }
+}
+#else
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q5_K_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -971,7 +1386,67 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
+#endif // GGML_MMQ_Q5K_PK
 
+#ifdef GGML_MMQ_Q6K_PK
+// 16 values share a scale: per lane 8 products of at most 32*127, which fits in int16, then fold lo+hi.
+template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_1_dp4a(
+        const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback, GGML_PREC_Q8) / warp_size;
+    constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback, GGML_PREC_Q8);
+
+    constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q6_K, I);
+    const int   * x_qs = (const int   *) x;
+    const float * x_df = (const float *) x_qs + txs.qs;
+    const int   * x_sc = (const int   *) x_df + txs.dm;
+    const int   * y_qs = (const int   *) y + 4;
+    const float * y_df = (const float *) y;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR6_K*VDR_Q6_K_Q8_1_MMQ) {
+        const int k0 = k00 + k01;
+
+#pragma unroll
+        for (int j0 = 0; j0 < J; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            float sumf[I/warp_size] = {};
+
+#pragma unroll
+            for (int g = 0; g < 4; ++g) { // 4 groups of 16 values = 64 values
+                int ue[4], uo[4];
+#pragma unroll
+                for (int l = 0; l < 4; ++l) {
+                    const int u = y_qs[j*MMQ_TILE_Y_K + k01 + 4*g + l];
+                    uo[l] = pk_ashr8(u);
+                    ue[l] = pk_ashr8(pk_shl8(u));
+                }
+                const float d8 = y_df[j*MMQ_TILE_Y_K + k01/QI8_1 + g/2];
+
+#pragma unroll
+                for (int i0 = 0; i0 < I; i0 += warp_size) {
+                    const int i = i0 + threadIdx.x;
+                    const int2 * xw = (const int2 *) &x_qs[i*130 + 2*(k0 + 4*g)];
+                    int acc = 0;
+#pragma unroll
+                    for (int l = 0; l < 4; ++l) {
+                        const int2 w = xw[l];
+                        acc = pk_mad_i16(w.x, ue[l], acc);
+                        acc = pk_mad_i16(w.y, uo[l], acc);
+                    }
+                    const int sumi = ((acc << 16) >> 16) + (acc >> 16);
+                    const int8_t * sc = (const int8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k0/16];
+                    sumf[i0/warp_size] += d8 * (sc[g] * sumi) * x_df[i*(MMQ_TILE_NE_K/QI6_K) + i/QI6_K];
+                }
+            }
+#pragma unroll
+            for (int i0 = 0; i0 < I; i0 += warp_size) {
+                sum[j0/nwarps*I/warp_size + i0/warp_size] += sumf[i0/warp_size];
+            }
+        }
+    }
+}
+#else
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -1006,6 +1481,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
+#endif // GGML_MMQ_Q6K_PK
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q6_K_q8_1_mma(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
