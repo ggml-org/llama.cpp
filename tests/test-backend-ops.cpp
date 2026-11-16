@@ -12190,6 +12190,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // few-token MUL_MAT_ID with MoE expert K and ragged rows, for mmvq-moe-cdna on CDNA1
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0}) {
+        for (int64_t k : {640, 1024, 2560}) {
+            if (k % ggml_blck_size(type) != 0) {
+                continue;
+            }
+            for (int n : {1, 3, 8}) {
+                test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 32, 6, true,  77, n, k));
+                test_cases.emplace_back(new test_mul_mat_id(type, GGML_TYPE_F32, 32, 6, false, 77, n, k));
+            }
+        }
+        for (int n : {1, 4}) {
+            for (bool with_bias : {false, true}) {
+                test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_SWIGLU, n, 72, 1024, true, 32, 6, true, with_bias));
+            }
+            test_cases.emplace_back(new test_mul_mat_fusion(type, GGML_GLU_OP_GEGLU, n, 72, 2560, true, 32, 6, true));
+        }
+    }
+
     // Both experts receive every token
     for (ggml_type type : {GGML_TYPE_Q2_K, GGML_TYPE_Q3_K, GGML_TYPE_Q4_K}) {
         for (int n : {64, 65}) {

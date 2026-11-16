@@ -1,4 +1,5 @@
 #include "mmvq.cuh"
+#include "mmvq-moe-cdna.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -1575,6 +1576,12 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t stride_channel_y   = ids ? s11  : s12;
 
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
+
+    if (ids && ggml_cuda_mmvq_moe_cdna_supported(src0, dst, ggml_cuda_info().devices[ggml_cuda_get_device()].cc, fusion_local)) {
+        ggml_cuda_mmvq_moe_cdna(src0, src1_q8_1.get(), ids_d, fusion_local, dst_d, ncols_dst, nchannels_dst, nchannels_y,
+            stride_col_y, stride_channel_y, stride_col_dst, stride_channel_dst, ids_stride, stream);
+        return;
+    }
 
     mul_mat_vec_q_switch_type(
         src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
