@@ -17,6 +17,7 @@ Note: it's highly recommended to always provide a speaker reference voice (via `
 Common params:
 - Sampling params such as `--top-k`, `--top-p`, `--temp`, etc. `--temp` also sets the temperature of the audio frames for models that support it, without it they use the model default
 - `-n <number_of_frames>` limits the output length, e.g. `-n 500`. Note that how many milliseconds each frame represents varies by model
+- `--tts-speaker-text` (optional) gives the transcript of `--tts-speaker-file`, some models put it in the prompt (e.g. Fish Audio S2 Pro)
 - Core inference params such as `-ngl`, `-b`, `-ub`, etc.
 
 ## Supported models

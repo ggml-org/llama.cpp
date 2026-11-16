@@ -1032,24 +1032,20 @@ bool server_realtime_slot::decode(const llama_token * tokens, const float * rows
     if (n_past + n >= n_ctx) {
         return fail("the conversation does not fit in the context", ERROR_TYPE_EXCEED_CONTEXT_SIZE);
     }
-    for (int32_t i0 = 0; i0 < n; i0 += n_batch) {
-        const int32_t n_cur = std::min(n_batch, n - i0);
-        llama_batch b = llama_batch_init(n_cur, rows ? n_embd : 0, 1);
-        for (int32_t i = 0; i < n_cur; i++) {
-            if (rows) {
-                memcpy(b.embd + (size_t) i * n_embd, rows + (size_t) (i0 + i) * n_embd, n_embd * sizeof(float));
-            } else {
-                b.token[i] = tokens[i0 + i];
-            }
-            b.pos[i]       = n_past + i0 + i;
-            b.n_seq_id[i]  = 1;
-            b.seq_id[i][0] = seq_id;
-            b.logits[i]    = logits_last && i0 + i == n - 1;
+    common_batch batch(ctx);
+    for (int32_t i = 0; i < n; i++) {
+        const llama_pos pos    = n_past + i;
+        const bool      output = logits_last && i == n - 1;
+        if (rows) {
+            const llama_embd e = { rows + (size_t) i * n_embd, 1, (size_t) n_embd };
+            batch.add_embd(e, &pos, seq_id, output);
+        } else {
+            batch.add(tokens[i], pos, seq_id, output);
         }
-        b.n_tokens = n_cur;
-        const int ret = llama_decode(ctx, b);
-        llama_batch_free(b);
-        if (ret != 0) {
+    }
+    for (int32_t i = 0; i < n; i += n_batch) {
+        const int32_t n_cur = std::min(n_batch, n - i);
+        if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(i, n_cur)) != 0) {
             return fail("failed to decode the conversation");
         }
     }

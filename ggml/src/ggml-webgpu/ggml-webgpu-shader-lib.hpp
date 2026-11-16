@@ -962,13 +962,16 @@ inline uint32_t ggml_webgpu_flash_attn_get_vec_kv_tile(size_t   wg_mem_limit_byt
                                                        uint32_t head_dim_qk,
                                                        uint32_t head_dim_v,
                                                        bool     has_mask,
-                                                       bool     kv_direct) {
-    const uint32_t max_kv_tile =
-        ggml_webgpu_flash_attn_max_kv_tile(wg_mem_limit_bytes, 1u, 1u, head_dim_qk, head_dim_v, has_mask, kv_direct);
+                                                       bool     k_direct,
+                                                       bool     v_direct) {
+    // kv_shmem is dropped only when both K and V are read directly
+    const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(wg_mem_limit_bytes, 1u, 1u, head_dim_qk, head_dim_v,
+                                                                    has_mask, k_direct && v_direct);
     GGML_ASSERT(max_kv_tile > 0);
 
     uint32_t kv_tile = std::min(GGML_WEBGPU_FLASH_ATTN_VEC_MAX_KV_TILE, max_kv_tile);
-    if (kv_direct) {
+    // a direct read has no bounds check, so the tile must divide the KV padding
+    if (k_direct || v_direct) {
         kv_tile = std::min(kv_tile, GGML_WEBGPU_KV_SEQ_PAD);
         while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {
             kv_tile -= 1u;
@@ -3050,7 +3053,7 @@ class ggml_webgpu_shader_lib {
         uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
             context.wg_mem_limit_bytes, decisions.q_tile, decisions.use_sg_matrix ? context.sg_mat_n : 1u,
             key.common.head_dim_qk, key.common.head_dim_v, key.common.has_mask,
-            key.common.k_direct || key.common.v_direct);
+            key.common.k_direct && key.common.v_direct);
 
         // WorkGroup storage size isn't enough for some params with subgroup matrices path (ref. https://github.com/ggml-org/llama.cpp/pull/26566)
         if (max_kv_tile == 0) {
@@ -3063,7 +3066,7 @@ class ggml_webgpu_shader_lib {
             key.use_sg_matrix       = false;
             max_kv_tile             = ggml_webgpu_flash_attn_max_kv_tile(
                 context.wg_mem_limit_bytes, decisions.q_tile, 1u, key.common.head_dim_qk, key.common.head_dim_v,
-                key.common.has_mask, key.common.k_direct || key.common.v_direct);
+                key.common.has_mask, key.common.k_direct && key.common.v_direct);
             GGML_ASSERT(max_kv_tile > 0);
         }
 
@@ -3125,7 +3128,7 @@ class ggml_webgpu_shader_lib {
         ggml_webgpu_flash_attn_vec_decisions decisions = {};
         decisions.kv_tile = ggml_webgpu_flash_attn_get_vec_kv_tile(context.wg_mem_limit_bytes, key.common.head_dim_qk,
                                                                    key.common.head_dim_v, key.common.has_mask,
-                                                                   key.common.k_direct || key.common.v_direct);
+                                                                   key.common.k_direct, key.common.v_direct);
         decisions.wg_size = context.max_subgroup_size;
 
         std::string              variant = "flash_attn_vec";
