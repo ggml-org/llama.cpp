@@ -209,12 +209,18 @@ gated_delta_net_cuda(const float * q,
                 attn_data[col] = attn_col * scale;
             }
         } else {
+            // same arithmetic as the replay loop, so that a replayed state matches bit for bit
+            float g_reg[rows_per_lane];
+#pragma unroll
+            for (int r = 0; r < rows_per_lane; r++) {
+                g_reg[r] = expf(g_t[r * lanes_per_col + lane_in_col]);
+            }
+
             // kv[col] = sum_i g[i] * S[i][col] * k[i]
             float kv_shard = 0.0f;
 #pragma unroll
             for (int r = 0; r < rows_per_lane; r++) {
-                const int i = r * lanes_per_col + lane_in_col;
-                kv_shard += expf(g_t[i]) * s_shard[r] * k_reg[r];
+                kv_shard += g_reg[r] * s_shard[r] * k_reg[r];
             }
 
             float kv_col = warp_reduce_sum<lanes_per_col>(kv_shard);
@@ -227,8 +233,7 @@ gated_delta_net_cuda(const float * q,
             float attn_partial = 0.0f;
 #pragma unroll
             for (int r = 0; r < rows_per_lane; r++) {
-                const int i = r * lanes_per_col + lane_in_col;
-                s_shard[r]  = expf(g_t[i]) * s_shard[r] + k_reg[r] * delta_col;
+                s_shard[r]  = g_reg[r] * s_shard[r] + k_reg[r] * delta_col;
                 attn_partial += s_shard[r] * q_reg[r];
             }
 
