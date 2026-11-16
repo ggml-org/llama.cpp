@@ -129,6 +129,12 @@ struct mtmd_audio_preprocessor_muse_spark_audio : mtmd_audio_preprocessor {
     bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
 };
 
+// fish_s2 speaker reference: same as muse spark (raw waveform, whole frames), truncated to fish_s2_max_spk_seconds
+struct mtmd_audio_preprocessor_fish_s2 : mtmd_audio_preprocessor_muse_spark_audio {
+    using mtmd_audio_preprocessor_muse_spark_audio::mtmd_audio_preprocessor_muse_spark_audio;
+    bool process(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output, bool shape_only) const override;
+};
+
 // vibevoice: gain to -25 dBFS RMS, without clipping the peak
 // the RMS is floored at -50 dBFS, so that silence or noise alone is not boosted to full scale
 double mtmd_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak);

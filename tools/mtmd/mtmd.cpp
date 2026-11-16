@@ -1420,6 +1420,10 @@ struct mtmd_context {
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_pockettts>(models.a.get());
                 } break;
+            case PROJECTOR_TYPE_FISH_S2_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_fish_s2>(models.a.get());
+                } break;
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_chatterbox_ref>(models.a.get(), cbx_is_mtl(*models.a));
@@ -2601,6 +2605,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_YUE2;
             info.sample_rate = 48000;
             info.n_channels  = mtmd_graph_yue2_gen::n_channels;
+            break;
+        case PROJECTOR_TYPE_FISH_S2_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_FISH_S2;
+            info.sample_rate = 44100;
             break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;

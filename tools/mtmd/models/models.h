@@ -462,7 +462,8 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
         ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
 
         ggml_tensor * quant_decode(ggml_tensor * inp_codes) const;
-        ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, int il) const;
+        // window <= 0 uses hparams.wav_tfm_swa
+        ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, int il, int64_t window = 0) const;
         ggml_tensor * convnext_block(ggml_tensor * x, const mtmd_code2wav::upsample_block & blk, const std::string & state_prefix) const;
         ggml_tensor * dac_res_unit(ggml_tensor * x, const mtmd_code2wav::dac_res & res, int dilation, const std::string & state_name) const;
 
@@ -567,6 +568,32 @@ struct mtmd_graph_drama3_gen : mtmd_graph {
     ggml_cgraph * build_codec();
     ggml_tensor * tower_layer(ggml_tensor * x, int il, ggml_tensor * code, ggml_tensor * mask, ggml_tensor * extra,
                               ggml_tensor * inp_pos, ggml_tensor * k_slot, ggml_tensor * v_slot, int pos);
+};
+
+//
+// fish_s2 generation:
+// GEN_CODE = fast AR, backbone hidden + semantic code -> other codes of the frame + next backbone input
+// GEN_WAV  = Fish DAC decoder, same as drama3
+//
+struct mtmd_graph_fish_s2_gen : mtmd_graph_drama3_gen {
+    using mtmd_graph_drama3_gen::mtmd_graph_drama3_gen;
+    ggml_cgraph * build() override;
+
+    ggml_cgraph * build_fast_ar();
+};
+
+// fish_s2 voice cloning: raw 44.1 kHz clip -> codec encoder + RVQ -> one backbone input row per frame
+struct mtmd_graph_fish_s2_spkenc : mtmd_graph {
+    mtmd_graph_fish_s2_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    // codec encoder transformer layers, the rest of model.layers is the quantizer pre_module
+    static constexpr int n_enc_tfm_layer = 4;
+    static constexpr int n_tfm_layer     = 12;
+
+    ggml_tensor * conv(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation) const;
+    ggml_tensor * snake(ggml_tensor * x, ggml_tensor * alpha, ggml_tensor * beta) const;
+    ggml_tensor * convnext(ggml_tensor * x, const mtmd_code2wav::upsample_block & blk) const;
 };
 
 //
