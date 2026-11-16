@@ -42,6 +42,44 @@ struct llama_memory_buffer {
 
 using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
+// Borrowed sampling outputs for one row.
+struct llama_sampling_output_view {
+    llama_token token = LLAMA_TOKEN_NULL;
+    const float * probs = nullptr;
+    const float * sampled_logits = nullptr;
+    const llama_token * candidates = nullptr;
+    const float * logits = nullptr;
+    uint32_t n_probs = 0;
+    uint32_t n_logits = 0;
+};
+
+struct llama_outputs {
+    const llama_vocab * vocab = nullptr;
+    uint32_t n_vocab = 0;
+    const float * embeddings = nullptr;
+    const float * embeddings_nextn = nullptr;
+
+    // Positive indices are batch token positions; negative indices count from the last output row.
+    // An invalid index returns an empty row.
+    LLAMA_API llama_sampling_output_view get_sampling_ith(int32_t i) const;
+
+    // Unmasked NextN embeddings use non-negative batch token positions, including tokens without logits.
+    LLAMA_API const float * get_embeddings_nextn_ith(int32_t i) const;
+
+    LLAMA_API const float * get_embeddings_layer_inp(uint32_t lid) const;
+
+private:
+    friend struct llama_context;
+    int64_t output_resolve_row(int32_t i) const;
+
+    std::vector<llama_sampling_output_view> sampling;
+    std::vector<const float *> embeddings_layer_inp;
+    const std::vector<int32_t> * output_ids = nullptr;
+    uint32_t n_embd = 0;
+    size_t n_embeddings_nextn = 0;
+    bool embeddings_nextn_masked = false;
+};
+
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
     llama_context(

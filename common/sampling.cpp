@@ -1,5 +1,5 @@
 #include "sampling.h"
-#include "../src/llama-ext.h"
+#include "../src/llama-context.h"
 
 #include "common.h"
 #include "fit.h"

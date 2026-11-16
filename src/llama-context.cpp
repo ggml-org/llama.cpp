@@ -24,6 +24,39 @@
 #include <unordered_map>
 
 //
+// llama_outputs
+//
+
+llama_sampling_output_view llama_outputs::get_sampling_ith(int32_t i) const {
+    const int64_t row = output_resolve_row(i);
+    return row >= 0 ? sampling[row] : llama_sampling_output_view{};
+}
+
+const float * llama_outputs::get_embeddings_nextn_ith(int32_t i) const {
+    const int64_t row = embeddings_nextn_masked ? output_resolve_row(i) : i;
+    return embeddings_nextn && row >= 0 && (size_t) row < n_embeddings_nextn
+        ? embeddings_nextn + (size_t) row * n_embd : nullptr;
+}
+
+const float * llama_outputs::get_embeddings_layer_inp(uint32_t lid) const {
+    GGML_ASSERT(lid < embeddings_layer_inp.size() && embeddings_layer_inp[lid]);
+    return embeddings_layer_inp[lid];
+}
+
+int64_t llama_outputs::output_resolve_row(int32_t i) const {
+    int64_t row = i;
+    if (i < 0) {
+        row += (int64_t) sampling.size();
+    } else {
+        if (!output_ids || (size_t) i >= output_ids->size()) {
+            return -1;
+        }
+        row = (*output_ids)[i];
+    }
+    return row >= 0 && (size_t) row < sampling.size() ? row : -1;
+}
+
+//
 // llama_context
 //
 

@@ -10,7 +10,7 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 
-#include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
+#include "../src/llama-context.h"
 
 #include <algorithm>
 #include <cassert>
@@ -1456,6 +1456,8 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             return;
         }
 
+        const auto * outputs = llama_get_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1470,7 +1472,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             auto & result = *dp.result;
 
             // DSpark: read from the first draft slot, truncate below the confidence threshold
-            const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
+            const float * conf = params.p_min > 0.0f ? outputs->embeddings_nextn : nullptr;
             // bonus-anchor drafts read the mask positions only, like DFlash
             const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
             for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
@@ -1480,7 +1482,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
                     break;
                 }
 
-                common_sampler_sample(smpl, ctx_dft, idx, true);
+                common_sampler_sample_from_outputs(smpl, outputs, idx, true);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
@@ -1577,6 +1579,8 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
             return;
         }
 
+        const auto * outputs = llama_get_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1588,7 +1592,7 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
 
             auto & result = *dp.result;
 
-            const float * lattice = llama_get_embeddings_nextn(ctx_dft);
+            const float * lattice = outputs->embeddings_nextn;
             GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
 
             // DFlash2 can instead sample each step and hand q to the verifier for rejection sampling
@@ -1758,6 +1762,8 @@ public:
             return;
         }
 
+        const auto * outputs = llama_get_outputs(ctx_dft);
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1768,7 +1774,7 @@ public:
 
             auto & result = *dp.result;
 
-            const float * lattice = llama_get_embeddings_nextn(ctx_dft);
+            const float * lattice = outputs->embeddings_nextn;
             GGML_ASSERT(lattice && "LiliCorr scorer produced no lattice");
 
             int32_t predecessor = 0;
