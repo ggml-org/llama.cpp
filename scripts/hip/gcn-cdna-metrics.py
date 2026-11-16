@@ -18,8 +18,16 @@ except ImportError:
     demangle = None
 
 METRICS = ('occupancy', 'vgpr_spill', 'sgpr_spill')
+REPORT_METRICS = METRICS + ('vgpr_total',)
+RULES = {
+    'vgpr_limit': 'blocking',
+    'vgpr_spill_increase': 'blocking',
+    'sgpr_spill_increase': 'blocking',
+    'occupancy_vgpr_increase': 'blocking',
+    'occupancy_drop': 'warning',
+}
 REMARK_NAMES = {'NumVGPR': 'vgprs', 'Occupancy': 'occupancy', 'VGPRSpill': 'vgpr_spill', 'SGPRSpill': 'sgpr_spill'}
-METRIC_NAMES = {'occupancy': 'Occupancy [waves/SIMD]', 'vgpr_spill': 'VGPRs Spill', 'sgpr_spill': 'SGPRs Spill'}
+METRIC_NAMES = {'occupancy': 'Occupancy [waves/SIMD]', 'vgpr_spill': 'VGPRs Spill', 'sgpr_spill': 'SGPRs Spill', 'vgpr_total': 'Total VGPRs (limit 256)'}
 
 IGNORED_VGPR = {
 
@@ -116,7 +124,7 @@ def load_ignore_file(filepath):
     return ignored
 
 
-def check_vgpr(functions, filepath):
+def check_vgpr(functions, filepath, rows=None):
     found_issues = False
     for ignored in (True, False):
         for name, data in sorted(functions.items()):
@@ -130,9 +138,13 @@ def check_vgpr(functions, filepath):
             location = data['location'] or filepath
             suffix = ' [IGNORED]' if ignored else ' '
             message = f"{location}: {format_name(name)} - Total VGPRs: {total_vgprs} ({vgprs} + {spill}){suffix}"
-            print(message if ignored else f'\033[91m{message}\033[0m')  # noqa: NP100
+            blocking = RULES['vgpr_limit'] == 'blocking'
+            color = '91' if blocking else '93'
+            print(message if ignored else f'\033[{color}m{message}\033[0m')  # noqa: NP100
             if not ignored:
-                found_issues = True
+                found_issues |= blocking
+                if rows is not None:
+                    rows.append(('vgpr_total', name, location, 256, total_vgprs, 'regression' if blocking else 'warning'))
     return int(found_issues)
 
 
@@ -184,24 +196,43 @@ def check_comparison(base, pr, baseline_log, pr_log, tolerance=0, ignored=None, 
     locations.update({name: data['location'] for name, data in pr.items()})
 
     changes = {metric: compare_metric(base, pr, common, metric, tolerance) for metric in METRICS}
+    issues = []  # metric, kernel, baseline, PR, severity, extra details
+    for metric, rule in (('vgpr_spill', 'vgpr_spill_increase'), ('sgpr_spill', 'sgpr_spill_increase')):
+        for name, base_val, pr_val in changes[metric][0]:
+            issues.append((metric, name, base_val, pr_val, RULES[rule], ''))
+    for name, base_val, pr_val in changes['occupancy'][0]:
+        base_vgprs = worst(base[name]['vgprs'], 'vgprs') if base[name]['vgprs'] else None
+        pr_vgprs = worst(pr[name]['vgprs'], 'vgprs') if pr[name]['vgprs'] else None
+        increasing = base_vgprs is not None and pr_vgprs is not None and pr_vgprs > base_vgprs
+        rule = 'occupancy_vgpr_increase' if increasing else 'occupancy_drop'
+        detail = f', VGPRs: {base_vgprs} -> {pr_vgprs}' if increasing else ''
+        issues.append(('occupancy', name, base_val, pr_val, RULES[rule], detail))
+
     print(f'Kernels compared: {len(common)} (baseline {len(base_names)}, PR {len(pr_names)})')  # noqa: NP100
     print(f'Added kernels: {len(added)}, removed kernels: {len(removed)}')  # noqa: NP100
-
-    for status_idx, color, status in ((0, '91', 'REGRESSION'), (1, '92', 'improved')):
-        for metric in METRICS:
-            for name, base_val, pr_val in sorted(changes[metric][status_idx]):
-                print(f"\033[{color}m{locations[name]}: {name} - {METRIC_NAMES[metric]}: {base_val} -> {pr_val} ({status})\033[0m")  # noqa: NP100
+    for severity, color, label in (('blocking', '91', 'REGRESSION'), ('warning', '93', 'WARNING')):
+        for metric, name, base_val, pr_val, level, detail in sorted(issues):
+            if level == severity:
+                print(f"\033[{color}m{locations[name]}: {name} - {METRIC_NAMES[metric]}: {base_val} -> {pr_val}{detail} ({label})\033[0m")  # noqa: NP100
+    for metric in METRICS:
+        for name, base_val, pr_val in sorted(changes[metric][1]):
+            print(f"\033[92m{locations[name]}: {name} - {METRIC_NAMES[metric]}: {base_val} -> {pr_val} (improved)\033[0m")  # noqa: NP100
     for name in sorted(added):
         print(f'note: new kernel in PR: {name}')  # noqa: NP100
     for name in sorted(removed):
         print(f'note: kernel only in baseline: {name}')  # noqa: NP100
 
+    # Check the absolute VGPR limit as well, even for kernels excluded from comparisons.
+    vgpr_rows = []
+    vgpr_failed = check_vgpr(pr, pr_log, vgpr_rows)
     if dump:
         rows = []
+        for metric, name, base_val, pr_val, severity, _ in issues:
+            rows.append((metric, name, locations[name], base_val, pr_val, 'regression' if severity == 'blocking' else 'warning'))
         for metric in METRICS:
-            for status_idx, status in ((0, 'regression'), (1, 'improved')):
-                for name, base_val, pr_val in sorted(changes[metric][status_idx]):
-                    rows.append((metric, name, locations[name], base_val, pr_val, status))
+            for name, base_val, pr_val in sorted(changes[metric][1]):
+                rows.append((metric, name, locations[name], base_val, pr_val, 'improved'))
+        rows.extend(vgpr_rows)
         for name in sorted(added):
             for metric in METRICS:
                 if pr[name][metric]:
@@ -213,12 +244,15 @@ def check_comparison(base, pr, baseline_log, pr_log, tolerance=0, ignored=None, 
         dump_tsv(dump, baseline_log, pr_log, len(base_names), len(pr_names), len(common), rows)
         print(f'Deltas written to {dump}')  # noqa: NP100
 
-    regressions = sum(len(changes[metric][0]) for metric in METRICS)
-    if regressions:
-        print(f'\033[91m{regressions} regression(s) found\033[0m')  # noqa: NP100
-        return 1
-    print('No regressions found')  # noqa: NP100
-    return 0
+    blocking = sum(severity == 'blocking' for _, _, _, _, severity, _ in issues)
+    warnings = sum(severity == 'warning' for _, _, _, _, severity, _ in issues)
+    blocking += sum(row[5] == 'regression' for row in vgpr_rows)
+    warnings += sum(row[5] == 'warning' for row in vgpr_rows)
+    if blocking or warnings:
+        print(f'{blocking} blocking regression(s), {warnings} warning(s)')  # noqa: NP100
+    else:
+        print('No regressions found')  # noqa: NP100
+    return int(bool(blocking or vgpr_failed))
 
 
 def read_deltas(filepath):
@@ -234,7 +268,7 @@ def read_deltas(filepath):
                         meta[parts[0].strip()] = parts[1].strip()
                     continue
                 cols = line.split('\t')
-                if len(cols) == 6 and cols[0] in METRICS:
+                if len(cols) == 6 and cols[0] in REPORT_METRICS:
                     rows.append(cols)
     except FileNotFoundError:
         print(f"Error: File {filepath} not found", file=sys.stderr)  # noqa: NP100
@@ -247,7 +281,7 @@ def write_report(path, meta, rows):
     added = {}   # kernel -> [location, {metric: value}]
     removed = {} # kernel -> [location, {metric: value}]
     for metric, kernel, location, baseline, pr, status in rows:
-        if status in ('regression', 'improved'):
+        if status in ('regression', 'warning', 'improved'):
             tables.setdefault((metric, status), []).append((kernel, location, baseline, pr))
         elif status == 'added':
             added.setdefault(kernel, [location, {}])[1][metric] = pr
@@ -262,9 +296,16 @@ def write_report(path, meta, rows):
                 f"(baseline {meta.get('baseline_kernels', '?')}, PR {meta.get('pr_kernels', '?')}). "
                 f"Added kernels: {len(added)}, removed kernels: {len(removed)}.\n\n")
 
-        for metric in METRICS:
+        for metric in REPORT_METRICS:
             name = METRIC_NAMES[metric]
-            for status, title in (('regression', 'regressions'), ('improved', 'improvements')):
+            statuses = (('regression', 'regressions'), ('improved', 'improvements'))
+            if metric == 'occupancy':
+                statuses = (('regression', 'regressions'), ('warning', 'warnings'), ('improved', 'improvements'))
+            elif metric == 'vgpr_total':
+                statuses = (('regression', 'regressions'), ('warning', 'warnings'))
+            if metric == 'vgpr_total':
+                f.write('The baseline value for total VGPRs is the 256-register threshold.\n\n')
+            for status, title in statuses:
                 entries = tables.get((metric, status), [])
                 f.write(f'## {name} {title} ({len(entries)})\n\n')
                 if entries:

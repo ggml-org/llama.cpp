@@ -88,7 +88,7 @@ jobs:
           cd build
           make -j $(nproc)
 
-      - name: Check for major VGPR spills
+      - name: Build HIP kernel resource metrics
         id: vgpr_check
         run: |
           cmake -B build -S . \
@@ -96,11 +96,24 @@ jobs:
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
             -DGGML_HIP_EXPORT_METRICS=On \
-            -DCMAKE_HIP_FLAGS="-fsave-optimization-record=yaml" \
+            -DCMAKE_HIP_FLAGS="-fsave-optimization-record=yaml -Xarch_device -fsave-optimization-record=yaml" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
-          make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
-          python3 ../scripts/hip/gcn-cdna-metrics.py vgpr ggml/src/ggml-hip
+          CCACHE_DISABLE=1 make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
+          echo "Optimization record files:"
+          find . -type f -name '*.opt.yaml' | head -n 10
+          echo "GPU kernel remarks in YAML:"
+          grep -rml --include='*.opt.yaml' 'kernel-resource-usage' . | head -n 10 || true
+          echo "First YAML record:"
+          first_yaml=$(find ggml/src/ggml-hip -type f -name '*.opt.yaml' -print -quit)
+          if [ -n "$first_yaml" ]; then head -n 35 "$first_yaml"; fi
+          echo "GPU resource diagnostics in compiler log:"
+          grep -m 3 'Function Name:' metrics.log || true
+
+      # The PR comparison evaluates every rule and reports all failures at the end.
+      - name: Check VGPR limit on master
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        run: python3 scripts/hip/gcn-cdna-metrics.py vgpr build/ggml/src/ggml-hip
 
       # On master pushes, cache the metrics log as the baseline for PR checks.
       - name: Save master metrics baseline
@@ -148,14 +161,14 @@ jobs:
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
             -DGGML_HIP_EXPORT_METRICS=On \
-            -DCMAKE_HIP_FLAGS="-fsave-optimization-record=yaml" \
+            -DCMAKE_HIP_FLAGS="-fsave-optimization-record=yaml -Xarch_device -fsave-optimization-record=yaml" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
-          make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
+          CCACHE_DISABLE=1 make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
           mkdir -p ../../hip-baseline-metrics
           find ggml/src/ggml-hip -type f -name '*.opt.yaml' -exec cp --parents {} ../../hip-baseline-metrics/ \;
 
-      - name: Check for occupancy regressions vs master
+      - name: Check kernel resource rules vs master
         if: ${{ github.event_name == 'pull_request' }}
         id: occupancy_check
         run: |
@@ -177,10 +190,10 @@ jobs:
           name: hip-kernel-metrics-report
           path: hip-kernel-metrics-report.md
 
-      - name: Fail on regressions
+      - name: Fail on blocking regressions
         if: ${{ github.event_name == 'pull_request' && steps.occupancy_check.outputs.check_failed == 'true' }}
         run: |
-          echo "Kernel metrics regressions detected, see the hip-kernel-metrics-report artifact"
+          echo "Blocking kernel metrics regressions detected, see the hip-kernel-metrics-report artifact"
           exit 1
 
       - name: ccache-buckets-save
