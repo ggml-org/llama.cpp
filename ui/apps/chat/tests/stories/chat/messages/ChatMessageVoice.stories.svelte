@@ -80,7 +80,8 @@
 		});
 
 		await expect(reveal).toHaveAttribute('data-revealed');
-		await expect(canvas.getByText(TRANSCRIPT)).toBeInTheDocument();
+		// drawn word by word, see VoiceSpokenText
+		await expect(reveal).toHaveTextContent(TRANSCRIPT);
 		await expect(canvas.getByRole('button', { name: 'Hide transcript' })).toBeInTheDocument();
 	}}
 >
@@ -93,7 +94,7 @@
 	beforeEach={() =>
 		seedVoice({ transcript: TRANSCRIPT }, '', { [SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS]: true })}
 	name="VoiceMessageCollapsed"
-	play={async ({ canvas, canvasElement, userEvent }) => {
+	play={async ({ canvasElement, userEvent }) => {
 		const reveal = await waitFor(() => {
 			const element = canvasElement.querySelector('[data-slot="voice-transcript-reveal"]');
 
@@ -105,7 +106,8 @@
 		await expect(reveal).not.toHaveAttribute('data-revealed');
 		await userEvent.hover(reveal);
 		await waitFor(() => expect(reveal).toHaveAttribute('data-revealed'));
-		await expect(canvas.getByText(TRANSCRIPT)).toBeInTheDocument();
+		// drawn word by word, see VoiceSpokenText
+		await expect(reveal).toHaveTextContent(TRANSCRIPT);
 	}}
 >
 	<ChatMessage chatActions={noopChatActions} class={STORY_CLASS} {message} />

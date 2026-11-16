@@ -6,6 +6,7 @@
 -->
 <script lang="ts">
 	import {
+		spokenLength,
 		VoiceTranscriptReveal,
 		type VoiceTranscriptStatus,
 		VoiceWaveform
@@ -46,6 +47,13 @@
 					: 'idle'
 	);
 	let label = $derived(source.voice ? 'Voice message' : source.name);
+	// the transcript lights up word by word as the clip plays, and stays lit
+	let playbackMs = $state<number | null>(null);
+	let spoken = $derived(
+		transcript && playbackMs !== null && source.durationMs
+			? spokenLength(transcript, peaks, source.durationMs, playbackMs)
+			: null
+	);
 	let collapsed = $derived(settingsStore.config[SETTINGS_KEYS.VOICE_COLLAPSE_TRANSCRIPTS] === true);
 
 	// an object URL lives as long as the clip is on screen
@@ -98,8 +106,8 @@
 	data-voice={source.voice || undefined}
 >
 	{#key collapsed}
-		<VoiceTranscriptReveal defaultOpen={!collapsed} {status} {transcript}>
-			<VoiceWaveform durationMs={source.durationMs} {label} {peaks} {size} {src} />
+		<VoiceTranscriptReveal defaultOpen={!collapsed} {spoken} {status} {transcript}>
+			<VoiceWaveform bind:playbackMs durationMs={source.durationMs} {label} {peaks} {size} {src} />
 		</VoiceTranscriptReveal>
 	{/key}
 

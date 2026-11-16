@@ -56,18 +56,19 @@
 	args={{ class: FORM_CLASS, script: SCRIPT }}
 	beforeEach={() => audioServer(VoiceInputMode.AUTO)}
 	name="RecordingVoiceMessage"
-	play={async ({ canvas, userEvent }) => {
+	play={async ({ canvas, canvasElement, userEvent }) => {
 		const mic = canvas.getAllByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage });
 
 		await userEvent.click(mic[mic.length - 1]);
 
 		await expect(await canvas.findByText(VOICE_MODE_MESSAGE.recording)).toBeInTheDocument();
 		await expect(canvas.getByRole('button', { name: 'Cancel recording' })).toBeInTheDocument();
-		// the live text runs under the waveform, the message stays empty
-		await waitFor(() => expect(canvas.getByText(/What is the/)).toBeInTheDocument(), {
-			timeout: 3000
-		});
-		await expect(canvas.getByRole('textbox')).not.toHaveTextContent('What is the');
+		// the live text shows as the empty message box's placeholder, the message stays empty
+		await waitFor(
+			() => expect(canvasElement.querySelector('.cm-placeholder')).toHaveTextContent(/What is the/),
+			{ timeout: 3000 }
+		);
+		// a placeholder shows only while the message itself is empty
 	}}
 />
 

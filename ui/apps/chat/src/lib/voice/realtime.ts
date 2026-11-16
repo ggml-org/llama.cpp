@@ -59,7 +59,9 @@ export function realtimeUrl(
  * A model with no streaming audio encoder gets an `error` event and the socket
  * closes: `connect()` then rejects with RealtimeUnsupportedError and the caller
  * transcribes the clip over HTTP instead. A model that holds realtime conversations
- * is switched to a transcription session: its transcript comes after the final commit.
+ * is switched to a transcription session, which transcribes each committed piece of
+ * audio: commitSegment() at the speaker's pauses gives its text while they go on, and
+ * the final commit the rest. One piece is transcribed at a time.
  */
 export class RealtimeTranscriber {
 	/** True when the session streams text while the audio comes in */
@@ -67,10 +69,16 @@ export class RealtimeTranscriber {
 	/** Input rate of the model, from session.created */
 	modelSampleRate: number | null = null;
 
+	// audio sent since the last commit: an empty commit is an error on the server
+	private audioSinceCommit = false;
 	private completedText = '';
 	private connecting: Promise<void> | null = null;
-
 	private readonly context: VoiceServerContext;
+	private finalSent = false;
+	private idleWaiters: (() => void)[] = [];
+
+	// commits whose transcript has not completed yet, and who waits for them
+	private inFlight = 0;
 	private itemText = '';
 	private readonly options: RealtimeTranscriberOptions;
 	private pendingConnect: Pending<void> | null = null;
@@ -80,6 +88,14 @@ export class RealtimeTranscriber {
 	private socket: WebSocket | null = null;
 	private state: RealtimeState = 'idle';
 	private timer: ReturnType<typeof setTimeout> | null = null;
+
+	/**
+	 * Whether a piece can be committed now: a session that transcribes per commit, with
+	 * audio since the last commit and no piece still being transcribed.
+	 */
+	get canCommitSegment(): boolean {
+		return this.state === 'open' && !this.live && this.audioSinceCommit && this.inFlight === 0;
+	}
 
 	/** True between session.created and finish() or close(). */
 	get ready(): boolean {
@@ -101,6 +117,7 @@ export class RealtimeTranscriber {
 		});
 
 		this.sentAudio = true;
+		this.audioSinceCommit = true;
 
 		if (this.state === 'open') {
 			this.socket?.send(message);
@@ -114,6 +131,15 @@ export class RealtimeTranscriber {
 		if (this.state === 'closed') return;
 
 		this.fail(new RealtimeError('The realtime session was closed.'));
+	}
+
+	/** Commits the audio so far as a piece to transcribe now; see canCommitSegment. */
+	commitSegment(): void {
+		if (!this.canCommitSegment) return;
+
+		this.inFlight++;
+		this.audioSinceCommit = false;
+		this.send({ type: VOICE_REALTIME_EVENTS.COMMIT });
 	}
 
 	/**
@@ -181,11 +207,27 @@ export class RealtimeTranscriber {
 			this.pendingFinish = { reject, resolve };
 		});
 
-		this.send({ final: true, type: VOICE_REALTIME_EVENTS.COMMIT });
 		this.startTimer(
 			this.options.finishTimeoutMs ?? VOICE_REALTIME_TIMEOUTS.FINISH_MS,
 			'The transcript did not complete in time.'
 		);
+
+		// a piece still being transcribed finishes first: the server follows one at a time
+		while (this.inFlight > 0 && this.state === 'finishing') {
+			await new Promise<void>((resolve) => this.idleWaiters.push(resolve));
+		}
+
+		if (this.state !== 'finishing') return done;
+
+		if (this.audioSinceCommit) {
+			this.finalSent = true;
+			this.inFlight++;
+			this.audioSinceCommit = false;
+			this.send({ final: true, type: VOICE_REALTIME_EVENTS.COMMIT });
+		} else {
+			// everything was committed in pieces already
+			this.resolveFinish();
+		}
 
 		return done;
 	}
@@ -201,6 +243,9 @@ export class RealtimeTranscriber {
 	private fail(error: Error): void {
 		this.state = 'closed';
 		this.clearTimer();
+
+		for (const wake of this.idleWaiters.splice(0)) wake();
+
 		this.queue = [];
 		this.pendingConnect?.reject(error);
 		this.pendingConnect = null;
@@ -236,16 +281,18 @@ export class RealtimeTranscriber {
 	}
 
 	private handleCompleted(transcript: string): void {
-		this.completedText += transcript;
+		this.completedText = joinPieces(this.completedText, transcript);
 		this.itemText = '';
+		this.inFlight = Math.max(0, this.inFlight - 1);
 		this.options.onCompleted?.(this.text);
 
-		if (this.state === 'finishing' && this.pendingFinish) {
-			const text = this.text.trim();
+		if (this.inFlight === 0) {
+			for (const wake of this.idleWaiters.splice(0)) wake();
+		}
 
-			this.pendingFinish.resolve(text);
-			this.pendingFinish = null;
-			this.close();
+		// a live session completes once, on its final commit; a per-commit one once the last piece is in
+		if (this.state === 'finishing' && (this.live || (this.finalSent && this.inFlight === 0))) {
+			this.resolveFinish();
 		}
 	}
 
@@ -339,6 +386,16 @@ export class RealtimeTranscriber {
 		this.pendingConnect = null;
 	}
 
+	private resolveFinish(): void {
+		if (!this.pendingFinish) return;
+
+		const text = this.text.trim();
+
+		this.pendingFinish.resolve(text);
+		this.pendingFinish = null;
+		this.close();
+	}
+
 	private send(event: object): void {
 		this.socket?.send(JSON.stringify(event));
 	}
@@ -347,4 +404,13 @@ export class RealtimeTranscriber {
 		this.clearTimer();
 		this.timer = setTimeout(() => this.fail(new RealtimeError(message)), ms);
 	}
+}
+
+/** Two transcribed pieces as one text, a space between them where neither has one. */
+function joinPieces(before: string, piece: string): string {
+	if (!before) return piece;
+
+	if (!piece) return before;
+
+	return /\s$/.test(before) || /^\s/.test(piece) ? before + piece : `${before} ${piece}`;
 }

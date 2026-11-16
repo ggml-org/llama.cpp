@@ -1,13 +1,17 @@
 import { VoiceCapture } from './capture';
+import { VOICE_LEVELS_INTERVAL_MS } from './constants';
 import { RealtimeUnsupportedError } from './errors';
+import { PauseDetector } from './pauses';
 import { RealtimeTranscriber } from './realtime';
 import { transcribeClip } from './transcribe';
 import type { VoiceSession, VoiceSessionOptions, VoiceSessionResult } from './types';
 
 /**
  * Starts capturing and, when asked to transcribe, tries the realtime socket at the
- * same time. Realtime gives live text; when the model cannot stream, the socket does
- * not open, or the session fails, the clip is transcribed over HTTP after recording.
+ * same time. Realtime gives live text: a live ASR model streams it, any other model
+ * that hears transcribes the recording piece by piece, cut at the speaker's pauses.
+ * When the model cannot stream, the socket does not open, or the session fails, the
+ * clip is transcribed over HTTP after recording.
  * @throws VoiceCaptureError when the microphone does not start
  */
 export async function startVoiceSession(options: VoiceSessionOptions = {}): Promise<VoiceSession> {
@@ -51,7 +55,22 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 		unsubscribers.push(unsubscribePcm);
 		realtime.connect().then(
 			() => {
-				if (!ended) options.onRealtime?.(realtime.live);
+				if (ended) return;
+
+				options.onRealtime?.(realtime.live);
+
+				// a model that transcribes per commit gets the speech piece by piece, at its pauses
+				if (!realtime.live) {
+					const pauses = new PauseDetector({
+						intervalMs: capture.levelsIntervalMs ?? VOICE_LEVELS_INTERVAL_MS
+					});
+
+					unsubscribers.push(
+						capture.onLevels((levels) => {
+							if (pauses.push(levels[levels.length - 1] ?? 0)) realtime.commitSegment();
+						})
+					);
+				}
 			},
 			(error) => {
 				unsubscribePcm();

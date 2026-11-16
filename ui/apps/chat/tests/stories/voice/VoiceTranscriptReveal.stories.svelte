@@ -78,7 +78,8 @@
 		const root = reveal(canvasElement);
 
 		// closed, but in the DOM for screen readers
-		await expect(canvas.getByText(TRANSCRIPT)).toBeInTheDocument();
+		// drawn word by word, see VoiceSpokenText
+		await expect(region(canvasElement)).toHaveTextContent(TRANSCRIPT);
 		await expect(root).not.toHaveAttribute('data-revealed');
 		await expect(getComputedStyle(region(canvasElement)).opacity).toBe('0');
 

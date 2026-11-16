@@ -52,6 +52,8 @@ export function withTranscript(
 }
 
 class VoiceTranscriptsStore {
+	// clips whose transcript the user wrote while recording: the model's does not replace it
+	private edited = new Set<string>();
 	private entries = new SvelteMap<string, VoiceTranscriptState>();
 	private recordedAt = new Map<string, number>();
 
@@ -59,11 +61,19 @@ class VoiceTranscriptsStore {
 	forget(name: string): void {
 		this.entries.delete(name);
 		this.recordedAt.delete(name);
+		this.edited.delete(name);
 	}
 
 	/** The state of a clip's transcript, undefined when none was asked for in this session. */
 	get(name: string): VoiceTranscriptState | undefined {
 		return this.entries.get(name);
+	}
+
+	/** Sets a clip's transcript to the text the user edited while recording; the model's is ignored. */
+	setTranscript(name: string, transcript: string): void {
+		this.edited.add(name);
+		this.recordedAt.set(name, this.recordedAt.get(name) ?? Date.now());
+		this.entries.set(name, { status: 'done', transcript });
 	}
 
 	/** Follows a clip's transcript, and writes it into the message it went out with. */
@@ -73,13 +83,13 @@ class VoiceTranscriptsStore {
 
 		transcript.then(
 			(text) => {
-				if (!this.entries.has(name)) return;
+				if (!this.entries.has(name) || this.edited.has(name)) return;
 
 				this.entries.set(name, { status: 'done', transcript: text });
 				void this.applyToMessage(name, text);
 			},
 			(error: unknown) => {
-				if (!this.entries.has(name)) return;
+				if (!this.entries.has(name) || this.edited.has(name)) return;
 
 				console.warn('Voice message transcription failed:', error);
 				this.entries.set(name, {

@@ -5,6 +5,9 @@
  * dictation, or nothing, see resolveVoiceMode) and runs a recording: live levels and
  * elapsed time, dictated text written into the message at the caret as it streams, and
  * on stop either a voice message attachment, whose transcript follows, or the text.
+ * A voice message's live text shows as the empty message box's placeholder; focusing
+ * the box makes it editable text there until the recording stops, when it goes with
+ * the clip (edited, as its transcript).
  */
 
 import {
@@ -157,7 +160,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	// the mode of the recording under way, fixed when it starts
 	let recordingMode = $state<VoiceMode>(VoiceMode.UNAVAILABLE);
 	let ticker: ReturnType<typeof setInterval> | undefined;
-	let span: DictationSpan | null = null;
+	// state: a voice message's text leaves the placeholder once it is in the message
+	let span = $state<DictationSpan | null>(null);
 	let lastValue = '';
 	// bumped by cancel, so a transcript still on its way is dropped
 	let generation = 0;
@@ -193,6 +197,22 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		options.setValue(next);
 	}
 
+	/**
+	 * A voice message's live text moves from the placeholder into the message, as text the
+	 * user can edit, and what is said next follows it there.
+	 */
+	function adoptLiveText() {
+		if (recordingMode !== VoiceMode.VOICE_MESSAGE || span) return;
+
+		if (state !== 'starting' && state !== 'recording') return;
+
+		lastValue = options.getValue();
+		span = new DictationSpan(lastValue, lastValue.length);
+		span.keepsEdits = true;
+		writeDictation(recorder?.liveText ?? '');
+		options.setCaretOffset(span.end);
+	}
+
 	async function start() {
 		if (!recorder || state !== 'idle' || resolution.mode === VoiceMode.UNAVAILABLE) return;
 
@@ -225,7 +245,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 			await recorder.start({
 				capture: deviceId ? { deviceId } : undefined,
-				onText: mode === VoiceMode.DICTATION ? (text) => writeDictation(text) : undefined,
+				// a voice message's text reaches the message only once the user made it editable
+				onText: (text) => writeDictation(text),
 				realtime,
 				transcribe: transcribe
 					? {
@@ -279,8 +300,10 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		if (run !== generation) return;
 
 		if (mode === VoiceMode.VOICE_MESSAGE) {
+			const edited = takeLiveText();
+
 			state = 'idle';
-			await attachVoiceMessage(result);
+			await attachVoiceMessage(result, edited);
 
 			return;
 		}
@@ -288,11 +311,36 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		await finishDictation(result, run);
 	}
 
-	async function attachVoiceMessage({ clip, transcript }: VoiceSessionResult) {
+	/**
+	 * Takes a voice message's text back out of the message once it stops: the clip carries
+	 * it. Returns the text when the user edited it, which then is the clip's transcript.
+	 */
+	function takeLiveText(): string | null {
+		const taken = span;
+
+		span = null;
+
+		if (!taken || taken.isEmpty) return null;
+
+		const previous = options.getValue();
+		const text = taken.text(previous).trim();
+
+		lastValue = taken.remove(previous);
+		options.setValue(lastValue);
+
+		return taken.userEdited ? text : null;
+	}
+
+	async function attachVoiceMessage(
+		{ clip, transcript }: VoiceSessionResult,
+		edited: string | null = null
+	) {
 		const name = `${VOICE_CLIP_NAME_PREFIX}${Date.now()}-${uuid().slice(0, 8)}.wav`;
 		const file = new File([clip.blob], name, { type: MimeTypeAudio.WAV });
 
 		if (transcript) voiceTranscriptsStore.track(name, transcript);
+
+		if (edited !== null) voiceTranscriptsStore.setTranscript(name, edited);
 
 		options.addVoiceFile({
 			file,
@@ -365,6 +413,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	});
 
 	return {
+		adoptLiveText,
 		cancel,
 		get elapsedMs() {
 			return elapsedMs;
@@ -386,7 +435,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		},
 		/** Text streaming while a voice message is recorded, shown under the waveform. */
 		get liveCaption() {
-			return recordingMode === VoiceMode.VOICE_MESSAGE ? (recorder?.liveText ?? '') : '';
+			// once made editable, the text is in the message instead
+			return recordingMode === VoiceMode.VOICE_MESSAGE && !span ? (recorder?.liveText ?? '') : '';
 		},
 		get mode() {
 			return state === 'idle' ? resolution.mode : recordingMode;

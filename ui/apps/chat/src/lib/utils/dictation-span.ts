@@ -5,8 +5,17 @@
  * hands that text over to the user, and dictation goes on after it.
  */
 export class DictationSpan {
+	/**
+	 * Edits inside the stretch stay in it, as when its text is a voice message's transcript:
+	 * what it held is the user's from then on, and new text goes after it.
+	 */
+	keepsEdits = false;
+	/** Whether the user edited inside the stretch, see keepsEdits. */
+	userEdited = false;
 	// characters of the dictated text already handed over to the user
 	private handedOver = 0;
+	// characters at the start of the stretch that the user edited, kept as they are
+	private kept = 0;
 	private length = 0;
 	// characters of the dictated text the stretch shows
 	private shown = 0;
@@ -28,13 +37,14 @@ export class DictationSpan {
 	 */
 	apply(value: string, text: string): string {
 		const body = text.slice(this.handedOver).trim();
-		const before = value.slice(0, this.start);
+		const before = value.slice(0, this.start + this.kept);
 		const after = value.slice(this.start + this.length);
-		const lead = body && before && !/\s$/.test(before) ? ' ' : '';
+		// no space before text that goes on with punctuation, e.g. ", and then"
+		const lead = body && before && !/\s$/.test(before) && !/^[,.;:!?)\]}]/.test(body) ? ' ' : '';
 		const trail = body && after && !/^\s/.test(after) ? ' ' : '';
 		const inserted = lead + body + trail;
 
-		this.length = inserted.length;
+		this.length = this.kept + inserted.length;
 		this.shown = text.length;
 
 		return before + inserted + after;
@@ -54,6 +64,11 @@ export class DictationSpan {
 			this.start += delta;
 		} else if (from >= end) {
 			return;
+		} else if (this.keepsEdits && from >= this.start && to <= end) {
+			this.length += delta;
+			this.kept = this.length;
+			this.handedOver = this.shown;
+			this.userEdited = true;
 		} else {
 			// typed into the dictated text: it is theirs now, what comes next goes after it
 			this.handedOver = this.shown;
@@ -69,6 +84,11 @@ export class DictationSpan {
 		this.length = 0;
 
 		return next;
+	}
+
+	/** The text the stretch holds in `value`, with the user's edits inside it. */
+	text(value: string): string {
+		return value.slice(this.start, this.start + this.length);
 	}
 }
 

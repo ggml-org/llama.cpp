@@ -65,7 +65,7 @@
 		uuid
 	} from '#lib/utils/index.ts';
 	import { VoiceRecorder, warmUpVoiceCapture } from '#lib/voice/index.ts';
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';
 
@@ -255,6 +255,11 @@
 		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
+	// while a voice message records, what is being said shows in the empty message box; once
+	// it stops, the text goes with the clip, as its transcript
+	let voicePlaceholder = $derived(
+		voice.isActive && voice.liveCaption && !value.trim() ? voice.liveCaption : null
+	);
 
 	const EXPANDED_SHEET_FILL = 'max-md:bg-(--chat-form-sheet-fill)';
 
@@ -623,8 +628,23 @@
 
 	// the audio set-up takes a moment, so it is made while the message is being written;
 	// it asks for no microphone, so the browser shows no recording indicator
-	function handleFocusIn() {
+	function handleFocusIn(event: FocusEvent) {
 		if (voice.showButton && !voice.isActive) warmUpVoiceCapture();
+
+		// the voice message's live text shown as the placeholder turns into text to edit
+		if (voicePlaceholder && (event.target as Element | null)?.closest('.cm-editor')) {
+			voice.adoptLiveText();
+		}
+	}
+
+	/** Stops the recording and sends the message once its text or clip is in the form. */
+	async function handleStopAndSend() {
+		await voice.stop();
+		await tick();
+
+		if (!canSubmit || disabled || hasLoadingAttachments || isLoading) return;
+
+		onSubmit?.();
 	}
 
 	// Escape drops a recording, wherever the focus is
@@ -775,7 +795,7 @@
 				}}
 				onKeydown={handleKeydown}
 				onPaste={handlePaste}
-				{placeholder}
+				placeholder={voicePlaceholder ?? placeholder}
 			/>
 
 			{#if mcpStore.resources.hasAttachments}
@@ -795,9 +815,10 @@
 						class="px-3"
 						elapsedMs={voice.elapsedMs}
 						levels={voice.levels}
-						liveCaption={voice.liveCaption}
+						liveCaption={voicePlaceholder ? '' : voice.liveCaption}
 						mode={voice.mode}
 						onCancel={voice.cancel}
+						onSend={isLoading ? undefined : () => void handleStopAndSend()}
 						onStop={() => void voice.stop()}
 						state={voice.state}
 					/>

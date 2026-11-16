@@ -36,7 +36,7 @@ function seed(audio: boolean, inputMode: VoiceInputMode = VoiceInputMode.AUTO) {
 
 async function renderForm() {
 	const recorder = new FakeVoiceRecorder();
-	const state = $state({ files: [] as ChatUploadedFile[], value: '' });
+	const state = $state({ files: [] as ChatUploadedFile[], sent: 0, value: '' });
 	const screen = render(ChatFormVoiceTestWrapper, { state, voiceRecorder: recorder });
 
 	await tick();
@@ -158,6 +158,21 @@ describe('dictation', () => {
 		expect(state.files).toHaveLength(0);
 	});
 
+	it('stops and sends the dictated text in one go', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state } = await renderForm();
+
+		recorder.transcript = Promise.resolve('Hello there');
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		recorder.say('Hello there');
+
+		await screen.getByRole('button', { name: 'Stop and send' }).click();
+		await expect.poll(() => state.sent).toBe(1);
+		expect(state.value).toBe('Hello there');
+	});
+
 	it('takes the dictated text back out on cancel', async () => {
 		seed(true, VoiceInputMode.DICTATION);
 
@@ -174,6 +189,33 @@ describe('dictation', () => {
 });
 
 describe('a voice message', () => {
+	it('turns its live text into text to edit on focus, which goes with the clip on stop', async () => {
+		seed(true);
+
+		const { editor, recorder, screen, state } = await renderForm();
+
+		recorder.transcript = Promise.resolve('model transcript');
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		recorder.say('Hello wrold');
+
+		editor.focus();
+		await expect.poll(() => state.value).toBe('Hello wrold');
+
+		// fixed by hand, and what is said next follows it
+		editor.dispatch({ changes: { from: 7, insert: 'or', to: 9 }, userEvent: 'input.type' });
+		await expect.poll(() => state.value).toBe('Hello world');
+		recorder.say('Hello wrold, how are you');
+		await expect.poll(() => state.value).toBe('Hello world, how are you');
+
+		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
+		await expect.poll(() => state.files.length).toBe(1);
+		expect(state.value).toBe('');
+		expect(voiceTranscriptsStore.transcriptOf(state.files[0].name)).toBe(
+			'Hello world, how are you'
+		);
+	});
+
 	it('is attached as a voice clip that gets its transcript later', async () => {
 		seed(true);
 
@@ -184,13 +226,17 @@ describe('a voice message', () => {
 		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last().click();
 		await expect.poll(() => recorder.status).toBe('recording');
 
-		// streamed text shows under the waveform, not in the message
+		// streamed text shows in the empty message box as its placeholder, not in the message
+		const placeholder = () => screen.container.querySelector('.cm-placeholder')?.textContent;
+
 		recorder.say('What is the weather on Mars');
-		await expect.element(screen.getByText('What is the weather on Mars')).toBeInTheDocument();
+		await expect.poll(placeholder).toBe('What is the weather on Mars');
 		expect(state.value).toBe('');
 
 		await screen.getByRole('button', { name: 'Stop recording' }).last().click();
 		await expect.poll(() => state.files.length).toBe(1);
+		// the text now goes with the clip
+		await expect.poll(placeholder).not.toBe('What is the weather on Mars');
 
 		const [file] = state.files;
 

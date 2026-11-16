@@ -3,6 +3,7 @@
  * component takes its data in (levels, peaks, an audio URL, a transcript); recording, analysing and transcribing stay
  * in each app.
  */
+export { default as VoiceSpokenText } from "./VoiceSpokenText.svelte";
 export { default as VoiceTranscriptReveal } from "./VoiceTranscriptReveal.svelte";
 export { default as VoiceWaveform } from "./VoiceWaveform.svelte";
 export { default as VoiceWaveformLive } from "./VoiceWaveformLive.svelte";

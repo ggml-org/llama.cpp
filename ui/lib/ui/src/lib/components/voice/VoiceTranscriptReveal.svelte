@@ -10,6 +10,7 @@
 	import type { Snippet } from 'svelte';
 	import { Button } from '../ui/button';
 	import { Skeleton } from '../ui/skeleton';
+	import VoiceSpokenText from './VoiceSpokenText.svelte';
 	import { cn } from '../ui/utils';
 	import type { VoiceTranscriptStatus } from '../../voice/types';
 
@@ -21,6 +22,8 @@
 		status?: VoiceTranscriptStatus;
 		/** Start with the transcript open; read once, the toggle key changes it after that. */
 		defaultOpen?: boolean;
+		/** Characters of the transcript spoken so far, to follow playback; left out, all of it reads as spoken. */
+		spoken?: number | null;
 		class?: string;
 	}
 
@@ -28,6 +31,7 @@
 		children,
 		class: className,
 		defaultOpen = false,
+		spoken = null,
 		status,
 		transcript = null
 	}: Props = $props();
@@ -145,7 +149,7 @@
 						<p class="text-caption text-fg-muted">Transcription unavailable</p>
 					{:else if transcript}
 						<p class="text-body-sm break-words whitespace-pre-wrap text-fg-muted">
-							<span class="sr-only">Transcript: </span>{transcript}
+							<span class="sr-only">Transcript: </span><VoiceSpokenText {spoken} text={transcript} />
 						</p>
 					{:else}
 						<p class="text-caption text-fg-muted">No speech detected</p>

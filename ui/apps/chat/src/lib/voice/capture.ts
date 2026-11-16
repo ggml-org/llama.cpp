@@ -43,22 +43,23 @@ interface CaptureGraph {
  * AudioContext is suspended for the next recording (see audio-context.ts).
  */
 export class VoiceCapture {
-	readonly sampleRate: number;
+	/** Time between two level values. */
+	readonly levelsIntervalMs: number;
 
+	readonly sampleRate: number;
 	private chunks: Int16Array[] = [];
 	private readonly chunkSamples: number;
 	private currentState: VoiceCaptureState = 'idle';
 	// resolves the wait of start() for the first audio
 	private firstAudio: (() => void) | null = null;
 	private frame: number | null = null;
+
 	// bumped by every start, stop and cancel, so a start still awaiting the microphone can tell it was dropped
 	private generation = 0;
-
 	private graph: CaptureGraph | null = null;
 	private handlePageHide = () => this.cancel();
 	private readonly history: LevelHistory;
 	private levelListeners = new Set<VoiceLevelsListener>();
-	private readonly levelsIntervalMs: number;
 	private readonly options: VoiceCaptureOptions;
 	private partial: number[] = [];
 	private pcmListeners = new Set<VoicePcmListener>();

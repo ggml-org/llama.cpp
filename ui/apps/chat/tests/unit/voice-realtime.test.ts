@@ -178,6 +178,65 @@ describe('RealtimeTranscriber', () => {
 		await expect(finished).resolves.toBe('First line.\nSecond line.');
 	});
 
+	it('transcribes a conversation model piece by piece, one at a time', async () => {
+		const transcriber = new RealtimeTranscriber(context, { sampleRate: 16_000 });
+		const connected = transcriber.connect();
+		const commits = () =>
+			socket().sent.filter((event) => event.type === 'input_audio_buffer.commit');
+		const completed = (transcript: string) =>
+			socket().emit({ transcript, type: 'conversation.item.input_audio_transcription.completed' });
+
+		socket().emit(sessionCreated('realtime'));
+		await connected;
+
+		// nothing to commit before any audio
+		expect(transcriber.canCommitSegment).toBe(false);
+		transcriber.append(Int16Array.from([1]));
+		transcriber.commitSegment();
+		expect(commits()).toEqual([{ type: 'input_audio_buffer.commit' }]);
+
+		// the next piece waits for the text of this one
+		transcriber.append(Int16Array.from([2]));
+		expect(transcriber.canCommitSegment).toBe(false);
+		completed('Hello there.');
+		expect(transcriber.text).toBe('Hello there.');
+		expect(transcriber.canCommitSegment).toBe(true);
+
+		transcriber.commitSegment();
+		transcriber.append(Int16Array.from([3]));
+
+		// the end waits for the piece in flight, then commits the rest
+		const finished = transcriber.finish();
+
+		await Promise.resolve();
+		expect(commits()).toHaveLength(2);
+		completed('How are you?');
+		await vi.waitFor(() => expect(commits()).toHaveLength(3));
+		expect(commits()[2]).toEqual({ final: true, type: 'input_audio_buffer.commit' });
+		completed('Fine.');
+
+		await expect(finished).resolves.toBe('Hello there. How are you? Fine.');
+	});
+
+	it('ends without a final commit when every piece was committed already', async () => {
+		const transcriber = new RealtimeTranscriber(context, { sampleRate: 16_000 });
+		const connected = transcriber.connect();
+
+		socket().emit(sessionCreated('realtime'));
+		await connected;
+		transcriber.append(Int16Array.from([1]));
+		transcriber.commitSegment();
+		socket().emit({
+			transcript: 'Only this.',
+			type: 'conversation.item.input_audio_transcription.completed'
+		});
+
+		await expect(transcriber.finish()).resolves.toBe('Only this.');
+		expect(
+			socket().sent.filter((event) => event.type === 'input_audio_buffer.commit')
+		).toHaveLength(1);
+	});
+
 	it('marks a conversation session switched to transcription as not live', async () => {
 		const transcriber = new RealtimeTranscriber(context, { sampleRate: 16_000 });
 		const connected = transcriber.connect();

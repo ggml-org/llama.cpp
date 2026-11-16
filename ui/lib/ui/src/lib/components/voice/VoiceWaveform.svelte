@@ -36,6 +36,11 @@
 		size?: VoiceWaveformSize;
 		/** What the clip is, for the play button and the slider. */
 		label?: string;
+		/**
+		 * Bound out: where playback is, to follow a transcript with. Null until the clip first plays, the clip's end
+		 * once it played through.
+		 */
+		playbackMs?: number | null;
 		class?: string;
 	}
 
@@ -44,6 +49,7 @@
 		durationMs,
 		label = 'Voice message',
 		peaks,
+		playbackMs = $bindable(null),
 		size = 'md',
 		src
 	}: Props = $props();
@@ -70,6 +76,36 @@
 	let bars = $derived(resamplePeaks(peaks, barCapacity(width, barWidth, BAR_GAP)));
 	// the length until playback starts, then where it is
 	let shownMs = $derived(!paused || elapsedMs > 0 ? elapsedMs : totalMs);
+
+	// playback as it goes, read every frame while playing: the media element's own updates come a few times a second
+	let started = $state(false);
+	let playedThrough = $state(false);
+
+	$effect(() => {
+		if (!started) {
+			playbackMs = null;
+
+			return;
+		}
+
+		if (playedThrough) {
+			playbackMs = totalMs;
+
+			return;
+		}
+
+		playbackMs = elapsedMs;
+
+		if (paused || !audio) return;
+
+		const media = audio;
+		let frame = requestAnimationFrame(function tick() {
+			playbackMs = Math.min(media.currentTime * 1000, totalMs || Infinity);
+			frame = requestAnimationFrame(tick);
+		});
+
+		return () => cancelAnimationFrame(frame);
+	});
 
 	$effect(() => {
 		if (!src) paused = true;
@@ -152,6 +188,9 @@
 	function handlePlay() {
 		if (playingAudio && playingAudio !== audio) playingAudio.pause();
 
+		started = true;
+		playedThrough = false;
+
 		playingAudio = audio ?? null;
 	}
 
@@ -160,6 +199,8 @@
 	}
 
 	function handleEnded() {
+		playedThrough = true;
+
 		if (audio) audio.currentTime = 0;
 
 		currentTime = 0;
