@@ -163,7 +163,6 @@ static __attribute__((noinline)) void concat_transpose_cvt_f16_to_f32(
         hvx_transpose_64x64_h_gather(spad2, 128,
                                      src_base + c * src_stride, src_stride,
                                      offsets, nrows, MIN(ncols - c, 64));
-        hvx_gather_sync(spad2);
         for (uint32_t r = 0; r < nrows; r++) {
             const HVX_Vector v = *(const HVX_Vector *) (spad2 + r * 128);
             const HVX_VectorPair vp = hvx_vec_f16_to_f32(v);
@@ -194,7 +193,6 @@ static __attribute__((noinline)) void concat_transpose_cvt_f32_to_f16(
                                          src_base + (c + 32) * src_stride, src_stride,
                                          offsets, nrows, chunk_cols - 32);
         }
-        hvx_gather_sync(spad2);
         if (chunk_cols > 32) {
             for (uint32_t r = 0; r < nrows; r++) {
                 const HVX_Vector * restrict vsrc = (const HVX_Vector *) (spad2 + r * 256);
@@ -234,7 +232,7 @@ struct htp_concat_context {
 static inline dma_addr_t concat_plane_addr(const struct htp_tensor * t, uint32_t p, const struct fastdiv_values * div_ne2, uint32_t ne2) {
     const uint32_t i3 = fastdiv(p, div_ne2);
     const uint32_t i2 = p - i3 * ne2;
-    return t->data + i2 * t->nb[2] + i3 * t->nb[3];
+    return t->data + (i2 * t->nb[2] + i3 * t->nb[3]);
 }
 
 static void concat_2d_transposed_worker(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
@@ -288,7 +286,6 @@ static void concat_2d_transposed_worker(const htp_thread_t * th, unsigned int nt
     uint32_t row   = row_begin;
     uint32_t col   = 0;
     uint32_t slot  = 0;
-    bool dst_pending = false;
 
     const dma_addr_t src1_addr = concat_plane_addr(src1, plane, div_ne2, ne2) + row * src1->nb[1];
     dma_queue_push(dma_q, dma_make_data(spad1_base, src1_addr), spad1_stride, src1->nb[0], MIN(row_end - row, block_rows) * src1_es, MIN(src1_ne0, block_cols));
@@ -297,6 +294,7 @@ static void concat_2d_transposed_worker(const htp_thread_t * th, unsigned int nt
         const dma_addr_t src0_addr = concat_plane_addr(src0, plane, div_ne2, ne2) + row * src0->nb[1];
         dma_queue_push(dma_q, dma_make_data(spad0_base + src0_dma_off, src0_addr), spad0_stride, src0->nb[1], raw_src0_row_bytes, MIN(row_end - row, block_rows));
     }
+    dma_queue_push(dma_q, dma_make_data(dst->data, spad0_base), 0, 0, 0, 0);
 
     while (plane < cctx->nplanes) {
         const uint32_t nrows = MIN(row_end - row, block_rows);
@@ -326,7 +324,7 @@ static void concat_2d_transposed_worker(const htp_thread_t * th, unsigned int nt
         const uint32_t next_ncols = MIN(src1_ne0 - next_col, block_cols);
 
         if (has_next) {
-            const dma_addr_t addr = concat_plane_addr(src1, next_plane, div_ne2, ne2) + next_row * src1->nb[1] + next_col * src1->nb[0];
+            const dma_addr_t addr = concat_plane_addr(src1, next_plane, div_ne2, ne2) + (next_row * src1->nb[1] + next_col * src1->nb[0]);
             dma_queue_push(dma_q, dma_make_data(spad1_base + (slot ^ 1) * spad1_slot, addr), spad1_stride, src1->nb[0], next_nrows * src1_es, next_ncols);
         }
 
@@ -353,18 +351,15 @@ static void concat_2d_transposed_worker(const htp_thread_t * th, unsigned int nt
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) row);
 
-        if (dst_pending) {
-            dma_queue_pop(dma_q); // dst
-        }
+        dma_queue_pop(dma_q); // dst
         if (src0 && has_next && next_col == 0) {
             const dma_addr_t addr = concat_plane_addr(src0, next_plane, div_ne2, ne2) + next_row * src0->nb[1];
             dma_queue_push(dma_q, dma_make_data(spad0_base + (slot ^ 1) * spad0_slot + src0_dma_off, addr), spad0_stride, src0->nb[1], raw_src0_row_bytes, next_nrows);
         }
 
         const uint32_t lead = (src0 && col == 0) ? dst_src0_row_bytes : 0;
-        const dma_addr_t dst_addr = concat_plane_addr(dst, plane, div_ne2, ne2) + row * dst->nb[1] + dst_src0_row_bytes + col * dst_es - lead;
+        const dma_addr_t dst_addr = concat_plane_addr(dst, plane, div_ne2, ne2) + (row * dst->nb[1] + dst_src0_row_bytes + col * dst_es - lead);
         dma_queue_push(dma_q, dma_make_data(dst_addr, spad0 + dst_src0_row_padded - lead), dst->nb[1], spad0_stride, lead + ncols * dst_es, nrows);
-        dst_pending = true;
 
         plane = next_plane;
         row   = next_row;
@@ -405,8 +400,8 @@ static inline void concat_regular_row_addrs(
     const uint32_t i1  = rem - i2 * ne1;
 
     *i1_out       = i1;
-    *src_addr_out = src->data + (dma_addr_t) i1 * src->nb[1] + (dma_addr_t) i2 * src->nb[2] + (dma_addr_t) i3 * src->nb[3];
-    *dst_addr_out = dst->data + (dma_addr_t) i1 * dst->nb[1] + (dma_addr_t) i2 * dst->nb[2] + (dma_addr_t) i3 * dst->nb[3];
+    *src_addr_out = src->data + (i1 * src->nb[1] + i2 * src->nb[2] + i3 * src->nb[3]);
+    *dst_addr_out = dst->data + (i1 * dst->nb[1] + i2 * dst->nb[2] + i3 * dst->nb[3]);
 }
 
 static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
@@ -467,9 +462,9 @@ static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth,
 
         const size_t s_stride0 = (cur_nr > 1) ? src->nb[1] : src_row_bytes;
         dma_queue_push(q, dma_make_data(sbuf[0], cur_src_addr), src_row_bytes, s_stride0, src_row_bytes, cur_nr);
+        dma_queue_push(q, dma_make_data(cur_dst_addr, dbuf[1]), 0, 0, 0, 0);
 
         uint32_t slot = 0;
-        bool dst_pending = false;
 
         while (cur_r < r_end) {
             const uint32_t next_r = cur_r + cur_nr;
@@ -487,9 +482,7 @@ static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth,
                 dma_queue_push(q, dma_make_data(sbuf[slot ^ 1], next_src_addr), src_row_bytes, s_stride_next, src_row_bytes, next_nr);
             }
 
-            if (dst_pending) {
-                dma_queue_pop(q); // dbuf[slot ^ 1]
-            }
+            dma_queue_pop(q); // dbuf[slot ^ 1]
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) cur_r);
             if (dst_es == 4) {
@@ -501,7 +494,6 @@ static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth,
 
             const size_t d_stride = (cur_nr > 1) ? dst->nb[1] : dst_row_bytes;
             dma_queue_push(q, dma_make_data(cur_dst_addr, dbuf[slot]), d_stride, dst_row_bytes, dst_row_bytes, cur_nr);
-            dst_pending = true;
 
             cur_r        = next_r;
             cur_i1       = next_i1;
@@ -523,9 +515,9 @@ static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth,
         uint32_t cur_cols = MIN(ne0 - col, max_cols);
         const uint32_t s_bytes0 = cur_cols * src_es;
         dma_queue_push(q, dma_make_data(sbuf[0], row_src_addr), s_bytes0, s_bytes0, s_bytes0, 1);
+        dma_queue_push(q, dma_make_data(row_dst_addr, dbuf[1]), 0, 0, 0, 0);
 
         uint32_t slot = 0;
-        bool dst_pending = false;
 
         while (r < r_end) {
             uint32_t next_r = r;
@@ -546,13 +538,11 @@ static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth,
             if (next_r < r_end) {
                 const uint32_t next_cols = MIN(ne0 - next_col, max_cols);
                 const uint32_t s_bytes_next = next_cols * src_es;
-                dma_queue_push(q, dma_make_data(sbuf[slot ^ 1], next_row_src_addr + (dma_addr_t) next_col * src_es),
+                dma_queue_push(q, dma_make_data(sbuf[slot ^ 1], next_row_src_addr + next_col * src_es),
                                s_bytes_next, s_bytes_next, s_bytes_next, 1);
             }
 
-            if (dst_pending) {
-                dma_queue_pop(q); // dbuf[slot ^ 1]
-            }
+            dma_queue_pop(q); // dbuf[slot ^ 1]
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
             if (dst_es == 4) {
@@ -563,9 +553,8 @@ static void concat_regular_cvt_worker(const htp_thread_t * th, unsigned int nth,
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) r);
 
             const uint32_t d_bytes = cur_cols * dst_es;
-            dma_queue_push(q, dma_make_data(row_dst_addr + (dma_addr_t) col * dst_es, dbuf[slot]),
+            dma_queue_push(q, dma_make_data(row_dst_addr + col * dst_es, dbuf[slot]),
                            d_bytes, d_bytes, d_bytes, 1);
-            dst_pending = true;
 
             r            = next_r;
             col          = next_col;
@@ -637,7 +626,7 @@ static int concat_regular(struct htp_ops_context * octx, const struct htp_concat
         view0.ne[d] = src0->ne[d];
         view1.ne[d] = src1->ne[d];
     }
-    view1.data += (dma_addr_t) src0->ne[dim] * dst->nb[dim];
+    view1.data += src0->ne[dim] * dst->nb[dim];
 
     const uint32_t total_rows_0 = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t total_rows_1 = src1->ne[1] * src1->ne[2] * src1->ne[3];
@@ -731,7 +720,7 @@ static int concat_transposed(struct htp_ops_context * octx, const struct htp_con
     struct htp_tensor view1 = *dst;
     view0.ne[0] = src0->ne[0];
     view1.ne[0] = src1->ne[0];
-    view1.data += (dma_addr_t) src0->ne[0] * dst_es;
+    view1.data += src0->ne[0] * dst_es;
 
     if (src0->ne[0] > 0) {
         struct htp_concat_transposed_vtcm_layout layout0;
@@ -964,14 +953,14 @@ static inline void concat_gather_rows_dma_in(
     if (kparams->na > 0) {
         uint8_t * dst_a = (src0_es == dst_es) ? region : raw_a;
         const size_t a_size = (size_t) (nr - 1) * a->nb[1] + (size_t) kparams->na * src0_es;
-        dma_queue_push(q, dma_make_data(dst_a, a->data + (dma_addr_t) r * a->nb[1]), a_size, a_size, a_size, 1);
+        dma_queue_push(q, dma_make_data(dst_a, a->data + r * a->nb[1]), a_size, a_size, a_size, 1);
     }
 
     if (b && kparams->nb > 0) {
         uint8_t * dst_b = (src1_es == dst_es) ? (region + kparams->v1) : raw_b;
         if (kparams->b_dense) {
             const size_t b_size = (size_t) (nr - 1) * b->nb[1] + (size_t) kparams->nb * src1_es;
-            dma_queue_push(q, dma_make_data(dst_b, b->data + (dma_addr_t) r * b->nb[1]), b_size, b_size, b_size, 1);
+            dma_queue_push(q, dma_make_data(dst_b, b->data + r * b->nb[1]), b_size, b_size, b_size, 1);
         } else {
             const size_t b_size = (size_t) (nr - 1) * b->nb[1] + src1_es;
             const size_t dst_span1 = (src1_es == dst_es)
@@ -979,7 +968,7 @@ static inline void concat_gather_rows_dma_in(
                 : (((size_t) kparams->span1 / dst_es) * src1_es);
             for (uint32_t k = 0; k < kparams->nb; k++) {
                 dma_queue_push(q, dma_make_data(dst_b + k * dst_span1,
-                                                b->data + (dma_addr_t) k * b->nb[0] + (dma_addr_t) r * b->nb[1]),
+                                                b->data + (k * b->nb[0] + r * b->nb[1])),
                                b_size, b_size, b_size, 1);
             }
         }
@@ -993,7 +982,7 @@ static inline void concat_gather_rows_dma_out(
 
     const struct htp_gather_rows_params * kparams = task->kparams;
     const size_t out_size = (size_t) nr * kparams->ne * task->dst_es;
-    dma_queue_push(q, dma_make_data(task->dst + (dma_addr_t) r * kparams->ne * task->dst_es, out), out_size, out_size, out_size, 1);
+    dma_queue_push(q, dma_make_data(task->dst + r * kparams->ne * task->dst_es, out), out_size, out_size, out_size, 1);
 }
 
 static void concat_gather_rows_mixed_worker(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {

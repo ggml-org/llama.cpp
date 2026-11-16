@@ -110,7 +110,6 @@ static __attribute__((noinline)) void hvx_ssm_conv_unpack_to_T_gen(const float *
                              base + j * sizeof(float), mu, vv);
         }
     }
-    hvx_gather_sync(T);
 }
 
 static inline void hvx_ssm_conv_unpack_to_T(const float * raw, float * T, uint32_t d_inner_per_hvx, uint32_t d_inner_stride, uint32_t d_conv) {
@@ -140,7 +139,6 @@ static __attribute__((noinline)) void hvx_ssm_conv_unpack_to_T_f16(const __fp16 
                              base + j * sizeof(__fp16), mu, vv);
         }
     }
-    hvx_gather_sync(T);
 
     for (uint32_t cb = 0; cb < d_inner_per_hvx; cb += VLEN_FP32) {
         for (uint32_t j = 0; j < d_conv; j += 2) {
@@ -253,7 +251,6 @@ static __attribute__((noinline)) void hvx_ssm_conv_transpose_block(const float *
     for (uint32_t t = 0; t < ncs; ++t) {
         Q6_vgather_ARMVw((HVX_Vector *) (T + (size_t) t * VLEN_FP32), base + t * sizeof(float), mu, vv);
     }
-    hvx_gather_sync(T);
 }
 
 // Transpose + widen F16 src0 for prefill: each 32-bit word gather fetches 2 consecutive F16 time steps
@@ -271,7 +268,6 @@ static __attribute__((noinline)) void hvx_ssm_conv_transpose_block_f16(const __f
     for (uint32_t t = 0; t < ncs; t += 2) {
         Q6_vgather_ARMVw(&T_vec[t], base + t * sizeof(__fp16), mu, vv);
     }
-    hvx_gather_sync(T_vec);
 
     for (uint32_t t = 0; t < ncs; t += 2) {
         HVX_VectorPair p = hvx_vec_f16_to_f32_shuff(T_vec[t]);
@@ -402,8 +398,8 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
     #define SSM_CONV_DECODE_PUSH_FETCH(c)                                                         \
         do {                                                                                      \
             const uint32_t   cur_tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off_fetch);    \
-            const dma_addr_t fetch_ddr  = src0->data + s_fetch * src0_stride_seq_bytes +          \
-                                          (ir0 + tile_off_fetch) * src0_stride_inner_bytes;       \
+            const dma_addr_t fetch_ddr  = src0->data + (s_fetch * src0_stride_seq_bytes +         \
+                                          (ir0 + tile_off_fetch) * src0_stride_inner_bytes);      \
             dma_queue_push(dma_q,                                                                 \
                            dma_make_data((uint8_t *) src0_tile_raw[(c) & 1], fetch_ddr),          \
                            raw_stride_bytes, src0_stride_inner_bytes, row_bytes, cur_tile_n);     \
@@ -419,8 +415,10 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
     uint8_t *        src1_dma_dest = src1_f16 ? (uint8_t *) src1_T : (uint8_t *) src1_raw;
     dma_queue_push(dma_q, dma_make_data(src1_dma_dest, src1_ddr), weight_dma_bytes, weight_dma_bytes, weight_dma_bytes, 1);
 
+    dma_queue_push(dma_q, dma_make_data(dst->data, (uint8_t *) dst_tile[0]), 0, 0, 0, 0);
     SSM_CONV_DECODE_PUSH_FETCH(0);
     if (n_chunks > 1) {
+        dma_queue_push(dma_q, dma_make_data(dst->data, (uint8_t *) dst_tile[1]), 0, 0, 0, 0);
         SSM_CONV_DECODE_PUSH_FETCH(1);
     }
 
@@ -443,9 +441,7 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
     for (uint32_t c = 0; c < n_chunks; ++c) {
         const uint32_t tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off);
 
-        if (c >= 2) {
-            dma_queue_pop(dma_q);  // writeback of chunk c-2, frees dst_tile[c & 1]
-        }
+        dma_queue_pop(dma_q);      // writeback of chunk c-2, frees dst_tile[c & 1]
         dma_queue_pop(dma_q);      // fetch chunk c
 
         float * restrict out = dst_tile[c & 1];
@@ -475,7 +471,7 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) i3);
 
-        const dma_addr_t dst_ddr        = dst->data + i3 * dst_stride_seq_bytes + (size_t) (ir0 + tile_off) * dst_elem_size;
+        const dma_addr_t dst_ddr        = dst->data + (i3 * dst_stride_seq_bytes + (size_t) (ir0 + tile_off) * dst_elem_size);
         const size_t     tile_out_bytes = (size_t) tile_n * dst_elem_size;
         dma_queue_push(dma_q, dma_make_data(dst_ddr, (uint8_t *) out),
                        tile_out_bytes, tile_out_bytes, tile_out_bytes, 1);
@@ -491,9 +487,7 @@ static void ssm_conv_thread_f32_decode(const htp_thread_t * th, unsigned int nth
         }
     }
 
-    for (uint32_t k = MIN(n_chunks, 2); k > 0; --k) {
-        dma_queue_pop(dma_q);  // drain the last writebacks
-    }
+    dma_queue_flush(dma_q);
 
     #undef SSM_CONV_DECODE_PUSH_FETCH
 
@@ -578,12 +572,12 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
     uint32_t tile_off_fetch = 0;
 
     // Chunk c fetches into src0_tile_raw[c & 1] and writes back from dst_tile[c & 1].
-    // Two fetches run ahead, so the queue order is F0 F1 W0 F2 W1 ... and pops follow it.
+    // Two fetches run ahead with dummy writeback pushes in prologue: W-2 F0 W-1 F1 W0 F2 ...
     #define SSM_CONV_PUSH_FETCH(c)                                                                \
         do {                                                                                      \
             const uint32_t   cur_tile_n = MIN(d_inner_tile, d_inner_per_hvx - tile_off_fetch);    \
-            const dma_addr_t fetch_ddr  = src0->data + s_fetch * src0_stride_seq_bytes +          \
-                                          (ir0 + tile_off_fetch) * src0_stride_inner_bytes;       \
+            const dma_addr_t fetch_ddr  = src0->data + (s_fetch * src0_stride_seq_bytes +         \
+                                          (ir0 + tile_off_fetch) * src0_stride_inner_bytes);      \
             dma_queue_push(dma_q,                                                                 \
                            dma_make_data((uint8_t *) src0_tile_raw[(c) & 1], fetch_ddr),          \
                            raw_stride_bytes, src0_stride_inner_bytes, row_bytes, cur_tile_n);     \
@@ -599,8 +593,10 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
     uint8_t *        src1_dma_dest = src1_f16 ? (uint8_t *) src1_T : (uint8_t *) src1_raw;
     dma_queue_push(dma_q, dma_make_data(src1_dma_dest, src1_ddr), weight_dma_bytes, weight_dma_bytes, weight_dma_bytes, 1);
 
+    dma_queue_push(dma_q, dma_make_data(dst->data, (uint8_t *) dst_tile[0]), 0, 0, 0, 0);
     SSM_CONV_PUSH_FETCH(0);
     if (n_chunks > 1) {
+        dma_queue_push(dma_q, dma_make_data(dst->data, (uint8_t *) dst_tile[1]), 0, 0, 0, 0);
         SSM_CONV_PUSH_FETCH(1);
     }
 
@@ -625,9 +621,7 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         const float * restrict raw = src0_tile_raw[c & 1];
         float * restrict       out = dst_tile[c & 1];
 
-        if (c >= 2) {
-            dma_queue_pop(dma_q);  // writeback of chunk c-2, frees dst_tile[c & 1]
-        }
+        dma_queue_pop(dma_q);      // writeback of chunk c-2, frees dst_tile[c & 1]
         dma_queue_pop(dma_q);      // fetch chunk c
 
         // Channel block outer, token inner: the taps and the sliding window stay in
@@ -669,7 +663,7 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         }
 
         // Writeback dst_tile VTCM -> DDR via 2D DMA
-        dma_queue_push(dma_q, dma_make_data(dst->data + i3 * dst_stride_seq_bytes + (size_t) (ir0 + tile_off) * dst_elem_size, (uint8_t *) out),
+        dma_queue_push(dma_q, dma_make_data(dst->data + (i3 * dst_stride_seq_bytes + (size_t) (ir0 + tile_off) * dst_elem_size), (uint8_t *) out),
                        dst_stride_token_bytes, dst_vtcm_stride_bytes, (size_t) tile_n * dst_elem_size, n_t);
 
         if (c + 2 < n_chunks) {
@@ -683,9 +677,7 @@ static void ssm_conv_thread_f32_prefill(const htp_thread_t * th, unsigned int nt
         }
     }
 
-    for (uint32_t k = MIN(n_chunks, 2); k > 0; --k) {
-        dma_queue_pop(dma_q);  // drain the last writebacks
-    }
+    dma_queue_flush(dma_q);
 
     #undef SSM_CONV_PUSH_FETCH
 

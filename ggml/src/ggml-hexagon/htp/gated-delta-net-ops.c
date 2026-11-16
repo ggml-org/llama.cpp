@@ -702,14 +702,14 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
 
     uint32_t j = 0;
     for (; j + 8 <= S_v; j += 8) {
-        float * row0 = s_work + (uint64_t) (j + 0) * S_v;
-        float * row1 = s_work + (uint64_t) (j + 1) * S_v;
-        float * row2 = s_work + (uint64_t) (j + 2) * S_v;
-        float * row3 = s_work + (uint64_t) (j + 3) * S_v;
-        float * row4 = s_work + (uint64_t) (j + 4) * S_v;
-        float * row5 = s_work + (uint64_t) (j + 5) * S_v;
-        float * row6 = s_work + (uint64_t) (j + 6) * S_v;
-        float * row7 = s_work + (uint64_t) (j + 7) * S_v;
+        float * row0 = s_work + (j + 0) * S_v;
+        float * row1 = s_work + (j + 1) * S_v;
+        float * row2 = s_work + (j + 2) * S_v;
+        float * row3 = s_work + (j + 3) * S_v;
+        float * row4 = s_work + (j + 4) * S_v;
+        float * row5 = s_work + (j + 5) * S_v;
+        float * row6 = s_work + (j + 6) * S_v;
+        float * row7 = s_work + (j + 7) * S_v;
 
         HVX_Vector vsums = gdn_mul_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
                                             vg, vk, S_v);
@@ -726,10 +726,10 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
         hvx_vec_store_u(out_buf + j, 8 * sizeof(float), res_attn);
     }
     for (; j + 4 <= S_v; j += 4) {
-        float * row0 = s_work + (uint64_t) (j + 0) * S_v;
-        float * row1 = s_work + (uint64_t) (j + 1) * S_v;
-        float * row2 = s_work + (uint64_t) (j + 2) * S_v;
-        float * row3 = s_work + (uint64_t) (j + 3) * S_v;
+        float * row0 = s_work + (j + 0) * S_v;
+        float * row1 = s_work + (j + 1) * S_v;
+        float * row2 = s_work + (j + 2) * S_v;
+        float * row3 = s_work + (j + 3) * S_v;
 
         HVX_Vector vsums = gdn_mul_dot4_f32(row0, row1, row2, row3, vg, vk, S_v);
 
@@ -744,7 +744,7 @@ static __attribute__((noinline)) void gdn_step_kda_f32(
         hvx_vec_store_u(out_buf + j, 4 * sizeof(float), res_attn);
     }
     for (; j < S_v; ++j) {
-        float * row = s_work + (uint64_t) j * S_v;
+        float * row = s_work + j * S_v;
         HVX_Vector vsum = gdn_mul_dot_f32(row, vg, vk, S_v);
         HVX_Vector vv_t = hvx_vec_splat_f32(v_buf[j]);
         HVX_Vector vdj  = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(vv_t, vsum), vbeta);
@@ -787,14 +787,14 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
 
     uint32_t j = 0;
     for (; j + 8 <= S_v; j += 8) {
-        float * row0 = s_work + (uint64_t) (j + 0) * S_v;
-        float * row1 = s_work + (uint64_t) (j + 1) * S_v;
-        float * row2 = s_work + (uint64_t) (j + 2) * S_v;
-        float * row3 = s_work + (uint64_t) (j + 3) * S_v;
-        float * row4 = s_work + (uint64_t) (j + 4) * S_v;
-        float * row5 = s_work + (uint64_t) (j + 5) * S_v;
-        float * row6 = s_work + (uint64_t) (j + 6) * S_v;
-        float * row7 = s_work + (uint64_t) (j + 7) * S_v;
+        float * row0 = s_work + (j + 0) * S_v;
+        float * row1 = s_work + (j + 1) * S_v;
+        float * row2 = s_work + (j + 2) * S_v;
+        float * row3 = s_work + (j + 3) * S_v;
+        float * row4 = s_work + (j + 4) * S_v;
+        float * row5 = s_work + (j + 5) * S_v;
+        float * row6 = s_work + (j + 6) * S_v;
+        float * row7 = s_work + (j + 7) * S_v;
 
         HVX_Vector vsums = gdn_mul_scalar_dot8_f32(row0, row1, row2, row3, row4, row5, row6, row7,
                                                    vgate, vk, S_v);
@@ -811,10 +811,10 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
         hvx_vec_store_u(out_buf + j, 8 * sizeof(float), res_attn);
     }
     for (; j + 4 <= S_v; j += 4) {
-        float * row0 = s_work + (uint64_t) (j + 0) * S_v;
-        float * row1 = s_work + (uint64_t) (j + 1) * S_v;
-        float * row2 = s_work + (uint64_t) (j + 2) * S_v;
-        float * row3 = s_work + (uint64_t) (j + 3) * S_v;
+        float * row0 = s_work + (j + 0) * S_v;
+        float * row1 = s_work + (j + 1) * S_v;
+        float * row2 = s_work + (j + 2) * S_v;
+        float * row3 = s_work + (j + 3) * S_v;
 
         HVX_Vector vsums = gdn_mul_scalar_dot4_f32(row0, row1, row2, row3, vgate, vk, S_v);
 
@@ -829,7 +829,7 @@ static __attribute__((noinline)) void gdn_step_scalar_f32(
         hvx_vec_store_u(out_buf + j, 4 * sizeof(float), res_attn);
     }
     for (; j < S_v; ++j) {
-        float * row = s_work + (uint64_t) j * S_v;
+        float * row = s_work + j * S_v;
         HVX_Vector vsum = gdn_mul_scalar_dot_f32(row, vgate, vk, S_v);
         HVX_Vector vv_t = hvx_vec_splat_f32(v_buf[j]);
         HVX_Vector vdj  = hvx_vec_mul_f32_f32(hvx_vec_sub_f32_f32(vv_t, vsum), vbeta);
@@ -884,8 +884,8 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
     const struct fastdiv_values * fd_rq3 = &kparams->div_rq3;
     const struct fastdiv_values * fd_rk3 = &kparams->div_rk3;
 
-    const uint32_t state_seq_stride = kparams->state_seq_stride;
-    const uint64_t state_size_per_snap = (uint64_t) kparams->state_size_per_snap;
+    const uint32_t state_seq_stride    = kparams->state_seq_stride;
+    const uint32_t state_size_per_snap = kparams->state_size_per_snap;
     const dma_addr_t state_out_dma_base = dst_cache ? dst_cache->data : (dst->data + S_v * H * n_tokens * n_seqs * sizeof(float));
 
     uint32_t ir_prefetch = gctx->row_start + ith;
@@ -895,8 +895,8 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
     for (int step = 0; step < 2 && ir_prefetch < row_end; step++) {
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-        dma_addr_t ps_in  = state->data + ((uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v) * sizeof(float);
-        dma_addr_t ps_out = state_out_dma_base + ((uint64_t) piv3 * H + piv1) * S_v * S_v * sizeof(float);
+        dma_addr_t ps_in  = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
+        dma_addr_t ps_out = state_out_dma_base + (piv3 * H + piv1) * S_v * S_v * sizeof(float);
 
         // Push dummy write-back
         dma_queue_push(dma_q, dma_make_data(ps_out, s_work[spad_idx]),
@@ -929,21 +929,21 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
         const uint32_t iq3 = fastdiv(iv3, fd_rq3);
         const uint32_t ik3 = fastdiv(iv3, fd_rk3);
 
-        dma_addr_t s_out    = state_out_dma_base + ((uint64_t) iv3 * H + iv1) * S_v * S_v * sizeof(float);
-        uint8_t * attn_data = dst_base + ((uint64_t) iv3 * n_tokens * H + iv1) * S_v * dst_elem_size;
+        dma_addr_t s_out    = state_out_dma_base + (iv3 * H + iv1) * S_v * S_v * sizeof(float);
+        uint8_t * attn_data = dst_base + (iv3 * n_tokens * H + iv1) * S_v * dst_elem_size;
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         for (uint32_t t = 0; t < n_tokens; ++t) {
             const void * q_t = (const uint8_t *) (uintptr_t) q->data +
-                    (uint64_t) iq3 * q->nb[3] + (uint64_t) t * q->nb[2] + (uint64_t) iq1 * q->nb[1];
+                    (iq3 * q->nb[3] + t * q->nb[2] + iq1 * q->nb[1]);
             const void * k_t = (const uint8_t *) (uintptr_t) k->data +
-                    (uint64_t) ik3 * k->nb[3] + (uint64_t) t * k->nb[2] + (uint64_t) ik1 * k->nb[1];
+                    (ik3 * k->nb[3] + t * k->nb[2] + ik1 * k->nb[1]);
             const void * v_t = (const uint8_t *) (uintptr_t) v->data +
-                    (uint64_t) iv3 * v->nb[3] + (uint64_t) t * v->nb[2] + (uint64_t) iv1 * v->nb[1];
+                    (iv3 * v->nb[3] + t * v->nb[2] + iv1 * v->nb[1]);
             const float * g_t = (const float *) ((const uint8_t *) (uintptr_t) g->data +
-                    (uint64_t) iv3 * g->nb[3] + (uint64_t) t * g->nb[2] + (uint64_t) iv1 * g->nb[1]);
+                    (iv3 * g->nb[3] + t * g->nb[2] + iv1 * g->nb[1]));
             const float beta_val = *(const float *) ((const uint8_t *) (uintptr_t) beta->data +
-                    (uint64_t) iv3 * beta->nb[3] + (uint64_t) t * beta->nb[2] + (uint64_t) iv1 * beta->nb[1]);
+                    (iv3 * beta->nb[3] + t * beta->nb[2] + iv1 * beta->nb[1]));
 
             if (kparams->kda) {
                 gdn_step_kda_f32(s_work_curr, attn_data, q_t, k_t, v_t, g_t, vtcm_scratch,
@@ -954,14 +954,14 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
             }
 
             if (K > 1) {
-                const int64_t target_slot = (int64_t) n_tokens - 1 - (int64_t) t;
-                if (target_slot > 0 && target_slot < (int64_t) K) {
-                    float * curr_state_o = state_out_base + (uint64_t) target_slot * state_size_per_snap + ((uint64_t) iv3 * H + iv1) * S_v * S_v;
+                const int32_t target_slot = (int32_t) n_tokens - 1 - (int32_t) t;
+                if (target_slot > 0 && target_slot < (int32_t) K) {
+                    float * curr_state_o = state_out_base + (uint32_t) target_slot * state_size_per_snap + (iv3 * H + iv1) * S_v * S_v;
                     gdn_copy_state_f32(curr_state_o, s_work_curr, S_v * S_v);
                 }
             }
 
-            attn_data += (uint64_t) S_v * H * dst_elem_size;
+            attn_data += S_v * H * dst_elem_size;
         }
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
 
@@ -974,7 +974,7 @@ static void gated_delta_net_f32_pp_thread(const htp_thread_t * th, unsigned int 
         if (ir_prefetch < row_end) {
             const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
             const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-            dma_addr_t ps_in = state->data + ((uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v) * sizeof(float);
+            dma_addr_t ps_in = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
 
             dma_queue_push(dma_q, dma_make_data(s_work[spad_idx], ps_in),
                            S_v * sizeof(float), S_v * sizeof(float),
@@ -1040,8 +1040,8 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
     for (int step = 0; step < 2 && ir_prefetch < row_end; step++) {
         const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
         const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-        dma_addr_t ps_in  = state->data + ((uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v) * sizeof(float);
-        dma_addr_t ps_out = state_out_dma_base + ((uint64_t) piv3 * H + piv1) * S_v * S_v * sizeof(float);
+        dma_addr_t ps_in  = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
+        dma_addr_t ps_out = state_out_dma_base + (piv3 * H + piv1) * S_v * S_v * sizeof(float);
 
         // Push dummy write-back
         dma_queue_push(dma_q, dma_make_data(ps_out, s_work[spad_idx]),
@@ -1074,19 +1074,19 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
         const uint32_t iq3 = fastdiv(iv3, fd_rq3);
         const uint32_t ik3 = fastdiv(iv3, fd_rk3);
 
-        dma_addr_t s_out    = state_out_dma_base + ((uint64_t) iv3 * H + iv1) * S_v * S_v * sizeof(float);
-        uint8_t * attn_data = dst_base + ((uint64_t) iv3 * H + iv1) * S_v * dst_elem_size;
+        dma_addr_t s_out    = state_out_dma_base + (iv3 * H + iv1) * S_v * S_v * sizeof(float);
+        uint8_t * attn_data = dst_base + (iv3 * H + iv1) * S_v * dst_elem_size;
 
         const void * q_t = (const uint8_t *) (uintptr_t) q->data +
-                (uint64_t) iq3 * q->nb[3] + (uint64_t) iq1 * q->nb[1];
+                (iq3 * q->nb[3] + iq1 * q->nb[1]);
         const void * k_t = (const uint8_t *) (uintptr_t) k->data +
-                (uint64_t) ik3 * k->nb[3] + (uint64_t) ik1 * k->nb[1];
+                (ik3 * k->nb[3] + ik1 * k->nb[1]);
         const void * v_t = (const uint8_t *) (uintptr_t) v->data +
-                (uint64_t) iv3 * v->nb[3] + (uint64_t) iv1 * v->nb[1];
+                (iv3 * v->nb[3] + iv1 * v->nb[1]);
         const float * g_t = (const float *) ((const uint8_t *) (uintptr_t) g->data +
-                (uint64_t) iv3 * g->nb[3] + (uint64_t) iv1 * g->nb[1]);
+                (iv3 * g->nb[3] + iv1 * g->nb[1]));
         const float beta_val = *(const float *) ((const uint8_t *) (uintptr_t) beta->data +
-                (uint64_t) iv3 * beta->nb[3] + (uint64_t) iv1 * beta->nb[1]);
+                (iv3 * beta->nb[3] + iv1 * beta->nb[1]));
 
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) ir);
         if (kparams->kda) {
@@ -1107,7 +1107,7 @@ static void gated_delta_net_f32_tg_thread(const htp_thread_t * th, unsigned int 
         if (ir_prefetch < row_end) {
             const uint32_t piv1 = fastmodulo(ir_prefetch, H, fd_H);
             const uint32_t piv3 = fastdiv(ir_prefetch, fd_H);
-            dma_addr_t ps_in = state->data + ((uint64_t) piv3 * state_seq_stride + (uint64_t) piv1 * S_v * S_v) * sizeof(float);
+            dma_addr_t ps_in = state->data + (piv3 * state_seq_stride + piv1 * S_v * S_v) * sizeof(float);
 
             dma_queue_push(dma_q, dma_make_data(s_work[spad_idx], ps_in),
                            S_v * sizeof(float), S_v * sizeof(float),
@@ -1587,9 +1587,9 @@ static inline void gdn_dma_push_chunk_inputs(
     uint32_t chunk_size,
     uint32_t S_v
 ) {
-    const dma_addr_t q_dma = q->data + (uint64_t) iq3 * q->nb[3] + (uint64_t) t_chunk * q->nb[2] + (uint64_t) iq1 * q->nb[1];
-    const dma_addr_t k_dma = k->data + (uint64_t) ik3 * k->nb[3] + (uint64_t) t_chunk * k->nb[2] + (uint64_t) ik1 * k->nb[1];
-    const dma_addr_t v_dma = v->data + (uint64_t) iv3 * v->nb[3] + (uint64_t) t_chunk * v->nb[2] + (uint64_t) iv1 * v->nb[1];
+    const dma_addr_t q_dma = q->data + (iq3 * q->nb[3] + t_chunk * q->nb[2] + iq1 * q->nb[1]);
+    const dma_addr_t k_dma = k->data + (ik3 * k->nb[3] + t_chunk * k->nb[2] + ik1 * k->nb[1]);
+    const dma_addr_t v_dma = v->data + (iv3 * v->nb[3] + t_chunk * v->nb[2] + iv1 * v->nb[1]);
 
     const uint32_t q_row_bytes = S_v * ((q->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
     const uint32_t k_row_bytes = S_v * ((k->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float));
@@ -1612,8 +1612,8 @@ static inline void gdn_dma_push_chunk_gb(
     uint32_t chunk_size,
     uint32_t n_batch
 ) {
-    const dma_addr_t g_dma    = g->data + (uint64_t) iv3 * g->nb[3] + (uint64_t) t_chunk * g->nb[2] + (uint64_t) iv1 * g->nb[1];
-    const dma_addr_t beta_dma = beta->data + (uint64_t) iv3 * beta->nb[3] + (uint64_t) t_chunk * beta->nb[2] + (uint64_t) iv1 * beta->nb[1];
+    const dma_addr_t g_dma    = g->data + (iv3 * g->nb[3] + t_chunk * g->nb[2] + iv1 * g->nb[1]);
+    const dma_addr_t beta_dma = beta->data + (iv3 * beta->nb[3] + t_chunk * beta->nb[2] + iv1 * beta->nb[1]);
     const uint32_t row_bytes  = n_batch * sizeof(float);
     const uint32_t dst_stride = (n_batch > 1) ? row_bytes + sizeof(float) : row_bytes;
 
@@ -1793,11 +1793,11 @@ static inline void gdn_init_head_ptrs(
     head->ik3 = fastdiv(head->iv3, &kparams->div_rk3);
 
     head->state_in_dma = state->data +
-        ((uint64_t) head->iv3 * kparams->state_seq_stride + (uint64_t) head->iv1 * S_v * S_v) * sizeof(float);
+        (head->iv3 * kparams->state_seq_stride + head->iv1 * S_v * S_v) * sizeof(float);
 
     head->state_out_dma = dst_cache ?
-        (dst_cache->data + ((uint64_t) head->iv3 * H + head->iv1) * S_v * S_v * sizeof(float)) :
-        (dst->data + ((uint64_t) S_v * H * n_tokens * kparams->n_seqs + (uint64_t) (head->iv3 * H + head->iv1) * S_v * S_v) * sizeof(float));
+        (dst_cache->data + (head->iv3 * H + head->iv1) * S_v * S_v * sizeof(float)) :
+        (dst->data + (S_v * H * n_tokens * kparams->n_seqs + (head->iv3 * H + head->iv1) * S_v * S_v) * sizeof(float));
 }
 
 struct htp_gdn_batch_context {
@@ -2441,7 +2441,7 @@ static int gated_delta_net_f32_hmx_chunked(
             const uint32_t valid_tokens = hex_smin(chunk_size, n_tokens - t_chunk);
             for (uint32_t h = 0; h < n_batch; ++h) {
                 const dma_addr_t attn_chunk_dma = dst->data +
-                    ((uint64_t) heads[h].iv3 * n_tokens * H + (uint64_t) t_chunk * H + heads[h].iv1) * row_out_bytes;
+                    (heads[h].iv3 * n_tokens * H + t_chunk * H + heads[h].iv1) * row_out_bytes;
                 dma_queue_push(dma_q, dma_make_data(attn_chunk_dma, heads[h].o_f32[curr_buf]),
                                dst->nb[1], row_out_bytes, row_out_bytes, valid_tokens);
             }

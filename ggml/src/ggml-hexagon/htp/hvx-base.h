@@ -404,7 +404,7 @@ static inline void hvx_transpose_32x32_w_shuff(uint8_t * restrict dst, uint32_t 
     }
 }
 
-// Specialized store that will follow outstanding scatters or gathers to make sure they complete
+// Drain outstanding vscatter/vgather before DMA, HMX, or scalar access to the VTCM region.
 static inline void hvx_gather_sync(void * vtcm_addr) {
     asm volatile("vmem(%0+#0):scatter_release\n"
                  "v0 = vmem(%0+#0)\n" :: "r"(vtcm_addr) : "v0", "memory");
@@ -428,7 +428,7 @@ static inline HVX_Vector hvx_vec_gather_offsets_h(uint32_t stride) {
 }
 
 // Rows [0, nrows) of the transpose of ncols src vectors (src_stride apart) to dst.
-// src, dst in VTCM. Async: hvx_gather_sync() before use.
+// src, dst in VTCM. Async: call hvx_gather_sync() before DMA, HMX, or scalar access.
 // Use for partial tiles (small ncols). Fewest packets.
 static inline void hvx_transpose_32x32_w_gather(uint8_t * restrict dst, uint32_t dst_stride, const uint8_t * restrict src,
                                                 uint32_t src_stride, HVX_Vector offsets, uint32_t nrows, uint32_t ncols) {
