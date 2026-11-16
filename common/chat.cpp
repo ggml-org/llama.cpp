@@ -318,6 +318,7 @@ struct common_chat_templates {
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
     std::unique_ptr<common_chat_template> template_tts;  // the prompt of a text to speak
+    std::shared_ptr<common_tts_dicts> tts_dicts;         // dictionaries of the model for tts_dict(), by name
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -806,10 +807,10 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 }
 
 // renders a task template (e.g. "tts") with the given variables
-static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars) {
+static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars, const std::shared_ptr<common_tts_dicts> & tts_dicts) {
     jinja::context ctx(tmpl.source());
-    // text normalization helpers: tts_norm_scan() and tts_norm_sub(), see docs/tts-norm-patterns.md
-    common_chat_tts_norm_add_builtins(ctx);
+    // text normalization helpers: tts_norm_scan(), tts_norm_sub() and tts_dict(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx, tts_dicts);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
@@ -893,7 +894,7 @@ std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templa
         {"messages", json::array({{{"role", "user"}, {"content", text}}})},
         {"language", language},
         {"voice",    voice},
-    });
+    }, chat_templates->tts_dicts);
 }
 
 std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,
@@ -1023,6 +1024,23 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model * 
             } catch (const std::exception & e) {
                 LOG_ERR("%s: failed to parse the tts chat template (ignoring it): %s\n", __func__, e.what());
             }
+        }
+        // dictionaries for tts_dict(): tokenizer.tts_dict.<name>
+        const std::string dict_prefix = "tokenizer.tts_dict.";
+        tmpls->tts_dicts = std::make_shared<common_tts_dicts>();
+        for (int32_t i = 0; i < llama_model_meta_count(model); i++) {
+            char key[256];
+            if (llama_model_meta_key_by_index(model, i, key, sizeof(key)) < 0 || std::string(key).rfind(dict_prefix, 0) != 0) {
+                continue;
+            }
+            const int32_t len = llama_model_meta_val_str_by_index(model, i, nullptr, 0);
+            if (len < 0) {
+                continue;
+            }
+            std::string dict(len + 1, '\0');
+            llama_model_meta_val_str_by_index(model, i, dict.data(), dict.size());
+            dict.resize(len);
+            (*tmpls->tts_dicts)[key + dict_prefix.size()] = std::move(dict);
         }
     }
     return tmpls;

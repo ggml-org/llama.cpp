@@ -45,11 +45,33 @@ static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 static void test_tts_norm_patterns(testing & t);
+static void test_tts_dict(testing & t);
 static void test_tts_template_zonos3(testing & t);
 
 static void test_shared_render(testing & t);
 
 static bool g_python_mode = false;
+
+// dictionaries given to tts_dict() in tests: lines "key<TAB>json", sorted by the bytes of the key
+static std::shared_ptr<const common_tts_dicts> test_tts_dicts() {
+    static const auto dicts = std::make_shared<const common_tts_dicts>(common_tts_dicts{
+        {"lex",
+            "\t\"empty\"\n"
+            "Zed\t\"z3d\"\n"
+            "hello\t\"h@loU\"\n"
+            "list\t[1,2,null]\n"
+            "null\tnull\n"
+            "read\t{\"DEFAULT\":\"rid\",\"VBD\":\"rEd\"}\n"
+            "w1\t{\"a\":1.5,\"b\":-2}\n"
+            "w2\t{\"a\":0.25}\n"
+            "zoo\t\"zu\"\n"
+            "\xc3\xa9t\xc3\xa9\t\"ete\"\n"
+            "\xe6\x97\xa5\t\"ni\""},
+        {"other", "hello\t\"bonjour\""},
+        {"empty", ""},
+    });
+    return dicts;
+}
 
 int main(int argc, char *argv[]) {
     testing t(std::cout);
@@ -85,6 +107,7 @@ int main(int argc, char *argv[]) {
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
     t.test("tts norm patterns", test_tts_norm_patterns);
+    t.test("tts dict", test_tts_dict);
     t.test("tts template zonos3", test_tts_template_zonos3);
     if (!g_python_mode) {
         t.test("shared render", test_shared_render);
@@ -3041,6 +3064,74 @@ static void test_tts_norm_patterns(testing & t) {
     }
 }
 
+// tts_dict(name, key): dictionaries of the model, see docs/tts-norm-patterns.md
+// only available to task templates, like tts_norm_scan(); the dictionaries of test_tts_dicts() stand for the ones of a model
+static void test_tts_dict(testing & t) {
+    test_template(t, "tts_dict is defined for task templates",
+        "{{ tts_dict is defined }}",
+        json::object(), "True", true);
+
+    test_template(t, "tts_dict returns the decoded JSON value",
+        "{{ tts_dict('lex', 'hello') }}|{{ tts_dict('lex', 'read').VBD }}|{{ tts_dict('lex', 'read') is mapping }}|{{ tts_dict('lex', 'list')[1] + 1 }}",
+        json::object(), "h@loU|rEd|True|3", true);
+
+    test_template(t, "tts_dict returns none for a missing key",
+        "{{ tts_dict('lex', 'nope') is none }}|{{ tts_dict('lex', 'hell') is none }}|{{ tts_dict('lex', 'hello!') is none }}|{{ tts_dict('lex', 'Hello') is none }}",
+        json::object(), "True|True|True|True", true);
+
+    test_template(t, "tts_dict first, last, empty and non-ASCII keys",
+        "{{ tts_dict('lex', '') }}|{{ tts_dict('lex', 'Zed') }}|{{ tts_dict('lex', 'zoo') }}|{{ tts_dict('lex', '\xc3\xa9t\xc3\xa9') }}|{{ tts_dict('lex', '\xe6\x97\xa5') }}",
+        json::object(), "empty|z3d|zu|ete|ni", true);
+
+    test_template(t, "tts_dict null value is none, like a missing key",
+        "{{ tts_dict('lex', 'null') is none }}",
+        json::object(), "True", true);
+
+    test_template(t, "tts_dict selects the dictionary by name",
+        "{{ tts_dict('other', 'hello') }}|{{ tts_dict('other', 'zoo') is none }}|{{ tts_dict('empty', 'hello') is none }}",
+        json::object(), "bonjour|True|True", true);
+
+    test_template(t, "tts_dict perceptron-style score",
+        "{%- set ws = [tts_dict('lex', 'w1'), tts_dict('lex', 'w2')] -%}"
+        "{{ ws | map(attribute='a', default=0.0) | sum }}|{{ ws | map(attribute='b', default=0.0) | sum }}",
+        json::object(), "1.75|-2.0", true);
+
+    if (!g_python_mode) {
+        test_template_error(t, "error: unknown dictionary",      "{{ tts_dict('nope', 'a') }}", "unknown dictionary 'nope'", true);
+        test_template_error(t, "error: key must be a string",    "{{ tts_dict('lex', 1) }}",    "expected value of type", true);
+        test_template_error(t, "error: missing argument",        "{{ tts_dict('lex') }}",       "expected between 2 and 2 arguments", true);
+
+        t.test("malformed dictionary line", [](testing & t) {
+            std::string value;
+            bool thrown = false;
+            try {
+                common_tts_dict_find("a\t1\nno tab here\nz\t2", "m", value);
+            } catch (const std::exception &) {
+                thrown = true;
+            }
+            t.assert_true("throws", thrown);
+        });
+
+        t.test("every key of a large dictionary is found", [](testing & t) {
+            std::string dict;
+            for (int i = 0; i < 1000; i++) {
+                char line[32];
+                snprintf(line, sizeof(line), "%sk%04d\t%d", i ? "\n" : "", i, i);
+                dict += line;
+            }
+            bool ok = true;
+            std::string value;
+            for (int i = 0; i < 1000; i++) {
+                char key[16];
+                snprintf(key, sizeof(key), "k%04d", i);
+                ok = ok && common_tts_dict_find(dict, key, value) && value == std::to_string(i);
+            }
+            ok = ok && !common_tts_dict_find(dict, "k", value) && !common_tts_dict_find(dict, "k10000", value) && !common_tts_dict_find(dict, "a", value);
+            t.assert_true("all found, none extra", ok);
+        });
+    }
+}
+
 // the ZONOS3 "tts" template spells out numbers in en, fr, de, es, it, pt, ja and zh, other languages pass through
 static void test_tts_template_zonos3(testing & t) {
     std::string path = __FILE__;
@@ -3115,7 +3206,7 @@ static void test_template_error(testing & t, const std::string & name, const std
             jinja::program ast = jinja::parse_from_tokens(lexer.tokenize(tmpl));
             jinja::context ctx(tmpl);
             if (tts_norm) {
-                common_chat_tts_norm_add_builtins(ctx);
+                common_chat_tts_norm_add_builtins(ctx, test_tts_dicts());
             }
             jinja::runtime runtime(ctx);
             runtime.gather_string_parts(runtime.execute(ast));
@@ -3135,7 +3226,7 @@ static void test_template_cpp(testing & t, const std::string & name, const std::
 
         jinja::context ctx(tmpl);
         if (tts_norm) {
-            common_chat_tts_norm_add_builtins(ctx);
+            common_chat_tts_norm_add_builtins(ctx, test_tts_dicts());
         }
         jinja::global_from_json(ctx, vars, true);
 
@@ -3196,6 +3287,7 @@ if merged_input.get("tts_norm_ref"):
     spec.loader.exec_module(chat_tts_norm)
     env.globals["tts_norm_scan"] = chat_tts_norm.tts_norm_scan
     env.globals["tts_norm_sub"] = chat_tts_norm.tts_norm_sub
+    env.globals["tts_dict"] = chat_tts_norm.make_tts_dict(merged_input["tts_dicts"])
 
 template = env.from_string(tmpl)
 result = template.render(**vars_json)
@@ -3217,6 +3309,7 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         merged["vars"] = vars;
         if (tts_norm) {
             merged["tts_norm_ref"] = tts_norm_ref_path();
+            merged["tts_dicts"]    = *test_tts_dicts();
         }
 
 #ifdef _WIN32
