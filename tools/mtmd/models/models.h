@@ -674,8 +674,7 @@ struct mtmd_graph_yue2_gen : mtmd_graph_snake_vae {
 
 //
 // MiniMax Music 3 generation, see mtmd_gen_wav_music3() for the flow-matching loop:
-// GEN_CODE  = depth decoder of one frame: backbone hidden rows (cond, then uncond with guidance) + semantic code
-//             -> the 8 codes, the next backbone input and the condition row (mix of the 8 hidden states of the frame)
+// GEN_CODE  = depth decoder of one frame: backbone hidden rows (cond, then uncond with guidance) + semantic code -> the 8 codes, the next backbone input and the condition row (mix of the 8 hidden states of the frame)
 // FLOW_COND = condition rows of a window -> DiT condition, resampled to the latent rate
 // FLOW_STEP = one DiT pass, cond and uncond rows as a batch of 2
 // GEN_WAV   = DAC decoder, latent rows -> interleaved stereo PCM

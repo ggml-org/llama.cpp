@@ -3036,8 +3036,10 @@ struct mtmd_model_loader {
                     if (m.dit.empty() || m.cond_layer_w->ne[0] != model.gen_code_head_w->ne[2] + 1 ||
                             m.cond_w->ne[0] != 3 || m.cond_w->ne[1] != hparams.n_embd ||
                             m.pre_w->ne[0] != 2 * g::n_latent + n_cond || m.pre_w->ne[1] != m.pre_w->ne[0] ||
-                            m.proj_in_w->ne[0] != m.pre_w->ne[0] || m.proj_out_w->ne[1] != g::n_latent ||
-                            m.time_freq->ne[0] * 2 != m.time_in_w->ne[0] || m.time_out_w->ne[1] != n_dit_embd ||
+                            m.proj_in_w->ne[0] != m.pre_w->ne[0] || m.proj_out_w->ne[0] != n_dit_embd || m.proj_out_w->ne[1] != g::n_latent ||
+                            m.post_w->ne[0] != g::n_latent || m.post_w->ne[1] != g::n_latent || m.cond_b->ne[0] != n_cond ||
+                            m.time_freq->ne[0] * 2 != m.time_in_w->ne[0] || m.time_in_w->ne[1] != m.time_out_w->ne[0] ||
+                            m.time_in_b->ne[0] != m.time_in_w->ne[1] || m.time_out_w->ne[1] != n_dit_embd || m.time_out_b->ne[0] != n_dit_embd ||
                             n_dit_embd % g::dit_d_head != 0 ||
                             vae.ratio() != g::vae_ratio || vae.n_latent() * 2 != g::n_latent || vae.out_w->ne[2] != 1) {
                         throw std::runtime_error(mtmd_format("%s: minimax_music3: unexpected DiT or vocoder layout\n", __func__));

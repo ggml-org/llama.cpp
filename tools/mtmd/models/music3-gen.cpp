@@ -9,7 +9,7 @@ int64_t mtmd_graph_music3_gen::latent_frames(int64_t n_frames) {
 }
 
 // one frame of the depth decoder (RVQDepthDecoder): row 0 is the backbone hidden, row p > 0 the embedding of code p - 1
-// each step reruns the 4 layers over the rows so far (at most 9, no KV cache), like the reference
+// each step reruns the 4 layers over the rows so far (at most 8, no KV cache), like the reference
 ggml_cgraph * mtmd_graph_music3_gen::build_depth() {
     const int64_t n_cb  = model.gen_code_head_w->ne[2]; // residual codebooks
     const int64_t n_voc = model.gen_code_head_w->ne[1];

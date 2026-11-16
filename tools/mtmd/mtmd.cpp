@@ -3131,6 +3131,8 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
     }
     state->zonos3_synth.reset();
+    state->flow_prev_latent.clear();
+    state->flow_prev_cond.clear();
 }
 
 // zonos3 GEN_WAV: n_codes == 0 flushes and resets the state
@@ -3594,7 +3596,7 @@ static int32_t mtmd_gen_wav_music3(mtmd_context * ctx, mtmd_gen_state * state, c
 
     // the next window starts from latent frames [L - 2 * n_overlap, L - n_overlap) of this one
     const size_t s0 = n_lat > 2 * (size_t) g::n_overlap ? n_lat - 2 * g::n_overlap : 0;
-    const size_t s1 = std::max(s0, n_lat > (size_t) g::n_overlap ? n_lat - g::n_overlap : 0);
+    const size_t s1 = n_lat > (size_t) g::n_overlap ? n_lat - g::n_overlap : 0;
     prev_lat.assign(x.begin() + s0 * n_lc, x.begin() + s1 * n_lc);
     prev_cond.assign(cond.begin() + s0 * n_cond, cond.begin() + s1 * n_cond);
 

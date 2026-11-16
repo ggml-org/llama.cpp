@@ -262,24 +262,24 @@ class MiniMaxMusic3MmprojModel(MmprojModel):
             yield (f"{dst}.beta", b)
 
         p = "a.gen.vae"
-        yield (f"{p}.in_proj.weight", get("dec_in_proj.weight").float())
-        yield (f"{p}.in_proj.bias",   get("dec_in_proj.bias").float())
+        yield (f"{p}.in_proj.weight", get("dec_in_proj.weight"))
+        yield (f"{p}.in_proj.bias",   get("dec_in_proj.bias"))
         yield (f"{p}.conv_in.weight", wn("conv_in"))
-        yield (f"{p}.conv_in.bias",   get("conv_in.bias").float())
+        yield (f"{p}.conv_in.bias",   get("conv_in.bias"))
         n_blk = len(self.global_config["vocoder"]["upsampling_ratios"])
         for b in range(n_blk):
             s = f"blocks.{b}"
             yield from snake(f"{p}.blk.{b}.snake", f"{s}.snake1")
             yield (f"{p}.blk.{b}.up.weight", wn(f"{s}.conv_t1"))
-            yield (f"{p}.blk.{b}.up.bias",   get(f"{s}.conv_t1.bias").float())
+            yield (f"{p}.blk.{b}.up.bias",   get(f"{s}.conv_t1.bias"))
             for r in range(3):
                 rs = f"{s}.res_unit{r + 1}"
                 yield from snake(f"{p}.blk.{b}.res.{r}.snake1", f"{rs}.snake1")
                 yield (f"{p}.blk.{b}.res.{r}.conv1.weight", wn(f"{rs}.conv1"))
-                yield (f"{p}.blk.{b}.res.{r}.conv1.bias",   get(f"{rs}.conv1.bias").float())
+                yield (f"{p}.blk.{b}.res.{r}.conv1.bias",   get(f"{rs}.conv1.bias"))
                 yield from snake(f"{p}.blk.{b}.res.{r}.snake2", f"{rs}.snake2")
                 yield (f"{p}.blk.{b}.res.{r}.conv2.weight", wn(f"{rs}.conv2"))
-                yield (f"{p}.blk.{b}.res.{r}.conv2.bias",   get(f"{rs}.conv2.bias").float())
+                yield (f"{p}.blk.{b}.res.{r}.conv2.bias",   get(f"{rs}.conv2.bias"))
         yield from snake(f"{p}.post_snake", "snake_out")
         yield (f"{p}.conv_out.weight", wn("conv_out"))
-        yield (f"{p}.conv_out.bias",   get("conv_out.bias").float())
+        yield (f"{p}.conv_out.bias",   get("conv_out.bias"))

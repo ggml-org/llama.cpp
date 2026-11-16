@@ -3827,10 +3827,6 @@ public:
             LOG_ERR("mtmd_helper_gen_audio: the vocab of the backbone has no minimax_music3 audio codes\n");
             return false;
         }
-        if (n_embd != llama_model_n_embd(model) || mtmd_gen_audio_get_info(mctx).n_channels != 2) {
-            LOG_ERR("mtmd_helper_gen_audio: the mmproj does not match the backbone\n");
-            return false;
-        }
         return true;
     }
 
@@ -3851,6 +3847,7 @@ public:
         h_rows.clear();
         n_gen = 0;
         cond_rows.clear();
+        n_rows_dropped = 0;
         n_win_done = 0;
         done = false;
         decoded = false;
@@ -3954,13 +3951,13 @@ public:
         *out_stop    = false;
 
         // the first frame only moves the backbone past <|audio_start|>, its condition row is dropped like the reference
-        const size_t n_rows = cond_rows.size();
-        while (!done && cond_rows.size() == n_rows) {
+        const size_t n_rows = n_frames();
+        while (!done && n_frames() == n_rows) {
             if (!gen_frame()) {
                 return 1;
             }
         }
-        if (cond_rows.size() == n_rows) {
+        if (n_frames() == n_rows) {
             *out_stop = true;
             return 0;
         }
@@ -4028,7 +4025,7 @@ public:
         if (decoded) {
             return 0;
         }
-        if (cond_rows.empty()) {
+        if (n_frames() == 0) {
             LOG_ERR("mtmd_helper_gen_audio: minimax_music3 stopped before the first frame\n");
             return 1;
         }
@@ -4072,7 +4069,7 @@ private:
     }
 
     size_t n_frames() const {
-        return cond_rows.size() / (size_t) n_embd;
+        return n_rows_dropped + cond_rows.size() / (size_t) n_embd;
     }
 
     static size_t window_start(size_t k) {
@@ -4218,7 +4215,7 @@ private:
         const size_t e = std::min(s + win_frames, n_frames());
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
-        inp.feats   = cond_rows.data() + s * n_embd;
+        inp.feats   = cond_rows.data() + (s - n_rows_dropped) * n_embd;
         inp.n_feats = (e - s) * n_embd;
         inp.n_steps = flow_steps;
         mtmd_gen_out out{};
@@ -4236,6 +4233,10 @@ private:
         }
         audio_pcm.insert(audio_pcm.end(), out.audio + left * n_ch, out.audio + (n - right) * n_ch);
         n_win_done++;
+        // the rows before the next window are not needed anymore
+        const size_t n_drop = std::min(window_start(n_win_done), n_frames()) - n_rows_dropped;
+        cond_rows.erase(cond_rows.begin(), cond_rows.begin() + n_drop * n_embd);
+        n_rows_dropped += n_drop;
         return true;
     }
 
@@ -4254,7 +4255,8 @@ private:
     std::vector<float> logits_uncond;
     std::vector<float> h_rows;        // backbone hidden of the cond, then uncond sequence
     size_t n_gen = 0;                 // frames sampled, the first one included
-    std::vector<float> cond_rows;     // one condition row per frame
+    std::vector<float> cond_rows;     // one condition row per frame, from frame n_rows_dropped
+    size_t n_rows_dropped = 0;
     size_t n_win_done = 0;
     bool done    = false;
     bool decoded = false;
