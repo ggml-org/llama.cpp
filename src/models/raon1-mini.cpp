@@ -165,44 +165,6 @@ std::unique_ptr<llm_graph_context> llama_model_raon1_mini::build_arch_graph(cons
     return std::make_unique<graph>(params);
 }
 
-// causal conv1d over one third (qkv = 0, 1, 2) of the shared Q/K/V conv state, with the rollback snapshots
-// x_proj: (d_inner, n_tokens); returns (head_dim, n_head, n_seq_tokens, n_seqs)
-ggml_tensor * llama_model_raon1_mini::graph::build_rda_conv(
-        llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_seq, ggml_tensor * x_proj,
-        ggml_tensor * conv_w, int64_t qkv, int il) {
-    const auto * mctx_cur = inp_rs->mctx;
-
-
-    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
-    const int64_t n_seqs       = ubatch.n_seqs;
-
-    const int64_t head_dim        = hparams.n_embd_head_kda;
-    const int64_t d_conv          = hparams.ssm_d_conv;
-    const int64_t d_inner         = head_dim * n_head;
-    const int64_t conv_state_size = (d_conv - 1) * d_inner;
-    const int64_t n_embd_r_total  = 3 * conv_state_size;
-
-    ggml_tensor * conv_states_mem = mctx_cur->get_r_l(il);
-
-    ggml_tensor * conv_state_x = ggml_view_3d(ctx0, conv_states_seq, d_conv - 1, d_inner, n_seqs,
-        (d_conv - 1)   * ggml_element_size(conv_states_seq),
-        n_embd_r_total * ggml_element_size(conv_states_seq),
-        qkv * conv_state_size * ggml_element_size(conv_states_seq));
-
-    ggml_tensor * x_3d   = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
-    ggml_tensor * conv_x = ggml_concat(ctx0, conv_state_x, ggml_transpose(ctx0, x_3d), 0);
-
-    build_conv_state_store(inp_rs, conv_states_mem, conv_x, d_conv - 1,
-        ggml_row_size(conv_states_mem->type, qkv * conv_state_size));
-
-    ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
-    ggml_tensor * Xcur = ggml_ssm_conv(ctx0, conv_x, conv_weight);
-    Xcur = ggml_reshape_2d(ctx0, Xcur, d_inner, n_tokens);
-    Xcur = ggml_silu(ctx0, Xcur);
-
-    return ggml_reshape_4d(ctx0, Xcur, head_dim, n_head, n_seq_tokens, n_seqs);
-}
-
 // decay gate from x = f_b(f_a(cur)) + dt_bias; ssm_a holds -exp(A_log)
 // with gate_lower_bound: g = lower_bound * sigmoid(exp(A_log) * x), else g = -softplus(exp(A_log) * x)
 ggml_tensor * llama_model_raon1_mini::graph::build_rda_gate(ggml_tensor * x, ggml_tensor * ssm_a) {
@@ -226,15 +188,20 @@ ggml_tensor * llama_model_raon1_mini::graph::build_rda_gate(ggml_tensor * x, ggm
 ggml_tensor * llama_model_raon1_mini::graph::build_rda_layer(
         ggml_tensor * cur, const llama_layer & layer, llm_graph_input_rs * inp_rs, int il) {
     const int64_t head_dim     = hparams.n_embd_head_kda;
+    const int64_t d_conv       = hparams.ssm_d_conv;
     const int64_t d_inner      = head_dim * n_head;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
     const int64_t n_seqs       = ubatch.n_seqs;
 
-    ggml_tensor * conv_states_seq = build_rs(inp_rs, inp_rs->mctx->get_r_l(il), hparams.n_embd_r(), n_seqs);
+    ggml_tensor * conv_states_all = inp_rs->mctx->get_r_l(il);
+    ggml_tensor * conv_states_seq = build_rs(inp_rs, conv_states_all, hparams.n_embd_r(), n_seqs);
 
-    ggml_tensor * Qcur = build_rda_conv(inp_rs, conv_states_seq, build_lora_mm(layer.wq, cur), layer.ssm_q_conv, 0, il);
-    ggml_tensor * Kcur = build_rda_conv(inp_rs, conv_states_seq, build_lora_mm(layer.wk, cur), layer.ssm_k_conv, 1, il);
-    ggml_tensor * Vcur = build_rda_conv(inp_rs, conv_states_seq, build_lora_mm(layer.wv, cur), layer.ssm_v_conv, 2, il);
+    ggml_tensor * Qcur = build_kda_conv1d(inp_rs, conv_states_all, conv_states_seq, 0, build_lora_mm(layer.wq, cur),
+            layer.ssm_q_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+    ggml_tensor * Kcur = build_kda_conv1d(inp_rs, conv_states_all, conv_states_seq, 1, build_lora_mm(layer.wk, cur),
+            layer.ssm_k_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
+    ggml_tensor * Vcur = build_kda_conv1d(inp_rs, conv_states_all, conv_states_seq, 2, build_lora_mm(layer.wv, cur),
+            layer.ssm_v_conv, d_conv, head_dim, n_head, n_seq_tokens, n_seqs);
     cb(Qcur, "rda_q_conv", il);
     cb(Kcur, "rda_k_conv", il);
     cb(Vcur, "rda_v_conv", il);
