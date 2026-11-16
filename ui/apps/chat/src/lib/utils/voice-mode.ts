@@ -1,4 +1,7 @@
-import { VOICE_MODE_MESSAGE } from '#lib/constants/voice.constants.ts';
+import {
+	VOICE_MODE_MESSAGE,
+	VOICE_TRANSCRIPTION_MODEL_AUTO
+} from '#lib/constants/voice.constants.ts';
 import { VoiceInputMode, VoiceMode } from '#lib/enums/index.ts';
 
 export interface VoiceModeInput {
@@ -8,9 +11,11 @@ export interface VoiceModeInput {
 	chatModel: string | null;
 	chatModelHasAudio: boolean;
 	isRouter: boolean;
-	/** The Transcription model setting; empty means the chat model. */
+	/** The Transcription model setting; VOICE_TRANSCRIPTION_MODEL_AUTO picks one. */
 	transcriptionModel: string;
 	transcriptionModelHasAudio: boolean;
+	/** Router mode: a loaded model with audio input, which Automatic falls back to. */
+	loadedAudioModel?: string | null;
 }
 
 export type VoiceModeResolution =
@@ -31,7 +36,8 @@ export type VoiceModeResolution =
 /**
  * What a recording becomes for the conversation's model. Automatic sends the voice to a
  * model with audio input and dictates otherwise; dictation transcribes with the chat model
- * when it can hear, else (router mode) with the chosen transcription model.
+ * when it can hear, else (router mode) with the chosen transcription model or, on
+ * Automatic, a model with audio input that is already loaded.
  */
 export function resolveVoiceMode(input: VoiceModeInput): VoiceModeResolution {
 	const { chatModel, chatModelHasAudio, isRouter, setting } = input;
@@ -45,13 +51,24 @@ export function resolveVoiceMode(input: VoiceModeInput): VoiceModeResolution {
 	}
 
 	// a single-model server has no other model to transcribe with
-	const chosen = isRouter ? input.transcriptionModel.trim() : '';
+	if (!isRouter) return { mode: VoiceMode.UNAVAILABLE, reason: VOICE_MODE_MESSAGE.unavailable };
 
-	if (chosen && input.transcriptionModelHasAudio) {
+	const chosen = input.transcriptionModel.trim();
+
+	if (chosen !== VOICE_TRANSCRIPTION_MODEL_AUTO) {
+		if (input.transcriptionModelHasAudio) {
+			return {
+				mode: VoiceMode.DICTATION,
+				separateModel: chosen !== chatModel,
+				transcriptionModel: chosen
+			};
+		}
+	} else if (input.loadedAudioModel) {
+		// already loaded, so transcribing swaps no model in or out
 		return {
 			mode: VoiceMode.DICTATION,
-			separateModel: chosen !== chatModel,
-			transcriptionModel: chosen
+			separateModel: false,
+			transcriptionModel: input.loadedAudioModel
 		};
 	}
 

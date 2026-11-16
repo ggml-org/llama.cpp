@@ -4,6 +4,7 @@ import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
+import { VOICE_TRANSCRIPTION_MODEL_AUTO } from './voice.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
 import AudioLines from '@lucide/svelte/icons/audio-lines';
 import Code from '@lucide/svelte/icons/code';
@@ -427,8 +428,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.SELECT
 			},
 			{
-				defaultValue: '',
-				help: 'The model that turns speech into text when the chat model has no audio input. Empty uses the chat model.',
+				defaultValue: VOICE_TRANSCRIPTION_MODEL_AUTO,
+				help: 'The model that turns speech into text when the chat model has no audio input. Automatic uses a model with audio input that is already loaded, so dictating loads nothing.',
 				key: SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL,
 				label: 'Transcription model',
 				standaloneField: false,

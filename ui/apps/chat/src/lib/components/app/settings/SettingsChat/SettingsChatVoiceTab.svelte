@@ -6,7 +6,11 @@
 	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import * as Select from '@ggml-org/llama-ui/ui/select';
 	import { SettingsChatFields } from '#lib/components/app/settings/index.ts';
-	import { SETTING_CONFIG_INFO, SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import {
+		SETTING_CONFIG_INFO,
+		SETTINGS_KEYS,
+		VOICE_TRANSCRIPTION_MODEL_AUTO
+	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
 
 	interface Props {
@@ -18,13 +22,12 @@
 	let { fields, localConfig, onConfigChange }: Props = $props();
 
 	const KEY = SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL;
-	const SAME_AS_CHAT = '';
-	const SAME_AS_CHAT_LABEL = 'Same as chat model';
+	const AUTO_LABEL = 'Automatic';
 
 	// the picker sits right after the Voice input field
 	let splitAt = $derived(fields.findIndex((f) => f.key === SETTINGS_KEYS.VOICE_INPUT_MODE) + 1);
 	let isRouter = $derived(serverStore.isRouterMode);
-	let current = $derived(String(localConfig[KEY] ?? SAME_AS_CHAT));
+	let current = $derived(String(localConfig[KEY] ?? VOICE_TRANSCRIPTION_MODEL_AUTO));
 
 	let audioModels = $derived.by(() => {
 		void modelsStore.props.cacheVersion;
@@ -42,11 +45,11 @@
 			list.push({ label: current, value: current });
 		}
 
-		return [{ label: SAME_AS_CHAT_LABEL, value: SAME_AS_CHAT }, ...list];
+		return [{ label: AUTO_LABEL, value: VOICE_TRANSCRIPTION_MODEL_AUTO }, ...list];
 	});
 
 	let selectedLabel = $derived(
-		options.find((option) => option.value === current)?.label ?? SAME_AS_CHAT_LABEL
+		options.find((option) => option.value === current)?.label ?? AUTO_LABEL
 	);
 
 	let singleModelId = $derived(modelsStore.activeModelId);
@@ -85,9 +88,8 @@
 			</p>
 
 			<p class="text-xs text-muted-foreground">
-				A transcription model other than the chat model is loaded on the server when you dictate,
-				alongside the chat model. A server that keeps one model at a time (<code
-					>--models-max 1</code
+				A model you pick here is loaded on the server when you dictate, alongside the chat model, if
+				it isn't loaded already. A server that keeps one model at a time (<code>--models-max 1</code
 				>) unloads the chat model to do it.
 			</p>
 		{:else}

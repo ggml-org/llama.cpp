@@ -6,7 +6,8 @@ import {
 	SETTINGS_CHAT_SECTIONS,
 	SETTINGS_KEYS,
 	SETTINGS_SECTION_SLUGS,
-	VOICE_MODE_MESSAGE
+	VOICE_MODE_MESSAGE,
+	VOICE_TRANSCRIPTION_MODEL_AUTO
 } from '#lib/constants/index.ts';
 import { SettingsFieldType, VoiceInputMode, VoiceMode } from '#lib/enums/index.ts';
 import { resolveVoiceMode, type VoiceModeInput, voiceModeLabel } from '#lib/utils/voice-mode.ts';
@@ -78,6 +79,36 @@ describe('resolveVoiceMode', () => {
 		).toBe(VoiceMode.UNAVAILABLE);
 	});
 
+	it('falls back to a loaded model with audio input on Automatic, loading nothing', () => {
+		const noAudio = { ...base, chatModel: 'qwen3', chatModelHasAudio: false };
+
+		expect(resolveVoiceMode({ ...noAudio, loadedAudioModel: 'qwen3-asr' })).toEqual({
+			mode: VoiceMode.DICTATION,
+			separateModel: false,
+			transcriptionModel: 'qwen3-asr'
+		});
+		// a chosen model wins over the loaded one
+		expect(
+			resolveVoiceMode({
+				...noAudio,
+				loadedAudioModel: 'qwen3-asr',
+				transcriptionModel: 'voxtral',
+				transcriptionModelHasAudio: true
+			})
+		).toEqual({ mode: VoiceMode.DICTATION, separateModel: true, transcriptionModel: 'voxtral' });
+		// so does the chat model, when it hears
+		expect(resolveVoiceMode({ ...base, loadedAudioModel: 'qwen3-asr' }).mode).toBe(
+			VoiceMode.VOICE_MESSAGE
+		);
+		// and nothing is loaded behind the user's back
+		expect(resolveVoiceMode({ ...noAudio, loadedAudioModel: null }).mode).toBe(
+			VoiceMode.UNAVAILABLE
+		);
+		expect(
+			resolveVoiceMode({ ...noAudio, isRouter: false, loadedAudioModel: 'qwen3-asr' }).mode
+		).toBe(VoiceMode.UNAVAILABLE);
+	});
+
 	it('ignores the transcription model on a single-model server', () => {
 		expect(
 			resolveVoiceMode({
@@ -104,10 +135,12 @@ describe('resolveVoiceMode', () => {
 describe('voice settings', () => {
 	const section = SETTINGS_CHAT_SECTIONS.find((s) => s.slug === SETTINGS_SECTION_SLUGS.VOICE);
 
-	it('default to automatic voice input, transcribed by the chat model', () => {
+	it('default to automatic voice input and transcription model', () => {
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_INPUT_MODE]).toBe(VoiceInputMode.AUTO);
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_TRANSCRIBE_MESSAGES]).toBe(true);
-		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]).toBe('');
+		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]).toBe(
+			VOICE_TRANSCRIPTION_MODEL_AUTO
+		);
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.VOICE_TRANSCRIPTION_LANGUAGE]).toBe('');
 	});
 

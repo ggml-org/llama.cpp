@@ -119,11 +119,24 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 		return model ? modelsStore.props.modelSupportsAudio(model) : false;
 	};
+	// what Automatic transcribes with when the chat model can't hear: one already loaded
+	const loadedAudioModel = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		if (!isRouter) return null;
+
+		return (
+			modelsStore.models.find(
+				(option) => hasAudio(option.model) && modelsStore.isModelLoaded(option.model)
+			)?.model ?? null
+		);
+	});
 	const resolution = $derived(
 		resolveVoiceMode({
 			chatModel,
 			chatModelHasAudio: hasAudio(chatModel),
 			isRouter,
+			loadedAudioModel: loadedAudioModel,
 			setting: String(config[SETTINGS_KEYS.VOICE_INPUT_MODE] ?? VoiceInputMode.AUTO),
 			transcriptionModel: transcriptionSetting,
 			transcriptionModelHasAudio: hasAudio(transcriptionSetting || null)
