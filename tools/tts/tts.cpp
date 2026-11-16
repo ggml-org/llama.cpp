@@ -142,6 +142,10 @@ int main(int argc, char ** argv) {
 
     mtmd_helper::gen_audio gen;
     gen.init(lctx, mctx.get());
+    if (!gen.valid()) {
+        LOG_ERR("the context cannot run the audio generation of this model\n");
+        return 1;
+    }
     mtmd_helper_gen_audio_inp inp = mtmd_helper_gen_audio_inp_default();
     inp.seq_id      = 0;
     inp.prompt      = prompt.c_str();
@@ -186,7 +190,7 @@ int main(int argc, char ** argv) {
         return t;
     };
 
-    const int max_new = params.n_predict > 0 ? params.n_predict : 512;
+    const int max_new = gen.max_frames(params.n_predict);
     int n_frames = 0;
     llama_token sampled = sample_semantic_code();
     const float * h_state = llama_get_embeddings_ith(lctx, -1);

@@ -637,6 +637,33 @@ struct mtmd_graph_zonos3_gen : mtmd_graph {
 
 std::vector<c2w_state_slot> list_zonos3_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
+//
+// YuE2 generation, the NAR transformer itself runs on a llama_context, see mtmd_gen_flow_yue2():
+// LATENT_IN  = latent rows -> backbone embd rows
+// LATENT_OUT = backbone hidden rows -> velocity rows
+// GEN_WAV    = Oobleck VAE decoder, latent rows -> interleaved stereo PCM
+//
+struct mtmd_graph_yue2_gen : mtmd_graph {
+    mtmd_graph_yue2_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, int n_rows)
+        : mtmd_graph(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_latent   = 64;
+    static constexpr int   n_freq     = 256;   // time embedder input
+    static constexpr int   n_channels = 2;
+    static constexpr int   vae_ratio  = 1920;  // output samples per latent frame
+    static constexpr int   vae_trim   = 64;    // a decode of n frames has vae_ratio * n - vae_trim samples
+    static constexpr float rope_theta = 1000000.0f;
+    static constexpr int   n_ctx_max  = 24576; // the AR prefix and the NAR rows of one chunk
+    static constexpr int   ode_steps  = 32;    // midpoint solver
+
+    mtmd_subctx_gen_process gen_process;
+    int n_rows;
+
+    ggml_tensor * snake(ggml_tensor * x, const mtmd_yue2::snake & s) const;
+    ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const;
+};
+
 struct mtmd_graph_soprano : mtmd_graph {
     mtmd_graph_soprano(mtmd_subcontext * ctx, const mtmd_image_f32 & img, int n_frames) : mtmd_graph(ctx, img), n_frames(n_frames) {}
     ggml_cgraph * build() override;
