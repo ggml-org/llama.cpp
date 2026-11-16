@@ -1444,6 +1444,12 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_qwen3_coder;
     }
 
+    // Inkling 1 and 2
+    if (is_inkling_template(src)) {
+        LOG_DBG("Using specialized template: Inkling\n");
+        return common_chat_params_init_inkling;
+    }
+
     return nullptr;
 }
 
@@ -1625,9 +1631,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
             if (!end_tag.empty()) {
                 auto_params.thinking_end_tags = {std::move(end_tag)};
             }
-        }
-        if (is_inkling2_template(src)) {
-            common_chat_inkling2_split_media(auto_params.prompt);
         }
         const auto & arena = auto_params.parser;
         LOG_DBG("%s: generated parser:\n%s\n\nparser generation prompt: %s\n", __func__, arena.dump(arena.root()).c_str(), auto_params.generation_prompt.c_str());
