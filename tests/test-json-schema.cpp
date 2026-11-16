@@ -238,6 +238,54 @@ static void test_object(testing & t) {
     });
 }
 
+static void test_object_surface(testing & t) {
+    for (const std::string combinator : { "oneOf", "anyOf", "allOf" }) {
+        t.test(combinator, [&](testing & t) {
+            auto schema = common_json::parse(R"({
+                "type": "object",
+                "$defs": { "count": { "type": "integer", "minimum": 1 } },
+                "properties": {
+                    "query": { "type": "string" },
+                    "cursor": { "$ref": "#/$defs/count" },
+                    "value": { "oneOf": [{ "type": "boolean" }, { "type": "null" }] }
+                },
+                "required": ["query"]
+            })");
+            schema[combinator] = common_json::parse(R"([
+                { "properties": { "left": { "type": "string" } }, "required": ["query"] },
+                { "properties": { "right": { "type": "string" } }, "required": ["cursor"] }
+            ])");
+
+            auto doc = common_chat_schema_object_from_json(schema);
+            const auto & o = root<common_chat_schema_object>(t, doc);
+            t.assert_equal("only declared properties", (size_t) 3, o.properties.size());
+            t.assert_equal("first property", "query", o.properties[0].name);
+            t.assert_true("root required", o.properties[0].required);
+            t.assert_equal("second property", "cursor", o.properties[1].name);
+            t.assert_true("branch required is not promoted", !o.properties[1].required);
+            const auto & ref = as<common_chat_schema_ref>(t, o.properties[1].schema.get(), "cursor");
+            const auto & count = as<common_chat_schema_integer>(t, ref.target, "cursor target");
+            t.assert_equal("referenced constraint", (int64_t) 1, count.minimum);
+            const auto & value = as<common_chat_schema_any_of>(t, o.properties[2].schema.get(), "value");
+            t.assert_equal("property alternatives", (size_t) 2, value.children.size());
+            as<common_chat_schema_boolean>(t, value.children[0].get(), "value[0]");
+            as<common_chat_schema_null>(t, value.children[1].get(), "value[1]");
+
+            if (combinator != "allOf") {
+                auto full = common_chat_schema_from_json(schema);
+                const auto & alternatives = root<common_chat_schema_any_of>(t, full);
+                t.assert_equal("full conversion keeps alternatives", (size_t) 2, alternatives.children.size());
+                const auto & left = as<common_chat_schema_object>(t, alternatives.children[0].get(), "left branch");
+                t.assert_equal("branch property", "left", left.properties[0].name);
+            }
+
+            schema.erase("properties");
+            auto branches_only = common_chat_schema_object_from_json(schema);
+            t.assert_true("branch properties are not merged", root<common_chat_schema_object>(t, branches_only).properties.empty());
+        });
+    }
+}
+
 static void test_const_enum(testing & t) {
     t.test("const", [](testing & t) {
         auto doc = parse(R"({"const": {"a": [1, null]}})");
@@ -501,6 +549,7 @@ int main(int argc, char * argv[]) {
     t.test("array", test_array);
     t.test("tuple", test_tuple);
     t.test("object", test_object);
+    t.test("object surface", test_object_surface);
     t.test("const and enum", test_const_enum);
     t.test("any_of", test_any_of);
     t.test("all_of", test_all_of);

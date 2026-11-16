@@ -3772,6 +3772,31 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
+        // Root combinators must not hide the declared tagged parameters.
+        const common_chat_tool search_tool{
+            "search",
+            "Search or continue a result page",
+            R"({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "cursor": { "type": "string" }
+                },
+                "oneOf": [
+                    { "required": ["query"] },
+                    { "required": ["cursor"] }
+                ]
+            })",
+        };
+        for (const std::string parameter : { "query", "cursor" }) {
+            tst.test("<tool_call>\n<function=search>\n<parameter=" + parameter + ">\nvalue\n</parameter>\n</function>\n</tool_call>")
+                .tools({ search_tool })
+                .expect_tool_calls({ { "search", json({ { parameter, "value" } }).dump(), {} } })
+                .expect_rules({ "tool-0-arg-0", "tool-0-arg-1" })
+                .expect_reconstruction()
+                .run();
+        }
+
         // Some models skip the opening <tool_call> and go straight to <function=>
         tst.test(
                "<function=special_function>\n"
