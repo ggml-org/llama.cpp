@@ -5,8 +5,8 @@
 #include <algorithm>
 #include <climits>
 
-// Q8_0 matrix-vector product for few src1 columns on CDNA, the src1 columns are quantized to q8_1.
-// A group of lpr lanes works on 64/lpr rows per wave, lane j handles the blocks j + lpr*s, s < nsteps, of its row.
+// Q8_0 matrix-vector product for few src1 columns on CDNA and RDNA3/4 (wave32), the src1 columns are quantized to q8_1.
+// A group of lpr lanes works on ws/lpr rows per wave (ws: wave size), lane j handles the blocks j + lpr*s, s < nsteps, of its row.
 // So 16 lanes read 16 consecutive blocks of 34 bytes, few 64 byte lines per load.
 // The waves are persistent and loop over the row groups, the loads of the next group are issued before the current one is computed.
 // src1 stays in LDS for the whole kernel.
@@ -20,7 +20,11 @@ static constexpr __host__ __device__ int mmvq_q8_cdna_ncp(const int ncols) {
     return ncols == 1 ? 1 : ncols + ncols % 2;
 }
 
-#if defined(CDNA)
+#if defined(CDNA) || defined(RDNA3) || defined(RDNA4)
+#define MMVQ_Q8_DEVICE
+#endif
+
+#if defined(MMVQ_Q8_DEVICE)
 // the raw data of a lane for one block, off is the block address % 4 (0 or 2)
 struct mmvq_q8_cdna_x {
     int4 a; // bytes [-off, 16 - off) of the block
@@ -43,7 +47,7 @@ static __device__ __forceinline__ int mmvq_q8_cdna_load_b2(const void * p) {
 }
 
 // sum over the n lanes of a group, the result is in all lanes of the group
-template <int n>
+template <int n, int ws>
 static __device__ __forceinline__ float mmvq_q8_cdna_group_sum(float x) {
     // DPP: xor 1, xor 2, row_half_mirror, row_mirror
     if constexpr (n >= 2) {
@@ -58,7 +62,10 @@ static __device__ __forceinline__ float mmvq_q8_cdna_group_sum(float x) {
     if constexpr (n >= 16) {
         x += __int_as_float(__builtin_amdgcn_update_dpp(0, __float_as_int(x), 0x140, 0xF, 0xF, false));
     }
-    if constexpr (n >= 32) {
+    if constexpr (n >= 32 && ws == 32) {
+        // lane i of each half gets lane i of the other half
+        x += __int_as_float(__builtin_amdgcn_permlanex16(__float_as_int(x), __float_as_int(x), 0x76543210, 0xFEDCBA98, false, false));
+    } else if constexpr (n >= 32) {
         const float s0 = __int_as_float(__builtin_amdgcn_readlane(__float_as_int(x),  0));
         const float s1 = __int_as_float(__builtin_amdgcn_readlane(__float_as_int(x), 16));
         const float s2 = __int_as_float(__builtin_amdgcn_readlane(__float_as_int(x), 32));
@@ -69,31 +76,36 @@ static __device__ __forceinline__ float mmvq_q8_cdna_group_sum(float x) {
             x = (s0 + s1) + (s2 + s3);
         }
     }
-    static_assert(n <= 64, "unsupported group size");
+    static_assert(n <= ws, "unsupported group size");
     return x;
 }
-#endif // defined(CDNA)
+#endif // defined(MMVQ_Q8_DEVICE)
 
 // ks == 1: a group of lpr lanes of a wave per row, the waves work on different rows.
-// ks  > 1: the ks waves of a block split the row, each wave then needs lpr == 64. For matrices with few rows.
+// ks  > 1: the ks waves of a block split the row, each wave then needs lpr == ws. For matrices with few rows.
 // has_gate: dst = glu(gate*y, x*y), gate has the same layout as x.
-template <int ncols, int nsteps, int lpr, int ks, bool has_gate>
-__launch_bounds__(MMVQ_Q8_CDNA_NWARPS*64, 1)
+// ws: wave size, 64 on CDNA, 32 on RDNA.
+template <int ncols, int nsteps, int lpr, int ks, bool has_gate, int ws, int nwarps>
+__launch_bounds__(nwarps*ws, 1)
 static __global__ void mul_mat_vec_q8_cdna(
         const char * __restrict__ x, const char * __restrict__ gate, const block_q8_1 * __restrict__ y, float * __restrict__ dst,
         const int nb, const int nrows, const int stride_row, const int stride_col_y, const int stride_col_dst,
         const ggml_glu_op glu_op, const float glu_limit) {
-#if defined(CDNA)
-    constexpr int nwarps = MMVQ_Q8_CDNA_NWARPS;
-    static_assert(ks == 1 || (ks == nwarps && lpr == 64), "unsupported split");
+#if defined(MMVQ_Q8_DEVICE)
+    if constexpr (ws != ggml_cuda_get_physical_warp_size()) {
+        GGML_UNUSED_VARS(x, gate, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu_op, glu_limit);
+        NO_DEVICE_CODE;
+        return;
+    }
+    static_assert(ks == 1 || (ks == nwarps && lpr == ws), "unsupported split");
     static_assert(!has_gate || (ncols == 1 && ks == 1), "unsupported gate");
     constexpr int lprt   = lpr*ks;                   // lanes per row
-    constexpr int gpw    = ks == 1 ? 64/lpr : 1;     // rows per group of a wave resp. block
+    constexpr int gpw    = ks == 1 ? ws/lpr : 1;     // rows per group of a wave resp. block
     constexpr int ncp    = mmvq_q8_cdna_ncp(ncols);
 
     // ks == 1: src1 in LDS. ks > 1: a block works on few rows, the src1 values of a lane are kept in registers.
     constexpr bool y_lds = ks == 1;
-    static_assert(y_lds || ncols == 1, "too many registers");
+    static_assert(y_lds || ncols == 1 || (ws == 32 && ncols <= 4), "too many registers");
 
     extern __shared__ int4 data_mmvq_q8_cdna[];
     int4  * yqa = data_mmvq_q8_cdna;            // qs [0, 16) of block b of column c at c*nb + b
@@ -103,7 +115,7 @@ static __global__ void mul_mat_vec_q8_cdna(
 
     const int lane    = threadIdx.x;
     const int iw      = __builtin_amdgcn_readfirstlane(threadIdx.y);
-    const int j       = ks == 1 ? lane % lpr : iw*64 + lane;
+    const int j       = ks == 1 ? lane % lpr : iw*ws + lane;
     const int unit    = ks == 1 ? blockIdx.x*nwarps + iw : blockIdx.x;  // first row group
     const int nunits  = ks == 1 ? gridDim.x*nwarps : gridDim.x;
     const int ngroups = (nrows + gpw - 1)/gpw;
@@ -145,7 +157,7 @@ static __global__ void mul_mat_vec_q8_cdna(
     int4  yrb[y_lds ? 1 : ncp*nsteps];
     float yrd[y_lds ? 1 : ncp*nsteps];
     if constexpr (y_lds) {
-        for (int i = threadIdx.y*64 + lane; i < ncp*nb; i += nwarps*64) {
+        for (int i = threadIdx.y*ws + lane; i < ncp*nb; i += nwarps*ws) {
             const int c = i / nb;
             const int b = i % nb;
             int4  qa = make_int4(0, 0, 0, 0);
@@ -217,7 +229,9 @@ static __global__ void mul_mat_vec_q8_cdna(
 
         float res = 0.0f;
         [[maybe_unused]] float res_gate = 0.0f;
-#pragma unroll 2
+        // y in registers needs constant indices. RDNA with many steps: 2 columns at once spill
+        constexpr int cunroll = ws == 32 && !y_lds ? ncp : (ws == 32 && nsteps > 4 ? 1 : 2);
+#pragma unroll cunroll
         for (int c = 0; c < ncp; ++c) {
             float sum = 0.0f;
             [[maybe_unused]] float sum_gate = 0.0f;
@@ -232,9 +246,9 @@ static __global__ void mul_mat_vec_q8_cdna(
                     sum_gate += dxg[s]*dy*float(dot(qsg[s], ua, ub));
                 }
             }
-            sum = mmvq_q8_cdna_group_sum<lpr>(sum);
+            sum = mmvq_q8_cdna_group_sum<lpr, ws>(sum);
             if constexpr (has_gate) {
-                sum_gate = mmvq_q8_cdna_group_sum<lpr>(sum_gate);
+                sum_gate = mmvq_q8_cdna_group_sum<lpr, ws>(sum_gate);
                 res_gate = c == jc ? sum_gate : res_gate;
             }
             if constexpr (ks == 1) {
@@ -271,7 +285,7 @@ static __global__ void mul_mat_vec_q8_cdna(
 #else
     GGML_UNUSED_VARS(x, gate, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu_op, glu_limit);
     NO_DEVICE_CODE;
-#endif // defined(CDNA)
+#endif // defined(MMVQ_Q8_DEVICE)
 }
 
 // lanes per row and wave, steps per lane, waves per row
@@ -308,27 +322,27 @@ struct mmvq_q8_cdna_glu {
     float        limit;
 };
 
-template <int ncols, int nsteps, int lpr, int ks, bool has_gate = false>
+template <int ncols, int nsteps, int lpr, int ks, bool has_gate = false, int ws = 64, int nwarps = MMVQ_Q8_CDNA_NWARPS>
 static void launch_mul_mat_vec_q8_cdna(
         const char * x, const block_q8_1 * y, float * dst, const int nb, const int nrows, const int stride_row,
         const int stride_col_y, const int stride_col_dst, const mmvq_q8_cdna_glu & glu, const int nsm, cudaStream_t stream) {
-    constexpr int gpw = ks == 1 ? 64/lpr : 1;
-    constexpr int upb = ks == 1 ? MMVQ_Q8_CDNA_NWARPS : 1; // row groups per block
+    constexpr int gpw = ks == 1 ? ws/lpr : 1;
+    constexpr int upb = ks == 1 ? nwarps : 1; // row groups per block
     const int ngroups = (nrows + gpw - 1)/gpw;
 
-    const dim3   block_dims(64, MMVQ_Q8_CDNA_NWARPS, 1);
+    const dim3   block_dims(ws, nwarps, 1);
     const size_t nbytes_shared = mmvq_q8_cdna_nbytes_shared(ncols, nb, {lpr, nsteps, ks});
 
     // all blocks at once, each wave gets the same number of row groups
     int max_blocks_per_cu = 1;
-    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_cu, mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks, has_gate>,
+    CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_cu, mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks, has_gate, ws, nwarps>,
         block_dims.x*block_dims.y, nbytes_shared));
     const int max_units = std::max(max_blocks_per_cu, 1)*nsm*upb;
     const int nrounds   = (ngroups + max_units - 1)/max_units;
     const int nunits    = (ngroups + nrounds - 1)/nrounds;
 
     const dim3   block_nums((nunits + upb - 1)/upb, 1, 1);
-    mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks, has_gate><<<block_nums, block_dims, nbytes_shared, stream>>>
+    mul_mat_vec_q8_cdna<ncols, nsteps, lpr, ks, has_gate, ws, nwarps><<<block_nums, block_dims, nbytes_shared, stream>>>
         (x, glu.gate, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu.op, glu.limit);
 }
 
@@ -371,8 +385,146 @@ static void mul_mat_vec_q8_cdna_switch_config(
     }
 }
 
+// RDNA: wave32, lpr <= 32
+struct mmvq_q8_rdna_config {
+    int lpr;
+    int nsteps;
+    int ks;
+    int nwarps;
+};
+
+static bool mmvq_q8_use_rdna(const int cc) {
+    return GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc);
+}
+
+static mmvq_q8_rdna_config mmvq_q8_rdna_get_config(const int64_t nb, const int ncols, const int cc) {
+    const bool rdna4 = GGML_CUDA_CC_IS_RDNA4(cc);
+    if (nb <= 16) {
+        return {16, 1, 1, 4};
+    }
+    if (nb <= 32) {
+        return rdna4 ? mmvq_q8_rdna_config{32, 1, 1, 4} : mmvq_q8_rdna_config{16, 2, 1, 4};
+    }
+    // 8 waves per block: more waves per SIMD when the y slice in LDS is large
+    if (nb <= 3*32) {
+        return {32, int((nb + 31)/32), 1, ncols > 4 ? 8 : 4};
+    }
+    if (nb <= 6*32) {
+        return {32, int((nb + 31)/32), 1, rdna4 ? 8 : 4};
+    }
+    // the waves of a block split each row, the columns are done in chunks of up to 4
+    return {32, int((nb + 32*4 - 1)/(32*4)), 4, 4};
+}
+
+template <int ncols, int nwarps, bool has_gate>
+static bool mul_mat_vec_q8_rdna_launch(
+        const mmvq_q8_rdna_config cfg, const char * x, const block_q8_1 * y, float * dst, const int nb, const int nrows, const int stride_row,
+        const int stride_col_y, const int stride_col_dst, const mmvq_q8_cdna_glu & glu, const int nsm, cudaStream_t stream) {
+    if (cfg.nwarps != nwarps) {
+        return false;
+    }
+#define MMVQ_Q8_RDNA_CASE(LPR, NS, KS) \
+    if (cfg.lpr == LPR && cfg.nsteps == NS && cfg.ks == KS) { \
+        launch_mul_mat_vec_q8_cdna<ncols, NS, LPR, KS, has_gate, 32, nwarps>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream); \
+        return true; \
+    }
+    if constexpr (nwarps == 4) {
+        MMVQ_Q8_RDNA_CASE(16, 1, 1)
+        MMVQ_Q8_RDNA_CASE(16, 2, 1)
+        MMVQ_Q8_RDNA_CASE(32, 1, 1)
+    }
+    MMVQ_Q8_RDNA_CASE(32, 2, 1)
+    MMVQ_Q8_RDNA_CASE(32, 3, 1)
+    MMVQ_Q8_RDNA_CASE(32, 4, 1)
+    MMVQ_Q8_RDNA_CASE(32, 5, 1)
+    MMVQ_Q8_RDNA_CASE(32, 6, 1)
+    if constexpr (nwarps == 4 && ncols <= 4 && !has_gate) {
+        MMVQ_Q8_RDNA_CASE(32, 1, 4)
+        MMVQ_Q8_RDNA_CASE(32, 2, 4)
+        MMVQ_Q8_RDNA_CASE(32, 3, 4)
+    }
+#undef MMVQ_Q8_RDNA_CASE
+    return false;
+}
+
+template <int ncols>
+static void mul_mat_vec_q8_rdna_switch_config(
+        const char * x, const block_q8_1 * y, float * dst, const int nb, const int nrows, const int stride_row,
+        const int stride_col_y, const int stride_col_dst, const mmvq_q8_cdna_glu & glu, const int nsm, const int cc, cudaStream_t stream) {
+    const mmvq_q8_rdna_config cfg = mmvq_q8_rdna_get_config(nb, ncols, cc);
+    if constexpr (ncols == 1) {
+        if (glu.gate) {
+            GGML_ASSERT(cfg.ks == 1);
+            if (mul_mat_vec_q8_rdna_launch<ncols, 4, true>(cfg, x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream) ||
+                mul_mat_vec_q8_rdna_launch<ncols, 8, true>(cfg, x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream)) {
+                return;
+            }
+            GGML_ABORT("fatal error");
+        }
+    }
+    if (mul_mat_vec_q8_rdna_launch<ncols, 4, false>(cfg, x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream) ||
+        mul_mat_vec_q8_rdna_launch<ncols, 8, false>(cfg, x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, stream)) {
+        return;
+    }
+    GGML_ABORT("fatal error");
+}
+
+static void mul_mat_vec_q8_rdna_switch_ncols(
+        const int ncols, const char * x, const block_q8_1 * y, float * dst, const int nb, const int nrows, const int stride_row,
+        const int stride_col_y, const int stride_col_dst, const mmvq_q8_cdna_glu & glu, const int nsm, const int cc, cudaStream_t stream) {
+    switch (ncols) {
+        case 1: mul_mat_vec_q8_rdna_switch_config<1>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 2: mul_mat_vec_q8_rdna_switch_config<2>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 3: mul_mat_vec_q8_rdna_switch_config<3>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 4: mul_mat_vec_q8_rdna_switch_config<4>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 5: mul_mat_vec_q8_rdna_switch_config<5>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 6: mul_mat_vec_q8_rdna_switch_config<6>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 7: mul_mat_vec_q8_rdna_switch_config<7>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        case 8: mul_mat_vec_q8_rdna_switch_config<8>(x, y, dst, nb, nrows, stride_row, stride_col_y, stride_col_dst, glu, nsm, cc, stream); break;
+        default: GGML_ABORT("fatal error");
+    }
+}
+
 bool ggml_hip_should_use_mmvq_q8_cdna(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst, const int cc,
         const ggml_cuda_mm_fusion_args_host * fusion) {
+    if (mmvq_q8_use_rdna(cc) && src0->type == GGML_TYPE_Q8_0) {
+        if (fusion) {
+            if (!fusion->gate || fusion->x_bias || fusion->gate_bias || fusion->x_scale || fusion->gate_scale || fusion->shared_up) {
+                return false;
+            }
+            if (src1->ne[1] != 1 || fusion->gate->type != src0->type || !ggml_are_same_stride(fusion->gate, src0) ||
+                    (uintptr_t) fusion->gate->data % 4 != 0) {
+                return false;
+            }
+        }
+        const int64_t ncols = src1->ne[1];
+        const int64_t nb    = src0->ne[0]/QK8_0;
+        if (ncols < 1 || ncols > MMVQ_Q8_CDNA_MAX_NCOLS) {
+            return false;
+        }
+        if (src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+            return false;
+        }
+        if ((uintptr_t) src0->data % 4 != 0 || src0->nb[1] % 2 != 0 || ggml_nbytes(src0) > INT_MAX) {
+            return false;
+        }
+        if (src1->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+            return false;
+        }
+        const mmvq_q8_rdna_config cfg = mmvq_q8_rdna_get_config(nb, std::min<int>(ncols, 4), cc);
+        if (nb > cfg.lpr*cfg.nsteps*cfg.ks || (cfg.ks > 1 && cfg.nsteps > 3) || (fusion && cfg.ks > 1)) {
+            return false;
+        }
+        // RDNA3: MMVQ is as fast for more columns with short rows, and faster with long rows (a block per CU, few waves)
+        if (GGML_CUDA_CC_IS_RDNA3(cc) && cfg.ks == 1 && ((nb > 16 && nb <= 32 && ncols > 2) || (nb > 3*32 && ncols > 4))) {
+            return false;
+        }
+        // MMVQ reads large matrices faster from 2 columns on
+        if (ncols > 1 && ggml_nbytes(src0) > 64*1024*1024) {
+            return false;
+        }
+        return mmvq_q8_cdna_nbytes_shared(ncols, nb, {cfg.lpr, cfg.nsteps, cfg.ks}) <= 64*1024;
+    }
     if (!GGML_CUDA_CC_IS_CDNA(cc) || src0->type != GGML_TYPE_Q8_0) {
         return false;
     }
@@ -430,6 +582,7 @@ void ggml_hip_mul_mat_vec_q8_cdna(ggml_backend_cuda_context & ctx, const ggml_te
 
     cudaStream_t stream = ctx.stream();
     const int    nsm    = ggml_cuda_info().devices[ctx.device].nsm;
+    const int    cc     = ggml_cuda_info().devices[ctx.device].cc;
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
     ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne11*ne10_padded*sizeof(block_q8_1)/QK8_1);
@@ -447,6 +600,17 @@ void ggml_hip_mul_mat_vec_q8_cdna(ggml_backend_cuda_context & ctx, const ggml_te
     const mmvq_q8_cdna_glu glu = {
         fusion ? (const char *) fusion->gate->data : nullptr, fusion ? fusion->glu_op : GGML_GLU_OP_SWIGLU, fusion ? fusion->glu_limit : 0.0f};
 
+    if (mmvq_q8_use_rdna(cc)) {
+        // split rows keep y in registers, at most 4 columns per launch
+        const bool split = mmvq_q8_rdna_get_config(nb, std::min<int>(ne11, 4), cc).ks > 1;
+        const int  step  = split ? 4 : ne11;
+        for (int c0 = 0; c0 < ne11; c0 += step) {
+            const int nc = std::min<int>(step, ne11 - c0);
+            mul_mat_vec_q8_rdna_switch_ncols(nc, x, y + c0*stride_col_y, d + c0*stride_col_dst, nb, ne01, nb01, stride_col_y, stride_col_dst,
+                glu, nsm, cc, stream);
+        }
+        return;
+    }
     switch (ne11) {
         case 1: mul_mat_vec_q8_cdna_switch_config<1>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
         case 2: mul_mat_vec_q8_cdna_switch_config<2>(x, y, d, nb, ne01, nb01, stride_col_y, stride_col_dst, glu, nsm, stream); break;
