@@ -579,7 +579,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_2, "attn_output.weight");
             }
             if (std::regex_match(tensor_name, pattern_ssm_dt) || std::regex_match(tensor_name, pattern_ssm_a) ||
-                    std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache)) {
+                    std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache) ||
+                    std::regex_match(tensor_name, pattern_spk_cache) || std::regex_match(tensor_name, pattern_spv_cache) ||
+                    std::regex_match(tensor_name, pattern_spgb_cache)) {
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight");
             }
         }
@@ -701,9 +703,21 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     auto get_split_segments = [&](int axis, uint32_t il) -> std::vector<std::pair<int64_t, uint32_t>> {
         if (is_glm5_next && std::regex_match(tensor_name, pattern_r_cache)) {
             // the conv state holds the q, k and v windows one after the other
-            const int64_t conv_state_size = (hparams.ssm_d_conv - 1) * hparams.n_head(il) * hparams.n_embd_head_kda;
-            GGML_ASSERT(tensor->ne[axis] == 3*conv_state_size);
+            const int64_t d_inner         = hparams.n_head(il) * hparams.n_embd_head_kda;
+            const int64_t conv_state_size = (hparams.ssm_d_conv - 1) * d_inner;
+            if (tensor->ne[axis] != 3*conv_state_size) {
+                // replay: q, k and v histories [d_inner, window + pending], every column is a block of heads
+                GGML_ASSERT(tensor->ne[axis] % (3*d_inner) == 0);
+                return {{d_inner, uint32_t(tensor->ne[axis] / d_inner)}};
+            }
             return {{conv_state_size, 3}};
+        }
+        if (is_glm5_next && (std::regex_match(tensor_name, pattern_spk_cache) || std::regex_match(tensor_name, pattern_spv_cache) ||
+                std::regex_match(tensor_name, pattern_spgb_cache))) {
+            // replay pending inputs, per token: k [S_k, H], v [S_v, H], then the gates [S_v, H] and the betas (in element 0)
+            const int64_t d_inner = hparams.n_head(il) * hparams.n_embd_head_kda;
+            GGML_ASSERT(tensor->ne[axis] % d_inner == 0);
+            return {{d_inner, uint32_t(tensor->ne[axis] / d_inner)}};
         }
         // TODO: deduplicate condition [TAG_SPLIT_QGATE_QWEN]
         // zonos3 has the qwen35 GDN layout, its attention layers have no fused qkv
@@ -836,7 +850,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 return {granularity_qkv / head_dim};
             }
             if (std::regex_match(tensor_name, pattern_r_cache)) {
-                return std::vector<int64_t>(segments.size(), granularity_qkv * (hparams.ssm_d_conv - 1));
+                // replay: channels first, each segment is a single conv column
+                const int64_t conv_state_size = (hparams.ssm_d_conv - 1) * hparams.n_head(il) * head_dim;
+                const bool    replay          = tensor->ne[0] != 3*conv_state_size;
+                return std::vector<int64_t>(segments.size(), granularity_qkv * (replay ? 1 : hparams.ssm_d_conv - 1));
+            }
+            if (std::regex_match(tensor_name, pattern_spk_cache) || std::regex_match(tensor_name, pattern_spv_cache) ||
+                    std::regex_match(tensor_name, pattern_spgb_cache)) {
+                return std::vector<int64_t>(segments.size(), granularity_qkv);
             }
             if (std::regex_match(tensor_name, pattern_s_cache)) {
                 return {granularity_qkv * head_dim};
