@@ -5,6 +5,8 @@
 #include <algorithm>
 
 // One block per (K/V segment, K/V head, sequence) handles all 12*ncols Q rows of the K/V head.
+// Segment s holds the granules of FATTN_SPARSE_CDNA_GRAN columns s, s + nseg, ...: the indexer selects clustered cells,
+// contiguous segments would give some blocks most of the work.
 // The block compacts the visible mask columns of its segment into LDS, in rounds of ncr columns.
 // A wave takes 16 compacted rows at a time and loads K and V directly in MFMA operand layout (16x16x16 f16):
 // - S^T = K Q^T: lane l loads K row l%16, dims [64*(l/16), 64*(l/16) + 64). Q in LDS uses the same dim order.
@@ -20,6 +22,7 @@
 #define FATTN_SPARSE_CDNA_NWAVES   4
 #define FATTN_SPARSE_CDNA_NTHREADS (FATTN_SPARSE_CDNA_NWAVES*64)
 #define FATTN_SPARSE_CDNA_NSEG_MAX 64 // the combine handles 8 segments per thread group
+#define FATTN_SPARSE_CDNA_GRAN     32 // columns per granule, divides FATTN_KQ_STRIDE
 #define FATTN_SPARSE_CDNA_MAX_SLACK 11.0f // log2 units, P <= 2^11 fits into f16
 #define FATTN_SPARSE_CDNA_MAX_OFFSET 3.0f // FATTN_KQ_MAX_OFFSET in log2 units
 
@@ -70,7 +73,7 @@ __launch_bounds__(FATTN_SPARSE_CDNA_NTHREADS, 1)
 static __global__ void flash_attn_sparse_cdna(
         const char * __restrict__ Q, const char * __restrict__ K, const char * __restrict__ V, const char * __restrict__ mask,
         half * __restrict__ dst_parts, float2 * __restrict__ dst_meta,
-        const float scale, const int ne01, const int ne11, const int seg_len,
+        const float scale, const int ne01, const int ne11,
         const int nb01, const int nb02, const int64_t nb03,
         const int nb11, const int nb12, const int64_t nb13,
         const int nb21, const int nb22, const int64_t nb23,
@@ -87,6 +90,8 @@ static __global__ void flash_attn_sparse_cdna(
     constexpr int nstreams = cfg::nstreams;
     constexpr int cpt      = cfg::cpt;
     constexpr int ncr      = cfg::ncr;
+    constexpr int gran     = FATTN_SPARSE_CDNA_GRAN;
+    static_assert(gran % cpt == 0 && ncr % gran == 0 && FATTN_KQ_STRIDE % gran == 0, "bad granule size");
 
     const int seg  = blockIdx.x;
     const int kvh  = blockIdx.y;
@@ -115,14 +120,20 @@ static __global__ void flash_attn_sparse_cdna(
     const char * V_base = V + nb23*seq + int64_t(nb22)*kvh;
     const half * maskh  = (const half *) (mask + nb33*(seq % ne33));
 
-    const int seg0    = seg*seg_len;
-    const int seg1    = min(seg0 + seg_len, ne11);
-    const int nrounds = (seg1 - seg0 + ncr - 1)/ncr;
+    const int nseg    = gridDim.x;
+    const int ngran   = (ne11/gran - seg + nseg - 1)/nseg;
+    const int nrounds = (ngran + ncr/gran - 1)/(ncr/gran);
+
+    // first column of thread tid in round r, -1 past the end of the segment
+    auto col_start = [&](const int r) {
+        const int u = r*(ncr/gran) + tid/(gran/cpt);
+        return u < ngran ? (u*nseg + seg)*gran + cpt*(tid % (gran/cpt)) : -1;
+    };
 
     // the loads are unconditional (clamped), invalid columns are set to -inf in the compaction
     __align__(16) half mreg[ncols][cpt];
     auto load_mask = [&](const int r) {
-        const int c0 = min(seg0 + r*ncr + tid*cpt, seg1 - cpt);
+        const int c0 = max(col_start(r), 0);
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
             ggml_cuda_memcpy_1<cpt*sizeof(half)>(mreg[j], maskh + min(j, ne01 - 1)*(nb31/sizeof(half)) + c0);
@@ -265,7 +276,7 @@ static __global__ void flash_attn_sparse_cdna(
 
     for (int r = 0; r < nrounds; ++r) {
         // compact the columns that any query can see
-        const int c0 = seg0 + r*ncr + tid*cpt;
+        const int c0 = col_start(r);
         uint32_t sel = 0;
 #pragma unroll
         for (int l = 0; l < cpt; ++l) {
@@ -276,7 +287,7 @@ static __global__ void flash_attn_sparse_cdna(
             }
             sel |= uint32_t(visible) << l;
         }
-        sel = c0 < seg1 ? sel : 0;
+        sel = c0 >= 0 ? sel : 0;
         // the order of the compacted columns does not matter: column l of all lanes, then column l + 1
         int pos_l[cpt];
         int nsel_w = 0;
@@ -449,7 +460,7 @@ static __global__ void flash_attn_sparse_cdna(
         __syncthreads();
     }
 #else
-    GGML_UNUSED_VARS(Q, K, V, mask, dst_parts, dst_meta, scale, ne01, ne11, seg_len,
+    GGML_UNUSED_VARS(Q, K, V, mask, dst_parts, dst_meta, scale, ne01, ne11,
         nb01, nb02, nb03, nb11, nb12, nb13, nb21, nb22, nb23, ne33, nb31, nb33);
     NO_DEVICE_CODE;
 #endif // defined(CDNA)
@@ -578,9 +589,7 @@ static void ggml_hip_flash_attn_ext_sparse_cdna_case(ggml_backend_cuda_context &
     const int ne11 = K->ne[1];
 
     // about one block per CU
-    int nseg = std::clamp<int>(nsm/(nkvh*nseq), 1, FATTN_SPARSE_CDNA_NSEG_MAX);
-    const int seg_len = GGML_PAD((ne11 + nseg - 1)/nseg, 8);
-    nseg = (ne11 + seg_len - 1)/seg_len;
+    const int nseg = std::clamp<int>(nsm/(nkvh*nseq), 1, FATTN_SPARSE_CDNA_NSEG_MAX);
 
     const int nrows = FATTN_SPARSE_CDNA_GQA*ne01;
     ggml_cuda_pool_alloc<half>   parts(ctx.pool(), size_t(nseq)*nkvh*nseg*nrows*FATTN_SPARSE_CDNA_D);
@@ -591,7 +600,7 @@ static void ggml_hip_flash_attn_ext_sparse_cdna_case(ggml_backend_cuda_context &
 
     flash_attn_sparse_cdna<ncols><<<dim3(nseg, nkvh, nseq), FATTN_SPARSE_CDNA_NTHREADS, 0, stream>>>(
         (const char *) Q->data, (const char *) K->data, (const char *) V->data, (const char *) mask->data,
-        parts.ptr, meta.ptr, scale, ne01, ne11, seg_len,
+        parts.ptr, meta.ptr, scale, ne01, ne11,
         Q->nb[1], Q->nb[2], Q->nb[3], K->nb[1], K->nb[2], K->nb[3], V->nb[1], V->nb[2], V->nb[3],
         mask->ne[3], mask->nb[1], mask->nb[3]);
     CUDA_CHECK(cudaGetLastError());
