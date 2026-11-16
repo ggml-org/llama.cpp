@@ -37,7 +37,7 @@
 #include "ggml-cuda/mmvf.cuh"
 #include "ggml-cuda/mmvq.cuh"
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-#include "ggml-cuda/mmid-f32.cuh"
+#    include "ggml-cuda/mmid-f32.cuh"
 #endif
 #include "ggml-cuda/moe-weighted-reduction.cuh"
 #include "ggml-cuda/norm.cuh"
