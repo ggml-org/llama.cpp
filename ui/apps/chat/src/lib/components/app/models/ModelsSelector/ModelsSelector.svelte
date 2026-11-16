@@ -1,6 +1,7 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import ModelsSelectorReasoning from './ModelsSelectorReasoning.svelte';
+	import ModelsSelectorReasoningBadge from './ModelsSelectorReasoningBadge.svelte';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
@@ -234,6 +235,11 @@
 				hideQuantization
 				modelId={selectedOption.model}
 			/>
+
+			<!-- in the model's column: the trigger is a grid of icon, model and chevron -->
+			{#if showReasoning}
+				<ModelsSelectorReasoningBadge />
+			{/if}
 		{:else}
 			<span class="min-w-0 font-medium">Select model</span>
 		{/if}
