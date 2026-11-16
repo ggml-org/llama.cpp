@@ -3312,8 +3312,14 @@ public:
             return -1;
         }
         prompt_pos += n;
-        if (n == n_left && in_codes && !start_uncond()) {
-            return -1;
+        if (n == n_left) {
+            if (in_codes) {
+                if (!start_uncond()) {
+                    return -1;
+                }
+            } else {
+                save_logits(llama_get_logits_ith(lctx, -1));
+            }
         }
         return n_left - n;
     }
@@ -3329,7 +3335,7 @@ public:
         }
 
         const bool use_cfg = in_codes && cfg_scale != 1.0f;
-        const llama_token tok = sample(use_cfg ? cfg_logits.data() : llama_get_logits_ith(lctx, -1));
+        const llama_token tok = sample(logits.data());
         int32_t i_out = -1; // output row of the cond sequence
         if (!in_codes) {
             // the score ends with </abc>, or is cut at max_tokens like the reference
@@ -3352,6 +3358,7 @@ public:
                 if (!decode(&tok, 1)) {
                     return 1;
                 }
+                save_logits(llama_get_logits_ith(lctx, -1));
             }
         } else {
             // the NAR pass also attends to <|music_end|>, the uncond sequence shares the unified KV cache
@@ -3372,8 +3379,11 @@ public:
                     return 1;
                 }
                 i_out = 0;
-            } else if (!decode(&tok, 1)) {
-                return 1;
+            } else {
+                if (!decode(&tok, 1)) {
+                    return 1;
+                }
+                save_logits(llama_get_logits_ith(lctx, -1));
             }
         }
         const float * h = llama_get_embeddings_ith(lctx, i_out);
@@ -3519,11 +3529,15 @@ private:
         return decode_ctx(lctx, toks, n, seq_id, pos);
     }
 
-    // logits = uncond + scale * (cond - uncond), on the codes and <|music_end|> only
-    void cfg_mix(const float * cond, const float * uncond) {
-        cfg_logits.resize((size_t) llama_vocab_n_tokens(vocab));
-        for (llama_token t = tok_music_end; t < tok_codec0 + n_codec; t++) {
-            cfg_logits[t] = uncond[t] + cfg_scale * (cond[t] - uncond[t]);
+    // keeps the logits of the next token, as the context logits belong to the last decode of any sequence (server slots)
+    // only the window that sample() reads: the text and </abc> for the score, <|music_end|> and the codes after it
+    // with guidance: uncond + scale * (cond - uncond)
+    void save_logits(const float * cond, const float * uncond = nullptr) {
+        const llama_token lo = in_codes ? tok_music_end : 0;
+        const llama_token hi = in_codes ? tok_codec0 + n_codec : tok_abc_end + 1;
+        logits.resize((size_t) llama_vocab_n_tokens(vocab));
+        for (llama_token t = lo; t < hi; t++) {
+            logits[t] = uncond ? uncond[t] + cfg_scale * (cond[t] - uncond[t]) : cond[t];
         }
     }
 
@@ -3531,6 +3545,7 @@ private:
     // the logits of the cond prompt must be the last ones when this is called
     bool start_uncond() {
         if (cfg_scale == 1.0f) {
+            save_logits(llama_get_logits_ith(lctx, -1));
             return true;
         }
         const float * c = llama_get_logits_ith(lctx, -1);
@@ -3553,7 +3568,7 @@ private:
                 return false;
             }
         }
-        cfg_mix(cond.data(), llama_get_logits_ith(lctx, -1));
+        save_logits(cond.data(), llama_get_logits_ith(lctx, -1));
         return true;
     }
 
@@ -3576,7 +3591,7 @@ private:
         }
         pos++;
         upos++;
-        cfg_mix(llama_get_logits_ith(lctx, 0), llama_get_logits_ith(lctx, 1));
+        save_logits(llama_get_logits_ith(lctx, 0), llama_get_logits_ith(lctx, 1));
         return true;
     }
 
@@ -3773,7 +3788,7 @@ private:
     llama_pos    upos       = 0;
     std::vector<llama_token> neg_prefix; // EOD + instruction
     std::vector<llama_token> abc_tail;   // the cond tokens from <abc> on
-    std::vector<float>       cfg_logits;
+    std::vector<float>       logits;     // see save_logits()
     std::vector<llama_token> prefix_tok; // the cond tokens before the first code
     std::vector<float>       latents;    // of the chunks done so far
     size_t n_nar_done = 0; // codes
