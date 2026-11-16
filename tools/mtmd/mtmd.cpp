@@ -3391,9 +3391,10 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
 
     // midpoint solver from t = 1 (noise) to t = 0
     std::vector<float> v1, v2, mid(x.size());
-    const double dt = 1.0 / g::ode_steps;
+    const int    n_steps = inp->n_steps > 0 ? inp->n_steps : g::ode_steps;
+    const double dt = 1.0 / n_steps;
     bool ok = true;
-    for (int step = 0; step < g::ode_steps && ok; step++) {
+    for (int step = 0; step < n_steps && ok; step++) {
         const double t = 1.0 - step * dt;
         ok = velocity(x, t, v1);
         for (size_t i = 0; ok && i < x.size(); i++) {

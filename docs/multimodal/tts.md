@@ -239,6 +239,7 @@ Available params:
 - Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
 - Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
 - The codes are sampled with classifier-free guidance like the reference: scale 1.01 with `--tts-voice off`, off (1.0) otherwise. `llama-server` takes `cfg_scale` to change it, the reference suggests 1.2 for a stronger text guidance. The uncond prompt runs as a second sequence, so the context must also hold it (the instruction, the score and the codes once more)
+- The NAR pass solves the flow-matching ODE in 32 midpoint steps like the reference; `llama-server` takes `flow_steps` to change it. The NAR time is about proportional to it: 16 steps are about 35% faster for the NAR and the VAE together, with a small deviation from the reference (about 0.2 dB of spectral difference); it grows with fewer steps (about 0.4 dB at 8, 0.8 dB at 4)
 - The NAR pass runs on chunks of codes like the reference: one chunk for a song that fits in 24576 positions, so the audio arrives after the last code. When streaming, each 30 s of codes is a chunk, processed during the generation, so the audio arrives in 30 s steps; the chunks are independent (each sees the prompt, the score and its own codes), which may be audible at the boundaries
 
 Example usage:

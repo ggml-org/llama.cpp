@@ -116,6 +116,8 @@ public:
     virtual bool supports_delivery() const { return false; }
     // mtmd_helper_gen_audio_inp::cfg_scale other than the default
     virtual bool supports_cfg() const { return false; }
+    // mtmd_helper_gen_audio_inp::flow_steps other than the default
+    virtual bool supports_flow_steps() const { return false; }
     virtual bool next_is_text() const { return false; }
 
     std::vector<llama_logit_bias> logit_bias; // see mtmd_helper_gen_audio_get_logit_bias()
@@ -2964,6 +2966,7 @@ public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
 
     bool supports_cfg() const override { return true; }
+    bool supports_flow_steps() const override { return true; }
 
     // the score and code budgets of the reference are enforced in step_gen()
     int32_t max_frames() const override { return 0; }
@@ -3017,6 +3020,7 @@ public:
         out_type = inp->out_type;
         stream   = inp->stream;
         code_cfg.temp = inp->temp >= 0.0f ? inp->temp : 1.0f;
+        flow_steps    = inp->flow_steps;
         rng.seed(inp->seed == UINT32_MAX ? std::random_device{}() : inp->seed);
         if (!init_gen_state(inp->seed)) {
             return 1;
@@ -3451,6 +3455,7 @@ private:
         inp.backbone_state      = state.data();
         inp.backbone_state_size = state.size();
         inp.backbone_n_past     = n_past;
+        inp.n_steps             = flow_steps;
         mtmd_gen_out out{};
         if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: flow matching failed\n");
@@ -3570,6 +3575,7 @@ private:
     bool in_codes = false;
     bool mode_off = false; // cot=off: no score
     float        cfg_scale  = 1.0f;
+    int32_t      flow_steps = 0; // 0 = the model default
     llama_seq_id seq_uncond = 0;
     llama_pos    upos       = 0;
     std::vector<llama_token> neg_prefix; // EOD + instruction
@@ -3654,6 +3660,7 @@ struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void) {
     inp.speed     = 1.0f;
     inp.loudness  = 0.0f;
     inp.cfg_scale = 0.0f; // model default
+    inp.flow_steps = 0;   // model default
     inp.out_type  = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     return inp;
 }
@@ -3681,6 +3688,14 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
     }
     if (inp->cfg_scale != 0.0f && !ctx->pipeline->supports_cfg()) {
         LOG_ERR("mtmd_helper_gen_audio: the model does not support cfg_scale\n");
+        return 2;
+    }
+    if (inp->flow_steps < 0 || inp->flow_steps > 1024) {
+        LOG_ERR("mtmd_helper_gen_audio: flow_steps must be in [1, 1024] (0 = model default)\n");
+        return 2;
+    }
+    if (inp->flow_steps != 0 && !ctx->pipeline->supports_flow_steps()) {
+        LOG_ERR("mtmd_helper_gen_audio: the model does not support flow_steps\n");
         return 2;
     }
     ctx->pipeline->logit_bias.clear();

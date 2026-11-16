@@ -325,6 +325,10 @@ struct mtmd_helper_gen_audio_inp {
     // default: 0.0 = the model's own; other models reject non-default values
     float cfg_scale;
 
+    // steps of the flow-matching ODE solver, fewer is faster with less accurate audio (only for models that support it)
+    // default: 0 = the model's own; other models reject non-default values
+    int32_t flow_steps;
+
     enum mtmd_helper_gen_audio_outtype out_type;
 };
 

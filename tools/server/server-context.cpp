@@ -1957,7 +1957,7 @@ private:
             task.tts_inp.data.seq_id = slot.id;
             const int32_t ret = slot.tts.ctx.set_input(task.tts_inp.get());
             if (ret == 2) {
-                send_error(task, "invalid TTS input: the model may not support \"speed\", \"loudness\" or \"cfg_scale\", see the server log", ERROR_TYPE_INVALID_REQUEST);
+                send_error(task, "invalid TTS input: the model may not support \"speed\", \"loudness\", \"cfg_scale\" or \"flow_steps\", see the server log", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
             if (ret != 0) {
@@ -5655,7 +5655,7 @@ json server_routes::get_model_info() const {
 // body of /tts and /v1/audio/speech; multipart form fields arrive as strings, the numeric and boolean params get their types back
 static json parse_tts_body(const server_http_req & req) {
     json body = json::parse(req.body);
-    for (const char * k : { "top_k", "n_predict", "max_tokens", "seed" }) {
+    for (const char * k : { "top_k", "n_predict", "max_tokens", "seed", "flow_steps" }) {
         if (body.contains(k) && body[k].is_string()) {
             body[k] = std::stoll(body[k].get<std::string>());
         }

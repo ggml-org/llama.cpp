@@ -530,6 +530,9 @@ struct mtmd_gen_inp {
     const uint8_t * backbone_state;
     size_t          backbone_state_size;
     int32_t         backbone_n_past;
+
+    // flow-matching GEN_CODE: steps of the ODE solver, <= 0 = model default (yue2: 32)
+    int32_t n_steps;
 };
 
 struct mtmd_gen_out {
