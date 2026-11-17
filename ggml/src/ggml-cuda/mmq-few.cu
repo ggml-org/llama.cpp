@@ -863,7 +863,48 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
 
 #elif defined(GGML_USE_HIP)
 
-static __device__ __forceinline__ float vec_dot_q4_K_q8_1_few(
+// Few-row MMQ for HIP: one CUDA block covers src0 rows, the lanes of its single warp split K.
+// Each lane decodes the weights of a K block once and reuses them for the 4 src1 columns of
+// the tile. The vec_dot functions below are the MMVQ decoders of vecdotq.cuh with the weight
+// decode hoisted out of the column loop.
+
+constexpr int mmq_few_vdr(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_K:   return VDR_Q4_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q6_K:   return VDR_Q6_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q3_K:   return VDR_Q3_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q5_K:   return VDR_Q5_K_Q8_1_MMVQ;
+        case GGML_TYPE_IQ4_NL: return VDR_IQ4_NL_Q8_1_MMVQ;
+        case GGML_TYPE_IQ4_XS: return VDR_IQ4_XS_Q8_1_MMVQ;
+        case GGML_TYPE_IQ3_S:  return VDR_IQ3_S_Q8_1_MMVQ;
+        case GGML_TYPE_Q4_0:   return VDR_Q4_0_Q8_1_MMVQ;
+        case GGML_TYPE_Q4_1:   return VDR_Q4_1_Q8_1_MMVQ;
+        case GGML_TYPE_Q5_0:   return VDR_Q5_0_Q8_1_MMVQ;
+        case GGML_TYPE_Q5_1:   return VDR_Q5_1_Q8_1_MMVQ;
+        case GGML_TYPE_MXFP4:  return VDR_MXFP4_Q8_1_MMVQ;
+        case GGML_TYPE_NVFP4:  return VDR_NVFP4_Q8_1_MMVQ;
+        case GGML_TYPE_Q2_K:   return VDR_Q2_K_Q8_1_MMVQ;
+        case GGML_TYPE_Q8_0:   return VDR_Q8_0_Q8_1_MMVQ;
+        default:               return 0;
+    }
+}
+
+// values per weight block, QK_K for the K-quants and the superblock formats
+constexpr int mmq_few_block_span(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q8_0:   return QK8_0;
+        case GGML_TYPE_IQ4_NL: return QK4_NL;
+        case GGML_TYPE_Q4_0:   return QK4_0;
+        case GGML_TYPE_Q4_1:   return QK4_1;
+        case GGML_TYPE_Q5_0:   return QK5_0;
+        case GGML_TYPE_Q5_1:   return QK5_1;
+        case GGML_TYPE_MXFP4:  return QK_MXFP4;
+        case GGML_TYPE_NVFP4:  return QK_NVFP4;
+        default:               return QK_K;
+    }
+}
+
+static __device__ __forceinline__ float mmq_few_vec_dot_q4_K(
         const int (&v0)[QR4_K], const int (&v1)[QR4_K], const uint8_t * sc, const uint8_t * m,
         const float2 dm, const block_q8_1 * y, const int bq8_offset, const int iqs8) {
     float sumf_d = 0.0f;
@@ -883,7 +924,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_few(
     return dm.x*sumf_d - dm.y*sumf_m;
 }
 
-static __device__ __forceinline__ float vec_dot_q6_K_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q6_K(
         const int (&vl)[VDR_Q6_K_Q8_1_MMVQ], const int (&vh)[VDR_Q6_K_Q8_1_MMVQ],
         const int8_t * scales, const float d, const block_q8_1 * y, const int bq8_offset, const int iqs8) {
     float sumf = 0.0f;
@@ -905,7 +946,7 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_few(
     return d*sumf;
 }
 
-static __device__ __forceinline__ float vec_dot_q8_0_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q8_0(
         const int (&v)[VDR_Q8_0_Q8_1_MMVQ], const float d, const block_q8_1 * y, const int iqs8) {
     int sumi = 0;
 #pragma unroll
@@ -915,7 +956,7 @@ static __device__ __forceinline__ float vec_dot_q8_0_q8_1_few(
     return d * __low2float(y->ds) * sumi;
 }
 
-static __device__ __forceinline__ float vec_dot_q3_K_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q3_K(
         const int (&vl)[VDR_Q3_K_Q8_1_MMVQ], const int (&vh)[VDR_Q3_K_Q8_1_MMVQ], const int (&scales)[3],
         const float d, const block_q8_1 * y, const int bq8_offset, const int iqs8) {
     float sumf = 0.0f;
@@ -939,7 +980,7 @@ static __device__ __forceinline__ float vec_dot_q3_K_q8_1_few(
     return d*sumf;
 }
 
-static __device__ __forceinline__ float vec_dot_q5_K_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q5_K(
         const int (&vl)[2], const int (&vh)[2], const uint8_t * sc, const uint8_t * m, const float2 dm,
         const block_q8_1 * y, const int bq8_offset, const int iqs8) {
     float sumf_d = 0.0f;
@@ -962,32 +1003,22 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_few(
     return dm.x*sumf_d - dm.y*sumf_m;
 }
 
-static __device__ __forceinline__ float vec_dot_iq4_nl_q8_1_few(
-        const int (&v0)[VDR_IQ4_NL_Q8_1_MMVQ], const int (&v1)[VDR_IQ4_NL_Q8_1_MMVQ],
-        const float d, const block_q8_1 * y, const int iqs8) {
+// shared by the 4-bit lookup formats, v0/v1 hold the table-decoded weight words
+template <int n>
+static __device__ __forceinline__ float mmq_few_vec_dot_table(
+        const int (&v0)[n], const int (&v1)[n], const int ls, const float d,
+        const block_q8_1 * y, const int iqs8) {
+    const int * q8 = (const int *) y->qs + iqs8;
     int sumi = 0;
 #pragma unroll
-    for (int l = 0; l < VDR_IQ4_NL_Q8_1_MMVQ; ++l) {
-        const int * q8 = (const int *) y->qs + iqs8;
+    for (int l = 0; l < n; ++l) {
         sumi = ggml_cuda_dp4a(v0[l], q8[l + 0], sumi);
         sumi = ggml_cuda_dp4a(v1[l], q8[l + 4], sumi);
-    }
-    return d * __low2float(y->ds) * sumi;
-}
-
-static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1_few(
-        const int (&v0)[4], const int (&v1)[4], const int ls, const float d, const block_q8_1 * y) {
-    int sumi = 0;
-#pragma unroll
-    for (int j = 0; j < 4; ++j) {
-        const int * q8 = (const int *) y->qs;
-        sumi = ggml_cuda_dp4a(v0[j], q8[j + 0], sumi);
-        sumi = ggml_cuda_dp4a(v1[j], q8[j + 4], sumi);
     }
     return d * __low2float(y->ds) * (sumi * ls);
 }
 
-static __device__ __forceinline__ float vec_dot_iq3_s_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_iq3_s(
         const int (&grid_l)[4], const int (&grid_h)[4], const int ls, const float d, const block_q8_1 * y) {
     int sumi = 0;
 #pragma unroll
@@ -1000,7 +1031,7 @@ static __device__ __forceinline__ float vec_dot_iq3_s_q8_1_few(
     return d * __low2float(y->ds) * (sumi * ls);
 }
 
-static __device__ __forceinline__ float vec_dot_q4_0_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q4_0(
         const int (&v)[VDR_Q4_0_Q8_1_MMVQ], const float d, const block_q8_1 * y, const int iqs) {
     int sumi = 0;
 #pragma unroll
@@ -1014,7 +1045,7 @@ static __device__ __forceinline__ float vec_dot_q4_0_q8_1_few(
     return d * (sumi * ds8f.x - (8*VDR_Q4_0_Q8_1_MMVQ/QI4_0) * ds8f.y);
 }
 
-static __device__ __forceinline__ float vec_dot_q4_1_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q4_1(
         const int (&v)[VDR_Q4_1_Q8_1_MMVQ], const float2 dm, const block_q8_1 * y, const int iqs) {
     int sumi = 0;
 #pragma unroll
@@ -1029,7 +1060,7 @@ static __device__ __forceinline__ float vec_dot_q4_1_q8_1_few(
     return sumi * (dm4f.x * ds8f.x) + (dm4f.y * ds8f.y) / (QI8_1 / (VDR_Q4_1_Q8_1_MMVQ * QR4_1));
 }
 
-static __device__ __forceinline__ float vec_dot_q5_0_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q5_0(
         const int (&vl)[VDR_Q5_0_Q8_1_MMVQ], const int (&vh)[VDR_Q5_0_Q8_1_MMVQ],
         const float d, const block_q8_1 * y, const int iqs) {
     int sumi = 0;
@@ -1054,7 +1085,7 @@ static __device__ __forceinline__ float vec_dot_q5_0_q8_1_few(
     return d * (sumi * ds8f.x - (16*VDR_Q5_0_Q8_1_MMVQ/QI5_0) * ds8f.y);
 }
 
-static __device__ __forceinline__ float vec_dot_q5_1_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q5_1(
         const int (&vl)[VDR_Q5_1_Q8_1_MMVQ], const int (&vh)[VDR_Q5_1_Q8_1_MMVQ],
         const float2 dm, const block_q8_1 * y, const int iqs) {
     int sumi = 0;
@@ -1080,7 +1111,7 @@ static __device__ __forceinline__ float vec_dot_q5_1_q8_1_few(
     return sumi * (dm5f.x * ds8f.x) + (dm5f.y * ds8f.y) / (QI8_1 / (VDR_Q5_1_Q8_1_MMVQ * QR5_1));
 }
 
-static __device__ __forceinline__ float vec_dot_q2_K_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_q2_K(
         const int (&v)[VDR_Q2_K_Q8_1_MMVQ], const int (&scales)[2], const float2 dm,
         const block_q8_1 * y, const int bq8_offset, const int iqs8) {
     float sumf_d = 0.0f;
@@ -1104,20 +1135,7 @@ static __device__ __forceinline__ float vec_dot_q2_K_q8_1_few(
     return dm.x*sumf_d - dm.y*sumf_m;
 }
 
-static __device__ __forceinline__ float vec_dot_mxfp4_q8_1_few(
-        const int (&v0)[VDR_MXFP4_Q8_1_MMVQ], const int (&v1)[VDR_MXFP4_Q8_1_MMVQ],
-        const float d, const block_q8_1 * y, const int iqs) {
-    int sumi = 0;
-#pragma unroll
-    for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
-        const int * q8 = (const int *) y->qs + iqs;
-        sumi = ggml_cuda_dp4a(v0[l], q8[l + 0], sumi);
-        sumi = ggml_cuda_dp4a(v1[l], q8[l + 4], sumi);
-    }
-    return d * __low2float(y->ds) * sumi;
-}
-
-static __device__ __forceinline__ float vec_dot_nvfp4_q8_1_few(
+static __device__ __forceinline__ float mmq_few_vec_dot_nvfp4(
         const int2 (&v0)[VDR_NVFP4_Q8_1_MMVQ/2], const int2 (&v1)[VDR_NVFP4_Q8_1_MMVQ/2],
         const int (&sc)[VDR_NVFP4_Q8_1_MMVQ/2], const block_q8_1 * y, const int iqs) {
     float sum = 0.0f;
@@ -1137,39 +1155,12 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1_few(
 }
 
 template <ggml_type type>
-static __global__ void mul_mat_q_few_gcn(
+static __global__ void mul_mat_q_few(
         const char * x, const block_q8_1 * y, float * dst,
         const int64_t nblocks, const int64_t stride_y, const int64_t stride_dst, const int ncols) {
     constexpr int ncols_tile = 4;
-    constexpr int vdr = type == GGML_TYPE_Q4_K ? VDR_Q4_K_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q6_K ? VDR_Q6_K_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q3_K ? VDR_Q3_K_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q5_K ? VDR_Q5_K_Q8_1_MMVQ :
-                        type == GGML_TYPE_IQ4_NL ? VDR_IQ4_NL_Q8_1_MMVQ :
-                        type == GGML_TYPE_IQ4_XS ? VDR_IQ4_XS_Q8_1_MMVQ :
-                        type == GGML_TYPE_IQ3_S ? VDR_IQ3_S_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q4_0 ? VDR_Q4_0_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q4_1 ? VDR_Q4_1_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q5_0 ? VDR_Q5_0_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q5_1 ? VDR_Q5_1_Q8_1_MMVQ :
-                        type == GGML_TYPE_MXFP4 ? VDR_MXFP4_Q8_1_MMVQ :
-                        type == GGML_TYPE_NVFP4 ? VDR_NVFP4_Q8_1_MMVQ :
-                        type == GGML_TYPE_Q2_K ? VDR_Q2_K_Q8_1_MMVQ : VDR_Q8_0_Q8_1_MMVQ;
-    constexpr int qi = type == GGML_TYPE_Q4_K ? ggml_cuda_type_traits<GGML_TYPE_Q4_K>::qi :
-                       type == GGML_TYPE_Q6_K ? ggml_cuda_type_traits<GGML_TYPE_Q6_K>::qi :
-                       type == GGML_TYPE_Q3_K ? ggml_cuda_type_traits<GGML_TYPE_Q3_K>::qi :
-                       type == GGML_TYPE_Q5_K ? ggml_cuda_type_traits<GGML_TYPE_Q5_K>::qi :
-                       type == GGML_TYPE_IQ4_NL ? ggml_cuda_type_traits<GGML_TYPE_IQ4_NL>::qi :
-                       type == GGML_TYPE_IQ4_XS ? ggml_cuda_type_traits<GGML_TYPE_IQ4_XS>::qi :
-                       type == GGML_TYPE_IQ3_S ? ggml_cuda_type_traits<GGML_TYPE_IQ3_S>::qi :
-                       type == GGML_TYPE_Q4_0 ? ggml_cuda_type_traits<GGML_TYPE_Q4_0>::qi :
-                       type == GGML_TYPE_Q4_1 ? ggml_cuda_type_traits<GGML_TYPE_Q4_1>::qi :
-                       type == GGML_TYPE_Q5_0 ? ggml_cuda_type_traits<GGML_TYPE_Q5_0>::qi :
-                       type == GGML_TYPE_Q5_1 ? ggml_cuda_type_traits<GGML_TYPE_Q5_1>::qi :
-                       type == GGML_TYPE_MXFP4 ? ggml_cuda_type_traits<GGML_TYPE_MXFP4>::qi :
-                       type == GGML_TYPE_NVFP4 ? ggml_cuda_type_traits<GGML_TYPE_NVFP4>::qi :
-                       type == GGML_TYPE_Q2_K ? ggml_cuda_type_traits<GGML_TYPE_Q2_K>::qi :
-                                                ggml_cuda_type_traits<GGML_TYPE_Q8_0>::qi;
+    constexpr int vdr = mmq_few_vdr(type);
+    constexpr int qi = ggml_cuda_type_traits<type>::qi;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     const int64_t row = blockIdx.x;
     const int col = ncols_tile*blockIdx.y;
@@ -1207,7 +1198,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q4_K_q8_1_few(v0, v1, sc, m, dm,
+                    sum[j] += mmq_few_vec_dot_q4_K(v0, v1, sc, m, dm,
                         y + (col + j)*stride_y + kbx*(QK_K/QK8_1), bq8_offset, iqs8);
                 }
             }
@@ -1230,7 +1221,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q6_K_q8_1_few(vl, vh, scales, d,
+                    sum[j] += mmq_few_vec_dot_q6_K(vl, vh, scales, d,
                         y + (col + j)*stride_y + kbx*(QK_K/QK8_1), bq8_offset, iqs % QI8_1);
                 }
             }
@@ -1249,7 +1240,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q8_0_q8_1_few(v, d,
+                    sum[j] += mmq_few_vec_dot_q8_0(v, d,
                         y + (col + j)*stride_y + kbx*(QK8_0/QK8_1), iqs8);
                 }
             }
@@ -1276,7 +1267,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q3_K_q8_1_few(vl, vh, scales, d,
+                    sum[j] += mmq_few_vec_dot_q3_K(vl, vh, scales, d,
                         y + (col + j)*stride_y + kbx*(QK_K/QK8_1), bq8_offset, iqs8);
                 }
             }
@@ -1309,7 +1300,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q5_K_q8_1_few(vl, vh, sc, m, dm,
+                    sum[j] += mmq_few_vec_dot_q5_K(vl, vh, sc, m, dm,
                         y + (col + j)*stride_y + kbx*(QK_K/QK8_1), bq8_offset, iqs8);
                 }
             }
@@ -1331,7 +1322,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_iq4_nl_q8_1_few(v0, v1, d,
+                    sum[j] += mmq_few_vec_dot_table(v0, v1, 1, d,
                         y + (col + j)*stride_y + kbx*(QK4_NL/QK8_1), iqs8);
                 }
             }
@@ -1353,8 +1344,8 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_iq4_xs_q8_1_few(v0, v1, ls - 32, d,
-                        y + (col + j)*stride_y + kbx*(QK_K/QK8_1) + iqs/4);
+                    sum[j] += mmq_few_vec_dot_table(v0, v1, ls - 32, d,
+                        y + (col + j)*stride_y + kbx*(QK_K/QK8_1) + iqs/4, 0);
                 }
             }
         }
@@ -1384,7 +1375,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_iq3_s_q8_1_few(grid_l, grid_h, ls, d,
+                    sum[j] += mmq_few_vec_dot_iq3_s(grid_l, grid_h, ls, d,
                         y + (col + j)*stride_y + kbx*(QK_K/QK8_1) + iqs/2);
                 }
             }
@@ -1402,7 +1393,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q4_0_q8_1_few(v, d,
+                    sum[j] += mmq_few_vec_dot_q4_0(v, d,
                         y + (col + j)*stride_y + kbx*(QK4_0/QK8_1), iqs);
                 }
             }
@@ -1420,7 +1411,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q4_1_q8_1_few(v, dm,
+                    sum[j] += mmq_few_vec_dot_q4_1(v, dm,
                         y + (col + j)*stride_y + kbx*(QK4_1/QK8_1), iqs);
                 }
             }
@@ -1440,7 +1431,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q5_0_q8_1_few(vl, vh, d,
+                    sum[j] += mmq_few_vec_dot_q5_0(vl, vh, d,
                         y + (col + j)*stride_y + kbx*(QK5_0/QK8_1), iqs);
                 }
             }
@@ -1460,7 +1451,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q5_1_q8_1_few(vl, vh, dm,
+                    sum[j] += mmq_few_vec_dot_q5_1(vl, vh, dm,
                         y + (col + j)*stride_y + kbx*(QK5_1/QK8_1), iqs);
                 }
             }
@@ -1484,7 +1475,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_q2_K_q8_1_few(v, scales, dm,
+                    sum[j] += mmq_few_vec_dot_q2_K(v, scales, dm,
                         y + (col + j)*stride_y + kbx*(QK_K/QK8_1), bq8_offset, iqs8);
                 }
             }
@@ -1505,7 +1496,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_mxfp4_q8_1_few(v0, v1, d,
+                    sum[j] += mmq_few_vec_dot_table(v0, v1, 1, d,
                         y + (col + j)*stride_y + kbx*(QK_MXFP4/QK8_1), iqs);
                 }
             }
@@ -1527,7 +1518,7 @@ static __global__ void mul_mat_q_few_gcn(
 #pragma unroll
             for (int j = 0; j < ncols_tile; ++j) {
                 if (col + j < ncols) {
-                    sum[j] += vec_dot_nvfp4_q8_1_few(v0, v1, sc,
+                    sum[j] += mmq_few_vec_dot_nvfp4(v0, v1, sc,
                         y + (col + j)*stride_y + kbx*(QK_NVFP4/QK8_1), iqs);
                 }
             }
@@ -1543,6 +1534,18 @@ static __global__ void mul_mat_q_few_gcn(
     }
 }
 
+
+template <ggml_type type>
+static void launch_mul_mat_q_few(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+        const block_q8_1 * y, const int64_t k_padded, cudaStream_t stream) {
+    const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+    const dim3 blocks(src0->ne[1], (src1->ne[1] + 3)/4);
+    const dim3 threads(warp_size);
+    const ggml_cuda_kernel_launch_params params(blocks, threads, 0, stream);
+    ggml_cuda_kernel_launch(mul_mat_q_few<type>, params, (const char *) src0->data, y, (float *) dst->data,
+        src0->ne[0]/mmq_few_block_span(type), k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+}
+
 void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     cudaStream_t stream = ctx.stream();
     const int64_t k_padded = GGML_PAD(src1->ne[0], MATRIX_ROW_PADDING);
@@ -1550,72 +1553,77 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
     quantize_row_q8_1_cuda((const float *) src1->data, y.get(), src1->ne[0], src1->nb[1]/sizeof(float),
         src1->nb[2]/sizeof(float), src1->nb[3]/sizeof(float), k_padded, src1->ne[1], 1, 1, stream);
 
-    const dim3 blocks(src0->ne[1], (src1->ne[1] + 3)/4);
-    const dim3 threads(ggml_cuda_info().devices[ctx.device].warp_size);
-    const ggml_cuda_kernel_launch_params params(blocks, threads, 0, stream);
     switch (src0->type) {
         case GGML_TYPE_Q4_K:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q4_K>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q4_K>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q6_K:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q6_K>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q6_K>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q8_0:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q8_0>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK8_0, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q8_0>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q3_K:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q3_K>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q3_K>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q5_K:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q5_K>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q5_K>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_IQ4_NL:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_IQ4_NL>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK4_NL, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_IQ4_NL>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_IQ4_XS:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_IQ4_XS>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_IQ4_XS>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_IQ3_S:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_IQ3_S>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_IQ3_S>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q4_0:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q4_0>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK4_0, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q4_0>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q4_1:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q4_1>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK4_1, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q4_1>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q5_0:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q5_0>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK5_0, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q5_0>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q5_1:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q5_1>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK5_1, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q5_1>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_Q2_K:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_Q2_K>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_K, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_Q2_K>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_MXFP4:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_MXFP4>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_MXFP4, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_MXFP4>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         case GGML_TYPE_NVFP4:
-            ggml_cuda_kernel_launch(mul_mat_q_few_gcn<GGML_TYPE_NVFP4>, params, (const char *) src0->data, y.get(), (float *) dst->data,
-                src0->ne[0]/QK_NVFP4, k_padded/QK8_1, dst->nb[1]/sizeof(float), (int) src1->ne[1]);
+            launch_mul_mat_q_few<GGML_TYPE_NVFP4>(src0, src1, dst, y.get(), k_padded, stream);
             break;
         default:
             GGML_ABORT("unsupported type for few-row MMQ");
+    }
+}
+
+static bool mmq_few_supported(const ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -1624,23 +1632,11 @@ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * 
     GGML_UNUSED_VARS(src0, src1, cc);
     return false;
 #else
-    return cc == GGML_CUDA_CC_VEGA20 && (src0->type == GGML_TYPE_Q4_K || src0->type == GGML_TYPE_Q6_K ||
-        src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q3_K || src0->type == GGML_TYPE_Q5_K ||
-        src0->type == GGML_TYPE_IQ4_NL || src0->type == GGML_TYPE_IQ4_XS || src0->type == GGML_TYPE_IQ3_S ||
-        src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q4_1 || src0->type == GGML_TYPE_Q5_0 ||
-        src0->type == GGML_TYPE_Q5_1 || src0->type == GGML_TYPE_Q2_K || src0->type == GGML_TYPE_MXFP4 ||
-        src0->type == GGML_TYPE_NVFP4) &&
-        src1->type == GGML_TYPE_F32 &&
+    // TODO: validated on gfx906 (VEGA20) only, the other GCN targets are untested
+    return GGML_CUDA_CC_IS_GCN(cc) && mmq_few_supported(src0->type) && src1->type == GGML_TYPE_F32 &&
         src1->ne[1] >= 9 && src1->ne[1] <= 24 && ggml_is_matrix(src0) && ggml_is_matrix(src1) &&
         ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_cuda_is_aligned(src0, 4) &&
-        ggml_cuda_is_aligned(src1, 4) &&
-        src0->ne[0] % (src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_IQ4_NL ? QK8_0 :
-                       src0->type == GGML_TYPE_Q4_0 ? QK4_0 :
-                       src0->type == GGML_TYPE_Q4_1 ? QK4_1 :
-                       src0->type == GGML_TYPE_Q5_0 ? QK5_0 :
-                       src0->type == GGML_TYPE_Q5_1 ? QK5_1 :
-                       src0->type == GGML_TYPE_MXFP4 ? QK_MXFP4 :
-                       src0->type == GGML_TYPE_NVFP4 ? QK_NVFP4 : QK_K) == 0 &&
+        ggml_cuda_is_aligned(src1, 4) && src0->ne[0] % mmq_few_block_span(src0->type) == 0 &&
         src0->ne[0] >= 2048 && src0->ne[0] <= INT_MAX && src0->ne[1] <= 1024;
 #endif // GGML_CUDA_FORCE_CUBLAS
 }
