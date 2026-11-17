@@ -364,7 +364,7 @@ llama_context::llama_context(
     cparams.fused_dsv4_hc_pre  = true;
     cparams.fused_dsv4_hc_comb = true;
     cparams.fused_dsv4_hc_post = true;
-    cparams.auto_fhc           = true;
+    cparams.auto_fhc           = model.arch != LLM_ARCH_CLIP; // the encoder graphs have no HC ops
 
     // only the indexer models build this mask, skip the probe for the others
     cparams.fused_top_k_mask = true;
@@ -901,11 +901,18 @@ void llama_context::sched_reserve() {
         graph_has_logits = get_gf_res_reserve()->get_logits() != nullptr;
     }
 
+    // the graph of a clip model is built from its warmup media, whatever the ubatch: reserved once
+    const bool same_graph = model.arch == LLM_ARCH_CLIP;
+
     // reserve with tg (token generation) graph to get the number of splits and nodes
-    if (cparams.training) {
+    if (cparams.training || same_graph) {
         // no tg graph for training
         n_splits_tg = n_splits_pp;
         n_nodes_tg  = n_nodes_pp;
+        if (same_graph) {
+            n_inputs_tg        = n_inputs_pp;
+            n_input_tensors_tg = n_input_tensors_pp;
+        }
     } else {
         auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.no_alloc());
         if (!gf) {
@@ -943,7 +950,7 @@ void llama_context::sched_reserve() {
     }
 
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
-    {
+    if (!same_graph) {
         // TODO: the worst case graph is not always reached for `n_seqs > 1`
         //       need to implement a more robust mechanism that tries a few different inputs and analyzes the results
         ggml_cgraph * gf = nullptr;

@@ -496,10 +496,41 @@ struct mtmd_input_chunks {
     std::vector<mtmd_input_chunk> entries;
 };
 
+// the output of an encode: the rows stay in the media, a copy is made only when they are not in host memory
+struct mtmd_encode_out {
+    std::vector<mtmd_lmedia_ref> media;
+    std::vector<std::vector<float>> copies; // per media, filled on demand
+
+    void set(const std::vector<llama_media *> & ms) {
+        media.clear();
+        copies.assign(ms.size(), {});
+        for (llama_media * m : ms) {
+            media.emplace_back(llama_media_ref(m));
+        }
+    }
+
+    float * rows(size_t i) {
+        if (i >= media.size()) {
+            return nullptr;
+        }
+        llama_media * m = media[i].m;
+        if (const float * p = llama_media_rows_host(m)) {
+            return const_cast<float *>(p);
+        }
+        auto & c = copies[i];
+        if (c.empty()) {
+            const int64_t n_embd = llama_media_get_rows(m, 0, 0, nullptr);
+            c.resize((size_t) llama_media_n_tokens(m) * n_embd);
+            llama_media_get_rows(m, 0, llama_media_n_tokens(m), c.data());
+        }
+        return c.data();
+    }
+};
+
 struct mtmd_batch {
     mtmd_context * ctx;
     std::vector<const mtmd_input_chunk *> entries;
-    std::vector<float> output_embd; // aggregated output embedding for the whole batch
+    mtmd_encode_out out; // the encoded media, one per entry
     explicit mtmd_batch(mtmd_context * ctx): ctx(ctx) {}
     int32_t n_tokens() const {
         int32_t n = 0;
@@ -691,7 +722,7 @@ struct mtmd_context {
     // held by every public function that runs a graph
     std::mutex compute_mutex;
 
-    std::vector<float> out_embd; // output of mtmd_encode*
+    mtmd_encode_out out; // output of mtmd_encode*
 
     // gen stages: native graphs (Qwen3-TTS) or the moved engine (llama_batch_ext_add_gen)
     bool gen_native = false;
@@ -1344,7 +1375,7 @@ static void mtmd_dump_rows(const std::vector<float> & rows, int64_t n_embd) {
 }
 
 // encodes the media (one ENCODER batch, so libllama can share graphs between them), rows in chunk order
-static int32_t mtmd_encode_media(mtmd_context * ctx, const std::vector<llama_media *> & media, std::vector<float> & out_embd) {
+static int32_t mtmd_encode_media(mtmd_context * ctx, const std::vector<llama_media *> & media, mtmd_encode_out & out) {
     for (llama_media * m : media) {
         if (llama_media_is_placeholder(m)) {
             LOG_ERR("%s: cannot encode a placeholder media\n", __func__);
@@ -1377,16 +1408,19 @@ static int32_t mtmd_encode_media(mtmd_context * ctx, const std::vector<llama_med
         }
     }
 
-    out_embd.clear();
-    int64_t n_embd = 0;
-    for (llama_media * m : media) {
-        const int64_t n_rows = llama_media_n_tokens(m);
-        n_embd = llama_media_get_rows(m, 0, 0, nullptr);
-        const size_t off = out_embd.size();
-        out_embd.resize(off + (size_t) n_rows * n_embd);
-        llama_media_get_rows(m, 0, n_rows, out_embd.data() + off);
+    out.set(media);
+    if (std::getenv("MTMD_DEBUG_EMBEDDINGS")) {
+        std::vector<float> rows;
+        int64_t n_embd = 0;
+        for (llama_media * m : media) {
+            const int64_t n_rows = llama_media_n_tokens(m);
+            n_embd = llama_media_get_rows(m, 0, 0, nullptr);
+            const size_t off = rows.size();
+            rows.resize(off + (size_t) n_rows * n_embd);
+            llama_media_get_rows(m, 0, n_rows, rows.data() + off);
+        }
+        mtmd_dump_rows(rows, n_embd);
     }
-    mtmd_dump_rows(out_embd, n_embd);
 
     if (!media.empty()) {
         ctx->last_ref = mtmd_lmedia_ref(llama_media_ref(media.back()));
@@ -1394,7 +1428,7 @@ static int32_t mtmd_encode_media(mtmd_context * ctx, const std::vector<llama_med
     return 0;
 }
 
-static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, std::vector<float> & out_embd) {
+static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk * chunk, mtmd_encode_out & out) {
     if (chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
         LOG_WRN("mtmd_encode_chunk has no effect for text chunks\n");
         return 0;
@@ -1404,13 +1438,13 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         LOG_ERR("%s: the %s tokens are a placeholder\n", __func__, chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio");
         return 1;
     }
-    return mtmd_encode_media(ctx, { m }, out_embd);
+    return mtmd_encode_media(ctx, { m }, out);
 }
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     std::lock_guard<std::mutex> lock(ctx->compute_mutex);
     try {
-        return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
+        return mtmd_encode_chunk_impl(ctx, chunk, ctx->out);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;
@@ -1424,7 +1458,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
         return 1;
     }
     try {
-        return mtmd_encode_media(ctx, { image_tokens->lmedia.m }, ctx->out_embd);
+        return mtmd_encode_media(ctx, { image_tokens->lmedia.m }, ctx->out);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;
@@ -1432,7 +1466,7 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
 }
 
 float * mtmd_get_output_embd(mtmd_context * ctx) {
-    return ctx->out_embd.data();
+    return ctx->out.rows(0);
 }
 
 mtmd_batch * mtmd_batch_init(mtmd_context * ctx) {
@@ -1481,7 +1515,7 @@ int32_t mtmd_batch_encode(mtmd_batch * batch) {
         media.push_back(m);
     }
     try {
-        return mtmd_encode_media(batch->ctx, media, batch->output_embd);
+        return mtmd_encode_media(batch->ctx, media, batch->out);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return 1;
@@ -1489,18 +1523,13 @@ int32_t mtmd_batch_encode(mtmd_batch * batch) {
 }
 
 float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
-    if (batch->output_embd.empty()) {
+    if (batch->out.media.size() != batch->entries.size()) {
         LOG_ERR("%s: batch has not been encoded yet\n", __func__);
         return nullptr;
     }
-    size_t offset = 0;
-    for (const auto * c : batch->entries) {
-        const size_t offset_prev = offset;
-        llama_media * m = c->lmedia();
-        offset += (size_t) llama_media_n_tokens(m) * llama_media_get_rows(m, 0, 0, nullptr);
-        GGML_ASSERT(offset <= batch->output_embd.size());
-        if (c == chunk) {
-            return &batch->output_embd.data()[offset_prev];
+    for (size_t i = 0; i < batch->entries.size(); ++i) {
+        if (batch->entries[i] == chunk) {
+            return batch->out.rows(i);
         }
     }
     return nullptr; // not found

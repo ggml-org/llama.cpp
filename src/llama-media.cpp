@@ -491,6 +491,10 @@ void llama_media_release_rows(struct llama_media * m) {
     m->rows.shrink_to_fit();
 }
 
+const float * llama_media_rows_host(const struct llama_media * m) {
+    return m->rows.empty() ? nullptr : m->rows.data();
+}
+
 int64_t llama_media_get_rows(const struct llama_media * m, int64_t row0, int64_t n_rows, float * out) {
     if (m->rows.empty()) {
         return 0;

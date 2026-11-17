@@ -97,7 +97,8 @@ bool clip_audio_log_mel(const clip_audio_mel_config & config, const float * samp
     }
 
     // the spectrum is several times larger than the result, so long audio is processed in blocks
-    const int64_t n_frames_max = 8192;
+    // (frames are independent); small blocks keep the compute buffer of the scheduler at a few MB
+    const int64_t n_frames_max = 1024;
 
     for (int64_t off = 0; off < n_frames; off += n_frames_max) {
         const int64_t n_cur = std::min(n_frames_max, n_frames - off);

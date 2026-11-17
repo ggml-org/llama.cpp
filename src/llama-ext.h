@@ -416,6 +416,9 @@ LLAMA_API void                  llama_media_free          (struct llama_media * 
 LLAMA_API void                  llama_media_release_rows  (struct llama_media * m); // keep the handle, free the rows
 // read back encoded rows; returns the row width, 0 if not encoded
 LLAMA_API int64_t               llama_media_get_rows      (const struct llama_media * m, int64_t row0, int64_t n_rows, float * out);
+// the encoded rows in place, n_tokens x n_embd; NULL if not encoded or not in host memory (then use llama_media_get_rows)
+// valid while the media lives and is not encoded again
+LLAMA_API const float *         llama_media_rows_host     (const struct llama_media * m);
 // TRANSITIONAL: decoder positions of one row (n_pos values, [t, y, x, z] for M-RoPE), for callers that decode host rows
 // with llama_batch_ext_add_embd instead of llama_batch_ext_add_media
 LLAMA_API bool                  llama_media_get_row_pos   (const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos);
