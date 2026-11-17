@@ -207,7 +207,7 @@ struct llama_media_proc_params {
 
 LLAMA_API struct llama_media_proc_params llama_media_proc_default_params(void);
 
-// preprocessing and layout for an (encoder context, decoder model) pair
+// preprocessing and layout for an (encoder context, decoder model) pair; model_dec may be null for the queries only
 // the user limits of the image token count are kv overrides of the mmproj model: clip.vision.image_min_tokens and
 // clip.vision.image_max_tokens (int)
 // audio preprocessing computes the log-mel on ctx_enc: do not use the proc while ctx_enc is computing
@@ -220,6 +220,22 @@ LLAMA_API void    llama_media_proc_free       (struct llama_media_proc * proc);
 LLAMA_API bool    llama_media_proc_has        (const struct llama_media_proc * proc, enum llama_media_type type);
 LLAMA_API int32_t llama_media_proc_sample_rate(const struct llama_media_proc * proc); // -1 without audio
 LLAMA_API int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc); // frames merged into one span, 1 = none
+
+// the most rows one media of this type takes (-1: no fixed bound), atomic: its span sits in one decoder ubatch
+LLAMA_API int32_t llama_media_proc_n_tokens_max(const struct llama_media_proc * proc, enum llama_media_type type, bool * atomic);
+// the frame size the model takes for a video of n_frames frames of src_w x src_h; false if the model has no video sizing
+LLAMA_API bool    llama_media_proc_video_frame_size(const struct llama_media_proc * proc, int32_t n_frames,
+                                                    int32_t src_w, int32_t src_h, int32_t * w, int32_t * h);
+// the text that opens and closes a video (empty strings if none), with special tokens
+LLAMA_API void    llama_media_proc_video_markers(const struct llama_media_proc * proc, const char ** beg, const char ** end);
+
+// debugging of model ports, unstable: run the encoder on preprocessed input and print its rows
+// image: nx * ny * 3 normalized RGB floats; audio: nx samples broadcast to every mel bin
+LLAMA_API int32_t llama_media_debug_encode    (const struct llama_media_proc * proc, enum llama_media_type type,
+                                               int32_t nx, int32_t ny, const float * data, size_t n_data);
+// debugging of model ports, unstable: print the preprocessed input; image: nx * ny RGB bytes, audio: nx PCM samples
+LLAMA_API int32_t llama_media_debug_preprocess(const struct llama_media_proc * proc, enum llama_media_type type,
+                                               int32_t nx, int32_t ny, const void * data);
 
 // builder: pieces in prompt order; pos_0 is the position of the first piece
 // one layout per prompt: images are numbered and aligned within it
@@ -271,6 +287,99 @@ LLAMA_API bool    llama_audio_stream_is_seq_start     (const struct llama_audio_
 LLAMA_API int64_t llama_audio_stream_get_n_rows       (const struct llama_audio_stream * s);
 // audio rows up to the end of the last flush
 LLAMA_API int64_t llama_audio_stream_get_n_rows_flushed(const struct llama_audio_stream * s);
+
+// audio generation pipelines of an mmproj model, moved from mtmd: one step of one sequence per batch entry
+// a GEN_CODE or GEN_WAV context of the mmproj runs both stages; its memory holds the decoder state of each sequence
+// (llama_memory_seq_rm() of a whole sequence is a cold start)
+enum llama_gen_audio_type {
+    LLAMA_GEN_AUDIO_TYPE_NONE, // not supported
+    LLAMA_GEN_AUDIO_TYPE_QWEN3TTS,
+    LLAMA_GEN_AUDIO_TYPE_POCKETTTS,
+    LLAMA_GEN_AUDIO_TYPE_SOPRANO,
+    LLAMA_GEN_AUDIO_TYPE_LFM3A,
+    LLAMA_GEN_AUDIO_TYPE_CHATTERBOX,
+    LLAMA_GEN_AUDIO_TYPE_DRAMA3,
+    LLAMA_GEN_AUDIO_TYPE_ZONOS3,
+    LLAMA_GEN_AUDIO_TYPE_YUE2,
+    LLAMA_GEN_AUDIO_TYPE_FISH_S2,
+};
+
+struct llama_gen_info {
+    enum llama_gen_audio_type type;
+    int32_t sample_rate;        // in Hz
+    int32_t n_channels;         // 1 = mono, 2 = stereo (llama_gen_out::audio is interleaved)
+    const char * model_variant; // name of the weight variant, can be nullptr
+    int32_t n_voices;           // predefined voices, see llama_model_gen_voice_name()
+};
+
+enum llama_gen_stage {
+    LLAMA_GEN_STAGE_CODE, // backbone hidden state to codes / features and the feedback row
+    LLAMA_GEN_STAGE_WAV,  // codes / features to PCM
+};
+
+struct llama_gen_inp {
+    enum llama_gen_stage type;
+
+    // LLAMA_GEN_STAGE_CODE
+    int32_t code0;      // codebook 0 entry sampled by the backbone
+    const float * embd; // backbone hidden state, llama_model_n_embd_inp(backbone) values
+    int32_t top_k;
+    float   top_p;
+    float   temp;           // sampling temperature, or noise scale for flow-matching decoders (0 = no noise)
+    float   penalty_repeat; // repetition penalty of the sampled codes, <= 1 is off
+    int32_t penalty_last_n; // frames the repetition penalty looks back on
+
+    // LLAMA_GEN_STAGE_WAV: codes (discrete) or feats (continuous), depending on the pipeline
+    // lfm3a CODE also takes codes: the codes revealed so far, -1 for a masked codebook
+    // zonos3 WAV: -1 for a residual code not known yet
+    const int32_t * codes;
+    size_t          n_codes;
+    const float   * feats;
+    size_t          n_feats;
+
+    // yue2 CODE: n_codes is the frame count; the backbone state of the backbone_n_past positions
+    const uint8_t * backbone_state;
+    size_t          backbone_state_size;
+    int32_t         backbone_n_past;
+
+    // flow-matching CODE: steps of the ODE solver, <= 0 = model default
+    int32_t n_steps;
+};
+
+// owned by the context, valid until its next llama_process()
+struct llama_gen_out {
+    // LLAMA_GEN_STAGE_CODE
+    const int32_t * codes;
+    size_t          n_codes;
+    const float   * feats; // continuous counterpart of codes
+    size_t          n_feats;
+    const float   * embd;  // feedback row for the backbone (ZONOS3: the logits of the codebook)
+    size_t          n_embd;
+    bool is_eos;           // pipelines with an EOS head in the mmproj
+
+    // LLAMA_GEN_STAGE_WAV
+    const float * audio;
+    size_t        n_samples; // over all channels
+};
+
+LLAMA_API struct llama_gen_info llama_model_gen_info(const struct llama_model * model);
+// defaults tuned for the pipeline
+LLAMA_API struct llama_gen_inp  llama_gen_inp_default(const struct llama_model * model);
+// a named tensor of the gen tower as F32, returns the element count (0 if not found), out may be null
+LLAMA_API size_t        llama_model_gen_read_tensor(const struct llama_model * model, const char * name, float * out, size_t n_max);
+// the idx-th predefined voice, idx 0 is the default; nullptr out of range
+LLAMA_API const char *  llama_model_gen_voice_name (const struct llama_model * model, int32_t idx);
+// a predefined voice as an encoded AUDIO media (backbone rows and the gen-side reference), matched case-insensitively
+LLAMA_API struct llama_media * llama_media_init_voice(const struct llama_model * model, const char * name);
+
+// one step of seq_id; returns the batch index, or -1 full, -3 bad seq_id, -6 the context does not run gen steps
+LLAMA_API int32_t llama_batch_ext_add_gen(struct llama_batch_ext * batch, llama_seq_id seq_id, const struct llama_gen_inp * inp);
+// the output of batch index i of the last llama_process()
+LLAMA_API bool    llama_get_gen_out_ith (struct llama_context * ctx, int32_t i, struct llama_gen_out * out);
+// the RNG of a sequence; UINT32_MAX = random; resets the sequence
+LLAMA_API void    llama_gen_set_seed    (struct llama_context * ctx, llama_seq_id seq_id, uint32_t seed);
+// the gen-side reference (speaker) of a sequence, from an encoded media of the same mmproj; non-zero if it has none
+LLAMA_API int32_t llama_gen_set_ref     (struct llama_context * ctx, llama_seq_id seq_id, const struct llama_media * media);
 
 LLAMA_API size_t              llama_media_layout_n_pieces  (const struct llama_media_layout * lay);
 LLAMA_API const llama_token * llama_media_layout_get_tokens(const struct llama_media_layout * lay, size_t i, size_t * n); // nullptr for media

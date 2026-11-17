@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-ext.h"
 
 #include "llama-arch.h"
 #include "llama-cparams.h"
@@ -150,6 +151,17 @@ struct llama_batch_ext {
 
     // codes of the entries added with llama_batch_ext_add_codes()
     std::vector<int32_t> codes;
+
+    // GEN contexts of the clip engine: the steps added with llama_batch_ext_add_gen(), inp points into the vectors
+    struct gen_entry {
+        llama_seq_id         seq_id;
+        llama_gen_inp        inp;
+        std::vector<int32_t> codes;
+        std::vector<float>   feats;
+        std::vector<float>   embd;
+        std::vector<uint8_t> backbone_state;
+    };
+    std::vector<gen_entry> gen;
 
     llama_batch_ext(llama_context * ctx);
 

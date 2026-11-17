@@ -119,6 +119,13 @@ uint32_t llama_model_clip::ctx_n_vocab(enum llama_context_type type) const {
 }
 
 uint32_t llama_model_clip::ctx_n_embd_state(enum llama_context_type type) const {
+    if (type != LLAMA_CONTEXT_TYPE_GEN_CODE && type != LLAMA_CONTEXT_TYPE_GEN_WAV) {
+        return 0;
+    }
+    if (!native_gen) {
+        // the backbone hidden state of a gen step
+        return engine_gen() ? (uint32_t) engine_gen()->n_mmproj_embd() : 0;
+    }
     return type == LLAMA_CONTEXT_TYPE_GEN_CODE ? (uint32_t) ghp.n_embd_in : 0;
 }
 
@@ -128,6 +135,7 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
 
     // every modality of the file, for the engine graphs and for the layout of all media
     engine = std::make_unique<clip_models>(clip_model_load_hparams(ml));
+    path   = ml.fname;
 
     // LLAMA_CLIP_NATIVE=0: run the towers that have native graphs on the engine graphs too
     const char * env_native = getenv("LLAMA_CLIP_NATIVE");
@@ -263,6 +271,7 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
                 }
             } break;
         case LLAMA_CLIP_PROJ_UNKNOWN:
+        case LLAMA_CLIP_PROJ_QWEN3TTS_GEN: // not a vision tower
             break;
     }
 }
@@ -392,6 +401,7 @@ void llama_model_clip::load_vision_tensors(llama_model_loader & ml) {
                 }
             } break;
         case LLAMA_CLIP_PROJ_UNKNOWN:
+        case LLAMA_CLIP_PROJ_QWEN3TTS_GEN: // not a vision tower
             GGML_ABORT("unreachable");
     }
 
@@ -511,6 +521,7 @@ llama_media_input llama_model_clip::reserve_media(uint32_t n_rows_max) const {
                 m.n_frames = vhp.n_temporal_merge;
             } break;
         case LLAMA_CLIP_PROJ_UNKNOWN:
+        case LLAMA_CLIP_PROJ_QWEN3TTS_GEN: // not a vision tower
             GGML_ABORT("unreachable");
     }
 

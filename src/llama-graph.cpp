@@ -4305,6 +4305,11 @@ void llm_graph_context::build_pooling(
 
     ggml_tensor * inp = res->t_embd;
 
+    // a stage of a media pipeline without an embedding output (a codec), it reads its outputs itself
+    if (inp == nullptr && pooling_type == LLAMA_POOLING_TYPE_NONE && model.arch == LLM_ARCH_CLIP) {
+        return;
+    }
+
     //// find result_norm tensor for input
     //for (int i = ggml_graph_n_nodes(gf) - 1; i >= 0; --i) {
     //    inp = ggml_graph_node(gf, i);

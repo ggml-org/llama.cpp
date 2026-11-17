@@ -1333,6 +1333,7 @@ void llama_batch_ext::clear() {
     state .clear();
     n_embd = 0;
     codes.clear();
+    gen.clear();
     for (auto * m : media) {
         llama_media_free(m);
     }

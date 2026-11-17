@@ -19,6 +19,8 @@
 #include "clip/clip-media.h"
 #include "clip/clip-subcontext.h"
 #include "clip/clip-graph.h"
+#include "clip/clip-gen.h"
+#include "clip/clip-gen-memory.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -2048,7 +2050,7 @@ bool llama_context::clip_exec(clip_subcontext & sub, clip_subctx_encode_params *
     // the graph of the next call depends on its input, do not keep this one
     gf_res_prev_active = nullptr;
 
-    return sub.read_outputs(res->get_gf(), res->get_embd(), req);
+    return sub.read_outputs(res->get_gf(), req->out_embd ? res->get_embd() : nullptr, req);
 }
 
 int llama_context::encode_media_engine(llama_media & m) {
@@ -2125,8 +2127,16 @@ int llama_context::encode_media_engine(llama_media & m) {
             out.assign(track.embd.begin() + off, track.embd.begin() + off + (size_t) at.n_tokens * n_row_embd);
         } else {
             if (cm->proj_type == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
-                LLAMA_LOG_ERROR("%s: the chatterbox reference encoder is not ported yet\n", __func__);
-                return -1;
+                // the reference encode also yields the gen-side conditioning of the speaker
+                clip_gen_ctx & host = clip_gen_host();
+                host.gen_ref = {};
+                if (clip_cbx_ref_encode(&host, &at, out) != 0) {
+                    return -3;
+                }
+                m.gen_ref = std::make_shared<const clip_gen_ref>(host.gen_ref);
+                m.n_embd  = n_embd;
+                m.rows    = std::move(out);
+                return 0;
             }
             out.resize((size_t) at.n_tokens * n_embd);
             if (!encode(at.batch_f32, at.source.get(), at.source_idx, out)) {
@@ -2137,6 +2147,80 @@ int llama_context::encode_media_engine(llama_media & m) {
     }
 
     m.rows = std::move(out);
+    return 0;
+}
+
+clip_gen_ctx & llama_context::clip_gen_host() {
+    if (!clip_gen) {
+        const auto & clip = static_cast<const llama_model_clip &>(model);
+        clip_gen = std::make_unique<clip_gen_ctx>();
+        clip_gen->n_threads = (int) cparams.n_threads_batch;
+        if (const clip_model * g = clip.engine_gen()) {
+            clip_gen->ctx_gen_a = clip_sub(*g);
+            if (g->proj_type == PROJECTOR_TYPE_YUE2_GEN && !clip.path.empty()) {
+                clip_yue2_nar.reset(clip_yue2_nar_load(clip.path.c_str(), model.dev_output(), g->hparams));
+                clip_gen->yue2_nar        = clip_yue2_nar.get();
+                clip_gen->yue2_flash_attn = cparams.flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            }
+        }
+        if (const clip_model * a = clip.engine_audio()) {
+            clip_gen->ctx_a = clip_sub(*a);
+        }
+    }
+    return *clip_gen;
+}
+
+int llama_context::gen_engine(const llama_batch_ext & batch_inp) {
+    auto * mem = dynamic_cast<llama_memory_clip_gen *>(memory.get());
+    if (mem == nullptr) {
+        LLAMA_LOG_ERROR("%s: this context does not run gen steps\n", __func__);
+        return -1;
+    }
+
+    if (t_compute_start_us == 0) {
+        t_compute_start_us = ggml_time_us();
+    }
+
+    clip_gen_ctx & host = clip_gen_host();
+    if (host.ctx_gen_a == nullptr) {
+        LLAMA_LOG_ERROR("%s: the model has no gen tower\n", __func__);
+        return -1;
+    }
+
+    sched_reserve();
+
+    gen_outs.assign(batch_inp.gen.size(), {});
+    for (size_t i = 0; i < batch_inp.gen.size(); ++i) {
+        const auto & e = batch_inp.gen[i];
+        clip_gen_state * st = mem->get(&host, e.seq_id);
+        if (st == nullptr) {
+            LLAMA_LOG_ERROR("%s: could not create the gen state of sequence %d\n", __func__, e.seq_id);
+            return -2;
+        }
+        if (getenv("CLIP_TRACE") && e.inp.codes) {
+            int32_t mn = INT32_MAX, mx = INT32_MIN;
+            for (size_t k = 0; k < e.inp.n_codes; ++k) { mn = std::min(mn, e.inp.codes[k]); mx = std::max(mx, e.inp.codes[k]); }
+            LLAMA_LOG_WARN("gen_engine: stage %d n_codes %zu range [%d, %d] embd %p\n", (int) e.inp.type, e.inp.n_codes, mn, mx, (const void *) e.inp.embd);
+        }
+        llama_gen_out out {};
+        int32_t res;
+        try {
+            res = clip_gen_audio_process(&host, st, &e.inp, &out);
+        } catch (const std::exception & ex) {
+            LLAMA_LOG_ERROR("%s: %s\n", __func__, ex.what());
+            res = -3;
+        }
+        if (res != 0) {
+            return res;
+        }
+        auto & o = gen_outs[i];
+        if (out.codes) { o.codes.assign(out.codes, out.codes + out.n_codes); }
+        if (out.feats) { o.feats.assign(out.feats, out.feats + out.n_feats); }
+        if (out.audio) { o.audio.assign(out.audio, out.audio + out.n_samples); }
+        if (out.embd)  { o.embd .assign(out.embd,  out.embd  + out.n_embd); }
+        o.is_eos = out.is_eos;
+        n_queued_tokens++;
+    }
     return 0;
 }
 
@@ -2722,6 +2806,9 @@ uint32_t llama_context::n_embd_out_ctx() const {
 }
 
 int llama_context::decode(const llama_batch_ext & batch_inp) {
+    if (!batch_inp.gen.empty()) {
+        return gen_engine(batch_inp);
+    }
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
         return gen_code(batch_inp);
     }
@@ -5798,4 +5885,46 @@ int32_t llama_get_sampled_tokens_ith(struct llama_context * ctx, int32_t i, llam
 
 int32_t llama_n_embd_out(const struct llama_context * ctx) {
     return (int32_t) ctx->n_embd_out_ctx();
+}
+
+//
+// gen pipelines of the clip engine
+//
+
+bool llama_get_gen_out_ith(llama_context * ctx, int32_t i, llama_gen_out * out) {
+    if (i < 0 || i >= (int32_t) ctx->gen_outs.size()) {
+        return false;
+    }
+    const auto & o = ctx->gen_outs[i];
+    *out = {};
+    out->codes     = o.codes.empty() ? nullptr : o.codes.data();
+    out->n_codes   = o.codes.size();
+    out->feats     = o.feats.empty() ? nullptr : o.feats.data();
+    out->n_feats   = o.feats.size();
+    out->embd      = o.embd .empty() ? nullptr : o.embd.data();
+    out->n_embd    = o.embd.size();
+    out->is_eos    = o.is_eos;
+    out->audio     = o.audio.empty() ? nullptr : o.audio.data();
+    out->n_samples = o.audio.size();
+    return true;
+}
+
+void llama_gen_set_seed(llama_context * ctx, llama_seq_id seq_id, uint32_t seed) {
+    if (auto * mem = dynamic_cast<llama_memory_clip_gen *>(llama_get_memory(ctx))) {
+        mem->set_seed(seq_id, seed);
+    }
+}
+
+int32_t llama_gen_set_ref(llama_context * ctx, llama_seq_id seq_id, const llama_media * media) {
+    auto * mem = dynamic_cast<llama_memory_clip_gen *>(llama_get_memory(ctx));
+    if (mem == nullptr || media == nullptr || !media->gen_ref) {
+        return 1;
+    }
+    clip_gen_ctx & host = ctx->clip_gen_host();
+    clip_gen_state * st = mem->get(&host, seq_id);
+    if (st == nullptr) {
+        return 1;
+    }
+    host.gen_ref = *media->gen_ref;
+    return clip_gen_state_set_ref(&host, st);
 }

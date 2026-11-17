@@ -8,6 +8,7 @@
 
 #include "clip/clip-media.h"
 #include "clip/clip-stream.h"
+#include "clip/clip-gen.h"
 
 #include <algorithm>
 #include <cstring>
@@ -26,10 +27,10 @@ bool llama_model_has_context_type(const struct llama_model * model, enum llama_c
             return clip->engine_vision() != nullptr || clip->engine_audio() != nullptr;
         }
         if (type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
-            return clip->native_gen;
+            return clip->native_gen || clip->engine_gen() != nullptr;
         }
         if (type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
-            return clip->native_gen && clip->c2w.dac_entry_w != nullptr;
+            return (clip->native_gen && clip->c2w.dac_entry_w != nullptr) || (!clip->native_gen && clip->engine_gen() != nullptr);
         }
         return false;
     }
@@ -115,7 +116,7 @@ struct llama_media_proc * llama_media_proc_init(
         struct llama_context     * ctx_enc,
         const struct llama_model * model_dec,
         struct llama_media_proc_params params) {
-    if (ctx_enc == nullptr || model_dec == nullptr) {
+    if (ctx_enc == nullptr) {
         return nullptr;
     }
     const llama_model * model_enc = &ctx_enc->get_model();
@@ -129,7 +130,7 @@ struct llama_media_proc * llama_media_proc_init(
     proc->ctx_enc    = ctx_enc;
     proc->model_enc  = model_enc;
     proc->model_dec  = model_dec;
-    proc->vocab      = &model_dec->vocab;
+    proc->vocab      = model_dec ? &model_dec->vocab : nullptr;
     proc->params     = params;
     proc->n_rows_max = ctx_enc->n_ubatch();
 
@@ -137,7 +138,7 @@ struct llama_media_proc * llama_media_proc_init(
         proc->cfg = std::make_unique<clip_layout_config>(clip->engine_vision(), clip->engine_audio(), model_dec,
                                                          nullptr, (int) ctx_enc->get_cparams().n_threads_batch);
         const int64_t n_embd = proc->cfg->n_embd_out();
-        if (n_embd != (int64_t) model_dec->hparams.n_embd_inp()) {
+        if (model_dec && n_embd != (int64_t) model_dec->hparams.n_embd_inp()) {
             LLAMA_LOG_ERROR("%s: the mmproj outputs rows of %" PRId64 ", the decoder takes %u\n"
                             "hint: you may be using wrong mmproj\n", __func__, n_embd, model_dec->hparams.n_embd_inp());
             return nullptr;
@@ -164,6 +165,37 @@ bool llama_media_proc_has(const struct llama_media_proc * proc, enum llama_media
 
 int32_t llama_media_proc_sample_rate(const struct llama_media_proc * proc) {
     return proc->cfg->a ? proc->cfg->a->hparams.audio_sample_rate : -1;
+}
+
+int32_t llama_media_proc_n_tokens_max(const struct llama_media_proc * proc, enum llama_media_type type, bool * atomic) {
+    const bool is_audio = type == LLAMA_MEDIA_TYPE_AUDIO;
+    const clip_model * m = is_audio ? proc->cfg->a : proc->cfg->v;
+    if (atomic) {
+        *atomic = m != nullptr && proc->cfg->decode_use_non_causal(is_audio);
+    }
+    if (m == nullptr) {
+        return 0;
+    }
+    return is_audio ? -1 : m->image_max_tokens();
+}
+
+bool llama_media_proc_video_frame_size(const struct llama_media_proc * proc, int32_t n_frames,
+        int32_t src_w, int32_t src_h, int32_t * w, int32_t * h) {
+    if (!proc->cfg->image_preproc) {
+        return false;
+    }
+    clip_image_size size;
+    if (!proc->cfg->image_preproc->get_video_frame_size(n_frames, src_w, src_h, size)) {
+        return false;
+    }
+    *w = size.width;
+    *h = size.height;
+    return true;
+}
+
+void llama_media_proc_video_markers(const struct llama_media_proc * proc, const char ** beg, const char ** end) {
+    *beg = proc->cfg->vid_beg.c_str();
+    *end = proc->cfg->vid_end.c_str();
 }
 
 int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc) {
@@ -586,3 +618,211 @@ const float * llama_audio_stream_get_output_embd(const struct llama_audio_stream
 bool    llama_audio_stream_is_seq_start      (const struct llama_audio_stream * s) { return clip_audio_stream_is_seq_start(s->s); }
 int64_t llama_audio_stream_get_n_rows        (const struct llama_audio_stream * s) { return clip_audio_stream_get_n_rows(s->s); }
 int64_t llama_audio_stream_get_n_rows_flushed(const struct llama_audio_stream * s) { return clip_audio_stream_get_n_rows_flushed(s->s); }
+
+//
+// gen pipelines of the clip engine, model-level queries
+//
+
+// a host over a throw-away runtime of the gen tower, for the queries that run no graph
+struct llama_gen_query {
+    std::unique_ptr<clip_subcontext> sub_gen;
+    std::unique_ptr<clip_subcontext> sub_a;
+    clip_gen_ctx host;
+
+    explicit llama_gen_query(const llama_model * model) {
+        const auto * clip = as_clip(model);
+        if (clip == nullptr || clip->engine_gen() == nullptr) {
+            return;
+        }
+        sub_gen = std::make_unique<clip_subcontext>(*clip->engine_gen(), false);
+        host.ctx_gen_a = sub_gen.get();
+        if (clip->engine_audio()) {
+            sub_a = std::make_unique<clip_subcontext>(*clip->engine_audio(), false);
+            host.ctx_a = sub_a.get();
+        }
+    }
+
+    bool ok() const { return host.ctx_gen_a != nullptr; }
+};
+
+struct llama_gen_info llama_model_gen_info(const struct llama_model * model) {
+    llama_gen_query q(model);
+    if (!q.ok()) {
+        llama_gen_info info {};
+        info.type = LLAMA_GEN_AUDIO_TYPE_NONE;
+        return info;
+    }
+    return clip_gen_audio_get_info(&q.host);
+}
+
+struct llama_gen_inp llama_gen_inp_default(const struct llama_model * model) {
+    llama_gen_query q(model);
+    if (!q.ok()) {
+        llama_gen_inp inp {};
+        inp.type = LLAMA_GEN_STAGE_CODE;
+        return inp;
+    }
+    return clip_gen_inp_default(&q.host);
+}
+
+size_t llama_model_gen_read_tensor(const struct llama_model * model, const char * name, float * out, size_t n_max) {
+    llama_gen_query q(model);
+    return q.ok() ? clip_gen_audio_read_tensor(&q.host, name, out, n_max) : 0;
+}
+
+const char * llama_model_gen_voice_name(const struct llama_model * model, int32_t idx) {
+    llama_gen_query q(model);
+    return q.ok() ? clip_gen_audio_voice_name(&q.host, idx) : nullptr;
+}
+
+struct llama_media * llama_media_init_voice(const struct llama_model * model, const char * name) {
+    const auto * clip = as_clip(model);
+    if (clip == nullptr || clip->engine_gen() == nullptr || name == nullptr) {
+        return nullptr;
+    }
+    const clip_model & g = *clip->engine_gen();
+    // matched case-insensitively, as the lfm3a "tts" chat template lowers it
+    const auto & voices = g.gen_voices;
+    const auto it = std::find_if(voices.begin(), voices.end(), [name](const auto & voice) {
+        return std::equal(voice.first.begin(), voice.first.end(), name, name + strlen(name),
+                          [](unsigned char a, unsigned char b) { return std::tolower(a) == std::tolower(b); });
+    });
+    if (it == voices.end()) {
+        return nullptr;
+    }
+    const int64_t n_embd = g.n_mmproj_embd();
+    if (n_embd <= 0 || it->second.rows.empty() || it->second.rows.size() % (size_t) n_embd != 0) {
+        return nullptr;
+    }
+    auto * m = new llama_media;
+    m->id        = it->first;
+    m->model_enc = model;
+    m->inp.type  = LLAMA_MEDIA_TYPE_AUDIO;
+    m->n_tokens  = (uint32_t) (it->second.rows.size() / n_embd);
+    m->n_pos     = (llama_pos) m->n_tokens;
+    m->n_embd    = n_embd;
+    m->rows      = it->second.rows;
+    const auto & ref = it->second.ref;
+    if (!ref.tokens.empty() || !ref.feat.empty() || !ref.spk.empty()) {
+        m->gen_ref = std::make_shared<const clip_gen_ref>(ref);
+    }
+    return m;
+}
+
+int32_t llama_batch_ext_add_gen(struct llama_batch_ext * batch, llama_seq_id seq_id, const struct llama_gen_inp * inp) {
+    if (batch->ctx_type != LLAMA_CONTEXT_TYPE_GEN_CODE && batch->ctx_type != LLAMA_CONTEXT_TYPE_GEN_WAV) {
+        return -6;
+    }
+    if (seq_id < 0 || seq_id >= batch->n_seq_max) {
+        return -3;
+    }
+    if (batch->gen.size() >= batch->n_tokens_max) {
+        return -1;
+    }
+    llama_batch_ext::gen_entry e;
+    e.seq_id = seq_id;
+    e.inp    = *inp;
+    if (inp->codes) {
+        e.codes.assign(inp->codes, inp->codes + inp->n_codes);
+    }
+    if (inp->feats) {
+        e.feats.assign(inp->feats, inp->feats + inp->n_feats);
+    }
+    if (inp->embd && batch->n_embd_state > 0) {
+        e.embd.assign(inp->embd, inp->embd + batch->n_embd_state);
+    }
+    if (inp->backbone_state) {
+        e.backbone_state.assign(inp->backbone_state, inp->backbone_state + inp->backbone_state_size);
+    }
+    batch->gen.push_back(std::move(e));
+    auto & b = batch->gen.back();
+    b.inp.codes          = inp->codes          ? b.codes.data()          : nullptr;
+    b.inp.feats          = inp->feats          ? b.feats.data()          : nullptr;
+    b.inp.embd           = inp->embd && !b.embd.empty() ? b.embd.data()  : nullptr;
+    b.inp.backbone_state = inp->backbone_state ? b.backbone_state.data() : nullptr;
+    return (int32_t) batch->gen.size() - 1;
+}
+
+//
+// debugging of model ports
+//
+
+int32_t llama_media_debug_encode(const struct llama_media_proc * proc, enum llama_media_type type,
+        int32_t nx, int32_t ny, const float * data, size_t n_data) {
+    const bool is_audio = type == LLAMA_MEDIA_TYPE_AUDIO;
+    const clip_model * m = is_audio ? proc->cfg->a : proc->cfg->v;
+    if (m == nullptr) {
+        LLAMA_LOG_ERROR("%s: the model has no tower for this media\n", __func__);
+        return 1;
+    }
+    clip_image_f32 inp;
+    if (is_audio) {
+        const int n_mel = m->hparams.n_mel_bins;
+        std::vector<float> buf((size_t) nx * n_mel);
+        for (int i = 0; i < nx; i++) {
+            for (int j = 0; j < n_mel; j++) {
+                buf[(size_t) j * nx + i] = data[i];
+            }
+        }
+        inp.set_size({nx, n_mel}, false, true);
+        inp.cpy_buf(buf);
+    } else {
+        inp.set_size({nx, ny}, false, false);
+        inp.cpy_buf(std::vector<float>(data, data + n_data));
+    }
+    LLAMA_LOG_INFO("%s: created input with nx=%d, ny=%d\n", __func__, inp.nx(), inp.ny());
+
+    clip_subcontext * sub = proc->ctx_enc->clip_sub(*m);
+    std::vector<float> out((size_t) m->n_output_tokens(&inp) * m->n_mmproj_embd());
+    sub->debug_output_embeddings = true;
+    const bool ok = sub->encode_image((int) proc->ctx_enc->get_cparams().n_threads_batch, &inp, out);
+    sub->debug_output_embeddings = false;
+    if (!ok) {
+        LLAMA_LOG_ERROR("%s: failed to encode\n", __func__);
+        return 1;
+    }
+    return 0;
+}
+
+int32_t llama_media_debug_preprocess(const struct llama_media_proc * proc, enum llama_media_type type,
+        int32_t nx, int32_t ny, const void * data) {
+    const auto & cfg = *proc->cfg;
+    if (type == LLAMA_MEDIA_TYPE_IMAGE) {
+        if (!cfg.image_preproc) {
+            LLAMA_LOG_ERROR("%s: the model has no vision tower\n", __func__);
+            return 1;
+        }
+        clip_image_u8 img_u8;
+        img_u8.set_size({nx, ny}, false);
+        img_u8.cpy_buf(std::vector<uint8_t>((const uint8_t *) data, (const uint8_t *) data + (size_t) nx * ny * 3));
+        clip_image_preproc_out pre = cfg.image_preproc->preprocess(img_u8);
+        LLAMA_LOG_INFO("%s: preprocessed image to %d entries\n", __func__, (int) pre.entries.size());
+        for (size_t i = 0; i < pre.entries.size(); i++) {
+            LLAMA_LOG_INFO("%s: entry %zu has nx=%d, ny=%d\n", __func__, i, pre.entries[i].nx(), pre.entries[i].ny());
+        }
+        return 0;
+    }
+    if (!cfg.audio_preproc) {
+        LLAMA_LOG_ERROR("%s: the model has no audio tower\n", __func__);
+        return 1;
+    }
+    std::lock_guard<std::mutex> lock(const_cast<llama_media_proc *>(proc)->stream_mutex);
+    cfg.audio_preproc->mel_config.sched = proc->ctx_enc->sched_aux();
+    clip_audio_preproc_out out = cfg.audio_preproc->preprocess((const float *) data, (size_t) nx);
+    if (out.entries.empty() || !cfg.audio_preproc->compute(out)) {
+        LLAMA_LOG_ERROR("%s: failed to preprocess audio\n", __func__);
+        return 1;
+    }
+    LLAMA_LOG_INFO("%s: preprocessed audio to %zu mel spec chunks\n", __func__, out.entries.size());
+    for (size_t i = 0; i < out.entries.size(); i++) {
+        const auto & mel  = out.entries[i];
+        const auto & mdat = mel.get_ro_buf();
+        LLAMA_LOG_INFO("%s: mel spec chunk %zu has n_len=%d, n_mel=%d\n", __func__, i, mel.nx(), mel.ny());
+        for (int mi = 0; mi < mel.ny(); mi++) {
+            for (int ti = 0; ti < mel.nx(); ti++) {
+                LLAMA_LOG_INFO("mel[%zu][m=%d][t=%d] = %f\n", i, mi, ti, mdat[(size_t) mi * mel.nx() + ti]);
+            }
+        }
+    }
+    return 0;
+}

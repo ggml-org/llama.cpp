@@ -1,6 +1,7 @@
 #include "models.h"
 
 #include "../clip/clip-model.h"
+#include "../clip/clip-gen-memory.h"
 
 #include "llama-impl.h"
 #include "llama-memory-slots.h"
@@ -157,6 +158,11 @@ int64_t llama_model_clip::c2w_samples_per_frame() const {
 
 llama_memory_i * llama_model_clip::create_clip_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     GGML_UNUSED(params);
+    const bool gen = cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV;
+    if (gen && !native_gen && engine_gen() != nullptr) {
+        // the gen pipelines of the engine keep their per-sequence state on the host side of the context
+        return new llama_memory_clip_gen();
+    }
     if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_GEN_WAV) {
         return nullptr;
     }
@@ -170,6 +176,9 @@ llama_memory_i * llama_model_clip::create_clip_memory(const llama_memory_params 
 uint32_t llama_model_clip::ctx_n_embd_out(enum llama_context_type type) const {
     if (type == LLAMA_CONTEXT_TYPE_GEN_WAV && native_gen) {
         return (uint32_t) c2w_samples_per_frame();
+    }
+    if ((type == LLAMA_CONTEXT_TYPE_GEN_CODE || type == LLAMA_CONTEXT_TYPE_GEN_WAV) && !native_gen && engine_gen()) {
+        return (uint32_t) engine_gen()->n_mmproj_embd(); // the feedback row of a gen step
     }
     if (type == LLAMA_CONTEXT_TYPE_ENCODER && !native_v) {
         if (const clip_model * m = engine_for_ctx(type)) {

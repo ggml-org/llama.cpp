@@ -106,7 +106,7 @@ void llama_model_clip::load_engine_tensors(llama_model_loader & ml) {
     if (engine->a) {
         clip_model_load_tensors(ml, *engine->a, create);
     }
-    if (engine->gen_a && !native_gen) {
+    if (engine->gen_a) {
         clip_model_load_tensors(ml, *engine->gen_a, create);
     }
 }
@@ -123,6 +123,27 @@ public:
     void set_input(const llama_ubatch * ubatch) override {
         GGML_UNUSED(ubatch);
         sub->input_ok = sub->set_inputs(gf, req);
+        if (getenv("CLIP_TRACE")) {
+            LLAMA_LOG_WARN("clip: set inputs of gen_process %d, ok = %d\n", (int) req->gen_process, (int) sub->input_ok);
+            for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+                ggml_tensor * node = ggml_graph_node(gf, i);
+                if (node->op != GGML_OP_GET_ROWS) {
+                    continue;
+                }
+                ggml_tensor * idx = node->src[1];
+                if (idx->type != GGML_TYPE_I32 || idx->buffer == nullptr || !(idx->flags & GGML_TENSOR_FLAG_INPUT)) {
+                    LLAMA_LOG_WARN("clip:   get_rows %s: src0 %s ne1 %lld, idx %s (op %s, input %d)\n", node->name, node->src[0]->name,
+                            (long long) node->src[0]->ne[1], idx->name, ggml_op_name(idx->op), (int) ((idx->flags & GGML_TENSOR_FLAG_INPUT) != 0));
+                    continue;
+                }
+                std::vector<int32_t> v(ggml_nelements(idx));
+                ggml_backend_tensor_get(idx, v.data(), 0, ggml_nbytes(idx));
+                int32_t mn = INT32_MAX, mx = INT32_MIN;
+                for (int32_t x : v) { mn = std::min(mn, x); mx = std::max(mx, x); }
+                LLAMA_LOG_WARN("clip:   get_rows %s: src0 %s ne1 %lld, idx %s [%d, %d]\n", node->name, node->src[0]->name,
+                        (long long) node->src[0]->ne[1], idx->name, mn, mx);
+            }
+        }
     }
 
     clip_subcontext           * sub;
@@ -162,7 +183,8 @@ struct llama_model_clip::graph_engine : public llm_graph_context {
         sub->ctx0 = nullptr;
         sub->gf   = nullptr;
 
-        // the last node is the embedding output; read it here, before scheduling may reorder the nodes
+        // the last node is the embedding output, read it here, before scheduling may reorder the nodes
+        // graphs with alternative branches (ggml_build_forward_select) have no embedding output in the other branches
         if (req == nullptr || req->out_embd != nullptr) {
             res->t_embd = ggml_graph_node(gf, -1);
         }

@@ -416,6 +416,8 @@ struct llama_model_clip : public llama_model_base {
     // the weights of a modality are created by the engine loader unless its graphs are native (below)
     std::unique_ptr<clip_models> engine;
 
+    std::string path; // the mmproj file, the YuE2 NAR layers are loaded from it again
+
     bool native_v   = false; // the vision tower runs on the native graphs of this file
     bool native_gen = false; // the gen tower runs on the native Qwen3-TTS graphs
 

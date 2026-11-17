@@ -228,6 +228,9 @@ struct mtmd_bitmap {
         }
     }
 
+    // libllama engine: the voice as an encoded media
+    std::shared_ptr<llama_media> lmedia;
+
     static mtmd_bitmap * init_voice(const std::string & name, const mtmd_gen_voice & voice, uint32_t n_embd) {
         const float *  rows   = voice.rows.data();
         const uint32_t n_rows = voice.rows.size() / n_embd;
@@ -808,7 +811,7 @@ static llama_model * mtmd_tiny_voca_stack_load(const char * fname, ggml_backend_
 
 // the libllama media engine (llama-ext.h): mmproj as a llama_model, an ENCODER context and a media proc
 struct mtmd_lm {
-    llama_model_ptr   model;
+    std::shared_ptr<llama_model> model;
     llama_context_ptr ctx;
     llama_media_proc * proc = nullptr;
 
@@ -819,12 +822,8 @@ struct mtmd_lm {
 
 // projectors that run on libllama unless MTMD_LEGACY_ENGINE is set
 static bool mtmd_lm_ported(projector_type proj) {
-    switch (proj) {
-        case PROJECTOR_TYPE_CHATTERBOX_SPKENC: // reference encoder of a gen pipeline, not ported yet
-            return false;
-        default:
-            return true;
-    }
+    GGML_UNUSED(proj);
+    return true;
 }
 
 struct mtmd_context {
@@ -903,7 +902,14 @@ struct mtmd_context {
     std::unique_ptr<mtmd_lm> lm;
 
     // libllama model of the audio generation stages (Qwen3-TTS code predictor), nullptr otherwise
-    llama_model_ptr lm_gen_model;
+    std::shared_ptr<llama_model> lm_gen_model;
+    bool lm_gen_engine = false; // the gen stages run on the moved engine of libllama (llama_batch_ext_add_gen)
+
+    // the mmproj as a llama_model, loaded once for the encoders and the gen stages
+    std::shared_ptr<llama_model> lm_model_shared;
+
+    // the last media encoded on libllama, the speaker reference of mtmd_gen_state_set_ref()
+    mtmd_lmedia_ref lm_last_ref;
     int32_t         lm_gen_threads = 1;
     llama_flash_attn_type lm_gen_fa = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
@@ -1051,49 +1057,17 @@ struct mtmd_context {
         if ((ctx_v || ctx_a) && text_model && !no_alloc && lm_ok && std::getenv("MTMD_LEGACY_ENGINE") == nullptr) {
             init_lm(mmproj_fname, ctx_params, device);
         }
-        if (ctx_gen_a && !ctx_v && !no_alloc && ctx_gen_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && std::getenv("MTMD_LEGACY_ENGINE") == nullptr) {
+        if (ctx_gen_a && !no_alloc && std::getenv("MTMD_LEGACY_ENGINE") == nullptr) {
             init_lm_gen(mmproj_fname, ctx_params, device);
         }
     }
 
     // the code predictor runs as a GEN_CODE llama_context, one per gen state (see mtmd_gen_state_init)
-    void init_lm_gen(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
-        llama_model_params mp = llama_model_default_params();
-        ggml_backend_dev_t devs[2] = { device, nullptr };
-        mp.n_gpu_layers = device ? 999 : 0;
-        mp.devices      = device ? devs : nullptr;
-        if (const char * lm_mode = std::getenv("MTMD_LM_LOAD_MODE")) {
-            if (strcmp(lm_mode, "dio") == 0) {
-                mp.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
-            }
+    // the mmproj as a llama_model, the user limits of the image token count as kv overrides
+    std::shared_ptr<llama_model> get_lm_model(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
+        if (lm_model_shared) {
+            return lm_model_shared;
         }
-        lm_gen_model.reset(llama_model_load_from_file(mmproj_fname, mp));
-        if (!lm_gen_model || !llama_model_has_context_type(lm_gen_model.get(), LLAMA_CONTEXT_TYPE_GEN_CODE)) {
-            LOG_WRN("%s: libllama could not load the generation stages of %s, using the mtmd engine\n", __func__, mmproj_fname);
-            lm_gen_model.reset();
-            return;
-        }
-        lm_gen_threads = ctx_params.n_threads;
-        lm_gen_fa      = ctx_params.flash_attn_type;
-        LOG_WRN("%s: the code predictor runs on the libllama engine (MTMD_LEGACY_ENGINE=1 to disable)\n", __func__);
-    }
-
-    // load the mmproj a second time, as a llama_model, and run ported projectors on libllama
-    void init_lm(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
-        // the native graphs of a tower take a whole media in one ubatch
-        int32_t max_rows = 512;
-        if (ctx_v) {
-            const auto & hp = ctx_v->model.hparams;
-            const int32_t align = hp.patch_size * std::max(hp.n_merge, 1);
-            max_rows = hp.image_max_pixels > 0
-                ? hp.image_max_pixels / (align * align)
-                : (hp.image_size / align) * (hp.image_size / align);
-            max_rows = std::max(max_rows, 1);
-        }
-
-        auto lm_new = std::make_unique<mtmd_lm>();
-
-        // the user limits of the image token count are kv overrides of the mmproj model
         std::vector<llama_model_kv_override> kvo;
         auto add_override = [&](const char * key, int32_t value) {
             if (value <= 0) {
@@ -1122,7 +1096,46 @@ struct mtmd_context {
                 mp.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
             }
         }
-        lm_new->model.reset(llama_model_load_from_file(mmproj_fname, mp));
+        llama_model * m = llama_model_load_from_file(mmproj_fname, mp);
+        if (m) {
+            lm_model_shared.reset(m, llama_model_free);
+        }
+        return lm_model_shared;
+    }
+
+    // the gen stages run on libllama: native graphs (Qwen3-TTS) or the moved engine (llama_batch_ext_add_gen)
+    void init_lm_gen(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
+        lm_gen_model = get_lm_model(mmproj_fname, ctx_params, device);
+        if (!lm_gen_model || !llama_model_has_context_type(lm_gen_model.get(), LLAMA_CONTEXT_TYPE_GEN_CODE)) {
+            LOG_WRN("%s: libllama could not load the generation stages of %s, using the mtmd engine\n", __func__, mmproj_fname);
+            lm_gen_model.reset();
+            return;
+        }
+        // LLAMA_CLIP_NATIVE=0 runs the towers with native graphs on the engine (A/B of the two)
+        const char * env_native = std::getenv("LLAMA_CLIP_NATIVE");
+        const bool native = env_native == nullptr || atoi(env_native) != 0;
+        lm_gen_engine  = !(native && ctx_gen_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN);
+        lm_gen_threads = ctx_params.n_threads;
+        lm_gen_fa      = ctx_params.flash_attn_type;
+        LOG_WRN("%s: the gen stages run on the libllama engine (MTMD_LEGACY_ENGINE=1 to disable)\n", __func__);
+    }
+
+    // load the mmproj a second time, as a llama_model, and run ported projectors on libllama
+    void init_lm(const char * mmproj_fname, const mtmd_context_params & ctx_params, ggml_backend_dev_t device) {
+        // the native graphs of a tower take a whole media in one ubatch
+        int32_t max_rows = 512;
+        if (ctx_v) {
+            const auto & hp = ctx_v->model.hparams;
+            const int32_t align = hp.patch_size * std::max(hp.n_merge, 1);
+            max_rows = hp.image_max_pixels > 0
+                ? hp.image_max_pixels / (align * align)
+                : (hp.image_size / align) * (hp.image_size / align);
+            max_rows = std::max(max_rows, 1);
+        }
+
+        auto lm_new = std::make_unique<mtmd_lm>();
+
+        lm_new->model = get_lm_model(mmproj_fname, ctx_params, device);
         if (!lm_new->model) {
             LOG_WRN("%s: libllama could not load %s, using the mtmd engine\n", __func__, mmproj_fname);
             return;
@@ -2563,6 +2576,20 @@ struct mtmd_tokenizer {
     }
 
     int32_t add_voice(const mtmd_bitmap & bitmap) {
+        if (bitmap.lmedia) {
+            llama_media * m = bitmap.lmedia.get();
+            mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens);
+            audio_tokens->n_tokens = llama_media_n_tokens(m);
+            audio_tokens->id       = bitmap.id;
+            audio_tokens->lmedia   = mtmd_lmedia_ref(llama_media_ref(m));
+            cur.entries.emplace_back(mtmd_input_chunk{
+                MTMD_INPUT_CHUNK_TYPE_AUDIO,
+                {}, // text tokens
+                nullptr, // image tokens
+                std::move(audio_tokens),
+            });
+            return 0;
+        }
         if (bitmap.ny == 0) {
             LOG_ERR("%s: error: voice \"%s\" holds no embeddings\n", __func__, bitmap.id.c_str());
             return 2;
@@ -2832,6 +2859,10 @@ static int32_t mtmd_encode_lm(mtmd_context * ctx, llama_media * m, std::vector<f
         return 1;
     }
     if (!llama_media_is_encoded(m)) {
+        if (!ctx->lm) {
+            LOG_ERR("%s: the model has no encoder for this media\n", __func__);
+            return 1;
+        }
         llama_batch_ext * batch = llama_batch_ext_init(ctx->lm->ctx.get());
         int32_t res = llama_batch_ext_add_media(batch, 0, m, 0, 0, 0);
         if (res >= 0) {
@@ -2848,6 +2879,8 @@ static int32_t mtmd_encode_lm(mtmd_context * ctx, llama_media * m, std::vector<f
     const int64_t n_embd = llama_media_get_rows(m, 0, 0, nullptr);
     out_embd.resize((size_t) n_rows * n_embd);
     llama_media_get_rows(m, 0, n_rows, out_embd.data());
+
+    ctx->lm_last_ref = mtmd_lmedia_ref(llama_media_ref(m));
 
     // same dump format as mtmd_subcontext (MTMD_DEBUG_EMBEDDINGS=<path>)
     const char * dump_path = std::getenv("MTMD_DEBUG_EMBEDDINGS");
@@ -3067,6 +3100,16 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 //
 
 mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
+    if (ctx->lm_gen_model) {
+        const llama_gen_info li = llama_model_gen_info(ctx->lm_gen_model.get());
+        mtmd_gen_audio_info info{};
+        info.type          = (mtmd_gen_audio_type) li.type;
+        info.sample_rate   = li.sample_rate;
+        info.n_channels    = li.n_channels;
+        info.model_variant = li.model_variant;
+        info.n_voices      = li.n_voices;
+        return info;
+    }
     mtmd_gen_audio_info info{};
     info.model_variant = "";
     info.n_channels    = 1;
@@ -3137,6 +3180,9 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
 }
 
 size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name, float * out, size_t n_max) {
+    if (ctx->lm_gen_model) {
+        return llama_model_gen_read_tensor(ctx->lm_gen_model.get(), name, out, n_max);
+    }
     if (!ctx->ctx_gen_a) {
         return 0;
     }
@@ -3501,6 +3547,9 @@ int32_t mtmd_gen_audio_g2p(const mtmd_context * ctx, const char * word, char * b
 }
 
 const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
+    if (ctx->lm_gen_model) {
+        return llama_model_gen_voice_name(ctx->lm_gen_model.get(), idx);
+    }
     if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;
     }
@@ -3527,6 +3576,20 @@ mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * na
     if (!ctx->ctx_gen_a || !name) {
         return nullptr;
     }
+    if (ctx->lm_gen_model) {
+        llama_media * m = llama_media_init_voice(ctx->lm_gen_model.get(), name);
+        if (!m) {
+            return nullptr;
+        }
+        const uint32_t n_rows = llama_media_n_tokens(m);
+        const int64_t  n_embd = llama_media_get_rows(m, 0, 0, nullptr);
+        mtmd_gen_voice voice;
+        voice.rows.resize((size_t) n_rows * n_embd);
+        llama_media_get_rows(m, 0, n_rows, voice.rows.data());
+        mtmd_bitmap * bitmap = mtmd_bitmap::init_voice(llama_media_get_id(m), voice, (uint32_t) n_embd);
+        bitmap->lmedia.reset(m, llama_media_free);
+        return bitmap;
+    }
     // the name is matched case-insensitively, as the lfm3a "tts" chat template lowers it
     const auto & voices = ctx->ctx_gen_a->model.gen_voices;
     const auto it = std::find_if(voices.begin(), voices.end(), [name](const auto & voice) {
@@ -3540,6 +3603,18 @@ mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * na
 }
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
+    if (ctx->lm_gen_model) {
+        const llama_gen_inp li = llama_gen_inp_default(ctx->lm_gen_model.get());
+        mtmd_gen_inp inp{};
+        inp.type           = li.type == LLAMA_GEN_STAGE_WAV ? MTMD_GEN_PROCESS_TYPE_GEN_WAV : MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+        inp.top_k          = li.top_k;
+        inp.top_p          = li.top_p;
+        inp.temp           = li.temp;
+        inp.penalty_repeat = li.penalty_repeat;
+        inp.penalty_last_n = li.penalty_last_n;
+        inp.n_steps        = li.n_steps;
+        return inp;
+    }
     mtmd_gen_inp inp{};
     inp.type  = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
     inp.speed = 1.0f;
@@ -3629,6 +3704,7 @@ struct mtmd_gen_state {
     llama_sampler_ptr lm_smpl;
     llama_context_ptr lm_ctx;
     llama_context_ptr lm_wav_ctx; // code2wav (GEN_WAV), its memory holds the decoder state of sequence 0
+    llama_context_ptr lm_eng_ctx; // moved pipelines: both stages, its memory holds the state of sequence 0
     uint32_t lm_seed  = 0;
     int32_t  lm_top_k = -1;
     float    lm_top_p = -1.0f;
@@ -3655,7 +3731,24 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
     if (!st->gen_state) {
         return nullptr;
     }
-    if (ctx->lm_gen_model) {
+    if (ctx->lm_gen_model && ctx->lm_gen_engine) {
+        llama_context_params cp = llama_context_default_params();
+        cp.ctx_type        = LLAMA_CONTEXT_TYPE_GEN_CODE;
+        cp.n_ctx           = 16;
+        cp.n_batch         = 1;
+        cp.n_ubatch        = 1;
+        cp.n_seq_max       = 1;
+        cp.n_threads       = ctx->lm_gen_threads;
+        cp.n_threads_batch = ctx->lm_gen_threads;
+        cp.flash_attn_type = ctx->lm_gen_fa;
+        cp.no_perf         = true;
+        st->lm_eng_ctx.reset(llama_init_from_model(ctx->lm_gen_model.get(), cp));
+        if (!st->lm_eng_ctx) {
+            LOG_ERR("%s: libllama could not create the gen context\n", __func__);
+            return nullptr;
+        }
+        llama_gen_set_seed(st->lm_eng_ctx.get(), 0, params.seed);
+    } else if (ctx->lm_gen_model) {
         llama_context_params cp = llama_context_default_params();
         cp.ctx_type        = LLAMA_CONTEXT_TYPE_GEN_CODE;
         cp.n_ctx           = 16;
@@ -3702,6 +3795,9 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
     state->ref_decoded = false;
     if (state->lm_wav_ctx) {
         llama_memory_seq_rm(llama_get_memory(state->lm_wav_ctx.get()), 0, -1, -1);
+    }
+    if (state->lm_eng_ctx) {
+        llama_memory_seq_rm(llama_get_memory(state->lm_eng_ctx.get()), 0, -1, -1);
     }
     if (state->istft) {
         const auto * hparams = &state->sctx->model.hparams;
@@ -4348,6 +4444,13 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
         LOG_ERR("%s: invalid gen state\n", __func__);
         return 1;
     }
+    if (state->lm_eng_ctx) {
+        if (!ctx->lm_last_ref.m || llama_gen_set_ref(state->lm_eng_ctx.get(), 0, ctx->lm_last_ref.m) != 0) {
+            LOG_ERR("%s: the last encode produced no reference data\n", __func__);
+            return 1;
+        }
+        return 0;
+    }
     if (ctx->gen_ref.tokens.empty()) {
         LOG_ERR("%s: the last encode produced no reference data\n", __func__);
         return 1;
@@ -4369,6 +4472,54 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     }
 
     *out = {};
+
+    // libllama engine: one gen entry of sequence 0
+    if (state->lm_eng_ctx) {
+        llama_context * lctx = state->lm_eng_ctx.get();
+        llama_gen_inp li{};
+        li.type                = inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV ? LLAMA_GEN_STAGE_WAV : LLAMA_GEN_STAGE_CODE;
+        li.code0               = inp->code0;
+        li.embd                = inp->embd;
+        li.top_k               = inp->top_k;
+        li.top_p               = inp->top_p;
+        li.temp                = inp->temp;
+        li.penalty_repeat      = inp->penalty_repeat;
+        li.penalty_last_n      = inp->penalty_last_n;
+        li.codes               = inp->codes;
+        li.n_codes             = inp->n_codes;
+        li.feats               = inp->feats;
+        li.n_feats             = inp->n_feats;
+        li.backbone_state      = inp->backbone_state;
+        li.backbone_state_size = inp->backbone_state_size;
+        li.backbone_n_past     = inp->backbone_n_past;
+        li.n_steps             = inp->n_steps;
+
+        llama_batch_ext * batch = llama_batch_ext_init(lctx);
+        int32_t res = llama_batch_ext_add_gen(batch, 0, &li) < 0 ? -1 : llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch);
+        llama_batch_ext_free(batch);
+        llama_gen_out lo{};
+        if (res != 0 || !llama_get_gen_out_ith(lctx, 0, &lo)) {
+            LOG_ERR("%s: libllama gen step failed (%d)\n", __func__, res);
+            return 1;
+        }
+        state->out_codes.assign(lo.codes, lo.codes + lo.n_codes);
+        state->out_feats.assign(lo.feats, lo.feats + lo.n_feats);
+        state->out_audio.assign(lo.audio, lo.audio + lo.n_samples);
+        if (lo.embd) {
+            state->out_embd.assign(lo.embd, lo.embd + lo.n_embd);
+        } else {
+            state->out_embd.clear();
+        }
+        out->codes     = state->out_codes.empty() ? nullptr : state->out_codes.data();
+        out->n_codes   = state->out_codes.size();
+        out->feats     = state->out_feats.empty() ? nullptr : state->out_feats.data();
+        out->n_feats   = state->out_feats.size();
+        out->embd      = state->out_embd.empty()  ? nullptr : state->out_embd.data();
+        out->is_eos    = lo.is_eos;
+        out->audio     = state->out_audio.empty() ? nullptr : state->out_audio.data();
+        out->n_samples = state->out_audio.size();
+        return 0;
+    }
 
     if (sctx->model.proj_type == PROJECTOR_TYPE_YUE2_GEN) {
         return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_flow_yue2(ctx, state, inp, out)

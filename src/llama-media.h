@@ -18,6 +18,7 @@ struct clip_image_tokens;
 struct clip_audio_tokens;
 struct clip_layout_config;
 struct clip_audio_preprocessor;
+struct clip_gen_ref;
 
 // how the decoder positions the rows of a media span
 enum llama_media_pos_type {
@@ -68,6 +69,9 @@ struct llama_media {
 
     // computes the log-mel of aud at encode time (when its source needs it)
     std::shared_ptr<clip_audio_preprocessor> aud_preproc;
+
+    // gen-side reference of a speaker clip (set by its encode) or of a predefined voice, see llama_gen_set_ref()
+    std::shared_ptr<const clip_gen_ref> gen_ref;
 
     // encoded rows, host memory in this version
     int64_t            n_embd = 0;

@@ -24,6 +24,7 @@ struct llama_media;
 struct clip_model;
 struct clip_subcontext;
 struct clip_subctx_encode_params;
+struct clip_gen_ctx;
 class llama_batch_allocr;
 class llama_moe_cache;
 
@@ -183,6 +184,22 @@ struct llama_context {
     // runs one engine graph: built by the clip model, inputs set, computed, outputs read back into req
     bool clip_exec(clip_subcontext & sub, clip_subctx_encode_params * req);
 
+    // GEN context of a clip model without native graphs: one gen step per entry, see llama_batch_ext_add_gen()
+    int gen_engine(const llama_batch_ext & batch_inp);
+
+    // the gen pipelines of the clip engine see the towers of this context through it, created on first use
+    clip_gen_ctx & clip_gen_host();
+
+    // the outputs of the last gen_engine(), owned copies
+    struct gen_out_store {
+        std::vector<int32_t> codes;
+        std::vector<float>   feats;
+        std::vector<float>   embd;
+        std::vector<float>   audio;
+        bool is_eos = false;
+    };
+    std::vector<gen_out_store> gen_outs;
+
     // the scheduler, for a graph outside of the llm_graph flow (the log-mel of the audio preprocessor)
     // the next process_ubatch() rebuilds its graph
     ggml_backend_sched_t sched_aux();
@@ -278,6 +295,9 @@ struct llama_context {
 private:
     // clip engine runtimes, one per tower in use
     std::map<const clip_model *, std::unique_ptr<clip_subcontext>> clip_subs;
+
+    std::unique_ptr<clip_gen_ctx> clip_gen;
+    std::unique_ptr<llama_model, void (*)(llama_model *)> clip_yue2_nar { nullptr, llama_model_free };
 
     //
     // output

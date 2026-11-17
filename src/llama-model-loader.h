@@ -129,6 +129,8 @@ struct llama_model_loader {
     struct gguf_context * metadata; // either metadata_ptr.get() or externally set
     llama_model_set_tensor_data_t set_tensor_data;
     void * set_tensor_data_ud;
+
+    std::string fname; // the file given to the loader, empty when loading from a file handle
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
