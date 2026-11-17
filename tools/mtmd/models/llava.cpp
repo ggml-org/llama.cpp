@@ -2,7 +2,7 @@
 
 // this graph is used by llava, granite and glm
 // due to having embedding_stack (used by granite), we cannot reuse build_vit
-ggml_cgraph * clip_graph_llava::build() {
+ggml_cgraph * mtmd_graph_llava::build() {
     const int batch_size = 1;
     const int n_pos = n_patches + (model.class_embedding ? 1 : 0);
 
@@ -167,10 +167,8 @@ ggml_cgraph * clip_graph_llava::build() {
             embeddings = ggml_add(ctx0, embeddings, model.mm_0_b);
 
             embeddings = ggml_gelu(ctx0, embeddings);
-            if (model.mm_2_w) {
-                embeddings = build_mm(model.mm_2_w, embeddings);
-                embeddings = ggml_add(ctx0, embeddings, model.mm_2_b);
-            }
+            embeddings = build_mm(model.mm_2_w, embeddings);
+            embeddings = ggml_add(ctx0, embeddings, model.mm_2_b);
         }
         else if (proj_type == PROJECTOR_TYPE_MLP_NORM) {
             embeddings = build_mm(model.mm_0_w, embeddings);

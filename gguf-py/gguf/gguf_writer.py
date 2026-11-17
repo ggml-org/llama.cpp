@@ -11,7 +11,7 @@ from enum import Enum, auto
 from math import prod
 from pathlib import Path
 from io import BufferedWriter
-from typing import IO, Any, Sequence, Mapping
+from typing import IO, Any, Callable, Sequence, Mapping
 from string import ascii_letters, digits
 
 import numpy as np
@@ -86,7 +86,8 @@ class GGUFWriter:
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
-        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False
+        split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False, small_first_shard: bool = False,
+        tensor_filter: Callable[[str], bool] | None = None,
     ):
         self.fout = None
         self.path = Path(path) if path else None
@@ -101,6 +102,7 @@ class GGUFWriter:
         self.split_max_size = split_max_size
         self.dry_run = dry_run
         self.small_first_shard = small_first_shard
+        self.tensor_filter = tensor_filter
         logger.info("gguf: This GGUF file is for {0} Endian only".format(
             "Big" if self.endianess == GGUFEndian.BIG else "Little",
         ))
@@ -381,6 +383,9 @@ class GGUFWriter:
         self, name: str, tensor: np.ndarray[Any, Any], raw_shape: Sequence[int] | None = None,
         raw_dtype: GGMLQuantizationType | None = None, tensor_endianess: GGUFEndian | None = None
     ) -> None:
+        if self.tensor_filter is not None and not self.tensor_filter(name):
+            return
+
         # if tensor endianness is not passed, assume it's native to system
         if tensor_endianess is None:
             tensor_endianess = GGUFEndian.BIG if sys.byteorder == 'big' else GGUFEndian.LITTLE
@@ -695,6 +700,9 @@ class GGUFWriter:
     def add_vocab_size(self, size: int) -> None:
         self.add_uint32(Keys.LLM.VOCAB_SIZE.format(arch=self.arch), size)
 
+    def add_vocab_size_unpadded(self, size: int) -> None:
+        self.add_uint32(Keys.LLM.VOCAB_SIZE_UNPADDED.format(arch=self.arch), size)
+
     def add_context_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.CONTEXT_LENGTH.format(arch=self.arch), length)
 
@@ -912,6 +920,9 @@ class GGUFWriter:
     def add_swiglu_clamp_exp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_EXP.format(arch=self.arch), values)
 
+    def add_swiglu_clamp(self, values: Sequence[float]) -> None:
+        self.add_array(Keys.LLM.SWIGLU_CLAMP.format(arch=self.arch), values)
+
     def add_swiglu_clamp_shexp(self, values: Sequence[float]) -> None:
         self.add_array(Keys.LLM.SWIGLU_CLAMP_SHEXP.format(arch=self.arch), values)
 
@@ -974,6 +985,18 @@ class GGUFWriter:
 
     def add_hrm_prefix_lm(self, value: bool) -> None:
         self.add_bool(Keys.HRM.PREFIX_LM.format(arch=self.arch), value)
+
+    def add_metis_pass_count(self, value: int) -> None:
+        self.add_uint32(Keys.Metis.PASS_COUNT.format(arch=self.arch), value)
+
+    def add_metis_memory_length(self, value: int) -> None:
+        self.add_uint32(Keys.Metis.MEMORY_LENGTH.format(arch=self.arch), value)
+
+    def add_metis_route_length(self, value: int) -> None:
+        self.add_uint32(Keys.Metis.ROUTE_LENGTH.format(arch=self.arch), value)
+
+    def add_metis_continuation_logit_limit(self, value: float) -> None:
+        self.add_float32(Keys.Metis.CONTINUATION_LOGIT_LIMIT.format(arch=self.arch), value)
 
     def add_adapter_count(self, count: int) -> None:
         self.add_uint32(Keys.Adapters.COUNT.format(arch=self.arch), count)
@@ -1086,6 +1109,9 @@ class GGUFWriter:
     def add_attention_output_lora_rank(self, length: int) -> None:
         self.add_uint32(Keys.Attention.OUTPUT_LORA_RANK.format(arch=self.arch), length)
 
+    def add_attention_pass_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.PASS_LORA_RANK.format(arch=self.arch), length)
+
     def add_attention_compress_ratios(self, values: Sequence[int]) -> None:
         self.add_array(Keys.Attention.COMPRESS_RATIOS.format(arch=self.arch), values)
 
@@ -1169,6 +1195,24 @@ class GGUFWriter:
     def add_xsa_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.XSA_EPS.format(arch=self.arch), value)
 
+    def add_relative_length(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.RELATIVE_LENGTH.format(arch=self.arch), length)
+
+    def add_relative_extent(self, extent: int) -> None:
+        self.add_uint32(Keys.Attention.RELATIVE_EXTENT.format(arch=self.arch), extent)
+
+    def add_qk_clip(self, value: float) -> None:
+        self.add_float32(Keys.Attention.QK_CLIP.format(arch=self.arch), value)
+
+    def add_relative_clip(self, value: float) -> None:
+        self.add_float32(Keys.Attention.RELATIVE_CLIP.format(arch=self.arch), value)
+
+    def add_log_scale_floor(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.LOG_SCALE_FLOOR.format(arch=self.arch), value)
+
+    def add_log_scale_alpha(self, value: float) -> None:
+        self.add_float32(Keys.Attention.LOG_SCALE_ALPHA.format(arch=self.arch), value)
+
     def add_attn_output_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.OUTPUT_SCALE.format(arch=self.arch), value)
 
@@ -1183,6 +1227,9 @@ class GGUFWriter:
 
     def add_realtime_delay_tokens(self, value: int) -> None:
         self.add_uint32(Keys.LLM.REALTIME_DELAY_TOKENS.format(arch=self.arch), value)
+
+    def add_classifier_free_guidance(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.CLASSIFIER_FREE_GUIDANCE.format(arch=self.arch), value)
 
     def add_pooling_type(self, value: PoolingType) -> None:
         self.add_uint32(Keys.LLM.POOLING_TYPE.format(arch=self.arch), value.value)
@@ -1266,6 +1313,9 @@ class GGUFWriter:
 
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
+
+    def add_ssm_norm_epsilon(self, value: float) -> None:
+        self.add_float32(Keys.SSM.NORM_EPSILON.format(arch=self.arch), value)
 
     def add_expert_latent_length(self, value: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_LATENT_LENGTH.format(arch=self.arch), value)
@@ -1712,6 +1762,15 @@ class GGUFWriter:
     def add_audio_projector_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.HEAD_COUNT, value)
 
+    def add_audio_rope_dims(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.ROPE_DIMS, value)
+
+    def add_audio_spk_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Speaker.BLOCK_COUNT, value)
+
+    def add_audio_spk_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Speaker.HEAD_COUNT, value)
+
     # audio generation (mmproj)
 
     def add_clip_gen_audio_projector_type(self, value: str) -> None:
@@ -1752,6 +1811,9 @@ class GGUFWriter:
 
     def add_gen_audio_model_variant(self, value: str) -> None:
         self.add_string(Keys.ClipGenAudio.MODEL_VARIANT, value)
+
+    def add_gen_audio_default_voice(self, value: str) -> None:
+        self.add_string(Keys.ClipGenAudio.DEFAULT_VOICE, value)
 
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)

@@ -130,13 +130,13 @@ void llama_model_qwen3next::load_arch_tensors(llama_model_loader & ml) {
 
 std::unique_ptr<llm_graph_context> llama_model_qwen3next::build_arch_graph(const llm_graph_params & params) const {
     if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
-        return std::make_unique<graph_mtp>(*this, params);
+        return std::make_unique<graph_mtp>(params);
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_qwen3next::graph::graph(const llama_model & model, const llm_graph_params & params) :
-    llm_build_delta_net_base(params), model(model) {
+llama_model_qwen3next::graph::graph(const llm_graph_params & params) :
+    llm_build_delta_net_base(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -273,15 +273,8 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn(
     Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, nullptr, LLM_NORM_RMS, il);
     cb(Kcur, "Kcur_normed", il);
 
-    Qcur = ggml_rope_ext(
-            ctx0, Qcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-
-    Kcur = ggml_rope_ext(
-            ctx0, Kcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base,
-            freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "Qcur", il);
     cb(Kcur, "Kcur", il);
@@ -616,7 +609,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_ffn(ggml_tensor * cur, c
 }
 
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for Qwen3-Next
-llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+llama_model_qwen3next::graph_mtp::graph_mtp(const llm_graph_params & params)
     : llm_graph_context(params) {
     GGML_ASSERT(hparams.n_layer_nextn > 0 && "QWEN3NEXT MTP requires n_layer_nextn > 0");
     GGML_ASSERT(hparams.n_layer_nextn == 1 && "QWEN3NEXT MTP currently only supports a single MTP block");
@@ -654,9 +647,7 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
     }
     cb(tok_embd, "mtp_tok_embd", il);
 
-    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
-    ggml_set_input(inp->h);
-    ggml_set_name(inp->h, "mtp_h_input");
+    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
 
     ggml_tensor * h_embd = inp->h;
 
@@ -705,12 +696,8 @@ llama_model_qwen3next::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-    Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
-    Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
-            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-            ext_factor, attn_factor, beta_fast, beta_slow);
+    Qcur = build_rope(Qcur, inp_pos, il);
+    Kcur = build_rope(Kcur, inp_pos, il);
 
     cb(Qcur, "mtp_Qcur", il);
     cb(Kcur, "mtp_Kcur", il);

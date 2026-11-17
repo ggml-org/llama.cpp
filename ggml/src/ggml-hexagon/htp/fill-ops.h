@@ -11,7 +11,7 @@ enum htp_fill_kernel_type {
 
 struct htp_fill_kernel_params {
     uint8_t  kernel_type;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t total_rows;
     uint32_t elem_size;
     uint32_t rows_per_chunk;

@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   make-release:
-    runs-on: ubuntu-24.04  # previously ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout
