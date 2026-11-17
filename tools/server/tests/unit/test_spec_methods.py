@@ -7,7 +7,6 @@ from utils import ServerProcess, download_file
 
 # Runs each speculative method greedily and checks that it still drafts and accepts as expected.
 # accept rate = accepted / drafted, accept len = 1 + accepted / verification steps (from /metrics).
-# DFlash2 and LiLiCorr use --spec-type draft-dflash; the draft GGUF metadata selects the variant.
 # Needs real models and a GPU. Use SPEC_METHODS=compact, nightly, all, or a comma-separated method list.
 
 HF = "https://huggingface.co"
@@ -69,7 +68,7 @@ CASES = [
     # Nightly floors retain the earlier three-point rate and 0.2 length margins.
     SpecCase(
         name="dflash2",
-        spec_type="draft-dflash",
+        spec_type="draft-dflash2",
         target="Qwen3.8-27B-Q4_K_M.gguf",
         draft="dflash2-Qwen3.8-27B-Q8_0.gguf",
         n_max=7,
@@ -78,7 +77,7 @@ CASES = [
     ),
     SpecCase(
         name="lilicorr",
-        spec_type="draft-dflash",
+        spec_type="draft-lilicorr",
         target="NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
         draft="lilicorr-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-NVFP4.gguf",
         n_max=7,

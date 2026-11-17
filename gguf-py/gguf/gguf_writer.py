@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -1458,6 +1459,15 @@ class GGUFWriter:
 
         self.add_string(Keys.Tokenizer.CHAT_TEMPLATE, value)
 
+    def add_tts_dicts(self, dicts: Mapping[str, Mapping[str, Any]]) -> None:
+        # dictionaries for tts_dict(): keys sorted by their bytes, values as JSON
+        self.add_array(Keys.Tokenizer.TTS_DICTS, list(dicts))
+        for name, value in dicts.items():
+            keys = sorted(value, key=lambda k: k.encode("utf-8"))
+            self.add_array(Keys.Tokenizer.TTS_DICT_KEYS_N.format(name=name), keys)
+            self.add_array(Keys.Tokenizer.TTS_DICT_VALUES_N.format(name=name),
+                           [json.dumps(value[k], ensure_ascii=False, separators=(",", ":")) for k in keys])
+
     def add_suppress_tokens(self, tokens: Sequence[int]) -> None:
         self.add_array(Keys.Tokenizer.SUPPRESS_TOKENS, tokens)
 
@@ -1811,6 +1821,9 @@ class GGUFWriter:
 
     def add_gen_audio_model_variant(self, value: str) -> None:
         self.add_string(Keys.ClipGenAudio.MODEL_VARIANT, value)
+
+    def add_gen_audio_default_voice(self, value: str) -> None:
+        self.add_string(Keys.ClipGenAudio.DEFAULT_VOICE, value)
 
     def add_xielu_alpha_p(self, values: Sequence[float]):
         self.add_array(Keys.xIELU.ALPHA_P, values)

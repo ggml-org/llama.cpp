@@ -1,0 +1,201 @@
+name: UI Lib Publish
+
+# Publishes @ggml-org/llama-ui, the library in ui/lib/ui, to npm.
+#
+# The version in ui/lib/ui/package.json is the release. A commit that reaches master with a
+# version npm does not have builds the library and publishes it; a commit that changes the
+# library without bumping it publishes nothing and says so on the run, which is the drift that
+# let 0.3.0 sit a day behind master. Bump the version in the PR whose change should ship, and
+# this workflow does the rest.
+#
+# Auth: no npm token is stored here. The job exchanges its OIDC identity for one (npm trusted
+# publishing) and signs the tarball with a provenance attestation. release-publish.yml has done
+# the same exchange on every push to master since it landed, its actions/attest step being the
+# proof that this repository can be issued a token.
+#
+# One-time setup, before this can publish: on the package, Publishing settings, Trusted
+# Publisher, GitHub Actions, with organization ggml-org, repository llama.cpp, workflow file
+# ui-lib-publish.yml, and Environment left blank - this job names no environment, since creating
+# one needs repository admin. Merging this workflow before that exists leaves the publish step
+# red on master: the release is late rather than wrong, and re-running the job publishes it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and pack, but do not publish'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/ui-lib-publish.yml',
+      'ui/lib/ui/**.*'
+    ]
+  # the advisory half, so a library change without a bump is annotated on the PR rather than
+  # discovered after the merge: the path filter keeps it off PRs that touch only Llama Chat
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/ui-lib-publish.yml',
+      'ui/lib/ui/**.*'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # never cancel a run mid-publish: a version half-published cannot be taken back. GitHub holds
+  # one pending run per group, so a newer push replaces an older queued one - no release is lost,
+  # as each run reads the version from its own commit.
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  LIB_DIR: ui/lib/ui
+
+jobs:
+  publish:
+    name: Publish @ggml-org/llama-ui
+    if: github.repository == 'ggml-org/llama.cpp'
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Check npm can publish with an OIDC token
+        run: |
+          npm -v
+          node -e '
+            const v = process.argv[1];
+            const [major, minor] = v.split(".").map(Number);
+            if (major < 11 || (major === 11 && minor < 5)) {
+              console.error(`npm ${v} cannot publish with trusted publishing: 11.5.1 or newer is needed`);
+              process.exit(1);
+            }
+          ' "$(npm -v)"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Run type checking
+        run: npm run check
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Build the package and lint it
+        run: npm run prepack
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Compare the version with npm
+        id: version
+        # on a PR this is advisory and must not fail the job: a registry outage is not the
+        # contributor's mistake. On master the publish decision rests on the answer, so it fails.
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: node scripts/npm-version-check.mjs
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Note a library change that ships no new version
+        if: github.event_name == 'pull_request' && always() && steps.version.outcome == 'success' && steps.version.outputs.should_publish != 'true'
+        env:
+          NOTE: ${{ steps.version.outputs.note }}
+        run: echo "::warning::$NOTE"
+
+      - name: Publish
+        # master only. npm's trusted publisher matches on the repository and the workflow file,
+        # not the branch, so this condition is the only thing stopping a manual run from a PR
+        # branch - one that anyone with write access can start - from publishing code that no
+        # one reviewed. A dispatch on master remains the way to re-run a release.
+        if: github.ref == 'refs/heads/master' && steps.version.outputs.should_publish == 'true' && inputs.dry_run != true
+        # --ignore-scripts publishes the tarball prepack built and publint passed rather than
+        # rebuilding it here; --provenance is implied by trusted publishing and named to be
+        # explicit. A package published with nothing in it cannot be taken back, so refuse first.
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          test -d dist || { echo "dist/ is missing: nothing was built, so nothing is published"; exit 1; }
+          npm publish --access public --provenance --ignore-scripts --tag "$TAG"
+        working-directory: ${{ env.LIB_DIR }}
+
+      - name: Verify it landed
+        if: github.ref == 'refs/heads/master' && steps.version.outputs.should_publish == 'true' && inputs.dry_run != true
+        env:
+          NAME: ${{ steps.version.outputs.name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # the registry can serve a new version some time after publish returns, so retry rather
+          # than call a release that worked a failure
+          for try in 1 2 3 4 5 6; do
+            seen=$(npm view "$NAME@$VERSION" version 2>/dev/null || true)
+            if [ "$seen" = "$VERSION" ]; then
+              echo "$NAME@$VERSION is on npm"
+              npm view "$NAME@$VERSION" dist-tags version dist.integrity
+              exit 0
+            fi
+            echo "not visible yet (attempt $try of 6)"
+            sleep 10
+          done
+          echo "::error::$NAME@$VERSION published without error but is not visible on the registry after 6 attempts. The publish did not fail: check the package on npm before publishing again."
+          exit 1
+
+      - name: Report
+        if: always()
+        # every value reaches the shell through env, not through the script, so a package name
+        # from a PR's package.json cannot inject into this step
+        env:
+          NAME: ${{ steps.version.outputs.name || '@ggml-org/llama-ui' }}
+          VERSION: ${{ steps.version.outputs.version || 'unknown' }}
+          LATEST: ${{ steps.version.outputs.latest }}
+          VERDICT: ${{ steps.version.outputs.verdict || 'not reached' }}
+          NOTE: ${{ steps.version.outputs.note }}
+          SHOULD: ${{ steps.version.outputs.should_publish }}
+          DRY: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY" = "true" ]; then published="no (dry run)"
+          elif [ "$SHOULD" = "true" ]; then published=yes
+          else published=no
+          fi
+          {
+            echo "### $NAME $VERSION"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| npm latest was | ${LATEST:-nothing published yet} |"
+            echo "| verdict | \`$VERDICT\` |"
+            echo "| published | $published |"
+            echo
+            echo "> $NOTE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Mind the verdict
+        if: always() && github.event_name != 'pull_request' && steps.version.outcome == 'success'
+        # a version going backwards is a mistake; a version not bumped is usually one too, but it
+        # is also what a stories-only commit looks like, so that only fails the run when the
+        # repository variable UI_LIB_PUBLISH_FAIL_ON_UNBUMPED is set to true
+        env:
+          NOTE: ${{ steps.version.outputs.note }}
+          VERDICT: ${{ steps.version.outputs.verdict }}
+          FAIL_ON_UNBUMPED: ${{ vars.UI_LIB_PUBLISH_FAIL_ON_UNBUMPED }}
+        run: |
+          case "$VERDICT" in
+            stale)
+              echo "::error::$NOTE"
+              exit 1 ;;
+            published)
+              if [ "$FAIL_ON_UNBUMPED" = "true" ]; then
+                echo "::error::$NOTE"
+                exit 1
+              fi
+              echo "::warning::$NOTE" ;;
+          esac
