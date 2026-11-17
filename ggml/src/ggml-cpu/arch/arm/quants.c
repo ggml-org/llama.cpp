@@ -562,8 +562,23 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const int8x16_t v1_1h = vld1q_s8(y1->qs + 16);
 
         // dot product into int32x4_t
+#if defined(__ARM_FEATURE_DOTPROD)
         const int32x4_t p_0 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), v0_0ls, v1_0l), v0_0hs, v1_0h);
         const int32x4_t p_1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), v0_1ls, v1_1l), v0_1hs, v1_1h);
+#else
+        // weights are -8..7, so int16 lanes can hold 4 products each (max 4*8*127 = 4064)
+        int16x8_t a_0 = vmull_s8(vget_low_s8(v0_0ls), vget_low_s8(v1_0l));
+        a_0 = vmlal_s8(a_0, vget_high_s8(v0_0ls), vget_high_s8(v1_0l));
+        a_0 = vmlal_s8(a_0, vget_low_s8(v0_0hs), vget_low_s8(v1_0h));
+        a_0 = vmlal_s8(a_0, vget_high_s8(v0_0hs), vget_high_s8(v1_0h));
+        const int32x4_t p_0 = vpaddlq_s16(a_0);
+
+        int16x8_t a_1 = vmull_s8(vget_low_s8(v0_1ls), vget_low_s8(v1_1l));
+        a_1 = vmlal_s8(a_1, vget_high_s8(v0_1ls), vget_high_s8(v1_1l));
+        a_1 = vmlal_s8(a_1, vget_low_s8(v0_1hs), vget_low_s8(v1_1h));
+        a_1 = vmlal_s8(a_1, vget_high_s8(v0_1hs), vget_high_s8(v1_1h));
+        const int32x4_t p_1 = vpaddlq_s16(a_1);
+#endif
 
         sumv0 = vmlaq_n_f32(sumv0, vcvtq_f32_s32(p_0), GGML_CPU_FP16_TO_FP32(x0->d)*GGML_CPU_FP16_TO_FP32(y0->d));
         sumv1 = vmlaq_n_f32(sumv1, vcvtq_f32_s32(p_1), GGML_CPU_FP16_TO_FP32(x1->d)*GGML_CPU_FP16_TO_FP32(y1->d));
