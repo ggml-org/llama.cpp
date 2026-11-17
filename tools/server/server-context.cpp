@@ -17,7 +17,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
-#include "../../src/llama-context.h"
+#include "../../src/llama-ext.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -72,7 +72,7 @@ static common_speculative_output_limits server_output_limits(const common_params
 // a checkpoint restore dropped tokens the target had accepted - re-accept them rather than verify again
 static std::vector<llama_token> server_accept_replay(
         common_sampler * smpl,
-        const llama_outputs * outputs,
+        const llama_sampling_outputs * outputs,
         const std::vector<int32_t> & idxs,
         const llama_tokens & draft) {
     GGML_ASSERT(idxs.size() == draft.size() + 1);
@@ -98,7 +98,8 @@ static std::vector<llama_token> server_accept_replay(
 // on replay the draft was already accepted before a context checkpoint restore, so repeat the same decisions
 static std::vector<llama_token> server_sample_and_accept_synth(
         common_sampler * smpl,
-        const llama_outputs * outputs,
+        const llama_vocab * vocab,
+        const llama_sampling_outputs * outputs,
         const std::vector<int32_t> & idxs,
         const llama_tokens & draft,
         const std::vector<double> & synth_probs,
@@ -110,7 +111,6 @@ static std::vector<llama_token> server_sample_and_accept_synth(
     std::vector<llama_token> result;
     result.reserve(idxs.size());
 
-    const llama_vocab * vocab = outputs->vocab;
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     for (size_t i = 0; i < draft.size(); ++i) {
         const llama_token id = common_sampler_sample_from_outputs(smpl, outputs, idxs[i]);
@@ -4731,7 +4731,7 @@ private:
                 slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
         };
 
-        const llama_outputs * outputs = nullptr;
+        const llama_sampling_outputs * outputs = nullptr;
         iterate(slots, [&](server_slot & slot) {
             // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
@@ -4791,7 +4791,7 @@ private:
             {
                 scoped_timer timer(t_sampl, n_sampl);
                 if (!outputs) {
-                    outputs = llama_get_outputs(ctx_tgt);
+                    outputs = llama_get_sampling_outputs(ctx_tgt);
                 }
                 id = common_sampler_sample_from_outputs(slot.smpl.get(), outputs, tok_idx);
             }
@@ -4861,14 +4861,14 @@ private:
                 const bool use_rejection = slot.use_spec_rejection() && !slot.spec_draft_q.empty();
 
                 if (!outputs) {
-                    outputs = llama_get_outputs(ctx_tgt);
+                    outputs = llama_get_sampling_outputs(ctx_tgt);
                 }
 
                 std::vector<llama_token> accepted;
                 if (!synth_probs.empty()) {
                     // synthetic acceptance replaces verification entirely, so it comes first
                     accepted = server_sample_and_accept_synth(
-                            slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft,
+                            slot.smpl.get(), vocab, outputs, spec_i_batch, slot.spec_draft,
                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
                 } else if (slot.spec_is_replay && slot.use_spec_rejection()) {
                     accepted = server_accept_replay(slot.smpl.get(), outputs, spec_i_batch, slot.spec_draft);

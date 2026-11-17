@@ -24,36 +24,20 @@
 #include <unordered_map>
 
 //
-// llama_outputs
+// llama_sampling_outputs
 //
 
-llama_sampling_output_view llama_outputs::get_sampling_ith(int32_t i) const {
-    const int64_t row = output_resolve_row(i);
-    return row >= 0 ? sampling[row] : llama_sampling_output_view{};
-}
-
-const float * llama_outputs::get_embeddings_nextn_ith(int32_t i) const {
-    const int64_t row = embeddings_nextn_masked ? output_resolve_row(i) : i;
-    return embeddings_nextn && row >= 0 && (size_t) row < n_embeddings_nextn
-        ? embeddings_nextn + (size_t) row * n_embd : nullptr;
-}
-
-const float * llama_outputs::get_embeddings_layer_inp(uint32_t lid) const {
-    GGML_ASSERT(lid < embeddings_layer_inp.size() && embeddings_layer_inp[lid]);
-    return embeddings_layer_inp[lid];
-}
-
-int64_t llama_outputs::output_resolve_row(int32_t i) const {
+llama_sampling_output_view llama_sampling_outputs::get_sampling_ith(int32_t i) const {
     int64_t row = i;
     if (i < 0) {
         row += (int64_t) sampling.size();
     } else {
         if (!output_ids || (size_t) i >= output_ids->size()) {
-            return -1;
+            return {};
         }
         row = (*output_ids)[i];
     }
-    return row >= 0 && (size_t) row < sampling.size() ? row : -1;
+    return row >= 0 && (size_t) row < sampling.size() ? sampling[row] : llama_sampling_output_view{};
 }
 
 //
@@ -1125,23 +1109,17 @@ enum llama_pooling_type llama_context::pooling_type() const {
     return cparams.pooling_type;
 }
 
-const llama_outputs * llama_context::get_outputs() {
+const llama_sampling_outputs * llama_context::get_sampling_outputs() {
     synchronize();
     output_reorder();
 
-    outputs.vocab = &model.vocab;
-    outputs.n_vocab = model.vocab.n_tokens();
-    outputs.embeddings = embd.data;
-    outputs.embeddings_nextn = embd_nextn.data;
-    outputs.output_ids = &output_ids;
-    outputs.n_embd = model.hparams.n_embd_out();
-    outputs.n_embeddings_nextn = embd_nextn.size / outputs.n_embd;
-    outputs.embeddings_nextn_masked = cparams.embeddings_nextn_masked;
+    sampling_outputs.vocab = &model.vocab;
+    sampling_outputs.output_ids = &output_ids;
 
-    outputs.sampling.resize(n_outputs);
+    sampling_outputs.sampling.resize(n_outputs);
     for (uint32_t row = 0; row < n_outputs; ++row) {
         const int32_t idx = (int32_t) row - (int32_t) n_outputs;
-        auto & output = outputs.sampling[row];
+        auto & output = sampling_outputs.sampling[row];
         output.token = get_sampled_token_ith(idx);
         output.probs = get_sampled_probs_ith(idx);
         output.sampled_logits = get_sampled_logits_ith(idx);
@@ -1151,12 +1129,7 @@ const llama_outputs * llama_context::get_outputs() {
         output.logits = !output.sampled_logits && logits.has_data() ? get_logits_ith(idx) : nullptr;
     }
 
-    outputs.embeddings_layer_inp.resize(embd_layer_inp.size());
-    for (uint32_t lid = 0; lid < embd_layer_inp.size(); ++lid) {
-        outputs.embeddings_layer_inp[lid] = embd_layer_inp[lid].has_data() ? get_embeddings_layer_inp(lid) : nullptr;
-    }
-
-    return &outputs;
+    return &sampling_outputs;
 }
 
 float * llama_context::get_logits() {
@@ -4858,8 +4831,8 @@ bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler *
     return ctx->set_sampler(seq_id, smpl);
 }
 
-const llama_outputs * llama_get_outputs(llama_context * ctx) {
-    return ctx->get_outputs();
+const llama_sampling_outputs * llama_get_sampling_outputs(llama_context * ctx) {
+    return ctx->get_sampling_outputs();
 }
 
 llama_token llama_get_sampled_token_ith(llama_context * ctx, int32_t i) {

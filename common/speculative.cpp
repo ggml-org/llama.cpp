@@ -10,7 +10,7 @@
 #include "ngram-mod.h"
 #include "sampling.h"
 
-#include "../src/llama-context.h"
+#include "../src/llama-ext.h"
 
 #include <algorithm>
 #include <cassert>
@@ -396,7 +396,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
-            const auto * outputs = llama_get_outputs(ctx_dft);
+            const auto * outputs = llama_get_sampling_outputs(ctx_dft);
             int i_batch = 0;
 
             batch.clear();
@@ -689,11 +689,10 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         // to get one g_embd row per token.
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
-        const auto * outputs = llama_get_outputs(ctx_tgt);
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
             const float * layer = target_layer_ids[k] < n_layer_tgt
-                ? outputs->get_embeddings_layer_inp((uint32_t) target_layer_ids[k])
-                : outputs->embeddings_nextn;
+                ? llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k])
+                : llama_get_embeddings_nextn(ctx_tgt);
             if (!layer) {
                 GGML_ABORT("EAGLE3: target layer %d input not extracted.", target_layer_ids[k]);
             }
@@ -846,7 +845,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
-            const auto * outputs = llama_get_outputs(ctx_dft);
+            const auto * outputs = llama_get_sampling_outputs(ctx_dft);
             int i_batch = 0;
 
             batch.clear();
@@ -860,7 +859,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 
                 common_sampler_sample_from_outputs(smpl, outputs, i_batch, true);
                 // pre-norm hidden state of this position becomes g_embd for the next step
-                const float * prenorm = outputs->get_embeddings_nextn_ith(i_batch);
+                const float * prenorm = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -1218,8 +1217,6 @@ public:
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
-        const auto * outputs = llama_get_outputs(ctx_tgt);
-
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_batch_beg[seq_id] < 0) {
                 continue;
@@ -1259,7 +1256,7 @@ public:
                 // injects them into the K/V cache at the target positions
                 features_buf.resize((size_t) n_chunk * n_embd_enc);
                 for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                    const float * layer = outputs->get_embeddings_layer_inp((uint32_t) target_layer_ids[k]);
+                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
                     if (!layer) {
                         GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
                     }
@@ -1329,7 +1326,7 @@ public:
             return;
         }
 
-        const auto * outputs = llama_get_outputs(ctx_dft);
+        const auto * outputs = llama_get_sampling_outputs(ctx_dft);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
@@ -1456,7 +1453,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             return;
         }
 
-        const auto * outputs = llama_get_outputs(ctx_dft);
+        const auto * outputs = llama_get_sampling_outputs(ctx_dft);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
@@ -1472,7 +1469,7 @@ struct common_speculative_impl_draft_dspark final : public common_speculative_im
             auto & result = *dp.result;
 
             // DSpark: read from the first draft slot, truncate below the confidence threshold
-            const float * conf = params.p_min > 0.0f ? outputs->embeddings_nextn : nullptr;
+            const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
             // bonus-anchor drafts read the mask positions only, like DFlash
             const int32_t i_draft_beg = sample_from_anchor ? 0 : 1;
             for (int32_t i = i_draft_beg; i < n_block_tokens; ++i) {
@@ -1579,8 +1576,6 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
             return;
         }
 
-        const auto * outputs = llama_get_outputs(ctx_dft);
-
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1592,7 +1587,7 @@ struct common_speculative_impl_draft_dflash2 final : public common_speculative_i
 
             auto & result = *dp.result;
 
-            const float * lattice = outputs->embeddings_nextn;
+            const float * lattice = llama_get_embeddings_nextn(ctx_dft);
             GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
 
             // DFlash2 can instead sample each step and hand q to the verifier for rejection sampling
@@ -1762,8 +1757,6 @@ public:
             return;
         }
 
-        const auto * outputs = llama_get_outputs(ctx_dft);
-
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             if (i_block_beg[seq_id] < 0) {
                 continue;
@@ -1774,7 +1767,7 @@ public:
 
             auto & result = *dp.result;
 
-            const float * lattice = outputs->embeddings_nextn;
+            const float * lattice = llama_get_embeddings_nextn(ctx_dft);
             GGML_ASSERT(lattice && "LiliCorr scorer produced no lattice");
 
             int32_t predecessor = 0;
@@ -2008,7 +2001,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         auto * ctx_dft = this->params.ctx_dft;
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
-        const auto * outputs = dev_rows ? nullptr : llama_get_outputs(ctx_tgt);
 
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
@@ -2029,7 +2021,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 }
             }
 
-            const float * h_tgt = dev_rows ? nullptr : outputs->embeddings_nextn;
+            const float * h_tgt = dev_rows ? nullptr : llama_get_embeddings_nextn(ctx_tgt);
 
             for (int k = 0; k < n_tokens; ++k) {
                 const auto & t = batch_in.tokens[k];
@@ -2115,7 +2107,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             verify_h[seq_id].resize((size_t) h_rows * n_embd);
 
             for (int32_t i = 0; i < h_rows; ++i) {
-                const float * h = outputs->get_embeddings_nextn_ith(h_offset + i);
+                const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, h_offset + i);
                 std::memcpy(verify_h[seq_id].data() + (size_t) i * n_embd, h, row_bytes);
             }
 
@@ -2194,7 +2186,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 break;
             }
 
-            const auto * outputs = llama_get_outputs(ctx_dft);
+            const auto * outputs = llama_get_sampling_outputs(ctx_dft);
 
             // rebuild the batch for the next step: the growing-KV paths re-add only the
             // new token (the KV already holds the prefix), while chained heads re-add the
@@ -2209,7 +2201,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto * smpl = smpls[seq_id].get();
 
                 const llama_token id_sampled = common_sampler_sample_from_outputs(smpl, outputs, i_last[seq_id], true);
-                const float * h_row = outputs->get_embeddings_nextn_ith(i_last[seq_id]);
+                const float * h_row = llama_get_embeddings_nextn_ith(ctx_dft, i_last[seq_id]);
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
 

@@ -53,31 +53,18 @@ struct llama_sampling_output_view {
     uint32_t n_logits = 0;
 };
 
-struct llama_outputs {
+struct llama_sampling_outputs {
     const llama_vocab * vocab = nullptr;
-    uint32_t n_vocab = 0;
-    const float * embeddings = nullptr;
-    const float * embeddings_nextn = nullptr;
 
     // Positive indices are batch token positions; negative indices count from the last output row.
     // An invalid index returns an empty row.
     LLAMA_API llama_sampling_output_view get_sampling_ith(int32_t i) const;
 
-    // Unmasked NextN embeddings use non-negative batch token positions, including tokens without logits.
-    LLAMA_API const float * get_embeddings_nextn_ith(int32_t i) const;
-
-    LLAMA_API const float * get_embeddings_layer_inp(uint32_t lid) const;
-
 private:
     friend struct llama_context;
-    int64_t output_resolve_row(int32_t i) const;
 
     std::vector<llama_sampling_output_view> sampling;
-    std::vector<const float *> embeddings_layer_inp;
     const std::vector<int32_t> * output_ids = nullptr;
-    uint32_t n_embd = 0;
-    size_t n_embeddings_nextn = 0;
-    bool embeddings_nextn_masked = false;
 };
 
 struct llama_context {
@@ -119,7 +106,7 @@ struct llama_context {
 
     enum llama_pooling_type pooling_type() const;
 
-    const llama_outputs * get_outputs();
+    const llama_sampling_outputs * get_sampling_outputs();
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
@@ -386,7 +373,7 @@ private:
     llama_memory_ptr memory;
     llama_moe_cache_ptr moe_cache;
 
-    llama_outputs outputs;
+    llama_sampling_outputs sampling_outputs;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
