@@ -1,7 +1,11 @@
 // highlightCode and its helpers, from ui/apps/chat's utils/code.ts (only what SyntaxHighlightedCode uses)
 import { CODE_BLOCK } from "../constants";
-import hljs from "highlight.js";
+import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
+import { all as languages } from "lowlight";
+
+// reuse lowlight's language modules: the full `highlight.js` entry bundles a second, CommonJS copy of every language
+for (const [name, language] of Object.entries(languages)) hljs.registerLanguage(name, language);
 
 // highlight.js's bash marks strings, variables and keywords but leaves a command's name and its flags plain, so a
 // command (`curl -H … -d …`) reads as one colour. Mark them too: the name as a built-in, the flags as attributes.
