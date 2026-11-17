@@ -520,14 +520,22 @@ static void test_mixed(testing & t) {
         bb.add_tok(3, 10, 0, false);
         const llama_pos pos1[n_pos] = { 11, 5, 7, 0 };
         bb.add_embd(pos1, {0}, true);
+        bb.add_tok(4, 12, 0, true);
 
         llama_batch_allocr ba(n_pos, true);
         t.assert_true(ba.init(bb.b, vocab, false));
 
         llama_ubatch ub = ba.split_simple(2);
-        const llama_pos expected[8] = { 10, 11, 10, 5, 10, 7, 0, 0 };
+        const llama_pos expected[8] = { 10, 11, 10, 5, 10, 7, 10, 0 };
         for (int i = 0; i < 8; ++i) {
             t.assert_equal(expected[i], ub.pos[i]);
+        }
+
+        ub = ba.split_simple(2);
+        t.assert_equal(1u, ub.n_tokens);
+        t.assert_true(ub.token != nullptr && ub.embd == nullptr);
+        for (uint32_t j = 0; j < n_pos; ++j) {
+            t.assert_equal(12, ub.pos[j]);
         }
     });
 

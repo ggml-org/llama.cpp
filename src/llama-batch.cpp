@@ -177,7 +177,7 @@ bool llama_batch_allocr::init(
 
     //
     // build flat pos array, section-major: pos[j*n_tok + i] = section j of entry i
-    // token entry: [p, p, p, 0] (M-RoPE text position)
+    // token entry: [p, p, p, p] (M-RoPE text position)
     // embd entry:  tokens[i].pos as-is
     //
 
@@ -188,8 +188,8 @@ bool llama_batch_allocr::init(
         for (uint32_t j = 0; j < n_pos_per_embd; ++j) {
             llama_pos p = tok.pos[j];
             if (expand) {
-                // expand [p] to [p, p, p, 0] for M-RoPE
-                p = j < 3 ? tok.pos[0] : 0;
+                // expand [p] to [p, p, p, p] for M-RoPE
+                p = tok.pos[0];
             }
             pos[(size_t) j*n_tok + i] = p;
         }
