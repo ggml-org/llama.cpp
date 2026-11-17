@@ -242,21 +242,10 @@ DEFINE_COMPUTE_REPEAT(mul_f16, _Float16, hvx_mul_f16_uuu)
 DEFINE_COMPUTE_REPEAT(div_f32, float,    hvx_div_f32_uuu)
 DEFINE_COMPUTE_REPEAT(div_f16, _Float16, hvx_div_f16_uuu)
 
-#define BINARY_LOAD_F32_F32(src, i) hvx_vmemu((src) + (size_t) (i) * sizeof(float))
-#define BINARY_LOAD_F32_F16(src, i)                                                                    \
-    ({                                                                                                 \
-        const uint32_t base = (i) & ~63u;                                                              \
-        HVX_VectorPair pair = hvx_vec_f16_to_f32(hvx_vmemu((src) + (size_t) base * sizeof(_Float16))); \
-        ((i) & 32u) ? Q6_V_hi_W(pair) : Q6_V_lo_W(pair);                                               \
-    })
-
-static inline HVX_Vector binary_clamp_f16_finite(HVX_Vector v) {
-    const HVX_Vector max_f16 = hvx_vec_splat_f32(65504.0f);
-    const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
-    const HVX_Vector inf     = hvx_vec_splat_f32(INFINITY);
+static inline HVX_Vector binary_clamp_f16_finite_vec(HVX_Vector v, HVX_Vector max_f16, HVX_Vector min_f16, HVX_Vector inf) {
     const HVX_VectorPred finite = Q6_Q_vcmp_gt_VsfVsf(inf, hvx_vec_abs_f32(v));
-    const HVX_VectorPred high = Q6_Q_and_QQ(finite, Q6_Q_vcmp_gt_VsfVsf(v, max_f16));
-    const HVX_VectorPred low  = Q6_Q_and_QQ(finite, Q6_Q_vcmp_gt_VsfVsf(min_f16, v));
+    const HVX_VectorPred high   = Q6_Q_and_QQ(finite, Q6_Q_vcmp_gt_VsfVsf(v, max_f16));
+    const HVX_VectorPred low    = Q6_Q_and_QQ(finite, Q6_Q_vcmp_gt_VsfVsf(min_f16, v));
     v = Q6_V_vmux_QVV(high, max_f16, v);
     return Q6_V_vmux_QVV(low, min_f16, v);
 }
@@ -266,45 +255,233 @@ static inline HVX_Vector binary_clamp_f16_finite(HVX_Vector v) {
 #define BINARY_OP_MUL(a, b, nan_inf_mask) ((void) (nan_inf_mask), hvx_vec_mul_f32_f32(a, b))
 #define BINARY_OP_DIV(a, b, nan_inf_mask) hvx_vec_mul_f32_f32(a, hvx_vec_inverse_f32_guard(b, nan_inf_mask))
 
-#define DEFINE_BINARY_MIXED_F32(NAME, LOAD0, LOAD1, OP)                                         \
-static void NAME(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {       \
-    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                  \
-    for (uint32_t i = 0; i < n; i += 32) {                                                      \
-        HVX_Vector out = OP(LOAD0(src0, i), LOAD1(src1, i), nan_inf_mask);                      \
-        hvx_vec_store_u(dst + (size_t) i * sizeof(float), MIN(32, n - i) * sizeof(float), out); \
-    }                                                                                           \
-}
+#define BINARY_LOAD64_A_F16(vsrc, k, s_lo, s_hi)              \
+    HVX_VectorPair p_##s_lo = hvx_vec_f16_to_f32((vsrc)[k]);  \
+    HVX_Vector s_lo = Q6_V_lo_W(p_##s_lo);                    \
+    HVX_Vector s_hi = Q6_V_hi_W(p_##s_lo)
 
-#define DEFINE_BINARY_MIXED_F16(NAME, LOAD0, LOAD1, OP)                                                \
+#define BINARY_LOAD64_A_F32(vsrc, k, s_lo, s_hi)              \
+    HVX_Vector s_lo = (vsrc)[2 * (k) + 0];                    \
+    HVX_Vector s_hi = (vsrc)[2 * (k) + 1]
+
+#define BINARY_LOAD64_U_F16(src, k, s_lo, s_hi)                                               \
+    HVX_VectorPair p_##s_lo = hvx_vec_f16_to_f32(hvx_vmemu((src) + (size_t) (k) * 128));      \
+    HVX_Vector s_lo = Q6_V_lo_W(p_##s_lo);                                                    \
+    HVX_Vector s_hi = Q6_V_hi_W(p_##s_lo)
+
+#define BINARY_LOAD64_U_F32(src, k, s_lo, s_hi)                                               \
+    HVX_Vector s_lo = hvx_vmemu((src) + (size_t) (2 * (k) + 0) * 128);                        \
+    HVX_Vector s_hi = hvx_vmemu((src) + (size_t) (2 * (k) + 1) * 128)
+
+#define BINARY_TAIL_LO_A_F16(vsrc, nvec, s_lo, s_hi)          \
+    BINARY_LOAD64_A_F16(vsrc, nvec, s_lo, s_hi)
+#define BINARY_TAIL_HI_A_F16(vsrc, nvec, s_hi)                \
+    ((void) (vsrc), (void) (nvec), (void) (s_hi))
+
+#define BINARY_TAIL_LO_A_F32(vsrc, nvec, s_lo, s_hi)          \
+    HVX_Vector s_lo = (vsrc)[2 * (nvec)];                     \
+    HVX_Vector s_hi
+#define BINARY_TAIL_HI_A_F32(vsrc, nvec, s_hi)                \
+    s_hi = (vsrc)[2 * (nvec) + 1]
+
+#define BINARY_TAIL_LO_U_F16(src, nvec, s_lo, s_hi)           \
+    BINARY_LOAD64_U_F16(src, nvec, s_lo, s_hi)
+#define BINARY_TAIL_HI_U_F16(src, nvec, s_hi)                 \
+    ((void) (src), (void) (nvec), (void) (s_hi))
+
+#define BINARY_TAIL_LO_U_F32(src, nvec, s_lo, s_hi)                   \
+    HVX_Vector s_lo = hvx_vmemu((src) + (size_t) (2 * (nvec)) * 128); \
+    HVX_Vector s_hi
+#define BINARY_TAIL_HI_U_F32(src, nvec, s_hi)                 \
+    s_hi = hvx_vmemu((src) + (size_t) (2 * (nvec) + 1) * 128)
+
+#define DEFINE_BINARY_MIXED_F32(NAME, T0, T1, OP, UNROLL)                                              \
 static void NAME(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {              \
     const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                         \
-    for (uint32_t i = 0; i < n; i += 64) {                                                             \
-        HVX_Vector out0 = OP(LOAD0(src0, i), LOAD1(src1, i), nan_inf_mask);                            \
-        const uint32_t rem = n - i;                                                                    \
-        HVX_Vector out1 = Q6_V_vzero();                                                                \
-        if (rem > 32) {                                                                                \
-            out1 = OP(LOAD0(src0, i + 32), LOAD1(src1, i + 32), nan_inf_mask);                         \
+    const uint32_t nvec = n / 64;                                                                      \
+    const uint32_t nloe = n % 64;                                                                      \
+    if (hex_is_aligned(dst, 128) && hex_is_aligned(src0, 128) && hex_is_aligned(src1, 128)) {          \
+        const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                                 \
+        const HVX_Vector * restrict vsrc1 = (const HVX_Vector *) src1;                                 \
+        HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                                        \
+        UNROLL                                                                                         \
+        for (uint32_t k = 0; k < nvec; k++) {                                                          \
+            BINARY_LOAD64_A_##T0(vsrc0, k, s0_0, s0_1);                                                \
+            BINARY_LOAD64_A_##T1(vsrc1, k, s1_0, s1_1);                                                \
+            vdst[2 * k + 0] = OP(s0_0, s1_0, nan_inf_mask);                                            \
+            vdst[2 * k + 1] = OP(s0_1, s1_1, nan_inf_mask);                                            \
         }                                                                                              \
-        out0 = binary_clamp_f16_finite(out0);                                                          \
-        out1 = binary_clamp_f16_finite(out1);                                                          \
-        HVX_Vector packed = hvx_vec_f32_to_f16(out0, out1);                                            \
-        hvx_vec_store_u(dst + (size_t) i * sizeof(_Float16), MIN(64, rem) * sizeof(_Float16), packed); \
+        if (nloe) {                                                                                    \
+            BINARY_TAIL_LO_A_##T0(vsrc0, nvec, s0_0, s0_1);                                            \
+            BINARY_TAIL_LO_A_##T1(vsrc1, nvec, s1_0, s1_1);                                            \
+            HVX_Vector out0 = OP(s0_0, s1_0, nan_inf_mask);                                            \
+            if (nloe <= 32) {                                                                          \
+                hvx_vec_store_a(&vdst[2 * nvec], nloe * sizeof(float), out0);                          \
+            } else {                                                                                   \
+                vdst[2 * nvec] = out0;                                                                 \
+                BINARY_TAIL_HI_A_##T0(vsrc0, nvec, s0_1);                                              \
+                BINARY_TAIL_HI_A_##T1(vsrc1, nvec, s1_1);                                              \
+                HVX_Vector out1 = OP(s0_1, s1_1, nan_inf_mask);                                        \
+                hvx_vec_store_a(&vdst[2 * nvec + 1], (nloe - 32) * sizeof(float), out1);               \
+            }                                                                                          \
+        }                                                                                              \
+        return;                                                                                        \
+    }                                                                                                  \
+    for (uint32_t k = 0; k < nvec; k++) {                                                              \
+        BINARY_LOAD64_U_##T0(src0, k, s0_0, s0_1);                                                     \
+        BINARY_LOAD64_U_##T1(src1, k, s1_0, s1_1);                                                     \
+        *(HVX_UVector *) (dst + (size_t) (2 * k + 0) * 128) = OP(s0_0, s1_0, nan_inf_mask);            \
+        *(HVX_UVector *) (dst + (size_t) (2 * k + 1) * 128) = OP(s0_1, s1_1, nan_inf_mask);            \
+    }                                                                                                  \
+    if (nloe) {                                                                                        \
+        BINARY_TAIL_LO_U_##T0(src0, nvec, s0_0, s0_1);                                                 \
+        BINARY_TAIL_LO_U_##T1(src1, nvec, s1_0, s1_1);                                                 \
+        HVX_Vector out0 = OP(s0_0, s1_0, nan_inf_mask);                                                \
+        if (nloe <= 32) {                                                                              \
+            hvx_vec_store_u(dst + (size_t) (2 * nvec) * 128, nloe * sizeof(float), out0);              \
+        } else {                                                                                       \
+            *(HVX_UVector *) (dst + (size_t) (2 * nvec) * 128) = out0;                                 \
+            BINARY_TAIL_HI_U_##T0(src0, nvec, s0_1);                                                   \
+            BINARY_TAIL_HI_U_##T1(src1, nvec, s1_1);                                                   \
+            HVX_Vector out1 = OP(s0_1, s1_1, nan_inf_mask);                                            \
+            hvx_vec_store_u(dst + (size_t) (2 * nvec + 1) * 128, (nloe - 32) * sizeof(float), out1);   \
+        }                                                                                              \
     }                                                                                                  \
 }
 
-#define DEFINE_BINARY_MIXED_OP(OP_NAME, OP)                                                                    \
-    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f16_f32_f16, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F32, OP)      \
-    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f16_f32_f32, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F32, OP)      \
-    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f32_f16_f16, BINARY_LOAD_F32_F32, BINARY_LOAD_F32_F16, OP)      \
-    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f32_f16_f32, BINARY_LOAD_F32_F32, BINARY_LOAD_F32_F16, OP)      \
-    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f16_f16_f32, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F16, OP)      \
-    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f32_f32_f16, BINARY_LOAD_F32_F32, BINARY_LOAD_F32_F32, OP)
+#define DEFINE_BINARY_MIXED_F16(NAME, T0, T1, OP, UNROLL)                                              \
+static void NAME(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {              \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                         \
+    const HVX_Vector max_f16      = hvx_vec_splat_f32(65504.0f);                                       \
+    const HVX_Vector min_f16      = hvx_vec_splat_f32(-65504.0f);                                      \
+    const HVX_Vector inf          = hvx_vec_splat_f32(INFINITY);                                       \
+    const uint32_t nvec = n / 64;                                                                      \
+    const uint32_t nloe = n % 64;                                                                      \
+    if (hex_is_aligned(dst, 128) && hex_is_aligned(src0, 128) && hex_is_aligned(src1, 128)) {          \
+        const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                                 \
+        const HVX_Vector * restrict vsrc1 = (const HVX_Vector *) src1;                                 \
+        HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                                        \
+        UNROLL                                                                                         \
+        for (uint32_t k = 0; k < nvec; k++) {                                                          \
+            BINARY_LOAD64_A_##T0(vsrc0, k, s0_0, s0_1);                                                \
+            BINARY_LOAD64_A_##T1(vsrc1, k, s1_0, s1_1);                                                \
+            HVX_Vector out0 = OP(s0_0, s1_0, nan_inf_mask);                                            \
+            HVX_Vector out1 = OP(s0_1, s1_1, nan_inf_mask);                                            \
+            out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                           \
+            out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                           \
+            vdst[k] = hvx_vec_f32_to_f16(out0, out1);                                                  \
+        }                                                                                              \
+        if (nloe) {                                                                                    \
+            BINARY_TAIL_LO_A_##T0(vsrc0, nvec, s0_0, s0_1);                                            \
+            BINARY_TAIL_LO_A_##T1(vsrc1, nvec, s1_0, s1_1);                                            \
+            HVX_Vector out0 = OP(s0_0, s1_0, nan_inf_mask);                                            \
+            out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                           \
+            HVX_Vector out1 = Q6_V_vzero();                                                            \
+            if (nloe > 32) {                                                                           \
+                BINARY_TAIL_HI_A_##T0(vsrc0, nvec, s0_1);                                              \
+                BINARY_TAIL_HI_A_##T1(vsrc1, nvec, s1_1);                                              \
+                out1 = OP(s0_1, s1_1, nan_inf_mask);                                                   \
+                out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                       \
+            }                                                                                          \
+            HVX_Vector packed = hvx_vec_f32_to_f16(out0, out1);                                        \
+            hvx_vec_store_a(&vdst[nvec], nloe * sizeof(_Float16), packed);                             \
+        }                                                                                              \
+        return;                                                                                        \
+    }                                                                                                  \
+    for (uint32_t k = 0; k < nvec; k++) {                                                              \
+        BINARY_LOAD64_U_##T0(src0, k, s0_0, s0_1);                                                     \
+        BINARY_LOAD64_U_##T1(src1, k, s1_0, s1_1);                                                     \
+        HVX_Vector out0 = OP(s0_0, s1_0, nan_inf_mask);                                                \
+        HVX_Vector out1 = OP(s0_1, s1_1, nan_inf_mask);                                                \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                               \
+        out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                               \
+        *(HVX_UVector *) (dst + (size_t) k * 128) = hvx_vec_f32_to_f16(out0, out1);                    \
+    }                                                                                                  \
+    if (nloe) {                                                                                        \
+        BINARY_TAIL_LO_U_##T0(src0, nvec, s0_0, s0_1);                                                 \
+        BINARY_TAIL_LO_U_##T1(src1, nvec, s1_0, s1_1);                                                 \
+        HVX_Vector out0 = OP(s0_0, s1_0, nan_inf_mask);                                                \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                               \
+        HVX_Vector out1 = Q6_V_vzero();                                                                \
+        if (nloe > 32) {                                                                               \
+            BINARY_TAIL_HI_U_##T0(src0, nvec, s0_1);                                                   \
+            BINARY_TAIL_HI_U_##T1(src1, nvec, s1_1);                                                   \
+            out1 = OP(s0_1, s1_1, nan_inf_mask);                                                       \
+            out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                           \
+        }                                                                                              \
+        HVX_Vector packed = hvx_vec_f32_to_f16(out0, out1);                                            \
+        hvx_vec_store_u(dst + (size_t) nvec * 128, nloe * sizeof(_Float16), packed);                   \
+    }                                                                                                  \
+}
 
-DEFINE_BINARY_MIXED_OP(add, BINARY_OP_ADD)
-DEFINE_BINARY_MIXED_OP(sub, BINARY_OP_SUB)
-DEFINE_BINARY_MIXED_OP(mul, BINARY_OP_MUL)
-DEFINE_BINARY_MIXED_OP(div, BINARY_OP_DIV)
-DEFINE_BINARY_MIXED_F16(binary_add_f16_f16_f16, BINARY_LOAD_F32_F16, BINARY_LOAD_F32_F16, BINARY_OP_ADD)
+#define DEFINE_BINARY_MIXED_F16_F16_F16(NAME, OP)                                                      \
+static void NAME(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) {              \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                         \
+    const HVX_Vector max_f16      = hvx_vec_splat_f32(65504.0f);                                       \
+    const HVX_Vector min_f16      = hvx_vec_splat_f32(-65504.0f);                                      \
+    const HVX_Vector inf          = hvx_vec_splat_f32(INFINITY);                                       \
+    const uint32_t nvec = n / 64;                                                                      \
+    const uint32_t nloe = n % 64;                                                                      \
+    if (hex_is_aligned(dst, 128) && hex_is_aligned(src0, 128) && hex_is_aligned(src1, 128)) {          \
+        const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                                 \
+        const HVX_Vector * restrict vsrc1 = (const HVX_Vector *) src1;                                 \
+        HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                                        \
+        _Pragma("unroll(2)")                                                                           \
+        for (uint32_t k = 0; k < nvec; k++) {                                                          \
+            HVX_VectorPair p0 = hvx_vec_f16_to_f32_shuff(vsrc0[k]);                                    \
+            HVX_VectorPair p1 = hvx_vec_f16_to_f32_shuff(vsrc1[k]);                                    \
+            HVX_Vector out0 = OP(Q6_V_lo_W(p0), Q6_V_lo_W(p1), nan_inf_mask);                          \
+            HVX_Vector out1 = OP(Q6_V_hi_W(p0), Q6_V_hi_W(p1), nan_inf_mask);                          \
+            out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                           \
+            out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                           \
+            vdst[k] = hvx_vec_f32_to_f16_shuff(out0, out1);                                            \
+        }                                                                                              \
+        if (nloe) {                                                                                    \
+            HVX_VectorPair p0 = hvx_vec_f16_to_f32_shuff(vsrc0[nvec]);                                 \
+            HVX_VectorPair p1 = hvx_vec_f16_to_f32_shuff(vsrc1[nvec]);                                 \
+            HVX_Vector out0 = OP(Q6_V_lo_W(p0), Q6_V_lo_W(p1), nan_inf_mask);                          \
+            HVX_Vector out1 = OP(Q6_V_hi_W(p0), Q6_V_hi_W(p1), nan_inf_mask);                          \
+            out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                           \
+            out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                           \
+            HVX_Vector packed = hvx_vec_f32_to_f16_shuff(out0, out1);                                  \
+            hvx_vec_store_a(&vdst[nvec], nloe * sizeof(_Float16), packed);                             \
+        }                                                                                              \
+        return;                                                                                        \
+    }                                                                                                  \
+    for (uint32_t k = 0; k < nvec; k++) {                                                              \
+        HVX_VectorPair p0 = hvx_vec_f16_to_f32_shuff(hvx_vmemu(src0 + (size_t) k * 128));              \
+        HVX_VectorPair p1 = hvx_vec_f16_to_f32_shuff(hvx_vmemu(src1 + (size_t) k * 128));              \
+        HVX_Vector out0 = OP(Q6_V_lo_W(p0), Q6_V_lo_W(p1), nan_inf_mask);                              \
+        HVX_Vector out1 = OP(Q6_V_hi_W(p0), Q6_V_hi_W(p1), nan_inf_mask);                              \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                               \
+        out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                               \
+        *(HVX_UVector *) (dst + (size_t) k * 128) = hvx_vec_f32_to_f16_shuff(out0, out1);              \
+    }                                                                                                  \
+    if (nloe) {                                                                                        \
+        HVX_VectorPair p0 = hvx_vec_f16_to_f32_shuff(hvx_vmemu(src0 + (size_t) nvec * 128));           \
+        HVX_VectorPair p1 = hvx_vec_f16_to_f32_shuff(hvx_vmemu(src1 + (size_t) nvec * 128));           \
+        HVX_Vector out0 = OP(Q6_V_lo_W(p0), Q6_V_lo_W(p1), nan_inf_mask);                              \
+        HVX_Vector out1 = OP(Q6_V_hi_W(p0), Q6_V_hi_W(p1), nan_inf_mask);                              \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);                               \
+        out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);                               \
+        HVX_Vector packed = hvx_vec_f32_to_f16_shuff(out0, out1);                                      \
+        hvx_vec_store_u(dst + (size_t) nvec * 128, nloe * sizeof(_Float16), packed);                   \
+    }                                                                                                  \
+}
+
+#define DEFINE_BINARY_MIXED_OP(OP_NAME, OP, UNROLL)                                 \
+    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f16_f32_f16, F16, F32, OP, UNROLL)   \
+    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f16_f32_f32, F16, F32, OP, UNROLL)   \
+    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f32_f16_f16, F32, F16, OP, UNROLL)   \
+    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f32_f16_f32, F32, F16, OP, UNROLL)   \
+    DEFINE_BINARY_MIXED_F32(binary_##OP_NAME##_f16_f16_f32, F16, F16, OP, UNROLL)   \
+    DEFINE_BINARY_MIXED_F16(binary_##OP_NAME##_f32_f32_f16, F32, F32, OP, UNROLL)
+
+DEFINE_BINARY_MIXED_OP(add, BINARY_OP_ADD, _Pragma("unroll(2)"))
+DEFINE_BINARY_MIXED_OP(sub, BINARY_OP_SUB, _Pragma("unroll(2)"))
+DEFINE_BINARY_MIXED_OP(mul, BINARY_OP_MUL, _Pragma("unroll(2)"))
+DEFINE_BINARY_MIXED_OP(div, BINARY_OP_DIV, )
+DEFINE_BINARY_MIXED_F16_F16_F16(binary_add_f16_f16_f16, BINARY_OP_ADD)
 
 #define DEFINE_COMPUTE_MIXED_SHAPES(OP_NAME, TYPES)                                                     \
     DEFINE_COMPUTE_SAME_SHAPE(OP_NAME##_##TYPES, binary_##OP_NAME##_##TYPES)                            \
@@ -345,27 +522,112 @@ DEFINE_COMPUTE_MIXED_ALL(sub)
 DEFINE_COMPUTE_MIXED_ALL(mul)
 DEFINE_COMPUTE_MIXED_ALL(div)
 
-#define DEFINE_BINARY_MIXED_SCALAR_F32(NAME, LOAD0, OP)                                         \
-static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {                  \
-    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                  \
-    const HVX_Vector val_vec = hvx_vec_splat_f32(val);                                          \
-    for (uint32_t i = 0; i < n; i += 32) {                                                      \
-        HVX_Vector out = OP(LOAD0(src0, i), val_vec, nan_inf_mask);                             \
-        hvx_vec_store_u(dst + (size_t) i * sizeof(float), MIN(32, n - i) * sizeof(float), out); \
-    }                                                                                           \
+#define DEFINE_BINARY_MIXED_SCALAR_F16_F16(NAME, OP)                                  \
+static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {        \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                        \
+    const HVX_Vector val_vec      = hvx_vec_splat_f32(val);                           \
+    const HVX_Vector max_f16      = hvx_vec_splat_f32(65504.0f);                      \
+    const HVX_Vector min_f16      = hvx_vec_splat_f32(-65504.0f);                     \
+    const HVX_Vector inf          = hvx_vec_splat_f32(INFINITY);                      \
+    const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                    \
+    HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                           \
+    const uint32_t nvec = n / 64;                                                     \
+    const uint32_t nloe = n % 64;                                                     \
+    _Pragma("unroll(2)")                                                              \
+    for (uint32_t k = 0; k < nvec; k++) {                                             \
+        HVX_VectorPair pair = hvx_vec_f16_to_f32_shuff(vsrc0[k]);                     \
+        HVX_Vector out0 = OP(Q6_V_lo_W(pair), val_vec, nan_inf_mask);                 \
+        HVX_Vector out1 = OP(Q6_V_hi_W(pair), val_vec, nan_inf_mask);                 \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);              \
+        out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);              \
+        vdst[k] = hvx_vec_f32_to_f16_shuff(out0, out1);                               \
+    }                                                                                 \
+    if (nloe) {                                                                       \
+        HVX_VectorPair pair = hvx_vec_f16_to_f32_shuff(vsrc0[nvec]);                  \
+        HVX_Vector out0 = OP(Q6_V_lo_W(pair), val_vec, nan_inf_mask);                 \
+        HVX_Vector out1 = OP(Q6_V_hi_W(pair), val_vec, nan_inf_mask);                 \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);              \
+        out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);              \
+        HVX_Vector packed = hvx_vec_f32_to_f16_shuff(out0, out1);                     \
+        hvx_vec_store_a(&vdst[nvec], nloe * sizeof(_Float16), packed);                \
+    }                                                                                 \
 }
 
-#define DEFINE_BINARY_MIXED_SCALAR_F16(NAME, LOAD0, OP)                                                       \
-static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {                                \
-    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                                                \
-    const HVX_Vector val_vec = hvx_vec_splat_f32(val);                                                        \
-    for (uint32_t i = 0; i < n; i += 64) {                                                                    \
-        HVX_Vector out0 = OP(LOAD0(src0, i), val_vec, nan_inf_mask);                                          \
-        const uint32_t rem = n - i;                                                                           \
-        HVX_Vector out1 = rem > 32 ? OP(LOAD0(src0, i + 32), val_vec, nan_inf_mask) : Q6_V_vzero();           \
-        HVX_Vector packed = hvx_vec_f32_to_f16(binary_clamp_f16_finite(out0), binary_clamp_f16_finite(out1)); \
-        hvx_vec_store_u(dst + (size_t) i * sizeof(_Float16), MIN(64, rem) * sizeof(_Float16), packed);        \
-    }                                                                                                         \
+#define DEFINE_BINARY_MIXED_SCALAR_F16_F32(NAME, OP)                                  \
+static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {        \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                        \
+    const HVX_Vector val_vec      = hvx_vec_splat_f32(val);                           \
+    const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                    \
+    HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                           \
+    const uint32_t nvec = n / 64;                                                     \
+    const uint32_t nloe = n % 64;                                                     \
+    _Pragma("unroll(2)")                                                              \
+    for (uint32_t k = 0; k < nvec; k++) {                                             \
+        HVX_VectorPair pair = hvx_vec_f16_to_f32(vsrc0[k]);                           \
+        vdst[2 * k + 0] = OP(Q6_V_lo_W(pair), val_vec, nan_inf_mask);                 \
+        vdst[2 * k + 1] = OP(Q6_V_hi_W(pair), val_vec, nan_inf_mask);                 \
+    }                                                                                 \
+    if (nloe) {                                                                       \
+        HVX_VectorPair pair = hvx_vec_f16_to_f32(vsrc0[nvec]);                        \
+        HVX_Vector out0 = OP(Q6_V_lo_W(pair), val_vec, nan_inf_mask);                 \
+        if (nloe <= 32) {                                                             \
+            hvx_vec_store_a(&vdst[2 * nvec], nloe * sizeof(float), out0);             \
+        } else {                                                                      \
+            vdst[2 * nvec] = out0;                                                    \
+            HVX_Vector out1 = OP(Q6_V_hi_W(pair), val_vec, nan_inf_mask);             \
+            hvx_vec_store_a(&vdst[2 * nvec + 1], (nloe - 32) * sizeof(float), out1);  \
+        }                                                                             \
+    }                                                                                 \
+}
+
+#define DEFINE_BINARY_MIXED_SCALAR_F32_F16(NAME, OP)                                  \
+static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {        \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                        \
+    const HVX_Vector val_vec      = hvx_vec_splat_f32(val);                           \
+    const HVX_Vector max_f16      = hvx_vec_splat_f32(65504.0f);                      \
+    const HVX_Vector min_f16      = hvx_vec_splat_f32(-65504.0f);                     \
+    const HVX_Vector inf          = hvx_vec_splat_f32(INFINITY);                      \
+    const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                    \
+    HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                           \
+    const uint32_t nvec = n / 64;                                                     \
+    const uint32_t nloe = n % 64;                                                     \
+    _Pragma("unroll(2)")                                                              \
+    for (uint32_t k = 0; k < nvec; k++) {                                             \
+        HVX_Vector out0 = OP(vsrc0[2 * k + 0], val_vec, nan_inf_mask);                \
+        HVX_Vector out1 = OP(vsrc0[2 * k + 1], val_vec, nan_inf_mask);                \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);              \
+        out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);              \
+        vdst[k] = hvx_vec_f32_to_f16(out0, out1);                                     \
+    }                                                                                 \
+    if (nloe) {                                                                       \
+        HVX_Vector out0 = OP(vsrc0[2 * nvec], val_vec, nan_inf_mask);                 \
+        out0 = binary_clamp_f16_finite_vec(out0, max_f16, min_f16, inf);              \
+        HVX_Vector out1 = Q6_V_vzero();                                               \
+        if (nloe > 32) {                                                              \
+            out1 = OP(vsrc0[2 * nvec + 1], val_vec, nan_inf_mask);                    \
+            out1 = binary_clamp_f16_finite_vec(out1, max_f16, min_f16, inf);          \
+        }                                                                             \
+        HVX_Vector packed = hvx_vec_f32_to_f16(out0, out1);                           \
+        hvx_vec_store_a(&vdst[nvec], nloe * sizeof(_Float16), packed);                \
+    }                                                                                 \
+}
+
+#define DEFINE_BINARY_MIXED_SCALAR_F32_F32(NAME, OP)                                  \
+static void NAME(uint8_t * dst, const uint8_t * src0, float val, uint32_t n) {        \
+    const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);                        \
+    const HVX_Vector val_vec      = hvx_vec_splat_f32(val);                           \
+    const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;                    \
+    HVX_Vector * restrict vdst        = (HVX_Vector *) dst;                           \
+    const uint32_t nvec = n / 32;                                                     \
+    const uint32_t nloe = n % 32;                                                     \
+    _Pragma("unroll(2)")                                                              \
+    for (uint32_t k = 0; k < nvec; k++) {                                             \
+        vdst[k] = OP(vsrc0[k], val_vec, nan_inf_mask);                                \
+    }                                                                                 \
+    if (nloe) {                                                                       \
+        HVX_Vector out = OP(vsrc0[nvec], val_vec, nan_inf_mask);                      \
+        hvx_vec_store_a(&vdst[nvec], nloe * sizeof(float), out);                      \
+    }                                                                                 \
 }
 
 #define DEFINE_COMPUTE_MIXED_SCALAR(NAME, SRC0_TYPE, DST_TYPE, FN)                                  \
@@ -381,10 +643,10 @@ static void compute_scalar_##NAME(                                              
 }
 
 #define DEFINE_COMPUTE_MIXED_SCALAR_OP(OP_NAME, OP)                                                           \
-    DEFINE_BINARY_MIXED_SCALAR_F16(binary_scalar_##OP_NAME##_f16_f16, BINARY_LOAD_F32_F16, OP)                \
-    DEFINE_BINARY_MIXED_SCALAR_F32(binary_scalar_##OP_NAME##_f16_f32, BINARY_LOAD_F32_F16, OP)                \
-    DEFINE_BINARY_MIXED_SCALAR_F16(binary_scalar_##OP_NAME##_f32_f16, BINARY_LOAD_F32_F32, OP)                \
-    DEFINE_BINARY_MIXED_SCALAR_F32(binary_scalar_##OP_NAME##_f32_f32, BINARY_LOAD_F32_F32, OP)                \
+    DEFINE_BINARY_MIXED_SCALAR_F16_F16(binary_scalar_##OP_NAME##_f16_f16, OP)                                 \
+    DEFINE_BINARY_MIXED_SCALAR_F16_F32(binary_scalar_##OP_NAME##_f16_f32, OP)                                 \
+    DEFINE_BINARY_MIXED_SCALAR_F32_F16(binary_scalar_##OP_NAME##_f32_f16, OP)                                 \
+    DEFINE_BINARY_MIXED_SCALAR_F32_F32(binary_scalar_##OP_NAME##_f32_f32, OP)                                 \
     DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f16_f32_f16, _Float16, _Float16, binary_scalar_##OP_NAME##_f16_f16) \
     DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f16_f32_f32, _Float16, float, binary_scalar_##OP_NAME##_f16_f32)    \
     DEFINE_COMPUTE_MIXED_SCALAR(OP_NAME##_f32_f16_f16, float, _Float16, binary_scalar_##OP_NAME##_f32_f16)    \
