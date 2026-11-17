@@ -1471,6 +1471,20 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {
         gguf_type type = gguf_get_kv_type(ctx, i);
         if (type == GGUF_TYPE_ARRAY) {
+            // only the string arrays listed here are kept, see llama_model_meta_arr_str()
+            static const char * const kept_prefixes[] = { "tokenizer.tts_dict" };
+            const std::string arr_name = gguf_get_key(ctx, i);
+            const bool is_kept = std::any_of(std::begin(kept_prefixes), std::end(kept_prefixes), [&](const char * prefix) {
+                return arr_name.rfind(prefix, 0) == 0;
+            });
+            if (is_kept && gguf_get_arr_type(ctx, i) == GGUF_TYPE_STRING) {
+                auto & arr = gguf_kv_arr[arr_name];
+                const size_t n = gguf_get_arr_n(ctx, i);
+                arr.reserve(n);
+                for (size_t j = 0; j < n; j++) {
+                    arr.emplace_back(gguf_get_arr_str(ctx, i, j));
+                }
+            }
             continue;
         }
         const char * name = gguf_get_key(ctx, i);
@@ -3942,6 +3956,22 @@ int32_t llama_model_meta_val_str_by_index(const llama_model * model, int32_t i, 
     auto it = model->gguf_kv.begin();
     std::advance(it, i);
     return snprintf(buf, buf_size, "%s", it->second.c_str());
+}
+
+int32_t llama_model_meta_arr_n(const llama_model * model, const char * key) {
+    const auto it = model->gguf_kv_arr.find(key);
+    if (it == model->gguf_kv_arr.end() || it->second.size() > (size_t) INT32_MAX) {
+        return -1;
+    }
+    return (int32_t) it->second.size();
+}
+
+const char * llama_model_meta_arr_str(const llama_model * model, const char * key, int32_t i) {
+    const auto it = model->gguf_kv_arr.find(key);
+    if (it == model->gguf_kv_arr.end() || i < 0 || (size_t) i >= it->second.size()) {
+        return nullptr;
+    }
+    return it->second[i].c_str();
 }
 
 int32_t llama_model_desc(const llama_model * model, char * buf, size_t buf_size) {

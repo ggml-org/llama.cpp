@@ -415,6 +415,9 @@ class Keys:
         CHAT_TEMPLATE        = "tokenizer.chat_template"
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
+        TTS_DICTS            = "tokenizer.tts_dicts"
+        TTS_DICT_KEYS_N      = "tokenizer.tts_dict.{name}.keys"
+        TTS_DICT_VALUES_N    = "tokenizer.tts_dict.{name}.values"
         # Normalizer constants
         NORMALIZER_NFC           = "tokenizer.ggml.normalizer.nfc"
         NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
