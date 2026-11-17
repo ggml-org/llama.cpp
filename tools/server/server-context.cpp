@@ -379,6 +379,15 @@ struct server_slot {
         return res;
     }
 
+    bool prompt_load_retry(server_prompt_cache & prompt_cache, const server_tokens & tokens, const std::function<bool()> & make_room) {
+        bool res = prompt_cache.load_retry(prompt, tokens, ctx_tgt, ctx_dft, id, make_room);
+        if (!res) {
+            SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
+        }
+
+        return res;
+    }
+
     void prompt_clear() {
         SLT_TRC(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
@@ -1131,6 +1140,9 @@ private:
 
     server_slot_sched slot_sched;
 
+    // --no-cache-idle-slots with unified KV and a prompt cache: idle slots keep their cells and save their prompt only before it is lost
+    bool keep_idle_slots = false;
+
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
@@ -1689,6 +1701,13 @@ private:
             }
         }
 
+        keep_idle_slots = params_base.kv_unified && prompt_cache && !params_base.cache_idle_slots;
+        slot_sched.keep_idle_slots = keep_idle_slots;
+
+        if (keep_idle_slots) {
+            SRV_TRC("%s", "idle slots stay in the KV cache and are saved to the prompt cache when their cells are needed\n");
+        }
+
         {
             const std::string & cfg = params_base.ui_config_json;
             if (!cfg.empty()) {
@@ -1824,7 +1843,32 @@ private:
 
         slot.prompt_save(*prompt_cache);
 
-        if (!slot.prompt_load(*prompt_cache, task.tokens)) {
+        bool loaded = false;
+
+        if (keep_idle_slots) {
+            // idle slots keep their cells, so the restore can fail: free idle slots one at a time until it fits
+            int n_purged = 0;
+
+            loaded = slot.prompt_load_retry(*prompt_cache, task.tokens, [&]() {
+                slot.prompt_clear();
+
+                if (!try_clear_idle_slots(true)) {
+                    return false;
+                }
+
+                n_purged++;
+
+                return true;
+            });
+
+            if (n_purged > 0) {
+                SLT_INF(slot, "%s the prompt from the cache after purging %d idle slots\n", loaded ? "loaded" : "could not load", n_purged);
+            }
+        } else {
+            loaded = slot.prompt_load(*prompt_cache, task.tokens);
+        }
+
+        if (!loaded) {
             slot.prompt_clear();
         }
 
@@ -1838,7 +1882,8 @@ private:
     //       - smarter decision which slot to clear (LRU or longest prompt?)
     //       - move slot to level 2 cache instead of removing?
     //       - instead of purging, try to store and resume later?
-    bool try_clear_idle_slots() {
+    // require_saved: clear a slot only if the prompt cache holds its prompt, return false otherwise
+    bool try_clear_idle_slots(bool require_saved = false) {
         bool res = false;
 
         if (!params_base.kv_unified) {
@@ -1851,6 +1896,18 @@ private:
             }
 
             if (slot.prompt.n_tokens() > 0) {
+                if (keep_idle_slots) {
+                    // save the prompt before its cells are freed (skipped if the cache has it)
+                    const bool saved = slot.prompt_save(*prompt_cache);
+                    if (saved) {
+                        prompt_cache->update();
+                    }
+
+                    if (require_saved && !saved && !prompt_cache->contains(slot.prompt)) {
+                        return false;
+                    }
+                }
+
                 SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
 
                 slot.prompt_clear();
@@ -2956,7 +3013,7 @@ private:
 
                     const int id_task = task.id;
 
-                    const auto plan = slot_sched.select(get_slot_infos(), task);
+                    auto plan = slot_sched.select(get_slot_infos(), task);
 
                     server_slot * slot = plan.id_slot == -1 ? nullptr : get_slot_by_id(plan.id_slot);
 
@@ -2991,6 +3048,31 @@ private:
                     }
 
                     // the task is not deferred past this point
+                    if (keep_idle_slots && !plan.update_cache && slot->prompt.n_tokens() > 0) {
+                        if (task.is_stateless() || !task.params.cache_prompt) {
+                            // the task keeps nothing of the slot: save the slot prompt before it is lost
+                            if (slot->prompt_save(*prompt_cache)) {
+                                prompt_cache->update();
+                            }
+                        } else {
+                            // the slot can hold only a shared prefix while the prompt cache holds the task's own conversation
+                            // load it if it adds more than 2x the slot size: a restore is cheaper than a recompute, and the margin pays for saving the slot
+                            const auto it = prompt_cache->find(slot->prompt, task.tokens);
+                            if (it != prompt_cache->states.end()) {
+                                const size_t n_slot   = slot->prompt.tokens.size();
+                                const size_t lcp_slot = slot->prompt.tokens.get_common_prefix(task.tokens);
+                                const size_t lcp_ram  = it->prompt.tokens.get_common_prefix(task.tokens);
+
+                                if (lcp_ram > lcp_slot + 2*n_slot) {
+                                    SLT_INF(*slot, "a cached prompt covers %zu more tokens than the slot (%zu tokens), loading it\n",
+                                            lcp_ram - lcp_slot, n_slot);
+
+                                    plan.update_cache = true;
+                                }
+                            }
+                        }
+                    }
+
                     if (plan.update_cache && prompt_cache) {
                         update_prompt_cache(*slot, task);
                     }

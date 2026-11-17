@@ -1715,7 +1715,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--cache-idle-slots"},
         {"--no-cache-idle-slots"},
-        "save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)",
+        "save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)\n"
+        "when disabled with unified KV, idle slots keep their cells and are saved only when the cells are needed (slower generation on backends without flash attention over K/V rows)",
         [](common_params & params, bool value) {
             params.cache_idle_slots = value;
         }
