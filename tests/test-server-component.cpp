@@ -4,6 +4,7 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-slot-sched.h"
 
 #include <algorithm>
 #include <cmath>
@@ -852,6 +853,76 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+//
+// server_prompt_cache and server_slot_sched
+//
+
+static server_prompt prompt_of(llama_token first, size_t n) {
+    llama_tokens tokens(n);
+    for (size_t i = 0; i < n; i++) {
+        tokens[i] = first + (llama_token) i;
+    }
+    return server_prompt { server_tokens(tokens, false), {} };
+}
+
+static void test_prompt_cache_held(testing & t) {
+    const size_t kib = 1024;
+
+    // 1 MiB: three 300 KiB entries fit, four do not
+    server_prompt_cache cache(1, 0);
+    for (llama_token first : { 1000, 2000, 3000 }) {
+        t.assert_true("alloc", cache.alloc(prompt_of(first, 10), 300*kib, 0) != nullptr);
+    }
+
+    t.assert_true("contains a prefix", cache.contains(prompt_of(3000, 5)));
+    t.assert_true("does not contain a longer prompt", !cache.contains(prompt_of(3000, 20)));
+
+    // hold the oldest entry, as load_retry() does
+    cache.held.splice(cache.held.begin(), cache.states, cache.states.begin());
+    t.assert_equal("size counts held", 900*kib, cache.size());
+    t.assert_equal("n_tokens counts held", (size_t) 30, cache.n_tokens());
+
+    t.assert_true("alloc next to held", cache.alloc(prompt_of(4000, 10), 300*kib, 0) != nullptr);
+    t.assert_equal("oldest unheld entry evicted", (llama_token) 3000, cache.states.front().prompt.tokens[0]);
+    t.assert_equal("held kept", (size_t) 1, cache.held.size());
+    t.assert_true("within limit", cache.size() <= cache.limit_size);
+
+    cache.states.clear();
+    t.assert_true("no room next to held", cache.alloc(prompt_of(5000, 10), 800*kib, 0) == nullptr);
+    t.assert_equal("held kept after skip", (size_t) 1, cache.held.size());
+}
+
+static void test_slot_sched_whole_start(testing & t) {
+    // slot 0 holds 300 tokens that start a 4300-token request (7% similarity), slot 1 is empty
+    const server_prompt prompt_start = prompt_of(1, 300);
+    const server_prompt prompt_other = prompt_of(2, 300);
+    const server_prompt prompt_empty;
+
+    server_task task(SERVER_TASK_TYPE_COMPLETION);
+    task.tokens = prompt_of(1, 4300).tokens;
+
+    server_slot_sched sched;
+    sched.slot_prompt_similarity = 0.1f;
+
+    std::vector<server_slot_info> slots = {
+        { 0, nullptr, false, 1, &prompt_start },
+        { 1, nullptr, false, 0, &prompt_empty },
+    };
+
+    auto plan = sched.select(slots, task);
+    t.assert_equal("default: empty slot", 1, plan.id_slot);
+    t.assert_true("default: cache update", plan.update_cache);
+
+    sched.keep_idle_slots = true;
+    plan = sched.select(slots, task);
+    t.assert_equal("keep idle slots: whole-start slot", 0, plan.id_slot);
+    t.assert_true("keep idle slots: no cache update", !plan.update_cache);
+
+    slots[0].prompt = &prompt_other;
+    plan = sched.select(slots, task);
+    t.assert_equal("keep idle slots: other prompt does not qualify", 1, plan.id_slot);
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -880,6 +951,8 @@ int main(int argc, char ** argv) {
     t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("prompt_cache_held", test_prompt_cache_held);
+    t.test("slot_sched_whole_start", test_slot_sched_whole_start);
 
     return t.summary();
 }

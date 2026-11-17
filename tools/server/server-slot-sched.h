@@ -3,6 +3,7 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include <functional>
 #include <list>
 #include <memory>
 #include <vector>
@@ -79,6 +80,9 @@ struct server_prompt_cache {
 
     std::list<server_prompt_cache_state> states;
 
+    // entry being restored by load_retry(): not in states, so saves cannot evict it, but counted by size() and n_tokens()
+    std::list<server_prompt_cache_state> held;
+
     // in bytes, 0 = no limit
     size_t limit_size = 0;
 
@@ -91,7 +95,26 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
+    // true if a cached prompt contains the whole prompt
+    bool contains(const server_prompt & prompt) const;
+
+    // the most similar cached prompt that keeps more context than prompt, or states.end(); lcp: its common prefix with tokens_new
+    std::list<server_prompt_cache_state>::iterator find(const server_prompt & prompt, const server_tokens & tokens_new, int * lcp = nullptr);
+
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+
+    enum restore_result {
+        RESTORE_OK,
+        RESTORE_FAILED_TGT,
+        RESTORE_FAILED_DFT, // the target state is already in the slot
+    };
+
+    // restores the main state, then the draft state, and frees each one once restored: a failed main restore keeps the entry intact
+    restore_result restore(server_prompt_cache_state & state, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+
+    // load() that calls make_room() and retries while the target state does not fit, until make_room() returns false
+    bool load_retry(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot,
+                    const std::function<bool()> & make_room);
 
     void update();
 };
@@ -118,6 +141,9 @@ struct server_slot_plan {
 // decides only, the caller applies the plan
 struct server_slot_sched {
     float slot_prompt_similarity = 0.0f;
+
+    // idle slots keep their prompts in a unified KV cache (--no-cache-idle-slots)
+    bool keep_idle_slots = false;
 
     // idle slots that lose the least by being reused: empty slots first, then the least recently used ones
     std::vector<int> get_free_slots(const std::vector<server_slot_info> & slots, size_t n_slots_needed, int exclude_id_slot) const;

@@ -64,8 +64,10 @@ server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_toke
 size_t server_prompt_cache::size() const {
     size_t res = 0;
 
-    for (const auto & state : states) {
-        res += state.size();
+    for (const auto * list : { &states, &held }) {
+        for (const auto & state : *list) {
+            res += state.size();
+        }
     }
 
     return res;
@@ -74,8 +76,10 @@ size_t server_prompt_cache::size() const {
 size_t server_prompt_cache::n_tokens() const {
     size_t res = 0;
 
-    for (const auto & state : states) {
-        res += state.prompt.n_tokens();
+    for (const auto * list : { &states, &held }) {
+        for (const auto & state : *list) {
+            res += state.prompt.n_tokens();
+        }
     }
 
     return res;
@@ -83,13 +87,9 @@ size_t server_prompt_cache::n_tokens() const {
 
 server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
-    for (auto it = states.begin(); it != states.end(); ++it) {
-        const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
-
-        if (cur_lcp_len == (int) prompt.tokens.size()) {
-            SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
-            return nullptr;
-        }
+    if (contains(prompt)) {
+        SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
+        return nullptr;
     }
 
     // calculate checkpoints size to see if it will fit with the prompt
@@ -128,6 +128,14 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
 
             states.pop_front();
         }
+
+        // only the held entry is left, and it cannot be removed
+        if (size() + state_size_new > limit_size) {
+            SRV_WRN(" - no room for prompt cache entry next to the entry being restored (size = %.3f MiB), skipping\n",
+                    state_size_new / (1024.0 * 1024.0));
+
+            return nullptr;
+        }
     }
 
     common_state_data state_data_tgt;
@@ -163,7 +171,17 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+bool server_prompt_cache::contains(const server_prompt & prompt) const {
+    for (const auto & state : states) {
+        if ((int) state.prompt.tokens.get_common_prefix(prompt.tokens) == (int) prompt.tokens.size()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::list<server_prompt_cache_state>::iterator server_prompt_cache::find(const server_prompt & prompt, const server_tokens & tokens_new, int * lcp) {
     int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -198,39 +216,61 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     if (it_best != states.end()) {
         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
+    }
 
-        {
-            auto & data = it_best->data.main;
+    if (lcp) {
+        *lcp = lcp_best;
+    }
+
+    return it_best;
+}
+
+server_prompt_cache::restore_result server_prompt_cache::restore(server_prompt_cache_state & state, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    {
+        auto & data = state.data.main;
+
+        const size_t size = data.size();
+        const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
+        if (n != size) {
+            SRV_ERR("failed to restore state with size %zu\n", size);
+
+            return RESTORE_FAILED_TGT;
+        }
+
+        data.clear();
+        data.shrink_to_fit();
+    }
+
+    {
+        auto & data = state.data.drft;
+
+        if (!data.empty()) {
+            GGML_ASSERT(ctx_dft);
 
             const size_t size = data.size();
-            const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
+            const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);
             if (n != size) {
-                SRV_ERR("failed to restore state with size %zu\n", size);
+                SRV_WRN("failed to restore state with size %zu\n", size);
 
-                return false;
+                return RESTORE_FAILED_DFT;
             }
 
             data.clear();
             data.shrink_to_fit();
         }
+    }
 
-        {
-            auto & data = it_best->data.drft;
+    return RESTORE_OK;
+}
 
-            if (!data.empty()) {
-                GGML_ASSERT(ctx_dft);
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    int lcp_best = 0;
 
-                const size_t size = data.size();
-                const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);
-                if (n != size) {
-                    SRV_WRN("failed to restore state with size %zu\n", size);
+    const auto it_best = find(prompt, tokens_new, &lcp_best);
 
-                    return false;
-                }
-
-                data.clear();
-                data.shrink_to_fit();
-            }
+    if (it_best != states.end()) {
+        if (restore(*it_best, ctx_tgt, ctx_dft, id_slot) != RESTORE_OK) {
+            return false;
         }
 
         SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_RESTORE__\n");
@@ -246,6 +286,46 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     }
 
     return true;
+}
+
+bool server_prompt_cache::load_retry(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot,
+                                     const std::function<bool()> & make_room) {
+    int lcp_best = 0;
+
+    const auto it_best = find(prompt, tokens_new, &lcp_best);
+    if (it_best == states.end()) {
+        return true;
+    }
+
+    GGML_ASSERT(held.empty());
+
+    held.splice(held.begin(), states, it_best);
+
+    while (true) {
+        const restore_result res = restore(held.front(), ctx_tgt, ctx_dft, id_slot);
+        if (res == RESTORE_OK) {
+            SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_RESTORE__\n");
+
+            // the whole cached prompt is a prefix of the new one
+            if (lcp_best == (int) held.front().prompt.tokens.size()) {
+                SRV_DBG("%s", "__TEST_TAG_PROMPT_CACHE_FULL_RESTORE__\n");
+            }
+
+            prompt = std::move(held.front().prompt);
+
+            held.clear();
+
+            return true;
+        }
+
+        // freeing target cells cannot fix a draft-side failure
+        if (res == RESTORE_FAILED_DFT || !make_room()) {
+            // put back as the oldest entry: the task recomputes the prompt, so this copy is obsolete first
+            states.splice(states.begin(), held);
+
+            return false;
+        }
+    }
 }
 
 void server_prompt_cache::update() {
@@ -370,8 +450,11 @@ server_slot_plan server_slot_sched::select(const std::vector<server_slot_info> &
 
             SLT_TRC(slot, " - checking sim = %.3f (%zu/%zu) > %.3f\n", f_sim_cur, lcp_len, task.tokens.size(), slot_prompt_similarity);
 
+            // a slot whose whole prompt starts the request also qualifies below the threshold: the request reuses all of it
+            const bool whole = keep_idle_slots && lcp_len == tokens.size();
+
             // select the current slot if the criteria match
-            if (f_sim_cur > f_sim_best && f_sim_cur > slot_prompt_similarity) {
+            if (f_sim_cur > f_sim_best && (f_sim_cur > slot_prompt_similarity || whole)) {
                 f_sim_best = f_sim_cur;
 
                 ret = &slot;
@@ -382,8 +465,13 @@ server_slot_plan server_slot_sched::select(const std::vector<server_slot_info> &
             const float f_keep = (f_sim_best*task.tokens.size()) / ret->prompt->tokens.size();
 
             if (task.id_slot == -1) {
-                SLT_INF(*ret, "selected slot by LCP similarity, f_sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
-                        f_sim_best, slot_prompt_similarity, f_keep);
+                if (f_sim_best > slot_prompt_similarity) {
+                    SLT_INF(*ret, "selected slot by LCP similarity, f_sim_best = %.3f (> %.3f thold), f_keep = %.3f\n",
+                            f_sim_best, slot_prompt_similarity, f_keep);
+                } else {
+                    SLT_INF(*ret, "selected slot whose whole conversation starts the request, f_sim_best = %.3f (<= %.3f thold)\n",
+                            f_sim_best, slot_prompt_similarity);
+                }
             }
 
             // if we are about to lose a large portion of the existing context - save it in the prompt cache

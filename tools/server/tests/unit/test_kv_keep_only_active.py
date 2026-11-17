@@ -1,4 +1,5 @@
 import os
+import random
 import tempfile
 import pytest
 from utils import *
@@ -113,3 +114,48 @@ def test_disabled_with_flag():
     })
     assert res.status_code == 200
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
+
+
+# with --no-cache-idle-slots, a restore that does not fit frees idle slots (each saved first) and stays within --cache-ram
+def test_no_cache_idle_slots_restore_after_purge():
+    global server
+    server.no_cache_idle_slots = True
+    server.n_slots = 3
+    server.n_ctx = 1024
+    server.n_predict = 1
+    server.cache_ram = 1
+    server.start()
+    log = LogReader(server.log_path)
+
+    rng = random.Random(7)
+
+    def tokens(n):
+        return [rng.randrange(10, 500) for _ in range(n)]
+
+    def complete(prompt, id_slot=-1):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "id_slot": id_slot,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        return res.body["timings"]["cache_n"]
+
+    # A, B, C and D pass through slot 0, so the RAM cache holds A, B and C (about 0.95 MiB)
+    a, b, c, d = tokens(500), tokens(500), tokens(500), tokens(500)
+    for prompt in (a, b, c, d):
+        complete(prompt, 0)
+
+    # slot 1 takes 300 cells, so A does not fit next to D
+    complete(tokens(300), 1)
+    log.drain()
+
+    # A goes to the empty slot 2: slot 0 is saved and cleared, and B is evicted because A still counts in RAM
+    assert complete(a + tokens(10)) >= 500
+    out = log.drain()
+    assert "after purging 1 idle slots" in out
+    assert "removing oldest entry" in out
+
+    # D was saved before its cells were freed, B was evicted
+    assert complete(d + tokens(10)) >= 500
+    assert complete(b + tokens(10)) == 0
