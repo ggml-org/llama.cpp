@@ -10,8 +10,8 @@ const require = createRequire(import.meta.url);
 
 /** The web favicons llama-brand draws for the UI, optically centred, keyed by the file they become. */
 export const BRAND_FAVICONS = {
-	[FAVICON_PATHS.SVG_DARK]: 'llama-brand/logo/svg/app/web/favicon-dark.svg',
-	[FAVICON_PATHS.SVG_LIGHT]: 'llama-brand/logo/svg/app/web/favicon.svg'
+	[FAVICON_PATHS.SVG_DARK]: '@ggml-org/llama-brand/logo/svg/app/web/favicon-dark.svg',
+	[FAVICON_PATHS.SVG_LIGHT]: '@ggml-org/llama-brand/logo/svg/app/web/favicon.svg'
 } as const;
 
 /**

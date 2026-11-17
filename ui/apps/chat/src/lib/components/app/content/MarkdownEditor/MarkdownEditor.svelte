@@ -358,7 +358,7 @@
 
 	div :global(.cm-placeholder) {
 		color: var(--muted-foreground);
-		text-shadow: none;
+		text-shadow: var(--text-shadow-engraved);
 	}
 
 	/* The markdown img styles must not reach the editor's invisible caret helpers */

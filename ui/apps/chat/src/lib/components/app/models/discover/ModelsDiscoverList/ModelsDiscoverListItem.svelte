@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelDownloadProgressBar from '../../ModelDownloadProgressBar.svelte';
 	import ModelDraftSubline from '../../ModelDraftSubline.svelte';
 	import ModelId from '../../ModelId.svelte';
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
+	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
 	import { Pause, Play, X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
 	import { HF_MMPROJ_FILENAME_TOKEN, MODEL_ID } from '#lib/constants/index.ts';
@@ -210,7 +210,7 @@
 				<span class="hidden items-center gap-0.5 group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
 						icon={state.isPaused ? Play : Pause}
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						onclick={() => void modelsStore.status.toggleDownload(state.repoWithTag)}
 						stopPropagationOnClick
 						tooltip={state.isPaused ? 'Resume downloading' : 'Pause downloading'}
@@ -220,7 +220,7 @@
 					<ActionIcon
 						class="text-muted-foreground hover:text-destructive"
 						icon={X}
-						iconSize="h-4 w-4"
+						iconSize="size-icon-md"
 						onclick={() => state.onRequestCancel?.(state.repoWithTag)}
 						stopPropagationOnClick
 						tooltip="Cancel downloading"

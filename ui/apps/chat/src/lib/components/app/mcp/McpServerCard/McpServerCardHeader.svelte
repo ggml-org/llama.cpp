@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
+	import { Switch } from '@ggml-org/llama-ui/ui/switch';
 	import { McpCapabilitiesBadges, McpServerIdentity } from '#lib/components/app/mcp/index.ts';
-	import { Badge } from '#lib/components/ui/badge/index.ts';
-	import { Switch } from '#lib/components/ui/switch/index.ts';
 	import { MCP_TRANSPORT_ICONS, MCP_TRANSPORT_LABELS } from '#lib/constants/index.ts';
 	import { MCPTransportType } from '#lib/enums/index.ts';
 	import type { MCPCapabilitiesInfo, MCPServerInfo } from '#lib/types/index.ts';
@@ -38,7 +38,7 @@
 				<McpServerIdentity
 					{displayName}
 					{faviconUrl}
-					iconClass="h-5 w-5"
+					iconClass="size-icon-lg"
 					iconRounded="rounded"
 					nameClass="leading-6 font-medium"
 					{serverInfo}
@@ -51,7 +51,7 @@
 						{@const TransportIcon = MCP_TRANSPORT_ICONS[transportType]}
 						<Badge class="h-5 gap-1 px-1.5 text-[10px]" variant="outline">
 							{#if TransportIcon}
-								<TransportIcon class="h-3 w-3" />
+								<TransportIcon class="size-icon-xs" />
 							{/if}
 
 							{MCP_TRANSPORT_LABELS[transportType] || transportType}

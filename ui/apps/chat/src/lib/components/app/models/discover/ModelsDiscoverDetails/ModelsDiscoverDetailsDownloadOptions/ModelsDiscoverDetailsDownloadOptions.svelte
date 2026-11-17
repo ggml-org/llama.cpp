@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { classify, draftBadgeOf, sortDraftKinds } from './download-options.utils';
 	import ModelsDiscoverDetailsDownloadOptionsRow from './ModelsDiscoverDetailsDownloadOptionsRow.svelte';
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import * as Select from '@ggml-org/llama-ui/ui/select';
 	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
-	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
-	import * as Select from '#lib/components/ui/select/index.ts';
 	import {
 		ModelDownloadConfirmAction,
 		ModelDraftSidecar,
@@ -186,7 +186,7 @@
 </script>
 
 {#if bitDepthRows.length}
-	<section class="rounded-3xl border border-border/30 bg-muted/60 shadow-sm dark:border-border/20">
+	<section class="rounded-3xl bg-muted/60 elevated-control">
 		<!-- One chip per main quant, each an independent download action. The draft
 			 of that quant rides with it and badges the chip; the server picks its file,
 			 the way -hf does. -->

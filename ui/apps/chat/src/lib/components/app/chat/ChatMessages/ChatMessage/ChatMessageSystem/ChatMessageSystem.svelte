@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { Card } from '@ggml-org/llama-ui/ui/card';
 	import { Check, X } from '@lucide/svelte';
 	import { ChatMessageActionIcons, MarkdownContent } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import { Card } from '#lib/components/ui/card/index.ts';
 	import { INPUT_CLASSES } from '#lib/constants/index.ts';
 	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { KeyboardKey } from '#lib/enums/index.ts';
@@ -97,7 +97,7 @@
 
 			<div class="mt-2 flex justify-end gap-2">
 				<Button class="h-8 px-3" onclick={editCtx.cancel} size="sm" variant="outline">
-					<X class="mr-1 h-3 w-3" />
+					<X class="mr-1 size-icon-md" />
 
 					Cancel
 				</Button>
@@ -108,7 +108,7 @@
 					onclick={editCtx.save}
 					size="sm"
 				>
-					<Check class="mr-1 h-3 w-3" />
+					<Check class="mr-1 size-icon-md" />
 
 					Save
 				</Button>
@@ -159,7 +159,7 @@
 									class="pointer-events-none absolute right-0 bottom-4 left-0 flex justify-center opacity-0 transition-opacity group-hover/expand:opacity-100"
 								>
 									<Button
-										class="rounded-full px-4 py-1.5 text-xs shadow-md"
+										class="rounded-full px-4 py-1.5 text-xs shadow-(--elevation-surface)"
 										size="sm"
 										variant="outline"
 									>

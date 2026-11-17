@@ -1,10 +1,10 @@
 <script lang="ts">
+	import { Badge } from '@ggml-org/llama-ui/ui/badge';
 	import {
 		ActionIconCopyToClipboard,
 		BadgesModality,
 		CollapsibleSection
 	} from '#lib/components/app/index.ts';
-	import { Badge } from '#lib/components/ui/badge/index.ts';
 	import { HuggingFaceService } from '#lib/services/index.ts';
 	import { modelsStore } from '#lib/stores/index.ts';
 	import type { ApiLlamaCppServerProps } from '#lib/types/api.js';

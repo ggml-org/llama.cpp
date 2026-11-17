@@ -17,7 +17,6 @@
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
-		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT
 	} from '#lib/constants/index.ts';
@@ -678,9 +677,10 @@
 	<div
 		bind:this={cardEl}
 		class={[
-			INPUT_CLASSES,
-			'backdrop-blur-md group/chat-form relative flex shrink flex-col overflow-hidden transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
-			isSingleRow ? 'rounded-(--chat-form-single-row-radius)' : 'rounded-4xl md:rounded-3xl',
+			'chat-form-surface group/chat-form relative flex shrink flex-col overflow-hidden outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
+			isSingleRow
+				? 'rounded-(--chat-form-single-row-radius)'
+				: 'rounded-(--chat-form-radius-compact) md:rounded-(--chat-form-radius)',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',

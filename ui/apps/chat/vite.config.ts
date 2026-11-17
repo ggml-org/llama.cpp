@@ -1,4 +1,5 @@
 import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
+import { llamaUiPlugin } from './scripts/vite-plugin-llama-ui';
 import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer';
 import { pwaManifestPlugin } from './scripts/vite-plugin-pwa-manifest';
 import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
@@ -43,6 +44,7 @@ export default defineConfig(({ mode }) => {
 		},
 
 		plugins: [
+			llamaUiPlugin(),
 			tailwindcss(),
 			sveltekit({
 				adapter: adapter({

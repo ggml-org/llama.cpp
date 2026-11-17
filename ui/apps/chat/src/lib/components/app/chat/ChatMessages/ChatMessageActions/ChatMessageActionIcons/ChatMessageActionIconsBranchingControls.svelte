@@ -30,7 +30,7 @@
 		role="navigation"
 	>
 		<ActionIcon
-			class="h-5 w-5 p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
+			class="size-icon-lg p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
 			disabled={!hasPrevious}
 			icon={ChevronLeft}
 			onclick={() => messageActions.navigateToSibling(previousSiblingId!)}
@@ -42,7 +42,7 @@
 		</span>
 
 		<ActionIcon
-			class="h-5 w-5 p-0 {!hasNext ? 'opacity-30' : ''}"
+			class="size-icon-lg p-0 {!hasNext ? 'opacity-30' : ''}"
 			disabled={!hasNext}
 			icon={ChevronRight}
 			onclick={() => messageActions.navigateToSibling(nextSiblingId!)}

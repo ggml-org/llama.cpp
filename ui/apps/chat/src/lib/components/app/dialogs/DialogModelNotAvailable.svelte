@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
 	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '#lib/constants/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -34,7 +34,7 @@
 	<AlertDialog.Content class="max-w-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<AlertTriangle class="h-5 w-5 text-amber-500" />
+				<AlertTriangle class="size-icon-lg text-amber-500" />
 				Model Not Available
 			</AlertDialog.Title>
 

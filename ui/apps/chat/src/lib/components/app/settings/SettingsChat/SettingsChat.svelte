@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { RefreshCw } from '@lucide/svelte';
 	import {
 		SettingsChatDesktopSidebar,
@@ -9,7 +10,6 @@
 		SettingsFooter,
 		SettingsResetButton
 	} from '#lib/components/app/settings/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
@@ -20,6 +20,7 @@
 	import { ColorMode } from '#lib/enums/ui.enums.ts';
 	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
 	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
+	import { applySurfaceTheme } from '#lib/utils/index.ts';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {
@@ -89,6 +90,9 @@
 	function handleConfigChange(key: string, value: string | boolean) {
 		localConfig[key] = value;
 
+		// the surface theme previews at once, like the colour theme
+		if (key === SETTINGS_KEYS.SURFACE_THEME) applySurfaceTheme(value);
+
 		// discover needs the hub metadata reads: checking it turns the hub on,
 		// unchecking it turns the hub back off, so the checkbox never lies
 		if (key === SETTINGS_KEYS.ENABLE_DISCOVER_MODELS) {
@@ -99,6 +103,7 @@
 	function handleReset() {
 		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
+		applySurfaceTheme(localConfig[SETTINGS_KEYS.SURFACE_THEME]);
 		mobileHeader?.updateCarousel();
 	}
 
@@ -153,7 +158,7 @@
 	}
 </script>
 
-<div in:fade={{ duration: 150 }} class="mx-auto flex h-full w-full flex-col">
+<div in:fade={{ duration: 150 }} class="mx-auto flex size-full flex-col">
 	<div class="flex flex-1 flex-col md:flex-row md:gap-4">
 		<SettingsChatDesktopSidebar
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
@@ -190,7 +195,7 @@
 									<SettingsResetButton onReset={handleReset} />
 
 									<Button onclick={() => window.location.reload()} variant="outline">
-										<RefreshCw class="h-3 w-3" />
+										<RefreshCw class="size-icon-md" />
 										Reload app
 									</Button>
 								</div>
