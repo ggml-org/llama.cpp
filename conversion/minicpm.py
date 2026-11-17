@@ -61,6 +61,65 @@ class MiniCPMModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("MiniCPM5MoEForCausalLM")
+class MiniCPM5MoEModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MINICPM5_MOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not self.hparams.get("use_gated_attention", False):
+            raise ValueError("MiniCPM5 MoE requires gated attention")
+        self._experts: list[dict[str, Tensor]] = [{} for _ in range(self.block_count)]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        head_dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+        self.gguf_writer.add_rope_dimension_count(head_dim)
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_count(self.hparams["n_shared_experts"])
+        self.gguf_writer.add_leading_dense_block_count(self.hparams["first_k_dense_replace"])
+        self.gguf_writer.add_expert_weights_norm(self.hparams.get("norm_topk_prob", True))
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        # The MiniCPM5 BPE is unchanged by the tokenizer wrapper's automatic BOS insertion.
+        return "minicpm5"
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.endswith("self_attn.q_proj.weight"):
+            n_head = self.hparams["num_attention_heads"]
+            head_dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // n_head)
+            # HF interleaves query and gate rows within each head.
+            query, gate = data_torch.reshape(n_head, 2 * head_dim, -1).chunk(2, dim=1)
+            query = query.reshape(n_head * head_dim, -1)
+            gate = gate.reshape(n_head * head_dim, -1)
+            # Q/K already use the NeoX RoPE layout expected by this architecture.
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), query
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), gate
+            return
+
+        if name.endswith(".e_score_correction_bias"):
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, bid, suffix="bias"), data_torch
+            return
+
+        if ".mlp.experts." in name:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+            self._experts[bid][name] = data_torch
+            if len(self._experts[bid]) == n_experts * 3:
+                for projection in ("gate_proj", "up_proj", "down_proj"):
+                    tensors = [
+                        self._experts[bid].pop(f"model.layers.{bid}.mlp.experts.{eid}.{projection}.weight")
+                        for eid in range(n_experts)
+                    ]
+                    merged = torch.stack(tensors, dim=0)
+                    yield from super().modify_tensors(merged, f"model.layers.{bid}.mlp.experts.{projection}.weight", bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("MiniCPM3ForCausalLM")
 @ModelBase.example("openbmb/MiniCPM3-4B")
 class MiniCPM3Model(TextModel):

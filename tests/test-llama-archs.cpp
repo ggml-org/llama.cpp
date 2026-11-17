@@ -287,7 +287,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_layer = 6;
     } else if (arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_LAGUNA) {
         n_embd = 160; // exercise per-head tensor split granularity with head size 80
-    } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_RICURSIVE) {
+    } else if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MINICPM5_MOE || arch == LLM_ARCH_RICURSIVE) {
         n_head = 4;
     } else if (arch == LLM_ARCH_LIMITE) {
         n_head  = 4;
@@ -338,7 +338,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
             arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
-            arch == LLM_ARCH_ZAYA1) {
+            arch == LLM_ARCH_ZAYA1 || arch == LLM_ARCH_MINICPM5_MOE) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
@@ -347,7 +347,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_layer   = 4;
     }
     n_layer = std::max(n_layer, n_layer_min);
-    const uint32_t n_embd_head = n_embd / n_head;
+    const uint32_t n_embd_head = (arch == LLM_ARCH_MINICPM5_MOE ? 2 : 1) * n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
     ms.add_kv(LLM_KV_VOCAB_SIZE,                n_vocab);
@@ -773,6 +773,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         }
     }
 
+    if (arch == LLM_ARCH_MINICPM5_MOE) {
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 3.66f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,  true);
+    }
+
     if (arch == LLM_ARCH_BEAM) {
         ms.add_kv(LLM_KV_EXPERT_COUNT,            uint32_t(8));
         ms.add_kv(LLM_KV_EXPERT_GROUP_COUNT,      uint32_t(4));
@@ -1107,6 +1112,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_BAILINGMOE3:
         case LLM_ARCH_DOTS1:
         case LLM_ARCH_AFMOE:
+        case LLM_ARCH_MINICPM5_MOE:
         case LLM_ARCH_BEAM:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
