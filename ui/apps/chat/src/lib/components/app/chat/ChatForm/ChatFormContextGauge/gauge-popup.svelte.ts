@@ -11,7 +11,7 @@ import {
 	CONTEXT_GAUGE_CLOSE_GRACE_MS,
 	CONTEXT_GAUGE_DIAL_GAP_PX,
 	CONTEXT_GAUGE_EDGE_MARGIN_PX
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let lastPointerType = '';

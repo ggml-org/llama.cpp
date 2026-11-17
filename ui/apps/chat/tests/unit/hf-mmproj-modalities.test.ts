@@ -1,4 +1,4 @@
-import { HuggingFaceService } from '$lib/services/huggingface.service';
+import { HuggingFaceService } from '#lib/services/huggingface.service.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** A GGUF header with the given bool metadata and no tensors. */

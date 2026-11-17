@@ -1,10 +1,15 @@
 <script lang="ts">
-	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
-	import { MODEL_ID } from '$lib/constants';
-	import { ModelCapability } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import type { ModelOption } from '$lib/types/models';
-	import { detectThinkingSupport, detectToolUseSupport, nearViewport, repoOf } from '$lib/utils';
+	import { ModelCapabilityIcons } from '@ggml-org/llama-ui/models';
+	import { MODEL_ID } from '#lib/constants/index.ts';
+	import { ModelCapability } from '#lib/enums/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import {
+		detectThinkingSupport,
+		detectToolUseSupport,
+		nearViewport,
+		repoOf
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -53,7 +58,7 @@
 	);
 </script>
 
-<span use:nearViewport={() => (isNearViewport = true)} class={className}>
+<span {@attach nearViewport(() => (isNearViewport = true))} class={className}>
 	<ModelCapabilityIcons
 		{hideModalities}
 		modalities={option.modalities}

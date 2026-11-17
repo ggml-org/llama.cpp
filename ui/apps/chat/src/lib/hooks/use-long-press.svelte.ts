@@ -1,5 +1,5 @@
-import { ROW_LONG_PRESS_MS, ROW_LONG_PRESS_SLOP_PX } from '$lib/constants';
-import { hapticTap } from '$lib/utils';
+import { ROW_LONG_PRESS_MS, ROW_LONG_PRESS_SLOP_PX } from '#lib/constants/index.ts';
+import { hapticTap } from '#lib/utils/index.ts';
 
 interface LongPressOptions {
 	/** Read on every press, so a hold only counts while this holds. */

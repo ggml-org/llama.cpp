@@ -1,16 +1,20 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Braces, FolderOpen, Loader2, Plus, X } from '@lucide/svelte';
 	import {
 		McpResourcePreview,
 		McpResourcesBrowser,
 		McpResourceTemplateForm
-	} from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { ICON_CLASS_DEFAULT, PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
-	import { getResourceDisplayName } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT, PANEL_CLOSE_MOBILE_CLASS } from '#lib/constants/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import type {
+		MCPResourceContent,
+		MCPResourceInfo,
+		MCPResourceTemplateInfo
+	} from '#lib/types/index.ts';
+	import { getResourceDisplayName } from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 
@@ -258,7 +262,7 @@
 	>
 		<Dialog.Header class="border-b border-border/30 px-4 py-3" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
-				<FolderOpen class="h-5 w-5" />
+				<FolderOpen class="size-icon-lg" />
 
 				<span>MCP Resources</span>
 
@@ -318,10 +322,10 @@
 
 						{#if templatePreviewLoading}
 							<div class="flex flex-1 items-center justify-center">
-								<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+								<Loader2 class="size-6 animate-spin text-muted-foreground" />
 							</div>
 						{:else if templatePreviewError}
-							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
+							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-fg-danger">
 								<span class="text-sm">{templatePreviewError}</span>
 
 								<Button

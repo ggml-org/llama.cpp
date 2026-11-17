@@ -15,8 +15,8 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from './database';
-import type { MessageRole, ToolSource } from '$lib/enums';
-import { AgenticSectionType, ContinueIntentKind, ToolCallType } from '$lib/enums';
+import type { MessageRole, ToolSource } from '#lib/enums/index.ts';
+import { AgenticSectionType, ContinueIntentKind, ToolCallType } from '#lib/enums/index.ts';
 
 /**
  * Agentic orchestration configuration.

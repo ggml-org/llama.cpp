@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SearchInput } from '$lib/components/app';
+	import { SearchInput } from '#lib/components/app/index.ts';
 
 	interface Props {
 		value?: string;

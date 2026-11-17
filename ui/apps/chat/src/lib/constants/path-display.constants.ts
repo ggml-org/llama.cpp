@@ -7,7 +7,7 @@
  * `[file:///abs/path](display)` payload back out on the UI side.
  */
 
-import { UrlProtocol } from '$lib/enums';
+import { UrlProtocol } from '#lib/enums/index.ts';
 
 export const CWD_CHANGED_PREFIX = 'Set working directory to ';
 export const CWD_CLEARED_TEXT = 'Working directory cleared';

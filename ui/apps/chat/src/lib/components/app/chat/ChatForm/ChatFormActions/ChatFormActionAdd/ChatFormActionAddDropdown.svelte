@@ -1,20 +1,20 @@
 <script lang="ts">
+	import { buttonVariants } from '@ggml-org/llama-ui/ui/button';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import { File, Folder, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
-	import { ChatFormActionAddToolsSubmenu } from '$lib/components/app';
-	import { buttonVariants } from '$lib/components/ui/button';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { cn } from '$lib/components/ui/utils';
+	import { ChatFormActionAddToolsSubmenu } from '#lib/components/app/index.ts';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
 		ATTACHMENT_TOOLTIP_TEXT,
 		ICON_CLASS_DEFAULT
-	} from '$lib/constants';
-	import { getChatFormActionsContext } from '$lib/contexts';
-	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
-	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	} from '#lib/constants/index.ts';
+	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
+	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/index.ts';
+	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
 
 	interface Props {
 		class?: string;
@@ -78,7 +78,7 @@
 						class={cn(
 							// ghost brings no fill of its own for the muted composer surface to fight over
 							buttonVariants({ variant: 'ghost' }),
-							'file-upload-button h-8 w-8 cursor-pointer rounded-full bg-background p-0 shadow-sm dark:bg-muted-foreground/15'
+							'file-upload-button matte-key size-8 [--button-shadow:var(--chat-form-key-shadow)] cursor-pointer rounded-full bg-background p-0 dark:bg-muted-foreground/15'
 						)}
 						disabled={chatFormActions.disabled}
 					>

@@ -5,14 +5,14 @@
  */
 
 import { DatabaseService } from './database.service';
-import type { ToolExecutionResult } from '$lib/types';
-import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
+import type { DatabaseConversation, DatabaseMessage } from '#lib/types/database.js';
+import type { ToolExecutionResult } from '#lib/types/index.ts';
 import {
 	parseSearchChatsParams,
 	searchChats,
 	SearchChatsError,
 	type SearchChatsTimeRange
-} from '$lib/utils/search-chats';
+} from '#lib/utils/search-chats.ts';
 
 function loadConversations(ids?: string[]): Promise<DatabaseConversation[]> {
 	return DatabaseService.readOnly(async ({ conversations }) => {

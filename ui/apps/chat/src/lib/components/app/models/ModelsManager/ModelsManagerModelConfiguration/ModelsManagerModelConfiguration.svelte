@@ -1,19 +1,19 @@
 <script lang="ts">
-	import ModelDownloadProgressBar from '../../ModelDownloadProgressBar.svelte';
 	import { downloadProgressFor } from '../utils';
 	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
 	import ModelsManagerModelConfigurationHeader from './ModelsManagerModelConfigurationHeader.svelte';
 	import ModelsManagerModelConfigurationInformation from './ModelsManagerModelConfigurationInformation.svelte';
+	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Trash2 } from '@lucide/svelte';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import { Button } from '$lib/components/ui/button';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ModelDownloadConfirmAction, ServerModelStatus } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import { deviceStore, modelsStore, uiStore } from '$lib/stores';
-	import type { HfModelDetailInfo } from '$lib/types/huggingface';
-	import type { ModelOption } from '$lib/types/models';
-	import { repoOf } from '$lib/utils';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
+	import { ModelDownloadConfirmAction, ServerModelStatus } from '#lib/enums/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import { deviceStore, modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { HfModelDetailInfo } from '#lib/types/huggingface.js';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { repoOf } from '#lib/utils/index.ts';
 
 	interface Props {
 		onClose: () => void;
@@ -204,7 +204,7 @@
 		size="sm"
 		variant="ghost"
 	>
-		<Trash2 class="h-4 w-4" />
+		<Trash2 class="size-icon-md" />
 		Delete this model from disk
 	</Button>
 {/snippet}

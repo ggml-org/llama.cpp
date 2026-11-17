@@ -16,8 +16,8 @@ import {
 	MCP_RESOURCE_CACHE,
 	NEWLINE,
 	RESOURCE_UNKNOWN_TYPE
-} from '$lib/constants';
-import { AttachmentType } from '$lib/enums';
+} from '#lib/constants/index.ts';
+import { AttachmentType } from '#lib/enums/index.ts';
 import type {
 	DatabaseMessageExtraMcpResource,
 	MCPCachedResource,
@@ -29,8 +29,8 @@ import type {
 	MCPResourceTemplate,
 	MCPResourceTemplateInfo,
 	MCPServerResources
-} from '$lib/types';
-import { normalizeResourceUri } from '$lib/utils';
+} from '#lib/types/index.ts';
+import { normalizeResourceUri } from '#lib/utils/index.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 function generateAttachmentId(): string {

@@ -4,7 +4,7 @@ import {
 	faviconForUrl,
 	isWebSearchToolName,
 	looksLikeSearchResult
-} from '$lib/utils/search-results';
+} from '#lib/utils/search-results.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('extractSearchResults', () => {

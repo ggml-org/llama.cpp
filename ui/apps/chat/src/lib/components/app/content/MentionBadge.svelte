@@ -1,13 +1,13 @@
 <script lang="ts">
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { settingsStore, toolsStore } from '$lib/stores';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { settingsStore, toolsStore } from '#lib/stores/index.ts';
 	import {
 		getMentionBadgeIconPaths,
 		getMentionBadgeLabel,
 		MENTION_BADGE_CLASSNAME,
 		MENTION_BADGE_ICON_CLASSNAME,
 		MENTION_BADGE_SVG_ATTRIBUTES
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		name: string;

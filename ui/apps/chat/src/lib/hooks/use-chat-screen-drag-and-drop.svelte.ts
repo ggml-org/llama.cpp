@@ -7,7 +7,7 @@
  * caller's onDrop callback.
  */
 
-import { chatStore } from '$lib/stores';
+import { chatStore } from '#lib/stores/index.ts';
 
 interface UseChatScreenDragAndDropOptions {
 	/** Called when the user drops files and no message is being edited. */

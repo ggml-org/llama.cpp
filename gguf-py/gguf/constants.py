@@ -415,6 +415,9 @@ class Keys:
         CHAT_TEMPLATE        = "tokenizer.chat_template"
         CHAT_TEMPLATE_N      = "tokenizer.chat_template.{name}"
         CHAT_TEMPLATES       = "tokenizer.chat_templates"
+        TTS_DICTS            = "tokenizer.tts_dicts"
+        TTS_DICT_KEYS_N      = "tokenizer.tts_dict.{name}.keys"
+        TTS_DICT_VALUES_N    = "tokenizer.tts_dict.{name}.values"
         # Normalizer constants
         NORMALIZER_NFC           = "tokenizer.ggml.normalizer.nfc"
         NORMALIZER_LOWERCASE     = "tokenizer.ggml.normalizer.lowercase"
@@ -7331,6 +7334,7 @@ class VisionProjectorType:
     ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
     ZONOS3_SPKENC = "zonos3_spkenc" # audio: MECT-B2 speaker encoder
     YUE2_GEN = "yue2_gen" # audio generation: flow-matching NAR + Oobleck VAE decoder
+    MINIMAX_MUSIC3_GEN = "minimax_music3_gen" # audio generation: RVQ depth decoder + flow-matching DiT + DAC decoder
     FISH_S2_GEN = "fish_s2_gen" # audio generation: fast AR code predictor + Fish DAC decoder
     FISH_S2_SPKENC = "fish_s2_spkenc" # audio: Fish DAC encoder + RVQ, reference clip -> prompt rows
     HUNYUANVL      = "hunyuanvl"

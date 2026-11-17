@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as Alert from '@ggml-org/llama-ui/ui/alert';
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
-	import * as Alert from '$lib/components/ui/alert';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { serverStore } from '$lib/stores';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { serverStore } from '#lib/stores/index.ts';
 
 	let hasError = $derived(!!serverStore.error);
 	let isLoadingModel = $derived(serverStore.status === 503);
@@ -26,7 +26,7 @@
 						disabled={serverStore.loading}
 						onclick={() => serverStore.fetch()}
 					>
-						<RefreshCw class="h-3 w-3 {serverStore.loading ? 'animate-spin' : ''}" />
+						<RefreshCw class="size-icon-xs {serverStore.loading ? 'animate-spin' : ''}" />
 						{serverStore.loading ? 'Retrying...' : 'Retry'}
 					</button>
 				{/if}

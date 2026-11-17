@@ -7,7 +7,7 @@
  */
 
 import { formatLocalIso } from './formatters';
-import type { ToolExecutionResult } from '$lib/types';
+import type { ToolExecutionResult } from '#lib/types/index.ts';
 
 /** The `result` field keeps the shape the `get_datetime` renderer already reads. */
 export function executeGetDatetimeTool(): ToolExecutionResult {

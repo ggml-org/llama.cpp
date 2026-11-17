@@ -6,9 +6,9 @@
 	import type { ModelQuantGroup } from './utils';
 	import { configuredContext } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
-	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
-	import { deviceStore, modelsStore } from '$lib/stores';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '#lib/constants/index.ts';
+	import { KeyboardKey, ModelGroupKind } from '#lib/enums/index.ts';
+	import { deviceStore, modelsStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		entry: ModelQuantGroup;
@@ -79,17 +79,17 @@
 
 	<span class="justify-self-center max-md:hidden">
 		<span
-			class="block h-2.5 w-2.5 rounded-full {anyLoaded
-				? 'bg-emerald-500'
+			class="block size-2.5 rounded-full {anyLoaded
+				? 'status-lamp orb-success'
 				: 'border border-muted-foreground/50'}"
 		></span>
 	</span>
 
 	<span class="flex justify-center {MODEL_ROW_TRAILING_CELL_CLASS}">
 		{#if expanded}
-			<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
+			<ChevronUp class="size-icon-sm text-muted-foreground" />
 		{:else}
-			<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+			<ChevronDown class="size-icon-sm text-muted-foreground" />
 		{/if}
 	</span>
 </div>

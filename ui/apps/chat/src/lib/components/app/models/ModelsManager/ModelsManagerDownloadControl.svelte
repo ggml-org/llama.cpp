@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { downloadProgressFor } from './utils';
-	import { ActionIcon } from '$lib/components/app';
-	import { MODEL_DOWNLOAD_ICONS } from '$lib/constants';
-	import { ModelRowDownloadState } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { MODEL_DOWNLOAD_ICONS } from '#lib/constants/index.ts';
+	import { ModelRowDownloadState } from '#lib/enums/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		class?: string;
@@ -35,9 +35,9 @@
 
 	<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 		<ActionIcon
-			class="h-5 w-5 hover:text-foreground"
+			class="size-icon-lg hover:text-foreground"
 			icon={isPaused ? MODEL_DOWNLOAD_ICONS.resume : MODEL_DOWNLOAD_ICONS.pause}
-			iconSize="h-4 w-4"
+			iconSize="size-icon-md"
 			onclick={() => void modelsStore.status.toggleDownload(option.model)}
 			stopPropagationOnClick
 			tooltip={isPaused ? 'Resume downloading' : 'Pause downloading'}

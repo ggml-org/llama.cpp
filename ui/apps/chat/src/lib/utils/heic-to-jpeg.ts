@@ -1,5 +1,5 @@
-import { IMAGE } from '$lib/constants';
-import { MimeTypeImage } from '$lib/enums';
+import { IMAGE } from '#lib/constants/index.ts';
+import { MimeTypeImage } from '#lib/enums/index.ts';
 
 // heic requires a relatively large decoder, in order to reduce primary bundle size
 // we lazily load this decoder from a CDN when needed, and cache it for future conversions

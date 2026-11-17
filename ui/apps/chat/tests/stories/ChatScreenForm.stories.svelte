@@ -3,7 +3,7 @@
 	import pdfAsset from './fixtures/assets/example.pdf?raw';
 	import svgAsset from './fixtures/assets/hf-logo.svg?url';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatScreenForm from '$lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
+	import ChatScreenForm from '#lib/components/app/chat/ChatScreen/ChatScreenForm.svelte';
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({

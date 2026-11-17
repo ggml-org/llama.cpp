@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/services/database.service', () => ({
+vi.mock('#lib/services/database.service.ts', () => ({
 	DatabaseService: {
 		getConversation: vi.fn(),
 		getConversationMessages: vi.fn(),
@@ -14,9 +14,9 @@ vi.mock('$lib/services/database.service', () => ({
 	}
 }));
 
-import { DatabaseService } from '$lib/services/database.service';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import type { DatabaseConversation, DatabaseMessage } from '#lib/types/database.js';
 
 const getConversationMock = vi.mocked(DatabaseService.getConversation);
 const getMessagesMock = vi.mocked(DatabaseService.getConversationMessages);
@@ -65,6 +65,31 @@ describe('active conversation identity', () => {
 
 		expect(conversationsStore.activeConversation).toBe(before);
 		expect(conversationsStore.activeConversation?.currNode).toBe('node-2');
+	});
+
+	it('does not fail when the conversation closes during the updateCurrentNode write', async () => {
+		await loadActive(makeConversation(), []);
+		updateCurrentNodeMock.mockImplementation(async () => {
+			conversationsStore.clearActiveConversation();
+		});
+
+		await expect(conversationsStore.updateCurrentNode('node-2')).resolves.toBeUndefined();
+
+		expect(updateCurrentNodeMock).toHaveBeenCalledWith('conv-1', 'node-2');
+		expect(conversationsStore.activeConversation).toBeNull();
+	});
+
+	it('leaves another conversation alone when it opens during the updateCurrentNode write', async () => {
+		await loadActive(makeConversation(), []);
+		updateCurrentNodeMock.mockImplementation(async () => {
+			await loadActive(makeConversation({ currNode: 'other-node', id: 'conv-2' }), []);
+		});
+
+		await conversationsStore.updateCurrentNode('node-2');
+
+		expect(updateCurrentNodeMock).toHaveBeenCalledWith('conv-1', 'node-2');
+		expect(conversationsStore.activeConversation?.id).toBe('conv-2');
+		expect(conversationsStore.activeConversation?.currNode).toBe('other-node');
 	});
 
 	it('writes renamed and pinned fields in place on applyConversationUpdate', async () => {

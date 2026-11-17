@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ArrowBigUp } from '@lucide/svelte';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	interface Props {
 		keys: string[];

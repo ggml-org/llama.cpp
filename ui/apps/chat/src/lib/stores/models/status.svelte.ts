@@ -5,35 +5,35 @@
  * Created and owned by modelsStore, which also owns the router rows it updates.
  */
 
-import { browser } from '$app/environment';
 import {
 	CLI_FLAGS,
 	HF_UD_QUANT_PREFIX_REGEX,
 	MODEL_ID,
 	type ModelSidecar,
 	STORAGE_APP_NAME
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	ModelAuxSidecar,
 	ModelDownloadStopRequest,
 	ServerModelsSseEventType,
 	ServerModelStatus
-} from '$lib/enums';
-import { HuggingFaceService } from '$lib/services/huggingface.service';
-import { ModelsService } from '$lib/services/models.service';
-import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
+} from '#lib/enums/index.ts';
+import { HuggingFaceService } from '#lib/services/huggingface.service.ts';
+import { ModelsService } from '#lib/services/models.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { serverStore } from '$lib/stores/server.svelte';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import type { ModelPropsManager } from '#lib/stores/models/props.svelte.ts';
 // explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
 import type {
 	ApiModelsSseDownloadFailedData,
 	ApiModelsSseDownloadProgressData,
 	ModelDownloadEntry,
 	ModelDownloadProgress
-} from '$lib/types';
-import type { ModelSidecarBadge } from '$lib/types/models';
-import { repoOf } from '$lib/utils/model-names';
-import { isAuxSidecar, isDraftSidecar, sidecarFromFileToken } from '$lib/utils/sidecars';
+} from '#lib/types/index.ts';
+import type { ModelSidecarBadge } from '#lib/types/models.js';
+import { repoOf } from '#lib/utils/model-names.ts';
+import { isAuxSidecar, isDraftSidecar, sidecarFromFileToken } from '#lib/utils/sidecars.ts';
+import { browser } from '$app/env';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 

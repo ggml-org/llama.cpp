@@ -1,6 +1,6 @@
-import { COMPACTION } from '$lib/constants';
-import { MessageRole, MessageType } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types';
+import { COMPACTION } from '#lib/constants/index.ts';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import type { DatabaseMessage } from '#lib/types/index.ts';
 
 /** Whether a message belongs to the prefix every request keeps first. */
 function isPrefix(message: DatabaseMessage): boolean {

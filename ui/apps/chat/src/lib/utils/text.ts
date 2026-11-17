@@ -1,4 +1,4 @@
-import { NEWLINE } from '$lib/constants';
+import { NEWLINE } from '#lib/constants/index.ts';
 
 /**
  * Returns a shortened preview of the provided content capped at the given length.

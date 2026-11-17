@@ -1,4 +1,4 @@
-import { CACHE } from '$lib/constants';
+import { CACHE } from '#lib/constants/index.ts';
 
 /**
  * TTL Cache - Time-To-Live cache implementation for memory optimization

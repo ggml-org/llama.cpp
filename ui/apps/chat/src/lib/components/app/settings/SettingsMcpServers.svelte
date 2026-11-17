@@ -1,13 +1,16 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Empty from '@ggml-org/llama-ui/ui/empty';
 	import { Plus } from '@lucide/svelte';
-	import { replaceState } from '$app/navigation';
+	import {
+		DialogMcpResourcesBrowser,
+		DialogMcpServerAddNew
+	} from '#lib/components/app/dialogs/index.ts';
+	import { McpServerCard, McpServerCardSkeleton } from '#lib/components/app/index.ts';
+	import { HealthCheckStatus } from '#lib/enums/index.ts';
+	import { mcpStore, toolsStore } from '#lib/stores/index.ts';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { McpServerCard, McpServerCardSkeleton } from '$lib/components/app';
-	import { DialogMcpResourcesBrowser, DialogMcpServerAddNew } from '$lib/components/app/dialogs';
-	import { Button } from '$lib/components/ui/button';
-	import * as Empty from '$lib/components/ui/empty';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore, toolsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 
@@ -26,11 +29,11 @@
 		if (page.url.searchParams.has('add')) {
 			isAddingServer = true;
 
-			const newUrl = new URL(page.url);
+			const newUrl = new URL(page.url.href);
 
 			newUrl.searchParams.delete('add');
 
-			replaceState(newUrl, {});
+			goto(newUrl, { replace: true, shallow: true });
 		}
 	});
 

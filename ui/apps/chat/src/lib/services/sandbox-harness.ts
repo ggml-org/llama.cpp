@@ -6,7 +6,7 @@
  */
 
 import WORKER_SHIM from './sandbox-worker.js?raw';
-import { NEWLINE } from '$lib/constants';
+import { NEWLINE } from '#lib/constants/index.ts';
 
 /**
  * CSP for the harness document, inherited by the blob worker. connect-src

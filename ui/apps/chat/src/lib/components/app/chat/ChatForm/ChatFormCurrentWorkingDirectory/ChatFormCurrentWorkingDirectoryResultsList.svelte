@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import { Folder } from '@lucide/svelte';
-	import { cn } from '$lib/components/ui/utils';
-	import { UI_DATA_ATTRS } from '$lib/constants';
-	import { highlightMatch } from '$lib/utils';
+	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { highlightMatch } from '#lib/utils/index.ts';
 	import { fly } from 'svelte/transition';
 
 	// Fly-in transition for the results list.

@@ -1,9 +1,15 @@
 <script lang="ts">
 	import ModelsManagerModelConfiguration from './ModelsManagerModelConfiguration/ModelsManagerModelConfiguration.svelte';
 	import { downloadGroups, findModelOption } from './utils';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import { conversationsStore, deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import {
+		conversationsStore,
+		deviceStore,
+		modelsStore,
+		serverStore,
+		uiStore
+	} from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 	import { untrack } from 'svelte';
 
 	// tracked downloads are not in the listing yet

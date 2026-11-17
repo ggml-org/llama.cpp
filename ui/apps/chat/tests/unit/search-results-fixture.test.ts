@@ -1,4 +1,4 @@
-import { extractSearchQuery, extractSearchResults } from '$lib/utils/search-results';
+import { extractSearchQuery, extractSearchResults } from '#lib/utils/search-results.ts';
 import { describe, expect, it } from 'vitest';
 
 const SAMPLE = `Title: World Cup 2026 | Match schedule, fixtures, results & stadiums

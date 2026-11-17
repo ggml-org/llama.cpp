@@ -1,11 +1,11 @@
 <script lang="ts">
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverDetailsMetadataItem from './ModelsDiscoverDetailsMetadataItem.svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { MessageSquareCode } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { modelsDiscoverStore } from '$lib/stores';
-	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
-	import { formatParameters } from '$lib/utils';
+	import { modelsDiscoverStore } from '#lib/stores/index.ts';
+	import type { HfModelDetailInfo, HfModelGguf } from '#lib/types/huggingface.js';
+	import { formatParameters } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -54,7 +54,7 @@
 			class="h-auto gap-1.5 px-2.5 py-1 text-xs"
 			onclick={() => (chatTemplateOpen = true)}
 			size="sm"
-			variant="tertiary"
+			variant="secondary"
 		>
 			<MessageSquareCode class="size-3" />
 			Chat template

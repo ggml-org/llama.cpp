@@ -3,6 +3,8 @@
 set(UI_SOURCE_GLOBS
     src/*
     static/*
+    # Llama UI, which the app compiles from source
+    ../../lib/ui/src/lib/*
 )
 
 set(UI_SOURCE_FILES
@@ -10,7 +12,9 @@ set(UI_SOURCE_FILES
     package-lock.json
     src/.gitignore
     vite.config.ts
-    svelte.config.js
     tsconfig.json
+    scripts/llama-ui.js
+    scripts/vite-plugin-llama-ui.ts
+    ../../lib/ui/package.json
     scripts/vite-plugin-llama-cpp-build.ts
 )

@@ -6,9 +6,9 @@ import { settingsStore } from './settings/index.svelte';
 import { tabsStore } from './tabs.svelte';
 import { toolsStore } from './tools.svelte';
 import { versionStore } from './version.svelte';
-import { browser } from '$app/environment';
-import { MigrationService } from '$lib/services/migration.service';
-import { validateApiKey } from '$lib/utils/api-key-validation';
+import { MigrationService } from '#lib/services/migration.service.ts';
+import { validateApiKey } from '#lib/utils/api-key-validation.ts';
+import { browser } from '$app/env';
 
 let startup: Promise<void> | null = null;
 

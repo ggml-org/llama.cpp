@@ -1,4 +1,4 @@
-import { findMentionToken, takeMentionDismissSnapshot } from '$lib/utils';
+import { findMentionToken, takeMentionDismissSnapshot } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('findMentionToken', () => {

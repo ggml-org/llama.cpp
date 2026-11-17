@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import {
 		ChevronDown,
 		ChevronRight,
@@ -10,21 +14,17 @@
 		PencilRuler,
 		Video
 	} from '@lucide/svelte';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
 		ICON_CLASS_DEFAULT
-	} from '$lib/constants';
-	import { getChatFormActionsContext } from '$lib/contexts';
-	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums/attachment.enums';
-	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
-	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
-	import type { ToolGroup } from '$lib/types';
+	} from '#lib/constants/index.ts';
+	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
+	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/attachment.enums.ts';
+	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
+	import { useToolsPanel } from '#lib/hooks/use-tools-panel.svelte.ts';
+	import type { ToolGroup } from '#lib/types/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

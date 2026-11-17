@@ -6,9 +6,9 @@
 // before any output is read, so the section type alone cannot tell a live call
 // from a finished one.
 
-import { AgenticSectionType } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
-import { isSectionExpandedByDefault } from '$lib/utils';
+import { AgenticSectionType } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/index.ts';
+import { isSectionExpandedByDefault } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 const CALL_ID = 'call-1';

@@ -1,4 +1,4 @@
-import { SVG } from '$lib/constants';
+import { SVG } from '#lib/constants/index.ts';
 import DOMPurify from 'dompurify';
 
 /**

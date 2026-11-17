@@ -1,9 +1,9 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import { cn } from '@ggml-org/llama-ui/utils';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import CollapsibleRegion from '$lib/components/app/misc/CollapsibleRegion.svelte';
-	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
-	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import CollapsibleRegion from '#lib/components/app/misc/CollapsibleRegion.svelte';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 

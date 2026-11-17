@@ -3,9 +3,9 @@
 // over, while a config that already set the new key keeps its own value. The
 // legacy key is removed so it does not stay orphaned in localStorage.
 
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
-import { MigrationService } from '$lib/services/migration.service';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { CONFIG_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { MigrationService } from '#lib/services/migration.service.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const MODEL_ORG_NAME_KEY_MIGRATION_ID = 'model-org-name-key-v1';

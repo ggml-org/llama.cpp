@@ -1,8 +1,8 @@
 // Guards the phone shape of the context panel: a phone shows it in a drawer, while a
 // wider screen keeps the card anchored above the dial.
 
-import ContextGaugePopup from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/ContextGaugePopup.svelte';
-import { gaugePopup } from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/gauge-popup.svelte';
+import ContextGaugePopup from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/ContextGaugePopup.svelte';
+import { gaugePopup } from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/gauge-popup.svelte.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

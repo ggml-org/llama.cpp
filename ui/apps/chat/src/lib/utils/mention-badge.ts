@@ -5,9 +5,9 @@ import {
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS,
 	MENTION_LINK_SCAN_FLAGS
-} from '$lib/constants';
-import { FileMentionEntryType } from '$lib/enums';
-import type { FileMentionEntry } from '$lib/types';
+} from '#lib/constants/index.ts';
+import { FileMentionEntryType } from '#lib/enums/index.ts';
+import type { FileMentionEntry } from '#lib/types/index.ts';
 
 export {
 	MENTION_BADGE_CLASSNAME,
@@ -15,7 +15,7 @@ export {
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 // `)` is allowed in a path only when not followed by whitespace or `[`,
 // so macOS paths parse while adjacent badges still terminate the match.

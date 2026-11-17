@@ -78,7 +78,7 @@ export { default as MentionText } from './MentionText.svelte';
  * <SyntaxHighlightedCode code={jsonString} language="json" />
  * ```
  */
-export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte';
+export { SyntaxHighlightedCode } from '@ggml-org/llama-ui/app/content';
 
 /**
  * **CollapsibleContentBlock** - Expandable content card

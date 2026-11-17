@@ -1,5 +1,7 @@
 <script lang="ts">
 	import SidebarNavigationGroupSubmenu from './SidebarNavigationGroupSubmenu.svelte';
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import {
 		Download,
 		FolderInput,
@@ -15,10 +17,8 @@
 		Trash2,
 		Unlink
 	} from '@lucide/svelte';
-	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
-	import { TruncatedText } from '$lib/components/app';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
+	import { TruncatedText } from '#lib/components/app/index.ts';
 	import {
 		FORK_TREE_DEPTH_PADDING,
 		ICON_CLASS_DEFAULT,
@@ -27,10 +27,10 @@
 		SHORTCUT_EDIT_CONVERSATION,
 		SHORTCUT_EXPORT_CONVERSATION,
 		UI_DATA_ATTRS
-	} from '$lib/constants';
-	import type { MenuKind } from '$lib/enums';
-	import { useLongPress } from '$lib/hooks/use-long-press.svelte';
-	import { RouterService } from '$lib/services/router.service';
+	} from '#lib/constants/index.ts';
+	import type { MenuKind } from '#lib/enums/index.ts';
+	import { useLongPress } from '#lib/hooks/use-long-press.svelte.ts';
+	import { RouterService } from '#lib/services/router.service.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -40,9 +40,9 @@
 		sidebarDragStore,
 		tabsStore,
 		uiStore
-	} from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
-	import { hapticTap } from '$lib/utils';
+	} from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
 	import { onMount, tick } from 'svelte';
 
 	interface Props {
@@ -323,7 +323,7 @@
 		class={[
 			'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground max-md:min-h-12 max-md:rounded-2xl max-md:px-3.5 max-md:py-3 md:min-h-8 md:py-1',
 			isLanding && 'invisible',
-			isActive ? 'bg-accent text-accent-foreground' : 'text-foreground/75',
+			isActive ? 'selected-row-surface text-accent-foreground' : 'text-foreground/75',
 			contextMenuOpen && 'bg-foreground/10',
 			isSelected && 'bg-primary/10 hover:bg-primary/15',
 			isSelectionMode && 'is-selection-mode',

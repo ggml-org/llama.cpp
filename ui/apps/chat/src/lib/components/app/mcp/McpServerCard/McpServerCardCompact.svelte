@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as Card from '$lib/components/ui/card';
-	import type { RecommendedMCPServer } from '$lib/types';
+	import * as Card from '@ggml-org/llama-ui/ui/card';
+	import type { RecommendedMCPServer } from '#lib/types/index.ts';
 	import { mode } from 'mode-watcher';
 
 	interface Props {
@@ -31,7 +31,7 @@
 		{#if activeIconUrl}
 			<img
 				alt=""
-				class="h-5 w-5 shrink-0 rounded"
+				class="size-5 shrink-0 rounded"
 				decoding="async"
 				loading="lazy"
 				src={activeIconUrl}

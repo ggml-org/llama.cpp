@@ -1,4 +1,6 @@
 <script lang="ts">
+	import * as Card from '@ggml-org/llama-ui/ui/card';
+	import { Skeleton } from '@ggml-org/llama-ui/ui/skeleton';
 	import {
 		McpConnectionLogs,
 		McpServerCardActions,
@@ -7,13 +9,11 @@
 		McpServerCardHeader,
 		McpServerCardToolsList,
 		McpServerInfo
-	} from '$lib/components/app/mcp';
-	import * as Card from '$lib/components/ui/card';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
+	} from '#lib/components/app/mcp/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { HealthCheckStatus } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { HealthCheckState, MCPServerSettingsEntry } from '#lib/types/index.ts';
 	import { tick } from 'svelte';
 
 	interface Props {

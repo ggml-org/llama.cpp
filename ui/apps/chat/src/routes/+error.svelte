@@ -1,11 +1,11 @@
 <script lang="ts">
+	import { ServerErrorSplash } from '#lib/components/app/index.ts';
+	import { APP_NAME, ROUTES } from '#lib/constants/index.ts';
 	import { goto } from '$app/navigation';
-	import { page } from '$app/stores';
-	import { ServerErrorSplash } from '$lib/components/app';
-	import { APP_NAME, ROUTES } from '$lib/constants';
+	import { page } from '$app/state';
 
-	let error = $derived($page.error);
-	let status = $derived($page.status);
+	let error = $derived(page.error);
+	let status = $derived(page.status);
 
 	// Check if this is an API key related error
 	let isApiKeyError = $derived(
@@ -39,10 +39,10 @@
 		<div class="w-full max-w-md px-4 text-center">
 			<div class="mb-6">
 				<div
-					class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10"
+					class="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-destructive/10"
 				>
 					<svg
-						class="h-8 w-8 text-destructive"
+						class="size-8 text-destructive"
 						fill="none"
 						stroke="currentColor"
 						viewBox="0 0 24 24"

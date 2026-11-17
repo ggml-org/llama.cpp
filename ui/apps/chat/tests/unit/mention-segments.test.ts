@@ -1,4 +1,4 @@
-import { splitMentionSegments } from '$lib/utils/mention-badge';
+import { splitMentionSegments } from '#lib/utils/mention-badge.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('splitMentionSegments', () => {

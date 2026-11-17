@@ -1,18 +1,18 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Download } from '@lucide/svelte';
-	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '$lib/constants';
-	import { MimeTypeText } from '$lib/enums';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
+	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '#lib/constants/index.ts';
+	import { MimeTypeText } from '#lib/enums/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
 	import {
 		downloadResourceContent,
 		getLanguageFromFilename,
 		isCodeResource,
 		isImageResource
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		open: boolean;
@@ -68,7 +68,7 @@
 							{#if favicon}
 								<img
 									alt=""
-									class="h-3 w-3 shrink-0 rounded-sm"
+									class="size-3 shrink-0 rounded-sm"
 									onerror={(e) => {
 										(e.currentTarget as HTMLImageElement).style.display = 'none';
 									}}
@@ -94,14 +94,14 @@
 			/>
 
 			<Button
-				class="h-7 w-7 p-0"
+				class="size-7 p-0"
 				disabled={!extra.content}
 				onclick={handleDownload}
 				size="sm"
 				title="Download content"
 				variant="ghost"
 			>
-				<Download class="h-3.5 w-3.5" />
+				<Download class="size-icon-md" />
 			</Button>
 		</div>
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 
 	interface Props {
 		open: boolean;
