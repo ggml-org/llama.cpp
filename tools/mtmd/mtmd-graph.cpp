@@ -1104,6 +1104,17 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                 builder = io ? std::make_unique<mtmd_graph_kokoro>(ctx, img, (mtmd_graph_kokoro::stage_type) io->stage, io->n_tok, io->n_frames, io->n_har)
                              : std::make_unique<mtmd_graph_kokoro>(ctx, img, mtmd_graph_kokoro::STAGE_DEC, 0, 2, 241);
             } break;
+        case PROJECTOR_TYPE_TINY_VOCA:
+            {
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT;
+                int n_rows = 1;
+                if (params && params->feats) {
+                    const size_t n_embd = (size_t) ctx->model.hparams.n_embd;
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % n_embd == 0);
+                    n_rows = (int) (params->feats->size() / n_embd);
+                }
+                builder = std::make_unique<mtmd_graph_tiny_voca>(ctx, img, gen_process, n_rows);
+            } break;
         case PROJECTOR_TYPE_YOUTUVL:
             {
                 builder = std::make_unique<mtmd_graph_youtuvl>(ctx, img);

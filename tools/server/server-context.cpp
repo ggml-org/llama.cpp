@@ -6986,7 +6986,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     const std::string voice      = json_value(body, "voice", has_speaker_ref ? std::string() : params.tts_voice);
     // raw_prompt: the input goes to the model as is (e.g. phonemes), the "tts" chat template is skipped
     const bool raw_prompt        = json_value(body, "raw_prompt", false);
-    const std::string tts_prompt = raw_prompt ? std::string() : common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
+    const auto g2p = [this](const std::string & word) {
+        char buf[512];
+        return mtmd_gen_audio_g2p(ctx_server.mctx, word.c_str(), buf, sizeof(buf)) > 0 ? std::string(buf) : std::string();
+    };
+    const std::string tts_prompt = raw_prompt ? std::string() : common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice, g2p);
     // a model with predefined voices only speaks with one of them
     mtmd::bitmap_ptr voice_ref;
     if (!voice.empty() && info.n_voices > 0) {

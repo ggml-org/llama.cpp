@@ -16,6 +16,7 @@ Supported models:
 - [YuE2](#yue2) (songs)
 - [MiniMax Music 3](#minimax-music-3) (songs)
 - [Kokoro](#kokoro)
+- [tiny-voca](#tiny-voca)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -423,3 +424,46 @@ python -m nltk.downloader averaged_perceptron_tagger_eng
 ```
 
 Without them the converter writes no `tts` template, and the prompt must be a phoneme string (as produced by misaki).
+
+## tiny-voca
+
+[tiny-voca](https://huggingface.co/n4ze3m/tiny-voca): a 4.5M-parameter English TTS model. A phoneme encoder (the text model), then a duration predictor, two frame transformers and a source-filter synthesizer (in the mmproj).
+
+Available params:
+- `--tts-voice` can be `M2` (default) or `F2`
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the synthesizer
+- `speed` (`llama-server` only) changes the speaking rate, from `0.25` to `4`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m tiny-voca.gguf \
+    -mm mmproj-tiny-voca.gguf \
+    -p "Hello! The meeting moved to 3:30 pm." \
+    --tts-voice F2 \
+    --output out.wav
+```
+
+The model speaks phonemes. The text to phonemes step is the model's `tts` chat template, a port of [dizione](https://github.com/n4ze3m/dizione) (the reference one), with its pronunciation dictionary and tables stored in the model:
+- the choice of a pronunciation for each word: exceptions and names, the dictionary, function words and their sentence stress, words spelled alike and read differently ("I read it yesterday", "to read"), hyphenated words, capitals read letter by letter, mixed case ("iPhone"), stretched words ("soooo"), accents, chat spellings ("lol", "btw")
+- a word missing from the dictionary is built from a known word when it can be (endings, prefixes, compounds), else it goes through the unknown-word model of dizione (stored in the mmproj) and its conversion rules
+- a pronunciation can be given in the text, in CMUdict notation or as phonemes: `Say {HH AH0 L OW1} to Samir{s ə m ˈɪɹ}`
+- the text rules are ported too: numbers, money, times, dates, telephone numbers, versions, codes, units, fractions, ranges, math signs and comparisons, web addresses and file names, abbreviations, chat spellings
+
+With `llama-server`, send `"raw_prompt": true` to pass phonemes directly, in the format printed by dizione: symbols separated by spaces, `<sp>` between words, a stress mark (`ˈ` or `ˌ`) before a stressed vowel, e.g. `h ə l ˈoʊ <sp> w ˈɜː l d .`
+
+Each sentence is spoken as one utterance. The template splits the text as the reference does (before a capital or a figure, not after a title or an initial), ends each sentence with `<eos>`, and adds a full stop when the text ends without a mark. Phonemes without `<eos>` are cut after each `.`, `?`, `!` or `…`, and a sentence without a final mark gets a full stop.
+
+**Note for GGUF conversion:**
+
+Convert the root of the repository (it needs `config.json`, `tiny-voca.pt` and `phonemizer/lexicon.tsv`). The other tables of the `tts` template come from the `dizione` python package; without it the converter writes no `tts` template, and the prompt must be phonemes:
+
+```sh
+pip install git+https://github.com/n4ze3m/dizione
+```
+
+```sh
+python convert_hf_to_gguf.py path/to/tiny-voca --outfile tiny-voca.gguf
+python convert_hf_to_gguf.py path/to/tiny-voca --mmproj --outfile mmproj-tiny-voca.gguf
+```
