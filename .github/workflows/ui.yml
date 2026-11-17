@@ -136,24 +136,6 @@ jobs:
         run: npm run prepack
         working-directory: ui/lib/ui
 
-      - name: Compare the version with npm
-        id: version
-        # cannot fail this job: a registry outage is not the contributor's mistake. The publish
-        # job, which publishes on the strength of the same answer, does fail when it cannot read it.
-        continue-on-error: true
-        run: node scripts/npm-version-check.mjs
-        working-directory: ui/lib/ui
-
-      - name: Note a library change that ships no new version
-        # advisory only, on the PR rather than after the merge: the version is what
-        # ui-lib-publish.yml releases, so a change here without a bump ships nothing. Not every
-        # change here is meant to ship (a stories-only PR is one), so this says so and lets the
-        # PR through; the publish job is where a release actually goes wrong.
-        if: always() && steps.version.outcome == 'success' && steps.version.outputs.should_publish != 'true'
-        env:
-          NOTE: ${{ steps.version.outputs.note }}
-        run: echo "::warning::$NOTE"
-
   e2e-tests:
     name: E2E Tests
     needs: ui-build

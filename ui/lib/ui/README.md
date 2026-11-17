@@ -82,8 +82,7 @@ change that carries no bump publishes nothing and leaves a warning on the run.
 
 - `npm version <patch|minor> --no-git-tag-version` and commit: it moves `package.json` and both version fields of the
   lockfile together.
-- Below `1.0` the usual convention for a version in its first quarter holds: a breaking change takes the next minor,
-  a feature the next patch.
+- Below `1.0`: a breaking change bumps the minor, a feature bumps the patch.
 - A version with a prerelease suffix (`0.5.0-beta.1`) publishes under the `next` tag, so `latest` stays a stable build.
 - Publishing needs no token in the repo: the job trades its OIDC identity for one, so the only place to look when a
   publish is refused is the package's trusted-publisher settings on npm.
