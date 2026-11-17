@@ -47,8 +47,8 @@ export const MODALITY_FLAG_KEYS: Record<Exclude<ModelModality, ModelModality.TEX
 
 export const MODALITY_ORDER: Exclude<ModelModality, ModelModality.TEXT>[] = [
 	ModelModality.VISION,
-	ModelModality.AUDIO,
-	ModelModality.VIDEO
+	ModelModality.VIDEO,
+	ModelModality.AUDIO
 ];
 
 export const CAPABILITY_ICONS: Record<ModelCapability, Component> = {

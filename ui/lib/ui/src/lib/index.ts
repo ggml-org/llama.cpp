@@ -39,4 +39,3 @@ export * as ToggleGroup from './components/ui/toggle-group/index.js';
 export * as Tooltip from './components/ui/tooltip/index.js';
 export * from './components/mockups/index.js';
 export * from './components/models/index.js';
-export * from './models/index.js';

@@ -13,3 +13,6 @@ export { default as ModelOrgAvatar } from './ModelOrgAvatar.svelte';
 export { default as ModelQuantChip } from './ModelQuantChip.svelte';
 export { default as ModelQuantOptions } from './ModelQuantOptions.svelte';
 export { default as ModelQuantRow } from './ModelQuantRow.svelte';
+
+// the data they take: constants, enums, formatters and types
+export * from '../../models/index.js';

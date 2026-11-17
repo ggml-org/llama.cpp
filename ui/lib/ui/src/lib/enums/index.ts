@@ -1,3 +1,3 @@
-// The enums the copied ui/apps/chat components import from `$lib/enums` (llama-ui only).
+// The enums the components share with the apps built on them.
 export { BooleanString } from './boolean-string.enums.js';
 export { ColorMode, TooltipSide } from './ui.enums.js';

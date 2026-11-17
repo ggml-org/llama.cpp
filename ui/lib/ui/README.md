@@ -47,6 +47,11 @@ beside the apps built on it in `ui/apps`.
 
 Next: llama.app's model page.
 
+The constants, enums and code helpers the components use are entry points too, for an app that shows the same things:
+`@ggml-org/llama-ui/constants` (the shared classes and code-block constants), `@ggml-org/llama-ui/enums` (`ColorMode`,
+`TooltipSide`, `BooleanString`) and `@ggml-org/llama-ui/code` (`highlightCode`, `trimCodePadding`). The model data
+(constants, enums, formatters and types) comes with the Model UI at `@ggml-org/llama-ui/models`.
+
 ## How the apps in this repo use it
 
 Llama Chat does not install the package: it compiles these sources as part of its own build, so a change here

@@ -38,6 +38,18 @@
 			"types": "./dist/components/app/*/index.d.ts",
 			"svelte": "./dist/components/app/*/index.js"
 		},
+		"./constants": {
+			"types": "./dist/constants/index.d.ts",
+			"svelte": "./dist/constants/index.js"
+		},
+		"./enums": {
+			"types": "./dist/enums/index.d.ts",
+			"svelte": "./dist/enums/index.js"
+		},
+		"./code": {
+			"types": "./dist/utils/index.d.ts",
+			"svelte": "./dist/utils/index.js"
+		},
 		"./models": {
 			"types": "./dist/components/models/index.d.ts",
 			"svelte": "./dist/components/models/index.js"
