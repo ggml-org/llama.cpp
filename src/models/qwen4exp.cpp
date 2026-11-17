@@ -1415,11 +1415,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
     ggml_tensor * emb = ggml_get_rows(ctx0, model.per_layer_tok_embd, rows);
     if (model.per_layer_tok_embd_s) {
         // scale by value, not with ggml_mul: an op with a host weight changes backend with the batch size
-        float scale = 1.0f;
-        if (!model.no_alloc()) {
-            ggml_backend_tensor_get(model.per_layer_tok_embd_s, &scale, 0, sizeof(scale));
-        }
-        emb = ggml_scale(ctx0, emb, scale);
+        emb = ggml_scale(ctx0, emb, model.per_layer_tok_embd_scale);
     }
     emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
     cb(emb, "ple_embd", -1);
