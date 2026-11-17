@@ -65,6 +65,10 @@ struct ggml_opencl_mean_kernels {
 struct ggml_opencl_silu_kernels {
     cl_kernel kernel_silu;
     cl_kernel kernel_silu_4;
+    cl_kernel kernel_silu_nc;
+    cl_kernel kernel_silu_f16;
+    cl_kernel kernel_silu_f16_4;
+    cl_kernel kernel_silu_f16_nc;
 };
 
 struct ggml_opencl_gelu_kernels {
@@ -758,6 +762,7 @@ struct ggml_opencl_mul_mat_kernels {
     cl_kernel kernel_gemv_noshuffle_q5_k_f32_mc3;
     cl_kernel kernel_gemm_noshuffle_q5_k_f32;
     cl_kernel kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a8_bin;
+    cl_kernel kernel_gemm_noshuffle_q5_k_f32_32b_trans_ila_a7_bin;
     cl_kernel kernel_gemm_noshuffle_q5_k_q8_1_dp4a_ila_a8_bin;
     cl_kernel kernel_gemv_noshuffle_q5_k_f32_32b_trans;
     cl_kernel kernel_gemv_noshuffle_q5_0_f32;
