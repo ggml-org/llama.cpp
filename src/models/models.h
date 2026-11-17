@@ -9,6 +9,7 @@
 #include <map>
 
 class llama_memory_hybrid_idx_context;
+class llama_memory_idx_iswa_context;
 
 // ref: https://github.com/ggml-org/llama.cpp/pull/28068
 static inline ggml_tensor * build_gdn_l2_norm(ggml_context * ctx, ggml_tensor * x, float eps) {
@@ -2436,6 +2437,119 @@ struct llama_model_hy_v4 : public llama_model_base {
     };
 
     llama_rope_params get_rope_params_indexer(const llama_cparams & cparams, int il) const override;
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
+// HY_V4_FLASH: hy_v4's iHC + gated MLA + sinks, with a hybrid attention stack (sparse full
+// layers alternating with sliding-window layers, each with its own head count and rope base),
+// sandwich norms and routed experts that run in a latent space.
+struct llama_model_hy_v4_flash : public llama_model_base {
+    llama_model_hy_v4_flash(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    uint32_t graph_nodes_per_tensor() const override { return 32; }
+
+    // -1 when the layer has no Engram module, else its index among the Engram layers
+    int engram_index(int il) const;
+
+    // n-gram hash of module e. Writes one row id per (token, column) into ids, and alongside it the
+    // per-column validity: a short history is padded, as in deepseek41, so only a position with no
+    // n-gram at all (an embedding position) is marked invalid.
+    void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev,
+            std::vector<int32_t> & ids, std::vector<float> & valid) const;
+
+    class llm_graph_input_kpool;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // the MTP graph reuses the helpers without running the trunk
+        struct no_build {};
+        graph(const llm_graph_params & params, no_build) : llm_graph_context(params) {}
+
+        // iHC, same layout as hy_v4: pre reduces the hc streams to one and returns the per-stream
+        // post gates, post writes the sublayer output back, head collapses before the final norm.
+        struct hc_pre {
+            ggml_tensor * cur;
+            ggml_tensor * post;
+        };
+
+        // reduce the hc streams to one, weighted by the pre gates
+        ggml_tensor * build_hc_reduce(
+                ggml_tensor * x,
+                ggml_tensor * weights,
+                int il) const;
+
+        hc_pre build_hc_pre(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                int il) const;
+
+        ggml_tensor * build_hc_post(
+                ggml_tensor * x,
+                ggml_tensor * residual,
+                ggml_tensor * post,
+                int il) const;
+
+        ggml_tensor * build_hc_head(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base) const;
+
+        // mctx_idx and inp_kpool are null when the file carries no indexer, and the sparse layers
+        // then attend their whole context
+        ggml_tensor * build_attention(
+                const llama_model & model,
+                llm_graph_input_attn_k_iswa * inp_attn,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                const llama_memory_idx_iswa_context * mctx_idx,
+                llm_graph_input_kpool * inp_kpool,
+                int il);
+
+        llm_graph_input_kpool * build_inp_kpool(const llama_memory_idx_iswa_context * mctx_idx);
+
+        // rotate only the trailing n_rot of each indexer head
+        ggml_tensor * build_indexer_rope(ggml_tensor * x, ggml_tensor * pos, int64_t n_idx,
+                float freq_base, int il) const;
+
+        // score the pooled keys against the query and keep the best groups, plus the group the
+        // current token sits in
+        ggml_tensor * build_kpool_select(
+                ggml_tensor * cur,
+                ggml_tensor * qr,
+                ggml_tensor * inp_pos,
+                float freq_base,
+                const llama_layer & layer,
+                const llama_memory_idx_iswa_context * mctx_idx,
+                llm_graph_input_kpool * inp_kpool,
+                int il);
+
+        // routed experts run at n_expert_latent, the router and the shared expert at n_embd
+        ggml_tensor * build_latent_moe(
+                const llama_model & model,
+                ggml_tensor * cur,
+                int il) const;
+
+        // Engram writes its delta into the hc residual streams before the layer's attention pre-mix
+        ggml_tensor * build_engram(
+                const llama_model & model,
+                ggml_tensor * x,
+                ggml_tensor * rows,
+                ggml_tensor * valid,
+                int il) const;
+    };
+
+    // the draft block: one sparse layer fed the next token's embedding and the trunk's final
+    // hidden state, with no hyper-connections of its own
+    struct graph_mtp : public graph {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 

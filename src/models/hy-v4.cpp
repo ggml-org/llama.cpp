@@ -42,6 +42,15 @@ void llama_model_hy_v4::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,   hparams.dsv4_hc_eps);
     ml.get_key(LLM_KV_HYPER_CONNECTION_MAGNITUDE, hparams.hc_magnitude);
 
+    // only VL files carry sections, and their rope rows are converted to NeoX order
+    ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+    if (hparams.use_mrope()) {
+        const auto & s = hparams.rope_sections;
+        if (s[0] < 0 || s[1] < 0 || s[2] < 0 || s[3] < 0 || 2 * ((int64_t) s[0] + s[1] + s[2] + s[3]) != (int64_t) hparams.n_rot()) {
+            throw std::runtime_error("hy_v4: rope sections must sum to n_rot / 2");
+        }
+    }
+
     // DSA is absent on the all-full_attention checkpoints, so indexer_top_k stays 0 there
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head,    false);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size, false);
@@ -488,6 +497,13 @@ llama_model_hy_v4::graph::graph(const llm_graph_params & params) :
 
     ggml_tensor * inp = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos = build_inp_pos();
+    if (hparams.use_mrope()) {
+        // IMROPE rotates the last pair with the 4th position, the reference uses t there.
+        // the batch fills it with 0 for text, so replace it with t for all tokens.
+        inp_pos = ggml_concat(ctx0,
+                ggml_view_1d(ctx0, inp_pos, 3 * n_tokens, 0),
+                ggml_view_1d(ctx0, inp_pos,     n_tokens, 0), 0);
+    }
     llm_graph_input_attn_k     * inp_attn     = is_dsa ? nullptr : build_attn_inp_k();
     llm_graph_input_attn_k_dsa * inp_attn_dsa = is_dsa ? build_attn_inp_k_dsa() : nullptr;
     ggml_tensor * inp_out_ids = build_inp_out_ids();

@@ -326,6 +326,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // Engram gate is an elementwise weight (ggml_mul), not a matmul operand
     quantize &= name.find("engram_gate.weight") == std::string::npos;
 
+    // hy_v4_flash: these are ggml_add operands
+    if (arch == LLM_ARCH_HY_V4_FLASH) {
+        quantize &= name.find("engram_kv_b.weight")            == std::string::npos;
+        quantize &= name.find("engram_hc_scale.weight")        == std::string::npos;
+        quantize &= name.find("indexer_compressor_ape.weight") == std::string::npos;
+    }
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
