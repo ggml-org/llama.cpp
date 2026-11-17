@@ -239,6 +239,17 @@ static void test(void) {
     argv = {"binary_name", "-lm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
+    // --ignore-eos is not supported with a grammar
+    {
+        common_params grammar_params;
+        argv = {"binary_name", "-m", "model_file.gguf", "--grammar", "root ::= \"ok\""};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), grammar_params, LLAMA_EXAMPLE_COMMON));
+
+        common_params grammar_eos_params;
+        argv = {"binary_name", "-m", "model_file.gguf", "--grammar", "root ::= \"ok\"", "--ignore-eos"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), grammar_eos_params, LLAMA_EXAMPLE_COMMON));
+    }
+
     printf("test-arg-parser: test valid usage\n\n");
 
     argv = {"binary_name", "-m", "model_file.gguf"};
