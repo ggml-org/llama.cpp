@@ -62,7 +62,7 @@ jobs:
   publish:
     name: Publish @ggml-org/llama-ui
     if: github.repository == 'ggml-org/llama.cpp'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04-arm
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
