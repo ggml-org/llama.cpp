@@ -86,8 +86,6 @@ struct llama_media_proc {
 
     llama_media_proc_params params;
 
-    uint32_t n_rows_max = 0; // n_ubatch of the encoder context
-
     // per-projector layout and preprocessors of the clip engine
     std::unique_ptr<clip_layout_config> cfg;
 

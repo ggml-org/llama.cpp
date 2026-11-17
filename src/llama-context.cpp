@@ -917,6 +917,30 @@ void llama_context::sched_reserve() {
         n_input_tensors_tg = this->n_input_tensors;
     }
 
+    // clip models: a context runs every encoder tower of the file (a GEN context too, for the references of its
+    // pipeline), the buffers fit the largest graph
+    if (model.arch == LLM_ARCH_CLIP) {
+        const auto & clip = static_cast<const llama_model_clip &>(model);
+        const clip_model * main_tower = clip.engine_for_ctx(cparams.ctx_type);
+        for (const clip_model * tower : { clip.engine_vision(), clip.engine_audio() }) {
+            if (tower == nullptr || tower == main_tower) {
+                continue;
+            }
+            llama_media_input mi;
+            mi.clip_sub = clip_sub(*tower);
+            reserve_media_inp = &mi;
+            std::vector<size_t> sizes(backend_ptrs.size(), 0);
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.no_alloc(), model.no_alloc() ? sizes.data() : nullptr);
+            reserve_media_inp = nullptr;
+            if (!gf) {
+                throw std::runtime_error("failed to allocate the compute buffers of a tower");
+            }
+            for (size_t i = 0; i < sizes.size(); ++i) {
+                backend_buf_exp_size[i] = std::max(backend_buf_exp_size[i], sizes[i]);
+            }
+        }
+    }
+
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
         // TODO: the worst case graph is not always reached for `n_seqs > 1`
@@ -1871,7 +1895,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         //const auto t_start_us = ggml_time_us();
 
+        const int64_t tp0 = ggml_time_us();
         gf = model.build_graph(gparams);
+        prof_build_us = ggml_time_us() - tp0;
 
         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
@@ -1881,11 +1907,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             return nullptr;
         }
 
+        const int64_t tp1 = ggml_time_us();
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
+        prof_alloc_us = ggml_time_us() - tp1;
 
         gf_res_prev_active = res;
     }
@@ -1895,7 +1923,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
+        const int64_t tp2 = ggml_time_us();
         res->set_inputs(&ubatch);
+        prof_inputs_us = ggml_time_us() - tp2;
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -2034,6 +2064,8 @@ bool llama_context::clip_exec(clip_subcontext & sub, clip_subctx_encode_params *
 
     n_outputs = 1;
 
+    static const bool prof = getenv("CLIP_PROFILE") != nullptr; // TEMP profiling
+    const int64_t t0 = ggml_time_us();
     ggml_status status;
     llm_graph_result * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
     if (!res) {
@@ -2045,12 +2077,20 @@ bool llama_context::clip_exec(clip_subcontext & sub, clip_subctx_encode_params *
         return false;
     }
 
+    const int64_t t1 = ggml_time_us();
     synchronize();
+    const int64_t t2 = ggml_time_us();
 
     // the graph of the next call depends on its input, do not keep this one
     gf_res_prev_active = nullptr;
 
-    return sub.read_outputs(res->get_gf(), req->out_embd ? res->get_embd() : nullptr, req);
+    const bool ok = sub.read_outputs(res->get_gf(), req->out_embd ? res->get_embd() : nullptr, req);
+    if (prof) {
+        LLAMA_LOG_WARN("clip_exec: process %.2f ms (build %.2f, alloc %.2f, inputs %.2f), sync %.2f ms, read %.2f ms, nodes %d\n",
+                (t1 - t0) / 1000.0, prof_build_us / 1000.0, prof_alloc_us / 1000.0, prof_inputs_us / 1000.0,
+                (t2 - t1) / 1000.0, (ggml_time_us() - t2) / 1000.0, ggml_graph_n_nodes(res->get_gf()));
+    }
+    return ok;
 }
 
 int llama_context::encode_media_engine(llama_media & m) {
@@ -2101,7 +2141,12 @@ int llama_context::encode_media_engine(llama_media & m) {
             if (source && source->needs_compute()) {
                 GGML_ASSERT(m.aud_preproc != nullptr);
                 m.aud_preproc->mel_config.sched = sched_aux();
-                if (!m.aud_preproc->compute(*source)) {
+                const int64_t tm0 = ggml_time_us();
+                const bool mel_ok = m.aud_preproc->compute(*source);
+                if (getenv("CLIP_PROFILE")) {
+                    LLAMA_LOG_WARN("encode_media_engine: log-mel %.2f ms\n", (ggml_time_us() - tm0) / 1000.0);
+                }
+                if (!mel_ok) {
                     LLAMA_LOG_ERROR("%s: unable to compute the mel\n", __func__);
                     return false;
                 }
@@ -2220,8 +2265,9 @@ int llama_context::gen_engine(const llama_batch_ext & batch_inp) {
 }
 
 int llama_context::encode_media(const llama_batch_ext & batch_inp) {
-    if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_ENCODER) {
-        LLAMA_LOG_ERROR("%s: media can only be encoded by an ENCODER context\n", __func__);
+    // a GEN context also encodes the media of its pipeline (speaker references), on the same compute buffers
+    if (model.arch != LLM_ARCH_CLIP) {
+        LLAMA_LOG_ERROR("%s: media can only be encoded by a context of an mmproj model\n", __func__);
         return -1;
     }
 
@@ -2287,11 +2333,6 @@ int llama_context::encode_media(const llama_batch_ext & batch_inp) {
         // native graphs: the input is built from the preprocessed entries
         const llama_media_input inp_native = m->img ? llama_media_native_input(*m) : llama_media_input();
         const llama_media_input & inp = m->img ? inp_native : m->inp;
-
-        if (n_rows > cparams.n_ubatch) {
-            LLAMA_LOG_ERROR("%s: media with %u rows exceeds n_ubatch = %u of the encoder context\n", __func__, n_rows, cparams.n_ubatch);
-            return -1;
-        }
 
         const llama_ubatch ubatch = llama_media_ubatch(n_rows, &inp);
 
@@ -3716,6 +3757,9 @@ ggml_cgraph * llama_context::graph_reserve(
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
 
     ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
+
+    // clip models: the tower whose graph is reserved, nullptr for the main tower of the context
+    ubatch.media = reserve_media_inp;
 
     auto * res = gf_res_reserve.get();
 

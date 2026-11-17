@@ -208,6 +208,8 @@ struct llama_media_proc_params {
 LLAMA_API struct llama_media_proc_params llama_media_proc_default_params(void);
 
 // preprocessing and layout for an (encoder context, decoder model) pair; model_dec may be null for the queries only
+// ctx_enc is an ENCODER context, or a GEN context of the same mmproj: it encodes the media of its pipeline
+// (speaker references) on the compute buffers of the generation stages
 // the user limits of the image token count are kv overrides of the mmproj model: clip.vision.image_min_tokens and
 // clip.vision.image_max_tokens (int)
 // audio preprocessing computes the log-mel on ctx_enc: do not use the proc while ctx_enc is computing
@@ -402,7 +404,7 @@ LLAMA_API int64_t               llama_media_get_rows      (const struct llama_me
 LLAMA_API bool                  llama_media_get_row_pos   (const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos);
 
 // meaning depends on the context type of the batch:
-// ENCODER context: queue the media for encoding (row0, n_rows and pos_0 are ignored); llama_process(ENCODE) writes the rows into the media
+// context of an mmproj (ENCODER, GEN): queue the media for encoding (row0, n_rows and pos_0 are ignored); llama_process(ENCODE) writes the rows into the media
 // decoder context: add rows [row0, row0 + n_rows) of an encoded media to seq_id, the media starting at pos_0 (n_rows = 0: all)
 //                  libllama sets the positions and the attention span of the rows
 // returns the batch index of the first row, or: -1 full, -3 bad seq_id, -4 not encoded, -5 would split an atomic media,

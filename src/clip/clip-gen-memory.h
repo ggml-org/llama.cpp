@@ -41,8 +41,8 @@ public:
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override { return {}; }
 
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
+    [[noreturn]] void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    [[noreturn]] void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
 private:
     std::map<llama_seq_id, clip_gen_state *> states;

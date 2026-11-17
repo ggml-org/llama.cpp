@@ -200,6 +200,8 @@ struct llama_context {
     };
     std::vector<gen_out_store> gen_outs;
 
+    int64_t prof_build_us = 0, prof_alloc_us = 0, prof_inputs_us = 0; // TEMP profiling
+
     // the scheduler, for a graph outside of the llm_graph flow (the log-mel of the audio preprocessor)
     // the next process_ubatch() rebuilds its graph
     ggml_backend_sched_t sched_aux();
@@ -297,6 +299,9 @@ private:
     std::map<const clip_model *, std::unique_ptr<clip_subcontext>> clip_subs;
 
     std::unique_ptr<clip_gen_ctx> clip_gen;
+
+    // the media input of the reserved graph (a tower of a clip model), see sched_reserve()
+    const struct llama_media_input * reserve_media_inp = nullptr;
     std::unique_ptr<llama_model, void (*)(llama_model *)> clip_yue2_nar { nullptr, llama_model_free };
 
     //

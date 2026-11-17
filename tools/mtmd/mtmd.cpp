@@ -538,11 +538,9 @@ static llama_model * mtmd_load_model(const char * fname, const mtmd_context_para
     return llama_model_load_from_file(fname, mp);
 }
 
-// the ENCODER context of the towers: the native graphs take a whole image in one ubatch
+// the ENCODER context of the towers: its compute buffers are reserved for the warmup input of each tower
 static llama_context * mtmd_init_encoder(llama_model * model, const mtmd_context_params & ctx_params) {
-    bool atomic = false;
-    const int32_t n_img = llama_model_media_n_tokens_max(model, LLAMA_MEDIA_TYPE_IMAGE, &atomic);
-    const uint32_t n_rows = (uint32_t) std::max(n_img, 512);
+    const uint32_t n_rows = 512; // not a limit: an encoder context takes media of any size
 
     llama_context_params cp = llama_context_default_params();
     cp.ctx_type          = LLAMA_CONTEXT_TYPE_ENCODER;
@@ -559,6 +557,23 @@ static llama_context * mtmd_init_encoder(llama_model * model, const mtmd_context
     return llama_init_from_model(model, cp);
 }
 
+// the GEN context of the moved pipelines, shared by the gen states (one sequence each)
+static llama_context_params mtmd_gen_ctx_params(const mtmd_context_params & ctx_params, uint32_t n_seq_max) {
+    llama_context_params cp = llama_context_default_params();
+    cp.ctx_type          = LLAMA_CONTEXT_TYPE_GEN_CODE;
+    cp.n_ctx             = 16 * n_seq_max;
+    cp.n_batch           = n_seq_max; // one output per sequence
+    cp.n_ubatch          = n_seq_max;
+    cp.n_seq_max         = n_seq_max;
+    cp.n_threads         = ctx_params.n_threads;
+    cp.n_threads_batch   = ctx_params.n_threads;
+    cp.flash_attn_type   = ctx_params.flash_attn_type;
+    cp.cb_eval           = ctx_params.cb_eval;
+    cp.cb_eval_user_data = ctx_params.cb_eval_user_data;
+    cp.no_perf           = true;
+    return cp;
+}
+
 //
 // mtmd_context
 //
@@ -569,6 +584,7 @@ struct mtmd_context {
 
     // encoder towers (vision, audio)
     llama_context_ptr  ctx_enc;
+    llama_context    * enc = nullptr; // encodes the media: ctx_enc, or gen_ctx for files with a generation tower
     llama_media_proc * proc = nullptr;
 
     mtmd_file_info info;
@@ -580,6 +596,11 @@ struct mtmd_context {
 
     // gen stages: native graphs (Qwen3-TTS) or the moved engine (llama_batch_ext_add_gen)
     bool gen_native = false;
+
+    // the moved engine: one GEN context for every gen state, a sequence each (as mtmd shared one scheduler)
+    static constexpr uint32_t n_gen_seq_max = 64;
+    llama_context_ptr gen_ctx;
+    std::vector<bool> gen_seq_used;
     llama_flash_attn_type flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
     // the last media encoded, the speaker reference of mtmd_gen_state_set_ref()
@@ -640,23 +661,35 @@ struct mtmd_context {
         }
         model.reset(m, llama_model_free);
 
-        if (llama_model_has_context_type(m, LLAMA_CONTEXT_TYPE_ENCODER)) {
+        if (info.has_gen_audio) {
+            // LLAMA_CLIP_NATIVE=1: Qwen3-TTS on its native graphs (see llama_model_clip)
+            const char * env_native = std::getenv("LLAMA_CLIP_NATIVE");
+            const bool native = env_native != nullptr && atoi(env_native) != 0;
+            gen_native      = native && info.proj_gen == "qwen3tts_gen";
+            flash_attn_type = ctx_params.flash_attn_type;
+        }
+
+        if (info.has_gen_audio && !gen_native) {
+            // one context for the generation stages and the references they encode: one set of compute buffers
+            gen_ctx.reset(llama_init_from_model(m, mtmd_gen_ctx_params(ctx_params, n_gen_seq_max)));
+            if (!gen_ctx) {
+                throw std::runtime_error("failed to create the gen context");
+            }
+            gen_seq_used.assign(n_gen_seq_max, false);
+            enc = gen_ctx.get();
+        } else if (llama_model_has_context_type(m, LLAMA_CONTEXT_TYPE_ENCODER)) {
             ctx_enc.reset(mtmd_init_encoder(m, ctx_params));
             if (!ctx_enc) {
                 throw std::runtime_error("failed to create the encoder context");
             }
-            proc = llama_media_proc_init(ctx_enc.get(), text_model, llama_media_proc_default_params());
+            enc = ctx_enc.get();
+        }
+
+        if (enc && (info.has_vision || info.has_audio)) {
+            proc = llama_media_proc_init(enc, text_model, llama_media_proc_default_params());
             if (!proc) {
                 throw std::runtime_error("failed to create the media proc (wrong mmproj for this text model?)");
             }
-        }
-
-        if (info.has_gen_audio) {
-            // LLAMA_CLIP_NATIVE=0 runs the towers with native graphs on the engine (A/B of the two)
-            const char * env_native = std::getenv("LLAMA_CLIP_NATIVE");
-            const bool native = env_native == nullptr || atoi(env_native) != 0;
-            gen_native      = native && info.proj_gen == "qwen3tts_gen";
-            flash_attn_type = ctx_params.flash_attn_type;
         }
 
         if (info.has_audio) {
@@ -1198,11 +1231,11 @@ static int32_t mtmd_encode_media(mtmd_context * ctx, const std::vector<llama_med
         need = need || !llama_media_is_encoded(m);
     }
     if (need) {
-        if (!ctx->ctx_enc) {
+        if (!ctx->enc) {
             LOG_ERR("%s: the model has no encoder for this media\n", __func__);
             return 1;
         }
-        llama_batch_ext * batch = llama_batch_ext_init(ctx->ctx_enc.get());
+        llama_batch_ext * batch = llama_batch_ext_init(ctx->enc);
         int32_t res = 0;
         for (llama_media * m : media) {
             if (!llama_media_is_encoded(m) && llama_batch_ext_add_media(batch, 0, m, 0, 0, 0) < 0) {
@@ -1210,7 +1243,7 @@ static int32_t mtmd_encode_media(mtmd_context * ctx, const std::vector<llama_med
             }
         }
         if (res == 0) {
-            res = llama_process(ctx->ctx_enc.get(), LLAMA_PROCESS_TYPE_ENCODE, batch);
+            res = llama_process(ctx->enc, LLAMA_PROCESS_TYPE_ENCODE, batch);
         }
         llama_batch_ext_free(batch);
         if (res != 0) {
@@ -1763,14 +1796,18 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_c
         mtmd_memory_usage res;
         res.image_max_tokens = -1;
         res.use_non_causal   = false;
-        if (llama_model_has_context_type(model.get(), LLAMA_CONTEXT_TYPE_ENCODER)) {
-            llama_context_ptr ctx(mtmd_init_encoder(model.get(), ctx_params));
-            if (!ctx) {
-                throw std::runtime_error("failed to create the encoder context");
-            }
+        // the contexts mtmd_init_from_file() creates: the shared gen context, or the encoder context
+        const char * env_native = std::getenv("LLAMA_CLIP_NATIVE");
+        const bool gen_native = env_native != nullptr && atoi(env_native) != 0 && info.proj_gen == "qwen3tts_gen";
+        llama_context_ptr ctx;
+        if (info.has_gen_audio && !gen_native) {
+            ctx.reset(llama_init_from_model(model.get(), mtmd_gen_ctx_params(ctx_params, mtmd_context::n_gen_seq_max)));
+        } else if (llama_model_has_context_type(model.get(), LLAMA_CONTEXT_TYPE_ENCODER)) {
+            ctx.reset(mtmd_init_encoder(model.get(), ctx_params));
+        }
+        if (ctx) {
             for (const auto & [buft, mb] : llama_get_memory_breakdown(ctx.get())) {
-                ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
-                res.backend_mem_usage[dev] += mb.total();
+                res.backend_mem_usage[ggml_backend_buft_get_device(buft)] += mb.total();
             }
         } else {
             res.backend_mem_usage[device ? device : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU)] += llama_model_size(model.get());
@@ -1962,6 +1999,9 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
 }
 
 struct mtmd_gen_state {
+    mtmd_context * ctx = nullptr;
+    llama_seq_id   seq = -1; // the sequence of the shared GEN context (moved pipelines)
+
     std::vector<int32_t> out_codes; // this frame's sampled codes (GEN_CODE)
     std::vector<float>   out_feats; // this frame's continuous features, if any (GEN_CODE)
     std::vector<float>   out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
@@ -1976,8 +2016,13 @@ struct mtmd_gen_state {
     int32_t  lm_top_k = -1;
     float    lm_top_p = -1.0f;
 
-    // the moved pipelines: both stages, its memory holds the state of sequence 0
-    llama_context_ptr eng_ctx;
+    ~mtmd_gen_state() {
+        if (seq >= 0) {
+            std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+            llama_memory_seq_rm(llama_get_memory(ctx->gen_ctx.get()), seq, -1, -1);
+            ctx->gen_seq_used[seq] = false;
+        }
+    }
 };
 
 mtmd_gen_state_params mtmd_gen_state_params_default(void) {
@@ -2005,12 +2050,20 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
     cp.no_perf         = true;
 
     if (!ctx->gen_native) {
-        st->eng_ctx.reset(llama_init_from_model(ctx->model.get(), cp));
-        if (!st->eng_ctx) {
-            LOG_ERR("%s: libllama could not create the gen context\n", __func__);
+        std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+        if (!ctx->gen_ctx) {
+            LOG_ERR("%s: the gen context is missing\n", __func__);
             return nullptr;
         }
-        llama_gen_set_seed(st->eng_ctx.get(), 0, params.seed);
+        const auto it = std::find(ctx->gen_seq_used.begin(), ctx->gen_seq_used.end(), false);
+        if (it == ctx->gen_seq_used.end()) {
+            LOG_ERR("%s: too many gen states (max %u)\n", __func__, mtmd_context::n_gen_seq_max);
+            return nullptr;
+        }
+        *it = true;
+        st->ctx = ctx;
+        st->seq = (llama_seq_id) (it - ctx->gen_seq_used.begin());
+        llama_gen_set_seed(ctx->gen_ctx.get(), st->seq, params.seed);
         return st.release();
     }
 
@@ -2042,8 +2095,9 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
     if (state->lm_wav_ctx) {
         llama_memory_seq_rm(llama_get_memory(state->lm_wav_ctx.get()), 0, -1, -1);
     }
-    if (state->eng_ctx) {
-        llama_memory_seq_rm(llama_get_memory(state->eng_ctx.get()), 0, -1, -1);
+    if (state->seq >= 0) {
+        std::lock_guard<std::mutex> lock(state->ctx->compute_mutex);
+        llama_memory_seq_rm(llama_get_memory(state->ctx->gen_ctx.get()), state->seq, -1, -1);
     }
 }
 
@@ -2052,7 +2106,8 @@ int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
         LOG_ERR("%s: invalid gen state\n", __func__);
         return 1;
     }
-    if (!state->eng_ctx || !ctx->last_ref.m || llama_gen_set_ref(state->eng_ctx.get(), 0, ctx->last_ref.m) != 0) {
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+    if (state->seq < 0 || !ctx->last_ref.m || llama_gen_set_ref(ctx->gen_ctx.get(), state->seq, ctx->last_ref.m) != 0) {
         LOG_ERR("%s: the last encode produced no reference data\n", __func__);
         return 1;
     }
@@ -2176,7 +2231,8 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
                                                            : mtmd_gen_wav_native(ctx, state, inp, out);
     }
 
-    llama_context * lctx = state->eng_ctx.get();
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+    llama_context * lctx = ctx->gen_ctx.get();
     llama_gen_inp li{};
     li.type                = inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV ? LLAMA_GEN_STAGE_WAV : LLAMA_GEN_STAGE_CODE;
     li.code0               = inp->code0;
@@ -2196,7 +2252,7 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     li.n_steps             = inp->n_steps;
 
     llama_batch_ext * batch = llama_batch_ext_init(lctx);
-    const int32_t res = llama_batch_ext_add_gen(batch, 0, &li) < 0 ? -1 : llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch);
+    const int32_t res = llama_batch_ext_add_gen(batch, state->seq, &li) < 0 ? -1 : llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch);
     llama_batch_ext_free(batch);
     llama_gen_out lo{};
     if (res != 0 || !llama_get_gen_out_ith(lctx, 0, &lo)) {

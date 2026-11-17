@@ -137,9 +137,10 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     engine = std::make_unique<clip_models>(clip_model_load_hparams(ml));
     path   = ml.fname;
 
-    // LLAMA_CLIP_NATIVE=0: run the towers that have native graphs on the engine graphs too
+    // LLAMA_CLIP_NATIVE=1: run Gemma 3, Qwen2/2.5/3-VL and Qwen3-TTS on their native graphs (libllama helpers)
+    // instead of the graphs of the clip engine; for development, the engine graphs match mtmd bit for bit
     const char * env_native = getenv("LLAMA_CLIP_NATIVE");
-    const bool allow_native = env_native == nullptr || atoi(env_native) != 0;
+    const bool allow_native = env_native != nullptr && atoi(env_native) != 0;
 
     ml.get_key(std::string(CKEY_HAS_VISION), vhp.has_vision, false);
 
@@ -499,32 +500,16 @@ public:
 };
 
 llama_media_input llama_model_clip::reserve_media(uint32_t n_rows_max) const {
+    GGML_UNUSED(n_rows_max);
+
+    // the warmup image of the clip engine, as mtmd reserved; larger media grow the compute buffers on demand
+    const auto & hp = engine_vision()->hparams;
+
     llama_media_input m;
-    m.type = LLAMA_MEDIA_TYPE_IMAGE;
-
-    switch (vhp.proj) {
-        case LLAMA_CLIP_PROJ_GEMMA3:
-            {
-                m.nx = vhp.image_size;
-                m.ny = vhp.image_size;
-            } break;
-        case LLAMA_CLIP_PROJ_QWEN2VL:
-        case LLAMA_CLIP_PROJ_QWEN25VL:
-        case LLAMA_CLIP_PROJ_QWEN3VL:
-            {
-                // a square image with n_rows_max output rows, capped by the model limit
-                const int32_t align = vhp.patch_size * vhp.n_merge;
-                const int64_t max_rows = std::min<int64_t>(n_rows_max, vhp.image_max_pixels / (align * align));
-                const int32_t side = std::max<int32_t>(1, (int32_t) std::sqrt((double) max_rows));
-                m.nx = side * align;
-                m.ny = side * align;
-                m.n_frames = vhp.n_temporal_merge;
-            } break;
-        case LLAMA_CLIP_PROJ_UNKNOWN:
-        case LLAMA_CLIP_PROJ_QWEN3TTS_GEN: // not a vision tower
-            GGML_ABORT("unreachable");
-    }
-
+    m.type     = LLAMA_MEDIA_TYPE_IMAGE;
+    m.nx       = hp.warmup_image_size;
+    m.ny       = hp.warmup_image_size;
+    m.n_frames = 1;
     return m;
 }
 

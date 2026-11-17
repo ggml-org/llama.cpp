@@ -121,8 +121,8 @@ struct llama_media_proc * llama_media_proc_init(
     }
     const llama_model * model_enc = &ctx_enc->get_model();
     const auto * clip = as_clip(model_enc);
-    if (clip == nullptr || ctx_enc->get_cparams().ctx_type != LLAMA_CONTEXT_TYPE_ENCODER) {
-        LLAMA_LOG_ERROR("%s: ctx_enc must be an ENCODER context of an mmproj model\n", __func__);
+    if (clip == nullptr) {
+        LLAMA_LOG_ERROR("%s: ctx_enc must be a context of an mmproj model\n", __func__);
         return nullptr;
     }
 
@@ -132,7 +132,6 @@ struct llama_media_proc * llama_media_proc_init(
     proc->model_dec  = model_dec;
     proc->vocab      = model_dec ? &model_dec->vocab : nullptr;
     proc->params     = params;
-    proc->n_rows_max = ctx_enc->n_ubatch();
 
     try {
         proc->cfg = std::make_unique<clip_layout_config>(clip->engine_vision(), clip->engine_audio(), model_dec,
@@ -455,7 +454,8 @@ bool llama_media_get_row_pos(const struct llama_media * m, llama_pos pos_0, uint
 
 int32_t llama_batch_ext_add_media(struct llama_batch_ext * batch, llama_seq_id seq_id,
         struct llama_media * media, uint32_t row0, uint32_t n_rows, llama_pos pos_0) {
-    if (batch->ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
+    // the contexts of an mmproj encode (ENCODER, and GEN for the references of its pipeline)
+    if (batch->model != nullptr && batch->model->arch == LLM_ARCH_CLIP) {
         if (media->placeholder) {
             return -4;
         }
