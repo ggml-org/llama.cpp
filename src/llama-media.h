@@ -18,6 +18,7 @@ struct clip_image_tokens;
 struct clip_audio_tokens;
 struct clip_layout_config;
 struct clip_audio_preprocessor;
+struct clip_cpu_compute;
 struct clip_gen_ref;
 
 // how the decoder positions the rows of a media span
@@ -67,8 +68,9 @@ struct llama_media {
     std::shared_ptr<clip_image_tokens> img;
     std::shared_ptr<clip_audio_tokens> aud;
 
-    // computes the log-mel of aud at encode time (when its source needs it)
+    // computes the log-mel of aud at encode time (when its source needs it), on the CPU scheduler of its proc
     std::shared_ptr<clip_audio_preprocessor> aud_preproc;
+    std::shared_ptr<clip_cpu_compute>        aud_cpu;
 
     // gen-side reference of a speaker clip (set by its encode) or of a predefined voice, see llama_gen_set_ref()
     std::shared_ptr<const clip_gen_ref> gen_ref;
@@ -88,6 +90,9 @@ struct llama_media_proc {
 
     // per-projector layout and preprocessors of the clip engine
     std::unique_ptr<clip_layout_config> cfg;
+
+    // runs the preprocessing graphs (log-mel), shared with the media that compute later
+    std::shared_ptr<clip_cpu_compute> cpu;
 
     // serializes the streams, they all encode on ctx_enc
     std::mutex stream_mutex;

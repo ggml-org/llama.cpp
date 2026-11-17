@@ -55,8 +55,28 @@ clip_image_f32_batch clip_subcontext::get_dummy_batch() const {
     return batch;
 }
 
+clip_cpu_compute::clip_cpu_compute(int n_threads) {
+    backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
+    if (!backend) {
+        throw std::runtime_error("failed to initialize the CPU backend");
+    }
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+    auto * set_n_threads = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+    if (set_n_threads) {
+        set_n_threads(backend, std::max(1, n_threads));
+    }
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
+    sched = ggml_backend_sched_new(&backend, &buft, 1, 64, false, false);
+}
+
+clip_cpu_compute::~clip_cpu_compute() {
+    ggml_backend_sched_free(sched);
+    ggml_backend_free(backend);
+}
+
 bool clip_audio_log_mel(const clip_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
     ggml_backend_sched_t sched = config.sched;
+    GGML_ASSERT(sched != nullptr && "the log-mel needs a scheduler, see clip_cpu_compute");
 
     const auto &  cache      = *config.cache;
     const auto &  filters    = cache.filters.data;

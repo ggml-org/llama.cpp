@@ -200,11 +200,9 @@ struct llama_context {
     };
     std::vector<gen_out_store> gen_outs;
 
-    int64_t prof_build_us = 0, prof_alloc_us = 0, prof_inputs_us = 0; // TEMP profiling
+    // threadpool and thread count of the backends, for a batch or a single token
+    void set_compute_threads(bool batched);
 
-    // the scheduler, for a graph outside of the llm_graph flow (the log-mel of the audio preprocessor)
-    // the next process_ubatch() rebuilds its graph
-    ggml_backend_sched_t sched_aux();
 
     // GEN_CODE context: one frame per entry, codes sampled in the graph
     int gen_code(const llama_batch_ext & batch_inp);

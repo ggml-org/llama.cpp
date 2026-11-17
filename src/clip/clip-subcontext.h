@@ -23,6 +23,18 @@ enum clip_flash_attn_type {
     CLIP_FLASH_ATTN_TYPE_ENABLED  = 1,
 };
 
+// a CPU-only scheduler for the preprocessing graphs (log-mel), apart from the scheduler of the encoder
+struct clip_cpu_compute {
+    ggml_backend_t       backend = nullptr;
+    ggml_backend_sched_t sched   = nullptr;
+
+    explicit clip_cpu_compute(int n_threads);
+    ~clip_cpu_compute();
+
+    clip_cpu_compute(const clip_cpu_compute &) = delete;
+    clip_cpu_compute & operator=(const clip_cpu_compute &) = delete;
+};
+
 // compute the log-mel of n_frames frames, the waveform must already be padded and window must hold one whole frame
 // out has the layout [n_frames, n_mel]; must not run at the same time as another pass
 struct clip_audio_mel_config;

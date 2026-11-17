@@ -1895,9 +1895,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         //const auto t_start_us = ggml_time_us();
 
-        const int64_t tp0 = ggml_time_us();
         gf = model.build_graph(gparams);
-        prof_build_us = ggml_time_us() - tp0;
 
         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
@@ -1907,13 +1905,11 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             return nullptr;
         }
 
-        const int64_t tp1 = ggml_time_us();
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
-        prof_alloc_us = ggml_time_us() - tp1;
 
         gf_res_prev_active = res;
     }
@@ -1923,9 +1919,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
-        const int64_t tp2 = ggml_time_us();
         res->set_inputs(&ubatch);
-        prof_inputs_us = ggml_time_us() - tp2;
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
@@ -1984,12 +1978,6 @@ static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input 
         /*.data         =*/ udata,
     };
     return ubatch;
-}
-
-ggml_backend_sched_t llama_context::sched_aux() {
-    synchronize();
-    gf_res_prev_active = nullptr;
-    return sched.get();
 }
 
 clip_subcontext * llama_context::clip_sub(const clip_model & m) {
@@ -2064,8 +2052,6 @@ bool llama_context::clip_exec(clip_subcontext & sub, clip_subctx_encode_params *
 
     n_outputs = 1;
 
-    static const bool prof = getenv("CLIP_PROFILE") != nullptr; // TEMP profiling
-    const int64_t t0 = ggml_time_us();
     ggml_status status;
     llm_graph_result * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
     if (!res) {
@@ -2077,20 +2063,12 @@ bool llama_context::clip_exec(clip_subcontext & sub, clip_subctx_encode_params *
         return false;
     }
 
-    const int64_t t1 = ggml_time_us();
     synchronize();
-    const int64_t t2 = ggml_time_us();
 
     // the graph of the next call depends on its input, do not keep this one
     gf_res_prev_active = nullptr;
 
-    const bool ok = sub.read_outputs(res->get_gf(), req->out_embd ? res->get_embd() : nullptr, req);
-    if (prof) {
-        LLAMA_LOG_WARN("clip_exec: process %.2f ms (build %.2f, alloc %.2f, inputs %.2f), sync %.2f ms, read %.2f ms, nodes %d\n",
-                (t1 - t0) / 1000.0, prof_build_us / 1000.0, prof_alloc_us / 1000.0, prof_inputs_us / 1000.0,
-                (t2 - t1) / 1000.0, (ggml_time_us() - t2) / 1000.0, ggml_graph_n_nodes(res->get_gf()));
-    }
-    return ok;
+    return sub.read_outputs(res->get_gf(), req->out_embd ? res->get_embd() : nullptr, req);
 }
 
 int llama_context::encode_media_engine(llama_media & m) {
@@ -2139,13 +2117,8 @@ int llama_context::encode_media_engine(llama_media & m) {
         auto encode = [&](const clip_image_f32_batch & batch_f32, clip_audio_preproc_out * source, uint32_t idx, std::vector<float> & dst) {
             clip_image_f32_batch batch = batch_f32.clone();
             if (source && source->needs_compute()) {
-                GGML_ASSERT(m.aud_preproc != nullptr);
-                m.aud_preproc->mel_config.sched = sched_aux();
-                const int64_t tm0 = ggml_time_us();
+                GGML_ASSERT(m.aud_preproc != nullptr && m.aud_cpu != nullptr);
                 const bool mel_ok = m.aud_preproc->compute(*source);
-                if (getenv("CLIP_PROFILE")) {
-                    LLAMA_LOG_WARN("encode_media_engine: log-mel %.2f ms\n", (ggml_time_us() - tm0) / 1000.0);
-                }
                 if (!mel_ok) {
                     LLAMA_LOG_ERROR("%s: unable to compute the mel\n", __func__);
                     return false;
@@ -3844,9 +3817,7 @@ void llama_context::sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph 
             lctx->n_reallocs_same, lctx->n_reallocs_diff);
 }
 
-ggml_status llama_context::graph_compute(
-            ggml_cgraph * gf,
-                   bool   batched) {
+void llama_context::set_compute_threads(bool batched) {
     int n_threads        = batched ? cparams.n_threads_batch : cparams.n_threads;
     ggml_threadpool_t tp = batched ? threadpool_batch        : threadpool;
 
@@ -3862,6 +3833,12 @@ ggml_status llama_context::graph_compute(
     for (const auto & set_n_threads_fn : set_n_threads_fns) {
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
+}
+
+ggml_status llama_context::graph_compute(
+            ggml_cgraph * gf,
+                   bool   batched) {
+    set_compute_threads(batched);
 
     copy_experts.reset();
 

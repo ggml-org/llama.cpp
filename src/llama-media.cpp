@@ -9,6 +9,7 @@
 #include "clip/clip-media.h"
 #include "clip/clip-stream.h"
 #include "clip/clip-gen.h"
+#include "clip/clip-subcontext.h"
 
 #include <algorithm>
 #include <cstring>
@@ -136,6 +137,10 @@ struct llama_media_proc * llama_media_proc_init(
     try {
         proc->cfg = std::make_unique<clip_layout_config>(clip->engine_vision(), clip->engine_audio(), model_dec,
                                                          nullptr, (int) ctx_enc->get_cparams().n_threads_batch);
+        if (proc->cfg->audio_preproc) {
+            proc->cpu = std::make_shared<clip_cpu_compute>((int) ctx_enc->get_cparams().n_threads_batch);
+            proc->cfg->audio_preproc->mel_config.sched = proc->cpu->sched;
+        }
         const int64_t n_embd = proc->cfg->n_embd_out();
         if (model_dec && n_embd != (int64_t) model_dec->hparams.n_embd_inp()) {
             LLAMA_LOG_ERROR("%s: the mmproj outputs rows of %" PRId64 ", the decoder takes %u\n"
@@ -265,10 +270,6 @@ static int32_t llama_media_layout_add_bitmaps(struct llama_media_layout * lay, c
     if ((is_audio && cfg.a == nullptr) || (!is_audio && cfg.v == nullptr)) {
         return 1;
     }
-    if (is_audio && cfg.audio_preproc) {
-        // the log-mel of the preprocessor runs on the encoder context
-        cfg.audio_preproc->mel_config.sched = proc.ctx_enc->sched_aux();
-    }
 
     std::vector<clip_input_chunk> out;
     clip_tokenizer tk(cfg, out);
@@ -314,6 +315,7 @@ static int32_t llama_media_layout_add_bitmaps(struct llama_media_layout * lay, c
             m->n_pos    = (llama_pos) c.tokens_audio->n_tokens;
             m->aud      = std::move(c.tokens_audio);
             m->aud_preproc = cfg.audio_preproc;
+            m->aud_cpu     = proc.cpu;
         }
 
         if (m->bidirectional && proc.params.n_span_max > 0 && m->n_tokens > (uint32_t) proc.params.n_span_max) {
@@ -574,9 +576,6 @@ struct llama_audio_stream * llama_audio_stream_init(const struct llama_media_pro
         return nullptr;
     }
     std::lock_guard<std::mutex> lock(st->proc->stream_mutex);
-    if (st->host.audio_preproc) {
-        st->host.audio_preproc->mel_config.sched = st->proc->ctx_enc->sched_aux();
-    }
     try {
         st->s = clip_audio_stream_init(&st->host, params);
     } catch (const std::exception & e) {
@@ -596,9 +595,6 @@ int32_t llama_audio_stream_push(struct llama_audio_stream * s, const float * pcm
 
 int32_t llama_audio_stream_flush(struct llama_audio_stream * s, bool end) {
     std::lock_guard<std::mutex> lock(s->proc->stream_mutex);
-    if (s->host.audio_preproc) {
-        s->host.audio_preproc->mel_config.sched = s->proc->ctx_enc->sched_aux();
-    }
     try {
         return clip_audio_stream_flush(s->s, end);
     } catch (const std::exception & e) {
@@ -609,9 +605,6 @@ int32_t llama_audio_stream_flush(struct llama_audio_stream * s, bool end) {
 
 int32_t llama_audio_stream_step(struct llama_audio_stream * s, llama_token last_token) {
     std::lock_guard<std::mutex> lock(s->proc->stream_mutex);
-    if (s->host.audio_preproc) {
-        s->host.audio_preproc->mel_config.sched = s->proc->ctx_enc->sched_aux();
-    }
     try {
         return clip_audio_stream_step(s->s, last_token);
     } catch (const std::exception & e) {
@@ -813,7 +806,6 @@ int32_t llama_media_debug_preprocess(const struct llama_media_proc * proc, enum 
         return 1;
     }
     std::lock_guard<std::mutex> lock(const_cast<llama_media_proc *>(proc)->stream_mutex);
-    cfg.audio_preproc->mel_config.sched = proc->ctx_enc->sched_aux();
     clip_audio_preproc_out out = cfg.audio_preproc->preprocess((const float *) data, (size_t) nx);
     if (out.entries.empty() || !cfg.audio_preproc->compute(out)) {
         LLAMA_LOG_ERROR("%s: failed to preprocess audio\n", __func__);
