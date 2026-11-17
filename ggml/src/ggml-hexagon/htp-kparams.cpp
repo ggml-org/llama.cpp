@@ -639,6 +639,7 @@ static bool htp_kparams_solve_hmx_mm(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * act,
+    const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
     int wtype,
     int ne00_padded,
@@ -649,10 +650,11 @@ static bool htp_kparams_solve_hmx_mm(
     int ne11_padded,
     bool is_matmul_id,
     bool is_batched,
-    size_t src2_size,
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
+    const size_t   src2_size         = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
+    const bool     src2_batched      = src2 && (src2->ne[2] > 1 || src2->ne[3] > 1);
     const bool     is_tiled          = ggml_hexagon_tensor_will_tile(src0);
     const int      aligned_tile_size = is_tiled ? htp_tensor_get_tile_padded_size(wtype) : 0;
     const int      n_hvx             = (int) htp_session_n_hvx(sess);
@@ -711,7 +713,7 @@ static bool htp_kparams_solve_hmx_mm(
         }
     }
 
-    if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1) {
+    if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !src2_batched) {
         if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             use_grouped = true;
         }
@@ -904,9 +906,8 @@ static bool htp_kparams_solve_matmul_impl(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
+    const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
-    const size_t src2_row_size,
-    const size_t src2_size,
     struct htp_mm_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -933,12 +934,12 @@ static bool htp_kparams_solve_matmul_impl(
 
     const bool hmx_enabled = (htp_session_n_hmx(sess) > 0) && (opt_mm_select >= 2);
     if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, src1, dst, is_matmul_id, is_batched)) {
-        if (htp_kparams_solve_hmx_mm(sess, src0, src1, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, src2_size, vtcm_budget, kparams)) {
+        if (htp_kparams_solve_hmx_mm(sess, src0, src1, src2, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, vtcm_budget, kparams)) {
             goto finalize;
         }
     }
 
-    htp_kparams_solve_hvx_mm(sess, src0, src1, dst, wtype, is_tiled, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, src2_row_size, vtcm_budget, kparams);
+    htp_kparams_solve_hvx_mm(sess, src0, src1, dst, wtype, is_tiled, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, src2 ? src2->nb[1] : 0, vtcm_budget, kparams);
 
 finalize:
     kparams->div_ne12_ne1 = init_fastdiv_values(ne12 * ne11);
@@ -1072,9 +1073,9 @@ static bool htp_kparams_solve_matmul(
     if (htp_matmul_can_collapse(src0, src1, dst)) {
         const ggml_tensor src1_collapsed = htp_tensor_collapse_rows(src1);
         const ggml_tensor dst_collapsed  = htp_tensor_collapse_rows(dst);
-        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, 0, 0, kparams);
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, nullptr, &dst_collapsed, kparams);
     }
-    return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, kparams);
+    return htp_kparams_solve_matmul_impl(sess, src0, src1, nullptr, dst, kparams);
 }
 
 bool htp_kparams_solve_matmul_add(
@@ -1092,17 +1093,16 @@ bool htp_kparams_solve_matmul_add(
                                            ? htp_tensor_collapse_rows(src2)
                                            : (src2 ? *src2 : ggml_tensor{});
         const struct ggml_tensor * p_src2 = src2 ? &src2_collapsed : nullptr;
-        const size_t src2_size = p_src2 ? hex_round_up(ggml_nbytes(p_src2), 128) : 0;
-        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, p_src2 ? p_src2->nb[1] : 0, src2_size, kparams);
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, p_src2, &dst_collapsed, kparams);
     }
-    const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
-    return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, kparams);
+    return htp_kparams_solve_matmul_impl(sess, src0, src1, src2, dst, kparams);
 }
 
 bool htp_kparams_solve_mmnx(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
     int32_t n_weights,
     struct htp_mm_kernel_params * kparams
 ) {
@@ -1131,8 +1131,8 @@ bool htp_kparams_solve_mmnx(
     const bool is_batched  = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
 
     const bool hmx_enabled = (n_hmx > 0) && (opt_mm_select >= 2);
-    if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, act, nullptr, false, is_batched)) {
-        if (htp_kparams_solve_hmx_mm(sess, src0, act, nullptr, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, is_batched, 0, vtcm_budget, kparams)) {
+    if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, act, dst, false, is_batched)) {
+        if (htp_kparams_solve_hmx_mm(sess, src0, act, nullptr, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, is_batched, vtcm_budget, kparams)) {
             kparams->n_weights = n_weights;
             goto finalize;
         }
@@ -1201,7 +1201,7 @@ bool htp_kparams_solve_mmidnx(
     int32_t n_weights,
     struct htp_mm_kernel_params * kparams
 ) {
-    const bool ok = htp_kparams_solve_matmul_impl(sess, src0, act, dst, 0, 0, kparams);
+    const bool ok = htp_kparams_solve_matmul_impl(sess, src0, act, nullptr, dst, kparams);
     kparams->n_weights = n_weights;
     return ok;
 }
@@ -5327,7 +5327,7 @@ bool htp_kparams_solve(
         if (!htp_matmul_check_types(src0, src1, dst, internal_f16)) {
             return false;
         }
-        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, tmp.kparams<htp_mm_kernel_params>()));
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, nullptr, dst, tmp.kparams<htp_mm_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_ADD) {
         const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
@@ -5336,8 +5336,7 @@ bool htp_kparams_solve(
             !htp_matmul_check_types(src0, src1, dst, internal_f16)) {
             return false;
         }
-        const size_t src2_size = hex_round_up(ggml_nbytes(src2), 128);
-        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2->nb[1], src2_size, tmp.kparams<htp_mm_kernel_params>()));
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, src2, dst, tmp.kparams<htp_mm_kernel_params>()));
     }
     if (tmp.opcode == HTP_OP_MUL_MAT_NX) {
         const size_t n_w = tmp.outputs.size();
@@ -5345,12 +5344,14 @@ bool htp_kparams_solve(
             return false;
         }
         const ggml_tensor * act = tmp.inputs[n_w];
+        const ggml_tensor * dst_for_solve = tmp.outputs[0];
         for (size_t i = 0; i < n_w; ++i) {
             if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i], internal_f16)) {
                 return false;
             }
+            dst_for_solve = htp_mdev_worst_dst(dst_for_solve, tmp.outputs[i]);
         }
-        if (!htp_kparams_solve_mmnx(sess, tmp.inputs[0], act, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
+        if (!htp_kparams_solve_mmnx(sess, tmp.inputs[0], act, dst_for_solve, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
             return false;
         }
         const auto * kp = tmp.kparams<htp_mm_kernel_params>();
@@ -5412,7 +5413,7 @@ bool htp_kparams_solve(
         if (tmp.inputs.size() != 6 || tmp.outputs.empty() || tmp.outputs.size() > 2) {
             return false;
         }
-        ggml_tensor op_view = *tmp.dst();
+        ggml_tensor op_view = *tmp.outputs[0];
         op_view.op = tmp.node->op;
         op_view.flags = tmp.node->flags;
         memcpy(op_view.op_params, tmp.params, sizeof(op_view.op_params));

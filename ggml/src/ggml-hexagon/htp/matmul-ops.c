@@ -4408,7 +4408,8 @@ static int hmx_mm_batched(struct htp_ops_context *octx, const hmx_mm_batched_par
     // Check if the precomputed parameters are grouped or simple.
     // If simple, or if group_size <= 1, we use simple fallback loop.
     // Grouped path is only valid for flat F16 if group_size > 1 and it fits within VTCM budget.
-    bool run_grouped = (params->weight_type == HTP_TYPE_F16 && params->tile_size == 0 && group_size > 1 && (size_t)vtcm_size <= vtcm_budget);
+    bool run_grouped = (params->weight_type == HTP_TYPE_F16 && params->tile_size == 0 && group_size > 1 &&
+                        params->bias_nb2 == 0 && params->bias_nb3 == 0 && (size_t)vtcm_size <= vtcm_budget);
     if (!run_grouped) {
         return hmx_mm_batched_simple(octx, params, m_chunk, n_chunk, pipeline, act_hvx, vtcm_size, act_hvx_div, k_div);
     }

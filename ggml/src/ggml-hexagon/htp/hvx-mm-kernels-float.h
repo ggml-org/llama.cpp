@@ -579,11 +579,12 @@ static inline void hvx_tensor_add_f32_grid(
     const HVX_Vector min_f16 = hvx_vec_splat_f32(-65504.0f);
 
     for (uint32_t r = start_row; r < end_row; r++) {
-        uint8_t * dst_row = (uint8_t *) dst->data + (size_t) r * nb1;
-
         uint32_t i13 = fastdiv(r, div_ne11_12);
         uint32_t i12 = fastdiv(r - i13 * ne11_12, div_ne11);
         uint32_t i11 = r - i13 * ne11_12 - i12 * ne11;
+
+        uint8_t * dst_row = (uint8_t *) dst->data +
+                            (size_t) i11 * nb1 + (size_t) i12 * dst->nb[2] + (size_t) i13 * dst->nb[3];
 
         uint32_t i23 = is_broadcast3 ? 0 : i13;
         uint32_t i22 = is_broadcast2 ? 0 : i12;

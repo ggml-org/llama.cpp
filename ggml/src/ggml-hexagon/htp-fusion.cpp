@@ -293,12 +293,19 @@ static bool fuse_mul_mat_nx(const ggml_hexagon_session * sess, htp_opnode & prev
     const bool collapse = htp_matmul_can_collapse(w0, x_orig, prev.node) && htp_matmul_can_collapse(w_in, x_in, d_in);
     if ((x_orig->ne[2] > 1 || x_orig->ne[3] > 1) && !collapse) return false;
 
-    if (prev.opcode == HTP_OP_MUL_MAT_NX) {
+    const ggml_tensor * prev_dst = prev.outputs[0];
+    for (size_t i = 1; i < prev.outputs.size(); ++i) {
+        prev_dst = htp_mdev_worst_dst(prev_dst, prev.outputs[i]);
+    }
+    const ggml_tensor * dst_for_solve = htp_mdev_worst_dst(prev_dst, d_in);
+
+    if (prev.opcode == HTP_OP_MUL_MAT_NX && htp_mdev_rows_per_chunk(dst_for_solve) == htp_mdev_rows_per_chunk(prev_dst)) {
         orig_kparams->n_weights = curr_n + 1;
     } else {
         struct htp_mm_kernel_params kparams;
         const ggml_tensor x_collapsed = collapse ? htp_tensor_collapse_rows(x_orig) : *x_orig;
-        if (!htp_kparams_solve_mmnx(sess, w0, &x_collapsed, curr_n + 1, &kparams)) return false;
+        const ggml_tensor d_collapsed = collapse ? htp_tensor_collapse_rows(dst_for_solve) : *dst_for_solve;
+        if (!htp_kparams_solve_mmnx(sess, w0, &x_collapsed, &d_collapsed, curr_n + 1, &kparams)) return false;
         if (!is_supported_mul_mat_nx_kernel(w0, &kparams)) return false;
 
         prev.set_kparams(kparams);
@@ -658,6 +665,7 @@ void htp_fusion_tag_graph(struct ggml_cgraph * graph) {
 
 bool htp_fusion_try_fuse(const struct ggml_hexagon_session * sess, struct htp_opnode & prev, const struct htp_opnode & cur) {
     if (!opt_opfusion) return false;
+    if (!cur.fused.empty()) return false;
 
     switch (cur.opcode) {
         case HTP_OP_ADD:

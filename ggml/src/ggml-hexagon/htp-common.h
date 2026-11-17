@@ -106,6 +106,9 @@ static inline bool ggml_hexagon_tensor_can_tile(const struct ggml_tensor * t) {
     if (opt_rt_repack == 0) {
         return false;
     }
+    if (!ggml_op_is_empty(t->op)) {
+        return false;
+    }
     if (t->buffer) {
         if (ggml_backend_buft_is_host(t->buffer->buft) ||
             ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
@@ -150,6 +153,12 @@ static inline uint32_t htp_mdev_rows_per_chunk(const struct ggml_tensor * t) {
         return (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32((uint32_t) row_size, HEX_L2_LINE_SIZE)) : 1;
     }
     return 0;
+}
+
+static inline const struct ggml_tensor * htp_mdev_worst_dst(const struct ggml_tensor * a, const struct ggml_tensor * b) {
+    const uint32_t ra = htp_mdev_rows_per_chunk(a);
+    const uint32_t rb = htp_mdev_rows_per_chunk(b);
+    return (ra != 0 && (rb == 0 || rb > ra)) ? b : a;
 }
 
 struct ggml_hexagon_session;
