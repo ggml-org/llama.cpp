@@ -862,6 +862,8 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list 
 
 `lang`: Language code for the utterance (model-dependent, e.g. `en`, `zh`). Optional.
 
+`raw_prompt`: If `true`, `input` is passed to the model as is, without the text preprocessing of the model's `tts` chat template (prompt format, text normalization, text to phonemes). For example, a Kokoro model then takes a phoneme string. Default: `false`
+
 `voice`: Voice for the utterance, one of the `voices` listed by `GET /props` (model-dependent, e.g. `female` or `male` for LFM3-Audio). Optional: a model with predefined voices speaks with the first of them when neither `voice` nor `speaker_ref` is given. It rejects any other name, and a predefined voice cannot be combined with `speaker_ref`.
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
@@ -1678,7 +1680,7 @@ Generates speech from text, for models that can generate audio. The request is c
 
 `stream_format`: `audio` streams the response as it becomes available, see `stream` in `/tts` for the WAV header it writes. `sse` is rejected. The response is not streamed when omitted.
 
-`speed`: Speaking speed, see `speed` in `/tts`. Only models that support it accept a value other than `1.0`. `loudness`, `cfg_scale` and `flow_steps` of `/tts` can be used as well.
+`speed`: Speaking speed, see `speed` in `/tts`. Only models that support it accept a value other than `1.0`. `loudness`, `cfg_scale`, `flow_steps`, `lang` and `raw_prompt` of `/tts` can be used as well.
 
 `instructions`: Ignored.
 

@@ -135,7 +135,13 @@ int main(int argc, char ** argv) {
 
     // a model with a "tts" chat template (e.g. LFM3-Audio) speaks the prompt rendered from it
     auto tmpls = common_chat_templates_init(model, "");
-    std::string prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
+    std::string prompt;
+    try {
+        prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
+    } catch (const std::exception & e) {
+        LOG_ERR("failed to prepare the text to speak: %s\n", e.what());
+        return 1;
+    }
     if (prompt.empty()) {
         prompt = params.prompt;
     }

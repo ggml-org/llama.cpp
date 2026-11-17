@@ -15,6 +15,7 @@ Supported models:
 - [Fish Audio S2 Pro](#fish-audio-s2-pro)
 - [YuE2](#yue2) (songs)
 - [MiniMax Music 3](#minimax-music-3) (songs)
+- [Kokoro](#kokoro)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -363,3 +364,62 @@ python convert_hf_to_gguf.py MiniMax-Music3 --mmproj --outfile mmproj-minimax-mu
 ```
 
 The mmproj holds the depth decoder and the DiT layers (in the `--outtype` type), and the condition encoder, the small DiT projections and the DAC decoder, always in F32.
+
+## Kokoro
+
+Available params:
+- `--tts-voice` selects one of the voices shipped with the weights (default: `af_heart`); `llama-tts` lists them when the name is unknown. The first letter of a voice is its language: `a` American English, `b` British English, `e` Spanish, `f` French, `h` Hindi, `i` Italian, `p` Brazilian Portuguese, `j` Japanese, `z` Mandarin
+- `--tts-lang` can be `en-us` or `en-gb`; when it is not given, the voices named `b*` speak British English and those named `a*` American English
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the vocoder source
+- `speed` (`llama-server` only) changes the speaking rate, e.g. `1.5`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m kokoro.gguf \
+    -mm mmproj-kokoro.gguf \
+    -p "Hello world" \
+    --tts-voice am_michael \
+    --output out.wav
+```
+
+The model speaks phonemes. Only English has a text to phonemes step (the model's `tts` chat template, with the pronunciation dictionary stored in the model):
+- the pronunciation of a word missing from the dictionary (mostly rare names) is predicted from its spelling, by a model that the converter learns from the dictionary. The reference uses espeak-ng for these words; the prediction is about as accurate, but it is not the same, so such a word can sound different from the reference
+- a text longer than 510 phonemes is split at sentence ends and spoken segment by segment
+
+**Other languages, or your own phonemes:**
+
+The prompt of a voice of another language must already be phonemes, in the symbols of the model (see `vocab` in its `config.json`). Run the text to phonemes step in your own code, for example with [espeak-ng](https://github.com/espeak-ng/espeak-ng), which the reference uses for Spanish, French, Hindi, Italian and Brazilian Portuguese:
+
+```sh
+PHONEMES=$(echo "El gobierno anunció nuevas medidas." | espeak-ng -q --ipa -v es --stdin | tr '\n' ' ')
+llama-tts -m kokoro.gguf \
+    -mm mmproj-kokoro.gguf \
+    -p "$PHONEMES" \
+    --tts-voice ef_dora \
+    --output out.wav
+```
+
+Notes:
+- espeak-ng drops the punctuation, which the model uses for pauses: phonemize the text between the marks and put them back for better prosody
+- the reference also replaces a few sounds by single symbols (e.g. `tʃ` by `ʧ`), see `espeak.py` of [misaki](https://github.com/hexgrad/misaki)
+- with `llama-server`, send `"raw_prompt": true` to pass phonemes with any voice, including the English ones
+
+**Note for GGUF conversion:**
+
+Download `config.json`, `kokoro-v1_0.pth` and the `voices/*.pt` files you want from [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M), every voice in the directory is stored in the mmproj:
+
+```sh
+python convert_hf_to_gguf.py path/to/Kokoro-82M --outfile kokoro.gguf
+python convert_hf_to_gguf.py path/to/Kokoro-82M --mmproj --outfile mmproj-kokoro.gguf
+```
+
+The pronunciation dictionary and the part-of-speech tagger of the `tts` template come from the `misaki` and `nltk` python packages. The converter also learns the spelling-to-sound model for unknown words from that dictionary, which adds about 15 seconds:
+
+```sh
+pip install misaki nltk
+python -m nltk.downloader averaged_perceptron_tagger_eng
+```
+
+Without them the converter writes no `tts` template, and the prompt must be a phoneme string (as produced by misaki).

@@ -114,6 +114,22 @@ struct mtmd_subctx_gen_state {
     }
 };
 
+// kokoro: inputs and outputs of one graph stage, see mtmd_graph_kokoro
+struct mtmd_subctx_kokoro_io {
+    int stage    = 0;
+    int n_tok    = 0;
+    int n_frames = 0;
+    int n_har    = 0;
+    const std::vector<int32_t> * tokens = nullptr; // STAGE_TEXT
+    const std::vector<float> *   x      = nullptr; // STAGE_F0N: shared LSTM output, STAGE_DEC: aligned text features
+    const std::vector<float> *   style  = nullptr; // predictor or decoder half of the voice row
+    const std::vector<float> *   f0     = nullptr; // STAGE_DEC
+    const std::vector<float> *   en     = nullptr;
+    const std::vector<float> *   har    = nullptr;
+    std::vector<float> * out0 = nullptr; // text features, F0, or STFT coefficients
+    std::vector<float> * out1 = nullptr; // STAGE_F0N: energy
+};
+
 struct mtmd_subctx_encode_params {
     int n_threads = 1;
     const mtmd_image_f32_batch * imgs = nullptr;
@@ -147,6 +163,10 @@ struct mtmd_subctx_encode_params {
     int vocode_n_mel  = 0;
     int vocode_n_stft = 0;
     std::vector<float> * out_spec = nullptr;
+
+    // kokoro: set by encode_kokoro() for each of its graph stages
+    const mtmd_subctx_kokoro_io * kokoro = nullptr;
+    float speed = 1.0f; // kokoro: the predicted durations are divided by it
 
     // audio gen: state of one sequence, encode() updates it in place
     struct mtmd_subctx_gen_state * gen_state = nullptr;
@@ -204,6 +224,9 @@ private:
     };
 
     mtmd_image_f32_batch get_dummy_batch() const;
+
+    // kokoro GEN_WAV: codes are the phoneme tokens, feats the voice row followed by the backbone state of each token
+    bool encode_kokoro(mtmd_subctx_encode_params * params);
 
     // only initialize backend buffers, but do not allocate them yet
     support_info_graph reserve_compute_meta(const mtmd_image_f32_batch & batch);
