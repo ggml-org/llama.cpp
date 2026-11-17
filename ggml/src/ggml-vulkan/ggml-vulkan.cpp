@@ -1323,7 +1323,9 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     }
 
     // Br=32 spills registers, only prefill benefits
-    result.q_in_regs = result.block_rows == coopmat_block_rows && device->vendor_id == VK_VENDOR_ID_AMD && n_rows >= 64;
+    // AMD proprietary driver crashes compiling the loop-indexed Qreg array
+    result.q_in_regs = result.block_rows == coopmat_block_rows && device->vendor_id == VK_VENDOR_ID_AMD && n_rows >= 64 &&
+                       device->driver_id != vk::DriverId::eAmdProprietary;
 
     // Flipped ownership: each subgroup owns 16 Q rows.
     // uma, nvidia: K/V tiles staged in separate LDS buffers; discrete AMD GQA: K/V loaded directly from global memory.
@@ -1354,6 +1356,9 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     if (device->architecture == AMD_RDNA4 && result.q_in_regs && hsk > 256) {
         result.limit_occupancy_shmem = 14 * 1024 / 16;
     }
+
+    // non-flip shader handles at most two row tiles
+    GGML_ASSERT(result.flip || result.block_rows <= 2 * coopmat_block_rows);
 
     return result;
 }
