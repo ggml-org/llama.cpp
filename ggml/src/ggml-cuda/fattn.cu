@@ -186,7 +186,6 @@ bool ggml_cuda_fattn_ext_use_gqa_opt(
     }
     return use_gqa_opt;
 }
-
 // The two helpers below duplicate the inline predicates of switch_ncols1 verbatim so that get_alloc_size can predict its routing
 // without modifying upstream's function (the allocation must match the kernel actually chosen, or the f16 scratch region is sized
 // wrong). A mismatch is a sizing bug only for quantized-KV ops that qualify for the fused path, and the GGML_CUDA_FATTN_MMA_FUSED=2
@@ -201,7 +200,6 @@ static bool ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile(const int cc, const
     const ggml_tensor * Q = dst->src[0];
     return !(has_wide_sparse && Q->ne[1] > 32/ncols2) && ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, ncols2);
 }
-
 // Dense (non-sparse) ncols1 selection made from the same predicates as switch_ncols1:
 template <int DKQ>
 static int ggml_cuda_fattn_ext_mma_f16_get_ncols1(const int cc, const int ne11, const int ncols2) {
@@ -749,20 +747,21 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
-
     // The MMA kernel and the vector kernel can read K/V through the kv_rows gather list:
     if (kv_rows) {
         if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !turing_mma_available(cc) || !mask || Q->ne[0] == 40 || Q->ne[0] == 72) {
             return BEST_FATTN_KERNEL_NONE;
         }
-        // Decode-shaped ops on quantized or f8_e4m3 caches go to the vec kernel with its kv_rows gather,
-        // unless the fused MMA dequant path applies to them (fused beats vec at depth there).
-        // The f16 conversion fallback can't read through kv_rows, so a compiled vec instance is required.
-        // (ggml_is_quantized excludes f8_e4m3, which needs its own clause; the vec kernel supports it per side.)
+        // Decode-shaped ops on quantized or f8_e4m3 caches go to the vec kernel with its kv_rows gather, unless the fused MMA dequant
+        // applies (fused beats vec at depth there); the f16 fallback can't read kv_rows, so a compiled vec instance is required
+        // (ggml_is_quantized excludes f8_e4m3, which needs its own clause).
         const bool vec_rows_types_ok =
             (ggml_is_quantized(K->type) || K->type == GGML_TYPE_F8_E4M3) &&
             (ggml_is_quantized(V->type) || V->type == GGML_TYPE_F8_E4M3);
-        if (cc >= GGML_CUDA_CC_ADA_LOVELACE && can_use_vector_kernel &&
+        // With the fused switch fully off, select kernels exactly like upstream master (kv_rows -> MMA + f16
+        // dequant copy): vec-gather only complements fused, and it loses to that route at deep 128-class caches.
+        if (ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 &&
+                cc >= GGML_CUDA_CC_ADA_LOVELACE && can_use_vector_kernel &&
                 Q->ne[1] <= 2 &&
                 vec_rows_types_ok &&
                 ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr &&
@@ -868,43 +867,36 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_applies_dkq(
         const int cc, const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * dst) {
     const int ncols1  = ggml_cuda_fattn_ext_mma_f16_get_ncols1<DKQ>(cc, Q->ne[1], 8);
     const int nstages = ggml_cuda_fattn_mma_get_nstages(DKQ, DKQ, ncols1, 8, cc);
+    bool use_sparse = false;
     if constexpr (DKQ != 128) { // may_use_sparse has no 128 entries
-        // Skip the fused path when either site can pick the sparse kernel (it has no fused dequant path): the
-        // ncols1=1 pre-check, or the case's own runtime check at its compiled ncols1 — 256/512 compile wide sparse cells.
-        if (ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<DKQ, DKQ, 8>(cc, dst) ||
-                (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DKQ, ncols1, 8) &&
-                 ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, 8))) {
-            return false; // the sparse kernel is selected instead
-        }
+        // Predict the sparse kernel exactly like the dispatch (the ncols1=1 pre-check, or the case's own runtime check at its
+        // compiled ncols1); the sparse kernel has its own fused gather path, so the flag feeds the gate below, not a disqualification.
+        use_sparse = ggml_cuda_fattn_ext_mma_f16_use_sparse_full_tile<DKQ, DKQ, 8>(cc, dst) ||
+            (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DKQ, ncols1, 8) &&
+             ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, ncols1, 8));
     }
-    return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DKQ, 8, nstages);
+    return ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DKQ, 8, nstages, use_sparse);
 }
-
 // Predicts whether ggml_cuda_flash_attn_ext_mma_f16_case will use the fused quantized dequant path,
 // via the same selection helpers as the dispatch chain. Must agree with that function or the f16 scratch region will be sized wrong.
 static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_tensor * dst) {
     if (ggml_cuda_fattn_mma_f16_fused_q_switch() == 0) {
         return false;
     }
-
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
-
     if ((Q->ne[0] != 128 && Q->ne[0] != 256 && Q->ne[0] != 512) || V->ne[0] != Q->ne[0]) {
         return false;
     }
-
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
-
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     if (!ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, dst->src[3], max_bias) || gqa_ratio <= 4) {
         return false; // switch_ncols2 doesn't pick ncols2 == 8
     }
-
-    // The DKQ=512 fused route exists only in the single-stage pass (chunk-granular staging), the DKQ=256 and DKQ=128 ones
-    // only in the multi-stage pass; the nstages requirement lives in fused_q_supported.
+    // The fused route lives in the multi-stage pass at 128/256 and in the single-stage pass (chunk-granular staging) at 512;
+    // the sparse kernels fuse at 256/512 (see fused_q_supported).
     switch (Q->ne[0]) {
         case 128: return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<128>(cc, Q, K, V, dst);
         case 256: return ggml_cuda_fattn_mma_f16_fused_q_applies_dkq<256>(cc, Q, K, V, dst);

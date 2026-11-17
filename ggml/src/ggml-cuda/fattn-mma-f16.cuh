@@ -528,32 +528,25 @@ constexpr int FATTN_MMA_FUSED_NONE = 0;
 constexpr int FATTN_MMA_FUSED_Q8_0 = 1;
 constexpr int FATTN_MMA_FUSED_Q4_0 = 2;
 constexpr int FATTN_MMA_FUSED_F8_E4M3 = 3;
-
-// All three block types cover 32 values per block; f8_e4m3 is 1 B/value with no embedded scale (the per-layer
-// cache scale is applied outside the FA op in the graph, so the kernel sees raw e4m3 bytes).
+// All three block types cover 32 values per block; f8_e4m3 is 1 B/value, its cache scale applied outside the FA op.
 constexpr int FATTN_MMA_Q8_0_BLOCK_BYTES = 34;
 constexpr int FATTN_MMA_Q4_0_BLOCK_BYTES = 18;
 constexpr int FATTN_MMA_F8_E4M3_BLOCK_BYTES = 32;
-
 // Staging row bytes per fused type, single source of truth for the load / dequant / alloc-predictor sites.
 static constexpr __host__ __device__ inline int ggml_cuda_fattn_mma_fused_block_bytes(const int fused) {
     return fused == FATTN_MMA_FUSED_Q4_0 ? FATTN_MMA_Q4_0_BLOCK_BYTES :
            fused == FATTN_MMA_FUSED_F8_E4M3 ? FATTN_MMA_F8_E4M3_BLOCK_BYTES : FATTN_MMA_Q8_0_BLOCK_BYTES;
 }
-
 // Maps a cache type to its fused kernel template arg (the gate rejects anything else up front).
 static constexpr __host__ __device__ inline int ggml_cuda_fattn_mma_fused_type_from_ggml(const ggml_type type) {
     return type == GGML_TYPE_Q4_0 ? FATTN_MMA_FUSED_Q4_0 :
            type == GGML_TYPE_F8_E4M3 ? FATTN_MMA_FUSED_F8_E4M3 : FATTN_MMA_FUSED_Q8_0;
 }
-
 static bool ggml_cuda_fattn_mma_fused_type_supported(const ggml_type type) {
     return type == GGML_TYPE_Q8_0 || type == GGML_TYPE_Q4_0 || type == GGML_TYPE_F8_E4M3;
 }
-
-// 8 B cp.async variant for the fused DKQ=DV=128 staging: q8_0/q4_0 rows of a 128-value head are 136/72 B, never 16 B
-// aligned, while the cache row pitch (K->nb[1]) equals the row size and both staging rows start out 8 B aligned.
-// cp.async.ca supports 4/8/16 B transfers (the .cg form upstream exposes only takes 16 B). Both pointers need 8 B alignment.
+// 8 B cp.async variant for the fused DKQ=DV=128 staging: q8_0/q4_0 rows of a 128-value head are 136/72 B (≡ 8 mod 16), never 16 B
+// aligned like the cache row pitch they read from. .ca supports 4/8/16 B transfers (.cg upstream only 16 B); both pointers need 8 B alignment.
 static __device__ __forceinline__ void cp_async_ca_8(const unsigned int dst, const void * src) {
 #ifdef CP_ASYNC_AVAILABLE
     asm volatile("cp.async.ca.shared.global [%0], [%1], 8;"
@@ -564,35 +557,43 @@ static __device__ __forceinline__ void cp_async_ca_8(const unsigned int dst, con
     NO_DEVICE_CODE;
 #endif // CP_ASYNC_AVAILABLE
 }
-
 // Loads a tile of raw quantized data into the shared memory staging area, to be dequantized into an f16 tile once arrived.
 // The staging area is a linear row-major layout, row size = D2/16 blocks * block_bytes.
-template<int fused, int nwarps, int nbatch_fa, int D2>
+// sparse selects the sparse-list row resolution, which must mirror flash_attn_ext_f16_load_tile: the kv_rows list
+// is readable over the full tile width (it is padded with -1), the sparse list only up to i_sup (its tail beyond
+// the count is not allocated to this tile), and negative rows are padding that gathers row 0.
+template<int fused, int nwarps, int nbatch_fa, int D2, bool sparse = false>
 static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
         const char * const __restrict__ KV, char * const __restrict__ stage, const int stride_KV,
-        const int k_VKQ_0, const int32_t * const __restrict__ indices) {
+        const int k_VKQ_0, const int32_t * const __restrict__ indices, const int i_sup = nbatch_fa) {
     static_assert(fused == FATTN_MMA_FUSED_Q8_0 || fused == FATTN_MMA_FUSED_Q4_0 || fused == FATTN_MMA_FUSED_F8_E4M3,
         "unhandled fused type");
     constexpr int block_bytes = ggml_cuda_fattn_mma_fused_block_bytes(fused);
     static_assert(D2 % 16 == 0, "fused dequant requires whole quantization blocks");
-    constexpr int row_bytes = (D2/16) * block_bytes;
-    // 16 B cp.async chunks wherever the rows are 16 B aligned (q8_0/q4_0 at D >= 256, f8_e4m3 always); the q8_0/q4_0
-    // D=128 rows are 136/72 B, ≡ 8 mod 16,
-    // exactly like the cache row pitch they read from, so they stage over 8 B chunks instead. See cp_async_ca_8.
+    constexpr int nblk = D2 / 16;
+    constexpr int row_bytes = nblk * block_bytes;
+    // Transfer width by row alignment: 16 B chunks wherever rows are 16 B aligned (q8_0/q4_0 at D >= 256, f8_e4m3 always),
+    // 8 B for the D=128 q8_0/q4_0 rows (136/72 B, see cp_async_ca_8); odd-byte rows excluded below.
     static_assert(row_bytes % 8 == 0, "quantized tile rows must be a multiple of 8 B");
     constexpr int copy_bytes = row_bytes % 16 == 0 ? 16 : 8;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    constexpr int chunks_per_row = row_bytes / copy_bytes; // cp.async chunks per row
+    constexpr int units_per_row = row_bytes / copy_bytes; // cp.async units per row
     constexpr int preload = 64;
-
     const unsigned int stage_32 = ggml_cuda_cvta_generic_to_shared(stage);
-
 #pragma unroll
-    for (int c = threadIdx.y*warp_size + threadIdx.x; c < nbatch_fa*chunks_per_row; c += nwarps*warp_size) {
-        const int i = c / chunks_per_row;
-        const int q = c % chunks_per_row;
-        // K/V rows given per mask column via the kv_rows list, negative rows are padding (mirrors flash_attn_ext_f16_load_tile):
-        const int64_t i_KV = indices ? max(indices[k_VKQ_0 + i], 0) : k_VKQ_0 + i;
+    for (int c = threadIdx.y*warp_size + threadIdx.x; c < nbatch_fa*units_per_row; c += nwarps*warp_size) {
+        const int i = c / units_per_row;
+        const int q = c % units_per_row;
+        // Row resolution mirrors flash_attn_ext_f16_load_tile: kv_rows gather via the list (negative rows are padding),
+        // the sparse list only within i_sup, and dense falls through to contiguous rows.
+        int64_t i_KV;
+        if constexpr (sparse) {
+            // out-of-range and negative slots gather row 0, the -inf mask removes their contribution (mirrors load_tile)
+            const int32_t index = i < i_sup ? indices[k_VKQ_0 + i] : 0;
+            i_KV = index >= 0 ? index : 0;
+        } else {
+            i_KV = indices ? max(indices[k_VKQ_0 + i], 0) : k_VKQ_0 + i;
+        }
         if constexpr (copy_bytes == 16) {
             cp_async_cg_16<preload>(stage_32 + c*sizeof(uint4), KV + i_KV*(stride_KV*4) + q*sizeof(uint4));
         } else {
@@ -600,7 +601,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_load_tile_q(
         }
     }
 }
-
 // Dequantizes the raw q8_0 staging area into an f16 tile with the same swizzle as flash_attn_ext_f16_load_tile.
 // The arithmetic matches dequantize_block_q8_0_f16, i.e. the result is bit-identical to the standalone f16 conversion.
 template<int stride_tile, int nwarps, int nbatch_fa, int D2>
@@ -609,18 +609,14 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nblk = D2 / 16; // q8_0 blocks per row, 32 values each
     constexpr int row_bytes = nblk * FATTN_MMA_Q8_0_BLOCK_BYTES;
-
     const half2 bias1152 = __floats2half2_rn(1152.0f, 1152.0f);
-
 #pragma unroll
     for (int u = threadIdx.y*warp_size + threadIdx.x; u < nbatch_fa*nblk; u += nwarps*warp_size) {
         const int i = u / nblk;
         const int j = u % nblk;
         const char * const b = stage + i*row_bytes + j*FATTN_MMA_Q8_0_BLOCK_BYTES;
-
         const half  d  = *(const half *) b;
         const half2 dd = __half2half2(d);
-
 #pragma unroll
         for (int q = 0; q < 4; ++q) {
             alignas(16) half vals[8];
@@ -638,7 +634,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q8(
         }
     }
 }
-
 // Dequantizes the raw q4_0 staging area into an f16 tile with the same swizzle as flash_attn_ext_f16_load_tile.
 // The arithmetic matches dequantize_block_q4_0 for dst_t=half, i.e. the result is bit-identical to the standalone f16 conversion.
 template<int stride_tile, int nwarps, int nbatch_fa, int D2>
@@ -647,16 +642,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q4(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nblk = D2 / 16; // q4_0 blocks per row, 32 values each
     constexpr int row_bytes = nblk * FATTN_MMA_Q4_0_BLOCK_BYTES;
-
 #pragma unroll
     for (int u = threadIdx.y*warp_size + threadIdx.x; u < nbatch_fa*nblk; u += nwarps*warp_size) {
         const int i = u / nblk;
         const int j = u % nblk;
         const char * const b = stage + i*row_bytes + j*FATTN_MMA_Q4_0_BLOCK_BYTES;
-
         const float d  = __half2float(*(const half *) b);
         const float dm = -8*d;
-
 #pragma unroll
         for (int q = 0; q < 4; ++q) {
             alignas(16) half vals[8];
@@ -673,7 +665,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q4(
         }
     }
 }
-
 // Converts two e4m3 bytes (low byte = first value) to half2. e4m3 values are exactly representable in f16, so the
 // hardware cvt is bit-identical to the reference dequantize_row_f8_e4m3 path; the fallback mirrors convert.cuh.
 static __device__ __forceinline__ half2 fattn_f8x2_to_half2(const uint16_t pair) {
@@ -684,7 +675,6 @@ static __device__ __forceinline__ half2 fattn_f8x2_to_half2(const uint16_t pair)
                              ggml_cuda_f8_e4m3_to_fp32((uint8_t) (pair >> 8)));
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
-
 // Dequantizes the raw f8_e4m3 staging area into an f16 tile with the same swizzle as flash_attn_ext_f16_load_tile.
 // Rows are plain byte arrays (1 B/value, no scale), so this is just the pair-wise cvt above.
 template<int stride_tile, int nwarps, int nbatch_fa, int D2>
@@ -693,13 +683,11 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_f8(
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nblk = D2 / 16; // f8_e4m3 blocks per row, 32 single-byte values each
     constexpr int row_bytes = nblk * FATTN_MMA_F8_E4M3_BLOCK_BYTES;
-
 #pragma unroll
     for (int u = threadIdx.y*warp_size + threadIdx.x; u < nbatch_fa*nblk; u += nwarps*warp_size) {
         const int i = u / nblk;
         const int j = u % nblk;
         const char * const b = stage + i*row_bytes + j*FATTN_MMA_F8_E4M3_BLOCK_BYTES;
-
 #pragma unroll
         for (int q = 0; q < 4; ++q) {
             alignas(16) half vals[8];
@@ -714,7 +702,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_f8(
         }
     }
 }
-
 // Dispatches the staging-area dequant to the type-specific arithmetic, mirroring flash_attn_ext_f16_load_tile_q.
 template<int fused, int stride_tile, int nwarps, int nbatch_fa, int D2>
 static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q(
@@ -729,7 +716,6 @@ static __device__ __forceinline__ void flash_attn_ext_f16_dequant_tile_q(
         flash_attn_ext_f16_dequant_tile_f8<stride_tile, nwarps, nbatch_fa, D2>(stage, tile);
     }
 }
-
 // Linear staging area for raw quantized tiles, located right after the mask tiles.
 // Shared by flash_attn_ext_f16_process_tile and flash_attn_ext_f16_iter so the two can't drift apart.
 template<int ncols1, int nbatch_fa>
@@ -874,14 +860,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     constexpr int stride_tile_K = swz ? nbatch_K2 : nbatch_K2 + 4;
     constexpr int stride_tile_V = V_is_K_view ? stride_tile_K : (swz ? nbatch_V2 : nbatch_V2 + 4);
 
-    // The fused dequant path consumes raw quantized bytes staged with cp.async, which only exists for
-    // cc >= Ampere. At DKQ=DV=256 the bytes arrive through the multi-stage pipeline; at DKQ=DV=512
-    // they are staged per 256-value chunk within the single-stage pass. The dispatch instantiates the
-    // fused template args for every compile pass, so on older architectures / HIP (where the device
-    // reports nstages == 0) these clamps keep the fused code out of the build.
+    // The fused path = cp.async of raw bytes + in-kernel dequant: multi-stage tile staging at DKQ=DV=256, chunk-granular staging
+    // inside the single-stage pass at 512 and the sparse kernels. The dispatch instantiates the fused template args on every
+    // compile pass, so the clamps below keep the fused code out of builds without cp.async (sub-Ampere, HIP).
     constexpr bool fused_chunked = DKQ == 512 && DV == 512;
-    constexpr int  fused_K_eff = (nstages > 1 || (nstages == 1 && fused_chunked)) ? fused_K : FATTN_MMA_FUSED_NONE;
-    constexpr int  fused_V_eff = (nstages > 1 || (nstages == 1 && fused_chunked)) ? fused_V : FATTN_MMA_FUSED_NONE;
+    constexpr int  fused_K_eff = (nstages > 1 || (nstages == 1 && (fused_chunked || use_sparse))) ? fused_K : FATTN_MMA_FUSED_NONE;
+    constexpr int  fused_V_eff = (nstages > 1 || (nstages == 1 && (fused_chunked || use_sparse))) ? fused_V : FATTN_MMA_FUSED_NONE;
     constexpr bool q_K         = fused_K_eff != FATTN_MMA_FUSED_NONE;
     constexpr bool q_V         = fused_V_eff != FATTN_MMA_FUSED_NONE;
     char   * stage    = flash_attn_ext_f16_stage<ncols1, nbatch_fa>(tile_mask);
@@ -904,8 +888,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         static_assert(!q_V || nbatch_V2 == DV/2,   "V dequant requires full-width tiles");
         cp_async_wait_all();
         __syncthreads();
-        static_assert(!q_K || !use_sparse, "fused KV dequant does not support sparse gather");
-        static_assert(!q_V || !use_sparse, "fused KV dequant does not support sparse gather");
+        static_assert(!q_K || !use_sparse, "fused KV dequant does not support sparse gather in the multi-stage pass");
+        static_assert(!q_V || !use_sparse, "fused KV dequant does not support sparse gather in the multi-stage pass");
         if constexpr (q_K) {
             // Raw K bytes from the previous iter's prefetch are now in the staging area:
             flash_attn_ext_f16_dequant_tile_q<fused_K_eff, stride_tile_K, nwarps, nbatch_fa, DKQ/2>(stage, tile_K);
@@ -934,13 +918,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 
         if constexpr (nstages <= 1) {
             if constexpr (q_K) {
-                // Chunk-granular fused staging (DKQ=DV=512): cp.async the chunk's raw quantized blocks
-                // (kv_rows gather via indices), then dequantize them into this half-width K tile slot.
-                static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
+                // Chunk-granular fused staging (DKQ=DV=512 or the sparse kernel): stage the chunk's blocks via the indices, then dequantize into this tile slot.
+                static_assert(!use_sparse || nstages == 1, "fused sparse gather requires the single-stage pass");
                 static_assert(nbatch_K2 % 16 == 0, "fused chunk staging requires whole quantization blocks");
                 constexpr int block_bytes_K = ggml_cuda_fattn_mma_fused_block_bytes(fused_K_eff);
-                flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, nbatch_K2>
-                    ((const char *) K_h2 + (k0_start/16) * block_bytes_K, stage, stride_K, k_VKQ_0, indices);
+                flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, nbatch_K2, use_sparse>
+                    ((const char *) K_h2 + (k0_start/16) * block_bytes_K, stage, stride_K, k_VKQ_0, indices, k_VKQ_sup);
                 cp_async_wait_all();
                 __syncthreads(); // The staged bytes are read by other threads' dequant below.
                 flash_attn_ext_f16_dequant_tile_q<fused_K_eff, stride_tile_K, nwarps, nbatch_fa, nbatch_K2>(stage, tile_K);
@@ -1290,7 +1273,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                     (mask_h, tile_mask, stride_mask, k_VKQ_0 + nbatch_fa, k_VKQ_sup, jt*ncols1, ne01, nullptr);
             }
             if constexpr (q_K) {
-                static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
+                static_assert(!use_sparse, "fused KV dequant does not support sparse gather in the multi-stage pass");
                 flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, k_VKQ_0 + nbatch_fa, indices);
             } else {
                 flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
@@ -1309,14 +1292,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         if constexpr (nstages <= 1) {
             if (!V_is_K_view || i0_stop > 2*nbatch_K2) {
                 if constexpr (q_V) {
-                    // Chunk-granular fused staging (DKQ=DV=512), mirroring the K loop above.
-                    // The single-stage tile is shared with K, which is fully consumed by the KQ loop.
+                    // Chunk-granular fused V staging, mirroring the K loop; the single-stage tile is shared with K, fully consumed by the KQ loop.
                     static_assert(!V_is_K_view, "fused V dequant does not support the K view");
-                    static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
+                    static_assert(!use_sparse || nstages == 1, "fused sparse gather requires the single-stage pass");
                     static_assert(nbatch_V2 % 16 == 0, "fused chunk staging requires whole quantization blocks");
                     constexpr int block_bytes_V = ggml_cuda_fattn_mma_fused_block_bytes(fused_V_eff);
-                    flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, nbatch_V2>
-                        ((const char *) V_h2 + (i0_start/32) * block_bytes_V, stage, stride_V, k_VKQ_0, indices);
+                    flash_attn_ext_f16_load_tile_q<fused_V_eff, nwarps, nbatch_fa, nbatch_V2, use_sparse>
+                        ((const char *) V_h2 + (i0_start/32) * block_bytes_V, stage, stride_V, k_VKQ_0, indices, k_VKQ_sup);
                     cp_async_wait_all();
                     __syncthreads(); // Staged bytes visible to the dequant below; K tile reads complete before its overwrite.
                     flash_attn_ext_f16_dequant_tile_q<fused_V_eff, stride_tile_V, nwarps, nbatch_fa, nbatch_V2>(stage, tile_V);
@@ -1606,15 +1588,12 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
     half  * tile_mask = (half *) (nstages > 1 ? tile_V + nbatch_fa * stride_tile_V : tile_V + nbatch_fa * stride_tile_KV_max);
     // Linear staging area for raw quantized tiles, only used by the multi-stage pipeline:
     char  * stage     = flash_attn_ext_f16_stage<ncols1, nbatch_fa>(tile_mask);
-    // The fused dequant path requires the multi-stage cp.async pipeline, which only exists for
-    // cc >= Ampere. The dispatch instantiates the fused template args for every compile pass,
-    // so on older architectures / HIP clamp them to the unfused path.
+    // The fused dequant requires cp.async (cc >= Ampere); the dispatch instantiates the fused template args on every compile
+    // pass, so the clamp below keeps them to sm_80+ (identical clamp in flash_attn_ext_f16_iter).
     // Only K is loaded through the fused path here, the fused V dequant runs in process_tile.
-    // The fused dequant path requires cp.async (cc >= Ampere); see the identical clamp in flash_attn_ext_f16_iter.
-    // DKQ=DV=256 rides the multi-stage pipeline, DKQ=DV=512 the chunk-granular staging in the single-stage pass.
     constexpr bool fused_chunked = DKQ == 512 && DV == 512;
-    constexpr int  fused_K_eff = (nstages > 1 || (nstages == 1 && fused_chunked)) ? fused_K : FATTN_MMA_FUSED_NONE;
-    constexpr int  fused_V_eff = (nstages > 1 || (nstages == 1 && fused_chunked)) ? fused_V : FATTN_MMA_FUSED_NONE;
+    constexpr int  fused_K_eff = (nstages > 1 || (nstages == 1 && (fused_chunked || use_sparse))) ? fused_K : FATTN_MMA_FUSED_NONE;
+    constexpr int  fused_V_eff = (nstages > 1 || (nstages == 1 && (fused_chunked || use_sparse))) ? fused_V : FATTN_MMA_FUSED_NONE;
     constexpr bool q_K         = fused_K_eff != FATTN_MMA_FUSED_NONE;
 
     T_B_KQ    Q_B[(Q_in_reg ? DKQp/(2*T_B_KQ::J) : 1)];
@@ -1740,7 +1719,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                 (mask_h, tile_mask, stride_mask, kb0*nbatch_fa, k_VKQ_sup, jt*ncols1, ne01, nullptr);
         }
         if constexpr (q_K) {
-            static_assert(!use_sparse, "fused KV dequant does not support sparse gather");
+            static_assert(!use_sparse, "fused KV dequant does not support sparse gather in the multi-stage pass");
             flash_attn_ext_f16_load_tile_q<fused_K_eff, nwarps, nbatch_fa, DKQ/2>((const char *) K_h2, stage, stride_K, kb0*nbatch_fa, indices);
         } else {
             flash_attn_ext_f16_load_tile<stride_tile_K, nwarps, nbatch_fa, use_cp_async, oob_check, use_sparse>
@@ -1756,7 +1735,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
             constexpr int  k_VKQ_sup = nbatch_fa;
             flash_attn_ext_f16_iter
                 <DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup, last_iter, oob_check,
-                 T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ>
+                 T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, fused_K_eff, fused_V_eff>
                 (Q_f2, K_h2, V_h2, mask_h, indices, dstk, dstk_fixup, scale, slope, logit_softcap,
                  ne01, ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C,
                  KQ_max, KQ_rowsum, jt, kb0, k_VKQ_sup);
@@ -1765,7 +1744,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
         const     int  k_VKQ_sup = ne11 - kb0*nbatch_fa;
         flash_attn_ext_f16_iter
             <DKQ, DV, ncols1, ncols2, nwarps, use_logit_softcap, V_is_K_view, use_sparse, needs_fixup, is_fixup, last_iter, oob_check,
-              T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ>
+              T_A_KQ, T_B_KQ, T_C_KQ, T_A_VKQ, T_B_VKQ, T_C_VKQ, fused_K_eff, fused_V_eff>
             (Q_f2, K_h2, V_h2, mask_h, indices, dstk, dstk_fixup, scale, slope, logit_softcap,
              ne01, ne02, stride_K, stride_V, stride_mask, tile_Q, tile_K, tile_V, tile_mask, Q_B, VKQ_C,
              KQ_max, KQ_rowsum, jt, kb0, k_VKQ_sup);
@@ -2415,7 +2394,6 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
 
 bool ggml_cuda_fattn_ext_use_gqa_opt(
         const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * mask, const float max_bias);
-
 // GGML_CUDA_FATTN_MMA_FUSED: 0 disables the fused dequant path, 2 requires it where supported (routing tests), default enabled.
 static int ggml_cuda_fattn_mma_f16_fused_q_switch() {
     static const int value = []() {
@@ -2424,29 +2402,83 @@ static int ggml_cuda_fattn_mma_f16_fused_q_switch() {
     }();
     return value;
 }
-
-// Prototype scope: fused q8_0/q4_0/f8_e4m3 dequant in the ncols2=8 kernels of three shape/pipeline families:
-// - DKQ=DV=128: dequant of the tiles staged by the multi-stage cp.async pipeline (needs nstages > 1).
-// - DKQ=DV=256: dequant of the tiles staged by the multi-stage cp.async pipeline (needs nstages > 1).
-// - DKQ=DV=512: no full-width multi-stage tiles fit in shared memory at 512, so the bytes are staged
-//   per 256-value chunk inside the single-stage pass instead (needs nstages == 1).
-// K and V qualify independently, so mixed pairs like K q8_0 + V q4_0 or K f8_e4m3 + V q8_0 use each side's own template.
+// Fused dequant scope (K and V qualify independently — mixed pairs like q8_0+q4_0 use each side's own template arg):
+// - DKQ=DV=128/256: dequant of the tiles staged by the multi-stage cp.async pipeline (needs nstages > 1).
+// - DKQ=DV=512: no full-width multi-stage tile fits smem, the bytes are staged per chunk inside the single-stage pass (needs nstages == 1).
+// - Sparse kernels (256/512 at ncols2=8): the gather forces nstages == 1 and rides the same chunk staging, load_tile_q gathering
+//   the tile rows through the indices list; the nstages passed here is the pre-clamp host value, the sparse family only needs
+//   cp.async to exist. Sparse compiles only at ncols1=1.
 static bool ggml_cuda_fattn_mma_f16_fused_q_supported(
-        const ggml_tensor * K, const ggml_tensor * V, const int DKQ, const int DV, const int ncols2, const int nstages) {
+        const ggml_tensor * K, const ggml_tensor * V, const int DKQ, const int DV, const int ncols2, const int nstages,
+        const bool use_sparse) {
     const bool q_K = ggml_cuda_fattn_mma_fused_type_supported(K->type);
     const bool q_V = ggml_cuda_fattn_mma_fused_type_supported(V->type);
+    // The launch grid is pinned to the unfused instance's occupancy (occ_kernel in launch_fattn): the fused staging smem changes
+    // blocks/SM, and an unpinned grid moves the stream-K seams (partial-combine order) at the sparse-512 cells.
+    // The dense arms must stay exclusive with the sparse one: a sparse op's nstages would otherwise satisfy the
+    // 256 (>1 host value) or 512 (==1) dense clause and bypass the sparse restriction.
     const bool fused_mode_ok = ncols2 == 8
-        && ((DKQ == 128 && DV == 128 && nstages > 1) || (DKQ == 256 && DV == 256 && nstages > 1) || (DKQ == 512 && DV == 512 && nstages == 1));
-    // The DKQ=DV=128 q8_0/q4_0 rows (4 quantization blocks, 136/72 B) can never be 16 B aligned; their cp.async staging
-    // runs over 8 B chunks, so the family's rows and pointers only need to be 8 B aligned (f8_e4m3 rows are 128 B and
-    // stage over 16 B chunks anyway). 256/512 rows are multiples of 8 blocks (272/144 B), where the check stays on 16 B.
-    const int align_req = fused_mode_ok && DKQ == 128 ? 8 : 16;
+        && (use_sparse
+            ? (nstages > 0 && DKQ == DV && (DKQ == 256 || DKQ == 512))
+            : ((DKQ == 128 && DV == 128 && nstages > 1) || (DKQ == 256 && DV == 256 && nstages > 1) || (DKQ == 512 && DV == 512 && nstages == 1)));
+    // Per-side staging alignment (see cp_async_ca_8): 16 B generally; 8 B at DKQ=DV=128 (136/72 B rows).
+    auto align_req_of = [](const ggml_type type, const int D) {
+        const int rb = (D/32) * ggml_cuda_fattn_mma_fused_block_bytes(ggml_cuda_fattn_mma_fused_type_from_ggml(type));
+        return rb % 16 == 0 ? 16 : 8;
+    };
+    const int align_K = fused_mode_ok ? align_req_of(K->type, DKQ) : 16;
+    const int align_V = fused_mode_ok ? align_req_of(V->type, DV) : 16;
     return fused_mode_ok
         && q_K && q_V
-        && K->nb[1] % align_req == 0 && K->nb[2] % align_req == 0 && K->nb[3] % align_req == 0
-        && V->nb[1] % align_req == 0 && V->nb[2] % align_req == 0 && V->nb[3] % align_req == 0
-        && (uintptr_t) K->data % align_req == 0 && (uintptr_t) V->data % align_req == 0;
+        && K->nb[1] % align_K == 0 && K->nb[2] % align_K == 0 && K->nb[3] % align_K == 0
+        && V->nb[1] % align_V == 0 && V->nb[2] % align_V == 0 && V->nb[3] % align_V == 0
+        && (uintptr_t) K->data % align_K == 0 && (uintptr_t) V->data % align_V == 0;
 }
+// The fused kernel instantiation table (K type x V type; use_sparse picks the dense or sparse gather variant); only cells the
+// gate can fuse instantiate either side (see fused_q_supported). The softcap-free 3x3 table serves the sparse calls (sparse
+// never runs with softcap); the dense cells (128/256/512, ncols2=8) use the 3x3x2 table with the softcap axis.
+// One table entry: kernel template args fixed by the enclosing pick instantiation, varying only in the per-side fused
+// K/V quant enums (_SC = softcap twin).
+#define FATTN_MMA_FUSED_CASE(KQ, VQ) \
+    flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, use_sparse, KQ, VQ>
+#define FATTN_MMA_FUSED_CASE_SC(KQ, VQ) \
+    { FATTN_MMA_FUSED_CASE(KQ, VQ), \
+      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true, V_is_K_view, use_sparse, KQ, VQ> }
+template <int DKQ, int DV, int ncols1, int ncols2, bool V_is_K_view, bool use_sparse>
+static fattn_kernel_t ggml_cuda_fattn_mma_f16_fused_kernel_pick(const int fused_K, const int fused_V, const bool use_logit_softcap) {
+    if constexpr (use_sparse) {
+        // Per-side q8_0/q4_0/f8_e4m3 dequant combinations (K x V), indexed by fused_K/V - 1.
+        GGML_ASSERT(!use_logit_softcap); // callers only reach this table for softcap-free ops (see above)
+        constexpr fattn_kernel_t fused_kernel_tab_nosc[3][3] = {
+            { FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0),
+              FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q4_0),
+              FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_F8_E4M3) },
+            { FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q8_0),
+              FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0),
+              FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_F8_E4M3) },
+            { FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q8_0),
+              FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q4_0),
+              FATTN_MMA_FUSED_CASE(FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_F8_E4M3) },
+        };
+        return fused_kernel_tab_nosc[fused_K - 1][fused_V - 1];
+    } else {
+        // Per-side q8_0/q4_0/f8_e4m3 dequant combinations (K x V x softcap), indexed by fused_K/V - 1.
+        constexpr fattn_kernel_t fused_kernel_tab[3][3][2] = {
+            { FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0),
+              FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q4_0),
+              FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_F8_E4M3) },
+            { FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q8_0),
+              FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0),
+              FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_F8_E4M3) },
+            { FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q8_0),
+              FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q4_0),
+              FATTN_MMA_FUSED_CASE_SC(FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_F8_E4M3) },
+        };
+        return fused_kernel_tab[fused_K - 1][fused_V - 1][use_logit_softcap];
+    }
+}
+#undef FATTN_MMA_FUSED_CASE
+#undef FATTN_MMA_FUSED_CASE_SC
 
 template <int DKQ, int DV, int ncols1, int ncols2>
 void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -2461,7 +2493,6 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const ggml_tensor * K    = dst->src[1];
     const ggml_tensor * V    = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
-
     float max_bias;
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
@@ -2491,10 +2522,6 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const size_t nbytes_shared_combine   = nwarps*cols_per_warp * (nbatch_combine + 4)                    * sizeof(half2);
 
     const size_t nbytes_shared_KV = nstages <= 1 ? nbytes_shared_KV_1stage : nbytes_shared_KV_2stage;
-
-    const bool fused_q_candidate = ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 && !V_is_K_view &&
-        ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, mask, max_bias) && Q->ne[2] / K->ne[2] > 4 &&
-        ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DV, ncols2, nstages);
 
     size_t nbytes_shared_total = std::max(nbytes_shared_combine, Q_in_reg ?
         std::max(nbytes_shared_Q,  nbytes_shared_KV + nbytes_shared_mask) :
@@ -2558,66 +2585,61 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         }
     }
 
-    const bool fused_q = fused_q_candidate && !use_sparse;
+    // Parity reference for the fused route: the kernel instance and smem size the f16-copy route would use, captured before
+    // the fused overwrite below; the launch derives its stream-K grid from these (see launch_fattn).
+    fattn_kernel_t const fattn_kernel_ref = fattn_kernel;
+    const size_t nbytes_shared_ref = nbytes_shared_total;
+    // The fused route is decided after the kernel selection above: fused_q_supported consumes the sparse predicate.
+    const bool fused_q = ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 &&
+        ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, mask, max_bias) && Q->ne[2] / K->ne[2] > 4 &&
+        ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DV, ncols2, nstages, use_sparse);
     const int fused_K = fused_q ? ggml_cuda_fattn_mma_fused_type_from_ggml(K->type) : FATTN_MMA_FUSED_NONE;
     const int fused_V = fused_q ? ggml_cuda_fattn_mma_fused_type_from_ggml(V->type) : FATTN_MMA_FUSED_NONE;
     if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
-        // routing pin for tests: with GGML_CUDA_FATTN_MMA_FUSED=2 supported dense ops must reach the fused kernels
+        // routing pin for tests: with GGML_CUDA_FATTN_MMA_FUSED=2 supported dense and sparse ops must reach the fused kernels
+        // (gate-excluded cases — sparse at DKQ=128 — are deliberately ignored, see fused_q_supported)
         const bool q_K = ggml_cuda_fattn_mma_fused_type_supported(K->type);
         const bool q_V = ggml_cuda_fattn_mma_fused_type_supported(V->type);
-        if (ggml_cuda_fattn_mma_f16_fused_q_switch() == 2 && !use_sparse && !fused_q_candidate && q_K && q_V) {
+        if (ggml_cuda_fattn_mma_f16_fused_q_switch() == 2 && !fused_q && q_K && q_V &&
+                (!use_sparse || DKQ == 256 || DKQ == 512)) {
             GGML_ABORT("GGML_CUDA_FATTN_MMA_FUSED=2 but the fused dequant path does not apply");
         }
     }
     if (fused_q) {
         if constexpr ((DKQ == 128 || DKQ == 256 || DKQ == 512) && DV == DKQ && ncols2 == 8) {
-            // One linear staging area is reused by the K and V loads in turn, so it is sized by whichever side needs more bytes.
-            // At DKQ=DV=256 this holds the full row; at 512 one 256-value chunk, which is the granularity the kernel stages at.
+            // One linear staging area is reused by the K and V loads in turn, sized by whichever side needs more bytes:
+            // the full row at DKQ=DV=256, one chunk (nbatch_K2/V2 values) at 512 and the sparse kernels.
             const size_t nbytes_stage_K = nbatch_fa * (nbatch_K2/16) * ggml_cuda_fattn_mma_fused_block_bytes(fused_K);
             const size_t nbytes_stage_V = nbatch_fa * (nbatch_V2/16) * ggml_cuda_fattn_mma_fused_block_bytes(fused_V);
             nbytes_shared_total += std::max(nbytes_stage_K, nbytes_stage_V); // raw quantized staging area
-
-            // Per-side q8_0/q4_0/f8_e4m3 dequant combinations (K x V x softcap), indexed by fused_K/V - 1.
-            constexpr fattn_kernel_t fused_kernel_tab[3][3][2] = {
-                { // K q8_0
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q8_0> },
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q4_0>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_Q4_0> },
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_F8_E4M3>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q8_0, FATTN_MMA_FUSED_F8_E4M3> },
-                },
-                { // K q4_0
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q8_0>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q8_0> },
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_Q4_0> },
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_F8_E4M3>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_Q4_0, FATTN_MMA_FUSED_F8_E4M3> },
-                },
-                { // K f8_e4m3
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q8_0>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q8_0> },
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q4_0>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_Q4_0> },
-                    { flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, false, V_is_K_view, false, FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_F8_E4M3>,
-                      flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, true,  V_is_K_view, false, FATTN_MMA_FUSED_F8_E4M3, FATTN_MMA_FUSED_F8_E4M3> },
-                },
-            };
-            fattn_kernel = fused_kernel_tab[fused_K - 1][fused_V - 1][logit_softcap != 0.0f];
-
+            // Sparse and dense ops pick their sparse-/dense-gather kernel family; the gate (fused_q_supported) has confined each
+            // to the cells where it exists, and use_sparse only ever holds where may_use_sparse does, so if constexpr keeps the
+            // other family's fused variants out of this instantiation (and the pin abort unreachable). The kernel table lives
+            // inside pick (sparse never runs with softcap).
+            if (use_sparse) {
+                if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(DKQ, DV, ncols1, ncols2)) {
+                    fattn_kernel = ggml_cuda_fattn_mma_f16_fused_kernel_pick<DKQ, DV, ncols1, ncols2, V_is_K_view, true>(
+                        fused_K, fused_V, logit_softcap != 0.0f);
+                } else {
+                    GGML_ABORT("fatal error"); // unreachable: this cell can have no sparse kernel
+                }
+            } else {
+                fattn_kernel = ggml_cuda_fattn_mma_f16_fused_kernel_pick<DKQ, DV, ncols1, ncols2, V_is_K_view, false>(
+                    fused_K, fused_V, logit_softcap != 0.0f);
+            }
             // Keyed on the kernel address, one raise per (variant, device): the attribute is per-function.
-            static uintptr_t fused_kernel_raised[GGML_CUDA_MAX_DEVICES] = {0};
-            if (fused_kernel_raised[id] != (uintptr_t) fattn_kernel) {
+            static uintptr_t fused_kernel_raised[2][GGML_CUDA_MAX_DEVICES] = {0};
+            if (fused_kernel_raised[use_sparse][id] != (uintptr_t) fattn_kernel) {
                 CUDA_CHECK(cudaFuncSetAttribute(reinterpret_cast<fattn_kernel_ptr_t>(fattn_kernel), cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
-                fused_kernel_raised[id] = (uintptr_t) fattn_kernel;
+                fused_kernel_raised[use_sparse][id] = (uintptr_t) fattn_kernel;
             }
         }
     }
 
     const bool async_kv_preload = nstages == 2 && !use_sparse;
     launch_fattn<DV, ncols1, ncols2>
-        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, !fused_q, !fused_q, true, use_sparse, warp_size_host, async_kv_preload);
+        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, !fused_q, !fused_q, true, use_sparse, warp_size_host, async_kv_preload,
+         fused_q ? fattn_kernel_ref : nullptr, fused_q ? nbytes_shared_ref : 0);
 }
 
 
