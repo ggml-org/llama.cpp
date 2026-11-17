@@ -441,11 +441,17 @@ llama_model_raon1_mini::graph::graph(const llm_graph_params & params) : llm_buil
         if (il < (int) hparams.n_layer_dense_lead) {
             cur = build_situ_ffn(cur, layer.ffn_up, layer.ffn_gate, layer.ffn_down, il);
         } else {
-            ggml_tensor * moe = build_moe_ffn(cur, layer.ffn_gate_inp, layer.ffn_up_exps,
-                    layer.ffn_gate_exps, layer.ffn_down_exps, layer.ffn_exp_probs_b,
-                    hparams.n_expert, hparams.n_expert_used(), LLM_FFN_SITU,
-                    hparams.expert_weights_norm, hparams.expert_weights_scale,
-                    (llama_expert_gating_func_type) hparams.expert_gating_func, il);
+            ggml_tensor * moe = build_moe_ffn(cur,
+                layer.ffn_gate_inp,
+                layer.ffn_up_exps,
+                layer.ffn_gate_exps,
+                layer.ffn_down_exps,
+                layer.ffn_exp_probs_b,
+                hparams.n_expert, hparams.n_expert_used(),
+                LLM_FFN_SITU, hparams.expert_weights_norm,
+                hparams.expert_weights_scale,
+                (llama_expert_gating_func_type) hparams.expert_gating_func,
+                il);
             if (layer.ffn_gate_shexp) {
                 ggml_tensor * shared = build_situ_ffn(cur, layer.ffn_up_shexp, layer.ffn_gate_shexp,
                         layer.ffn_down_shexp, il);
