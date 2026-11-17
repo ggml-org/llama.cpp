@@ -746,8 +746,8 @@ std::unique_ptr<clip_graph> clip_get_graph_builder(clip_subcontext * ctx, const 
     const clip_image_f32 & img = imgs.entries[0];
     std::unique_ptr<clip_graph> builder;
 
+    // Gemma 3, Qwen2/2.5/3-VL and the Qwen3-TTS gen tower run on native graphs, see llama_model_clip
     switch (ctx->model.proj_type) {
-        case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_COHERE2V:
         case PROJECTOR_TYPE_LFM2:
@@ -782,15 +782,6 @@ std::unique_ptr<clip_graph> clip_get_graph_builder(clip_subcontext * ctx, const 
         case PROJECTOR_TYPE_DOTS3NOTE_A:
             {
                 builder = std::make_unique<clip_graph_dots3note_a>(ctx, img);
-            } break;
-        case PROJECTOR_TYPE_QWEN2VL:
-        case PROJECTOR_TYPE_QWEN25VL:
-            {
-                builder = std::make_unique<clip_graph_qwen2vl>(ctx, img);
-            } break;
-        case PROJECTOR_TYPE_QWEN3VL:
-            {
-                builder = std::make_unique<clip_graph_qwen3vl>(ctx, img);
             } break;
         case PROJECTOR_TYPE_MAGEVL:
             {
@@ -1058,13 +1049,6 @@ std::unique_ptr<clip_graph> clip_get_graph_builder(clip_subcontext * ctx, const 
                 } else {
                     builder = std::make_unique<clip_graph_drama3_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames, top_k, top_p, temp);
                 }
-            } break;
-        case PROJECTOR_TYPE_QWEN3TTS_GEN:
-            {
-                const auto  gen_process = params ? params->gen_process : CLIP_SUBCTX_GEN_PROCESS_GEN_CODE;
-                const int   top_k = params ? params->top_k : 50;
-                const float top_p = params ? params->top_p : 1.0f;
-                builder = std::make_unique<clip_graph_qwen3tts_gen>(ctx, img, gen_process, top_k, top_p);
             } break;
         case PROJECTOR_TYPE_SOPRANO:
             {

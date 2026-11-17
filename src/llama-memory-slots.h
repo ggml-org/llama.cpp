@@ -11,7 +11,8 @@
 struct llama_model;
 
 // per-sequence state tensors of any shape, declared by the model (conv left-contexts, transposed-conv tails,
-// k/v windows of a streaming decoder, position counters); graphs read them and write them back in place
+// k/v windows of a streaming decoder, position counters); graphs read them and write them back in place.
+// The slots of a sequence are allocated, zeroed, by its first use and freed when the sequence is removed
 class llama_memory_slots : public llama_memory_i {
 public:
     struct slot_desc {
@@ -45,24 +46,31 @@ public:
     [[noreturn]] void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     [[noreturn]] void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
-    // the slot of a sequence, F32 [ne0, ne1]; a view into the slot tensor of all sequences
+    // the slot of a sequence, F32 [ne0, ne1]; allocates the slots of the sequence on first use
     ggml_tensor * view(ggml_context * ctx, const std::string & name, llama_seq_id seq_id) const;
 
     // the number of positions a sequence has gone through, for seq_pos_max
     void advance(llama_seq_id seq_id, llama_pos n);
 
 private:
-    void zero_seq(llama_seq_id seq_id);
+    // the slots of one sequence
+    struct seq_slots {
+        ggml_context_ptr        ctx;
+        ggml_backend_buffer_ptr buf;
+        std::map<std::string, ggml_tensor *> tensors; // F32 [ne0, ne1]
+    };
+
+    seq_slots & alloc_seq(llama_seq_id seq_id) const;
+    void        free_seq (llama_seq_id seq_id);
 
     const uint32_t n_seq_max;
 
     std::vector<slot_desc> descs;
-    std::map<std::string, ggml_tensor *> tensors; // [ne0, ne1 * n_seq_max]
-
     std::vector<llama_pos> n_pos; // per sequence, -1 = empty
 
-    ggml_context_ptr        ctx;
-    ggml_backend_buffer_ptr buf;
+    ggml_backend_buffer_type_t buft = nullptr;
+
+    mutable std::vector<seq_slots> seqs; // allocated by the first use of the sequence
 };
 
 class llama_memory_slots_context : public llama_memory_context_i {

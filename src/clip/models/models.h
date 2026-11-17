@@ -56,16 +56,6 @@ struct clip_graph_deepseek4v : clip_graph {
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_qwen2vl : clip_graph {
-    clip_graph_qwen2vl(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
-    ggml_cgraph * build() override;
-};
-
-struct clip_graph_qwen3vl : clip_graph_qwen2vl {
-    clip_graph_qwen3vl(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph_qwen2vl(ctx, img) {}
-    ggml_cgraph * build() override;
-};
-
 struct clip_graph_magevl : clip_graph {
     clip_graph_magevl(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -81,8 +71,8 @@ struct clip_graph_lfm3vl : clip_graph {
     ggml_cgraph * build() override;
 };
 
-struct clip_graph_ling3vl : clip_graph_qwen3vl {
-    clip_graph_ling3vl(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph_qwen3vl(ctx, img) {}
+struct clip_graph_ling3vl : clip_graph {
+    clip_graph_ling3vl(clip_subcontext * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
 
@@ -385,18 +375,9 @@ struct clip_graph_qwen3tts_spkenc : clip_graph {
     ggml_tensor * attentive_stats_pool(ggml_tensor * x) const;
 };
 
-struct clip_graph_qwen3tts_gen : clip_graph {
-    clip_graph_qwen3tts_gen(clip_subcontext * ctx, const clip_image_f32 & img, clip_subctx_gen_process gen_process, int top_k, float top_p)
-        : clip_graph(ctx, img), gen_process(gen_process), top_k(top_k), top_p(top_p) {}
-    ggml_cgraph * build() override;
-
-    // which sub-graph build() constructs, fixed at graph-build time
-    clip_subctx_gen_process gen_process;
-
-    // sampling params, fixed at graph-build time (GEN_CODE only)
-    int   top_k;
-    float top_p;
-
+// the code predictor and the codec of Qwen3-TTS, the building blocks of the Fish S2 and Drama 3 graphs
+// (Qwen3-TTS itself runs on native graphs, see llama_model_clip)
+struct clip_graph_qwen3tts_gen {
     //
     // code_gen: backbone hidden state + sampled code0 -> 16 RVQ codes
     // MTP-style code predictor, one token per codebook

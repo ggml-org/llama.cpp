@@ -35,12 +35,16 @@ static const char * CKEY_WA_PATTERN    = "clip.vision.n_wa_pattern";
 static const char * CKEY_WINDOW_SIZE   = "clip.vision.window_size";
 static const char * CKEY_DEEPSTACK     = "clip.vision.is_deepstack_layers";
 
-static llama_clip_projector clip_projector_from_string(const std::string & name) {
-    if (name == "gemma3")           { return LLAMA_CLIP_PROJ_GEMMA3; }
-    if (name == "qwen2vl_merger")   { return LLAMA_CLIP_PROJ_QWEN2VL; }
-    if (name == "qwen2.5vl_merger") { return LLAMA_CLIP_PROJ_QWEN25VL; }
-    if (name == "qwen3vl_merger")   { return LLAMA_CLIP_PROJ_QWEN3VL; }
-    return LLAMA_CLIP_PROJ_UNKNOWN;
+// the vision projectors with native graphs, from the projector the engine resolved (e.g. the vision tower of a
+// legacy "qwen2.5o" file is Qwen2.5-VL)
+static llama_clip_projector clip_projector_native(const clip_model * m) {
+    switch (m ? m->proj_type : PROJECTOR_TYPE_UNKNOWN) {
+        case PROJECTOR_TYPE_GEMMA3:   return LLAMA_CLIP_PROJ_GEMMA3;
+        case PROJECTOR_TYPE_QWEN2VL:  return LLAMA_CLIP_PROJ_QWEN2VL;
+        case PROJECTOR_TYPE_QWEN25VL: return LLAMA_CLIP_PROJ_QWEN25VL;
+        case PROJECTOR_TYPE_QWEN3VL:  return LLAMA_CLIP_PROJ_QWEN3VL;
+        default:                      return LLAMA_CLIP_PROJ_UNKNOWN;
+    }
 }
 
 // mmproj files store sizes as u32 (most) or i32 (some converters), accept both
@@ -74,7 +78,7 @@ void llama_model_clip::load_gen_hparams(llama_model_loader & ml) {
         return;
     }
     ml.get_key(std::string(CKEY_GEN_PROJ), ghp.proj_name, false);
-    ghp.proj = ghp.proj_name == "qwen3tts_gen" ? LLAMA_CLIP_PROJ_QWEN3TTS_GEN : LLAMA_CLIP_PROJ_UNKNOWN;
+    ghp.proj = engine_gen() && engine_gen()->proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN ? LLAMA_CLIP_PROJ_QWEN3TTS_GEN : LLAMA_CLIP_PROJ_UNKNOWN;
     if (ghp.proj == LLAMA_CLIP_PROJ_UNKNOWN) {
         return;
     }
@@ -137,11 +141,8 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     engine = std::make_unique<clip_models>(clip_model_load_hparams(ml));
     path   = ml.fname;
 
-    // LLAMA_CLIP_NATIVE=1: run Gemma 3, Qwen2/2.5/3-VL and Qwen3-TTS on their native graphs (libllama helpers)
-    // instead of the graphs of the clip engine; for development, the engine graphs match mtmd bit for bit
-    const char * env_native = getenv("LLAMA_CLIP_NATIVE");
-    const bool allow_native = env_native != nullptr && atoi(env_native) != 0;
-
+    // Gemma 3, Qwen2/2.5/3-VL and Qwen3-TTS (gen tower) run on their native graphs (libllama helpers), the other
+    // towers on the graphs of the clip engine; the engine still lays out and preprocesses every media
     ml.get_key(std::string(CKEY_HAS_VISION), vhp.has_vision, false);
 
     std::string proj;
@@ -149,11 +150,11 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(std::string(CKEY_PROJ_TYPE), proj, false);
     }
     vhp.proj_name = proj;
-    vhp.proj      = clip_projector_from_string(proj);
+    vhp.proj      = clip_projector_native(engine_vision());
 
     if (!vhp.has_vision) {
         load_gen_hparams(ml);
-        native_gen = allow_native && ghp.has_gen && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN;
+        native_gen = ghp.has_gen && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN;
         if (!native_gen) {
             ghp = {};
             const clip_model * main = engine_audio() ? engine_audio() : engine_gen();
@@ -165,7 +166,7 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
         return;
     }
 
-    native_v = allow_native && vhp.proj != LLAMA_CLIP_PROJ_UNKNOWN;
+    native_v = vhp.proj != LLAMA_CLIP_PROJ_UNKNOWN;
     if (!native_v) {
         GGML_ASSERT(engine_vision() != nullptr);
         load_engine_hparams(*engine_vision());
@@ -628,6 +629,12 @@ struct llama_model_clip::graph_vit : public llm_graph_context {
             cb(Vcur, "Vcur", il);
 
             ggml_tensor * mask = get_mask ? get_mask(il) : nullptr;
+
+            // Q, K and V enter the graph before the attention, as in the clip engine: the K/V casts come after the
+            // projections, which lowers the peak of the compute buffer (one activation less) and keeps the node order
+            ggml_build_forward_order(gf, Qcur);
+            ggml_build_forward_order(gf, Kcur);
+            ggml_build_forward_order(gf, Vcur);
 
             cur = build_attn_mha(Qcur, Kcur, Vcur, nullptr, mask, nullptr, nullptr, nullptr, 0, kq_scale, il);
             cur = build_lora_mm(layer.wo, cur);
@@ -1157,6 +1164,11 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
         ggml_tensor * kc = ggml_reshape_3d(ctx0, k_cache, d_head, n_head_kv, n_kv_pad);
         ggml_tensor * vc = ggml_reshape_3d(ctx0, v_cache, d_head, n_head_kv, n_kv_pad);
 
+        // Q, K and V enter the graph before the attention, as in the clip engine (same node order, same fusions)
+        ggml_build_forward_order(gf, q);
+        ggml_build_forward_order(gf, kc);
+        ggml_build_forward_order(gf, vc);
+
         ggml_tensor * attn = build_attn_mha(q, kc, vc, nullptr, kq_mask, nullptr, nullptr, nullptr, 0, kq_scale, il);
         attn = ggml_mul_mat(ctx0, layer.wo, attn);
 
@@ -1179,7 +1191,8 @@ std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_
 
     const bool native = (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER && native_v) ||
                         (ctx_type != LLAMA_CONTEXT_TYPE_ENCODER && native_gen);
-    if ((mi && mi->clip_req) || !native) {
+    // a media of an engine tower (encode or reservation of a tower other than the main one) carries its runtime
+    if ((mi && mi->clip_sub) || !native) {
         return llama_model_clip_build_engine_graph(*this, params);
     }
 

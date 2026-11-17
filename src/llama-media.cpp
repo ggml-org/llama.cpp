@@ -841,6 +841,32 @@ int32_t llama_media_debug_encode(const struct llama_media_proc * proc, enum llam
     }
     LLAMA_LOG_INFO("%s: created input with nx=%d, ny=%d\n", __func__, inp.nx(), inp.ny());
 
+    // a tower on native graphs: the input as a media, encoded on the context
+    const auto * clip = as_clip(proc->model_enc);
+    if (!is_audio && clip != nullptr && clip->native_v) {
+        auto * media = new llama_media;
+        media->model_enc = proc->model_enc;
+        media->inp.type  = LLAMA_MEDIA_TYPE_IMAGE;
+        media->img       = std::make_shared<clip_image_tokens>();
+        media->img->batch_f32.entries.push_back(inp);
+        media->n_tokens  = (uint32_t) m->n_output_tokens(&inp);
+        llama_batch_ext * batch = llama_batch_ext_init(proc->ctx_enc);
+        int32_t res = llama_batch_ext_add_media(batch, 0, media, 0, 0, 0) < 0 ? -1 : 0;
+        if (res == 0) {
+            res = llama_process(proc->ctx_enc, LLAMA_PROCESS_TYPE_ENCODE, batch);
+        }
+        llama_batch_ext_free(batch);
+        if (res == 0) {
+            clip_debug_print_embeddings(media->rows.data(), media->n_embd, media->n_tokens);
+        }
+        llama_media_free(media);
+        if (res != 0) {
+            LLAMA_LOG_ERROR("%s: failed to encode\n", __func__);
+            return 1;
+        }
+        return 0;
+    }
+
     clip_subcontext * sub = proc->ctx_enc->clip_sub(*m);
     std::vector<float> out((size_t) m->n_output_tokens(&inp) * m->n_mmproj_embd());
     sub->debug_output_embeddings = true;

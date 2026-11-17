@@ -74,6 +74,56 @@ clip_cpu_compute::~clip_cpu_compute() {
     ggml_backend_free(backend);
 }
 
+void clip_debug_print_embeddings(const float * data, int64_t n_embd, int64_t n_tokens) {
+    const std::vector<float> emb_data(data, data + n_embd * n_tokens);
+
+    LOG_INF("\n=== CLIP_DEBUG_EMBEDDINGS ===\n");
+    LOG_INF("Shape: [%lld, %lld]\n", (long long)n_embd, (long long)n_tokens);
+
+    // TEMP debugging (parity validation), will be removed before merge
+    // when the env var holds a path, dump the raw data: [int32 n_tokens][int32 n_embd][f32 data]
+    const char * dump_path = std::getenv("CLIP_DEBUG_EMBEDDINGS");
+    if (dump_path && strcmp(dump_path, "1") != 0) {
+        FILE * f = fopen(dump_path, "wb");
+        if (f) {
+            const int32_t hdr[2] = { (int32_t)n_tokens, (int32_t)n_embd };
+            fwrite(hdr, sizeof(hdr), 1, f);
+            fwrite(emb_data.data(), sizeof(float), emb_data.size(), f);
+            fclose(f);
+        }
+    }
+
+    // Print first few values of first token
+    LOG_INF("Token 0 (first 16 values): ");
+    for (int i = 0; i < std::min((int64_t)16, n_embd); i++) {
+        LOG_INF("%.6f ", emb_data[i]);
+    }
+    LOG_INF("\n");
+
+    // Print last few values of first token
+    if (n_embd > 16) {
+        LOG_INF("Token 0 (last 16 values):  ");
+        for (int64_t i = n_embd - 16; i < n_embd; i++) {
+            LOG_INF("%.6f ", emb_data[i]);
+        }
+        LOG_INF("\n");
+    }
+
+    // Compute and print statistics
+    float sum = 0.0f, sum_sq = 0.0f, min_val = emb_data[0], max_val = emb_data[0];
+    for (size_t i = 0; i < emb_data.size(); i++) {
+        sum += emb_data[i];
+        sum_sq += emb_data[i] * emb_data[i];
+        min_val = std::min(min_val, emb_data[i]);
+        max_val = std::max(max_val, emb_data[i]);
+    }
+    float mean = sum / emb_data.size();
+    float variance = (sum_sq / emb_data.size()) - (mean * mean);
+    LOG_INF("Stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f, sum=%.6f\n",
+            mean, sqrtf(variance), min_val, max_val, sum);
+    LOG_INF("=== END CLIP_DEBUG_EMBEDDINGS ===\n\n");
+}
+
 bool clip_audio_log_mel(const clip_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
     ggml_backend_sched_t sched = config.sched;
     GGML_ASSERT(sched != nullptr && "the log-mel needs a scheduler, see clip_cpu_compute");
@@ -191,7 +241,6 @@ bool clip_subcontext::encode_batch(int n_threads, const clip_image_f32_batch * i
 // persisted state slots of the gen-audio decoders and the streaming audio encoders
 static std::vector<c2w_state_slot> list_gen_state_slots(const clip_hparams & hparams, const clip_model & model) {
     switch (model.proj_type) {
-        case PROJECTOR_TYPE_QWEN3TTS_GEN:  return list_c2w_state_slots(hparams, model);
         case PROJECTOR_TYPE_FISH_S2_GEN:   return list_c2w_state_slots(hparams, model);
         case PROJECTOR_TYPE_DRAMA3_GEN:    return list_drama3_state_slots(hparams, model);
         case PROJECTOR_TYPE_POCKETTTS_GEN: return list_pockettts_state_slots(hparams, model);
@@ -854,8 +903,6 @@ bool clip_subcontext::set_inputs(ggml_cgraph * gf, clip_subctx_encode_params * p
                 }
                 set_input_i32("positions", positions);
             } break;
-        case PROJECTOR_TYPE_QWEN2VL:
-        case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_GLM5V:
@@ -962,14 +1009,13 @@ bool clip_subcontext::set_inputs(ggml_cgraph * gf, clip_subctx_encode_params * p
 
                 set_input_i32("positions", positions);
             } break;
-        case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_EXAONE4_5:
         case PROJECTOR_TYPE_YOUTUVL:
             {
                 // pw * ph = number of tokens output by ViT after apply patch merger
                 // ipw * ipw = number of vision token been processed inside ViT
                 const bool use_window_attn =
-                    (model.proj_type == PROJECTOR_TYPE_QWEN25VL || model.proj_type == PROJECTOR_TYPE_EXAONE4_5)
+                    model.proj_type == PROJECTOR_TYPE_EXAONE4_5
                         ? hparams.n_wa_pattern > 0
                         : !hparams.wa_layer_indexes.empty();
                 const int merge_ratio = 2;
@@ -1454,7 +1500,6 @@ bool clip_subcontext::set_inputs(ggml_cgraph * gf, clip_subctx_encode_params * p
                 }
                 set_input_f32("inp_temb", temb);
             } break;
-        case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_GEMMA3NV:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_COHERE2V:
@@ -1646,59 +1691,6 @@ bool clip_subcontext::set_inputs(ggml_cgraph * gf, clip_subctx_encode_params * p
                         v = dist(params->gen_state->rng);
                     }
                     set_input_f32("inp_rand", r);
-                }
-            } break;
-        case PROJECTOR_TYPE_QWEN3TTS_GEN:
-            {
-                if (params->gen_process == CLIP_SUBCTX_GEN_PROCESS_GEN_WAV) {
-                    GGML_ASSERT(params->codes != nullptr);
-
-                    // frame-major input to group-major, rear-padded with code 0 up to one window
-                    const int64_t n_codes  = model.gen_code_head_w->ne[2] + 1;
-                    const int64_t n_frames_w = hparams.wav_tfm_swa;
-                    const int64_t n_frames   = (int64_t) params->codes->size() / n_codes;
-                    GGML_ASSERT(n_frames > 0 && n_frames <= n_frames_w);
-
-                    // codes are used as ggml_get_rows indices, so check them against the codebook vocab
-                    const int64_t vocab_first = model.c2w.quant_first_cb_w->ne[1];
-                    const int64_t vocab_rest  = model.c2w.quant_rest_cb_w->ne[1];
-                    for (int64_t f = 0; f < n_frames; f++) {
-                        for (int64_t g = 0; g < n_codes; g++) {
-                            const int32_t c = (*params->codes)[f * n_codes + g];
-                            const int64_t vocab = (g == 0) ? vocab_first : vocab_rest;
-                            if (c < 0 || (int64_t) c >= vocab) {
-                                LOG_ERR("%s: code out of range (frame %lld, group %lld, code %d, vocab %lld)\n",
-                                        __func__, (long long) f, (long long) g, c, (long long) vocab);
-                                return false;
-                            }
-                        }
-                    }
-
-                    std::vector<int32_t> codes(n_frames_w * n_codes, 0);
-                    for (int64_t f = 0; f < n_frames; f++) {
-                        for (int64_t g = 0; g < n_codes; g++) {
-                            codes[g * n_frames_w + f] = (*params->codes)[f * n_codes + g];
-                        }
-                    }
-                    set_input_i32("inp_codes", codes);
-                    set_gen_state_in();
-                } else {
-                    // code0 indexes gen_code_out_embd_w via ggml_get_rows; bound it
-                    const int64_t vocab0 = model.gen_code_out_embd_w->ne[1];
-                    if (params->code0 < 0 || (int64_t) params->code0 >= vocab0) {
-                        LOG_ERR("%s: code0 out of range (%d, vocab %lld)\n", __func__, params->code0, (long long) vocab0);
-                        return false;
-                    }
-                    std::vector<int32_t> code0 = { params->code0 };
-                    set_input_i32("inp_code0", code0);
-
-                    // one uniform(0,1) draw per codebook, used by do_sampling()
-                    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-                    const int64_t n_acoustic = model.gen_code_head_w->ne[2];
-                    for (int64_t g = 0; g < n_acoustic; g++) {
-                        std::vector<float> r = { dist(params->gen_state->rng) };
-                        set_input_f32(("inp_rand_" + std::to_string(g)).c_str(), r);
-                    }
                 }
             } break;
         case PROJECTOR_TYPE_HUNYUANVL:
@@ -2493,56 +2485,9 @@ bool clip_subcontext::read_outputs(ggml_cgraph * gf, ggml_tensor * embeddings, c
     //
 
     if (debug_output_embeddings && embeddings != nullptr) {
-        const int64_t n_embd = embeddings->ne[0];
-        const int64_t n_tokens = embeddings->ne[1];
         std::vector<float> emb_data(ggml_nelements(embeddings));
         ggml_backend_tensor_get(embeddings, emb_data.data(), 0, ggml_nbytes(embeddings));
-
-        LOG_INF("\n=== CLIP_DEBUG_EMBEDDINGS ===\n");
-        LOG_INF("Shape: [%lld, %lld]\n", (long long)n_embd, (long long)n_tokens);
-
-        // TEMP debugging (parity validation), will be removed before merge
-        // when the env var holds a path, dump the raw data: [int32 n_tokens][int32 n_embd][f32 data]
-        const char * dump_path = std::getenv("CLIP_DEBUG_EMBEDDINGS");
-        if (dump_path && strcmp(dump_path, "1") != 0) {
-            FILE * f = fopen(dump_path, "wb");
-            if (f) {
-                const int32_t hdr[2] = { (int32_t)n_tokens, (int32_t)n_embd };
-                fwrite(hdr, sizeof(hdr), 1, f);
-                fwrite(emb_data.data(), sizeof(float), emb_data.size(), f);
-                fclose(f);
-            }
-        }
-
-        // Print first few values of first token
-        LOG_INF("Token 0 (first 16 values): ");
-        for (int i = 0; i < std::min((int64_t)16, n_embd); i++) {
-            LOG_INF("%.6f ", emb_data[i]);
-        }
-        LOG_INF("\n");
-
-        // Print last few values of first token
-        if (n_embd > 16) {
-            LOG_INF("Token 0 (last 16 values):  ");
-            for (int64_t i = n_embd - 16; i < n_embd; i++) {
-                LOG_INF("%.6f ", emb_data[i]);
-            }
-            LOG_INF("\n");
-        }
-
-        // Compute and print statistics
-        float sum = 0.0f, sum_sq = 0.0f, min_val = emb_data[0], max_val = emb_data[0];
-        for (size_t i = 0; i < emb_data.size(); i++) {
-            sum += emb_data[i];
-            sum_sq += emb_data[i] * emb_data[i];
-            min_val = std::min(min_val, emb_data[i]);
-            max_val = std::max(max_val, emb_data[i]);
-        }
-        float mean = sum / emb_data.size();
-        float variance = (sum_sq / emb_data.size()) - (mean * mean);
-        LOG_INF("Stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f, sum=%.6f\n",
-                mean, sqrtf(variance), min_val, max_val, sum);
-        LOG_INF("=== END CLIP_DEBUG_EMBEDDINGS ===\n\n");
+        clip_debug_print_embeddings(emb_data.data(), embeddings->ne[0], embeddings->ne[1]);
     }
 
     return true;

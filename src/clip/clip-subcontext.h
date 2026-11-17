@@ -24,6 +24,10 @@ enum clip_flash_attn_type {
 };
 
 // a CPU-only scheduler for the preprocessing graphs (log-mel), apart from the scheduler of the encoder
+// prints the shape, the first and last values of row 0 and the statistics of encoded rows (CLIP_DEBUG_EMBEDDINGS);
+// CLIP_DEBUG_EMBEDDINGS=<path> also dumps them as [int32 n_rows][int32 n_embd][f32 rows]
+void clip_debug_print_embeddings(const float * data, int64_t n_embd, int64_t n_rows);
+
 struct clip_cpu_compute {
     ggml_backend_t       backend = nullptr;
     ggml_backend_sched_t sched   = nullptr;

@@ -9,55 +9,59 @@
 #include <stdexcept>
 
 llama_memory_slots::llama_memory_slots(const llama_model & model, const std::vector<slot_desc> & slots, uint32_t n_seq_max, bool offload)
-    : n_seq_max(n_seq_max), descs(slots), n_pos(n_seq_max, -1) {
-    ggml_init_params params = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * (slots.size() + 1),
-        /*.mem_buffer =*/ nullptr,
-        /*.no_alloc   =*/ true,
-    };
-    ctx.reset(ggml_init(params));
-
-    for (const auto & d : slots) {
-        ggml_tensor * t = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, d.ne0, d.ne1 * n_seq_max);
-        ggml_format_name(t, "slot_%s", d.name.c_str());
-        tensors[d.name] = t;
-    }
-
+    : n_seq_max(n_seq_max), descs(slots), n_pos(n_seq_max, -1), seqs(n_seq_max) {
     // the slots live where the model output lives
-    ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+    buft = ggml_backend_cpu_buffer_type();
     if (offload) {
         if (ggml_backend_dev_t dev = model.dev_output()) {
             buft = ggml_backend_dev_buffer_type(dev);
         }
     }
-    buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx.get(), buft));
-    if (!buf) {
+    size_t per_seq = 0;
+    for (const auto & d : slots) {
+        per_seq += (size_t) d.ne0 * d.ne1 * sizeof(float);
+    }
+    LLAMA_LOG_INFO("%s: %zu state slots, %.2f MiB per sequence (allocated by its first use), up to %u sequences\n",
+            __func__, slots.size(), per_seq / 1024.0 / 1024.0, n_seq_max);
+}
+
+llama_memory_slots::seq_slots & llama_memory_slots::alloc_seq(llama_seq_id seq_id) const {
+    GGML_ASSERT(seq_id >= 0 && (uint32_t) seq_id < n_seq_max);
+    seq_slots & s = seqs[seq_id];
+    if (s.buf) {
+        return s;
+    }
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * (descs.size() + 1),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    s.ctx.reset(ggml_init(params));
+    for (const auto & d : descs) {
+        ggml_tensor * t = ggml_new_tensor_2d(s.ctx.get(), GGML_TYPE_F32, d.ne0, d.ne1);
+        ggml_format_name(t, "slot_%s_%d", d.name.c_str(), seq_id);
+        s.tensors[d.name] = t;
+    }
+    s.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(s.ctx.get(), buft));
+    if (!s.buf) {
         throw std::runtime_error("failed to allocate the state slots");
     }
-    ggml_backend_buffer_clear(buf.get(), 0);
-    LLAMA_LOG_INFO("%s: %zu state slots, %.2f MiB for %u sequences\n", __func__, slots.size(),
-            ggml_backend_buffer_get_size(buf.get()) / 1024.0 / 1024.0, n_seq_max);
+    ggml_backend_buffer_clear(s.buf.get(), 0);
+    return s;
+}
+
+void llama_memory_slots::free_seq(llama_seq_id seq_id) {
+    seqs[seq_id] = seq_slots();
+    n_pos[seq_id] = -1;
 }
 
 ggml_tensor * llama_memory_slots::view(ggml_context * ctx0, const std::string & name, llama_seq_id seq_id) const {
-    GGML_ASSERT(seq_id >= 0 && (uint32_t) seq_id < n_seq_max);
-    ggml_tensor * t = tensors.at(name);
-    const int64_t ne1 = t->ne[1] / n_seq_max;
-    return ggml_view_2d(ctx0, t, t->ne[0], ne1, t->nb[1], (size_t) seq_id * ne1 * t->nb[1]);
+    ggml_tensor * t = alloc_seq(seq_id).tensors.at(name);
+    return ggml_view_2d(ctx0, t, t->ne[0], t->ne[1], t->nb[1], 0);
 }
 
 void llama_memory_slots::advance(llama_seq_id seq_id, llama_pos n) {
     n_pos[seq_id] = (n_pos[seq_id] < 0 ? 0 : n_pos[seq_id] + 1) + n - 1;
-}
-
-void llama_memory_slots::zero_seq(llama_seq_id seq_id) {
-    for (const auto & [name, t] : tensors) {
-        const int64_t ne1   = t->ne[1] / n_seq_max;
-        const size_t  bytes = (size_t) ne1 * t->nb[1];
-        std::vector<uint8_t> zeros(bytes, 0);
-        ggml_backend_tensor_set(t, zeros.data(), (size_t) seq_id * bytes, bytes);
-    }
-    n_pos[seq_id] = -1;
 }
 
 llama_memory_context_ptr llama_memory_slots::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
@@ -85,10 +89,10 @@ llama_memory_context_ptr llama_memory_slots::init_update(llama_context * lctx, b
 }
 
 void llama_memory_slots::clear(bool data) {
-    if (data) {
-        ggml_backend_buffer_clear(buf.get(), 0);
+    GGML_UNUSED(data); // a sequence starts from zeroed slots either way
+    for (uint32_t s = 0; s < n_seq_max; ++s) {
+        free_seq((llama_seq_id) s);
     }
-    std::fill(n_pos.begin(), n_pos.end(), -1);
 }
 
 bool llama_memory_slots::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -100,19 +104,23 @@ bool llama_memory_slots::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1)
         clear(true);
         return true;
     }
-    zero_seq(seq_id);
+    free_seq(seq_id);
     return true;
 }
 
 void llama_memory_slots::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     GGML_UNUSED(p0);
     GGML_UNUSED(p1);
-    for (const auto & [name, t] : tensors) {
-        const int64_t ne1   = t->ne[1] / n_seq_max;
-        const size_t  bytes = (size_t) ne1 * t->nb[1];
-        std::vector<uint8_t> tmp(bytes);
-        ggml_backend_tensor_get(t, tmp.data(), (size_t) seq_id_src * bytes, bytes);
-        ggml_backend_tensor_set(t, tmp.data(), (size_t) seq_id_dst * bytes, bytes);
+    if (!seqs[seq_id_src].buf) {
+        free_seq(seq_id_dst);
+        return;
+    }
+    const seq_slots & src = seqs[seq_id_src];
+    seq_slots       & dst = alloc_seq(seq_id_dst);
+    for (const auto & [name, t] : src.tensors) {
+        std::vector<uint8_t> tmp(ggml_nbytes(t));
+        ggml_backend_tensor_get(t, tmp.data(), 0, tmp.size());
+        ggml_backend_tensor_set(dst.tensors.at(name), tmp.data(), 0, tmp.size());
     }
     n_pos[seq_id_dst] = n_pos[seq_id_src];
 }
@@ -120,7 +128,7 @@ void llama_memory_slots::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst
 void llama_memory_slots::seq_keep(llama_seq_id seq_id) {
     for (uint32_t s = 0; s < n_seq_max; ++s) {
         if ((llama_seq_id) s != seq_id) {
-            zero_seq(s);
+            free_seq((llama_seq_id) s);
         }
     }
 }
@@ -137,7 +145,11 @@ llama_pos llama_memory_slots::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_slots::memory_breakdown() const {
-    return { { ggml_backend_buffer_get_type(buf.get()), ggml_backend_buffer_get_size(buf.get()) } };
+    size_t size = 0;
+    for (const auto & s : seqs) {
+        size += s.buf ? ggml_backend_buffer_get_size(s.buf.get()) : 0;
+    }
+    return { { buft, size } };
 }
 
 void llama_memory_slots::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {

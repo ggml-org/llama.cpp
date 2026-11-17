@@ -926,8 +926,10 @@ void llama_context::sched_reserve() {
     }
 
     // clip models: a context runs every encoder tower of the file (a GEN context too, for the references of its
-    // pipeline), the buffers fit the largest graph
-    if (model.arch == LLM_ARCH_CLIP) {
+    // pipeline), the buffers fit the largest graph; the native code predictor (Qwen3-TTS) encodes nothing
+    const bool clip_native_code = model.arch == LLM_ARCH_CLIP && cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE &&
+                                  static_cast<const llama_model_clip &>(model).native_gen;
+    if (model.arch == LLM_ARCH_CLIP && !clip_native_code) {
         const auto & clip = static_cast<const llama_model_clip &>(model);
         const clip_model * main_tower = clip.engine_for_ctx(cparams.ctx_type);
         for (const clip_model * tower : { clip.engine_vision(), clip.engine_audio() }) {
