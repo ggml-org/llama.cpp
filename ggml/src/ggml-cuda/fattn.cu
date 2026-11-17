@@ -143,8 +143,8 @@ static constexpr ggml_cuda_fattn_tile_sparse_config ggml_cuda_fattn_tile_get_spa
     if (DKQ == 192 && DV == 128) return {16384, 1};
     if (DKQ == 256 && DV == 256) return {gqa_ratio == 2 ? 32768 : 4096, 1};
     if (DKQ == 320 && DV == 256) return {65536, 64};
-    if (DKQ == 512 && DV == 512) return {65536, 16};
-    if (DKQ == 576 && DV == 512) return {65536, 32};
+    if (DKQ == 512 && DV == 512) return {16384, 16};
+    if (DKQ == 576 && DV == 512) return {32768, 32};
 
     return {0, 0}; // Unsupported geometry.
 }
@@ -160,8 +160,11 @@ bool ggml_cuda_flash_attn_ext_tile_shall_use_sparse(const int cc, const ggml_ten
     const ggml_tensor * mask = dst->src[3];
     const int n_kv_max = ggml_get_op_params_i32(dst, 4);
 
+    float max_bias = 0.0f;
+    memcpy(&max_bias, (const float *) dst->op_params + 1, sizeof(float));
+
     if (!mask || mask->ne[0] != K->ne[1] ||
-        mask->ne[1] < Q->ne[1] || mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0) {
+        mask->ne[1] < Q->ne[1] || mask->ne[2] != 1 || dst->src[5] || n_kv_max <= 0 || max_bias != 0.0f) {
         return false;
     }
 
