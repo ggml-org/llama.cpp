@@ -141,7 +141,9 @@ Strix Halo (gfx1151), ROCm build. Two references: mtmd's own engine, whose outpu
 | Generation | Qwen3-TTS 1.7B, Soprano 80M, Chatterbox, Chatterbox-turbo, ZONOS3-Mini, LFM3-Omni 2B (vs master) | WAV byte-identical on CPU and GPU |
 | Serialized chunks | chunks of all 30 models above saved by master (version 5), loaded by the branch | same type, token count, position count and id |
 
-Qwen2.5-Omni 7B (image and audio): the text on CPU now differs from the stored reference in one token; master gives the branch's text, rows bit-exact, so the reference is the outlier. The native graphs (`LLAMA_CLIP_NATIVE=1`) of Qwen3-TTS give a byte-identical WAV on GPU only with `GGML_CUDA_DISABLE_FUSION=1` (HIP fuses neighbouring ops by node order); they are not the default.
+Gemma 3, Qwen2-VL, Qwen2.5-VL, Qwen3-VL, Qwen3.5, the Qwen2.5-Omni vision tower and Qwen3-TTS generation run on their native graphs, the only graphs of these projectors; the moved graphs they replace gave the same results. Two Qwen3-TTS generation states driven alternately give the codes and audio of one state alone (shared code predictor and codec contexts). Qwen2.5-Omni 7B (image and audio): the text on CPU differs from the stored reference in one token; master gives the branch's text, rows bit-exact, so the reference is the outlier. `llama-mtmd-debug -p encode` on the native towers prints the same rows as master (Gemma 3, Qwen2.5-VL).
+
+On GPU, the native Qwen3-TTS code predictor builds the RoPE position and the mask of a position once for all its layers, as the engine did: from the second layer on, the RMS norm, the norm weight and the RoPE of Q are neighbours and HIP fuses them as it did for the engine, which keeps the WAV byte-identical (with `GGML_CUDA_DISABLE_FUSION=1` both master and the branch give another WAV, the same one).
 
 Not tested, no small GGUF available: Pocket TTS, Drama 3, Fish S2, YuE2, the LFM3-Audio stream. Their code moved unchanged.
 
@@ -151,11 +153,11 @@ Tests: `test-mtmd-impl` (17 cases) and `test-mtmd-c-api` pass; on Windows `test-
 
 | | master `e8fbcad85` | branch |
 |---|---|---|
-| `tools/mtmd` (C/C++) | 42,956 lines | 10,492 lines (`mtmd.cpp` 6,101 -> 2,450) |
-| `src` | 120,647 lines | 159,042 lines: `src/clip` 33,476, the rest +4,919 (native graphs of 3 families, media and gen plumbing, slot memories) |
-| `src` + `tools/mtmd` | 163,603 | 169,534 (+5,931) |
+| `tools/mtmd` (C/C++) | 42,956 lines | 10,512 lines (`mtmd.cpp` 6,101 -> 2,470) |
+| `src` | 120,647 lines | 158,527 lines: `src/clip` 32,896, the rest +4,984 (native graphs of 3 families, media and gen plumbing, slot memories) |
+| `src` + `tools/mtmd` | 163,603 | 169,039 (+5,436) |
 
-The net growth is the native graphs (Gemma 3, Qwen-VL, Qwen3-TTS), which exist next to the moved ones, and the bridge (`clip-engine.cpp`, `llama-media.cpp`, `clip-gen-memory.cpp`).
+The net growth is the native graphs (Gemma 3, Qwen-VL, Qwen3-TTS), which replaced the engine's graphs of these projectors, and the bridge (`clip-engine.cpp`, `llama-media.cpp`, `clip-gen-memory.cpp`).
 
 ### API surface
 
@@ -170,22 +172,22 @@ The net growth is the native graphs (Gemma 3, Qwen-VL, Qwen3-TTS), which exist n
 
 | Case | master | branch |
 |---|---|---|
-| Gemma 3 4B, image encode | 783-788 ms | 777-782 ms |
-| Qwen2.5-VL 3B, image encode | 338-345 ms | 333-343 ms |
-| InternVL3 1B, image encode, 5 tiles | 624-630 ms | 625-633 ms |
-| LFM2-VL 450M, image encode | 86-89 ms | 78-87 ms |
-| MiniCPM-V 2.6, image encode, slices | 412 ms | 406-411 ms |
-| Gemma 4 E4B, audio encode | 82-86 ms | 83-84 ms |
-| Voxtral Mini 3B, audio encode | 306-311 ms | 303-305 ms |
-| Qwen3-VL 2B, video encode, 20 frames (6 runs) | 1168-1624 ms | 1175-1717 ms |
-| LFM3-Omni 2B, video encode with soundtrack | 549-553 ms | 539-551 ms |
-| Qwen3-TTS 1.7B, llama-tts wall time | 3.31-3.40 s | 3.28-3.30 s |
-| Soprano 80M, llama-tts wall time | 0.58-0.65 s | 0.57-0.59 s |
-| Chatterbox-turbo, llama-tts wall time (4 runs) | 6.63-6.84 s | 6.60-6.64 s |
-| ZONOS3-Mini, llama-tts wall time | 1.48-1.51 s (one 5.50 s outlier) | 1.41-1.42 s |
-| LFM3-Omni 2B, llama-tts wall time | 2.25-2.28 s | 2.22-2.24 s |
+| Gemma 3 4B, image encode (native) | 777-782 ms | 770-782 ms |
+| Qwen2.5-VL 3B, image encode (native) | 337-347 ms | 331-339 ms |
+| InternVL3 1B, image encode, 5 tiles | 624-631 ms | 628-631 ms |
+| LFM2-VL 450M, image encode | 78-88 ms | 78-86 ms |
+| MiniCPM-V 2.6, image encode, slices | 396-412 ms | 406-415 ms |
+| Gemma 4 E4B, audio encode | 82-86 ms | 83 ms |
+| Voxtral Mini 3B, audio encode | 303-361 ms | 307-315 ms |
+| Qwen3-VL 2B, video encode, 20 frames (native) | 1172-2084 ms | 1187-1900 ms |
+| LFM3-Omni 2B, video encode with soundtrack | 998-1074 ms | 984-1007 ms |
+| Qwen3-TTS 1.7B, llama-tts wall time (native) | 4.97-5.73 s | 4.68-4.86 s |
+| Soprano 80M, llama-tts wall time | 1.03-1.10 s | 0.93-1.08 s |
+| Chatterbox-turbo, llama-tts wall time | 14.56-16.70 s | 14.14-14.69 s |
+| ZONOS3-Mini, llama-tts wall time | 2.21-2.63 s | 1.91-1.95 s |
+| LFM3-Omni 2B, llama-tts wall time | 3.12-3.24 s | 3.02-3.18 s |
 
-Equal within noise. The video runs spread with the machine: both builds slowed down in the same runs, and in quiet runs they took 1168-1219 ms (master) and 1175-1204 ms (branch), chunk by chunk the same. An earlier Chatterbox-turbo series had two 9.5 s runs on the branch; 4 more runs of each build did not repeat it, and the timings inside the process (generation 2.01 s, vocoder 1.29-1.34 s) are the same in both builds. On CPU the machine was shared with another job (load average 7 to 10); a recheck of 4 cases, 5 interleaved runs with 8 threads, gave the branch's best run at or below master's (Gemma 3 image 6566 -> 6084 ms, Voxtral audio 2703 -> 2734 ms, Qwen3-VL video 11824 -> 10611 ms, LFM3-Omni video 6433 -> 5399 ms) and medians within 9 %, which is the noise of that load.
+Equal within noise, after the removal of the moved graphs (native graphs marked); the machine was busier than in the earlier series, both builds alike. Earlier series on a quiet machine: the video runs spread with the machine, both builds slowing down in the same runs (quiet runs 1168-1219 ms master, 1175-1204 ms branch, chunk by chunk the same); two 9.5 s Chatterbox-turbo runs of the branch did not repeat in 4 more runs of each build, with the same timings inside the process (generation 2.01 s, vocoder 1.29-1.34 s). On CPU the machine was shared with another job (load average 7 to 10); a recheck of 4 cases, 5 interleaved runs with 8 threads, gave the branch's best run within 1 % of master's or below it (Gemma 3 image 6566 -> 6084 ms, Voxtral audio 2703 -> 2734 ms, Qwen3-VL video 11824 -> 10611 ms, LFM3-Omni video 6433 -> 5399 ms) and medians within 9 %, which is the noise of that load.
 
 Text only (`llama-bench -m gemma-3-4b-it-Q8_0 -lm dio -ngl 99 -fa 1 -p 1024 -n 128 -d 0,40000 -ub 1024,2048,4096 -b 4096`, master then branch):
 
@@ -208,13 +210,13 @@ All within 2.5 %, below the 3 % noise floor of this machine; the text path does 
 
 ### Initialization (`mtmd_init_from_file` with warmup, best of 3)
 
-CPU: the branch is faster for all 30 mmprojs, 6x to 15x (SmolVLM 53 -> 8 ms, Gemma 3 190 -> 14 ms, Qwen2.5-VL 292 -> 25 ms, Qwen3.5 54 -> 4 ms, Gemma 4 216 -> 34 ms, Qwen2.5-Omni 513 -> 49 ms). The weights are mapped instead of read, and an encoder context reserves its graph once, on a placeholder warmup batch. GPU: the branch is faster for all 30, by 2 % to 42 % (Gemma 3 118 -> 100 ms, Qwen2.5-VL 210 -> 193 ms, Qwen3.5 51 -> 38 ms, Qwen2.5-Omni 363 -> 314 ms).
+CPU: the branch is faster for all 30 mmprojs, 6x to 15x (SmolVLM 53 -> 8 ms, Gemma 3 190 -> 14 ms, Qwen2.5-VL 292 -> 25 ms, Qwen3.5 54 -> 4 ms, Gemma 4 216 -> 34 ms, Qwen2.5-Omni 513 -> 49 ms). The weights are mapped instead of read, and an encoder context reserves its graph once, on a placeholder warmup batch. After the removal of the moved graphs, on a CPU loaded by another job, the native-graph models stayed 9 to 13x faster than master (Gemma 3 374 -> 40 ms, Qwen2.5-VL 600 -> 52 ms, Qwen2.5-Omni 1055 -> 104 ms). GPU, after the removal: faster for 29 of 30, equal for SmolVLM2 (49 ms) (Gemma 3 192 -> 152 ms, Qwen2.5-VL 321 -> 299 ms, Qwen3.5 64 -> 52 ms, Qwen2.5-Omni 546 -> 480 ms).
 
 ### Memory
 
-`mtmd_get_memory_usage` (CPU) equals master for 34 of 37 mmprojs, Qwen2.5-VL included (1,846 MiB). The three files with both a vision and an audio tower (Qwen2.5-Omni, Gemma 4, LFM3-Omni) estimate 2 to 6 MiB lower: the branch's estimate is its compute buffers plus its weights, which equal master's at runtime (Gemma 4: 143.65 MiB compute, 945.5 MiB weights in both builds); master's estimate is above its own runtime buffers.
+`mtmd_get_memory_usage` (CPU) equals master for 33 of 37 mmprojs, Qwen2-VL (1,537 MiB) and Qwen2.5-VL (1,846 MiB) included. Gemma 3 estimates 12 MiB lower (921 vs 933 MiB). Qwen3-TTS estimates 10 MiB higher (1,517 vs 1,507 MiB): the codec state of the first sequence (5 MiB) and the code predictor context (0.8 MiB) come on top of a codec compute buffer of master's size. The three files with both a vision and an audio tower (Qwen2.5-Omni, Gemma 4, LFM3-Omni) estimate 2 to 6 MiB lower: the branch's estimate is its compute buffers plus its weights, which equal master's at runtime (Gemma 4: 143.65 MiB compute, 945.5 MiB weights in both builds); master's estimate is above its own runtime buffers.
 
-Peak RSS of `llama-mtmd-cli` (CPU, Gemma 4 E4B): image +5 MB (8,424 vs 8,429 MB), audio +15 MB (8,531 vs 8,546 MB), 0.1 to 0.2 %. After `mtmd_init_from_file` the branch is 4 MB lower; the difference comes during encode: about 5 MB is the compute buffer of the log-mel's CPU scheduler (master ran it on the encoder's scheduler, whose buffers already fit it), the rest host copies of the input.
+Peak RSS of `llama-mtmd-cli` (CPU, Gemma 4 E4B): image +5 MB (8,424 vs 8,429 MB), audio +15 MB (8,531 vs 8,546 MB), 0.1 to 0.2 %. After `mtmd_init_from_file` the branch is 4 MB lower; the difference comes during encode: about 5 MB is the compute buffer of the log-mel's CPU scheduler (master ran it on the encoder's scheduler, whose buffers already fit it), the rest host copies of the input. Qwen3-TTS (`llama-tts`, CPU): +30 MB (8,587 vs 8,617 MB, 0.35 %), WAV identical, 10 % faster (11.1 vs 12.3 s wall).
 
 ## Known limitations
 

@@ -1016,8 +1016,10 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
         // position 0: the hidden state seeds the cache
         {
             ggml_tensor * cur = project_in(h);
+            ggml_tensor * kq_mask = causal_mask_row(n_kv_pad, 0);
+            ggml_tensor * inp_pos = const_i32(k_cache[0], 0.0f);
             for (int il = 0; il < n_layer; il++) {
-                cur = layer_forward(cur, il, 0, k_cache[il], v_cache[il]);
+                cur = layer_forward(cur, il, 0, inp_pos, kq_mask, k_cache[il], v_cache[il]);
             }
         }
 
@@ -1030,8 +1032,12 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
                 cur_in = codebook_embd(g - 1, code_prev);
             }
             ggml_tensor * cur = project_in(cur_in);
+            // the position and the mask are shared by the layers, as in the clip engine: from the second layer on,
+            // the norm and the rope of Q sit next to each other and the backends fuse them the same way
+            ggml_tensor * kq_mask = causal_mask_row(n_kv_pad, pos);
+            ggml_tensor * inp_pos = const_i32(k_cache[0], (float) pos);
             for (int il = 0; il < n_layer; il++) {
-                cur = layer_forward(cur, il, pos, k_cache[il], v_cache[il]);
+                cur = layer_forward(cur, il, pos, inp_pos, kq_mask, k_cache[il], v_cache[il]);
             }
             cur = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
             cur = ggml_mul(ctx0, cur, clip.gc_norm);
@@ -1134,14 +1140,12 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
         return mask;
     }
 
-    ggml_tensor * layer_forward(ggml_tensor * cur, int il, int pos, ggml_tensor *& k_cache, ggml_tensor *& v_cache) {
+    ggml_tensor * layer_forward(ggml_tensor * cur, int il, int pos, ggml_tensor * inp_pos, ggml_tensor * kq_mask,
+                                ggml_tensor *& k_cache, ggml_tensor *& v_cache) {
         const auto & layer = model.layers[il];
         const int64_t d_head   = hparams.n_embd_head_k();
         const int64_t n_kv_pad = k_cache->ne[1];
         const float   kq_scale = 1.0f / sqrtf((float) d_head);
-
-        ggml_tensor * inp_pos = const_i32(k_cache, (float) pos);
-        ggml_tensor * kq_mask = causal_mask_row(n_kv_pad, pos);
 
         ggml_tensor * x = ggml_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
         x = ggml_mul(ctx0, x, layer.attn_norm);
