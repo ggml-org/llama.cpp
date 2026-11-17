@@ -47,7 +47,7 @@ void llama_model_domynedge::load_arch_tensors(llama_model_loader &) {
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_i}, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_i * n_head, n_embd}, 0);
 
-        // K-norm has a learnable weight; Q-norm does not (elementwise_affine=False)
+        // K-norm has a learnable weight; Q-norm does not
         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_i}, 0);
 
         layer.ffn_norm      = create_tensor(tn(LLM_TENSOR_FFN_NORM,      "weight", i), {n_embd}, 0);
@@ -103,7 +103,7 @@ llama_model_domynedge::graph::graph(const llama_model & model, const llm_graph_p
                     n_rot_il, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, attn_factor, beta_fast, beta_slow);
             cb(Qcur, "Qcur_rope", il);
-            
+                        
             Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
                     n_rot_il, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                     ext_factor, attn_factor, beta_fast, beta_slow);

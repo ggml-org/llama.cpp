@@ -228,8 +228,6 @@ def download_model(model):
     repo = model["repo"]
     tokt = model["tokt"]
 
-    os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
-
     files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
 
     if name == "gpt-4o":

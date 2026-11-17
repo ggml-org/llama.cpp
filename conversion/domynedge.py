@@ -19,13 +19,7 @@ class DomynEdgeModel(TextModel):
         # Per-layer rope/SWA pattern: True="rope", False="nope"
         rope_pattern = [v == "rope" for v in position_layers]
         self.gguf_writer.add_rope_pattern(rope_pattern)
-        self.gguf_writer.add_sliding_window_pattern(rope_pattern)  # SWA ↔ RoPE in domyn-edge
-
-        '''# window_sizes entries are [size, offset]; -1 means full/global attention
-        swa_window = next((ws[0] for v, ws in zip(position_layers, window_sizes) if v == "rope"), None)
-        if swa_window is not None and swa_window > 0:
-            self.gguf_writer.add_sliding_window(swa_window)        
-        '''
+        self.gguf_writer.add_sliding_window_pattern(rope_pattern)  # SWA <-> RoPE in domyn-edge
         
         # window_sizes entries are flash-attn style [left, right] (current token excluded; -1 = full attention),
         # while llama.cpp's n_swa counts the current token, hence the +1 (matches HF's sliding_window=1025)
