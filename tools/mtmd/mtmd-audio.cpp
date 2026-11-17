@@ -270,6 +270,14 @@ static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out)
     fft_impl<true, false>(cache, in, N, out);
 }
 
+void mtmd_audio_fft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    fft(cache, in, N, out);
+}
+
+void mtmd_audio_ifft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    ifft(cache, in, N, out);
+}
+
 static void mtmd_audio_fill_entries(std::vector<mtmd_audio_mel> & mels, bool shape_only, std::vector<mtmd_image_f32> & entries) {
     entries.clear();
     for (auto & mel : mels) {

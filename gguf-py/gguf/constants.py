@@ -771,6 +771,7 @@ class MODEL_ARCH(IntEnum):
     POCKETTTS        = auto()
     ZONOS3           = auto()
     KOKORO           = auto()
+    TINY_VOCA        = auto()
     K2HORIZON        = auto()
     KOLIBRI1         = auto()
     LIMITE           = auto()
@@ -1758,6 +1759,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.POCKETTTS:        "pockettts",
     MODEL_ARCH.ZONOS3:           "zonos3",
     MODEL_ARCH.KOKORO:           "kokoro",
+    MODEL_ARCH.TINY_VOCA:        "tiny-voca",
     MODEL_ARCH.K2HORIZON:        "k2-horizon",
     MODEL_ARCH.KOLIBRI1:         "kolibri1",
     MODEL_ARCH.LIMITE:           "limite",
@@ -6866,6 +6868,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
+    MODEL_ARCH.TINY_VOCA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+    ],
     MODEL_ARCH.KOKORO: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.TOKEN_EMBD_NORM,
@@ -7356,6 +7371,7 @@ class VisionProjectorType:
     FISH_S2_GEN = "fish_s2_gen" # audio generation: fast AR code predictor + Fish DAC decoder
     FISH_S2_SPKENC = "fish_s2_spkenc" # audio: Fish DAC encoder + RVQ, reference clip -> prompt rows
     KOKORO = "kokoro" # audio generation: StyleTTS2 prosody predictor + iSTFTNet decoder
+    TINY_VOCA = "tiny_voca" # audio generation: duration predictor, frame transformers, source-filter vocoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"

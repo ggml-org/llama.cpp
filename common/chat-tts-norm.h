@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -70,6 +71,11 @@ using common_tts_dicts = std::map<std::string, common_tts_dict>;
 // binary search of key in a dictionary; on success, value is set to the JSON document
 bool common_tts_dict_find(const common_tts_dict & dict, const std::string & key, std::string & value);
 
-// add tts_norm_scan(), tts_norm_sub() and tts_dict() to the context of a task template
+// pronunciation of a word by a letter-to-sound model, as phonemes separated by spaces (e.g. CMUdict notation)
+// empty when there is none; the notation is the one of the model, its "tts" template knows it
+using common_tts_g2p = std::function<std::string(const std::string & word)>;
+
+// add tts_norm_scan(), tts_norm_sub(), tts_dict() and tts_g2p() to the context of a task template
 // they are not jinja global builtins on purpose: chat templates are not affected
-void common_chat_tts_norm_add_builtins(jinja::context & ctx, std::shared_ptr<const common_tts_dicts> dicts = nullptr);
+void common_chat_tts_norm_add_builtins(jinja::context & ctx, std::shared_ptr<const common_tts_dicts> dicts = nullptr,
+                                       common_tts_g2p g2p = nullptr);

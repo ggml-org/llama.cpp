@@ -615,29 +615,39 @@ static bool cbx_is_mtl(const mtmd_model & model) {
     return model.cbx_read_tensor("a.cenc.perceiver.pre_attention_query", nullptr, 0) > 0;
 }
 
-// yue2: the NAR layers are a qwen3 text model, libllama loads them from a synthetic GGUF
-// the tensor data is read from the mmproj file, mtmd keeps no copy
-struct yue2_nar_source {
+// a stage of the mmproj that is a libllama text model: its layers are stored under a prefix, with the libllama names
+// libllama loads them from a synthetic GGUF: gdst holds the arch hparams, the tensor data is read from the mmproj file
+struct mtmd_owned_llama_source {
     std::ifstream f;
     std::map<std::string, std::pair<size_t, size_t>> tensors; // name in the synthetic model -> offset and size in the mmproj
 };
 
-static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
-    auto * src = (yue2_nar_source *) user_data;
+static void mtmd_owned_llama_set_tensor_data(ggml_tensor * t, void * user_data) {
+    auto * src = (mtmd_owned_llama_source *) user_data;
     std::vector<uint8_t> buf(ggml_nbytes(t), 0);
     const std::string name = t->name;
     auto it = src->tensors.find(name);
     if (it != src->tensors.end()) {
         if (it->second.second != buf.size()) {
-            throw std::runtime_error(mtmd_format("yue2: unexpected size of %s", t->name));
+            throw std::runtime_error(mtmd_format("unexpected size of %s", t->name));
         }
         src->f.seekg((std::streamoff) it->second.first, std::ios::beg);
         if (!src->f.read((char *) buf.data(), (std::streamsize) buf.size())) {
-            throw std::runtime_error(mtmd_format("yue2: failed to read %s", t->name));
+            throw std::runtime_error(mtmd_format("failed to read %s", t->name));
         }
     } else {
         // optional tensors that libllama creates by itself, give them neutral values (scale = 1, dense_2 = identity, others = 0)
-        GGML_ASSERT(t->type == GGML_TYPE_F32);
+        // any other missing tensor is an error: a weight left at 0 gives wrong output without any error
+        // (e.g. a model built from metadata has separate q, k, v and no fused qkv)
+        auto ends_with = [&](const char * suffix) {
+            const size_t n = strlen(suffix);
+            return name.size() >= n && name.compare(name.size() - n, n, suffix) == 0;
+        };
+        const bool optional = ends_with("scale") || ends_with(".bias") || name == "dense_2.weight" ||
+                              name == "token_embd.weight" || name == "output.weight"; // inputs are embedding rows, outputs are hidden states
+        if (!optional || t->type != GGML_TYPE_F32) {
+            throw std::runtime_error(mtmd_format("tensor %s is missing from the mmproj", t->name));
+        }
         float * w = (float *) buf.data();
         if (name.size() >= 5 && name.compare(name.size() - 5, 5, "scale") == 0) {
             std::fill(w, w + ggml_nelements(t), 1.0f);
@@ -651,15 +661,52 @@ static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
     ggml_backend_tensor_set(t, buf.data(), 0, buf.size());
 }
 
-static llama_model * mtmd_yue2_nar_load(const char * fname, ggml_backend_dev_t device, const mtmd_hparams & hparams) {
+// the layers are the tensors "<prefix>blk.*" and "<prefix>output_norm.*" of the mmproj, n_tensors receives their count
+static llama_model * mtmd_owned_llama_load(const char * fname, ggml_backend_dev_t device, gguf_context * gdst, const std::string & prefix, size_t & n_tensors) {
     ggml_context * meta = nullptr;
     gguf_init_params gparams = { /*no_alloc =*/ true, /*ctx =*/ &meta };
     gguf_context_ptr gsrc(gguf_init_from_file(fname, gparams));
     ggml_context_ptr meta_ptr(meta);
     if (!gsrc) {
-        throw std::runtime_error(mtmd_format("yue2: failed to read %s", fname));
+        throw std::runtime_error(mtmd_format("failed to read %s", fname));
     }
 
+    mtmd_owned_llama_source src;
+    for (int64_t i = 0; i < gguf_get_n_tensors(gsrc.get()); i++) {
+        const std::string name = gguf_get_tensor_name(gsrc.get(), i);
+        if (name.rfind(prefix + "blk.", 0) != 0 && name.rfind(prefix + "output_norm.", 0) != 0) {
+            continue;
+        }
+        // the synthetic model only takes the type from here, the shapes come from the hparams
+        ggml_tensor t = *ggml_get_tensor(meta, name.c_str());
+        ggml_set_name(&t, name.substr(prefix.size()).c_str());
+        gguf_add_tensor(gdst, &t);
+        src.tensors[t.name] = { gguf_get_data_offset(gsrc.get()) + gguf_get_tensor_offset(gsrc.get(), i), ggml_nbytes(&t) };
+    }
+    n_tensors = src.tensors.size();
+    src.f = open_ifstream_binary(fname);
+    if (!src.f) {
+        throw std::runtime_error(mtmd_format("failed to open %s", fname));
+    }
+
+    llama_model_params mparams = llama_model_default_params();
+    std::vector<ggml_backend_dev_t> devs;
+    if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        devs = { device, nullptr };
+        mparams.devices      = devs.data();
+        mparams.n_gpu_layers = -1;
+    } else {
+        mparams.n_gpu_layers = 0;
+    }
+    llama_model * model = llama_model_init_from_user(gdst, mtmd_owned_llama_set_tensor_data, &src, mparams);
+    if (!model) {
+        throw std::runtime_error(mtmd_format("failed to load the layers under %s", prefix.c_str()));
+    }
+    return model;
+}
+
+// yue2: the NAR layers are a qwen3 text model
+static llama_model * mtmd_yue2_nar_load(const char * fname, ggml_backend_dev_t device, const mtmd_hparams & hparams) {
     const llm_arch arch = LLM_ARCH_QWEN3;
     gguf_context_ptr gdst(gguf_init_empty());
     auto key = [&](llm_kv kv) { return llama_arch_kv_name(arch, kv); };
@@ -675,39 +722,38 @@ static llama_model * mtmd_yue2_nar_load(const char * fname, ggml_backend_dev_t d
     gguf_set_val_f32(gdst.get(), key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS).c_str(),   hparams.eps);
     gguf_set_val_f32(gdst.get(), key(LLM_KV_ROPE_FREQ_BASE).c_str(),                mtmd_graph_yue2_gen::rope_theta);
 
-    yue2_nar_source src;
-    const std::string prefix = "a.gen.nar.";
-    for (int64_t i = 0; i < gguf_get_n_tensors(gsrc.get()); i++) {
-        const std::string name = gguf_get_tensor_name(gsrc.get(), i);
-        if (name.rfind(prefix + "blk.", 0) != 0 && name != prefix + "output_norm.weight") {
-            continue;
-        }
-        // the synthetic model only takes the type from here, the shapes come from the hparams
-        ggml_tensor t = *ggml_get_tensor(meta, name.c_str());
-        ggml_set_name(&t, name.substr(prefix.size()).c_str());
-        gguf_add_tensor(gdst.get(), &t);
-        src.tensors[t.name] = { gguf_get_data_offset(gsrc.get()) + gguf_get_tensor_offset(gsrc.get(), i), ggml_nbytes(&t) };
-    }
-    if (src.tensors.size() != (size_t) hparams.n_layer * 11 + 1) {
+    size_t n_tensors = 0;
+    llama_model * model = mtmd_owned_llama_load(fname, device, gdst.get(), "a.gen.nar.", n_tensors);
+    if (n_tensors != (size_t) hparams.n_layer * 11 + 1) {
+        llama_model_free(model);
         throw std::runtime_error("yue2: unexpected NAR tensors in the mmproj");
     }
-    src.f = open_ifstream_binary(fname);
-    if (!src.f) {
-        throw std::runtime_error(mtmd_format("yue2: failed to open %s", fname));
-    }
+    return model;
+}
 
-    llama_model_params mparams = llama_model_default_params();
-    std::vector<ggml_backend_dev_t> devs;
-    if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-        devs = { device, nullptr };
-        mparams.devices      = devs.data();
-        mparams.n_gpu_layers = -1;
-    } else {
-        mparams.n_gpu_layers = 0;
-    }
-    llama_model * model = llama_model_init_from_user(gdst.get(), yue2_nar_set_tensor_data, &src, mparams);
-    if (!model) {
-        throw std::runtime_error("yue2: failed to load the NAR layers");
+// tiny-voca: the prosody and acoustic stacks, same arch as the text model
+static llama_model * mtmd_tiny_voca_stack_load(const char * fname, ggml_backend_dev_t device, const mtmd_hparams & hparams, const char * prefix, int n_layer) {
+    const llm_arch arch = LLM_ARCH_TINY_VOCA;
+    gguf_context_ptr gdst(gguf_init_empty());
+    auto key = [&](llm_kv kv) { return llama_arch_kv_name(arch, kv); };
+    gguf_set_val_str(gdst.get(), key(LLM_KV_GENERAL_ARCHITECTURE).c_str(), llama_arch_name(arch));
+    gguf_set_val_str(gdst.get(), key(LLM_KV_TOKENIZER_MODEL).c_str(),       "none");
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_VOCAB_SIZE).c_str(),                    1);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_CONTEXT_LENGTH).c_str(),                mtmd_graph_tiny_voca::n_max_frames);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_EMBEDDING_LENGTH).c_str(),              hparams.n_embd);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_FEED_FORWARD_LENGTH).c_str(),           hparams.n_ff);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_BLOCK_COUNT).c_str(),                   n_layer);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_ATTENTION_HEAD_COUNT).c_str(),          hparams.n_head);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_ATTENTION_HEAD_COUNT_KV).c_str(),       hparams.n_head);
+    gguf_set_val_f32(gdst.get(), key(LLM_KV_ATTENTION_LAYERNORM_EPS).c_str(),       hparams.eps);
+    gguf_set_val_f32(gdst.get(), key(LLM_KV_ROPE_FREQ_BASE).c_str(),                mtmd_graph_tiny_voca::rope_theta);
+    gguf_set_val_bool(gdst.get(), key(LLM_KV_ATTENTION_CAUSAL).c_str(),             false);
+
+    size_t n_tensors = 0;
+    llama_model * model = mtmd_owned_llama_load(fname, device, gdst.get(), prefix, n_tensors);
+    if (n_tensors != (size_t) n_layer * 18 + 2) {
+        llama_model_free(model);
+        throw std::runtime_error(mtmd_format("tiny_voca: unexpected tensors under %s in the mmproj", prefix));
     }
     return model;
 }
@@ -730,6 +776,11 @@ struct mtmd_context {
     // yue2: the NAR layers, run on a llama_context of their own, see mtmd_gen_flow_yue2()
     llama_model_ptr       yue2_nar;
     llama_flash_attn_type yue2_flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
+
+    // tiny-voca: the frame stacks, run on llama_contexts of their own, see mtmd_gen_wav_tiny_voca()
+    llama_model_ptr       tiny_voca_prosody;
+    llama_model_ptr       tiny_voca_acoustic;
+    llama_flash_attn_type tiny_voca_flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
     // gen-side reference data of the last encoded chunk (chatterbox), see mtmd_gen_state_set_ref()
     mtmd_gen_ref gen_ref;
@@ -867,6 +918,13 @@ struct mtmd_context {
         if (models.gen_a && models.gen_a->proj_type == PROJECTOR_TYPE_YUE2_GEN && !no_alloc) {
             yue2_nar.reset(mtmd_yue2_nar_load(mmproj_fname, device, models.gen_a->hparams));
             yue2_flash_attn = ctx_params.flash_attn_type;
+        }
+        if (models.gen_a && models.gen_a->proj_type == PROJECTOR_TYPE_TINY_VOCA && !no_alloc) {
+            using g = mtmd_graph_tiny_voca;
+            const auto & hp = models.gen_a->hparams;
+            tiny_voca_prosody .reset(mtmd_tiny_voca_stack_load(mmproj_fname, device, hp, "a.gen.prosody.",  g::n_prosody_layer));
+            tiny_voca_acoustic.reset(mtmd_tiny_voca_stack_load(mmproj_fname, device, hp, "a.gen.acoustic.", g::n_acoustic_layer));
+            tiny_voca_flash_attn = ctx_params.flash_attn_type;
         }
         for (size_t i = 0; i < backends->ptrs.size(); ++i) {
             const size_t size = ggml_backend_sched_get_buffer_size(backends->sched.get(), backends->ptrs[i]);
@@ -2680,6 +2738,8 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_ZONOS3;
             info.sample_rate = 44100;
             break;
+            info.sample_rate = 24000;
+            break;
         case PROJECTOR_TYPE_YUE2_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_YUE2;
             info.sample_rate = 48000;
@@ -2696,6 +2756,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             break;
         case PROJECTOR_TYPE_KOKORO:
             info.type = MTMD_GEN_AUDIO_TYPE_KOKORO;
+            info.sample_rate = 24000;
+            break;
+        case PROJECTOR_TYPE_TINY_VOCA:
+            info.type = MTMD_GEN_AUDIO_TYPE_TINY_VOCA;
             info.sample_rate = 24000;
             break;
         default:
@@ -3054,6 +3118,21 @@ static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audi
     return 0;
 }
 
+int32_t mtmd_gen_audio_g2p(const mtmd_context * ctx, const char * word, char * buf, size_t buf_size) {
+    if (!ctx || !ctx->ctx_gen_a || !word || !buf || buf_size == 0) {
+        return 0;
+    }
+    std::string out;
+    if (ctx->ctx_gen_a->model.proj_type == PROJECTOR_TYPE_TINY_VOCA) {
+        out = mtmd_graph_tiny_voca::g2p(ctx->ctx_gen_a->model.tiny_voca, word);
+    }
+    if (out.size() + 1 > buf_size) {
+        return -1;
+    }
+    memcpy(buf, out.c_str(), out.size() + 1);
+    return (int32_t) out.size();
+}
+
 const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;
@@ -3116,6 +3195,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             break;
         case PROJECTOR_TYPE_SOPRANO:
         case PROJECTOR_TYPE_KOKORO:
+        case PROJECTOR_TYPE_TINY_VOCA:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
         case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
@@ -3338,8 +3418,8 @@ static int32_t mtmd_gen_wav_lfm3a(mtmd_context * ctx, mtmd_gen_state * state, co
     return 0;
 }
 
-// yue2: one pass of an mtmd graph, rows in -> rows out (PCM for GEN_WAV)
-static bool yue2_encode(mtmd_context * ctx, mtmd_gen_state * state, mtmd_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
+// one pass of an mtmd graph, rows in -> rows out (PCM for GEN_WAV), used by yue2 and tiny-voca
+static bool gen_encode_rows(mtmd_context * ctx, mtmd_gen_state * state, mtmd_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
     mtmd_image_f32 dummy;
     dummy.set_size({1, 1}, false, true);
     dummy.cpy_buf(std::vector<float>(1, 0.0f));
@@ -3464,7 +3544,7 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
     std::vector<float> embd, hidden, vel;
     auto velocity = [&](const std::vector<float> & x, double t, std::vector<float> & v) -> bool {
         std::copy(x.begin(), x.end(), x_rows.begin() + g::n_latent); // the start and end rows stay 0
-        if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
+        if (!gen_encode_rows(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
             return false;
         }
         const std::vector<float> temb = time_embd(t);
@@ -3490,7 +3570,7 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
         const float * h = llama_get_embeddings(lctx.get());
         hidden.assign(h, h + n_rows * n_embd);
         llama_memory_seq_rm(mem, 0, (llama_pos) n_past, -1);
-        if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
+        if (!gen_encode_rows(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
             return false;
         }
         v.assign(vel.begin() + g::n_latent, vel.end() - g::n_latent);
@@ -3529,6 +3609,160 @@ static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, co
     return 0;
 }
 
+// tiny-voca: one pass of a frame stack, embedding rows in -> hidden rows out
+static bool tiny_voca_stack(mtmd_context * ctx, llama_model * model, const std::vector<float> & in, std::vector<float> & out) {
+    const int64_t n_embd = llama_model_n_embd(model);
+    const int32_t n_rows = (int32_t) (in.size() / n_embd);
+
+    llama_context_params cparams = llama_context_default_params();
+    cparams.n_ctx           = (uint32_t) n_rows;
+    cparams.n_batch         = (uint32_t) n_rows;
+    cparams.n_ubatch        = (uint32_t) n_rows; // non-causal, all rows must be in one ubatch
+    cparams.n_seq_max       = 1;
+    cparams.n_threads       = ctx->n_threads;
+    cparams.n_threads_batch = ctx->n_threads;
+    cparams.embeddings      = true;
+    cparams.pooling_type    = LLAMA_POOLING_TYPE_NONE;
+    cparams.attention_type  = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
+    cparams.flash_attn_type = ctx->tiny_voca_flash_attn;
+    cparams.no_perf         = true;
+    llama_context_ptr lctx(llama_init_from_model(model, cparams));
+    if (!lctx) {
+        LOG_ERR("%s: failed to create the context of a frame stack\n", __func__);
+        return false;
+    }
+
+    llama_batch_ext_ptr batch(llama_batch_ext_init(lctx.get()));
+    for (int32_t i = 0; i < n_rows; i++) {
+        const llama_embd row = { in.data() + (size_t) i * n_embd, 1, (size_t) n_embd };
+        const llama_pos  p   = i;
+        const int32_t    idx = llama_batch_ext_add_embd(batch.get(), 0, row);
+        if (idx < 0) {
+            LOG_ERR("%s: failed to add a row to the batch (error %d)\n", __func__, idx);
+            return false;
+        }
+        llama_batch_ext_set_pos(batch.get(), idx, &p);
+        llama_batch_ext_set_output_embd(batch.get(), idx, true);
+    }
+    if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+        LOG_ERR("%s: frame stack decode failed\n", __func__);
+        return false;
+    }
+    const float * h = llama_get_embeddings(lctx.get());
+    out.assign(h, h + (size_t) n_rows * n_embd);
+    return true;
+}
+
+// tiny-voca GEN_WAV: phoneme tokens + encoder states -> waveform, see TinyVoca.synthesize() in the reference (model.py)
+// codes: the tokens; feats: the voice row (encoder half, frame half), then the encoder state of each token
+static int32_t mtmd_gen_wav_tiny_voca(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_tiny_voca;
+    const auto &  tv     = ctx->ctx_gen_a->model.tiny_voca;
+    const int64_t n_embd = ctx->ctx_gen_a->model.hparams.n_embd;
+    const int64_t n_tok  = (int64_t) inp->n_codes;
+
+    if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->codes || n_tok == 0 || !inp->feats ||
+            inp->n_feats != (size_t) ((2 + n_tok) * n_embd)) {
+        LOG_ERR("%s: tiny_voca requires the phoneme tokens, the voice row and the encoder state of each token\n", __func__);
+        return 1;
+    }
+    if (!std::isfinite(inp->speed) || inp->speed < 0.25f || inp->speed > 4.0f) {
+        LOG_ERR("%s: speed must be between 0.25 and 4\n", __func__);
+        return 1;
+    }
+    for (int64_t i = 0; i < n_tok; i++) {
+        if (inp->codes[i] < 0 || inp->codes[i] >= (int32_t) tv.token_class.size()) {
+            LOG_ERR("%s: token out of range (%d)\n", __func__, inp->codes[i]);
+            return 1;
+        }
+    }
+    const float * frame_voice = inp->feats + n_embd;
+    const std::vector<float> hidden(inp->feats + 2 * n_embd, inp->feats + inp->n_feats);
+
+    std::vector<float> dur_out;
+    if (!gen_encode_rows(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_IN, hidden, dur_out) || dur_out.size() != (size_t) (2 * n_tok)) {
+        LOG_ERR("%s: duration predictor failed\n", __func__);
+        return 1;
+    }
+
+    // frames per token: a phone lasts at least one frame, a pause token only when its presence logit is > 0
+    std::vector<int64_t> dur(n_tok);
+    int64_t n_frames = 0;
+    for (int64_t i = 0; i < n_tok; i++) {
+        const float  o0     = std::clamp(dur_out[2 * i], 0.0f, std::log1p(g::max_dur));
+        const double frames = std::max(1.0, std::nearbyint((double) std::expm1(o0) / inp->speed));
+        const bool   phone  = tv.token_class[inp->codes[i]] > 0.0f;
+        dur[i] = phone || dur_out[2 * i + 1] > 0.0f ? (int64_t) frames : 0;
+        n_frames += dur[i];
+    }
+    if (n_frames < 1 || n_frames > g::n_max_frames) {
+        LOG_ERR("%s: the utterance has %lld frames, it must have 1 to %d, split the text\n", __func__, (long long) n_frames, g::n_max_frames);
+        return 1;
+    }
+
+    // token states repeated by their duration, plus the position inside the token and the frame voice
+    std::vector<float>   x((size_t) (n_frames * n_embd));
+    std::vector<int64_t> owner(n_frames);
+    for (int64_t i = 0, f = 0; i < n_tok; i++) {
+        for (int64_t o = 0; o < dur[i]; o++, f++) {
+            const float rel  = ((float) o + 0.5f) / (float) dur[i];
+            const float feat[3] = { rel, 1.0f - rel, std::log1p((float) dur[i]) / 4.0f };
+            float * row = x.data() + f * n_embd;
+            for (int64_t c = 0; c < n_embd; c++) {
+                const float * w = tv.frame_pos_w.data() + c * 3;
+                row[c] = hidden[i * n_embd + c] + tv.frame_pos_b[c] + w[0] * feat[0] + w[1] * feat[1] + w[2] * feat[2] + frame_voice[c];
+            }
+            owner[f] = i;
+        }
+    }
+
+    std::vector<float> h_pro;
+    if (!tiny_voca_stack(ctx, ctx->tiny_voca_prosody.get(), x, h_pro)) {
+        return 1;
+    }
+
+    // pitch, voicing and energy; the frames of a vowel are always voiced
+    std::vector<float> f0(n_frames);
+    for (int64_t f = 0; f < n_frames; f++) {
+        float p[3];
+        const float * h = h_pro.data() + f * n_embd;
+        for (int k = 0; k < 3; k++) {
+            const float * w = tv.prosody_head_w.data() + k * n_embd;
+            float acc = tv.prosody_head_b[k];
+            for (int64_t c = 0; c < n_embd; c++) {
+                acc += w[c] * h[c];
+            }
+            p[k] = acc;
+        }
+        if (tv.token_class[inp->codes[owner[f]]] == 2.0f) {
+            p[1] = std::max(p[1], 2.0f);
+        }
+        f0[f] = std::clamp(g::f0_ref * std::exp(p[0]), g::f0_min, g::f0_max);
+
+        // the acoustic stack is conditioned on the clamped pitch and energy and the hard voicing decision
+        const float cond[3] = { std::clamp(p[0], -2.0f, 1.5f), p[1] > 0.0f ? 1.0f : 0.0f, std::clamp(p[2], -4.5f, 3.0f) };
+        float * row = x.data() + f * n_embd;
+        for (int64_t c = 0; c < n_embd; c++) {
+            const float * w = tv.prosody_proj_w.data() + c * 3;
+            row[c] = h[c] + tv.prosody_proj_b[c] + w[0] * cond[0] + w[1] * cond[1] + w[2] * cond[2];
+        }
+    }
+
+    std::vector<float> h_ac, voc;
+    if (!tiny_voca_stack(ctx, ctx->tiny_voca_acoustic.get(), x, h_ac)) {
+        return 1;
+    }
+    if (!gen_encode_rows(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, h_ac, voc) || voc.size() != (size_t) (n_frames * g::n_voc)) {
+        LOG_ERR("%s: source-filter heads failed\n", __func__);
+        return 1;
+    }
+
+    g::synth(voc, f0, state->gen_state->rng, state->out_audio);
+    out->audio     = state->out_audio.data();
+    out->n_samples = state->out_audio.size();
+    return 0;
+}
+
 // yue2 GEN_WAV: latents -> interleaved stereo PCM in one VAE pass, the caller splits a long song into tiles
 static int32_t mtmd_gen_wav_yue2(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     using g = mtmd_graph_yue2_gen;
@@ -3538,7 +3772,7 @@ static int32_t mtmd_gen_wav_yue2(mtmd_context * ctx, mtmd_gen_state * state, con
     }
     const std::vector<float> feats(inp->feats, inp->feats + inp->n_feats);
     auto & audio = state->out_audio;
-    if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_GEN_WAV, feats, audio)) {
+    if (!gen_encode_rows(ctx, state, MTMD_SUBCTX_GEN_PROCESS_GEN_WAV, feats, audio)) {
         LOG_ERR("%s: encode failed (vae)\n", __func__);
         return 1;
     }
@@ -3734,6 +3968,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     if (sctx->model.proj_type == PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN) {
         return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_code_music3(ctx, state, inp, out)
                                                            : mtmd_gen_wav_music3(ctx, state, inp, out);
+    }
+
+    if (sctx->model.proj_type == PROJECTOR_TYPE_TINY_VOCA) {
+        return mtmd_gen_wav_tiny_voca(ctx, state, inp, out);
     }
 
     if (sctx->model.proj_type == PROJECTOR_TYPE_SOPRANO) {

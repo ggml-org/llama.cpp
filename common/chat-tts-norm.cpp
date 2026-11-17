@@ -871,7 +871,7 @@ bool common_tts_dict_find(const common_tts_dict & dict, const std::string & key,
     return true;
 }
 
-void common_chat_tts_norm_add_builtins(context & ctx, std::shared_ptr<const common_tts_dicts> dicts) {
+void common_chat_tts_norm_add_builtins(context & ctx, std::shared_ptr<const common_tts_dicts> dicts, common_tts_g2p g2p) {
     ctx.set_val("tts_norm_scan", mk_val<value_func>("tts_norm_scan", tts_norm_builtin_scan));
     ctx.set_val("tts_norm_sub",  mk_val<value_func>("tts_norm_sub",  tts_norm_builtin_sub));
     ctx.set_val("tts_dict",      mk_val<value_func>("tts_dict", [dicts](const func_args & args) -> value {
@@ -887,6 +887,16 @@ void common_chat_tts_norm_add_builtins(context & ctx, std::shared_ptr<const comm
             return mk_val<value_none>();
         }
         return value_from_json(common_json::parse(doc), false);
+    }));
+    // none when the caller gives no letter-to-sound model, or the model has no pronunciation
+    ctx.set_val("tts_g2p",       mk_val<value_func>("tts_g2p", [g2p](const func_args & args) -> value {
+        args.ensure_count(1, 1);
+        args.ensure_vals<value_string>();
+        const std::string out = g2p ? g2p(args.get_pos(0)->as_string().str()) : std::string();
+        if (out.empty()) {
+            return mk_val<value_none>();
+        }
+        return mk_val<value_string>(out);
     }));
 }
 

@@ -780,6 +780,52 @@ struct mtmd_graph_music3_gen : mtmd_graph_snake_vae {
     ggml_cgraph * build_vocoder();
 };
 
+// tiny-voca: small graphs around the stacks, the stacks run on libllama (see mtmd_gen_wav_tiny_voca())
+// LATENT_IN:  token states [n_embd, n_rows] -> duration outputs [2, n_rows]
+// LATENT_OUT: acoustic states [n_embd, n_rows] -> source-filter params [n_voc, n_rows]
+struct mtmd_graph_tiny_voca : mtmd_graph {
+    mtmd_graph_tiny_voca(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, int n_rows)
+        : mtmd_graph(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_prosody_layer  = 2;
+    static constexpr int   n_acoustic_layer = 5;
+    static constexpr int   n_max_frames     = 3000;
+    static constexpr int   hop              = 256;  // samples per frame
+    static constexpr int   n_cep_causal     = 80;
+    static constexpr int   n_cep_anti       = 16;
+    static constexpr int   n_noise_cep      = 32;
+    static constexpr int   harm_fft         = 512;
+    static constexpr int   harm_hop         = 128;
+    static constexpr int   harm_steps       = hop / harm_hop;
+    static constexpr int   noise_fft        = 256;
+    static constexpr int   noise_hop        = 64;
+    static constexpr int   noise_steps      = hop / noise_hop;
+    static constexpr int   n_voc            = n_cep_causal + n_cep_anti + harm_steps + n_noise_cep + noise_steps;
+    static constexpr float rope_theta       = 10000.0f;
+    static constexpr float sample_rate      = 24000.0f;
+    static constexpr float harmonic_limit   = 0.47f;  // highest harmonic, relative to the sample rate
+    static constexpr float f0_ref           = 200.0f; // Hz, log F0 is predicted relative to it
+    static constexpr float f0_min           = 50.0f;
+    static constexpr float f0_max           = 600.0f;
+    static constexpr float max_dur          = 400.0f; // frames per token before the speed
+
+    mtmd_subctx_gen_process gen_process;
+    int n_rows;
+
+    // host: frame params [n_frames, n_voc] and F0 [n_frames] in Hz -> waveform [n_frames * hop]
+    static void synth(const std::vector<float> & voc, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & audio);
+
+    // unknown-word model: letters (a-z and ') -> CMUdict phonemes separated by spaces, other characters are skipped
+    static constexpr int n_g2p_slot   = 2;  // positions per letter
+    static constexpr int n_g2p_letter = 27;
+    static constexpr int n_g2p_symbol = 69;
+    static std::string g2p(const mtmd_tiny_voca & tv, const std::string & word);
+
+  private:
+    ggml_tensor * conv3(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) const;
+};
+
 struct mtmd_graph_soprano : mtmd_graph {
     mtmd_graph_soprano(mtmd_subcontext * ctx, const mtmd_image_f32 & img, int n_frames) : mtmd_graph(ctx, img), n_frames(n_frames) {}
     ggml_cgraph * build() override;
