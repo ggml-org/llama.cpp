@@ -135,6 +135,48 @@ Behaviour of libmtmd with the shim:
 
 No format change. mmproj files keep `general.architecture = clip`, `clip.*` keys and `v.*` / `mm.*` tensor names. Integer `clip.vision.*` keys are accepted as u32 or i32 (converters differ). Unlike mtmd, libllama checks every tensor shape; tensors whose shape is not given by hparams (projector, legacy layouts) are created with the shape read from the file.
 
+## Verification
+
+Reference: the same binary with `MTMD_LEGACY_ENGINE=1` (mtmd's own engine), so both sides share the text model, the sampler and the build. Encoder rows are compared through `MTMD_DEBUG_EMBEDDINGS` dumps; text and audio as greedy outputs (`--temp 0` / `--top-k 1`, seed 1). Strix Halo (gfx1151), ROCm build.
+
+| Model | What runs on libllama | CPU | GPU (HIP) |
+|---|---|---|---|
+| Gemma 3 4B (Q8_0, mmproj f16) | vision tower, layout, decoder rows with a bidirectional image span | rows bit-exact (256 x 2560), text identical | rows bit-exact with FA off and on, text identical |
+| Qwen2.5-VL 3B (Q8_0, mmproj f16) | vision tower with window attention, M-RoPE rows | rows bit-exact (391 x 2048), text identical | same, FA off and on |
+| Qwen3-VL 2B (Q8_0, mmproj Q8_0) | vision tower with deepstack, M-RoPE rows | rows bit-exact (300 x 8192), text identical | same, FA off and on |
+| Qwen3-TTS 1.7B (Q8_0, mmproj bf16) | code predictor (GEN_CODE), codec (GEN_WAV) | WAV byte-identical, FA off and on, one window and 4 windows (221 frames) | byte-identical with `GGML_CUDA_DISABLE_FUSION=1`; with fusion on, the codes drift after a few frames |
+
+Checks that must fail did fail:
+- Gemma 3 with the image span forced causal changes the generated text, so the span mask is in effect.
+- Qwen3-TTS with `--top-k 50` differs between the engines (different random draws) while repeated runs of each engine are identical, so the libllama predictor is the one running.
+- The first Gemma 3 run that looked bit-exact had silently fallen back to the old engine (a u32/i32 key mismatch); the run scripts now report which engine ran.
+
+Numerical notes:
+- The GPU difference in TTS comes from kernel fusion: the HIP backend fuses neighbouring ops depending on node order, and the predictor graph orders its nodes differently from mtmd's. With fusion off, both engines agree byte for byte.
+- An unpadded last codec window (34 frames instead of 72) differs by a few LSB from frame 1 on: the CPU matmul kernels depend on the column count. The shim pads like mtmd; libllama itself takes any frame count.
+- Ported encoders reuse `build_attn_mha`, whose non-FA path sets BF16 accumulation on `kq`; this changed nothing on CPU or HIP for these models.
+
+Regression tests: `ctest` on CPU 64/64 (download tests and a git-lfs vocab fixture excluded), `test-llama-archs` 152/152.
+
+Text-only speed (the batch allocator, the KV mask and the output width changed for every model): standard matrix, Gemma 3 4B Q8_0, `llama-bench -lm dio -ngl 99 -fa 1 -p 1024 -n 128 -d 0,40000 -ub 1024,2048,4096 -b 4096`, master `e8fbcad85` then the branch, one after the other.
+
+| ubatch | test | master t/s | branch t/s |
+|---|---|---|---|
+| 1024 | pp1024 | 2393 ± 102 | 2356 ± 79 |
+| 1024 | tg128 | 45.46 ± 0.23 | 45.49 ± 0.12 |
+| 1024 | pp1024 @ d40000 | 1276 ± 28 | 1313 ± 18 |
+| 1024 | tg128 @ d40000 | 35.95 ± 0.81 | 37.96 ± 0.06 |
+| 2048 | pp1024 | 2191 ± 114 | 2461 ± 21 |
+| 2048 | tg128 | 43.17 ± 0.35 | 47.65 ± 0.06 |
+| 2048 | pp1024 @ d40000 | 1205 ± 71 | 1396 ± 7 |
+| 2048 | tg128 @ d40000 | 36.34 ± 0.19 | 37.99 ± 0.03 |
+| 4096 | pp1024 | 2327 ± 34 | 2462 ± 19 |
+| 4096 | tg128 | 45.70 ± 0.07 | 47.58 ± 0.10 |
+| 4096 | pp1024 @ d40000 | 1287 ± 46 | 1403 ± 26 |
+| 4096 | tg128 @ d40000 | 36.34 ± 0.12 | 37.85 ± 0.10 |
+
+No slowdown. The branch is not faster either: master ran first and its spread is much wider, so the gap is the order of the runs, not the change.
+
 ## Known limitations of the prototype
 
 - Only the projectors listed in `mtmd_lm_ported()` use libllama.
