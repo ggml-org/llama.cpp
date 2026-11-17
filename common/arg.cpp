@@ -912,6 +912,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         throw std::invalid_argument("error: --prompt-cache-all not supported in interactive mode yet\n");
     }
 
+    if (params.sampling.ignore_eos && !common_grammar_value(params.sampling.grammar).empty()) {
+        throw std::invalid_argument("error: --ignore-eos is not supported with --grammar or --json-schema\n");
+    }
+
     const bool skip_model_download =
         // server will call common_params_handle_models() later, so we skip it here
         ctx_arg.ex == LLAMA_EXAMPLE_SERVER ||
