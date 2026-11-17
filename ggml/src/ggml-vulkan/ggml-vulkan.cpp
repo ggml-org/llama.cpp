@@ -1330,7 +1330,9 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
     static const bool disable_flip = getenv("GGML_VK_DISABLE_FA_FLIP") != nullptr;
     static const char * force_flip = getenv("GGML_VK_FORCE_FA_FLIP");
     const bool flip_arch = force_flip != nullptr || device->vendor_id == VK_VENDOR_ID_NVIDIA ||
-        (device->vendor_id == VK_VENDOR_ID_AMD && (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4));
+        (device->vendor_id == VK_VENDOR_ID_AMD && (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4) &&
+         // AMD proprietary driver crashes compiling the flip shader
+         device->driver_id != vk::DriverId::eAmdProprietary);
     if (allow_flip && !disable_flip && flip_arch && n_rows >= 64 &&
         (result.subgroup_size == 32 || result.subgroup_size == 64) &&
         hsk % 16 == 0 && hsv % 16 == 0 && hsk <= 256 && hsv <= 256 &&
