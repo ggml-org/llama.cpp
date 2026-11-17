@@ -36,6 +36,9 @@ std::string get_lock_path(const std::string & repo_id, const std::string & oid);
 // A completed snapshot (final_path present) is returned without the lock, so a read-only cache works.
 std::string finalize_file(const hf_file & file, const std::function<bool()> & keep_waiting = {});
 
+// Remove snapshot files and any blobs that become unreferenced
+bool remove_cached_files(const std::string & repo_id, const hf_files & files);
+
 // Remove the entire cached directory for a repo, returns true if removed
 bool remove_cached_repo(const std::string & repo_id);
 
