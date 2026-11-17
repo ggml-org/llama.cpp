@@ -572,6 +572,19 @@ static void common_params_fit_impl(
         throw common_params_fit_exception("model_params::tensor_buft_overrides already set by user, abort");
     }
 
+#ifdef _WIN32
+    // weights that do not fit go to system memory, on Windows (WDDM) an iGPU host buffer is charged to the same budget as the device
+    if (!mparams->no_host) {
+        for (ggml_backend_dev_t dev : devs) {
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                LOG_TRC("%s: %s is an iGPU -> not using a host buffer for weights in system memory\n", __func__, ggml_backend_dev_name(dev));
+                mparams->no_host = true;
+                break;
+            }
+        }
+    }
+#endif // _WIN32
+
     // step 3: iteratively fill the back to front with "dense" layers
     //   - for a dense model simply fill full layers, giving each device a contiguous slice of the model
     //   - for a MoE model, same as dense model but with all MoE tensors in system memory
