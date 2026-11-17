@@ -71,6 +71,7 @@ enum mtmd_subctx_gen_process {
     MTMD_SUBCTX_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
     MTMD_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows
     MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows
+    MTMD_SUBCTX_GEN_PROCESS_RES_INP,    // internal: backbone row to residual LM input row (voxcpm2)
 };
 
 // persistent state of a causal audio encoder, for streaming input (one per stream)
@@ -127,6 +128,8 @@ struct mtmd_subctx_encode_params {
     std::vector<int32_t> * out_codes = nullptr; // this frame's 16 sampled codes
     std::vector<float> * out_feats = nullptr; // continuous counterpart of out_codes
     float   temp = 0.0f;                      // sampling temperature, noise scale for flow-matching decoders
+    float   cfg_scale = 0.0f;                 // flow-matching decoders with guidance (voxcpm2)
+    int     n_steps   = 0;                    // steps of the flow-matching ODE solver (voxcpm2)
     bool * out_is_eos = nullptr;
 
     // TOKENIZE: speech embedding rows of the produced codes

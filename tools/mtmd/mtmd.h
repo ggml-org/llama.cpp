@@ -475,6 +475,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_ZONOS3,
     MTMD_GEN_AUDIO_TYPE_YUE2,
     MTMD_GEN_AUDIO_TYPE_FISH_S2,
+    MTMD_GEN_AUDIO_TYPE_VOXCPM2,
 };
 
 struct mtmd_gen_audio_info {
@@ -527,6 +528,8 @@ struct mtmd_gen_inp {
     const float * feats;
     size_t        n_feats;
 
+    // voxcpm2 GEN_CODE: one call per backbone row, embd is its hidden state and feats its input row (n_text_embd elements, null for a text row)
+    //                   code0 < 0 for a prompt row (the residual LM only reads it), code0 >= 0 makes the next frame
     // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
     // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
     const uint8_t * backbone_state;
@@ -535,6 +538,8 @@ struct mtmd_gen_inp {
 
     // flow-matching GEN_CODE: steps of the ODE solver, <= 0 = model default (yue2: 32)
     int32_t n_steps;
+    // flow-matching GEN_CODE: classifier-free guidance scale, <= 0 = model default (voxcpm2: 2.0)
+    float   cfg_scale;
 };
 
 struct mtmd_gen_out {
