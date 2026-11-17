@@ -82,38 +82,38 @@ void mtmd_graph_voxcpm2_gen::build_res_inp() {
     const auto &  m      = model.voxcpm2;
     const int64_t n_text = m.fusion_b->ne[0];
 
-    // hidden state, then the input row of an audio row
-    ggml_tensor * inp = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_text, audio_row ? 2 : 1);
-    ggml_set_name(inp, "inp_raw");
-    ggml_set_input(inp);
-
-    ggml_tensor * h = ggml_view_1d(ctx0, inp, n_text, 0);
+    ggml_tensor * h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_text, n_rows);
+    ggml_set_name(h, "inp_raw");
+    ggml_set_input(h);
     ggml_tensor * x = nullptr;
     if (audio_row) {
+        x = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_text, n_rows);
+        ggml_set_name(x, "inp_feats");
+        ggml_set_input(x);
         // FSQ: tanh, then round to the grid of 1/9
         ggml_tensor * q = ggml_tanh(ctx0, ggml_add(ctx0, build_mm(m.fsq_in_w, h), m.fsq_in_b));
         q = ggml_scale(ctx0, ggml_round(ctx0, ggml_scale(ctx0, q, fsq_scale)), 1.0f / fsq_scale);
         h = ggml_add(ctx0, build_mm(m.fsq_out_w, q), m.fsq_out_b);
-        x = ggml_view_1d(ctx0, inp, n_text, inp->nb[1]);
     } else {
-        h = ggml_cont(ctx0, h);
-        x = ggml_scale(ctx0, h, 0.0f);
+        x = ggml_scale(ctx0, h, 0.0f); // a text row has no input row
     }
-    ggml_set_name(h, "out_feats");
-    ggml_set_output(h);
-    ggml_build_forward_expand(gf, h);
 
-    // logit(stop) - logit(continue)
-    ggml_tensor * s = ggml_silu(ctx0, ggml_add(ctx0, build_mm(m.stop_proj_w, h), m.stop_proj_b));
-    s = build_mm(m.stop_head_w, s);
-    s = ggml_sub(ctx0, ggml_view_1d(ctx0, s, 1, ggml_element_size(s)), ggml_view_1d(ctx0, s, 1, 0));
-    ggml_set_name(s, "out_eos_score");
-    ggml_set_output(s);
-    ggml_build_forward_expand(gf, s);
+    // logit(stop) - logit(continue), only the row of the next frame needs it
+    if (n_rows == 1) {
+        ggml_tensor * s = ggml_silu(ctx0, ggml_add(ctx0, build_mm(m.stop_proj_w, h), m.stop_proj_b));
+        s = build_mm(m.stop_head_w, s);
+        s = ggml_sub(ctx0, ggml_view_1d(ctx0, s, 1, ggml_element_size(s)), ggml_view_1d(ctx0, s, 1, 0));
+        ggml_set_name(s, "out_eos_score");
+        ggml_set_output(s);
+        ggml_build_forward_expand(gf, s);
+    }
 
-    // residual LM input, the last node
+    // residual LM input rows, then the (FSQ'd) hidden states
     ggml_tensor * r = ggml_add(ctx0, build_mm(m.fusion_w, ggml_concat(ctx0, h, x, 0)), m.fusion_b);
-    ggml_build_forward_expand(gf, r);
+    ggml_tensor * out = ggml_concat(ctx0, r, h, 1);
+    ggml_set_name(out, "out_feats");
+    ggml_set_output(out);
+    ggml_build_forward_expand(gf, out);
 }
 
 // Euler solver from noise (t = 1) to the patch (t = 0), see UnifiedCFM.solve_euler()

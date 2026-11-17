@@ -3585,15 +3585,17 @@ static int32_t mtmd_gen_wav_yue2(mtmd_context * ctx, mtmd_gen_state * state, con
     return 0;
 }
 
-// voxcpm2 GEN_CODE: the backbone row goes through the residual LM, then code0 >= 0 makes the next frame
-// see VoxCPM2Model._inference(), each row of the prompt and each frame are one call
+// voxcpm2 GEN_CODE: the backbone rows go through the residual LM, then code0 >= 0 makes the next frame
+// see VoxCPM2Model._inference(): the prompt rows are read in batches, then each frame is one call
 static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
     using g = mtmd_graph_voxcpm2_gen;
     mtmd_subcontext * sctx = ctx->ctx_gen_a.get();
     const size_t n_text = (size_t) sctx->model.n_mmproj_embd();
+    const bool   prompt = inp->code0 < 0;
+    const int    n_rows = prompt && inp->n_codes > 1 ? (int) inp->n_codes : 1;
 
-    if (!inp->embd || (inp->feats && inp->n_feats != n_text)) {
-        LOG_ERR("%s: voxcpm2 needs the hidden state, and the input row for an audio row\n", __func__);
+    if (!inp->embd || (inp->feats && inp->n_feats != n_text * n_rows)) {
+        LOG_ERR("%s: voxcpm2 needs the hidden states, and the input rows for audio rows\n", __func__);
         return 1;
     }
     const int n_steps = inp->n_steps > 0 ? inp->n_steps : g::n_steps_default;
@@ -3601,38 +3603,36 @@ static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state,
         LOG_ERR("%s: flow steps must be in [2, %d]\n", __func__, g::n_steps_max);
         return 1;
     }
-    if (state->voxcpm2_n_past >= g::n_ctx_res) {
+    if (state->voxcpm2_n_past + n_rows > g::n_ctx_res) {
         LOG_ERR("%s: the residual LM holds at most %d rows\n", __func__, g::n_ctx_res);
         return 1;
     }
 
-    auto make_batch = [&](const std::vector<float> & rows, int n_rows) {
+    auto make_batch = [&](const float * rows, int n) {
         mtmd_image_f32 img;
-        img.set_size({(int) n_text, n_rows}, false, true);
-        img.cpy_buf(rows);
+        img.set_size({(int) n_text, n}, false, true);
+        img.cpy_buf(std::vector<float>(rows, rows + n_text * n));
         mtmd_image_f32_batch batch;
         batch.is_audio = true;
         batch.entries.push_back(std::move(img));
         return batch;
     };
 
-    // FSQ (audio rows), residual LM input and stop score of the row
-    const bool audio_row = inp->feats != nullptr;
-    std::vector<float> rows(inp->embd, inp->embd + n_text);
-    if (audio_row) {
-        rows.insert(rows.end(), inp->feats, inp->feats + n_text);
+    // FSQ (audio rows), residual LM inputs, and the stop score of a single row
+    mtmd_image_f32_batch batch = make_batch(inp->embd, n_rows);
+    std::vector<float> x_rows;
+    if (inp->feats) {
+        x_rows.assign(inp->feats, inp->feats + n_text * n_rows);
     }
-    mtmd_image_f32_batch batch = make_batch(rows, audio_row ? 2 : 1);
-    std::vector<float> res_inp(n_text);
-    std::vector<float> h_fsq;
+    std::vector<float> res_out; // residual LM input rows, then the (FSQ'd) hidden states
     bool is_eos = false;
     {
         mtmd_subctx_encode_params params;
         params.imgs        = &batch;
         params.n_threads   = ctx->n_threads;
         params.gen_process = MTMD_SUBCTX_GEN_PROCESS_RES_INP;
-        params.out_embd    = &res_inp;
-        params.out_feats   = &h_fsq;
+        params.feats       = inp->feats ? &x_rows : nullptr;
+        params.out_feats   = &res_out;
         params.out_is_eos  = &is_eos;
         if (!sctx->encode(&params)) {
             LOG_ERR("%s: encode failed (res_inp)\n", __func__);
@@ -3640,37 +3640,39 @@ static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state,
         }
     }
 
-    // residual LM, one causal step
+    // residual LM, causal over all the rows of the sequence
     llama_context * lctx = state->voxcpm2_res.get();
     {
         llama_batch_ext_ptr lbatch(llama_batch_ext_init(lctx));
-        const llama_embd row = { res_inp.data(), 1, n_text };
-        const int32_t    idx = llama_batch_ext_add_embd(lbatch.get(), 0, row);
-        if (idx < 0) {
-            LOG_ERR("%s: failed to add a row to the batch (error %d)\n", __func__, idx);
-            return 1;
+        for (int i = 0; i < n_rows; i++) {
+            const llama_embd row = { res_out.data() + (size_t) i * n_text, 1, n_text };
+            const int32_t    idx = llama_batch_ext_add_embd(lbatch.get(), 0, row);
+            if (idx < 0) {
+                LOG_ERR("%s: failed to add a row to the batch (error %d)\n", __func__, idx);
+                return 1;
+            }
+            const llama_pos p = state->voxcpm2_n_past + i;
+            llama_batch_ext_set_pos(lbatch.get(), idx, &p);
+            llama_batch_ext_set_output_embd(lbatch.get(), idx, i == n_rows - 1);
         }
-        const llama_pos p = state->voxcpm2_n_past;
-        llama_batch_ext_set_pos(lbatch.get(), idx, &p);
-        llama_batch_ext_set_output_embd(lbatch.get(), idx, true);
         if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, lbatch.get()) != 0) {
             LOG_ERR("%s: residual LM decode failed\n", __func__);
             return 1;
         }
-        state->voxcpm2_n_past++;
+        state->voxcpm2_n_past += n_rows;
     }
 
     state->out_embd.clear();
     state->out_feats.clear();
-    if (inp->code0 < 0) {
+    if (prompt) {
         return 0;
     }
 
     // flow matching from [FSQ'd hidden state, residual LM output], then LocEnc of the new patch
     const float * r = llama_get_embeddings(lctx);
-    rows = h_fsq;
+    std::vector<float> rows(res_out.begin() + n_text, res_out.end());
     rows.insert(rows.end(), r, r + n_text);
-    batch = make_batch(rows, 2);
+    batch = make_batch(rows.data(), 2);
     std::vector<float> next_embd(n_text);
     std::vector<float> patch;
     {

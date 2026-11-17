@@ -1537,6 +1537,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
                     set_input_f32("inp_temb", mtmd_graph_voxcpm2_gen::time_embd(n_steps, hparams.n_embd));
                     set_positions("inp_pos_dit");
                     set_positions("inp_pos_enc");
+                } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_RES_INP) {
+                    if (params->feats) {
+                        set_input_f32("inp_feats", *params->feats);
+                    }
                 } else if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_LATENT_IN) {
                     set_input_f32("inp_feats", *params->feats);
                     set_positions("inp_pos_enc");

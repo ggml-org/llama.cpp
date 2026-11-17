@@ -3949,16 +3949,21 @@ public:
             }
         }
 
-        for (int i = 0; i < n; i++) {
+        // the rows go to the residual LM together, the first frame comes from the last prompt row
+        const bool last = prompt_pos + n == n_prompt;
+        const int  n_res = last ? n - 1 : n;
+        std::vector<float> h_rows((size_t) n_res * n_embd);
+        for (int i = 0; i < n_res; i++) {
             const float * h = llama_get_embeddings_ith(lctx, i);
-            if (prompt_pos + i == n_prompt - 1) {
-                h_state_buf.assign(h, h + n_embd); // first frame comes from the last prompt row
-                break;
-            }
-            const int v = rows[prompt_pos + i].voice;
-            if (!run_row(h, v >= 0 ? voice.data() + (size_t) v * n_embd : nullptr, -1)) {
-                return -1;
-            }
+            std::copy(h, h + n_embd, h_rows.begin() + (size_t) i * n_embd);
+        }
+        if (last) {
+            const float * h = llama_get_embeddings_ith(lctx, n - 1);
+            h_state_buf.assign(h, h + n_embd);
+        }
+        const float * x = is_voice ? voice.data() + (size_t) rows[prompt_pos].voice * n_embd : nullptr;
+        if (n_res > 0 && !run_row(h_rows.data(), x, -1, nullptr, n_res)) {
+            return -1;
         }
         pos        += n;
         prompt_pos += n;
@@ -4150,14 +4155,15 @@ private:
         return out;
     }
 
-    // one backbone row through mtmd: code0 < 0 for a prompt row, else the next frame goes to out
-    bool run_row(const float * h, const float * x, int32_t code0, mtmd_gen_out * out = nullptr) {
+    // backbone rows through mtmd: code0 < 0 for n_rows prompt rows, else one row and the next frame goes to out
+    bool run_row(const float * h, const float * x, int32_t code0, mtmd_gen_out * out = nullptr, int n_rows = 1) {
         mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
         inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
         inp.code0   = code0;
         inp.embd    = const_cast<float *>(h);
         inp.feats   = x;
-        inp.n_feats = x ? (size_t) n_embd : 0;
+        inp.n_feats = x ? (size_t) n_rows * n_embd : 0;
+        inp.n_codes = (size_t) n_rows;
         if (temp >= 0.0f) {
             inp.temp = temp;
         }

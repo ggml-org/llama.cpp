@@ -528,8 +528,9 @@ struct mtmd_gen_inp {
     const float * feats;
     size_t        n_feats;
 
-    // voxcpm2 GEN_CODE: one call per backbone row, embd is its hidden state and feats its input row (n_text_embd elements, null for a text row)
-    //                   code0 < 0 for a prompt row (the residual LM only reads it), code0 >= 0 makes the next frame
+    // voxcpm2 GEN_CODE: embd is the hidden state of a backbone row and feats its input row (n_text_embd elements, null for a text row)
+    //                   code0 >= 0 makes the next frame; code0 < 0 for prompt rows, the residual LM only reads them,
+    //                   n_codes of them (1 if 0) in embd and feats, all text rows or all audio rows
     // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
     // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
     const uint8_t * backbone_state;
