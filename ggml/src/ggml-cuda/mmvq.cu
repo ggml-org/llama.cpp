@@ -531,8 +531,23 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
         return 1;
     }
     if (table_id == MMVQ_PARAMETERS_RDNA1) {
-        // 1 warp/block measured fastest on gfx1010 (Q4_K_M tg128 52.3 -> 57.8 t/s with 4)
-        return ncols_dst == 1 ? 1 : calc_nwarps(type, ncols_dst, MMVQ_PARAMETERS_GENERIC);
+        // 1 warp/block measured fastest on gfx1010 for ncols_dst == 1 (Q4_K_M tg128 52.3 -> 57.8 t/s with 4),
+        // the other values are the same as in the generic table.
+        switch (ncols_dst) {
+            case 1:
+                return 1;
+            case 2:
+            case 3:
+            case 4:
+                return 4;
+            case 5:
+            case 6:
+            case 7:
+            case 8:
+                return 2;
+            default:
+                return 1;
+        }
     }
     if (table_id == MMVQ_PARAMETERS_TURING) {
         if (ncols_dst == 1) {
@@ -600,10 +615,7 @@ static constexpr __host__ __device__ bool mmvq_two_rows_ncols1(ggml_type type) {
 }
 
 static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int ncols_dst, int table_id, bool small_k = false, int nwarps = 1) {
-    if (table_id == MMVQ_PARAMETERS_RDNA1) {
-        return calc_rows_per_block(type, ncols_dst, MMVQ_PARAMETERS_GENERIC, small_k, nwarps);
-    }
-    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING || table_id == MMVQ_PARAMETERS_GB10) {
+    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING || table_id == MMVQ_PARAMETERS_GB10 || table_id == MMVQ_PARAMETERS_RDNA1) {
         switch (ncols_dst) {
             case 1:
                 if (small_k) {
@@ -612,7 +624,7 @@ static constexpr __host__ __device__ int calc_rows_per_block(ggml_type type, int
                 if (table_id == MMVQ_PARAMETERS_GB10) {
                     return type == GGML_TYPE_IQ2_S || type == GGML_TYPE_IQ3_S ? 2 : 1;
                 }
-                return table_id == MMVQ_PARAMETERS_GENERIC && mmvq_two_rows_ncols1(type) ? 2 : 1;
+                return (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_RDNA1) && mmvq_two_rows_ncols1(type) ? 2 : 1;
             case 2:
             case 3:
             case 4:
