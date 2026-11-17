@@ -626,8 +626,22 @@ div.markdown-user-content :global(.table-wrapper) {
 
 /* Hide mermaid code text until rendered - prevents flash */
 .markdown-content :global(pre.mermaid:not([data-mermaid-rendered])),
-.markdown-content :global(pre.mermaid[data-mermaid-rendered]:not(:has(svg))) {
+.markdown-content :global(pre.mermaid[data-mermaid-rendered]:not(:has(svg, .mermaid-error))) {
 	display: none;
+}
+
+/* A diagram Pele can't draw shows why, with the line it stopped at */
+.markdown-content :global(.mermaid-error) {
+	max-width: 100%;
+	padding: 1rem;
+	color: var(--destructive);
+	font-family: var(--font-mono);
+	font-size: 0.8125rem;
+	/* the caret line under the source must line up character by character */
+	font-variant-ligatures: none;
+	text-align: left;
+	white-space: pre-wrap;
+	cursor: default;
 }
 
 /* Hide svg source until rendered - prevents flash. A rendered-but-unsanitized
