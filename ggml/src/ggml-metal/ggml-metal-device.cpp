@@ -2584,7 +2584,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_conv_2d_mm(ggml_
 
     res.nr0 = nr0;
     res.nr1 = nr1;
-    res.nsg = 4;
+    res.nsg = N_SG_CONV_2D;
 
     res.smem = nr0*nr1*sizeof(float);
 

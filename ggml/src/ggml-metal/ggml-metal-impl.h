@@ -17,6 +17,8 @@
 #define N_ARGMAX_NPART_MAX 256
 #define N_ARGMAX_CHUNK 4096
 
+#define N_SG_CONV_2D 4
+
 // kernel parameters for mat-vec threadgroups
 //
 // N_R0: number of src0 rows to process per simdgroup

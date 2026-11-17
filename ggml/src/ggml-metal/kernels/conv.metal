@@ -285,7 +285,7 @@ kernel void kernel_conv_2d_mm(
         ushort  tiitg[[thread_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
-    constexpr short NSG = 4;
+    constexpr short NSG = N_SG_CONV_2D;
     constexpr short NTH = 32*NSG;
     constexpr short NK  = 32;
     constexpr short NKB = NK/8;
