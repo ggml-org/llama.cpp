@@ -137,7 +137,10 @@ int main(int argc, char ** argv) {
     auto tmpls = common_chat_templates_init(model, "");
     std::string prompt;
     try {
-        prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice);
+        prompt = common_chat_get_tts_prompt(tmpls.get(), params.prompt, params.tts_lang, params.tts_voice, [&](const std::string & word) {
+            char buf[512];
+            return mtmd_gen_audio_g2p(mctx.get(), word.c_str(), buf, sizeof(buf)) > 0 ? std::string(buf) : std::string();
+        });
     } catch (const std::exception & e) {
         LOG_ERR("failed to prepare the text to speak: %s\n", e.what());
         return 1;

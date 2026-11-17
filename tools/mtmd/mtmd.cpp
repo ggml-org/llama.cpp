@@ -3118,6 +3118,21 @@ static int32_t cbx_ref_encode(mtmd_context * ctx, const mtmd_audio_tokens * audi
     return 0;
 }
 
+int32_t mtmd_gen_audio_g2p(const mtmd_context * ctx, const char * word, char * buf, size_t buf_size) {
+    if (!ctx || !ctx->ctx_gen_a || !word || !buf || buf_size == 0) {
+        return 0;
+    }
+    std::string out;
+    if (ctx->ctx_gen_a->model.proj_type == PROJECTOR_TYPE_TINY_VOCA) {
+        out = mtmd_graph_tiny_voca::g2p(ctx->ctx_gen_a->model.tiny_voca, word);
+    }
+    if (out.size() + 1 > buf_size) {
+        return -1;
+    }
+    memcpy(buf, out.c_str(), out.size() + 1);
+    return (int32_t) out.size();
+}
+
 const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx) {
     if (!ctx->ctx_gen_a || idx < 0) {
         return nullptr;

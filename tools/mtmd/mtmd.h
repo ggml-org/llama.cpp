@@ -497,6 +497,12 @@ MTMD_API size_t mtmd_gen_audio_read_tensor(mtmd_context * ctx, const char * name
 // name of the idx-th predefined voice, nullptr when idx is out of range; idx 0 is the default voice
 MTMD_API const char * mtmd_gen_audio_voice_name(const mtmd_context * ctx, int32_t idx);
 
+// pronunciation of a word by the letter-to-sound model of the mmproj, for the tts_g2p() of the "tts" chat template
+// (see common_chat_get_tts_prompt()); the phonemes are separated by spaces, in the notation of the model (tiny-voca: CMUdict)
+// returns the length written to buf (NUL terminated), 0 if the model has no letter-to-sound model or no pronunciation,
+// -1 if buf is too small; does not run a graph, can be called from any thread
+MTMD_API int32_t mtmd_gen_audio_g2p(const mtmd_context * ctx, const char * word, char * buf, size_t buf_size);
+
 // predefined voice with this name as a voice bitmap, to pass as speaker reference
 // returns nullptr if there is no such voice, the caller must free it
 MTMD_API mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * name);

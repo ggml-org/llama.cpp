@@ -445,13 +445,15 @@ llama-tts -m tiny-voca.gguf \
     --output out.wav
 ```
 
-The model speaks phonemes. The text to phonemes step is the model's `tts` chat template, a partial port of [dizione](https://github.com/n4ze3m/dizione) (the reference one), with its pronunciation dictionary and tables stored in the model:
-- a word missing from the dictionary is spelled letter by letter: the unknown-word model of dizione is not ported
-- not ported yet: homographs, word endings of unknown words, most of the text normalization (numbers, money, percent, times, ordinals and the common abbreviations are read)
+The model speaks phonemes. The text to phonemes step is the model's `tts` chat template, a port of [dizione](https://github.com/n4ze3m/dizione) (the reference one), with its pronunciation dictionary and tables stored in the model:
+- the choice of a pronunciation for each word: exceptions and names, the dictionary, function words and their sentence stress, words spelled alike and read differently ("I read it yesterday", "to read"), hyphenated words, capitals read letter by letter, mixed case ("iPhone"), stretched words ("soooo"), accents, chat spellings ("lol", "btw")
+- a word missing from the dictionary is built from a known word when it can be (endings, prefixes, compounds), else it goes through the unknown-word model of dizione (stored in the mmproj) and its conversion rules
+- a pronunciation can be given in the text, in CMUdict notation or as phonemes: `Say {HH AH0 L OW1} to Samir{s ə m ˈɪɹ}`
+- the text rules are ported too: numbers, money, times, dates, telephone numbers, versions, codes, units, fractions, ranges, math signs and comparisons, web addresses and file names, abbreviations, chat spellings
 
 With `llama-server`, send `"raw_prompt": true` to pass phonemes directly, in the format printed by dizione: symbols separated by spaces, `<sp>` between words, a stress mark (`ˈ` or `ˌ`) before a stressed vowel, e.g. `h ə l ˈoʊ <sp> w ˈɜː l d .`
 
-Each sentence is spoken as one utterance, a full stop is added when a sentence ends without a mark.
+Each sentence is spoken as one utterance. The template splits the text as the reference does (before a capital or a figure, not after a title or an initial), ends each sentence with `<eos>`, and adds a full stop when the text ends without a mark. Phonemes without `<eos>` are cut after each `.`, `?`, `!` or `…`, and a sentence without a final mark gets a full stop.
 
 **Note for GGUF conversion:**
 

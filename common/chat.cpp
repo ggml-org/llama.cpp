@@ -807,10 +807,11 @@ bool common_chat_templates_was_explicit(const struct common_chat_templates * tmp
 }
 
 // renders a task template (e.g. "tts") with the given variables
-static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars, const std::shared_ptr<common_tts_dicts> & tts_dicts) {
+static std::string common_chat_template_render(const common_chat_template & tmpl, const json & vars, const std::shared_ptr<common_tts_dicts> & tts_dicts,
+                                               const common_tts_g2p & g2p = nullptr) {
     jinja::context ctx(tmpl.source());
-    // text normalization helpers: tts_norm_scan(), tts_norm_sub() and tts_dict(), see docs/tts-norm-patterns.md
-    common_chat_tts_norm_add_builtins(ctx, tts_dicts);
+    // text normalization helpers: tts_norm_scan(), tts_norm_sub(), tts_dict() and tts_g2p(), see docs/tts-norm-patterns.md
+    common_chat_tts_norm_add_builtins(ctx, tts_dicts, g2p);
     jinja::global_from_json(ctx, vars, false);
     ctx.set_val("bos_token", jinja::mk_val<jinja::value_string>(tmpl.bos_token()));
     ctx.set_val("eos_token", jinja::mk_val<jinja::value_string>(tmpl.eos_token()));
@@ -886,7 +887,7 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
 }
 
 std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
-                                       const std::string & language, const std::string & voice) {
+                                       const std::string & language, const std::string & voice, const common_tts_g2p & g2p) {
     if (!chat_templates || !chat_templates->template_tts) {
         return "";
     }
@@ -894,7 +895,7 @@ std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templa
         {"messages", json::array({{{"role", "user"}, {"content", text}}})},
         {"language", language},
         {"voice",    voice},
-    }, chat_templates->tts_dicts);
+    }, chat_templates->tts_dicts, g2p);
 }
 
 std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,

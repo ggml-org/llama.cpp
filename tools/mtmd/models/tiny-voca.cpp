@@ -2,7 +2,10 @@
 #include "../mtmd-audio.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstring>
+#include <string>
 
 // same-length conv with 3 taps; x: [T, IC], w: [3, IC, OC], returns [T, OC]
 ggml_tensor * mtmd_graph_tiny_voca::conv3(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) const {
@@ -186,4 +189,119 @@ void mtmd_graph_tiny_voca::synth(const std::vector<float> & voc, const std::vect
     for (size_t i = 0; i < audio.size(); i++) {
         audio[i] = harm_out[i] + noise_out[i];
     }
+}
+
+//
+// host: unknown-word model of the phonemizer, see g2p.py of dizione
+//
+
+static const char * const tiny_voca_g2p_letters = "abcdefghijklmnopqrstuvwxyz'";
+static const char * const tiny_voca_g2p_symbols[mtmd_graph_tiny_voca::n_g2p_symbol] = {
+    "AA0", "AA1", "AA2", "AE0", "AE1", "AE2", "AH0", "AH1", "AH2", "AO0", "AO1", "AO2", "AW0", "AW1", "AW2", "AY0", "AY1", "AY2",
+    "B", "CH", "D", "DH", "EH0", "EH1", "EH2", "ER0", "ER1", "ER2", "EY0", "EY1", "EY2", "F", "G", "HH",
+    "IH0", "IH1", "IH2", "IY0", "IY1", "IY2", "JH", "K", "L", "M", "N", "NG", "OW0", "OW1", "OW2", "OY0", "OY1", "OY2",
+    "P", "R", "S", "SH", "T", "TH", "UH0", "UH1", "UH2", "UW0", "UW1", "UW2", "V", "W", "Y", "Z", "ZH",
+};
+
+// one direction of a GRU layer over x [n, n_in] -> y [n, n_hidden], written at column offset of rows of width stride
+// the products are summed in double and rounded once, as close as can be to the reference (numpy, float32): two
+// symbols are sometimes almost as likely, and the order of a float32 sum would decide between them
+static void tiny_voca_gru(const mtmd_tiny_voca::g2p_gru & g, const std::vector<float> & x, int64_t n, int64_t n_in, int64_t n_hidden,
+        bool reverse, std::vector<float> & y, int64_t offset, int64_t stride) {
+    const int64_t h3 = 3 * n_hidden;
+    std::vector<float> inp((size_t) (n * h3));
+    for (int64_t t = 0; t < n; t++) {
+        for (int64_t r = 0; r < h3; r++) {
+            const float * w = g.w_ih.data() + r * n_in;
+            const float * xt = x.data() + t * n_in;
+            double acc = 0.0;
+            for (int64_t c = 0; c < n_in; c++) {
+                acc += (double) w[c] * xt[c];
+            }
+            inp[t * h3 + r] = (float) acc + g.b_ih[r];
+        }
+    }
+    std::vector<float> state((size_t) n_hidden, 0.0f), rec((size_t) h3);
+    for (int64_t s = 0; s < n; s++) {
+        const int64_t t = reverse ? n - 1 - s : s;
+        for (int64_t r = 0; r < h3; r++) {
+            const float * w = g.w_hh.data() + r * n_hidden;
+            double acc = 0.0;
+            for (int64_t c = 0; c < n_hidden; c++) {
+                acc += (double) w[c] * state[c];
+            }
+            rec[r] = (float) acc + g.b_hh[r];
+        }
+        const float * in = inp.data() + t * h3;
+        for (int64_t k = 0; k < n_hidden; k++) {
+            const float reset  = 1.0f / (1.0f + std::exp(-(in[k] + rec[k])));
+            const float update = 1.0f / (1.0f + std::exp(-(in[n_hidden + k] + rec[n_hidden + k])));
+            const float cand   = std::tanh(in[2 * n_hidden + k] + reset * rec[2 * n_hidden + k]);
+            state[k] = (1.0f - update) * cand + update * state[k];
+        }
+        std::copy(state.begin(), state.end(), y.begin() + t * stride + offset);
+    }
+}
+
+std::string mtmd_graph_tiny_voca::g2p(const mtmd_tiny_voca & tv, const std::string & word) {
+    const int64_t w = tv.g2p_n_width;
+    const int64_t h = tv.g2p_n_hidden;
+    if (w == 0 || tv.g2p_layers.empty()) {
+        return "";
+    }
+    std::vector<int> ids;
+    for (char c : word) {
+        const char * p = strchr(tiny_voca_g2p_letters, std::tolower((unsigned char) c));
+        if (c != '\0' && p) {
+            ids.push_back((int) (p - tiny_voca_g2p_letters) + 1);
+        }
+    }
+    if (ids.empty()) {
+        return "";
+    }
+
+    // each letter takes n_g2p_slot positions: its embedding plus the embedding of the slot
+    const int64_t n = (int64_t) ids.size() * n_g2p_slot;
+    std::vector<float> x((size_t) (n * w));
+    for (size_t l = 0; l < ids.size(); l++) {
+        for (int s = 0; s < n_g2p_slot; s++) {
+            float * row = x.data() + ((int64_t) l * n_g2p_slot + s) * w;
+            for (int64_t c = 0; c < w; c++) {
+                row[c] = tv.g2p_embd[ids[l] * w + c] + tv.g2p_slot[s * w + c];
+            }
+        }
+    }
+    int64_t n_in = w;
+    for (size_t il = 0; il + 1 < tv.g2p_layers.size(); il += 2) {
+        std::vector<float> y((size_t) (n * 2 * h));
+        tiny_voca_gru(tv.g2p_layers[il],     x, n, n_in, h, false, y, 0, 2 * h);
+        tiny_voca_gru(tv.g2p_layers[il + 1], x, n, n_in, h, true,  y, h, 2 * h);
+        x    = std::move(y);
+        n_in = 2 * h;
+    }
+
+    // CTC, read greedily: a label repeated or the blank (0) is no new symbol
+    std::string out;
+    int prev = 0;
+    for (int64_t t = 0; t < n; t++) {
+        int best = 0;
+        float best_v = -INFINITY;
+        for (int k = 0; k <= n_g2p_symbol; k++) {
+            const float * wr = tv.g2p_out_w.data() + k * n_in;
+            double sum = 0.0;
+            for (int64_t c = 0; c < n_in; c++) {
+                sum += (double) wr[c] * x[t * n_in + c];
+            }
+            const float acc = (float) sum + tv.g2p_out_b[k];
+            if (acc > best_v) {
+                best_v = acc;
+                best   = k;
+            }
+        }
+        if (best != prev && best != 0) {
+            out += (out.empty() ? "" : " ") + std::string(tiny_voca_g2p_symbols[best - 1]);
+        }
+        prev = best;
+    }
+    return out;
 }

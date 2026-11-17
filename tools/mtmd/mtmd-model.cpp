@@ -3529,6 +3529,33 @@ struct mtmd_model_loader {
                     read_host("a.gen.prosody_proj.weight", tv.prosody_proj_w, 3, n_embd);
                     read_host("a.gen.prosody_proj.bias",   tv.prosody_proj_b, n_embd, 1);
 
+                    // unknown-word model, optional
+                    if (const ggml_tensor * e = ggml_get_tensor(ctx_meta.get(), "a.gen.g2p.embed.weight")) {
+                        const ggml_tensor * hh = ggml_get_tensor(ctx_meta.get(), "a.gen.g2p.gru.weight_hh_l0");
+                        if (!hh || e->ne[1] != g::n_g2p_letter + 1) {
+                            throw std::runtime_error(mtmd_format("%s: tiny_voca: unexpected g2p model\n", __func__));
+                        }
+                        const int64_t w = e->ne[0];
+                        const int64_t h = hh->ne[0];
+                        tv.g2p_n_width  = w;
+                        tv.g2p_n_hidden = h;
+                        read_host("a.gen.g2p.embed.weight", tv.g2p_embd, w, g::n_g2p_letter + 1);
+                        read_host("a.gen.g2p.slot",         tv.g2p_slot, w, g::n_g2p_slot);
+                        for (int il = 0; ggml_get_tensor(ctx_meta.get(), ("a.gen.g2p.gru.weight_ih_l" + std::to_string(il)).c_str()); il++) {
+                            for (const char * dir : { "", "_reverse" }) {
+                                const std::string sfx = "_l" + std::to_string(il) + dir;
+                                mtmd_tiny_voca::g2p_gru gru;
+                                read_host("a.gen.g2p.gru.weight_ih" + sfx, gru.w_ih, il == 0 ? w : 2 * h, 3 * h);
+                                read_host("a.gen.g2p.gru.weight_hh" + sfx, gru.w_hh, h, 3 * h);
+                                read_host("a.gen.g2p.gru.bias_ih"   + sfx, gru.b_ih, 3 * h, 1);
+                                read_host("a.gen.g2p.gru.bias_hh"   + sfx, gru.b_hh, 3 * h, 1);
+                                tv.g2p_layers.push_back(std::move(gru));
+                            }
+                        }
+                        read_host("a.gen.g2p.out.weight", tv.g2p_out_w, 2 * h, g::n_g2p_symbol + 1);
+                        read_host("a.gen.g2p.out.bias",   tv.g2p_out_b, g::n_g2p_symbol + 1, 1);
+                    }
+
                     // read by the audio pipeline: input tables and voices (encoder row, then frame row)
                     for (const char * name : { "a.gen.tok_embd.weight", "a.gen.stress_embd.weight" }) {
                         model.cbx_tensors[name] = get_tensor(name);

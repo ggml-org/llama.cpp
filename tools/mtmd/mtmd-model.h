@@ -971,6 +971,22 @@ struct mtmd_tiny_voca {
     std::vector<float> prosody_head_b;
     std::vector<float> prosody_proj_w; // [n_embd, 3]
     std::vector<float> prosody_proj_b;
+
+    // unknown-word model of the phonemizer, run on the host by mtmd_gen_audio_g2p(): letters -> CMUdict phonemes
+    // embedding (each letter takes n_slot positions), bidirectional GRU layers, CTC output read greedily
+    struct g2p_gru {
+        std::vector<float> w_ih; // [3 * n_hidden, n_in]: reset, update, new
+        std::vector<float> w_hh; // [3 * n_hidden, n_hidden]
+        std::vector<float> b_ih;
+        std::vector<float> b_hh;
+    };
+    std::vector<float> g2p_embd;     // [n_letter + 1, n_width], row 0 unused
+    std::vector<float> g2p_slot;     // [n_slot, n_width]
+    std::vector<g2p_gru> g2p_layers; // forward, reverse, for each layer
+    std::vector<float> g2p_out_w;    // [n_symbol + 1, 2 * n_hidden], output 0 is the CTC blank
+    std::vector<float> g2p_out_b;
+    int64_t g2p_n_width  = 0;
+    int64_t g2p_n_hidden = 0;
 };
 
 // snake-activated conv decoder of the DAC / Oobleck family (a.gen.vae.*): yue2 VAE, minimax_music3 vocoder

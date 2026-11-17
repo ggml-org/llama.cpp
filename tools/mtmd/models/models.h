@@ -816,6 +816,12 @@ struct mtmd_graph_tiny_voca : mtmd_graph {
     // host: frame params [n_frames, n_voc] and F0 [n_frames] in Hz -> waveform [n_frames * hop]
     static void synth(const std::vector<float> & voc, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & audio);
 
+    // unknown-word model: letters (a-z and ') -> CMUdict phonemes separated by spaces, other characters are skipped
+    static constexpr int n_g2p_slot   = 2;  // positions per letter
+    static constexpr int n_g2p_letter = 27;
+    static constexpr int n_g2p_symbol = 69;
+    static std::string g2p(const mtmd_tiny_voca & tv, const std::string & word);
+
   private:
     ggml_tensor * conv3(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b) const;
 };
