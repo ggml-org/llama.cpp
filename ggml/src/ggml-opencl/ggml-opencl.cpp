@@ -906,6 +906,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_fa_q8_rows_f16 = nullptr;
     cl_kernel kernel_fa_q8_rows_f32 = nullptr;
     cl_kernel kernel_mul_mm_q8_kq_p8 = nullptr;
+    cl_kernel kernel_mul_mm_q8_kq_p8_dk512 = nullptr;
     ggml_opencl_fa_kernels fa;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_adreno_xmem_attn_state adreno_xmem_attn;
@@ -1522,7 +1523,8 @@ struct ggml_backend_opencl_context {
                 kernel_fa_kqv_direct_reduce,
                 kernel_fa_q8_rows_f16,
                 kernel_fa_q8_rows_f32,
-                kernel_mul_mm_q8_kq_p8
+                kernel_mul_mm_q8_kq_p8,
+                kernel_mul_mm_q8_kq_p8_dk512
         }) {
             if (kernel != nullptr) {
                 CL_CHECK(clReleaseKernel(kernel));
@@ -4034,6 +4036,26 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         if (prog != nullptr) {
             CL_CHECK((backend_ctx->kernel_mul_mm_q8_kq_p8 = clCreateKernel(prog, "kernel_mul_mm_q8_kq_p8", &err), err));
             CL_CHECK(clReleaseProgram(prog));
+        }
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mm_q8_kq_p8_dk512
+    if (backend_ctx->gpu_family == ADRENO && backend_ctx->has_integer_dot) {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mm_q8_kq_p8_dk512.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mm_q8_kq_p8_dk512.cl");
+#endif
+        cl_program prog = build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts, /*fatal=*/false);
+        if (prog != nullptr) {
+            cl_kernel kernel = clCreateKernel(prog, "kernel_mul_mm_q8_kq_p8_dk512", &err);
+            CL_CHECK(clReleaseProgram(prog));
+            if (err == CL_SUCCESS) {
+                backend_ctx->kernel_mul_mm_q8_kq_p8_dk512 = kernel;
+            }
         }
         GGML_LOG_CONT(".");
     }
@@ -23040,7 +23062,7 @@ static void ggml_cl_fa_kq_p8_dispatch(
 
     if (kq_int8) {
         ggml_cl_fa_q8_rows(backend, q, dst, backend_ctx->prealloc_fa_q8.buffer, backend_ctx->prealloc_fa_q8_scale.buffer, q0, nqc);
-        kernel = backend_ctx->kernel_mul_mm_q8_kq_p8;
+        kernel = K <= 256 ? backend_ctx->kernel_mul_mm_q8_kq_p8 : backend_ctx->kernel_mul_mm_q8_kq_p8_dk512;
         CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem), &backend_ctx->prealloc_fa_k8.buffer));
         CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem), &backend_ctx->prealloc_fa_k8_scale.buffer));
         CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem), &backend_ctx->prealloc_fa_q8.buffer));
@@ -23646,16 +23668,25 @@ static bool ggml_cl_flash_attn_decompose_dispatch(
         const char * e = getenv("GGML_OPENCL_FA_KQ_INT8");
         return (e && e[0]) ? (e[0] != '0' ? 1 : 0) : -1;
     }();
-    const bool kq_int8 = kq_p8 && dk <= 256 && dk % 32 == 0 &&
+    static const int dk512_env = [] {
+        const char * e = getenv("GGML_OPENCL_FA_KQ_DK512_F16");
+        return (e && e[0]) ? (e[0] != '0' ? 1 : 0) : -1;
+    }();
+    const bool dk512 = dk > 256 && dk <= 512 && n_q >= 32 &&
+        (dk512_env == 1 || (dk512_env < 0 && backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E));
+    const bool kq_int8_possible = kq_p8 && (dk <= 256 || dk512) && dk % 32 == 0 &&
         backend_ctx->kernel_fa_q8_rows_f16 != nullptr && backend_ctx->kernel_fa_q8_rows_f32 != nullptr &&
-        backend_ctx->kernel_mul_mm_q8_kq_p8 != nullptr &&
         n_head <= INT_MAX && n_head_kv <= INT_MAX &&
         n_q <= INT_MAX / n_head / (dk / 32) && n_kv <= INT_MAX / n_head_kv / (dk / 32) &&
         (dst->src[4] == nullptr || dk > 64) &&
         (kq_int8_env == 1 || (kq_int8_env < 0 && backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && n_kv >= 2048)) &&
         backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_fa_q8_rows_f16) >= 64 &&
-        backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_fa_q8_rows_f32) >= 64 &&
-        backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_mul_mm_q8_kq_p8) >= 64;
+        backend_ctx->get_kernel_workgroup_size(backend_ctx->kernel_fa_q8_rows_f32) >= 64;
+    cl_kernel kq_int8_kernel = nullptr;
+    if (kq_int8_possible) {
+        kq_int8_kernel = dk <= 256 ? backend_ctx->kernel_mul_mm_q8_kq_p8 : backend_ctx->kernel_mul_mm_q8_kq_p8_dk512;
+    }
+    const bool kq_int8 = kq_int8_kernel != nullptr && backend_ctx->get_kernel_workgroup_size(kq_int8_kernel) >= 64;
 
     if (kq_p8) {
         ggml_cl_flash_attn_decompose_kq_p8(backend, q, k, dst, n_q_chunk, scale, max_bias, kqv_direct, kq_int8);
