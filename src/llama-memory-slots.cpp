@@ -9,7 +9,7 @@
 #include <stdexcept>
 
 llama_memory_slots::llama_memory_slots(const llama_model & model, const std::vector<slot_desc> & slots, uint32_t n_seq_max, bool offload)
-    : n_seq_max(n_seq_max), descs(slots), n_pos(n_seq_max, -1), seqs(n_seq_max) {
+    : n_seq_max(n_seq_max), descs(slots), n_pos(n_seq_max, -1), no_alloc(model.no_alloc()), seqs(n_seq_max) {
     // the slots live where the model output lives
     buft = ggml_backend_cpu_buffer_type();
     if (offload) {
@@ -42,11 +42,10 @@ llama_memory_slots::seq_slots & llama_memory_slots::alloc_seq(llama_seq_id seq_i
         ggml_format_name(t, "slot_%s_%d", d.name.c_str(), seq_id);
         s.tensors[d.name] = t;
     }
-    s.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(s.ctx.get(), buft));
-    if (!s.buf) {
-        throw std::runtime_error("failed to allocate the state slots");
+    s.buf = llama_memory_bufs::alloc_buf(s.ctx.get(), buft, no_alloc, "state slots");
+    if (!no_alloc) {
+        ggml_backend_buffer_clear(s.buf.get(), 0);
     }
-    ggml_backend_buffer_clear(s.buf.get(), 0);
     return s;
 }
 
@@ -147,7 +146,16 @@ llama_pos llama_memory_slots::seq_pos_max(llama_seq_id seq_id) const {
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_slots::memory_breakdown() const {
     size_t size = 0;
     for (const auto & s : seqs) {
-        size += s.buf ? ggml_backend_buffer_get_size(s.buf.get()) : 0;
+        if (!s.buf) {
+            continue;
+        }
+        if (no_alloc) {
+            for (const auto & [name, t] : s.tensors) {
+                size += ggml_backend_buft_get_alloc_size(buft, t);
+            }
+        } else {
+            size += ggml_backend_buffer_get_size(s.buf.get());
+        }
     }
     return { { buft, size } };
 }

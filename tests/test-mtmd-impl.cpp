@@ -836,6 +836,53 @@ MAKE_TEST(test_audio_log_mel_blocks) {
 #endif // TEST_CLIP_INTERNALS
 
 //
+// mtmd chunk serialization
+//
+
+// an overview-only MiniCPM-V 4.7 canvas chunk of an early version-3 build, whose canvas position type was 3
+// (later builds gave 3 to SenseNova-U1 without a new version): 16x16 tiles and one </image> separator
+MAKE_TEST(test_legacy_canvas_chunk) {
+    std::vector<char> buf;
+    auto put = [&buf](const void * p, size_t n) { buf.insert(buf.end(), (const char *) p, (const char *) p + n); };
+    auto u8  = [&put](uint8_t v)  { put(&v, sizeof(v)); };
+    auto u32 = [&put](uint32_t v) { put(&v, sizeof(v)); };
+    auto i32 = [&put](int32_t v)  { put(&v, sizeof(v)); };
+    auto u64 = [&put](uint64_t v) { put(&v, sizeof(v)); };
+
+    u64(3);                           // version
+    u32(MTMD_INPUT_CHUNK_TYPE_IMAGE); // chunk type
+    u64(0);                           // text tokens
+    u8(1);                            // image tokens
+    u32(16); u32(16);                 // token grid of the last tile
+    u32(3);                           // position type: canvas in that build
+    u32(0);                           // image index
+    u32(1);                           // temporal merge
+    u64(2); put("id", 2);             // id
+    u8(0);                            // batch: not audio
+    u64(1);                           // one entry: the overview
+    u8(0); u8(0); i32(0);             // add_viewsep, add_newline, lead_pad
+    i32(1);                           // suffix: </image>
+    i32(0); i32(0); i32(0); i32(0);   // anyres grid_x, grid_y, orig_nx, orig_ny
+    i32(448); i32(448);               // pixel size
+    u8(0);                            // no audio tokens
+
+    mtmd_input_chunk * chunk = mtmd_input_chunk_load(buf.data(), buf.size());
+    t.assert_true("loaded", chunk != nullptr);
+    if (!chunk) {
+        return;
+    }
+    t.assert_equal("rows: tiles and the separator", (size_t) 257, mtmd_input_chunk_get_n_tokens(chunk));
+    t.assert_equal("positions: the tile and the separator", (llama_pos) 2, mtmd_input_chunk_get_n_pos(chunk));
+    const mtmd_image_tokens * im = mtmd_input_chunk_get_tokens_image(chunk);
+    const mtmd_decoder_pos sep = mtmd_image_tokens_get_decoder_pos(im, 100, 256);
+    t.assert_equal("separator position", (llama_pos) 101, (llama_pos) sep.t);
+    mtmd_input_chunk_free(chunk);
+
+    // a truncated buffer fails to load (and leaks nothing)
+    t.assert_true("truncated", mtmd_input_chunk_load(buf.data(), buf.size() - 3) == nullptr);
+}
+
+//
 // mtmd_helper_resampler
 //
 

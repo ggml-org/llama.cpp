@@ -69,6 +69,7 @@ private:
     std::vector<llama_pos> n_pos; // per sequence, -1 = empty
 
     ggml_backend_buffer_type_t buft = nullptr;
+    bool no_alloc = false; // a memory estimate: dummy buffers, the sizes are simulated
 
     mutable std::vector<seq_slots> seqs; // allocated by the first use of the sequence
 };

@@ -2761,6 +2761,11 @@ int llama_context::gen_wav(const llama_batch_ext & batch_inp) {
             LLAMA_LOG_ERROR("%s: all entries need %d codes and the same sequence\n", __func__, n_codes);
             return -1;
         }
+        if (model.arch == LLM_ARCH_CLIP &&
+                !static_cast<const llama_model_clip &>(model).c2w_codes_valid(batch_inp.codes.data() + tok.codes_off, n_codes)) {
+            LLAMA_LOG_ERROR("%s: frame %d: %d codes expected, each inside its codebook\n", __func__, i, n_codes);
+            return -1;
+        }
         std::copy_n(batch_inp.codes.begin() + tok.codes_off, n_codes, udata->token.begin() + (size_t) i * n_codes);
         udata->pos[i]    = i;
         udata->seq_id[i] = udata->seq_id_data.data() + i;
@@ -5939,6 +5944,12 @@ bool llama_get_gen_out_ith(llama_context * ctx, int32_t i, llama_gen_out * out) 
 void llama_gen_set_seed(llama_context * ctx, llama_seq_id seq_id, uint32_t seed) {
     if (auto * mem = dynamic_cast<llama_memory_clip_gen *>(llama_get_memory(ctx))) {
         mem->set_seed(seq_id, seed);
+    }
+}
+
+void llama_gen_reset(llama_context * ctx, llama_seq_id seq_id) {
+    if (auto * mem = dynamic_cast<llama_memory_clip_gen *>(llama_get_memory(ctx))) {
+        mem->reset(seq_id);
     }
 }
 

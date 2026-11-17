@@ -145,6 +145,19 @@ std::vector<llama_model_clip::c2w_slot> llama_model_clip::c2w_slots() const {
     return slots;
 }
 
+bool llama_model_clip::c2w_codes_valid(const int32_t * codes, int32_t n_codes) const {
+    if (!c2w.quant_first_cb || !c2w.quant_rest_cb || n_codes != c2w.quant_rest_cb->ne[2] + 1) {
+        return false;
+    }
+    for (int32_t g = 0; g < n_codes; ++g) {
+        const int64_t size = g == 0 ? c2w.quant_first_cb->ne[1] : c2w.quant_rest_cb->ne[1];
+        if (codes[g] < 0 || codes[g] >= size) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int64_t llama_model_clip::c2w_samples_per_frame() const {
     int64_t n = 1;
     for (const auto & up : c2w.up) {

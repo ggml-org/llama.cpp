@@ -1,5 +1,6 @@
 #pragma once
 
+#include <mutex>
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "clip-model.h"
@@ -74,6 +75,7 @@ struct clip_audio_mel_config {
 
     const clip_audio_cache * cache = nullptr;
     ggml_backend_sched_t     sched = nullptr;
+    std::mutex *             sched_mutex = nullptr; // held while sched computes, it can be shared (see clip_cpu_compute)
 };
 
 struct clip_audio_preproc_out {

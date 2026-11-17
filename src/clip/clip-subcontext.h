@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <mutex>
 #include <vector>
 
 // libllama internal: runs the graphs of one clip_model of a llama_context (see llama_context::clip_exec)
@@ -31,6 +32,7 @@ void clip_debug_print_embeddings(const float * data, int64_t n_embd, int64_t n_r
 struct clip_cpu_compute {
     ggml_backend_t       backend = nullptr;
     ggml_backend_sched_t sched   = nullptr;
+    std::mutex           mutex;  // the media and streams of a proc share sched, possibly across contexts
 
     explicit clip_cpu_compute(int n_threads);
     ~clip_cpu_compute();
@@ -40,7 +42,7 @@ struct clip_cpu_compute {
 };
 
 // compute the log-mel of n_frames frames, the waveform must already be padded and window must hold one whole frame
-// out has the layout [n_frames, n_mel]; must not run at the same time as another pass
+// out has the layout [n_frames, n_mel]; holds config.sched_mutex while it computes
 struct clip_audio_mel_config;
 bool clip_audio_log_mel(const clip_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out);
 

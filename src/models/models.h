@@ -539,6 +539,8 @@ struct llama_model_clip : public llama_model_base {
 
     std::vector<c2w_slot> c2w_slots() const;
     int64_t               c2w_samples_per_frame() const;
+    // n_codes codes of one frame for the native codec: the right count, each inside its codebook
+    bool                  c2w_codes_valid(const int32_t * codes, int32_t n_codes) const;
 
     llama_memory_i * create_clip_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 

@@ -1073,6 +1073,7 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
     // logits [n_vocab, 1] -> I32 [1]
     ggml_tensor * sample(ggml_tensor * logits) {
         logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
+        ggml_tensor * candidates = nullptr;
         if (smpl) {
             llama_sampler_data data = { logits, nullptr, nullptr, nullptr };
             smpl->iface->backend_apply(smpl, ctx0, gf, &data);
@@ -1082,8 +1083,14 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
             if (data.logits) {
                 logits = data.logits;
             }
+            candidates = data.candidates; // a chain that stopped early: the logits are those of these codes
         }
-        return ggml_argmax(ctx0, ggml_reshape_2d(ctx0, logits, logits->ne[0], 1));
+        ggml_tensor * idx = ggml_argmax(ctx0, ggml_reshape_2d(ctx0, logits, logits->ne[0], 1));
+        if (candidates) {
+            idx = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, candidates, 1, ggml_nelements(candidates)), idx);
+            idx = ggml_reshape_1d(ctx0, idx, 1);
+        }
+        return idx;
     }
 
     ggml_tensor * codebook_embd(int64_t book, ggml_tensor * code) {

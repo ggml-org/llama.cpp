@@ -143,6 +143,7 @@ protected:
     bool init_gen_state(uint32_t seed) {
         mtmd_gen_state_params params = mtmd_gen_state_params_default();
         params.seed = seed;
+        gen_state.reset(); // its sequence first: the context has a fixed number of them
         gen_state.reset(mtmd_gen_state_init(mctx, params));
         if (!gen_state) {
             LOG_ERR("mtmd_helper_gen_audio: failed to create the gen state\n");

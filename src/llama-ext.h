@@ -212,7 +212,7 @@ LLAMA_API struct llama_media_proc_params llama_media_proc_default_params(void);
 // (speaker references) on the compute buffers of the generation stages
 // the user limits of the image token count are kv overrides of the mmproj model: clip.vision.image_min_tokens and
 // clip.vision.image_max_tokens (int)
-// audio preprocessing computes the log-mel on ctx_enc: do not use the proc while ctx_enc is computing
+// audio preprocessing computes the log-mel on a CPU scheduler of the proc, under its own lock
 LLAMA_API struct llama_media_proc * llama_media_proc_init(
         struct llama_context     * ctx_enc,
         const struct llama_model * model_dec,
@@ -262,10 +262,10 @@ LLAMA_API int32_t llama_media_layout_add_frames(struct llama_media_layout * lay,
 LLAMA_API int32_t llama_media_layout_add_audio (struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id);
 
 // an audio track cut in pieces that go into the prompt one by one, each in its own place (the soundtrack of a video,
-// each piece after its frames, see LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI); it is encoded once, as one clip, and every
-// piece takes its rows of it, without audio markers
-// begin_track copies the pieces (pcm[i] can be NULL for a placeholder), add_track_piece lays out the next one;
-// a piece too short for a row adds no media
+// each piece after its frames, LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI only: returns 1 for other models); it is encoded
+// once, as one clip, and every piece takes its rows of it, without audio markers
+// begin_track copies the pieces; pcm[i] can be NULL, the media of the track are then placeholders (laid out, not
+// encodable); add_track_piece lays out the next one; a piece too short for a row adds no media
 LLAMA_API int32_t llama_media_layout_begin_track    (struct llama_media_layout * lay, const float * const * pcm, const size_t * n_samples, int32_t n_pieces);
 LLAMA_API int32_t llama_media_layout_add_track_piece(struct llama_media_layout * lay, const char * id);
 
@@ -397,6 +397,9 @@ LLAMA_API int32_t llama_batch_ext_add_gen(struct llama_batch_ext * batch, llama_
 LLAMA_API bool    llama_get_gen_out_ith (struct llama_context * ctx, int32_t i, struct llama_gen_out * out);
 // the RNG of a sequence; UINT32_MAX = random; resets the sequence
 LLAMA_API void    llama_gen_set_seed    (struct llama_context * ctx, llama_seq_id seq_id, uint32_t seed);
+// a new utterance on a sequence: clears its decoder state, keeps its RNG position and its reference
+// (llama_memory_seq_rm of the whole sequence drops all three)
+LLAMA_API void    llama_gen_reset       (struct llama_context * ctx, llama_seq_id seq_id);
 // the gen-side reference (speaker) of a sequence, from an encoded media of the same mmproj; non-zero if it has none
 LLAMA_API int32_t llama_gen_set_ref     (struct llama_context * ctx, llama_seq_id seq_id, const struct llama_media * media);
 
@@ -416,9 +419,6 @@ LLAMA_API void                  llama_media_free          (struct llama_media * 
 LLAMA_API void                  llama_media_release_rows  (struct llama_media * m); // keep the handle, free the rows
 // read back encoded rows; returns the row width, 0 if not encoded
 LLAMA_API int64_t               llama_media_get_rows      (const struct llama_media * m, int64_t row0, int64_t n_rows, float * out);
-// the encoded rows in place, n_tokens x n_embd; NULL if not encoded or not in host memory (then use llama_media_get_rows)
-// valid while the media lives and is not encoded again
-LLAMA_API const float *         llama_media_rows_host     (const struct llama_media * m);
 // TRANSITIONAL: decoder positions of one row (n_pos values, [t, y, x, z] for M-RoPE), for callers that decode host rows
 // with llama_batch_ext_add_embd instead of llama_batch_ext_add_media
 LLAMA_API bool                  llama_media_get_row_pos   (const struct llama_media * m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos);

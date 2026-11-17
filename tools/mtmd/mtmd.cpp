@@ -11,6 +11,8 @@
 #include "../src/llama-ext.h"
 
 #include <algorithm>
+#include <array>
+#include <random>
 #include <cctype>
 #include <climits>
 #include <cmath>
@@ -88,7 +90,8 @@ static std::string mtmd_format(const char * fmt, ...) {
 //
 
 // remember to bump this if the serialization format changes
-#define MTMD_SERIALIZATION_VERSION 6
+// 6: counts and ids; 7: and the decoder positions of image rows
+#define MTMD_SERIALIZATION_VERSION 7
 
 // oldest compat version that can be loaded (2 to 5: the format of the old engine, read for their counts)
 #define MTMD_SERIALIZATION_VERSION_MIN 2
@@ -268,6 +271,8 @@ struct mtmd_legacy_entry {
     int32_t nx = 0;
     int32_t ny = 0;
     int32_t suffix_type = 0;
+    int32_t grid_x = 0; // anyres grid of the image (version 3 and later)
+    int32_t grid_y = 0;
 };
 
 static std::vector<mtmd_legacy_entry> mtmd_legacy_read_batch(mtmd_serialization & ser) {
@@ -286,9 +291,10 @@ static std::vector<mtmd_legacy_entry> mtmd_legacy_read_batch(mtmd_serialization 
             if (e.suffix_type < 0 || e.suffix_type > 5) {
                 throw std::runtime_error("invalid suffix type");
             }
-            for (int i = 0; i < 4; ++i) {
-                ser.read<int32_t>(); // anyres grid_x, grid_y, orig_nx, orig_ny
-            }
+            e.grid_x = ser.read<int32_t>();
+            e.grid_y = ser.read<int32_t>();
+            ser.read<int32_t>(); // anyres orig_nx
+            ser.read<int32_t>(); // anyres orig_ny
         }
         e.nx = ser.read<int32_t>();
         e.ny = ser.read<int32_t>();
@@ -305,6 +311,89 @@ static size_t mtmd_legacy_suffix_rows(int32_t suffix_type) {
     return rows[suffix_type];
 }
 
+// the position types of the old engine
+enum mtmd_legacy_pos { MTMD_LEGACY_POS_NORMAL, MTMD_LEGACY_POS_MROPE, MTMD_LEGACY_POS_HUNYUANVL, MTMD_LEGACY_POS_SENSENOVA_U1, MTMD_LEGACY_POS_CANVAS };
+
+// the decoder position [t, y, x, z] of row i of an image of the old engine at pos_0, as its getter computed it
+struct mtmd_legacy_layout {
+    mtmd_legacy_pos pos = MTMD_LEGACY_POS_NORMAL;
+    uint32_t nx = 0;
+    uint32_t ny = 0;
+    uint32_t n_tok = 0;
+    uint32_t image_idx = 0;
+    std::vector<mtmd_legacy_entry> entries;
+
+    // MiniCPM-V 4.7 canvas: the token grid of tile k, scaled from its pixel size
+    std::pair<uint32_t, uint32_t> tile_grid(size_t k) const {
+        const auto & ref = entries.back();
+        return { (uint32_t) entries[k].nx * nx / ref.nx, (uint32_t) entries[k].ny * ny / ref.ny };
+    }
+
+    static uint32_t canvas_scale(uint32_t coord, uint32_t grid, uint32_t canvas) {
+        if (grid <= 1 || canvas <= 1) {
+            return 0;
+        }
+        const double v = (double) coord * (double) (canvas - 1) / (double) (grid - 1);
+        return std::min((uint32_t) std::nearbyint(v), canvas - 1);
+    }
+
+    std::array<llama_pos, 4> row_pos(llama_pos pos_0, uint32_t i) const {
+        const llama_pos seq = pos_0 + (llama_pos) i;
+        switch (pos) {
+            case MTMD_LEGACY_POS_MROPE:
+                return { pos_0, pos_0 + (llama_pos) (i / nx), pos_0 + (llama_pos) (i % nx), 0 };
+            case MTMD_LEGACY_POS_SENSENOVA_U1:
+                return { pos_0, (llama_pos) (i / nx), (llama_pos) (i % nx), 0 };
+            case MTMD_LEGACY_POS_HUNYUANVL:
+                {
+                    if (i == 0 || i == n_tok - 1) {
+                        return { seq, seq, seq, seq }; // BOI, EOI
+                    }
+                    const uint32_t offset = i - 1;
+                    return { seq, (llama_pos) (offset % (nx + 1)), (llama_pos) (offset / (nx + 1)), (llama_pos) image_idx };
+                }
+            case MTMD_LEGACY_POS_CANVAS:
+                {
+                    const bool tiled = entries[0].grid_x > 0 && entries[0].grid_y > 0;
+                    const uint32_t canvas_w = tiled ? entries[0].grid_x * nx : nx;
+                    const uint32_t canvas_h = tiled ? entries[0].grid_y * ny : ny;
+                    const llama_pos base = pos_0 - 1;
+                    llama_pos tp = pos_0;
+                    for (size_t k = 0; k < entries.size(); ++k) {
+                        const auto [gw, gh] = tile_grid(k);
+                        if (i < gw * gh) {
+                            const uint32_t row = i / gw;
+                            const uint32_t col = i % gw;
+                            uint32_t h;
+                            uint32_t w;
+                            if (k == 0) {
+                                h = canvas_scale(row, gh, canvas_h);
+                                w = canvas_scale(col, gw, canvas_w);
+                            } else {
+                                const uint32_t s = k - 1;
+                                h = (s / entries[0].grid_x) * ny + row;
+                                w = (s % entries[0].grid_x) * nx + col;
+                            }
+                            return { tp, base + (llama_pos) h, base + (llama_pos) w, base };
+                        }
+                        i -= gw * gh;
+                        const uint32_t n_sep = (uint32_t) mtmd_legacy_suffix_rows(entries[k].suffix_type);
+                        if (i < n_sep) {
+                            const llama_pos p = tp + 1 + (llama_pos) i;
+                            return { p, p, p, p };
+                        }
+                        i -= n_sep;
+                        tp += 1 + (llama_pos) n_sep;
+                    }
+                    throw std::runtime_error("canvas row out of range");
+                }
+            case MTMD_LEGACY_POS_NORMAL:
+            default:
+                return { seq, seq, seq, seq };
+        }
+    }
+};
+
 struct mtmd_image_tokens {
     uint32_t  nx    = 0; // token grid in x (M-RoPE decoders), or the token count
     uint32_t  ny    = 0; // token grid in y, 1 for the other decoders
@@ -312,12 +401,48 @@ struct mtmd_image_tokens {
     llama_pos n_pos = 0; // positions the span advances
     std::string id;      // optional user-defined ID, useful for KV cache tracking
 
-    mtmd_lmedia_ref lmedia; // nullptr once loaded from a buffer: counts only
+    mtmd_lmedia_ref lmedia; // nullptr once loaded from a buffer: counts and positions only
+
+    // decoder positions of a chunk without media (loaded from a buffer): row i at pos_0 is
+    // pos_base[4i + d] + pos_0 if bit d of pos_shift[i] is set, else pos_base[4i + d]; empty if unknown
+    std::vector<llama_pos> pos_base;
+    std::vector<uint8_t>   pos_shift;
 
     uint32_t n_tokens() const { return n_tok; }
 
     bool is_placeholder() const {
         return lmedia.m == nullptr || llama_media_is_placeholder(lmedia.m);
+    }
+
+    // [t, y, x, z] of row i at pos_0
+    std::array<llama_pos, 4> row_pos(llama_pos pos_0, uint32_t i) const {
+        std::array<llama_pos, 4> p;
+        p.fill(pos_0 + (llama_pos) i);
+        if (lmedia.m) {
+            llama_media_get_row_pos(lmedia.m, pos_0, i, p.data(), 4);
+        } else if ((size_t) i < pos_shift.size()) {
+            for (int d = 0; d < 4; ++d) {
+                p[d] = pos_base[4 * (size_t) i + d] + ((pos_shift[i] >> d) & 1 ? pos_0 : 0);
+            }
+        }
+        return p;
+    }
+
+    // every layout is affine in pos_0 with a slope of 0 or 1 per dimension
+    template <typename F>
+    void set_positions(F && pos_at) {
+        pos_base.resize((size_t) n_tok * 4);
+        pos_shift.assign(n_tok, 0);
+        for (uint32_t i = 0; i < n_tok; ++i) {
+            const auto p0 = pos_at(0, i);
+            const auto p1 = pos_at(1, i);
+            for (int d = 0; d < 4; ++d) {
+                pos_base[4 * (size_t) i + d] = p0[d];
+                if (p1[d] != p0[d]) {
+                    pos_shift[i] |= 1 << d;
+                }
+            }
+        }
     }
 
     void serialize(mtmd_serialization & ser) const {
@@ -326,9 +451,26 @@ struct mtmd_image_tokens {
         ser.write(n_tok);
         ser.write((int32_t) n_pos);
         ser.write(id);
+        // version 7: the positions of every row
+        mtmd_image_tokens tmp;
+        const mtmd_image_tokens * src = this;
+        if (lmedia.m && pos_shift.empty()) {
+            tmp.n_tok = n_tok;
+            tmp.set_positions([this](llama_pos pos_0, uint32_t i) { return row_pos(pos_0, i); });
+            src = &tmp;
+        }
+        ser.write((uint32_t) src->pos_shift.size());
+        for (size_t i = 0; i < src->pos_shift.size(); ++i) {
+            for (int d = 0; d < 4; ++d) {
+                ser.write((int32_t) src->pos_base[4 * i + d]);
+            }
+            ser.write((uint8_t) src->pos_shift[i]);
+        }
     }
     void deserialize(mtmd_serialization & ser) {
         lmedia.reset();
+        pos_base.clear();
+        pos_shift.clear();
         if (ser.version < 6) {
             deserialize_legacy(ser);
             return;
@@ -338,37 +480,60 @@ struct mtmd_image_tokens {
         n_tok = ser.read<uint32_t>();
         n_pos = ser.read<int32_t>();
         id    = ser.read<std::string>();
+        if (ser.version >= 7) {
+            const uint32_t n = ser.read<uint32_t>();
+            if (n != 0 && n != n_tok) {
+                throw std::runtime_error("invalid position count");
+            }
+            if (n > (ser.data.size() - ser.read_pos) / 17) {
+                throw std::runtime_error("positions exceed buffer size");
+            }
+            pos_base.resize((size_t) n * 4);
+            pos_shift.resize(n);
+            for (uint32_t i = 0; i < n; ++i) {
+                for (int d = 0; d < 4; ++d) {
+                    pos_base[4 * (size_t) i + d] = ser.read<int32_t>();
+                }
+                pos_shift[i] = ser.read<uint8_t>();
+            }
+        }
     }
 
     void deserialize_legacy(mtmd_serialization & ser) {
-        enum { POS_NORMAL, POS_MROPE, POS_HUNYUANVL, POS_SENSENOVA_U1, POS_CANVAS };
+        mtmd_legacy_layout lay;
         nx = ser.read<uint32_t>();
         ny = ser.read<uint32_t>();
         const uint32_t pos = ser.read<uint32_t>();
-        if (pos > POS_CANVAS) {
+        if (pos > MTMD_LEGACY_POS_CANVAS) {
             throw std::runtime_error("invalid pos type");
         }
-        ser.read<uint32_t>(); // image_idx
+        lay.image_idx = ser.read<uint32_t>();
         const uint32_t n_temporal_merge = ser.read<uint32_t>();
         id = ser.read<std::string>();
-        const auto entries = mtmd_legacy_read_batch(ser);
+        lay.entries = mtmd_legacy_read_batch(ser);
+        lay.nx = nx;
+        lay.ny = ny;
+        const auto & entries = lay.entries;
 
-        if (pos == POS_HUNYUANVL) {
+        // early version-3 files numbered the canvas type 3, later ones gave 3 to SenseNova-U1 without a new
+        // version; only canvas tiles carry MiniCPM-V separators
+        lay.pos = (mtmd_legacy_pos) pos;
+        if (lay.pos == MTMD_LEGACY_POS_SENSENOVA_U1 &&
+                std::any_of(entries.begin(), entries.end(), [](const mtmd_legacy_entry & e) { return e.suffix_type != 0; })) {
+            lay.pos = MTMD_LEGACY_POS_CANVAS;
+        }
+
+        if (lay.pos == MTMD_LEGACY_POS_HUNYUANVL) {
             n_tok = (nx + 1) * ny + 2;
-        } else if (pos == POS_CANVAS) {
+        } else if (lay.pos == MTMD_LEGACY_POS_CANVAS) {
             if (entries.empty() || entries.back().nx == 0 || entries.back().ny == 0) {
                 throw std::runtime_error("invalid canvas chunk");
             }
-            const auto & ref = entries.back();
             n_tok = 0;
-            n_pos = 0;
-            for (const auto & e : entries) {
-                const uint32_t gw = (uint32_t) e.nx * nx / ref.nx;
-                const uint32_t gh = (uint32_t) e.ny * ny / ref.ny;
-                n_tok += gw * gh + (uint32_t) mtmd_legacy_suffix_rows(e.suffix_type);
-                n_pos += 1 + (llama_pos) mtmd_legacy_suffix_rows(e.suffix_type);
+            for (size_t k = 0; k < entries.size(); ++k) {
+                const auto [gw, gh] = lay.tile_grid(k);
+                n_tok += gw * gh + (uint32_t) mtmd_legacy_suffix_rows(entries[k].suffix_type);
             }
-            return;
         } else {
             uint32_t nz = entries.size();
             if (n_temporal_merge > 1) {
@@ -376,11 +541,23 @@ struct mtmd_image_tokens {
             }
             n_tok = nx * ny * nz;
         }
-        switch (pos) {
-            case POS_MROPE:        n_pos = std::max(nx, ny); break;
-            case POS_SENSENOVA_U1: n_pos = 1;                break;
-            default:               n_pos = n_tok;            break;
+        switch (lay.pos) {
+            case MTMD_LEGACY_POS_MROPE:        n_pos = std::max(nx, ny); break;
+            case MTMD_LEGACY_POS_SENSENOVA_U1: n_pos = 1;                break;
+            case MTMD_LEGACY_POS_CANVAS:
+                n_pos = 0;
+                for (const auto & e : entries) {
+                    n_pos += 1 + (llama_pos) mtmd_legacy_suffix_rows(e.suffix_type);
+                }
+                break;
+            default:                           n_pos = n_tok;            break;
         }
+
+        if ((lay.pos == MTMD_LEGACY_POS_MROPE || lay.pos == MTMD_LEGACY_POS_SENSENOVA_U1 || lay.pos == MTMD_LEGACY_POS_HUNYUANVL) && nx == 0) {
+            throw std::runtime_error("invalid image grid");
+        }
+        lay.n_tok = n_tok;
+        set_positions([&lay](llama_pos pos_0, uint32_t i) { return lay.row_pos(pos_0, i); });
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
@@ -497,33 +674,24 @@ struct mtmd_input_chunks {
 };
 
 // the output of an encode: the rows stay in the media, a copy is made only when they are not in host memory
+// the output of an encode: a copy of the rows of each media, owned by the caller of the encode until the next one
+// (writes to it do not reach the media, which may serve other encodes of the same chunk)
 struct mtmd_encode_out {
-    std::vector<mtmd_lmedia_ref> media;
-    std::vector<std::vector<float>> copies; // per media, filled on demand
+    std::vector<std::vector<float>> rows_of; // per media
 
     void set(const std::vector<llama_media *> & ms) {
-        media.clear();
-        copies.assign(ms.size(), {});
-        for (llama_media * m : ms) {
-            media.emplace_back(llama_media_ref(m));
+        rows_of.assign(ms.size(), {});
+        for (size_t i = 0; i < ms.size(); ++i) {
+            const int64_t n_embd = llama_media_get_rows(ms[i], 0, 0, nullptr);
+            rows_of[i].resize((size_t) llama_media_n_tokens(ms[i]) * n_embd);
+            llama_media_get_rows(ms[i], 0, llama_media_n_tokens(ms[i]), rows_of[i].data());
         }
     }
 
+    size_t size() const { return rows_of.size(); }
+
     float * rows(size_t i) {
-        if (i >= media.size()) {
-            return nullptr;
-        }
-        llama_media * m = media[i].m;
-        if (const float * p = llama_media_rows_host(m)) {
-            return const_cast<float *>(p);
-        }
-        auto & c = copies[i];
-        if (c.empty()) {
-            const int64_t n_embd = llama_media_get_rows(m, 0, 0, nullptr);
-            c.resize((size_t) llama_media_n_tokens(m) * n_embd);
-            llama_media_get_rows(m, 0, llama_media_n_tokens(m), c.data());
-        }
-        return c.data();
+        return i < rows_of.size() ? rows_of[i].data() : nullptr;
     }
 };
 
@@ -711,17 +879,19 @@ static bool mtmd_gen_is_native(const llama_model * model) {
     return llama_model_gen_info(model).type == LLAMA_GEN_AUDIO_TYPE_QWEN3TTS;
 }
 
-static llama_context_params mtmd_native_gen_ctx_params(int n_threads, llama_flash_attn_type flash_attn_type, enum llama_context_type type, uint32_t n_seq_max) {
+static llama_context_params mtmd_native_gen_ctx_params(const mtmd_context_params & ctx_params, enum llama_context_type type, uint32_t n_seq_max) {
     llama_context_params cp = llama_context_default_params();
-    cp.ctx_type        = type;
-    cp.n_ctx           = 256 * n_seq_max; // no KV: the smallest context of a sequence
-    cp.n_batch         = n_seq_max;       // one output per sequence; the graph takes one frame whatever the ubatch
-    cp.n_ubatch        = n_seq_max;
-    cp.n_seq_max       = n_seq_max;
-    cp.n_threads       = n_threads;
-    cp.n_threads_batch = n_threads;
-    cp.flash_attn_type = flash_attn_type;
-    cp.no_perf         = true;
+    cp.ctx_type          = type;
+    cp.n_ctx             = 256 * n_seq_max; // no KV: the smallest context of a sequence
+    cp.n_batch           = n_seq_max;       // one output per sequence; the graph takes one frame whatever the ubatch
+    cp.n_ubatch          = n_seq_max;
+    cp.n_seq_max         = n_seq_max;
+    cp.n_threads         = ctx_params.n_threads;
+    cp.n_threads_batch   = ctx_params.n_threads;
+    cp.flash_attn_type   = ctx_params.flash_attn_type;
+    cp.cb_eval           = ctx_params.cb_eval;
+    cp.cb_eval_user_data = ctx_params.cb_eval_user_data;
+    cp.no_perf           = true;
     if (type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
         cp.n_batch  = 72; // one call decodes up to a window of frames
         cp.n_ubatch = 72;
@@ -759,7 +929,10 @@ struct mtmd_context {
     llama_context_ptr gen_code_ctx;
     llama_context_ptr gen_wav_ctx;
     std::vector<bool> gen_seq_used;
-    llama_flash_attn_type flash_attn_type = LLAMA_FLASH_ATTN_TYPE_AUTO;
+
+    // the gen states may outlive the context (a client freeing them in any order): they check this before
+    // giving their sequence back
+    std::shared_ptr<char> alive = std::make_shared<char>(0);
 
     // the last media encoded, the speaker reference of mtmd_gen_state_set_ref()
     mtmd_lmedia_ref last_ref;
@@ -820,8 +993,7 @@ struct mtmd_context {
         model.reset(m, llama_model_free);
 
         if (info.has_gen_audio) {
-            gen_native      = mtmd_gen_is_native(m);
-            flash_attn_type = ctx_params.flash_attn_type;
+            gen_native = mtmd_gen_is_native(m);
         }
 
         if (info.has_gen_audio && !gen_native) {
@@ -834,8 +1006,8 @@ struct mtmd_context {
             enc = gen_ctx.get();
         } else if (info.has_gen_audio) {
             // the codec context also encodes the references: its compute buffers fit the speaker tower
-            gen_code_ctx.reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(n_threads, flash_attn_type, LLAMA_CONTEXT_TYPE_GEN_CODE, n_gen_seq_max)));
-            gen_wav_ctx .reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(n_threads, flash_attn_type, LLAMA_CONTEXT_TYPE_GEN_WAV,  n_gen_seq_max)));
+            gen_code_ctx.reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(ctx_params, LLAMA_CONTEXT_TYPE_GEN_CODE, n_gen_seq_max)));
+            gen_wav_ctx .reset(llama_init_from_model(m, mtmd_native_gen_ctx_params(ctx_params, LLAMA_CONTEXT_TYPE_GEN_WAV,  n_gen_seq_max)));
             if (!gen_code_ctx || !gen_wav_ctx) {
                 throw std::runtime_error("failed to create the gen contexts");
             }
@@ -1557,7 +1729,7 @@ int32_t mtmd_batch_encode(mtmd_batch * batch) {
 }
 
 float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
-    if (batch->out.media.size() != batch->entries.size()) {
+    if (batch->out.size() != batch->entries.size()) {
         LOG_ERR("%s: batch has not been encoded yet\n", __func__);
         return nullptr;
     }
@@ -1868,9 +2040,9 @@ int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, si
 mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len) {
     try {
         mtmd_serialization ser(MTMD_SERIALIZATION_VERSION, buf, len);
-        auto * chunk = new mtmd_input_chunk{MTMD_INPUT_CHUNK_TYPE_TEXT, {}, nullptr, nullptr};
+        mtmd::input_chunk_ptr chunk(new mtmd_input_chunk{MTMD_INPUT_CHUNK_TYPE_TEXT, {}, nullptr, nullptr});
         chunk->deserialize(ser);
-        return chunk;
+        return chunk.release();
     } catch (const std::exception & e) {
         LOG_ERR("%s: %s\n", __func__, e.what());
         return nullptr;
@@ -1891,10 +2063,7 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
 
 mtmd_decoder_pos mtmd_image_tokens_get_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
     mtmd_decoder_pos pos;
-    llama_pos p[4] = { pos_0 + (llama_pos) i, pos_0 + (llama_pos) i, pos_0 + (llama_pos) i, pos_0 + (llama_pos) i };
-    if (image_tokens->lmedia.m) {
-        llama_media_get_row_pos(image_tokens->lmedia.m, pos_0, (uint32_t) i, p, 4);
-    }
+    const auto p = image_tokens->row_pos(pos_0, (uint32_t) i);
     pos.t = p[0];
     pos.y = p[1];
     pos.x = p[2];
@@ -1970,6 +2139,10 @@ static void stub_log_callback(enum ggml_log_level, const char *, void *) {
 mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_context_params ctx_params) {
     ctx_params.progress_callback = nullptr;
 
+    // the loggers are process-wide: concurrent estimates would restore each other's stub
+    static std::mutex estimate_mutex;
+    std::lock_guard<std::mutex> estimate_lock(estimate_mutex);
+
     // the model and the context of mtmd_init_from_file(), allocations simulated, quietly
     auto saved_log_callback  = g_logger_state.log_callback;
     auto saved_log_user_data = g_logger_state.log_callback_user_data;
@@ -1999,7 +2172,7 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_c
             ctxs.emplace_back(llama_init_from_model(model.get(), mtmd_gen_ctx_params(ctx_params, mtmd_context::n_gen_seq_max)));
         } else if (info.has_gen_audio) {
             for (auto type : { LLAMA_CONTEXT_TYPE_GEN_WAV, LLAMA_CONTEXT_TYPE_GEN_CODE }) {
-                ctxs.emplace_back(llama_init_from_model(model.get(), mtmd_native_gen_ctx_params(ctx_params.n_threads, ctx_params.flash_attn_type, type, mtmd_context::n_gen_seq_max)));
+                ctxs.emplace_back(llama_init_from_model(model.get(), mtmd_native_gen_ctx_params(ctx_params, type, mtmd_context::n_gen_seq_max)));
             }
         } else if (llama_model_has_context_type(model.get(), LLAMA_CONTEXT_TYPE_ENCODER)) {
             ctxs.emplace_back(mtmd_init_encoder(model.get(), ctx_params));
@@ -2081,6 +2254,7 @@ void mtmd_debug_preprocess_audio(mtmd_context * ctx, const std::vector<float> & 
 //
 
 struct mtmd_audio_stream {
+    mtmd_context * ctx = nullptr; // its encoder context also runs the gen stages (LFM3): compute_mutex
     llama_audio_stream * ls = nullptr;
     int n_embd = 0;
 
@@ -2111,7 +2285,11 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
     lp.prompt   = params.prompt;
     lp.n_prompt = params.n_prompt;
     auto s = std::make_unique<mtmd_audio_stream>();
-    s->ls = llama_audio_stream_init(ctx->proc, lp);
+    s->ctx = ctx;
+    {
+        std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+        s->ls = llama_audio_stream_init(ctx->proc, lp);
+    }
     if (!s->ls) {
         return nullptr;
     }
@@ -2120,18 +2298,27 @@ mtmd_audio_stream * mtmd_audio_stream_init(mtmd_context * ctx, mtmd_audio_stream
 }
 
 void mtmd_audio_stream_free(mtmd_audio_stream * stream) {
+    if (stream) {
+        std::lock_guard<std::mutex> lock(stream->ctx->compute_mutex);
+        llama_audio_stream_free(stream->ls);
+        stream->ls = nullptr;
+    }
     delete stream;
 }
 
+// the stream steps run graphs on the encoder context, which the gen states of LFM3 share
 int32_t mtmd_audio_stream_push(mtmd_audio_stream * s, const float * samples, size_t n_samples) {
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return llama_audio_stream_push(s->ls, samples, n_samples);
 }
 
 int32_t mtmd_audio_stream_flush(mtmd_audio_stream * s, bool end) {
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return llama_audio_stream_flush(s->ls, end);
 }
 
 int32_t mtmd_audio_stream_step(mtmd_audio_stream * s, llama_token last_token) {
+    std::lock_guard<std::mutex> lock(s->ctx->compute_mutex);
     return llama_audio_stream_step(s->ls, last_token);
 }
 
@@ -2203,20 +2390,133 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     return inp;
 }
 
+// the sampling of the Qwen3-TTS code predictor, inside its graph (a backend sampler): top-k, top-p over the
+// candidates, then one uniform draw per codebook from the RNG of the gen state; the algorithm and the draws of the
+// clip engine, so a seed gives the codes it gave
+struct mtmd_code_sampler {
+    int32_t top_k = 50;
+    float   top_p = 1.0f;
+    std::mt19937 rng;
+    std::vector<ggml_tensor *> rand_inp; // the draws of the graph being built, one per codebook, in order
+};
+
+static ggml_tensor * mtmd_code_sampler_build(ggml_context * ctx0, const mtmd_code_sampler & s, ggml_tensor * logits, ggml_tensor * inp_rand) {
+    logits = ggml_reshape_1d(ctx0, logits, ggml_nelements(logits));
+    const int64_t n_vocab = logits->ne[0];
+
+    auto sort_by = [ctx0](ggml_tensor * a, ggml_tensor * idx) {
+        ggml_tensor * a2d = ggml_reshape_2d(ctx0, a, 1, a->ne[0]);
+        return ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, a2d, idx), idx->ne[0]);
+    };
+
+    ggml_tensor * cur        = logits;
+    ggml_tensor * candidates = nullptr; // maps a row back to its code
+
+    if (s.top_k > 0 && s.top_k < n_vocab) {
+        ggml_tensor * idx = ggml_top_k(ctx0, cur, s.top_k);
+        candidates = idx;
+        cur        = sort_by(cur, idx);
+    }
+
+    if (s.top_p < 1.0f) {
+        ggml_tensor * sorted_idx    = ggml_argsort(ctx0, cur, GGML_SORT_ORDER_DESC);
+        ggml_tensor * sorted_logits = sort_by(cur, sorted_idx);
+        candidates = candidates ? sort_by(candidates, sorted_idx) : sorted_idx;
+
+        ggml_tensor * probs = ggml_soft_max(ctx0, sorted_logits);
+        ggml_tensor * cdf   = ggml_cumsum(ctx0, probs);
+
+        // keep the codes up to the one where the cdf crosses top_p, that one included
+        ggml_tensor * keep_mask = ggml_step(ctx0, ggml_scale_bias(ctx0, cdf, -1.0f, s.top_p));
+        ggml_tensor * idxf      = ggml_clamp(ctx0, ggml_sum(ctx0, keep_mask), 0.0f, (float) keep_mask->ne[0] - 1);
+        ggml_tensor * ones      = ggml_scale_bias(ctx0, idxf, 0.0f, 1.0f);
+
+        ggml_tensor * keep_mask_2d = ggml_reshape_2d(ctx0, keep_mask, 1, keep_mask->ne[0]);
+        keep_mask_2d = ggml_set_rows(ctx0, keep_mask_2d, ones, ggml_cast(ctx0, idxf, GGML_TYPE_I32));
+        keep_mask    = ggml_reshape_1d(ctx0, keep_mask_2d, keep_mask->ne[0]);
+
+        cur = ggml_add(ctx0, sorted_logits, ggml_log(ctx0, keep_mask)); // log(1) = 0 keeps, log(0) = -inf drops
+    }
+
+    // the code where the cdf crosses the draw
+    ggml_tensor * cumsum     = ggml_cumsum(ctx0, ggml_soft_max(ctx0, cur));
+    ggml_tensor * cross_mask = ggml_step(ctx0, ggml_sub(ctx0, cumsum, inp_rand));
+    ggml_tensor * idx        = ggml_cast(ctx0, ggml_scale_bias(ctx0, ggml_sum(ctx0, cross_mask), -1.0f, (float) cross_mask->ne[0]), GGML_TYPE_I32);
+
+    if (candidates) {
+        idx = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, candidates, 1, candidates->ne[0]), idx);
+    }
+    return idx;
+}
+
+static const char * mtmd_code_sampler_name(const llama_sampler * /*smpl*/) {
+    return "mtmd-code";
+}
+
+// the codes are only sampled in the graph
+static void mtmd_code_sampler_apply(llama_sampler * /*smpl*/, llama_token_data_array * /*cur_p*/) {
+    GGML_ABORT("the code sampler runs in the graph of the code predictor only");
+}
+
+static void mtmd_code_sampler_free(llama_sampler * smpl) {
+    delete (mtmd_code_sampler *) smpl->ctx;
+}
+
+static bool mtmd_code_sampler_backend_init(llama_sampler * /*smpl*/, ggml_backend_buffer_type_t /*buft*/, uint32_t /*n_outputs_max_per_seq*/) {
+    return true;
+}
+
+static void mtmd_code_sampler_backend_apply(llama_sampler * smpl, ggml_context * ctx0, ggml_cgraph * /*gf*/, llama_sampler_data * data) {
+    auto * s = (mtmd_code_sampler *) smpl->ctx;
+    ggml_tensor * inp_rand = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+    ggml_format_name(inp_rand, "code_rand_%zu", s->rand_inp.size());
+    ggml_set_input(inp_rand);
+    s->rand_inp.push_back(inp_rand);
+    data->sampled = mtmd_code_sampler_build(ctx0, *s, data->logits, inp_rand);
+}
+
+static void mtmd_code_sampler_backend_set_input(llama_sampler * smpl) {
+    auto * s = (mtmd_code_sampler *) smpl->ctx;
+    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+    for (ggml_tensor * t : s->rand_inp) {
+        const float v = dist(s->rng);
+        ggml_backend_tensor_set(t, &v, 0, sizeof(v));
+    }
+}
+
+static void mtmd_code_sampler_backend_reset(llama_sampler * smpl) {
+    ((mtmd_code_sampler *) smpl->ctx)->rand_inp.clear();
+}
+
+static llama_sampler_i mtmd_code_sampler_i = {
+    /* .name              = */ mtmd_code_sampler_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ mtmd_code_sampler_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ nullptr,
+    /* .free              = */ mtmd_code_sampler_free,
+    /* .backend_init      = */ mtmd_code_sampler_backend_init,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ mtmd_code_sampler_backend_apply,
+    /* .backend_set_input = */ mtmd_code_sampler_backend_set_input,
+    /* .backend_reset     = */ mtmd_code_sampler_backend_reset,
+    /* .copy_state        = */ nullptr,
+};
+
 struct mtmd_gen_state {
     mtmd_context * ctx = nullptr;
     llama_seq_id   seq = -1; // the sequence of the shared GEN contexts
+    std::weak_ptr<char> ctx_alive; // expired once ctx is freed: its sequences went with it
 
     std::vector<int32_t> out_codes; // this frame's sampled codes (GEN_CODE)
     std::vector<float>   out_feats; // this frame's continuous features, if any (GEN_CODE)
     std::vector<float>   out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
     std::vector<float>   out_audio; // decoded PCM samples for the current frame (GEN_WAV)
 
-    // native graphs (Qwen3-TTS): the sampler chain of the sequence in the code predictor context
-    llama_sampler_ptr lm_smpl;
-    uint32_t lm_seed  = 0;
-    int32_t  lm_top_k = -1;
-    float    lm_top_p = -1.0f;
+    // native graphs (Qwen3-TTS): the sampler of the sequence in the code predictor context (a chain holding
+    // code_smpl), its RNG and parameters live as long as the state
+    llama_sampler_ptr   lm_smpl;
+    mtmd_code_sampler * code_smpl = nullptr;
 
     // the per-sequence state of the GEN contexts (decoder slots, RNG), the caller holds compute_mutex
     void clear_seq() {
@@ -2228,7 +2528,8 @@ struct mtmd_gen_state {
     }
 
     ~mtmd_gen_state() {
-        if (seq >= 0) {
+        const auto alive = ctx_alive.lock();
+        if (seq >= 0 && alive) {
             std::lock_guard<std::mutex> lock(ctx->compute_mutex);
             clear_seq();
             if (ctx->gen_native) {
@@ -2262,14 +2563,26 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
         LOG_ERR("%s: too many gen states (max %u)\n", __func__, mtmd_context::n_gen_seq_max);
         return nullptr;
     }
-    *it = true;
-    st->ctx = ctx;
-    st->seq = (llama_seq_id) (it - ctx->gen_seq_used.begin());
+    const llama_seq_id seq = (llama_seq_id) (it - ctx->gen_seq_used.begin());
     if (ctx->gen_native) {
-        st->lm_seed = params.seed; // the sampler chain is made by the first step, from its parameters
+        auto * cs = new mtmd_code_sampler;
+        cs->rng.seed(params.seed == UINT32_MAX ? std::random_device{}() : params.seed);
+        llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(chain, llama_sampler_init(&mtmd_code_sampler_i, cs));
+        if (!llama_set_sampler(ctx->gen_code_ctx.get(), seq, chain)) {
+            llama_sampler_free(chain);
+            LOG_ERR("%s: the code predictor context does not take the code sampler\n", __func__);
+            return nullptr;
+        }
+        st->lm_smpl.reset(chain);
+        st->code_smpl = cs;
     } else {
-        llama_gen_set_seed(ctx->gen_ctx.get(), st->seq, params.seed);
+        llama_gen_set_seed(ctx->gen_ctx.get(), seq, params.seed);
     }
+    *it = true;
+    st->ctx       = ctx;
+    st->seq       = seq;
+    st->ctx_alive = ctx->alive;
     return st.release();
 }
 
@@ -2277,15 +2590,23 @@ void mtmd_gen_state_free(mtmd_gen_state * state) {
     delete state;
 }
 
+// a new utterance: the decoder state goes, the RNG position and the speaker reference stay
 void mtmd_gen_state_reset(mtmd_gen_state * state) {
-    if (state->seq >= 0) {
-        std::lock_guard<std::mutex> lock(state->ctx->compute_mutex);
-        state->clear_seq();
+    const auto alive = state ? state->ctx_alive.lock() : nullptr;
+    if (!alive || state->seq < 0) {
+        return;
+    }
+    mtmd_context * ctx = state->ctx;
+    std::lock_guard<std::mutex> lock(ctx->compute_mutex);
+    if (ctx->gen_native) {
+        llama_memory_seq_rm(llama_get_memory(ctx->gen_wav_ctx.get()), state->seq, -1, -1); // the codec slots
+    } else {
+        llama_gen_reset(ctx->gen_ctx.get(), state->seq);
     }
 }
 
 int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
-    if (!state) {
+    if (!state || state->ctx != ctx) {
         LOG_ERR("%s: invalid gen state\n", __func__);
         return 1;
     }
@@ -2302,29 +2623,9 @@ static int32_t mtmd_gen_code_native(mtmd_context * ctx, mtmd_gen_state * state, 
     llama_context * lctx = ctx->gen_code_ctx.get();
     const int32_t n_embd = llama_model_n_embd_out(ctx->model.get());
 
-    // the sampler chain follows the call parameters; temperature is ignored, as by the graph
-    if (!state->lm_smpl || inp->top_k != state->lm_top_k || inp->top_p != state->lm_top_p) {
-        llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
-        if (inp->top_k == 1) {
-            llama_sampler_chain_add(chain, llama_sampler_init_greedy());
-        } else {
-            if (inp->top_k > 0) {
-                llama_sampler_chain_add(chain, llama_sampler_init_top_k(inp->top_k));
-            }
-            if (inp->top_p < 1.0f) {
-                llama_sampler_chain_add(chain, llama_sampler_init_top_p(inp->top_p, 1));
-            }
-            llama_sampler_chain_add(chain, llama_sampler_init_dist(state->lm_seed));
-        }
-        if (!llama_set_sampler(lctx, state->seq, chain)) {
-            llama_sampler_free(chain);
-            LOG_ERR("%s: the code predictor context does not take this sampler\n", __func__);
-            return 1;
-        }
-        state->lm_smpl.reset(chain);
-        state->lm_top_k = inp->top_k;
-        state->lm_top_p = inp->top_p;
-    }
+    // the parameters of this call, read when the graph is built; temperature is ignored, as by the clip engine
+    state->code_smpl->top_k = inp->top_k;
+    state->code_smpl->top_p = inp->top_p;
 
     std::vector<float> h(n_embd, 0.0f);
     if (inp->embd) {
@@ -2459,6 +2760,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
 int32_t mtmd_gen_audio_process(mtmd_context * ctx, mtmd_gen_state * state, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
     if (!ctx->info.has_gen_audio || !state) {
         LOG_ERR("%s: model does not support audio generation\n", __func__);
+        return 1;
+    }
+    if (state->ctx != ctx) {
+        LOG_ERR("%s: the gen state belongs to another context\n", __func__);
         return 1;
     }
     try {

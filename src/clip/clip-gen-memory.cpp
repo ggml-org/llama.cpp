@@ -44,6 +44,13 @@ clip_gen_state * llama_memory_clip_gen::get(clip_gen_ctx * host, llama_seq_id se
     return st;
 }
 
+void llama_memory_clip_gen::reset(llama_seq_id seq_id) {
+    auto it = states.find(seq_id);
+    if (it != states.end()) {
+        clip_gen_state_reset(it->second);
+    }
+}
+
 void llama_memory_clip_gen::set_seed(llama_seq_id seq_id, uint32_t seed) {
     seeds[seq_id] = seed;
     seq_rm(seq_id, -1, -1);

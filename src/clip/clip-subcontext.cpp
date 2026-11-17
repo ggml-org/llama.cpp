@@ -127,6 +127,10 @@ void clip_debug_print_embeddings(const float * data, int64_t n_embd, int64_t n_t
 bool clip_audio_log_mel(const clip_audio_mel_config & config, const float * samples, const float * window, int64_t n_frames, float * out) {
     ggml_backend_sched_t sched = config.sched;
     GGML_ASSERT(sched != nullptr && "the log-mel needs a scheduler, see clip_cpu_compute");
+    std::unique_lock<std::mutex> lock;
+    if (config.sched_mutex) {
+        lock = std::unique_lock<std::mutex>(*config.sched_mutex);
+    }
 
     const auto &  cache      = *config.cache;
     const auto &  filters    = cache.filters.data;

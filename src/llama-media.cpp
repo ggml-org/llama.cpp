@@ -139,7 +139,8 @@ struct llama_media_proc * llama_media_proc_init(
                                                          nullptr, (int) ctx_enc->get_cparams().n_threads_batch);
         if (proc->cfg->audio_preproc) {
             proc->cpu = std::make_shared<clip_cpu_compute>((int) ctx_enc->get_cparams().n_threads_batch);
-            proc->cfg->audio_preproc->mel_config.sched = proc->cpu->sched;
+            proc->cfg->audio_preproc->mel_config.sched       = proc->cpu->sched;
+            proc->cfg->audio_preproc->mel_config.sched_mutex = &proc->cpu->mutex;
         }
         const int64_t n_embd = proc->cfg->n_embd_out();
         if (model_dec && n_embd != (int64_t) model_dec->hparams.n_embd_inp()) {
@@ -233,6 +234,7 @@ struct llama_media_track {
     std::vector<clip_bitmap> pieces;
     clip_tokenizer::soundtrack st;
     size_t next = 0;
+    bool placeholder = false; // a piece without PCM: the track is laid out, not encodable
 };
 
 llama_media_layout::~llama_media_layout() {
@@ -402,10 +404,11 @@ int32_t llama_media_layout_add_audio(struct llama_media_layout * lay, const floa
 }
 
 int32_t llama_media_layout_begin_track(struct llama_media_layout * lay, const float * const * pcm, const size_t * n_samples, int32_t n_pieces) {
-    if (lay->proc->cfg->a == nullptr) {
+    // the rows of a piece follow from the samples of the soundtrack tower (lfm3a: one row per 8 mel frames)
+    if (llama_media_proc_video_template(lay->proc) != LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI) {
         return 1;
     }
-    if (n_pieces < 1) {
+    if (n_pieces < 1 || n_samples == nullptr) {
         return 2;
     }
     auto track = std::make_unique<llama_media_track>();
@@ -417,6 +420,8 @@ int32_t llama_media_layout_begin_track(struct llama_media_layout * lay, const fl
         b.is_audio = true;
         if (pcm && pcm[i]) {
             b.data.assign((const uint8_t *) pcm[i], (const uint8_t *) (pcm[i] + n_samples[i]));
+        } else {
+            track->placeholder = true;
         }
     }
     for (const auto & b : track->pieces) {
@@ -433,7 +438,15 @@ int32_t llama_media_layout_add_track_piece(struct llama_media_layout * lay, cons
     }
     clip_bitmap & b = track->pieces[track->next++];
     b.id = id ? id : "";
+    const size_t n_before = lay->pieces.size();
     const int32_t res = llama_media_layout_run(lay, [&](clip_tokenizer & tk) { return tk.add_soundtrack_piece(track->st, b); });
+    if (res == 0 && track->placeholder) {
+        for (size_t i = n_before; i < lay->pieces.size(); ++i) {
+            if (lay->pieces[i].media) {
+                lay->pieces[i].media->placeholder = true;
+            }
+        }
+    }
     if (track->next == track->pieces.size()) {
         lay->track.reset();
     }
@@ -489,10 +502,6 @@ void llama_media_free(struct llama_media * m) {
 void llama_media_release_rows(struct llama_media * m) {
     m->rows.clear();
     m->rows.shrink_to_fit();
-}
-
-const float * llama_media_rows_host(const struct llama_media * m) {
-    return m->rows.empty() ? nullptr : m->rows.data();
 }
 
 int64_t llama_media_get_rows(const struct llama_media * m, int64_t row0, int64_t n_rows, float * out) {
@@ -625,7 +634,7 @@ static bool llama_audio_stream_host(const llama_media_proc * proc, clip_stream_c
     host.aud_end       = proc->cfg->aud_end;
     host.audio_preproc = proc->cfg->audio_preproc;
     host.ctx_a         = proc->ctx_enc->clip_sub(*clip->engine_audio());
-    host.n_embd_text   = (int) proc->model_dec->hparams.n_embd_inp();
+    host.n_embd_text   = proc->model_dec ? (int) proc->model_dec->hparams.n_embd_inp() : 0; // a query-only proc has none
     host.n_threads     = (int) proc->ctx_enc->get_cparams().n_threads_batch;
     host.text_model    = proc->model_dec;
     host.vocab         = proc->vocab;

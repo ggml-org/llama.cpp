@@ -22,6 +22,9 @@ public:
     // the seed of seq_id (UINT32_MAX = random), takes effect from a cold start
     void set_seed(llama_seq_id seq_id, uint32_t seed);
 
+    // clears the decoder state of a sequence, keeps its RNG and its reference
+    void reset(llama_seq_id seq_id);
+
     llama_memory_context_ptr init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) override;
     llama_memory_context_ptr init_full() override;
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
