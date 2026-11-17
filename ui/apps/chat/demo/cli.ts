@@ -104,7 +104,12 @@ async function record(scripts: string[], uiDir = UI_DIR): Promise<Video[]> {
 		],
 		{
 			cwd: UI_DIR,
-			env: { ...process.env, DEMO_UI_DIR: uiDir, DEMO_UI_PORT: String(port) },
+			env: {
+				...process.env,
+				DEMO_STORYBOOK_PORT: String(await freePort()),
+				DEMO_UI_DIR: uiDir,
+				DEMO_UI_PORT: String(port)
+			},
 			stdio: 'inherit'
 		}
 	);
@@ -272,6 +277,14 @@ async function recordPr(number: string, trustedSha?: string): Promise<void> {
 	run('git', ['worktree', 'prune']);
 	run('git', ['worktree', 'add', '--detach', worktree, sha]);
 	symlinkSync(join(UI_DIR, 'node_modules'), join(worktree, 'ui/apps/chat/node_modules'));
+
+	// Chat builds Llama UI from source, and DEMO_STORYBOOK=ui runs its Storybook
+	if (existsSync(join(UI_DIR, '../../lib/ui/node_modules'))) {
+		symlinkSync(
+			join(UI_DIR, '../../lib/ui/node_modules'),
+			join(worktree, 'ui/lib/ui/node_modules')
+		);
+	}
 
 	const name = `pr-${number}`;
 	const script = writeDemoScript(name, source);

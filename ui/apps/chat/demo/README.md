@@ -138,6 +138,18 @@ await demo.zoomOut();
 
 The render needs nothing more than the plain one: the demo's Chromium draws each frame on a canvas from the recorded frames and the script's timeline, and `ffmpeg` encodes them. It takes a few times as long as the video.
 
+## A mocked llama-server
+
+`test.use({ mockServer: { models: ['org/Model-GGUF:Q4_K_M'], reply: 'A **Markdown** reply' } })` answers llama-server's endpoints in the browser (`fixtures/llama-server.ts`): the model list, props, model loading, tools and a streamed reply. Nothing reaches the server and no model loads, so a demo that sends a message looks the same on every machine. `tests/e2e` checks call `mockLlamaServer(page)` directly, since the e2e build runs without a server.
+
+## Storybook stories
+
+`test.use({ story: 'ui-forms-switch--default' })` records a Storybook story (the id from its `?path=/story/<id>` URL) instead of Llama Chat, from the Storybook that `DEMO_STORYBOOK` adds to the servers: `ui` for Llama UI (`ui/lib/ui`), `chat` for Llama Chat's. It runs on `DEMO_STORYBOOK_PORT` (default `:6007`). A small component reads better at a smaller `viewport` than zoomed in.
+
+```bash
+DEMO_STORYBOOK=ui npm run demo:record -- demo/<name>
+```
+
 ## Conversations
 
 Demos that need existing chats import them with `test.use({ traces: ['long-chat'] })`, through Settings > Import/Export before the video starts. Traces use the export format (llama.app JSONL), so the Hub shows them as Llama traces:
@@ -151,4 +163,6 @@ Demos that need existing chats import them with `test.use({ traces: ['long-chat'
 
 To try a script locally, put it in `demo/` as `<name>.demo.ts`, importing from `./helpers.ts`, and run `npm run demo:record -- demo/<name>`. `npm run demo:codegen` opens Playwright codegen against `:5180` for a first draft.
 
-The config starts, or reuses when already running, the fixture MCP servers on `:8765`, `llama-server` on `:9931` (router mode, `--tools all`) and the UI's vite dev server.
+The config starts, or reuses when already running, the fixture MCP servers on `:8765`, `llama-server` on `:9931` (router mode, `--tools all`), the UI's vite dev server and, with `DEMO_STORYBOOK`, a Storybook.
+
+For agents, [skills/ui-demo](../../../../skills/ui-demo/SKILL.md) walks through a demo, an e2e check and docs media for one change.

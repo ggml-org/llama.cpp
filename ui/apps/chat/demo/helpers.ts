@@ -1,4 +1,5 @@
 import { demoMcpServerSettings } from './fixtures/demo-config.ts';
+import { mockLlamaServer, type MockServerOptions } from './fixtures/llama-server.ts';
 import { generateTrace } from './fixtures/traces.ts';
 import {
 	CAMERA_MOVE_MS,
@@ -8,7 +9,13 @@ import {
 	renderPolished
 } from './polish.ts';
 import { ScreencastRecorder } from './recorder.ts';
-import { type CDPSession, type Locator, type Page, test as base } from '@playwright/test';
+import {
+	type CDPSession,
+	type Locator,
+	type Page,
+	test as base,
+	type TestInfo
+} from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import {
 	appendFileSync,
@@ -522,10 +529,17 @@ export class Demo {
 interface DemoOptions {
 	/** Empty conversations added to the library before the demo starts, e.g. to fill a list. */
 	chats: number;
+	/** Answers llama-server's endpoints in the browser instead (fixtures/llama-server.ts), so no model loads. */
+	mockServer: MockServerOptions | null;
 	/** Path the demo starts from. */
 	startPath: string;
 	/** Extra UI settings merged into the seeded config. */
 	settings: Record<string, unknown>;
+	/**
+	 * Storybook story id (`?path=/story/<id>`) recorded instead of Llama Chat, from the Storybook
+	 * that DEMO_STORYBOOK starts: `ui` (Llama UI) or `chat` (Llama Chat).
+	 */
+	story: string;
 	/**
 	 * Conversations imported before the demo starts: built-in traces from
 	 * fixtures/traces.ts, or `<name>.jsonl` files from DEMO_TRACES_DATASET.
@@ -554,7 +568,7 @@ function loadTrace(name: string, dir: string): string {
 }
 
 /** Imports conversations through Settings > Data, like a user would. */
-async function importTraces(page: Page, file: string): Promise<void> {
+export async function importTraces(page: Page, file: string): Promise<void> {
 	// the expanded sidebar adds the shortcut to the name
 	const settings = page.getByRole('button', { name: /^Settings(\s|$)/ }).first();
 	const reachable = (target: Locator) =>
@@ -677,14 +691,56 @@ async function seedChats(page: Page, count: number): Promise<void> {
 	);
 }
 
+/** Seeds settings, imports the traces, adds the chats and opens `startPath` in Llama Chat. */
+async function openChat(
+	page: Page,
+	settings: Record<string, unknown>,
+	startPath: string,
+	traces: string[],
+	chats: number,
+	testInfo: TestInfo
+): Promise<void> {
+	await page.addInitScript(seedSettings, {
+		mcpServers: JSON.stringify(demoMcpServerSettings()),
+		...settings
+	});
+
+	if (traces.length > 0) {
+		const dir = testInfo.outputPath('traces');
+		const file = join(dir, 'import.jsonl');
+
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(file, traces.map((name) => loadTrace(name, dir)).join('\n'));
+		await page.goto('/');
+		await page
+			.getByRole('textbox', { name: 'Type a message...' })
+			.waitFor({ timeout: APP_READY_TIMEOUT_MS });
+		await importTraces(page, file);
+	}
+
+	if (chats > 0) await seedChats(page, chats);
+
+	await page.goto(startPath);
+
+	// a hash route after the import doesn't reload, which the conversations list needs
+	if (traces.length > 0 || chats > 0) await page.reload();
+
+	// a fresh checkout's dev server optimizes its dependencies on the first load and reloads the
+	// page, which can take well past an action's timeout; the recording has not started yet
+	await page
+		.getByRole('textbox', { name: 'Type a message...' })
+		.waitFor({ timeout: APP_READY_TIMEOUT_MS });
+}
+
 export const test = base.extend<DemoOptions & { demo: Demo }>({
 	chats: [0, { option: true }],
 	demo: async ({ page }, use, testInfo) => {
 		await use(new Demo(page, `${testInfo.file}:${testInfo.title}`));
 	},
+	mockServer: [null, { option: true }],
 
 	page: async (
-		{ browser, chats, colorScheme, page, settings, startPath, traces },
+		{ browser, chats, colorScheme, mockServer, page, settings, startPath, story, traces },
 		use,
 		testInfo
 	) => {
@@ -696,36 +752,21 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 		}
 
 		await page.addInitScript(installCursorOverlay);
-		await page.addInitScript(seedSettings, {
-			mcpServers: JSON.stringify(demoMcpServerSettings()),
-			...settings
-		});
 
-		if (traces.length > 0) {
-			const dir = testInfo.outputPath('traces');
-			const file = join(dir, 'import.jsonl');
-
-			mkdirSync(dir, { recursive: true });
-			writeFileSync(file, traces.map((name) => loadTrace(name, dir)).join('\n'));
-			await page.goto('/');
-			await page
-				.getByRole('textbox', { name: 'Type a message...' })
-				.waitFor({ timeout: APP_READY_TIMEOUT_MS });
-			await importTraces(page, file);
+		if (story && !process.env.DEMO_STORYBOOK) {
+			throw new Error('demo: a story demo needs DEMO_STORYBOOK=ui (Llama UI) or chat (Llama Chat)');
 		}
 
-		if (chats > 0) await seedChats(page, chats);
+		if (story) {
+			await page.goto(
+				`http://localhost:${process.env.DEMO_STORYBOOK_PORT}/iframe.html?id=${story}&viewMode=story`
+			);
+			await page.locator('#storybook-root > *').first().waitFor({ timeout: APP_READY_TIMEOUT_MS });
+		} else {
+			if (mockServer) await mockLlamaServer(page, mockServer);
 
-		await page.goto(startPath);
-
-		// a hash route after the import doesn't reload, which the conversations list needs
-		if (traces.length > 0 || chats > 0) await page.reload();
-
-		// a fresh checkout's dev server optimizes its dependencies on the first load and reloads the
-		// page, which can take well past an action's timeout; the recording has not started yet
-		await page
-			.getByRole('textbox', { name: 'Type a message...' })
-			.waitFor({ timeout: APP_READY_TIMEOUT_MS });
+			await openChat(page, settings, startPath, traces, chats, testInfo);
+		}
 
 		const viewport = page.viewportSize();
 
@@ -774,6 +815,8 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 	settings: [{}, { option: true }],
 
 	startPath: ['/', { option: true }],
+
+	story: ['', { option: true }],
 
 	traces: [[], { option: true }]
 });
