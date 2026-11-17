@@ -2512,6 +2512,30 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
         return;
     }
+    // A thin src0 (few rows) can use MMVF the same way, the result is then transposed into dst.
+    // BLAS runs only a few workgroups for this shape.
+    if (ne01 > 1 && ne01 <= MMVF_MAX_BATCH_SIZE && ne11 > MMVF_MAX_BATCH_SIZE && ne2 == 1 && ne3 == 1
+            && src0->type == GGML_TYPE_F32
+            && ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)
+            && ggml_cuda_should_use_mmvf(src1, cc, warp_size, ne01)) {
+        ggml_cuda_pool_alloc<float> dst_t(ctx.pool(), ne01*ne11);
+        ggml_tensor dst_vec = *dst;
+        dst_vec.data  = dst_t.get();
+        dst_vec.ne[0] = ne11;
+        dst_vec.ne[1] = ne01;
+        dst_vec.nb[1] = dst_vec.nb[0]*ne11;
+        dst_vec.nb[2] = dst_vec.nb[1]*ne01;
+        dst_vec.nb[3] = dst_vec.nb[2];
+        ggml_cuda_mul_mat_vec_f(ctx, src1, src0, nullptr, &dst_vec);
+
+        ggml_tensor dst_vec_t = dst_vec;
+        dst_vec_t.ne[0] = ne01;
+        dst_vec_t.ne[1] = ne11;
+        dst_vec_t.nb[0] = dst_vec.nb[1];
+        dst_vec_t.nb[1] = dst_vec.nb[0];
+        ggml_cuda_cpy(ctx, &dst_vec_t, dst);
+        return;
+    }
     if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
