@@ -72,34 +72,52 @@ static __global__ void mm_ids_helper(
         // a warp holds a whole number of token slots, so the slot count is padded to a power of 2
         constexpr int neu_padded = mm_ids_pow2<n_expert_used_template>::value;
         static_assert(neu_padded <= warp_size && warp_size % neu_padded == 0, "bad n_expert_used");
-        for (int it0 = 0; it0 < n_tokens; it0 += warp_size/neu_padded) {
-            const int it = it0 + threadIdx.x / neu_padded;
-
-            const int iex = threadIdx.x % neu_padded; // The index at which the expert is used, if any.
-            const int expert_used = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
-                ids[it*si1 + iex] : INT_MAX;
+        constexpr int tokens_per_iter = warp_size/neu_padded;
+        // load several iterations ahead, the loop is bound by the global load latency otherwise
+        constexpr int nload = 8;
+        const int iex = threadIdx.x % neu_padded; // The index at which the expert is used, if any.
+        for (int it00 = 0; it00 < n_tokens; it00 += nload*tokens_per_iter) {
+            int expert_used_buf[nload];
+#pragma unroll
+            for (int il = 0; il < nload; ++il) {
+                const int it = it00 + il*tokens_per_iter + threadIdx.x / neu_padded;
+                expert_used_buf[il] = (neu_padded == n_expert_used || iex < n_expert_used) && it < n_tokens ?
+                    ids[it*si1 + iex] : INT_MAX;
+            }
+#pragma unroll
+            for (int il = 0; il < nload; ++il) {
+            const int it = it00 + il*tokens_per_iter + threadIdx.x / neu_padded;
+            const int expert_used = expert_used_buf[il];
             const int iex_used = expert_used == expert ? iex : -1;
             nex_prev += expert_used < expert;
 
-            // Whether the threads at this token position have used the expert:
-            const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
+            const uint64_t match = ggml_cuda_ballot(iex_used != -1);
+            // most experts are not used by any token of the warp
+            if (match == 0) {
+                continue;
+            }
 
-            // Do a scan over threads at lower token positions in warp to get the correct index for writing data:
-            int it_compact_add_lower = 0;
+            // one bit per token position in the warp, set if the token uses the expert
+            uint64_t token_mask = 0;
+            if constexpr (neu_padded == 1) {
+                token_mask = match;
+            } else {
+                constexpr uint64_t group_bits = (uint64_t(1) << neu_padded) - 1;
 #pragma unroll
-            for (int offset = neu_padded; offset < warp_size; offset += neu_padded) {
-                const int tmp = ggml_cuda_shfl_up(it_compact_add_self, offset, warp_size);
-                if (threadIdx.x >= static_cast<unsigned int>(offset)) {
-                    it_compact_add_lower += tmp;
+                for (int g = 0; g < tokens_per_iter; ++g) {
+                    token_mask |= ((match >> (g*neu_padded)) & group_bits) != 0 ? uint64_t(1) << g : 0;
                 }
             }
+
+            // compact index: number of lower token positions in the warp that use the expert
+            const int it_compact_add_lower = __popcll(token_mask & ((uint64_t(1) << (threadIdx.x / neu_padded)) - 1));
 
             if (iex_used != -1) {
                 store[it_compact + it_compact_add_lower] = mm_ids_helper_store(it, iex_used);
             }
 
-            // The thread with the highest index in the warp always has the sum over the whole warp, use it to increment all threads:
-            it_compact += ggml_cuda_shfl(it_compact_add_lower + it_compact_add_self, warp_size - 1, warp_size);
+            it_compact += __popcll(token_mask);
+            }
         }
     }
     nex_prev = warp_reduce_sum<warp_size>(nex_prev);
