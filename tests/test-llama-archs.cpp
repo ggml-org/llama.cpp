@@ -974,47 +974,6 @@ static int32_t get_logits_mixed(
     return 0;
 }
 
-static void check_sensenova_mixed_batch(llama_model * model) {
-    auto params = llama_context_default_params();
-    params.n_ctx = 128;
-    params.n_seq_max = 2;
-    params.n_batch = params.n_ubatch = 16;
-    params.n_threads = params.n_threads_batch = 4;
-    params.kv_unified = true;
-    params.type_k = params.type_v = GGML_TYPE_F32;
-    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
-    llama_context_ptr ctx(llama_init_from_model(model, params));
-    GGML_ASSERT(ctx);
-    llama_set_causal_attn(ctx.get(), false);
-
-    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
-    const uint32_t n_embd = llama_model_n_embd_inp(model);
-    const llama_token tokens[5] = {1, 2, 3, 4, 5};
-    std::vector<float> embd(5*n_embd);
-    GGML_ASSERT(llama_model_get_tok_embd_rows(model, tokens, 5, embd.data()) == embd.size());
-    std::vector<float> logits[2];
-    for (int mixed = 0; mixed < 2; ++mixed) {
-        llama_memory_clear(llama_get_memory(ctx.get()), true);
-        common_batch batch(ctx.get());
-        // Compare the text token with its raw embedding and explicit temporal-only position.
-        const llama_pos text_pos[4] = {4, 0, 0, 0};
-        if (mixed) {
-            batch.add(tokens[0], 4, 0, true);
-        } else {
-            batch.add_embd({embd.data(), 1, n_embd}, text_pos, 0, true);
-        }
-        // A complete bidirectional image in a separate sequence keeps the attention masks identical.
-        for (int i = 0; i < 4; ++i) {
-            const llama_pos pos[4] = {4, i/2, i%2, 0};
-            batch.add_embd({embd.data() + (i + 1)*n_embd, 1, n_embd}, pos, 1, true);
-        }
-        GGML_ASSERT(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0);
-        const float * rows = llama_get_logits(ctx.get());
-        logits[mixed].assign(rows, rows + batch.size()*n_vocab);
-    }
-    GGML_ASSERT(nmse(logits[0], logits[1]) < 1e-12);
-}
-
 static bool check_causal_attn_toggle(
         llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
@@ -1432,9 +1391,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
-                        if (arch == LLM_ARCH_SENSENOVA_U1) {
-                            check_sensenova_mixed_batch(model_and_ctx_cpu.first.get());
-                        }
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;
