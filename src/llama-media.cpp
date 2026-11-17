@@ -208,8 +208,16 @@ void llama_media_proc_video_markers(const struct llama_media_proc * proc, const 
     *end = proc->cfg->vid_end.c_str();
 }
 
-bool llama_media_proc_video_has_soundtrack(const struct llama_media_proc * proc) {
-    return proc->cfg->video_has_soundtrack();
+enum llama_media_video_template llama_media_proc_video_template(const struct llama_media_proc * proc) {
+    const clip_layout_config & cfg = *proc->cfg;
+    switch (cfg.proj_type_v()) {
+        case PROJECTOR_TYPE_LFM3VL:
+            return cfg.video_has_soundtrack() ? LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI : LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3;
+        case PROJECTOR_TYPE_QWEN3VL:
+            return LLAMA_MEDIA_VIDEO_TEMPLATE_QWEN3VL;
+        default:
+            return LLAMA_MEDIA_VIDEO_TEMPLATE_DEFAULT;
+    }
 }
 
 int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc) {

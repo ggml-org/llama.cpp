@@ -803,7 +803,7 @@ struct mtmd_context {
     }
 
     bool video_has_soundtrack() const {
-        return proc && llama_media_proc_video_has_soundtrack(proc);
+        return proc && llama_media_proc_video_template(proc) == LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI;
     }
 };
 
@@ -1569,10 +1569,11 @@ mtmd_video_config mtmd_get_video_config(const mtmd_context * ctx,
                                         int32_t src_width, int32_t src_height,
                                         int32_t src_n_frames, float src_fps) {
     mtmd_video_template tmpl = MTMD_VIDEO_TEMPLATE_DEFAULT;
-    if (ctx->info.proj_v == "lfm3vl") {
-        tmpl = ctx->video_has_soundtrack() ? MTMD_VIDEO_TEMPLATE_LFM3_OMNI : MTMD_VIDEO_TEMPLATE_LFM3;
-    } else if (ctx->info.proj_v == "qwen3vl") {
-        tmpl = MTMD_VIDEO_TEMPLATE_QWEN3VL;
+    switch (ctx->proc ? llama_media_proc_video_template(ctx->proc) : LLAMA_MEDIA_VIDEO_TEMPLATE_DEFAULT) {
+        case LLAMA_MEDIA_VIDEO_TEMPLATE_QWEN3VL:   tmpl = MTMD_VIDEO_TEMPLATE_QWEN3VL;   break;
+        case LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3:      tmpl = MTMD_VIDEO_TEMPLATE_LFM3;      break;
+        case LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI: tmpl = MTMD_VIDEO_TEMPLATE_LFM3_OMNI; break;
+        default: break;
     }
     const llama_media_proc * proc = ctx->proc;
     auto frame_size = [proc](int32_t n, int32_t sw, int32_t sh, int32_t & w, int32_t & h) {

@@ -230,8 +230,14 @@ LLAMA_API bool    llama_media_proc_video_frame_size(const struct llama_media_pro
                                                     int32_t src_w, int32_t src_h, int32_t * w, int32_t * h);
 // the text that opens and closes a video (empty strings if none), with special tokens
 LLAMA_API void    llama_media_proc_video_markers(const struct llama_media_proc * proc, const char ** beg, const char ** end);
-// true if the model hears the soundtrack of a video: its audio goes in pieces, see llama_media_layout_begin_track()
-LLAMA_API bool    llama_media_proc_video_has_soundtrack(const struct llama_media_proc * proc);
+// how the frames of a video are sampled and marked in the prompt
+enum llama_media_video_template {
+    LLAMA_MEDIA_VIDEO_TEMPLATE_DEFAULT,   // frames as images
+    LLAMA_MEDIA_VIDEO_TEMPLATE_QWEN3VL,   // Qwen3-VL: 2 fps, timestamps
+    LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3,      // LFM3-VL
+    LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI, // LFM3-VL, and the soundtrack in pieces after the frames, see llama_media_layout_begin_track()
+};
+LLAMA_API enum llama_media_video_template llama_media_proc_video_template(const struct llama_media_proc * proc);
 
 // debugging of model ports, unstable: run the encoder on preprocessed input and print its rows
 // image: nx * ny * 3 normalized RGB floats; audio: nx samples broadcast to every mel bin
@@ -256,7 +262,7 @@ LLAMA_API int32_t llama_media_layout_add_frames(struct llama_media_layout * lay,
 LLAMA_API int32_t llama_media_layout_add_audio (struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id);
 
 // an audio track cut in pieces that go into the prompt one by one, each in its own place (the soundtrack of a video,
-// each piece after its frames, see llama_media_proc_video_has_soundtrack()); it is encoded once, as one clip, and every
+// each piece after its frames, see LLAMA_MEDIA_VIDEO_TEMPLATE_LFM3_OMNI); it is encoded once, as one clip, and every
 // piece takes its rows of it, without audio markers
 // begin_track copies the pieces (pcm[i] can be NULL for a placeholder), add_track_piece lays out the next one;
 // a piece too short for a row adds no media
