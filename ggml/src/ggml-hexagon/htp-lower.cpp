@@ -444,7 +444,7 @@ void htp_lightning_indexer_collapse_tensors(
     }
 }
 
-void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & node, struct ggml_tensor * scratch) {
+void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & node, struct ggml_tensor * scratch, bool apply_f16) {
     const uint32_t n_hvx = htp_session_n_hvx(sess);
     const size_t   n_in  = node.inputs.size();
     const size_t   n_out = node.outputs.size();
@@ -456,14 +456,14 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
 
     for (size_t i = 0; i < n_in; ++i) {
         if (node.inputs[i]) {
-            in_dirty[i] = ggml_hexagon_tensor_is_f16(node.inputs[i]);
-            in_mat[i]   = htp_tensor_lower_f16(node.inputs[i]);
+            in_dirty[i] = apply_f16 && ggml_hexagon_tensor_is_lowered_f16(node.inputs[i]);
+            in_mat[i]   = apply_f16 ? htp_tensor_lower_f16(node.inputs[i]) : *node.inputs[i];
         }
     }
     for (size_t i = 0; i < n_out; ++i) {
         if (node.outputs[i]) {
-            out_dirty[i] = ggml_hexagon_tensor_is_f16(node.outputs[i]);
-            out_mat[i]   = htp_tensor_lower_f16(node.outputs[i]);
+            out_dirty[i] = apply_f16 && ggml_hexagon_tensor_is_lowered_f16(node.outputs[i]);
+            out_mat[i]   = apply_f16 ? htp_tensor_lower_f16(node.outputs[i]) : *node.outputs[i];
         }
     }
 
@@ -640,13 +640,6 @@ void htp_lower_opnode(const struct ggml_hexagon_session * sess, htp_opnode & nod
     }
 }
 
-static const ggml_tensor * htp_lower_root(const ggml_tensor * tensor) {
-    while (tensor->view_src) {
-        tensor = tensor->view_src;
-    }
-    return tensor;
-}
-
 static bool htp_lower_is_view(const ggml_tensor * tensor) {
     return tensor->op == GGML_OP_VIEW || tensor->op == GGML_OP_RESHAPE || tensor->op == GGML_OP_PERMUTE || tensor->op == GGML_OP_TRANSPOSE;
 }
@@ -673,6 +666,9 @@ static bool htp_lower_safe_class(
 ) {
     int total_internal_uses = 0;
     for (const ggml_tensor * tensor : tensors) {
+        if (tensor->type != GGML_TYPE_F32) {
+            return false;
+        }
         if (tensor != root && !htp_lower_is_view(tensor)) {
             return false;
         }
@@ -775,7 +771,7 @@ static bool htp_lower_respect_prec_hints(
         }
     }
     if (owner.opcode == HTP_OP_SOFTMAX && !owner.inputs.empty() && owner.inputs[0]) {
-        const ggml_tensor * in_root = htp_lower_root(owner.inputs[0]);
+        const ggml_tensor * in_root = htp_tensor_root(owner.inputs[0]);
         auto oit = owner_idx.find(in_root);
         if (oit != owner_idx.end()) {
             const htp_opnode & node = nodes[oit->second];
@@ -808,7 +804,7 @@ static bool htp_lower_respect_prec_hints(
                 break;
             }
         }
-        if (!uses_cls && (!act || htp_lower_root(act) != r)) {
+        if (!uses_cls && (!act || htp_tensor_root(act) != r)) {
             continue;
         }
         auto blocks_src1 = [](const ggml_tensor * orig_mm) -> bool {
@@ -883,7 +879,7 @@ static bool htp_lower_safe_gdn_output(
     for (size_t idx : uit->second) {
         const htp_opnode & node = nodes[idx];
         for (const ggml_tensor * input : node.inputs) {
-            if (!input || htp_lower_root(input) != root) {
+            if (!input || htp_tensor_root(input) != root) {
                 continue;
             }
             const ptrdiff_t offset = (const uint8_t *) input->data - (const uint8_t *) root->data;
@@ -896,10 +892,39 @@ static bool htp_lower_safe_gdn_output(
     return has_consumer;
 }
 
+void htp_lower_reset_graph(const struct ggml_cgraph * graph) {
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        ggml_tensor * node = graph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            ggml_hexagon_tensor_clear_lowered(node->src[j]);
+        }
+        ggml_hexagon_tensor_clear_lowered(node);
+    }
+}
+
+void htp_unpack_tensor_lowered_f16(void * dst, const struct ggml_tensor * t, size_t offset, size_t size) {
+    if (size == 0) {
+        return;
+    }
+    GGML_ASSERT(t->type == GGML_TYPE_F32);
+    GGML_ASSERT(offset % sizeof(float) == 0 && size % sizeof(float) == 0);
+    const struct ggml_tensor * root = htp_tensor_root(t);
+    const uint8_t * base = (const uint8_t *) root->data + ((const uint8_t *) t->data - (const uint8_t *) root->data) / 2;
+    const ggml_fp16_t * src = (const ggml_fp16_t *) (base + offset / 2);
+    const int64_t n = (int64_t) (size / sizeof(float));
+    if ((uintptr_t) dst % alignof(float) == 0) {
+        ggml_fp16_to_fp32_row(src, (float *) dst, n);
+    } else {
+        std::vector<float> tmp((size_t) n);
+        ggml_fp16_to_fp32_row(src, tmp.data(), n);
+        memcpy(dst, tmp.data(), size);
+    }
+}
+
 void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml_cgraph * graph, std::vector<htp_opnode> & nodes) {
     if (opt_opf16 <= 0) {
         for (htp_opnode & node : nodes) {
-            htp_lower_opnode(sess, node);
+            htp_lower_opnode(sess, node, nullptr, false);
         }
         return;
     }
@@ -915,8 +940,8 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         if (!tensor || !seen.insert(tensor).second) {
             return;
         }
-        ggml_hexagon_tensor_clear_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_F16);
-        const ggml_tensor * root = htp_lower_root(tensor);
+        ggml_hexagon_tensor_clear_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_LOWERED_F16);
+        const ggml_tensor * root = htp_tensor_root(tensor);
         auto & cls = classes[root];
         if (cls.empty()) {
             roots.push_back(root);
@@ -946,7 +971,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
             if (!t) {
                 return;
             }
-            auto & vec = root_users[htp_lower_root(t)];
+            auto & vec = root_users[htp_tensor_root(t)];
             if (vec.empty() || vec.back() != idx) {
                 vec.push_back(idx);
             }
@@ -962,7 +987,6 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         }
     }
 
-    std::vector<const ggml_tensor *> lowered_tensors;
     size_t n_candidates    = 0;
     size_t n_lowered_roots = 0;
     size_t n_lowered_mm    = 0;
@@ -986,7 +1010,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
     }
 
     auto is_f16_tensor = [&](const ggml_tensor * t) -> bool {
-        return t && (htp_effective_type(t) == GGML_TYPE_F16 || ggml_hexagon_tensor_is_f16(htp_lower_root(t)));
+        return t && (htp_effective_type(t) == GGML_TYPE_F16 || ggml_hexagon_tensor_is_lowered_f16(htp_tensor_root(t)));
     };
 
     auto is_weight_or_bcast = [](const ggml_tensor * inp, const ggml_tensor * dst) -> bool {
@@ -1026,7 +1050,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     auto can_lower = [&](const ggml_tensor * r) -> bool {
         auto it = classes.find(r);
-        if (it == classes.end() || ggml_hexagon_tensor_is_f16(r)) {
+        if (it == classes.end() || ggml_hexagon_tensor_is_lowered_f16(r)) {
             return false;
         }
         auto sit = root_safe_class.find(r);
@@ -1059,7 +1083,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                 auto oit = owner_idx.find(tensor);
                 if (oit != owner_idx.end()) {
                     for (const ggml_tensor * input : nodes[oit->second].inputs) {
-                        if (input && ggml_hexagon_tensor_is_f16(input)) {
+                        if (input && ggml_hexagon_tensor_is_lowered_f16(input)) {
                             return true;
                         }
                     }
@@ -1087,12 +1111,12 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         std::vector<saved_node>          touched;
 
         auto apply_root = [&](const ggml_tensor * r) -> bool {
-            if (ggml_hexagon_tensor_is_f16(r)) {
+            if (ggml_hexagon_tensor_is_lowered_f16(r)) {
                 return false;
             }
             tx_roots.push_back(r);
             for (const ggml_tensor * tensor : classes[r]) {
-                ggml_hexagon_tensor_set_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_F16);
+                ggml_hexagon_tensor_set_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_LOWERED_F16);
             }
 
             auto uit = root_users.find(r);
@@ -1132,13 +1156,13 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
                 }
                 solved = false;
                 for (const ggml_tensor * out : tnode->outputs) {
-                    const ggml_tensor * out_root = out ? htp_lower_root(out) : nullptr;
+                    const ggml_tensor * out_root = out ? htp_tensor_root(out) : nullptr;
                     if (out_root && can_lower(out_root) && apply_root(out_root)) {
                         expanded = true;
                     }
                 }
                 for (const ggml_tensor * inp : tnode->inputs) {
-                    const ggml_tensor * inp_root = inp ? htp_lower_root(inp) : nullptr;
+                    const ggml_tensor * inp_root = inp ? htp_tensor_root(inp) : nullptr;
                     if (inp_root && can_lower(inp_root) &&
                         (is_selected_root(inp_root) || htp_lower_is_rms_root(nodes, owner_idx, inp_root)) &&
                         apply_root(inp_root)) {
@@ -1161,7 +1185,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         if (!solved) {
             for (const ggml_tensor * r : tx_roots) {
                 for (const ggml_tensor * tensor : classes[r]) {
-                    ggml_hexagon_tensor_clear_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_F16);
+                    ggml_hexagon_tensor_clear_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_LOWERED_F16);
                 }
             }
             for (saved_node & s : touched) {
@@ -1171,8 +1195,6 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         }
 
         for (const ggml_tensor * r : tx_roots) {
-            const auto & cls = classes[r];
-            lowered_tensors.insert(lowered_tensors.end(), cls.begin(), cls.end());
             ++n_lowered_roots;
             bytes_saved += ggml_nbytes(r) / 2;
             if (htp_lower_is_mm_root(nodes, owner_idx, r)) {
@@ -1183,10 +1205,6 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     for (htp_opnode & node : nodes) {
         htp_lower_opnode(sess, node);
-    }
-
-    for (const ggml_tensor * tensor : lowered_tensors) {
-        ggml_hexagon_tensor_clear_flags(const_cast<ggml_tensor *>(tensor), HTP_TENSOR_F16);
     }
 
     if (n_lowered_roots > 0 || opt_opf16 > 0) {

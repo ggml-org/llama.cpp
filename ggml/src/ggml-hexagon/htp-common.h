@@ -63,40 +63,55 @@ static inline bool ggml_hexagon_tensor_is_tiled(const struct ggml_tensor * t) {
     return (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_TILED) != 0;
 }
 
-static inline bool ggml_hexagon_tensor_is_f16(const struct ggml_tensor * t) {
-    return t && (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_F16) != 0;
+static inline const struct ggml_tensor * htp_tensor_root(const struct ggml_tensor * t) {
+    while (t && t->view_src) {
+        t = t->view_src;
+    }
+    return t;
+}
+
+static inline void ggml_hexagon_tensor_clear_lowered(struct ggml_tensor * t) {
+    for (; t != nullptr; t = t->view_src) {
+        ggml_hexagon_tensor_clear_flags(t, HTP_TENSOR_LOWERED_F16);
+    }
+}
+
+static inline bool ggml_hexagon_tensor_is_lowered_f16(const struct ggml_tensor * t) {
+    return t && (ggml_hexagon_tensor_get_flags(t) & HTP_TENSOR_LOWERED_F16) != 0;
+}
+
+static inline bool htp_tensor_is_stored_f16(const struct ggml_tensor * t) {
+    return t && t->type == GGML_TYPE_F32 &&
+           (ggml_hexagon_tensor_is_lowered_f16(t) || ggml_hexagon_tensor_is_lowered_f16(htp_tensor_root(t)));
 }
 
 static inline enum ggml_type htp_effective_type(const struct ggml_tensor * t) {
-    return ggml_hexagon_tensor_is_f16(t) ? GGML_TYPE_F16 : t->type;
+    return ggml_hexagon_tensor_is_lowered_f16(t) ? GGML_TYPE_F16 : t->type;
 }
 
 static inline uint8_t * htp_tensor_data_ptr(const struct ggml_tensor * t) {
-    if (!ggml_hexagon_tensor_is_f16(t) || !t->view_src) {
+    if (!ggml_hexagon_tensor_is_lowered_f16(t) || !t->view_src) {
         return (uint8_t *) t->data;
     }
-    const struct ggml_tensor * root = t;
-    while (root->view_src) {
-        root = root->view_src;
-    }
+    const struct ggml_tensor * root = htp_tensor_root(t);
     return (uint8_t *) root->data + ((const uint8_t *) t->data - (const uint8_t *) root->data) / 2;
 }
 
 static inline size_t htp_tensor_nbytes(const struct ggml_tensor * t) {
-    return ggml_hexagon_tensor_is_f16(t) ? (ggml_nbytes(t) / 2) : ggml_nbytes(t);
+    return ggml_hexagon_tensor_is_lowered_f16(t) ? (ggml_nbytes(t) / 2) : ggml_nbytes(t);
 }
 
-// Lower a tagged F32 tensor to F16 on the stack and clear HTP_TENSOR_F16 so lowering is idempotent.
+// Lower a tagged F32 tensor to F16 on the stack and clear HTP_TENSOR_LOWERED_F16 so lowering is idempotent.
 static inline struct ggml_tensor htp_tensor_lower_f16(const struct ggml_tensor * t) {
     struct ggml_tensor m = *t;
-    if (ggml_hexagon_tensor_is_f16(t)) {
+    if (ggml_hexagon_tensor_is_lowered_f16(t)) {
         m.type = GGML_TYPE_F16;
         for (int d = 0; d < GGML_MAX_DIMS; ++d) {
             m.nb[d] /= 2;
         }
         m.view_offs /= 2;
         m.data       = htp_tensor_data_ptr(t);
-        m.extra      = (void *) (uintptr_t) (ggml_hexagon_tensor_get_flags(t) & ~HTP_TENSOR_F16);
+        m.extra      = (void *) (uintptr_t) (ggml_hexagon_tensor_get_flags(t) & ~HTP_TENSOR_LOWERED_F16);
     }
     return m;
 }

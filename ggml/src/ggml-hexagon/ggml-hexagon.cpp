@@ -693,6 +693,8 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     sess->flush_sync();
 
+    ggml_hexagon_tensor_clear_lowered(tensor);
+
     if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
         ggml_hexagon_tensor_set_flags(tensor, HTP_TENSOR_WEIGHT);
     }
@@ -715,12 +717,16 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu usage %d flags 0x%x\n",
             sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage, flags);
 
-    if ((flags & HTP_TENSOR_TILED) == 0) {
-        memcpy(data, (const char *) tensor->data + offset, size);
+    if (flags & HTP_TENSOR_TILED) {
+        htp_unpack_tensor_tiled(data, tensor, offset, size);
+        return;
+    }
+    if (htp_tensor_is_stored_f16(tensor)) {
+        htp_unpack_tensor_lowered_f16(data, tensor, offset, size);
         return;
     }
 
-    htp_unpack_tensor_tiled(data, tensor, offset, size);
+    memcpy(data, (const char *) tensor->data + offset, size);
 }
 
 static bool ggml_backend_hexagon_buffer_cpy_tensor(ggml_backend_buffer_t      buffer,
@@ -746,6 +752,8 @@ static void ggml_backend_hexagon_buffer_set_tensor_2d(ggml_backend_buffer_t buff
     auto sess = sbuf->sess;
 
     sess->flush_sync();
+
+    ggml_hexagon_tensor_clear_lowered(tensor);
 
     if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
         ggml_hexagon_tensor_set_flags(tensor, HTP_TENSOR_WEIGHT);
@@ -775,6 +783,12 @@ static void ggml_backend_hexagon_buffer_get_tensor_2d(ggml_backend_buffer_t buff
                 sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, (int) buffer->usage);
 
     if ((flags & HTP_TENSOR_TILED) == 0) {
+        if (htp_tensor_is_stored_f16(tensor)) {
+            for (size_t i = 0; i < n_copies; i++) {
+                htp_unpack_tensor_lowered_f16((uint8_t *) data + i * stride_data, tensor, offset + i * stride_tensor, size);
+            }
+            return;
+        }
         for (size_t i = 0; i < n_copies; i++) {
             memcpy((uint8_t *)data + i * stride_data, (const uint8_t *)tensor->data + offset + i * stride_tensor, size);
         }
@@ -814,6 +828,7 @@ static void ggml_backend_hexagon_buffer_set_tensor_n(ggml_backend_buffer_t buffe
         if (sizes[i] == 0) {
             continue;
         }
+        ggml_hexagon_tensor_clear_lowered(tensors[i]);
         if (is_weights) {
             ggml_hexagon_tensor_set_flags(tensors[i], HTP_TENSOR_WEIGHT);
         }
@@ -857,6 +872,8 @@ static void ggml_backend_hexagon_host_buffer_set_tensor(ggml_backend_buffer_t bu
 
     sess->flush_sync();
 
+    ggml_hexagon_tensor_clear_lowered(tensor);
+
     memcpy((char *) tensor->data + offset, data, size);
 }
 
@@ -865,6 +882,10 @@ static void ggml_backend_hexagon_host_buffer_get_tensor(ggml_backend_buffer_t bu
                                                         void *                data,
                                                         size_t                offset,
                                                         size_t                size) {
+    if (htp_tensor_is_stored_f16(tensor)) {
+        htp_unpack_tensor_lowered_f16(data, tensor, offset, size);
+        return;
+    }
     memcpy(data, (const char *) tensor->data + offset, size);
     GGML_UNUSED(buffer);
 }
@@ -884,6 +905,7 @@ static void ggml_backend_hexagon_host_buffer_set_tensor_n(ggml_backend_buffer_t 
         if (sizes[i] == 0) {
             continue;
         }
+        ggml_hexagon_tensor_clear_lowered(tensors[i]);
         memcpy((char *) tensors[i]->data + offsets[i], data[i], sizes[i]);
     }
 }
@@ -2541,6 +2563,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     if (!cache_hit) {
         ggml_hexagon_graph_repack(graph, sess);
 
+        htp_lower_reset_graph(graph);
         htp_fusion_tag_graph(graph);
 
         auto & nodes = sess->cached_nodes;

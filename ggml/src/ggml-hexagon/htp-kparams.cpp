@@ -5303,7 +5303,7 @@ bool htp_kparams_solve(
 ) {
     ggml_tensor scratch[HTP_OP_MAX_INPUTS + HTP_OP_MAX_OUTPUTS];
     htp_opnode tmp = node;
-    htp_lower_opnode(sess, tmp, scratch);
+    htp_lower_opnode(sess, tmp, scratch, internal_f16);
 
     const ggml_tensor * src0 = tmp.inputs.empty() ? nullptr : tmp.inputs[0];
     const ggml_tensor * src1 = tmp.inputs.size() > 1 ? tmp.inputs[1] : nullptr;
