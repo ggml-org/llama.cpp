@@ -527,9 +527,11 @@ struct llama_layer {
     // DeepSeek-V4
     struct ggml_tensor * attn_kv_norm = nullptr;
     struct ggml_tensor * hc_attn_fn   = nullptr;
+    struct ggml_tensor * hc_attn_fn_b = nullptr;
     struct ggml_tensor * hc_attn_base = nullptr;
     struct ggml_tensor * hc_attn_scale = nullptr;
     struct ggml_tensor * hc_ffn_fn    = nullptr;
+    struct ggml_tensor * hc_ffn_fn_b  = nullptr;
     struct ggml_tensor * hc_ffn_base  = nullptr;
     struct ggml_tensor * hc_ffn_scale = nullptr;
     struct ggml_tensor * attn_comp_wkv   = nullptr;

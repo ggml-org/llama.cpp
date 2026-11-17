@@ -127,7 +127,11 @@ void llama_model_qwen35::load_arch_tensors(llama_model_loader & ml) {
     };
 
     for (int i = 0; i < n_layer; ++i) {
-        load_block_trunk(i, trunk_flags);
+        if (!layer_tensor_sources.empty() && layer_tensor_sources[i] != (uint32_t) i) {
+            layers[i] = layers[layer_tensor_sources[i]];
+        } else {
+            load_block_trunk(i, trunk_flags);
+        }
     }
     for (int i = n_layer; i < n_layer_all; ++i) {
         load_block_mtp(i);
@@ -142,7 +146,7 @@ std::unique_ptr<llm_graph_context> llama_model_qwen35::build_arch_graph(const ll
 }
 
 llama_model_qwen35::graph::graph(const llm_graph_params & params) :
-    llm_build_delta_net_base(params) {
+    graph_base(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -209,8 +213,10 @@ llama_model_qwen35::graph::graph(const llm_graph_params & params) :
         // Input for next layer
         inpL = cur;
     }
-    cur = inpL;
+    build_output(inpL, inp_out_ids);
+}
 
+void llama_model_qwen35::graph_base::build_output(ggml_tensor * cur, ggml_tensor * inp_out_ids) {
     cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
 
     cb(cur, "h_nextn", -1);
@@ -240,7 +246,7 @@ llama_model_qwen35::graph::graph(const llm_graph_params & params) :
     res->t_logits = cur;
 }
 
-std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
+std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph_base::build_qkvz(
                 ggml_tensor * input,
                         int   il) {
     const int64_t n_seqs       = ubatch.n_seqs;
@@ -272,7 +278,7 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35::graph::build_qkvz(
     return { qkv_mixed, z };
 }
 
-ggml_tensor * llama_model_qwen35::graph::build_norm_gated(
+ggml_tensor * llama_model_qwen35::graph_base::build_norm_gated(
         ggml_tensor * input,
         ggml_tensor * weights,
         ggml_tensor * gate,
@@ -283,7 +289,7 @@ ggml_tensor * llama_model_qwen35::graph::build_norm_gated(
     return ggml_mul(ctx0, normalized, gated_silu);
 }
 
-ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
+ggml_tensor * llama_model_qwen35::graph_base::build_layer_attn(
         llm_graph_input_attn_kv * inp,
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
@@ -354,7 +360,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
     return cur;
 }
 
-ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
+ggml_tensor * llama_model_qwen35::graph_base::build_layer_attn_linear(
         llm_graph_input_rs * inp,
         ggml_tensor *        cur,
         int                  il) {
@@ -491,7 +497,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn_linear(
     return cur;
 }
 
-ggml_tensor * llama_model_qwen35::graph::build_layer_ffn(ggml_tensor * cur, const int il) {
+ggml_tensor * llama_model_qwen35::graph_base::build_layer_ffn(ggml_tensor * cur, const int il) {
     // Qwen3.5 does not use MoE FFN
     GGML_ASSERT(model.layers[il].ffn_gate_inp == nullptr);
 

@@ -1168,6 +1168,18 @@ class GGUFWriter:
     def add_engram_token_map(self, values: Sequence[int]) -> None:
         self.add_key_value(Keys.Engram.TOKEN_MAP.format(arch=self.arch), list(values), GGUFValueType.ARRAY, GGUFValueType.INT32)
 
+    def add_hyper_connection_start(self, value: int) -> None:
+        self.add_uint32(Keys.HyperConnection.START.format(arch=self.arch), value)
+
+    def add_hyper_connection_end(self, value: int) -> None:
+        self.add_uint32(Keys.HyperConnection.END.format(arch=self.arch), value)
+
+    def add_hyper_connection_pre_scale(self, value: float) -> None:
+        self.add_float32(Keys.HyperConnection.PRE_SCALE.format(arch=self.arch), value)
+
+    def add_hyper_connection_fixed_identity(self, value: bool) -> None:
+        self.add_bool(Keys.HyperConnection.FIXED_IDENTITY.format(arch=self.arch), value)
+
     def add_hyper_connection_count(self, count: int) -> None:
         self.add_uint32(Keys.HyperConnection.COUNT.format(arch=self.arch), count)
 

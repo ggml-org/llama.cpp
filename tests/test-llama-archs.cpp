@@ -333,6 +333,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
+    } else if (arch == LLM_ARCH_SENSENOVA_LOOP) {
+        n_layer = 6; // 4 physical layers, with the middle 2 visited twice
     } else if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
         n_embd  = 128;
         n_head  = 4;
@@ -385,6 +387,23 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_TIME_MIX_EXTRA_DIM,      uint32_t(64));
     ms.add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,    uint32_t(128));
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
+
+    if (arch == LLM_ARCH_SENSENOVA_LOOP) {
+        ms.add_kv(LLM_KV_LOOP_START,                           uint32_t(1));
+        ms.add_kv(LLM_KV_LOOP_END,                             uint32_t(3));
+        ms.add_kv(LLM_KV_LOOP_COUNT,                           uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_START,               uint32_t(1));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_END,                 uint32_t(3));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_PRE_SCALE,           1.0f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY,      false);
+        std::vector<uint32_t> recurrent;
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            recurrent.push_back(il % 2 == 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, recurrent);
+    }
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
@@ -892,7 +911,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_SENSENOVA_LOOP || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,        n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA1 ? 2 : 4)); // ZAYA CCA convs have kernel 2
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));

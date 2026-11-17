@@ -2906,6 +2906,13 @@ void llama_context::output_reorder() {
 
 uint32_t llama_context::graph_max_nodes() const {
     uint32_t res = std::max<uint32_t>(1024u, model.graph_nodes_per_tensor()*model.n_tensors());
+    if (model.arch == LLM_ARCH_SENSENOVA_LOOP) {
+        uint32_t n_mhc = model.hparams.mhc_end - model.hparams.mhc_start;
+        if (model.hparams.mhc_start >= model.hparams.loop_start && model.hparams.mhc_end <= model.hparams.loop_end) {
+            n_mhc *= model.hparams.loop_count;
+        }
+        res = std::max<uint32_t>(res, 64u * model.n_tensors() + 128u * model.hparams.n_layer() + 48u * model.hparams.dsv4_hc_sinkhorn_iters * n_mhc);
+    }
     for (const auto & lora : model.loras) {
         res += lora->get_n_nodes();
     }

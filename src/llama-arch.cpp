@@ -35,6 +35,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN2MOE,         "qwen2moe"         },
     { LLM_ARCH_QWEN2VL,          "qwen2vl"          },
     { LLM_ARCH_SENSENOVA_U1,     "sensenova_u1"     },
+    { LLM_ARCH_SENSENOVA_LOOP,   "sensenova_loop"   },
     { LLM_ARCH_QWEN3,            "qwen3"            },
     { LLM_ARCH_FLINT,            "flint"            },
     { LLM_ARCH_QWEN3MOE,         "qwen3moe"         },
@@ -370,6 +371,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_LOG_SCALE_FLOOR,              "%s.attention.log_scale_floor"              },
     { LLM_KV_ATTENTION_LOG_SCALE_ALPHA,              "%s.attention.log_scale_alpha"              },
 
+    { LLM_KV_HYPER_CONNECTION_START,                 "%s.hyper_connection.start"                 },
+    { LLM_KV_HYPER_CONNECTION_END,                   "%s.hyper_connection.end"                   },
+    { LLM_KV_HYPER_CONNECTION_PRE_SCALE,             "%s.hyper_connection.pre_scale"             },
+    { LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY,        "%s.hyper_connection.fixed_identity"        },
     { LLM_KV_HYPER_CONNECTION_COUNT,                 "%s.hyper_connection.count"                 },
     { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,   "%s.hyper_connection.sinkhorn_iterations"   },
     { LLM_KV_HYPER_CONNECTION_EPSILON,               "%s.hyper_connection.epsilon"               },
@@ -1505,6 +1510,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_QWEN35:
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_QWEN4EXP:
@@ -1579,6 +1585,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
 
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_SENSENOVA_LOOP:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_ZAYA1:
         case LLM_ARCH_GROK:
