@@ -22,7 +22,7 @@ The sections below list the params supported by each model, with `llama-tts` exa
 Available params:
 - `--tts-lang` can be `zh`, `en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, `ru` (default: `en`)
 - `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3)
-- `--tts-speaker-text` is the transcript of the speaker file. With it, the speech continues from the reference codes (the "ICL" mode of the reference), which clones the voice more closely. The codes come from the first 30 s of the clip. It needs an mmproj converted with the speech tokenizer encoder, older files fall back to the speaker embedding only
+- `--tts-speaker-text` is the transcript of the speaker file. With it, the speech continues from the reference codes (the "ICL" mode of the reference), which clones the voice more closely. It needs a clip of 30 s or less and an mmproj converted with the speech tokenizer encoder, otherwise it falls back to the speaker embedding only
 
 Example usage:
 

@@ -1858,8 +1858,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
                 if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
-                    set_mimi_tfm_inputs((int64_t) mtmd_hparams::qwen3tts_max_ref_seconds * hparams.audio_sample_rate +
-                                        (int64_t) mtmd_hparams::qwen3tts_ref_silence_ms * hparams.audio_sample_rate / 1000);
+                    set_mimi_tfm_inputs((int64_t) mtmd_hparams::qwen3tts_max_ref_seconds * hparams.audio_sample_rate);
                     break;
                 }
                 if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {

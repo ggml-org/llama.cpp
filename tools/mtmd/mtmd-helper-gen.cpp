@@ -201,6 +201,7 @@ public:
         seq_id = 0;
         pos = 0;
         codes_buf.clear();
+        next_window_frames = window_frames;
         gen_state.reset();
         audio_pcm.clear();
         overlay.clear();
@@ -244,7 +245,7 @@ public:
         const size_t n_ref_frames = speaker_embd.empty() ? 0 : speaker_embd.size() / (size_t) n_e - 1;
         const bool   icl          = has_ref_text && n_ref_frames > 0;
         if (has_ref_text && !icl) {
-            LOG_WRN("mtmd_helper_gen_audio: the mmproj has no reference encoder, cloning from the speaker embedding only\n");
+            LOG_WRN("mtmd_helper_gen_audio: no reference codes (mmproj without reference encoder, or clip too long), cloning from the speaker embedding only\n");
         }
         auto row = [&](llama_token t) {
             return std::vector<float>(tok_embd.begin() + (size_t) t * n_e,
@@ -337,8 +338,11 @@ public:
             return 1;
         }
         // the decoder continues from the reference codes of the encode above
-        if (icl && mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
-            return 1;
+        if (icl) {
+            if (mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
+                return 1;
+            }
+            next_window_frames = window_frames - std::min(n_ref_frames, window_frames - 1);
         }
 
         // the prompt above holds the whole text stream up to tts_eos, so every generated
@@ -403,7 +407,7 @@ public:
         }
 
         codes_buf.insert(codes_buf.end(), out.codes, out.codes + out.n_codes);
-        if (out.n_codes > 0 && codes_buf.size() / out.n_codes >= window_frames) {
+        if (out.n_codes > 0 && codes_buf.size() / out.n_codes >= next_window_frames) {
             if (!flush_gen_wav()) {
                 return 1;
             }
@@ -539,6 +543,7 @@ private:
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
         codes_buf.clear();
+        next_window_frames = window_frames;
         return true;
     }
 
@@ -571,6 +576,7 @@ private:
     int32_t  top_k = 50;
     float    top_p = 1.0f;
     std::vector<int32_t> codes_buf;
+    size_t next_window_frames = window_frames; // the first window leaves room for the reference codes
     std::vector<float>   audio_pcm;
     std::vector<float> overlay;
     std::vector<float> h_state_buf;

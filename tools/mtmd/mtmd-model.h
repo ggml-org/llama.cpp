@@ -215,8 +215,6 @@ struct mtmd_hparams {
     static constexpr int32_t pockettts_max_spk_seconds = 30;
     // qwen3tts: the reference encoder mask is dense, so cost is quadratic in the clip
     static constexpr int32_t qwen3tts_max_ref_seconds = 30;
-    // qwen3tts: trailing silence, so the talker does not continue the last sound of the reference
-    static constexpr int32_t qwen3tts_ref_silence_ms = 500;
     // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
     static constexpr int32_t fish_s2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
