@@ -9,12 +9,16 @@ name: UI Lib Publish
 # ship, and this workflow does the rest.
 #
 # Auth: no npm token is stored here. The job exchanges its OIDC identity for one (npm trusted
-# publishing) and signs the tarball with a provenance attestation, as release-publish.yml
-# already does for GitHub releases. To wire it up, on npm: the package's Publishing settings,
-# Trusted Publisher, GitHub Actions, repository ggml-org/llama.cpp, workflow
-# ui-lib-publish.yml, and the environment below as the keyword. Until that exists the publish
-# step fails, and every step before it still runs, so a dry run shows whether the release is
-# ready.
+# publishing) and signs the tarball with a provenance attestation. release-publish.yml has done
+# the same exchange on every push to master since it landed, its actions/attest step being the
+# proof that this repository can be issued a token.
+#
+# To wire it up, on npm: the package's Publishing settings, Trusted Publisher, GitHub Actions,
+# with organization ggml-org, repository llama.cpp, workflow file ui-lib-publish.yml, and
+# Environment left blank - this job names no environment, and adding one later means creating it
+# on the repository as well as naming it here and on npm. Until the trusted publisher exists the
+# publish step fails and every step before it still runs, so a dry run shows whether a release is
+# ready without publishing it.
 
 on:
   workflow_dispatch:
@@ -51,7 +55,6 @@ jobs:
     name: Publish @ggml-org/llama-ui
     if: github.repository == 'ggml-org/llama.cpp'
     runs-on: ubuntu-24.04
-    environment: npm
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
