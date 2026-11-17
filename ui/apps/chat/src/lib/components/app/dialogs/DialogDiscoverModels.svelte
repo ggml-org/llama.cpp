@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import ModelsDiscover from '#lib/components/app/models/discover/ModelsDiscover.svelte';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { DISCOVER_ICON } from '#lib/constants/index.ts';
 	import { uiStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
@@ -36,7 +36,7 @@
 	>
 		<Dialog.Header class="flex flex-row items-center p-2 pr-8">
 			<Dialog.Title class="flex min-h-7 items-center gap-2">
-				<DISCOVER_ICON class="h-5 w-5" />
+				<DISCOVER_ICON class="size-icon-lg" />
 
 				<span>Discover</span>
 			</Dialog.Title>

@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Card } from '@ggml-org/llama-ui/ui/card';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { TruncatedText } from '#lib/components/app/misc/index.ts';
-	import { Card } from '#lib/components/ui/card/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { McpPromptVariant } from '#lib/enums/index.ts';
 	import { mcpStore } from '#lib/stores/index.ts';
 	import type { DatabaseMessageExtraMcpPrompt } from '#lib/types/index.ts';
@@ -100,7 +100,7 @@
 					{#if serverFavicon}
 						<img
 							alt=""
-							class="h-3.5 w-3.5 shrink-0 rounded-sm"
+							class="size-3.5 shrink-0 rounded-sm"
 							onerror={(e) => {
 								(e.currentTarget as HTMLImageElement).style.display = 'none';
 							}}

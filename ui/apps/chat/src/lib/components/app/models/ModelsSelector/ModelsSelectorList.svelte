@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
+	import { Logo } from '@ggml-org/llama-ui/app/misc';
 	import { Heart, Power } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
@@ -8,7 +9,6 @@
 		ModelsSection,
 		ModelsSelectorOption
 	} from '#lib/components/app/index.ts';
-	import Logo from '#lib/components/app/misc/Logo.svelte';
 	import {
 		LOCAL_BACKEND_ID,
 		MODEL_ROW_WINDOW,
@@ -177,7 +177,7 @@
 		sticky
 	>
 		{#snippet icon()}
-			<Power class="h-3.5 w-3.5 shrink-0" />
+			<Power class="size-icon-sm shrink-0" />
 		{/snippet}
 
 		{#each loaded as item (item.option.id)}
@@ -190,7 +190,7 @@
 	<!-- Favorites come first; the sections below skip them -->
 	<ModelsSection label="Favorites" persistKey="favorites" revealChevronOnHover sticky>
 		{#snippet icon()}
-			<Heart class="h-3.5 w-3.5 shrink-0" />
+			<Heart class="size-icon-sm shrink-0" />
 		{/snippet}
 
 		{#each favorites as item (`fav-${item.option.id}`)}

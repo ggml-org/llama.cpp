@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { ArrowDown, ArrowUp, CornerDownLeft, MessageSquare, Pin, X } from '@lucide/svelte';
 	import { ActionIcon, KeyboardShortcutInfo } from '#lib/components/app/index.ts';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import {
 		ICON_CLASS_DEFAULT,
 		ICON_CLASS_SM,

@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Settings, X } from '@lucide/svelte';
 	import { SettingsChat } from '#lib/components/app/settings/index.ts';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { PANEL_CLOSE_MOBILE_CLASS } from '#lib/constants/index.ts';
 	import { deviceStore } from '#lib/stores/index.ts';
 
@@ -26,7 +26,7 @@
 	>
 		<Dialog.Header class="md:p-0 p-4" showCloseButton={false}>
 			<Dialog.Title class="flex items-center gap-2">
-				<Settings class="h-5 w-5" />
+				<Settings class="size-icon-lg" />
 
 				<span>Settings</span>
 			</Dialog.Title>

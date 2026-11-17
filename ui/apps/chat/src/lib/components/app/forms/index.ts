@@ -41,7 +41,7 @@ export { default as KeyValuePairs } from './KeyValuePairs.svelte';
  * Input field optimized for search with clear button and keyboard handling.
  * Supports placeholder, autofocus, and change callbacks.
  */
-export { default as SearchInput } from './SearchInput.svelte';
+export { SearchInput } from '@ggml-org/llama-ui/app/forms';
 
 /**
  * **HighlightedMatch** - Substring-match text highlight

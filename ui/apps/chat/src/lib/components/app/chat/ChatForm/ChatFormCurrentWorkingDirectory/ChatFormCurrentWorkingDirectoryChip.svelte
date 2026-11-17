@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Folder, X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/actions/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
 	import { abbreviateWorkingDir } from '#lib/utils/index.ts';
 
@@ -35,7 +35,7 @@
 	]}
 >
 	<div class="flex min-w-0 items-center gap-1 cursor-pointer">
-		<Folder class="w-3.5 h-3.5" />
+		<Folder class="size-icon-sm" />
 
 		{#if showTooltip && displayLabelTitle}
 			<Tooltip.Root>
@@ -60,10 +60,10 @@
 		>
 			<ActionIcon
 				ariaLabel="Reset working directory"
-				class="!h-4 !w-4 shrink-0 text-muted-foreground hover:text-foreground"
+				class="!size-icon-md !shrink-0 text-muted-foreground hover:text-foreground"
 				{disabled}
 				icon={X}
-				iconSize="h-3 w-3"
+				iconSize="size-icon-md"
 				onclick={onClear}
 				stopPropagationOnClick
 				tooltip="Reset working directory"

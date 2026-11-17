@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import ChatFormActionRecord from '#lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 
 	let {
 		hasAudioModality = true,

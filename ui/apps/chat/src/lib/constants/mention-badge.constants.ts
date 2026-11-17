@@ -8,7 +8,7 @@
 export const MENTION_BADGE_CLASSNAME =
 	'inline-flex w-fit shrink-0 items-center gap-1 whitespace-nowrap rounded-md border border-border/50 bg-foreground/5 px-1.5 py-0.5 text-xs font-mono text-foreground hover:bg-foreground/10 dark:bg-foreground/10 dark:text-secondary-foreground';
 
-export const MENTION_BADGE_ICON_CLASSNAME = 'h-3 w-3 shrink-0';
+export const MENTION_BADGE_ICON_CLASSNAME = 'size-icon-xs shrink-0';
 
 /** Regex flag that makes the mention scanner walk every link in a message instead of the first. */
 export const MENTION_LINK_SCAN_FLAGS = 'g';

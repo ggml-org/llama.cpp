@@ -1,8 +1,8 @@
 <script lang="ts">
 	import '../app.css';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { GlassKey, MenuIcon, SidebarNavigation } from '#lib/components/app/index.ts';
 	import { PwaMetaTags, PwaRefreshAlert } from '#lib/components/pwa/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		BOX_BORDER,
 		CHAT_FORM_CHROME_FADE_MS,
@@ -33,7 +33,7 @@
 	} from '#lib/stores/index.ts';
 	import { initStores } from '#lib/stores/init.ts';
 	import { withBase } from '#lib/utils/base-path.ts';
-	import { hapticTap } from '#lib/utils/index.ts';
+	import { applySurfaceTheme, hapticTap } from '#lib/utils/index.ts';
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
@@ -52,6 +52,11 @@
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
 	let chatSidebar: { editActiveConversation?: () => void } | undefined = $state();
+
+	// the light surface theme (Paper or Matte) follows the saved setting
+	$effect(() => {
+		applySurfaceTheme(settingsStore.config[SETTINGS_KEYS.SURFACE_THEME]);
+	});
 
 	let showBuildVersion = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean

@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { Check, Copy, X } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { COPY_FEEDBACK_RESET_MS } from '#lib/constants/index.ts';
 	import { copyToClipboard } from '#lib/utils/index.ts';
 
@@ -45,12 +45,12 @@
 				class="h-auto gap-1.5 px-2 py-1 text-xs"
 				onclick={() => void copy()}
 				size="sm"
-				variant="tertiary"
+				variant="secondary"
 			>
 				{#if copied}
-					<Check class="size-3.5 text-green-500" />
+					<Check class="size-icon-sm text-fg-success" />
 				{:else}
-					<Copy class="size-3.5" />
+					<Copy class="size-icon-sm" />
 				{/if}
 
 				Copy
@@ -61,7 +61,7 @@
 				class="ml-auto inline-flex cursor-pointer items-center justify-center rounded-md p-1.5 text-muted-foreground/70 transition-colors hover:bg-muted-foreground/10 hover:text-foreground"
 				type="button"
 			>
-				<X class="h-4 w-4" />
+				<X class="size-icon-md" />
 			</Dialog.Close>
 		</Dialog.Header>
 
