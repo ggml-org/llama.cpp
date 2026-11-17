@@ -585,23 +585,17 @@ bool remove_cached_files(const std::string & repo_id, const hf_files & files) {
 
     // collect blobs still referenced by any remaining snapshot entry
     std::unordered_set<std::string> still_referenced;
-    fs::directory_iterator revisions(repo_path / "snapshots", ec);
-    const fs::directory_iterator revisions_end;
-    for (; !ec && revisions != revisions_end; revisions.increment(ec)) {
-        fs::recursive_directory_iterator entries(revisions->path(), ec);
-        const fs::recursive_directory_iterator entries_end;
-        for (; !ec && entries != entries_end; entries.increment(ec)) {
-            const fs::path blob = resolve_blob_path(repo_path, entries->path(), true);
-            if (!blob.empty()) {
-                still_referenced.insert(blob.string());
+    try {
+        for (const auto & revision : fs::directory_iterator(repo_path / "snapshots")) {
+            for (const auto & entry : fs::recursive_directory_iterator(revision.path())) {
+                const fs::path blob = resolve_blob_path(repo_path, entry.path(), true);
+                if (!blob.empty()) {
+                    still_referenced.insert(blob.string());
+                }
             }
         }
-        if (ec) {
-            break;
-        }
-    }
-    if (ec) {
-        LOG_WRN("%s: failed to scan remaining snapshots: %s\n", __func__, ec.message().c_str());
+    } catch (const fs::filesystem_error & e) {
+        LOG_WRN("%s: failed to scan remaining snapshots: %s\n", __func__, e.code().message().c_str());
         return removed;
     }
 
