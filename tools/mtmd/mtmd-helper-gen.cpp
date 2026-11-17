@@ -1189,18 +1189,14 @@ public:
         }
         auto & seg = segments[n_encoded];
         const int n = (int) seg.tokens.size();
-        llama_batch batch = llama_batch_init(n, 0, 1);
-        batch.n_tokens = n;
-        for (int i = 0; i < n; ++i) {
-            batch.token[i]     = seg.tokens[i];
-            batch.pos[i]       = i;
-            batch.n_seq_id[i]  = 1;
-            batch.seq_id[i][0] = seq_id;
-            batch.logits[i]    = true;
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        if (!batch_set_tokens(batch.get(), seg.tokens.data(), n, 0, seq_id)) {
+            return -1;
         }
-        const int ret = llama_decode(lctx, batch);
-        llama_batch_free(batch);
-        if (ret != 0) {
+        for (int i = 0; i < n; ++i) {
+            llama_batch_ext_set_output_embd(batch.get(), i, true);
+        }
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
             LOG_ERR("mtmd_helper_gen_audio: kokoro backbone failed\n");
             return -1;
         }
