@@ -276,23 +276,44 @@ static inline HVX_Vector rms_norm_sum_sq_f16(const uint8_t * restrict src, uint3
     const uint32_t nvec = num_elems / VLEN_FP16;
     const uint32_t nloe = num_elems % VLEN_FP16;
 
+#if __HVX_ARCH__ >= 79
+    HVX_VectorPair sum_p = Q6_W_vzero();
+
+    #pragma unroll(4)
     for (uint32_t i = 0; i < nvec; i++) {
-        HVX_VectorPair p = hvx_vec_f16_to_f32(v_src[i]);
-        HVX_Vector v0 = Q6_V_lo_W(p);
-        HVX_Vector v1 = Q6_V_hi_W(p);
-        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v0, v0));
-        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+        HVX_Vector v = v_src[i];
+        sum_p = Q6_Wsf_vmpyacc_WsfVhfVhf(sum_p, v, v);
     }
 
     if (nloe > 0) {
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * sizeof(_Float16));
-        HVX_Vector masked = Q6_V_vand_QV(bmask, v_src[nvec]);
-        HVX_VectorPair p = hvx_vec_f16_to_f32(masked);
-        HVX_Vector v0 = Q6_V_lo_W(p);
-        HVX_Vector v1 = Q6_V_hi_W(p);
-        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v0, v0));
-        sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vmpy_VsfVsf(v1, v1));
+        HVX_Vector v = Q6_V_vand_QV(bmask, v_src[nvec]);
+        sum_p = Q6_Wsf_vmpyacc_WsfVhfVhf(sum_p, v, v);
     }
+
+    sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vadd_VsfVsf(Q6_V_lo_W(sum_p), Q6_V_hi_W(sum_p)));
+#else
+    HVX_Vector sum0 = Q6_V_vzero();
+    HVX_Vector sum1 = Q6_V_vzero();
+
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nvec; i++) {
+        HVX_Vector v = v_src[i];
+        HVX_VectorPair sq = Q6_Wqf32_vmpy_VhfVhf(v, v);
+        sum0 = Q6_Vqf32_vadd_Vqf32Vqf32(sum0, Q6_V_lo_W(sq));
+        sum1 = Q6_Vqf32_vadd_Vqf32Vqf32(sum1, Q6_V_hi_W(sq));
+    }
+
+    if (nloe > 0) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * sizeof(_Float16));
+        HVX_Vector v = Q6_V_vand_QV(bmask, v_src[nvec]);
+        HVX_VectorPair sq = Q6_Wqf32_vmpy_VhfVhf(v, v);
+        sum0 = Q6_Vqf32_vadd_Vqf32Vqf32(sum0, Q6_V_lo_W(sq));
+        sum1 = Q6_Vqf32_vadd_Vqf32Vqf32(sum1, Q6_V_hi_W(sq));
+    }
+
+    sum_v = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, Q6_Vqf32_vadd_Vqf32Vqf32(sum0, sum1));
+#endif
 
     return sum_v;
 }
@@ -377,6 +398,295 @@ static inline void rms_store_tail_f32(uint8_t * restrict dst, uint32_t i, uint32
     }
 }
 
+static inline HVX_Vector rms_clamp_pack_f16_shuff(HVX_Vector r0, HVX_Vector r1, HVX_Vector f16_min, HVX_Vector f16_max) {
+    r0 = Q6_Vsf_vmin_VsfVsf(Q6_Vsf_vmax_VsfVsf(r0, f16_min), f16_max);
+    r1 = Q6_Vsf_vmin_VsfVsf(Q6_Vsf_vmax_VsfVsf(r1, f16_min), f16_max);
+    return hvx_vec_f32_to_f16_shuff(r0, r1);
+}
+
+static inline HVX_Vector rms_clamp_pack_f16(HVX_Vector r0, HVX_Vector r1, HVX_Vector f16_min, HVX_Vector f16_max) {
+    return Q6_Vh_vdeal_Vh(rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max));
+}
+
+static inline void rms_norm_apply_row_f16(const uint8_t * restrict src,
+                                          uint8_t * restrict dst,
+                                          uint32_t n,
+                                          HVX_Vector scale_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const uint32_t nvec = n / VLEN_FP16;
+    const uint32_t nloe = n % VLEN_FP16;
+
+    const HVX_Vector one_hf  = hvx_vec_splat_f16(1.0);
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+#if __HVX_ARCH__ < 79
+    const HVX_Vector scale_qf = Q6_Vqf32_vadd_VsfVsf(scale_v, Q6_V_vzero());
+#endif
+
+    #pragma unroll(4)
+    for (uint32_t k = 0; k < nvec; k++) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sp = Q6_Wsf_vmpy_VhfVhf(v_src[k], one_hf);
+        HVX_Vector     r0 = Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sp), scale_v);
+        HVX_Vector     r1 = Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sp), scale_v);
+#else
+        HVX_VectorPair sp = Q6_Wqf32_vmpy_VhfVhf(v_src[k], one_hf);
+        HVX_Vector     r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sp), scale_qf));
+        HVX_Vector     r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sp), scale_qf));
+#endif
+        v_dst[k] = rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max);
+    }
+
+    if (nloe > 0) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sp = Q6_Wsf_vmpy_VhfVhf(v_src[nvec], one_hf);
+        HVX_Vector     r0 = Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sp), scale_v);
+        HVX_Vector     r1 = Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sp), scale_v);
+#else
+        HVX_VectorPair sp = Q6_Wqf32_vmpy_VhfVhf(v_src[nvec], one_hf);
+        HVX_Vector     r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sp), scale_qf));
+        HVX_Vector     r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sp), scale_qf));
+#endif
+        HVX_Vector packed = rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max);
+        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(_Float16), packed);
+    }
+}
+
+static inline void rms_norm_apply_row_mul_f16_f32(const uint8_t * restrict src,
+                                                  const uint8_t * restrict weight,
+                                                  uint8_t * restrict dst,
+                                                  uint32_t n,
+                                                  HVX_Vector scale_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    const HVX_Vector * restrict v_w   = (const HVX_Vector *) weight;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const uint32_t nvec = n / VLEN_FP16;
+    const uint32_t nloe = n % VLEN_FP16;
+
+    const HVX_Vector one_hf  = hvx_vec_splat_f16(1.0);
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+
+    #pragma unroll(2)
+    for (uint32_t k = 0; k < nvec; k++) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sp  = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[k]), one_hf);
+        HVX_Vector     ws0 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * k + 0], scale_v);
+        HVX_Vector     ws1 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * k + 1], scale_v);
+        HVX_Vector     r0  = Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sp), ws0);
+        HVX_Vector     r1  = Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sp), ws1);
+#else
+        HVX_VectorPair sp  = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[k]), one_hf);
+        HVX_Vector     ws0 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * k + 0], scale_v);
+        HVX_Vector     ws1 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * k + 1], scale_v);
+        HVX_Vector     r0  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sp), ws0));
+        HVX_Vector     r1  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sp), ws1));
+#endif
+        v_dst[k] = rms_clamp_pack_f16(r0, r1, f16_min, f16_max);
+    }
+
+    if (nloe > 0) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sp  = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[nvec]), one_hf);
+        HVX_Vector     ws0 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * nvec + 0], scale_v);
+        HVX_Vector     r0  = Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sp), ws0);
+        HVX_Vector     r1  = Q6_V_vzero();
+        if (nloe > 32) {
+            HVX_Vector ws1 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * nvec + 1], scale_v);
+            r1 = Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sp), ws1);
+        }
+#else
+        HVX_VectorPair sp  = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[nvec]), one_hf);
+        HVX_Vector     ws0 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * nvec + 0], scale_v);
+        HVX_Vector     r0  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sp), ws0));
+        HVX_Vector     r1  = Q6_V_vzero();
+        if (nloe > 32) {
+            HVX_Vector ws1 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * nvec + 1], scale_v);
+            r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sp), ws1));
+        }
+#endif
+        HVX_Vector packed = rms_clamp_pack_f16(r0, r1, f16_min, f16_max);
+        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(_Float16), packed);
+    }
+}
+
+static inline void rms_norm_apply_row_mul_f16_f16(const uint8_t * restrict src,
+                                                  const uint8_t * restrict weight,
+                                                  uint8_t * restrict dst,
+                                                  uint32_t n,
+                                                  HVX_Vector scale_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    const HVX_Vector * restrict v_w   = (const HVX_Vector *) weight;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const uint32_t nvec = n / VLEN_FP16;
+    const uint32_t nloe = n % VLEN_FP16;
+
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+#if __HVX_ARCH__ < 79
+    const HVX_Vector scale_qf = Q6_Vqf32_vadd_VsfVsf(scale_v, Q6_V_vzero());
+#endif
+
+    #pragma unroll(4)
+    for (uint32_t k = 0; k < nvec; k++) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sw = Q6_Wsf_vmpy_VhfVhf(v_src[k], v_w[k]);
+        HVX_Vector     r0 = Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sw), scale_v);
+        HVX_Vector     r1 = Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sw), scale_v);
+#else
+        HVX_VectorPair sw = Q6_Wqf32_vmpy_VhfVhf(v_src[k], v_w[k]);
+        HVX_Vector     r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sw), scale_qf));
+        HVX_Vector     r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sw), scale_qf));
+#endif
+        v_dst[k] = rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max);
+    }
+
+    if (nloe > 0) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sw = Q6_Wsf_vmpy_VhfVhf(v_src[nvec], v_w[nvec]);
+        HVX_Vector     r0 = Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sw), scale_v);
+        HVX_Vector     r1 = Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sw), scale_v);
+#else
+        HVX_VectorPair sw = Q6_Wqf32_vmpy_VhfVhf(v_src[nvec], v_w[nvec]);
+        HVX_Vector     r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sw), scale_qf));
+        HVX_Vector     r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sw), scale_qf));
+#endif
+        HVX_Vector packed = rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max);
+        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(_Float16), packed);
+    }
+}
+
+static inline void rms_norm_apply_row_mul_add_f16_f32_f16(const uint8_t * restrict src,
+                                                          const uint8_t * restrict weight,
+                                                          const uint8_t * restrict add,
+                                                          uint8_t * restrict dst,
+                                                          uint32_t n,
+                                                          HVX_Vector scale_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    const HVX_Vector * restrict v_w   = (const HVX_Vector *) weight;
+    const HVX_Vector * restrict v_add = (const HVX_Vector *) add;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const uint32_t nvec = n / VLEN_FP16;
+    const uint32_t nloe = n % VLEN_FP16;
+
+    const HVX_Vector one_hf  = hvx_vec_splat_f16(1.0);
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+
+    #pragma unroll(2)
+    for (uint32_t k = 0; k < nvec; k++) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sp  = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[k]), one_hf);
+        HVX_VectorPair ap  = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_add[k]), one_hf);
+        HVX_Vector     ws0 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * k + 0], scale_v);
+        HVX_Vector     ws1 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * k + 1], scale_v);
+        HVX_Vector     r0  = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sp), ws0), Q6_V_lo_W(ap));
+        HVX_Vector     r1  = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sp), ws1), Q6_V_hi_W(ap));
+#else
+        HVX_VectorPair sp  = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[k]), one_hf);
+        HVX_VectorPair ap  = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_add[k]), one_hf);
+        HVX_Vector     ws0 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * k + 0], scale_v);
+        HVX_Vector     ws1 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * k + 1], scale_v);
+        HVX_Vector     m0  = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sp), ws0);
+        HVX_Vector     m1  = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sp), ws1);
+        HVX_Vector     r0  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m0, Q6_V_lo_W(ap)));
+        HVX_Vector     r1  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m1, Q6_V_hi_W(ap)));
+#endif
+        v_dst[k] = rms_clamp_pack_f16(r0, r1, f16_min, f16_max);
+    }
+
+    if (nloe > 0) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sp  = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[nvec]), one_hf);
+        HVX_VectorPair ap  = Q6_Wsf_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_add[nvec]), one_hf);
+        HVX_Vector     ws0 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * nvec + 0], scale_v);
+        HVX_Vector     r0  = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sp), ws0), Q6_V_lo_W(ap));
+        HVX_Vector     r1  = Q6_V_vzero();
+        if (nloe > 32) {
+            HVX_Vector ws1 = Q6_Vsf_vmpy_VsfVsf(v_w[2 * nvec + 1], scale_v);
+            r1 = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sp), ws1), Q6_V_hi_W(ap));
+        }
+#else
+        HVX_VectorPair sp  = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_src[nvec]), one_hf);
+        HVX_VectorPair ap  = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(v_add[nvec]), one_hf);
+        HVX_Vector     ws0 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * nvec + 0], scale_v);
+        HVX_Vector     m0  = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sp), ws0);
+        HVX_Vector     r0  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m0, Q6_V_lo_W(ap)));
+        HVX_Vector     r1  = Q6_V_vzero();
+        if (nloe > 32) {
+            HVX_Vector ws1 = Q6_Vqf32_vmpy_VsfVsf(v_w[2 * nvec + 1], scale_v);
+            HVX_Vector m1  = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sp), ws1);
+            r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m1, Q6_V_hi_W(ap)));
+        }
+#endif
+        HVX_Vector packed = rms_clamp_pack_f16(r0, r1, f16_min, f16_max);
+        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(_Float16), packed);
+    }
+}
+
+static inline void rms_norm_apply_row_mul_add_f16_f16_f16(const uint8_t * restrict src,
+                                                          const uint8_t * restrict weight,
+                                                          const uint8_t * restrict add,
+                                                          uint8_t * restrict dst,
+                                                          uint32_t n,
+                                                          HVX_Vector scale_v) {
+    const HVX_Vector * restrict v_src = (const HVX_Vector *) src;
+    const HVX_Vector * restrict v_w   = (const HVX_Vector *) weight;
+    const HVX_Vector * restrict v_add = (const HVX_Vector *) add;
+    HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
+
+    const uint32_t nvec = n / VLEN_FP16;
+    const uint32_t nloe = n % VLEN_FP16;
+
+    const HVX_Vector one_hf  = hvx_vec_splat_f16(1.0);
+    const HVX_Vector f16_max = hvx_vec_splat_f32(65504.0f);
+    const HVX_Vector f16_min = hvx_vec_splat_f32(-65504.0f);
+#if __HVX_ARCH__ < 79
+    const HVX_Vector scale_qf = Q6_Vqf32_vadd_VsfVsf(scale_v, Q6_V_vzero());
+#endif
+
+    #pragma unroll(2)
+    for (uint32_t k = 0; k < nvec; k++) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sw = Q6_Wsf_vmpy_VhfVhf(v_src[k], v_w[k]);
+        HVX_VectorPair ap = Q6_Wsf_vmpy_VhfVhf(v_add[k], one_hf);
+        HVX_Vector     r0 = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sw), scale_v), Q6_V_lo_W(ap));
+        HVX_Vector     r1 = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sw), scale_v), Q6_V_hi_W(ap));
+#else
+        HVX_VectorPair sw = Q6_Wqf32_vmpy_VhfVhf(v_src[k], v_w[k]);
+        HVX_VectorPair ap = Q6_Wqf32_vmpy_VhfVhf(v_add[k], one_hf);
+        HVX_Vector     m0 = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sw), scale_qf);
+        HVX_Vector     m1 = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sw), scale_qf);
+        HVX_Vector     r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m0, Q6_V_lo_W(ap)));
+        HVX_Vector     r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m1, Q6_V_hi_W(ap)));
+#endif
+        v_dst[k] = rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max);
+    }
+
+    if (nloe > 0) {
+#if __HVX_ARCH__ >= 79
+        HVX_VectorPair sw = Q6_Wsf_vmpy_VhfVhf(v_src[nvec], v_w[nvec]);
+        HVX_VectorPair ap = Q6_Wsf_vmpy_VhfVhf(v_add[nvec], one_hf);
+        HVX_Vector     r0 = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_lo_W(sw), scale_v), Q6_V_lo_W(ap));
+        HVX_Vector     r1 = Q6_Vsf_vadd_VsfVsf(Q6_Vsf_vmpy_VsfVsf(Q6_V_hi_W(sw), scale_v), Q6_V_hi_W(ap));
+#else
+        HVX_VectorPair sw = Q6_Wqf32_vmpy_VhfVhf(v_src[nvec], v_w[nvec]);
+        HVX_VectorPair ap = Q6_Wqf32_vmpy_VhfVhf(v_add[nvec], one_hf);
+        HVX_Vector     m0 = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(sw), scale_qf);
+        HVX_Vector     m1 = Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(sw), scale_qf);
+        HVX_Vector     r0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m0, Q6_V_lo_W(ap)));
+        HVX_Vector     r1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(m1, Q6_V_hi_W(ap)));
+#endif
+        HVX_Vector packed = rms_clamp_pack_f16_shuff(r0, r1, f16_min, f16_max);
+        hvx_vec_store_a(&v_dst[nvec], nloe * sizeof(_Float16), packed);
+    }
+}
+
 static __attribute__((noinline)) void rms_norm_apply_row(const uint8_t * restrict src,
                                                          const uint8_t * restrict weight,
                                                          const uint8_t * restrict add,
@@ -388,6 +698,29 @@ static __attribute__((noinline)) void rms_norm_apply_row(const uint8_t * restric
     const bool src1_f16 = uctx->src1_f16;
     const bool src2_f16 = uctx->src2_f16;
     const bool dst_f16  = uctx->dst_f16;
+
+    if (src0_f16 && dst_f16) {
+        if (!weight && !add) {
+            rms_norm_apply_row_f16(src, dst, n, scale_v);
+            return;
+        }
+        if (weight && !add) {
+            if (src1_f16) {
+                rms_norm_apply_row_mul_f16_f16(src, weight, dst, n, scale_v);
+            } else {
+                rms_norm_apply_row_mul_f16_f32(src, weight, dst, n, scale_v);
+            }
+            return;
+        }
+        if (weight && add && src2_f16) {
+            if (src1_f16) {
+                rms_norm_apply_row_mul_add_f16_f16_f16(src, weight, add, dst, n, scale_v);
+            } else {
+                rms_norm_apply_row_mul_add_f16_f32_f16(src, weight, add, dst, n, scale_v);
+            }
+            return;
+        }
+    }
 
     uint32_t i = 0;
     for (; i + 64 <= n; i += 64) {
