@@ -399,9 +399,10 @@ endif()
 # libmtmd
 llama_build_and_test(test-mtmd-c-api.c  LABEL behavior  LINK mtmd)
 
-# the internals of the engine (src/clip) are exported by libllama on these platforms only
+llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd llama-common)
+# the internals of the engine (src/clip) are exported by libllama on these platforms only, the other cases run everywhere
 if (NOT WIN32)
-    llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd llama-common)
+    target_compile_definitions(test-mtmd-impl PRIVATE TEST_CLIP_INTERNALS)
     target_include_directories(test-mtmd-impl PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/ggml/include)
 endif()
 

@@ -2,10 +2,13 @@
 
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
+// the internals of the engine (src/clip) are exported by libllama on some platforms only, see tests/CMakeLists.txt
+#ifdef TEST_CLIP_INTERNALS
 #include "../src/clip/clip-audio.h"
 #include "../src/clip/clip-subcontext.h"
-#include "mtmd-helper.h"
 #include "../src/clip/clip-image.h"
+#endif // TEST_CLIP_INTERNALS
+#include "mtmd-helper.h"
 #include "mtmd-internal.h"
 #include "models/models.h"
 
@@ -58,6 +61,7 @@ struct test_registry {
     static void name(testing & t)
 
 
+#ifdef TEST_CLIP_INTERNALS
 //
 // mtmd_image
 //
@@ -327,6 +331,7 @@ MAKE_TEST(test_image_preprocessor_inkling2v) {
     t.assert_equal("capped width aligned", 0, capped.entries[0].nx() % 40);
     t.assert_equal("capped height aligned", 0, capped.entries[0].ny() % 40);
 }
+#endif // TEST_CLIP_INTERNALS
 
 //
 // mtmd temporal merge
@@ -399,6 +404,7 @@ MAKE_TEST(test_temporal_merge_grouping) {
 // mtmd_helper video
 //
 
+#ifdef TEST_CLIP_INTERNALS
 static mtmd_video_frame_size_fn frame_size_of(const clip_image_preprocessor & preproc) {
     return [&preproc](int32_t n, int32_t sw, int32_t sh, int32_t & w, int32_t & h) {
         clip_image_size size;
@@ -436,6 +442,7 @@ MAKE_TEST(test_video_config) {
         t.assert_equal(name + " frame size", image_size_to_str(expected_size), image_size_to_str({ cfg.frame_width, cfg.frame_height }));
     }
 }
+#endif // TEST_CLIP_INTERNALS
 
 // n_frames source frames, each one starts with its index
 struct test_video_source : mtmd_helper_video_seq {
@@ -488,6 +495,7 @@ static std::string video_sequence_to_str(testing & t, mtmd_helper_video_seq & vi
     return out;
 }
 
+#ifdef TEST_CLIP_INTERNALS
 MAKE_TEST(test_video_sequence_qwen3vl) {
     clip_hparams hparams;
     hparams.patch_size = 16;
@@ -541,6 +549,7 @@ MAKE_TEST(test_video_sequence_lfm3_omni) {
         std::string("<0.2 seconds>[0][1]{100}<1.2 seconds>[2][3]{100}<2.2 seconds>[4][5]{100}<3.2 seconds>[6][7]{100}<4.0 seconds>[8]{50}"),
         video_sequence_to_str(t, video));
 }
+#endif // TEST_CLIP_INTERNALS
 
 // a source that gives every frame: the frames of fps_target are picked by index
 MAKE_TEST(test_video_sequence_sample_by_index) {
@@ -565,6 +574,7 @@ MAKE_TEST(test_video_sequence_sample_by_index) {
     }
 }
 
+#ifdef TEST_CLIP_INTERNALS
 //
 // mtmd_audio
 //
@@ -823,6 +833,7 @@ MAKE_TEST(test_audio_log_mel_blocks) {
     }
     t.assert_true("max_diff = " + std::to_string(max_diff), max_diff < 1e-5f);
 }
+#endif // TEST_CLIP_INTERNALS
 
 //
 // mtmd_helper_resampler
