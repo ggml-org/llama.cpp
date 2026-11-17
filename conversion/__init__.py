@@ -78,6 +78,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
+    "DomynEdgeForCausalLM": "domynedge",
     "Dots1ForCausalLM": "dots1",
     "Dots3NoteForCausalLM": "dots3",
     "Dots3NoteForConditionalGeneration": "dots3",

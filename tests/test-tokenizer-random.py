@@ -80,6 +80,7 @@ class LibLlamaModel:
             raise RuntimeError("error: failed to load model '%s'" % path_model)
         if isinstance(cparams, dict):
             cparams = libllama.context_default_params(**cparams)
+        self.vocab = self.lib.llama_model_get_vocab(self.model)
         self.ctx = self.lib.llama_init_from_model(self.model, cparams)
         if not self.ctx:
             raise RuntimeError("error: failed to create context for model '%s'" % path_model)
@@ -101,7 +102,7 @@ class LibLlamaModel:
         num = self.lib.llama_tokenize(self.model, encoded_text, len(encoded_text), self.token_ids, len(self.token_ids), add_special, parse_special)
         while num < 0 and len(self.token_ids) < (16 << 20):
             self.token_ids = self.ffi.new("llama_token[]", -2 * num)
-            num = self.lib.llama_tokenize(self.model, encoded_text, len(encoded_text), self.token_ids, len(self.token_ids), add_special, parse_special)
+            num = self.lib.llama_tokenize(self.vocab, encoded_text, len(encoded_text), self.token_ids, len(self.token_ids), add_special, parse_special)
         return list(self.token_ids[0:num])
 
     def detokenize(self, ids: list[int], remove_special: bool = False, unparse_special: bool = False) -> str:
@@ -112,7 +113,7 @@ class LibLlamaModel:
         num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
         while num < 0 and len(self.text_buff) < (16 << 20):
             self.text_buff = self.ffi.new("uint8_t[]", -2 * num)
-            num = self.lib.llama_detokenize(self.model, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
+            num = self.lib.llama_detokenize(self.vocab, self.token_ids, len(ids), self.text_buff, len(self.text_buff), remove_special, unparse_special)
         return str(self.ffi.buffer(self.text_buff, num), encoding="utf-8", errors="replace")  # replace errors with '\uFFFD' # pyright: ignore[reportArgumentType]
 
 
