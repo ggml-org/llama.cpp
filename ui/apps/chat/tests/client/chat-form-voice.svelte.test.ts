@@ -34,10 +34,10 @@ function seed(audio: boolean, inputMode: VoiceInputMode = VoiceInputMode.AUTO) {
 	});
 }
 
-async function renderForm() {
+async function renderForm({ isLoading = false } = {}) {
 	const recorder = new FakeVoiceRecorder();
 	const state = $state({ files: [] as ChatUploadedFile[], sent: 0, value: '' });
-	const screen = render(ChatFormVoiceTestWrapper, { state, voiceRecorder: recorder });
+	const screen = render(ChatFormVoiceTestWrapper, { isLoading, state, voiceRecorder: recorder });
 
 	await tick();
 
@@ -76,6 +76,36 @@ describe('the microphone', () => {
 			.toBeEnabled();
 	});
 
+	it('stays beside the send button once the message has text, and dictates more', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen, state, type } = await renderForm();
+
+		type(0, 'Hello');
+		await expect.poll(() => state.value).toBe('Hello');
+		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(() => recorder.status).toBe('recording');
+		recorder.say('there');
+		await expect.poll(() => state.value).toContain('there');
+		expect(state.value).toContain('Hello');
+	});
+
+	it('stays beside the stop button while a reply streams', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, screen } = await renderForm({ isLoading: true });
+
+		await expect.element(screen.getByRole('button', { exact: true, name: 'Stop' })).toBeEnabled();
+
+		const mic = screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last();
+
+		await expect.element(mic).toBeEnabled();
+		await mic.click();
+		await expect.poll(() => recorder.status).toBe('recording');
+	});
+
 	it('leaves the send button on a single-model server without audio input', async () => {
 		seed(false);
 
@@ -83,6 +113,18 @@ describe('the microphone', () => {
 
 		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
 		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.voiceMessage);
+	});
+
+	it('does not stand beside the send button without voice input', async () => {
+		seed(false);
+
+		const { screen, state, type } = await renderForm();
+
+		type(0, 'Hello');
+		await expect.poll(() => state.value).toBe('Hello');
+		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.voiceMessage);
+		expect(screen.container.innerHTML).not.toContain(VOICE_MODE_MESSAGE.dictate);
 	});
 });
 

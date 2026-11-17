@@ -89,6 +89,12 @@
 	let shouldShowRecordButton = $derived(
 		!!voice?.show && !canSend && !hasAudioAttachments && currentConfig.autoMicOnEmpty
 	);
+	// while a reply streams or the message has text, the microphone stays at hand beside the
+	// stop or send button, so more can be dictated without clearing the message first
+	let showStop = $derived(isLoading && !canSend);
+	let shouldShowRecordBeside = $derived(
+		!!voice?.show && !voice.unavailableReason && !hasAudioAttachments && (showStop || canSend)
+	);
 
 	let selectorModelRef: ModelsSelector | undefined = $state(undefined);
 
@@ -182,7 +188,18 @@
 		</Button>
 	{/if}
 
-	{#if isLoading && !canSend}
+	{#if shouldShowRecordBeside}
+		<ChatFormActionRecord
+			action={voice?.action}
+			{disabled}
+			hint={voice?.hint}
+			{micWarning}
+			{onMicClick}
+			secondary
+		/>
+	{/if}
+
+	{#if showStop}
 		<Button
 			class="group size-8 rounded-full p-0 max-md:size-9 hover:bg-destructive/10!"
 			onclick={onStop}

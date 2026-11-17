@@ -17,6 +17,8 @@
 		micWarning?: string | null;
 		/** Why no model can take the recording; disables the button. */
 		unavailableReason?: string | null;
+		/** A quieter button, beside the main one (stop or send). */
+		secondary?: boolean;
 		onMicClick?: () => void;
 	}
 
@@ -29,6 +31,7 @@
 		isRecording = false,
 		micWarning = null,
 		onMicClick,
+		secondary = false,
 		unavailableReason = null
 	}: Props = $props();
 
@@ -73,7 +76,7 @@
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<Button
-				class="size-8 max-md:size-9 rounded-full p-0 {isRecording
+				class="group size-8 max-md:size-9 rounded-full p-0 {isRecording
 					? 'matte-orb orb-danger text-white! hover:bg-transparent'
 					: showWarning
 						? 'bg-surface-warning text-fg-warning hover:bg-surface-warning'
@@ -82,7 +85,7 @@
 				onclick={handleClick}
 				onpointerdown={handlePointerDown}
 				type="button"
-				variant={isRecording || showWarning ? 'ghost' : 'default'}
+				variant={isRecording || showWarning || secondary ? 'ghost' : 'default'}
 			>
 				<span class="sr-only"
 					>{isRecording
@@ -96,6 +99,8 @@
 					<Square class="{ICON_CLASS_DEFAULT} fill-white" />
 				{:else if showWarning}
 					<MicOff class={ICON_CLASS_DEFAULT} />
+				{:else if secondary}
+					<Mic class="{ICON_CLASS_DEFAULT} stroke-muted-foreground group-hover:stroke-foreground" />
 				{:else}
 					<Mic class={ICON_CLASS_DEFAULT} />
 				{/if}
