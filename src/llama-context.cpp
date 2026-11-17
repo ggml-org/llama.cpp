@@ -2197,11 +2197,6 @@ int llama_context::gen_engine(const llama_batch_ext & batch_inp) {
             LLAMA_LOG_ERROR("%s: could not create the gen state of sequence %d\n", __func__, e.seq_id);
             return -2;
         }
-        if (getenv("CLIP_TRACE") && e.inp.codes) {
-            int32_t mn = INT32_MAX, mx = INT32_MIN;
-            for (size_t k = 0; k < e.inp.n_codes; ++k) { mn = std::min(mn, e.inp.codes[k]); mx = std::max(mx, e.inp.codes[k]); }
-            LLAMA_LOG_WARN("gen_engine: stage %d n_codes %zu range [%d, %d] embd %p\n", (int) e.inp.type, e.inp.n_codes, mn, mx, (const void *) e.inp.embd);
-        }
         llama_gen_out out {};
         int32_t res;
         try {
