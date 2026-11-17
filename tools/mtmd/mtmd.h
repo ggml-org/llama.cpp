@@ -218,6 +218,8 @@ MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool merge
 // on a lazy bitmap: the expanded chunks are one video, wrapped by the model's video begin/end tokens
 //                   with MTMD_VIDEO_TEMPLATE_LFM3_OMNI, its audio bitmaps are the pieces of one soundtrack, in order
 MTMD_API void         mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video);
+// transcript of an audio bitmap is optional, some TTS models use it to clone the speaker voice more closely (--tts-speaker-text)
+MTMD_API void         mtmd_bitmap_set_transcript(mtmd_bitmap * bitmap, const char * transcript);
 
 // mtmd_bitmap lazy
 //

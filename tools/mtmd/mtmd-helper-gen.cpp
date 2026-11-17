@@ -201,6 +201,7 @@ public:
         seq_id = 0;
         pos = 0;
         codes_buf.clear();
+        next_window_frames = window_frames;
         gen_state.reset();
         audio_pcm.clear();
         overlay.clear();
@@ -232,12 +233,21 @@ public:
 
         std::vector<float> speaker_embd;
         if (inp->speaker_ref) {
+            mtmd_bitmap_set_transcript(inp->speaker_ref, inp->speaker_ref_text);
             if (!encode_speaker(inp->speaker_ref, speaker_embd)) {
                 return 1;
             }
         }
 
         const int n_e = n_embd;
+
+        // cloning with the reference transcript continues the reference speech, see generate_icl_prompt() upstream
+        const bool   has_ref_text = inp->speaker_ref_text && inp->speaker_ref_text[0];
+        const size_t n_ref_frames = speaker_embd.empty() ? 0 : speaker_embd.size() / (size_t) n_e - 1;
+        const bool   icl          = has_ref_text && n_ref_frames > 0;
+        if (has_ref_text && !icl) {
+            LOG_WRN("mtmd_helper_gen_audio: no reference codes (mmproj without reference encoder, or clip too long), cloning from the speaker embedding only\n");
+        }
         auto row = [&](llama_token t) {
             return std::vector<float>(tok_embd.begin() + (size_t) t * n_e,
                                        tok_embd.begin() + (size_t) (t + 1) * n_e);
@@ -256,14 +266,31 @@ public:
         // upstream chat wrap, then slices: [0:3] role, [3:-5] utterance body
         const std::string full = "<|im_start|>assistant\n" + std::string(inp->prompt, inp->prompt_len) +
                                   "<|im_end|>\n<|im_start|>assistant\n";
-        std::vector<llama_token> ids(full.size() + 16);
-        int n_ids = llama_tokenize(vocab, full.c_str(), (int32_t) full.size(), ids.data(), (int32_t) ids.size(),
-                                   false, true);
+        auto tokenize = [&](const std::string & text) {
+            std::vector<llama_token> tokens(text.size() + 16);
+            const int n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), tokens.data(), (int32_t) tokens.size(),
+                                         false, true);
+            tokens.resize(n < 0 ? 0 : (size_t) n);
+            return tokens;
+        };
+
+        std::vector<llama_token> ids = tokenize(full);
+        const int n_ids = (int) ids.size();
         if (n_ids < 8) {
             LOG_ERR("mtmd_helper_gen_audio: tokenization failed\n");
             return 1;
         }
-        ids.resize((size_t) n_ids);
+
+        // the reference transcript goes before the text, with the same chat wrap minus the next turn: slices [3:-2]
+        std::vector<llama_token> ref_ids;
+        if (icl) {
+            ref_ids = tokenize("<|im_start|>assistant\n" + std::string(inp->speaker_ref_text) + "<|im_end|>\n");
+            if (ref_ids.size() < 6) {
+                LOG_ERR("mtmd_helper_gen_audio: tokenization of the reference text failed\n");
+                return 1;
+            }
+            ref_ids = std::vector<llama_token>(ref_ids.begin() + 3, ref_ids.end() - 2);
+        }
 
         std::vector<std::vector<float>> prompt;
         for (int i = 0; i < 3; i++) prompt.push_back(row(ids[(size_t) i]));
@@ -273,9 +300,17 @@ public:
         prompt.push_back(sum_row(tts_pad, c_think_e));
         if (!speaker_embd.empty()) prompt.push_back(sum_vec(tts_pad, speaker_embd));
         prompt.push_back(sum_row(tts_bos, codec_pad));
+        for (llama_token t : ref_ids) prompt.push_back(sum_row(t, codec_pad));
         for (int i = 3; i < n_ids - 5; i++) prompt.push_back(sum_row(ids[(size_t) i], codec_pad));
         prompt.push_back(sum_row(tts_eos, codec_pad));
         prompt.push_back(sum_row(tts_pad, codec_bos));
+        // the reference frames, as if the talker had just spoken them
+        if (icl) {
+            for (size_t f = 0; f < n_ref_frames; f++) {
+                const float * frame = speaker_embd.data() + (f + 1) * (size_t) n_e;
+                prompt.push_back(sum_vec(tts_pad, std::vector<float>(frame, frame + n_e)));
+            }
+        }
 
         n_prompt = (int) prompt.size();
 
@@ -302,6 +337,13 @@ public:
         stream = inp->stream;
         if (!init_gen_state(inp->seed)) {
             return 1;
+        }
+        // the decoder continues from the reference codes of the encode above
+        if (icl) {
+            if (mtmd_gen_state_set_ref(mctx, gen_state.get()) != 0) {
+                return 1;
+            }
+            next_window_frames = window_frames - std::min(n_ref_frames, window_frames - 1);
         }
 
         // the prompt above holds the whole text stream up to tts_eos, so every generated
@@ -366,7 +408,7 @@ public:
         }
 
         codes_buf.insert(codes_buf.end(), out.codes, out.codes + out.n_codes);
-        if (out.n_codes > 0 && codes_buf.size() / out.n_codes >= window_frames) {
+        if (out.n_codes > 0 && codes_buf.size() / out.n_codes >= next_window_frames) {
             if (!flush_gen_wav()) {
                 return 1;
             }
@@ -502,6 +544,7 @@ private:
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);
         codes_buf.clear();
+        next_window_frames = window_frames;
         return true;
     }
 
@@ -534,6 +577,7 @@ private:
     int32_t  top_k = 50;
     float    top_p = 1.0f;
     std::vector<int32_t> codes_buf;
+    size_t next_window_frames = window_frames; // the first window leaves room for the reference codes
     std::vector<float>   audio_pcm;
     std::vector<float> overlay;
     std::vector<float> h_state_buf;

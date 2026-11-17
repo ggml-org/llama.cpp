@@ -1360,6 +1360,21 @@ class MODEL_TENSOR(IntEnum):
     A_CODEC_VQ_FIRST_CB    = auto() # semantic VQ codebook, l2-normalized
     A_CODEC_VQ_REST_IN     = auto() # residual VQ input projections, merged 3D
     A_CODEC_VQ_REST_CB     = auto() # residual VQ codebooks, l2-normalized, merged 3D
+    # qwen3tts reference encoder: raw PCM -> RVQ codes, the SEANet stack and the downsample conv use A_ENC_*
+    A_GEN_ENC_TFM_ATTN_NORM        = auto()
+    A_GEN_ENC_TFM_ATTN_Q           = auto()
+    A_GEN_ENC_TFM_ATTN_K           = auto()
+    A_GEN_ENC_TFM_ATTN_V           = auto()
+    A_GEN_ENC_TFM_ATTN_OUT         = auto()
+    A_GEN_ENC_TFM_ATTN_SCALE       = auto()
+    A_GEN_ENC_TFM_FFN_NORM         = auto()
+    A_GEN_ENC_TFM_FFN_UP           = auto()
+    A_GEN_ENC_TFM_FFN_DOWN         = auto()
+    A_GEN_ENC_TFM_FFN_SCALE        = auto()
+    A_GEN_ENC_QUANT_FIRST_IN       = auto()
+    A_GEN_ENC_QUANT_FIRST_CB       = auto()
+    A_GEN_ENC_QUANT_REST_IN        = auto()
+    A_GEN_ENC_QUANT_REST_CB        = auto()
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
@@ -2323,6 +2338,20 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_CODEC_VQ_FIRST_CB:       "a.codec.vq.first.codebook",
     MODEL_TENSOR.A_CODEC_VQ_REST_IN:        "a.codec.vq.rest.in_proj",
     MODEL_TENSOR.A_CODEC_VQ_REST_CB:        "a.codec.vq.rest.codebook",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_NORM:   "a.gen.enc.tfm.blk.{bid}.ln1",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_Q:      "a.gen.enc.tfm.blk.{bid}.attn_q",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_K:      "a.gen.enc.tfm.blk.{bid}.attn_k",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_V:      "a.gen.enc.tfm.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_OUT:    "a.gen.enc.tfm.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_SCALE:  "a.gen.enc.tfm.blk.{bid}.ls1",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_NORM:    "a.gen.enc.tfm.blk.{bid}.ln2",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_UP:      "a.gen.enc.tfm.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_DOWN:    "a.gen.enc.tfm.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_GEN_ENC_TFM_FFN_SCALE:   "a.gen.enc.tfm.blk.{bid}.ls2",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_IN:  "a.gen.enc.quant.first.in_proj",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_CB:  "a.gen.enc.quant.first.codebook",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_REST_IN:   "a.gen.enc.quant.rest.in_proj",
+    MODEL_TENSOR.A_GEN_ENC_QUANT_REST_CB:   "a.gen.enc.quant.rest.codebook",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB:  "a.gen.wav.quant.first.codebook",
@@ -2778,6 +2807,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_CODEC_VQ_FIRST_CB,
         MODEL_TENSOR.A_CODEC_VQ_REST_IN,
         MODEL_TENSOR.A_CODEC_VQ_REST_CB,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_NORM,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_Q,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_K,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_V,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_OUT,
+        MODEL_TENSOR.A_GEN_ENC_TFM_ATTN_SCALE,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_NORM,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_UP,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_DOWN,
+        MODEL_TENSOR.A_GEN_ENC_TFM_FFN_SCALE,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_IN,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_FIRST_CB,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_REST_IN,
+        MODEL_TENSOR.A_GEN_ENC_QUANT_REST_CB,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB,

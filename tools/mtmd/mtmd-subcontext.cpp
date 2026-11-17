@@ -675,9 +675,9 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         set_input_attn_mask(mask);
     };
 
-    // rope positions and attention mask of the mimi transformers (pocket-tts).
+    // rope positions and attention mask of the mimi encoder transformer (pocket-tts, qwen3tts reference encoder).
     // the mask is causal with a sliding window, see _build_attention_mask() in the reference
-    auto set_pockettts_tfm_inputs = [&]() {
+    auto set_mimi_tfm_inputs = [&](int64_t max_samples) {
         const int64_t n_pos = ggml_nelements(get_inp_tensor("inp_pos"));
         GGML_ASSERT(n_pos > 0);
         std::vector<int32_t> positions((size_t) n_pos);
@@ -686,9 +686,13 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         }
         set_input_i32("inp_pos", positions);
 
-        // the preprocessor truncates the waveform to keep this mask bounded
-        const int64_t max_pos = (int64_t) mtmd_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate / 120;
-        GGML_ASSERT(n_pos <= max_pos && "pocket-tts speaker reference too long for a dense mask");
+        // the caller truncates the waveform to keep this mask bounded
+        int64_t hop = 1;
+        for (int32_t ratio : hparams.seanet_ratios) {
+            hop *= ratio;
+        }
+        const int64_t max_pos = (max_samples + hop - 1) / hop;
+        GGML_ASSERT(n_pos <= max_pos && "speaker reference too long for a dense mask");
 
         const int64_t context = hparams.mimi_tfm_context;
         std::vector<float> mask((size_t) n_pos * n_pos, -INFINITY);
@@ -1483,7 +1487,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             {
-                set_pockettts_tfm_inputs();
+                set_mimi_tfm_inputs((int64_t) mtmd_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate);
             } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
@@ -1887,6 +1891,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
+                if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
+                    set_mimi_tfm_inputs((int64_t) mtmd_hparams::qwen3tts_max_ref_seconds * hparams.audio_sample_rate);
+                    break;
+                }
                 if (params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
                     GGML_ASSERT(params->codes != nullptr);
 
@@ -2422,6 +2430,35 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     //
     // for audio gen models
     //
+
+    if (model.proj_type == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
+        GGML_ASSERT(params->out_codes && params->out_code_embd);
+
+        // frame-major codes, the layout of GEN_WAV's input
+        std::vector<std::vector<int32_t>> groups;
+        for (int g = 0; ; g++) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, ("out_ref_code_" + std::to_string(g)).c_str());
+            if (!t) {
+                break;
+            }
+            groups.emplace_back((size_t) ggml_nelements(t));
+            ggml_backend_tensor_get(t, groups.back().data(), 0, ggml_nbytes(t));
+        }
+        GGML_ASSERT(!groups.empty());
+        const size_t n_frames = groups[0].size();
+        params->out_codes->resize(n_frames * groups.size());
+        for (size_t f = 0; f < n_frames; f++) {
+            for (size_t g = 0; g < groups.size(); g++) {
+                (*params->out_codes)[f * groups.size() + g] = groups[g][f];
+            }
+        }
+
+        ggml_tensor * rows = ggml_graph_get_tensor(gf, "out_ref_rows");
+        GGML_ASSERT(rows && rows->type == GGML_TYPE_F32 && (size_t) rows->ne[1] == n_frames);
+        params->out_code_embd->resize((size_t) ggml_nelements(rows));
+        ggml_backend_tensor_get(rows, params->out_code_embd->data(), 0, ggml_nbytes(rows));
+        return true;
+    }
 
     if (model.proj_type == PROJECTOR_TYPE_CHATTERBOX && params->gen_process == MTMD_SUBCTX_GEN_PROCESS_TOKENIZE) {
         ggml_tensor * fsq = ggml_graph_get_tensor(gf, "out_fsq");

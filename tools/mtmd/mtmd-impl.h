@@ -252,6 +252,12 @@
 #define TN_A_ASP_ATTN  "a.asp_attn.%s"
 #define TN_A_ASP_TDNN  "a.asp_tdnn.%s"
 
+// qwen3tts reference encoder, the transformer blocks use the generic names with the "a.gen.enc.tfm" prefix
+#define TN_A_GEN_ENC_QUANT_FIRST_IN  "a.gen.enc.quant.first.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_FIRST_CB  "a.gen.enc.quant.first.codebook.%s"
+#define TN_A_GEN_ENC_QUANT_REST_IN   "a.gen.enc.quant.rest.in_proj.%s"
+#define TN_A_GEN_ENC_QUANT_REST_CB   "a.gen.enc.quant.rest.codebook.%s"
+
 // qwen3tts code_predictor
 #define TN_A_GEN_CODE_PROJ_IN  "a.gen.code.proj_in.%s"
 #define TN_A_GEN_CODE_EMBD     "a.gen.code.embd.%s"

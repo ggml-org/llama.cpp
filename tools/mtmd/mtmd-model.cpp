@@ -1075,6 +1075,14 @@ struct mtmd_model_loader {
                         // TODO: hardcoded for now, read from code_predictor_config instead
                         hparams.rope_theta = 1000000.0f;
 
+                        // reference encoder: mimi with the stride-2 downsample of the 12.5 Hz tokenizer
+                        // seanet ratios are [8,6,5,4] in the config, the encoder reverses them
+                        hparams.audio_sample_rate = 24000;
+                        hparams.seanet_ratios     = { 4, 5, 6, 8 };
+                        hparams.seanet_n_stage    = (int32_t) hparams.seanet_ratios.size();
+                        hparams.mimi_downsample   = 2;
+                        hparams.mimi_tfm_context  = 250;
+
                         // code2wav params
                         hparams.wav_tfm_n_layer      = 8;
                         hparams.wav_tfm_n_embd       = 512;
@@ -2826,6 +2834,47 @@ struct mtmd_model_loader {
 
                     // code2wav: RVQ codes -> raw PCM, lives in the same ctx as code_predictor
                     load_code2wav(true);
+
+                    // reference encoder, absent from files converted before it was added
+                    model.ref_quant_rest_cb = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_REST_CB, "weight"), false);
+                    if (model.ref_quant_rest_cb) {
+                        load_seanet(model.seanet, false);
+                        model.downsample_w = get_tensor(mtmd_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                        for (int il = 0; ; il++) {
+                            const char * p = "a.gen.enc.tfm";
+                            ggml_tensor * ln_1_w = get_tensor(mtmd_format(TN_LN_1, p, il, "weight"), false);
+                            if (!ln_1_w) {
+                                break;
+                            }
+                            mtmd_layer layer;
+                            layer.ln_1_w    = ln_1_w;
+                            layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        p, il, "bias"));
+                            layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      p, il, "weight"));
+                            layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      p, il, "weight"));
+                            layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      p, il, "weight"));
+                            layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, p, il, "weight"));
+                            layer.ls_1_w    = get_tensor(mtmd_format(TN_LS_1,        p, il, "weight"));
+                            layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        p, il, "weight"));
+                            layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        p, il, "bias"));
+                            layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      p, il, "weight"));
+                            layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    p, il, "weight"));
+                            layer.ls_2_w    = get_tensor(mtmd_format(TN_LS_2,        p, il, "weight"));
+                            model.ref_enc_layers.push_back(layer);
+                        }
+                        model.ref_quant_first_in_w = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_FIRST_IN, "weight"));
+                        model.ref_quant_first_cb   = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_FIRST_CB, "weight"));
+                        model.ref_quant_rest_in_w  = get_tensor(mtmd_format(TN_A_GEN_ENC_QUANT_REST_IN,  "weight"));
+
+                        // the codes index the code predictor tables, see build_ref_encoder()
+                        const int64_t n_acoustic = model.ref_quant_rest_cb->ne[2];
+                        if (model.ref_enc_layers.empty() ||
+                                n_acoustic != model.gen_code_head_w->ne[2] ||
+                                n_acoustic > model.gen_code_embd_w->ne[2] ||
+                                model.ref_quant_first_cb->ne[1] > model.gen_code_out_embd_w->ne[1] ||
+                                model.ref_quant_rest_cb->ne[1]  > model.gen_code_embd_w->ne[1]) {
+                            throw std::runtime_error(mtmd_format("%s: qwen3tts: unexpected reference encoder shape\n", __func__));
+                        }
+                    }
                 } break;
             case PROJECTOR_TYPE_ZONOS3_GEN:
                 {
