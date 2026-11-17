@@ -318,6 +318,7 @@ llama_kv_cache::llama_kv_cache(
         if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4 ||
                 model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_DOTS3NOTE ||
                 model.arch == LLM_ARCH_MISTRAL_LARGE4) &&
+                n_embd_head_k_all > 0 &&
                 hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
@@ -328,12 +329,12 @@ llama_kv_cache::llama_kv_cache(
             ggml_is_quantized(type_v) &&
             hparams.n_embd_head_v() % 64 == 0;
 
-        if (attn_rot_k) {
+        if (attn_rot_k && n_embd_head_k_all > 0) {
             n_rot_k = 64;
 
             // TODO: investigate if using the smallest rotation matrix is beneficial also for K (similar as for V)
             // ref: https://github.com/ggml-org/llama.cpp/pull/21038#issuecomment-4141323088
-            while (n_embd_head_k_all % (2*n_rot_k) == 0) {
+            while (n_rot_k <= static_cast<uint32_t>(n_embd_head_k_all) / 2 && n_embd_head_k_all % (2*n_rot_k) == 0) {
                 n_rot_k *= 2;
             }
         }
