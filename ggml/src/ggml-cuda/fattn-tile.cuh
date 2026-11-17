@@ -374,6 +374,7 @@ static constexpr __device__ int ggml_cuda_fattn_tile_get_nbatch_K(const int DKQ,
 }
 
 #ifdef GGML_USE_HIP
+// The sparse launch pins ncols1 == 1, so the ncols2 parameter is the total number of Q columns per block.
 static constexpr bool ggml_cuda_flash_attn_ext_tile_may_use_sparse(
         const int DKQ, const int DV, const int ncols2, const bool use_logit_softcap) {
     return DKQ > 64 && ncols2 > 1 && !use_logit_softcap &&
@@ -969,7 +970,7 @@ static __global__ void flash_attn_tile(
 
     // Main loop over KV cache:
     // Sparse KV_max stores ne11 indices per list, followed by one count per list.
-    const int list = use_sparse ? (sequence % ne33)*gridDim.x + blockIdx.x : 0;
+    const int list = use_sparse ? (sequence % ne33)*(int)gridDim.x + blockIdx.x : 0;
     const int * sparse_indices = use_sparse ? KV_max + int64_t(list)*ne11 : nullptr;
     const int k_VKQ_max = use_sparse ? KV_max[int64_t(gridDim.x)*ne33*ne11 + list] :
         KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
