@@ -390,6 +390,15 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
         : mtmd_graph(ctx, img), gen_process(gen_process), top_k(top_k), top_p(top_p) {}
     ggml_cgraph * build() override;
 
+    // MTMD_SUBCTX_GEN_PROCESS_TOKENIZE: reference clip -> codes and their talker input rows
+    ggml_cgraph * build_ref_encoder();
+    ggml_tensor * nearest_code(ggml_tensor * x, ggml_tensor * codebook) const;
+
+    // reference encoder transformer, see encoder_config in speech_tokenizer/config.json
+    static constexpr int   ref_enc_n_head     = 8;
+    static constexpr float ref_enc_eps        = 1e-5f;
+    static constexpr float ref_enc_rope_theta = 10000.0f;
+
     // which sub-graph build() constructs, fixed at graph-build time
     mtmd_subctx_gen_process gen_process;
 
@@ -483,6 +492,11 @@ struct mtmd_graph_pockettts_seanet : mtmd_graph {
     mtmd_graph_pockettts_seanet(const mtmd_graph & parent) : mtmd_graph(parent) {}
     ggml_cgraph * build() override { GGML_ABORT("call encode()/decode() instead"); }
 
+    // qwen3tts reference codes: the output is quantized, so the im2col is F32 (the kernels must be F32 too)
+    bool f32_im2col = false;
+    // qwen3tts reference codes: pad_replicate also repeats the last frame on the right, like MimiConv1d
+    bool pad_replicate_end = false;
+
     // per-call streaming state, keyed by slot name (see list_pockettts_state_slots)
     std::map<std::string, ggml_tensor *> state_in;
     mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
@@ -501,11 +515,22 @@ struct mtmd_graph_pockettts_seanet : mtmd_graph {
 };
 
 // mimi encoder + speaker_proj: reference waveform -> voice conditioning rows
+// the qwen3tts reference encoder reuses encode() with its own transformer options
 struct mtmd_graph_pockettts_spkenc : mtmd_graph {
     mtmd_graph_pockettts_spkenc(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    mtmd_graph_pockettts_spkenc(const mtmd_graph & parent) : mtmd_graph(parent) {}
     ggml_cgraph * build() override;
 
+    int         tfm_n_head     = n_head;
+    float       tfm_eps        = eps;
+    float       tfm_rope_theta = hparams.rope_theta;
+    int         tfm_rope_type  = GGML_ROPE_TYPE_NORMAL;
+    ffn_op_type tfm_ffn_type   = FFN_GELU;
+
     ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const;
+
+    // waveform [n_samples, 1] -> [n_frames, C], at the frame rate after model.downsample_w
+    ggml_tensor * encode(const mtmd_graph_pockettts_seanet & seanet, ggml_tensor * x, const std::vector<mtmd_layer> & layers);
 };
 
 //

@@ -213,6 +213,8 @@ struct mtmd_hparams {
 
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
+    // qwen3tts: the reference encoder mask is dense, so cost is quadratic in the clip
+    static constexpr int32_t qwen3tts_max_ref_seconds = 30;
     // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
     static constexpr int32_t fish_s2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
@@ -1299,6 +1301,17 @@ struct mtmd_model {
     // lfm3a depthformer (MaskGIT)
     ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D
     ggml_tensor * gen_code_mask_embd   = nullptr;
+
+    // qwen3tts reference encoder: reference clip -> RVQ codes, uses seanet and downsample_w too
+    std::vector<mtmd_layer> ref_enc_layers;
+    ggml_tensor * ref_quant_first_in_w = nullptr;
+    ggml_tensor * ref_quant_first_cb   = nullptr;
+    ggml_tensor * ref_quant_rest_in_w  = nullptr;
+    ggml_tensor * ref_quant_rest_cb    = nullptr; // acoustic codebooks, merged 3D
+
+    bool has_ref_encoder() const {
+        return ref_quant_rest_cb != nullptr;
+    }
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     mtmd_code2wav c2w;
