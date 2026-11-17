@@ -444,7 +444,9 @@ struct common_params_diffusion {
 
 // reasoning API response format (not to be confused as chat template's reasoning format)
 // only used by server
+// ordered from the lightest to the deepest sleep
 enum common_sleep_mode {
+    COMMON_SLEEP_MODE_MEMORY, // free context memory (KV cache, compute buffers), keep the model loaded
     COMMON_SLEEP_MODE_FREE, // free context and model memory
     COMMON_SLEEP_MODE_RST, // also restart the process, releasing all backend resources
 };

@@ -3874,11 +3874,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--sleep-mode"}, "MODE",
         "sleep behavior:\n"
+        "- 'memory' frees context memory (KV cache), keeps the model loaded for a faster wake up\n"
         "- 'free' frees context and model memory\n"
         "- 'rst' restarts the whole process, may help reset memory to zero on certain backend (only support posix env)\n"
         "(default: free)",
         [](common_params & params, const std::string & value) {
-            if (value == "free") {
+            if (value == "memory") {
+                params.sleep_mode = COMMON_SLEEP_MODE_MEMORY;
+            } else if (value == "free") {
                 params.sleep_mode = COMMON_SLEEP_MODE_FREE;
             } else if (value == "rst") {
                 params.sleep_mode = COMMON_SLEEP_MODE_RST;
