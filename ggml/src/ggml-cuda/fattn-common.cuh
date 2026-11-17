@@ -1252,14 +1252,23 @@ void launch_fattn(
         }
     } else {
         // parallel_blocks must not be larger than what the tensor size allows:
-        parallel_blocks = std::min(parallel_blocks, ntiles_KV);
+        int parallel_blocks_max = ntiles_KV;
+
+        // Minimum granularity: smaller pieces of work cannot hide the memory latency.
+        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && nsm >= 8 && ntiles_x == 1) {
+            const int max_kv_streams_per_sm = 4;
+            const int kv_streams = K->ne[2]*Q->ne[3];
+            parallel_blocks_max = std::min(parallel_blocks_max, (max_kv_streams_per_sm*nsm + kv_streams - 1)/kv_streams);
+            parallel_blocks = 1;
+        }
+        parallel_blocks = std::min(parallel_blocks, parallel_blocks_max);
 
         // If ntiles_total % blocks_per_wave != 0 then some efficiency is lost due to tail effects.
         // Test whether parallel_blocks can be set to a higher value for better efficiency.
         const int blocks_per_wave = nsm * max_blocks_per_sm;
         int nwaves_best = 0;
         int efficiency_percent_best = 0;
-        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= ntiles_KV; ++parallel_blocks_test) {
+        for (int parallel_blocks_test = parallel_blocks; parallel_blocks_test <= parallel_blocks_max; ++parallel_blocks_test) {
             const int nblocks_total = ntiles_dst * parallel_blocks_test;
             const int nwaves = (nblocks_total + blocks_per_wave - 1) / blocks_per_wave;
             const int efficiency_percent = 100 * nblocks_total / (nwaves*blocks_per_wave);
