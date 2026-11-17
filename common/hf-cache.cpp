@@ -552,12 +552,20 @@ bool remove_cached_files(const std::string & repo_id, const hf_files & files) {
         to_remove.emplace_back(f.local_path);
     }
 
+    std::error_code ec;
+    const fs::path canonical_repo = fs::weakly_canonical(repo_path, ec);
+    const fs::path canonical_blobs = ec ? fs::path() : fs::weakly_canonical(repo_path / "blobs", ec);
+    const auto [repo_end, _] = std::mismatch(canonical_repo.begin(), canonical_repo.end(), canonical_blobs.begin(), canonical_blobs.end());
+    const bool cleanup_blobs = !ec && canonical_repo != canonical_blobs && repo_end == canonical_repo.end();
+
     // resolve blob paths from symlinks before deleting snapshot entries
     std::vector<fs::path> blobs_to_check;
-    for (const auto & p : to_remove) {
-        const fs::path blob = resolve_blob_path(repo_path, p);
-        if (!blob.empty()) {
-            blobs_to_check.push_back(blob);
+    if (cleanup_blobs) {
+        for (const auto & p : to_remove) {
+            const fs::path blob = resolve_blob_path(repo_path, p);
+            if (!blob.empty()) {
+                blobs_to_check.push_back(blob);
+            }
         }
     }
 
@@ -577,7 +585,6 @@ bool remove_cached_files(const std::string & repo_id, const hf_files & files) {
 
     // collect blobs still referenced by any remaining snapshot entry
     std::unordered_set<std::string> still_referenced;
-    std::error_code ec;
     fs::directory_iterator revisions(repo_path / "snapshots", ec);
     const fs::directory_iterator revisions_end;
     for (; !ec && revisions != revisions_end; revisions.increment(ec)) {

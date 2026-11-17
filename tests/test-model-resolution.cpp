@@ -491,7 +491,7 @@ static void test_blob_removal() {
     common_download_opts opts;
     opts.download_dflash = true;
 
-    for (const std::string kind : { "shared", "revision", "linked-revision", "alias", "linked-blob", "external" }) {
+    for (const std::string kind : { "shared", "revision", "linked-revision", "alias", "linked-blob", "external", "external-blobs" }) {
         g_context = "blob removal: " + kind;
         fs::path blob = cache_put(repo_id, "dflash-model-Q4_0.gguf");
         if (blob.empty()) {
@@ -517,6 +517,10 @@ static void test_blob_removal() {
                 fs::remove(local);
                 cache_link(blob, local);
             }
+        } else if (kind == "external-blobs") {
+            const fs::path actual_blobs = cache_dir / "actual-blobs";
+            fs::rename(repo / "blobs", actual_blobs);
+            fs::create_directory_symlink(actual_blobs, repo / "blobs");
         }
         cache_link(kind == "alias" ? repo / "blob-alias" / blob.filename() : blob, other);
 
@@ -530,11 +534,12 @@ static void test_blob_removal() {
         REQUIRE(!fs::exists(other));
         REQUIRE(!fs::is_symlink(other));
         // Alias and external targets must not be deleted.
-        REQUIRE(fs::exists(blob) == (kind == "alias" || kind == "external"));
+        REQUIRE(fs::exists(blob) == (kind == "alias" || kind == "external" || kind == "external-blobs"));
         if (kind == "linked-blob" || kind == "external") {
             REQUIRE(fs::exists(external));
         }
         fs::remove_all(repo);
+        fs::remove_all(cache_dir / "actual-blobs");
         fs::remove(external);
     }
 }
