@@ -3096,6 +3096,25 @@ struct common_speculative_init_result::impl {
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
     llama_model_ptr   model;
     llama_context_ptr context;
+
+    // used to recreate the context
+    llama_model *        model_ctx = nullptr; // model or model_tgt
+    llama_context_params cparams;
+
+    bool init_context(llama_context * ctx_tgt) {
+        GGML_ASSERT(!context);
+
+        // the draft context holds as many tokens per sequence as the target context
+        cparams.n_ctx     = llama_n_ctx(ctx_tgt);
+        cparams.ctx_other = ctx_tgt;
+
+        context.reset(llama_init_from_model(model_ctx, cparams));
+        if (!context) {
+            LOG_ERR("%s: failed to create MTP context\n", __func__);
+            return false;
+        }
+        return true;
+    }
 };
 
 common_speculative_init_result::common_speculative_init_result(
@@ -3115,13 +3134,11 @@ common_speculative_init_result::common_speculative_init_result(
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     }
 
-    // the draft context holds as many tokens per sequence as the target context
-    cparams.n_ctx = llama_n_ctx(ctx_tgt);
-
     // note: for small models maybe we can set this to the maximum possible draft from all speculative types
     //       the extra memory for small models is likely negligible?
-    cparams.n_rs_seq  = 0;
-    cparams.ctx_other = ctx_tgt;
+    cparams.n_rs_seq = 0;
+
+    pimpl->cparams = cparams;
 
     std::string model_path;
     if (has_draft) {
@@ -3135,26 +3152,15 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->model.reset(model_dft);
-
-        llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
-        if (ctx_dft == nullptr) {
-            LOG_ERR("%s: failed to create MTP context\n", __func__);
-            return;
-        }
-
-        pimpl->context.reset(ctx_dft);
+        pimpl->model_ctx = model_dft;
+        pimpl->init_context(ctx_tgt);
     } else if (spec_mtp) {
         model_path = params.model.path;
 
         LOG_INF("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
 
-        llama_context * ctx_dft = llama_init_from_model(model_tgt, cparams);
-        if (ctx_dft == nullptr) {
-            LOG_ERR("%s: failed to create MTP context\n", __func__);
-            return;
-        }
-
-        pimpl->context.reset(ctx_dft);
+        pimpl->model_ctx = model_tgt;
+        pimpl->init_context(ctx_tgt);
     }
 }
 
@@ -3166,6 +3172,17 @@ llama_model * common_speculative_init_result::model() {
 
 llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
+}
+
+void common_speculative_init_result::free_context() {
+    pimpl->context.reset();
+}
+
+bool common_speculative_init_result::init_context(llama_context * ctx_tgt) {
+    if (!pimpl->model_ctx) {
+        return true; // no draft context
+    }
+    return pimpl->init_context(ctx_tgt);
 }
 
 common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {

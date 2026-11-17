@@ -1034,6 +1034,13 @@ struct common_init_result {
 
     std::vector<llama_adapter_lora_ptr> & lora();
 
+    // free the context (and its memory), but keep the model loaded
+    // the samplers are also freed, as they may be bound to the context
+    void free_context();
+
+    // recreate the context with the same params as the first one, without warmup
+    bool init_context(common_params & params);
+
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
@@ -1074,6 +1081,7 @@ struct common_threadpools {
     common_threadpools & operator=(const common_threadpools &) = delete;
 
     void init(llama_context * ctx, const common_params & params);
+    void reset();
 
 private:
     ggml_threadpool * threadpool       = nullptr;
