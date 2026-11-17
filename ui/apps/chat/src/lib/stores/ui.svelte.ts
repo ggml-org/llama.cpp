@@ -6,9 +6,6 @@
  * controls and the chat tab bar reacts to).
  */
 
-import { browser } from '$app/environment';
-import { goto } from '$app/navigation';
-import { page } from '$app/state';
 import {
 	MODELS_ROUTE_ID,
 	ROUTES,
@@ -19,11 +16,14 @@ import {
 	SIDEBAR_MIN_WIDTH,
 	SIDEBAR_SECTION_ORDER_LOCALSTORAGE_KEY,
 	SIDEBAR_WIDTH_LOCALSTORAGE_KEY
-} from '$lib/constants';
-import { deviceStore } from '$lib/stores/device.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { Group } from '$lib/types/groups';
-import { remToPx } from '$lib/utils/css';
+} from '#lib/constants/index.ts';
+import { deviceStore } from '#lib/stores/device.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import type { Group } from '#lib/types/groups.js';
+import { remToPx } from '#lib/utils/css.ts';
+import { browser } from '$app/env';
+import { goto } from '$app/navigation';
+import { page } from '$app/state';
 import { SvelteSet } from 'svelte/reactivity';
 
 interface GroupDialogOptions {

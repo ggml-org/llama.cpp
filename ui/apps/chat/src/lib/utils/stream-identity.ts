@@ -1,4 +1,4 @@
-import { CONVERSATION_ID_SEPARATOR } from '$lib/constants';
+import { CONVERSATION_ID_SEPARATOR } from '#lib/constants/index.ts';
 
 /**
  * Build the conversation identity used by the server side replay buffer.

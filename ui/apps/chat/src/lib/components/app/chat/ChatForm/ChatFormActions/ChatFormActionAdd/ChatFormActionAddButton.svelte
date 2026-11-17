@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Plus } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ATTACHMENT_TOOLTIP_TEXT, ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { ATTACHMENT_TOOLTIP_TEXT, ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	interface Props {
 		disabled?: boolean;

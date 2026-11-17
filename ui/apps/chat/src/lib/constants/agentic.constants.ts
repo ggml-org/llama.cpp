@@ -1,4 +1,4 @@
-import type { AgenticConfig } from '$lib/types/agentic';
+import type { AgenticConfig } from '#lib/types/agentic.js';
 
 export const ATTACHMENT_SAVED_REGEX = /\[Attachment saved: ([^\]]+)\]/;
 

@@ -4,9 +4,9 @@
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { deviceStore } from '$lib/stores';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { deviceStore } from '#lib/stores/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';

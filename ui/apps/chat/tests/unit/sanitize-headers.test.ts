@@ -1,5 +1,5 @@
-import { CORS_PROXY } from '$lib/constants';
-import { sanitizeHeaders } from '$lib/utils/api-headers';
+import { CORS_PROXY } from '#lib/constants/index.ts';
+import { sanitizeHeaders } from '#lib/utils/api-headers.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('sanitizeHeaders', () => {

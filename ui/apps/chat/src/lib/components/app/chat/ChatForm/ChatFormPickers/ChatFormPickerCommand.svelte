@@ -3,10 +3,10 @@
 		ChatFormPickerList,
 		ChatFormPickerListItem,
 		ChatFormPickerPopover
-	} from '$lib/components/app/chat';
-	import { CHAT_FORM_COMMAND_ICONS } from '$lib/constants';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import type { ChatFormCommand } from '$lib/types';
+	} from '#lib/components/app/chat/index.ts';
+	import { CHAT_FORM_COMMAND_ICONS } from '#lib/constants/index.ts';
+	import { usePickerNavigation } from '#lib/hooks/use-picker-navigation.svelte.ts';
+	import type { ChatFormCommand } from '#lib/types/index.ts';
 
 	/**
 	 * Slash-command picker; `query` (typed after `/`) filters the commands.

@@ -1,7 +1,7 @@
-import { AgenticSectionType, MessageRole } from '$lib/enums';
-import type { ApiChatCompletionToolCall } from '$lib/types/api';
-import type { DatabaseMessage } from '$lib/types/database';
-import { deriveAgenticSections, hasAgenticContent } from '$lib/utils/agentic';
+import { AgenticSectionType, MessageRole } from '#lib/enums/index.ts';
+import type { ApiChatCompletionToolCall } from '#lib/types/api.js';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import { deriveAgenticSections, hasAgenticContent } from '#lib/utils/agentic.ts';
 import { describe, expect, it } from 'vitest';
 
 function makeAssistant(overrides: Partial<DatabaseMessage> = {}): DatabaseMessage {

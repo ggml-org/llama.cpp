@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { KeyboardKey } from '$lib/enums';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import { KeyboardKey } from '#lib/enums/index.ts';
 	import type { Component, Snippet } from 'svelte';
 
 	interface Props {

@@ -29,7 +29,7 @@ import {
 	MERMAID_SCROLL_CONTAINER_CLASS,
 	MERMAID_SYNTAX_ATTR,
 	MERMAID_WRAPPER_CLASS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';

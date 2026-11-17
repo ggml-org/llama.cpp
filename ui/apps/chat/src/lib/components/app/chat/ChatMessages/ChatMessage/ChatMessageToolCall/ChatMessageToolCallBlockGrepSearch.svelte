@@ -2,9 +2,9 @@
 	import { parseGrepSearchMeta } from './parsers/grep-search';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
-	import { toolsStore } from '$lib/stores';
-	import type { AgenticSection } from '$lib/types';
-	import { abbreviateHome } from '$lib/utils';
+	import { toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { abbreviateHome } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import HoverCardPortal from './hover-card-portal.svelte';
-	import { cn, type WithoutChildrenOrChild } from '$lib/components/ui/utils.js';
+	import { cn, type WithoutChildrenOrChild } from '#lib/components/ui/utils.ts';
 	import { LinkPreview as HoverCardPrimitive } from 'bits-ui';
 	import type { ComponentProps } from 'svelte';
 

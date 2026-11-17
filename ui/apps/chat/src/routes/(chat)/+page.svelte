@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { replaceState } from '$app/navigation';
+	import { DialogModelNotAvailable } from '#lib/components/app/index.ts';
+	import { APP_NAME, URL_PARAMS } from '#lib/constants/index.ts';
+	import { conversationsStore, modelsStore, serverStore } from '#lib/stores/index.ts';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { DialogModelNotAvailable } from '$lib/components/app';
-	import { APP_NAME, URL_PARAMS } from '$lib/constants';
-	import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
@@ -16,13 +16,13 @@
 
 	// Clear params after handling the deep link so a refresh does not replay them
 	function clearUrlParams() {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 
 		url.searchParams.delete(URL_PARAMS.QUERY);
 		url.searchParams.delete(URL_PARAMS.MODEL);
 		url.searchParams.delete(URL_PARAMS.LOAD);
 
-		replaceState(url.toString(), {});
+		goto(url.toString(), { replace: true, shallow: true });
 	}
 
 	async function handleUrlParams() {

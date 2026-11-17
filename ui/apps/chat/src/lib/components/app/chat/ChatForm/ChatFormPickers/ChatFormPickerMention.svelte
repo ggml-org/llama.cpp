@@ -1,22 +1,22 @@
 <script lang="ts">
 	import { File, Folder } from '@lucide/svelte';
-	import { ChatFormPickerList, ChatFormPickerListItem } from '$lib/components/app/chat';
-	import HighlightedMatch from '$lib/components/app/forms/HighlightedMatch.svelte';
-	import * as Popover from '$lib/components/ui/popover';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '$lib/constants';
+	import { ChatFormPickerList, ChatFormPickerListItem } from '#lib/components/app/chat/index.ts';
+	import HighlightedMatch from '#lib/components/app/forms/HighlightedMatch.svelte';
+	import * as Popover from '#lib/components/ui/popover/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '#lib/constants/index.ts';
 	import {
 		BuiltInTool,
 		FileMentionEntryType,
 		GlobSearchType,
 		KeyboardKey,
 		ToolSource
-	} from '$lib/enums';
-	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
-	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
-	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
+	} from '#lib/enums/index.ts';
+	import { useDebouncedSearch } from '#lib/hooks/use-debounced-search.svelte.ts';
+	import { usePickerNavigation } from '#lib/hooks/use-picker-navigation.svelte.ts';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '#lib/stores/index.ts';
+	import type { FileMentionEntry, GlobEntryResult } from '#lib/types/index.ts';
+	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
 
 	/**
 	 * Floating file/folder mention picker. The chat input is the search

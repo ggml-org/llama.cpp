@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import { McpServerIdentity, TruncatedText } from '$lib/components/app';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { ToolSource } from '$lib/enums/tools.enums';
-	import { conversationsStore, mcpStore, permissionsStore, toolsStore } from '$lib/stores';
-	import { getToolUi } from '$lib/utils';
+	import { McpServerIdentity, TruncatedText } from '#lib/components/app/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { ToolSource } from '#lib/enums/tools.enums.ts';
+	import { conversationsStore, mcpStore, permissionsStore, toolsStore } from '#lib/stores/index.ts';
+	import { getToolUi } from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();

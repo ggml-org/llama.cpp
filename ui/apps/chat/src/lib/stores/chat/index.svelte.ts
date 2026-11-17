@@ -15,28 +15,29 @@ import {
 	REASONING_EFFORT_TOKENS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
 	ReasoningEffort,
 	StreamConnectionState
-} from '$lib/enums';
-import { ChatService } from '$lib/services/chat.service';
-import { DatabaseService } from '$lib/services/database.service';
+} from '#lib/enums/index.ts';
+import { ChatService } from '#lib/services/chat.service.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { agenticStore } from '$lib/stores/agentic/index.svelte';
-import { chatActivityStore } from '$lib/stores/chat/activity.svelte';
-import { type ChatFlowsHost, ChatMessageFlows } from '$lib/stores/chat/flows.svelte';
-import { chatProcessingStore } from '$lib/stores/chat/processing.svelte';
-import { type ChatStreamHost, ChatStreamManager } from '$lib/stores/chat/streams.svelte';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { mcpStore } from '$lib/stores/mcp/index.svelte';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
+import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
+import { chatActivityStore } from '#lib/stores/chat/activity.svelte.ts';
+import { type ChatFlowsHost, ChatMessageFlows } from '#lib/stores/chat/flows.svelte.ts';
+import { chatProcessingStore } from '#lib/stores/chat/processing.svelte.ts';
+import { type ChatStreamHost, ChatStreamManager } from '#lib/stores/chat/streams.svelte.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
+import type { AgenticToolPolicy } from '#lib/types/agentic.js';
 import type {
 	ApiChatMessageData,
 	ChatMessageCompactionTimings,
@@ -46,8 +47,7 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	ErrorDialogState
-} from '$lib/types';
-import type { AgenticToolPolicy } from '$lib/types/agentic';
+} from '#lib/types/index.ts';
 import {
 	canCompactMessages,
 	compactionCut,
@@ -58,7 +58,7 @@ import {
 	isAbortError,
 	normalizeModelName,
 	sliceAtLastCompaction
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 class ChatStore implements ChatStreamHost, ChatFlowsHost {
@@ -135,7 +135,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		if (!activeConv) throw new Error('No active conversation');
 
-		let parentId: string | null = null;
+		let parentId: string | null;
 
 		if (parent === '-1') {
 			const am = conversationsStore.activeMessages;
@@ -1096,7 +1096,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				content: string,
 				reasoningContent: string | undefined,
 				timings: ChatMessageTimings | undefined,
-				toolCalls: import('$lib/types/api').ApiChatCompletionToolCall[] | undefined
+				toolCalls: import('#lib/types/api.js').ApiChatCompletionToolCall[] | undefined
 			) => {
 				const updateData: Record<string, unknown> = {
 					content,

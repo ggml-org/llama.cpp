@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Clock, Loader2 } from '@lucide/svelte';
-	import { AgenticSectionType } from '$lib/enums';
-	import type { AgenticSection } from '$lib/types';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
 
 	interface Props {
 		section: AgenticSection;

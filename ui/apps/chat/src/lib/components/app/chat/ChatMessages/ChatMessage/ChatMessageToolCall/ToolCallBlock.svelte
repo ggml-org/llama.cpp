@@ -10,12 +10,12 @@
 	// snippet - everything around them is this single source of truth.
 
 	import { Loader2, Wrench } from '@lucide/svelte';
-	import { CollapsibleContentBlock } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
-	import { AgenticSectionType } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { AgenticSection, ToolUiEntry } from '$lib/types';
-	import { getToolUi } from '$lib/utils';
+	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, ToolUiEntry } from '#lib/types/index.ts';
+	import { getToolUi } from '#lib/utils/index.ts';
 	import type { Component, Snippet } from 'svelte';
 
 	type ToolCallBlockMetaWithError = TMeta & { errorMessage?: string };

@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { fileMentionWidgets } from './mention-badge-widget';
 	import { EditorView } from '@codemirror/view';
-	import { MarkdownEditor } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { deviceStore } from '$lib/stores';
-	import { settingsStore } from '$lib/stores/settings/index.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { MarkdownEditor } from '#lib/components/app/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+	import { toolsStore } from '#lib/stores/tools.svelte.ts';
 	import { onMount } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 

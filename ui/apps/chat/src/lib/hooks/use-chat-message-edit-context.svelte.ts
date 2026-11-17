@@ -1,6 +1,6 @@
-import { setChatMessageEditContext } from '$lib/contexts';
-import { MessageRole } from '$lib/enums';
-import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
+import { setChatMessageEditContext } from '#lib/contexts/index.ts';
+import { MessageRole } from '#lib/enums/index.ts';
+import { parseFilesToMessageExtras } from '#lib/utils/convert-files-to-extra.ts';
 
 interface UseChatMessageEditContextOptions {
 	getContent: () => string;

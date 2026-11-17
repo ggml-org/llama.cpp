@@ -3,8 +3,8 @@
  * Handles PDF text extraction and image conversion in the browser
  */
 
-import { browser } from '$app/environment';
-import { MimeTypeApplication, MimeTypeImage } from '$lib/enums';
+import { MimeTypeApplication, MimeTypeImage } from '#lib/enums/index.ts';
+import { browser } from '$app/env';
 import * as pdfjs from 'pdfjs-dist';
 
 type TextContent = {
@@ -78,7 +78,8 @@ export async function convertPDFToText(file: File): Promise<string> {
 		console.error('Error converting PDF to text:', error);
 
 		throw new Error(
-			`Failed to convert PDF to text: ${error instanceof Error ? error.message : 'Unknown error'}`
+			`Failed to convert PDF to text: ${error instanceof Error ? error.message : 'Unknown error'}`,
+			{ cause: error }
 		);
 	}
 }
@@ -130,7 +131,8 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 		console.error('Error converting PDF to images:', error);
 
 		throw new Error(
-			`Failed to convert PDF to images: ${error instanceof Error ? error.message : 'Unknown error'}`
+			`Failed to convert PDF to images: ${error instanceof Error ? error.message : 'Unknown error'}`,
+			{ cause: error }
 		);
 	}
 }

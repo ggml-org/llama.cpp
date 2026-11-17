@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ChatAttachmentsList, MarkdownContent, MentionText } from '$lib/components/app';
-	import { Card } from '$lib/components/ui/card';
-	import { settingsStore } from '$lib/stores';
-	import type { DatabaseMessageExtra } from '$lib/types/database';
+	import { ChatAttachmentsList, MarkdownContent, MentionText } from '#lib/components/app/index.ts';
+	import { Card } from '#lib/components/ui/card/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtra } from '#lib/types/database.js';
 
 	interface Props {
 		content: string;

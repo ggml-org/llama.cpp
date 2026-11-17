@@ -8,7 +8,7 @@
  * Import from this barrel in leaf consumers:
  *
  * ```ts
- * import { chatStore, modelsStore } from '$lib/stores';
+ * import { chatStore, modelsStore } from '#lib/stores/index.ts';
  * ```
  *
  * Store modules keep direct imports between each other (and from services/
@@ -48,7 +48,7 @@ export { modelsStore } from './models/index.svelte';
 export { modelsDiscoverStore } from './models-discover/index.svelte';
 
 // SERVER
-export { serverStore } from './server.svelte';
+export { serverStore } from './llama-server.svelte';
 
 // UI / LAYOUT
 export { uiStore } from './ui.svelte';

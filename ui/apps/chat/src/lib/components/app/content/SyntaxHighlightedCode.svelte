@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
-	import { ColorMode } from '$lib/enums';
-	import { highlightCode, loadHighlightTheme } from '$lib/utils';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '#lib/constants/index.ts';
+	import { ColorMode } from '#lib/enums/index.ts';
+	import { highlightCode, loadHighlightTheme } from '#lib/utils/index.ts';
 	import { mode } from 'mode-watcher';
 
 	interface Props {

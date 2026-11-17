@@ -3,7 +3,7 @@
  * (selector row and chat message).
  */
 
-import { MODEL_LOAD_STAGE_LABELS, MODEL_LOAD_TAIL_SHARE } from '$lib/constants';
+import { MODEL_LOAD_STAGE_LABELS, MODEL_LOAD_TAIL_SHARE } from '#lib/constants/index.ts';
 
 /**
  * Human label for a model load stage.

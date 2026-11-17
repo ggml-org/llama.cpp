@@ -2,9 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
+import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID } from '#lib/constants/index.ts';
+import { TabsStore } from '#lib/stores/tabs.svelte.ts';
 import { goto } from '$app/navigation';
-import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID } from '$lib/constants';
-import { TabsStore } from '$lib/stores/tabs.svelte';
 
 const gotoMock = vi.mocked(goto);
 

@@ -8,17 +8,17 @@
  * and owned by chatStore; the host exposes the per-conversation state setters.
  */
 
-import { CONVERSATION_ID_SEPARATOR, STREAM_RESUME_RETRY_MS } from '$lib/constants';
-import { MessageRole, MessageType, StreamConnectionState } from '$lib/enums';
-import { ChatService } from '$lib/services/chat.service';
-import { DatabaseService } from '$lib/services/database.service';
-import type { ChatActivityStore } from '$lib/stores/chat/activity.svelte';
-import type { ChatProcessingStore } from '$lib/stores/chat/processing.svelte';
+import { CONVERSATION_ID_SEPARATOR, STREAM_RESUME_RETRY_MS } from '#lib/constants/index.ts';
+import { MessageRole, MessageType, StreamConnectionState } from '#lib/enums/index.ts';
+import { ChatService } from '#lib/services/chat.service.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import type { ChatActivityStore } from '#lib/stores/chat/activity.svelte.ts';
+import type { ChatProcessingStore } from '#lib/stores/chat/processing.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import type { ApiStreamSession, ChatMessageTimings, DatabaseMessage } from '$lib/types';
-import { streamIdentity } from '$lib/utils';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import type { ApiStreamSession, ChatMessageTimings, DatabaseMessage } from '#lib/types/index.ts';
+import { streamIdentity } from '#lib/utils/index.ts';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 /**

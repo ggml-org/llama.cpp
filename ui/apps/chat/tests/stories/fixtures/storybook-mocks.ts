@@ -1,5 +1,5 @@
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
 
 /**
  * Mock server properties for Storybook testing

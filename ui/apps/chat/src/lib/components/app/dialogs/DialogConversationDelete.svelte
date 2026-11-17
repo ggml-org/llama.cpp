@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Trash2 } from '@lucide/svelte';
-	import { DialogConfirmation } from '$lib/components/app';
+	import { DialogConfirmation } from '#lib/components/app/index.ts';
 
 	interface Props {
 		open: boolean;

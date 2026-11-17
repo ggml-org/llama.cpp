@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { DropdownMenuSearchable } from '$lib/components/app';
-	import { Drawer, DrawerContent } from '$lib/components/ui/drawer';
-	import { uiStore } from '$lib/stores';
+	import { DropdownMenuSearchable } from '#lib/components/app/index.ts';
+	import { Drawer, DrawerContent } from '#lib/components/ui/drawer/index.ts';
+	import { uiStore } from '#lib/stores/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

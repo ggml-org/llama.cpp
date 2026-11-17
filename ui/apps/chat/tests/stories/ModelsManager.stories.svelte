@@ -1,14 +1,14 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ModelsManagerModelsTable from '$lib/components/app/models/ModelsManager/ModelsManagerModelsTable.svelte';
+	import ModelsManagerModelsTable from '#lib/components/app/models/ModelsManager/ModelsManagerModelsTable.svelte';
 	import type {
 		ModelQuantGroup,
 		ModelsTableGroup
-	} from '$lib/components/app/models/ModelsManager/utils';
-	import { MODELS_TABLE_GROUP_LABELS } from '$lib/constants';
-	import { ModelGroupKind, ModelsTableGroupKind, ServerModelStatus } from '$lib/enums';
-	import { modelsStore } from '$lib/stores/models/index.svelte';
-	import type { ModelOption } from '$lib/types/models';
+	} from '#lib/components/app/models/ModelsManager/utils.ts';
+	import { MODELS_TABLE_GROUP_LABELS } from '#lib/constants/index.ts';
+	import { ModelGroupKind, ModelsTableGroupKind, ServerModelStatus } from '#lib/enums/index.ts';
+	import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	const { Story } = defineMeta({
 		parameters: {

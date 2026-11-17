@@ -1,4 +1,4 @@
-import { isAbortError } from '$lib/utils/abort';
+import { isAbortError } from '#lib/utils/abort.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('isAbortError', () => {

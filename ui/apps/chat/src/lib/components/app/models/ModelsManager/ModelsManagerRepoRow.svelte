@@ -6,9 +6,9 @@
 	import type { ModelQuantGroup } from './utils';
 	import { configuredContext } from './utils';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
-	import { KeyboardKey, ModelGroupKind } from '$lib/enums';
-	import { deviceStore, modelsStore } from '$lib/stores';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '#lib/constants/index.ts';
+	import { KeyboardKey, ModelGroupKind } from '#lib/enums/index.ts';
+	import { deviceStore, modelsStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		entry: ModelQuantGroup;

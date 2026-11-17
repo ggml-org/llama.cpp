@@ -1,7 +1,7 @@
-import { PROMPT_TRIGGER_PREFIX } from '$lib/constants';
-import { ChatFormCommandAction, KeyboardKey } from '$lib/enums';
-import type { ChatFormCommand } from '$lib/types';
-import { getChatCommands } from '$lib/utils';
+import { PROMPT_TRIGGER_PREFIX } from '#lib/constants/index.ts';
+import { ChatFormCommandAction, KeyboardKey } from '#lib/enums/index.ts';
+import type { ChatFormCommand } from '#lib/types/index.ts';
+import { getChatCommands } from '#lib/utils/index.ts';
 import {
 	type CommandDismissSnapshot,
 	findCommandToken,
@@ -9,7 +9,7 @@ import {
 	type MentionDismissSnapshot,
 	takeCommandDismissSnapshot,
 	takeMentionDismissSnapshot
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 
 /** Dependencies injected as getters so the hook stays free of store circular imports. */
 export interface UseChatFormPickersOptions {

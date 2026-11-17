@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Check, Plus } from '@lucide/svelte';
-	import { SearchInput } from '$lib/components/app';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { groupsStore, uiStore } from '$lib/stores';
+	import { SearchInput } from '#lib/components/app/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import { groupsStore, uiStore } from '#lib/stores/index.ts';
 
 	let options = $derived(uiStore.groupPicker);
 	let query = $state('');

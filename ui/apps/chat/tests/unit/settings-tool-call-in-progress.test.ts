@@ -8,8 +8,8 @@ import {
 	SETTINGS_CHAT_SECTIONS,
 	SETTINGS_KEYS,
 	SETTINGS_SECTION_SLUGS
-} from '$lib/constants';
-import { SettingsFieldType } from '$lib/enums';
+} from '#lib/constants/index.ts';
+import { SettingsFieldType } from '#lib/enums/index.ts';
 import { describe, expect, it } from 'vitest';
 
 function displayField(key: string) {

@@ -4,10 +4,10 @@
 // the components fall back when it fails. Inline data: icons load under any
 // policy and are never proxied.
 
-import { mcpStore } from '$lib/stores/mcp/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { buildProxiedIconUrl } from '$lib/utils/cors-proxy';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { buildProxiedIconUrl } from '#lib/utils/cors-proxy.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 // The favicon fallback resolves to the root domain of the server url, so the

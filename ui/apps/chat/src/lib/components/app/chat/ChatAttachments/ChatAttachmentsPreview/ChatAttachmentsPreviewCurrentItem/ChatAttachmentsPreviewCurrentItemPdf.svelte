@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { Eye, FileText, Info } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT, PDF_AS_IMAGES_LEGACY_CONTENT_REGEX } from '$lib/constants';
-	import { AttachmentType, MimeTypeApplication, PdfViewMode } from '$lib/enums';
-	import type { ChatAttachmentDisplayItem } from '$lib/types';
-	import { getLanguageFromFilename } from '$lib/utils';
-	import { convertPDFToImage, convertPDFToText } from '$lib/utils/browser-only';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import * as Alert from '#lib/components/ui/alert/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { ICON_CLASS_DEFAULT, PDF_AS_IMAGES_LEGACY_CONTENT_REGEX } from '#lib/constants/index.ts';
+	import { AttachmentType, MimeTypeApplication, PdfViewMode } from '#lib/enums/index.ts';
+	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
+	import { convertPDFToImage, convertPDFToText } from '#lib/utils/browser-only.ts';
+	import { getLanguageFromFilename } from '#lib/utils/index.ts';
 
 	interface Props {
 		currentItem: ChatAttachmentDisplayItem | null;

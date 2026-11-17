@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { McpServerForm } from '$lib/components/app/mcp';
-	import { Button } from '$lib/components/ui/button';
-	import { parseHeadersToArray } from '$lib/utils';
+	import { McpServerForm } from '#lib/components/app/mcp/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { parseHeadersToArray } from '#lib/utils/index.ts';
 
 	interface Props {
 		serverId: string;

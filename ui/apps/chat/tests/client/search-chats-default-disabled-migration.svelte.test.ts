@@ -1,10 +1,13 @@
 // search_chats starts disabled: tool policy is a deny-list, so the key must be added to the global defaults and to every existing conversation
 
-import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY, SEARCH_CHATS_TOOL_KEY } from '$lib/constants';
-import { DatabaseService } from '$lib/services/database.service';
-import { MigrationService } from '$lib/services/migration.service';
-import type { ExportedConversation } from '$lib/types/database';
-import { withSearchChatsDisabled } from '$lib/utils/search-chats';
+import {
+	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+	SEARCH_CHATS_TOOL_KEY
+} from '#lib/constants/index.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { MigrationService } from '#lib/services/migration.service.ts';
+import type { ExportedConversation } from '#lib/types/database.js';
+import { withSearchChatsDisabled } from '#lib/utils/search-chats.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 const MIGRATION_ID = 'search-chats-default-disabled-v1';

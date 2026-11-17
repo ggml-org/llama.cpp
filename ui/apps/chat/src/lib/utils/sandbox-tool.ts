@@ -2,9 +2,9 @@ import {
 	SANDBOX_TIMEOUT_MS_DEFAULT,
 	SANDBOX_TIMEOUT_MS_MAX,
 	SANDBOX_TOOL_NAME
-} from '$lib/constants';
-import { JsonSchemaType, ToolCallType } from '$lib/enums';
-import type { OpenAIToolDefinition } from '$lib/types';
+} from '#lib/constants/index.ts';
+import { JsonSchemaType, ToolCallType } from '#lib/enums/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 
 const NERDAMER_DESCRIPTION = `
 Symbolic/numeric math via \`nerdamer\`

@@ -1,11 +1,11 @@
 // IndexedDB side of search_chats: loading, the current-chat filter and the readonly transaction.
 // Matching and formatting are covered by tests/unit/search-chats.test.ts.
 
-import { MessageRole, MessageType } from '$lib/enums';
-import { DatabaseService } from '$lib/services/database.service';
-import { SearchChatsService } from '$lib/services/search-chats.service';
-import type { ExportedConversation } from '$lib/types/database';
-import { formatLocalIso } from '$lib/utils/formatters';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { SearchChatsService } from '#lib/services/search-chats.service.ts';
+import type { ExportedConversation } from '#lib/types/database.js';
+import { formatLocalIso } from '#lib/utils/formatters.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 function makeConversation(

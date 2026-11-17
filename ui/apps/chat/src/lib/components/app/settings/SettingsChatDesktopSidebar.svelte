@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
 
 	interface Props {
 		sections: SettingsSection[];

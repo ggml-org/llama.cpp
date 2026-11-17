@@ -2,7 +2,7 @@
 // anchored below it, while a tap still opens the chat and a drift is a scroll.
 
 import ConversationRowHarness from './components/ConversationRowHarness.svelte';
-import { ROW_LONG_PRESS_MS, ROW_LONG_PRESS_SLOP_PX } from '$lib/constants';
+import { ROW_LONG_PRESS_MS, ROW_LONG_PRESS_SLOP_PX } from '#lib/constants/index.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

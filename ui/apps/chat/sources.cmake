@@ -10,7 +10,6 @@ set(UI_SOURCE_FILES
     package-lock.json
     src/.gitignore
     vite.config.ts
-    svelte.config.js
     tsconfig.json
     scripts/vite-plugin-llama-cpp-build.ts
 )

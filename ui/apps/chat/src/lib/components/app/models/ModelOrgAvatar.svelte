@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
-	import { HuggingFaceService } from '$lib/services';
+	import { DARK_INVERT_AVATAR_ORGS } from '#lib/constants/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	// Avatars a failed request is cooling down for. A failure hides the image

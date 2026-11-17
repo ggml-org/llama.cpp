@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Pencil, RefreshCw, Trash2 } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '#lib/components/ui/button/index.ts';
 
 	interface Props {
 		isHealthChecking: boolean;
