@@ -90,6 +90,9 @@ private:
     // full duplex: one frame per update(), h_state holds the embedding of the generated audio for the next row
     bool duplex         = false;
     bool duplex_pending = false; // the stream may have a row ready
+    // past the attention window: the first rows of the stream stay, 1/duplex_discard_div of the window goes at once
+    static constexpr int32_t duplex_n_keep      = 3;
+    static constexpr int32_t duplex_discard_div = 6;
 
     bool fail(const std::string & msg, enum error_type type = ERROR_TYPE_SERVER);
     void send_result(common_chat_input content, std::vector<float> audio, bool response_done = false);

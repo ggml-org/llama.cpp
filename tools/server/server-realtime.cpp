@@ -1339,6 +1339,17 @@ bool server_realtime_slot::duplex_frame() {
     }
     GGML_ASSERT(n == 1);
 
+    // the model was trained on streams no longer than its window, so it always saw their start (it acts as an attention sink)
+    // once the window is full: the first rows stay, the oldest rows after them go and the rest shifts back, like StreamingLLM
+    llama_memory_t mem   = llama_get_memory(ctx);
+    const int32_t  n_swa = llama_model_n_swa(model);
+    if (n_swa > 0 && n_past >= n_swa && llama_memory_can_shift(mem)) {
+        const int32_t n_discard = n_swa / duplex_discard_div;
+        llama_memory_seq_rm (mem, seq_id, duplex_n_keep, duplex_n_keep + n_discard);
+        llama_memory_seq_add(mem, seq_id, duplex_n_keep + n_discard, -1, -n_discard);
+        n_past -= n_discard;
+    }
+
     const float * row = mtmd_audio_stream_get_output_embd(stream.get());
     std::vector<float> inp(row, row + h_state.size());
     for (size_t i = 0; i < inp.size(); i++) {
