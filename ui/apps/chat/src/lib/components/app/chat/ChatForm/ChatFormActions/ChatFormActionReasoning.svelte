@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { Check, Info, Lightbulb, LightbulbOff } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ICON_CLASS_DEFAULT, REASONING_EFFORT_LABELS } from '$lib/constants';
-	import { ReasoningEffort } from '$lib/enums';
-	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
-	import { deviceStore } from '$lib/stores';
-	import type { ReasoningEffortLevel } from '$lib/types';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Drawer from '#lib/components/ui/drawer/index.ts';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { ICON_CLASS_DEFAULT, REASONING_EFFORT_LABELS } from '#lib/constants/index.ts';
+	import { ReasoningEffort } from '#lib/enums/index.ts';
+	import { useReasoningMenu } from '#lib/hooks/use-reasoning-menu.svelte.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import type { ReasoningEffortLevel } from '#lib/types/index.ts';
 
 	const reasoning = useReasoningMenu();
 

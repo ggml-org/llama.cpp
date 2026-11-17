@@ -1,8 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
-import { CORS_PROXY } from '$lib/constants';
-import { MCPConnectionPhase, MCPTransportType } from '$lib/enums';
-import { MCPService } from '$lib/services/mcp.service';
-import type { MCPConnection, MCPConnectionLog, MCPServerConfig } from '$lib/types';
+import { CORS_PROXY } from '#lib/constants/index.ts';
+import { MCPConnectionPhase, MCPTransportType } from '#lib/enums/index.ts';
+import { MCPService } from '#lib/services/mcp.service.ts';
+import type { MCPConnection, MCPConnectionLog, MCPServerConfig } from '#lib/types/index.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type DiagnosticFetchFactory = (

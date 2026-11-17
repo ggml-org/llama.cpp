@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { MODALITY_ICONS, MODALITY_LABELS } from '$lib/constants';
-	import { ModelModality } from '$lib/enums';
+	import { MODALITY_ICONS, MODALITY_LABELS } from '#lib/constants/index.ts';
+	import { ModelModality } from '#lib/enums/index.ts';
 
 	interface Props {
 		modalities: ModelModality[];

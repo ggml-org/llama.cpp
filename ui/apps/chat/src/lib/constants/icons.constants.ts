@@ -30,8 +30,8 @@ import {
 	FileTypeCategory,
 	ModelCapability,
 	ModelModality
-} from '$lib/enums';
-import type { ModelCapabilities, ModelModalities } from '$lib/types/models';
+} from '#lib/enums/index.ts';
+import type { ModelCapabilities, ModelModalities } from '#lib/types/models.js';
 import type { Component } from 'svelte';
 
 export const FILE_TYPE_ICONS = {

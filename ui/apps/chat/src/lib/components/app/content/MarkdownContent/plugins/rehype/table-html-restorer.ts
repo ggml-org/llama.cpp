@@ -64,7 +64,7 @@
  * // With this plugin: <br> becomes line break, <ul> becomes actual list
  */
 
-import { BR_PATTERN, LI_PATTERN, LIST_PATTERN } from '$lib/constants';
+import { BR_PATTERN, LI_PATTERN, LIST_PATTERN } from '#lib/constants/index.ts';
 import type { Element, ElementContent, Root, Text } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';

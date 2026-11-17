@@ -13,19 +13,19 @@ import {
 	MessageRole,
 	MessageType,
 	StreamConnectionState
-} from '$lib/enums';
-import { ChatService } from '$lib/services/chat.service';
-import { DatabaseService } from '$lib/services/database.service';
-import type { ChatProcessingStore } from '$lib/stores/chat/processing.svelte';
+} from '#lib/enums/index.ts';
+import { ChatService } from '#lib/services/chat.service.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import type { ChatProcessingStore } from '#lib/stores/chat/processing.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
 import type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	ErrorDialogState
-} from '$lib/types';
+} from '#lib/types/index.ts';
 import {
 	classifyContinueIntent,
 	filterByLeafNodeId,
@@ -34,7 +34,7 @@ import {
 	findMessageById,
 	isAbortError,
 	sliceAtLastCompaction
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 
 /**
  * The slice of chatStore the flows drive. Kept narrow on purpose so the flows

@@ -4,11 +4,11 @@ import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
 import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { getFileTypeCategory } from '$lib/utils';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '#lib/enums/index.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { getFileTypeCategory } from '#lib/utils/index.ts';
 import { toast } from 'svelte-sonner';
 
 /**

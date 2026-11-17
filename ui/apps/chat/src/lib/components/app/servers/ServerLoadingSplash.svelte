@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Server } from '@lucide/svelte';
-	import { ServerStatus } from '$lib/components/app';
+	import { ServerStatus } from '#lib/components/app/index.ts';
 	import { fade } from 'svelte/transition';
 
 	interface Props {

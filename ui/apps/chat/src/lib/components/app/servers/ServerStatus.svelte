@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { AlertTriangle, Server } from '@lucide/svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { modelsStore, serverStore } from '$lib/stores';
+	import { Badge } from '#lib/components/ui/badge/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { modelsStore, serverStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		class?: string;

@@ -1,18 +1,18 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
+	import { KeyboardShortcutInfo } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
 	import {
 		ICON_CLASS_DEFAULT,
 		ICON_STRIP_TRANSITION_DELAY_MULTIPLIER,
 		ICON_STRIP_TRANSITION_DURATION,
 		SIDEBAR_ACTIONS_ITEMS
-	} from '$lib/constants';
-	import { SidebarAction } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
-	import type { DesktopIconStripItem } from '$lib/types';
-	import { hapticTap } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import { SidebarAction } from '#lib/enums/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import type { DesktopIconStripItem } from '#lib/types/index.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';

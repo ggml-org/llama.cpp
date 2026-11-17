@@ -1,4 +1,4 @@
-import { highlightCode, splitGluedClosingCodeFences, trimCodePadding } from '$lib/utils/code';
+import { highlightCode, splitGluedClosingCodeFences, trimCodePadding } from '#lib/utils/code.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('trimCodePadding', () => {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference implementation of TTS normalization patterns, the tts_norm_scan() and tts_norm_sub() template functions.
+"""Reference implementation of the template functions tts_norm_scan(), tts_norm_sub() (TTS normalization patterns) and tts_dict().
 
 The specification is in docs/tts-norm-patterns.md. This file must give the same result as the C++ implementation
 (common/chat-tts-norm.cpp) for every input; tests/test-jinja.cpp checks this in python mode (test-jinja -py).
@@ -8,12 +8,14 @@ Usage with jinja2:
 
     env.globals["tts_norm_scan"] = chat_tts_norm.tts_norm_scan
     env.globals["tts_norm_sub"] = chat_tts_norm.tts_norm_sub
+    env.globals["tts_dict"] = chat_tts_norm.make_tts_dict(dicts)  # dicts: name -> {"keys", "values"} of tokenizer.tts_dict.<name>
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 # character classes, explicit codepoint ranges (keep in sync with common/chat-tts-norm.cpp)
 
@@ -554,3 +556,23 @@ def tts_norm_sub(text: str, pattern: str, repl: str) -> str:
                 if gs >= 0:
                     out.append(text[gs:ge])
     return "".join(out)
+
+
+def make_tts_dict(dicts: dict[str, dict[str, list[str]]]) -> Callable[[str, str], Any]:
+    # a dictionary is {"keys": [...], "values": [...]}, the values are JSON documents
+    parsed: dict[str, dict[str, str]] = {}
+
+    def tts_dict(name: str, key: str) -> Any:
+        if not isinstance(name, str) or not isinstance(key, str):
+            raise TypeError("tts_dict: name and key must be strings")
+        if name not in dicts:
+            raise KeyError(f"tts_dict: unknown dictionary '{name}'")
+        if name not in parsed:
+            keys, values = dicts[name]["keys"], dicts[name]["values"]
+            if len(keys) != len(values):
+                raise ValueError("tts_dict: malformed dictionary, a key has no value")
+            parsed[name] = dict(zip(keys, values))
+        doc = parsed[name].get(key)
+        return None if doc is None else json.loads(doc)
+
+    return tts_dict

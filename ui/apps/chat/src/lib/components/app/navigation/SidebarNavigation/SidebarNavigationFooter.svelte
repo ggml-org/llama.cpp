@@ -1,7 +1,7 @@
 <script lang="ts">
 	import SidebarNavigationActions from './SidebarNavigationActions.svelte';
-	import { SIDEBAR_FOOTER_ITEMS } from '$lib/constants';
-	import type { SidebarAction } from '$lib/enums';
+	import { SIDEBAR_FOOTER_ITEMS } from '#lib/constants/index.ts';
+	import type { SidebarAction } from '#lib/enums/index.ts';
 
 	interface Props {
 		onAction?: (action: SidebarAction) => void;

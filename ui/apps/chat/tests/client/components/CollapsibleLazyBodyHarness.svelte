@@ -1,6 +1,6 @@
 <script lang="ts">
-	import CollapsibleContentBlock from '$lib/components/app/content/CollapsibleContentBlock.svelte';
-	import CollapsibleTerminalBlock from '$lib/components/app/content/CollapsibleTerminalBlock.svelte';
+	import CollapsibleContentBlock from '#lib/components/app/content/CollapsibleContentBlock.svelte';
+	import CollapsibleTerminalBlock from '#lib/components/app/content/CollapsibleTerminalBlock.svelte';
 
 	interface Props {
 		variant: 'content' | 'terminal';

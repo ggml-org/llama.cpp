@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { McpLogo } from '$lib/components/app';
-	import { SettingsMcpServers } from '$lib/components/app/settings';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { deviceStore } from '$lib/stores';
+	import { McpLogo } from '#lib/components/app/index.ts';
+	import { SettingsMcpServers } from '#lib/components/app/settings/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		open?: boolean;

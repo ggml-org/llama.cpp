@@ -7,7 +7,7 @@
 		FileMentionEntry,
 		GetPromptResult,
 		MCPPromptInfo
-	} from '$lib/types';
+	} from '#lib/types/index.ts';
 
 	interface Props {
 		/** What every picker's popover floats by. */

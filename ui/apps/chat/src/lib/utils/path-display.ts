@@ -7,7 +7,7 @@ import {
 	HOME_TILDE_PREFIX,
 	PATH_SEPARATOR,
 	TRAILING_SLASHES_REGEX
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 export function lastPathSegment(p: string): string {
 	const trimmed = p.replace(TRAILING_SLASHES_REGEX, '');
@@ -47,7 +47,7 @@ export function abbreviateHome(path: string, home: string | null | undefined): s
 	return path;
 }
 
-export { CWD_CHANGED_PREFIX, CWD_CLEARED_TEXT } from '$lib/constants';
+export { CWD_CHANGED_PREFIX, CWD_CLEARED_TEXT } from '#lib/constants/index.ts';
 
 export interface CwdMessageInfo {
 	// absolute server-side path, null when the cwd was cleared

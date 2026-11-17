@@ -3,7 +3,7 @@ import {
 	SSE_DONE_MARKER,
 	SSE_LINE_SEPARATOR,
 	SSE_RECORD_SEPARATOR
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 /**
  * Minimal SSE-with-JSON stream iterator.

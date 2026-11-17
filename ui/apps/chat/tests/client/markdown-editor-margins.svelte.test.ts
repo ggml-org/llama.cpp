@@ -3,11 +3,11 @@
 // message actually shows for each block kind, so the table can't drift from
 // markdown-content.css.
 
-import MarkdownContent from '$lib/components/app/content/MarkdownContent/MarkdownContent.svelte';
+import MarkdownContent from '#lib/components/app/content/MarkdownContent/MarkdownContent.svelte';
 import {
 	BLOCK_MARGINS_REM,
 	PARAGRAPH_MARGINS_REM
-} from '$lib/components/app/content/MarkdownEditor/markdown-blocks';
+} from '#lib/components/app/content/MarkdownEditor/markdown-blocks.ts';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 

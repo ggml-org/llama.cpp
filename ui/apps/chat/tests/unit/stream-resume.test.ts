@@ -21,8 +21,8 @@ beforeAll(() => {
 	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
 });
 
-import { STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX } from '$lib/constants';
-import { ChatService } from '$lib/services/chat.service';
+import { STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX } from '#lib/constants/index.ts';
+import { ChatService } from '#lib/services/chat.service.ts';
 
 describe('ChatService stream resume', () => {
 	beforeEach(() => {

@@ -2,8 +2,8 @@
 // renders HuggingFace model cards, which are third-party content, so every
 // payload below must come out neutralized - both right after sanitize and
 // after an innerHTML re-parse, which is where mutation XSS would surface.
-import MarkdownContent from '$lib/components/app/content/MarkdownContent/MarkdownContent.svelte';
-import { SAFE_HTML_CONFIG } from '$lib/components/app/content/MarkdownContent/safe-html-config';
+import MarkdownContent from '#lib/components/app/content/MarkdownContent/MarkdownContent.svelte';
+import { SAFE_HTML_CONFIG } from '#lib/components/app/content/MarkdownContent/safe-html-config.ts';
 import DOMPurify from 'dompurify';
 import { mount, unmount } from 'svelte';
 import { describe, expect, it } from 'vitest';

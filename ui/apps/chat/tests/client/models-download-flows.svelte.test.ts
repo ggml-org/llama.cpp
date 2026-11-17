@@ -3,11 +3,16 @@
 // sidecars it started with, a cancel dropping the whole download, and a reload
 // restoring the paused state of an unfinished one.
 
-import { ModelAuxSidecar, ModelDraftSidecar, ServerModelStatus, ServerRole } from '$lib/enums';
-import { ModelsService } from '$lib/services/models.service';
-import { modelsStore } from '$lib/stores';
-import { serverStore } from '$lib/stores/server.svelte';
-import type { ApiModelDataEntry, ApiModelsListResponse } from '$lib/types/api';
+import {
+	ModelAuxSidecar,
+	ModelDraftSidecar,
+	ServerModelStatus,
+	ServerRole
+} from '#lib/enums/index.ts';
+import { ModelsService } from '#lib/services/models.service.ts';
+import { modelsStore } from '#lib/stores/index.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import type { ApiModelDataEntry, ApiModelsListResponse } from '#lib/types/api.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const REPO = 'org/model-GGUF';

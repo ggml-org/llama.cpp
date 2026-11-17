@@ -1,4 +1,4 @@
-import { BuiltInTool } from '$lib/enums';
+import { BuiltInTool } from '#lib/enums/index.ts';
 
 export const SANDBOX_TOOL_NAME = BuiltInTool.BROWSER_RUN_JAVASCRIPT;
 

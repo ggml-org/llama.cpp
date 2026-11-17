@@ -1,4 +1,4 @@
-import { FILE_PATH_SEPARATOR_REGEX, MODEL_ID } from '$lib/constants';
+import { FILE_PATH_SEPARATOR_REGEX, MODEL_ID } from '#lib/constants/index.ts';
 
 /**
  * Normalizes a model name by extracting the filename from a path, but preserves Hugging Face repository format.

@@ -2,12 +2,17 @@
 	import { parseEditFileMeta, parseEditFileTitleMeta } from './parsers/edit-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { FileTypeText } from '$lib/enums';
-	import { toolsStore } from '$lib/stores';
-	import type { AgenticSection } from '$lib/types';
-	import { abbreviateHome, computeLineDiff, formatJsonPretty, prefixFor } from '$lib/utils';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '#lib/constants/index.ts';
+	import { FileTypeText } from '#lib/enums/index.ts';
+	import { toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import {
+		abbreviateHome,
+		computeLineDiff,
+		formatJsonPretty,
+		prefixFor
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;

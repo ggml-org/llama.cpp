@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ArrowDown } from '@lucide/svelte';
-	import ActionIcon from '$lib/components/app/actions/ActionIcon.svelte';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import ActionIcon from '#lib/components/app/actions/ActionIcon.svelte';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	let { onclick }: { onclick: (e?: MouseEvent) => void } = $props();
 </script>

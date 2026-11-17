@@ -1,5 +1,5 @@
 // Central constants export file
-// All constants should be imported from '$lib/constants'
+// All constants should be imported from '#lib/constants/index.ts'
 
 export * from './agentic.constants';
 export * from './api-endpoints.constants';
@@ -25,7 +25,6 @@ export * from './chat-form.constants';
 export * from './cli-flags.constants';
 export * from './compaction.constants';
 export * from './code-block.constants';
-export * from './context-keys.constants';
 export * from './control-actions.constants';
 export * from './css-classes.constants';
 export * from './formatters.constants';

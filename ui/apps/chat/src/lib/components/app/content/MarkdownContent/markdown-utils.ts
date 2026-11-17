@@ -2,7 +2,7 @@
  * Utility functions for markdown processing in MarkdownContent component.
  */
 
-import { MARKDOWN_DATA_ATTRS } from '$lib/constants';
+import { MARKDOWN_DATA_ATTRS } from '#lib/constants/index.ts';
 import type { RootContent as HastRootContent } from 'hast';
 
 /**

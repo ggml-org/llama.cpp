@@ -2,11 +2,11 @@
 // click or from the keyboard, and a repo row toggles its quants the same way.
 
 import ModelsManagerRowWrapper from './components/ModelsManagerRowWrapper.svelte';
-import ModelsManagerRepoRow from '$lib/components/app/models/ModelsManager/ModelsManagerRepoRow.svelte';
-import type { ModelQuantGroup } from '$lib/components/app/models/ModelsManager/utils';
-import { ModelGroupKind, ServerRole } from '$lib/enums';
-import { serverStore } from '$lib/stores/server.svelte';
-import type { ModelOption } from '$lib/types/models';
+import ModelsManagerRepoRow from '#lib/components/app/models/ModelsManager/ModelsManagerRepoRow.svelte';
+import type { ModelQuantGroup } from '#lib/components/app/models/ModelsManager/utils.ts';
+import { ModelGroupKind, ServerRole } from '#lib/enums/index.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import type { ModelOption } from '#lib/types/models.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

@@ -1,4 +1,4 @@
-import { hasMarkdownStructure } from '$lib/components/app/content/MarkdownEditor/markdown-structure';
+import { hasMarkdownStructure } from '#lib/components/app/content/MarkdownEditor/markdown-structure.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('hasMarkdownStructure', () => {

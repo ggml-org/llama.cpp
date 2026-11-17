@@ -3,7 +3,7 @@ import {
 	KEY_VALUE_PAIR_UNSAFE_KEY_RE,
 	KEY_VALUE_PAIR_UNSAFE_VALUE_RE,
 	KEY_VALUE_PAIR_VALUE_MAX_LENGTH
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 /**
  * Strip control characters unsafe in identifier/header-name contexts and cap length.

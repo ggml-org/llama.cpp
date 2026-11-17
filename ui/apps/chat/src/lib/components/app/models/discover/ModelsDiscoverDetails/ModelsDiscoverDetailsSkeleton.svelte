@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { Skeleton } from '#lib/components/ui/skeleton/index.ts';
 </script>
 
 <!-- Static skeleton of ModelsDiscoverDetails: header, metadata chips, download options and readme lines. -->

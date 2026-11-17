@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { cn } from '$lib/components/ui/utils.js';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import { Drawer as DrawerPrimitive } from 'vaul-svelte';
 
 	let {

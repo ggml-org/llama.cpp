@@ -6,19 +6,19 @@
  * and live processing state while streaming (chatStore).
  */
 
-import { MessageRole, MessageType } from '$lib/enums';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { agenticStore } from '$lib/stores/agentic/index.svelte';
-import { chatStore } from '$lib/stores/chat/index.svelte';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
+import { agenticStore } from '#lib/stores/agentic/index.svelte.ts';
+import { chatStore } from '#lib/stores/chat/index.svelte.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
 import type {
 	ApiProcessingState,
 	ChatMessageAgenticTimings,
 	ChatMessageTimings,
 	DatabaseMessage
-} from '$lib/types';
+} from '#lib/types/index.ts';
 
 interface LiveStats {
 	freshTokens: number;

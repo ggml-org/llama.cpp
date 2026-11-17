@@ -90,6 +90,8 @@ add_library(mtmd
             models/yue2-gen.cpp
             models/voxcpm2-gen.cpp
             models/voxcpm2-spkenc.cpp
+            models/snake-vae.cpp
+            models/music3-gen.cpp
             models/zonos3-spkenc.cpp
             models/pockettts-seanet.cpp
             models/pockettts-spkenc.cpp

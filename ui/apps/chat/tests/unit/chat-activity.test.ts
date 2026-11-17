@@ -1,4 +1,4 @@
-import { ChatActivityStore } from '$lib/stores/chat/activity.svelte';
+import { ChatActivityStore } from '#lib/stores/chat/activity.svelte.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 describe('ChatActivityStore', () => {

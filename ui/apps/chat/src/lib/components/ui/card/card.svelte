@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { cn, type WithElementRef } from '$lib/components/ui/utils';
-	import { BOX_BORDER } from '$lib/constants';
+	import { cn, type WithElementRef } from '#lib/components/ui/utils.ts';
+	import { BOX_BORDER } from '#lib/constants/index.ts';
 	import type { HTMLAttributes } from 'svelte/elements';
 
 	let {

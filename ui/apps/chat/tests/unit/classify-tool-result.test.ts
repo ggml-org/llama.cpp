@@ -1,4 +1,4 @@
-import { classifyToolResult } from '$lib/utils/agentic';
+import { classifyToolResult } from '#lib/utils/agentic.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('classifyToolResult', () => {

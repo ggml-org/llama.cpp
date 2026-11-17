@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { getChatMessageActionsContext } from '$lib/contexts';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { getChatMessageActionsContext } from '#lib/contexts/index.ts';
 
 	interface Props {
 		class?: string;

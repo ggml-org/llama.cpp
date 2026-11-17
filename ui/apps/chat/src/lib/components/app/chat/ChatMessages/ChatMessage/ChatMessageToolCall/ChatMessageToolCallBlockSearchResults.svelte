@@ -1,18 +1,18 @@
 <script lang="ts">
 	import { Globe, Loader2 } from '@lucide/svelte';
-	import { CollapsibleContentBlock } from '$lib/components/app';
-	import * as HoverCard from '$lib/components/ui/hover-card';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
-	import { AgenticSectionType } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { AgenticSection, SearchResult } from '$lib/types';
+	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
+	import * as HoverCard from '#lib/components/ui/hover-card/index.ts';
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, SearchResult } from '#lib/types/index.ts';
 	import {
 		buildProxiedIconUrl,
 		extractSearchQuery,
 		extractSearchResults,
 		faviconForUrl,
 		sanitizeExternalUrl
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;

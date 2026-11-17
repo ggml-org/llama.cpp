@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { ScrollCarousel } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
-	import { BooleanString } from '$lib/enums';
-	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { ScrollCarousel } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { BooleanString } from '#lib/enums/index.ts';
+	import { useScrollCarousel } from '#lib/hooks/use-scroll-carousel.svelte.ts';
+	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
 	import { onMount, tick } from 'svelte';
 
 	interface Props {

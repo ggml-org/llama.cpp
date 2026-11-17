@@ -12,10 +12,10 @@ import {
 	MERMAID_WRAPPER_CLASS,
 	SVG,
 	TOGGLE_SOURCE_BTN_CLASS
-} from '$lib/constants';
-import { BooleanString } from '$lib/enums';
-import { sanitizeSvg } from '$lib/utils/sanitize-svg';
-import { mountSvgShadow } from '$lib/utils/svg-shadow';
+} from '#lib/constants/index.ts';
+import { BooleanString } from '#lib/enums/index.ts';
+import { sanitizeSvg } from '#lib/utils/sanitize-svg.ts';
+import { mountSvgShadow } from '#lib/utils/svg-shadow.ts';
 
 export type DiagramAction = { copy: string } | { previewSvg: string };
 

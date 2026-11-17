@@ -8,18 +8,18 @@
 		SettingsChatToolsTab,
 		SettingsFooter,
 		SettingsResetButton
-	} from '$lib/components/app/settings';
-	import { Button } from '$lib/components/ui/button';
+	} from '#lib/components/app/settings/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
 		SETTINGS_KEYS,
 		SETTINGS_SECTION_SLUGS
-	} from '$lib/constants';
-	import { ColorMode } from '$lib/enums/ui.enums';
-	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	} from '#lib/constants/index.ts';
+	import { ColorMode } from '#lib/enums/ui.enums.ts';
+	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
 	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
 	interface Props {

@@ -1,5 +1,5 @@
-import { detectToolUseSupport } from '$lib/utils/chat-template-tool-detector';
-import { minMemoryTierGb } from '$lib/utils/model-compatibility';
+import { detectToolUseSupport } from '#lib/utils/chat-template-tool-detector.ts';
+import { minMemoryTierGb } from '#lib/utils/model-compatibility.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('minMemoryTierGb', () => {

@@ -1,19 +1,19 @@
 <script lang="ts">
 	import ModelsDiscoverListItem from './ModelsDiscoverList/ModelsDiscoverListItem.svelte';
 	import { Download } from '@lucide/svelte';
-	import { ModelsSection } from '$lib/components/app';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
+	import { ModelsSection } from '#lib/components/app/index.ts';
 	import {
 		ModelsDiscoverDetailsContainer,
 		ModelsDiscoverList,
 		ModelsDiscoverListSearch
-	} from '$lib/components/app/models/discover';
-	import { Button } from '$lib/components/ui/button';
-	import { ModelDownloadConfirmAction } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import { modelsDiscoverStore, modelsStore, uiStore } from '$lib/stores';
-	import type { HfModelInfo } from '$lib/types';
-	import { repoOf } from '$lib/utils';
+	} from '#lib/components/app/models/discover/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { ModelDownloadConfirmAction } from '#lib/enums/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import { modelsDiscoverStore, modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { HfModelInfo } from '#lib/types/index.ts';
+	import { repoOf } from '#lib/utils/index.ts';
 	import { untrack } from 'svelte';
 
 	let selectedId = $state<string | null>(null);

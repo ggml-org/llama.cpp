@@ -8,14 +8,24 @@
 		ModelsSelectorList,
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
-	} from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR, MODEL_ICON, SETTINGS_KEYS } from '$lib/constants';
-	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
-	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
-	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { deviceStore, modelsStore, serverStore, settingsStore, uiStore } from '$lib/stores';
-	import { type ModelItem, modelLoadFraction } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import {
+		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
+		MODEL_ICON,
+		SETTINGS_KEYS
+	} from '#lib/constants/index.ts';
+	import { KeyboardKey, ServerModelStatus } from '#lib/enums/index.ts';
+	import { useChatFormModel } from '#lib/hooks/use-chat-form-model.svelte.ts';
+	import { useModelsSelector } from '#lib/hooks/use-models-selector.svelte.ts';
+	import {
+		deviceStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		uiStore
+	} from '#lib/stores/index.ts';
+	import { type ModelItem, modelLoadFraction } from '#lib/utils/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {

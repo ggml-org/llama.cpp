@@ -1,17 +1,17 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { McpServerCardCompact, McpServerForm } from '$lib/components/app/mcp';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
+	import { McpServerCardCompact, McpServerForm } from '#lib/components/app/mcp/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import {
 		DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
 		HEADERS,
 		MCP_SERVER_ID_PREFIX,
 		RECOMMENDED_MCP_SERVERS
-	} from '$lib/constants';
-	import { BooleanString, HealthCheckStatus } from '$lib/enums';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import { BooleanString, HealthCheckStatus } from '#lib/enums/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '#lib/utils/index.ts';
+	import { browser } from '$app/env';
 
 	interface Props {
 		open: boolean;

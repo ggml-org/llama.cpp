@@ -3,7 +3,7 @@
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { EditorView } from '@codemirror/view';
-import { conversationsStore } from '$lib/stores';
+import { conversationsStore } from '#lib/stores/index.ts';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
