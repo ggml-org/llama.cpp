@@ -1226,6 +1226,19 @@ void launch_fattn(
             }
         }
 
+        // RDNA3.5 decode: the search above can pick ~100 KV splits at 4k context, each block then reads too few KV rows to hide memory latency.
+        // Cap the splits to keep >= 256 KV rows per split and at most ~3 KV streams (KV head x split) per SM, but keep >= 2 blocks per SM.
+        // nsm counts WGPs (2 CUs) on RDNA, skip GPUs with less than 16 CUs.
+        const int64_t min_kv_per_split   = 256;
+        const int64_t max_streams_per_sm = 3;
+        const int64_t min_blocks_per_sm  = 2;
+        if (GGML_CUDA_CC_IS_RDNA3_5(cc) && nsm >= 8 && Q->ne[1] == 1 && n_kv >= 2*min_kv_per_split) {
+            const int64_t kv_streams = (int64_t) ntiles_x*K->ne[2]*Q->ne[3];
+            const int64_t max_splits = std::min(n_kv/min_kv_per_split, (max_streams_per_sm*nsm + kv_streams - 1)/kv_streams);
+            const int64_t min_splits = (min_blocks_per_sm*nsm + ntiles_dst - 1)/ntiles_dst;
+            parallel_blocks = std::min<int64_t>(parallel_blocks, std::max(max_splits, min_splits));
+        }
+
         blocks_num.x = ntiles_x;
         blocks_num.y = parallel_blocks;
         blocks_num.z = ntiles_z_gqa*K->ne[2]*Q->ne[3];
