@@ -3039,6 +3039,16 @@ ggml_cgraph * llama_context::graph_reserve(
     this->n_input_tensors = llama_graph_n_input_tensors(gf);
     this->n_outputs = save_n_outputs;
 
+    // let devices preprocess the graph (e.g. remote devices prefetch supports_op results)
+    for (auto & backend : backends) {
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        auto * graph_preprocess_fn = reg ? (ggml_backend_dev_graph_preprocess_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_graph_preprocess") : nullptr;
+        if (graph_preprocess_fn) {
+            graph_preprocess_fn(dev, gf);
+        }
+    }
+
     // initialize scheduler with the specified graph
     if (split_only) {
         if (sizes) {
