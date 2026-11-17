@@ -418,7 +418,7 @@ export class RealtimeTranscriber {
 }
 
 /** Two transcribed pieces as one text, a space between them where neither has one. */
-function joinPieces(before: string, piece: string): string {
+export function joinPieces(before: string, piece: string): string {
 	if (!before) return piece;
 
 	if (!piece) return before;

@@ -243,6 +243,81 @@ describe('startVoiceSession', () => {
 		warn.mockRestore();
 	});
 
+	describe('a model that cannot stream (Qwen3-ASR)', () => {
+		/** Answers a piece with "Piece N." and the whole clip with `whole`, or fails it. */
+		function server(whole: string | null) {
+			let pieces = 0;
+
+			return vi.fn(async (_url: string, init: RequestInit) => {
+				const file = (init.body as FormData).get('file') as File;
+
+				if (file.name === 'piece.wav') {
+					return new Response(JSON.stringify({ text: `Piece ${++pieces}.` }));
+				}
+
+				return whole === null
+					? new Response('busy', { status: 503 })
+					: new Response(JSON.stringify({ text: whole }));
+			});
+		}
+
+		/** Speaks two pieces with a pause after each, over HTTP once the socket says no. */
+		async function speakOverHttp(fetchMock: ReturnType<typeof server>) {
+			const onText = vi.fn();
+			const { capture, emitPcm, holdLevel } = fakeCapture();
+			const session = await startVoiceSession({
+				capture,
+				onText,
+				transcribe: { context: serverContext(fetchMock as unknown as typeof fetch), model: 'asr' }
+			});
+
+			// said before the socket answered: kept for the first piece
+			emitPcm(Int16Array.from([1, 2]));
+			FakeWebSocket.instances[0].emit({
+				error: { message: 'The current model does not support realtime transcription.' },
+				type: 'error'
+			});
+			await flush();
+
+			holdLevel(0.05, 200);
+			holdLevel(0.6, 500);
+			holdLevel(0.05, 400);
+			await flush();
+			expect(onText).toHaveBeenLastCalledWith('Piece 1.');
+
+			emitPcm(Int16Array.from([3]));
+			holdLevel(0.6, 500);
+			holdLevel(0.05, 400);
+			await flush();
+			expect(onText).toHaveBeenLastCalledWith('Piece 1. Piece 2.');
+
+			return session.stop();
+		}
+
+		it('gives live text piece by piece over HTTP, then the whole clip', async () => {
+			const fetchMock = server('Whole.');
+			const result = await speakOverHttp(fetchMock);
+
+			expect(result.liveText).toBe('Piece 1. Piece 2.');
+			await expect(result.transcript).resolves.toBe('Whole.');
+			// two pieces and the whole clip
+			expect(fetchMock).toHaveBeenCalledTimes(3);
+
+			const first = (fetchMock.mock.calls[0][1].body as FormData).get('file') as File;
+
+			// the audio from before the socket answered went with the first piece
+			expect(first.size).toBeGreaterThan(44);
+		});
+
+		it('keeps the pieces when the whole clip fails', async () => {
+			const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+			const result = await speakOverHttp(server(null));
+
+			await expect(result.transcript).resolves.toBe('Piece 1. Piece 2.');
+			warn.mockRestore();
+		});
+	});
+
 	it('uses HTTP when realtime is still connecting at the end', async () => {
 		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ text: 'Late.' })));
 		const { capture } = fakeCapture();

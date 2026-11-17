@@ -1,6 +1,7 @@
 import { VoiceCapture } from './capture';
 import { VOICE_LEVELS_INTERVAL_MS, VOICE_PIECE, VOICE_RETRANSCRIBE_MAX_MS } from './constants';
 import { RealtimeUnsupportedError } from './errors';
+import { HttpPieceTranscriber } from './http-pieces';
 import { PauseDetector } from './pauses';
 import { RealtimeTranscriber } from './realtime';
 import { transcribeClip } from './transcribe';
@@ -10,8 +11,10 @@ import type { VoiceSession, VoiceSessionOptions, VoiceSessionResult } from './ty
  * Starts capturing and, when asked to transcribe, tries the realtime socket at the
  * same time. Realtime gives live text: a live ASR model streams it, any other model
  * that hears transcribes the recording piece by piece, cut at the speaker's pauses.
- * When the model cannot stream, the socket does not open, or the session fails, the
- * clip is transcribed over HTTP after recording.
+ * When the model cannot hold a realtime session (Qwen3-ASR) or the socket does not
+ * open, the pieces go over HTTP instead, one request each, so the text is live too.
+ * Either way, a recording cut into pieces gets one more pass over the whole clip
+ * at the end, punctuated by meaning rather than by the pauses.
  * @throws VoiceCaptureError when the microphone does not start
  */
 export async function startVoiceSession(options: VoiceSessionOptions = {}): Promise<VoiceSession> {
@@ -36,19 +39,69 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 	let liveText: string | null = null;
 	let ended = false;
 
+	const showText = (text: string) => {
+		liveText = text;
+		options.onText?.(text);
+	};
+	// cuts the recording at the speaker's pauses: short ones, so the text keeps up with them
+	const cutAtPauses = (cut: () => boolean) => {
+		const pauses = new PauseDetector({
+			intervalMs: capture.levelsIntervalMs ?? VOICE_LEVELS_INTERVAL_MS,
+			maxSegmentMs: VOICE_PIECE.MAX_MS,
+			minSpeechMs: VOICE_PIECE.MIN_SPEECH_MS,
+			pauseMs: VOICE_PIECE.PAUSE_MS
+		});
+
+		unsubscribers.push(
+			capture.onLevels((levels) => {
+				const atPause = pauses.push(levels[levels.length - 1] ?? 0);
+
+				if (pauses.heardSpeech) speechSinceCommit = true;
+
+				if (atPause && cut()) speechSinceCommit = false;
+			})
+		);
+	};
+	// pieces over HTTP, for when realtime is not to be had; the audio is kept from the start,
+	// so nothing said while the socket answers is lost if the model turns out unable to stream
+	const httpPieces = transcribe
+		? new HttpPieceTranscriber({
+				onText: showText,
+				sampleRate: capture.sampleRate,
+				transcribe: (wav, signal) =>
+					transcribeClip(transcribe.context, wav, {
+						filename: 'piece.wav',
+						language: transcribe.language,
+						model: transcribe.model,
+						signal
+					})
+			})
+		: null;
+
+	let piecesOverHttp = false;
+
+	if (httpPieces) unsubscribers.push(capture.onPcm((chunk) => httpPieces.append(chunk)));
+
+	const startHttpPieces = () => {
+		if (!httpPieces || ended) return;
+
+		piecesOverHttp = true;
+		cutAtPauses(() => {
+			if (!httpPieces.canCut) return false;
+
+			httpPieces.cut();
+
+			return true;
+		});
+	};
+
 	if (transcribe && options.realtime !== false) {
 		const realtime = new RealtimeTranscriber(transcribe.context, {
 			autoload: transcribe.autoload,
 			language: transcribe.language,
 			model: transcribe.model,
-			onCompleted: (text) => {
-				liveText = text;
-				options.onText?.(text);
-			},
-			onDelta: (_delta, text) => {
-				liveText = text;
-				options.onText?.(text);
-			},
+			onCompleted: showText,
+			onDelta: (_delta, text) => showText(text),
 			sampleRate: capture.sampleRate
 		});
 		const unsubscribePcm = capture.onPcm((chunk) => realtime.append(chunk));
@@ -57,32 +110,22 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 		unsubscribers.push(unsubscribePcm);
 		realtime.connect().then(
 			() => {
+				// the socket has it all from here
+				httpPieces?.close();
+
 				if (ended) return;
 
 				options.onRealtime?.(realtime.live);
 
-				// a model that transcribes per commit gets the speech piece by piece, at its pauses:
-				// short ones, so the text keeps up with the speaker
+				// a model that transcribes per commit gets the speech piece by piece, at its pauses
 				if (!realtime.live) {
-					const pauses = new PauseDetector({
-						intervalMs: capture.levelsIntervalMs ?? VOICE_LEVELS_INTERVAL_MS,
-						maxSegmentMs: VOICE_PIECE.MAX_MS,
-						minSpeechMs: VOICE_PIECE.MIN_SPEECH_MS,
-						pauseMs: VOICE_PIECE.PAUSE_MS
+					cutAtPauses(() => {
+						if (!realtime.canCommitSegment) return false;
+
+						realtime.commitSegment();
+
+						return true;
 					});
-
-					unsubscribers.push(
-						capture.onLevels((levels) => {
-							const cut = pauses.push(levels[levels.length - 1] ?? 0);
-
-							if (pauses.heardSpeech) speechSinceCommit = true;
-
-							if (cut && realtime.canCommitSegment) {
-								realtime.commitSegment();
-								speechSinceCommit = false;
-							}
-						})
-					);
 				}
 			},
 			(error) => {
@@ -91,14 +134,16 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 				if (ended) return;
 
 				if (!(error instanceof RealtimeUnsupportedError)) {
-					console.warn('Realtime transcription unavailable, transcribing after recording:', error);
+					console.warn('Realtime transcription unavailable, transcribing over HTTP:', error);
 				}
 
 				options.onRealtime?.(false);
+				startHttpPieces();
 			}
 		);
 	} else if (transcribe) {
 		options.onRealtime?.(false);
+		startHttpPieces();
 	}
 
 	const release = () => {
@@ -114,6 +159,7 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 			release();
 			capture.cancel();
 			transcriber?.close();
+			httpPieces?.close();
 		},
 		capture,
 		async stop(): Promise<VoiceSessionResult> {
@@ -125,6 +171,7 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 			} catch (error) {
 				release();
 				transcriber?.close();
+				httpPieces?.close();
 
 				throw error;
 			}
@@ -167,9 +214,22 @@ export async function startVoiceSession(options: VoiceSessionOptions = {}): Prom
 								}
 							)
 						: pieces;
+			} else if (piecesOverHttp && httpPieces) {
+				// the whole clip now, punctuated by meaning; a piece still on its way would hold the server up
+				const fromPieces = httpPieces.text;
+
+				httpPieces.close();
+				transcript = overHttp().catch((error) => {
+					if (!fromPieces) throw error;
+
+					console.warn('Transcribing the whole recording failed, keeping its pieces:', error);
+
+					return fromPieces;
+				});
 			} else {
 				// still connecting at the end: the HTTP request is the shorter wait
 				realtime?.close();
+				httpPieces?.close();
 				transcript = overHttp();
 			}
 
