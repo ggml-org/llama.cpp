@@ -344,7 +344,6 @@ private:
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     llama_memory_ptr memory;
-    llama_moe_cache_ptr moe_cache;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
@@ -433,6 +432,9 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+
+    // The cache unregisters backend callbacks and must be destroyed before the backends and scheduler.
+    llama_moe_cache_ptr moe_cache;
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;

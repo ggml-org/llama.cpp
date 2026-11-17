@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ggml-metal.h"
 #include "ggml-metal-device.h"
 
 #ifdef __cplusplus
@@ -33,6 +34,7 @@ ggml_metal_event_t ggml_metal_get_ev_cpy(ggml_metal_t ctx);
 
 void ggml_metal_set_n_cb            (ggml_metal_t ctx, int n_cb);
 void ggml_metal_set_abort_callback  (ggml_metal_t ctx, ggml_abort_callback abort_callback, void * user_data);
+void ggml_metal_set_moe_cache_handler(ggml_metal_t ctx, struct ggml_metal_moe_cache_handler handler);
 
 bool ggml_metal_supports_family     (ggml_metal_t ctx, int family);
 void ggml_metal_capture_next_compute(ggml_metal_t ctx);

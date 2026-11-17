@@ -1,5 +1,25 @@
 #include "common.h"
 
+kernel void kernel_moe_cache_copy_ids(
+        device const int * selected              [[buffer(0)]],
+        device       int * message_layer         [[buffer(1)]],
+        device       int * message_n_ids         [[buffer(2)]],
+        device       int * message_n_expert_used [[buffer(3)]],
+        device       int * message_selected      [[buffer(4)]],
+        constant int     & layer                 [[buffer(5)]],
+        constant uint    & n                     [[buffer(6)]],
+        constant uint    & n_expert_used         [[buffer(7)]],
+        uint tid [[thread_position_in_threadgroup]]) {
+    if (tid == 0) {
+        message_layer[0] = layer;
+        message_n_ids[0] = n;
+        message_n_expert_used[0] = n_expert_used;
+    }
+    for (uint i = tid; i < n; i += 32) {
+        message_selected[i] = selected[i];
+    }
+}
+
 kernel void kernel_argmax_f32(
         constant ggml_metal_kargs_argmax & args,
         device   const char * src0,

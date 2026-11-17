@@ -41,7 +41,8 @@ struct ggml_metal_op {
         int  idx_end,
         bool use_concurrency,
         bool use_capture,
-        int  debug_graph) {
+        int  debug_graph,
+        ggml_metal_moe_cache_handler moe_cache_handler) {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
         this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
@@ -52,6 +53,7 @@ struct ggml_metal_op {
         this->use_concurrency = use_concurrency;
         this->use_capture     = use_capture;
         this->debug_graph     = debug_graph;
+        this->moe_cache_handler = moe_cache_handler;
         this->gf              = gf;
 
         idxs.reserve(gf->n_nodes);
@@ -114,6 +116,8 @@ struct ggml_metal_op {
 
     int debug_graph;
 
+    ggml_metal_moe_cache_handler moe_cache_handler;
+
 private:
     ggml_cgraph * gf;
 
@@ -133,7 +137,8 @@ ggml_metal_op_t ggml_metal_op_init(
         int idx_end,
         bool use_concurrency,
         bool use_capture,
-        int debug_graph) {
+        int debug_graph,
+        ggml_metal_moe_cache_handler moe_cache_handler) {
     ggml_metal_op_t res = new ggml_metal_op(
         dev,
         cmd_buf,
@@ -143,7 +148,8 @@ ggml_metal_op_t ggml_metal_op_init(
         idx_end,
         use_concurrency,
         use_capture,
-        debug_graph);
+        debug_graph,
+        moe_cache_handler);
 
     return res;
 }
@@ -2948,6 +2954,86 @@ size_t ggml_metal_op_mul_mat_id_extra_ids(const ggml_tensor * op) {
     return ggml_type_size(GGML_TYPE_I32)*(ne20*ne21 + ne02);
 }
 
+static void ggml_metal_op_moe_cache_remap_ids(
+        ggml_metal_op_t ctx,
+        ggml_tensor * op,
+        ggml_metal_buffer_id & bid_src2) {
+    const ggml_metal_moe_cache_handler & handler = ctx->moe_cache_handler;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    if (!handler.fn) {
+        return;
+    }
+
+    ggml_metal_moe_cache_request request = {};
+    if (!handler.fn(
+            handler.user_data,
+            op->src[0],
+            op->src[2],
+            &request)) {
+        return;
+    }
+
+    GGML_ASSERT(ggml_is_contiguous(op->src[2]));
+    const int64_t n_ids = ggml_nelements(op->src[2]);
+    GGML_ASSERT(n_ids > 0 && n_ids <= GGML_METAL_MOE_CACHE_MAX_IDS);
+
+    ggml_metal_buffer_id msg = ggml_metal_get_buffer_id(handler.message);
+
+    if (!request.reuse) {
+        auto pipeline = ggml_metal_library_get_pipeline_moe_cache_copy_ids(ctx->lib);
+        ggml_metal_buffer_id message_layer = {
+            msg.metal,
+            msg.offs + offsetof(struct ggml_metal_moe_cache_message, layer),
+        };
+        ggml_metal_buffer_id message_n_ids = {
+            msg.metal,
+            msg.offs + offsetof(struct ggml_metal_moe_cache_message, n_ids),
+        };
+        ggml_metal_buffer_id message_n_expert_used = {
+            msg.metal,
+            msg.offs + offsetof(struct ggml_metal_moe_cache_message, n_expert_used),
+        };
+        ggml_metal_buffer_id message_selected = {
+            msg.metal,
+            msg.offs + offsetof(struct ggml_metal_moe_cache_message, selected),
+        };
+        const uint32_t n = (uint32_t) n_ids;
+        const uint32_t n_expert_used = (uint32_t) op->src[2]->ne[0];
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_buffer(enc, bid_src2, 0);
+        ggml_metal_encoder_set_buffer(enc, message_layer, 1);
+        ggml_metal_encoder_set_buffer(enc, message_n_ids, 2);
+        ggml_metal_encoder_set_buffer(enc, message_n_expert_used, 3);
+        ggml_metal_encoder_set_buffer(enc, message_selected, 4);
+        ggml_metal_encoder_set_bytes (enc, (void *) &request.layer, sizeof(request.layer), 5);
+        ggml_metal_encoder_set_bytes (enc, (void *) &n, sizeof(n), 6);
+        ggml_metal_encoder_set_bytes (enc, (void *) &n_expert_used, sizeof(n_expert_used), 7);
+        ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 32, 1, 1);
+
+        // Debug groups cannot span compute encoders.
+        if (ctx->use_capture) {
+            ggml_metal_encoder_debug_group_pop(enc);
+        }
+        ggml_metal_encoder_signal_and_wait_for_event(
+            enc,
+            (ggml_metal_event_t) handler.event->context,
+            2*request.seq - 1,
+            2*request.seq);
+        if (ctx->use_capture) {
+            ggml_metal_encoder_debug_group_push(enc, ggml_op_desc(op));
+        }
+        if (ctx->mem_ranges) {
+            // The encoder boundary already orders all earlier work.
+            ggml_mem_ranges_reset(ctx->mem_ranges);
+        }
+    }
+
+    bid_src2.metal = msg.metal;
+    bid_src2.offs  = msg.offs + offsetof(struct ggml_metal_moe_cache_message, remapped);
+}
+
 int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2978,6 +3064,8 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     ggml_metal_buffer_id bid_src1 = ggml_metal_get_buffer_id(op->src[1]);
     ggml_metal_buffer_id bid_src2 = ggml_metal_get_buffer_id(op->src[2]);
     ggml_metal_buffer_id bid_dst  = ggml_metal_get_buffer_id(op);
+
+    ggml_metal_op_moe_cache_remap_ids(ctx, op, bid_src2);
 
     const uint32_t r2 = 1;
     const uint32_t r3 = 1;
