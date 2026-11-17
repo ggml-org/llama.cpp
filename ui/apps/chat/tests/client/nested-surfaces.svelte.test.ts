@@ -4,9 +4,9 @@
 // group's, so its radius is the group's less the padding between their edges.
 
 import '../../src/app.css';
-import SidebarNavigationActions from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationActions.svelte';
-import SidebarNavigationFooter from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationFooter.svelte';
-import { SIDEBAR_ACTIONS_ITEMS, SIDEBAR_FOOTER_ITEMS } from '$lib/constants';
+import SidebarNavigationActions from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigationActions.svelte';
+import SidebarNavigationFooter from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigationFooter.svelte';
+import { SIDEBAR_ACTIONS_ITEMS, SIDEBAR_FOOTER_ITEMS } from '#lib/constants/index.ts';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

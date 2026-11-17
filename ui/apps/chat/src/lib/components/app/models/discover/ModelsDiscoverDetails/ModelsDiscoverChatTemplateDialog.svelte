@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { Check, Copy, X } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { COPY_FEEDBACK_RESET_MS } from '$lib/constants';
-	import { copyToClipboard } from '$lib/utils';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import { COPY_FEEDBACK_RESET_MS } from '#lib/constants/index.ts';
+	import { copyToClipboard } from '#lib/utils/index.ts';
 
 	interface Props {
 		open?: boolean;

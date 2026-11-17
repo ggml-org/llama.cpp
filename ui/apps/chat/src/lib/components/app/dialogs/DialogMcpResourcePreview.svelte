@@ -1,18 +1,18 @@
 <script lang="ts">
 	import { Download } from '@lucide/svelte';
-	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '$lib/constants';
-	import { MimeTypeText } from '$lib/enums';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
+	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '#lib/constants/index.ts';
+	import { MimeTypeText } from '#lib/enums/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
 	import {
 		downloadResourceContent,
 		getLanguageFromFilename,
 		isCodeResource,
 		isImageResource
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		open: boolean;

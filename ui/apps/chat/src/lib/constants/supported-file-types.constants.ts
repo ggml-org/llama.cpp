@@ -3,6 +3,7 @@
  * Organized by category with TypeScript enums for better type safety
  */
 
+import { FileExtensionVideo, FileTypeVideo } from '#lib/enums/files.enums.ts';
 import {
 	FileExtensionAudio,
 	FileExtensionImage,
@@ -17,8 +18,7 @@ import {
 	MimeTypeImage,
 	MimeTypeText,
 	MimeTypeVideo
-} from '$lib/enums';
-import { FileExtensionVideo, FileTypeVideo } from '$lib/enums/files.enums';
+} from '#lib/enums/index.ts';
 
 // File type configuration using enums
 export const AUDIO_FILE_TYPES = {

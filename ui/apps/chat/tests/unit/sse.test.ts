@@ -1,4 +1,4 @@
-import { parseSseJsonStream } from '$lib/utils/sse';
+import { parseSseJsonStream } from '#lib/utils/sse.ts';
 import { describe, expect, it } from 'vitest';
 
 function makeSseResponse(events: string[]): Response {

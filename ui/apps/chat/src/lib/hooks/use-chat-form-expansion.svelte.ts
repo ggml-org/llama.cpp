@@ -2,7 +2,7 @@ import { useKeyboardInset } from './use-keyboard-inset.svelte';
 import {
 	type CollapsedHeightHoldOptions,
 	createCollapsedHeightHold
-} from '$lib/components/app/chat/ChatForm/chat-form-collapsed-height';
+} from '#lib/components/app/chat/ChatForm/chat-form-collapsed-height.ts';
 import {
 	SHEET_AT_REST,
 	type SheetFrame,
@@ -10,9 +10,9 @@ import {
 	type SheetRects,
 	shiftSheetRects,
 	shouldExpandChatForm
-} from '$lib/components/app/chat/ChatForm/chat-form-expand';
-import { CHAT_FORM_EASE_OUT, CHAT_FORM_SHEET_MS, UI_DATA_ATTRS } from '$lib/constants';
-import { deviceStore, uiStore } from '$lib/stores';
+} from '#lib/components/app/chat/ChatForm/chat-form-expand.ts';
+import { CHAT_FORM_EASE_OUT, CHAT_FORM_SHEET_MS, UI_DATA_ATTRS } from '#lib/constants/index.ts';
+import { deviceStore, uiStore } from '#lib/stores/index.ts';
 import { flushSync, onDestroy, tick, untrack } from 'svelte';
 
 export interface UseChatFormExpansionOptions extends CollapsedHeightHoldOptions {

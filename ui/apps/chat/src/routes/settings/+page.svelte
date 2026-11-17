@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { SettingsChat } from '$lib/components/app/settings';
-	import { APP_NAME } from '$lib/constants';
+	import { SettingsChat } from '#lib/components/app/settings/index.ts';
+	import { APP_NAME } from '#lib/constants/index.ts';
 	import { toast } from 'svelte-sonner';
 </script>
 

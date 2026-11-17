@@ -1,4 +1,4 @@
-import type { AttachmentType } from '$lib/enums';
+import type { AttachmentType } from '#lib/enums/index.ts';
 
 /**
  * Common utility types used across the application

@@ -7,16 +7,16 @@
 		ChatFormActionSubmit,
 		ChatFormContextGauge,
 		ModelsSelector
-	} from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
-	import { setChatFormActionsContext } from '$lib/contexts';
-	import { FileTypeCategory } from '$lib/enums';
-	import { useChatFormModel } from '$lib/hooks/use-chat-form-model.svelte';
-	import { useShowContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { ChatService } from '$lib/services';
-	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
-	import { abbreviateWorkingDir, getFileTypeCategory } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
+	import { setChatFormActionsContext } from '#lib/contexts/index.ts';
+	import { FileTypeCategory } from '#lib/enums/index.ts';
+	import { useChatFormModel } from '#lib/hooks/use-chat-form-model.svelte.ts';
+	import { useShowContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
+	import { ChatService } from '#lib/services/index.ts';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '#lib/stores/index.ts';
+	import { abbreviateWorkingDir, getFileTypeCategory } from '#lib/utils/index.ts';
 
 	interface Props {
 		canSend?: boolean;

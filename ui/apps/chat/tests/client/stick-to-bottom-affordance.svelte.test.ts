@@ -2,7 +2,7 @@
 // bottom, which still reads as near it, only once the reader is well above it, and
 // never once they are back at the bottom.
 
-import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
+import { createStickToBottom } from '#lib/hooks/use-stick-to-bottom.svelte.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 
 let cleanup: (() => void)[] = [];

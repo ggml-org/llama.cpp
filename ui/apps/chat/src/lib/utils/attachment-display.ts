@@ -1,10 +1,14 @@
-import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
+import { AttachmentType, FileTypeCategory, SpecialFileType } from '#lib/enums/index.ts';
 import type {
 	AttachmentDisplayItemsOptions,
 	ChatAttachmentDisplayItem,
 	ChatUploadedFile
-} from '$lib/types';
-import { getFileTypeCategory, getFileTypeCategoryByExtension, isImageFile } from '$lib/utils';
+} from '#lib/types/index.ts';
+import {
+	getFileTypeCategory,
+	getFileTypeCategoryByExtension,
+	isImageFile
+} from '#lib/utils/index.ts';
 
 /**
  * Check if a display item represents an MCP prompt

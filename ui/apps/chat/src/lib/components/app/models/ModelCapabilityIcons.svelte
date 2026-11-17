@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		CAPABILITY_ICONS,
 		CAPABILITY_LABELS,
@@ -7,9 +7,9 @@
 		MODALITY_ICONS,
 		MODALITY_LABELS,
 		MODALITY_ORDER
-	} from '$lib/constants';
-	import { ModelCapability } from '$lib/enums';
-	import type { ModelModalities } from '$lib/types/models';
+	} from '#lib/constants/index.ts';
+	import { ModelCapability } from '#lib/enums/index.ts';
+	import type { ModelModalities } from '#lib/types/models.js';
 
 	interface Props {
 		modalities?: ModelModalities;

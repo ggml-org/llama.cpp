@@ -15,19 +15,20 @@ describe('PWA Build Output', () => {
 		return;
 	}
 
-	const swContent = readFileSync(resolve(DIST_DIR, 'sw.js'), 'utf-8');
+	const swContent = readFileSync(resolve(DIST_DIR, 'service-worker.js'), 'utf-8');
+	const legacySwContent = readFileSync(resolve(DIST_DIR, 'sw.js'), 'utf-8');
 	const indexContent = readFileSync(resolve(DIST_DIR, 'index.html'), 'utf-8');
 
 	describe('Core files exist', () => {
-		it('service worker (sw.js) exists', () => {
-			expect(existsSync(resolve(DIST_DIR, 'sw.js')), 'sw.js not found').toBeTruthy();
+		it('service worker (service-worker.js) exists', () => {
+			expect(
+				existsSync(resolve(DIST_DIR, 'service-worker.js')),
+				'service-worker.js not found'
+			).toBeTruthy();
 		});
 
-		it('workbox library exists (hashed filename)', () => {
-			// SvelteKit generates workbox-{hash}.js files
-			const files = readdirSync(DIST_DIR).filter((f) => f.match(/^workbox-[^.]+\.js$/));
-
-			expect(files.length).toBeGreaterThan(0);
+		it('legacy service worker (sw.js) exists', () => {
+			expect(existsSync(resolve(DIST_DIR, 'sw.js')), 'sw.js not found').toBeTruthy();
 		});
 
 		it('manifest.webmanifest exists', () => {
@@ -80,52 +81,40 @@ describe('PWA Build Output', () => {
 	});
 
 	describe('Service worker content', () => {
-		it('service worker has minified self.define format', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit's workbox-plugin-sveltekit produces a minified SW with self.define
-			expect(swContent).toMatch(/if\(!self.define\)/);
-		});
-
-		it('references hashed workbox file (SvelteKit build output)', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit's workbox-plugin-sveltekit references hashed workbox files
-			expect(swContent).toMatch(/define\(\["\.\/workbox-[a-zA-Z0-9]+"\]/);
-		});
-
 		it('precache contains SvelteKit bundle.js with content hash', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit uses content-hashed bundle names in _app/immutable/
-			expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+			expect(swContent).toMatch(/["'`]_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js["'`]/);
 		});
 
 		it('precache contains SvelteKit bundle.css with content hash', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit uses content-hashed CSS bundle names in _app/immutable/assets/
-			expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
+			expect(swContent).toMatch(/["'`]_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css["'`]/);
 		});
 
-		it('precache contains _app/version.json', () => {
-			expect(swContent).toBeTruthy();
-			// SvelteKit stores version.json in _app directory
-			expect(swContent).toMatch(/"_app\/version\.json"/);
+		it('precache contains the app shell, _app/version.json and manifest.webmanifest', () => {
+			expect(swContent).toMatch(/["'`]\.\/["'`]/);
+			expect(swContent).toMatch(/["'`]_app\/version\.json["'`]/);
+			expect(swContent).toMatch(/["'`]manifest\.webmanifest["'`]/);
 		});
 
-		it('precache contains manifest.webmanifest', () => {
-			expect(swContent).toBeTruthy();
-			expect(swContent).toMatch(/"manifest\.webmanifest"/);
+		it('activates a waiting worker on SKIP_WAITING', () => {
+			expect(swContent).toMatch(/SKIP_WAITING/);
+			expect(swContent).toMatch(/skipWaiting\(\)/);
 		});
 
-		it('no navigation route — API endpoints bypass PWA', () => {
-			expect(swContent).toBeTruthy();
-			// NavigationRoute is intentionally absent so direct browser
-			// navigation to server API endpoints returns JSON, not HTML.
-			expect(swContent).not.toMatch(/NavigationRoute/);
+		it('precaches from the network, not the HTTP cache', () => {
+			// a stale index.html from the HTTP cache would point at the previous build's bundle
+			expect(swContent).toMatch(/cache:\s*["'`]reload["'`]/);
 		});
 
-		it('has runtime caching for API routes', () => {
-			expect(swContent).toBeTruthy();
-			expect(swContent).toMatch(/api-cache/);
-			expect(swContent).toMatch(/NetworkFirst/);
+		it('does not route API requests', () => {
+			// only precached files are served from cache, so API calls always hit the server
+			expect(swContent).not.toMatch(/v1\//);
+		});
+	});
+
+	describe('Legacy service worker content', () => {
+		it('unregisters itself and clears caches', () => {
+			expect(legacySwContent).toMatch(/registration\.unregister\(\)/);
+			expect(legacySwContent).toMatch(/caches\.delete/);
 		});
 	});
 
@@ -176,14 +165,6 @@ describe('PWA Build Output', () => {
 	describe('SvelteKit _app directory', () => {
 		it('_app directory exists (SvelteKit uses it for hashed assets)', () => {
 			expect(existsSync(resolve(DIST_DIR, '_app'))).toBeTruthy();
-		});
-	});
-
-	describe('Hashed workbox files', () => {
-		it('workbox-*.js files exist in dist root (SvelteKit build output)', () => {
-			const files = readdirSync(DIST_DIR).filter((f) => f.match(/^workbox-[^.]+\.js$/));
-
-			expect(files.length).toBeGreaterThan(0);
 		});
 	});
 

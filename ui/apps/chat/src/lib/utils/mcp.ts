@@ -26,7 +26,7 @@ import {
 	RESOURCE_TEXT_CONTENT_SEPARATOR,
 	TEXT_FILE_EXTENSION_REGEX,
 	URI_PATTERNS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	ColorMode,
 	HealthCheckStatus,
@@ -34,7 +34,8 @@ import {
 	MCPTransportType,
 	MimeTypeText,
 	UrlProtocol
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
+import type { MimeTypeUnion } from '#lib/types/common.js';
 import type {
 	HealthCheckState,
 	MCPResourceContent,
@@ -42,8 +43,7 @@ import type {
 	MCPResourceInfo,
 	MCPServerDisplayInfo,
 	MCPServerSettingsEntry
-} from '$lib/types';
-import type { MimeTypeUnion } from '$lib/types/common';
+} from '#lib/types/index.ts';
 import type { Component } from 'svelte';
 
 /**

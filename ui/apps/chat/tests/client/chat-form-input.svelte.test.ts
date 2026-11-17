@@ -4,9 +4,9 @@
 // key and paste handlers run first and win when they handle the event.
 
 import { EditorView } from '@codemirror/view';
-import ChatFormInput from '$lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInput.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import ChatFormInput from '#lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInput.svelte';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';

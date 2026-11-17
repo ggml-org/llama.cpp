@@ -6,9 +6,9 @@
 
 import { lastPathSegment } from './path-display';
 import { buildGlobSearchArgs, joinPath, rankEntries } from './working-directory';
-import { GLOB, PATH_SEPARATOR, SEARCH } from '$lib/constants';
-import { BuiltInTool, GlobSearchType } from '$lib/enums';
-import { ToolsService } from '$lib/services/tools.service';
+import { GLOB, PATH_SEPARATOR, SEARCH } from '#lib/constants/index.ts';
+import { BuiltInTool, GlobSearchType } from '#lib/enums/index.ts';
+import { ToolsService } from '#lib/services/tools.service.ts';
 import type {
 	GlobEntry,
 	GlobEntryResult,
@@ -16,7 +16,7 @@ import type {
 	GlobSearchChildOptions,
 	GlobSearchChildResult,
 	GlobSearchResult
-} from '$lib/types/glob';
+} from '#lib/types/glob.js';
 
 const SEARCH_CACHE_TTL_MS = 2000;
 

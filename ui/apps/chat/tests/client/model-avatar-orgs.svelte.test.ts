@@ -2,10 +2,10 @@
 // family grouping (grouped lists leave the base org to the family heading), while a
 // caller that names one flag keeps control of what the avatar shows.
 
-import ModelAvatar from '$lib/components/app/models/ModelAvatar.svelte';
-import { SETTINGS_KEYS } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { ModelOption } from '$lib/types/models';
+import ModelAvatar from '#lib/components/app/models/ModelAvatar.svelte';
+import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import type { ModelOption } from '#lib/types/models.js';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 

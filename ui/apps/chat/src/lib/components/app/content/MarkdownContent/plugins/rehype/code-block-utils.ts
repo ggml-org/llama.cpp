@@ -10,7 +10,7 @@ import {
 	DIAGRAM_SOURCE_CLASS,
 	PREVIEW_ICON_SVG,
 	TOGGLE_SOURCE_BTN_CLASS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import type { Element, ElementContent } from 'hast';
 
 export interface BlockIdGenerator {

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { CHAT_FORM_RESIZE_MS, CHAT_GREETING_ENTER_DELAY_MS } from '$lib/constants';
-	import { serverStore } from '$lib/stores';
+	import { CHAT_FORM_RESIZE_MS, CHAT_GREETING_ENTER_DELAY_MS } from '#lib/constants/index.ts';
+	import { serverStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		/** Transparent but still in place, e.g. behind the expanded chat form. */

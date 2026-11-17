@@ -1,11 +1,11 @@
 <script lang="ts">
 	import { FolderPlus, Pencil } from '@lucide/svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Label } from '$lib/components/ui/label';
-	import { GROUP_NAME_MAX_LENGTH } from '$lib/constants';
-	import { groupsStore, uiStore } from '$lib/stores';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { Input } from '#lib/components/ui/input/index.ts';
+	import { Label } from '#lib/components/ui/label/index.ts';
+	import { GROUP_NAME_MAX_LENGTH } from '#lib/constants/index.ts';
+	import { groupsStore, uiStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
 
 	let options = $derived(uiStore.groupDialog);

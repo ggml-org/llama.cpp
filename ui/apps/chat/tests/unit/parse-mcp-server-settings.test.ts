@@ -1,5 +1,5 @@
-import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
-import { parseMcpServerSettings } from '$lib/utils/mcp';
+import { MCP_SERVER_ID_PREFIX } from '#lib/constants/index.ts';
+import { parseMcpServerSettings } from '#lib/utils/mcp.ts';
 import { describe, expect, it, vi } from 'vitest';
 
 /**

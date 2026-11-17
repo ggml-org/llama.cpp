@@ -7,21 +7,21 @@
  * ParameterSyncService.
  */
 
-import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '$lib/constants';
-import { ColorMode } from '$lib/enums';
-import { ParameterSyncService } from '$lib/services/parameter-sync.service';
-import { SettingsService } from '$lib/services/settings.service';
-import { deviceStore } from '$lib/stores/device.svelte';
+import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { ColorMode } from '#lib/enums/index.ts';
+import { ParameterSyncService } from '#lib/services/parameter-sync.service.ts';
+import { SettingsService } from '#lib/services/settings.service.ts';
+import { deviceStore } from '#lib/stores/device.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { serverStore } from '$lib/stores/server.svelte';
-import type { SettingsExportType } from '$lib/types';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import type { SettingsExportType } from '#lib/types/index.ts';
 import {
 	configToParameterRecord,
 	getConfigValue,
 	normalizeFloatingPoint,
 	setConfigValue
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
+import { browser } from '$app/env';
 import { setMode } from 'mode-watcher';
 
 class SettingsStore {

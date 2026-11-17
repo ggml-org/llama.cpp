@@ -1,4 +1,4 @@
-import { readGgufMetadata } from '$lib/utils/gguf-metadata';
+import { readGgufMetadata } from '#lib/utils/gguf-metadata.ts';
 import { describe, expect, it } from 'vitest';
 
 type Entry =

@@ -1,4 +1,4 @@
-import { getJpegOrientationFromDataURL, isJpegMimeType } from '$lib/utils/jpeg-orientation';
+import { getJpegOrientationFromDataURL, isJpegMimeType } from '#lib/utils/jpeg-orientation.ts';
 import { describe, expect, it } from 'vitest';
 
 // Builds the TIFF payload of an APP1 segment holding a single IFD0 entry

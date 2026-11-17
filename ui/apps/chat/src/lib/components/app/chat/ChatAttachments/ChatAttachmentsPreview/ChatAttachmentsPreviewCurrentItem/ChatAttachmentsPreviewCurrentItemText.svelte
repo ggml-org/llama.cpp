@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SyntaxHighlightedCode } from '$lib/components/app';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
 
 	interface Props {
 		displayTextContent: string | undefined;

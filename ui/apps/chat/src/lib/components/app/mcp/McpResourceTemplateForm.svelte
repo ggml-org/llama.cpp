@@ -1,16 +1,16 @@
 <script lang="ts">
-	import { InputWithSuggestions } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { MIN_AUTOCOMPLETE_INPUT_LENGTH } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { MCPResourceTemplateInfo } from '$lib/types';
+	import { InputWithSuggestions } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { MIN_AUTOCOMPLETE_INPUT_LENGTH } from '#lib/constants/index.ts';
+	import { KeyboardKey } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { MCPResourceTemplateInfo } from '#lib/types/index.ts';
 	import {
 		debounce,
 		expandTemplate,
 		extractTemplateVariables,
 		isTemplateComplete
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		template: MCPResourceTemplateInfo;

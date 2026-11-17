@@ -9,11 +9,14 @@
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { AlertTriangle, Check, CircleStop, Loader2, XCircle } from '@lucide/svelte';
-	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
-	import { AgenticSectionType, AttachmentType } from '$lib/enums';
-	import { settingsStore, toolsStore } from '$lib/stores';
-	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
+	import { CollapsibleTerminalBlock } from '#lib/components/app/index.ts';
+	import {
+		SETTINGS_KEYS,
+		TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX
+	} from '#lib/constants/index.ts';
+	import { AgenticSectionType, AttachmentType } from '#lib/enums/index.ts';
+	import { settingsStore, toolsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '#lib/types/index.ts';
 	import {
 		abbreviateHome,
 		type ExecShellExitStatus,
@@ -22,7 +25,7 @@
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
 		parseToolResultWithMedia
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -264,8 +267,7 @@
 		{:else if section.toolResult}
 			<div
 				bind:this={scrollEl}
-				class:is-clamped={!useFullHeightCodeBlocks}
-				class="terminal-output"
+				class={['terminal-output', !useFullHeightCodeBlocks && 'is-clamped']}
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}

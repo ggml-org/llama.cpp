@@ -1,4 +1,4 @@
-import type { MenuKind, SidebarAction } from '$lib/enums';
+import type { MenuKind, SidebarAction } from '#lib/enums/index.ts';
 import type { Component, Snippet } from 'svelte';
 
 /**

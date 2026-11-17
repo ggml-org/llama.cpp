@@ -6,10 +6,15 @@
  * No reactive state; consumed by settingsStore.
  */
 
-import { SETTINGS_KEYS, SETTINGS_REGISTRY } from '$lib/constants';
-import { ParameterSource, SyncableParameterType } from '$lib/enums';
-import type { ParameterInfo, ParameterRecord, ParameterValue, SyncableParameter } from '$lib/types';
-import { normalizeFloatingPoint } from '$lib/utils';
+import { SETTINGS_KEYS, SETTINGS_REGISTRY } from '#lib/constants/index.ts';
+import { ParameterSource, SyncableParameterType } from '#lib/enums/index.ts';
+import type {
+	ParameterInfo,
+	ParameterRecord,
+	ParameterValue,
+	SyncableParameter
+} from '#lib/types/index.ts';
+import { normalizeFloatingPoint } from '#lib/utils/index.ts';
 
 /** Mapping of UI setting keys to server parameter keys, derived from the registry. */
 export const SYNCABLE_PARAMETERS: SyncableParameter[] = SETTINGS_REGISTRY.flatMap(

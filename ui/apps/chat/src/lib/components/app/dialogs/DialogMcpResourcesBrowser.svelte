@@ -4,13 +4,17 @@
 		McpResourcePreview,
 		McpResourcesBrowser,
 		McpResourceTemplateForm
-	} from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import * as Dialog from '$lib/components/ui/dialog';
-	import { ICON_CLASS_DEFAULT, PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
-	import { deviceStore, mcpStore } from '$lib/stores';
-	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
-	import { getResourceDisplayName } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
+	import { ICON_CLASS_DEFAULT, PANEL_CLOSE_MOBILE_CLASS } from '#lib/constants/index.ts';
+	import { deviceStore, mcpStore } from '#lib/stores/index.ts';
+	import type {
+		MCPResourceContent,
+		MCPResourceInfo,
+		MCPResourceTemplateInfo
+	} from '#lib/types/index.ts';
+	import { getResourceDisplayName } from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { toast } from 'svelte-sonner';
 

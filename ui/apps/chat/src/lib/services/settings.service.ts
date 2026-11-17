@@ -1,5 +1,5 @@
-import { browser } from '$app/environment';
-import { CONFIG_LOCALSTORAGE_KEY, USER_OVERRIDES_LOCALSTORAGE_KEY } from '$lib/constants';
+import { CONFIG_LOCALSTORAGE_KEY, USER_OVERRIDES_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { browser } from '$app/env';
 
 /**
  * SettingsService - localStorage persistence layer for settings

@@ -15,10 +15,10 @@
 		Trash2,
 		Unlink
 	} from '@lucide/svelte';
-	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
-	import { TruncatedText } from '$lib/components/app';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
+	import { TruncatedText } from '#lib/components/app/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		FORK_TREE_DEPTH_PADDING,
 		ICON_CLASS_DEFAULT,
@@ -27,10 +27,10 @@
 		SHORTCUT_EDIT_CONVERSATION,
 		SHORTCUT_EXPORT_CONVERSATION,
 		UI_DATA_ATTRS
-	} from '$lib/constants';
-	import type { MenuKind } from '$lib/enums';
-	import { useLongPress } from '$lib/hooks/use-long-press.svelte';
-	import { RouterService } from '$lib/services/router.service';
+	} from '#lib/constants/index.ts';
+	import type { MenuKind } from '#lib/enums/index.ts';
+	import { useLongPress } from '#lib/hooks/use-long-press.svelte.ts';
+	import { RouterService } from '#lib/services/router.service.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -40,9 +40,9 @@
 		sidebarDragStore,
 		tabsStore,
 		uiStore
-	} from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
-	import { hapticTap } from '$lib/utils';
+	} from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
+	import { hapticTap } from '#lib/utils/index.ts';
 	import { onMount, tick } from 'svelte';
 
 	interface Props {

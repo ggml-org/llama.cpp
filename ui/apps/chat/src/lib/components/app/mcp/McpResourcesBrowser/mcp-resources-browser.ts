@@ -1,5 +1,5 @@
-import type { MCPResource, MCPResourceInfo } from '$lib/types';
-import { parseResourcePath } from '$lib/utils';
+import type { MCPResource, MCPResourceInfo } from '#lib/types/index.ts';
+import { parseResourcePath } from '#lib/utils/index.ts';
 
 export interface ResourceTreeNode {
 	name: string;

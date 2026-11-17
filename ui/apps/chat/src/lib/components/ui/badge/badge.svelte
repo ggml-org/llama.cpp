@@ -24,7 +24,7 @@
 </script>
 
 <script lang="ts">
-	import { cn, type WithElementRef } from '$lib/components/ui/utils';
+	import { cn, type WithElementRef } from '#lib/components/ui/utils.ts';
 	import type { HTMLAnchorAttributes } from 'svelte/elements';
 
 	let {

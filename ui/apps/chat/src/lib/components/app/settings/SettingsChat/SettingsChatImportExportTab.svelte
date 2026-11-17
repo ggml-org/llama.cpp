@@ -5,12 +5,12 @@
 		DialogConfirmation,
 		DialogConversationSelection,
 		DialogExportSettings
-	} from '$lib/components/app';
-	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
-	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
-	import { ConversationTransferService } from '$lib/services';
-	import { conversationsStore, groupsStore, settingsStore } from '$lib/stores';
-	import { createMessageCountMap } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import SettingsGroup from '#lib/components/app/settings/SettingsGroup.svelte';
+	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '#lib/enums/index.ts';
+	import { ConversationTransferService } from '#lib/services/index.ts';
+	import { conversationsStore, groupsStore, settingsStore } from '#lib/stores/index.ts';
+	import { createMessageCountMap } from '#lib/utils/index.ts';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
 

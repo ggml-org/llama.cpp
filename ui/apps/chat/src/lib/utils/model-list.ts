@@ -1,5 +1,5 @@
-import { ModelModality } from '$lib/enums';
-import type { ModelOption } from '$lib/types/models';
+import { ModelModality } from '#lib/enums/index.ts';
+import type { ModelOption } from '#lib/types/models.js';
 
 /** Model list helpers: search, grouping and windowing of the selector rows. */
 

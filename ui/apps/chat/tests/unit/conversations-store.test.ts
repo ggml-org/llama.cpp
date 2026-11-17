@@ -5,7 +5,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/services/database.service', () => ({
+vi.mock('#lib/services/database.service.ts', () => ({
 	DatabaseService: {
 		getConversation: vi.fn(),
 		getConversationMessages: vi.fn(),
@@ -14,9 +14,9 @@ vi.mock('$lib/services/database.service', () => ({
 	}
 }));
 
-import { DatabaseService } from '$lib/services/database.service';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import type { DatabaseConversation, DatabaseMessage } from '#lib/types/database.js';
 
 const getConversationMock = vi.mocked(DatabaseService.getConversation);
 const getMessagesMock = vi.mocked(DatabaseService.getConversationMessages);

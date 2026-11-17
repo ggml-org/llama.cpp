@@ -1,4 +1,4 @@
-import { redactValue } from '$lib/utils/redact';
+import { redactValue } from '#lib/utils/redact.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('redactValue', () => {

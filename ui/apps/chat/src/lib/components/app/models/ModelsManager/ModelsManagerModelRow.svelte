@@ -9,11 +9,11 @@
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, downloadProgressFor, isRowControlClick } from './utils';
 	import { Heart, MoreHorizontal } from '@lucide/svelte';
-	import { ContextMenuActions, DropdownMenuActions } from '$lib/components/app';
-	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '$lib/constants';
-	import { ModelRowDownloadState } from '$lib/enums';
-	import { deviceStore, modelsStore } from '$lib/stores';
-	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
+	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
+	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '#lib/constants/index.ts';
+	import { ModelRowDownloadState } from '#lib/enums/index.ts';
+	import { deviceStore, modelsStore } from '#lib/stores/index.ts';
+	import type { ModelOption, ModelSidecarBadge } from '#lib/types/models.js';
 
 	interface Props {
 		isFavorite: (option: ModelOption) => boolean;

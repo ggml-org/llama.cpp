@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { RotateCcw } from '@lucide/svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { settingsStore } from '$lib/stores';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		onReset?: () => void;

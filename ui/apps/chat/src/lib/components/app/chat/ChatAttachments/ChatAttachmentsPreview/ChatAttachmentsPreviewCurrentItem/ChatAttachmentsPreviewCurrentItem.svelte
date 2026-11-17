@@ -6,7 +6,7 @@
 	import ChatAttachmentsPreviewCurrentItemUnavailable from './ChatAttachmentsPreviewCurrentItemUnavailable.svelte';
 	import ChatAttachmentsPreviewCurrentItemVideo from './ChatAttachmentsPreviewCurrentItemVideo.svelte';
 	import { FileIcon, FileText, Image, Music, Video } from '@lucide/svelte';
-	import type { ChatAttachmentDisplayItem } from '$lib/types';
+	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
 
 	interface Props {
 		currentItem: ChatAttachmentDisplayItem | null;

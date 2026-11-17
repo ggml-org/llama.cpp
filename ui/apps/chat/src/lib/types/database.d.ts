@@ -1,6 +1,6 @@
-import { AttachmentType, ReasoningEffort, ToolSource } from '$lib/enums';
-import type { ChatMessageTimings, ChatMessageType, ChatRole } from '$lib/types/chat';
-import type { Group } from '$lib/types/groups';
+import { AttachmentType, ReasoningEffort, ToolSource } from '#lib/enums/index.ts';
+import type { ChatMessageTimings, ChatMessageType, ChatRole } from '#lib/types/chat.js';
+import type { Group } from '#lib/types/groups.js';
 
 /**
  * @deprecated Legacy per-conversation MCP server flags. MCP server enabled

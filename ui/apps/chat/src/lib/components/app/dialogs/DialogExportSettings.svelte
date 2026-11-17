@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Shield, ShieldOff } from '@lucide/svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import Label from '$lib/components/ui/label/label.svelte';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import Label from '#lib/components/ui/label/label.svelte';
 
 	let {
 		includeSensitiveData = $bindable(false),

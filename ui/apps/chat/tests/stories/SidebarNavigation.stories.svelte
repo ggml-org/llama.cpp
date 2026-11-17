@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import SidebarNavigation from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigation.svelte';
+	import SidebarNavigation from '#lib/components/app/navigation/SidebarNavigation/SidebarNavigation.svelte';
 	import { expect } from 'storybook/test';
 	import { waitFor } from 'storybook/test';
 	import { screen } from 'storybook/test';
@@ -54,7 +54,7 @@
 	asChild
 	name="Default"
 	play={async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
+		const { conversationsStore } = await import('#lib/stores/conversations/index.svelte.ts');
 
 		waitFor(() =>
 			setTimeout(() => {
@@ -72,7 +72,7 @@
 	asChild
 	name="SearchActive"
 	play={async ({ userEvent }) => {
-		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
+		const { conversationsStore } = await import('#lib/stores/conversations/index.svelte.ts');
 
 		waitFor(() =>
 			setTimeout(() => {
@@ -101,7 +101,7 @@
 	name="Empty"
 	play={async () => {
 		// Mock empty conversations store
-		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
+		const { conversationsStore } = await import('#lib/stores/conversations/index.svelte.ts');
 
 		conversationsStore.conversations = [];
 	}}

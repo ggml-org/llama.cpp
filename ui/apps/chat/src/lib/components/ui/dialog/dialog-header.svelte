@@ -1,7 +1,7 @@
 <script lang="ts">
 	import XIcon from '@lucide/svelte/icons/x';
-	import { cn, type WithElementRef } from '$lib/components/ui/utils';
-	import { PANEL_CLOSE_MOBILE_CLASS } from '$lib/constants';
+	import { cn, type WithElementRef } from '#lib/components/ui/utils.ts';
+	import { PANEL_CLOSE_MOBILE_CLASS } from '#lib/constants/index.ts';
 	import { Dialog as DialogPrimitive } from 'bits-ui';
 	import type { HTMLAttributes } from 'svelte/elements';
 

@@ -7,8 +7,8 @@
 		gaugeTriggerLeave,
 		gaugeTriggerPointerDown
 	} from './gauge-popup.svelte';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
+	import { useContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
+	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {

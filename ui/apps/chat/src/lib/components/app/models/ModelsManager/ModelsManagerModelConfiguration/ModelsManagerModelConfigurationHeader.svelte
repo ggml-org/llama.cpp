@@ -1,11 +1,11 @@
 <script lang="ts">
 	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
 	import { X } from '@lucide/svelte';
-	import { ModelAvatar, ModelId } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { ServerModelStatus } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ModelAvatar, ModelId } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { ServerModelStatus } from '#lib/enums/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		isDownload?: boolean;

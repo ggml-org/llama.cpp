@@ -6,10 +6,11 @@
  * modelsStore and its status manager.
  */
 
-import { base } from '$app/paths';
-import { API_MODELS, MODEL_ID, type ModelSidecar } from '$lib/constants';
-import { ServerModelStatus } from '$lib/enums';
-import type { ModelSidecarBadge, ParsedModelId } from '$lib/types/models';
+import { API_MODELS, MODEL_ID, type ModelSidecar } from '#lib/constants/index.ts';
+import { ServerModelStatus } from '#lib/enums/index.ts';
+import type { ModelSidecarBadge, ParsedModelId } from '#lib/types/models.js';
+import { getAuthHeaders } from '#lib/utils/api-headers.ts';
+import { withBase } from '#lib/utils/base-path.ts';
 import {
 	apiDelete,
 	apiFetch,
@@ -20,8 +21,7 @@ import {
 	repoOf,
 	sidecarFromFileToken,
 	splitSseRecords
-} from '$lib/utils';
-import { getAuthHeaders } from '$lib/utils/api-headers';
+} from '#lib/utils/index.ts';
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
@@ -360,7 +360,7 @@ export class ModelsService {
 
 		while (!signal.aborted) {
 			try {
-				const response = await fetch(`${base}${API_MODELS.SSE}`, {
+				const response = await fetch(withBase(API_MODELS.SSE), {
 					headers: getAuthHeaders(),
 					signal
 				});

@@ -1,20 +1,20 @@
 <script lang="ts">
 	import { File, Folder, Image, MessageSquare, Mic, Plus, Video } from '@lucide/svelte';
-	import { ChatFormActionAddToolsSubmenu } from '$lib/components/app';
-	import { buttonVariants } from '$lib/components/ui/button';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { cn } from '$lib/components/ui/utils';
+	import { ChatFormActionAddToolsSubmenu } from '#lib/components/app/index.ts';
+	import { buttonVariants } from '#lib/components/ui/button/index.ts';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_MENU_TEXT,
 		ATTACHMENT_MODALITY_TEXT,
 		ATTACHMENT_TOOLTIP_TEXT,
 		ICON_CLASS_DEFAULT
-	} from '$lib/constants';
-	import { getChatFormActionsContext } from '$lib/contexts';
-	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
-	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	} from '#lib/constants/index.ts';
+	import { getChatFormActionsContext } from '#lib/contexts/index.ts';
+	import { AttachmentAction, AttachmentItemEnabledWhen } from '#lib/enums/index.ts';
+	import { useAttachmentMenu } from '#lib/hooks/use-attachment-menu.svelte.ts';
 
 	interface Props {
 		class?: string;

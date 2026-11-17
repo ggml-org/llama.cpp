@@ -1,8 +1,8 @@
 /**
  * Utility functions for conversation data manipulation
  */
-import { MessageRole } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types';
+import { MessageRole } from '#lib/enums/index.ts';
+import type { DatabaseMessage } from '#lib/types/index.ts';
 
 /**
  * Model that generated the conversation's latest assistant message, or null

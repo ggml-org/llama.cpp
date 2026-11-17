@@ -1,5 +1,5 @@
-import { UI_DATA_ATTRS } from '$lib/constants';
-import { BooleanString } from '$lib/enums';
+import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+import { BooleanString } from '#lib/enums/index.ts';
 import githubLightCss from 'highlight.js/styles/github.css?inline';
 import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 

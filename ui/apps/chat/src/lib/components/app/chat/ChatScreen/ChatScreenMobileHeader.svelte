@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { HOME_TILDE, SET_WORKING_DIRECTORY_LABEL } from '$lib/constants';
-	import { conversationsStore, toolsStore } from '$lib/stores';
-	import { lastPathSegment } from '$lib/utils';
+	import { HOME_TILDE, SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
+	import { conversationsStore, toolsStore } from '#lib/stores/index.ts';
+	import { lastPathSegment } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Opens the chat form's working directory picker. */

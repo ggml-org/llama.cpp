@@ -3,7 +3,7 @@ import {
 	GGUF_KEY_HAS_VISION_ENCODER,
 	PATH_SEPARATOR,
 	SETTINGS_KEYS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	BYTE,
 	BYTE_LABEL,
@@ -73,10 +73,10 @@ import {
 	WEEKS_AGO_LABEL,
 	YEARS_AGO_LABEL,
 	YESTERDAY_LABEL
-} from '$lib/constants';
-import { MODEL_ID, type ModelSidecar } from '$lib/constants';
-import { HfEntryType, HfModelSort, SidecarForm } from '$lib/enums';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+} from '#lib/constants/index.ts';
+import { MODEL_ID, type ModelSidecar } from '#lib/constants/index.ts';
+import { HfEntryType, HfModelSort, SidecarForm } from '#lib/enums/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import type {
 	HfCatalogEntry,
 	HfMmprojEncoders,
@@ -84,9 +84,9 @@ import type {
 	HfModelInfo,
 	HfModelSearchParams,
 	HfModelSibling
-} from '$lib/types/huggingface';
-import type { ModelModalities } from '$lib/types/models';
-import { readGgufMetadata, sidecarFromFileToken } from '$lib/utils';
+} from '#lib/types/huggingface.js';
+import type { ModelModalities } from '#lib/types/models.js';
+import { readGgufMetadata, sidecarFromFileToken } from '#lib/utils/index.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Fetch failure carrying the HTTP status, so retry logic tests the code instead of the message. */

@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { KeyValuePairs } from '$lib/components/app';
-	import { Input } from '$lib/components/ui/input';
-	import { Switch } from '$lib/components/ui/switch';
-	import { CLI_FLAGS, HEADERS, MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
-	import { UrlProtocol } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { KeyValuePair } from '$lib/types';
-	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
+	import { KeyValuePairs } from '#lib/components/app/index.ts';
+	import { Input } from '#lib/components/ui/input/index.ts';
+	import { Switch } from '#lib/components/ui/switch/index.ts';
+	import { CLI_FLAGS, HEADERS, MCP_SERVER_URL_PLACEHOLDER } from '#lib/constants/index.ts';
+	import { UrlProtocol } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { KeyValuePair } from '#lib/types/index.ts';
+	import { parseHeadersToArray, serializeHeaders } from '#lib/utils/index.ts';
 
 	interface Props {
 		url: string;

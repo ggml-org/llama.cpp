@@ -1,5 +1,5 @@
+import { AttachmentAction } from '#lib/enums/index.ts';
 import { page } from '$app/state';
-import { AttachmentAction } from '$lib/enums';
 
 export interface AttachmentModalityFlags {
 	hasVisionModality: boolean;

@@ -1,6 +1,6 @@
-import type { ModelSidecar } from '$lib/constants';
-import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
-import { ModelsService } from '$lib/services/models.service';
+import type { ModelSidecar } from '#lib/constants/index.ts';
+import { ModelAuxSidecar, ModelDraftSidecar } from '#lib/enums/index.ts';
+import { ModelsService } from '#lib/services/models.service.ts';
 import { describe, expect, it } from 'vitest';
 
 const { parseModelId } = ModelsService;

@@ -6,12 +6,12 @@
 		ModelId,
 		ModelLoadControl,
 		ModelRowActions
-	} from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
-	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { ServerModelStatus } from '#lib/enums/index.ts';
+	import { modelsStore, settingsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { modelLoadFraction, modelLoadProgressText } from '#lib/utils/index.ts';
 
 	interface Props {
 		option: ModelOption;

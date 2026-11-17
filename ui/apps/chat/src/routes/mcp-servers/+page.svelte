@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { SettingsMcpServers } from '$lib/components/app/settings';
-	import { APP_NAME } from '$lib/constants';
+	import { SettingsMcpServers } from '#lib/components/app/settings/index.ts';
+	import { APP_NAME } from '#lib/constants/index.ts';
 </script>
 
 <svelte:head>

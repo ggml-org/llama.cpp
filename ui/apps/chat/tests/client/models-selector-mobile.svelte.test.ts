@@ -1,12 +1,12 @@
 // Guards the phone model picker: the selector serves a phone a bottom drawer
 // with the same search and sections the desktop menu shows.
 
-import ModelsSelector from '$lib/components/app/models/ModelsSelector/ModelsSelector.svelte';
-import { ServerRole } from '$lib/enums';
-import { ModelsService } from '$lib/services/models.service';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
-import type { ModelOption } from '$lib/types/models';
+import ModelsSelector from '#lib/components/app/models/ModelsSelector/ModelsSelector.svelte';
+import { ServerRole } from '#lib/enums/index.ts';
+import { ModelsService } from '#lib/services/models.service.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import type { ModelOption } from '#lib/types/models.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

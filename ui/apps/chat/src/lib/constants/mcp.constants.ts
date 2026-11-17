@@ -1,7 +1,7 @@
 import { Globe, Radio, Zap } from '@lucide/svelte';
-import { MCPTransportType } from '$lib/enums';
-import { MimeTypeImage } from '$lib/enums/files.enums';
-import type { ClientCapabilities, Implementation } from '$lib/types';
+import { MimeTypeImage } from '#lib/enums/files.enums.ts';
+import { MCPTransportType } from '#lib/enums/index.ts';
+import type { ClientCapabilities, Implementation } from '#lib/types/index.ts';
 import type { Component } from 'svelte';
 
 export const DEFAULT_CLIENT_VERSION = '1.0.0';

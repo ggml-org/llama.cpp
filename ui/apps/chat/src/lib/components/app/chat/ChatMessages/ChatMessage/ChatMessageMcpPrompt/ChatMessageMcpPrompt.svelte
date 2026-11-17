@@ -3,10 +3,10 @@
 		ChatMessageActionIcons,
 		ChatMessageEditForm,
 		ChatMessageMcpPromptContent
-	} from '$lib/components/app';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { McpPromptVariant } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	} from '#lib/components/app/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { McpPromptVariant } from '#lib/enums/index.ts';
+	import type { DatabaseMessageExtraMcpPrompt } from '#lib/types/index.ts';
 
 	interface Props {
 		class?: string;

@@ -13,7 +13,7 @@
  * `edit_file` snippet typically carries.
  */
 
-import { DiffLineKind } from '$lib/enums';
+import { DiffLineKind } from '#lib/enums/index.ts';
 
 export interface DiffLine {
 	kind: DiffLineKind;

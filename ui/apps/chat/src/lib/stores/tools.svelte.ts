@@ -7,7 +7,6 @@
  * the chat flows.
  */
 
-import { browser } from '$app/environment';
 import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
@@ -18,7 +17,7 @@ import {
 	HOME_TILDE,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	BuiltInTool,
 	GlobSearchType,
@@ -26,14 +25,15 @@ import {
 	JsonSchemaType,
 	ToolCallType,
 	ToolSource
-} from '$lib/enums';
-import { ToolsService } from '$lib/services/tools.service';
+} from '#lib/enums/index.ts';
+import { ToolsService } from '#lib/services/tools.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpStore } from '$lib/stores/mcp/index.svelte';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
-import { ApiError, buildSandboxToolDefinition } from '$lib/utils';
+import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '#lib/types/index.ts';
+import { ApiError, buildSandboxToolDefinition } from '#lib/utils/index.ts';
+import { browser } from '$app/env';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 /** Stable selection identity for a tool, shared by the disabled set and the permission store */

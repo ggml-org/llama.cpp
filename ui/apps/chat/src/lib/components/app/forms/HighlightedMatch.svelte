@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { highlightMatch } from '$lib/utils';
+	import { highlightMatch } from '#lib/utils/index.ts';
 
 	interface Props {
 		text: string;

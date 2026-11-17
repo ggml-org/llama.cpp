@@ -7,7 +7,7 @@
 	import { MATH_FORMULAS_MD } from './fixtures/math-formulas.js';
 	import { README_MD } from './fixtures/readme.js';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { MarkdownContent } from '$lib/components/app';
+	import { MarkdownContent } from '#lib/components/app/index.ts';
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({

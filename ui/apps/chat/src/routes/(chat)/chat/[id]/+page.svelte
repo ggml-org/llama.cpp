@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { goto, replaceState } from '$app/navigation';
+	import { DialogModelNotAvailable } from '#lib/components/app/index.ts';
+	import { APP_NAME, ROUTES, URL_PARAMS } from '#lib/constants/index.ts';
+	import { chatStore, conversationsStore, modelsStore } from '#lib/stores/index.ts';
+	import { goto } from '$app/navigation';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { DialogModelNotAvailable } from '$lib/components/app';
-	import { APP_NAME, ROUTES, URL_PARAMS } from '$lib/constants';
-	import { chatStore, conversationsStore, modelsStore } from '$lib/stores';
 
 	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
@@ -25,11 +25,11 @@
 	 * Clear URL params after message is sent to prevent re-sending on refresh
 	 */
 	function clearUrlParams() {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 
 		url.searchParams.delete(URL_PARAMS.QUERY);
 		url.searchParams.delete(URL_PARAMS.MODEL);
-		replaceState(url.toString(), {});
+		goto(url.toString(), { replace: true, shallow: true });
 	}
 
 	async function handleUrlParams() {

@@ -1,5 +1,5 @@
 import type { OpenAIToolDefinition } from './mcp';
-import type { ToolSource } from '$lib/enums';
+import type { ToolSource } from '#lib/enums/index.ts';
 import type { Component } from 'svelte';
 
 /**

@@ -1,8 +1,8 @@
 <script lang="ts" module>
 	import { JOKES_TABLE_MD, WIDE_CELL_TABLE_MD } from './fixtures/mobile-tables.js';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
-	import type { ChatMessageActions } from '$lib/types';
+	import ChatMessage from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
+	import type { ChatMessageActions } from '#lib/types/index.ts';
 
 	const { Story } = defineMeta({
 		component: ChatMessage,
@@ -190,7 +190,7 @@
 	}}
 	name="User"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
@@ -203,7 +203,7 @@
 	}}
 	name="Assistant"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
@@ -216,7 +216,7 @@
 	}}
 	name="AssistantWithTable"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
@@ -229,7 +229,7 @@
 	}}
 	name="AssistantWithReasoning"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 	}}
@@ -242,7 +242,7 @@
 	}}
 	name="RawLlmOutput"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', true);
 	}}
@@ -255,8 +255,8 @@
 	}}
 	name="Compaction"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
-		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
+		const { conversationsStore } = await import('#lib/stores/conversations/index.svelte.ts');
 
 		settingsStore.updateConfig('showMessageStats', true);
 		settingsStore.updateConfig('showRawOutputSwitch', false);
@@ -273,9 +273,9 @@
 	}}
 	name="CompactionPrefill"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
-		const { chatActivityStore } = await import('$lib/stores/chat/activity.svelte');
-		const { chatStore } = await import('$lib/stores/chat/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
+		const { chatActivityStore } = await import('#lib/stores/chat/activity.svelte.ts');
+		const { chatStore } = await import('#lib/stores/chat/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 
@@ -310,9 +310,9 @@
 	}}
 	name="CompactionGenerating"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
-		const { chatActivityStore } = await import('$lib/stores/chat/activity.svelte');
-		const { chatStore } = await import('$lib/stores/chat/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
+		const { chatActivityStore } = await import('#lib/stores/chat/activity.svelte.ts');
+		const { chatStore } = await import('#lib/stores/chat/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 
@@ -344,7 +344,7 @@
 	asChild
 	name="WithReasoningContent"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 		// Phase 1: Stream reasoning content in chunks
@@ -400,11 +400,11 @@
 	}}
 	name="Processing"
 	play={async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.updateConfig('showRawOutputSwitch', false);
 		// Import the chat store to simulate loading state
-		const { chatStore } = await import('$lib/stores/chat/index.svelte');
+		const { chatStore } = await import('#lib/stores/chat/index.svelte.ts');
 
 		// Set loading state to true to trigger the processing UI
 		chatStore.isLoading = true;

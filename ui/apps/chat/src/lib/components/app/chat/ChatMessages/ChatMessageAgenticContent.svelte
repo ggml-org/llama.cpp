@@ -6,16 +6,20 @@
 		ChatMessageActionCardPermissionRequest,
 		ChatMessageStatistics,
 		MarkdownContent
-	} from '$lib/components/app';
-	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
-	import { agenticStore, conversationsStore, settingsStore } from '$lib/stores';
+	} from '#lib/components/app/index.ts';
+	import {
+		AgenticSectionType,
+		ChatMessageStatsView,
+		ToolPermissionDecision
+	} from '#lib/enums/index.ts';
+	import { agenticStore, conversationsStore, settingsStore } from '#lib/stores/index.ts';
 	import type {
 		AgenticSection,
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
-	} from '$lib/types';
-	import { deriveAgenticSections, isSectionExpandedByDefault } from '$lib/utils';
+	} from '#lib/types/index.ts';
+	import { deriveAgenticSections, isSectionExpandedByDefault } from '#lib/utils/index.ts';
 
 	interface Props {
 		message: DatabaseMessage;

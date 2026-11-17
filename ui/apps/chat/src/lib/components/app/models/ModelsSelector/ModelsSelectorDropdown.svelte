@@ -7,17 +7,17 @@
 		ModelsSelectorList,
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
-	} from '$lib/components/app';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_ICON } from '$lib/constants';
-	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
-	import type { UseModelsSelectorReturn } from '$lib/hooks/use-models-selector.svelte';
-	import { ModelsService } from '$lib/services/models.service';
-	import { modelsStore, uiStore } from '$lib/stores';
-	import type { ModelOption, ModelSidecarBadge } from '$lib/types/models';
-	import type { ModelItem } from '$lib/utils';
-	import { modelLoadFraction, repoOf } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { MODEL_ICON } from '#lib/constants/index.ts';
+	import { KeyboardKey, ServerModelStatus } from '#lib/enums/index.ts';
+	import type { UseModelsSelectorReturn } from '#lib/hooks/use-models-selector.svelte.ts';
+	import { ModelsService } from '#lib/services/models.service.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { ModelOption, ModelSidecarBadge } from '#lib/types/models.js';
+	import type { ModelItem } from '#lib/utils/index.ts';
+	import { modelLoadFraction, repoOf } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** The selector state this shell renders; the owner derives it once. */

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import MermaidPreviewControls from './MermaidPreviewControls.svelte';
-	import { SVG } from '$lib/constants';
-	import { mountSvgShadow } from '$lib/utils/svg-shadow';
+	import { SVG } from '#lib/constants/index.ts';
+	import { mountSvgShadow } from '#lib/utils/svg-shadow.ts';
 
 	interface Props {
 		svgHtml: string;

@@ -1,5 +1,5 @@
-import { DatabaseService } from '$lib/services/database.service';
-import type { Group } from '$lib/types';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import type { Group } from '#lib/types/index.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 
 function makeGroup(id: string): Group {

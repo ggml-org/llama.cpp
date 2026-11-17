@@ -1,4 +1,4 @@
-import { CONFIG_LOCALSTORAGE_KEY, STORAGE_APP_NAME } from '$lib/constants';
+import { CONFIG_LOCALSTORAGE_KEY, STORAGE_APP_NAME } from '#lib/constants/index.ts';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 // node env unit project has no DOM, install a minimal localStorage backed by a Map
@@ -35,7 +35,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 	beforeEach(async () => {
 		localStorage.clear();
 		// Reset the migration run counter so `runAllMigrations` is guaranteed to execute.
-		await import('$lib/services/migration.service').then((mod) =>
+		await import('#lib/services/migration.service.ts').then((mod) =>
 			mod.MigrationService.resetState()
 		);
 	});
@@ -45,7 +45,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 	});
 
 	async function runMigrations() {
-		const { MigrationService } = await import('$lib/services/migration.service');
+		const { MigrationService } = await import('#lib/services/migration.service.ts');
 
 		await MigrationService.runAllMigrations();
 	}
@@ -148,7 +148,7 @@ describe('mcp-default-overrides-merge-v1 migration', () => {
 			mcpServers: JSON.stringify([{ enabled: false, id: 'exa', url: 'https://mcp.exa.ai/mcp' }])
 		});
 
-		const { MigrationService } = await import('$lib/services/migration.service');
+		const { MigrationService } = await import('#lib/services/migration.service.ts');
 
 		await MigrationService.runAllMigrations();
 

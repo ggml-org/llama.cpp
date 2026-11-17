@@ -1,10 +1,10 @@
 <script lang="ts">
-	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { ScrollArea } from '$lib/components/ui/scroll-area';
-	import { UI_DATA_ATTRS } from '$lib/constants';
-	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
+	import SearchInput from '#lib/components/app/forms/SearchInput.svelte';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import { ScrollArea } from '#lib/components/ui/scroll-area/index.ts';
+	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { useMarqueeSelection } from '#lib/hooks/use-marquee-selection.svelte.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {

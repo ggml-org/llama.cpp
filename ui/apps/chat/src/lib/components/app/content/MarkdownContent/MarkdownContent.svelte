@@ -1,5 +1,5 @@
 <script lang="ts">
-	import '$lib/styles/katex-custom.scss';
+	import '#lib/styles/katex-custom.scss';
 	import {
 		getDiagramButtonAction,
 		renderMermaidDiagrams,
@@ -20,7 +20,7 @@
 		CodeBlockActions,
 		DialogCodePreview,
 		DialogMermaidPreview
-	} from '$lib/components/app';
+	} from '#lib/components/app/index.ts';
 	import {
 		CODE_BLOCK_CLASS,
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
@@ -29,11 +29,11 @@
 		MERMAID_LANGUAGE,
 		SETTINGS_KEYS,
 		SVG
-	} from '$lib/constants';
-	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
-	import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
-	import { settingsStore } from '$lib/stores';
-	import type { DatabaseMessageExtra } from '$lib/types/database';
+	} from '#lib/constants/index.ts';
+	import { BooleanString, ColorMode, UrlProtocol } from '#lib/enums/index.ts';
+	import { createStickToBottom } from '#lib/hooks/use-stick-to-bottom.svelte.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtra } from '#lib/types/database.js';
 	import {
 		copyCodeToClipboard,
 		copyToClipboard,
@@ -41,10 +41,14 @@
 		loadHighlightTheme,
 		preprocessLaTeX,
 		splitGluedClosingCodeFences
-	} from '$lib/utils';
-	import { detectIncompleteCodeBlock, highlightCode, type IncompleteCodeBlock } from '$lib/utils';
-	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
-	import { mountSvgShadow } from '$lib/utils/svg-shadow';
+	} from '#lib/utils/index.ts';
+	import {
+		detectIncompleteCodeBlock,
+		highlightCode,
+		type IncompleteCodeBlock
+	} from '#lib/utils/index.ts';
+	import { sanitizeSvg } from '#lib/utils/sanitize-svg.ts';
+	import { mountSvgShadow } from '#lib/utils/svg-shadow.ts';
 	import DOMPurify from 'dompurify';
 	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
 	import type { Root as MdastRoot } from 'mdast';

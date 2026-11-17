@@ -11,7 +11,7 @@
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
 		DialogMcpResourcesBrowser
-	} from '$lib/components/app';
+	} from '#lib/components/app/index.ts';
 	import {
 		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
@@ -20,7 +20,7 @@
 		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT
-	} from '$lib/constants';
+	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
@@ -28,9 +28,9 @@
 		MimeTypeText,
 		SpecialFileType,
 		ToolSource
-	} from '$lib/enums';
-	import { useChatFormExpansion } from '$lib/hooks/use-chat-form-expansion.svelte';
-	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	} from '#lib/enums/index.ts';
+	import { useChatFormExpansion } from '#lib/hooks/use-chat-form-expansion.svelte.ts';
+	import { useChatFormPickers } from '#lib/hooks/use-chat-form-pickers.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -41,14 +41,22 @@
 		settingsStore,
 		toolsStore,
 		uiStore
-	} from '$lib/stores';
+	} from '#lib/stores/index.ts';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
 		MCPPromptInfo,
 		MCPResourceInfo,
 		PromptMessage
-	} from '$lib/types';
+	} from '#lib/types/index.ts';
+	import {
+		AudioRecorder,
+		convertToWav,
+		createAudioFile,
+		describeMicrophoneError,
+		isAudioRecordingSupported,
+		microphoneUnavailableReason
+	} from '#lib/utils/browser-only.ts';
 	import {
 		buildMentionInsertion,
 		findCommandToken,
@@ -57,15 +65,7 @@
 		isIMEComposing,
 		parseClipboardContent,
 		uuid
-	} from '$lib/utils';
-	import {
-		AudioRecorder,
-		convertToWav,
-		createAudioFile,
-		describeMicrophoneError,
-		isAudioRecordingSupported,
-		microphoneUnavailableReason
-	} from '$lib/utils/browser-only';
+	} from '#lib/utils/index.ts';
 	import { onMount, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';

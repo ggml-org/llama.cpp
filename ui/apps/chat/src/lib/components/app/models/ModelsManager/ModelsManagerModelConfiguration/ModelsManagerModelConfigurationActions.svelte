@@ -10,8 +10,8 @@
 		SquarePen,
 		Trash2
 	} from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { conversationsStore, deviceStore, uiStore } from '$lib/stores';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { conversationsStore, deviceStore, uiStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		/** A provider that cannot load or unload has no button to offer. */

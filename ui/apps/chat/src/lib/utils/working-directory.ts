@@ -13,8 +13,8 @@ import {
 	PATH_SEPARATOR,
 	SEARCH,
 	TRAILING_SLASHES_REGEX
-} from '$lib/constants';
-import type { GlobEntry, GlobSearchArgs } from '$lib/types/glob';
+} from '#lib/constants/index.ts';
+import type { GlobEntry, GlobSearchArgs } from '#lib/types/glob.js';
 
 export interface PathQuery {
 	parent: string;

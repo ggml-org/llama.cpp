@@ -1,5 +1,5 @@
-import { ColorLevel, MessageRole } from '$lib/enums';
-import type { ApiProcessingState, DatabaseMessage } from '$lib/types';
+import { ColorLevel, MessageRole } from '#lib/enums/index.ts';
+import type { ApiProcessingState, DatabaseMessage } from '#lib/types/index.ts';
 
 const WARNING_THRESHOLD = 80;
 const CRITICAL_THRESHOLD = 95;

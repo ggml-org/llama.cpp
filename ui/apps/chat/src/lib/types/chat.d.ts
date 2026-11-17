@@ -8,7 +8,7 @@ import type {
 	ErrorDialogType,
 	FileMentionEntryType,
 	MessageRole
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 import type { Component } from 'svelte';
 
 /**

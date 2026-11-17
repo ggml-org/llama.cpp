@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelAvatar from '../ModelAvatar.svelte';
-	import { MODEL_ICON } from '$lib/constants';
-	import type { ModelOption } from '$lib/types/models';
+	import { MODEL_ICON } from '#lib/constants/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		class?: string;

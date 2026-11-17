@@ -467,7 +467,7 @@ export { default as ChatMessage } from './ChatMessages/ChatMessage/ChatMessage.s
  * and child tool result messages) and renders them as interactive collapsible sections.
  *
  * **Architecture:**
- * - Uses `deriveAgenticSections()` from `$lib/utils` to build sections from structured data
+ * - Uses `deriveAgenticSections()` from `#lib/utils/index.ts` to build sections from structured data
  * - Renders sections as CollapsibleContentBlock components
  * - Handles streaming state for progressive content display
  * - Falls back to MarkdownContent for plain text sections

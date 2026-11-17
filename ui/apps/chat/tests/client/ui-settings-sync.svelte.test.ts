@@ -1,6 +1,6 @@
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
-import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { CONFIG_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 function mockProps(
@@ -88,7 +88,7 @@ describe('server ui_settings application semantics', () => {
 
 describe('syncable scope (spec section 4)', () => {
 	it('sampling params keep their live server twin, ui settings carry none', async () => {
-		const { ParameterSyncService } = await import('$lib/services/parameter-sync.service');
+		const { ParameterSyncService } = await import('#lib/services/parameter-sync.service.ts');
 
 		expect(ParameterSyncService.canSyncParameter('temperature')).toBe(true);
 		expect(ParameterSyncService.canSyncParameter('samplers')).toBe(true);

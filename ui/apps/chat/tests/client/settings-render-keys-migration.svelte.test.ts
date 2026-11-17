@@ -4,9 +4,9 @@
 // returns to its own default. The toggle is removed from the persisted
 // config so it does not stay orphaned in localStorage.
 
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
-import { MigrationService } from '$lib/services/migration.service';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { CONFIG_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { MigrationService } from '#lib/services/migration.service.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const RENDER_KEYS_MIGRATION_ID = 'render-keys-unfold-v1';

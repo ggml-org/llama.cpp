@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { FileText, Music, Video } from '@lucide/svelte';
-	import { ScrollCarousel } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
-	import { ScrollCarouselVariant } from '$lib/enums';
+	import { ScrollCarousel } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
 
 	interface PreviewItem {
 		id: string;

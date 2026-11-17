@@ -1,4 +1,4 @@
-import { CODE_BLOCK, NEWLINE } from '$lib/constants';
+import { CODE_BLOCK, NEWLINE } from '#lib/constants/index.ts';
 import hljs from 'highlight.js';
 
 export interface IncompleteCodeBlock {

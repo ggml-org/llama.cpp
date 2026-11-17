@@ -20,8 +20,8 @@ import {
 	SearchCode,
 	Terminal
 } from '@lucide/svelte';
-import { BuiltInTool, ToolSource } from '$lib/enums';
-import type { ToolUiEntry } from '$lib/types';
+import { BuiltInTool, ToolSource } from '#lib/enums/index.ts';
+import type { ToolUiEntry } from '#lib/types/index.ts';
 
 export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
 	[BuiltInTool.BROWSER_GET_DATETIME]: {

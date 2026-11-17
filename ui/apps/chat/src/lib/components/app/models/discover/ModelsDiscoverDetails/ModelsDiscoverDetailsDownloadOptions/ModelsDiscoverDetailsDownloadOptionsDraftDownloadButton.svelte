@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { Download } from '@lucide/svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { HuggingFaceService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
-	import type { ModelCompanionDraft } from '$lib/types';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import type { ModelCompanionDraft } from '#lib/types/index.ts';
 
 	interface Props {
 		/** The draft its model is missing, with its own file, quant and size. */

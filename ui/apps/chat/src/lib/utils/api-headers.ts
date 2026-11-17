@@ -1,7 +1,7 @@
 import { redactValue } from './redact';
-import { CORS_PROXY, HEADERS } from '$lib/constants';
-import { MimeTypeApplication } from '$lib/enums';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { CORS_PROXY, HEADERS } from '#lib/constants/index.ts';
+import { MimeTypeApplication } from '#lib/enums/index.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 
 /**
  * Get authorization headers for API requests

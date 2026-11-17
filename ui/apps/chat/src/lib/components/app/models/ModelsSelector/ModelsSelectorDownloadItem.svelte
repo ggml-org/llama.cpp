@@ -3,11 +3,11 @@
 	import ModelDraftSubline from '../ModelDraftSubline.svelte';
 	import ModelOrgAvatar from '../ModelOrgAvatar.svelte';
 	import { Info, Loader2, Pause, Play, X } from '@lucide/svelte';
-	import { ActionIcon, ModelId } from '$lib/components/app';
-	import { ModelRowDownloadState } from '$lib/enums';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { modelsStore, uiStore } from '$lib/stores';
-	import type { ModelDownloadEntry, ModelSidecarBadge } from '$lib/types';
+	import { ActionIcon, ModelId } from '#lib/components/app/index.ts';
+	import { ModelRowDownloadState } from '#lib/enums/index.ts';
+	import { HuggingFaceService, ModelsService } from '#lib/services/index.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { ModelDownloadEntry, ModelSidecarBadge } from '#lib/types/index.ts';
 
 	interface Props {
 		/** One entry from the status feed: an in-flight or paused download. */

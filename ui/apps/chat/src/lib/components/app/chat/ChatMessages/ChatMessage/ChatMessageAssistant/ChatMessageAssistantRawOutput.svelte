@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { buildAssistantRawOutput, deriveAgenticSections } from '$lib/utils';
+	import { buildAssistantRawOutput, deriveAgenticSections } from '#lib/utils/index.ts';
 
 	interface Props {
 		message: DatabaseMessage;

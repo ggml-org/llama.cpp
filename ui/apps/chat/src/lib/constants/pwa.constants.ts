@@ -60,7 +60,9 @@ export const PWA_MANIFEST = {
 			type: 'image/png'
 		}
 	],
+	lang: 'en',
 	name: APP_NAME,
+	scope: './',
 	short_name: APP_NAME,
 	start_url: './',
 	theme_color: THEME_COLORS.BACKGROUND_LIGHT
@@ -95,10 +97,18 @@ export const APPLE_DEVICES = {
 export type AppleDeviceKey = keyof typeof APPLE_DEVICES;
 
 export const PWA_FILE_PATHS = {
+	LEGACY_SERVICE_WORKER: '/sw.js',
 	MANIFEST: '/manifest.webmanifest',
-	SERVICE_WORKER: '/sw.js',
-	VERSION: '/version.json',
-	WORKBOX: '/workbox-<hash>.js'
+	SERVICE_WORKER: '/service-worker.js'
+} as const;
+
+/** The Vite plugin that serves manifest.webmanifest in dev and emits it with the build */
+export const PWA_MANIFEST_PLUGIN = {
+	/** Media type of a web app manifest (W3C Web App Manifest) */
+	CONTENT_TYPE: 'application/manifest+json',
+	/** Vite environment that builds the browser bundle, the one the manifest goes with */
+	ENVIRONMENT: 'client',
+	NAME: 'llamacpp:pwa-manifest'
 } as const;
 
 // Used by the server middleware to skip API key validation.
@@ -172,10 +182,11 @@ export const PUBLIC_ENDPOINTS = [
 	'/apple-splash-portrait-dark-2048x2732.png',
 	'/apple-splash-landscape-dark-2048x2732.png',
 	'/manifest.webmanifest',
+	'/service-worker.js',
 	'/sw.js',
-	'/version.json',
-	'/workbox-<hash>.js'
+	'/version.json'
 ] as const;
+
 export const BUILD_CONFIG = {
 	GUIDE_COMMENT: `
 <!--
@@ -240,18 +251,9 @@ export const PWA_ASSET_GENERATOR = {
 	XHTML: false
 } as const;
 
-export const CACHE_SETTINGS = {
-	API_CACHE_MAX_AGE_SECONDS: 60 * 60 * 24,
-	API_CACHE_MAX_ENTRIES: 50,
-	IMMUTABLE_MAX_AGE_SECONDS: 31536000,
-	MAX_FILE_SIZE_BYTES: 10 * 1024 * 1024
-} as const;
-
-export const GLOB_PATTERNS: string[] = [
-	'**/*.{js,css,html,ico,svg,png,webp,woff,woff2,json,webmanifest}'
-];
-
 export const SW_CONFIG = {
+	/** How long the update waits for the new worker to install and activate before reloading */
+	ACTIVATE_TIMEOUT_MS: 10000,
 	CHECK_INTERVAL_MS: 60000,
 	UPDATE_FETCH_OPTIONS: {
 		CACHE: 'no-store',
@@ -261,21 +263,6 @@ export const SW_CONFIG = {
 		}
 	}
 } as const;
-
-// Runtime caching configuration for Workbox
-export const RUNTIME_CACHING = {
-	CACHE_NAME: 'api-cache',
-	HANDLER: 'NetworkFirst'
-} as const;
-
-// Workbox runtime caching patterns
-export const API_CACHING_PATTERNS = {
-	STATIC_API: /^\/(health|props|models|tools|slots|cors-proxy).*/,
-	V1_API: /^\/v1\/.*/
-} as const;
-
-// SvelteKit PWA plugin options
-export const PWA_KIT_OPTIONS = {} as const;
 
 export const APPLE_META_TAGS = {
 	MOBILE_WEB_APP_CAPABLE: { content: 'yes', name: 'apple-mobile-web-app-capable' },
@@ -288,67 +275,3 @@ export const SPLASH_LINK = {
 	DARK_MEDIA_SUFFIX: ' and (prefers-color-scheme: dark)',
 	HTML: '<link rel="apple-touch-startup-image"'
 } as const;
-
-// SvelteKit PWA plugin configuration — used by @vite.config.ts
-import type { SvelteKitPWAOptions } from '@vite-pwa/sveltekit';
-
-export const SVELTEKIT_PWA_OPTIONS: SvelteKitPWAOptions = {
-	devOptions: {
-		enabled: true,
-		suppressWarnings: true
-	},
-
-	// SvelteKit-specific options
-	kit: {
-		// Include version file for proper cache invalidation
-		includeVersionFile: true
-	},
-
-	// Strategy: generateSW - the plugin generates a service worker automatically
-	// using Workbox. For a custom SW, use 'injectManifest' instead.
-	// Manifest configuration
-	manifest: PWA_MANIFEST,
-
-	// Workbox configuration for generateSW strategy
-	workbox: {
-		// Match all static assets in the build output.
-		// Uses '**/' because SvelteKit outputs files under _app/immutable/
-		// subdirectories.
-		globPatterns: GLOB_PATTERNS,
-		maximumFileSizeToCacheInBytes: CACHE_SETTINGS.MAX_FILE_SIZE_BYTES,
-
-		// Prevent @vite-pwa/sveltekit from auto-adding a NavigationRoute by
-		// setting navigateFallback to empty string. This keeps the service
-		// worker from intercepting direct browser navigation to server API
-		// endpoints (e.g. /slots, /models, /v1/models) which should return
-		// JSON, not the SPA HTML shell. The server's own static-file fallback
-		// handles non-API navigation to index.html for the SPA router.
-		navigateFallback: '',
-
-		// Runtime caching for API calls - use NetworkFirst so APIs are always fresh
-		runtimeCaching: [
-			{
-				handler: RUNTIME_CACHING.HANDLER,
-				options: {
-					cacheName: RUNTIME_CACHING.CACHE_NAME,
-					expiration: {
-						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS,
-						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES
-					}
-				},
-				urlPattern: API_CACHING_PATTERNS.V1_API
-			},
-			{
-				handler: RUNTIME_CACHING.HANDLER,
-				options: {
-					cacheName: RUNTIME_CACHING.CACHE_NAME,
-					expiration: {
-						maxAgeSeconds: CACHE_SETTINGS.API_CACHE_MAX_AGE_SECONDS,
-						maxEntries: CACHE_SETTINGS.API_CACHE_MAX_ENTRIES
-					}
-				},
-				urlPattern: API_CACHING_PATTERNS.STATIC_API
-			}
-		]
-	}
-};

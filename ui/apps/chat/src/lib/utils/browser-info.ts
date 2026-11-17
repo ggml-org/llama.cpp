@@ -8,13 +8,13 @@
  * @see buildBrowserInfoToolDefinition in constants/browser-info.ts - tool schema sent to the LLM
  */
 
-import { browser } from '$app/environment';
 import {
 	BROWSER_INFO_NOTE,
 	BROWSER_INFO_OS_UA_PATTERNS,
 	BROWSER_INFO_OS_UNKNOWN
-} from '$lib/constants';
-import type { ToolExecutionResult } from '$lib/types';
+} from '#lib/constants/index.ts';
+import type { ToolExecutionResult } from '#lib/types/index.ts';
+import { browser } from '$app/env';
 
 export function detectOs(userAgent: string): string {
 	for (const [pattern, os] of BROWSER_INFO_OS_UA_PATTERNS) {

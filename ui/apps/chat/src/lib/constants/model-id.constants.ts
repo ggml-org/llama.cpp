@@ -2,7 +2,7 @@
  * Parsing of `org/ModelName[-tag][:quant]` style model IDs.
  */
 
-import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
+import { ModelAuxSidecar, ModelDraftSidecar } from '#lib/enums/index.ts';
 
 /** Any sidecar file type: a draft variant or an auxiliary sidecar like mmproj. */
 export type ModelSidecar = ModelDraftSidecar | ModelAuxSidecar;

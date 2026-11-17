@@ -19,7 +19,7 @@ test.describe('PWA Service Worker', () => {
 		});
 
 		expect(swURL).toBeTruthy();
-		expect(swURL).toContain('/sw.js');
+		expect(swURL).toContain('/service-worker.js');
 	});
 
 	test('service worker has precache configured', async ({ page }) => {
@@ -41,15 +41,33 @@ test.describe('PWA Service Worker', () => {
 		const swContent = await swResponse.text();
 
 		// Precache contains SvelteKit content-hashed bundle paths
-		expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
-		expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
-		expect(swContent).toMatch(/"manifest\.webmanifest"/);
-		expect(swContent).toMatch(/"_app\/version\.json"/);
-		// NavigationRoute is intentionally absent — server API endpoints
-		// (e.g. /slots, /models) must not be intercepted by the PWA and
-		// should return JSON directly from the server.
-		expect(swContent).not.toMatch(/NavigationRoute/);
-		expect(swContent).toMatch(/api-cache/);
+		expect(swContent).toMatch(/["'`]_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js["'`]/);
+		expect(swContent).toMatch(/["'`]_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css["'`]/);
+		expect(swContent).toMatch(/["'`]manifest\.webmanifest["'`]/);
+		expect(swContent).toMatch(/["'`]_app\/version\.json["'`]/);
+	});
+
+	test('API requests bypass the service worker', async ({ page }) => {
+		await page.goto('/');
+
+		await page.evaluate(async () => {
+			await navigator.serviceWorker.ready;
+		});
+
+		await page.reload();
+
+		const servedBySw = page.waitForResponse((r) => r.url().endsWith('/props'));
+
+		await page.evaluate(() => fetch('./props').catch(() => null));
+
+		expect((await servedBySw).fromServiceWorker()).toBeFalsy();
+	});
+
+	test('legacy sw.js removes itself', async ({ page }) => {
+		const response = await page.request.get('/sw.js');
+
+		expect(response.ok()).toBeTruthy();
+		expect(await response.text()).toMatch(/registration\.unregister\(\)/);
 	});
 
 	test('offline mode - page loads when offline after caching', async ({ browser }) => {

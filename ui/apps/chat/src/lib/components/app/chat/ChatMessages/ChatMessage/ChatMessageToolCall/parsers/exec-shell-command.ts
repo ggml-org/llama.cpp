@@ -8,8 +8,8 @@
 // the error / exit status elide from call-section to result-section.
 
 import { parseToolArgs } from './_shared';
-import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/index.ts';
 
 export type ExecShellCommandMeta = {
 	command: string;

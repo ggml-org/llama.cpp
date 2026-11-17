@@ -1,5 +1,5 @@
-import { NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
-import { RouterService } from '$lib/services/router.service';
+import { NEW_CHAT_TAB_ID, ROUTES } from '#lib/constants/index.ts';
+import { RouterService } from '#lib/services/router.service.ts';
 
 interface TabRoute {
 	params: Partial<Record<string, string>>;

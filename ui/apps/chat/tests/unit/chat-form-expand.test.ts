@@ -4,7 +4,7 @@ import {
 	type SheetRects,
 	shiftSheetRects,
 	shouldExpandChatForm
-} from '$lib/components/app/chat/ChatForm/chat-form-expand';
+} from '#lib/components/app/chat/ChatForm/chat-form-expand.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('shouldExpandChatForm', () => {

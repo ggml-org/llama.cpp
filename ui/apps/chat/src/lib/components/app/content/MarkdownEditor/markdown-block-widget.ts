@@ -8,17 +8,17 @@ import {
 	renderMermaidDiagrams,
 	renderSvgDiagrams,
 	toggleDiagramSource
-} from '$lib/components/app/content/MarkdownContent/markdown-diagrams';
-import { getMarkdownProcessor } from '$lib/components/app/content/MarkdownContent/markdown-processor';
-import { getCodeInfoFromTarget } from '$lib/components/app/content/MarkdownContent/markdown-utils';
-import { MERMAID_BLOCK_CLASS } from '$lib/constants';
-import { ColorMode } from '$lib/enums';
+} from '#lib/components/app/content/MarkdownContent/markdown-diagrams.ts';
+import { getMarkdownProcessor } from '#lib/components/app/content/MarkdownContent/markdown-processor.ts';
+import { getCodeInfoFromTarget } from '#lib/components/app/content/MarkdownContent/markdown-utils.ts';
+import { MERMAID_BLOCK_CLASS } from '#lib/constants/index.ts';
+import { ColorMode } from '#lib/enums/index.ts';
 import {
 	copyCodeToClipboard,
 	copyToClipboard,
 	preprocessLaTeX,
 	splitGluedClosingCodeFences
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 import { mode } from 'mode-watcher';
 
 export interface MarkdownBlockWidgetOptions {

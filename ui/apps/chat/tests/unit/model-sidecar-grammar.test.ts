@@ -1,7 +1,7 @@
-import { ModelAuxSidecar, ModelDraftSidecar, SidecarForm } from '$lib/enums';
-import { HuggingFaceService } from '$lib/services/huggingface.service';
-import { ModelsService } from '$lib/services/models.service';
-import { sidecarFromTag } from '$lib/utils';
+import { ModelAuxSidecar, ModelDraftSidecar, SidecarForm } from '#lib/enums/index.ts';
+import { HuggingFaceService } from '#lib/services/huggingface.service.ts';
+import { ModelsService } from '#lib/services/models.service.ts';
+import { sidecarFromTag } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 const { buildDownloadTag } = ModelsService;

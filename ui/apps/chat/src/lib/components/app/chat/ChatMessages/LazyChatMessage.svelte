@@ -1,8 +1,8 @@
 <script lang="ts">
 	import ChatMessage from './ChatMessage/ChatMessage.svelte';
-	import { MessageType } from '$lib/enums';
-	import { chatStore } from '$lib/stores';
-	import type { ChatMessageActions } from '$lib/types';
+	import { MessageType } from '#lib/enums/index.ts';
+	import { chatStore } from '#lib/stores/index.ts';
+	import type { ChatMessageActions } from '#lib/types/index.ts';
 
 	interface Props {
 		chatActions: ChatMessageActions;
@@ -78,10 +78,11 @@
 
 <div
 	bind:this={wrapperEl}
-	class:chat-message--eager={eager}
-	class:chat-message--synthetic={Boolean(message.isSynthetic) &&
-		message.type !== MessageType.COMPACTION}
-	class="chat-message"
+	class={[
+		'chat-message',
+		eager && 'chat-message--eager',
+		message.isSynthetic && message.type !== MessageType.COMPACTION && 'chat-message--synthetic'
+	]}
 >
 	{#if shouldMount}
 		<ChatMessage

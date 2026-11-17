@@ -19,6 +19,7 @@
 		Heart,
 		Power
 	} from '@lucide/svelte';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
 		CollapsibleRegion,
 		GroupedList,
@@ -27,9 +28,8 @@
 		Logo,
 		ModelAvatar,
 		ModelsSection
-	} from '$lib/components/app';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import * as Empty from '$lib/components/ui/empty';
+	} from '#lib/components/app/index.ts';
+	import * as Empty from '#lib/components/ui/empty/index.ts';
 	import {
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
@@ -39,17 +39,17 @@
 		MODEL_ROW_WINDOW,
 		MODELS_TABLE_GROUP_STICKY_OFFSET,
 		SETTINGS_KEYS
-	} from '$lib/constants';
+	} from '#lib/constants/index.ts';
 	import {
 		KeyboardKey,
 		ModelCapability,
 		ModelDownloadConfirmAction,
 		ModelsTableGroupKind,
 		ModelsTableSortKey
-	} from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
-	import { groupModelFamilies, type ModelFamilyGroup } from '$lib/utils/model-families';
+	} from '#lib/enums/index.ts';
+	import { modelsStore, settingsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { groupModelFamilies, type ModelFamilyGroup } from '#lib/utils/model-families.ts';
 	import type { Snippet } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 

@@ -1,4 +1,4 @@
-import { LEGACY_AGENTIC_REGEX } from '$lib/constants';
+import { LEGACY_AGENTIC_REGEX } from '#lib/constants/index.ts';
 import { describe, expect, it } from 'vitest';
 
 /**

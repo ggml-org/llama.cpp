@@ -1,5 +1,5 @@
-import { SANDBOX_TOOL_NAME } from '$lib/constants';
-import { SandboxService } from '$lib/services/sandbox.service';
+import { SANDBOX_TOOL_NAME } from '#lib/constants/index.ts';
+import { SandboxService } from '#lib/services/sandbox.service.ts';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 const run = (code: string, timeoutMs?: number) =>
@@ -10,7 +10,7 @@ const run = (code: string, timeoutMs?: number) =>
 
 describe('sandbox service', () => {
 	beforeEach(async () => {
-		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
+		const { settingsStore } = await import('#lib/stores/settings/index.svelte.ts');
 
 		settingsStore.config = {
 			...settingsStore.config,

@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { TruncatedText } from '$lib/components/app/misc';
-	import { Card } from '$lib/components/ui/card';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { McpPromptVariant } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
+	import { TruncatedText } from '#lib/components/app/misc/index.ts';
+	import { Card } from '#lib/components/ui/card/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { McpPromptVariant } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { DatabaseMessageExtraMcpPrompt } from '#lib/types/index.ts';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface ContentPart {

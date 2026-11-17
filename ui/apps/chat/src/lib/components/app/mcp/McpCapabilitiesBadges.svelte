@@ -8,8 +8,8 @@
 		Sparkles,
 		Wrench
 	} from '@lucide/svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import type { MCPCapabilitiesInfo } from '$lib/types';
+	import { Badge } from '#lib/components/ui/badge/index.ts';
+	import type { MCPCapabilitiesInfo } from '#lib/types/index.ts';
 
 	interface Props {
 		capabilities?: MCPCapabilitiesInfo;

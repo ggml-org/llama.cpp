@@ -6,12 +6,12 @@
 //
 // Run: npx vitest bench --project=unit tests/unit/agentic-hotpath.bench.ts
 
-import { classifyToolResult, parseToolResultWithMedia } from '$lib/utils/agentic';
-import { detectIncompleteCodeBlock, highlightCode } from '$lib/utils/code';
-import { computeLineDiff } from '$lib/utils/compute-line-diff';
-import { preprocessLaTeX } from '$lib/utils/latex-protection';
-import { parsePartialJsonArgs } from '$lib/utils/parse-partial-json-args';
-import { extractSearchQuery, extractSearchResults } from '$lib/utils/search-results';
+import { classifyToolResult, parseToolResultWithMedia } from '#lib/utils/agentic.ts';
+import { detectIncompleteCodeBlock, highlightCode } from '#lib/utils/code.ts';
+import { computeLineDiff } from '#lib/utils/compute-line-diff.ts';
+import { preprocessLaTeX } from '#lib/utils/latex-protection.ts';
+import { parsePartialJsonArgs } from '#lib/utils/parse-partial-json-args.ts';
+import { extractSearchQuery, extractSearchResults } from '#lib/utils/search-results.ts';
 import { all as lowlightAll } from 'lowlight';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';

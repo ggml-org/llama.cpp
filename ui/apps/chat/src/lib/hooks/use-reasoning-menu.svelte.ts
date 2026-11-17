@@ -1,9 +1,9 @@
-import { REASONING_EFFORT_TOKENS } from '$lib/constants';
-import { ReasoningEffort } from '$lib/enums';
-import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
-import type { ReasoningEffortLevel } from '$lib/types';
-import type { DatabaseMessage } from '$lib/types/database';
-import { getConversationModel } from '$lib/utils';
+import { REASONING_EFFORT_TOKENS } from '#lib/constants/index.ts';
+import { ReasoningEffort } from '#lib/enums/index.ts';
+import { conversationsStore, modelsStore, serverStore } from '#lib/stores/index.ts';
+import type { DatabaseMessage } from '#lib/types/database.js';
+import type { ReasoningEffortLevel } from '#lib/types/index.ts';
+import { getConversationModel } from '#lib/utils/index.ts';
 
 export interface UseReasoningMenuReturn {
 	readonly modelSupportsThinking: boolean;

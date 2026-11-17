@@ -1,7 +1,7 @@
 // Guards useKeyboardInset: the part of the screen an on-screen keyboard covers is
 // published as --keyboard-inset while active, and never while pinch-zoomed.
 
-import { useKeyboardInset } from '$lib/hooks/use-keyboard-inset.svelte';
+import { useKeyboardInset } from '#lib/hooks/use-keyboard-inset.svelte.ts';
 import { flushSync } from 'svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 

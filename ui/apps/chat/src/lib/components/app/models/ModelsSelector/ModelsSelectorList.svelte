@@ -1,22 +1,22 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
 	import { Heart, Power } from '@lucide/svelte';
+	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
 		GroupedList,
 		ModelAvatar,
 		ModelsSection,
 		ModelsSelectorOption
-	} from '$lib/components/app';
-	import { DialogConfirmDownload } from '$lib/components/app/dialogs';
-	import Logo from '$lib/components/app/misc/Logo.svelte';
+	} from '#lib/components/app/index.ts';
+	import Logo from '#lib/components/app/misc/Logo.svelte';
 	import {
 		LOCAL_BACKEND_ID,
 		MODEL_ROW_WINDOW,
 		SELECTOR_GROUP_STICKY_OFFSET,
 		SETTINGS_KEYS
-	} from '$lib/constants';
-	import { ModelDownloadConfirmAction } from '$lib/enums';
-	import { modelsStore, settingsStore } from '$lib/stores';
+	} from '#lib/constants/index.ts';
+	import { ModelDownloadConfirmAction } from '#lib/enums/index.ts';
+	import { modelsStore, settingsStore } from '#lib/stores/index.ts';
 	import {
 		type GroupedModelOptions,
 		groupModelFamilies,
@@ -24,7 +24,7 @@
 		type ModelItem,
 		repoOf,
 		windowLocalGroups
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		groups: GroupedModelOptions;

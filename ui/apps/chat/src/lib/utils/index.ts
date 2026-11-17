@@ -1,15 +1,16 @@
 /**
  * Unified exports for all utility functions
- * Import utilities from '$lib/utils' for cleaner imports
+ * Import utilities from '#lib/utils/index.ts' for cleaner imports
  *
  * For browser-only utilities (pdf-processing, audio-recording, svg-to-png,
  * webp-to-png, process-uploaded-files, convert-files-to-extra), use:
- * import { ... } from '$lib/utils/browser-only'
+ * import { ... } from '#lib/utils/browser-only.ts'
  */
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
+export { withBase } from './base-path';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities

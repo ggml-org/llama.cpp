@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ActionIcon } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT, MODEL_LOAD_ICONS } from '$lib/constants';
-	import { modelsStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT, MODEL_LOAD_ICONS } from '#lib/constants/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		class?: string;

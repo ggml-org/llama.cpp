@@ -19,8 +19,8 @@ import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachme
 import { rehypeSvgPre } from './plugins/rehype/svg-pre';
 import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
 import { remarkLiteralHtml } from './plugins/remark/literal-html';
-import { FileTypeText } from '$lib/enums/files.enums';
-import type { DatabaseMessageExtra } from '$lib/types/database';
+import { FileTypeText } from '#lib/enums/files.enums.ts';
+import type { DatabaseMessageExtra } from '#lib/types/database.js';
 import type { Root as HastRoot } from 'hast';
 import { all as lowlightAll } from 'lowlight';
 import type { Root as MdastRoot } from 'mdast';

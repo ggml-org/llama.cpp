@@ -6,7 +6,7 @@ import {
 	SECONDS_PER_HOUR,
 	SECONDS_PER_MINUTE,
 	SHORT_DURATION_THRESHOLD
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 
 /**
  * Formats file size in bytes to human readable format

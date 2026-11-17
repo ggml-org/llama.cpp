@@ -1,6 +1,6 @@
 /**
  *
- * SERVER
+ * SERVERS
  *
  * Components for displaying server connection state and handling
  * connection errors. Integrates with serverStore for state management.

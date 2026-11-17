@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { MODEL_ID } from '$lib/constants';
-	import { HuggingFaceService } from '$lib/services';
-	import type { ModelOption } from '$lib/types/models';
-	import { nearViewport, repoOf } from '$lib/utils';
-	import { formatContextLength } from '$lib/utils/formatters';
+	import { MODEL_ID } from '#lib/constants/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
+	import { formatContextLength } from '#lib/utils/formatters.ts';
+	import { nearViewport, repoOf } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;
@@ -51,7 +51,7 @@
 </script>
 
 <span
-	use:nearViewport={() => (isNearViewport = true)}
+	{@attach nearViewport(() => (isNearViewport = true))}
 	class={['text-sm text-muted-foreground', className]}
 >
 	{formatContextLength(values)}

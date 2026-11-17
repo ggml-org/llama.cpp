@@ -2,11 +2,11 @@
 	import { parseRunJavascriptMeta } from './parsers/run-javascript';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { Terminal, XCircle } from '@lucide/svelte';
-	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { FileTypeText } from '$lib/enums';
-	import type { AgenticSection } from '$lib/types';
-	import { getToolUi } from '$lib/utils';
+	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
+	import { MAX_HEIGHT_CODE_BLOCK } from '#lib/constants/index.ts';
+	import { FileTypeText } from '#lib/enums/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { getToolUi } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;

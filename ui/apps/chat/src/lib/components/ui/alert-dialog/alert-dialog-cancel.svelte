@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { buttonVariants } from '$lib/components/ui/button/index.js';
-	import { cn } from '$lib/components/ui/utils.js';
+	import { buttonVariants } from '#lib/components/ui/button/index.ts';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import { AlertDialog as AlertDialogPrimitive } from 'bits-ui';
 
 	let {

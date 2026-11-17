@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ScrollCarousel } from '$lib/components/app';
-	import * as Select from '$lib/components/ui/select';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import { ScrollCarousel } from '#lib/components/app/index.ts';
+	import * as Select from '#lib/components/ui/select/index.ts';
+	import * as ToggleGroup from '#lib/components/ui/toggle-group/index.ts';
 	import {
 		CAPABILITY_ICONS,
 		CAPABILITY_LABELS,
@@ -14,9 +14,9 @@
 		MODALITY_LABELS,
 		MODALITY_ORDER,
 		type ModalityKey
-	} from '$lib/constants';
-	import { ModelCapability } from '$lib/enums';
-	import { modelsStore } from '$lib/stores';
+	} from '#lib/constants/index.ts';
+	import { ModelCapability } from '#lib/enums/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {

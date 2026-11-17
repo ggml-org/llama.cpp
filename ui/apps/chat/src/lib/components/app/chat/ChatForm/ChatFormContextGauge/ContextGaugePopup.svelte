@@ -9,11 +9,11 @@
 		gaugePopupClose
 	} from './gauge-popup.svelte';
 	import { FoldVertical, Loader2 } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { agenticStore, chatStore, conversationsStore, deviceStore } from '$lib/stores';
-	import { formatParameters } from '$lib/utils/formatters';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Drawer from '#lib/components/ui/drawer/index.ts';
+	import { useContextGauge } from '#lib/hooks/use-context-gauge.svelte.ts';
+	import { agenticStore, chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { formatParameters } from '#lib/utils/formatters.ts';
 
 	const gauge = useContextGauge();
 

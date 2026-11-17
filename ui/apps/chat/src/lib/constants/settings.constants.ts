@@ -16,16 +16,16 @@ import {
 	SlidersVertical,
 	Sun
 } from '@lucide/svelte';
-import { SyncableParameterType } from '$lib/enums';
-import { SettingsFieldType } from '$lib/enums/settings.enums';
-import { ColorMode } from '$lib/enums/ui.enums';
+import { SyncableParameterType } from '#lib/enums/index.ts';
+import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
+import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
 	SettingsConfigValue,
 	SettingsEntry,
 	SettingsFieldConfig,
 	SettingsSection,
 	SettingsSectionEntry
-} from '$lib/types';
+} from '#lib/types/index.ts';
 
 /** Settings sections — slug is the routing identity, title is the display label. */
 export const SETTINGS_SECTIONS = {

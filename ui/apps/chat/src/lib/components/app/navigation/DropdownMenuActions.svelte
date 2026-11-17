@@ -1,13 +1,13 @@
 <script lang="ts">
 	import MenuActionsList from './MenuActionsList.svelte';
-	import { KeyboardShortcutInfo } from '$lib/components/app';
-	import * as Drawer from '$lib/components/ui/drawer';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { Separator } from '$lib/components/ui/separator';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MenuKind } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
-	import type { MenuAction } from '$lib/types';
+	import { KeyboardShortcutInfo } from '#lib/components/app/index.ts';
+	import * as Drawer from '#lib/components/ui/drawer/index.ts';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import { Separator } from '#lib/components/ui/separator/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { MenuKind } from '#lib/enums/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {

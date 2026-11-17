@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Music, Video, X } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { AttachmentType } from '$lib/enums';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { AttachmentType } from '#lib/enums/index.ts';
 	import {
 		formatFileSize,
 		getFileTypeLabel,
@@ -11,7 +11,7 @@
 		isPdfFile,
 		isTextFile,
 		isVideoFile
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface Props {
 		attachment?: DatabaseMessageExtra;

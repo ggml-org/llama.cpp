@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { ScrollCarousel } from '$lib/components/app';
-	import { ScrollCarouselVariant } from '$lib/enums';
+	import { ScrollCarousel } from '#lib/components/app/index.ts';
+	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
 	import { expect, waitFor } from 'storybook/test';
 
 	const { Story } = defineMeta({

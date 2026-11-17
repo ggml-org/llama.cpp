@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Loader2, Square, X } from '@lucide/svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { cn } from '$lib/components/ui/utils';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import {
 		ICON_CLASS_SM,
 		ICON_CLASS_XS,
@@ -9,7 +9,7 @@
 		TAB_SURFACE_CLASS,
 		TAB_SURFACE_IDLE_CLASS,
 		UI_DATA_ATTRS
-	} from '$lib/constants';
+	} from '#lib/constants/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Tab {

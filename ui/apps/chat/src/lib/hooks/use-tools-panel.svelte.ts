@@ -1,7 +1,7 @@
-import { CLI_FLAGS } from '$lib/constants';
-import { ToolSource } from '$lib/enums';
-import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
-import type { ToolEntry, ToolGroup } from '$lib/types';
+import { CLI_FLAGS } from '#lib/constants/index.ts';
+import { ToolSource } from '#lib/enums/index.ts';
+import { conversationsStore, mcpStore, toolsStore } from '#lib/stores/index.ts';
+import type { ToolEntry, ToolGroup } from '#lib/types/index.ts';
 import { SvelteSet } from 'svelte/reactivity';
 
 export interface UseToolsPanelReturn {

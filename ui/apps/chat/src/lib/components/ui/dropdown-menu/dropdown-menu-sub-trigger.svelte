@@ -1,6 +1,6 @@
 <script lang="ts">
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-	import { cn } from '$lib/components/ui/utils.js';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
 
 	let {

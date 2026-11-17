@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ArrowUp } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 
 	interface Props {
 		canSend?: boolean;

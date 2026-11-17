@@ -6,7 +6,7 @@
 
 import '../../src/app.css';
 import SidebarNavigationHarness from './components/SidebarNavigationHarness.svelte';
-import { uiStore } from '$lib/stores';
+import { uiStore } from '#lib/stores/index.ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

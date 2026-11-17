@@ -3,11 +3,11 @@
 // it, the picker still opens but explains why instead of firing searches
 // that would only fail with "Search failed".
 
-import ChatFormPickerMention from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
-import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY } from '$lib/constants';
-import { BuiltInTool } from '$lib/enums';
-import { toolsStore } from '$lib/stores/tools.svelte';
-import type { OpenAIToolDefinition } from '$lib/types';
+import ChatFormPickerMention from '#lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
+import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
+import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 import { tick } from 'svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';

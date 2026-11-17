@@ -4,10 +4,10 @@
 		DialogChatAttachmentsPreview,
 		DialogMcpResourcePreview,
 		ScrollCarousel
-	} from '$lib/components/app';
-	import { ScrollCarouselVariant } from '$lib/enums';
-	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
-	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '$lib/utils';
+	} from '#lib/components/app/index.ts';
+	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
+	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
+	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;

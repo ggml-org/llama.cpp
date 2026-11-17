@@ -6,9 +6,9 @@
  * PropsService for the /props fetch.
  */
 
-import { ServerRole } from '$lib/enums';
-import { PropsService } from '$lib/services/props.service';
-import { ApiError } from '$lib/utils';
+import { ServerRole } from '#lib/enums/index.ts';
+import { PropsService } from '#lib/services/props.service.ts';
+import { ApiError } from '#lib/utils/index.ts';
 
 const LOADING_RETRY_INTERVAL_MS = 1000;
 

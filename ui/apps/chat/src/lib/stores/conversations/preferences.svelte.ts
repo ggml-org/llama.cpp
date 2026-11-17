@@ -11,13 +11,13 @@
  * rows these options persist onto.
  */
 
-import { REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY } from '$lib/constants';
-import { ReasoningEffort, ToolSource } from '$lib/enums';
-import { DatabaseService } from '$lib/services/database.service';
+import { REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
+import { ReasoningEffort, ToolSource } from '#lib/enums/index.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpStore } from '$lib/stores/mcp/index.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
-import type { DatabaseConversation, ToolEntry, ToolGroup } from '$lib/types';
+import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
+import type { DatabaseConversation, ToolEntry, ToolGroup } from '#lib/types/index.ts';
 
 /** Load reasoning effort default from localStorage, DEFAULT defers to the server */
 function loadReasoningEffortDefault(): ReasoningEffort {

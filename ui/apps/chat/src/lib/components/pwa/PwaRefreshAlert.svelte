@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import * as Card from '#lib/components/ui/card/index.ts';
 
-	let { forceReload, needRefresh: needRefreshProp, updateServiceWorker } = $props();
+	let { needRefresh: needRefreshProp, updateServiceWorker } = $props();
 	let needRefresh = $derived(needRefreshProp ?? false);
 </script>
 
@@ -18,12 +18,7 @@
 			<Button
 				class="justify-self-end-safe"
 				onclick={() => {
-					updateServiceWorker();
-
-					if (forceReload) {
-						window.location.reload();
-					}
-
+					void updateServiceWorker();
 					needRefresh = false;
 				}}
 				size="sm"

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelsDiscoverDetails from './ModelsDiscoverDetails.svelte';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { HfModelDetailInfo, HfModelSibling } from '#lib/types/huggingface.js';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */

@@ -1,13 +1,13 @@
-import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
-import { deviceStore, modelsStore, serverStore, uiStore } from '$lib/stores';
-import type { ModelOption } from '$lib/types/models';
+import { CHAT_INPUT_FOCUS_SELECTOR } from '#lib/constants/index.ts';
+import { deviceStore, modelsStore, serverStore, uiStore } from '#lib/stores/index.ts';
+import type { ModelOption } from '#lib/types/models.js';
 import {
 	filterModelOptions,
 	groupFavoriteOptions,
 	groupModelOptions,
 	type ModelItem
-} from '$lib/utils';
-import { nameOf } from '$lib/utils/model-names';
+} from '#lib/utils/index.ts';
+import { nameOf } from '#lib/utils/model-names.ts';
 import { onMount } from 'svelte';
 import { SvelteSet } from 'svelte/reactivity';
 

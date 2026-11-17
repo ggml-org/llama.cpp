@@ -1,4 +1,4 @@
-import { DEFAULT_AGENTIC_CONFIG, SETTINGS_KEYS } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('AGENTIC_MAX_TURNS default value', () => {
 	it('sources the settings default from DEFAULT_AGENTIC_CONFIG.maxTurns', async () => {
-		const { SETTING_CONFIG_DEFAULT } = await import('$lib/constants');
+		const { SETTING_CONFIG_DEFAULT } = await import('#lib/constants/index.ts');
 
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.AGENTIC_MAX_TURNS]).toBe(
 			DEFAULT_AGENTIC_CONFIG.maxTurns

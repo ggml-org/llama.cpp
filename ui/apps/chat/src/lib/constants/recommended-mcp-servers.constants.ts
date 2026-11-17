@@ -1,4 +1,4 @@
-import type { RecommendedMCPServer } from '$lib/types';
+import type { RecommendedMCPServer } from '#lib/types/index.ts';
 
 // Suggested MCP servers shown as opt-in cards in the "Add New Server" dialog.
 // Rendering these cards never reaches the upstream domain - favicons come

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ChatMessageStatistics } from '$lib/components/app';
-	import { ChatMessageStatisticsMode } from '$lib/enums';
-	import type { UseProcessingStateReturn } from '$lib/hooks/use-processing-state.svelte';
-	import { agenticStore } from '$lib/stores';
+	import { ChatMessageStatistics } from '#lib/components/app/index.ts';
+	import { ChatMessageStatisticsMode } from '#lib/enums/index.ts';
+	import type { UseProcessingStateReturn } from '#lib/hooks/use-processing-state.svelte.ts';
+	import { agenticStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		message: DatabaseMessage;

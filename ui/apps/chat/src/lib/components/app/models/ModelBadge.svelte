@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ModelId from './ModelId.svelte';
-	import { ActionIconCopyToClipboard, BadgeInfo } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_ICON } from '$lib/constants';
-	import { modelsStore, serverStore } from '$lib/stores';
+	import { ActionIconCopyToClipboard, BadgeInfo } from '#lib/components/app/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { MODEL_ICON } from '#lib/constants/index.ts';
+	import { modelsStore, serverStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		class?: string;

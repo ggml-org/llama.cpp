@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { mcpStore } from '$lib/stores';
-	import type { MCPServerSettingsEntry } from '$lib/types';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { MCPServerSettingsEntry } from '#lib/types/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

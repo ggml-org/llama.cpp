@@ -1,7 +1,5 @@
 <script lang="ts">
 	import { PanelLeftClose, PanelLeftOpen, Search } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
 	import {
 		ActionIcon,
 		DialogConversationDelete,
@@ -17,7 +15,7 @@
 		SidebarNavigationActions,
 		SidebarNavigationConversationList,
 		SidebarNavigationFooter
-	} from '$lib/components/app';
+	} from '#lib/components/app/index.ts';
 	import {
 		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS,
@@ -31,13 +29,21 @@
 		SIDEBAR_REVEAL_ACTION_DELAY_MS,
 		SIDEBAR_SETTLE_MS,
 		SIDEBAR_TOGGLE_MS
-	} from '$lib/constants';
-	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
-	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
-	import { buildConversationTree, remToPx } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import { SidebarAction, TooltipSide } from '#lib/enums/index.ts';
+	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
+	import { useMarqueeSelection } from '#lib/hooks/use-marquee-selection.svelte.ts';
+	import { RouterService } from '#lib/services/router.service.ts';
+	import {
+		chatStore,
+		conversationsStore,
+		deviceStore,
+		settingsStore,
+		uiStore
+	} from '#lib/stores/index.ts';
+	import { buildConversationTree, remToPx } from '#lib/utils/index.ts';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';

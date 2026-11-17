@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Download, Heart } from '@lucide/svelte';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo } from '$lib/types/huggingface';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { HfModelDetailInfo } from '#lib/types/huggingface.js';
 
 	interface Props {
 		details: HfModelDetailInfo;

@@ -6,9 +6,9 @@
 // are handled.
 
 import { parseToolArgs } from './_shared';
-import { JSON_ARRAY_OPEN, JSON_OBJECT_OPEN } from '$lib/constants';
-import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import { JSON_ARRAY_OPEN, JSON_OBJECT_OPEN } from '#lib/constants/index.ts';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/index.ts';
 
 export type RunJavascriptMeta = {
 	code: string;

@@ -10,7 +10,7 @@
  * the permission/continue/steering gates owned by {@link AgenticGates}.
  */
 
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '#lib/constants/index.ts';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -19,27 +19,53 @@ import {
 	IMAGE_MIME_TO_EXTENSION,
 	MCP_ATTACHMENT_NAME_PREFIX,
 	MIME_TYPE_PREFIXES
-} from '$lib/constants';
-import { BuiltInTool, ToolPermissionDecision, ToolSource } from '$lib/enums';
+} from '#lib/constants/index.ts';
+import { BuiltInTool, ToolPermissionDecision, ToolSource } from '#lib/enums/index.ts';
 import {
 	AttachmentType,
 	ContentPartType,
 	MessageRole,
 	MimeTypePrefix,
 	ToolCallType
-} from '$lib/enums';
-import { ChatService } from '$lib/services';
-import { ReadMediaService } from '$lib/services/read-media.service';
-import { SandboxService } from '$lib/services/sandbox.service';
-import { SearchChatsService } from '$lib/services/search-chats.service';
-import { ToolsService } from '$lib/services/tools.service';
+} from '#lib/enums/index.ts';
+import { ChatService } from '#lib/services/index.ts';
+import { ReadMediaService } from '#lib/services/read-media.service.ts';
+import { SandboxService } from '#lib/services/sandbox.service.ts';
+import { SearchChatsService } from '#lib/services/search-chats.service.ts';
+import { ToolsService } from '#lib/services/tools.service.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { AgenticGates } from '$lib/stores/agentic/gates.svelte';
-import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { mcpStore } from '$lib/stores/mcp/index.svelte';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
+import { AgenticGates } from '#lib/stores/agentic/gates.svelte.ts';
+import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
+import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { toolsStore } from '#lib/stores/tools.svelte.ts';
+import type {
+	AgenticFlowCallbacks,
+	AgenticFlowOptions,
+	AgenticMessage,
+	AgenticToolCallList,
+	AgenticToolPolicy,
+	SteeringMessage
+} from '#lib/types/agentic.js';
+import type {
+	ApiChatCompletionToolCall,
+	ApiChatMessageContentPart,
+	ApiChatMessageData
+} from '#lib/types/api.js';
+import type {
+	ChatMessageAgenticTimings,
+	ChatMessageAgenticTurnStats,
+	ChatMessagePromptProgress,
+	ChatMessageTimings,
+	ChatMessageToolCallTiming
+} from '#lib/types/chat.js';
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraImageFile
+} from '#lib/types/database.js';
 import type {
 	AgenticConfig,
 	AgenticFlowParams,
@@ -48,40 +74,14 @@ import type {
 	MCPToolCall,
 	SettingsConfigType,
 	ToolExecutionResult
-} from '$lib/types';
-import type {
-	AgenticFlowCallbacks,
-	AgenticFlowOptions,
-	AgenticMessage,
-	AgenticToolCallList,
-	AgenticToolPolicy,
-	SteeringMessage
-} from '$lib/types/agentic';
-import type {
-	ApiChatCompletionToolCall,
-	ApiChatMessageContentPart,
-	ApiChatMessageData
-} from '$lib/types/api';
-import type {
-	ChatMessageAgenticTimings,
-	ChatMessageAgenticTurnStats,
-	ChatMessagePromptProgress,
-	ChatMessageTimings,
-	ChatMessageToolCallTiming
-} from '$lib/types/chat';
-import type {
-	DatabaseMessage,
-	DatabaseMessageExtra,
-	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraImageFile
-} from '$lib/types/database';
-import type { OpenAIToolDefinition } from '$lib/types/mcp';
+} from '#lib/types/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/mcp.js';
 import {
 	executeBrowserInfoTool,
 	executeGetDatetimeTool,
 	getAudioInputFormat,
 	isAbortError
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {

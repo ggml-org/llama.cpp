@@ -17,11 +17,15 @@
  *   conversation list on init. The new-chat tab is kept across reloads.
  */
 
-import { browser } from '$app/environment';
+import {
+	CONVERSATION_TABS_LOCALSTORAGE_KEY,
+	NEW_CHAT_TAB_ID,
+	ROUTES
+} from '#lib/constants/index.ts';
+import { RouterService } from '#lib/services/router.service.ts';
+import type { TabView } from '#lib/utils/chat-tabs.ts';
+import { browser } from '$app/env';
 import { goto } from '$app/navigation';
-import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
-import { RouterService } from '$lib/services/router.service';
-import type { TabView } from '$lib/utils/chat-tabs';
 import { untrack } from 'svelte';
 
 export class TabsStore {

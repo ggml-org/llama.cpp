@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Check } from '@lucide/svelte';
-	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '$lib/constants';
-	import { ModelRowDownloadState } from '$lib/enums';
+	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '#lib/constants/index.ts';
+	import { ModelRowDownloadState } from '#lib/enums/index.ts';
 
 	interface Props {
 		/**

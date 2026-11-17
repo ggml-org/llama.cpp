@@ -2,7 +2,7 @@
 	import {
 		useChatFormPickers,
 		type UseChatFormPickersReturn
-	} from '$lib/hooks/use-chat-form-pickers.svelte';
+	} from '#lib/hooks/use-chat-form-pickers.svelte.ts';
 
 	let value = $state('');
 	let caretOffset = $state(0);

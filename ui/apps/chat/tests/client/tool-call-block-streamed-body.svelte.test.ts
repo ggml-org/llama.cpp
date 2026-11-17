@@ -3,10 +3,10 @@
 // streams its body first (or a same-named tool with other arg names) used
 // to render an empty block.
 
-import ChatMessageToolCallBlockEditFile from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockEditFile.svelte';
-import ChatMessageToolCallBlockWriteFile from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockWriteFile.svelte';
-import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
+import ChatMessageToolCallBlockEditFile from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockEditFile.svelte';
+import ChatMessageToolCallBlockWriteFile from '#lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlockWriteFile.svelte';
+import { AgenticSectionType, BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/index.ts';
 import { tick } from 'svelte';
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';

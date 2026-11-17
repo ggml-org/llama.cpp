@@ -1,12 +1,12 @@
-import { COMPACTION } from '$lib/constants';
-import { MessageRole, MessageType } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types';
+import { COMPACTION } from '#lib/constants/index.ts';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import type { DatabaseMessage } from '#lib/types/index.ts';
 import {
 	canCompactMessages,
 	compactionCut,
 	compactionTokensBefore,
 	sliceAtLastCompaction
-} from '$lib/utils';
+} from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 const CONV_ID = 'conv';

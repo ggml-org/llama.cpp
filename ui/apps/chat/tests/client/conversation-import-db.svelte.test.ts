@@ -1,6 +1,6 @@
-import { MessageRole, MessageType } from '$lib/enums';
-import { DatabaseService } from '$lib/services/database.service';
-import type { ExportedConversation } from '$lib/types/database';
+import { MessageRole, MessageType } from '#lib/enums/index.ts';
+import { DatabaseService } from '#lib/services/database.service.ts';
+import type { ExportedConversation } from '#lib/types/database.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 function makeSession(id: string): ExportedConversation {

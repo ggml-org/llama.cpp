@@ -4,18 +4,18 @@
 	import ModelId from '../../ModelId.svelte';
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import { Pause, Play, X } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { HF_MMPROJ_FILENAME_TOKEN, MODEL_ID } from '$lib/constants';
-	import { ModelDraftSidecar, ModelRowDownloadState } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import { modelsDiscoverStore, modelsStore } from '$lib/stores';
-	import type { ModelsDiscoverSizeRange } from '$lib/stores/models-discover/index.svelte';
-	import type { HfModelInfo, HfModelSiblingRef } from '$lib/types/huggingface';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { HF_MMPROJ_FILENAME_TOKEN, MODEL_ID } from '#lib/constants/index.ts';
+	import { ModelDraftSidecar, ModelRowDownloadState } from '#lib/enums/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import { modelsDiscoverStore, modelsStore } from '#lib/stores/index.ts';
+	import type { ModelsDiscoverSizeRange } from '#lib/stores/models-discover/index.svelte.ts';
+	import type { HfModelInfo, HfModelSiblingRef } from '#lib/types/huggingface.js';
 	import type {
 		ModelDownloadProgress,
 		ModelModalities,
 		ModelSidecarBadge
-	} from '$lib/types/models';
+	} from '#lib/types/models.js';
 	import {
 		detectThinkingSupport,
 		detectToolUseSupport,
@@ -23,7 +23,7 @@
 		isDraftSidecar,
 		isServerSidecarFile,
 		orgOf
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	/**

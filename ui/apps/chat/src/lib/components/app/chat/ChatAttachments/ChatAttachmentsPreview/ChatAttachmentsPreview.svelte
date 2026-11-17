@@ -4,9 +4,9 @@
 		ChatAttachmentsPreviewFileInfo,
 		ChatAttachmentsPreviewNavButtons,
 		ChatAttachmentsPreviewThumbnailStrip
-	} from '$lib/components/app';
-	import { UI_DATA_ATTRS } from '$lib/constants';
-	import { modelsStore } from '$lib/stores';
+	} from '#lib/components/app/index.ts';
+	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import {
 		createBase64DataUrl,
 		formatFileSize,
@@ -19,7 +19,7 @@
 		isPdfFile,
 		isTextFile,
 		isVideoFile
-	} from '$lib/utils';
+	} from '#lib/utils/index.ts';
 
 	interface PreviewItem {
 		id: string;

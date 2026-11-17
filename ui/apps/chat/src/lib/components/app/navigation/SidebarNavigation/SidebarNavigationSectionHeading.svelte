@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronDown } from '@lucide/svelte';
-	import { TruncatedText } from '$lib/components/app';
-	import { sidebarDragStore } from '$lib/stores';
+	import { TruncatedText } from '#lib/components/app/index.ts';
+	import { sidebarDragStore } from '#lib/stores/index.ts';
 	import type { Component, Snippet } from 'svelte';
 
 	interface Props {

@@ -1,5 +1,5 @@
-import type { ModelSidecar } from '$lib/constants/model-id.constants';
-import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
+import type { ModelSidecar } from '#lib/constants/model-id.constants.ts';
+import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '#lib/types/api.js';
 
 export interface ModelModalities {
 	vision: boolean;

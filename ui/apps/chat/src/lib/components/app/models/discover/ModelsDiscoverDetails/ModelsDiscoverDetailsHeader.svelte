@@ -4,12 +4,12 @@
 	import ModelsDiscoverDetailsHfHubStats from './ModelsDiscoverDetailsHfHubStats.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
 	import { ExternalLink } from '@lucide/svelte';
-	import { base } from '$app/paths';
-	import { Button } from '$lib/components/ui/button';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
-	import type { ModelModalities } from '$lib/types/models';
-	import { orgOf } from '$lib/utils';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import type { HfModelDetailInfo, HfModelGguf } from '#lib/types/huggingface.js';
+	import type { ModelModalities } from '#lib/types/models.js';
+	import { orgOf } from '#lib/utils/index.ts';
+	import { asset } from '$app/paths';
 
 	interface Props {
 		modelId: string;
@@ -91,7 +91,7 @@
 			target="_blank"
 			variant="tertiary"
 		>
-			<img alt="" class="h-3.5 w-3.5" src="{base}/recommended-mcp/huggingface.ico" />
+			<img alt="" class="h-3.5 w-3.5" src={asset('recommended-mcp/huggingface.ico')} />
 
 			View on Hugging Face
 

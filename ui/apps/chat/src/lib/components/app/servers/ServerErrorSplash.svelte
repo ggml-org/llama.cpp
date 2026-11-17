@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { AlertTriangle, CheckCircle, Key, RefreshCw, XCircle } from '@lucide/svelte';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { Input } from '#lib/components/ui/input/index.ts';
+	import Label from '#lib/components/ui/label/label.svelte';
+	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { KeyboardKey } from '#lib/enums/index.ts';
+	import { serverStore, settingsStore } from '#lib/stores/index.ts';
+	import { withBase } from '#lib/utils/base-path.ts';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '$lib/constants';
-	import { KeyboardKey } from '$lib/enums';
-	import { serverStore, settingsStore } from '$lib/stores';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
@@ -67,7 +67,7 @@
 			settingsStore.updateConfig(SETTINGS_KEYS.API_KEY, apiKeyInput.trim());
 
 			// Test the API key by making a real request to the server
-			const response = await fetch(`${base}/props`, {
+			const response = await fetch(withBase('/props'), {
 				headers: {
 					'Content-Type': 'application/json',
 					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKeyInput.trim()}`

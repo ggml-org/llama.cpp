@@ -7,9 +7,9 @@ import {
 } from './keyboard-shortcuts.constants';
 import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
 import { Search, Settings, SquarePen } from '@lucide/svelte';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
-import { SidebarAction, ToolSource } from '$lib/enums';
-import type { DesktopIconStripItem } from '$lib/types';
+import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
+import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
+import type { DesktopIconStripItem } from '#lib/types/index.ts';
 
 /** Delay before a copied affordance resets from its check to the copy icon. */
 export const COPY_FEEDBACK_RESET_MS = 1500;

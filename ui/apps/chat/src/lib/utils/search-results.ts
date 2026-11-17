@@ -1,4 +1,4 @@
-import type { SearchResult } from '$lib/types/search';
+import type { SearchResult } from '#lib/types/search.js';
 
 /**
  * Parsers for MCP web-search tool responses shaped like:

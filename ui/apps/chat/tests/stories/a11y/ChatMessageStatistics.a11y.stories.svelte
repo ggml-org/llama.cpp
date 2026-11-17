@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatMessageStatistics from '$lib/components/app/chat/ChatMessages/ChatMessageStatistics/ChatMessageStatistics.svelte';
+	import ChatMessageStatistics from '#lib/components/app/chat/ChatMessages/ChatMessageStatistics/ChatMessageStatistics.svelte';
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({

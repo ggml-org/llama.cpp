@@ -1,8 +1,8 @@
 <script lang="ts" module>
-	import { ServerRole } from '$lib/enums';
-	import { ModelsService } from '$lib/services';
-	import { modelsStore, serverStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ServerRole } from '#lib/enums/index.ts';
+	import { ModelsService } from '#lib/services/index.ts';
+	import { modelsStore, serverStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	const model = (id: string, name: string, orgName: string, params: string): ModelOption => ({
 		capabilities: [],
@@ -35,7 +35,7 @@
 </script>
 
 <script lang="ts">
-	import ChatForm from '$lib/components/app/chat/ChatForm/ChatForm.svelte';
+	import ChatForm from '#lib/components/app/chat/ChatForm/ChatForm.svelte';
 	import { untrack } from 'svelte';
 
 	interface Props {

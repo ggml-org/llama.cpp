@@ -1,4 +1,4 @@
-import { AttachmentType } from '$lib/enums';
+import { AttachmentType } from '#lib/enums/index.ts';
 import type {
 	ClipboardAttachment,
 	ClipboardMcpPromptAttachment,
@@ -9,7 +9,7 @@ import type {
 	DatabaseMessageExtraMcpResource,
 	DatabaseMessageExtraTextFile,
 	ParsedClipboardContent
-} from '$lib/types';
+} from '#lib/types/index.ts';
 import { toast } from 'svelte-sonner';
 
 /**

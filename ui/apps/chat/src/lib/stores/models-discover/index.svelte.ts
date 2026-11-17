@@ -6,15 +6,15 @@
  * Both paths fetch the same fields, so a row renders the same either way.
  */
 
-import { MODELS_DISCOVER_CATALOG_BATCH } from '$lib/constants';
-import { HuggingFaceService } from '$lib/services';
+import { MODELS_DISCOVER_CATALOG_BATCH } from '#lib/constants/index.ts';
+import { HuggingFaceService } from '#lib/services/index.ts';
 import type {
 	HfCatalogBuild,
 	HfCatalogEntry,
 	HfModelInfo,
 	HfModelSibling
-} from '$lib/types/huggingface';
-import { isAuxSidecar, orgOf } from '$lib/utils';
+} from '#lib/types/huggingface.js';
+import { isAuxSidecar, orgOf } from '#lib/utils/index.ts';
 import { SvelteMap } from 'svelte/reactivity';
 
 /** Min/max GGUF file size (bytes) across the quants of one repo. */

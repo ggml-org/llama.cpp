@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { MODEL_VARIANT_BADGE_CLASS } from '$lib/constants';
-	import type { ModelSidecarBadge } from '$lib/types/models';
-	import { isAuxSidecar } from '$lib/utils';
+	import { MODEL_VARIANT_BADGE_CLASS } from '#lib/constants/index.ts';
+	import type { ModelSidecarBadge } from '#lib/types/models.js';
+	import { isAuxSidecar } from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {

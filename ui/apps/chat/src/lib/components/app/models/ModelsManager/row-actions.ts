@@ -1,10 +1,10 @@
 import { Compass, Eye, EyeOff, Heart, HeartOff, Trash2 } from '@lucide/svelte';
-import { MODEL_DOWNLOAD_ICONS } from '$lib/constants';
-import { ModelRowDownloadState } from '$lib/enums';
-import { modelsStore, uiStore } from '$lib/stores';
-import type { MenuAction } from '$lib/types';
-import type { ModelOption } from '$lib/types/models';
-import { repoOf } from '$lib/utils';
+import { MODEL_DOWNLOAD_ICONS } from '#lib/constants/index.ts';
+import { ModelRowDownloadState } from '#lib/enums/index.ts';
+import { modelsStore, uiStore } from '#lib/stores/index.ts';
+import type { MenuAction } from '#lib/types/index.ts';
+import type { ModelOption } from '#lib/types/models.js';
+import { repoOf } from '#lib/utils/index.ts';
 
 export function modelRowActions(
 	option: ModelOption,

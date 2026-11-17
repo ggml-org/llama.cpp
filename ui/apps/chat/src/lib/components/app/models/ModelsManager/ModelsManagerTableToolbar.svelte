@@ -2,11 +2,11 @@
 	import ModelsManagerFilters from './ModelsManagerFilters.svelte';
 	import { hasActiveFilters } from './utils';
 	import { X } from '@lucide/svelte';
-	import { SearchInput } from '$lib/components/app/forms';
-	import { Button } from '$lib/components/ui/button';
-	import { type ModalityKey } from '$lib/constants';
-	import { ModelCapability } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
+	import { SearchInput } from '#lib/components/app/forms/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { type ModalityKey } from '#lib/constants/index.ts';
+	import { ModelCapability } from '#lib/enums/index.ts';
+	import { deviceStore } from '#lib/stores/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

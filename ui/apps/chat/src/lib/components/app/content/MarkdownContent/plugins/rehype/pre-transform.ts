@@ -11,6 +11,12 @@ export interface DiagramPreData {
 	sourceCode: Element;
 }
 
+declare module 'hast' {
+	interface ElementData {
+		sourceCode?: Element;
+	}
+}
+
 /**
  * Recursively extracts all text content from a HAST node.
  * Handles nested elements (e.g., span wrappers from syntax highlighting).

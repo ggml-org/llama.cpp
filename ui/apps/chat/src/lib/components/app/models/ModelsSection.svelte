@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChevronLeft, CircleAlert, Loader2 } from '@lucide/svelte';
-	import { CollapsibleSection } from '$lib/components/app';
-	import { modelsStore } from '$lib/stores';
+	import { CollapsibleSection } from '#lib/components/app/index.ts';
+	import { modelsStore } from '#lib/stores/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

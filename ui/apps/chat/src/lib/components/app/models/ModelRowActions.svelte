@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Heart, HeartOff, Info } from '@lucide/svelte';
-	import { ActionIcon } from '$lib/components/app';
-	import { modelsStore, uiStore } from '$lib/stores';
-	import type { ModelOption } from '$lib/types/models';
+	import { ActionIcon } from '#lib/components/app/index.ts';
+	import { modelsStore, uiStore } from '#lib/stores/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {
 		isFav: boolean;

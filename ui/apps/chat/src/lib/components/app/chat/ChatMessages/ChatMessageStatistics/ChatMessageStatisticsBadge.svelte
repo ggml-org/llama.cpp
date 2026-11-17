@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { BadgeInfo } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { copyToClipboard } from '$lib/utils';
+	import { BadgeInfo } from '#lib/components/app/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { copyToClipboard } from '#lib/utils/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {

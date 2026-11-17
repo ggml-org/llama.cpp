@@ -9,22 +9,22 @@
 		ContextMenuActions,
 		DialogConfirmation,
 		DropdownMenuActions
-	} from '$lib/components/app';
+	} from '#lib/components/app/index.ts';
 	import {
 		SIDEBAR_ROW_SLIDE_MS,
 		SIDEBAR_SECTION_IDS,
 		SIDEBAR_SECTION_PREVIEW_COUNT,
 		SIDEBAR_SHOW_MORE_ROW_CLASS
-	} from '$lib/constants';
+	} from '#lib/constants/index.ts';
 	import {
 		conversationsStore,
 		deviceStore,
 		groupsStore,
 		sidebarDragStore,
 		uiStore
-	} from '$lib/stores';
-	import type { DatabaseConversation, Group, MenuAction } from '$lib/types';
-	import type { ConversationTreeItem } from '$lib/utils';
+	} from '#lib/stores/index.ts';
+	import type { DatabaseConversation, Group, MenuAction } from '#lib/types/index.ts';
+	import type { ConversationTreeItem } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
 	import { slide } from 'svelte/transition';
 
