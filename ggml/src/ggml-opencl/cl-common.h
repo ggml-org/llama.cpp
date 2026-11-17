@@ -711,6 +711,9 @@ struct ggml_backend_opencl_context {
     size_t  image_max_buffer_size;
     size_t  image2d_max_width;
     size_t  image2d_max_height;
+    size_t  image3d_max_width;
+    size_t  image3d_max_height;
+    size_t  image3d_max_depth;
 
     cl_device_svm_capabilities svm_caps;
 
