@@ -27,15 +27,15 @@ template <>      struct mm_ids_pow2<0> { static constexpr int value = 1; };
 // Helper function for mul_mat_id, converts ids to a more convenient format.
 // ids_src1 describes how to permute the flattened column indices of src1 in order to get a compact src1 tensor sorted by expert.
 // ids_dst describes the same mapping but for the dst tensor.
-// The first (n_tokens*n_expert_used + J - 1) / tile_width elements of tile_spec contain the specication for
-//   matrix multiplication tiles at token positions which are exactly divided by tile_width.
-// Additionally the following n_expert elements of tile_spec may contain additional tiles that fall between these seams.
+// mm_ids_helper writes the column range of each expert to tile_spec[expert], mm_ids_tiles then splits the ranges into
+//   tiles of tile_width columns that start at the first column of an expert.
+// There are at most (n_tokens*n_expert_used + tile_width - 1) / tile_width + n_experts tiles, unused elements are empty.
 template <int n_expert_used_template>
 __launch_bounds__(ggml_cuda_get_physical_warp_size(), 1)
 static __global__ void mm_ids_helper(
         const int32_t * __restrict__ ids,
         int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec,
-        const int n_tokens, const int n_expert_used_var, const int nchannels_y, const uint3 tile_width,
+        const int n_tokens, const int n_expert_used_var, const int nchannels_y,
         const int si1, const int sis1, const bool write_inverse) {
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     const int n_expert_used = n_expert_used_template == 0 ? n_expert_used_var : n_expert_used_template;
@@ -136,25 +136,53 @@ static __global__ void mm_ids_helper(
         }
     }
 
-    if (threadIdx.x != 0) {
-        return;
+    if (threadIdx.x == 0) {
+        tile_spec[expert] = {expert, nex_prev, nex_prev + it_compact, /*padding =*/ 0};
     }
+}
 
-    int col_low  = nex_prev;
-    int col_high = nex_prev + min(int(tile_width.z), it_compact);
+static __global__ void mm_ids_tiles(
+        ggml_cuda_mm_id_tile_spec * __restrict__ tile_spec, const int n_experts, const int max_tiles, const int tile_width) {
+    extern __shared__ int data_mm_ids_tiles[];
+    int * col_low  = data_mm_ids_tiles;              // [n_experts]
+    int * col_high = col_low + n_experts;            // [n_experts]
+    int * tile_sum = col_high + n_experts;           // [blockDim.x]
 
-    // The while loop covers all tiles at the seams containing the column with % tile_width == 0.
-    while (col_high > fastdiv(col_low + tile_width.z - 1, tile_width) * tile_width.z) {
-        tile_spec[fastdiv(col_low + tile_width.z - 1, tile_width)]
-            = {expert, col_low, col_high, /*padding =*/ 0};
-
-        col_low  = col_high;
-        col_high = min(col_high + int(tile_width.z), nex_prev + it_compact);
+    for (int e = threadIdx.x; e < n_experts; e += blockDim.x) {
+        const ggml_cuda_mm_id_tile_spec ts = tile_spec[e];
+        col_low[e]  = ts.col_low;
+        col_high[e] = ts.col_high;
     }
+    __syncthreads();
 
-    // Finally, at most one extra tile_spec between the seams per expert.
-    tile_spec[fastdiv(n_tokens*n_expert_used + tile_width.z - 1, tile_width) + expert]
-        = {expert, col_low, col_high, /*padding =*/ 0};
+    // each thread handles a contiguous range of experts, scan the tile counts of the ranges
+    const int e_per_thread = (n_experts + blockDim.x - 1) / blockDim.x;
+    const int e_start      = min(n_experts, int(threadIdx.x)*e_per_thread);
+    const int e_stop       = min(n_experts, e_start + e_per_thread);
+
+    int ntiles = 0;
+    for (int e = e_start; e < e_stop; ++e) {
+        ntiles += (col_high[e] - col_low[e] + tile_width - 1) / tile_width;
+    }
+    tile_sum[threadIdx.x] = ntiles;
+    __syncthreads();
+    for (int offset = 1; offset < int(blockDim.x); offset *= 2) {
+        const int tmp = threadIdx.x >= offset ? tile_sum[threadIdx.x - offset] : 0;
+        __syncthreads();
+        tile_sum[threadIdx.x] += tmp;
+        __syncthreads();
+    }
+    const int ntiles_total = tile_sum[blockDim.x - 1];
+
+    int it = tile_sum[threadIdx.x] - ntiles;
+    for (int e = e_start; e < e_stop; ++e) {
+        for (int c = col_low[e]; c < col_high[e]; c += tile_width) {
+            tile_spec[it++] = {e, c, min(c + tile_width, col_high[e]), /*padding =*/ 0};
+        }
+    }
+    for (int i = ntiles_total + threadIdx.x; i < max_tiles; i += blockDim.x) {
+        tile_spec[i] = {0, 0, 0, /*padding =*/ 0};
+    }
 }
 
 template <int n_expert_used_template>
@@ -171,14 +199,19 @@ static void launch_mm_ids_helper(
     const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
     CUDA_SET_SHARED_MEMORY_LIMIT(mm_ids_helper<n_expert_used_template>, smpbo);
 
-    const uint3 tile_width_fd = init_fastdiv_values(tile_width);
-
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
     const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);
     GGML_ASSERT(nbytes_shared <= smpbo);
     mm_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
-        (ids, ids_src1, ids_dst, tile_spec, n_tokens, n_expert_used_var, nchannels_y, tile_width_fd, si1, sis1, write_inverse);
+        (ids, ids_src1, ids_dst, tile_spec, n_tokens, n_expert_used_var, nchannels_y, si1, sis1, write_inverse);
+
+    const int max_tiles = (n_tokens*n_expert_used_var + tile_width - 1) / tile_width + n_experts;
+    const int nthreads_tiles = 256;
+    const size_t nbytes_shared_tiles = (2*n_experts + nthreads_tiles)*sizeof(int);
+    GGML_ASSERT(nbytes_shared_tiles <= smpbo);
+    CUDA_SET_SHARED_MEMORY_LIMIT(mm_ids_tiles, smpbo);
+    mm_ids_tiles<<<1, nthreads_tiles, nbytes_shared_tiles, stream>>>(tile_spec, n_experts, max_tiles, tile_width);
 }
 
 void ggml_cuda_launch_mm_ids_helper(
