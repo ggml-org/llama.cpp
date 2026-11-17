@@ -185,7 +185,7 @@ The net growth is the native graphs (Gemma 3, Qwen-VL, Qwen3-TTS), which exist n
 | ZONOS3-Mini, llama-tts wall time | 1.48-1.51 s (one 5.50 s outlier) | 1.41-1.42 s |
 | LFM3-Omni 2B, llama-tts wall time | 2.25-2.28 s | 2.22-2.24 s |
 
-Equal within noise. The video runs spread with the machine: both builds slowed down in the same runs, and in quiet runs they took 1168-1219 ms (master) and 1175-1204 ms (branch), chunk by chunk the same. An earlier Chatterbox-turbo series had two 9.5 s runs on the branch; 4 more runs of each build did not repeat it, and the timings inside the process (generation 2.01 s, vocoder 1.29-1.34 s) are the same in both builds. On CPU the same cases are equal within noise too.
+Equal within noise. The video runs spread with the machine: both builds slowed down in the same runs, and in quiet runs they took 1168-1219 ms (master) and 1175-1204 ms (branch), chunk by chunk the same. An earlier Chatterbox-turbo series had two 9.5 s runs on the branch; 4 more runs of each build did not repeat it, and the timings inside the process (generation 2.01 s, vocoder 1.29-1.34 s) are the same in both builds. On CPU the machine was shared with another job (load average 7 to 10); a recheck of 4 cases, 5 interleaved runs with 8 threads, gave the branch's best run at or below master's (Gemma 3 image 6566 -> 6084 ms, Voxtral audio 2703 -> 2734 ms, Qwen3-VL video 11824 -> 10611 ms, LFM3-Omni video 6433 -> 5399 ms) and medians within 9 %, which is the noise of that load.
 
 Text only (`llama-bench -m gemma-3-4b-it-Q8_0 -lm dio -ngl 99 -fa 1 -p 1024 -n 128 -d 0,40000 -ub 1024,2048,4096 -b 4096`, master then branch):
 
