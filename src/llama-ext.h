@@ -175,7 +175,19 @@ static const enum llama_context_type LLAMA_CONTEXT_TYPE_ENCODER = (enum llama_co
 // outputs: llama_get_sampled_tokens_ith() for the codes, llama_get_embeddings_ith() for the feedback embedding
 static const enum llama_context_type LLAMA_CONTEXT_TYPE_GEN_CODE = (enum llama_context_type) 17;
 
+// context role for mmproj models with an audio generation stage: codes to PCM (codec decoder, vocoder)
+// one entry per frame (llama_batch_ext_add_codes), the entries of a call are consecutive frames of one sequence
+// the decoder state of each sequence (conv left-contexts, k/v window, position) is kept in the context memory;
+// llama_memory_seq_rm(mem, seq, -1, -1) resets it; output row i (llama_get_embeddings_ith) is the PCM of frame i
+static const enum llama_context_type LLAMA_CONTEXT_TYPE_GEN_WAV = (enum llama_context_type) 18;
+
 LLAMA_API bool llama_model_has_context_type(const struct llama_model * model, enum llama_context_type type);
+
+// width of the embedding rows the context outputs (it depends on the context type for mmproj models)
+LLAMA_API int32_t llama_n_embd_out(const struct llama_context * ctx);
+
+// an entry carrying one code per codebook (GEN_WAV context); returns the batch index or llama_batch_ext_add() errors
+LLAMA_API int32_t llama_batch_ext_add_codes(struct llama_batch_ext * batch, llama_seq_id seq_id, const llama_token * codes, int32_t n_codes);
 
 // several sampled tokens for output row i (the codes of one audio frame); returns their count, copies up to n_max into out
 LLAMA_API int32_t llama_get_sampled_tokens_ith(struct llama_context * ctx, int32_t i, llama_token * out, int32_t n_max);

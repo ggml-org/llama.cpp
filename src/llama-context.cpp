@@ -116,7 +116,7 @@ static llm_graph_type ctx_type_to_graph_type(llama_context_type ctx_type) {
     if (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER) {
         return LLM_GRAPH_TYPE_ENCODER;
     }
-    if (ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
+    if (ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE || ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
         return LLM_GRAPH_TYPE_DECODER;
     }
     switch (ctx_type) {
@@ -327,7 +327,8 @@ llama_context::llama_context(
         cparams.causal_attn = params.attention_type == LLAMA_ATTENTION_TYPE_CAUSAL;
     }
 
-    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE ||
+        cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
         // media encoders output one embedding row per media token, with full attention inside a media
         cparams.embeddings   = true;
         cparams.causal_attn  = false;
@@ -1181,7 +1182,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
-        const uint32_t n_embd_out = model.hparams.n_embd_out();
+        const uint32_t n_embd_out = n_embd_out_ctx();
         return embd.data + j*n_embd_out;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid embeddings id %d, reason: %s\n", __func__, i, err.what());
@@ -1216,7 +1217,7 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
             throw std::runtime_error("no nextn embeddings");
         }
 
-        const uint32_t n_embd = model.hparams.n_embd_out();
+        const uint32_t n_embd = n_embd_out_ctx();
 
         if (!cparams.embeddings_nextn_masked) {
             // unmasked: nextn rows are stored densely, indexed by raw token position.
@@ -1602,7 +1603,7 @@ bool llama_context::h_nextn_dev_alloc() {
     };
     ctx_h_nextn_dev.reset(ggml_init(params));
 
-    h_nextn_dev = ggml_new_tensor_2d(ctx_h_nextn_dev.get(), GGML_TYPE_F32, model.hparams.n_embd_out(), cparams.n_batch + cparams.n_seq_max);
+    h_nextn_dev = ggml_new_tensor_2d(ctx_h_nextn_dev.get(), GGML_TYPE_F32, n_embd_out_ctx(), cparams.n_batch + cparams.n_seq_max);
     ggml_set_name(h_nextn_dev, "h_nextn_dev");
 
     buf_h_nextn_dev.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_h_nextn_dev.get(), ggml_backend_dev_buffer_type(h_nextn_dev_dev)));
@@ -1963,6 +1964,8 @@ int llama_context::encode_media(const llama_batch_ext & batch_inp) {
             /*.decision_order =*/ nullptr,
             /*.span         =*/ nullptr,
             /*.media        =*/ &m->inp,
+            /*.codes        =*/ nullptr,
+            /*.n_codes      =*/ 0,
             /*.data         =*/ udata,
         };
 
@@ -2110,7 +2113,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
                 {
                     // extract token embeddings
                     GGML_ASSERT(embd.data != nullptr);
-                    const uint32_t n_embd_out = hparams.n_embd_out();
+                    const uint32_t n_embd_out = n_embd_out_ctx();
 
                     GGML_ASSERT(n_outputs*n_embd_out <= (int64_t) embd.size);
                     ggml_backend_tensor_get_async(backend_embd, t_embd, embd.data, 0, n_outputs*n_embd_out*sizeof(float));
@@ -2128,7 +2131,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
 
                         // use n_embd_out (not n_embd_inp) - the pooled embedding has the model's
                         // output dimension, which differs from input dimension for deepstack models (e.g. qwen3vl)
-                        const uint32_t n_embd_out = hparams.n_embd_out();
+                        const uint32_t n_embd_out = n_embd_out_ctx();
                         embd_seq_out[seq_id].resize(n_embd_out);
                         ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_out*seq_idx)*sizeof(float), n_embd_out*sizeof(float));
                     }
@@ -2160,7 +2163,7 @@ int llama_context::encode(const llama_batch_ext & batch_inp) {
         ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
         GGML_ASSERT(backend_h != nullptr);
 
-        const uint32_t n_embd = hparams.n_embd_out();
+        const uint32_t n_embd = n_embd_out_ctx();
         GGML_ASSERT(n_outputs*n_embd <= (int64_t) embd_nextn.size);
         ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn.data, 0, n_outputs*n_embd*sizeof(float));
     }
@@ -2265,7 +2268,7 @@ int llama_context::gen_code(const llama_batch_ext & batch_inp) {
     }
 
     const size_t   n_embd_state = batch_inp.n_embd_state;
-    const uint32_t n_embd_out   = model.hparams.n_embd_out();
+    const uint32_t n_embd_out   = n_embd_out_ctx();
 
     gen_codes.clear();
     n_gen_codes = 0;
@@ -2312,6 +2315,8 @@ int llama_context::gen_code(const llama_batch_ext & batch_inp) {
             /*.decision_order =*/ nullptr,
             /*.span         =*/ nullptr,
             /*.media        =*/ nullptr,
+            /*.codes        =*/ nullptr,
+            /*.n_codes      =*/ 0,
             /*.data         =*/ udata,
         };
 
@@ -2359,9 +2364,122 @@ int32_t llama_context::get_sampled_tokens_ith(int32_t i, llama_token * out, int3
     return n_gen_codes;
 }
 
+int llama_context::gen_wav(const llama_batch_ext & batch_inp) {
+    const int32_t n_frames = (int32_t) batch_inp.tokens.size();
+    if (n_frames == 0) {
+        LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
+        return -1;
+    }
+    if (!memory) {
+        LLAMA_LOG_ERROR("%s: the context has no decoder state memory\n", __func__);
+        return -1;
+    }
+
+    const auto & tok0 = batch_inp.tokens[0];
+    if (tok0.seq_ids.size() != 1 || tok0.n_codes <= 0) {
+        LLAMA_LOG_ERROR("%s: entries need codes and one sequence\n", __func__);
+        return -1;
+    }
+    const llama_seq_id seq     = *tok0.seq_ids.begin();
+    const int32_t      n_codes = tok0.n_codes;
+
+    if (t_compute_start_us == 0) {
+        t_compute_start_us = ggml_time_us();
+    }
+
+    sched_reserve();
+
+    if (output_reserve(n_frames) < (uint32_t) n_frames) {
+        LLAMA_LOG_ERROR("%s: could not reserve space for %d outputs\n", __func__, n_frames);
+        return -2;
+    }
+
+    auto udata = std::make_shared<llama_ubatch::data_t>();
+    udata->token     .resize(n_frames * n_codes);
+    udata->pos       .resize(n_frames);
+    udata->n_seq_id  .assign(n_frames, 1);
+    udata->seq_id_data.assign(n_frames, seq);
+    udata->seq_id    .resize(n_frames);
+    udata->seq_id_unq = { seq };
+    udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
+    udata->seq_idx[seq] = 0;
+    udata->output    .assign(n_frames, 1);
+    for (int32_t i = 0; i < n_frames; ++i) {
+        const auto & tok = batch_inp.tokens[i];
+        if (tok.n_codes != n_codes || tok.seq_ids.size() != 1 || *tok.seq_ids.begin() != seq) {
+            LLAMA_LOG_ERROR("%s: all entries need %d codes and the same sequence\n", __func__, n_codes);
+            return -1;
+        }
+        std::copy_n(batch_inp.codes.begin() + tok.codes_off, n_codes, udata->token.begin() + (size_t) i * n_codes);
+        udata->pos[i]    = i;
+        udata->seq_id[i] = udata->seq_id_data.data() + i;
+    }
+
+    llama_ubatch ubatch {
+        /*.b_equal_seqs =*/ true,
+        /*.n_tokens     =*/ (uint32_t) n_frames,
+        /*.n_seq_tokens =*/ (uint32_t) n_frames,
+        /*.n_seqs       =*/ 1,
+        /*.n_seqs_unq   =*/ 1,
+        /*.n_pos        =*/ 1,
+        /*.token        =*/ nullptr,
+        /*.embd         =*/ nullptr,
+        /*.embd_state   =*/ nullptr,
+        /*.embd_row     =*/ nullptr,
+        /*.pos          =*/ udata->pos.data(),
+        /*.n_seq_id     =*/ udata->n_seq_id.data(),
+        /*.seq_id       =*/ udata->seq_id.data(),
+        /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
+        /*.seq_idx      =*/ udata->seq_idx.data(),
+        /*.output       =*/ udata->output.data(),
+        /*.type         =*/ nullptr,
+        /*.decision_order =*/ nullptr,
+        /*.span         =*/ nullptr,
+        /*.media        =*/ nullptr,
+        /*.codes        =*/ udata->token.data(),
+        /*.n_codes      =*/ (uint32_t) n_codes,
+        /*.data         =*/ udata,
+    };
+
+    n_queued_tokens += n_frames;
+    n_outputs = n_frames;
+
+    auto mctx = memory->init_full();
+
+    ggml_status status;
+    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+    if (!res) {
+        switch (status) {
+            case GGML_STATUS_ABORTED:      return  2;
+            case GGML_STATUS_ALLOC_FAILED: return -2;
+            case GGML_STATUS_FAILED:       return -3;
+            case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
+        }
+    }
+
+    synchronize();
+
+    const uint32_t n_embd = n_embd_out_ctx();
+    ggml_tensor * t_embd = res->get_embd();
+    GGML_ASSERT(t_embd && ggml_nelements(t_embd) == (int64_t) n_embd * n_frames);
+    ggml_backend_tensor_get(t_embd, embd.data, 0, (size_t) n_embd * n_frames * sizeof(float));
+    for (int32_t i = 0; i < n_frames; ++i) {
+        output_ids[i] = i;
+    }
+
+    return 0;
+}
+
+uint32_t llama_context::n_embd_out_ctx() const {
+    return model.ctx_n_embd_out(cparams.ctx_type);
+}
+
 int llama_context::decode(const llama_batch_ext & batch_inp) {
     if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
         return gen_code(batch_inp);
+    }
+    if (cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+        return gen_wav(batch_inp);
     }
 
     if (!memory) {
@@ -2661,7 +2779,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                     {
                         // extract token embeddings
                         GGML_ASSERT(embd.data != nullptr);
-                        const uint32_t n_embd_out = hparams.n_embd_out();
+                        const uint32_t n_embd_out = n_embd_out_ctx();
                         float * embd_out = embd.data + n_outputs_prev*n_embd_out;
 
                         if (n_outputs) {
@@ -2679,7 +2797,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
                         // use n_embd_out (not n_embd_inp) - the pooled embedding has the model's
                         // output dimension, which differs from input dimension for deepstack models (e.g. qwen3vl)
-                        const uint32_t n_embd_out = hparams.n_embd_out();
+                        const uint32_t n_embd_out = n_embd_out_ctx();
 
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
@@ -2726,7 +2844,7 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
                 GGML_ASSERT(backend_h != nullptr);
 
-                const uint32_t n_embd  = hparams.n_embd_out();
+                const uint32_t n_embd  = n_embd_out_ctx();
                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
@@ -2849,7 +2967,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_batch    = cparams.n_batch;
     const auto n_vocab    = vocab.n_tokens();
     const auto n_embd     = hparams.n_embd;
-    const auto n_embd_out = hparams.n_embd_out();
+    const auto n_embd_out = n_embd_out_ctx();
 
     bool has_logits     = !cparams.embeddings || graph_has_logits;
     bool has_embd       = cparams.embeddings;
@@ -3041,7 +3159,7 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
 void llama_context::output_reorder() {
     const uint64_t n_vocab     = model.vocab.n_tokens();
     const uint64_t n_embd      = model.hparams.n_embd;
-    const uint64_t n_embd_out  = model.hparams.n_embd_out();
+    const uint64_t n_embd_out  = n_embd_out_ctx();
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
@@ -4809,7 +4927,8 @@ llama_context * llama_init_from_model(
     }
 
     {
-        const bool media_ctx = params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE;
+        const bool media_ctx = params.ctx_type == LLAMA_CONTEXT_TYPE_ENCODER || params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_CODE ||
+                               params.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV;
         if ((model->arch == LLM_ARCH_CLIP) != media_ctx) {
             LLAMA_LOG_ERROR("%s: mmproj models need an ENCODER or GEN_CODE context, and those contexts need an mmproj model\n", __func__);
             return nullptr;
@@ -5428,4 +5547,8 @@ llama_context * llama_get_ctx_other(struct llama_context * ctx) {
 
 int32_t llama_get_sampled_tokens_ith(struct llama_context * ctx, int32_t i, llama_token * out, int32_t n_max) {
     return ctx->get_sampled_tokens_ith(i, out, n_max);
+}
+
+int32_t llama_n_embd_out(const struct llama_context * ctx) {
+    return (int32_t) ctx->n_embd_out_ctx();
 }

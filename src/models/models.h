@@ -6,6 +6,7 @@
 
 // note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
+#include <functional>
 #include <map>
 
 class llama_memory_hybrid_idx_context;
@@ -380,6 +381,12 @@ struct llama_model_bloom : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct llama_model_clip;
+
+// Qwen3-TTS codec, src/models/clip-qwen3tts-wav.cpp
+void llama_model_clip_load_c2w(llama_model_clip & m, const std::function<ggml_tensor *(const LLM_TN_IMPL &, int)> & create, int not_required);
+std::unique_ptr<llm_graph_context> llama_model_clip_build_wav_graph(const llama_model_clip & clip, const llm_graph_params & params);
+
 // mmproj GGUFs: media encoder towers (see src/models/clip.cpp)
 enum llama_clip_projector {
     LLAMA_CLIP_PROJ_UNKNOWN,
@@ -455,6 +462,53 @@ struct llama_model_clip : public llama_model_base {
 
     uint32_t ctx_n_vocab(enum llama_context_type type) const override;
     uint32_t ctx_n_embd_state(enum llama_context_type type) const override;
+    uint32_t ctx_n_embd_out(enum llama_context_type type) const override;
+
+    // Qwen3-TTS code2wav (codec decoder), fixed shapes of the reference decoder
+    struct c2w_tfm_layer {
+        ggml_tensor * ln1 = nullptr, * q = nullptr, * k = nullptr, * v = nullptr, * o = nullptr, * ls1 = nullptr;
+        ggml_tensor * ln2 = nullptr, * gate = nullptr, * up = nullptr, * down = nullptr, * ls2 = nullptr;
+    };
+    struct c2w_up_block {
+        ggml_tensor * conv_w = nullptr, * conv_b = nullptr, * dw_w = nullptr, * dw_b = nullptr;
+        ggml_tensor * norm_w = nullptr, * norm_b = nullptr, * pw1_w = nullptr, * pw1_b = nullptr;
+        ggml_tensor * pw2_w = nullptr, * pw2_b = nullptr, * gamma = nullptr;
+    };
+    struct c2w_dac_res {
+        ggml_tensor * act1_a = nullptr, * act1_b = nullptr, * conv1_w = nullptr, * conv1_b = nullptr;
+        ggml_tensor * act2_a = nullptr, * act2_b = nullptr, * conv2_w = nullptr, * conv2_b = nullptr;
+    };
+    struct c2w_dac_block {
+        ggml_tensor * snake_a = nullptr, * snake_b = nullptr, * conv_w = nullptr, * conv_b = nullptr;
+        std::vector<c2w_dac_res> res;
+    };
+    struct c2w_slot {
+        std::string name;
+        int64_t ne0;
+        int64_t ne1;
+    };
+    struct {
+        ggml_tensor * quant_first_out = nullptr, * quant_first_cb = nullptr;
+        ggml_tensor * quant_rest_out  = nullptr, * quant_rest_cb  = nullptr;
+        ggml_tensor * pre_conv_w = nullptr, * pre_conv_b = nullptr;
+        ggml_tensor * tfm_in_w = nullptr, * tfm_in_b = nullptr, * tfm_out_w = nullptr, * tfm_out_b = nullptr, * tfm_norm = nullptr;
+        std::vector<c2w_tfm_layer> tfm;
+        std::vector<c2w_up_block>  up;
+        ggml_tensor * dac_entry_w = nullptr, * dac_entry_b = nullptr;
+        std::vector<c2w_dac_block> dac;
+        ggml_tensor * post_snake_a = nullptr, * post_snake_b = nullptr, * post_conv_w = nullptr, * post_conv_b = nullptr;
+
+        int32_t n_head     = 16;
+        int32_t n_head_kv  = 16;
+        int32_t window     = 72;      // frames per call and attention window
+        float   eps        = 1e-5f;
+        float   rope_theta = 10000.0f;
+    } c2w;
+
+    std::vector<c2w_slot> c2w_slots() const;
+    int64_t               c2w_samples_per_frame() const;
+
+    llama_memory_i * create_clip_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
     // vision stem and projector
     ggml_tensor * v_patch_embd   = nullptr;
@@ -511,6 +565,7 @@ struct llama_model_clip : public llama_model_base {
     struct graph_qwen2vl;
     struct graph_qwen3vl;
     struct graph_qwen3tts_code;
+    struct graph_qwen3tts_wav;
 };
 
 struct llama_model_mpt : public llama_model_base {

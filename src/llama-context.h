@@ -166,6 +166,12 @@ struct llama_context {
 
     // GEN_CODE context: one frame per entry, codes sampled in the graph
     int gen_code(const llama_batch_ext & batch_inp);
+
+    // GEN_WAV context: consecutive frames of one sequence, PCM rows out, state in the context memory
+    int gen_wav(const llama_batch_ext & batch_inp);
+
+    // width of the output embedding rows of this context
+    uint32_t n_embd_out_ctx() const;
     int32_t get_sampled_tokens_ith(int32_t i, llama_token * out, int32_t n_max) const;
     int decode(const llama_batch_ext & batch_inp);
 

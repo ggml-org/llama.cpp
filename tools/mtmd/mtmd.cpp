@@ -3535,6 +3535,7 @@ struct mtmd_gen_state {
     // libllama engine: the code predictor context and the sampler chain of its sequence (declared first, freed last)
     llama_sampler_ptr lm_smpl;
     llama_context_ptr lm_ctx;
+    llama_context_ptr lm_wav_ctx; // code2wav (GEN_WAV), its memory holds the decoder state of sequence 0
     uint32_t lm_seed  = 0;
     int32_t  lm_top_k = -1;
     float    lm_top_p = -1.0f;
@@ -3578,6 +3579,19 @@ mtmd_gen_state * mtmd_gen_state_init(mtmd_context * ctx, mtmd_gen_state_params p
             return nullptr;
         }
         st->lm_seed = params.seed;
+
+        if (llama_model_has_context_type(ctx->lm_gen_model.get(), LLAMA_CONTEXT_TYPE_GEN_WAV) && std::getenv("MTMD_LEGACY_CODEC") == nullptr) {
+            llama_context_params wp = cp;
+            wp.ctx_type = LLAMA_CONTEXT_TYPE_GEN_WAV;
+            wp.n_ctx    = 72;
+            wp.n_batch  = 72; // one call decodes up to a window of frames
+            wp.n_ubatch = 72;
+            st->lm_wav_ctx.reset(llama_init_from_model(ctx->lm_gen_model.get(), wp));
+            if (!st->lm_wav_ctx) {
+                LOG_ERR("%s: libllama could not create the code2wav context\n", __func__);
+                return nullptr;
+            }
+        }
     }
     if (ctx->ctx_gen_a->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN) {
         const auto * hparams = &ctx->ctx_gen_a->model.hparams;
@@ -3593,6 +3607,9 @@ void mtmd_gen_state_free(mtmd_gen_state * state) {
 void mtmd_gen_state_reset(mtmd_gen_state * state) {
     state->gen_state->reset();
     state->ref_decoded = false;
+    if (state->lm_wav_ctx) {
+        llama_memory_seq_rm(llama_get_memory(state->lm_wav_ctx.get()), 0, -1, -1);
+    }
     if (state->istft) {
         const auto * hparams = &state->sctx->model.hparams;
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
@@ -4443,6 +4460,55 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     }
 
     // MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    if (state->lm_wav_ctx) {
+        llama_context * wctx = state->lm_wav_ctx.get();
+        const int32_t n_cb = 16;
+        if (!inp->codes || inp->n_codes == 0 || inp->n_codes % n_cb != 0) {
+            LOG_ERR("%s: codes required for gen_wav\n", __func__);
+            return 1;
+        }
+        int32_t n_frames = (int32_t) (inp->n_codes / n_cb);
+        const int32_t spf      = llama_n_embd_out(wctx);
+
+        // a short last window is padded to a full one, as the mtmd engine does, then trimmed: the graph shape
+        // decides the CPU matmul kernels, so this keeps the PCM bit-identical (libllama takes any frame count)
+        std::vector<llama_token> padded;
+        const int32_t n_real = n_frames;
+        const llama_token * codes_src = inp->codes;
+        if (n_frames < 72) {
+            padded.assign((size_t) 72 * n_cb, 0);
+            std::copy(inp->codes, inp->codes + inp->n_codes, padded.begin());
+            codes_src = padded.data();
+            n_frames = 72;
+        }
+
+        state->out_audio.clear();
+        llama_batch_ext * batch = llama_batch_ext_init(wctx);
+        for (int32_t f0 = 0; f0 < n_frames; f0 += (int32_t) llama_n_batch(wctx)) {
+            const int32_t n = std::min<int32_t>((int32_t) llama_n_batch(wctx), n_frames - f0);
+            llama_batch_ext_clear(batch);
+            for (int32_t f = 0; f < n; ++f) {
+                if (llama_batch_ext_add_codes(batch, 0, codes_src + (size_t) (f0 + f) * n_cb, n_cb) < 0) {
+                    llama_batch_ext_free(batch);
+                    return 1;
+                }
+            }
+            if (llama_process(wctx, LLAMA_PROCESS_TYPE_DECODE, batch) != 0) {
+                llama_batch_ext_free(batch);
+                LOG_ERR("%s: libllama code2wav failed\n", __func__);
+                return 1;
+            }
+            for (int32_t f = 0; f < n && f0 + f < n_real; ++f) {
+                const float * pcm = llama_get_embeddings_ith(wctx, f);
+                state->out_audio.insert(state->out_audio.end(), pcm, pcm + spf);
+            }
+        }
+        llama_batch_ext_free(batch);
+
+        out->audio     = state->out_audio.data();
+        out->n_samples = state->out_audio.size();
+        return 0;
+    }
     if (sctx->model.proj_type == PROJECTOR_TYPE_CHATTERBOX) {
         if (!inp->codes || inp->n_codes == 0) {
             LOG_ERR("%s: codes required for gen_wav\n", __func__);

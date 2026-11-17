@@ -417,6 +417,8 @@ void llama_model_clip::load_gen_tensors(llama_model_loader & ml) {
     const int64_t head_dim = layers[0].wq->ne[1] / n_head;
     hparams.n_embd_head_k_full = (uint32_t) head_dim;
     hparams.n_embd_head_v_full = (uint32_t) head_dim;
+
+    llama_model_clip_load_c2w(*this, create_as_file, TENSOR_NOT_REQUIRED);
 }
 
 //
@@ -1152,6 +1154,9 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
 
 std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params & params) const {
     if (!vhp.has_vision && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN) {
+        if (params.cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+            return llama_model_clip_build_wav_graph(*this, params);
+        }
         return std::make_unique<graph_qwen3tts_code>(*this, params);
     }
     switch (vhp.proj) {

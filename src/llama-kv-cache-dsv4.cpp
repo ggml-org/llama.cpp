@@ -171,6 +171,8 @@ static llama_ubatch dsv4_build_raw_write_ubatch(const llama_ubatch & ubatch) {
         /*.decision_order =*/ nullptr,
         /*.span         =*/ nullptr,
         /*.media        =*/ nullptr,
+        /*.codes        =*/ nullptr,
+        /*.n_codes      =*/ 0,
         /*.data         =*/ data,
     };
 

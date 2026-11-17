@@ -2979,6 +2979,10 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     llama_memory_i * res;
 
+    if (arch == LLM_ARCH_CLIP) {
+        return static_cast<const llama_model_clip *>(this)->create_clip_memory(params, cparams);
+    }
+
     // the non-causal LFM2 and LFM3 decision graphs read the whole prompt in one batch, nothing is kept
     if (arch == LLM_ARCH_LFM2 && !hparams.causal_attn && hparams.n_layer_decision > 0) {
         return nullptr;

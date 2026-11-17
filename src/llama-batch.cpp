@@ -373,6 +373,8 @@ bool llama_batch_allocr::init(
             /*.decision_order =*/ decision_order.empty() ? nullptr : decision_order.data(),
             /*.span         =*/ span_vec.empty() ? nullptr : span_vec.data(),
             /*.media        =*/ nullptr,
+            /*.codes        =*/ nullptr,
+            /*.n_codes      =*/ 0,
             /*.data         =*/ {},
         };
 
@@ -601,6 +603,8 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
         /*.decision_order =*/ nullptr,
         /*.span         =*/ nullptr,
         /*.media        =*/ nullptr,
+        /*.codes        =*/ nullptr,
+        /*.n_codes      =*/ 0,
         /*.data         =*/ std::move(udata),
     };
 
@@ -1104,6 +1108,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.decision_order =*/ udata->decision_order.empty() ? nullptr : udata->decision_order.data(),
         /*.span         =*/ udata->span.empty() ? nullptr : udata->span.data(),
         /*.media        =*/ nullptr,
+        /*.codes        =*/ nullptr,
+        /*.n_codes      =*/ 0,
         /*.data         =*/ std::move(udata),
     };
 
@@ -1326,6 +1332,7 @@ void llama_batch_ext::clear() {
     embd  .clear();
     state .clear();
     n_embd = 0;
+    codes.clear();
     for (auto * m : media) {
         llama_media_free(m);
     }

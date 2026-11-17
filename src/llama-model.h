@@ -1023,6 +1023,7 @@ struct llama_model {
 
     // input widths of a batch for a context of this type (token ids < n_vocab, state rows of n_embd_state)
     virtual uint32_t ctx_n_vocab(enum llama_context_type type) const;
+    virtual uint32_t ctx_n_embd_out(enum llama_context_type type) const { GGML_UNUSED(type); return hparams.n_embd_out(); }
     virtual uint32_t ctx_n_embd_state(enum llama_context_type type) const;
 
     // decoder side of media: whether attention is bidirectional inside a media span of this type

@@ -25,6 +25,9 @@ bool llama_model_has_context_type(const struct llama_model * model, enum llama_c
         if (type == LLAMA_CONTEXT_TYPE_GEN_CODE) {
             return !clip->vhp.has_vision && clip->ghp.has_gen && clip->ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN;
         }
+        if (type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+            return !clip->vhp.has_vision && clip->ghp.has_gen && clip->c2w.dac_entry_w != nullptr;
+        }
         return false;
     }
     switch (type) {
@@ -389,4 +392,18 @@ int32_t llama_batch_ext_add_media(struct llama_batch_ext * batch, llama_seq_id s
     }
 
     return first;
+}
+
+int32_t llama_batch_ext_add_codes(struct llama_batch_ext * batch, llama_seq_id seq_id, const llama_token * codes, int32_t n_codes) {
+    if (n_codes <= 0 || codes == nullptr) {
+        return -2;
+    }
+    const int32_t idx = batch->add_token(seq_id);
+    if (idx < 0) {
+        return idx;
+    }
+    batch->tokens[idx].codes_off = (int32_t) batch->codes.size();
+    batch->tokens[idx].n_codes   = n_codes;
+    batch->codes.insert(batch->codes.end(), codes, codes + n_codes);
+    return idx;
 }
