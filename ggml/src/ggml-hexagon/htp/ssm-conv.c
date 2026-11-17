@@ -110,6 +110,8 @@ static __attribute__((noinline)) void hvx_ssm_conv_unpack_to_T_gen(const float *
                              base + j * sizeof(float), mu, vv);
         }
     }
+
+    hvx_gather_sync(T);
 }
 
 static inline void hvx_ssm_conv_unpack_to_T(const float * raw, float * T, uint32_t d_inner_per_hvx, uint32_t d_inner_stride, uint32_t d_conv) {
@@ -139,6 +141,8 @@ static __attribute__((noinline)) void hvx_ssm_conv_unpack_to_T_f16(const __fp16 
                              base + j * sizeof(__fp16), mu, vv);
         }
     }
+
+    hvx_gather_sync(T);
 
     for (uint32_t cb = 0; cb < d_inner_per_hvx; cb += VLEN_FP32) {
         for (uint32_t j = 0; j < d_conv; j += 2) {
@@ -251,6 +255,8 @@ static __attribute__((noinline)) void hvx_ssm_conv_transpose_block(const float *
     for (uint32_t t = 0; t < ncs; ++t) {
         Q6_vgather_ARMVw((HVX_Vector *) (T + (size_t) t * VLEN_FP32), base + t * sizeof(float), mu, vv);
     }
+
+    hvx_gather_sync(T);
 }
 
 // Transpose + widen F16 src0 for prefill: each 32-bit word gather fetches 2 consecutive F16 time steps
@@ -268,6 +274,8 @@ static __attribute__((noinline)) void hvx_ssm_conv_transpose_block_f16(const __f
     for (uint32_t t = 0; t < ncs; t += 2) {
         Q6_vgather_ARMVw(&T_vec[t], base + t * sizeof(__fp16), mu, vv);
     }
+
+    hvx_gather_sync(T);
 
     for (uint32_t t = 0; t < ncs; t += 2) {
         HVX_VectorPair p = hvx_vec_f16_to_f32_shuff(T_vec[t]);

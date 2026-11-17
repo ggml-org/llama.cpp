@@ -669,8 +669,8 @@ static void add_id_copy_##NAME(uint8_t * dst, const uint8_t * src, uint32_t n) {
     STMT;                                                                        \
 }
 
-DEFINE_ADD_ID_COPY(f16_f16, memcpy(dst, src, n * sizeof(_Float16)))
-DEFINE_ADD_ID_COPY(f32_f32, memcpy(dst, src, n * sizeof(float)))
+DEFINE_ADD_ID_COPY(f16_f16, hvx_copy_f16_aa(dst, src, n))
+DEFINE_ADD_ID_COPY(f32_f32, hvx_copy_f32_aa(dst, src, n))
 DEFINE_ADD_ID_COPY(f16_f32, binary_scalar_add_f16_f32(dst, src, 0.0f, n))
 DEFINE_ADD_ID_COPY(f32_f16, binary_scalar_add_f32_f16(dst, src, 0.0f, n))
 
@@ -1684,13 +1684,12 @@ static int execute_op_binary(struct htp_ops_context * octx) {
             dma_queue_push(dma_q, dma_make_data(vtcm_src1, src1->data), 128, 0, src1_elem_size, 1);
             dma_queue_pop(dma_q);
 
-            if (type_key != 0 && src1_type == HTP_TYPE_F16) {
-                binary_expand_f16_to_f32(vtcm_src1, 1);
-            }
+            const HVX_Vector v_src1 = hvx_vmem(vtcm_src1);
             if (type_key != 0) {
-                scalar_f32 = ((const float *) vtcm_src1)[0];
+                const HVX_Vector v_f32 = (src1_type == HTP_TYPE_F16) ? Q6_V_lo_W(hvx_vec_f16_to_f32(v_src1)) : v_src1;
+                scalar_f32 = hvx_vec_get_f32(v_f32);
             } else {
-                scalar_f16 = ((const _Float16 *) vtcm_src1)[0];
+                scalar_f16 = hvx_vec_get_f16(v_src1);
             }
         }
 
