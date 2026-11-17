@@ -399,7 +399,11 @@ endif()
 # libmtmd
 llama_build_and_test(test-mtmd-c-api.c  LABEL behavior  LINK mtmd)
 
-llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd llama-common)
+# the internals of the engine (src/clip) are exported by libllama on these platforms only
+if (NOT WIN32)
+    llama_build_and_test(test-mtmd-impl.cpp  LABEL behavior  LINK mtmd llama-common)
+    target_include_directories(test-mtmd-impl PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/ggml/include)
+endif()
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)

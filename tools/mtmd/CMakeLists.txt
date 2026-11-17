@@ -14,21 +14,12 @@ find_package(Threads REQUIRED)
 
 set(MTMD_CORE_SOURCES
     mtmd.cpp
-    mtmd-audio.cpp
-    mtmd-image.cpp
     mtmd.h
     mtmd-internal.h
     mtmd-helper.cpp
     mtmd-helper-gen.cpp
     mtmd-helper-common.h
     mtmd-helper.h
-    mtmd-model.cpp
-    mtmd-subcontext.cpp
-    mtmd-graph.cpp
-    mtmd-subcontext.h
-    mtmd-impl.h
-    mtmd-model.h
-    mtmd-graph.h
 )
 
 if (MTMD_VIDEO)
@@ -37,76 +28,6 @@ endif()
 
 add_library(mtmd
             ${MTMD_CORE_SOURCES}
-            models/models.h
-            models/chatterbox-gen.cpp
-            models/chatterbox-spkenc.cpp
-            models/cogvlm.cpp
-            models/conformer.cpp
-            models/deepseek4v.cpp
-            models/dots3note.cpp
-            models/dotsocr.cpp
-            models/exaone4_5.cpp
-            models/gemma4a.cpp
-            models/gemma4v.cpp
-            models/gemma4ua.cpp
-            models/gemma4uv.cpp
-            models/glm4v.cpp
-            models/granite-speech.cpp
-            models/granite4-vision.cpp
-            models/hunyuanvl.cpp
-            models/inkling2v.cpp
-            models/internvl.cpp
-            models/kimivl.cpp
-            models/kimik25.cpp
-            models/nemotron-v2-vl.cpp
-            models/nemotron-omni.cpp
-            models/nemotron-transcribe.cpp
-            models/muse-glimmer.cpp
-            models/muse-spark-audio.cpp
-            models/vibevoice-asr.cpp
-            models/llama4.cpp
-            models/llava.cpp
-            models/minicpmv.cpp
-            models/paddleocr.cpp
-            models/pixtral.cpp
-            models/qwen2vl.cpp
-            models/sensenova-u1.cpp
-            models/minimax-m3.cpp
-            models/qwen3vl.cpp
-            models/magevl.cpp
-            models/lfm3vl.cpp
-            models/lfm3a.cpp
-            models/lfm3a-gen.cpp
-            models/ling3vl.cpp
-            models/mimovl.cpp
-            models/qwen3a.cpp
-            models/mimo-audio.cpp
-            models/qwen3tts-spkenc.cpp
-            models/qwen3tts-gen.cpp
-            models/drama3-gen.cpp
-            models/fish-s2-gen.cpp
-            models/fish-s2-spkenc.cpp
-            models/zonos3-gen.cpp
-            models/yue2-gen.cpp
-            models/snake-vae.cpp
-            models/music3-gen.cpp
-            models/zonos3-spkenc.cpp
-            models/pockettts-seanet.cpp
-            models/pockettts-spkenc.cpp
-            models/pockettts-gen.cpp
-            models/soprano.cpp
-            models/kokoro.cpp
-            models/tiny-voca.cpp
-            models/step3vl.cpp
-            models/siglip.cpp
-            models/whisper-enc.cpp
-            models/voxtral-rt.cpp
-            models/deepseekocr.cpp
-            models/deepseekocr2.cpp
-            models/mobilenetv5.cpp
-            models/youtuvl.cpp
-            models/yasa2.cpp
-            models/parakeet.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
@@ -138,7 +59,6 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)
     target_compile_definitions(mtmd PUBLIC  LLAMA_SHARED)
 
-    # export all symbols so that internal components can be tested by test-mtmd-impl
     set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 

@@ -167,14 +167,20 @@ int32_t llama_media_proc_sample_rate(const struct llama_media_proc * proc) {
     return proc->cfg->a ? proc->cfg->a->hparams.audio_sample_rate : -1;
 }
 
-int32_t llama_media_proc_n_tokens_max(const struct llama_media_proc * proc, enum llama_media_type type, bool * atomic) {
+int32_t llama_model_media_n_tokens_max(const struct llama_model * model, enum llama_media_type type, bool * atomic) {
+    const auto * clip = as_clip(model);
     const bool is_audio = type == LLAMA_MEDIA_TYPE_AUDIO;
-    const clip_model * m = is_audio ? proc->cfg->a : proc->cfg->v;
+    const clip_model * m = clip == nullptr ? nullptr : is_audio ? clip->engine_audio() : clip->engine_vision();
     if (atomic) {
-        *atomic = m != nullptr && proc->cfg->decode_use_non_causal(is_audio);
+        *atomic = false;
     }
     if (m == nullptr) {
         return 0;
+    }
+    if (atomic) {
+        // the layout config without a decoder only answers model-level questions
+        const clip_layout_config cfg(clip->engine_vision(), clip->engine_audio(), nullptr, nullptr, 1);
+        *atomic = cfg.decode_use_non_causal(is_audio);
     }
     return is_audio ? -1 : m->image_max_tokens();
 }

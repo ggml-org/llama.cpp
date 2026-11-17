@@ -221,8 +221,8 @@ LLAMA_API bool    llama_media_proc_has        (const struct llama_media_proc * p
 LLAMA_API int32_t llama_media_proc_sample_rate(const struct llama_media_proc * proc); // -1 without audio
 LLAMA_API int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc); // frames merged into one span, 1 = none
 
-// the most rows one media of this type takes (-1: no fixed bound), atomic: its span sits in one decoder ubatch
-LLAMA_API int32_t llama_media_proc_n_tokens_max(const struct llama_media_proc * proc, enum llama_media_type type, bool * atomic);
+// the most rows one media of this type takes (-1: no fixed bound, 0: no tower), atomic: its span sits in one decoder ubatch
+LLAMA_API int32_t llama_model_media_n_tokens_max(const struct llama_model * model, enum llama_media_type type, bool * atomic);
 // the frame size the model takes for a video of n_frames frames of src_w x src_h; false if the model has no video sizing
 LLAMA_API bool    llama_media_proc_video_frame_size(const struct llama_media_proc * proc, int32_t n_frames,
                                                     int32_t src_w, int32_t src_h, int32_t * w, int32_t * h);

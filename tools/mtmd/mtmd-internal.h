@@ -2,6 +2,7 @@
 
 #include "mtmd.h"
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -20,9 +21,10 @@ struct mtmd_internal_part {
 // [QWEN_VIDEO] merged parts are erased from `parts`, so one group always maps to one part
 std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_internal_part> & parts, int n_merge);
 
-struct mtmd_image_preprocessor;
+// the frame size the model takes for a video (llama_media_proc_video_frame_size), false if it has no video sizing
+using mtmd_video_frame_size_fn = std::function<bool(int32_t n_frames, int32_t src_w, int32_t src_h, int32_t & w, int32_t & h)>;
 
 // mtmd_get_video_config() for a given template, without a context
-mtmd_video_config mtmd_video_config_init(mtmd_video_template tmpl, const mtmd_image_preprocessor * preproc,
+mtmd_video_config mtmd_video_config_init(mtmd_video_template tmpl, const mtmd_video_frame_size_fn & frame_size,
                                          int32_t src_width, int32_t src_height,
                                          int32_t src_n_frames, float src_fps);
