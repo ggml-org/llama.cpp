@@ -1191,6 +1191,9 @@ struct ggml_backend_sched {
 
     ggml_backend_t backends[GGML_SCHED_MAX_BACKENDS];
     ggml_backend_buffer_type_t bufts[GGML_SCHED_MAX_BACKENDS];
+    ggml_backend_dev_supports_op_prefetch_t supports_op_prefetch[GGML_SCHED_MAX_BACKENDS];
+    // supports_op answers of the graph being split, only for backends with a prefetch function
+    std::unordered_map<const struct ggml_tensor *, bool> supports_op_cache[GGML_SCHED_MAX_BACKENDS];
     ggml_gallocr_t galloc;
 
     // hash map of the nodes in the graph
@@ -1302,6 +1305,15 @@ static int ggml_backend_sched_backend_id(ggml_backend_sched_t sched, ggml_backen
     return -1;
 }
 
+static bool ggml_backend_sched_supports_op(ggml_backend_sched_t sched, int backend_id, const struct ggml_tensor * op) {
+    const auto & cache = sched->supports_op_cache[backend_id];
+    auto it = cache.find(op);
+    if (it != cache.end()) {
+        return it->second;
+    }
+    return ggml_backend_supports_op(sched->backends[backend_id], op);
+}
+
 static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, const struct ggml_tensor * tensor, const struct ggml_tensor * op) {
     ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
     if (buffer == NULL) {
@@ -1311,7 +1323,7 @@ static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, co
     // find highest prio backend that supports the buffer type and the op
     for (int i = 0; i < sched->n_backends; i++) {
         if (ggml_backend_supports_buft(sched->backends[i], buffer->buft) &&
-            ggml_backend_supports_op(sched->backends[i], op)) {
+            ggml_backend_sched_supports_op(sched, i, op)) {
             return i;
         }
     }
@@ -1386,7 +1398,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
                 // check if a backend with higher prio wants to offload the op
                 if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
                     for (int b = 0; b < src_backend_id; b++) {
-                        if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
+                        if (ggml_backend_sched_supports_op(sched, b, tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                             SET_CAUSE(tensor, "1.off");
                             return b;
                         }
@@ -1473,7 +1485,7 @@ static bool ggml_backend_sched_buffer_supported(ggml_backend_sched_t sched, stru
 }
 
 static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, struct ggml_tensor * node, int cur_backend_id, int * node_backend_id) {
-    if (ggml_backend_supports_op(sched->backends[cur_backend_id], node)) {
+    if (ggml_backend_sched_supports_op(sched, cur_backend_id, node)) {
         *node_backend_id = cur_backend_id;
         SET_CAUSE(node, "2.sup");
     }
@@ -1500,6 +1512,19 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     graph->uid = ggml_graph_next_uid();
+
+    // devices that answer supports_op over the network can answer for the whole graph in one round trip
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->supports_op_prefetch[b] == NULL) {
+            continue;
+        }
+        std::vector<char> supported(graph->n_nodes, 1);
+        sched->supports_op_prefetch[b](ggml_backend_get_device(sched->backends[b]), graph, (bool *) supported.data());
+        sched->supports_op_cache[b].clear();
+        for (int i = 0; i < graph->n_nodes; i++) {
+            sched->supports_op_cache[b][graph->nodes[i]] = supported[i];
+        }
+    }
 
     // pass 1: assign backends to ops with pre-allocated inputs
     for (int i = 0; i < graph->n_leafs; i++) {
@@ -1636,7 +1661,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             // unassigned node: find the backend with the most supported inputs
             int n_supported_best = -1;
             for (int b = 0; b < sched->n_backends; b++) {
-                if (ggml_backend_supports_op(sched->backends[b], node)) {
+                if (ggml_backend_sched_supports_op(sched, b, node)) {
                     int n_supported = 0;
                     for (int j = 0; j < GGML_MAX_SRC; j++) {
                         struct ggml_tensor * src = node->src[j];
@@ -1657,7 +1682,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         } else {
             // assigned node: upgrade to higher prio backend if possible
             for (int b = 0; b < *node_backend_id; b++) {
-                if (sched->bufts[b] == sched->bufts[*node_backend_id] && ggml_backend_supports_op(sched->backends[b], node)) {
+                if (sched->bufts[b] == sched->bufts[*node_backend_id] && ggml_backend_sched_supports_op(sched, b, node)) {
                     bool supported = true;
                     for (int j = 0; j < GGML_MAX_SRC; j++) {
                         struct ggml_tensor * src = node->src[j];
@@ -2310,7 +2335,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
 
-    struct ggml_backend_sched * sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
+    struct ggml_backend_sched * sched = new ggml_backend_sched();
 
     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
@@ -2357,6 +2382,11 @@ ggml_backend_sched_t ggml_backend_sched_new(
         sched->bufts[b] = bufts ? bufts[b] : ggml_backend_get_default_buffer_type(backends[b]);
         GGML_ASSERT(ggml_backend_supports_buft(backends[b], sched->bufts[b]));
 
+        ggml_backend_dev_t dev = ggml_backend_get_device(backends[b]);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : NULL;
+        sched->supports_op_prefetch[b] = reg ? (ggml_backend_dev_supports_op_prefetch_t)
+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_dev_supports_op_prefetch") : NULL;
+
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {
                 sched->events[b][c] = ggml_backend_event_new(backends[b]->device);
@@ -2400,7 +2430,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->context_buffer);
     free(sched->graph.nodes);
     free(sched->graph.leafs);
-    free(sched);
+    delete sched;
 }
 
 void ggml_backend_sched_reset(ggml_backend_sched_t sched) {

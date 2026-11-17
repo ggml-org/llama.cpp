@@ -232,6 +232,8 @@ extern "C" {
     typedef void                         (*ggml_backend_set_n_threads_t)(ggml_backend_t backend, int n_threads);
     // Get additional buffer types provided by the device (returns a NULL-terminated array)
     typedef ggml_backend_buffer_type_t * (*ggml_backend_dev_get_extra_bufts_t)(ggml_backend_dev_t device);
+    // Answer supports_op for all nodes of a graph at once: supported[i] is the answer for graph->nodes[i]
+    typedef void                         (*ggml_backend_dev_supports_op_prefetch_t)(ggml_backend_dev_t device, const struct ggml_cgraph * graph, bool * supported);
     // Set the abort callback for the backend
     typedef void                         (*ggml_backend_set_abort_callback_t)(ggml_backend_t backend, ggml_abort_callback abort_callback, void * abort_callback_data);
     // Get a list of feature flags supported by the backend (returns a NULL-terminated array)
