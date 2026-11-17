@@ -2464,6 +2464,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         ggml_build_forward_expand(gf, ggml_get_rows(ctx0, weights, ggml_view_2d(ctx0, selected_experts, 0, n_tokens, selected_experts->nb[1], 0)));
 
         selected_experts = build_inp_moe_ids(n_expert_used, n_tokens);
+
+        // host experts: compute the ids on the device, as the router ids are, because the MoE cache and the expert copy read them there
+        if (down_exps->buffer && ggml_backend_buffer_is_host(down_exps->buffer)) {
+            selected_experts = ggml_cont(ctx0, selected_experts);
+        }
     }
 
     // compute the expert input before the slot lookup, so that the scheduler prefetches it for the CPU part (the router can read a different tensor)

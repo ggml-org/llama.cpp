@@ -278,7 +278,7 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override;
 
-    ggml_tensor * ids = nullptr; // I32 [n_expert_used_max, n_batch]
+    ggml_tensor * ids = nullptr; // I32 [n_expert_used_max, n_tokens]
 
     const int64_t n_expert;
 };
