@@ -2,10 +2,7 @@
 #include "../ops.h"
 
 void ggml_cl_load_kernels_dup(ggml_backend_opencl_context * backend_ctx) {
-    cl_int err;
     const std::string & compile_opts = backend_ctx->kernel_compile_opts;
-    GGML_UNUSED(backend_ctx);
-    GGML_UNUSED(err);
     GGML_UNUSED(compile_opts);
 }
 
