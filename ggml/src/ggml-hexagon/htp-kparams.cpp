@@ -690,7 +690,7 @@ static bool htp_kparams_solve_hmx_mm(
     const uint32_t min_kgroup = (wtype == GGML_TYPE_IQ2_XXS || wtype == GGML_TYPE_Q2_K) ? 256u : 128u;
     if (is_tiled && htp_is_int_hmx_weight_type((int) wtype) && (opt_mm_select == 3 || opt_mm_select == 4) &&
         ne00_padded >= (int) min_kgroup && (ne00_padded % min_kgroup) == 0) {
-        const bool use_w8a16      = (opt_mm_select == 4) || (!is_matmul_id && m_for_solver <= 32);
+        const bool use_w8a16      = (opt_mm_select == 3) || (!is_matmul_id && m_for_solver <= 32);
         const uint32_t def_kgroup = 2048u;
         uint32_t target_kgroup    = (opt_hmx_kgroup > 0) ? (uint32_t) hex_round_up(std::min(opt_hmx_kgroup, 4096), min_kgroup)
                                                          : def_kgroup;

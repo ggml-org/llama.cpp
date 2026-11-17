@@ -133,8 +133,8 @@ size_t opt_mbuf_dyn    = 512ul * 1024 * 1024;      // max dynamic (compute) buff
 size_t opt_mbuf_static = 1ul * 1024 * 1024 * 1024; // max static (weight/KV) buffer size
 size_t opt_mbuf_total  = 0;                        // total buffer space limit (0 = unconstrained)
 
-int    opt_mm_select     = 3; // 4 = INT HMX W8A16, 3 = INT HMX W8A8 (default), 2 = FP16 HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU
-int    opt_hmx_kgroup    = 0; // INT HMX K superblock size override (0 = mode default: 2048)
+int    opt_mm_select     = 4; // 4 = INT HMX W8A8 (default), 3 = INT HMX W8A16, 2 = FP16 HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU
+int    opt_hmx_kgroup    = 2048; // INT HMX K superblock size override (0 = mode default: 2048)
 int    opt_fa_select     = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
 int    opt_fa_split      = 1; // 1 = head-split + team-split when n_kv_heads < N_cores (default), 0 = off
 int    opt_li_select     = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)
@@ -153,8 +153,8 @@ int    opt_opqueue   = 8;    // max number of pending batches
 int    opt_optrace   = 0;    // trace buffer size per thread (0 means default)
 int    opt_oppoll    = 0;    // polling for batch completions
 int    opt_opfusion  = 1;    // enable/disable op fusion
-int    opt_opf16     = 0;    // promote internal F32 ops to F16 (0: off, 1: intra-layer, 2: full opbatch)
-int    opt_f16_test  = 0;    // promote any supported internal F32 output to F16
+int    opt_opf16     = 2;    // lower internal F32 ops to F16 (0: off, 1: intra-layer, 2: full opbatch)
+int    opt_f16_test  = 0;    // lower any supported internal F32 output to F16
 int    opt_rt_repack = 1;    // runtime repacking: 0 = disabled, 1 = all tileable weights (default)
 
 static std::regex* opt_opfilter = NULL; // regex of ops to not claim
@@ -3562,12 +3562,14 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_power_mode = getenv("GGML_HEXAGON_POWER_MODE");
 
     // Init Arch first since it affects other defaults
+    int hw_arch = 0;
+    int arch_err = htpdrv_get_arch(CDSP_DOMAIN_ID, &hw_arch);
     if (!str_arch) {
-        int err = htpdrv_get_arch(CDSP_DOMAIN_ID, &opt_arch);
-        if (err != 0) {
-            GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", err);
+        if (arch_err != 0) {
+            GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", arch_err);
             opt_arch = 73;
         } else {
+            opt_arch = hw_arch;
             if (opt_arch < 73) {
                 GGML_LOG_WARN("ggml-hex: Hexagon arch v%d is under supported range, capping at v73\n", opt_arch);
                 opt_arch = 73;
@@ -3581,6 +3583,9 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
             str_arch++;
         }
         opt_arch = strtoul(str_arch, NULL, 0);
+    }
+    if (arch_err != 0) {
+        hw_arch = opt_arch;
     }
 
     size_t MiB = 1024 * 1024;
@@ -3838,6 +3843,15 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     // Resolve domain info for all configured devices
     ggml_hexagon_discover_devices();
+
+    size_t total_sessions = opt_ndev;
+    for (size_t i = 0; i < opt_ndev; i++) {
+        total_sessions += opt_device_configs[i].mdev_group.size();
+    }
+    if (!str_mm_select && hw_arch == 73 && total_sessions > 1) {
+        opt_mm_select = 2;
+        GGML_LOG_INFO("ggml-hex: defaulting MM_SELECT=2 on multi-session v73 hardware\n");
+    }
 
     if (str_profile) {
         opt_pmu_evt = [&]() -> std::vector<uint32_t> {

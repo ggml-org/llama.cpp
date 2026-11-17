@@ -400,11 +400,11 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   ```
 
 - `GGML_HEXAGON_OPF16=N`
-  Controls internal FP32-to-FP16 activation tensor promotion inside HTP opbatches (configurable via `--hex-opf16` in `run.py`):
+  Controls internal FP32-to-FP16 activation tensor lowering inside HTP opbatches (configurable via `--hex-opf16` in `run.py`):
 
-  - `0`: Disabled (default) - keep internal activations in FP32
-  - `1`: Intra-layer FP16 with FP32 residual spine - promote internal `MUL_MAT*` and `FLASH_ATTN_EXT` outputs and downstream intra-layer ops to FP16 while keeping cross-layer residual merges (`ADD`, `RMS_NORM_MUL_ADD`, `MUL_MAT_ADD` with FP32 residual) and `GGML_PREC_F32`-hinted matmuls in FP32
-  - `2`: Full opbatch FP16 - also promote internal `RMS_NORM*` and intra-opbatch residual merges to FP16
+  - `0`: Disabled - keep internal activations in FP32
+  - `1`: Intra-layer FP16 with FP32 residual spine - lower internal `MUL_MAT*` and `FLASH_ATTN_EXT` outputs and downstream intra-layer ops to FP16 while keeping cross-layer residual merges (`ADD`, `RMS_NORM_MUL_ADD`, `MUL_MAT_ADD` with FP32 residual) and `GGML_PREC_F32`-hinted matmuls in FP32
+  - `2`: Full opbatch FP16 (default) - also lower internal `RMS_NORM*` and intra-opbatch residual merges to FP16
 
 - `GGML_HEXAGON_MM_SELECT=N`
   Selects the matrix multiplication engine on HTP (configurable via `--hex-mm-select` in `run.py`):
@@ -412,11 +412,11 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   - `0`: Disabled (falls back to CPU or GPU)
   - `1`: HVX vector kernels only
   - `2`: FP16 HMX matrix engine (`M > 1`) with HVX decode (`M = 1`)
-  - `3`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with automatic `W8A16` selection when `M <= 32` and HVX decode when `M = 1` (default)
-  - `4`: INT HMX `W8A16` (`uint16` activations x `int8` weights) with HVX decode when `M = 1`
+  - `3`: INT HMX `W8A16` (`uint16` activations x `int8` weights) with HVX decode when `M = 1`
+  - `4`: INT HMX `W8A8` (`uint8` activations x `int8` weights) with automatic `W8A16` selection when `M <= 32` and HVX decode when `M = 1` (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)
 
 - `GGML_HEXAGON_HMX_KGROUP=N`
-  Overrides the INT HMX K-dimension superblock group size (configurable via `--hex-hmx-kgroup` in `run.py`):
+  Overrides the INT HMX K-dimension superblock group size (default: `2048`, configurable via `--hex-hmx-kgroup` in `run.py`):
 
-  - `0`: Automatic mode default (`2048`)
-  - `128..4096`: Explicit superblock size (rounded up to a multiple of `128`, or `256` for `IQ2_XXS` / `Q2_K`, and clamped to the largest divisor of `K`)
+  - `0`: Automatic mode (also selects automatic default `2048`)
+  - `128..4096`: Explicit superblock size (default `2048`; rounded up to a multiple of `128`, or `256` for `IQ2_XXS` / `Q2_K`, and clamped to the largest divisor of `K`)
