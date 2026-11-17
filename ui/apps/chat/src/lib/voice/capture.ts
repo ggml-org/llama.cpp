@@ -161,6 +161,9 @@ export class VoiceCapture {
 				}
 			});
 			timing.mark('microphone');
+			timing.note(
+				checkProcessing(stream, { ...VOICE_MICROPHONE_CONSTRAINTS, ...this.options.constraints })
+			);
 
 			if (dropped()) throw new DOMException('Voice capture cancelled', 'AbortError');
 
@@ -338,10 +341,42 @@ function releaseDevice(stream: MediaStream | null, context: AudioContext | null)
 	if (context) idleCaptureContext(context);
 }
 
+const PROCESSING = ['echoCancellation', 'noiseSuppression', 'autoGainControl'] as const;
+
+/**
+ * What the browser gave for the microphone, e.g. "MacBook Pro Microphone, 48000 Hz, raw".
+ * Processing that was asked off but is on is warned about: the browser keeps one setting
+ * per device, so a page or app that has the same microphone open with echo cancellation
+ * (a call, voice mode) gets the recording processed too, and the system may lower other
+ * sound while it lasts.
+ */
+function checkProcessing(stream: MediaStream, asked: MediaTrackConstraints): string {
+	const track = stream.getAudioTracks()[0];
+
+	if (!track) return 'no audio track';
+
+	const settings = track.getSettings();
+	const on = PROCESSING.filter((key) => settings[key] === true);
+	const unwanted = on.filter((key) => asked[key] === false);
+
+	if (unwanted.length > 0) {
+		console.warn(
+			`[voice] ${track.label || 'The microphone'} is processed (${unwanted.join(', ')}) although the raw signal was asked for; another tab or app may have it open for a call.`
+		);
+	}
+
+	const rate = settings.sampleRate ? `${settings.sampleRate} Hz` : null;
+
+	return [track.label || 'microphone', rate, on.length > 0 ? on.join(' + ') : 'raw']
+		.filter(Boolean)
+		.join(', ');
+}
+
 /** How long each step of a start took, logged in development to see where a slow start goes. */
 function startTiming() {
 	const startedAt = performance.now();
 	const steps: string[] = [];
+	const notes: string[] = [];
 
 	let last = startedAt;
 
@@ -352,11 +387,14 @@ function startTiming() {
 			steps.push(`${step} ${Math.round(now - last)} ms`);
 			last = now;
 		},
+		note(text: string) {
+			notes.push(text);
+		},
 		report() {
 			if (!import.meta.env?.DEV) return;
 
 			console.debug(
-				`[voice] recording after ${Math.round(performance.now() - startedAt)} ms: ${steps.join(', ')}`
+				`[voice] recording after ${Math.round(performance.now() - startedAt)} ms: ${steps.join(', ')}${notes.length > 0 ? ` (${notes.join('; ')})` : ''}`
 			);
 		}
 	};
