@@ -665,7 +665,7 @@ std::vector<c2w_state_slot> list_c2w_state_slots(const mtmd_hparams & hparams, c
 }
 
 // x: [dim, T], codebook: [dim, n_entries] -> [T] index of the nearest entry
-ggml_tensor * mtmd_graph_qwen3tts_gen::nearest_code(ggml_tensor * x, ggml_tensor * codebook) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::nearest_code(ggml_context * ctx0, ggml_tensor * x, ggml_tensor * codebook) {
     // argmin |x - e|^2 = argmax 2 x.e - |e|^2
     ggml_tensor * dots  = ggml_mul_mat(ctx0, codebook, x);                // [n_entries, T]
     ggml_tensor * norms = ggml_sum_rows(ctx0, ggml_sqr(ctx0, codebook));  // [1, n_entries]
@@ -695,14 +695,14 @@ ggml_cgraph * mtmd_graph_qwen3tts_gen::build_ref_encoder() {
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [512, T]
 
     std::vector<ggml_tensor *> codes;
-    codes.push_back(nearest_code(build_mm(model.ref_quant_first_in_w, cur), model.ref_quant_first_cb));
+    codes.push_back(nearest_code(ctx0, build_mm(model.ref_quant_first_in_w, cur), model.ref_quant_first_cb));
 
     const int64_t n_acoustic = model.ref_quant_rest_cb->ne[2];
     ggml_tensor * residual = build_mm(model.ref_quant_rest_in_w, cur);
     for (int64_t i = 0; i < n_acoustic; i++) {
         ggml_tensor * codebook = ggml_view_2d(ctx0, model.ref_quant_rest_cb, model.ref_quant_rest_cb->ne[0], model.ref_quant_rest_cb->ne[1],
                                               model.ref_quant_rest_cb->nb[1], (size_t) i * model.ref_quant_rest_cb->nb[2]);
-        ggml_tensor * code = nearest_code(residual, codebook);
+        ggml_tensor * code = nearest_code(ctx0, residual, codebook);
         codes.push_back(code);
         if (i + 1 < n_acoustic) {
             residual = ggml_sub(ctx0, residual, ggml_get_rows(ctx0, codebook, code));

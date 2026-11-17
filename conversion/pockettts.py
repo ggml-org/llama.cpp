@@ -291,6 +291,8 @@ class PocketTTSMmprojModel(MmprojModel):
         (gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_Q, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_K, gguf.MODEL_TENSOR.A_GEN_WAV_TFM_ATTN_V),
     )
 
+    n_seanet_stages = _N_SEANET_STAGES
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.has_audio_encoder = _has_voice_encoder(self.dir_model)
@@ -509,11 +511,11 @@ class PocketTTSMmprojModel(MmprojModel):
         if idx == 0:
             yield (self.format_tensor_name(conv_in, suffix=suffix), data_torch)
             return
-        if idx == 3 * _N_SEANET_STAGES + 2:
+        if idx == 3 * self.n_seanet_stages + 2:
             yield (self.format_tensor_name(conv_out, suffix=suffix), data_torch)
             return
 
-        for stage in range(_N_SEANET_STAGES):
+        for stage in range(self.n_seanet_stages):
             res_idx = _DEC_RES_IDX(stage) if is_decoder else _ENC_RES_IDX(stage)
             scale_idx = _DEC_SCALE_IDX(stage) if is_decoder else _ENC_SCALE_IDX(stage)
             if idx == scale_idx:
