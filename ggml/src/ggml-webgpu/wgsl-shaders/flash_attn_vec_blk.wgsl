@@ -9,6 +9,8 @@ struct Params {
     seq_len_q: u32,
     seq_len_kv: u32,
     stride_mask3: u32,
+    stride_mask2: u32,
+    mask_ne2: u32,
     // Number of KV blocks and Q blocks per batch.
     // nblk0 = ceil(seq_len_kv / KV_TILE), nblk1 = seq_len_q.
     nblk0: u32,
@@ -30,11 +32,12 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(local_invocation_id) local_id: vec3<u32>) {
     // Dispatch mapping:
     //  - x indexes KV blocks
-    //  - y flattens (batch_idx, q_blk) as y = batch_idx * nblk1 + q_blk
+    //  - y flattens (batch_idx, mask_head, q_blk) as y = (batch_idx * mask_ne2 + mask_head) * nblk1 + q_blk
     let kv_blk = wg_id.x;
     let y = wg_id.y;
     let q_blk = y % params.nblk1;
-    let batch_idx = y / params.nblk1;
+    let mask_head = (y / params.nblk1) % params.mask_ne2;
+    let batch_idx = y / (params.nblk1 * params.mask_ne2);
     if (kv_blk >= params.nblk0) {
         return;
     }
@@ -43,7 +46,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let k_start = kv_blk * KV_TILE;
 
     let mask_batch = select(0u, batch_idx, params.stride_mask3 > 0u);
-    let mask_batch_base = params.offset_mask + mask_batch * params.stride_mask3;
+    let mask_batch_base = params.offset_mask + mask_batch * params.stride_mask3 + mask_head * params.stride_mask2;
 
     // We keep min/max to classify:
     //  - fully masked (max <= MASK_MIN)
@@ -95,7 +98,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             }
         }
 
-        let blk_idx = (batch_idx * params.nblk1 + q_blk) * params.nblk0 + kv_blk;
+        let blk_idx = ((batch_idx * params.mask_ne2 + mask_head) * params.nblk1 + q_blk) * params.nblk0 + kv_blk;
         blk[blk_idx] = state;
     }
 }

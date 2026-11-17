@@ -1132,6 +1132,12 @@ static void test_filters(testing & t) {
         "{\"a\": 1, \"b\": 2}"
     );
 
+    test_template(t, "tojson sort_keys=true nested with separators",
+        "{{ data|tojson(sort_keys=true, separators=(',',':')) }}",
+        {{"data", {{"name", "f"}, {"args", {{"z", 1}, {"a", json::array({json{{"y", 2}, {"b", 3}}})}}}}}},
+        "{\"args\":{\"a\":[{\"b\":3,\"y\":2}],\"z\":1},\"name\":\"f\"}"
+    );
+
     test_template(t, "tojson",
         "{{ data|tojson }}",
         {{"data", {{"a", 1}, {"b", json::array({1, 2})}}}},
@@ -1467,6 +1473,15 @@ static void test_macros(testing & t) {
         "{{ 'a-b' | replace(*['-', '+']) }}",
         json::object(),
         "a+b"
+    );
+
+    test_template(t, "caller saved and called after its scope ended",
+        "{% set ns = namespace(f=none) %}"
+        "{% macro keep() %}{% set ns.f = caller %}{% endmacro %}"
+        "{% macro outer(p) %}{% call keep() %}[{{ p }}]{% endcall %}{% endmacro %}"
+        "{{ outer('a') }}{{ outer('b') }}{{ ns.f() }}{{ ns.f() }}",
+        json::object(),
+        "[b][b]"
     );
 
     test_template(t, "macro with caller",

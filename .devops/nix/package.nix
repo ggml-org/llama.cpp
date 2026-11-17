@@ -133,11 +133,11 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  # Builds the webui locally, taking care not to require updating any sha256 hash.
+  # Builds Llama Chat locally, taking care not to require updating any sha256 hash.
   webui = stdenvNoCC.mkDerivation {
     pname = "webui";
     version = llamaVersion;
-    src = lib.cleanSource ../../tools/ui;
+    src = lib.cleanSource ../../ui/apps/chat;
 
     nativeBuildInputs = [
       nodejs
@@ -146,7 +146,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
 
     # no sha256 required when using buildNodeModules
     npmDeps = importNpmLock.buildNodeModules {
-      npmRoot = ../../tools/ui;
+      npmRoot = ../../ui/apps/chat;
       inherit nodejs;
     };
 
@@ -156,8 +156,8 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   };
 
   postPatch = lib.optionalString useWebUi ''
-    cp -r ${finalAttrs.webui} tools/ui/dist
-    chmod -R u+w tools/ui/dist
+    cp -r ${finalAttrs.webui} ui/apps/chat/dist
+    chmod -R u+w ui/apps/chat/dist
   '';
 
   # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,

@@ -552,7 +552,9 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
             or not self._ssm_layers
         )
         self.gguf_writer.add_rope_scaling_finetuned(use_rope)
-        if not use_rope:
+        # Set context length to an arbitrary large value if rope is not used AND no previous value is present.
+        # https://huggingface.co/ibm-granite/granite-4.0-h-micro-GGUF/discussions/1
+        if not use_rope and "max_position_embeddings" not in self.hparams:
             self.gguf_writer.add_context_length(2**20)
 
         ## Validation ##

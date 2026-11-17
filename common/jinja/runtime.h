@@ -81,12 +81,38 @@ struct context {
         current_time(parent.current_time),
         is_get_stats(parent.is_get_stats),
         macro_depth(parent.macro_depth),
-        // inherit variables (for example, when entering a new scope)
-        env(mk_val<value_object>(*parent.env)) {}
+        // child scope: own variables only, lookups fall back to the parent (which must outlive this scope)
+        parent(&parent),
+        env(mk_val<value_object>()) {
+        env->has_builtins = false;
+    }
+
+    context(context &&) = default;
+
+    // copy with all visible variables flattened in, for a scope that can outlive its parents (caller() of a call block)
+    context snapshot() const {
+        std::vector<const context *> chain;
+        for (const context * c = this; c; c = c->parent) {
+            chain.push_back(c);
+        }
+        context res(*this);
+        res.parent = nullptr;
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+            for (const auto & kv : (*it)->env->as_ordered_object()) {
+                res.env->insert(kv.first, kv.second);
+            }
+        }
+        return res;
+    }
 
     // returns nullptr if not found
     value find_val(const value & key) {
-        return env->find(key);
+        for (const context * c = this; c; c = c->parent) {
+            if (value v = c->env->find(key)) {
+                return v;
+            }
+        }
+        return nullptr;
     }
 
     value get_val(const std::string & name) {
@@ -107,6 +133,7 @@ struct context {
     }
 
 private:
+    const context * parent = nullptr;
     value_object env;
 };
 

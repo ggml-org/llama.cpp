@@ -156,10 +156,13 @@ ggml_tensor * mtmd_graph_qwen3tts_gen::code_gen::layer_forward(
     q = ggml_reshape_3d(ctx0, q, d_head, n_head, 1);
     k = ggml_reshape_3d(ctx0, k, d_head, n_head_kv, 1);
 
-    q = ggml_rms_norm(ctx0, q, hparams.eps);
-    q = ggml_mul(ctx0, q, layer.q_norm);
-    k = ggml_rms_norm(ctx0, k, hparams.eps);
-    k = ggml_mul(ctx0, k, layer.k_norm);
+    // fish_s2 fast AR has no qk norm
+    if (layer.q_norm) {
+        q = ggml_rms_norm(ctx0, q, hparams.eps);
+        q = ggml_mul(ctx0, q, layer.q_norm);
+        k = ggml_rms_norm(ctx0, k, hparams.eps);
+        k = ggml_mul(ctx0, k, layer.k_norm);
+    }
 
     q = ggml_rope_ext(ctx0, q, inp_pos, nullptr, (int) d_head, GGML_ROPE_TYPE_NEOX, 0,
                       hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
@@ -418,12 +421,12 @@ ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::quant_decode(ggml_tensor * inp_
 // one pre_transformer layer over a batch of N = sliding_window new frames
 // attention runs over [(W-1)-frame prefix from the last batch] + [N new frames]
 // RoPE positions come from a persisted counter, so phases line up across batches
-ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, int il) const {
+ggml_tensor * mtmd_graph_qwen3tts_gen::code2wav::tfm_layer_forward(ggml_tensor * cur, const mtmd_layer & layer, int il, int64_t window) const {
     const int     n_head    = hparams.wav_tfm_n_head;
     const int     n_head_kv = hparams.wav_tfm_n_head_kv;
     const int64_t d_head    = layer.q_w->ne[1] / n_head;
     const float   kq_scale  = 1.0f / sqrtf((float) d_head);
-    const int64_t W         = hparams.wav_tfm_swa; // == N, frames per batch
+    const int64_t W         = window > 0 ? window : hparams.wav_tfm_swa; // code2wav: == N, frames per batch
     const int64_t N         = cur->ne[1];
     const int64_t prefix    = W - 1;
     const int64_t total_kv  = prefix + N;

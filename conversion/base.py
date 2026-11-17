@@ -3488,6 +3488,9 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # some models (llava_onevision2) only declare the architecture inside text_config
     if arch is None and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]
+    # some configs only have a model_type (fishaudio/s2-pro)
+    if arch is None:
+        arch = hparams.get("model_type")
     if arch is None:
         raise ValueError("Failed to detect model architecture")
     return arch

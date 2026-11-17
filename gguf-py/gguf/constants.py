@@ -1335,6 +1335,28 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_CODE_EH_PROJ     = auto() # drama3: per-layer [code embd; hidden] -> hidden projection
     A_GEN_CODE_BLK_EMBD    = auto() # drama3: per-layer code embedding table
     A_GEN_CODE_BLK_OUT_NORM = auto() # drama3: per-layer output norm
+    A_GEN_CODE_TOK_EMBD    = auto() # fish_s2: code predictor input embedding, shared by all codebooks
+    # fish_s2 codec encoder (voice cloning): reference clip -> codes
+    A_CODEC_ENC_ENTRY      = auto() # entry conv
+    A_CODEC_ENC_SNAKE      = auto() # encoder block, Snake before the strided conv
+    A_CODEC_ENC_CONV       = auto() # encoder block, strided conv
+    A_CODEC_ENC_RES_ACT1   = auto()
+    A_CODEC_ENC_RES_CONV1  = auto()
+    A_CODEC_ENC_RES_ACT2   = auto()
+    A_CODEC_ENC_RES_CONV2  = auto()
+    A_CODEC_ENC_POST_SNAKE = auto()
+    A_CODEC_ENC_POST_CONV  = auto()
+    A_CODEC_DOWN_CONV      = auto() # quantizer downsample, strided conv + ConvNeXt
+    A_CODEC_DOWN_DWCONV    = auto()
+    A_CODEC_DOWN_NORM      = auto()
+    A_CODEC_DOWN_PW1       = auto()
+    A_CODEC_DOWN_PW2       = auto()
+    A_CODEC_DOWN_GAMMA     = auto()
+    A_CODEC_PRE_NORM       = auto() # output norm of the quantizer pre_module
+    A_CODEC_VQ_FIRST_IN    = auto() # semantic VQ input projection
+    A_CODEC_VQ_FIRST_CB    = auto() # semantic VQ codebook, l2-normalized
+    A_CODEC_VQ_REST_IN     = auto() # residual VQ input projections, merged 3D
+    A_CODEC_VQ_REST_CB     = auto() # residual VQ codebooks, l2-normalized, merged 3D
     # qwen3tts code2wav: RVQ codes -> raw PCM
     A_GEN_WAV_QUANT_FIRST_IN       = auto() # semantic RVQ, in_proj (1x1 conv, loaded as 2D)
     A_GEN_WAV_QUANT_FIRST_OUT      = auto() # semantic RVQ, out_proj
@@ -2277,6 +2299,27 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_CODE_EH_PROJ:        "a.gen.code.blk.{bid}.eh_proj",
     MODEL_TENSOR.A_GEN_CODE_BLK_EMBD:       "a.gen.code.blk.{bid}.embd",
     MODEL_TENSOR.A_GEN_CODE_BLK_OUT_NORM:   "a.gen.code.blk.{bid}.out_norm",
+    MODEL_TENSOR.A_GEN_CODE_TOK_EMBD:       "a.gen.code.tok_embd",
+    MODEL_TENSOR.A_CODEC_ENC_ENTRY:         "a.codec.enc.entry",
+    MODEL_TENSOR.A_CODEC_ENC_SNAKE:         "a.codec.enc.blk.{bid}.snake",
+    MODEL_TENSOR.A_CODEC_ENC_CONV:          "a.codec.enc.blk.{bid}.conv",
+    MODEL_TENSOR.A_CODEC_ENC_RES_ACT1:      "a.codec.enc.blk.{bid}.res.{xid}.act1",
+    MODEL_TENSOR.A_CODEC_ENC_RES_CONV1:     "a.codec.enc.blk.{bid}.res.{xid}.conv1",
+    MODEL_TENSOR.A_CODEC_ENC_RES_ACT2:      "a.codec.enc.blk.{bid}.res.{xid}.act2",
+    MODEL_TENSOR.A_CODEC_ENC_RES_CONV2:     "a.codec.enc.blk.{bid}.res.{xid}.conv2",
+    MODEL_TENSOR.A_CODEC_ENC_POST_SNAKE:    "a.codec.enc.post_snake",
+    MODEL_TENSOR.A_CODEC_ENC_POST_CONV:     "a.codec.enc.post_conv",
+    MODEL_TENSOR.A_CODEC_DOWN_CONV:         "a.codec.down.blk.{bid}.conv",
+    MODEL_TENSOR.A_CODEC_DOWN_DWCONV:       "a.codec.down.blk.{bid}.dwconv",
+    MODEL_TENSOR.A_CODEC_DOWN_NORM:         "a.codec.down.blk.{bid}.norm",
+    MODEL_TENSOR.A_CODEC_DOWN_PW1:          "a.codec.down.blk.{bid}.pw1",
+    MODEL_TENSOR.A_CODEC_DOWN_PW2:          "a.codec.down.blk.{bid}.pw2",
+    MODEL_TENSOR.A_CODEC_DOWN_GAMMA:        "a.codec.down.blk.{bid}.gamma",
+    MODEL_TENSOR.A_CODEC_PRE_NORM:          "a.codec.pre_norm",
+    MODEL_TENSOR.A_CODEC_VQ_FIRST_IN:       "a.codec.vq.first.in_proj",
+    MODEL_TENSOR.A_CODEC_VQ_FIRST_CB:       "a.codec.vq.first.codebook",
+    MODEL_TENSOR.A_CODEC_VQ_REST_IN:        "a.codec.vq.rest.in_proj",
+    MODEL_TENSOR.A_CODEC_VQ_REST_CB:        "a.codec.vq.rest.codebook",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN:  "a.gen.wav.quant.first.in_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT: "a.gen.wav.quant.first.out_proj",
     MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB:  "a.gen.wav.quant.first.codebook",
@@ -2711,6 +2754,27 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_CODE_EH_PROJ,
         MODEL_TENSOR.A_GEN_CODE_BLK_EMBD,
         MODEL_TENSOR.A_GEN_CODE_BLK_OUT_NORM,
+        MODEL_TENSOR.A_GEN_CODE_TOK_EMBD,
+        MODEL_TENSOR.A_CODEC_ENC_ENTRY,
+        MODEL_TENSOR.A_CODEC_ENC_SNAKE,
+        MODEL_TENSOR.A_CODEC_ENC_CONV,
+        MODEL_TENSOR.A_CODEC_ENC_RES_ACT1,
+        MODEL_TENSOR.A_CODEC_ENC_RES_CONV1,
+        MODEL_TENSOR.A_CODEC_ENC_RES_ACT2,
+        MODEL_TENSOR.A_CODEC_ENC_RES_CONV2,
+        MODEL_TENSOR.A_CODEC_ENC_POST_SNAKE,
+        MODEL_TENSOR.A_CODEC_ENC_POST_CONV,
+        MODEL_TENSOR.A_CODEC_DOWN_CONV,
+        MODEL_TENSOR.A_CODEC_DOWN_DWCONV,
+        MODEL_TENSOR.A_CODEC_DOWN_NORM,
+        MODEL_TENSOR.A_CODEC_DOWN_PW1,
+        MODEL_TENSOR.A_CODEC_DOWN_PW2,
+        MODEL_TENSOR.A_CODEC_DOWN_GAMMA,
+        MODEL_TENSOR.A_CODEC_PRE_NORM,
+        MODEL_TENSOR.A_CODEC_VQ_FIRST_IN,
+        MODEL_TENSOR.A_CODEC_VQ_FIRST_CB,
+        MODEL_TENSOR.A_CODEC_VQ_REST_IN,
+        MODEL_TENSOR.A_CODEC_VQ_REST_CB,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_IN,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_OUT,
         MODEL_TENSOR.A_GEN_WAV_QUANT_FIRST_CB,
@@ -7223,6 +7287,9 @@ class VisionProjectorType:
     DRAMA3_GEN = "drama3_gen" # audio generation: codebook tower + Fish DAC decoder
     ZONOS3_GEN = "zonos3_gen" # audio generation: 10 codebook heads + ZAC decoder
     ZONOS3_SPKENC = "zonos3_spkenc" # audio: MECT-B2 speaker encoder
+    YUE2_GEN = "yue2_gen" # audio generation: flow-matching NAR + Oobleck VAE decoder
+    FISH_S2_GEN = "fish_s2_gen" # audio generation: fast AR code predictor + Fish DAC decoder
+    FISH_S2_SPKENC = "fish_s2_spkenc" # audio: Fish DAC encoder + RVQ, reference clip -> prompt rows
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
