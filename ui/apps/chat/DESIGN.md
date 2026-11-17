@@ -968,7 +968,9 @@ Tailwind shadows: `elevation-surface` reaches about 20px, like `shadow-lg`, `ele
 about 38px, like `shadow-xl`, and `elevation-control` is three tight layers reaching no further
 than 4px, so buttons and other controls sit close to the page. Two softer steps sit below them: `elevation-soft` for the chat form,
 which floats only a little, and `elevation-faint` for the user message bubble, which barely
-lifts. Dark mode deepens the same stacks. Tailwind's own `shadow-xs` to `shadow-2xl` are
+lifts. The keys inside the chat form, the add key and the model selector, take `elevation-key`
+(`--chat-form-key-shadow`): a 0.5px hairline all round and a 1px drop, since the control elevation's soft
+spread blends into the white form; in dark it is the control elevation. Dark mode deepens the same stacks. Tailwind's own `shadow-xs` to `shadow-2xl` are
 built the same way (`tokens/semantic.css`), each reaching about as far as Tailwind's default for
 it. Every
 button carries `elevation-control` (`--button-shadow`); a ghost button only while hovered. Overlays behind dialogs are `surface-overlay`

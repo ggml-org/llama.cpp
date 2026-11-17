@@ -14,6 +14,8 @@
 	--chat-form-edge-mid-focus: var(--edge-focus-mid);
 	--chat-form-highlight: var(--highlight-inner);
 	--chat-form-shadow: var(--elevation-soft);
+	/* the keys inside it: the add key and the model selector */
+	--chat-form-key-shadow: var(--elevation-key);
 	--chat-form-radius: var(--radius-surface);
 	--chat-form-radius-compact: var(--radius-surface-lg);
 

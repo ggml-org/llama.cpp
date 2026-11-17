@@ -108,6 +108,9 @@
 	--elevation-raised:
 		0 2px 4px rgb(0 0 0 / 0.04), 0 6px 12px -3px rgb(0 0 0 / 0.06),
 		0 16px 28px -6px rgb(0 0 0 / 0.08);
+	/* a key on a white surface, like the chat form's: a hairline all round and a drop of 1px, so it stands apart
+	   without the control elevation's soft spread, which blends into the white */
+	--elevation-key: 0 0 0 0.5px rgb(0 0 0 / 0.08), 0 1px 1.5px rgb(0 0 0 / 0.08);
 	/* softer steps: the chat form floats only a little, its shadow close and tight (smooth near layers, nothing
 	   reaching past 6px); a message bubble barely lifts */
 	--elevation-soft:
@@ -209,6 +212,7 @@
 		0 0.5px 1px rgb(0 0 0 / 0.3), 0 1px 2px rgb(0 0 0 / 0.25), 0 2px 4px -1px rgb(0 0 0 / 0.25);
 	--elevation-raised:
 		0 2px 4px rgb(0 0 0 / 0.25), 0 6px 12px -3px rgb(0 0 0 / 0.3), 0 16px 28px -6px rgb(0 0 0 / 0.4);
+	--elevation-key: var(--elevation-control);
 	--elevation-soft:
 		0 0.5px 1px rgb(0 0 0 / 0.25), 0 1px 3px rgb(0 0 0 / 0.25), 0 2px 6px -2px rgb(0 0 0 / 0.25),
 		0 6px 16px -10px rgb(0 0 0 / 0.35);
