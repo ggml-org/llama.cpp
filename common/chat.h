@@ -504,8 +504,10 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
 
 // prompt of the model's "tts" chat template for the text to speak, empty if the model has none
 // language and voice are optional, the template defines their defaults
+// g2p (optional): the letter-to-sound model of the template's tts_g2p(), e.g. mtmd_gen_audio_g2p()
 std::string common_chat_get_tts_prompt(const common_chat_templates * chat_templates, const std::string & text,
-                                       const std::string & language = "", const std::string & voice = "");
+                                       const std::string & language = "", const std::string & voice = "",
+                                       const std::function<std::string(const std::string & word)> & g2p = nullptr);
 
 // system prompt line for the speech language and voice (e.g. LFM3-Audio), empty if not used
 std::string common_chat_get_speech_system_prompt(const common_chat_templates * chat_templates,

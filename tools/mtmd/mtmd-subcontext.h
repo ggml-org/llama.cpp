@@ -69,8 +69,8 @@ enum mtmd_subctx_gen_process {
     MTMD_SUBCTX_GEN_PROCESS_TTS,        // full utterance of codes to raw PCM audio
     MTMD_SUBCTX_GEN_PROCESS_TTS_VOCODE, // internal: mel + source stft to istft input
     MTMD_SUBCTX_GEN_PROCESS_TOKENIZE,   // raw PCM audio to semantic speech tokens
-    MTMD_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows
-    MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows
+    MTMD_SUBCTX_GEN_PROCESS_LATENT_IN,  // internal: flow latent rows to backbone embd rows (tiny-voca: token states to durations)
+    MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, // internal: backbone hidden rows to flow velocity rows (tiny-voca: to source-filter params)
     MTMD_SUBCTX_GEN_PROCESS_FLOW_COND,  // internal: frame rows to flow condition rows
     MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP,  // internal: one velocity pass of the flow transformer
 };

@@ -24,6 +24,10 @@ struct server_prompt {
     // a checkpoint does not change after it is created, so the prompt cache shares it with the slot instead of a copy
     std::list<std::shared_ptr<const common_prompt_checkpoint>> checkpoints;
 
+    // the lora config that the tokens were processed with, it follows the state to the prompt cache and back
+    // TODO: slot files do not store it
+    std::vector<common_adapter_lora_info> lora;
+
     void clear() {
         tokens.clear();
         checkpoints.clear();
@@ -37,11 +41,13 @@ struct server_prompt {
         return server_prompt {
             tokens.clone(),
             checkpoints,
+            lora,
         };
     }
 
     // n_prefix: tokens shared with the new prompt, must be > 0
     // has_new_tokens: the new prompt is longer than n_prefix
+    // n_swa: 0 if a state must end right before the next token (no SWA, or recurrent)
     // pos_min: min position of the live state
     // n_past == 0 without a checkpoint means that nothing can be reused
     server_prompt_reuse get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min) const;
@@ -91,7 +97,8 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    // lora_new: the lora config of the new prompt, the states made with another config are skipped
+    bool load(server_prompt & prompt, const server_tokens & tokens_new, const std::vector<common_adapter_lora_info> & lora_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
 };
@@ -122,5 +129,6 @@ struct server_slot_sched {
     // idle slots that lose the least by being reused: empty slots first, then the least recently used ones
     std::vector<int> get_free_slots(const std::vector<server_slot_info> & slots, size_t n_slots_needed, int exclude_id_slot) const;
 
-    server_slot_plan select(const std::vector<server_slot_info> & slots, const server_task & task) const;
+    // lora: the lora config of the task
+    server_slot_plan select(const std::vector<server_slot_info> & slots, const server_task & task, const std::vector<common_adapter_lora_info> & lora) const;
 };

@@ -96,6 +96,7 @@ add_library(mtmd
             models/pockettts-gen.cpp
             models/soprano.cpp
             models/kokoro.cpp
+            models/tiny-voca.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
