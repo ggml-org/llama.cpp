@@ -25,6 +25,7 @@
 // These need to be supported N,M values for a MatBc x MatBr x 16 coopmatmuladd
 const uint32_t MatBr = 16;
 const uint32_t MatBc = 16;
+const uint32_t q_tiles = Br / MatBr;
 
 const uint32_t rows_per_thread = Br / row_split;
 const uint32_t cols_per_iter = gl_WorkGroupSize.x / row_split;
@@ -64,15 +65,14 @@ shared FLOAT_TYPEV4 kvsh[(kvsh_stride >= vsh_stride) ? (Bc * kvsh_stride) : (Bc 
 shared ACC_TYPE slope[Br];
 
 // row-tiled builds stage the PV result through sfsh
-const bool PV_IN_SFSH = Br > MatBr;
 const uint32_t osh_stride = row_split * MatBr / 4;
-shared O_TYPEV4 pvsh[PV_IN_SFSH ? 2 : Br * osh_stride];
+shared O_TYPEV4 pvsh[q_tiles > 1 ? 2 : Br * osh_stride];
 
 shared vec4 occupancy_limiter[LIMIT_OCCUPANCY_SHMEM > 0 ? LIMIT_OCCUPANCY_SHMEM : 1];
 #if defined(FLOAT16) && !defined(ACC_TYPE_MAX)
 const uint32_t pv_per_acc = 2;
 O_TYPEV4 pvsh_load(const uint32_t i) {
-    if (!PV_IN_SFSH) {
+    if (q_tiles == 1) {
         return pvsh[i];
     }
     const uvec2 u = floatBitsToUint(vec2(sfsh[i / 2][(i % 2) * 2], sfsh[i / 2][(i % 2) * 2 + 1]));
@@ -81,7 +81,7 @@ O_TYPEV4 pvsh_load(const uint32_t i) {
 #else
 const uint32_t pv_per_acc = 1;
 O_TYPEV4 pvsh_load(const uint32_t i) {
-    if (!PV_IN_SFSH) {
+    if (q_tiles == 1) {
         return pvsh[i];
     }
     return O_TYPEV4(sfsh[i]);
@@ -117,7 +117,6 @@ void main() {
 
 #define tile_row(r) (row_tid * rows_per_thread + (r))
 
-    const uint32_t q_tiles = Br / MatBr;
     const uint32_t d_tiles = HSK_pad / 16;
 
     uint32_t q_offset = gqa_iq1*p.nb01 + (iq2*p.nb02+iq3*p.nb03) / 4;
@@ -594,11 +593,9 @@ void main() {
                     }
                 }
 
-                if (PV_IN_SFSH) {
+                if (q_tiles > 1) {
                     coopMatStore(PVMat0, sfsh, o_offset / pv_per_acc, osh_stride / pv_per_acc, gl_CooperativeMatrixLayoutRowMajor);
-                    if (q_tiles > 1) {
-                        coopMatStore(PVMat1, sfsh, (o_offset + MatBc * osh_stride) / pv_per_acc, osh_stride / pv_per_acc, gl_CooperativeMatrixLayoutRowMajor);
-                    }
+                    coopMatStore(PVMat1, sfsh, (o_offset + MatBc * osh_stride) / pv_per_acc, osh_stride / pv_per_acc, gl_CooperativeMatrixLayoutRowMajor);
                 } else {
                     coopMatStore(PVMat0, pvsh, o_offset, osh_stride, gl_CooperativeMatrixLayoutRowMajor);
                 }
