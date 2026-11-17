@@ -350,7 +350,9 @@ class GGUFReader:
             np_dims = tuple(reversed(dims.tolist()))
             block_size, type_size = GGML_QUANT_SIZES[ggml_type]
             n_bytes = n_elems * type_size // block_size
-            data_offs = int(start_offs + offset_tensor[0])
+            data_offs = int(start_offs) + int(offset_tensor[0])
+            if data_offs + n_bytes > self.data.nbytes:
+                raise ValueError(f'Tensor {tensor_name} data exceeds file size {self.data.nbytes}')
             item_type: npt.DTypeLike
             if ggml_type == GGMLQuantizationType.F16:
                 item_count = n_elems
