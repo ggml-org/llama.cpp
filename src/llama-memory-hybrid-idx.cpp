@@ -417,7 +417,6 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
         const llama_pos stale = mem_idx_stale[s];
         bool keep = !sq.cells.empty() && !sp.empty() && sq.pos_min == sp.begin()->first && stale > sq.pos_min;
         if (keep) {
-            auto it = sp.upper_bound(sq.cells.back());
             if (stale != POS_CLEAN) {
                 const auto cut = std::lower_bound(sq.cells.begin(), sq.cells.end(), std::make_pair(stale, uint32_t(0)));
                 sq.cells.erase(cut, sq.cells.end());
@@ -425,8 +424,8 @@ const llama_memory_hybrid_idx::kpool_layout & llama_memory_hybrid_idx::kpool_lay
                     sq.pools.pop_back();
                 }
                 sq.j_next = sq.pools.empty() ? 0 : sq.pools.back() + kpool;
-                it = sp.lower_bound(std::make_pair(stale, uint32_t(0)));
             }
+            auto it = stale == POS_CLEAN ? sp.upper_bound(sq.cells.back()) : sp.lower_bound(std::make_pair(stale, uint32_t(0)));
             for (; it != sp.end(); ++it) {
                 sq.cells.push_back(*it);
             }
