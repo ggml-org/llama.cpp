@@ -204,6 +204,7 @@ struct mtmd_bitmap {
     std::shared_ptr<const mtmd_gen_ref> gen_ref; // gen-side reference of a predefined voice, if any
     bool mergeable = false; // [QWEN_VIDEO] set only on frames of the same video
     bool is_video  = false; // see mtmd_bitmap_set_is_video()
+    std::string transcript; // see mtmd_bitmap_set_transcript()
 
     // lazy-loaded bitmap
     mtmd_bitmap_lazy_callback lazy_callback = nullptr;
@@ -2056,10 +2057,11 @@ struct mtmd_tokenizer {
             // sanity check
             GGML_ASSERT(ctx->audio_preproc != nullptr);
 
-            // qwen3tts: the clip also gives the reference codes for cloning with a transcript, see mtmd_qwen3tts_ref_encode()
+            // qwen3tts: a clip with a transcript also gives the reference codes, see mtmd_qwen3tts_ref_encode()
             mtmd_image_f32 ref_wav;
             bool with_ref_codes = ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
-                                  ctx->ctx_gen_a && ctx->ctx_gen_a->model.has_ref_encoder();
+                                  ctx->ctx_gen_a && ctx->ctx_gen_a->model.has_ref_encoder() &&
+                                  !bitmap->transcript.empty();
 
             // preprocess audio
             auto source = std::make_shared<mtmd_audio_preproc_out>();
@@ -4033,6 +4035,14 @@ void mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable) {
 
 void mtmd_bitmap_set_is_video(mtmd_bitmap * bitmap, bool is_video) {
     bitmap->is_video = is_video;
+}
+
+void mtmd_bitmap_set_transcript(mtmd_bitmap * bitmap, const char * transcript) {
+    if (transcript) {
+        bitmap->transcript = std::string(transcript);
+    } else {
+        bitmap->transcript.clear();
+    }
 }
 
 mtmd_bitmap * mtmd_bitmap_init_lazy(const mtmd_context * ctx,

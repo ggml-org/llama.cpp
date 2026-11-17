@@ -233,6 +233,7 @@ public:
 
         std::vector<float> speaker_embd;
         if (inp->speaker_ref) {
+            mtmd_bitmap_set_transcript(inp->speaker_ref, inp->speaker_ref_text);
             if (!encode_speaker(inp->speaker_ref, speaker_embd)) {
                 return 1;
             }
