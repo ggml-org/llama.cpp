@@ -85,4 +85,7 @@ change that carries no bump publishes nothing and leaves a warning on the run.
 - Below `1.0`: a breaking change bumps the minor, a feature bumps the patch.
 - A version with a prerelease suffix (`0.5.0-beta.1`) publishes under the `next` tag, so `latest` stays a stable build.
 - Publishing needs no token in the repo: the job trades its OIDC identity for one, so the only place to look when a
-  publish is refused is the package's trusted-publisher settings on npm.
+  publish is refused is the package's trusted-publisher settings on npm. A publisher names a workflow that must already
+  exist under `.github/workflows`, so it is added after this workflow lands, and it allows staged publishing until
+  `npm publish` is permitted for it. Provenance is generated without asking, and only on a GitHub-hosted runner: a
+  self-hosted one cannot publish this way.
