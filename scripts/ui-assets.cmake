@@ -72,11 +72,13 @@ function(ui_validate_assets files in_dir)
     set(found_index FALSE)
     set(found_manifest FALSE)
     set(found_sw FALSE)
+    # the service worker: SvelteKit's service-worker.js, or Workbox's workbox-*.js in the
+    # prebuilt archives of builds before SvelteKit 3
+    set(found_service_worker FALSE)
     set(found_build_json FALSE)
     set(found_version_json FALSE)
     set(found_bundle_js FALSE)
     set(found_bundle_css FALSE)
-    set(found_workbox_js FALSE)
 
     foreach(f ${files})
         get_filename_component(base "${f}" NAME)
@@ -86,6 +88,8 @@ function(ui_validate_assets files in_dir)
             set(found_manifest TRUE)
         elseif(base STREQUAL "sw.js")
             set(found_sw TRUE)
+        elseif(base STREQUAL "service-worker.js" OR base MATCHES "^workbox.*\\.js$")
+            set(found_service_worker TRUE)
         elseif(base STREQUAL "build.json")
             set(found_build_json TRUE)
         elseif(base STREQUAL "version.json")
@@ -94,8 +98,6 @@ function(ui_validate_assets files in_dir)
             set(found_bundle_js TRUE)
         elseif(base MATCHES "^bundle.*\\.css$")
             set(found_bundle_css TRUE)
-        elseif(base MATCHES "^workbox.*\\.js$")
-            set(found_workbox_js TRUE)
         endif()
     endforeach()
 
@@ -109,6 +111,9 @@ function(ui_validate_assets files in_dir)
     if(NOT found_sw)
         list(APPEND missing "sw.js")
     endif()
+    if(NOT found_service_worker)
+        list(APPEND missing "service-worker.js (or workbox[hash].js in an older build)")
+    endif()
     if(NOT found_build_json)
         list(APPEND missing "build.json")
     endif()
@@ -120,9 +125,6 @@ function(ui_validate_assets files in_dir)
     endif()
     if(NOT found_bundle_css)
         list(APPEND missing "bundle[hash].css")
-    endif()
-    if(NOT found_workbox_js)
-        list(APPEND missing "workbox[hash].js")
     endif()
 
     if(missing)
@@ -144,7 +146,7 @@ endfunction()
 # Generate ui.cpp/ui.h embedding every file of ${dist_dir} (empty table when
 # it has no index.html), gzip-compressed when LLAMA_UI_GZIP is enabled.
 function(emit_files dist_dir)
-    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/tools/ui")
+    set(UI_TEMPLATE_DIR "${LLAMA_SOURCE_DIR}/ui/apps/chat")
 
     # Collect the asset list once and reuse it for the fingerprint,
     # validation, compression and embedding.
@@ -518,7 +520,7 @@ function(hf_download version out_var out_resolved)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# 1. Priority 1: pre-built assets supplied in tools/ui/dist
+# 1. Priority 1: pre-built assets supplied in ui/apps/chat/dist
 # ---------------------------------------------------------------------------
 if(EXISTS "${SRC_DIST_DIR}/index.html")
     message(STATUS "UI: using pre-built assets from ${SRC_DIST_DIR}")
@@ -585,7 +587,7 @@ if(NOT provisioned)
                         "In a disconnected environment, download the pre-built UI "
                         "from a llama.cpp release at "
                         "https://github.com/ggml-org/llama.cpp/releases and "
-                        "extract to tools/ui/dist.")
+                        "extract to ui/apps/chat/dist.")
     endif()
 endif()
 

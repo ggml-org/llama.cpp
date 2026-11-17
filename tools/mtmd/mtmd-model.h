@@ -213,6 +213,8 @@ struct mtmd_hparams {
 
     // pocket-tts
     static constexpr int32_t pockettts_max_spk_seconds = 30;
+    // fish_s2: the codec encoder runs at 44.1 kHz, memory grows with the clip
+    static constexpr int32_t fish_s2_max_spk_seconds = 30;
     int32_t seanet_n_stage    = 0;
     std::vector<int32_t> seanet_ratios; // encoder order (reversed compared to the config)
     int32_t mimi_downsample   = 0;      // encoder frame rate / model frame rate
@@ -622,6 +624,12 @@ struct mtmd_code2wav {
     ggml_tensor * quant_rest_out_w  = nullptr;
     ggml_tensor * quant_rest_cb_w   = nullptr; // codebooks, merged 3D [15, vocab, dim]
 
+    // fish_s2 codec encoder: in_proj bias and l2-normalized codebooks for the nearest-entry search
+    ggml_tensor * quant_first_in_b      = nullptr;
+    ggml_tensor * quant_rest_in_b       = nullptr;
+    ggml_tensor * quant_first_cb_norm_w = nullptr;
+    ggml_tensor * quant_rest_cb_norm_w  = nullptr;
+
     ggml_tensor * pre_conv_w = nullptr;
     ggml_tensor * pre_conv_b = nullptr;
 
@@ -935,6 +943,84 @@ struct mtmd_zonos3_wav {
     int64_t rs_kernel_len = 0;
 };
 
+// snake-activated conv decoder of the DAC / Oobleck family (a.gen.vae.*): yue2 VAE, minimax_music3 vocoder
+struct mtmd_snake_vae {
+    // x + beta * sin(alpha * x)^2, alpha and beta folded at conversion
+    struct snake {
+        ggml_tensor * alpha = nullptr;
+        ggml_tensor * beta  = nullptr;
+    };
+    struct res_unit {
+        snake         act1;
+        ggml_tensor * conv1_w = nullptr; // k = 7, dilated
+        ggml_tensor * conv1_b = nullptr;
+        snake         act2;
+        ggml_tensor * conv2_w = nullptr; // k = 1
+        ggml_tensor * conv2_b = nullptr;
+    };
+    struct block {
+        snake         act;
+        ggml_tensor * up_w = nullptr; // ConvTranspose1d, k = 2 * stride
+        ggml_tensor * up_b = nullptr;
+        std::vector<res_unit> res;
+    };
+
+    ggml_tensor * in_proj_w = nullptr; // optional k = 1 conv before conv_in
+    ggml_tensor * in_proj_b = nullptr;
+    ggml_tensor * in_w      = nullptr;
+    ggml_tensor * in_b      = nullptr;
+    std::vector<block> blocks;
+    snake         post;
+    ggml_tensor * out_w     = nullptr;
+    ggml_tensor * out_b     = nullptr; // optional
+
+    // output samples per latent frame
+    int64_t ratio() const {
+        int64_t r = 1;
+        for (const auto & blk : blocks) {
+            r *= blk.up_w->ne[0] / 2;
+        }
+        return r;
+    }
+    int64_t n_latent() const {
+        return (in_proj_w ? in_proj_w : in_w)->ne[1];
+    }
+};
+
+// yue2: projections of the flow-matching NAR (a.gen.nar.*), the VAE is mtmd_model::snake_vae
+// the NAR transformer layers are loaded by libllama, see mtmd_yue2_nar_load()
+struct mtmd_yue2 {
+    ggml_tensor * inp_w = nullptr; // latent -> backbone embd
+    ggml_tensor * inp_b = nullptr;
+    ggml_tensor * out_w = nullptr; // backbone hidden -> velocity
+    ggml_tensor * out_b = nullptr;
+
+    // time embedder MLP, read on the host
+    std::vector<float> time0_w; // [256, n_embd]
+    std::vector<float> time0_b;
+    std::vector<float> time2_w; // [n_embd, n_embd]
+    std::vector<float> time2_b;
+};
+
+// minimax_music3: condition encoder (a.gen.cond.*) and flow-matching DiT (a.gen.flow.*)
+// the depth decoder is the generic a.gen.code.* layers, the vocoder is mtmd_model::snake_vae
+struct mtmd_music3 {
+    ggml_tensor * cond_layer_w = nullptr; // mix of the hidden states of a frame, softmax and scale folded in
+    ggml_tensor * cond_w       = nullptr; // k = 3 conv
+    ggml_tensor * cond_b       = nullptr;
+
+    ggml_tensor * time_freq  = nullptr; // random Fourier features, 2 * pi folded in
+    ggml_tensor * time_in_w  = nullptr;
+    ggml_tensor * time_in_b  = nullptr;
+    ggml_tensor * time_out_w = nullptr;
+    ggml_tensor * time_out_b = nullptr;
+    ggml_tensor * pre_w      = nullptr; // k = 1 conv over [latent, zeros, cond], residual
+    ggml_tensor * proj_in_w  = nullptr;
+    ggml_tensor * proj_out_w = nullptr;
+    ggml_tensor * post_w     = nullptr; // k = 1 conv, residual
+    std::vector<mtmd_layer> dit;
+};
+
 struct mtmd_vocos {
     ggml_tensor * input_w        = nullptr;
     ggml_tensor * input_b        = nullptr;
@@ -1208,6 +1294,7 @@ struct mtmd_model {
     ggml_tensor * gen_code_head_w     = nullptr; // per-codebook output head, merged 3D
     ggml_tensor * gen_code_out_embd_w = nullptr; // codebook-0 embedding, fed back into the talker
     ggml_tensor * gen_code_norm_w     = nullptr; // final norm
+    ggml_tensor * gen_code_tok_embd_w = nullptr; // fish_s2: input embedding shared by all codebooks
 
     // lfm3a depthformer (MaskGIT)
     ggml_tensor * gen_code_head_norm_w = nullptr; // per-codebook norm before the tied head, merged 2D
@@ -1217,6 +1304,9 @@ struct mtmd_model {
     mtmd_code2wav c2w;
     std::vector<mtmd_drama3_layer> drama3_layers;
     mtmd_zonos3_wav zonos3;
+    mtmd_yue2 yue2;
+    mtmd_music3 music3;
+    mtmd_snake_vae snake_vae; // yue2, minimax_music3
 
     // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
     mtmd_seanet seanet;

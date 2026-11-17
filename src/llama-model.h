@@ -956,6 +956,9 @@ struct llama_model {
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
+    // the gguf metadata string arrays kept after load, see load_hparams()
+    std::unordered_map<std::string, std::vector<std::string>> gguf_kv_arr;
+
     // list of devices used in this model
     std::vector<llama_device> devices;
 

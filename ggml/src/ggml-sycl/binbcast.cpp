@@ -10,10 +10,11 @@
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
-        int ne10, int ne11, int ne12, int ne13,
+        int ne11, int ne12, int ne13,
         /*int s0, */ int s1,  int s2,  int s3,
         int s00, int s01, int s02, int s03,
         int s10, int s11, int s12, int s13,
+        const sycl::uint3 ne10_fd,
         const sycl::nd_item<3> &item_ct1) {
     const int i0s = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                     item_ct1.get_local_id(2);
@@ -44,7 +45,7 @@ static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
 
     for (int i0 = i0s; i0 < ne0;
          i0 += item_ct1.get_local_range(2) * item_ct1.get_group_range(2)) {
-        const int i10 = i0 % ne10;
+        const int i10 = (int) fast_div_modulo((uint32_t) i0, ne10_fd).y();
         dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
     }
 }
@@ -52,10 +53,11 @@ static void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst_t * dst,
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
 static void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
-        int ne10, int ne11, int ne12, int ne13,
+        int ne11, int ne12, int ne13,
         /*int s0, */ int s1,  int s2,  int s3,
         int s00, int s01, int s02, int s03,
         int s10, int s11, int s12, int s13,
+        const sycl::uint3 ne10_fd,
         const sycl::nd_item<3> &item_ct1) {
 
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
@@ -82,7 +84,7 @@ static void k_bin_bcast_unravel(const src0_t * src0, const src1_t * src1, dst_t 
     const src1_t * src1_row = src1 + i_src1;
     dst_t * dst_row = dst + i_dst;
 
-    const int i10 = i0 % ne10;
+    const int i10 = (int) fast_div_modulo((uint32_t) i0, ne10_fd).y();
     dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0*s00] : 0.0f, (float)src1_row[i10*s10]);
 }
 
@@ -146,7 +148,8 @@ struct bin_bcast_sycl {
             int64_t ne2 = cne[2];
             int64_t ne3 = cne[3];
 
-            int64_t ne10 = cne1[0];
+            const sycl::uint3 ne10_fd = init_fastdiv_values((uint32_t) cne1[0]);
+
             int64_t ne11 = cne1[1];
             int64_t ne12 = cne1[2];
             int64_t ne13 = cne1[3];
@@ -231,8 +234,8 @@ struct bin_bcast_sycl {
                         [=](sycl::nd_item<3> item_ct1) {
                             k_bin_bcast_unravel<bin_op>(
                                 src0_dd, src1_dd, dst_dd, ne0, ne1, ne2, ne3,
-                                ne10, ne11, ne12, ne13, s1, s2, s3, s00, s01, s02,
-                                s03, s10, s11, s12, s13, item_ct1);
+                                ne11, ne12, ne13, s1, s2, s3, s00, s01, s02,
+                                s03, s10, s11, s12, s13, ne10_fd, item_ct1);
                         });
                 }
             } else {
@@ -249,9 +252,9 @@ struct bin_bcast_sycl {
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         k_bin_bcast<bin_op>(src0_dd, src1_dd, dst_dd, ne0, ne1,
-                                            ne2, ne3, ne10, ne11, ne12, ne13,
+                                            ne2, ne3, ne11, ne12, ne13,
                                             s1, s2, s3, s00, s01, s02, s03, s10, s11, s12, s13,
-                                            item_ct1);
+                                            ne10_fd, item_ct1);
                     });
             }
         }
@@ -362,12 +365,13 @@ void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename src2_t, typename dst_t>
 static void k_bin_bcast3(const src0_t * src0, const src1_t * src1, const src2_t * src2, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
-        int ne10, int ne11, int ne12, int ne13,
-        int ne20, int ne21, int ne22, int ne23,
+        int ne11, int ne12, int ne13,
+        int ne21, int ne22, int ne23,
         int s1, int s2, int s3,
         int s00, int s01, int s02, int s03,
         int s10, int s11, int s12, int s13,
         int s20, int s21, int s22, int s23,
+        const sycl::uint3 ne10_fd, const sycl::uint3 ne20_fd,
         const sycl::nd_item<3> & item_ct1) {
     const int i0s = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                     item_ct1.get_local_id(2);
@@ -403,8 +407,8 @@ static void k_bin_bcast3(const src0_t * src0, const src1_t * src1, const src2_t 
 
     for (int i0 = i0s; i0 < ne0;
          i0 += item_ct1.get_local_range(2) * item_ct1.get_group_range(2)) {
-        const int   i10 = i0 % ne10;
-        const int   i20 = i0 % ne20;
+        const int   i10 = (int) fast_div_modulo((uint32_t) i0, ne10_fd).y();
+        const int   i20 = (int) fast_div_modulo((uint32_t) i0, ne20_fd).y();
         const float acc = bin_op((float) src0_row[i0 * s00], (float) src1_row[i10 * s10]);
         dst_row[i0]     = (dst_t) bin_op(acc, (float) src2_row[i20 * s20]);
     }
@@ -413,12 +417,13 @@ static void k_bin_bcast3(const src0_t * src0, const src1_t * src1, const src2_t 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename src2_t, typename dst_t>
 static void k_bin_bcast3_unravel(const src0_t * src0, const src1_t * src1, const src2_t * src2, dst_t * dst,
         int ne0, int ne1, int ne2, int ne3,
-        int ne10, int ne11, int ne12, int ne13,
-        int ne20, int ne21, int ne22, int ne23,
+        int ne11, int ne12, int ne13,
+        int ne21, int ne22, int ne23,
         int s1, int s2, int s3,
         int s00, int s01, int s02, int s03,
         int s10, int s11, int s12, int s13,
         int s20, int s21, int s22, int s23,
+        const sycl::uint3 ne10_fd, const sycl::uint3 ne20_fd,
         const sycl::nd_item<3> & item_ct1) {
     const int i = item_ct1.get_local_range(2) * item_ct1.get_group(2) +
                   item_ct1.get_local_id(2);
@@ -444,8 +449,8 @@ static void k_bin_bcast3_unravel(const src0_t * src0, const src1_t * src1, const
     const size_t i_src2 = i23 * s23 + i22 * s22 + i21 * s21;
     const size_t i_dst  = i3 * s3 + i2 * s2 + i1 * s1;
 
-    const int   i10 = i0 % ne10;
-    const int   i20 = i0 % ne20;
+    const int   i10 = (int) fast_div_modulo((uint32_t) i0, ne10_fd).y();
+    const int   i20 = (int) fast_div_modulo((uint32_t) i0, ne20_fd).y();
     const float acc = bin_op((float) src0[i_src0 + i0 * s00], (float) src1[i_src1 + i10 * s10]);
     dst[i_dst + i0] = (dst_t) bin_op(acc, (float) src2[i_src2 + i20 * s20]);
 }
@@ -547,6 +552,9 @@ static void launch_bin_bcast3(ggml_backend_sycl_context & ctx, const ggml_tensor
         GGML_ASSERT(cnb2[0] % sizeof(src2_t) == 0 && cnb2[1] % sizeof(src2_t) == 0 && cnb2[2] % sizeof(src2_t) == 0 &&
                     cnb2[3] % sizeof(src2_t) == 0);
 
+        const sycl::uint3 ne10_fd = init_fastdiv_values((uint32_t) ne10);
+        const sycl::uint3 ne20_fd = init_fastdiv_values((uint32_t) ne20);
+
         const src0_t * src0_dd = (const src0_t *) src0->data;
         const src1_t * src1_dd = (const src1_t *) src1->data;
         const src2_t * src2_dd = (const src2_t *) src2->data;
@@ -575,17 +583,18 @@ static void launch_bin_bcast3(ggml_backend_sycl_context & ctx, const ggml_tensor
                 sycl::nd_range<3>(sycl::range<3>(1, 1, block_num) * sycl::range<3>(1, 1, block_size),
                                   sycl::range<3>(1, 1, block_size)),
                 [=](sycl::nd_item<3> item_ct1) {
-                    k_bin_bcast3_unravel<bin_op>(src0_dd, src1_dd, src2_dd, dst_dd, ne0, ne1, ne2, ne3, ne10, ne11,
-                                                 ne12, ne13, ne20, ne21, ne22, ne23, s1, s2, s3, s00, s01, s02, s03,
-                                                 s10, s11, s12, s13, s20, s21, s22, s23, item_ct1);
+                    k_bin_bcast3_unravel<bin_op>(src0_dd, src1_dd, src2_dd, dst_dd, ne0, ne1, ne2, ne3,
+                                                 ne11, ne12, ne13, ne21, ne22, ne23, s1, s2, s3, s00, s01, s02,
+                                                 s03, s10, s11, s12, s13, s20, s21, s22, s23, ne10_fd, ne20_fd,
+                                                 item_ct1);
                 });
         } else {
             stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                                  [=](sycl::nd_item<3> item_ct1) {
-                                     k_bin_bcast3<bin_op>(src0_dd, src1_dd, src2_dd, dst_dd, ne0, ne1, ne2, ne3, ne10,
-                                                          ne11, ne12, ne13, ne20, ne21, ne22, ne23, s1, s2, s3, s00,
+                                     k_bin_bcast3<bin_op>(src0_dd, src1_dd, src2_dd, dst_dd, ne0, ne1, ne2, ne3,
+                                                          ne11, ne12, ne13, ne21, ne22, ne23, s1, s2, s3, s00,
                                                           s01, s02, s03, s10, s11, s12, s13, s20, s21, s22, s23,
-                                                          item_ct1);
+                                                          ne10_fd, ne20_fd, item_ct1);
                                  });
         }
     }
@@ -647,4 +656,3 @@ void ggml_sycl_op_add_add_fused(ggml_backend_sycl_context & ctx, ggml_tensor * a
         GGML_ABORT("fatal error");
     }
 }
-

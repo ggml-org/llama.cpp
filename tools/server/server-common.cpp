@@ -1646,6 +1646,11 @@ json oaicompat_chat_params_parse(
             inputs.enable_thinking = false;
             inputs.chat_template_kwargs.erase("reasoning_effort");
         } else if (!reasoning_effort.empty()) {
+            const auto rejected = caps.at("reasoning_effort_rejected").get<std::vector<std::string>>();
+            if (std::find(rejected.begin(), rejected.end(), reasoning_effort) != rejected.end()) {
+                const auto levels = caps.at("reasoning_effort_levels").get<std::vector<std::string>>();
+                throw std::invalid_argument("reasoning_effort \"" + reasoning_effort + "\" is not supported by the chat template, supported levels: " + string_join(levels, ", "));
+            }
             inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
         }
     }

@@ -473,11 +473,15 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_CHATTERBOX,
     MTMD_GEN_AUDIO_TYPE_DRAMA3,
     MTMD_GEN_AUDIO_TYPE_ZONOS3,
+    MTMD_GEN_AUDIO_TYPE_YUE2,
+    MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
+    MTMD_GEN_AUDIO_TYPE_FISH_S2,
 };
 
 struct mtmd_gen_audio_info {
     enum mtmd_gen_audio_type type;
     int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
+    int32_t n_channels;  // 1 = mono, 2 = stereo (mtmd_gen_out::audio is interleaved)
     const char * model_variant; // name of the weight variant, can be nullptr if not applicable
     int32_t n_voices; // predefined voices, see mtmd_gen_audio_voice_name()
 };
@@ -500,6 +504,8 @@ enum mtmd_gen_process_type {
                                     // for qwen3tts, this is code2wav
                                     // for pocket-tts, this is mimi decoder
                                     // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
+                                    // for yue2, this is one VAE pass, the caller splits a long song into tiles
+                                    // for minimax_music3, this is one window: flow matching + vocoder
 };
 
 struct mtmd_gen_inp {
@@ -522,6 +528,19 @@ struct mtmd_gen_inp {
     size_t    n_codes;
     const float * feats;
     size_t        n_feats;
+
+    // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
+    // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)
+    const uint8_t * backbone_state;
+    size_t          backbone_state_size;
+    int32_t         backbone_n_past;
+
+    // flow matching: steps of the ODE solver, <= 0 = model default (yue2 GEN_CODE: 32, minimax_music3 GEN_WAV: 30)
+    int32_t n_steps;
+
+    // minimax_music3 GEN_CODE: feats holds the backbone hidden rows, cond then uncond with guidance
+    // classifier-free guidance scale of the residual codes, <= 0 = model default (1.5)
+    float cfg_scale;
 };
 
 struct mtmd_gen_out {
@@ -538,7 +557,7 @@ struct mtmd_gen_out {
 
     // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     const float * audio;
-    size_t        n_samples;
+    size_t        n_samples; // total over all channels
 };
 
 struct mtmd_gen_state_params {

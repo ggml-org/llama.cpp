@@ -8,6 +8,7 @@
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
+#include "llama-cpp.h"
 #include "../src/llama-ext.h"
 
 // fix problem with std::min and std::max
@@ -613,6 +614,103 @@ static bool cbx_is_mtl(const mtmd_model & model) {
     return model.cbx_read_tensor("a.cenc.perceiver.pre_attention_query", nullptr, 0) > 0;
 }
 
+// yue2: the NAR layers are a qwen3 text model, libllama loads them from a synthetic GGUF
+// the tensor data is read from the mmproj file, mtmd keeps no copy
+struct yue2_nar_source {
+    std::ifstream f;
+    std::map<std::string, std::pair<size_t, size_t>> tensors; // name in the synthetic model -> offset and size in the mmproj
+};
+
+static void yue2_nar_set_tensor_data(ggml_tensor * t, void * user_data) {
+    auto * src = (yue2_nar_source *) user_data;
+    std::vector<uint8_t> buf(ggml_nbytes(t), 0);
+    const std::string name = t->name;
+    auto it = src->tensors.find(name);
+    if (it != src->tensors.end()) {
+        if (it->second.second != buf.size()) {
+            throw std::runtime_error(mtmd_format("yue2: unexpected size of %s", t->name));
+        }
+        src->f.seekg((std::streamoff) it->second.first, std::ios::beg);
+        if (!src->f.read((char *) buf.data(), (std::streamsize) buf.size())) {
+            throw std::runtime_error(mtmd_format("yue2: failed to read %s", t->name));
+        }
+    } else {
+        // optional tensors that libllama creates by itself, give them neutral values (scale = 1, dense_2 = identity, others = 0)
+        GGML_ASSERT(t->type == GGML_TYPE_F32);
+        float * w = (float *) buf.data();
+        if (name.size() >= 5 && name.compare(name.size() - 5, 5, "scale") == 0) {
+            std::fill(w, w + ggml_nelements(t), 1.0f);
+        } else if (name == "dense_2.weight") {
+            GGML_ASSERT(t->ne[0] == t->ne[1]);
+            for (int64_t i = 0; i < t->ne[0]; i++) {
+                w[i * t->ne[0] + i] = 1.0f;
+            }
+        }
+    }
+    ggml_backend_tensor_set(t, buf.data(), 0, buf.size());
+}
+
+static llama_model * mtmd_yue2_nar_load(const char * fname, ggml_backend_dev_t device, const mtmd_hparams & hparams) {
+    ggml_context * meta = nullptr;
+    gguf_init_params gparams = { /*no_alloc =*/ true, /*ctx =*/ &meta };
+    gguf_context_ptr gsrc(gguf_init_from_file(fname, gparams));
+    ggml_context_ptr meta_ptr(meta);
+    if (!gsrc) {
+        throw std::runtime_error(mtmd_format("yue2: failed to read %s", fname));
+    }
+
+    const llm_arch arch = LLM_ARCH_QWEN3;
+    gguf_context_ptr gdst(gguf_init_empty());
+    auto key = [&](llm_kv kv) { return llama_arch_kv_name(arch, kv); };
+    gguf_set_val_str(gdst.get(), key(LLM_KV_GENERAL_ARCHITECTURE).c_str(), llama_arch_name(arch));
+    gguf_set_val_str(gdst.get(), key(LLM_KV_TOKENIZER_MODEL).c_str(),       "none");
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_VOCAB_SIZE).c_str(),                    1);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_CONTEXT_LENGTH).c_str(),                mtmd_graph_yue2_gen::n_ctx_max);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_EMBEDDING_LENGTH).c_str(),              hparams.n_embd);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_FEED_FORWARD_LENGTH).c_str(),           hparams.n_ff);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_BLOCK_COUNT).c_str(),                   hparams.n_layer);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_ATTENTION_HEAD_COUNT).c_str(),          hparams.n_head);
+    gguf_set_val_u32(gdst.get(), key(LLM_KV_ATTENTION_HEAD_COUNT_KV).c_str(),       hparams.n_head_kv);
+    gguf_set_val_f32(gdst.get(), key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS).c_str(),   hparams.eps);
+    gguf_set_val_f32(gdst.get(), key(LLM_KV_ROPE_FREQ_BASE).c_str(),                mtmd_graph_yue2_gen::rope_theta);
+
+    yue2_nar_source src;
+    const std::string prefix = "a.gen.nar.";
+    for (int64_t i = 0; i < gguf_get_n_tensors(gsrc.get()); i++) {
+        const std::string name = gguf_get_tensor_name(gsrc.get(), i);
+        if (name.rfind(prefix + "blk.", 0) != 0 && name != prefix + "output_norm.weight") {
+            continue;
+        }
+        // the synthetic model only takes the type from here, the shapes come from the hparams
+        ggml_tensor t = *ggml_get_tensor(meta, name.c_str());
+        ggml_set_name(&t, name.substr(prefix.size()).c_str());
+        gguf_add_tensor(gdst.get(), &t);
+        src.tensors[t.name] = { gguf_get_data_offset(gsrc.get()) + gguf_get_tensor_offset(gsrc.get(), i), ggml_nbytes(&t) };
+    }
+    if (src.tensors.size() != (size_t) hparams.n_layer * 11 + 1) {
+        throw std::runtime_error("yue2: unexpected NAR tensors in the mmproj");
+    }
+    src.f = open_ifstream_binary(fname);
+    if (!src.f) {
+        throw std::runtime_error(mtmd_format("yue2: failed to open %s", fname));
+    }
+
+    llama_model_params mparams = llama_model_default_params();
+    std::vector<ggml_backend_dev_t> devs;
+    if (device && ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+        devs = { device, nullptr };
+        mparams.devices      = devs.data();
+        mparams.n_gpu_layers = -1;
+    } else {
+        mparams.n_gpu_layers = 0;
+    }
+    llama_model * model = llama_model_init_from_user(gdst.get(), yue2_nar_set_tensor_data, &src, mparams);
+    if (!model) {
+        throw std::runtime_error("yue2: failed to load the NAR layers");
+    }
+    return model;
+}
+
 struct mtmd_context {
     // must outlive the subcontexts below
     mtmd_models models;
@@ -627,6 +725,10 @@ struct mtmd_context {
 
     // generation context
     std::unique_ptr<mtmd_subcontext> ctx_gen_a; // audio
+
+    // yue2: the NAR layers, run on a llama_context of their own, see mtmd_gen_flow_yue2()
+    llama_model_ptr       yue2_nar;
+    llama_flash_attn_type yue2_flash_attn = LLAMA_FLASH_ATTN_TYPE_AUTO;
 
     // gen-side reference data of the last encoded chunk (chatterbox), see mtmd_gen_state_set_ref()
     mtmd_gen_ref gen_ref;
@@ -760,6 +862,10 @@ struct mtmd_context {
         }
         if (models.gen_a) {
             ctx_gen_a = std::make_unique<mtmd_subcontext>(*models.gen_a, *backends, sctx_params);
+        }
+        if (models.gen_a && models.gen_a->proj_type == PROJECTOR_TYPE_YUE2_GEN && !no_alloc) {
+            yue2_nar.reset(mtmd_yue2_nar_load(mmproj_fname, device, models.gen_a->hparams));
+            yue2_flash_attn = ctx_params.flash_attn_type;
         }
         for (size_t i = 0; i < backends->ptrs.size(); ++i) {
             const size_t size = ggml_backend_sched_get_buffer_size(backends->sched.get(), backends->ptrs[i]);
@@ -1313,6 +1419,10 @@ struct mtmd_context {
             case PROJECTOR_TYPE_POCKETTTS_SPKENC:
                 {
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_pockettts>(models.a.get());
+                } break;
+            case PROJECTOR_TYPE_FISH_S2_SPKENC:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_fish_s2>(models.a.get());
                 } break;
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
@@ -2455,6 +2565,7 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
     mtmd_gen_audio_info info{};
     info.model_variant = "";
+    info.n_channels    = 1;
     if (!ctx->ctx_gen_a) {
         info.type = MTMD_GEN_AUDIO_TYPE_NONE;
         return info;
@@ -2488,6 +2599,20 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             break;
         case PROJECTOR_TYPE_ZONOS3_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_ZONOS3;
+            info.sample_rate = 44100;
+            break;
+        case PROJECTOR_TYPE_YUE2_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_YUE2;
+            info.sample_rate = 48000;
+            info.n_channels  = mtmd_graph_yue2_gen::n_channels;
+            break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3;
+            info.sample_rate = 44100;
+            info.n_channels  = mtmd_graph_music3_gen::n_channels;
+            break;
+        case PROJECTOR_TYPE_FISH_S2_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_FISH_S2;
             info.sample_rate = 44100;
             break;
         default:
@@ -2908,6 +3033,12 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
         case PROJECTOR_TYPE_SOPRANO:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            // top-k 50 is fixed in the graph, like the reference
+            inp.top_k = 50;
+            inp.top_p = 1.0f;
+            inp.temp  = 1.0f;
+            break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
             // codebook heads, same as the reference (sglang-omni fishaudio_drama3)
             inp.top_k = 30;
@@ -2956,6 +3087,10 @@ struct mtmd_gen_state {
     // zonos3: the iSTFT head runs on the host
     std::unique_ptr<mtmd_audio_zonos3_synth> zonos3_synth;
 
+    // minimax_music3: tail of the previous window, the next one starts from it, see mtmd_gen_wav_music3()
+    std::vector<float> flow_prev_latent;
+    std::vector<float> flow_prev_cond;
+
     ~mtmd_gen_state() {
         delete gen_state;
     }
@@ -2996,6 +3131,8 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
     }
     state->zonos3_synth.reset();
+    state->flow_prev_latent.clear();
+    state->flow_prev_cond.clear();
 }
 
 // zonos3 GEN_WAV: n_codes == 0 flushes and resets the state
@@ -3113,6 +3250,368 @@ static int32_t mtmd_gen_wav_lfm3a(mtmd_context * ctx, mtmd_gen_state * state, co
     return 0;
 }
 
+// yue2: one pass of an mtmd graph, rows in -> rows out (PCM for GEN_WAV)
+static bool yue2_encode(mtmd_context * ctx, mtmd_gen_state * state, mtmd_subctx_gen_process proc, const std::vector<float> & in, std::vector<float> & out) {
+    mtmd_image_f32 dummy;
+    dummy.set_size({1, 1}, false, true);
+    dummy.cpy_buf(std::vector<float>(1, 0.0f));
+    mtmd_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(dummy));
+
+    mtmd_subctx_encode_params params;
+    params.imgs        = &batch;
+    params.n_threads   = ctx->n_threads;
+    params.gen_process = proc;
+    params.feats       = &in;
+    if (proc == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+        params.out_audio = &out;
+        params.gen_state = state->gen_state;
+    } else {
+        params.out_feats = &out;
+    }
+    return ctx->ctx_gen_a->encode(&params);
+}
+
+// NAR context: the backbone keys/values, then the NAR rows of each pass
+// the state only loads into the same KV layout, try both flash attention settings
+static llama_context_ptr yue2_nar_context(mtmd_context * ctx, const mtmd_gen_inp * inp, int32_t n_rows) {
+    llama_context_params cparams = llama_context_default_params();
+    cparams.n_ctx          = (uint32_t) (inp->backbone_n_past + n_rows);
+    cparams.n_batch        = (uint32_t) n_rows;
+    cparams.n_ubatch       = (uint32_t) n_rows; // non-causal, the rows of a pass must be in one ubatch
+    cparams.n_seq_max      = 1;
+    cparams.n_threads      = ctx->n_threads;
+    cparams.n_threads_batch = ctx->n_threads;
+    cparams.embeddings     = true;
+    cparams.pooling_type   = LLAMA_POOLING_TYPE_NONE;
+    cparams.attention_type = LLAMA_ATTENTION_TYPE_NON_CAUSAL;
+    cparams.no_perf        = true;
+
+    std::vector<llama_flash_attn_type> fa_types = { ctx->yue2_flash_attn };
+    if (ctx->yue2_flash_attn == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+        fa_types = { LLAMA_FLASH_ATTN_TYPE_ENABLED, LLAMA_FLASH_ATTN_TYPE_DISABLED };
+    }
+    for (llama_flash_attn_type fa : fa_types) {
+        cparams.flash_attn_type = fa;
+        llama_context_ptr lctx(llama_init_from_model(ctx->yue2_nar.get(), cparams));
+        if (!lctx) {
+            continue;
+        }
+        if (llama_state_seq_set_data(lctx.get(), inp->backbone_state, inp->backbone_state_size, 0) == 0) {
+            continue;
+        }
+        if (llama_memory_seq_pos_max(llama_get_memory(lctx.get()), 0) != inp->backbone_n_past - 1) {
+            LOG_ERR("%s: the backbone state does not hold %d positions\n", __func__, inp->backbone_n_past);
+            return nullptr;
+        }
+        return lctx;
+    }
+    LOG_ERR("%s: cannot load the backbone state, the backbone context must use an F16 KV cache\n", __func__);
+    return nullptr;
+}
+
+// yue2 GEN_CODE: flow matching from noise to the VAE latents of one chunk, see synthesize() in the reference (nar.py)
+static int32_t mtmd_gen_flow_yue2(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_yue2_gen;
+    const auto & y = ctx->ctx_gen_a->model.yue2;
+    const int64_t n_embd = ctx->ctx_gen_a->model.hparams.n_embd;
+
+    if (!ctx->yue2_nar || inp->n_codes == 0 || !inp->backbone_state || inp->backbone_n_past <= 0) {
+        LOG_ERR("%s: yue2 needs the frame count and the backbone state\n", __func__);
+        return 1;
+    }
+    const int64_t n_frames = (int64_t) inp->n_codes;
+    const int64_t n_rows   = n_frames + 2; // latent start, frames, latent end
+    const int64_t n_past   = inp->backbone_n_past;
+    if (n_past + n_rows > g::n_ctx_max) {
+        LOG_ERR("%s: song too long: %lld prompt positions + %lld frames, max %d positions\n", __func__,
+                (long long) n_past, (long long) n_frames, g::n_ctx_max);
+        return 1;
+    }
+    llama_context_ptr lctx = yue2_nar_context(ctx, inp, (int32_t) n_rows);
+    if (!lctx) {
+        return 1;
+    }
+    llama_memory_t mem = llama_get_memory(lctx.get());
+
+    // sinusoidal position of each NAR row (AudioPositionEmbedding), interleaved sin/cos
+    std::vector<float> pos_embd((size_t) (n_rows * n_embd));
+    for (int64_t i = 0; i < n_rows; i++) {
+        for (int64_t j = 0; j < n_embd / 2; j++) {
+            const double a = (double) i * std::exp((double) (2 * j) * -std::log(10000.0) / (double) n_embd);
+            pos_embd[i * n_embd + 2 * j]     = (float) std::sin(a);
+            pos_embd[i * n_embd + 2 * j + 1] = (float) std::cos(a);
+        }
+    }
+
+    // TimestepEmbedder: [cos, sin] of t * freqs -> linear -> silu -> linear
+    auto time_embd = [&](double t) {
+        const double raw = std::clamp(std::log(t / (1.0 - t)), -20.0, 20.0);
+        const double ts  = 1.0 / (1.0 + std::exp(-raw)); // timestep_shift = 1
+        const int64_t half = g::n_freq / 2;
+        std::vector<float> f(g::n_freq);
+        for (int64_t j = 0; j < half; j++) {
+            const double a = ts * std::exp(-std::log(10000.0) * (double) j / (double) half);
+            f[j]        = (float) std::cos(a);
+            f[half + j] = (float) std::sin(a);
+        }
+        std::vector<float> h(y.time0_b), o(y.time2_b);
+        for (int64_t r = 0; r < n_embd; r++) {
+            for (int64_t c = 0; c < g::n_freq; c++) {
+                h[r] += y.time0_w[r * g::n_freq + c] * f[c];
+            }
+            h[r] = h[r] / (1.0f + std::exp(-h[r]));
+        }
+        for (int64_t r = 0; r < n_embd; r++) {
+            for (int64_t c = 0; c < n_embd; c++) {
+                o[r] += y.time2_w[r * n_embd + c] * h[c];
+            }
+        }
+        return o;
+    };
+
+    llama_batch_ext_ptr batch(llama_batch_ext_init(lctx.get()));
+    std::vector<float> x_rows((size_t) (n_rows * g::n_latent), 0.0f);
+    std::vector<float> embd, hidden, vel;
+    auto velocity = [&](const std::vector<float> & x, double t, std::vector<float> & v) -> bool {
+        std::copy(x.begin(), x.end(), x_rows.begin() + g::n_latent); // the start and end rows stay 0
+        if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_IN, x_rows, embd)) {
+            return false;
+        }
+        const std::vector<float> temb = time_embd(t);
+        llama_batch_ext_clear(batch.get());
+        for (int64_t i = 0; i < n_rows; i++) {
+            for (int64_t j = 0; j < n_embd; j++) {
+                embd[i * n_embd + j] = embd[i * n_embd + j] + temb[j] + pos_embd[i * n_embd + j];
+            }
+            const llama_embd row = { embd.data() + i * n_embd, 1, (size_t) n_embd };
+            const llama_pos  p   = (llama_pos) (n_past + i);
+            const int32_t    idx = llama_batch_ext_add_embd(batch.get(), 0, row);
+            if (idx < 0) {
+                LOG_ERR("%s: failed to add a row to the batch (error %d)\n", __func__, idx);
+                return false;
+            }
+            llama_batch_ext_set_pos(batch.get(), idx, &p);
+            llama_batch_ext_set_output_embd(batch.get(), idx, true);
+        }
+        if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+            LOG_ERR("%s: NAR decode failed\n", __func__);
+            return false;
+        }
+        const float * h = llama_get_embeddings(lctx.get());
+        hidden.assign(h, h + n_rows * n_embd);
+        llama_memory_seq_rm(mem, 0, (llama_pos) n_past, -1);
+        if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT, hidden, vel)) {
+            return false;
+        }
+        v.assign(vel.begin() + g::n_latent, vel.end() - g::n_latent);
+        return true;
+    };
+
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    std::vector<float> x((size_t) (n_frames * g::n_latent));
+    for (auto & v : x) {
+        v = dist(state->gen_state->rng);
+    }
+
+    // midpoint solver from t = 1 (noise) to t = 0
+    std::vector<float> v1, v2, mid(x.size());
+    const int    n_steps = inp->n_steps > 0 ? inp->n_steps : g::ode_steps;
+    const double dt = 1.0 / n_steps;
+    bool ok = true;
+    for (int step = 0; step < n_steps && ok; step++) {
+        const double t = 1.0 - step * dt;
+        ok = velocity(x, t, v1);
+        for (size_t i = 0; ok && i < x.size(); i++) {
+            mid[i] = x[i] - v1[i] * (float) (dt / 2);
+        }
+        ok = ok && velocity(mid, t - dt / 2, v2);
+        for (size_t i = 0; ok && i < x.size(); i++) {
+            x[i] -= v2[i] * (float) dt;
+        }
+    }
+    if (!ok) {
+        return 1;
+    }
+
+    state->out_feats = std::move(x);
+    out->feats   = state->out_feats.data();
+    out->n_feats = state->out_feats.size();
+    return 0;
+}
+
+// yue2 GEN_WAV: latents -> interleaved stereo PCM in one VAE pass, the caller splits a long song into tiles
+static int32_t mtmd_gen_wav_yue2(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_yue2_gen;
+    if (!inp->feats || inp->n_feats == 0 || inp->n_feats % g::n_latent != 0) {
+        LOG_ERR("%s: yue2 needs whole latent frames\n", __func__);
+        return 1;
+    }
+    const std::vector<float> feats(inp->feats, inp->feats + inp->n_feats);
+    auto & audio = state->out_audio;
+    if (!yue2_encode(ctx, state, MTMD_SUBCTX_GEN_PROCESS_GEN_WAV, feats, audio)) {
+        LOG_ERR("%s: encode failed (vae)\n", __func__);
+        return 1;
+    }
+    for (auto & v : audio) {
+        v = std::clamp(v, -1.0f, 1.0f);
+    }
+
+    out->audio     = audio.data();
+    out->n_samples = audio.size();
+    return 0;
+}
+
+
+// minimax_music3: one pass of an mtmd graph on rows of floats
+static bool music3_encode(mtmd_context * ctx, mtmd_gen_state * state, mtmd_subctx_encode_params & params, const std::vector<float> & in) {
+    mtmd_image_f32 dummy;
+    dummy.set_size({1, 1}, false, true);
+    dummy.cpy_buf(std::vector<float>(1, 0.0f));
+    mtmd_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(dummy));
+
+    params.imgs      = &batch;
+    params.n_threads = ctx->n_threads;
+    params.feats     = &in;
+    params.gen_state = state->gen_state;
+    return ctx->ctx_gen_a->encode(&params);
+}
+
+// minimax_music3 GEN_CODE: the depth decoder of one frame, see _generate_depth_codes() of the reference (encoders.py)
+static int32_t mtmd_gen_code_music3(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_music3_gen;
+    const size_t n_embd = (size_t) ctx->ctx_gen_a->model.n_mmproj_embd();
+    if (!inp->feats || (inp->n_feats != n_embd && inp->n_feats != 2 * n_embd)) {
+        LOG_ERR("%s: minimax_music3 needs 1 or 2 backbone hidden rows\n", __func__);
+        return 1;
+    }
+    const std::vector<float> rows(inp->feats, inp->feats + inp->n_feats);
+
+    std::vector<float> out_embd(n_embd);
+    mtmd_subctx_encode_params params;
+    params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+    params.out_embd    = &out_embd;
+    params.out_codes   = &state->out_codes;
+    params.out_feats   = &state->out_feats;
+    params.code0       = inp->code0;
+    params.cfg_scale   = inp->cfg_scale > 0.0f ? inp->cfg_scale : g::depth_cfg;
+    params.temp        = inp->temp;
+    if (!music3_encode(ctx, state, params, rows)) {
+        LOG_ERR("%s: encode failed (depth decoder)\n", __func__);
+        return 1;
+    }
+    state->out_embd = std::move(out_embd);
+
+    out->embd    = state->out_embd.data();
+    out->codes   = state->out_codes.data();
+    out->n_codes = state->out_codes.size();
+    out->feats   = state->out_feats.data();
+    out->n_feats = state->out_feats.size();
+    return 0;
+}
+
+// minimax_music3 GEN_WAV: condition rows of one window -> flow matching -> vocoder, see denoise.py of the reference
+// a window starts from the tail of the previous one, kept in the state
+static int32_t mtmd_gen_wav_music3(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_music3_gen;
+    const auto & m = ctx->ctx_gen_a->model.music3;
+    const size_t n_embd = (size_t) ctx->ctx_gen_a->model.hparams.n_embd;
+    const size_t n_cond = (size_t) m.cond_w->ne[2];
+    const size_t n_in   = (size_t) m.pre_w->ne[0]; // [latent, zeros, condition]
+    const size_t n_lc   = g::n_latent;
+    if (!inp->feats || inp->n_feats == 0 || inp->n_feats % n_embd != 0) {
+        LOG_ERR("%s: minimax_music3 needs whole condition rows\n", __func__);
+        return 1;
+    }
+    const std::vector<float> rows(inp->feats, inp->feats + inp->n_feats);
+
+    std::vector<float> cond;
+    {
+        mtmd_subctx_encode_params params;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_FLOW_COND;
+        params.out_feats   = &cond;
+        if (!music3_encode(ctx, state, params, rows)) {
+            LOG_ERR("%s: encode failed (condition)\n", __func__);
+            return 1;
+        }
+    }
+    const size_t n_lat = cond.size() / n_cond;
+
+    // the overlap takes the condition of the previous window, its latents are blended toward the previous ones
+    auto & prev_lat  = state->flow_prev_latent;
+    auto & prev_cond = state->flow_prev_cond;
+    const size_t n_ov = std::min(prev_lat.size() / n_lc, n_lat);
+    std::copy(prev_cond.begin(), prev_cond.begin() + n_ov * n_cond, cond.begin());
+
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    std::vector<float> x(n_lat * n_lc);
+    for (auto & v : x) {
+        v = dist(state->gen_state->rng);
+    }
+    const std::vector<float> noise_ov(x.begin(), x.begin() + n_ov * n_lc);
+
+    // batch 0 is conditioned, batch 1 has a zero condition
+    std::vector<float> dit_in(2 * n_lat * n_in, 0.0f);
+    for (size_t i = 0; i < n_lat; i++) {
+        std::copy(cond.begin() + i * n_cond, cond.begin() + (i + 1) * n_cond, dit_in.begin() + i * n_in + 2 * n_lc);
+    }
+
+    // FlowMatchEulerDiscreteScheduler with invert_sigmas: t = 1 - linspace(1, 1 / n, n), then 1
+    const int n_steps = inp->n_steps > 0 ? inp->n_steps : g::flow_steps;
+    std::vector<float> ts(n_steps + 1, 1.0f);
+    for (int i = 0; i < n_steps; i++) {
+        const double sigma = n_steps > 1 ? 1.0 + i * (1.0 / n_steps - 1.0) / (n_steps - 1) : 1.0;
+        ts[i] = 1.0f - (float) sigma;
+    }
+
+    std::vector<float> vel;
+    for (int i = 0; i < n_steps; i++) {
+        const float t = ts[i];
+        for (size_t j = 0; j < n_ov * n_lc; j++) {
+            x[j] = (1.0f - (1.0f - 1e-6f) * t) * noise_ov[j] + t * prev_lat[j];
+        }
+        for (size_t b = 0; b < 2; b++) {
+            for (size_t r = 0; r < n_lat; r++) {
+                std::copy(x.begin() + r * n_lc, x.begin() + (r + 1) * n_lc, dit_in.begin() + (b * n_lat + r) * n_in);
+            }
+        }
+        mtmd_subctx_encode_params params;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP;
+        params.flow_t      = t;
+        params.cfg_scale   = g::dit_cfg;
+        params.out_feats   = &vel;
+        if (!music3_encode(ctx, state, params, dit_in) || vel.size() != x.size()) {
+            LOG_ERR("%s: encode failed (flow step %d)\n", __func__, i);
+            return 1;
+        }
+        const float dt = ts[i + 1] - ts[i];
+        for (size_t j = 0; j < x.size(); j++) {
+            x[j] += dt * vel[j];
+        }
+    }
+    std::copy(prev_lat.begin(), prev_lat.begin() + n_ov * n_lc, x.begin());
+
+    // the next window starts from latent frames [L - 2 * n_overlap, L - n_overlap) of this one
+    const size_t s0 = n_lat > 2 * (size_t) g::n_overlap ? n_lat - 2 * g::n_overlap : 0;
+    const size_t s1 = n_lat > (size_t) g::n_overlap ? n_lat - g::n_overlap : 0;
+    prev_lat.assign(x.begin() + s0 * n_lc, x.begin() + s1 * n_lc);
+    prev_cond.assign(cond.begin() + s0 * n_cond, cond.begin() + s1 * n_cond);
+
+    mtmd_subctx_encode_params params;
+    params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
+    params.out_audio   = &state->out_audio;
+    if (!music3_encode(ctx, state, params, x)) {
+        LOG_ERR("%s: encode failed (vocoder)\n", __func__);
+        return 1;
+    }
+    out->audio     = state->out_audio.data();
+    out->n_samples = state->out_audio.size();
+    return 0;
+}
+
 int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
     if (!state || state->sctx != ctx->ctx_gen_a.get()) {
         LOG_ERR("%s: invalid gen state\n", __func__);
@@ -3138,6 +3637,15 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     }
 
     *out = {};
+
+    if (sctx->model.proj_type == PROJECTOR_TYPE_YUE2_GEN) {
+        return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_flow_yue2(ctx, state, inp, out)
+                                                           : mtmd_gen_wav_yue2(ctx, state, inp, out);
+    }
+    if (sctx->model.proj_type == PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN) {
+        return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_code_music3(ctx, state, inp, out)
+                                                           : mtmd_gen_wav_music3(ctx, state, inp, out);
+    }
 
     if (sctx->model.proj_type == PROJECTOR_TYPE_SOPRANO) {
         const size_t n_embd = (size_t) sctx->model.n_mmproj_embd();
