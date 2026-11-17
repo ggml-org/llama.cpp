@@ -265,12 +265,22 @@ ggml_tensor * llama_model_zaya1::graph::build_router_moe(const llama_model & mod
     cb(keep, "router_keep", il);
 
     ggml_tensor * moe = build_moe_ffn(cur,
-            nullptr, nullptr, nullptr, layer.ffn_down_exps, nullptr,
+            nullptr,
+            nullptr,
+            nullptr,
+            layer.ffn_down_exps,
+            nullptr,
             n_expert + 1, n_expert_used,
-            LLM_FFN_SILU, false, 0.0f,
+            LLM_FFN_SILU, false,
+            0.0f,
             LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-            il, logits, layer.ffn_gate_up_exps,
-            nullptr, nullptr, nullptr, expert);
+            il,
+            logits,
+            layer.ffn_gate_up_exps,
+            nullptr,
+            nullptr,
+            nullptr,
+            expert);
 
     return ggml_mul(ctx0, moe, keep);
 }

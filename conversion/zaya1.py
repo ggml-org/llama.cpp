@@ -63,8 +63,6 @@ class ZayaModel(TextModel):
         self.gguf_writer.add_token_types(toktypes)
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        # the HF post-processor appends <eos>, a prompt must not end with it
-        special_vocab.add_special_token["eos"] = False
         special_vocab.add_to_gguf(self.gguf_writer)
         self.gguf_writer.add_add_space_prefix(False)
 
