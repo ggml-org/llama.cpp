@@ -1,0 +1,60 @@
+<!--
+	The Storybook's front page (Introduction): in short, what this Storybook is for, how we think, how the products fit
+	together and how the sections are laid out. Written for people first and readable as plain Markdown by agents too.
+	Set in the Editorial.
+-->
+
+<script>
+	import Figure from '../editorial/Figure.svelte';
+	import Principles from './Principles.svelte';
+	import Products from './Products.svelte';
+	import Sections from './Sections.svelte';
+	import Stack from './Stack.svelte';
+	import Uses from './Uses.svelte';
+</script>
+
+<p class="kicker">Llama · Storybook</p>
+
+# Introduction
+
+<p class="lead">This is where <strong>Llama UI</strong> and <strong>Llama Chat</strong> are designed, built and checked. Everything in it is the real component, font or file, so what you see here is what ships. The <strong>Llama Brand</strong> and the communications made with it have their own Storybook, in llama-brand.</p>
+
+## In short
+
+The component library **Llama UI**, built on the **Llama Brand** (the icon, Llama Sans and Llama Mono, the colours), and the app **Llama Chat** built from it, in one place, for the people and agents who design and build Llama products.
+
+<Figure n={1} caption="The building blocks, from the bottom: the Llama Brand, in llama-brand, Llama UI built on it and Llama Chat built from that. The communications are made from the brand and the app, in llama-brand too.">
+	<Stack />
+</Figure>
+
+## What it's for
+
+<Figure n={2} caption="Four uses.">
+	<Uses />
+</Figure>
+
+## How we think
+
+<Figure n={3} caption="Five ideas, each drawn with the real system: the devices a model runs on, the first run's recommendation, the three places the character lives, a control on its grid and one token chain.">
+	<Principles />
+</Figure>
+
+## How it fits together
+
+<Figure n={4} caption="The products and their repositories. llama-brand supplies the brand; llama.cpp holds the engine, Llama UI in ui/lib/ui and Llama Chat in ui/apps/chat, this Storybook's home; the native apps run llama-server and open Llama Chat. llama.app shows models the way Llama Chat does.">
+	<Products />
+</Figure>
+
+Inside Llama UI, the tokens go from primitives to semantic roles to components, in `ui/lib/ui/src/lib/styles/tokens/`, and `DESIGN.md` is generated from them. Llama UI draws the interface and handles interaction; each app owns its own state.
+
+## How it's laid out
+
+<Figure n={5} caption="The sections, in sidebar order.">
+	<Sections />
+</Figure>
+
+## Working in it
+
+- Run it with `npm run storybook` in `ui/apps/chat`.
+- Pages that are mostly prose, like this one, are `.svx`: Markdown with Svelte components in it. `AGENTS.md` says how to write them.
+- Where a guideline and a story disagree, the story is right: it's the real thing.

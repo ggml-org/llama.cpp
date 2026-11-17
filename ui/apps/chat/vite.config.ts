@@ -129,6 +129,8 @@ export default defineConfig(({ mode }) => {
 					],
 					test: {
 						browser: { ...browserBaseConfig, instances: [{ browser: 'chromium', headless: true }] },
+						// Llama UI's stories, shown in this Storybook too, are tested by the library itself (ui/lib/ui)
+						exclude: ['../../lib/ui/tests/**'],
 						name: 'ui'
 					}
 				}
