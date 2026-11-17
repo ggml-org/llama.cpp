@@ -1,5 +1,9 @@
 # llama.cpp
 
+<p align="center">
+  <b>English</b> · <a href="https://github.com/ggml-org/llama.cpp/blob/master/README.zh.md">简体中文</a>
+</p>
+
 ![llama.cpp](https://raw.githubusercontent.com/ggml-org/llama-brand/refs/heads/master/logo/svg/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">
