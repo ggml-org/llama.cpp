@@ -1,11 +1,13 @@
 /*
  * Llama UI's theme: fonts, tokens, surfaces and the Tailwind theme the components read.
- * Consumers import it after Tailwind and tw-animate-css, which the components' enter and exit
- * animations come from (a peer dependency, like Tailwind: an app that compiles these sources
- * itself resolves it from its own node_modules):
+ * Consumers import it after Tailwind, tw-animate-css, which the components' enter and exit
+ * animations come from (a peer dependency, like Tailwind), and @ggml-org/llama-brand's colours,
+ * which the primitives build on. Stylesheets here import no package, so an app that compiles
+ * these sources itself resolves all three from its own node_modules:
  *
  *   @import 'tailwindcss';
  *   @import 'tw-animate-css';
+ *   @import '@ggml-org/llama-brand/css/colors.css';
  *   @import '@ggml-org/llama-ui/theme.css';
  *
  * Dark mode is the `dark` class on <html>; the Matte light surfaces are the `theme-matte` class.

@@ -5,6 +5,8 @@
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';
+/* the brand's colours, which Llama UI's primitives build on */
+@import '@ggml-org/llama-brand/css/colors.css';
 /* Llama UI's theme (ui/lib/ui): fonts, tokens, surfaces, the shadcn names and the base styles
    its components read. By path rather than as @ggml-org/llama-ui/theme.css: prettier's Tailwind
    plugin reads this file too, and it knows no aliases */
