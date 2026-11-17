@@ -1097,6 +1097,10 @@ struct mtmd_model_loader {
                     {
                         hparams.audio_sample_rate = 48000;
                     } break;
+                case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+                    {
+                        hparams.audio_sample_rate = 44100;
+                    } break;
                 case PROJECTOR_TYPE_DRAMA3_GEN:
                 case PROJECTOR_TYPE_FISH_S2_GEN:
                     {
@@ -1757,6 +1761,44 @@ struct mtmd_model_loader {
             c2w.dac_post_snake_beta  = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_SNAKE, "beta"));
             c2w.dac_post_conv_w      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_CONV,  "weight"));
             c2w.dac_post_conv_b      = get_tensor(mtmd_format(TN_A_GEN_WAV_DAC_POST_CONV,  "bias"));
+        };
+
+        // a.gen.vae.*, see mtmd_snake_vae
+        auto load_snake_vae = [&]() {
+            auto & vae = model.snake_vae;
+            const std::string p = "a.gen.vae";
+            auto load_snake = [&](const std::string & q) {
+                return mtmd_snake_vae::snake{ get_tensor(q + ".alpha"), get_tensor(q + ".beta") };
+            };
+            vae.in_proj_w = get_tensor(p + ".in_proj.weight", false);
+            vae.in_proj_b = get_tensor(p + ".in_proj.bias",   false);
+            vae.in_w      = get_tensor(p + ".conv_in.weight");
+            vae.in_b      = get_tensor(p + ".conv_in.bias");
+            for (int b = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format("%s.blk.%d.up.weight", p.c_str(), b).c_str()) >= 0; b++) {
+                const std::string q = p + ".blk." + std::to_string(b);
+                mtmd_snake_vae::block blk;
+                blk.act  = load_snake(q + ".snake");
+                blk.up_w = get_tensor(q + ".up.weight");
+                blk.up_b = get_tensor(q + ".up.bias");
+                for (int r = 0; r < 3; r++) {
+                    const std::string rq = q + ".res." + std::to_string(r);
+                    mtmd_snake_vae::res_unit ru;
+                    ru.act1    = load_snake(rq + ".snake1");
+                    ru.conv1_w = get_tensor(rq + ".conv1.weight");
+                    ru.conv1_b = get_tensor(rq + ".conv1.bias");
+                    ru.act2    = load_snake(rq + ".snake2");
+                    ru.conv2_w = get_tensor(rq + ".conv2.weight");
+                    ru.conv2_b = get_tensor(rq + ".conv2.bias");
+                    blk.res.push_back(ru);
+                }
+                vae.blocks.push_back(std::move(blk));
+            }
+            vae.post  = load_snake(p + ".post_snake");
+            vae.out_w = get_tensor(p + ".conv_out.weight");
+            vae.out_b = get_tensor(p + ".conv_out.bias", false);
+            if (vae.blocks.empty()) {
+                throw std::runtime_error(mtmd_format("%s: no VAE decoder blocks\n", __func__));
+            }
         };
 
         switch (model.proj_type) {
@@ -2926,42 +2968,81 @@ struct mtmd_model_loader {
                     read_host("a.gen.nar.time.2.weight", y.time2_w, n_embd, n_embd);
                     read_host("a.gen.nar.time.2.bias",   y.time2_b, n_embd, 1);
 
-                    const std::string p = "a.gen.vae";
-                    auto load_snake = [&](const std::string & q) {
-                        return mtmd_yue2::snake{ get_tensor(q + ".alpha"), get_tensor(q + ".beta") };
-                    };
-                    y.vae_in_w = get_tensor(p + ".conv_in.weight");
-                    y.vae_in_b = get_tensor(p + ".conv_in.bias");
-                    for (int b = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format("%s.blk.%d.up.weight", p.c_str(), b).c_str()) >= 0; b++) {
-                        const std::string q = p + ".blk." + std::to_string(b);
-                        mtmd_yue2::block blk;
-                        blk.act  = load_snake(q + ".snake");
-                        blk.up_w = get_tensor(q + ".up.weight");
-                        blk.up_b = get_tensor(q + ".up.bias");
-                        for (int r = 0; r < 3; r++) {
-                            const std::string rq = q + ".res." + std::to_string(r);
-                            mtmd_yue2::res_unit ru;
-                            ru.act1    = load_snake(rq + ".snake1");
-                            ru.conv1_w = get_tensor(rq + ".conv1.weight");
-                            ru.conv1_b = get_tensor(rq + ".conv1.bias");
-                            ru.act2    = load_snake(rq + ".snake2");
-                            ru.conv2_w = get_tensor(rq + ".conv2.weight");
-                            ru.conv2_b = get_tensor(rq + ".conv2.bias");
-                            blk.res.push_back(ru);
-                        }
-                        y.vae.push_back(std::move(blk));
-                    }
-                    y.vae_post  = load_snake(p + ".post_snake");
-                    y.vae_out_w = get_tensor(p + ".conv_out.weight");
-
                     // the tile cropping in mtmd_gen_wav_yue2() depends on the total stride
-                    int64_t ratio = 1;
-                    for (const auto & blk : y.vae) {
-                        ratio *= blk.up_w->ne[0] / 2;
-                    }
-                    if (ratio != mtmd_graph_yue2_gen::vae_ratio || y.vae_in_w->ne[1] != mtmd_graph_yue2_gen::n_latent ||
-                            y.vae_out_w->ne[2] != mtmd_graph_yue2_gen::n_channels) {
+                    load_snake_vae();
+                    const auto & vae = model.snake_vae;
+                    if (vae.ratio() != mtmd_graph_yue2_gen::vae_ratio || vae.n_latent() != mtmd_graph_yue2_gen::n_latent ||
+                            vae.out_w->ne[2] != mtmd_graph_yue2_gen::n_channels) {
                         throw std::runtime_error(mtmd_format("%s: yue2: unexpected VAE decoder layout\n", __func__));
+                    }
+                } break;
+            case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+                {
+                    // generic a.gen.code.* tensors (depth decoder layers, position_embd, post_ln) are loaded above
+                    using g = mtmd_graph_music3_gen;
+                    model.gen_code_proj_in_w  = get_tensor(mtmd_format(TN_A_GEN_CODE_PROJ_IN,  "weight"));
+                    model.gen_code_embd_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_EMBD,     "weight"));
+                    model.gen_code_head_w     = get_tensor(mtmd_format(TN_A_GEN_CODE_HEAD,     "weight"));
+                    model.gen_code_out_embd_w = get_tensor(mtmd_format(TN_A_GEN_CODE_OUT_EMBD, "weight"));
+                    // the depth decoder sees the backbone hidden, then one row per code (all but the last)
+                    const int64_t n_embd = hparams.n_embd;
+                    if (!model.post_ln_w || !model.position_embeddings || n_embd != hparams.projection_dim ||
+                            model.gen_code_proj_in_w->ne[0] != n_embd || model.gen_code_proj_in_w->ne[1] != n_embd ||
+                            model.gen_code_embd_w->ne[0] != n_embd || model.gen_code_head_w->ne[0] != n_embd ||
+                            model.gen_code_out_embd_w->ne[0] != n_embd || model.position_embeddings->ne[0] != n_embd ||
+                            model.gen_code_embd_w->ne[2] != model.gen_code_head_w->ne[2] ||
+                            model.gen_code_embd_w->ne[1] != model.gen_code_head_w->ne[1] ||
+                            model.position_embeddings->ne[1] < model.gen_code_head_w->ne[2] + 1) {
+                        throw std::runtime_error(mtmd_format("%s: minimax_music3: unexpected depth decoder layout\n", __func__));
+                    }
+
+                    auto & m = model.music3;
+                    m.cond_layer_w = get_tensor("a.gen.cond.layer_w");
+                    m.cond_w       = get_tensor("a.gen.cond.proj.weight");
+                    m.cond_b       = get_tensor("a.gen.cond.proj.bias");
+                    m.time_freq    = get_tensor("a.gen.flow.time_freq");
+                    m.time_in_w    = get_tensor("a.gen.flow.time_in.weight");
+                    m.time_in_b    = get_tensor("a.gen.flow.time_in.bias");
+                    m.time_out_w   = get_tensor("a.gen.flow.time_out.weight");
+                    m.time_out_b   = get_tensor("a.gen.flow.time_out.bias");
+                    m.pre_w        = get_tensor("a.gen.flow.pre.weight");
+                    m.proj_in_w    = get_tensor("a.gen.flow.proj_in.weight");
+                    m.proj_out_w   = get_tensor("a.gen.flow.proj_out.weight");
+                    m.post_w       = get_tensor("a.gen.flow.post.weight");
+                    for (int il = 0; gguf_find_tensor(ctx_gguf.get(), mtmd_format(TN_ATTN_Q, "a.gen.flow", il, "weight").c_str()) >= 0; il++) {
+                        const char * q = "a.gen.flow";
+                        mtmd_layer layer;
+                        layer.ln_1_w    = get_tensor(mtmd_format(TN_LN_1,        q, il, "weight"));
+                        layer.ln_1_b    = get_tensor(mtmd_format(TN_LN_1,        q, il, "bias"));
+                        layer.q_w       = get_tensor(mtmd_format(TN_ATTN_Q,      q, il, "weight"));
+                        layer.k_w       = get_tensor(mtmd_format(TN_ATTN_K,      q, il, "weight"));
+                        layer.v_w       = get_tensor(mtmd_format(TN_ATTN_V,      q, il, "weight"));
+                        layer.o_w       = get_tensor(mtmd_format(TN_ATTN_OUTPUT, q, il, "weight"));
+                        layer.ln_2_w    = get_tensor(mtmd_format(TN_LN_2,        q, il, "weight"));
+                        layer.ln_2_b    = get_tensor(mtmd_format(TN_LN_2,        q, il, "bias"));
+                        layer.ff_up_w   = get_tensor(mtmd_format(TN_FFN_UP,      q, il, "weight"));
+                        layer.ff_up_b   = get_tensor(mtmd_format(TN_FFN_UP,      q, il, "bias"));
+                        layer.ff_gate_w = get_tensor(mtmd_format(TN_FFN_GATE,    q, il, "weight"));
+                        layer.ff_gate_b = get_tensor(mtmd_format(TN_FFN_GATE,    q, il, "bias"));
+                        layer.ff_down_w = get_tensor(mtmd_format(TN_FFN_DOWN,    q, il, "weight"));
+                        layer.ff_down_b = get_tensor(mtmd_format(TN_FFN_DOWN,    q, il, "bias"));
+                        m.dit.push_back(layer);
+                    }
+
+                    load_snake_vae();
+                    const auto & vae = model.snake_vae;
+                    const int64_t n_dit_embd = m.proj_in_w->ne[1];
+                    const int64_t n_cond     = m.cond_w->ne[2];
+                    if (m.dit.empty() || m.cond_layer_w->ne[0] != model.gen_code_head_w->ne[2] + 1 ||
+                            m.cond_w->ne[0] != 3 || m.cond_w->ne[1] != hparams.n_embd ||
+                            m.pre_w->ne[0] != 2 * g::n_latent + n_cond || m.pre_w->ne[1] != m.pre_w->ne[0] ||
+                            m.proj_in_w->ne[0] != m.pre_w->ne[0] || m.proj_out_w->ne[0] != n_dit_embd || m.proj_out_w->ne[1] != g::n_latent ||
+                            m.post_w->ne[0] != g::n_latent || m.post_w->ne[1] != g::n_latent || m.cond_b->ne[0] != n_cond ||
+                            m.time_freq->ne[0] * 2 != m.time_in_w->ne[0] || m.time_in_w->ne[1] != m.time_out_w->ne[0] ||
+                            m.time_in_b->ne[0] != m.time_in_w->ne[1] || m.time_out_w->ne[1] != n_dit_embd || m.time_out_b->ne[0] != n_dit_embd ||
+                            n_dit_embd % g::dit_d_head != 0 ||
+                            vae.ratio() != g::vae_ratio || vae.n_latent() * 2 != g::n_latent || vae.out_w->ne[2] != 1) {
+                        throw std::runtime_error(mtmd_format("%s: minimax_music3: unexpected DiT or vocoder layout\n", __func__));
                     }
                 } break;
             case PROJECTOR_TYPE_DRAMA3_GEN:
@@ -4610,6 +4691,7 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_DRAMA3_GEN:
         case PROJECTOR_TYPE_ZONOS3_GEN:
         case PROJECTOR_TYPE_YUE2_GEN:
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
         case PROJECTOR_TYPE_FISH_S2_GEN:
             {
                 // one hidden-state vector fed back to the talker per call
@@ -4811,6 +4893,8 @@ int mtmd_model::n_mmproj_embd() const {
             return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_YUE2_GEN:
             return yue2.inp_w->ne[1];
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            return gen_code_out_embd_w->ne[0];
         case PROJECTOR_TYPE_POCKETTTS_SPKENC:
             return spk_proj_w->ne[1];
         case PROJECTOR_TYPE_POCKETTTS_GEN:

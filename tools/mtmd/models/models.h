@@ -637,15 +637,26 @@ struct mtmd_graph_zonos3_gen : mtmd_graph {
 
 std::vector<c2w_state_slot> list_zonos3_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model);
 
+// graphs that decode with a mtmd_snake_vae (yue2, minimax_music3), see snake-vae.cpp
+struct mtmd_graph_snake_vae : mtmd_graph {
+    using mtmd_graph::mtmd_graph;
+
+    // x: [T, C]
+    ggml_tensor * snake(ggml_tensor * x, const mtmd_snake_vae::snake & s) const;
+    ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const;
+    // x: [T, n_latent] -> [T * ratio, n_out]
+    ggml_tensor * build_snake_vae(ggml_tensor * x, const mtmd_snake_vae & vae) const;
+};
+
 //
 // YuE2 generation, the NAR transformer itself runs on a llama_context, see mtmd_gen_flow_yue2():
 // LATENT_IN  = latent rows -> backbone embd rows
 // LATENT_OUT = backbone hidden rows -> velocity rows
 // GEN_WAV    = Oobleck VAE decoder, latent rows -> interleaved stereo PCM
 //
-struct mtmd_graph_yue2_gen : mtmd_graph {
+struct mtmd_graph_yue2_gen : mtmd_graph_snake_vae {
     mtmd_graph_yue2_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process, int n_rows)
-        : mtmd_graph(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
+        : mtmd_graph_snake_vae(ctx, img), gen_process(gen_process), n_rows(n_rows) {}
     ggml_cgraph * build() override;
 
     static constexpr int   n_latent   = 64;
@@ -659,9 +670,48 @@ struct mtmd_graph_yue2_gen : mtmd_graph {
 
     mtmd_subctx_gen_process gen_process;
     int n_rows;
+};
 
-    ggml_tensor * snake(ggml_tensor * x, const mtmd_yue2::snake & s) const;
-    ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int dilation) const;
+//
+// MiniMax Music 3 generation, see mtmd_gen_wav_music3() for the flow-matching loop:
+// GEN_CODE  = depth decoder of one frame: backbone hidden rows (cond, then uncond with guidance) + semantic code -> the 8 codes, the next backbone input and the condition row (mix of the 8 hidden states of the frame)
+// FLOW_COND = condition rows of a window -> DiT condition, resampled to the latent rate
+// FLOW_STEP = one DiT pass, cond and uncond rows as a batch of 2
+// GEN_WAV   = DAC decoder, latent rows -> interleaved stereo PCM
+//
+struct mtmd_graph_music3_gen : mtmd_graph_snake_vae {
+    mtmd_graph_music3_gen(mtmd_subcontext * ctx, const mtmd_image_f32 & img, mtmd_subctx_gen_process gen_process,
+                          int n_rows, int n_out, float cfg_scale, float temp)
+        : mtmd_graph_snake_vae(ctx, img), gen_process(gen_process), n_rows(n_rows), n_out(n_out), cfg_scale(cfg_scale), temp(temp) {}
+    ggml_cgraph * build() override;
+
+    static constexpr int   n_latent   = 128;  // two channels of 64
+    static constexpr int   n_channels = 2;
+    static constexpr int   vae_ratio  = 512;  // output samples per latent frame
+    static constexpr int   dit_d_head = 64;
+    static constexpr int   dit_n_rot  = 32;   // partial rotary
+    static constexpr float dit_theta  = 10000.0f;
+    static constexpr float dit_eps    = 1e-5f;
+    static constexpr int   top_k      = 50;
+
+    // sampling and flow matching of the reference (encoders.py, denoise.py)
+    static constexpr float depth_cfg  = 1.5f;
+    static constexpr float dit_cfg    = 1.7f;
+    static constexpr int   flow_steps = 30;
+    static constexpr int   n_overlap  = 172; // latent frames shared by neighboring windows
+
+    mtmd_subctx_gen_process gen_process;
+    int   n_rows; // GEN_CODE: backbone rows, FLOW_COND: frames, FLOW_STEP and GEN_WAV: latent frames
+    int   n_out;  // FLOW_COND: latent frames
+    float cfg_scale;
+    float temp;
+
+    static int64_t latent_frames(int64_t n_frames);
+
+    ggml_cgraph * build_depth();
+    ggml_cgraph * build_cond();
+    ggml_cgraph * build_dit();
+    ggml_cgraph * build_vocoder();
 };
 
 struct mtmd_graph_soprano : mtmd_graph {

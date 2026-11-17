@@ -47,6 +47,7 @@ static void test_fuzzing(testing & t);
 static void test_tts_norm_patterns(testing & t);
 static void test_tts_dict(testing & t);
 static void test_tts_template_zonos3(testing & t);
+static void test_tts_template_music3(testing & t);
 
 static void test_shared_render(testing & t);
 
@@ -104,6 +105,7 @@ int main(int argc, char *argv[]) {
     t.test("tts norm patterns", test_tts_norm_patterns);
     t.test("tts dict", test_tts_dict);
     t.test("tts template zonos3", test_tts_template_zonos3);
+    t.test("tts template music3", test_tts_template_music3);
     if (!g_python_mode) {
         t.test("shared render", test_shared_render);
         t.test("hasher", test_hasher);
@@ -3229,6 +3231,37 @@ static void test_tts_template_zonos3(testing & t) {
             {"voice",    ""},
         };
         test_template(t, c[0] + ": " + c[1], tmpl, vars, c[2], true);
+    }
+}
+
+// the MiniMax Music 3 "tts" template: caption and lyrics cleanup of the diffusers pipeline (encoders.py), then the special-token prompt
+static void test_tts_template_music3(testing & t) {
+    std::string path = __FILE__;
+    const size_t pos = path.find_last_of("/\\");
+    path = (pos == std::string::npos ? std::string(".") : path.substr(0, pos)) + "/../models/templates/MiniMaxAI-MiniMax-Music3-tts.jinja";
+    std::ifstream fs(path, std::ios_base::binary);
+    if (!t.assert_true("template file is readable: " + path, fs.is_open())) {
+        return;
+    }
+    const std::string tmpl((std::istreambuf_iterator<char>(fs)), std::istreambuf_iterator<char>());
+
+    const std::vector<std::array<std::string, 2>> cases = {
+        { "[Tags]\nGenre: acoustic pop. BPM: 96.\nVocals: soft female lead.\n[Lyrics]\n[verse]\nMorning light\n[chorus]\nSoftly",
+          "<|im_start|><|caption_start|>Genre: acoustic pop. BPM: 96.\nVocals: soft female lead.<|caption_end|><|lyrics_start|>[start]\n[verse]\nMorning light\n[chorus]\nSoftly<|lyrics_end|><|im_end|><|audio_start|>" },
+        // markdown, <|key value|> tags, inline and lowercased section tags
+        { "[Tags]\n# Global Metadata\n- **bpm** is 92. *key* is E\n   ### h3 title\n---\n\n\n\xe2\x80\xa2 dot item\n    indented four\n<|genre  Blues Rock|> and <|solo|>\n**a **b** c**\n"
+          "[Lyrics]\n[Verse] I'm learning how\n  [Pre-Chorus] [Bass Quartet]  text dropped\nline one [Chorus] line two ^ next",
+          "<|im_start|><|caption_start|>Global Metadata\nbpm is 92. key is E\nh3 title\ndot item\nindented four\ngenre is Blues Rock and solo\na b c<|caption_end|>"
+          "<|lyrics_start|>[start]\n[verse]\n[pre-chorus]\n[bass quartet]\nline one\n[chorus]\nline two\nnext<|lyrics_end|><|im_end|><|audio_start|>" },
+    };
+    for (const auto & c : cases) {
+        // same variables as common_chat_get_tts_prompt()
+        const json vars = {
+            {"messages", json::array({{{"role", "user"}, {"content", c[0]}}})},
+            {"language", ""},
+            {"voice",    ""},
+        };
+        test_template(t, c[0], tmpl, vars, c[1], true);
     }
 }
 

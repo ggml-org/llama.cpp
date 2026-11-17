@@ -880,9 +880,9 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list 
 
 `loudness`: Target loudness in LUFS, `< 0` (default `0.0`, the model's own loudness). Only for models that support it, others reject a value other than `0.0` with a 400 error.
 
-`cfg_scale`: Classifier-free guidance scale of the audio codes, `> 0`, `1.0` disables it (default `0.0`, the model's own). Only for models that support it (YuE2), others reject a value other than `0.0` with a 400 error.
+`cfg_scale`: Classifier-free guidance scale of the audio codes, `> 0`, `1.0` disables it (default `0.0`, the model's own). Only for models that support it (YuE2, MiniMax Music 3), others reject a value other than `0.0` with a 400 error.
 
-`flow_steps`: Steps of the flow-matching ODE solver, `1` to `1024` (default `0`, the model's own). Fewer steps are faster and the audio is less accurate. Only for models that support it (YuE2), others reject a value other than `0` with a 400 error.
+`flow_steps`: Steps of the flow-matching ODE solver, `1` to `1024` (default `0`, the model's own). Fewer steps are faster and the audio is less accurate. Only for models that support it (YuE2, MiniMax Music 3), others reject a value other than `0` with a 400 error.
 
 `n_predict`: Max number of audio frames to generate. Defaults to the limit of the model (`512` for most models); generation normally stops earlier once the model emits an end-of-speech token.
 

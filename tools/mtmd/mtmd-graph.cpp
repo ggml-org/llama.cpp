@@ -1049,6 +1049,27 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                 }
                 builder = std::make_unique<mtmd_graph_yue2_gen>(ctx, img, gen_process, n_rows);
             } break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            {
+                using g = mtmd_graph_music3_gen;
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                // row size of the input of each process; the reserve pass builds GEN_CODE with one row
+                size_t n_col = (size_t) ctx->model.hparams.n_embd;
+                if (gen_process == MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP) {
+                    n_col = 2 * (size_t) ctx->model.music3.pre_w->ne[0];
+                } else if (gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV) {
+                    n_col = g::n_latent;
+                }
+                int n_rows = 1;
+                if (params && params->feats) {
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % n_col == 0);
+                    n_rows = (int) (params->feats->size() / n_col);
+                }
+                const int   n_out     = gen_process == MTMD_SUBCTX_GEN_PROCESS_FLOW_COND ? (int) g::latent_frames(n_rows) : 0;
+                const float cfg_scale = params ? params->cfg_scale : 1.0f;
+                const float temp      = params ? params->temp : 1.0f;
+                builder = std::make_unique<mtmd_graph_music3_gen>(ctx, img, gen_process, n_rows, n_out, cfg_scale, temp);
+            } break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
         case PROJECTOR_TYPE_FISH_S2_GEN:
             {
