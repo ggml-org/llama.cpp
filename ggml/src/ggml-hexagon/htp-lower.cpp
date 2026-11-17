@@ -922,7 +922,7 @@ void htp_unpack_tensor_lowered_f16(void * dst, const struct ggml_tensor * t, siz
 }
 
 void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml_cgraph * graph, std::vector<htp_opnode> & nodes) {
-    if (opt_opf16 <= 0) {
+    if (opt_oplower <= 0) {
         for (htp_opnode & node : nodes) {
             htp_lower_opnode(sess, node, nullptr, false);
         }
@@ -1026,9 +1026,9 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         return ggml_nelements(inp) < ggml_nelements(dst);
     };
 
-    // Under OPF16=1, keep cross-layer residual spine merges in F32 when the residual input is F32.
+    // Under OPLOWER=1, keep cross-layer residual spine merges in F32 when the residual input is F32.
     auto is_residual_spine_stop = [&](const htp_opnode & owner, const ggml_tensor * r) -> bool {
-        if (opt_opf16 != 1) {
+        if (opt_oplower != 1) {
             return false;
         }
         if (owner.opcode == HTP_OP_ADD) {
@@ -1075,10 +1075,10 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     auto is_selected_root = [&](const ggml_tensor * r) -> bool {
         if (htp_lower_is_mm_root(nodes, owner_idx, r) || htp_lower_is_fa_root(nodes, owner_idx, r) ||
-            (opt_opf16 >= 2 && htp_lower_is_rms_root(nodes, owner_idx, r))) {
+            (opt_oplower >= 2 && htp_lower_is_rms_root(nodes, owner_idx, r))) {
             return true;
         }
-        if (opt_opf16 >= 1) {
+        if (opt_oplower >= 1) {
             for (const ggml_tensor * tensor : classes[r]) {
                 auto oit = owner_idx.find(tensor);
                 if (oit != owner_idx.end()) {
@@ -1207,8 +1207,8 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
         htp_lower_opnode(sess, node);
     }
 
-    if (n_lowered_roots > 0 || opt_opf16 > 0) {
-        HEX_VERBOSE("ggml-hex: %s lower opf16=%d roots=%zu/%zu mm_out=%zu saved=%zuB\n",
-                    htp_session_name(sess), opt_opf16, n_lowered_roots, n_candidates, n_lowered_mm, bytes_saved);
+    if (n_lowered_roots > 0 || opt_oplower > 0) {
+        HEX_VERBOSE("ggml-hex: %s lower oplower=%d roots=%zu/%zu mm_out=%zu saved=%zuB\n",
+                    htp_session_name(sess), opt_oplower, n_lowered_roots, n_candidates, n_lowered_mm, bytes_saved);
     }
 }
