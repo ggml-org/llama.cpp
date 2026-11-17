@@ -2830,6 +2830,12 @@ struct test_set_rows : public test_case {
             if (type_src == GGML_TYPE_F16) {
                 err_estimate *= 16.0f;
             }
+            if (type_src == GGML_TYPE_BF16) {
+                // BF16 values have 8 significant bits, so many of them land exactly on a rounding tie,
+                // and backends break ties differently (e.g. the CPU q8_0 rounds half to even, CUDA half away from zero).
+                // Allow 1 in 32 values to be off by one instead of one value in total.
+                return err_estimate / (0.25f*32.0f);
+            }
             err_estimate /= 0.25f*float(ne[0] * r * ne[2]*nr23[0] * ne[3]*nr23[1]);
             return err_estimate;
         }
@@ -10831,11 +10837,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
-    for (ggml_type src_type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
+    for (ggml_type src_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         for (ggml_type type : all_types) {
-            if (src_type == GGML_TYPE_BF16 && type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
-                continue; // only the CPU, which is the reference, writes BF16 rows into other types
-            }
             for (int b : {1, 7}) {
                 for (bool v : {false, true}) {
                     test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 256, 5,  b, 3 }, { 1, 1, }, 1, v));
@@ -10855,10 +10858,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F16, GGML_TYPE_F16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
-    test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_BF16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
-    test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_BF16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
-    test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_BF16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
-    test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_BF16, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, true));
+    // BF16 source: one case per type covers batch dims, broadcast indices and gaps between rows
+    for (ggml_type type : all_types) {
+        test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, type, GGML_TYPE_I64, { 256, 11, 1, 1 }, { 2, 3, }, 7, true));
+    }
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
+    test_cases.emplace_back(new test_set_rows(GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
 
     for (int mode : { GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_VISION, GGML_ROPE_TYPE_IMROPE }) {
         for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
