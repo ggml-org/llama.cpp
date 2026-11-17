@@ -1071,8 +1071,8 @@ public:
     }
 
     ~server_context_impl() {
-        if (!sleeping) {
-            // destroy() is already called when entering sleeping state
+        if (!sleeping || sleep_mode == COMMON_SLEEP_MODE_MEMORY) {
+            // destroy() is already called when entering free sleeping state
             // we don't call it again here to avoid double free
             destroy();
         }
@@ -1135,6 +1135,7 @@ private:
     std::set<std::string> model_tags;    // informational tags
 
     bool sleeping = false;
+    common_sleep_mode sleep_mode = COMMON_SLEEP_MODE_FREE; // only valid while sleeping
 
     // set once init() has run, which requires a loaded model
     bool initialized = false;
@@ -1161,8 +1162,74 @@ private:
         mctx = nullptr;
     }
 
+    // free the contexts and their memory (KV cache, compute buffers), keep the models loaded
+    void free_ctx() {
+        // keep the prompts in the RAM cache, so they can be reused after waking up
+        if (prompt_cache) {
+            for (auto & slot : slots) {
+                if (slot.prompt_save(*prompt_cache)) {
+                    prompt_cache->update();
+                }
+            }
+        }
+
+        // these hold pointers to the contexts
+        slots.clear();
+        spec.reset();
+        batch = server_batch();
+
+        params_base.speculative.draft.ctx_tgt = nullptr;
+        params_base.speculative.draft.ctx_dft = nullptr;
+
+        // the draft context may share memory with the target context, free it first
+        if (spec_init) {
+            spec_init->free_context();
+        }
+        llama_init->free_context();
+
+        ctx_dft = nullptr;
+        ctx_tgt = nullptr;
+    }
+
+    // recreate the contexts freed by free_ctx(), with the same params
+    bool init_ctx() {
+        if (!llama_init->init_context(params_base)) {
+            return false;
+        }
+        ctx_tgt = llama_init->context();
+
+        if (spec_init) {
+            if (!spec_init->init_context(ctx_tgt)) {
+                return false;
+            }
+            ctx_dft = spec_init->context();
+
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
+            params_base.speculative.draft.ctx_dft = ctx_dft;
+        }
+
+        return init_slots();
+    }
+
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
+        if (new_state) {
+            sleep_mode = params_base.sleep_mode;
+        }
+        if (sleep_mode == COMMON_SLEEP_MODE_MEMORY) {
+            // note: the model stays loaded, so the router is not notified
+            if (new_state) {
+                SRV_INF("%s", "server is entering sleeping state, freeing context memory\n");
+                free_ctx();
+            } else {
+                SRV_INF("%s", "server is exiting sleeping state, allocating context memory\n");
+                if (!init_ctx()) {
+                    GGML_ABORT("failed to recreate context after sleeping");
+                }
+            }
+            sleeping = new_state;
+            return;
+        }
         if (new_state) {
             if (callback_state) {
                 callback_state(SERVER_STATE_SLEEPING, {});
@@ -1498,6 +1565,78 @@ private:
             }
         }
 
+        if (!init_slots()) {
+            return false;
+        }
+
+        // decision requests rarely repeat a state, the prompt cache is opt-in for decision models
+        if (decision.type != COMMON_DECISION_TYPE_NONE && !params_base.cache_ram_explicit) {
+            SRV_INF("%s", "decision model: prompt cache disabled by default, use `--cache-ram N` to enable it\n");
+            params_base.cache_ram_mib    = 0;
+            params_base.cache_idle_slots = false;
+        }
+
+        if (params_base.cache_ram_mib != 0) {
+            if (params_base.cache_ram_mib < 0) {
+                SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
+            } else {
+                SRV_TRC("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
+            }
+            SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+
+            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+        } else {
+            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+        }
+        SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+
+        if (params_base.n_ctx_checkpoints > 0) {
+            SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
+                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
+        } else {
+            SRV_TRC("%s", "context checkpoints disabled\n");
+        }
+
+        if (!params_base.model_alias.empty()) {
+            // backward compat: use first alias as model name
+            model_name = *params_base.model_alias.begin();
+        } else if (!params_base.model.get_name().empty()) {
+            model_name = params_base.model.get_name();
+        } else {
+            // fallback: derive model name from file name
+            auto model_path = std::filesystem::path(params_base.model.path);
+            model_name = model_path.filename().string();
+        }
+
+        model_aliases = params_base.model_alias;
+        model_tags    = params_base.model_tags;
+
+        // propagate new defaults back to caller
+        params = params_base;
+
+        // a process restarted into sleeping state loads the model here for the first time
+        if (!initialized) {
+            initialized = true;
+            if (!init()) {
+                return false;
+            }
+        }
+
+        SRV_INF("%s", "model loaded\n");
+
+        if (callback_model_loaded) {
+            callback_model_loaded();
+        }
+
+        if (is_resume && callback_state) {
+            callback_state(SERVER_STATE_READY, {});
+        }
+
+        return true;
+    }
+
+    // init slots, speculative decoding and batch for the current ctx_tgt / ctx_dft
+    bool init_slots() {
         slots.clear();
 
         ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
@@ -1617,69 +1756,6 @@ private:
             const int32_t n_batch = llama_n_batch(ctx_tgt);
             const int32_t n_embd  = llama_model_n_embd_inp(model_tgt);
             batch.init(ctx_tgt, std::max(n_batch, params_base.n_parallel), n_embd);
-        }
-
-        // decision requests rarely repeat a state, the prompt cache is opt-in for decision models
-        if (decision.type != COMMON_DECISION_TYPE_NONE && !params_base.cache_ram_explicit) {
-            SRV_INF("%s", "decision model: prompt cache disabled by default, use `--cache-ram N` to enable it\n");
-            params_base.cache_ram_mib    = 0;
-            params_base.cache_idle_slots = false;
-        }
-
-        if (params_base.cache_ram_mib != 0) {
-            if (params_base.cache_ram_mib < 0) {
-                SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
-            } else {
-                SRV_TRC("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
-            }
-            SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
-
-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
-        } else {
-            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
-        }
-        SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
-
-        if (params_base.n_ctx_checkpoints > 0) {
-            SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
-                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
-        } else {
-            SRV_TRC("%s", "context checkpoints disabled\n");
-        }
-
-        if (!params_base.model_alias.empty()) {
-            // backward compat: use first alias as model name
-            model_name = *params_base.model_alias.begin();
-        } else if (!params_base.model.get_name().empty()) {
-            model_name = params_base.model.get_name();
-        } else {
-            // fallback: derive model name from file name
-            auto model_path = std::filesystem::path(params_base.model.path);
-            model_name = model_path.filename().string();
-        }
-
-        model_aliases = params_base.model_alias;
-        model_tags    = params_base.model_tags;
-
-        // propagate new defaults back to caller
-        params = params_base;
-
-        // a process restarted into sleeping state loads the model here for the first time
-        if (!initialized) {
-            initialized = true;
-            if (!init()) {
-                return false;
-            }
-        }
-
-        SRV_INF("%s", "model loaded\n");
-
-        if (callback_model_loaded) {
-            callback_model_loaded();
-        }
-
-        if (is_resume && callback_state) {
-            callback_state(SERVER_STATE_READY, {});
         }
 
         return true;
