@@ -1366,7 +1366,7 @@ struct llama_model::impl {
 
     uint64_t n_elements = 0;
 
-    size_t n_bytes = 0;
+    uint64_t n_bytes = 0;
 
     std::string desc_str;
 
@@ -2558,7 +2558,7 @@ llama_ftype llama_model::ftype() const {
     return pimpl->ftype;
 }
 
-size_t llama_model::size() const {
+uint64_t llama_model::size() const {
     return pimpl->n_bytes;
 }
 

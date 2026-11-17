@@ -775,7 +775,7 @@ llama_model_loader::llama_model_loader(
         // mmap places tensors at their file offsets, so an embedded GGUF must be aligned in the file too
         const size_t tensor_align = ggml_backend_buft_get_alignment(ggml_backend_cpu_buffer_type());
         if (use_mmap && gguf_get_data_offset(metadata) % tensor_align != 0) {
-            throw std::runtime_error(format("%s: GGUF data section at file offset %zu is not %zu byte aligned, cannot mmap",
+            throw std::runtime_error(format("%s: GGUF data section at file offset %" PRIu64 " is not %zu byte aligned, cannot mmap",
                 __func__, gguf_get_data_offset(metadata), tensor_align));
         }
 
@@ -917,6 +917,14 @@ llama_model_loader::llama_model_loader(
     if (this->use_mmap && !llama_mmap::SUPPORTED) {
         LLAMA_LOG_WARN("%s: mmap is not supported on this platform\n", __func__);
         this->use_mmap = false;
+    }
+
+    for (size_t i = 0; this->use_mmap && i < files.size(); i++) {
+        if (files[i]->size() > SIZE_MAX) {
+            LLAMA_LOG_WARN("%s: model file %zu (%.2f GiB) is too large to mmap on this platform, disabling mmap\n",
+                __func__, i, files[i]->size() / 1024.0 / 1024.0 / 1024.0);
+            this->use_mmap = false;
+        }
     }
 
     this->check_tensors = check_tensors;
@@ -1186,7 +1194,7 @@ bool llama_model_loader::lazy_read::add(const std::string & name, const ggml_ten
     }
 
     // do not lazy-read small tensors, it has significant overhead and is not worth it
-    constexpr size_t auto_min_size = 4ull * 1024 * 1024 * 1024;
+    constexpr uint64_t auto_min_size = 4ull * 1024 * 1024 * 1024;
     if (mode != LLAMA_LAZY_MODE_ON && ggml_nbytes(t) <= auto_min_size) {
         return false;
     }
@@ -1597,7 +1605,8 @@ std::vector<llama_model_loader::mapping_range> llama_model_loader::get_mapping_r
             continue;
         }
         own.insert(weight);
-        own_ranges.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
+        // mmap only, so the offsets fit in size_t
+        own_ranges.push_back({ (size_t) weight->offs, (size_t) weight->offs + ggml_nbytes(tensor) });
     }
 
     for (const auto & it : ctx_map) {
@@ -1610,7 +1619,7 @@ std::vector<llama_model_loader::mapping_range> llama_model_loader::get_mapping_r
             if (!weight || weight->idx != idx || own.count(weight)) {
                 continue;
             }
-            other.push_back({ weight->offs, weight->offs + ggml_nbytes(tensor) });
+            other.push_back({ (size_t) weight->offs, (size_t) weight->offs + ggml_nbytes(tensor) });
         }
     }
 
@@ -1619,7 +1628,7 @@ std::vector<llama_model_loader::mapping_range> llama_model_loader::get_mapping_r
 
 void llama_model_loader::unmap_weight(const llama_tensor_weight & w) const {
     if (!use_mmap) { return; }
-    mappings.at(w.idx)->unmap_fragment(w.offs, w.offs + ggml_nbytes(w.tensor));
+    mappings.at(w.idx)->unmap_fragment((size_t) w.offs, (size_t) w.offs + ggml_nbytes(w.tensor));
 }
 
 const void * llama_model_loader::load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const {
@@ -1822,12 +1831,12 @@ bool llama_model_loader::load_all_data(
                 // locking a lazy tensor would fault all of it in, which is what lazy avoids
                 if (lmlocks && !lazy.has(cur)) {
                     const auto & lmlock = lmlocks->at(weight->idx);
-                    lmlock->grow_to(weight->offs + n_size);
+                    lmlock->grow_to((size_t) weight->offs + n_size);
                 }
 
                 auto & mmap_used = mmaps_used[weight->idx];
-                mmap_used.first  = std::min(mmap_used.first,  weight->offs);
-                mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+                mmap_used.first  = std::min(mmap_used.first,  (size_t) weight->offs);
+                mmap_used.second = std::max(mmap_used.second, (size_t) (weight->offs + n_size));
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
@@ -1845,21 +1854,23 @@ bool llama_model_loader::load_all_data(
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
-                    size_t offset = weight->offs;
+                    // 64-bit mask: a 32-bit size_t mask would clear the high half of the offset
+                    uint64_t offset = weight->offs;
                     alignment = file->read_alignment();
-                    size_t aligned_offset = offset & ~(alignment - 1);
-                    size_t offset_from_alignment = offset - aligned_offset;
+                    const uint64_t align_mask = ~((uint64_t) alignment - 1);
+                    uint64_t aligned_offset = offset & align_mask;
+                    size_t offset_from_alignment = (size_t) (offset - aligned_offset);
                     file->seek(aligned_offset, SEEK_SET);
 
                     // Calculate aligned read boundaries
-                    size_t read_start = aligned_offset;
-                    size_t read_end = (offset + n_size + alignment - 1) & ~(alignment - 1);
+                    uint64_t read_start = aligned_offset;
+                    uint64_t read_end = (offset + n_size + alignment - 1) & align_mask;
 
                     size_t bytes_read = 0;
                     size_t data_read = 0;  // Actual tensor data copied (excluding padding)
 
                     while (bytes_read < read_end - read_start) {
-                        size_t read_size = std::min<size_t>(buffer_size, read_end - read_start - bytes_read);
+                        size_t read_size = (size_t) std::min<uint64_t>(buffer_size, read_end - read_start - bytes_read);
 
                         // Align the destination pointer within the pinned buffer
                         uintptr_t ptr_dest_aligned = (reinterpret_cast<uintptr_t>(host_ptrs[buffer_idx]) + alignment - 1) & ~(alignment - 1);
@@ -1882,7 +1893,7 @@ bool llama_model_loader::load_all_data(
 
                         // Trim alignment padding at end of last chunk
                         if (aligned_offset + bytes_read + read_size > offset + n_size) {
-                            data_to_copy -= (read_end - (offset + n_size));
+                            data_to_copy -= (size_t) (read_end - (offset + n_size));
                         }
 
                         // Async upload actual data to GPU
@@ -1898,11 +1909,11 @@ bool llama_model_loader::load_all_data(
                     }
                 } else {
                     // with direct IO read the aligned range around the tensor and use the data inside it, so no bounce buffer is needed
-                    const size_t align          = file->read_alignment();
-                    const size_t aligned_offset = weight->offs & ~(align - 1);
-                    const size_t pad            = weight->offs - aligned_offset;
-                    const size_t read_size      = (pad + n_size + align - 1) & ~(align - 1);
-                    const size_t buf_size       = read_size + align - 1;
+                    const size_t   align          = file->read_alignment();
+                    const uint64_t aligned_offset = weight->offs & ~((uint64_t) align - 1);
+                    const size_t   pad            = (size_t) (weight->offs - aligned_offset);
+                    const size_t   read_size      = (pad + n_size + align - 1) & ~(align - 1);
+                    const size_t   buf_size       = read_size + align - 1;
 
                     // tensors come biggest-first: shrink the buffer when it gets too large, so peak memory stays close to one tensor
                     const size_t read_buf_size = read_buf ? ggml_backend_buffer_get_size(read_buf.get()) : 0;

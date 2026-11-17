@@ -223,8 +223,8 @@ struct gguf_context {
     std::vector<struct gguf_tensor_info> info;
 
     size_t alignment = GGUF_DEFAULT_ALIGNMENT;
-    size_t offset    = 0; // offset of `data` from beginning of file
-    size_t size      = 0; // size of `data` in bytes
+    uint64_t offset  = 0; // offset of `data` from beginning of file
+    uint64_t size    = 0; // size of `data` in bytes
 
     void * data = nullptr;
 };
@@ -793,7 +793,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
         for (size_t i = 0; i < ctx->info.size(); ++i) {
             const gguf_tensor_info & ti = ctx->info[i];
             if (ti.offset != ctx->size) {
-                GGML_LOG_ERROR("%s: tensor '%s' has offset %" PRIu64 ", expected %zu\n",
+                GGML_LOG_ERROR("%s: tensor '%s' has offset %" PRIu64 ", expected %" PRIu64 "\n",
                     __func__, ti.t.name, ti.offset, ctx->size);
                 GGML_LOG_ERROR("%s: failed to read tensor data\n", __func__);
                 gguf_free(ctx);
@@ -809,8 +809,8 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 return nullptr;
             }
             const size_t padded_size = GGML_PAD(nbytes, ctx->alignment);
-            if (SIZE_MAX - ctx->size < padded_size) {
-                GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
+            if (UINT64_MAX - ctx->size < padded_size) {
+                GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %" PRIu64 " + %zu\n",
                     __func__, ti.t.name, ctx->size, padded_size);
                 gguf_free(ctx);
                 return nullptr;
@@ -852,7 +852,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 return nullptr;
             }
 
-            mem_size = overhead + ctx->size;
+            mem_size = overhead + (size_t) ctx->size;
         }
 
         struct ggml_init_params pdata = {
@@ -882,7 +882,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // read the binary blob with the tensor data
-            ok = ok && gr.read(data->data, ctx->size);
+            ok = ok && gr.read(data->data, (size_t) ctx->size);
 
             if (!ok) {
                 GGML_LOG_ERROR("%s: failed to read tensor data binary blob\n", __func__);
@@ -1047,7 +1047,7 @@ size_t gguf_get_alignment(const struct gguf_context * ctx) {
     return ctx->alignment;
 }
 
-size_t gguf_get_data_offset(const struct gguf_context * ctx) {
+uint64_t gguf_get_data_offset(const struct gguf_context * ctx) {
     return ctx->offset;
 }
 
@@ -1210,7 +1210,7 @@ int64_t gguf_find_tensor(const struct gguf_context * ctx, const char * name) {
     return tensor_id;
 }
 
-size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int64_t tensor_id) {
+uint64_t gguf_get_tensor_offset(const struct gguf_context * ctx, int64_t tensor_id) {
     GGML_ASSERT(tensor_id >= 0 && tensor_id < gguf_get_n_tensors(ctx));
     return ctx->info[tensor_id].offset;
 }

@@ -701,7 +701,7 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             continue;
         }
 
-        const size_t offset = gguf_get_tensor_offset(gguf_ctx, id);
+        const uint64_t offset = gguf_get_tensor_offset(gguf_ctx, id);
 
         if (offset != expected_offset) {
             ok = false;
@@ -739,7 +739,7 @@ static bool handcrafted_check_tensor_data(const gguf_context * gguf_ctx, const u
         const size_t size = ggml_row_size(type, ne);
 
         const std::string name = "my_tensor_" + std::to_string(i);
-        const size_t offset = gguf_get_tensor_offset(gguf_ctx, gguf_find_tensor(gguf_ctx, name.c_str()));
+        const uint64_t offset = gguf_get_tensor_offset(gguf_ctx, gguf_find_tensor(gguf_ctx, name.c_str()));
 
         std::vector<uint8_t> data(size);
         GGML_ASSERT(fseek(file, gguf_get_data_offset(gguf_ctx) + offset, SEEK_SET) == 0);
@@ -1128,7 +1128,7 @@ static bool all_tensors_in_other(const gguf_context * ctx, const gguf_context * 
             ok = false;
         }
 
-        const size_t offset = gguf_get_tensor_offset(ctx, id);
+        const uint64_t offset = gguf_get_tensor_offset(ctx, id);
         if (offset != gguf_get_tensor_offset(other, id)) {
             ok = false;
         }

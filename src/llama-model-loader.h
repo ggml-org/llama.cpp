@@ -31,7 +31,7 @@ struct llama_model_loader {
     // Holds information on a model weight
     struct llama_tensor_weight {
         uint16_t  idx; // source file index
-        size_t   offs; // tensor data offset in the original file
+        uint64_t offs; // tensor data offset in the original file
 
         ggml_tensor * tensor;
 
@@ -74,7 +74,7 @@ struct llama_model_loader {
     int n_created = 0;
 
     uint64_t n_elements = 0;
-    size_t   n_bytes    = 0;
+    uint64_t n_bytes    = 0;
 
     bool use_mmap = false;
     bool use_direct_io = false;
@@ -134,8 +134,8 @@ struct llama_model_loader {
     std::string arch_name;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
-    size_t size_done = 0;
-    size_t size_data = 0;
+    uint64_t size_done = 0;
+    uint64_t size_data = 0;
     std::vector<std::pair<size_t, size_t>> mmaps_used;
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
