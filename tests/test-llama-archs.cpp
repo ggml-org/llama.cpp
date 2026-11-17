@@ -974,6 +974,74 @@ static int32_t get_logits_mixed(
     return 0;
 }
 
+static void check_sensenova_mixed_batch(llama_model * model) {
+    auto params = llama_context_default_params();
+    params.n_ctx = 128;
+    params.n_seq_max = 2;
+    params.n_batch = params.n_ubatch = 16;
+    params.n_threads = params.n_threads_batch = 4;
+    params.kv_unified = true;
+    params.type_k = params.type_v = GGML_TYPE_F32;
+    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    params.rope_freq_base = 5000000.0f;
+    llama_context_ptr ctx(llama_init_from_model(model, params));
+    GGML_ASSERT(ctx);
+
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const uint32_t n_embd = llama_model_n_embd_inp(model);
+    std::vector<float> embd(4*n_embd);
+    fill_normal(embd, "sensenova_image", {0, 0.1f});
+    std::vector<float> logits[2][3];
+    for (int mixed = 0; mixed < 2; ++mixed) {
+        llama_memory_clear(llama_get_memory(ctx.get()), true);
+        common_batch batch(ctx.get());
+        auto decode = [&](int stage, int start, int count) {
+            GGML_ASSERT(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get_sub_batch(start, count)) == 0);
+            for (int i = 0; i < count; ++i) {
+                const float * row = llama_get_logits_ith(ctx.get(), i);
+                logits[mixed][stage].insert(logits[mixed][stage].end(), row, row + n_vocab);
+            }
+        };
+
+        llama_set_causal_attn(ctx.get(), true);
+        for (llama_seq_id seq = 0; seq < 2; ++seq) {
+            for (llama_pos p = 0; p < 4; ++p) {
+                batch.add(p + 1, p, seq, true);
+            }
+        }
+        decode(0, 0, batch.size());
+
+        // The image is bidirectional. The other sequence has only one new text token, so its mask is unchanged.
+        llama_set_causal_attn(ctx.get(), false);
+        batch.clear();
+        batch.add(5, 4, 0, true);
+        for (int i = 0; i < 4; ++i) {
+            const llama_pos pos[4] = {4, i/2, i%2, 0};
+            batch.add_embd({embd.data() + i*n_embd, 1, n_embd}, pos, 1, true);
+        }
+        if (mixed) {
+            decode(1, 0, batch.size());
+        } else {
+            decode(1, 0, 1);
+            decode(1, 1, 4);
+        }
+
+        llama_set_causal_attn(ctx.get(), true);
+        batch.clear();
+        for (llama_seq_id seq = 0; seq < 2; ++seq) {
+            batch.add(6, 5, seq, true);
+        }
+        decode(2, 0, batch.size());
+    }
+    for (int stage = 0; stage < 3; ++stage) {
+        const double error = nmse(logits[0][stage], logits[1][stage]);
+        if (!std::isfinite(error) || error > 1e-12) {
+            LOG_ERR("SenseNova mixed batch stage %d: NMSE = %.3e\n", stage, error);
+            throw std::runtime_error("SenseNova mixed batch logits differ");
+        }
+    }
+}
+
 static bool check_causal_attn_toggle(
         llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
     const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
@@ -1391,6 +1459,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_SENSENOVA_U1) {
+                            check_sensenova_mixed_batch(model_and_ctx_cpu.first.get());
+                        }
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llama_arch_supports_sm_tensor(arch)) {
                         test_executed = true;

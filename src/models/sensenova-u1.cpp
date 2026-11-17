@@ -12,9 +12,13 @@ public:
             // U1 expects text-token positions in the temporal plane only: [t, 0, 0, 0].
             // The generic M-RoPE input uses [t, t, t, 0], so U1 needs a custom input class.
             if (ubatch->token) {
-                std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd, 0);
+                std::vector<llama_pos> pos_data(ubatch->pos, ubatch->pos + n_tokens*n_pos_per_embd);
                 for (int i = 0; i < n_tokens; ++i) {
-                    pos_data[i] = ubatch->pos[i];
+                    if (!ubatch->is_mixed() || ubatch->type[i] == 0) {
+                        for (uint32_t axis = 1; axis < n_pos_per_embd; ++axis) {
+                            pos_data[axis*n_tokens + i] = 0;
+                        }
+                    }
                 }
                 ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*ggml_element_size(pos));
             } else {
