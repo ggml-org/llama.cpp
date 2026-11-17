@@ -128,7 +128,9 @@ static __global__ void conv2d_implicit_gemm_f16(const half * __restrict__ input,
                                                 const half * __restrict__ weight,
                                                 float * __restrict__ output,
                                                 const conv_params P,
-                                                const int         split_k) {
+                                                const int         split_k,
+                                                const uint3       kw_fd,
+                                                const uint3       kwkh_fd) {
     using namespace ggml_cuda_mma;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     constexpr int nthreads  = 4 * warp_size;
@@ -202,7 +204,10 @@ static __global__ void conv2d_implicit_gemm_f16(const half * __restrict__ input,
         }
         for (int k = load_row; k < BK; k += nthreads / (BN / 2)) {
             const int ki = k0 + k;
-            const int ci = ki / (kw * kh), ky = ki / kw % kh, kx = ki % kw;
+            const int ci     = KW && KH ? ki / (KW * KH) : int(fastdiv(uint32_t(ki), kwkh_fd));
+            const int r      = ki - ci * kw * kh;
+            const int ky     = KW ? r / KW : int(fastdiv(uint32_t(r), kw_fd));
+            const int kx     = r - ky * kw;
             const int offset = ki < k_total ? (n * ic + ci) * ih * iw + ky * dy * iw + kx * dx : 0;
             half      lo = __float2half(0.0f), hi = lo;
             if (ki < k_total && spatial < ow * oh) {
@@ -314,12 +319,17 @@ static void conv2d_launch_implicit_gemm(const half *        input,
                                         dim3                grid,
                                         dim3                block,
                                         cudaStream_t        stream) {
+    const uint3 kw_fd   = init_fastdiv_values(uint64_t(params.KW));
+    const uint3 kwkh_fd = init_fastdiv_values(uint64_t(params.KW * params.KH));
     if (params.KW == 3 && params.KH == 3) {
-        conv2d_implicit_gemm_f16<3, 3, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv2d_implicit_gemm_f16<3, 3, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, kw_fd, kwkh_fd);
     } else if (params.KW == 1 && params.KH == 1) {
-        conv2d_implicit_gemm_f16<1, 1, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv2d_implicit_gemm_f16<1, 1, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, kw_fd, kwkh_fd);
     } else {
-        conv2d_implicit_gemm_f16<0, 0, use_mma><<<grid, block, 0, stream>>>(input, weight, output, params, split_k);
+        conv2d_implicit_gemm_f16<0, 0, use_mma>
+            <<<grid, block, 0, stream>>>(input, weight, output, params, split_k, kw_fd, kwkh_fd);
     }
 }
 
