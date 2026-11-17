@@ -17,6 +17,11 @@
 {%- set NQP = ';:,.!?—…' -%}
 {%- set TAUS = 'AIOWYiuæɑəɛɪɹʊʌ' -%}
 {%- set SYMBOLS = {'%': 'percent', '&': 'and', '+': 'plus', '@': 'at'} -%}
+{#- the lexicon has only ASCII keys: an accented letter is read as its base letter -#}
+{%- set FOLD = [['[àáâãäåāă]', 'a'], ['[ÀÁÂÃÄÅĀĂ]', 'A'], ['[çćč]', 'c'], ['[ÇĆČ]', 'C'], ['[èéêëēėęě]', 'e'], ['[ÈÉÊËĒĖĘĚ]', 'E'],
+    ['[ìíîïīı]', 'i'], ['[ÌÍÎÏĪİ]', 'I'], ['[ñńň]', 'n'], ['[ÑŃŇ]', 'N'], ['[òóôõöøōő]', 'o'], ['[ÒÓÔÕÖØŌŐ]', 'O'],
+    ['[ùúûüūůű]', 'u'], ['[ÙÚÛÜŪŮŰ]', 'U'], ['[ýÿ]', 'y'], ['[ÝŸ]', 'Y'], ['[śšș]', 's'], ['[ŚŠȘ]', 'S'], ['[źżž]', 'z'], ['[ŹŻŽ]', 'Z'],
+    ['ł', 'l'], ['Ł', 'L'], ['ß', 'ss'], ['æ', 'ae'], ['Æ', 'AE'], ['œ', 'oe'], ['Œ', 'OE']] -%}
 {%- set CURRENCIES = {'$': ['dollar', 'cent'], '£': ['pound', 'pence'], '€': ['euro', 'cent']} -%}
 
 {#- ---------- small helpers ---------- -#}
@@ -93,9 +98,9 @@
 {%- endif -%}
 {%- endmacro -%}
 
-{#- a word missing from the lexicon: the predicted pronunciation; if it has no vowel, the word is spelled out -#}
+{#- a word missing from the lexicon: the predicted pronunciation; a word that cannot be read (e.g. "cpp") is spelled out -#}
 {%- macro fallback(word) -%}
-{%- set ps = lts(word) -%}
+{%- set ps = lts(word) if tts_norm_scan(word, '[aeiouyAEIOUY]') | selectattr('rule') | list else '' -%}
 {%- if ps and tts_norm_scan(ps, '[' ~ V ~ ']') | selectattr('rule') | list -%}{{ ps }}
 {%- else -%}{{ get_nnp(word) or unk }}
 {%- endif -%}
@@ -452,6 +457,16 @@
 {%- endif -%}
 {%- endmacro -%}
 
+{#- unknown word in mixed case, read part by part: "OneAPI" -> One + API, '' if the word has one part -#}
+{%- macro camel(text, tag, fv) -%}
+{%- set parts = tts_norm_scan(text, '(?:%u(?!%l))+|%u?%l+') | selectattr('rule') | map(attribute='text') | list -%}
+{%- if parts | length > 1 and parts | join('') == text -%}
+  {%- for p in parts -%}
+    {{- get_nnp(p) if p | length == 1 else (lex_word(p, tag, fv) or fallback(p)) -}}
+  {%- endfor -%}
+{%- endif -%}
+{%- endmacro -%}
+
 {#- nxt: next token text ('' at end) -#}
 {%- macro word_tok(text, tag, fv, fto, nxt) -%}
 {%- set w = text | replace('‘', "'") | replace('’', "'") -%}
@@ -473,11 +488,14 @@
   {{- messages[-1].content | trim -}}
 {%- else -%}
 {%- set text = messages[-1].content | trim -%}
-{%- set text = tts_norm_sub(text, '%s+', ' ') -%}
+{%- set t = namespace(s=tts_norm_sub(text, '%s+', ' ')) -%}
+{%- for f in FOLD -%}{%- set t.s = tts_norm_sub(t.s, f[0], f[1]) -%}{%- endfor -%}
+{%- set text = t.s -%}
 {%- set segs = tts_norm_scan(text, [
     ['abbr',  '(?<!%w)%a%a?(?:%.%a%a?)+%.?(?!%w)'],
     ['money', '([$£€]) ?(%d+(?:,%d%d%d)*(?:%.%d+)?)(?!%d)'],
     ['num',   '((?<!%w)%-)?(%d+(?:,%d%d%d)*(?:%.%d+)?|%.%d+)(st|nd|rd|th|\'s|s|ed|ing)?(?!%w)'],
+    ['dig',   '%d+(?:,%d%d%d)*(?:%.%d+)?'],
     ['cmpd',  '%a+(?:[\'’]%a+)*(?:[%-_]%a+(?:[\'’]%a+)*)+'],
     ['wdot',  '%a+%.(?= [%u%d]|$)'],
     ['word',  '%a+(?:[\'’‘]%a+)*[\'’‘]?'],
@@ -516,7 +534,7 @@
 {%- set tags = pos_tag(tk.toks).split(' ') if tk.toks else [] -%}
 
 {#- 2. G2P right to left (misaki's future-vowel context) -#}
-{%- set GLUE = ['abbr', 'money', 'num', 'cmpd', 'wdot', 'word', 'sym'] -%}
+{%- set GLUE = ['abbr', 'money', 'num', 'dig', 'cmpd', 'wdot', 'word', 'sym'] -%}
 {%- set ns = namespace(fv='none', fto=false, out=[], next='', next_text='') -%}
 {%- for s in segs | reverse -%}
   {%- set i = nseg - 1 - loop.index0 -%}
@@ -534,10 +552,13 @@
     {%- set ps = get_number('', s.groups[1], '', s.groups[0]) -%}
   {%- elif s.rule == 'num' -%}
     {%- set ps = get_number(s.groups[0], s.groups[1], s.groups[2], '') -%}
+  {%- elif s.rule == 'dig' -%}
+    {#- digits glued to letters, e.g. "221B" -#}
+    {%- set ps = get_number('', s.text, '', '') -%}
   {%- elif s.rule == 'cmpd' -%}
     {%- set ps = compound(s.text, tag, ns.fv) -%}
   {%- elif s.rule == 'word' -%}
-    {%- set ps = word_tok(s.text, tag, ns.fv, ns.fto, ns.next_text) or fallback(s.text) -%}
+    {%- set ps = word_tok(s.text, tag, ns.fv, ns.fto, ns.next_text) or camel(s.text, tag, ns.fv) or fallback(s.text) -%}
   {%- elif s.rule == 'sym' -%}
     {%- set ps = lex_word(s.text, tag, ns.fv) or unk -%}
   {%- elif s.rule == 'dash' -%}

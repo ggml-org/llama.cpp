@@ -1144,7 +1144,7 @@ public:
         }
         const std::string name = std::string("voice.") + voice;
         std::vector<float> table(mtmd_gen_audio_read_tensor(mctx, name.c_str(), nullptr, 0));
-        if (table.size() < n_style || table.size() % n_style != 0 ||
+        if (table.size() < n_voice_row || table.size() % n_voice_row != 0 ||
             mtmd_gen_audio_read_tensor(mctx, name.c_str(), table.data(), table.size()) != table.size()) {
             LOG_ERR("mtmd_helper_gen_audio: unknown voice \"%s\"\n", voice);
             return 1;
@@ -1163,8 +1163,8 @@ public:
             seg.tokens.push_back(pad);
             seg.tokens.insert(seg.tokens.end(), phonemes.begin() + pos, phonemes.begin() + pos + len);
             seg.tokens.push_back(pad);
-            const size_t row = std::min(len - 1, table.size() / n_style - 1);
-            seg.feats.assign(table.begin() + row * n_style, table.begin() + (row + 1) * n_style);
+            const size_t row = std::min(len - 1, table.size() / n_voice_row - 1);
+            seg.feats.assign(table.begin() + row * n_voice_row, table.begin() + (row + 1) * n_voice_row);
             segments.push_back(std::move(seg));
             pos += len;
             // a segment does not start with a space
@@ -1302,7 +1302,7 @@ private:
         return true;
     }
 
-    static constexpr size_t n_style = 256; // decoder style, then predictor style
+    static constexpr size_t n_voice_row = 256; // decoder style, then predictor style
 
     llama_seq_id seq_id = 0;
     std::unordered_map<std::string, llama_token> token_of;

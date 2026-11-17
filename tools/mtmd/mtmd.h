@@ -526,11 +526,11 @@ struct mtmd_gen_inp {
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
     // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
     // kokoro GEN_WAV takes both: codes are the phoneme tokens, feats is the voice row (256 values) then the backbone state of each token
-    float speed; // kokoro: speaking speed, > 0 (default: 1.0)
     int32_t * codes;
     size_t    n_codes;
     const float * feats;
     size_t        n_feats;
+    float speed; // kokoro: speaking speed, > 0 (default: 1.0)
 
     // yue2 GEN_CODE: n_codes is the frame count, codes is not read (the backbone state holds them)
     // backbone_state: llama_state_seq_get_data() of the backbone_n_past positions (prompt, codes, end token)

@@ -404,6 +404,9 @@ class KokoroMmprojModel(MmprojModel):
         if "lstm" in new_name or ".shared." in new_name or new_name.startswith(("a.gen.bert_enc.", "voice.")) \
                 or ".duration_proj." in new_name or ".m_source." in new_name or ".pool." in new_name:
             return gguf.GGMLQuantizationType.F32
+        # CONV_TRANSPOSE_1D takes only F32 weights on some backends
+        if ".ups." in new_name:
+            return gguf.GGMLQuantizationType.F32
         # the conv ops have no BF16 kernels
         if n_dims >= 2:
             return gguf.GGMLQuantizationType.F16
