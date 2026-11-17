@@ -819,7 +819,8 @@ def test_completion_checkpoint_hybrid_swa():
     server = ServerPreset.tinylfm3omni()
     server.n_slots = 1
     server.n_batch = 16
-    server.n_ubatch = 16
+    # one token per ubatch, like the generated tokens: the runs with and without the cache go through the same kernels
+    server.n_ubatch = 1
     server.cache_ram = 0
     server.temperature = 0.0
     server.start()
@@ -840,10 +841,7 @@ def test_completion_checkpoint_hybrid_swa():
 
     def assert_same_output(actual, expected):
         assert actual["tokens"] == expected["tokens"]
-        assert [tid for tid, _ in top_logprobs(actual)] == [tid for tid, _ in top_logprobs(expected)]
-        # the batches are not split the same way with and without the cache, which moves the logprobs of this model by up to 0.01
-        for (_, lp), (_, lp_expected) in zip(top_logprobs(actual), top_logprobs(expected)):
-            assert lp == pytest.approx(lp_expected, abs=0.02)
+        assert top_logprobs(actual) == top_logprobs(expected)
 
     # shorter than n_swa (256), so that every checkpoint is within the SWA window of the prompt end
     prefix = [1000 + i for i in range(200)]
