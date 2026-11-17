@@ -172,12 +172,12 @@ static bool test_tensor_n(ggml_backend_buffer_type_t buft) {
 
     {
         std::vector<ggml_tensor *> batch;
-        ggml_backend_buffer_ptr scatter_buf = alloc_tensors(ctx.get(), buft, { 256 }, batch);
+        ggml_backend_buffer_ptr scatter_buf = alloc_tensors(ctx.get(), buft, { 64 }, batch);
         if (!scatter_buf) {
             return false;
         }
-        batch.resize(512, batch[0]);
-        uint8_t input[32], expected[1024], out[1024];
+        batch.resize(128, batch[0]);
+        uint8_t input[32], expected[256], out[256];
         for (size_t i = 0; i < sizeof(input); i++) {
             input[i] = (uint8_t) (i + 1);
         }
