@@ -106,6 +106,11 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * g
 // get the last accepted token
 llama_token common_sampler_last(const struct common_sampler * gsmpl);
 
+// put the k largest logits into out as candidates sorted by descending logit, with p = 0
+// returns false if k < 1, k > 128 or k >= n_vocab, if a logit is NaN, or if two of the k + 1 largest logits are equal
+// when it returns true, out is equal to the result of llama_sampler_top_k on all logits
+bool common_sampler_top_k_logits(const float * logits, int32_t n_vocab, int32_t k, std::vector<llama_token_data> & out);
+
 // print the sampler chain into a string
 std::string common_sampler_print(const struct common_sampler * gsmpl);
 

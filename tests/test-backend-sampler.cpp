@@ -15,6 +15,7 @@
 #include <fstream>
 #include <functional>
 #include <map>
+#include <numeric>
 #include <random>
 #include <string>
 #include <unordered_map>
@@ -2060,6 +2061,158 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+// samples the logits through smpl and checks the result against a copy of its chain applied to all logits
+static void top_k_sample_and_check(common_sampler * smpl, llama_context * ctx, int32_t idx, const std::vector<float> & logits) {
+    std::copy(logits.begin(), logits.end(), llama_get_logits_ith(ctx, idx));
+
+    std::vector<llama_token_data> cur(logits.size());
+    for (size_t i = 0; i < logits.size(); ++i) {
+        cur[i] = { (llama_token) i, logits[i], 0.0f };
+    }
+    llama_token_data_array ref = { cur.data(), cur.size(), -1, false };
+
+    llama_sampler_ptr chain(llama_sampler_clone(common_sampler_get(smpl)));
+    llama_sampler_apply(chain.get(), &ref);
+
+    const llama_token id = common_sampler_sample(smpl, ctx, idx);
+    const llama_token_data_array * got = common_sampler_get_candidates(smpl, false);
+
+    GGML_ASSERT(ref.selected >= 0 && id == ref.data[ref.selected].id);
+    GGML_ASSERT(got->selected == ref.selected && got->sorted == ref.sorted && got->size == ref.size);
+    GGML_ASSERT(memcmp(got->data, ref.data, ref.size*sizeof(llama_token_data)) == 0);
+
+    common_sampler_accept(smpl, id, true);
+}
+
+// common_sampler takes the chain's leading top-k straight from the logits; the result must not change
+static void test_top_k_from_logits(const test_params & params) {
+    std::vector<llama_sampler_seq_config> configs;
+    test_context test_ctx(params, configs, 1);
+    GGML_ASSERT(test_ctx.decode({{0, "Hello"}}));
+
+    llama_context * ctx = test_ctx.ctx.get();
+    const int32_t idx = test_ctx.idx_for_seq(0);
+    const int32_t n_vocab = test_ctx.n_vocab;
+
+    std::mt19937 rng(99);
+    std::normal_distribution<float> nd(0.0f, 2.5f);
+
+    std::vector<float> logits(n_vocab);
+    std::vector<int32_t> order(n_vocab);
+
+    const auto random_logits = [&]() {
+        for (auto & l : logits) {
+            l = nd(rng);
+        }
+    };
+
+    const auto run = [&](const char * name, common_params_sampling sp) {
+        common_sampler_ptr smpl(common_sampler_init(params.model.get(), sp));
+        const int32_t k = sp.top_k;
+        for (int it = 0; it < 64; ++it) {
+            random_logits();
+            if (it % 4 == 1) {
+                // a tie at the k-th largest falls back to all logits
+                std::iota(order.begin(), order.end(), 0);
+                std::partial_sort(order.begin(), order.begin() + k + 1, order.end(), [&](int32_t a, int32_t b) { return logits[a] > logits[b]; });
+                logits[order[k]] = logits[order[k - 1]];
+            }
+            if (it % 4 == 2) {
+                // a peaked row, where top-p and min-p cut inside the top k
+                logits[it] += 12.0f;
+            }
+            top_k_sample_and_check(smpl.get(), ctx, idx, logits);
+        }
+        printf("top-k from logits, %s: OK\n", name);
+    };
+
+    common_params_sampling base;
+    base.seed  = 1234;
+    base.top_k = 20;
+
+    run("default", base);
+    {
+        auto sp = base;
+        sp.temp = 0.0f;
+        run("temp 0", sp);
+    }
+    {
+        auto sp = base;
+        sp.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+        sp.top_k    = 1;
+        run("top-k 1", sp);
+    }
+
+    // an active sampler before the top-k
+    {
+        auto sp = base;
+        sp.penalty_repeat = 1.5f;
+        sp.penalty_last_n = 64;
+        run("penalties", sp);
+    }
+    {
+        auto sp = base;
+        sp.logit_bias = { { 5, 20.0f } };
+        run("logit bias", sp);
+    }
+    {
+        auto sp = base;
+        sp.samplers = { COMMON_SAMPLER_TYPE_TOP_P, COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE };
+        sp.top_p    = 0.5f;
+        run("top-p first", sp);
+    }
+
+    // a forced token outside the top k of the logits
+    {
+        const llama_token tok_start  = 7;
+        const llama_token tok_forced = 9;
+
+        auto sp = base;
+        sp.reasoning_budget_tokens = 0;
+        sp.reasoning_budget_start  = { tok_start };
+        sp.reasoning_budget_end    = { { 8 } };
+        sp.reasoning_budget_forced = { tok_forced };
+
+        common_sampler_ptr smpl(common_sampler_init(params.model.get(), sp));
+
+        // with no budget left, the start tag starts forcing
+        common_sampler_accept(smpl.get(), tok_start, true);
+
+        random_logits();
+        logits[tok_forced] = -100.0f;
+        std::copy(logits.begin(), logits.end(), llama_get_logits_ith(ctx, idx));
+        GGML_ASSERT(common_sampler_sample(smpl.get(), ctx, idx) == tok_forced);
+        printf("top-k from logits, reasoning budget forcing: OK\n");
+    }
+
+    // the tokens the grammar allows are outside the top k of the logits
+    {
+        std::vector<llama_token> toks_a;
+        for (llama_token i = 0; i < n_vocab; ++i) {
+            if (test_ctx.token_to_piece(i, false) == "a") {
+                toks_a.push_back(i);
+            }
+        }
+        GGML_ASSERT(!toks_a.empty());
+
+        auto sp = base;
+        sp.grammar = { COMMON_GRAMMAR_TYPE_USER, "root ::= \"a\"" };
+
+        for (bool grammar_first : { true, false }) {
+            common_sampler_ptr smpl(common_sampler_init(params.model.get(), sp));
+
+            random_logits();
+            for (llama_token tok : toks_a) {
+                logits[tok] = -100.0f;
+            }
+            std::copy(logits.begin(), logits.end(), llama_get_logits_ith(ctx, idx));
+            const llama_token id = common_sampler_sample(smpl.get(), ctx, idx, grammar_first);
+            GGML_ASSERT(std::find(toks_a.begin(), toks_a.end(), id) != toks_a.end());
+        }
+        printf("top-k from logits, grammar: OK\n");
+    }
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2079,6 +2232,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_min_p",                  test_min_p,                  true },
     { "test_logit_bias",             test_logit_bias,             true },
     { "test_penalties",              test_penalties,              true },
+    { "test_top_k_from_logits",      test_top_k_from_logits,      true },
     // multiple sequences
     { "test_multi_sequence",         test_multi_sequence,         true },
     { "test_dist",                   test_dist,                   true },
