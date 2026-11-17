@@ -173,5 +173,6 @@ struct clip_subcontext {
     clip_subctx_gen_state * gen_state_init(uint32_t seed, ggml_backend_buffer_type_t buft = nullptr);
 
     // the batch the compute buffers are reserved for
-    clip_image_f32_batch get_dummy_batch() const;
+    // placeholder: shapes only, for building a graph that is not computed (reservation)
+    clip_image_f32_batch get_dummy_batch(bool placeholder = false) const;
 };

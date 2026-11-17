@@ -2007,7 +2007,7 @@ clip_subcontext * llama_context::clip_sub(const clip_model & m) {
             ggml_context_ptr ctx_probe(ggml_init(ip));
             s->ctx0 = ctx_probe.get();
             s->gf   = ggml_new_graph(ctx_probe.get());
-            const clip_image_f32_batch batch = s->get_dummy_batch();
+            const clip_image_f32_batch batch = s->get_dummy_batch(true);
             s->support_batch = clip_get_graph_builder(s, batch)->support_batch();
             s->ctx0 = nullptr;
             s->gf   = nullptr;

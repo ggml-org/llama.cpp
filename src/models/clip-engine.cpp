@@ -158,7 +158,7 @@ struct llama_model_clip::graph_engine : public llm_graph_context {
         if (req) {
             g = sub->build(req);
         } else {
-            const clip_image_f32_batch batch = sub->get_dummy_batch();
+            const clip_image_f32_batch batch = sub->get_dummy_batch(true);
             g = clip_get_graph_builder(sub, batch, nullptr)->build();
         }
         GGML_ASSERT(g == gf);

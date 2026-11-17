@@ -27,19 +27,19 @@ clip_subcontext::clip_subcontext(const clip_model & model, bool flash_attn) :
     debug_output_embeddings = std::getenv("CLIP_DEBUG_EMBEDDINGS") != nullptr;
 }
 
-clip_image_f32_batch clip_subcontext::get_dummy_batch() const {
+clip_image_f32_batch clip_subcontext::get_dummy_batch(bool placeholder) const {
     // create a fake batch
     const auto & hparams = model.hparams;
     clip_image_f32_batch batch;
     clip_image_f32 img;
     if (model.modality == CLIP_MODALITY_VISION) {
         const int sz = hparams.warmup_image_size;
-        img.set_size({sz, sz}, false, false);
+        img.set_size({sz, sz}, placeholder, false);
         LOG_INF("%s: warmup with image size = %d x %d\n", __func__, sz, sz);
     } else if (model.modality == CLIP_MODALITY_GEN_AUDIO) {
         // TODO: improve this, move to per-model impl
         const int n_embd = model.n_mmproj_embd();
-        img.set_size({n_embd, 1}, false, true);
+        img.set_size({n_embd, 1}, placeholder, true);
         LOG_INF("%s: warmup with one gen-audio step\n", __func__);
     } else {
         // GEMMA4UA uses n_mel_bins as a raw-waveform frame size (640), not a mel-bin count,
@@ -48,7 +48,7 @@ clip_image_f32_batch clip_subcontext::get_dummy_batch() const {
         if (hparams.n_mel_bins <= 0 || (fft_based && hparams.n_mel_bins > 256)) {
             throw std::runtime_error(clip_format("%s: invalid n_mel_bins (%d), must be in [1, 256]\n", __func__, hparams.n_mel_bins));
         }
-        img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, false, false);
+        img.set_size({hparams.warmup_audio_size, hparams.n_mel_bins}, placeholder, false);
         LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
     }
     batch.entries.push_back(img);
