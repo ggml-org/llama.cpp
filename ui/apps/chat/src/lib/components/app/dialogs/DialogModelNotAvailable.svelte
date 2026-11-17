@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '#lib/constants/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '$lib/constants';
 
 	interface Props {
 		open: boolean;
@@ -21,7 +21,7 @@
 
 	function handleSelectModel(model: string) {
 		// Build URL with selected model, preserving other params
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 
 		url.searchParams.set(URL_PARAMS.MODEL, model);
 

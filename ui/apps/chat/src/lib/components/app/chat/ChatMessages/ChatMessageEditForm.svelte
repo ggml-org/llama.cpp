@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { AlertTriangle, X } from '@lucide/svelte';
-	import { ChatForm, DialogConfirmation } from '$lib/components/app';
-	import { Button } from '$lib/components/ui/button';
-	import { Switch } from '$lib/components/ui/switch';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { chatStore } from '$lib/stores';
-	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { ChatForm, DialogConfirmation } from '#lib/components/app/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { Switch } from '#lib/components/ui/switch/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { KeyboardKey, MessageRole } from '#lib/enums/index.ts';
+	import { chatStore } from '#lib/stores/index.ts';
+	import { processFilesToChatUploaded } from '#lib/utils/browser-only.ts';
 
 	const editCtx = getChatMessageEditContext();
 

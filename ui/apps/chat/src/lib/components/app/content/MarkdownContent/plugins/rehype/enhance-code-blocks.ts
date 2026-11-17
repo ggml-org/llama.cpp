@@ -17,7 +17,7 @@ import {
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
-import { CODE_BLOCK_CLASS, MARKDOWN_DATA_ATTRS } from '$lib/constants';
+import { CODE_BLOCK_CLASS, MARKDOWN_DATA_ATTRS } from '#lib/constants/index.ts';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';

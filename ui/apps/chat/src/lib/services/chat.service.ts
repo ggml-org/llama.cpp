@@ -22,7 +22,7 @@ import {
 	STREAM_QUERY_PARAMS,
 	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
 	STREAM_VISIBILITY_KICK_MS
-} from '$lib/constants';
+} from '#lib/constants/index.ts';
 import {
 	AttachmentLabel,
 	AttachmentType,
@@ -30,22 +30,25 @@ import {
 	MessageRole,
 	ReasoningFormat,
 	StreamConnectionState
-} from '$lib/enums';
-import { modelsStore } from '$lib/stores/models/index.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
+} from '#lib/enums/index.ts';
+import { modelsStore } from '#lib/stores/models/index.svelte.ts';
+import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import type {
 	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
 	ApiChatMessageData,
 	ApiStreamSession
-} from '$lib/types/api';
-import type { OpenAIToolDefinition } from '$lib/types/mcp';
-import { isAbortError } from '$lib/utils/abort';
-import { ApiError } from '$lib/utils/api-fetch';
-import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
-import { formatAttachmentText } from '$lib/utils/formatters';
-import { streamIdentity } from '$lib/utils/stream-identity';
+} from '#lib/types/api.js';
+import type {
+	DatabaseMessageExtraMcpPrompt,
+	DatabaseMessageExtraMcpResource
+} from '#lib/types/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/mcp.js';
+import { isAbortError } from '#lib/utils/abort.ts';
+import { ApiError } from '#lib/utils/api-fetch.ts';
+import { getAuthHeaders, getJsonHeaders } from '#lib/utils/api-headers.ts';
+import { formatAttachmentText } from '#lib/utils/formatters.ts';
+import { streamIdentity } from '#lib/utils/stream-identity.ts';
 
 interface ResumableStreamState {
 	bytesReceived: number;

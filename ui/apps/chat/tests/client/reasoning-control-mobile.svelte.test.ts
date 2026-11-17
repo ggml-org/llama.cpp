@@ -1,9 +1,9 @@
 // Guards the phone shape of the reasoning control: a phone picks the effort in a drawer,
 // since a dropdown of small rows is not a touch target.
 
-import ChatFormActionReasoning from '$lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionReasoning.svelte';
-import { ServerRole } from '$lib/enums';
-import { serverStore } from '$lib/stores/server.svelte';
+import ChatFormActionReasoning from '#lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionReasoning.svelte';
+import { ServerRole } from '#lib/enums/index.ts';
+import { serverStore } from '#lib/stores/llama-server.svelte.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';

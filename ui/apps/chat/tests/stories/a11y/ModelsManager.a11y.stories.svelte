@@ -1,8 +1,8 @@
 <script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ModelsManagerModelRow from '$lib/components/app/models/ModelsManager/ModelsManagerModelRow.svelte';
-	import { MODEL_ROW_GRID_CLASS } from '$lib/constants';
-	import type { ModelOption } from '$lib/types/models';
+	import ModelsManagerModelRow from '#lib/components/app/models/ModelsManager/ModelsManagerModelRow.svelte';
+	import { MODEL_ROW_GRID_CLASS } from '#lib/constants/index.ts';
+	import type { ModelOption } from '#lib/types/models.js';
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({

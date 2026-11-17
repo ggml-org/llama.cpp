@@ -2,7 +2,7 @@
  * Browser-only utility exports
  *
  * These utilities require browser APIs (DOM, Canvas, MediaRecorder, etc.)
- * and cannot be imported during SSR. Import from '$lib/utils/browser-only'
+ * and cannot be imported during SSR. Import from '#lib/utils/browser-only.ts'
  * only in client-side code or components that are not server-rendered.
  */
 

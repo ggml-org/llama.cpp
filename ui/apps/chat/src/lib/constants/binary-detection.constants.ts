@@ -1,4 +1,4 @@
-import type { BinaryDetectionOptions } from '$lib/types';
+import type { BinaryDetectionOptions } from '#lib/types/index.ts';
 
 export const DEFAULT_BINARY_DETECTION_OPTIONS: BinaryDetectionOptions = {
 	maxAbsoluteNullBytes: 2,

@@ -5,8 +5,8 @@ import {
 	SearchChatsOrder,
 	ToolCallType,
 	ToolSource
-} from '$lib/enums';
-import type { OpenAIToolDefinition } from '$lib/types';
+} from '#lib/enums/index.ts';
+import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 
 export const SEARCH_CHATS_TOOL_NAME = BuiltInTool.BROWSER_SEARCH_CHATS;
 

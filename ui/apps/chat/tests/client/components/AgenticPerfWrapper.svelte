@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { perfState } from './agentic-perf-state.svelte';
-	import ChatMessageAgenticContent from '$lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import ChatMessageAgenticContent from '#lib/components/app/chat/ChatMessages/ChatMessageAgenticContent.svelte';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 </script>
 
 <Tooltip.Provider>

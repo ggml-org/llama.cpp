@@ -8,8 +8,8 @@
  * demand if they aren't cached yet.
  */
 
-import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
-import { getConversationModel } from '$lib/utils';
+import { conversationsStore, modelsStore, serverStore } from '#lib/stores/index.ts';
+import { getConversationModel } from '#lib/utils/index.ts';
 
 export function useChatScreenActiveModel() {
 	const isRouter = $derived(serverStore.isRouterMode);

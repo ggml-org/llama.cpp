@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Trash2 } from '@lucide/svelte';
-	import { ContextMenuActions } from '$lib/components/app';
-	import { NATIVE_CONTEXT_MENU_SELECTOR } from '$lib/constants';
-	import { getChatMessageActionsContext, getChatMessageEditContext } from '$lib/contexts';
-	import { MessageRole } from '$lib/enums';
-	import type { MenuAction } from '$lib/types';
+	import { ContextMenuActions } from '#lib/components/app/index.ts';
+	import { NATIVE_CONTEXT_MENU_SELECTOR } from '#lib/constants/index.ts';
+	import { getChatMessageActionsContext, getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { MessageRole } from '#lib/enums/index.ts';
+	import type { MenuAction } from '#lib/types/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

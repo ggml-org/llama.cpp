@@ -1,5 +1,5 @@
 import type { ChatMessagePromptProgress, ChatRole } from './chat';
-import type { ModelSidecar } from '$lib/constants';
+import type { ModelSidecar } from '#lib/constants/index.ts';
 import type {
 	ContentPartType,
 	FileTypeAudio,
@@ -7,7 +7,7 @@ import type {
 	ServerModelsSseEventType,
 	ServerModelStatus,
 	ServerRole
-} from '$lib/enums';
+} from '#lib/enums/index.ts';
 
 export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
 

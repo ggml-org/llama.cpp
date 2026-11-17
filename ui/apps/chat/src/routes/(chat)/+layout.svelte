@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { ChatScreen, ChatTabs } from '#lib/components/app/index.ts';
+	import { NEW_CHAT_TAB_ID } from '#lib/constants/index.ts';
+	import { settingsStore, tabsStore } from '#lib/stores/index.ts';
 	import { page } from '$app/state';
-	import { ChatScreen, ChatTabs } from '$lib/components/app';
-	import { NEW_CHAT_TAB_ID } from '$lib/constants';
-	import { settingsStore, tabsStore } from '$lib/stores';
 
 	let { children } = $props();
 

@@ -5,15 +5,20 @@
  */
 
 import { useProcessingState } from './use-processing-state.svelte';
-import { page } from '$app/state';
 import {
 	colorLevelFromPercent,
 	hasProcessedTokens
-} from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
-import { STATS_UNITS } from '$lib/constants';
-import { ColorLevel } from '$lib/enums';
-import { chatStore, contextStatsStore, conversationsStore, modelsStore } from '$lib/stores';
-import type { DatabaseMessage } from '$lib/types';
+} from '#lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge.ts';
+import { STATS_UNITS } from '#lib/constants/index.ts';
+import { ColorLevel } from '#lib/enums/index.ts';
+import {
+	chatStore,
+	contextStatsStore,
+	conversationsStore,
+	modelsStore
+} from '#lib/stores/index.ts';
+import type { DatabaseMessage } from '#lib/types/index.ts';
+import { page } from '$app/state';
 
 export interface UseContextGaugeReturn {
 	readonly activeModelId: string | null;

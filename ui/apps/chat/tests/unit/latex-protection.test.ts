@@ -1,5 +1,5 @@
 /* eslint-disable no-irregular-whitespace */
-import { maskInlineLaTeX, preprocessLaTeX } from '$lib/utils/latex-protection';
+import { maskInlineLaTeX, preprocessLaTeX } from '#lib/utils/latex-protection.ts';
 import { describe, expect, it, test } from 'vitest';
 
 describe('maskInlineLaTeX', () => {

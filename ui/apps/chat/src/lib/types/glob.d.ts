@@ -1,4 +1,4 @@
-import type { GlobSearchType } from '$lib/enums';
+import type { GlobSearchType } from '#lib/enums/index.ts';
 
 /**
  * A single directory entry returned by the server's `file_glob_search`

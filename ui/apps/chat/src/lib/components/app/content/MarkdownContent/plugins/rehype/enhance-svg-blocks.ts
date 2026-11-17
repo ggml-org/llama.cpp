@@ -19,7 +19,7 @@ import {
 	generateBlockId
 } from './code-block-utils';
 import type { DiagramPreData } from './pre-transform';
-import { DIAGRAM_VIEW_MODE_ATTR, DIAGRAM_VIEW_RENDERED, SVG } from '$lib/constants';
+import { DIAGRAM_VIEW_MODE_ATTR, DIAGRAM_VIEW_RENDERED, SVG } from '#lib/constants/index.ts';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';

@@ -1,5 +1,5 @@
-import { MICROPHONE_UNAVAILABLE_MESSAGE } from '$lib/constants';
-import { MimeTypeAudio } from '$lib/enums';
+import { MICROPHONE_UNAVAILABLE_MESSAGE } from '#lib/constants/index.ts';
+import { MimeTypeAudio } from '#lib/enums/index.ts';
 
 /**
  * AudioRecorder - Browser-based audio recording with MediaRecorder API

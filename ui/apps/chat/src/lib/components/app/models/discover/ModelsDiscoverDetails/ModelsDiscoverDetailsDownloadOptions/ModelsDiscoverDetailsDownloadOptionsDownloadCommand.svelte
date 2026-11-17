@@ -1,9 +1,14 @@
 <script lang="ts">
 	import { Check, Copy } from '@lucide/svelte';
-	import * as Select from '$lib/components/ui/select';
-	import { COPY_FEEDBACK_RESET_MS, MODEL_ID, SERVE_COMMAND, SPEC_TYPE } from '$lib/constants';
-	import type { ModelDraftSidecar } from '$lib/enums';
-	import { copyToClipboard } from '$lib/utils';
+	import * as Select from '#lib/components/ui/select/index.ts';
+	import {
+		COPY_FEEDBACK_RESET_MS,
+		MODEL_ID,
+		SERVE_COMMAND,
+		SPEC_TYPE
+	} from '#lib/constants/index.ts';
+	import type { ModelDraftSidecar } from '#lib/enums/index.ts';
+	import { copyToClipboard } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Full HuggingFace repo id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */

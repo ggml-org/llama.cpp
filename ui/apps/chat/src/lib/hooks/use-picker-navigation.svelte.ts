@@ -1,4 +1,4 @@
-import { KeyboardKey } from '$lib/enums';
+import { KeyboardKey } from '#lib/enums/index.ts';
 
 /**
  * Shared keyboard navigation state for the chat-form pickers: a highlighted

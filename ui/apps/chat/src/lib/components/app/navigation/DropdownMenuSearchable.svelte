@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { SearchInput } from '$lib/components/app';
-	import { cn } from '$lib/components/ui/utils.js';
+	import { SearchInput } from '#lib/components/app/index.ts';
+	import { cn } from '#lib/components/ui/utils.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

@@ -1,15 +1,15 @@
 <script lang="ts">
-	import { browser } from '$app/environment';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
 	import {
 		DialogConversationDelete,
 		SearchInput,
 		SidebarNavigationSearchResults
-	} from '$lib/components/app';
-	import { ROUTES } from '$lib/constants';
-	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
+	} from '#lib/components/app/index.ts';
+	import { ROUTES } from '#lib/constants/index.ts';
+	import { RouterService } from '#lib/services/router.service.ts';
+	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { browser } from '$app/env';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 
 	let searchQuery = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);
@@ -28,7 +28,7 @@
 	// in-place search, so bounce back to a new-chat tab without a history entry.
 	$effect(() => {
 		if (browser && !deviceStore.isMobile) {
-			goto(ROUTES.START, { replaceState: true });
+			goto(ROUTES.START, { replace: true });
 		}
 	});
 

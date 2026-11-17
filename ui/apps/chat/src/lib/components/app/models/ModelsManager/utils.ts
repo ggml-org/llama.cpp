@@ -1,14 +1,14 @@
-import { LOCAL_BACKEND_ID, type ModalityKey } from '$lib/constants';
-import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '$lib/enums';
-import { HuggingFaceService, ModelsService } from '$lib/services';
-import { modelsStore } from '$lib/stores';
+import { LOCAL_BACKEND_ID, type ModalityKey } from '#lib/constants/index.ts';
+import { ModelCapability, ModelGroupKind, ModelsTableGroupKind } from '#lib/enums/index.ts';
+import { HuggingFaceService, ModelsService } from '#lib/services/index.ts';
+import { modelsStore } from '#lib/stores/index.ts';
 import type {
 	ModelDownloadEntry,
 	ModelDownloadProgress,
 	ModelOption,
 	ModelSidecarBadge
-} from '$lib/types/models';
-import { detectThinkingSupport, detectToolUseSupport, repoOf } from '$lib/utils';
+} from '#lib/types/models.js';
+import { detectThinkingSupport, detectToolUseSupport, repoOf } from '#lib/utils/index.ts';
 
 /** One repo of the table, with the rows it ships as. */
 export interface ModelQuantGroup {

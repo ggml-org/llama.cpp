@@ -1,19 +1,19 @@
 <script lang="ts">
 	import { ArrowDown, ArrowUp, CornerDownLeft, MessageSquare, Pin, X } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
-	import { ActionIcon, KeyboardShortcutInfo } from '$lib/components/app';
-	import * as Dialog from '$lib/components/ui/dialog';
+	import { ActionIcon, KeyboardShortcutInfo } from '#lib/components/app/index.ts';
+	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import {
 		ICON_CLASS_DEFAULT,
 		ICON_CLASS_SM,
 		ICON_CLASS_XS,
 		SIDEBAR_ACTIONS_ITEMS,
 		SIDEBAR_FOOTER_ITEMS
-	} from '$lib/constants';
-	import { KeyboardKey, SidebarAction } from '$lib/enums';
-	import { RouterService } from '$lib/services/router.service';
-	import { conversationsStore, deviceStore } from '$lib/stores';
-	import { formatRelativeTime, isIMEComposing } from '$lib/utils';
+	} from '#lib/constants/index.ts';
+	import { KeyboardKey, SidebarAction } from '#lib/enums/index.ts';
+	import { RouterService } from '#lib/services/router.service.ts';
+	import { conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { formatRelativeTime, isIMEComposing } from '#lib/utils/index.ts';
+	import { goto } from '$app/navigation';
 	import type { Component } from 'svelte';
 
 	interface Props {

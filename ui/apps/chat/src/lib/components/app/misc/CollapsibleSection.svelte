@@ -1,8 +1,8 @@
 <script lang="ts">
 	import CollapsibleRegion from './CollapsibleRegion.svelte';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

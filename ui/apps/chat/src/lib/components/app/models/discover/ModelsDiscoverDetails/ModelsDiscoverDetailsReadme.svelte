@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { MarkdownContent } from '$lib/components/app';
+	import { MarkdownContent } from '#lib/components/app/index.ts';
 
 	interface Props {
 		readme: string | null;

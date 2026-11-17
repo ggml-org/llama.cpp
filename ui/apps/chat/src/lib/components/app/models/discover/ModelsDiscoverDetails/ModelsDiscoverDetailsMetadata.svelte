@@ -2,10 +2,10 @@
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverDetailsMetadataItem from './ModelsDiscoverDetailsMetadataItem.svelte';
 	import { MessageSquareCode } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { modelsDiscoverStore } from '$lib/stores';
-	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
-	import { formatParameters } from '$lib/utils';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { modelsDiscoverStore } from '#lib/stores/index.ts';
+	import type { HfModelDetailInfo, HfModelGguf } from '#lib/types/huggingface.js';
+	import { formatParameters } from '#lib/utils/index.ts';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */

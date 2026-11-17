@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/services/tools.service', () => ({
+vi.mock('#lib/services/tools.service.ts', () => ({
 	ToolsService: { executeToolRaw: vi.fn() }
 }));
 
-import { GlobSearchType } from '$lib/enums';
-import { ToolsService } from '$lib/services/tools.service';
-import { runGlobSearchWithChildren } from '$lib/utils';
+import { GlobSearchType } from '#lib/enums/index.ts';
+import { ToolsService } from '#lib/services/tools.service.ts';
+import { runGlobSearchWithChildren } from '#lib/utils/index.ts';
 
 const mockExecute = vi.mocked(ToolsService.executeToolRaw);
 

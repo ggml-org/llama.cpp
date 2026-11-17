@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { Pencil } from '@lucide/svelte';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
+	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import { Button } from '#lib/components/ui/button/index.ts';
+	import { Input } from '#lib/components/ui/input/index.ts';
 
 	interface Props {
 		open: boolean;

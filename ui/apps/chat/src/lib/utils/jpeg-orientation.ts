@@ -1,5 +1,5 @@
-import { EXIF } from '$lib/constants';
-import { MimeTypeImage } from '$lib/enums';
+import { EXIF } from '#lib/constants/index.ts';
+import { MimeTypeImage } from '#lib/enums/index.ts';
 
 /**
  * Read the EXIF orientation tag from a JPEG base64 data URL

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import * as Collapsible from '$lib/components/ui/collapsible';
+	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
 
 	interface Props {
 		instructions?: string;

@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { cn } from '$lib/components/ui/utils';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { ScrollCarouselVariant } from '$lib/enums';
-	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
+	import { cn } from '#lib/components/ui/utils.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
+	import { useScrollCarousel } from '#lib/hooks/use-scroll-carousel.svelte.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

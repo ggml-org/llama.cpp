@@ -1,5 +1,5 @@
-import { ChatService } from '$lib/services/chat.service';
-import type { ApiStreamSession } from '$lib/types';
+import { ChatService } from '#lib/services/chat.service.ts';
+import type { ApiStreamSession } from '#lib/types/index.ts';
 import { describe, expect, it } from 'vitest';
 
 function makeSession(overrides: Partial<ApiStreamSession>): ApiStreamSession {

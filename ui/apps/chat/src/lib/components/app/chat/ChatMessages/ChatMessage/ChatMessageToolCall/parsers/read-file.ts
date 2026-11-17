@@ -4,10 +4,10 @@
 // can render incrementally as the file path streams in.
 
 import { parseToolArgs } from './_shared';
-import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
-import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/types';
-import { getFileTypeByExtension } from '$lib/utils';
+import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX } from '#lib/constants/index.ts';
+import { BuiltInTool } from '#lib/enums/index.ts';
+import type { AgenticSection } from '#lib/types/index.ts';
+import { getFileTypeByExtension } from '#lib/utils/index.ts';
 
 export type ReadFileMeta = {
 	fileName: string;

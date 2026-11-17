@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ChatFormActionRecord from '$lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import ChatFormActionRecord from '#lib/components/app/chat/ChatForm/ChatFormActions/ChatFormActionRecord.svelte';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 
 	let {
 		hasAudioModality = true,

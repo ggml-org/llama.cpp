@@ -4,15 +4,15 @@
 		ChatAttachmentsListItemMcpResource,
 		ChatAttachmentsListItemThumbnailFile,
 		ChatAttachmentsListItemThumbnailImage
-	} from '$lib/components/app';
-	import { AttachmentType } from '$lib/enums';
+	} from '#lib/components/app/index.ts';
+	import { AttachmentType } from '#lib/enums/index.ts';
 	import type {
 		ChatAttachmentDisplayItem,
 		DatabaseMessageExtraMcpPrompt,
 		DatabaseMessageExtraMcpResource,
 		MCPResourceAttachment
-	} from '$lib/types';
-	import { isMcpPrompt, isMcpResource, isPdfFile } from '$lib/utils';
+	} from '#lib/types/index.ts';
+	import { isMcpPrompt, isMcpResource, isPdfFile } from '#lib/utils/index.ts';
 
 	interface Props {
 		class?: string;

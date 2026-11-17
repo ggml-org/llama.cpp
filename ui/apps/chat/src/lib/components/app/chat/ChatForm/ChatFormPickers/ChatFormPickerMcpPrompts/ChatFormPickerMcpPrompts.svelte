@@ -6,12 +6,12 @@
 		ChatFormPickerListItemSkeleton,
 		ChatFormPickerPopover,
 		ChatFormPromptPickerArgumentForm
-	} from '$lib/components/app/chat';
-	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import { KeyboardKey } from '$lib/enums';
-	import { mcpStore } from '$lib/stores';
-	import type { GetPromptResult, MCPPromptInfo, MCPServerSettingsEntry } from '$lib/types';
-	import { debounce, uuid } from '$lib/utils';
+	} from '#lib/components/app/chat/index.ts';
+	import Badge from '#lib/components/ui/badge/badge.svelte';
+	import { KeyboardKey } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { GetPromptResult, MCPPromptInfo, MCPServerSettingsEntry } from '#lib/types/index.ts';
+	import { debounce, uuid } from '#lib/utils/index.ts';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {

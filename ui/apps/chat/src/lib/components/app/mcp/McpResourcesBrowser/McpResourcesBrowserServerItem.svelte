@@ -6,13 +6,17 @@
 		sortTreeChildren
 	} from './mcp-resources-browser';
 	import { Braces, ChevronDown, ChevronRight, FolderOpen, Loader2 } from '@lucide/svelte';
-	import { McpServerIdentity } from '$lib/components/app/mcp';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { mcpStore } from '$lib/stores';
-	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
-	import { getDisplayName, getResourceIcon } from '$lib/utils';
+	import { McpServerIdentity } from '#lib/components/app/mcp/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
+	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type {
+		MCPResourceInfo,
+		MCPResourceTemplateInfo,
+		MCPServerResources
+	} from '#lib/types/index.ts';
+	import { getDisplayName, getResourceIcon } from '#lib/utils/index.ts';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {

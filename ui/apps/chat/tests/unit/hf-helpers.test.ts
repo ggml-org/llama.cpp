@@ -1,4 +1,4 @@
-import { HuggingFaceService } from '$lib/services/huggingface.service';
+import { HuggingFaceService } from '#lib/services/huggingface.service.ts';
 import { describe, expect, it } from 'vitest';
 
 const {

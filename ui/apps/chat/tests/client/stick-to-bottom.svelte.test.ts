@@ -3,7 +3,7 @@
 // passed to followSizeOf - the chat form expanding on the reader's click - is
 // still followed, so the latest message stays in view above it.
 
-import { createStickToBottom } from '$lib/hooks/use-stick-to-bottom.svelte';
+import { createStickToBottom } from '#lib/hooks/use-stick-to-bottom.svelte.ts';
 import { afterEach, describe, expect, it } from 'vitest';
 
 let cleanup: (() => void)[] = [];

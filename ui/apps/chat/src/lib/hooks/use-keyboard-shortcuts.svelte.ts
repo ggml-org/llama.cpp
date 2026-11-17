@@ -1,7 +1,7 @@
+import { NEW_CHAT_TAB_ID } from '#lib/constants/index.ts';
+import { KeyboardKey } from '#lib/enums/index.ts';
+import { conversationsStore, settingsStore, tabsStore } from '#lib/stores/index.ts';
 import { page } from '$app/state';
-import { NEW_CHAT_TAB_ID } from '$lib/constants';
-import { KeyboardKey } from '$lib/enums';
-import { conversationsStore, settingsStore, tabsStore } from '$lib/stores';
 
 interface KeyboardShortcutsCallbacks {
 	editActiveConversation?: () => void;

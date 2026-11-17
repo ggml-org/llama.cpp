@@ -5,11 +5,11 @@
 		ChatMessageEditForm,
 		ChatMessageStatistics,
 		ChatMessageUserBubble
-	} from '$lib/components/app/chat';
-	import { getChatMessageEditContext } from '$lib/contexts';
-	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, settingsStore } from '$lib/stores';
+	} from '#lib/components/app/chat/index.ts';
+	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
+	import { ChatMessageStatisticsMode, MessageRole } from '#lib/enums/index.ts';
+	import { useProcessingState } from '#lib/hooks/use-processing-state.svelte.ts';
+	import { chatStore, settingsStore } from '#lib/stores/index.ts';
 
 	interface Props {
 		class?: string;

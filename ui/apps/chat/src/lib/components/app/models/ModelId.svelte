@@ -2,17 +2,17 @@
 	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
 	import ModelDraftSidecars from './ModelDraftSidecars.svelte';
 	import { Database, ScrollText } from '@lucide/svelte';
-	import { TruncatedText } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '$lib/constants';
-	import type { ModelDraftSidecar } from '$lib/enums';
-	import { HuggingFaceService } from '$lib/services';
-	import { ModelsService } from '$lib/services/models.service';
-	import { settingsStore } from '$lib/stores';
-	import type { ModelModalities } from '$lib/types/models';
-	import { type ModelSidecarBadge } from '$lib/types/models';
-	import { isAuxSidecar } from '$lib/utils';
-	import { formatParameters } from '$lib/utils';
+	import { TruncatedText } from '#lib/components/app/index.ts';
+	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
+	import { MODEL_BADGE_CLASS, MODEL_VARIANT_BADGE_CLASS } from '#lib/constants/index.ts';
+	import type { ModelDraftSidecar } from '#lib/enums/index.ts';
+	import { HuggingFaceService } from '#lib/services/index.ts';
+	import { ModelsService } from '#lib/services/models.service.ts';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { ModelModalities } from '#lib/types/models.js';
+	import { type ModelSidecarBadge } from '#lib/types/models.js';
+	import { isAuxSidecar } from '#lib/utils/index.ts';
+	import { formatParameters } from '#lib/utils/index.ts';
 
 	interface Props {
 		modelId: string;

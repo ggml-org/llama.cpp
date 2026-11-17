@@ -1,16 +1,16 @@
 <script lang="ts">
 	import { FlaskConical, RotateCcw } from '@lucide/svelte';
-	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Input } from '$lib/components/ui/input';
-	import Label from '$lib/components/ui/label/label.svelte';
-	import * as RadioGroup from '$lib/components/ui/radio-group';
-	import * as Select from '$lib/components/ui/select';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
-	import { SettingsFieldType } from '$lib/enums/settings.enums';
-	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
-	import { normalizeFloatingPoint } from '$lib/utils/precision';
+	import { SettingsChatParameterSourceIndicator } from '#lib/components/app/settings/index.ts';
+	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
+	import { Input } from '#lib/components/ui/input/index.ts';
+	import Label from '#lib/components/ui/label/label.svelte';
+	import * as RadioGroup from '#lib/components/ui/radio-group/index.ts';
+	import * as Select from '#lib/components/ui/select/index.ts';
+	import { Textarea } from '#lib/components/ui/textarea/index.ts';
+	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
+	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import { normalizeFloatingPoint } from '#lib/utils/precision.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
