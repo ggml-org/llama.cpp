@@ -8763,6 +8763,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             const uint32_t split_blocks = ROUNDUP_POW2(std::max(1u, KV / fold_split), fold_params.block_cols) / fold_params.block_cols;
             fold_pays = neq1 > tuning_params.block_rows ||
                         (CEIL_DIV(neq1, fold_tok) * fold_params.block_rows <= neq1 * tuning_params.block_rows && split_blocks >= 16);
+            fold_pays = fold_pays && ggml_vk_flash_attn_scalar_shmem_support(ctx->device, fold_params, HSK, HSV, f32acc, k_type_eff, v_type_eff);
         }
         // the mask opt bits are read for row block 0, so it has to hold every token
         if (fold_pays && fold_params.path == tuning_params.path && fold_params.block_rows >= 2 * gqa_ratio && fold_params.block_rows >= neq1) {

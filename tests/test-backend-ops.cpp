@@ -494,6 +494,8 @@ static std::string var_to_str(ggml_scale_mode mode) {
 #define VARS_TO_STR16(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) VAR_TO_STR(a) + "," + VARS_TO_STR15(b, c, d, e, f, g, h, i, j, k, l, m, n, o, p)
 #define VARS_TO_STR17(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q) VAR_TO_STR(a) + "," + VARS_TO_STR16(b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q)
 #define VARS_TO_STR18(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r) VAR_TO_STR(a) + "," + VARS_TO_STR17(b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r)
+#define VARS_TO_STR19(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s) VAR_TO_STR(a) + "," + VARS_TO_STR18(b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s)
+#define VARS_TO_STR20(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t) VAR_TO_STR(a) + "," + VARS_TO_STR19(b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, q, r, s, t)
 
 // accept FLT_MAX as infinity
 static bool isinf_or_max(float f) {
@@ -9032,7 +9034,7 @@ struct test_flash_attn_ext : public test_case {
     const bool mask_padded;
 
     std::string vars() override {
-        return VARS_TO_STR18(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_K, type_V, permute, kv_view, v_is_view_of_k, n_kv_max, q_head_padding) + ",mask_heads=" + std::to_string(mask_heads) + ",mask_padded=" + std::to_string(mask_padded);
+        return VARS_TO_STR20(hsk, hsv, nh, nr23, kv, nb, mask, sinks, max_bias, logit_softcap, prec, type_K, type_V, permute, kv_view, v_is_view_of_k, n_kv_max, q_head_padding, mask_heads, mask_padded);
     }
 
     double max_nmse_err() override {
@@ -13206,6 +13208,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 64, {6, 1}, 512, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 80, {4, 1}, 512, 8, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 64, {2, 1}, 1024, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    // head size 2048: the folded scalar tile has to fit in 32 KB shared memory
+    test_cases.emplace_back(new test_flash_attn_ext(2048, 128, 1, {2, 1}, 1024, 8, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     // Folded CM2 rows: large GQA groups, padded masks, permuted Q, and padded head dimensions.
     test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {16, 1}, 4096, 5, true, true, 8.0f, 10.0f, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 2, 1, 3}, true, false, 0, 0, 1, true));
