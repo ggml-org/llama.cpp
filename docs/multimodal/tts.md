@@ -12,6 +12,8 @@ Supported models:
 - [Chatterbox](#chatterbox)
 - [Drama 3](#drama-3)
 - [ZONOS3](#zonos3)
+- [Fish Audio S2 Pro](#fish-audio-s2-pro)
+- [YuE2](#yue2) (songs)
 
 The sections below list the params supported by each model, with `llama-tts` examples. In `llama-server`, the same options are set with `--tts-lang` and `--tts-voice`, or per request (see the [`/tts` endpoint](../../tools/server/README.md#post-tts-generate-speech-audio-from-text)).
 
@@ -215,3 +217,92 @@ Convert the root of the release repository, not the `lm/` subdirectory. The mmpr
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --outtype q8_0 --outfile zonos3-mini.gguf
 python convert_hf_to_gguf.py path/to/ZONOS3-Mini --mmproj --outtype f32 --outfile mmproj-zonos3-mini.gguf
 ```
+
+## Fish Audio S2 Pro
+
+[Fish Audio S2 Pro](https://huggingface.co/fishaudio/s2-pro): a Qwen3 backbone (4B) samples each frame's semantic token, a 4-layer fast AR predicts the 9 other codes, and the Fish DAC (same as Drama 3) decodes them to 44.1 kHz audio.
+
+Available params:
+- Speaker tags `<|speaker:0|>`, `<|speaker:1|>`, ... in the text give each character its own voice, a text without a tag starts with `<|speaker:0|>`
+- Inline instructions in brackets control the delivery, for example `[laughing]`, `[whisper]` or `[pause]`
+- The language is the one of the text, `--tts-lang` is not used
+- Voice cloning: `--tts-speaker-file` with the reference clip, optionally `--tts-speaker-text` with its transcript (it is put in the prompt as the reference does). The clip is encoded by the codec encoder half of `codec.pth`, it is truncated to the first 30 s
+- Note: `--temp`, `--top-k` and `--top-p` are not used (only `--seed`), frames are sampled with the settings of the reference (semantic token: repetition penalty 1.1 over the last 16 frames, top-k 30, top-p 0.8, temperature 0.8, or top-p 0.9 and temperature 1.0 when the last 4 frames repeat a token; other codes: greedy)
+- Each frame is 2048 samples (about 46 ms), generation stops at the end-of-speech token
+
+Example usage:
+
+```sh
+llama-tts -m s2-pro.gguf \
+    -mm mmproj-s2-pro.gguf \
+    -p "<|speaker:0|>Did you remember to buy the bread? <|speaker:1|>Of course I did [laughing] it is on the kitchen table." \
+    -n 1000 \
+    --output out.wav
+```
+
+Voice cloning (`--tts-speaker-text` can be left out):
+
+```sh
+llama-tts -m s2-pro.gguf \
+    -mm mmproj-s2-pro.gguf \
+    --tts-speaker-file reference.wav \
+    --tts-speaker-text "The words spoken in reference.wav." \
+    -p "Hello, this is a cloned voice." \
+    --output out.wav
+```
+
+**Note for GGUF conversion:**
+
+The mmproj holds the fast AR and `codec.pth` (the encoder half for voice cloning, the decoder half for the audio), it is best kept in BF16. The codec encoder is always stored in F16/F32, small errors in it change the codes picked by its VQ:
+
+```sh
+python convert_hf_to_gguf.py path/to/s2-pro --outtype q8_0 --outfile s2-pro.gguf
+python convert_hf_to_gguf.py path/to/s2-pro --mmproj --outtype bf16 --outfile mmproj-s2-pro.gguf
+```
+
+## YuE2
+
+[m-a-p/YuE2-3B](https://huggingface.co/m-a-p/YuE2-3B) generates songs (vocals and accompaniment) from a style prompt and lyrics, as 48 kHz stereo. The backbone (a Qwen3 text model) writes an ABC score, then one semantic code per 40 ms frame; the NAR half of the checkpoint turns the codes into VAE latents by flow matching, attending to the keys and values of the backbone, and the [YuE2-Vae](https://huggingface.co/m-a-p/YuE2-Vae) decoder makes the audio.
+
+The prompt is the text of the reference request:
+
+```
+[Tags]
+City Pop, upbeat, danceable, groovy bass, electric guitar, synth
+[Lyrics]
+[Verse]
+...
+```
+
+Available params:
+- `--tts-voice` picks the planning mode of the reference (`cot`): `full` (default, a chord-annotated score), `melody` (a melody-only score) or `off` (no score)
+- Cover mode: append the score to the prompt as `\n[ABC]\n<score>`, with `--tts-voice melody` or `full`; the model then goes straight to the codes
+- The generation stops at the limits of the reference (4096 score tokens, then 9000 codes, 6 minutes); `-n` sets a lower limit on the score tokens and the codes together
+- The context must keep the default size (24576 positions, the one of the reference): a smaller `-c` is rejected when the model is loaded
+- Note: `--top-k` and `--top-p` are not used, both phases are sampled with the settings of the reference (`yue2_generation_config.json`); `--temp` changes the temperature of the codes
+- Note: the backbone context must use an F16 KV cache (default): the NAR pass loads its keys and values
+- The codes are sampled with classifier-free guidance like the reference: scale 1.01 with `--tts-voice off`, off (1.0) otherwise. `llama-server` takes `cfg_scale` to change it, the reference suggests 1.2 for a stronger text guidance. The uncond prompt runs as a second sequence, so the context must also hold it (the instruction, the score and the codes once more)
+- The NAR pass solves the flow-matching ODE in 32 midpoint steps like the reference; `llama-server` takes `flow_steps` to change it. The NAR time is about proportional to it: 16 steps are about 35% faster for the NAR and the VAE together, with a small deviation from the reference (about 0.2 dB of spectral difference); it grows with fewer steps (about 0.4 dB at 8, 0.8 dB at 4)
+- The NAR pass runs on chunks of codes like the reference: one chunk for a song that fits in 24576 positions, so the audio arrives after the last code. When streaming, each 30 s of codes is a chunk, processed during the generation, so the audio arrives in 30 s steps; the chunks are independent (each sees the prompt, the score and its own codes), which may be audible at the boundaries
+
+Example usage:
+
+```sh
+llama-tts -m yue2-3b.gguf \
+    -mm mmproj-yue2-3b.gguf \
+    -f song.txt \
+    --output song.wav
+```
+
+**Note for GGUF conversion:**
+
+The VAE is a separate repository, download it into the `vae` subdirectory of the model:
+
+```sh
+hf download m-a-p/YuE2-3B --local-dir YuE2-3B
+hf download m-a-p/YuE2-Vae --local-dir YuE2-3B/vae
+python convert_hf_to_gguf.py YuE2-3B --outfile yue2-3b.gguf
+python convert_hf_to_gguf.py YuE2-3B --mmproj --outfile mmproj-yue2-3b.gguf
+```
+
+The mmproj holds the NAR transformer layers (loaded with libllama as a Qwen3 text model, in the `--outtype` type), and the latent projections and the VAE decoder, always in F32.

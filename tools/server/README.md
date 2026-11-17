@@ -2,7 +2,7 @@
 
 Fast, lightweight, pure C/C++ HTTP server based on [httplib](https://github.com/yhirose/cpp-httplib), [nlohmann::json](https://github.com/nlohmann/json) and **llama.cpp**.
 
-Set of LLM REST APIs and a web UI to interact with llama.cpp.
+Set of LLM REST APIs and Llama Chat, a built-in chat app, to interact with llama.cpp.
 
 **Features:**
  * LLM inference of F16 and quantized models on GPU and CPU
@@ -17,7 +17,7 @@ Set of LLM REST APIs and a web UI to interact with llama.cpp.
  * Prefilling of assistant messages similar to the Claude API
  * [Function calling](../../docs/function-calling.md) / tool use for ~any model
  * Speculative decoding
- * Easy-to-use web UI
+ * Llama Chat, an easy-to-use built-in chat app
 
 For the full list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
 
@@ -202,14 +202,14 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
-| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy, for the Web UI to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
+| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
 | `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
 | `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
 | `--allow-unauthenticated-tools` | allow server tools, MCP servers or MCP proxy on a non-loopback address without an API key - only for trusted networks (default: disabled)<br/>(env: LLAMA_ARG_ALLOW_UNAUTHENTICATED_TOOLS) |
 | `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
 | `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
-| `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
+| `--ui, --webui, --no-ui, --no-webui` | whether to enable Llama Chat, the built-in chat app (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--connect` | (experimental) open a peer-to-peer tunnel for server using llama-connect (default: disabled)<br/>(env: LLAMA_ARG_CONNECT) |
 | `--connect-code CODE` | manually specify a 40-character code for --connect (default: generate a new one for each run)<br/>(env: LLAMA_ARG_CONNECT_CODE) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
@@ -357,7 +357,7 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 
 ### Server tools support
 
-The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI.
+The server includes a set of server tools that enable the LLM to access the local file system directly from Llama Chat.
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
@@ -389,11 +389,11 @@ The same JSON can be passed inline with `--mcp-servers-json`. Each entry under `
 | `cwd` | working directory of the child process |
 | `timeout_ms` | per-tool-call timeout (default: 30000) |
 
-Every server is spawned once at startup to list its tools, then stopped, and respawned on demand when one of its tools is called. Tools are exposed as `<server>_<tool>` alongside the built-in ones: they show up in the Web UI and in `GET /tools`, and the model calls them like any other tool. A name colliding with an already registered tool is skipped. This is independent of `--tools`, MCP servers can be the only tools available.
+Every server is spawned once at startup to list its tools, then stopped, and respawned on demand when one of its tools is called. Tools are exposed as `<server>_<tool>` alongside the built-in ones: they show up in Llama Chat and in `GET /tools`, and the model calls them like any other tool. A name colliding with an already registered tool is skipped. This is independent of `--tools`, MCP servers can be the only tools available.
 
 The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
 
-Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach public MCP servers that do not send CORS headers. It refuses local and private addresses (loopback, LAN, link-local); connect to those from the Web UI directly.
+Note: `--ui-mcp-proxy` is unrelated, it only lets Llama Chat reach public MCP servers that do not send CORS headers. It refuses local and private addresses (loopback, LAN, link-local); connect to those from Llama Chat directly.
 
 Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
 
@@ -866,6 +866,8 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list 
 
 `speaker_ref_b64`: Base64-encoded reference audio to clone the speaker's voice. Optional. Alternatively, upload the reference audio as a `speaker_ref` file field via `multipart/form-data` (see example below) - if both are provided, the uploaded file takes precedence. Rejected when the model has no voice encoder (e.g. Pocket TTS without voice cloning).
 
+`speaker_ref_text`: Transcript of the reference audio, put in the prompt by some models (e.g. Fish Audio S2 Pro). Optional.
+
 `top_k`, `top_p`: Sampling params for both the backbone sampler and the acoustic code predictor. Optional, `0` or absent keeps the server `--top-k`/`--top-p` for the backbone and the model defaults for the code predictor.
 
 `temperature`: Temperature for the backbone sampler and the audio frames, for models that support it. `0` is greedy sampling. Optional, absent keeps the server `--temp` for the backbone and the model defaults for the audio.
@@ -878,9 +880,13 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For the list 
 
 `loudness`: Target loudness in LUFS, `< 0` (default `0.0`, the model's own loudness). Only for models that support it, others reject a value other than `0.0` with a 400 error.
 
-`n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
+`cfg_scale`: Classifier-free guidance scale of the audio codes, `> 0`, `1.0` disables it (default `0.0`, the model's own). Only for models that support it (YuE2), others reject a value other than `0.0` with a 400 error.
 
-`response_format`: `wav` (default), `pcm` (raw `float32` little-endian mono samples, no header; the response `Content-Type` carries the sample rate, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`) or `pcm16` (same, as signed 16-bit samples, e.g. `audio/pcm;rate=24000;encoding=signed-int;bits=16`).
+`flow_steps`: Steps of the flow-matching ODE solver, `1` to `1024` (default `0`, the model's own). Fewer steps are faster and the audio is less accurate. Only for models that support it (YuE2), others reject a value other than `0` with a 400 error.
+
+`n_predict`: Max number of audio frames to generate. Defaults to the limit of the model (`512` for most models); generation normally stops earlier once the model emits an end-of-speech token.
+
+`response_format`: `wav` (default), `pcm` (raw `float32` little-endian samples, no header, channels interleaved; the response `Content-Type` carries the sample rate and, for stereo models, the channel count, e.g. `audio/pcm;rate=24000;encoding=float;bits=32`) or `pcm16` (same, as signed 16-bit samples, e.g. `audio/pcm;rate=24000;encoding=signed-int;bits=16`).
 
 `stream`: If `true`, the response is streamed as audio becomes available instead of waiting for the full generation to finish. WAV streaming writes an RFC-noncompliant header with an unknown (`0xFFFFFFFF`) size field, since the final length isn't known up front; most players and decoders (ffmpeg, VLC, ...) handle this by reading until EOF.
 
@@ -1031,7 +1037,7 @@ By default, it is read-only. To make POST request to change global properties, y
 - `voices` - the predefined voices of an audio generation model, to pass as `voice` to `/tts`. Only present when the model has some (e.g. LFM3-Audio, Pocket TTS without voice cloning)
 - `model_path` - the path to model file (same with `-m` argument)
 - `chat_template` - the model's original Jinja2 prompt template
-- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info), `reasoning_effort_levels` lists the `reasoning_effort` values the template renders distinctly, from lowest to highest
+- `chat_template_caps` - capabilities of the chat template (see `common/jinja/caps.h` for more info), `reasoning_effort_levels` lists the `reasoning_effort` values the template renders distinctly, from lowest to highest, and `reasoning_effort_rejected` the ones it raises on, which are answered with a 400
 - `modalities` - the list of supported modalities
 - `is_sleeping` - sleeping status, see [Sleeping on idle](#sleeping-on-idle)
 
@@ -1672,7 +1678,7 @@ Generates speech from text, for models that can generate audio. The request is c
 
 `stream_format`: `audio` streams the response as it becomes available, see `stream` in `/tts` for the WAV header it writes. `sse` is rejected. The response is not streamed when omitted.
 
-`speed`: Speaking speed, see `speed` in `/tts`. Only models that support it accept a value other than `1.0`. `loudness` of `/tts` can be used as well.
+`speed`: Speaking speed, see `speed` in `/tts`. Only models that support it accept a value other than `1.0`. `loudness`, `cfg_scale` and `flow_steps` of `/tts` can be used as well.
 
 `instructions`: Ignored.
 
@@ -2044,7 +2050,7 @@ An invalid request returns the error `400`. A model that is not a decision model
 
 ## Server tools
 
-The server exposes a REST API under `/tools` that allows the Web UI to call server tools. This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+The server exposes a REST API under `/tools` that allows Llama Chat to call server tools. This endpoint is intended to be used internally by Llama Chat and subject to change or to be removed in the future.
 
 **Please do NOT use this endpoint in a downstream application**
 
@@ -2643,9 +2649,9 @@ Apart from error types supported by OAI, we also have custom types that are spec
 }
 ```
 
-### Custom default Web UI preferences
+### Custom default Llama Chat preferences
 
-You can specify default preferences for the web UI using `--ui-config <JSON config>` or `--ui-config-file <path to JSON config>`. For example, you can disable pasting long text as attachments and enable rendering Markdown in user messages with this command:
+You can specify default preferences for Llama Chat using `--ui-config <JSON config>` or `--ui-config-file <path to JSON config>`. For example, you can disable pasting long text as attachments and enable rendering Markdown in user messages with this command:
 
 ```bash
 ./llama-server -m model.gguf --ui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'

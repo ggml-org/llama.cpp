@@ -973,6 +973,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_pockettts_spkenc>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_FISH_S2_SPKENC:
+            {
+                builder = std::make_unique<mtmd_graph_fish_s2_spkenc>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_POCKETTTS_GEN:
             {
                 const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
@@ -1034,14 +1038,31 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                                      ? (int) (params->codes->size() / n_cb) : 1;
                 builder = std::make_unique<mtmd_graph_zonos3_gen>(ctx, img, gen_process, all_known, n_frames);
             } break;
+        case PROJECTOR_TYPE_YUE2_GEN:
+            {
+                const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_LATENT_IN;
+                int n_rows = 1;
+                if (params && params->feats) {
+                    const size_t n_col = gen_process == MTMD_SUBCTX_GEN_PROCESS_LATENT_OUT ? ctx->model.yue2.out_w->ne[0] : mtmd_graph_yue2_gen::n_latent;
+                    GGML_ASSERT(!params->feats->empty() && params->feats->size() % n_col == 0);
+                    n_rows = (int) (params->feats->size() / n_col);
+                }
+                builder = std::make_unique<mtmd_graph_yue2_gen>(ctx, img, gen_process, n_rows);
+            } break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
+        case PROJECTOR_TYPE_FISH_S2_GEN:
             {
                 const auto gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
                 const int64_t n_cb = ctx->model.gen_code_embd_w->ne[2];
                 const int n_frames = params && params->codes ? (int) (params->codes->size() / n_cb) : 1;
-                builder = std::make_unique<mtmd_graph_drama3_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames,
-                                                                  params ? params->top_k : 30, params ? params->top_p : 0.9f,
-                                                                  params ? params->temp : 1.0f);
+                const int   top_k = params ? params->top_k : 30;
+                const float top_p = params ? params->top_p : 0.9f;
+                const float temp  = params ? params->temp  : 1.0f;
+                if (ctx->model.proj_type == PROJECTOR_TYPE_FISH_S2_GEN) {
+                    builder = std::make_unique<mtmd_graph_fish_s2_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames, top_k, top_p, temp);
+                } else {
+                    builder = std::make_unique<mtmd_graph_drama3_gen>(ctx, img, gen_process, params ? params->gen_state : nullptr, n_frames, top_k, top_p, temp);
+                }
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {

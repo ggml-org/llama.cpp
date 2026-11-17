@@ -25,7 +25,7 @@ def test_access_public_endpoint(endpoint: str):
 
 
 def test_access_static_assets_without_api_key():
-    """Static web UI assets should not require API key authentication (issue #21229)"""
+    """Static Llama Chat assets should not require API key authentication (issue #21229)"""
     global server
     server.start()
     for path in ["/", "/sw.js", "/manifest.webmanifest", "/_app/version.json"]:
