@@ -3,8 +3,12 @@
 #include "server-common.h"
 #include "server-task.h"
 
+#include "file-lock.h"
+
+#include <filesystem>
 #include <list>
 #include <memory>
+#include <string>
 #include <vector>
 
 // which prompt goes to which slot: slot prompt state, prompt cache and slot selection
@@ -24,9 +28,14 @@ struct server_prompt {
     // a checkpoint does not change after it is created, so the prompt cache shares it with the slot instead of a copy
     std::list<std::shared_ptr<const common_prompt_checkpoint>> checkpoints;
 
+    // some tokens were processed with a lora config other than the one at startup
+    // TODO: such a prompt is not saved to disk, because the lora config is not a part of the prompt hash
+    bool lora_changed = false;
+
     void clear() {
         tokens.clear();
         checkpoints.clear();
+        lora_changed = false;
     }
 
     int n_tokens() const {
@@ -37,6 +46,7 @@ struct server_prompt {
         return server_prompt {
             tokens.clone(),
             checkpoints,
+            lora_changed,
         };
     }
 
@@ -71,6 +81,76 @@ struct server_prompt_cache_state {
     }
 };
 
+// prompt cache on disk, one file per prompt in a flat directory: {compat}-{prompt hash}.cache
+// file: header | hash chain | tokens | state | draft state | checkpoints
+// the directory can be shared by many servers, every operation holds a lock on it
+
+struct server_prompt_cache_disk_entry {
+    std::string name;
+
+    size_t size = 0; // in bytes
+    std::filesystem::file_time_type t_used;
+
+    // the fields below are not set for the files of another compat id, such files only count in the size limit
+    size_t n_tokens = 0;
+
+    server_tokens::prefix_hash hash = {}; // of the whole prompt
+    std::vector<server_tokens::prefix_hash> hashes;
+};
+
+struct server_prompt_cache_disk {
+    // compat: 16 hex chars, changes when the saved states can no longer be used (other model, mmproj, etc.)
+    // limit_size: in bytes, 0 = no limit
+    server_prompt_cache_disk(const std::string & dir, const std::string & compat, size_t limit_size, bool has_mtmd);
+
+    // the files as of the last operation, another server can change them at any time
+    const std::list<server_prompt_cache_disk_entry> & get_entries() const { return entries; }
+
+    size_t size() const;
+
+    server_prompt_cache_disk_stats get_stats() const;
+
+    // removes the saved prompts that are a prefix of this one, then the oldest files if over the limit
+    bool save(const server_prompt_cache_state & state);
+
+    // loads the saved prompt that shares the longest prefix with the tokens
+    // n_prefix_min: the saved prompt must share more tokens than this
+    // n_tokens_max: longer saved prompts are skipped
+    bool load(const server_tokens & tokens, size_t n_prefix_min, size_t n_tokens_max, server_prompt_cache_state & state);
+
+private:
+    using entry_list = std::list<server_prompt_cache_disk_entry>;
+
+    // reads the directory again, the lock must be held
+    void refresh();
+
+    // the prompts are compared by their hashes, no file is read
+    entry_list::iterator find(const server_tokens & tokens, size_t n_prefix_min, size_t n_tokens_max);
+
+    // a file that cannot be read is removed
+    bool read(entry_list::iterator it, server_prompt_cache_state & state);
+
+    entry_list::iterator remove(entry_list::iterator it);
+
+    // marks the entry as the most recently used one
+    void touch(entry_list::iterator it);
+
+    std::filesystem::path dir;
+    std::string compat;
+    size_t limit_size;
+    bool has_mtmd;
+
+    // oldest first
+    entry_list entries;
+
+    common_file_lock lock;
+
+    server_prompt_cache_disk_stats stats;
+};
+
+// id of everything that makes a saved state unusable when it changes
+std::string server_prompt_cache_disk_compat(const common_params & params);
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
@@ -78,6 +158,9 @@ struct server_prompt_cache {
     }
 
     std::list<server_prompt_cache_state> states;
+
+    // optional, the states that are dropped from the RAM are saved there
+    std::unique_ptr<server_prompt_cache_disk> disk;
 
     // in bytes, 0 = no limit
     size_t limit_size = 0;
@@ -91,9 +174,21 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    // n_ctx_slot: longer prompts are not loaded from the disk
+    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot, int32_t n_ctx_slot);
 
     void update();
+
+    // saves all the states to disk, they stay in the RAM
+    void flush_to_disk();
+
+private:
+    void save_to_disk(const server_prompt_cache_state & state);
+
+    void pop_oldest();
+
+    // moves the best match from the disk to the RAM if it beats the slot and the states in RAM
+    void load_from_disk(const server_tokens & tokens_new, size_t lcp_slot, int32_t n_ctx_slot);
 };
 
 // what the scheduler needs to know about a slot

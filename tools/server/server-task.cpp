@@ -10,6 +10,7 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <cmath>
 #include <sstream>
 
 //
@@ -1564,6 +1565,17 @@ json server_task_result_metrics::to_json() {
     return json{};
 }
 
+// whole numbers are printed in full, the default stream precision rounds them to 6 digits
+static std::string metric_value_str(double value) {
+    if (value == std::floor(value) && std::fabs(value) < 9007199254740992.0) { // 2^53
+        return std::to_string((int64_t) value);
+    }
+
+    std::ostringstream ss;
+    ss << value;
+    return ss.str();
+}
+
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
 std::string server_task_result_metrics::to_metrics() {
     const std::vector<metric_item> counters = {
@@ -1607,6 +1619,34 @@ std::string server_task_result_metrics::to_metrics() {
             "spec_decode_num_drafts_total",
             "Speculative: Total speculative decoding verification steps",
             (double) metrics.n_draft_verif_steps
+        }, {
+            "prompt_cache_disk_saves_total",
+            "Disk prompt cache: Number of prompts saved",
+            (double) cache_disk.n_saves
+        }, {
+            "prompt_cache_disk_save_bytes_total",
+            "Disk prompt cache: Number of bytes written",
+            (double) cache_disk.size_saved
+        }, {
+            "prompt_cache_disk_save_seconds_total",
+            "Disk prompt cache: Total time spent saving prompts",
+            cache_disk.t_save / 1.e6
+        }, {
+            "prompt_cache_disk_loads_total",
+            "Disk prompt cache: Number of prompts loaded",
+            (double) cache_disk.n_loads
+        }, {
+            "prompt_cache_disk_load_bytes_total",
+            "Disk prompt cache: Number of bytes read",
+            (double) cache_disk.size_loaded
+        }, {
+            "prompt_cache_disk_load_seconds_total",
+            "Disk prompt cache: Total time spent loading prompts",
+            cache_disk.t_load / 1.e6
+        }, {
+            "prompt_cache_disk_evictions_total",
+            "Disk prompt cache: Number of files removed to stay under the size limit",
+            (double) cache_disk.n_evictions
         },
     };
 
@@ -1631,6 +1671,14 @@ std::string server_task_result_metrics::to_metrics() {
             "n_busy_slots_per_decode",
             "Average number of busy slots per llama_decode() call",
             (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)
+        }, {
+            "prompt_cache_disk_files",
+            "Disk prompt cache: Number of files in the directory",
+            (double) cache_disk.n_files
+        }, {
+            "prompt_cache_disk_bytes",
+            "Disk prompt cache: Size of the directory in bytes",
+            (double) cache_disk.size
         },
     };
 
@@ -1640,7 +1688,7 @@ std::string server_task_result_metrics::to_metrics() {
         for (const auto & item : items) {
             prometheus << "# HELP llamacpp:" << item.name << " " << item.description << "\n"
                        << "# TYPE llamacpp:" << item.name << " " << type             << "\n"
-                       << "llamacpp:"        << item.name << " " << item.value       << "\n";
+                       << "llamacpp:"        << item.name << " " << metric_value_str(item.value) << "\n";
         }
     };
 

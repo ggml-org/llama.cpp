@@ -197,6 +197,9 @@ private: // disallow accessing these members directly, risking out-of-sync
 
     void update_hashes();
 
+    // hash of the tokens in [i_begin, i_end), chained after prev
+    prefix_hash hash_range(const prefix_hash & prev, size_t i_begin, size_t i_end) const;
+
 public:
     server_tokens() = default;
     ~server_tokens() = default;
@@ -275,6 +278,9 @@ public:
     size_t get_common_prefix(const server_tokens & b) const;
 
     const std::vector<prefix_hash> & get_prefix_hashes() const { return hashes; }
+
+    // hash of the first n tokens, n does not need to be at a block boundary
+    prefix_hash get_hash(size_t n) const;
 
     // lower bound of get_common_prefix(), b is known only by its prefix hashes
     // the result is less than one block plus one media chunk below the exact value
@@ -521,6 +527,21 @@ struct server_slot_stats {
     }
 
     json to_json() const;
+};
+
+// for /metrics, the counters restart when the model is loaded again after sleeping
+struct server_prompt_cache_disk_stats {
+    uint64_t n_saves      = 0; // files written
+    uint64_t n_loads      = 0; // files read
+    uint64_t n_evictions  = 0; // files removed to stay under the size limit
+    uint64_t size_saved   = 0; // in bytes
+    uint64_t size_loaded  = 0; // in bytes
+    uint64_t t_save       = 0; // in microseconds
+    uint64_t t_load       = 0; // in microseconds
+
+    // current state of the directory, the files of other models included
+    uint64_t n_files = 0;
+    uint64_t size    = 0; // in bytes
 };
 
 // shared between server_context_impl and server_task_result_*

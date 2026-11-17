@@ -122,6 +122,8 @@ class ServerProcess:
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
+    cache_disk: str | None = None
+    cache_disk_max_size: int | None = None
     override_kv: str | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
@@ -307,6 +309,10 @@ class ServerProcess:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
         if self.cache_ram is not None:
             server_args.extend(["--cache-ram", self.cache_ram])
+        if self.cache_disk is not None:
+            server_args.extend(["--cache-disk", self.cache_disk])
+        if self.cache_disk_max_size is not None:
+            server_args.extend(["--cache-disk-max-size", self.cache_disk_max_size])
         if self.override_kv:
             server_args.extend(["--override-kv", self.override_kv])
         if self.no_cache_idle_slots:

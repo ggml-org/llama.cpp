@@ -619,6 +619,9 @@ struct server_task_result_metrics : server_task_result {
 
     server_metrics metrics;
 
+    // all zeros when the disk prompt cache is disabled
+    server_prompt_cache_disk_stats cache_disk;
+
     virtual json to_json() override;
 
     struct metric_item {
