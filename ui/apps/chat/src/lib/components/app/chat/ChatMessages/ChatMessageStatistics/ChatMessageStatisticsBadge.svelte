@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { BadgeInfo } from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { copyToClipboard } from '#lib/utils/index.ts';
 	import type { Component } from 'svelte';
 
@@ -25,7 +25,7 @@
 			{#snippet child({ props })}
 				<BadgeInfo {...props} class={className} onclick={handleClick}>
 					{#snippet icon()}
-						<IconComponent class="h-3 w-3" />
+						<IconComponent class="size-icon-xs" />
 					{/snippet}
 
 					{value}
@@ -40,7 +40,7 @@
 {:else}
 	<BadgeInfo class={className} onclick={handleClick}>
 		{#snippet icon()}
-			<IconComponent class="h-3 w-3" />
+			<IconComponent class="size-icon-xs" />
 		{/snippet}
 
 		{value}

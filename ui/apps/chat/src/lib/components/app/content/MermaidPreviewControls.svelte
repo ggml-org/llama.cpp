@@ -35,7 +35,7 @@
 	<div class="mermaid-preview-controls-inner flex items-center gap-1 rounded-lg bg-muted p-1">
 		<button
 			aria-label="Zoom out"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={onZoomOut}
 			title="Zoom out"
 		>
@@ -49,7 +49,7 @@
 
 		<button
 			aria-label="Zoom in"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={onZoomIn}
 			title="Zoom in"
 		>
@@ -60,7 +60,7 @@
 
 		<button
 			aria-label="Reset view"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={onResetView}
 			title="Reset view"
 		>
@@ -71,7 +71,7 @@
 
 		<button
 			aria-label="Download SVG"
-			class="mermaid-preview-btn flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
+			class="mermaid-preview-btn flex size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-foreground transition-colors hover:bg-muted-foreground/15 active:bg-muted-foreground/25"
 			onclick={downloadSvg}
 			title="Download SVG"
 		>

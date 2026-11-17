@@ -1,11 +1,11 @@
+import type {
+	ModelDownloadProgress as LlamaUiModelDownloadProgress,
+	ModelModalities
+} from '@ggml-org/llama-ui/models';
 import type { ModelSidecar } from '#lib/constants/model-id.constants.ts';
 import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '#lib/types/api.js';
 
-export interface ModelModalities {
-	vision: boolean;
-	audio: boolean;
-	video: boolean;
-}
+export type { ModelModalities } from '@ggml-org/llama-ui/models';
 
 export interface ModelCapabilities {
 	reasoning: boolean;
@@ -44,9 +44,7 @@ export interface ModelDownloadFileProgress {
 }
 
 /** Progress of an in-flight download, summed across its files. */
-export interface ModelDownloadProgress {
-	downloadedBytes: number;
-	totalBytes: number;
+export interface ModelDownloadProgress extends LlamaUiModelDownloadProgress {
 	/** Per-file progress keyed by file URL. */
 	files: Record<string, ModelDownloadFileProgress>;
 }

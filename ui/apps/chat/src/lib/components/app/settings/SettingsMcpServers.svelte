@@ -1,12 +1,12 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Empty from '@ggml-org/llama-ui/ui/empty';
 	import { Plus } from '@lucide/svelte';
 	import {
 		DialogMcpResourcesBrowser,
 		DialogMcpServerAddNew
 	} from '#lib/components/app/dialogs/index.ts';
 	import { McpServerCard, McpServerCardSkeleton } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Empty from '#lib/components/ui/empty/index.ts';
 	import { HealthCheckStatus } from '#lib/enums/index.ts';
 	import { mcpStore, toolsStore } from '#lib/stores/index.ts';
 	import { goto } from '$app/navigation';

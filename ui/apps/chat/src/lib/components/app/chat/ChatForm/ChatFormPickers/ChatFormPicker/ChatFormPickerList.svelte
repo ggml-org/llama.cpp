@@ -1,6 +1,6 @@
 <script generics="T" lang="ts">
+	import { ScrollArea } from '@ggml-org/llama-ui/ui/scroll-area';
 	import { SearchInput } from '#lib/components/app/index.ts';
-	import ScrollArea from '#lib/components/ui/scroll-area/scroll-area.svelte';
 	import { CHAT_FORM_POPOVER_MAX_HEIGHT, UI_DATA_ATTRS } from '#lib/constants/index.ts';
 	import { useScrollActiveRow } from '#lib/hooks/use-scroll-active-row.svelte.ts';
 	import type { Snippet } from 'svelte';

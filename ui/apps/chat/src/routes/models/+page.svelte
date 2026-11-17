@@ -1,6 +1,6 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import ModelsManager from '#lib/components/app/models/ModelsManager/ModelsManager.svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { APP_NAME, DISCOVER_ICON } from '#lib/constants/index.ts';
 	import { modelsStore, uiStore } from '#lib/stores/index.ts';
 	import { onMount } from 'svelte';
@@ -42,7 +42,7 @@
 				size="sm"
 				variant="tertiary"
 			>
-				<DISCOVER_ICON class="h-3.5 w-3.5" />
+				<DISCOVER_ICON class="size-icon-md" />
 
 				Discover Models
 			</Button>

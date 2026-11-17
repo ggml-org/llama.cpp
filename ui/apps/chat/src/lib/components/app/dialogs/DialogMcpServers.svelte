@@ -1,7 +1,7 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { McpLogo } from '#lib/components/app/index.ts';
 	import { SettingsMcpServers } from '#lib/components/app/settings/index.ts';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 	import { deviceStore } from '#lib/stores/index.ts';
 
 	interface Props {
@@ -24,7 +24,7 @@
 	>
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
-				<McpLogo class="h-5 w-5" />
+				<McpLogo class="size-5" />
 
 				<span>MCP Servers</span>
 			</Dialog.Title>

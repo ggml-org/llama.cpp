@@ -37,26 +37,26 @@
 		{#if showAction && revealOnHover}
 			{#if isFailed}
 				<MODEL_LOAD_ICONS.failed
-					class="h-3.5 w-3.5 text-red-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
+					class="size-icon-sm text-status-danger group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
 			{:else}
 				<span
-					class="h-2 w-2 rounded-full group-hover:hidden [@media(pointer:coarse)]:hidden {isSleeping
-						? 'bg-orange-400'
+					class="size-2 rounded-full group-hover:hidden [@media(pointer:coarse)]:hidden {isSleeping
+						? 'status-lamp orb-warning'
 						: isLoaded
-							? 'bg-green-500'
+							? 'status-lamp orb-success'
 							: 'bg-muted-foreground/50'}"
 				></span>
 			{/if}
 		{:else}
 			{#if isFailed}
-				<MODEL_LOAD_ICONS.failed class="h-3.5 w-3.5 text-red-500" />
+				<MODEL_LOAD_ICONS.failed class="size-icon-sm text-status-danger" />
 			{:else}
 				<span
-					class="h-2 w-2 rounded-full {isSleeping
-						? 'bg-orange-400'
+					class="size-2 rounded-full {isSleeping
+						? 'status-lamp orb-warning'
 						: isLoaded
-							? 'bg-green-500'
+							? 'status-lamp orb-success'
 							: 'bg-muted-foreground/50'}"
 				></span>
 			{/if}
@@ -73,9 +73,9 @@
 		>
 			{#if isFailed}
 				<ActionIcon
-					class="h-5 w-5 text-red-500 hover:text-foreground"
+					class="size-icon-lg text-fg-danger hover:text-foreground"
 					icon={MODEL_LOAD_ICONS.retry}
-					iconSize="h-4 w-4"
+					iconSize="size-icon-md"
 					onclick={() => modelsStore.status.load(option.model)}
 					stopPropagationOnClick
 					tooltip="Retry loading model"
@@ -83,9 +83,9 @@
 				/>
 			{:else if isLoaded || isSleeping}
 				<ActionIcon
-					class="h-5 w-5 hover:text-foreground"
+					class="size-icon-lg hover:text-foreground"
 					icon={MODEL_LOAD_ICONS.unload}
-					iconSize="h-4 w-4"
+					iconSize="size-icon-md"
 					onclick={() => modelsStore.status.unload(option.model)}
 					stopPropagationOnClick
 					tooltip="Unload model"
@@ -93,9 +93,9 @@
 				/>
 			{:else}
 				<ActionIcon
-					class="h-5 w-5 hover:text-foreground"
+					class="size-icon-lg hover:text-foreground"
 					icon={MODEL_LOAD_ICONS.load}
-					iconSize="h-4 w-4"
+					iconSize="size-icon-md"
 					onclick={() => modelsStore.status.load(option.model)}
 					stopPropagationOnClick
 					tooltip="Load model"

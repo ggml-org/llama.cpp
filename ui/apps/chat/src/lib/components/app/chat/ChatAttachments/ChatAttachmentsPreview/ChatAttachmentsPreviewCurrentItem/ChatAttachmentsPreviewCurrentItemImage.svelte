@@ -11,7 +11,7 @@
 	<div class="flex flex-1 items-center justify-center">
 		<img
 			alt={currentItem?.name || 'preview'}
-			class="max-h-[80vh] max-w-[80vw] rounded-lg object-contain shadow-lg"
+			class="max-h-[80vh] max-w-[80vw] rounded-lg object-contain shadow-(--elevation-raised)"
 			src={displayPreview}
 		/>
 	</div>

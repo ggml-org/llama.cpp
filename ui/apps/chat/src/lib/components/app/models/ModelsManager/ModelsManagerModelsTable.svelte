@@ -9,6 +9,7 @@
 		type ModelQuantGroup,
 		type ModelsTableGroup
 	} from './utils';
+	import * as Empty from '@ggml-org/llama-ui/ui/empty';
 	import {
 		ArrowDown,
 		ArrowUp,
@@ -29,7 +30,6 @@
 		ModelAvatar,
 		ModelsSection
 	} from '#lib/components/app/index.ts';
-	import * as Empty from '#lib/components/ui/empty/index.ts';
 	import {
 		FAMILY_ROW_WINDOW,
 		type ModalityKey,
@@ -218,9 +218,9 @@
 
 		{#if sortKey === key}
 			{#if sortAsc}
-				<ArrowUp class="h-3 w-3" />
+				<ArrowUp class="size-icon-xs" />
 			{:else}
-				<ArrowDown class="h-3 w-3" />
+				<ArrowDown class="size-icon-xs" />
 			{/if}
 		{/if}
 	</button>
@@ -303,9 +303,9 @@
 				: ''}"
 		>
 			{#if expanded}
-				<ChevronUp class="h-3.5 w-3.5 text-muted-foreground" />
+				<ChevronUp class="size-icon-sm text-muted-foreground" />
 			{:else}
-				<ChevronDown class="h-3.5 w-3.5 text-muted-foreground" />
+				<ChevronDown class="size-icon-sm text-muted-foreground" />
 			{/if}
 		</span>
 	</div>
@@ -370,13 +370,13 @@
 			{#if group.items.length > 0}
 				{#snippet groupIcon()}
 					{#if group.kind === ModelsTableGroupKind.DOWNLOADING}
-						<Download class="h-3.5 w-3.5 shrink-0" />
+						<Download class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.FAVORITES}
-						<Heart class="h-3.5 w-3.5 shrink-0" />
+						<Heart class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOADED}
-						<Power class="h-3.5 w-3.5 shrink-0" />
+						<Power class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.HIDDEN}
-						<EyeOff class="h-3.5 w-3.5 shrink-0" />
+						<EyeOff class="size-icon-sm shrink-0" />
 					{:else if group.kind === ModelsTableGroupKind.LOCAL}
 						<Logo class="shrink-0" style="--size: 0.875rem" />
 					{/if}

@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
 	import { Pencil } from '@lucide/svelte';
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import { Input } from '#lib/components/ui/input/index.ts';
 
 	interface Props {
 		open: boolean;
@@ -54,7 +54,7 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
-				<Pencil class="h-5 w-5" />
+				<Pencil class="size-icon-lg" />
 				Rename conversation
 			</AlertDialog.Title>
 

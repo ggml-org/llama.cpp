@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
-	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
 
 	interface Props {
 		instructions?: string;
@@ -18,9 +18,9 @@
 			class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 		>
 			{#if isExpanded}
-				<ChevronDown class="h-3.5 w-3.5" />
+				<ChevronDown class="size-icon-sm" />
 			{:else}
-				<ChevronRight class="h-3.5 w-3.5" />
+				<ChevronRight class="size-icon-sm" />
 			{/if}
 
 			<span>Server instructions</span>

@@ -8,6 +8,8 @@ import {
 	SHORT_DURATION_THRESHOLD
 } from '#lib/constants/index.ts';
 
+export { formatParameters } from '@ggml-org/llama-ui/models';
+
 /**
  * Formats file size in bytes to human readable format
  * Supports Bytes, KB, MB, and GB
@@ -25,35 +27,6 @@ export function formatFileSize(bytes: number | unknown): string {
 	const i = Math.floor(Math.log(bytes) / Math.log(k));
 
 	return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
-
-/**
- * Format parameter count to human-readable format (B, M, K)
- *
- * Billions keep one decimal for hub counts (`15.2B`) and none for whole
- * values (id-parsed counts are integers anyway, e.g. `8B`).
- *
- * @param params - Parameter count
- * @returns Human-readable parameter count
- */
-export function formatParameters(params: number | unknown): string {
-	if (typeof params !== 'number') return 'Unknown';
-
-	if (params >= 1e9) {
-		const billions = params / 1e9;
-
-		return `${Number.isInteger(billions) ? billions : billions.toFixed(1)}B`;
-	}
-
-	if (params >= 1e6) {
-		return `${(params / 1e6).toFixed(2)}M`;
-	}
-
-	if (params >= 1e3) {
-		return `${(params / 1e3).toFixed(2)}K`;
-	}
-
-	return params.toString();
 }
 
 /** Separator between the context values shown for one model, e.g. `8192 / 4096`. */

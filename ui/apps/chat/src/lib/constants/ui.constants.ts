@@ -98,9 +98,6 @@ export const DEFAULT_MOBILE_BREAKPOINT = 768;
 /** Models listed per remote provider before the "+ X more" line; search covers the rest. */
 export const REMOTE_PROVIDER_MODEL_LIMIT = 12;
 
-/** Orgs whose avatar is dark and needs inverting in dark mode. */
-export const DARK_INVERT_AVATAR_ORGS = ['openai'];
-
 /** Model rows mounted before the list scrolls; a local catalog can hold hundreds. */
 export const MODEL_ROW_WINDOW = 50;
 

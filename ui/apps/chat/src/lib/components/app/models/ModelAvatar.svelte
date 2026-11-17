@@ -31,7 +31,7 @@
 		fallback,
 		option,
 		quantPositionClass = '-bottom-1 -right-1',
-		quantSize = 'h-3 w-3',
+		quantSize = 'size-3',
 		showBaseModelAvatar,
 		showQuantBadge = true,
 		showRepoOrgAvatar,

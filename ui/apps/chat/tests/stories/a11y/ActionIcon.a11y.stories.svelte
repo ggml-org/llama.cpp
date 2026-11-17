@@ -1,7 +1,7 @@
 <script lang="ts" module>
+	import { ActionIcon } from '@ggml-org/llama-ui/app/actions';
 	import { Copy } from '@lucide/svelte';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ActionIcon from '#lib/components/app/actions/ActionIcon.svelte';
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({

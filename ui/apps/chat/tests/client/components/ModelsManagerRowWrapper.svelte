@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import ModelsManagerModelRow from '#lib/components/app/models/ModelsManager/ModelsManagerModelRow.svelte';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import type { ModelOption } from '#lib/types/models.js';
 
 	interface Props {

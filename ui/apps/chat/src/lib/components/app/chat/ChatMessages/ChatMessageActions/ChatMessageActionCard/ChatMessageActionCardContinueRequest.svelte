@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ChatMessageActionCard from './ChatMessageActionCard.svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { RotateCw } from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
 
 	interface Props {
 		onDecision: (shouldContinue: boolean) => void;

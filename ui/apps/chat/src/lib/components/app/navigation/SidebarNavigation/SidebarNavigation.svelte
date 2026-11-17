@@ -568,7 +568,7 @@
 			'h-dvh md:h-[calc(100dvh-1.125rem)]',
 			// phone: it stays put under the page, which slides aside to uncover it
 			isOnMobile && 'bg-(--sidebar-reveal-bg)',
-			'md:rounded-2xl',
+			'md:rounded-(--sidebar-radius)',
 			'flex flex-col justify-between',
 			// desktop only: on a phone the background follows the reveal frame by frame
 			'md:transition-[width,padding,margin,background-color,box-shadow,backdrop-filter] md:duration-200 md:ease-out',
@@ -576,7 +576,7 @@
 			isSettling && 'md:duration-300 md:ease-[cubic-bezier(0.34,1.56,0.64,1)]',
 			isDocked && !uiStore.isSidebarExpanded ? 'md:w-12' : 'md:w-(--sidebar-width)',
 			(uiStore.isSidebarExpanded || (isFloating && isPeeking)) &&
-				'md:bg-muted/60 md:backdrop-blur-xl max-md:shadow-md',
+				'md:sidebar-surface max-md:shadow-(--elevation-surface)',
 			isFloating && 'md:-mr-[calc(var(--sidebar-width)-3rem)]',
 			isStripHidden && 'md:pointer-events-none',
 			// on a phone the expanded chat form fills the screen, so the logo button over
@@ -621,7 +621,7 @@
 								: 'Go to start'}
 						class="pointer-events-auto size-10 rounded-full! md:size-9 {isStripHidden
 							? 'bg-transparent! hover:bg-transparent!'
-							: 'bg-muted/60 border border-border/20 backdrop-blur-sm bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
+							: 'matte-key bg-surface-raised! hover:bg-surface-raised! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!'}"
 						href={uiStore.isSidebarExpanded && !isLogoToggle ? ROUTES.START : undefined}
 						icon={isLogoToggle && logoHovered
 							? uiStore.isSidebarExpanded
@@ -645,7 +645,7 @@
 				{#if isOnMobile}
 					<ActionIcon
 						ariaLabel="Search"
-						class="bg-muted/60 border border-border/20 backdrop-blur-sm size-10 rounded-full! bg-background! hover:bg-background! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
+						class="matte-key size-10 rounded-full! bg-surface-raised! hover:bg-surface-raised! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
 						icon={Search}
 						iconSize="size-4.5"
 						onclick={() => handleSidebarAction(SidebarAction.SEARCH)}

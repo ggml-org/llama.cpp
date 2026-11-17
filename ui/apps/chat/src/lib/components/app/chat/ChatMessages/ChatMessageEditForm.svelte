@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { Switch } from '@ggml-org/llama-ui/ui/switch';
 	import { AlertTriangle, X } from '@lucide/svelte';
 	import { ChatForm, DialogConfirmation } from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import { Switch } from '#lib/components/ui/switch/index.ts';
 	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { KeyboardKey, MessageRole } from '#lib/enums/index.ts';
 	import { chatStore } from '#lib/stores/index.ts';
@@ -138,7 +138,7 @@
 	{/if}
 
 	<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
-		<X class="mr-1 h-3 w-3" />
+		<X class="mr-1 size-icon-md" />
 
 		Cancel
 	</Button>

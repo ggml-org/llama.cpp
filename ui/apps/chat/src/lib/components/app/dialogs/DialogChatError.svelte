@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 	import { AlertTriangle, TimerOff } from '@lucide/svelte';
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
 	import { ErrorDialogType } from '#lib/enums/index.ts';
 
 	interface Props {
@@ -38,9 +38,9 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				{#if isTimeout}
-					<TimerOff class={`h-5 w-5 ${iconClass}`} />
+					<TimerOff class={`size-icon-lg ${iconClass}`} />
 				{:else}
-					<AlertTriangle class={`h-5 w-5 ${iconClass}`} />
+					<AlertTriangle class={`size-icon-lg ${iconClass}`} />
 				{/if}
 
 				{title}

@@ -14,6 +14,7 @@ on:
       '.github/workflows/ui.yml',
       '.github/workflows/ui-build.yml',
       'ui/apps/chat/**.*',
+      'ui/lib/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
@@ -22,6 +23,7 @@ on:
       '.github/workflows/ui.yml',
       '.github/workflows/ui-build.yml',
       'ui/apps/chat/**.*',
+      'ui/lib/**.*',
       'tools/server/tests/**.*'
     ]
 
@@ -106,6 +108,33 @@ jobs:
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
         working-directory: ui/apps/chat
+
+  lib-checks:
+    name: Library checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/lib/ui
+
+      - name: Run type checking
+        run: npm run check
+        working-directory: ui/lib/ui
+
+      - name: Build the package
+        run: npm run prepack
+        working-directory: ui/lib/ui
 
   e2e-tests:
     name: E2E Tests

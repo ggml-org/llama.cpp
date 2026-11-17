@@ -7,7 +7,7 @@
  */
 
 /** Styled icon button for action triggers with tooltip. */
-export { default as ActionIcon } from './ActionIcon.svelte';
+export { ActionIcon } from '@ggml-org/llama-ui/app/actions';
 
 /** Copy-to-clipboard icon button with clipboard logic. */
 export { default as ActionIconCopyToClipboard } from './ActionIconCopyToClipboard.svelte';

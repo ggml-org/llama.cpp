@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		ModelId,
@@ -9,7 +10,6 @@
 		ModelsSelectorOption,
 		ModelsSelectorTriggerIcon
 	} from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import {
 		DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR,
 		MODEL_ICON,
@@ -217,7 +217,7 @@
 
 {#snippet selectorTriggerInner()}
 	<ModelsSelectorTriggerIcon
-		class="mr-0.375 size-3.5 max-md:size-4 shrink-0"
+		class="mr-0.375 size-icon-sm max-md:size-icon-md shrink-0"
 		option={selectedOption}
 	/>
 
@@ -275,7 +275,7 @@
 			<button
 				aria-disabled="true"
 				aria-selected="true"
-				class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+				class="flex w-full cursor-not-allowed items-center bg-surface-danger p-2 text-left text-sm text-fg-danger"
 				disabled
 				role="option"
 				type="button"
@@ -311,7 +311,7 @@
 
 {#if ms.loading && ms.options.length === 0 && ms.isMultiModel}
 	<div class="flex items-center gap-2 text-xs text-muted-foreground">
-		<Loader2 class="h-3.5 w-3.5 animate-spin" />
+		<Loader2 class="size-icon-sm animate-spin" />
 
 		Loading models...
 	</div>
@@ -321,7 +321,7 @@
 			class="inline-flex items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs text-muted-foreground"
 			style="max-width: min(calc(100cqw - 10rem), 48rem)"
 		>
-			<MODEL_ICON class="h-3.5 w-3.5 shrink-0" />
+			<MODEL_ICON class="size-icon-sm shrink-0" />
 		</span>
 	{:else}
 		<span class="text-xs text-muted-foreground">No models yet.</span>
@@ -329,7 +329,7 @@
 {:else if ms.isMultiModel}
 	{#if isMobile}
 		<button
-			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+			class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 			disabled={disabled || ms.updating}
 			onclick={() => ms.handleOpenChange(true)}
 			style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -366,7 +366,7 @@
 	<!-- a phone has no manager: the single model still gets the drawer, so its
 	     load control, actions and information stay reachable -->
 	<button
-		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
+		class="relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 max-md:gap-1.5 max-md:h-7 max-md:px-2.25 max-md:py-1 max-md:text-[13px] focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground"
 		disabled={disabled || ms.updating}
 		onclick={() => ms.handleOpenChange(true)}
 		style="max-width: min(calc(100vw-4rem), 32rem)"
@@ -396,9 +396,9 @@
 				<button
 					{...props}
 					class={[
-						`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+						`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-(--chat-form-key-shadow) transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 						!ms.isCurrentModelInCache
-							? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
+							? 'bg-surface-danger text-fg-danger! hover:bg-surface-danger/80 hover:text-fg-danger'
 							: forceForegroundText
 								? 'text-foreground'
 								: 'text-foreground',
@@ -408,7 +408,10 @@
 					onclick={() => ms.handleOpenChange(true)}
 					style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 				>
-					<ModelsSelectorTriggerIcon class="mr-0.375 size-3.5 shrink-0" option={selectedOption} />
+					<ModelsSelectorTriggerIcon
+						class="mr-0.375 size-icon-sm shrink-0"
+						option={selectedOption}
+					/>
 
 					{#if selectedOption}
 						<ModelId

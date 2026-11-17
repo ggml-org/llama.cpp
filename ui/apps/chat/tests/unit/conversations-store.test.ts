@@ -67,6 +67,31 @@ describe('active conversation identity', () => {
 		expect(conversationsStore.activeConversation?.currNode).toBe('node-2');
 	});
 
+	it('does not fail when the conversation closes during the updateCurrentNode write', async () => {
+		await loadActive(makeConversation(), []);
+		updateCurrentNodeMock.mockImplementation(async () => {
+			conversationsStore.clearActiveConversation();
+		});
+
+		await expect(conversationsStore.updateCurrentNode('node-2')).resolves.toBeUndefined();
+
+		expect(updateCurrentNodeMock).toHaveBeenCalledWith('conv-1', 'node-2');
+		expect(conversationsStore.activeConversation).toBeNull();
+	});
+
+	it('leaves another conversation alone when it opens during the updateCurrentNode write', async () => {
+		await loadActive(makeConversation(), []);
+		updateCurrentNodeMock.mockImplementation(async () => {
+			await loadActive(makeConversation({ currNode: 'other-node', id: 'conv-2' }), []);
+		});
+
+		await conversationsStore.updateCurrentNode('node-2');
+
+		expect(updateCurrentNodeMock).toHaveBeenCalledWith('conv-1', 'node-2');
+		expect(conversationsStore.activeConversation?.id).toBe('conv-2');
+		expect(conversationsStore.activeConversation?.currNode).toBe('other-node');
+	});
+
 	it('writes renamed and pinned fields in place on applyConversationUpdate', async () => {
 		await loadActive(makeConversation(), []);
 		const before = conversationsStore.activeConversation;

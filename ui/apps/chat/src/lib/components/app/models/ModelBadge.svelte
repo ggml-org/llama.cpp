@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelId from './ModelId.svelte';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { ActionIconCopyToClipboard, BadgeInfo } from '#lib/components/app/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { MODEL_ICON } from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
 
@@ -29,7 +29,7 @@
 {#snippet badgeContent(triggerProps?: Record<string, unknown>)}
 	<BadgeInfo {...triggerProps ?? {}} class={className} {onclick}>
 		{#snippet icon()}
-			<MODEL_ICON class="h-3 w-3" />
+			<MODEL_ICON class="size-icon-xs" />
 		{/snippet}
 
 		{#if model}

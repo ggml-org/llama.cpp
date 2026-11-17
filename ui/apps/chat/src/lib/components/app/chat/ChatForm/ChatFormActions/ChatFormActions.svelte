@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { SkipForward, Square } from '@lucide/svelte';
 	import {
 		ChatFormActionReasoning,
@@ -8,7 +9,6 @@
 		ChatFormContextGauge,
 		ModelsSelector
 	} from '#lib/components/app/index.ts';
-	import { Button } from '#lib/components/ui/button/index.ts';
 	import { ICON_CLASS_DEFAULT, SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
 	import { setChatFormActionsContext } from '#lib/contexts/index.ts';
 	import { FileTypeCategory } from '#lib/enums/index.ts';
@@ -162,7 +162,7 @@
 
 	{#if isReasoning && !canSend}
 		<Button
-			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9"
+			class="group size-8 rounded-full p-0 max-md:size-9"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
 			title="Skip reasoning"
@@ -179,7 +179,7 @@
 
 	{#if isLoading && !canSend}
 		<Button
-			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9 hover:bg-destructive/10!"
+			class="group size-8 rounded-full p-0 max-md:size-9 hover:bg-destructive/10!"
 			onclick={onStop}
 			type="button"
 			variant="secondary"
@@ -187,7 +187,7 @@
 			<span class="sr-only">Stop</span>
 
 			<Square
-				class="h-8 w-8 fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
+				class="size-icon-md fill-muted-foreground stroke-muted-foreground group-hover:fill-destructive group-hover:stroke-destructive hover:fill-destructive hover:stroke-destructive"
 			/>
 		</Button>
 	{:else if shouldShowRecordButton}

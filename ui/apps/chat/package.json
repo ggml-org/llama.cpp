@@ -79,7 +79,7 @@
 		"globals": "16.5.0",
 		"highlight.js": "11.11.1",
 		"http-server": "14.1.1",
-		"llama-brand": "https://codeload.github.com/ggml-org/llama-brand/tar.gz/f05540643c1ca2a18d732ed6491c839686da9a3a",
+		"@ggml-org/llama-brand": "https://codeload.github.com/ggml-org/llama-brand/tar.gz/f05540643c1ca2a18d732ed6491c839686da9a3a",
 		"mdsvex": "0.12.7",
 		"mermaid": "11.17.2",
 		"mode-watcher": "1.1.0",

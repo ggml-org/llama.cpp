@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ModelCapabilityIcons from './ModelCapabilityIcons.svelte';
+	import { ModelCapabilityIcons } from '@ggml-org/llama-ui/models';
 	import { MODEL_ID } from '#lib/constants/index.ts';
 	import { ModelCapability } from '#lib/enums/index.ts';
 	import { HuggingFaceService } from '#lib/services/index.ts';

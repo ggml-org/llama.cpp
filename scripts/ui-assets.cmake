@@ -19,7 +19,11 @@ set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save ban
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
-set(WORK_DIR     "${UI_BINARY_DIR}/ui-src")
+# The stage keeps the layout of ui/: the app in apps/chat, with the sources of
+# Llama UI that it compiles next to it in lib/ui (see ui/apps/chat/scripts/llama-ui.js).
+set(STAGE_DIR    "${UI_BINARY_DIR}/ui-src")
+set(WORK_DIR     "${STAGE_DIR}/apps/chat")
+set(UI_LIB_DIR   "${UI_SOURCE_DIR}/../../lib/ui")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
 set(EMBED_STAMP  "${UI_BINARY_DIR}/.ui-embed.sha256")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
@@ -316,6 +320,16 @@ function(npm_build_should_skip out_var)
 endfunction()
 
 function(stage_sources)
+    # everything but the app goes: the library, restaged below, and what a stage
+    # from before this layout left at the top, its node_modules included
+    if(EXISTS "${STAGE_DIR}")
+        file(GLOB staged RELATIVE "${STAGE_DIR}" "${STAGE_DIR}/*")
+        list(REMOVE_ITEM staged "apps")
+        foreach(entry ${staged})
+            file(REMOVE_RECURSE "${STAGE_DIR}/${entry}")
+        endforeach()
+    endif()
+
     if(EXISTS "${WORK_DIR}")
         file(GLOB staged RELATIVE "${WORK_DIR}" "${WORK_DIR}/*")
         list(REMOVE_ITEM staged "node_modules")
@@ -328,6 +342,16 @@ function(stage_sources)
         DESTINATION "${WORK_DIR}"
         NO_SOURCE_PERMISSIONS
         PATTERN "node_modules" EXCLUDE
+    )
+
+    # what the app reads of the library: its sources and the dependency list
+    file(COPY "${UI_LIB_DIR}/package.json"
+        DESTINATION "${STAGE_DIR}/lib/ui"
+        NO_SOURCE_PERMISSIONS
+    )
+    file(COPY "${UI_LIB_DIR}/src/lib"
+        DESTINATION "${STAGE_DIR}/lib/ui/src"
+        NO_SOURCE_PERMISSIONS
     )
 endfunction()
 

@@ -1,9 +1,9 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Check, ChevronDown, ChevronRight, Info, Loader2, PencilRuler } from '@lucide/svelte';
-	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
-	import * as Collapsible from '#lib/components/ui/collapsible/index.ts';
-	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { ATTACHMENT_MENU_TEXT, CLI_FLAGS, ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { useToolsPanel } from '#lib/hooks/use-tools-panel.svelte.ts';
 	import { mcpStore, toolsStore } from '#lib/stores/index.ts';
@@ -90,9 +90,9 @@
 				class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 			>
 				{#if isExpanded}
-					<ChevronDown class="h-3.5 w-3.5 shrink-0" />
+					<ChevronDown class="size-icon-sm shrink-0" />
 				{:else}
-					<ChevronRight class="h-3.5 w-3.5 shrink-0" />
+					<ChevronRight class="size-icon-sm shrink-0" />
 				{/if}
 
 				<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
