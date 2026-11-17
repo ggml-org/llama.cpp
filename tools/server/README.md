@@ -249,7 +249,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
-| `--sleep-mode MODE` | sleep behavior:<br/>- 'free' frees context and model memory<br/>- 'rst' restarts the whole process, may help reset memory to zero on certain backend (only support posix env)<br/>(default: free) |
+| `--sleep-mode MODE` | sleep behavior:<br/>- 'memory' frees context memory (KV cache), keeps the model loaded for a faster wake up<br/>- 'free' frees context and model memory<br/>- 'rst' restarts the whole process, may help reset memory to zero on certain backend (only support posix env)<br/>(default: free) |
 | `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
 | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
 | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
@@ -2606,6 +2606,8 @@ Note that the following endpoints are exempt from being considered as incoming t
 - `GET /metrics`
 
 Some backends keep memory allocated even after the model is unloaded, for example a CUDA context stays on the GPU. To also release that memory, use `--sleep-mode rst`, which restarts the server process upon sleeping. The process keeps the same PID and port, and the responses of the endpoints listed above are preserved across the restart. This mode is not supported on Windows.
+
+To keep the model loaded and only free the context memory (KV cache and compute buffers), use `--sleep-mode memory`. Waking up then only re-allocates the context memory, which is much faster than reloading the model from disk. Before freeing, the content of the slots is saved to the prompt cache (if enabled with `--cache-ram`), so it can be reused after waking up. As the model stays loaded, a server in this mode does not report the `sleeping` status to the router.
 
 ## More examples
 
