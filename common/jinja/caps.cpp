@@ -627,9 +627,14 @@ caps caps_get(jinja::program & prog) {
         // levels sharing a render are aliases and the highest one is kept
         const auto unknown = render("REASONING_EFFORT_UNKNOWN");
         std::vector<std::string> renders;
+        std::vector<std::string> rejected;
         for (const auto & level : candidates) {
             const auto rendered = render(level);
-            if (!rendered || rendered == unknown) {
+            if (!rendered) {
+                rejected.push_back(level);
+                continue;
+            }
+            if (rendered == unknown) {
                 continue;
             }
             const auto it = std::find(renders.begin(), renders.end(), *rendered);
@@ -639,6 +644,11 @@ caps caps_get(jinja::program & prog) {
                 renders.push_back(*rendered);
                 result.reasoning_effort_levels.push_back(level);
             }
+        }
+
+        // a template that renders no level fails the probe for another reason, so its failures say nothing about the levels
+        if (!result.reasoning_effort_levels.empty()) {
+            result.reasoning_effort_rejected = rejected;
         }
     }
 

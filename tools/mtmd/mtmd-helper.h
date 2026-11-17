@@ -23,11 +23,40 @@ extern "C" {
 struct mtmd_helper_video;
 typedef struct mtmd_helper_video mtmd_helper_video;
 
+struct mtmd_helper_video_stream_info {
+    uint32_t width;    // as displayed (rotation and pixel aspect ratio applied)
+    uint32_t height;
+    float    fps;
+    int32_t  n_frames; // -1 if unknown
+    float    duration; // in seconds, -1 if unknown
+};
+
+// Video decoder: the built-in one runs ffmpeg/ffprobe (MTMD_VIDEO), an application can provide its own.
+// Call order: open, start, read_audio, read_frame..., close
+struct mtmd_helper_video_decoder {
+    // path and/or buf is set; buf is only valid during the call
+    // returns the decoder state, NULL on failure
+    void * (*open)(void * user_data, const char * path, const unsigned char * buf, size_t len,
+                   struct mtmd_helper_video_stream_info * info);
+    // optional: called once with the size read_frame() will ask for
+    // if fps > 0, a decoder that resamples to fps itself sets *fps_picked; otherwise the helper picks frames by index
+    bool (*start)(void * state, uint32_t width, uint32_t height, float fps, bool * fps_picked);
+    // next frame in presentation order, as RGB24 scaled to width x height (same on every call)
+    // rgb == NULL skips the frame; returns false at the end of the stream or on error
+    bool (*read_frame)(void * state, unsigned char * rgb, uint32_t width, uint32_t height);
+    // optional: the soundtrack as mono F32 PCM at sample_rate, starting at the first video frame
+    // the samples are valid until the next call to the decoder; NULL if there is no soundtrack
+    const float * (*read_audio)(void * state, int sample_rate, size_t * n_samples);
+    void (*close)(void * state);
+    void * user_data;
+};
+
 struct mtmd_helper_video_init_params {
     float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
     const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
     int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
     bool no_soundtrack;          // frames only, also for models that hear the soundtrack of a video (LFM3-Omni)
+    const struct mtmd_helper_video_decoder * decoder; // NULL means ffmpeg (requires MTMD_VIDEO)
     // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
 };
 
@@ -64,7 +93,7 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
 //     image: formats supported by stb_image: jpg, png, bmp, gif, etc.
-//            webp is decoded via ffmpeg, requires MTMD_VIDEO build with ffmpeg in PATH
+//            webp is decoded via ffmpeg (MTMD_VIDEO build with ffmpeg in PATH), or via opt.video_params.decoder if ffmpeg is not built in
 //     audio: formats supported by miniaudio: wav, mp3, flac
 // note:
 //   - for now, video input is only supported via C++ helper functions
@@ -77,6 +106,32 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
                     const unsigned char * buf, size_t len,
                     bool placeholder,
                     struct mtmd_helper_init_opt opt);
+
+enum mtmd_helper_media_type {
+    MTMD_HELPER_MEDIA_TYPE_UNKNOWN,
+    MTMD_HELPER_MEDIA_TYPE_IMAGE,
+    MTMD_HELPER_MEDIA_TYPE_AUDIO,
+    MTMD_HELPER_MEDIA_TYPE_VIDEO,
+};
+
+struct mtmd_helper_media_meta {
+    enum mtmd_helper_media_type type;
+    uint32_t width;       // image, video (frame size)
+    uint32_t height;
+    int32_t  sample_rate; // audio, at the source rate
+    float    duration;    // audio, video: in seconds, -1 if unknown
+    int32_t  n_frames;    // video: -1 if unknown
+};
+typedef struct mtmd_helper_media_meta mtmd_helper_media_meta;
+
+// metadata of a media file in a buffer, the same formats as mtmd_helper_bitmap_init_from_buf()
+// only the headers are read (ffprobe or opt.video_params.decoder for video), nothing is decoded
+// returns 0 on success, 1 if the format is not recognized
+// this function is thread-safe
+MTMD_API int32_t mtmd_helper_get_media_meta(
+                    const unsigned char * buf, size_t len,
+                    struct mtmd_helper_init_opt opt,
+                    struct mtmd_helper_media_meta * out);
 
 // streaming resampler for raw mono F32 PCM (e.g. realtime input), to match mtmd_get_audio_sample_rate()
 // it keeps state between calls, use one per stream
@@ -155,7 +210,7 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 void * user_data);
 
 //
-// video input helpers (requires ffmpeg/ffprobe installed on the system)
+// video input helpers (requires ffmpeg/ffprobe installed on the system, or a mtmd_helper_video_decoder)
 // the notion of video only exists at the helper level, it is not visible to the core mtmd library
 //
 // NOTE: this implementation is model-agnostic, it can be used with any vision-capable model
@@ -172,16 +227,14 @@ struct mtmd_helper_video_info {
 
 // note: mtmd_helper_video_init_params is defined at the top, as it is part of mtmd_helper_init_opt
 
-// returns NULL on failure (ffprobe not found, file unreadable, etc.)
+// returns NULL on failure (no decoder, ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(
                     const struct mtmd_context * mctx,
                     const char * path,
                     struct mtmd_helper_video_init_params params);
 
 // Same as mtmd_helper_video_init(), but reads from an in-memory buffer.
-// The buffer is copied internally; the caller does not need to keep it alive.
-// Note: pipe input is not seekable, so seeking will use output-side seeking
-// (ffmpeg decodes and discards frames up to the target position).
+// The caller does not need to keep the buffer alive.
 MTMD_API mtmd_helper_video * mtmd_helper_video_init_from_buf(
                     const struct mtmd_context * mctx,
                     const unsigned char * buf, size_t len,
@@ -203,7 +256,7 @@ struct mtmd_helper_cap {
     // input capabilities
     bool vision;
     bool audio;
-    bool video; // also depending on MTMD_VIDEO build option
+    bool video; // built-in decoder only (MTMD_VIDEO), a custom decoder is not counted
 
     // realtime capabilities
     bool audio_stream; // realtime transcription, see mtmd_audio_stream_init()
@@ -234,8 +287,8 @@ struct mtmd_helper_gen_audio;
 typedef struct mtmd_helper_gen_audio mtmd_helper_gen_audio;
 
 enum mtmd_helper_gen_audio_outtype {
-    MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM, // raw PCM
-    MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
+    MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM, // raw F32 PCM, channels interleaved
+    MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE
 };
 // what a response that continues a sequence (n_past > 0) outputs
 enum mtmd_helper_gen_audio_out_mode {
@@ -257,6 +310,7 @@ struct mtmd_helper_gen_audio_inp {
     enum mtmd_helper_gen_audio_out_mode out_mode; // n_past > 0 only (default: auto)
 
     mtmd_bitmap * speaker_ref; // optional, can be NULL: audio to clone, or a voice bitmap
+    const char * speaker_ref_text; // optional, can be NULL: transcript of speaker_ref, for models that put it in the prompt (e.g. Fish S2)
     const char * lang; // optional, can be NULL
 
     int32_t  top_k;
@@ -264,11 +318,24 @@ struct mtmd_helper_gen_audio_inp {
     float    temp; // audio frame temperature if the model supports it, < 0 = model default, 0 = greedy
     uint32_t seed; // UINT32_MAX for random (default: random)
 
+    // delivery (only for models that support it); other models reject non-default values
+    float speed;    // speaking speed relative to a typical pace, > 0 (default: 1.0 = the model's own pace)
+    float loudness; // target loudness in LUFS, < 0 (default: 0.0 = the model's own loudness)
+
+    // classifier-free guidance scale of the audio codes, > 0, 1.0 = no guidance (only for models that support it)
+    // default: 0.0 = the model's own; other models reject non-default values
+    float cfg_scale;
+
+    // steps of the flow-matching ODE solver, fewer is faster with less accurate audio (only for models that support it)
+    // default: 0 = the model's own; other models reject non-default values
+    int32_t flow_steps;
+
     enum mtmd_helper_gen_audio_outtype out_type;
 };
 
 MTMD_API struct mtmd_helper_gen_audio_inp mtmd_helper_gen_audio_inp_default(void);
 
+// returns nullptr if the context cannot run the pipeline of the model (e.g. a context too small)
 MTMD_API mtmd_helper_gen_audio * mtmd_helper_gen_audio_init(
                                     struct llama_context * lctx,
                                     struct mtmd_context * mctx);
@@ -277,11 +344,15 @@ MTMD_API void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx);
 
 MTMD_API void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx);
 
+// frame limit for a caller that has none of its own (e.g. no -n); 0 = step_gen() stops by itself
+MTMD_API int32_t mtmd_helper_gen_audio_max_frames(const mtmd_helper_gen_audio * ctx);
+
+// returns 0 on success, 2 if the input is invalid for the model (e.g. unsupported speed or loudness), 1 on other errors
 MTMD_API int32_t mtmd_helper_gen_audio_set_input(
                         mtmd_helper_gen_audio * ctx,
                         const struct mtmd_helper_gen_audio_inp * inp);
 
-// processes at most n_batch prompt tokens per call
+// processes at most n_batch prompt tokens per call, n_batch must not exceed llama_n_batch() of the context
 // returns: >0 = number of prompt tokens remaining, 0 = done, <0 = error
 MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
                         mtmd_helper_gen_audio * ctx,
@@ -311,7 +382,7 @@ MTMD_API int32_t mtmd_helper_audio_stream_get_logit_bias(const mtmd_context * mc
                                                          llama_logit_bias * out, int32_t n_max);
 
 // out_data valid until next get_output() or reset() call
-// out_n_samples (optional, can be NULL) receives the number of generated PCM samples
+// out_n_samples (optional, can be NULL) receives the number of generated PCM samples per channel (see mtmd_gen_audio_info::n_channels)
 // if inp->stream is true: returns only audio produced since the previous call, and
 // *out_data_len == 0 whenever a full window_frames batch hasn't accumulated yet
 MTMD_API int32_t mtmd_helper_gen_audio_get_output(
@@ -365,6 +436,7 @@ struct gen_audio {
         mtmd_helper_gen_audio_inp data = mtmd_helper_gen_audio_inp_default();
         std::string prompt_str;
         std::string lang_str;
+        std::string speaker_ref_text_str;
         mtmd::bitmap_ptr speaker_ref_ptr;
 
         inp()                             = default;
@@ -376,6 +448,7 @@ struct gen_audio {
         void set_prompt     (std::string p)        { prompt_str = std::move(p); }
         void set_lang       (std::string l)        { lang_str   = std::move(l); }
         void set_speaker_ref(mtmd::bitmap_ptr bmp) { speaker_ref_ptr = std::move(bmp); }
+        void set_speaker_ref_text(std::string t)   { speaker_ref_text_str = std::move(t); }
 
         // pointers are only valid as long as *this is alive
         const mtmd_helper_gen_audio_inp * get() {
@@ -383,6 +456,7 @@ struct gen_audio {
             data.prompt_len  = prompt_str.size();
             data.lang        = lang_str.empty() ? nullptr : lang_str.c_str();
             data.speaker_ref = speaker_ref_ptr.get();
+            data.speaker_ref_text = speaker_ref_text_str.empty() ? nullptr : speaker_ref_text_str.c_str();
             return &data;
         }
     };
@@ -393,6 +467,11 @@ struct gen_audio {
     }
     bool valid() const {
         return ctx.get() != nullptr;
+    }
+    // caller's limit if > 0, else the limit of the model
+    int32_t max_frames(int32_t n_predict) const {
+        const int32_t n_model = mtmd_helper_gen_audio_max_frames(ctx.get());
+        return n_predict > 0 ? n_predict : n_model > 0 ? n_model : INT32_MAX;
     }
     void reset() {
         mtmd_helper_gen_audio_reset(ctx.get());
@@ -435,14 +514,6 @@ inline std::vector<llama_logit_bias> audio_stream_logit_bias(const mtmd_context 
 // internals of mtmd_helper_video, do not use in applications
 //
 
-struct mtmd_helper_video_src {
-    uint32_t width    = 0;
-    uint32_t height   = 0;
-    float    fps      = 0.0f;
-    int32_t  n_frames = -1;
-    float    duration = -1.0f;
-};
-
 struct mtmd_helper_video_seq {
     float fps_target = 0.0f;
     mtmd_helper_video_info info = {};
@@ -482,8 +553,14 @@ struct mtmd_helper_video_seq {
     virtual ~mtmd_helper_video_seq();
 
     virtual bool read_raw_frame() = 0;
+    virtual bool skip_raw_frame() { return read_raw_frame(); }
 
-    void configure(const mtmd_video_config & cfg, const mtmd_helper_video_src & src, float fps_target_arg);
+    void configure(const mtmd_video_config & cfg, const mtmd_helper_video_stream_info & src, float fps_target_arg);
+
+    // pick the frames of fps_target by index, for a source that yields every frame
+    void sample_by_index(const mtmd_helper_video_stream_info & src);
+    // pcm: mono, starting at the first video frame
+    void set_soundtrack(const float * pcm, size_t n, int rate);
 
     int32_t ts_per_n_frames() const;
 
