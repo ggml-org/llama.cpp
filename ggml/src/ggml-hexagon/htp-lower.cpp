@@ -897,7 +897,7 @@ static bool htp_lower_safe_gdn_output(
 }
 
 void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml_cgraph * graph, std::vector<htp_opnode> & nodes) {
-    if (opt_opf16 <= 0 && opt_f16_test == 0) {
+    if (opt_opf16 <= 0) {
         for (htp_opnode & node : nodes) {
             htp_lower_opnode(sess, node);
         }
@@ -1004,7 +1004,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
 
     // Under OPF16=1, keep cross-layer residual spine merges in F32 when the residual input is F32.
     auto is_residual_spine_stop = [&](const htp_opnode & owner, const ggml_tensor * r) -> bool {
-        if (opt_opf16 != 1 || opt_f16_test != 0) {
+        if (opt_opf16 != 1) {
             return false;
         }
         if (owner.opcode == HTP_OP_ADD) {
@@ -1050,7 +1050,7 @@ void htp_lower_graph(const struct ggml_hexagon_session * sess, const struct ggml
     };
 
     auto is_selected_root = [&](const ggml_tensor * r) -> bool {
-        if (opt_f16_test != 0 || htp_lower_is_mm_root(nodes, owner_idx, r) || htp_lower_is_fa_root(nodes, owner_idx, r) ||
+        if (htp_lower_is_mm_root(nodes, owner_idx, r) || htp_lower_is_fa_root(nodes, owner_idx, r) ||
             (opt_opf16 >= 2 && htp_lower_is_rms_root(nodes, owner_idx, r))) {
             return true;
         }

@@ -319,6 +319,11 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Repacking (converting weights to tiled layout) is an internal optimization applied during `set_tensor()` or rt-repack. Non-weight tensors or test harness tensors with the same type remain in flat layout.
 - Therefore, any supported type (such as BF16, F16, quantized types) must be supported both when repacked into tiles and when stored flat in memory.
 
+### FP16 and Mixed-Precision Operator Support
+
+- New and updated Hexagon compute operators must support `F16` (and mixed `F16`/`F32` where applicable for graph lowering) across activation inputs and outputs, even when `ggml-cpu` only implements `F32`.
+- Gate lowered-only type combinations (those not constructible in standard GGML graphs) behind `internal_f16` in `htp-kparams.cpp` so `supports_op` stays aligned with standard GGML semantics while `htp-lower` can lower internal tensors to `F16`.
+
 ### Multiline Macro Formatting
 
 - Keep trailing backslashes in multiline `#define` macros cleanly aligned to a consistent column.
