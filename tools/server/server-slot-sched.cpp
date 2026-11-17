@@ -10,7 +10,7 @@
 // server_prompt
 //
 
-server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min) const {
+server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_tokens, int32_t n_swa, llama_pos pos_min, bool can_rewind) const {
     server_prompt_reuse res;
     res.n_past   = n_prefix;
     res.pos_next = tokens.pos_next(n_prefix);
@@ -22,7 +22,9 @@ server_prompt_reuse server_prompt::get_reuse(int32_t n_prefix, bool has_new_toke
     // a state or a checkpoint is useful when its pos_min is below this threshold
     const auto pos_min_thold = std::max(0, n_swa > 0 ? pos_eval - n_swa + 2 : pos_eval);
 
-    if (pos_min < pos_min_thold) {
+    // A SWA cache starting at zero has not lost any prefix tokens.
+    const bool swa_prefix_intact = n_swa > 0 && pos_min == 0 && can_rewind;
+    if (pos_min < pos_min_thold || swa_prefix_intact) {
         return res;
     }
 
