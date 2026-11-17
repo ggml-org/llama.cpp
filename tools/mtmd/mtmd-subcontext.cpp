@@ -523,7 +523,7 @@ mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
 
 bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
     const int n_embd  = model.n_mmproj_embd();
-    const int n_style = 128; // decoder style, then predictor style
+    const int n_style = mtmd_graph_kokoro::n_style;
     if (params->gen_process != MTMD_SUBCTX_GEN_PROCESS_GEN_WAV || !params->codes || !params->feats || !params->gen_state || !params->out_audio) {
         LOG_ERR("%s: kokoro takes the phoneme tokens and their backbone states\n", __func__);
         return false;
@@ -553,7 +553,6 @@ bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
         return encode(&p);
     };
 
-    // text encoder CNN
     std::vector<float> text_cnn;
     {
         mtmd_subctx_kokoro_io io;
@@ -566,11 +565,9 @@ bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
         }
     }
 
-    // durations and the aligned features
     std::vector<float> shared, asr;
     const int n_frames = mtmd_graph_kokoro::prosody(model, bert, n_embd, text_cnn.data(), n_tok, style_pred.data(), params->speed, shared, asr);
 
-    // F0 and energy
     std::vector<float> f0, en;
     {
         mtmd_subctx_kokoro_io io;
@@ -585,7 +582,6 @@ bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
         }
     }
 
-    // harmonic source, decoder, ISTFT
     std::vector<float> har, spec;
     {
         mtmd_subctx_kokoro_io io;

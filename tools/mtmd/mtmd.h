@@ -523,8 +523,7 @@ struct mtmd_gen_inp {
     // pass either codes (discrete) or feats (continuous), depending on the pipeline
     // lfm3a GEN_CODE also takes codes: the codes revealed so far, -1 for a masked codebook
     // zonos3 GEN_WAV: -1 for a residual code not known yet, the frame is decoded without it
-    // kokoro GEN_WAV takes both: codes are the phoneme tokens of the whole utterance,
-    // feats the voice row (256 values) followed by the backbone state of each token
+    // kokoro GEN_WAV takes both: codes are the phoneme tokens, feats is the voice row (256 values) then the backbone state of each token
     float speed; // kokoro: speaking speed, > 0 (default: 1.0)
     int32_t * codes;
     size_t    n_codes;

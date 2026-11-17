@@ -906,8 +906,7 @@ static common_tts_dict kokoro_dict(std::vector<std::pair<std::string, std::strin
     return dict;
 }
 
-// the "tts" template of the model with small dictionaries: a few words of the lexicon, a tagger that only knows the
-// tags listed in pos_tagdict, and a model for unknown words over the letters z a b i n g
+// the "tts" template with small dictionaries: a few lexicon words, fixed tags, and a model for unknown words over the letters z a b i n g
 MAKE_TEST(test_kokoro_tts_template) {
     std::string path = __FILE__;
     const size_t pos = path.find_last_of("/\\");

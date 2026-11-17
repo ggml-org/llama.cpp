@@ -1,11 +1,10 @@
-{#- Kokoro "tts" template: english text -> phonemes, a port of the english path of misaki, the reference G2P
-    functions: tts_norm_scan() / tts_norm_sub() for tokenization and string tests, tts_dict() for the dictionaries
-    (see docs/tts-norm-patterns.md)
+{#- Kokoro "tts" template: english text -> phonemes, a port of the english path of misaki (the reference G2P)
+    functions: tts_norm_scan(), tts_norm_sub(), tts_dict(), see docs/tts-norm-patterns.md
     dictionaries, written by conversion/kokoro.py:
-    - gold / silver (US) and gold_gb / silver_gb (british): the misaki lexicon, a value is a string or {DEFAULT, <tag>...}
-    - pos_weights / pos_tagdict / pos_classes: the nltk averaged perceptron tagger (Penn tags, as misaki gets from spacy)
-    - lts / lts_gb: a pronunciation model for the words missing from the lexicon (misaki uses espeak for them), see lts()
-    the voices of the other languages take phonemes: their prompt passes through unchanged -#}
+    - gold / silver (US), gold_gb / silver_gb (british): the misaki lexicon, a value is a string or {DEFAULT, <tag>...}
+    - pos_weights / pos_tagdict / pos_classes: the nltk averaged perceptron tagger
+    - lts / lts_gb: model for the words missing from the lexicon, see lts_search()
+    a voice of another language takes phonemes, its prompt passes through -#}
 {%- set unk = unk if unk is defined else '' -%}
 {#- british english: the voices named b*, or language en-gb; it has its own lexicon and a few suffix rules -#}
 {%- set lang = (language if language is defined and language else '') | lower | replace('_', '-') -%}
@@ -40,11 +39,10 @@
 {%- endmacro -%}
 
 {#- ---------- words missing from the lexicon ---------- -#}
-{#- joint n-gram model over units "letter:sounds", learned from the lexicon by the converter:
-    tts_dict(LTS, "<up to 4 units before> <letter>") -> {sounds: probability}, "<s>" pads the start, the letter "$" is the end
-    beam search over the letters; the score of a unit comes from the longest context that knows it, times 0.4 per unit dropped
-    fixed: none, or the sounds of each letter without stress marks: then only the stress is searched, and exactly one
-    primary stress is allowed (the beam keeps the best hypotheses with and without one)
+{#- beam search over the letters with an n-gram model of units "letter:sounds"
+    tts_dict(LTS, "<0 to 4 units before> <letter>") -> {sounds: probability}; "<s>" pads the start, the letter "$" is the end
+    a unit takes its score from the longest context that has it, times 0.4 for each unit dropped
+    fixed is none, or the sounds of each letter without stress: then only the stress is searched, with exactly one primary stress
     returns the sounds of each letter, joined by "|" -#}
 {%- macro lts_search(word, fixed) -%}
 {%- set bm = namespace(l=[{'p': 1.0, 'h': ['<s>', '<s>', '<s>', '<s>'], 'o': [], 's': false}]) -%}
@@ -95,7 +93,7 @@
 {%- endif -%}
 {%- endmacro -%}
 
-{#- a word missing from the lexicon: its predicted pronunciation, spelled out if that has no vowel, else unk -#}
+{#- a word missing from the lexicon: the predicted pronunciation; if it has no vowel, the word is spelled out -#}
 {%- macro fallback(word) -%}
 {%- set ps = lts(word) -%}
 {%- if ps and tts_norm_scan(ps, '[' ~ V ~ ']') | selectattr('rule') | list -%}{{ ps }}
@@ -359,7 +357,7 @@
 {{- ns.r -}}
 {%- endmacro -%}
 
-{#- ---------- POS tagger: nltk averaged perceptron, weights in tts.dict.pos_* ---------- -#}
+{#- ---------- POS tagger: nltk averaged perceptron, weights in the pos_* dictionaries ---------- -#}
 {%- macro pos_norm(w) -%}
 {%- if '-' in w and w[:1] != '-' -%}!HYPHEN
 {%- elif full(w, '%d%d%d%d') -%}!YEAR
@@ -461,7 +459,7 @@
 {%- if ps -%}{{ ps }}
 {#- "etc" + "." -> dictionary entry "etc." (the dot is kept as punctuation) -#}
 {%- elif nxt[:1] == '.' and has(w ~ '.') -%}{{ lookup(w ~ '.', tag, none, fv) }}
-{#- trailing closing quote: moments’ -> mˈOmᵊnts” -#}
+{#- trailing closing quote, e.g. after a plural possessive -#}
 {%- elif w.endswith("'") and lex_word(w[:-1], tag, fv) -%}{{ lex_word(w[:-1], tag, fv) }}”
 {#- unknown name + 's -#}
 {%- elif w.endswith("'s") -%}{{ (lex_word(w[:-2], tag, fv) or fallback(w[:-2])) ~ gold("'s") }}
@@ -561,6 +559,6 @@
   {%- if s.rule is not none -%}{%- set ns.next_text = s.text -%}{%- endif -%}
   {%- set ns.out = [ps] + ns.out -%}
 {%- endfor -%}
-{%- if debug_tags is defined and debug_tags -%}{{ tk.toks | join(' ') }} || {{ tags | join(' ') }} || {% endif -%}
+
 {{- (ns.out | join('') | replace('ɾ', 'T') | replace('ʔ', 't')) | trim -}}
 {%- endif -%}

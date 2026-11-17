@@ -1,9 +1,9 @@
 #include "models.h"
 
-// backbone of the Kokoro TTS pipeline: the PL-BERT text encoder over phoneme tokens (an ALBERT model)
+// backbone of the Kokoro TTS pipeline: the PL-BERT phoneme encoder (an ALBERT model)
 // - token and position embeddings have a small width, a projection brings them to n_embd
 // - one layer is stored and applied n_layer times
-// it has no lm_head, the rest of the model (prosody predictor, decoder) lives inside the mmproj
+// it has no lm_head, the rest of the model is inside the mmproj
 
 void llama_model_kokoro::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
@@ -18,7 +18,7 @@ void llama_model_kokoro::load_arch_tensors(llama_model_loader & ml) {
     const ggml_tensor * pos_meta = ml.get_tensor_meta(tn(LLM_TENSOR_POS_EMBD, "weight").str().c_str());
     const int64_t n_embd_tok = pos_meta ? pos_meta->ne[0] : n_embd;
 
-    // rows are zero-padded from n_embd_tok to n_embd by the converter, so that token and embedding inputs have the same width
+    // the converter pads the rows with zeros from n_embd_tok to n_embd, token and embedding inputs must have the same width
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
     // the token type embedding is folded into the positions by the converter
     pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD,   "weight"), {n_embd_tok, n_ctx_train}, 0);

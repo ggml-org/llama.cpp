@@ -16,12 +16,9 @@ from torch import Tensor
 from .base import ModelBase, TextModel, MmprojModel, gguf, logger
 
 # Kokoro (StyleTTS2 with an iSTFTNet decoder), https://huggingface.co/hexgrad/Kokoro-82M
-#
 # text model: the PL-BERT phoneme encoder (ALBERT), one token per phoneme character
-# mmproj:     bert_encoder, prosody predictor, text encoder, decoder and the voices
-#
-# the text to phonemes step (misaki) is the "tts" chat template, see models/templates/hexgrad-Kokoro-82M-tts.jinja
-# its dictionaries come from the misaki and nltk python packages, when they are installed
+# mmproj: bert_encoder, prosody predictor, text encoder, decoder and the voices
+# the text to phonemes step is the "tts" chat template, its dictionaries come from the misaki and nltk python packages
 
 DEFAULT_VOICE = "af_heart"
 
@@ -77,10 +74,9 @@ def _load_modules(dir_model: Path, modules: Iterable[str]) -> dict[str, dict[str
 
 
 def _g2p_fallback(lexicons: list[dict[str, Any]]) -> dict[str, Any]:
-    # pronunciation model for the words missing from the lexicon, learned from the lexicon itself
-    # a joint n-gram model over units "letter:sounds", decoded by the "tts" template with a beam search:
-    #   key "<4 units before> <letter>" (or fewer units, down to the letter alone) -> {sounds: probability}
-    # "<s>" pads the start of a word, the letter "$" is its end
+    # model for the words missing from the lexicon: n-grams over units "letter:sounds", learned from the lexicon
+    # key "<0 to 4 units before> <letter>" -> {sounds: probability}; "<s>" pads the start of a word, the letter "$" is its end
+    # the "tts" template decodes it with a beam search
     order, min_count, stress = 5, 3, "\u02c8\u02cc"
     vowels = set("AIOQWYaiu\u00e6\u0251\u0252\u0254\u0259\u025b\u025c\u026a\u028a\u028c\u1d7b\u1d4a")
 
@@ -167,7 +163,7 @@ def _g2p_fallback(lexicons: list[dict[str, Any]]) -> dict[str, Any]:
         for w, a in step(sample, cost):
             for c, o in zip(w, a):
                 counts[c][o] += 1
-        # a silent letter is mildly discouraged, so that a sound stays on the letter that carries it
+        # small cost for a silent letter, so that a sound stays on its own letter
         cost = {c: {o: math.log(n / sum(cnt.values())) - (0.5 if o == "" else 0.0) + penalty(c, o) for o, n in cnt.items()}
                 for c, cnt in counts.items()}
     aligned = step(words.items(), cost)
@@ -184,12 +180,12 @@ def _g2p_fallback(lexicons: list[dict[str, Any]]) -> dict[str, Any]:
                 ngram[(ctx + " " if ctx else "") + letter][o] += 1
                 n_ctx[ctx] += 1
 
-    # the probability is over every unit that follows the context, not only the ones of this letter:
-    # how likely the letter is after the sounds chosen so far is what lets the search drop a bad choice
+    # the probability is over all the units after the context, not only the ones of this letter
+    # this tells the search how likely the letter is after the sounds it chose, so it can drop a bad choice
     model: dict[str, Any] = {}
     for key, cnt in ngram.items():
         ctx, _, letter = key.rpartition(" ")
-        # the two shortest contexts keep every reading that the letter has at least min_count times in the lexicon
+        # the two shortest contexts keep all the readings that the letter has min_count times or more
         kept = {o: float(f"{n / n_ctx[ctx]:.4g}") for o, n in cnt.most_common()
                 if n >= min_count or (key.count(" ") < 2 and ngram[letter][o] >= min_count)}
         if kept:
@@ -404,7 +400,7 @@ class KokoroMmprojModel(MmprojModel):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del name, bid
-        # tensors read on the host stay F32: LSTMs, linear layers around them, the harmonic source and the voices
+        # tensors read on the host stay F32
         if "lstm" in new_name or ".shared." in new_name or new_name.startswith(("a.gen.bert_enc.", "voice.")) \
                 or ".duration_proj." in new_name or ".m_source." in new_name or ".pool." in new_name:
             return gguf.GGMLQuantizationType.F32

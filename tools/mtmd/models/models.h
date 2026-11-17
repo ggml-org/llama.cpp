@@ -264,6 +264,8 @@ struct mtmd_graph_kokoro : mtmd_graph {
         STAGE_F0N,  // shared LSTM output -> F0 and energy curves
         STAGE_DEC,  // aligned features + source STFT -> STFT coefficients
     };
+    static constexpr int n_style = 128; // a voice row is the decoder style, then the predictor style
+
     stage_type stage;
     int n_tok    = 0;
     int n_frames = 0;
@@ -273,7 +275,7 @@ struct mtmd_graph_kokoro : mtmd_graph {
     ggml_cgraph * build() override;
 
     // host side, between the graphs
-    // bert [n_tok, n_embd], text_cnn [n_tok, 512], style: the predictor half of the voice row
+    // bert [n_tok, n_embd], text_cnn [n_tok, 512], style is the predictor style
     // fills shared and asr as [n_frames, 512], returns n_frames
     static int prosody(const mtmd_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
                        const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr);

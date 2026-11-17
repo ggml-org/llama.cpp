@@ -1,22 +1,15 @@
 #include "models.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <random>
+#include <stdexcept>
 
-// Kokoro (StyleTTS2 prosody predictor + iSTFTNet decoder), tensors keep the names of the reference modules:
-//   a.gen.bert_enc.*  bert_encoder      a.gen.pred.*  predictor
-//   a.gen.text.*      text_encoder      a.gen.dec.*   decoder
-//
-// one utterance runs three graphs, with the recurrent and signal processing parts on the host in between:
-//   STAGE_TEXT  tokens -> text encoder CNN
-//   host        duration encoder (LSTMs), durations, alignment, shared LSTM, text encoder LSTM
-//   STAGE_F0N   F0 and energy curves
-//   host        harmonic source and its STFT
-//   STAGE_DEC   decoder + generator -> STFT coefficients
-//   host        ISTFT
-//
-// the graphs keep activations as [T, C], the layout of the conv ops
+// Kokoro: StyleTTS2 prosody predictor + iSTFTNet decoder. Tensors keep the names of the reference modules (a.gen.<module>.*)
+// One utterance runs the 3 graphs of stage_type. The LSTMs, the alignment, the harmonic source and the ISTFT run on the host in between
+// The graphs keep activations as [T, C], the layout of the conv ops
 
-static const int   KOKORO_N_STYLE  = 128;   // each half of a voice row: decoder style, then predictor style
 static const int   KOKORO_N_HIDDEN = 512;
 static const int   KOKORO_N_HARM   = 9;     // fundamental + 8 overtones
 static const int   KOKORO_UPS      = 300;   // samples per F0 step: upsample rates 10 * 6, times the ISTFT hop
@@ -159,8 +152,8 @@ ggml_cgraph * mtmd_graph_kokoro::build_text() {
 ggml_cgraph * mtmd_graph_kokoro::build_f0n() {
     const std::string p = "a.gen.pred.";
     ggml_tensor * inp   = input("inp_x", GGML_TYPE_F32, KOKORO_N_HIDDEN, n_frames);
-    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, KOKORO_N_STYLE, 1);
-    style = ggml_reshape_1d(ctx0, style, KOKORO_N_STYLE);
+    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, n_style, 1);
+    style = ggml_reshape_1d(ctx0, style, n_style);
     ggml_tensor * x = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 
     for (const char * curve : {"F0", "N"}) {
@@ -184,8 +177,8 @@ ggml_cgraph * mtmd_graph_kokoro::build_dec() {
     ggml_tensor * f0    = input("inp_f0", GGML_TYPE_F32, 2 * n_frames, 1);
     ggml_tensor * en    = input("inp_n", GGML_TYPE_F32, 2 * n_frames, 1);
     ggml_tensor * har   = input("inp_har", GGML_TYPE_F32, KOKORO_N_FFT + 2, n_har);
-    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, KOKORO_N_STYLE, 1);
-    style = ggml_reshape_1d(ctx0, style, KOKORO_N_STYLE);
+    ggml_tensor * style = input("inp_style", GGML_TYPE_F32, n_style, 1);
+    style = ggml_reshape_1d(ctx0, style, n_style);
     asr = ggml_cont(ctx0, ggml_transpose(ctx0, asr));
     har = ggml_cont(ctx0, ggml_transpose(ctx0, har));
 
@@ -202,7 +195,6 @@ ggml_cgraph * mtmd_graph_kokoro::build_dec() {
         x = adain_resblk(q, x, style, has_tensor(q + ".pool.weight"));
     }
 
-    // generator
     const std::string g = p + "generator.";
     int n_ups = 0;
     while (has_tensor(g + "ups." + std::to_string(n_ups) + ".weight")) {
@@ -337,7 +329,7 @@ static std::vector<float> kokoro_align(const std::vector<float> & x, const std::
 int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
                                const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr) {
     const int n_h   = KOKORO_N_HIDDEN;
-    const int n_cat = n_h + KOKORO_N_STYLE;
+    const int n_cat = n_h + n_style;
 
     // bert_encoder, then each row is followed by the style
     const auto enc_w = kokoro_read(model, "a.gen.bert_enc.weight", (size_t) n_h * n_embd);
@@ -349,7 +341,7 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
         for (int j = 0; j < n_h; j++) {
             row[j] += enc_b[j];
         }
-        memcpy(row + n_h, style, KOKORO_N_STYLE * sizeof(float));
+        memcpy(row + n_h, style, n_style * sizeof(float));
     }
 
     // DurationEncoder: LSTM, AdaLayerNorm, style again
@@ -358,9 +350,9 @@ int mtmd_graph_kokoro::prosody(const mtmd_model & model, const float * bert, int
     for (int il = 0; model.cbx_tensors.count(mtmd_format("a.gen.pred.text_encoder.lstms.%d.weight_ih_l0", 2 * il)); il++) {
         kokoro_lstm(model, mtmd_format("a.gen.pred.text_encoder.lstms.%d", 2 * il), x, n_tok, n_cat, y);
         const std::string norm = mtmd_format("a.gen.pred.text_encoder.lstms.%d.fc", 2 * il + 1);
-        const auto fc_w = kokoro_read(model, norm + ".weight", (size_t) 2 * n_h * KOKORO_N_STYLE);
+        const auto fc_w = kokoro_read(model, norm + ".weight", (size_t) 2 * n_h * n_style);
         const auto fc_b = kokoro_read(model, norm + ".bias", (size_t) 2 * n_h);
-        kokoro_matvec(fc_w.data(), style, 2 * n_h, KOKORO_N_STYLE, gamma_beta.data());
+        kokoro_matvec(fc_w.data(), style, 2 * n_h, n_style, gamma_beta.data());
         for (int t = 0; t < n_tok; t++) {
             const float * src = y.data() + (size_t) t * n_h;
             float * dst = x.data() + (size_t) t * n_cat;
@@ -415,8 +407,8 @@ int mtmd_graph_kokoro::har_source(const mtmd_model & model, const std::vector<fl
     const auto lin_w = kokoro_read(model, "a.gen.dec.generator.m_source.l_linear.weight", KOKORO_N_HARM);
     const auto lin_b = kokoro_read(model, "a.gen.dec.generator.m_source.l_linear.bias", 1);
 
-    // SineGen: the phase is accumulated at the F0 rate, then interpolated linearly to the sample rate
-    // (the reference adds a random initial phase that its own downsampling drops again)
+    // SineGen: the phase adds up at the F0 rate, then it is interpolated to the sample rate
+    // the reference also adds a random start phase, but its own downsampling drops it
     std::vector<float> phase((size_t) n_f0 * KOKORO_N_HARM);
     for (int h = 0; h < KOKORO_N_HARM; h++) {
         float cum = 0.0f;

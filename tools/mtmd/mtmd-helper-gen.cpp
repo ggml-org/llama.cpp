@@ -1079,8 +1079,8 @@ private:
     bool   wav_header_sent = false;
 };
 
-// Kokoro is not autoregressive: the backbone encodes the phonemes once, the mmproj turns its states into the whole utterance.
-// the prompt is a phoneme string (from the "tts" chat template when the model has one), one token per character
+// Kokoro is not autoregressive: the backbone encodes the phonemes once, the mmproj turns its states into the whole utterance
+// the prompt is a phoneme string (the output of the "tts" chat template), one token per character
 class kokoro_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
 public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
@@ -1112,7 +1112,7 @@ public:
         stream   = inp->stream;
         speed    = inp->speed;
 
-        // one token per phoneme character, the characters the model does not know are dropped like the reference does
+        // one token per phoneme character, unknown characters are dropped like in the reference
         if (token_of.empty()) {
             for (llama_token id = 0; id < llama_vocab_n_tokens(vocab); id++) {
                 if (llama_vocab_get_attr(vocab, id) & LLAMA_TOKEN_ATTR_NORMAL) {
@@ -1265,8 +1265,7 @@ private:
         return text[0] != '\0' && strstr(chars, text) != nullptr;
     }
 
-    // phonemes of the segment that starts at pos: a long text is cut after the last sentence end that fits,
-    // else after a weaker break, like the reference pipeline
+    // length of the segment that starts at pos: a long text is cut at the last sentence end that fits, else at a weaker break
     size_t split_len(const std::vector<llama_token> & phonemes, size_t pos, size_t n_max) const {
         if (phonemes.size() - pos <= n_max) {
             return phonemes.size() - pos;
