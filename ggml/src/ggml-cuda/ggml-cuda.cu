@@ -2263,7 +2263,7 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
                              src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
     // fusion is not universally faster on Pascal
-    if (cc <= GGML_CUDA_CC_PASCAL) {
+    if (cc < GGML_CUDA_CC_VOLTA) {
         return false;
     }
     //we only support fusion for ncols_dst = 1
