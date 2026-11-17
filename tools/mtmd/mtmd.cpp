@@ -2606,6 +2606,11 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.sample_rate = 48000;
             info.n_channels  = mtmd_graph_yue2_gen::n_channels;
             break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            info.type = MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3;
+            info.sample_rate = 44100;
+            info.n_channels  = mtmd_graph_music3_gen::n_channels;
+            break;
         case PROJECTOR_TYPE_FISH_S2_GEN:
             info.type = MTMD_GEN_AUDIO_TYPE_FISH_S2;
             info.sample_rate = 44100;
@@ -3028,6 +3033,12 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
         case PROJECTOR_TYPE_SOPRANO:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
+        case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
+            // top-k 50 is fixed in the graph, like the reference
+            inp.top_k = 50;
+            inp.top_p = 1.0f;
+            inp.temp  = 1.0f;
+            break;
         case PROJECTOR_TYPE_DRAMA3_GEN:
             // codebook heads, same as the reference (sglang-omni fishaudio_drama3)
             inp.top_k = 30;
@@ -3076,6 +3087,10 @@ struct mtmd_gen_state {
     // zonos3: the iSTFT head runs on the host
     std::unique_ptr<mtmd_audio_zonos3_synth> zonos3_synth;
 
+    // minimax_music3: tail of the previous window, the next one starts from it, see mtmd_gen_wav_music3()
+    std::vector<float> flow_prev_latent;
+    std::vector<float> flow_prev_cond;
+
     ~mtmd_gen_state() {
         delete gen_state;
     }
@@ -3116,6 +3131,8 @@ void mtmd_gen_state_reset(mtmd_gen_state * state) {
         state->istft = std::make_unique<mtmd_audio_streaming_istft>(hparams->audio_n_fft, hparams->audio_hop_len);
     }
     state->zonos3_synth.reset();
+    state->flow_prev_latent.clear();
+    state->flow_prev_cond.clear();
 }
 
 // zonos3 GEN_WAV: n_codes == 0 flushes and resets the state
@@ -3446,6 +3463,155 @@ static int32_t mtmd_gen_wav_yue2(mtmd_context * ctx, mtmd_gen_state * state, con
     return 0;
 }
 
+
+// minimax_music3: one pass of an mtmd graph on rows of floats
+static bool music3_encode(mtmd_context * ctx, mtmd_gen_state * state, mtmd_subctx_encode_params & params, const std::vector<float> & in) {
+    mtmd_image_f32 dummy;
+    dummy.set_size({1, 1}, false, true);
+    dummy.cpy_buf(std::vector<float>(1, 0.0f));
+    mtmd_image_f32_batch batch;
+    batch.is_audio = true;
+    batch.entries.push_back(std::move(dummy));
+
+    params.imgs      = &batch;
+    params.n_threads = ctx->n_threads;
+    params.feats     = &in;
+    params.gen_state = state->gen_state;
+    return ctx->ctx_gen_a->encode(&params);
+}
+
+// minimax_music3 GEN_CODE: the depth decoder of one frame, see _generate_depth_codes() of the reference (encoders.py)
+static int32_t mtmd_gen_code_music3(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_music3_gen;
+    const size_t n_embd = (size_t) ctx->ctx_gen_a->model.n_mmproj_embd();
+    if (!inp->feats || (inp->n_feats != n_embd && inp->n_feats != 2 * n_embd)) {
+        LOG_ERR("%s: minimax_music3 needs 1 or 2 backbone hidden rows\n", __func__);
+        return 1;
+    }
+    const std::vector<float> rows(inp->feats, inp->feats + inp->n_feats);
+
+    std::vector<float> out_embd(n_embd);
+    mtmd_subctx_encode_params params;
+    params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+    params.out_embd    = &out_embd;
+    params.out_codes   = &state->out_codes;
+    params.out_feats   = &state->out_feats;
+    params.code0       = inp->code0;
+    params.cfg_scale   = inp->cfg_scale > 0.0f ? inp->cfg_scale : g::depth_cfg;
+    params.temp        = inp->temp;
+    if (!music3_encode(ctx, state, params, rows)) {
+        LOG_ERR("%s: encode failed (depth decoder)\n", __func__);
+        return 1;
+    }
+    state->out_embd = std::move(out_embd);
+
+    out->embd    = state->out_embd.data();
+    out->codes   = state->out_codes.data();
+    out->n_codes = state->out_codes.size();
+    out->feats   = state->out_feats.data();
+    out->n_feats = state->out_feats.size();
+    return 0;
+}
+
+// minimax_music3 GEN_WAV: condition rows of one window -> flow matching -> vocoder, see denoise.py of the reference
+// a window starts from the tail of the previous one, kept in the state
+static int32_t mtmd_gen_wav_music3(mtmd_context * ctx, mtmd_gen_state * state, const mtmd_gen_inp * inp, mtmd_gen_out * out) {
+    using g = mtmd_graph_music3_gen;
+    const auto & m = ctx->ctx_gen_a->model.music3;
+    const size_t n_embd = (size_t) ctx->ctx_gen_a->model.hparams.n_embd;
+    const size_t n_cond = (size_t) m.cond_w->ne[2];
+    const size_t n_in   = (size_t) m.pre_w->ne[0]; // [latent, zeros, condition]
+    const size_t n_lc   = g::n_latent;
+    if (!inp->feats || inp->n_feats == 0 || inp->n_feats % n_embd != 0) {
+        LOG_ERR("%s: minimax_music3 needs whole condition rows\n", __func__);
+        return 1;
+    }
+    const std::vector<float> rows(inp->feats, inp->feats + inp->n_feats);
+
+    std::vector<float> cond;
+    {
+        mtmd_subctx_encode_params params;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_FLOW_COND;
+        params.out_feats   = &cond;
+        if (!music3_encode(ctx, state, params, rows)) {
+            LOG_ERR("%s: encode failed (condition)\n", __func__);
+            return 1;
+        }
+    }
+    const size_t n_lat = cond.size() / n_cond;
+
+    // the overlap takes the condition of the previous window, its latents are blended toward the previous ones
+    auto & prev_lat  = state->flow_prev_latent;
+    auto & prev_cond = state->flow_prev_cond;
+    const size_t n_ov = std::min(prev_lat.size() / n_lc, n_lat);
+    std::copy(prev_cond.begin(), prev_cond.begin() + n_ov * n_cond, cond.begin());
+
+    std::normal_distribution<float> dist(0.0f, 1.0f);
+    std::vector<float> x(n_lat * n_lc);
+    for (auto & v : x) {
+        v = dist(state->gen_state->rng);
+    }
+    const std::vector<float> noise_ov(x.begin(), x.begin() + n_ov * n_lc);
+
+    // batch 0 is conditioned, batch 1 has a zero condition
+    std::vector<float> dit_in(2 * n_lat * n_in, 0.0f);
+    for (size_t i = 0; i < n_lat; i++) {
+        std::copy(cond.begin() + i * n_cond, cond.begin() + (i + 1) * n_cond, dit_in.begin() + i * n_in + 2 * n_lc);
+    }
+
+    // FlowMatchEulerDiscreteScheduler with invert_sigmas: t = 1 - linspace(1, 1 / n, n), then 1
+    const int n_steps = inp->n_steps > 0 ? inp->n_steps : g::flow_steps;
+    std::vector<float> ts(n_steps + 1, 1.0f);
+    for (int i = 0; i < n_steps; i++) {
+        const double sigma = n_steps > 1 ? 1.0 + i * (1.0 / n_steps - 1.0) / (n_steps - 1) : 1.0;
+        ts[i] = 1.0f - (float) sigma;
+    }
+
+    std::vector<float> vel;
+    for (int i = 0; i < n_steps; i++) {
+        const float t = ts[i];
+        for (size_t j = 0; j < n_ov * n_lc; j++) {
+            x[j] = (1.0f - (1.0f - 1e-6f) * t) * noise_ov[j] + t * prev_lat[j];
+        }
+        for (size_t b = 0; b < 2; b++) {
+            for (size_t r = 0; r < n_lat; r++) {
+                std::copy(x.begin() + r * n_lc, x.begin() + (r + 1) * n_lc, dit_in.begin() + (b * n_lat + r) * n_in);
+            }
+        }
+        mtmd_subctx_encode_params params;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_FLOW_STEP;
+        params.flow_t      = t;
+        params.cfg_scale   = g::dit_cfg;
+        params.out_feats   = &vel;
+        if (!music3_encode(ctx, state, params, dit_in) || vel.size() != x.size()) {
+            LOG_ERR("%s: encode failed (flow step %d)\n", __func__, i);
+            return 1;
+        }
+        const float dt = ts[i + 1] - ts[i];
+        for (size_t j = 0; j < x.size(); j++) {
+            x[j] += dt * vel[j];
+        }
+    }
+    std::copy(prev_lat.begin(), prev_lat.begin() + n_ov * n_lc, x.begin());
+
+    // the next window starts from latent frames [L - 2 * n_overlap, L - n_overlap) of this one
+    const size_t s0 = n_lat > 2 * (size_t) g::n_overlap ? n_lat - 2 * g::n_overlap : 0;
+    const size_t s1 = n_lat > (size_t) g::n_overlap ? n_lat - g::n_overlap : 0;
+    prev_lat.assign(x.begin() + s0 * n_lc, x.begin() + s1 * n_lc);
+    prev_cond.assign(cond.begin() + s0 * n_cond, cond.begin() + s1 * n_cond);
+
+    mtmd_subctx_encode_params params;
+    params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
+    params.out_audio   = &state->out_audio;
+    if (!music3_encode(ctx, state, params, x)) {
+        LOG_ERR("%s: encode failed (vocoder)\n", __func__);
+        return 1;
+    }
+    out->audio     = state->out_audio.data();
+    out->n_samples = state->out_audio.size();
+    return 0;
+}
+
 int32_t mtmd_gen_state_set_ref(mtmd_context * ctx, mtmd_gen_state * state) {
     if (!state || state->sctx != ctx->ctx_gen_a.get()) {
         LOG_ERR("%s: invalid gen state\n", __func__);
@@ -3475,6 +3641,10 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
     if (sctx->model.proj_type == PROJECTOR_TYPE_YUE2_GEN) {
         return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_flow_yue2(ctx, state, inp, out)
                                                            : mtmd_gen_wav_yue2(ctx, state, inp, out);
+    }
+    if (sctx->model.proj_type == PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN) {
+        return inp->type == MTMD_GEN_PROCESS_TYPE_GEN_CODE ? mtmd_gen_code_music3(ctx, state, inp, out)
+                                                           : mtmd_gen_wav_music3(ctx, state, inp, out);
     }
 
     if (sctx->model.proj_type == PROJECTOR_TYPE_SOPRANO) {

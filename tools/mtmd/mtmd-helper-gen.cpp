@@ -3810,6 +3810,466 @@ private:
     bool   wav_header_sent = false;
 };
 
+// MiniMax Music 3: the backbone samples the semantic code of each frame with guidance, the depth decoder (mtmd) the other codes
+// the condition rows of the frames go to the flow matching and the vocoder (mtmd) in windows, like the reference (diffusers pipeline)
+class music3_gen_audio_pipeline : public mtmd_gen_audio_pipeline {
+public:
+    using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
+
+    bool supports_cfg() const override { return true; }
+    bool supports_flow_steps() const override { return true; }
+
+    // step_gen() stops at the frame limit of the reference
+    int32_t max_frames() const override { return 0; }
+
+    bool check_context() const override {
+        if (llama_vocab_n_tokens(vocab) < tok_code0 + n_semantic) {
+            LOG_ERR("mtmd_helper_gen_audio: the vocab of the backbone has no minimax_music3 audio codes\n");
+            return false;
+        }
+        return true;
+    }
+
+    void reset() override {
+        seq_id = 0;
+        seq_uncond = 0;
+        use_cfg = false;
+        cfg_scale = 1.0f;
+        temp = 1.0f;
+        flow_steps = 0;
+        pos = 0;
+        prompt.clear();
+        prompt_uncond.clear();
+        prompt_pos = 0;
+        uprompt_pos = 0;
+        logits_cond.clear();
+        logits_uncond.clear();
+        h_rows.clear();
+        n_gen = 0;
+        cond_rows.clear();
+        n_rows_dropped = 0;
+        n_win_done = 0;
+        done = false;
+        decoded = false;
+        audio_pcm.clear();
+        out_buf.clear();
+        stream = false;
+        pcm_sent = 0;
+        wav_header_sent = false;
+        gen_state.reset();
+    }
+
+    int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
+        reset();
+        seq_id     = inp->seq_id;
+        out_type   = inp->out_type;
+        stream     = inp->stream;
+        temp       = inp->temp >= 0.0f ? inp->temp : 1.0f;
+        flow_steps = inp->flow_steps;
+        cfg_scale  = inp->cfg_scale > 0.0f ? inp->cfg_scale : 1.5f;
+        rng.seed(inp->seed == UINT32_MAX ? std::random_device{}() : inp->seed);
+        if (!init_gen_state(inp->seed)) {
+            return 1;
+        }
+
+        // the "tts" template renders the whole prompt, special tokens included
+        const std::string text(inp->prompt, inp->prompt_len);
+        prompt.resize(text.size() + 16);
+        const int32_t n = llama_tokenize(vocab, text.c_str(), (int32_t) text.size(), prompt.data(), (int32_t) prompt.size(), false, true);
+        if (n < 3 || prompt[0] != tok_im_start || prompt[n - 1] != tok_audio_start) {
+            LOG_ERR("mtmd_helper_gen_audio: minimax_music3 expects the prompt of its tts template\n");
+            return 1;
+        }
+        prompt.resize((size_t) n);
+        if (n > max_prompt) {
+            LOG_ERR("mtmd_helper_gen_audio: the prompt has %d tokens, the maximum is %d\n", n, max_prompt);
+            return 1;
+        }
+
+        llama_memory_t mem = llama_get_memory(lctx);
+        if (!llama_memory_seq_rm(mem, seq_id, 0, -1)) {
+            LOG_ERR("mtmd_helper_gen_audio: cannot reset the sequence\n");
+            return 1;
+        }
+        use_cfg = cfg_scale != 1.0f;
+        if (use_cfg) {
+            // the uncond sequence lives half a seq space away from the cond one
+            const int32_t n_seq_max = (int32_t) llama_n_seq_max(lctx);
+            seq_uncond = (llama_seq_id) (n_seq_max / 2 + seq_id);
+            if (!llama_model_classifier_free_guidance(model) || seq_id >= n_seq_max / 2) {
+                LOG_ERR("mtmd_helper_gen_audio: cfg needs a paired sequence (n_seq_max = %d, seq_id = %d), reconvert the model or use cfg_scale = 1\n", n_seq_max, seq_id);
+                return 1;
+            }
+            if (!llama_memory_seq_rm(mem, seq_uncond, 0, -1)) {
+                LOG_ERR("mtmd_helper_gen_audio: cannot reset the cfg sequence\n");
+                return 1;
+            }
+            // the uncond prompt keeps <|im_start|> and the last 2 tokens, the rest is <|audio_cfg|>
+            prompt_uncond = prompt;
+            std::fill(prompt_uncond.begin() + 1, prompt_uncond.end() - 2, tok_audio_cfg);
+        }
+        if (n_pos_needed((llama_pos) n + 1) > (int64_t) llama_n_ctx_seq(lctx)) {
+            LOG_ERR("mtmd_helper_gen_audio: the prompt does not fit in the context\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    int32_t step_prompt(int32_t n_batch) override {
+        GGML_ASSERT(n_batch > 0);
+        const int32_t n_prompt = (int32_t) prompt.size();
+        if (prompt_pos < n_prompt) {
+            const int32_t n = std::min(n_batch, n_prompt - prompt_pos);
+            llama_pos p = prompt_pos;
+            if (!decode_tokens(prompt.data() + prompt_pos, n, seq_id, p)) {
+                return -1;
+            }
+            prompt_pos += n;
+            if (prompt_pos == n_prompt) {
+                save_outputs(0, -1);
+            }
+        } else if (use_cfg && uprompt_pos < n_prompt) {
+            const int32_t n = std::min(n_batch, n_prompt - uprompt_pos);
+            llama_pos p = uprompt_pos;
+            if (!decode_tokens(prompt_uncond.data() + uprompt_pos, n, seq_uncond, p)) {
+                return -1;
+            }
+            uprompt_pos += n;
+            if (uprompt_pos == n_prompt) {
+                save_outputs(1, -1);
+            }
+        }
+        pos = n_prompt;
+        const int32_t n_left = (n_prompt - prompt_pos) + (use_cfg ? n_prompt - uprompt_pos : 0);
+        return n_left;
+    }
+
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out, bool * out_stop) override {
+        GGML_UNUSED(sampled);
+        GGML_UNUSED(h_state_in);
+        *h_state_out = nullptr;
+        *out_stop    = false;
+
+        // the first frame only moves the backbone past <|audio_start|>, its condition row is dropped like the reference
+        const size_t n_rows = n_frames();
+        while (!done && n_frames() == n_rows) {
+            if (!gen_frame()) {
+                return 1;
+            }
+        }
+        if (n_frames() == n_rows) {
+            *out_stop = true;
+            return 0;
+        }
+        *h_state_out = h_rows.data();
+        *out_stop    = done;
+
+        // a window is final once a frame past it exists, see MiniMaxMusic3PrepareChunksStep of the reference
+        while (n_frames() > window_start(n_win_done) + win_frames) {
+            if (!run_window(false)) {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
+        *out_sample_rate = info.sample_rate;
+        const uint16_t n_ch = (uint16_t) info.n_channels;
+
+        if (!stream) {
+            if (flush() != 0) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) (audio_pcm.size() / n_ch);
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate, n_ch)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
+        }
+
+        const size_t n_new = audio_pcm.size() - pcm_sent;
+        if (out_n_samples) {
+            *out_n_samples = (int64_t) (n_new / n_ch);
+        }
+        if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
+            return 0;
+        }
+        out_buf.clear();
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate, n_ch);
+            wav_header_sent = true;
+        }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
+        *out_data     = out_buf.data();
+        *out_data_len = out_buf.size();
+        return 0;
+    }
+
+    int32_t flush() override {
+        if (decoded) {
+            return 0;
+        }
+        if (n_frames() == 0) {
+            LOG_ERR("mtmd_helper_gen_audio: minimax_music3 stopped before the first frame\n");
+            return 1;
+        }
+        done = true;
+        // the windows start every win_hop frames before n_frames - win_hop, the last one ends at n_frames
+        while (n_win_done == 0 || window_start(n_win_done) + win_hop < n_frames()) {
+            const bool last = window_start(n_win_done + 1) + win_hop >= n_frames();
+            if (!run_window(last)) {
+                return 1;
+            }
+            if (last) {
+                break;
+            }
+        }
+        decoded = true;
+        return 0;
+    }
+
+private:
+    // token ids of the checkpoint, see encoders.py of the reference
+    static constexpr llama_token tok_im_start    = 151644;
+    static constexpr llama_token tok_audio_cfg   = 151654;
+    static constexpr llama_token tok_audio_start = 151669;
+    static constexpr llama_token tok_audio_end   = 151670;
+    static constexpr llama_token tok_code0       = 151675;
+    static constexpr int32_t     n_semantic      = 16384;
+    static constexpr int32_t     max_prompt      = 5000;
+    static constexpr size_t      max_audio_frames = 9000;
+    static constexpr int32_t     top_k           = 50;
+
+    // windows of the flow matching and their crop, see before_denoise.py and decoders.py of the reference
+    static constexpr size_t win_frames = 200;
+    static constexpr size_t win_hop    = 100;
+    static constexpr size_t crop_left  = 86;       // latent frames
+    static constexpr size_t crop_right = 344 - 86; // latent frames
+    static constexpr size_t hop_samples = 512;     // samples per latent frame
+
+    // with guidance, both sequences share the unified KV cache
+    int64_t n_pos_needed(llama_pos n) const {
+        return use_cfg ? 2 * (int64_t) n : (int64_t) n;
+    }
+
+    size_t n_frames() const {
+        return n_rows_dropped + cond_rows.size() / (size_t) n_embd;
+    }
+
+    static size_t window_start(size_t k) {
+        return k * win_hop;
+    }
+
+    bool decode_tokens(const llama_token * toks, int32_t n, llama_seq_id seq, llama_pos & p) {
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        if (!batch_set_tokens(batch.get(), toks, n, p, seq)) {
+            return false;
+        }
+        llama_batch_ext_set_output_logits(batch.get(), n - 1, true);
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+            return false;
+        }
+        p += n;
+        return true;
+    }
+
+    // the context outputs belong to the last decode of any sequence (server slots), keep ours right away
+    // only the window that sample() reads: <|audio_end|> and the semantic codes
+    void save_outputs(int row, int32_t idx) {
+        auto & lg = row == 0 ? logits_cond : logits_uncond;
+        const float * l = llama_get_logits_ith(lctx, idx);
+        lg.assign(l + tok_audio_end, l + tok_code0 + n_semantic);
+        const float * h = llama_get_embeddings_ith(lctx, idx);
+        h_rows.resize((size_t) (use_cfg ? 2 : 1) * n_embd);
+        std::copy(h, h + n_embd, h_rows.begin() + (size_t) row * n_embd);
+    }
+
+    // feeds the next backbone input row to both sequences
+    bool decode_embd(const float * embd) {
+        llama_batch_ext_ptr batch(llama_batch_ext_init(lctx));
+        const int n_seq = use_cfg ? 2 : 1;
+        const llama_seq_id seqs[2] = { seq_id, seq_uncond };
+        for (int i = 0; i < n_seq; i++) {
+            const llama_embd row = { embd, 1, (size_t) n_embd };
+            const int32_t idx = llama_batch_ext_add_embd(batch.get(), seqs[i], row);
+            if (idx < 0) {
+                LOG_ERR("mtmd_helper_gen_audio: failed to add a row to the batch (error %d)\n", idx);
+                return false;
+            }
+            llama_batch_ext_set_pos(batch.get(), idx, &pos);
+            llama_batch_ext_set_output_logits(batch.get(), idx, true);
+        }
+        if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, batch.get()) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: decode failed\n");
+            return false;
+        }
+        pos++;
+        for (int i = 0; i < n_seq; i++) {
+            save_outputs(i, i);
+        }
+        return true;
+    }
+
+    // semantic code or <|audio_end|>: guidance on the top-k of the cond logits, then top-k sampling, see SemanticGenerationStep
+    llama_token sample() {
+        const size_t n = logits_cond.size();
+        std::vector<std::pair<float, size_t>> cand;
+        cand.reserve(n);
+        for (size_t i = 0; i < n; i++) {
+            const llama_token t = tok_audio_end + (llama_token) i;
+            if (t == tok_audio_end || t >= tok_code0) {
+                cand.emplace_back(logits_cond[i], i);
+            }
+        }
+        const size_t k = std::min(cand.size(), (size_t) top_k);
+        std::nth_element(cand.begin(), cand.begin() + (k - 1), cand.end(), std::greater<std::pair<float, size_t>>());
+        const float thr = cand[k - 1].first;
+
+        std::vector<std::pair<float, size_t>> guided;
+        for (const auto & c : cand) {
+            if (c.first >= thr) {
+                const float u = use_cfg ? logits_uncond[c.second] : c.first;
+                guided.emplace_back(u + (c.first - u) * cfg_scale, c.second);
+            }
+        }
+        std::sort(guided.begin(), guided.end(), std::greater<std::pair<float, size_t>>());
+        if (temp <= 0.0f) {
+            return tok_audio_end + (llama_token) guided[0].second;
+        }
+        // values below the k-th one are masked, ties stay
+        const float gthr = guided[std::min(guided.size(), (size_t) top_k) - 1].first;
+        std::vector<double> p;
+        double sum = 0.0;
+        for (const auto & g : guided) {
+            if (g.first < gthr) {
+                break;
+            }
+            p.push_back(std::exp((double) (g.first - guided[0].first) / temp));
+            sum += p.back();
+        }
+        double u = std::uniform_real_distribution<double>(0.0, sum)(rng);
+        for (size_t i = 0; i < p.size(); i++) {
+            u -= p[i];
+            if (u <= 0.0) {
+                return tok_audio_end + (llama_token) guided[i].second;
+            }
+        }
+        return tok_audio_end + (llama_token) guided[p.size() - 1].second;
+    }
+
+    // one frame: semantic code, depth decoder, condition row, then the next backbone input
+    bool gen_frame() {
+        const llama_token tok = sample();
+        if (tok == tok_audio_end) {
+            done = true;
+            return true;
+        }
+
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type      = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+        inp.code0     = tok - tok_code0;
+        inp.feats     = h_rows.data();
+        inp.n_feats   = h_rows.size();
+        inp.cfg_scale = use_cfg ? cfg_scale : 1.0f;
+        inp.temp      = temp;
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0 || out.n_feats != (size_t) n_embd) {
+            LOG_ERR("mtmd_helper_gen_audio: depth decoder failed\n");
+            return false;
+        }
+        if (n_gen++ > 0) {
+            cond_rows.insert(cond_rows.end(), out.feats, out.feats + out.n_feats);
+            if (n_frames() >= max_audio_frames) {
+                done = true;
+                return true;
+            }
+        }
+        if (n_pos_needed(pos + 1) > (int64_t) llama_n_ctx_seq(lctx)) {
+            LOG_WRN("mtmd_helper_gen_audio: the context is full, the song ends at %zu frames\n", n_frames());
+            done = true;
+            return true;
+        }
+        return decode_embd(out.embd);
+    }
+
+    // flow matching and vocoder of one window, then the crop of the reference
+    bool run_window(bool last) {
+        const size_t s = window_start(n_win_done);
+        const size_t e = std::min(s + win_frames, n_frames());
+        mtmd_gen_inp inp = mtmd_gen_inp_default(mctx);
+        inp.type    = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
+        inp.feats   = cond_rows.data() + (s - n_rows_dropped) * n_embd;
+        inp.n_feats = (e - s) * n_embd;
+        inp.n_steps = flow_steps;
+        mtmd_gen_out out{};
+        if (mtmd_gen_audio_process(mctx, gen_state.get(), &inp, &out) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: flow matching failed\n");
+            return false;
+        }
+        const size_t n_ch  = (size_t) info.n_channels;
+        const size_t n     = out.n_samples / n_ch;
+        const size_t left  = n_win_done == 0 ? 0 : crop_left * hop_samples;
+        const size_t right = last ? 0 : crop_right * hop_samples;
+        if (n < left + right) {
+            LOG_ERR("mtmd_helper_gen_audio: window is too short\n");
+            return false;
+        }
+        audio_pcm.insert(audio_pcm.end(), out.audio + left * n_ch, out.audio + (n - right) * n_ch);
+        n_win_done++;
+        // the rows before the next window are not needed anymore
+        const size_t n_drop = std::min(window_start(n_win_done), n_frames()) - n_rows_dropped;
+        cond_rows.erase(cond_rows.begin(), cond_rows.begin() + n_drop * n_embd);
+        n_rows_dropped += n_drop;
+        return true;
+    }
+
+    llama_seq_id seq_id     = 0;
+    llama_seq_id seq_uncond = 0;
+    bool  use_cfg    = false;
+    float cfg_scale  = 1.0f;
+    float temp       = 1.0f;
+    int32_t flow_steps = 0; // 0 = the model default
+    llama_pos pos = 0;
+    std::vector<llama_token> prompt;
+    std::vector<llama_token> prompt_uncond;
+    int32_t prompt_pos  = 0;
+    int32_t uprompt_pos = 0;
+    std::vector<float> logits_cond;   // see save_outputs()
+    std::vector<float> logits_uncond;
+    std::vector<float> h_rows;        // backbone hidden of the cond, then uncond sequence
+    size_t n_gen = 0;                 // frames sampled, the first one included
+    std::vector<float> cond_rows;     // one condition row per frame, from frame n_rows_dropped
+    size_t n_rows_dropped = 0;
+    size_t n_win_done = 0;
+    bool done    = false;
+    bool decoded = false;
+    std::mt19937 rng;
+
+    mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
+    bool stream = false;
+    std::vector<float> audio_pcm; // interleaved
+    std::vector<char>  out_buf;
+    size_t pcm_sent        = 0;
+    bool   wav_header_sent = false;
+};
+
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
     switch (mtmd_gen_audio_get_info(mctx).type) {
         case MTMD_GEN_AUDIO_TYPE_QWEN3TTS:
@@ -3828,6 +4288,8 @@ static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lc
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new zonos3_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_YUE2:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new yue2_gen_audio_pipeline(lctx, mctx));
+        case MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3:
+            return std::unique_ptr<mtmd_gen_audio_pipeline>(new music3_gen_audio_pipeline(lctx, mctx));
         case MTMD_GEN_AUDIO_TYPE_FISH_S2:
             return std::unique_ptr<mtmd_gen_audio_pipeline>(new fish_s2_gen_audio_pipeline(lctx, mctx));
         default:

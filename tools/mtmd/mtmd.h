@@ -474,6 +474,7 @@ enum mtmd_gen_audio_type {
     MTMD_GEN_AUDIO_TYPE_DRAMA3,
     MTMD_GEN_AUDIO_TYPE_ZONOS3,
     MTMD_GEN_AUDIO_TYPE_YUE2,
+    MTMD_GEN_AUDIO_TYPE_MINIMAX_MUSIC3,
     MTMD_GEN_AUDIO_TYPE_FISH_S2,
 };
 
@@ -504,6 +505,7 @@ enum mtmd_gen_process_type {
                                     // for pocket-tts, this is mimi decoder
                                     // for lfm3a, this is the codec decoder + ISTFT, n_codes == 0 flushes the tail
                                     // for yue2, this is one VAE pass, the caller splits a long song into tiles
+                                    // for minimax_music3, this is one window: flow matching + vocoder
 };
 
 struct mtmd_gen_inp {
@@ -533,8 +535,12 @@ struct mtmd_gen_inp {
     size_t          backbone_state_size;
     int32_t         backbone_n_past;
 
-    // flow-matching GEN_CODE: steps of the ODE solver, <= 0 = model default (yue2: 32)
+    // flow matching: steps of the ODE solver, <= 0 = model default (yue2 GEN_CODE: 32, minimax_music3 GEN_WAV: 30)
     int32_t n_steps;
+
+    // minimax_music3 GEN_CODE: feats holds the backbone hidden rows, cond then uncond with guidance
+    // classifier-free guidance scale of the residual codes, <= 0 = model default (1.5)
+    float cfg_scale;
 };
 
 struct mtmd_gen_out {
