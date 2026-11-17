@@ -394,6 +394,7 @@ MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input
 
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
+// The encoder runs in libllama: its messages go through llama_log_set().
 MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
 // EXPERIMENTAL API to get mmproj's capabilities without initializing the full context

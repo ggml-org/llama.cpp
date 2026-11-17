@@ -90,8 +90,8 @@ static std::string mtmd_format(const char * fmt, ...) {
 // remember to bump this if the serialization format changes
 #define MTMD_SERIALIZATION_VERSION 6
 
-// oldest compat version that can be loaded (5 and older hold the preprocessed input of the old engine)
-#define MTMD_SERIALIZATION_VERSION_MIN 6
+// oldest compat version that can be loaded (2 to 5: the format of the old engine, read for their counts)
+#define MTMD_SERIALIZATION_VERSION_MIN 2
 
 struct mtmd_serialization {
     uint64_t version = MTMD_SERIALIZATION_VERSION;
@@ -262,6 +262,49 @@ struct mtmd_lmedia_ref {
     }
 };
 
+// versions 2 to 5 of the format, written by the old engine: the counts follow from the geometry of the entries
+// (MiniCPM-V 4.7 canvas separators, HunyuanVL row newlines, Qwen-VL temporal merge), as the old engine computed them
+struct mtmd_legacy_entry {
+    int32_t nx = 0;
+    int32_t ny = 0;
+    int32_t suffix_type = 0;
+};
+
+static std::vector<mtmd_legacy_entry> mtmd_legacy_read_batch(mtmd_serialization & ser) {
+    ser.read<bool>(); // is_audio
+    const uint64_t n = ser.read<uint64_t>();
+    if (n > (ser.data.size() - ser.read_pos) / 10) {
+        throw std::runtime_error("entries count exceeds buffer size");
+    }
+    std::vector<mtmd_legacy_entry> entries(n);
+    for (auto & e : entries) {
+        ser.read<bool>();    // add_viewsep
+        ser.read<bool>();    // add_newline
+        ser.read<int32_t>(); // lead_pad
+        if (ser.version >= 3) {
+            e.suffix_type = ser.read<int32_t>();
+            if (e.suffix_type < 0 || e.suffix_type > 5) {
+                throw std::runtime_error("invalid suffix type");
+            }
+            for (int i = 0; i < 4; ++i) {
+                ser.read<int32_t>(); // anyres grid_x, grid_y, orig_nx, orig_ny
+            }
+        }
+        e.nx = ser.read<int32_t>();
+        e.ny = ser.read<int32_t>();
+        if (ser.version >= 5) {
+            ser.read<int32_t>(); // audio_n_ctx
+        }
+    }
+    return entries;
+}
+
+// separator rows after a MiniCPM-V 4.7 tile: </image>, </image><slice>, </slice><slice>, </slice>\n<slice>, </slice>
+static size_t mtmd_legacy_suffix_rows(int32_t suffix_type) {
+    static const size_t rows[] = { 0, 1, 2, 2, 3, 1 };
+    return rows[suffix_type];
+}
+
 struct mtmd_image_tokens {
     uint32_t  nx    = 0; // token grid in x (M-RoPE decoders), or the token count
     uint32_t  ny    = 0; // token grid in y, 1 for the other decoders
@@ -285,12 +328,59 @@ struct mtmd_image_tokens {
         ser.write(id);
     }
     void deserialize(mtmd_serialization & ser) {
+        lmedia.reset();
+        if (ser.version < 6) {
+            deserialize_legacy(ser);
+            return;
+        }
         nx    = ser.read<uint32_t>();
         ny    = ser.read<uint32_t>();
         n_tok = ser.read<uint32_t>();
         n_pos = ser.read<int32_t>();
         id    = ser.read<std::string>();
-        lmedia.reset();
+    }
+
+    void deserialize_legacy(mtmd_serialization & ser) {
+        enum { POS_NORMAL, POS_MROPE, POS_HUNYUANVL, POS_SENSENOVA_U1, POS_CANVAS };
+        nx = ser.read<uint32_t>();
+        ny = ser.read<uint32_t>();
+        const uint32_t pos = ser.read<uint32_t>();
+        if (pos > POS_CANVAS) {
+            throw std::runtime_error("invalid pos type");
+        }
+        ser.read<uint32_t>(); // image_idx
+        const uint32_t n_temporal_merge = ser.read<uint32_t>();
+        id = ser.read<std::string>();
+        const auto entries = mtmd_legacy_read_batch(ser);
+
+        if (pos == POS_HUNYUANVL) {
+            n_tok = (nx + 1) * ny + 2;
+        } else if (pos == POS_CANVAS) {
+            if (entries.empty() || entries.back().nx == 0 || entries.back().ny == 0) {
+                throw std::runtime_error("invalid canvas chunk");
+            }
+            const auto & ref = entries.back();
+            n_tok = 0;
+            n_pos = 0;
+            for (const auto & e : entries) {
+                const uint32_t gw = (uint32_t) e.nx * nx / ref.nx;
+                const uint32_t gh = (uint32_t) e.ny * ny / ref.ny;
+                n_tok += gw * gh + (uint32_t) mtmd_legacy_suffix_rows(e.suffix_type);
+                n_pos += 1 + (llama_pos) mtmd_legacy_suffix_rows(e.suffix_type);
+            }
+            return;
+        } else {
+            uint32_t nz = entries.size();
+            if (n_temporal_merge > 1) {
+                nz = (nz + n_temporal_merge - 1) / n_temporal_merge;
+            }
+            n_tok = nx * ny * nz;
+        }
+        switch (pos) {
+            case POS_MROPE:        n_pos = std::max(nx, ny); break;
+            case POS_SENSENOVA_U1: n_pos = 1;                break;
+            default:               n_pos = n_tok;            break;
+        }
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
@@ -310,9 +400,18 @@ struct mtmd_audio_tokens {
         ser.write(id);
     }
     void deserialize(mtmd_serialization & ser) {
+        lmedia.reset();
         n_tokens = ser.read<uint32_t>();
         id       = ser.read<std::string>();
-        lmedia.reset();
+        if (ser.version < 6) {
+            // the old engine kept the mel entries and, from version 4, a slice of a soundtrack
+            mtmd_legacy_read_batch(ser);
+            if (ser.version >= 4 && ser.read<bool>()) {
+                ser.read<uint32_t>(); // row_begin
+                ser.read<uint32_t>(); // n_tokens of the track
+                mtmd_legacy_read_batch(ser);
+            }
+        }
     }
 };
 using mtmd_audio_tokens_ptr = std::unique_ptr<mtmd_audio_tokens>;
@@ -1758,7 +1857,6 @@ mtmd_input_chunks * mtmd_test_create_input_chunks() {
 void mtmd_log_set(ggml_log_callback log_callback, void * user_data) {
     g_logger_state.log_callback = log_callback ? log_callback : mtmd_log_callback_default;
     g_logger_state.log_callback_user_data = user_data;
-    llama_log_set(log_callback, user_data);
 }
 
 struct mtmd_caps mtmd_get_cap_from_file(const char * fname) {
@@ -1782,10 +1880,18 @@ static void stub_log_callback(enum ggml_log_level, const char *, void *) {
 mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_context_params ctx_params) {
     ctx_params.progress_callback = nullptr;
 
-    // the model and the encoder context of mtmd_init_from_file(), allocations simulated
+    // the model and the context of mtmd_init_from_file(), allocations simulated, quietly
     auto saved_log_callback  = g_logger_state.log_callback;
     auto saved_log_user_data = g_logger_state.log_callback_user_data;
+    ggml_log_callback saved_llama_log_callback  = nullptr;
+    void *            saved_llama_log_user_data = nullptr;
+    llama_log_get(&saved_llama_log_callback, &saved_llama_log_user_data);
+    auto restore_logs = [&]() {
+        mtmd_log_set(saved_log_callback, saved_log_user_data);
+        llama_log_set(saved_llama_log_callback, saved_llama_log_user_data);
+    };
     try {
+        mtmd_log_set(stub_log_callback, nullptr);
         llama_log_set(stub_log_callback, nullptr);
         const mtmd_file_info info = mtmd_read_file_info(mmproj_fname);
         ggml_backend_dev_t device = mtmd_select_device(ctx_params.use_gpu, ctx_params.device);
@@ -1817,10 +1923,10 @@ mtmd_memory_usage mtmd_get_memory_usage(const char * mmproj_fname, struct mtmd_c
             res.image_max_tokens = llama_model_media_n_tokens_max(model.get(), LLAMA_MEDIA_TYPE_IMAGE, &atomic);
             res.use_non_causal   = atomic;
         }
-        mtmd_log_set(saved_log_callback, saved_log_user_data);
+        restore_logs();
         return res;
     } catch (const std::exception & e) {
-        mtmd_log_set(saved_log_callback, saved_log_user_data);
+        restore_logs();
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return {{}, -1, false};
     }
