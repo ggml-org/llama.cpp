@@ -4,7 +4,7 @@
     dictionaries, written by conversion/kokoro.py:
     - gold / silver (US) and gold_gb / silver_gb (british): the misaki lexicon, a value is a string or {DEFAULT, <tag>...}
     - pos_weights / pos_tagdict / pos_classes: the nltk averaged perceptron tagger (Penn tags, as misaki gets from spacy)
-    there is no fallback for the words missing from the lexicon (misaki uses espeak), they become `unk`
+    - lts / lts_gb: a pronunciation model for the words missing from the lexicon (misaki uses espeak for them), see lts()
     the voices of the other languages take phonemes: their prompt passes through unchanged -#}
 {%- set unk = unk if unk is defined else '' -%}
 {#- british english: the voices named b*, or language en-gb; it has its own lexicon and a few suffix rules -#}
@@ -12,6 +12,7 @@
 {%- set GB = lang in ['en-gb', 'british'] or (not lang and voice is defined and voice and voice[:1] == 'b') -%}
 {%- set GOLD = 'gold_gb' if GB else 'gold' -%}
 {%- set SILVER = 'silver_gb' if GB else 'silver' -%}
+{%- set LTS = 'lts_gb' if GB else 'lts' -%}
 {%- set V   = 'AIOQWYaiuæɑɒɔəɛɜɪʊʌᵻ' -%}
 {%- set C   = 'bdfhjklmnpstvwzðŋɡɹɾʃʒʤʧθ' -%}
 {%- set NQP = ';:,.!?—…' -%}
@@ -36,6 +37,70 @@
 {%- macro gold(w) -%}
 {%- set k = dkey(GOLD, w) -%}
 {%- if k -%}{%- set e = tts_dict(GOLD, k) -%}{{ e.DEFAULT if e is mapping else e }}{%- endif -%}
+{%- endmacro -%}
+
+{#- ---------- words missing from the lexicon ---------- -#}
+{#- joint n-gram model over units "letter:sounds", learned from the lexicon by the converter:
+    tts_dict(LTS, "<up to 4 units before> <letter>") -> {sounds: probability}, "<s>" pads the start, the letter "$" is the end
+    beam search over the letters; the score of a unit comes from the longest context that knows it, times 0.4 per unit dropped
+    fixed: none, or the sounds of each letter without stress marks: then only the stress is searched, and exactly one
+    primary stress is allowed (the beam keeps the best hypotheses with and without one)
+    returns the sounds of each letter, joined by "|" -#}
+{%- macro lts_search(word, fixed) -%}
+{%- set bm = namespace(l=[{'p': 1.0, 'h': ['<s>', '<s>', '<s>', '<s>'], 'o': [], 's': false}]) -%}
+{%- for ch in (tts_norm_scan(word, '.') | map(attribute='text') | list) + ['$'] -%}
+  {%- set i = loop.index0 -%}
+  {%- set nx = namespace(l=[]) -%}
+  {%- for hyp in bm.l -%}
+    {%- set st = namespace(f=1.0, seen=[]) -%}
+    {%- for n in range(4, -1, -1) -%}
+      {%- set d = tts_dict(LTS, (hyp.h[4 - n:] + [ch]) | join(' ')) -%}
+      {%- if d is not none -%}
+        {%- for o, p in d | items -%}
+          {%- if o not in st.seen -%}
+            {%- set _ = st.seen.append(o) -%}
+            {%- set prim = 'ˈ' in o -%}
+            {%- set match = fixed is none or ch == '$' or (o | replace('ˈ', '') | replace('ˌ', '')) == fixed[i] -%}
+            {%- if match and not (fixed is not none and prim and hyp.s) -%}
+              {%- set _ = nx.l.append({'p': hyp.p * st.f * p, 'h': (hyp.h + [ch ~ ':' ~ o])[-4:], 'o': hyp.o + [o], 's': hyp.s or prim}) -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endif -%}
+      {%- set st.f = st.f * 0.4 -%}
+    {%- endfor -%}
+  {%- endfor -%}
+  {%- set srt = nx.l | sort(attribute='p', reverse=true) -%}
+  {%- if fixed is none -%}{%- set bm.l = srt[:16] -%}
+  {%- else -%}{%- set bm.l = (srt | selectattr('s') | list)[:8] + (srt | rejectattr('s') | list)[:8] -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- set done = (bm.l | selectattr('s') | list) or bm.l -%}
+{%- if done -%}{{ (done | sort(attribute='p', reverse=true))[0].o[:-1] | join('|') }}{%- endif -%}
+{%- endmacro -%}
+
+{#- pronunciation of a word that is not in the lexicon, '' if it cannot be read -#}
+{%- macro lts(word) -%}
+{%- set w = namespace(s=word | lower | replace('’', "'")) -%}
+{#- doubled consonants and "ck" say one sound -#}
+{%- for c in ['b', 'c', 'd', 'f', 'g', 'h', 'j', 'k', 'l', 'm', 'n', 'p', 'q', 'r', 's', 't', 'v', 'w', 'x', 'y', 'z'] -%}{%- set w.s = w.s | replace(c ~ c, c) -%}{%- endfor -%}
+{%- set w.s = w.s | replace('ck', 'k') -%}
+{%- if w.s | length >= 2 and full(w.s, "[a-z']+") -%}
+  {#- first the sounds, then the stress marks on those sounds -#}
+  {%- set first = lts_search(w.s, none) -%}
+  {%- if first or w.s | length == 0 -%}
+    {%- set sounds = first.split('|') | map('replace', 'ˈ', '') | map('replace', 'ˌ', '') | list -%}
+    {%- if sounds | length == w.s | length -%}{{ lts_search(w.s, sounds) | replace('|', '') }}{%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{#- a word missing from the lexicon: its predicted pronunciation, spelled out if that has no vowel, else unk -#}
+{%- macro fallback(word) -%}
+{%- set ps = lts(word) -%}
+{%- if ps and tts_norm_scan(ps, '[' ~ V ~ ']') | selectattr('rule') | list -%}{{ ps }}
+{%- else -%}{{ get_nnp(word) or unk }}
+{%- endif -%}
 {%- endmacro -%}
 
 {%- macro parent_tag(tag) -%}
@@ -154,7 +219,7 @@
 {%- if n < 5 or not word.endswith('ing') -%}
 {%- elif n > 5 and is_known(word[:-3]) -%}{{ sfx_ing(lookup(word[:-3], tag, stress, fv)) }}
 {%- elif is_known(word[:-3] ~ 'e') -%}{{ sfx_ing(lookup(word[:-3] ~ 'e', tag, stress, fv)) }}
-{%- elif n > 5 and tts_norm_scan(word, '(?:([bcdgklmnprstvxz])%1|ck)ing$') | length > 0 and is_known(word[:-4]) -%}{{ sfx_ing(lookup(word[:-4], tag, stress, fv)) }}
+{%- elif n > 5 and tts_norm_scan(word, '(?:bb|cc|dd|gg|kk|ll|mm|nn|pp|rr|ss|tt|vv|xx|zz|ck)ing$') | selectattr('rule') | list and is_known(word[:-4]) -%}{{ sfx_ing(lookup(word[:-4], tag, stress, fv)) }}
 {%- endif -%}
 {%- endmacro -%}
 
@@ -361,13 +426,17 @@
 {%- for s in tts_norm_scan(text, '%a+(?:[\'’]%a+)*') | reverse -%}
   {%- if s.rule -%}
     {%- set p = lex_word(s.text, tag, ns.fv) -%}
-    {%- if not p -%}{%- set ns.bad = true -%}{%- set p = unk -%}{%- endif -%}
+    {%- if not p -%}{%- set ns.bad = true -%}{%- endif -%}
     {%- set ns.parts = [{'t': s.text, 'p': p}] + ns.parts -%}
     {%- set ns.fv = next_fv(p, ns.fv) -%}
   {%- endif -%}
 {%- endfor -%}
 {%- set n = ns.parts | length -%}
 {%- set d = namespace(demote=[]) -%}
+{#- a part is missing from the lexicon: read the compound part by part -#}
+{%- if ns.bad -%}
+  {%- for x in ns.parts -%}{{ x.p or fallback(x.t) }}{%- endfor -%}
+{%- else -%}
 {%- if not ns.bad -%}
   {%- set k = namespace(keys=[]) -%}
   {%- for x in ns.parts -%}
@@ -382,6 +451,7 @@
 {%- endif -%}
 {%- for x in ns.parts -%}{{ apply_stress(x.p, -0.5) if loop.index0 in d.demote else x.p }}{%- endfor -%}
 {%- endif -%}
+{%- endif -%}
 {%- endmacro -%}
 
 {#- nxt: next token text ('' at end) -#}
@@ -394,7 +464,7 @@
 {#- trailing closing quote: moments’ -> mˈOmᵊnts” -#}
 {%- elif w.endswith("'") and lex_word(w[:-1], tag, fv) -%}{{ lex_word(w[:-1], tag, fv) }}”
 {#- unknown name + 's -#}
-{%- elif w.endswith("'s") -%}{{ (lex_word(w[:-2], tag, fv) or unk) ~ gold("'s") }}
+{%- elif w.endswith("'s") -%}{{ (lex_word(w[:-2], tag, fv) or fallback(w[:-2])) ~ gold("'s") }}
 {%- endif -%}
 {%- endmacro -%}
 
@@ -456,7 +526,7 @@
   {%- if s.rule == 'wdot' and has(s.text) -%}
     {%- set ps = lex_word(s.text, tag, ns.fv) -%}
   {%- elif s.rule == 'wdot' -%}
-    {%- set w = lex_word(s.text[:-1], tag, 'none') or unk -%}
+    {%- set w = lex_word(s.text[:-1], tag, 'none') or fallback(s.text[:-1]) -%}
     {%- set ps = w ~ '.' -%}
   {%- elif s.rule is none -%}
     {%- set ps = tts_norm_sub(s.text, '%S', '') -%}
@@ -469,7 +539,7 @@
   {%- elif s.rule == 'cmpd' -%}
     {%- set ps = compound(s.text, tag, ns.fv) -%}
   {%- elif s.rule == 'word' -%}
-    {%- set ps = word_tok(s.text, tag, ns.fv, ns.fto, ns.next_text) or unk -%}
+    {%- set ps = word_tok(s.text, tag, ns.fv, ns.fto, ns.next_text) or fallback(s.text) -%}
   {%- elif s.rule == 'sym' -%}
     {%- set ps = lex_word(s.text, tag, ns.fv) or unk -%}
   {%- elif s.rule == 'dash' -%}

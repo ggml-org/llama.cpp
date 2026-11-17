@@ -3,6 +3,10 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import json
+import math
+import re
+from collections import Counter, defaultdict
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -72,6 +76,127 @@ def _load_modules(dir_model: Path, modules: Iterable[str]) -> dict[str, dict[str
     return {m: {k.removeprefix("module."): v for k, v in state[m].items()} for m in modules}
 
 
+def _g2p_fallback(lexicons: list[dict[str, Any]]) -> dict[str, Any]:
+    # pronunciation model for the words missing from the lexicon, learned from the lexicon itself
+    # a joint n-gram model over units "letter:sounds", decoded by the "tts" template with a beam search:
+    #   key "<4 units before> <letter>" (or fewer units, down to the letter alone) -> {sounds: probability}
+    # "<s>" pads the start of a word, the letter "$" is its end
+    order, min_count, stress = 5, 3, "\u02c8\u02cc"
+    vowels = set("AIOQWYaiu\u00e6\u0251\u0252\u0254\u0259\u025b\u025c\u026a\u028a\u028c\u1d7b\u1d4a")
+
+    def sounds(ps: str) -> list[str]:
+        # a stress mark goes with the sound after it, a length mark with the one before
+        out: list[str] = []
+        pre = ""
+        for c in ps:
+            if c in stress:
+                pre += c
+            elif c == "\u02d0" and out:
+                out[-1] += c
+            else:
+                out.append(pre + c)
+                pre = ""
+        return out
+
+    def penalty(letter: str, chunk: str) -> float:
+        # a consonant letter says consonants only; a vowel letter says a vowel, with at most a glide
+        flat = [c for c in chunk if c not in stress and c != "\u02d0"]
+        n_vowel = sum(c in vowels for c in flat)
+        if letter in "bcdfgjkmnpqstvxz" and n_vowel > 0:
+            return -8.0
+        if letter in "aeiou" and flat and (n_vowel == 0 or any(c not in vowels and c not in "jw" for c in flat)):
+            return -8.0
+        return 0.0
+
+    words: dict[str, list[str]] = {}
+    for lexicon in lexicons:
+        for word, v in lexicon.items():
+            ps = v["DEFAULT"] if isinstance(v, dict) else v
+            # same spelling normalization as the template: doubled consonants and "ck" say one sound
+            w = re.sub(r"([b-df-hj-np-tv-z])\1", r"\1", word.lower()).replace("ck", "k")
+            if ps and " " not in ps and len(w) >= 2 and re.fullmatch(r"[a-z']+", w) and w not in words:
+                t = sounds(ps)
+                if len(t) <= 2 * len(w):
+                    words[w] = t
+
+    def align(w: str, t: list[str], cost: dict[str, dict[str, float]]) -> list[str] | None:
+        # best split of the sounds over the letters, each letter takes 0, 1 or 2 of them
+        n_l, n_t = len(w), len(t)
+        two = [t[j] + t[j + 1] for j in range(n_t - 1)]
+        best = [[-1e18] * (n_t + 1) for _ in range(n_l + 1)]
+        back = [[0] * (n_t + 1) for _ in range(n_l + 1)]
+        best[0][0] = 0.0
+        for i in range(n_l):
+            letter = w[i]
+            row = cost.setdefault(letter, {})
+            cur, nxt, bk = best[i], best[i + 1], back[i + 1]
+            # the sounds left must fit in the letters left
+            for j in range(max(0, n_t - 2 * (n_l - i)), n_t + 1):
+                base = cur[j]
+                if base < -1e17:
+                    continue
+                for k, chunk in ((0, ""), (1, t[j] if j < n_t else None), (2, two[j] if j + 1 < n_t else None)):
+                    if chunk is None:
+                        break
+                    c = row.get(chunk)
+                    if c is None:
+                        # not seen yet for this letter
+                        c = row[chunk] = -12.0 + penalty(letter, chunk)
+                    if base + c > nxt[j + k]:
+                        nxt[j + k] = base + c
+                        bk[j + k] = k
+        if best[n_l][n_t] < -1e17:
+            return None
+        out: list[str] = []
+        j = n_t
+        for i in range(n_l, 0, -1):
+            k = back[i][j]
+            out.append("".join(t[j - k:j]))
+            j -= k
+        return out[::-1]
+
+    # hard EM: align with the current letter -> sounds costs, count, repeat
+    # the costs are learned on a sample of the words, then every word is aligned once
+    def step(items: Iterable[tuple[str, list[str]]], cost: dict[str, dict[str, float]]) -> list[tuple[str, list[str]]]:
+        return [(w, a) for w, a in ((w, align(w, t, cost)) for w, t in items) if a is not None]
+
+    sample = list(words.items())[::max(1, len(words) // 20000)]
+    cost: dict[str, dict[str, float]] = {}
+    for _ in range(5):
+        counts: dict[str, Counter[str]] = defaultdict(Counter)
+        for w, a in step(sample, cost):
+            for c, o in zip(w, a):
+                counts[c][o] += 1
+        # a silent letter is mildly discouraged, so that a sound stays on the letter that carries it
+        cost = {c: {o: math.log(n / sum(cnt.values())) - (0.5 if o == "" else 0.0) + penalty(c, o) for o, n in cnt.items()}
+                for c, cnt in counts.items()}
+    aligned = step(words.items(), cost)
+
+    # counts of a unit after each of its contexts, from 4 units down to none
+    ngram: dict[str, Counter[str]] = defaultdict(Counter)
+    n_ctx: Counter[str] = Counter()
+    for w, a in aligned:
+        units = ["<s>"] * (order - 1) + [c + ":" + o for c, o in zip(w, a)] + ["$:"]
+        for i in range(order - 1, len(units)):
+            letter, _, o = units[i].partition(":")
+            for n in range(order):
+                ctx = " ".join(units[i - n:i])
+                ngram[(ctx + " " if ctx else "") + letter][o] += 1
+                n_ctx[ctx] += 1
+
+    # the probability is over every unit that follows the context, not only the ones of this letter:
+    # how likely the letter is after the sounds chosen so far is what lets the search drop a bad choice
+    model: dict[str, Any] = {}
+    for key, cnt in ngram.items():
+        ctx, _, letter = key.rpartition(" ")
+        # the two shortest contexts keep every reading that the letter has at least min_count times in the lexicon
+        kept = {o: float(f"{n / n_ctx[ctx]:.4g}") for o, n in cnt.most_common()
+                if n >= min_count or (key.count(" ") < 2 and ngram[letter][o] >= min_count)}
+        if kept:
+            model[key] = kept
+    return model
+
+
 def _g2p_dicts() -> dict[str, dict[str, Any]] | None:
     # dictionaries of the "tts" template: the misaki lexicon and the nltk averaged perceptron tagger
     spec = importlib.util.find_spec("misaki")
@@ -96,11 +221,20 @@ def _g2p_dicts() -> dict[str, dict[str, Any]] | None:
     classes = sorted(load(Path(f"{base}.classes.json")))
     cid = {c: f"c{i}" for i, c in enumerate(classes)}
     weights = load(Path(f"{base}.weights.json"))
+    lex = {
+        "gold":      load(data / "us_gold.json"),
+        "silver":    load(data / "us_silver.json"),
+        "gold_gb":   load(data / "gb_gold.json"),
+        "silver_gb": load(data / "gb_silver.json"),
+    }
+    logger.info("gguf: learning the pronunciation of unknown words from the lexicon, this takes a few minutes")
+    # one process per variant
+    with ProcessPoolExecutor(max_workers=2) as pool:
+        lts, lts_gb = pool.map(_g2p_fallback, [[lex["gold"], lex["silver"]], [lex["gold_gb"], lex["silver_gb"]]])
     return {
-        "gold":        load(data / "us_gold.json"),
-        "silver":      load(data / "us_silver.json"),
-        "gold_gb":     load(data / "gb_gold.json"),
-        "silver_gb":   load(data / "gb_silver.json"),
+        **lex,
+        "lts":         lts,
+        "lts_gb":      lts_gb,
         "pos_weights": {f: {cid[t]: w for t, w in tw.items()} for f, tw in weights.items()},
         "pos_tagdict": load(Path(f"{base}.tagdict.json")),
         "pos_classes": {"": classes},

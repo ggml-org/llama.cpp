@@ -328,7 +328,7 @@ llama-tts -m kokoro.gguf \
 ```
 
 The model speaks phonemes. Only English has a text to phonemes step (the model's `tts` chat template, with the pronunciation dictionary stored in the model):
-- a word missing from the dictionary (mostly rare names) is skipped: the reference falls back to espeak-ng for it, which llama.cpp does not have
+- the pronunciation of a word missing from the dictionary (mostly rare names) is predicted from its spelling, by a model that the converter learns from the dictionary. The reference uses espeak-ng for these words; the prediction is about as accurate, but it is not the same, so such a word can sound different from the reference
 - a text longer than 510 phonemes is split at sentence ends and spoken segment by segment
 
 **Other languages, or your own phonemes:**
@@ -358,7 +358,7 @@ python convert_hf_to_gguf.py path/to/Kokoro-82M --outfile kokoro.gguf
 python convert_hf_to_gguf.py path/to/Kokoro-82M --mmproj --outfile mmproj-kokoro.gguf
 ```
 
-The pronunciation dictionary and the part-of-speech tagger of the `tts` template come from the `misaki` and `nltk` python packages:
+The pronunciation dictionary and the part-of-speech tagger of the `tts` template come from the `misaki` and `nltk` python packages. The converter also learns the spelling-to-sound model for unknown words from that dictionary, which adds about 15 seconds:
 
 ```sh
 pip install misaki nltk
