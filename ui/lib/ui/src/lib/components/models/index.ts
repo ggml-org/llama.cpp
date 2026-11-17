@@ -3,6 +3,7 @@
  * what the user did out; fetching, downloading and loading models stay in each app.
  */
 export { default as ModelCard } from './ModelCard.svelte';
+export { default as ModelDraftSidecars } from './ModelDraftSidecars.svelte';
 export { default as ModelCapabilityIcons } from './ModelCapabilityIcons.svelte';
 export { default as ModelDownloadProgressBar } from './ModelDownloadProgressBar.svelte';
 export { default as ModelFamilyCard } from './ModelFamilyCard.svelte';

@@ -2,12 +2,12 @@
 	import ModelAvatar from '../ModelAvatar.svelte';
 	import ModelCapabilities from '../ModelCapabilities.svelte';
 	import ModelContext from '../ModelContext.svelte';
-	import ModelDownloadProgressBar from '../ModelDownloadProgressBar.svelte';
 	import ModelDraftSubline from '../ModelDraftSubline.svelte';
 	import ModelId from '../ModelId.svelte';
 	import ModelsManagerStatusCell from './ModelsManagerStatusCell.svelte';
 	import { modelRowActions } from './row-actions';
 	import { configuredContext, downloadProgressFor, isRowControlClick } from './utils';
+	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
 	import { Heart, MoreHorizontal } from '@lucide/svelte';
 	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
 	import { MODEL_ROW_GRID_CLASS, MODEL_ROW_TRAILING_CELL_CLASS } from '#lib/constants/index.ts';

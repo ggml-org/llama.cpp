@@ -3,6 +3,8 @@
 	"compilerOptions": {
 		"paths": {
 			"@ggml-org/llama-ui/ui/*": ["../../lib/ui/src/lib/components/ui/*/index.ts"],
+			"@ggml-org/llama-ui/app/*": ["../../lib/ui/src/lib/components/app/*/index.ts"],
+			"@ggml-org/llama-ui/models": ["../../lib/ui/src/lib/components/models/index.ts"],
 			"@ggml-org/llama-ui/utils": ["../../lib/ui/src/lib/components/ui/utils.ts"],
 			"@ggml-org/llama-ui/styles/*": ["../../lib/ui/src/lib/styles/*"],
 			"@ggml-org/llama-ui/theme.css": ["../../lib/ui/src/lib/styles/theme.css"],
@@ -23,7 +25,7 @@
 			"mode-watcher": ["./node_modules/mode-watcher"],
 			"mode-watcher/*": ["./node_modules/mode-watcher/*"],
 			"svelte": ["./node_modules/svelte"],
-			"svelte/*": ["./node_modules/svelte/*"],
+			"svelte/*": ["./node_modules/svelte/*", "./node_modules/svelte/types/index.d.ts"],
 			"tailwind-merge": ["./node_modules/tailwind-merge"],
 			"tailwind-merge/*": ["./node_modules/tailwind-merge/*"],
 			"tailwind-variants": ["./node_modules/tailwind-variants"],

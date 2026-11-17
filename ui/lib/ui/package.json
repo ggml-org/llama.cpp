@@ -34,6 +34,14 @@
 			"types": "./dist/components/ui/*/index.d.ts",
 			"svelte": "./dist/components/ui/*/index.js"
 		},
+		"./app/*": {
+			"types": "./dist/components/app/*/index.d.ts",
+			"svelte": "./dist/components/app/*/index.js"
+		},
+		"./models": {
+			"types": "./dist/components/models/index.d.ts",
+			"svelte": "./dist/components/models/index.js"
+		},
 		"./utils": {
 			"types": "./dist/components/ui/utils.d.ts",
 			"svelte": "./dist/components/ui/utils.js"

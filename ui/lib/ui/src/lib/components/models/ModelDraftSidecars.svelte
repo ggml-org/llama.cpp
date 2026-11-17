@@ -1,24 +1,23 @@
+<!--
+	A model's draft sidecars, one badge each, titled with the sidecar's own quant when it has one.
+-->
 <script lang="ts">
-	import { MODEL_VARIANT_BADGE_CLASS } from '#lib/constants/index.ts';
-	import type { ModelSidecarBadge } from '#lib/types/models.js';
-	import { isAuxSidecar } from '#lib/utils/index.ts';
+	import { MODEL_VARIANT_BADGE_CLASS } from '../../models/constants';
+	import type { ModelDraftSidecarBadge } from '../../models/types';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		/** Draft sidecars available for the model, each with its own quant. */
-		draftSidecars?: ModelSidecarBadge[];
+		draftSidecars?: ModelDraftSidecarBadge[];
 	}
 
 	let { draftSidecars = [] }: Props = $props();
 
-	// the router listing and the --model-draft args both report a model's drafts, so
-	// the same sidecar can arrive twice
+	// an app can learn of the same sidecar from more than one place
 	let badges = $derived.by(() => {
 		const seen = new SvelteSet<string>();
 
 		return draftSidecars.filter((badge) => {
-			if (isAuxSidecar(badge.kind)) return false;
-
 			const key = `${badge.kind}:${badge.quant ?? ''}`;
 
 			if (seen.has(key)) return false;

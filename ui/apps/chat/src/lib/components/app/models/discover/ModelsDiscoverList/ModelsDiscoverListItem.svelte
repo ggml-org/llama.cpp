@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelDownloadProgressBar from '../../ModelDownloadProgressBar.svelte';
 	import ModelDraftSubline from '../../ModelDraftSubline.svelte';
 	import ModelId from '../../ModelId.svelte';
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
+	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
 	import { Pause, Play, X } from '@lucide/svelte';
 	import { ActionIcon } from '#lib/components/app/index.ts';
 	import { HF_MMPROJ_FILENAME_TOKEN, MODEL_ID } from '#lib/constants/index.ts';

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ActionIcon from './ActionIcon.svelte';
+	import { ActionIcon } from '@ggml-org/llama-ui/app/actions';
 	import { Check, Copy } from '@lucide/svelte';
 	import { COPY_FEEDBACK_RESET_MS, ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { copyToClipboard } from '#lib/utils/index.ts';

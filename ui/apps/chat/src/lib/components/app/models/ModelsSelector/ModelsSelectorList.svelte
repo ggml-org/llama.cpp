@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
+	import { Logo } from '@ggml-org/llama-ui/app/misc';
 	import { Heart, Power } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
@@ -8,7 +9,6 @@
 		ModelsSection,
 		ModelsSelectorOption
 	} from '#lib/components/app/index.ts';
-	import Logo from '#lib/components/app/misc/Logo.svelte';
 	import {
 		LOCAL_BACKEND_ID,
 		MODEL_ROW_WINDOW,

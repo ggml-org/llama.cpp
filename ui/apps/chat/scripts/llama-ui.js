@@ -20,6 +20,8 @@ const source = `${root}src/lib`;
 /** [import specifier, source path]; `*` stands for one path segment or more. */
 const LLAMA_UI_EXPORTS = [
 	['@ggml-org/llama-ui/ui/*', `${source}/components/ui/*/index.ts`],
+	['@ggml-org/llama-ui/app/*', `${source}/components/app/*/index.ts`],
+	['@ggml-org/llama-ui/models', `${source}/components/models/index.ts`],
 	['@ggml-org/llama-ui/utils', `${source}/components/ui/utils.ts`],
 	['@ggml-org/llama-ui/styles/*', `${source}/styles/*`],
 	['@ggml-org/llama-ui/theme.css', `${source}/styles/theme.css`],
@@ -58,6 +60,11 @@ export function llamaUiPaths(nodeModules) {
 		paths[name] = [`${nodeModules}/${name}`];
 		paths[`${name}/*`] = [`${nodeModules}/${name}/*`];
 	}
+
+	// Svelte declares the subpaths with no file of their own (svelte/reactivity, svelte/attachments) in
+	// types/index.d.ts, which only its package exports point at; without this fallback, a library source
+	// that imports one would get its types from a second copy of Svelte in ui/lib/ui/node_modules
+	paths['svelte/*'] = [`${nodeModules}/svelte/*`, `${nodeModules}/svelte/types/index.d.ts`];
 
 	// the icons sit behind lucide's package exports, which a path mapping does not read
 	paths['@lucide/svelte/icons/*'] = [`${nodeModules}/@lucide/svelte/dist/icons/*`];

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ModelDownloadProgressBar from '../../../ModelDownloadProgressBar.svelte';
 	import { labelFor } from './download-options.utils';
+	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Check, Download, Loader2, Pause, Play, RotateCw, X } from '@lucide/svelte';
 	import { HuggingFaceService } from '#lib/services/index.ts';

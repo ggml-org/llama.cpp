@@ -1,9 +1,9 @@
 <script lang="ts">
-	import ModelDownloadProgressBar from '../../ModelDownloadProgressBar.svelte';
 	import { downloadProgressFor } from '../utils';
 	import ModelsManagerModelConfigurationActions from './ModelsManagerModelConfigurationActions.svelte';
 	import ModelsManagerModelConfigurationHeader from './ModelsManagerModelConfigurationHeader.svelte';
 	import ModelsManagerModelConfigurationInformation from './ModelsManagerModelConfigurationInformation.svelte';
+	import { ModelDownloadProgressBar } from '@ggml-org/llama-ui/models';
 	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Trash2 } from '@lucide/svelte';

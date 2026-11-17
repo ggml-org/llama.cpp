@@ -1,8 +1,8 @@
 <script lang="ts">
-	import ModelCapabilityIcons from '../../ModelCapabilityIcons.svelte';
 	import ModelOrgAvatar from '../../ModelOrgAvatar.svelte';
 	import ModelsDiscoverDetailsHfHubStats from './ModelsDiscoverDetailsHfHubStats.svelte';
 	import ModelsDiscoverDetailsMetadata from './ModelsDiscoverDetailsMetadata.svelte';
+	import { ModelCapabilityIcons } from '@ggml-org/llama-ui/models';
 	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { ExternalLink } from '@lucide/svelte';
 	import { HuggingFaceService } from '#lib/services/index.ts';

@@ -24,6 +24,12 @@ export interface ModelQuantCompanion {
 	onDisk?: boolean;
 }
 
+/** A draft sidecar a model comes with, badged with its own quant when its file names one. */
+export interface ModelDraftSidecarBadge {
+	kind: string;
+	quant?: string | null;
+}
+
 export interface ModelDownloadProgress {
 	downloadedBytes: number;
 	totalBytes: number;
