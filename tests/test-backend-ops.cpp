@@ -12296,13 +12296,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 8, 1, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NEOX));
     test_cases.emplace_back(new test_rms_norm_mul_rope({128, 8, 1, 1}, 1e-6f, false, true,  true, GGML_ROPE_TYPE_NEOX));
+    test_cases.emplace_back(new test_rms_norm_mul_rope({256, 8, 1, 1}, 1e-6f, false, false, true, GGML_ROPE_TYPE_NEOX));
+    test_cases.emplace_back(new test_rms_norm_mul_rope({256, 8, 1, 1}, 1e-6f, false, true,  true, GGML_ROPE_TYPE_NEOX));
 
     // ne[2] > 65535 exceeds the CUDA gridDim.y limit (#27901)
     test_cases.emplace_back(new test_rms_norm_mul_rope({4, 1, 65536, 1}, 1e-6f, false, false, false, GGML_ROPE_TYPE_NORMAL));
     test_cases.emplace_back(new test_rms_norm_mul_rope({4, 1, 65536, 1}, 1e-6f, false, true,  false, GGML_ROPE_TYPE_NEOX));
 
     for (int mode : {GGML_ROPE_TYPE_NORMAL, GGML_ROPE_TYPE_NEOX, GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE}) {
-        for (int64_t n : {64, 128, 1024}) {
+        for (int64_t n : {64, 128, 256, 1024}) {
             for (bool truncate : {false, true}) {
                 test_cases.emplace_back(new test_rms_norm_mul_rope({n, 2, 3, 1}, 1e-6f, false, false, true, mode, true, true, GGML_TYPE_F16, true, truncate));
                 for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
