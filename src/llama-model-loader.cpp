@@ -1829,6 +1829,12 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
+#if defined(__linux__)
+                // with lazy tensors the mapping is not populated up front, see llama_mmap
+                if (use_mmap && lazy.any()) {
+                    llama_prefetch({{ data, n_size }});
+                }
+#endif
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
         } else {
