@@ -344,6 +344,7 @@ llama_context::llama_context(
 
     cparams.flash_attn = params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cparams.auto_fa    = params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO;
+    cparams.auto_fa_user = cparams.auto_fa;
 
     // the KV cache is shared with ctx_other, so follow its flash attention setting instead of resolving it here:
     // the probe disables it when the layers and the shared KV are on different devices, which breaks a quantized V cache
@@ -1983,7 +1984,7 @@ static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input 
 clip_subcontext * llama_context::clip_sub(const clip_model & m) {
     auto & sub = clip_subs[&m];
     if (!sub) {
-        sub = std::make_unique<clip_subcontext>(m, cparams.flash_attn);
+        sub = std::make_unique<clip_subcontext>(m, llama_model_clip::engine_flash_attn(m, cparams));
         clip_subcontext * s = sub.get();
         s->exec = [this, s](clip_subctx_encode_params * req) { return clip_exec(*s, req); };
         ggml_backend_dev_t dev_state = model.dev_output();
@@ -2178,7 +2179,8 @@ clip_gen_ctx & llama_context::clip_gen_host() {
             if (g->proj_type == PROJECTOR_TYPE_YUE2_GEN && !clip.path.empty()) {
                 clip_yue2_nar.reset(clip_yue2_nar_load(clip.path.c_str(), model.dev_output(), g->hparams));
                 clip_gen->yue2_nar        = clip_yue2_nar.get();
-                clip_gen->yue2_flash_attn = cparams.flash_attn ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
+                clip_gen->yue2_flash_attn = cparams.auto_fa_user ? LLAMA_FLASH_ATTN_TYPE_AUTO
+                                          : cparams.flash_attn   ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
             }
         }
         if (const clip_model * a = clip.engine_audio()) {

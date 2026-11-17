@@ -148,7 +148,7 @@ int32_t mtmd_helper_decode_image_chunk(
                 llama_batch_ext_free(batch);
                 return ret;
             }
-            LOG_WRN("%s decoded (libllama media rows %u-%u) in %" PRId64 " ms\n", name, r, r + n - 1, ggml_time_ms() - t1);
+            LOG_INF("%s decoded (batch %u/%u) in %" PRId64 " ms\n", name, r / step + 1, (n_rows + step - 1) / step, ggml_time_ms() - t1);
         }
         llama_batch_ext_free(batch);
         *new_n_past = n_past + llama_media_n_pos(lmedia);

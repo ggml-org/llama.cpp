@@ -39,6 +39,7 @@ struct llama_cparams {
     bool offload_kqv;
     bool flash_attn;
     bool auto_fa;
+    bool auto_fa_user; // auto was asked for: the clip towers that opt out of it (clip_model::flash_attn_auto) run without
     bool fused_lid;          // use fused lightning indexer
     bool auto_flid;
     bool fused_dsv4_hc_pre;

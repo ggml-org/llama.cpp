@@ -100,6 +100,8 @@ struct llama_media_proc {
     ~llama_media_proc();
 };
 
+struct llama_media_track;
+
 struct llama_media_layout {
     struct piece {
         std::vector<llama_token> tokens;
@@ -114,6 +116,8 @@ struct llama_media_layout {
 
     size_t   n_tokens       = 0; // tokens of the pieces so far
     uint32_t n_images_added = 0; // images laid out so far
+
+    std::unique_ptr<llama_media_track> track; // see llama_media_layout_begin_track()
 
     ~llama_media_layout();
 

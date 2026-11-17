@@ -208,6 +208,10 @@ void llama_media_proc_video_markers(const struct llama_media_proc * proc, const 
     *end = proc->cfg->vid_end.c_str();
 }
 
+bool llama_media_proc_video_has_soundtrack(const struct llama_media_proc * proc) {
+    return proc->cfg->video_has_soundtrack();
+}
+
 int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc) {
     return proc->cfg->v ? std::max(proc->cfg->v->n_temporal_merge(), 1) : 1;
 }
@@ -215,6 +219,13 @@ int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc) {
 //
 // layout
 //
+
+// the pieces of a track and the rows assigned so far
+struct llama_media_track {
+    std::vector<clip_bitmap> pieces;
+    clip_tokenizer::soundtrack st;
+    size_t next = 0;
+};
 
 llama_media_layout::~llama_media_layout() {
     for (auto & p : pieces) {
@@ -261,29 +272,20 @@ int32_t llama_media_layout_add_tokens(struct llama_media_layout * lay, const lla
     return 0;
 }
 
-// lays out one media with the clip engine, appends the chunks it becomes as pieces
-static int32_t llama_media_layout_add_bitmaps(struct llama_media_layout * lay, const std::vector<clip_bitmap> & bitmaps) {
+// runs one step of the clip tokenizer, appends the chunks it yields as pieces
+template <typename F>
+static int32_t llama_media_layout_run(struct llama_media_layout * lay, F && step) {
     const llama_media_proc & proc = *lay->proc;
     const clip_layout_config & cfg = *proc.cfg;
-
-    const bool is_audio = bitmaps[0].is_audio;
-    if ((is_audio && cfg.a == nullptr) || (!is_audio && cfg.v == nullptr)) {
-        return 1;
-    }
 
     std::vector<clip_input_chunk> out;
     clip_tokenizer tk(cfg, out);
     tk.n_images_added  = lay->n_images_added;
     tk.n_tokens_before = lay->n_tokens;
 
-    std::vector<const clip_bitmap *> ptrs;
-    for (const auto & b : bitmaps) {
-        ptrs.push_back(&b);
-    }
-
     int32_t res = 0;
     try {
-        res = tk.add_media(ptrs);
+        res = step(tk);
     } catch (const std::exception & e) {
         LLAMA_LOG_ERROR("%s: %s\n", __func__, e.what());
         return 2;
@@ -327,6 +329,22 @@ static int32_t llama_media_layout_add_bitmaps(struct llama_media_layout * lay, c
     }
 
     return 0;
+}
+
+// lays out one media with the clip engine
+static int32_t llama_media_layout_add_bitmaps(struct llama_media_layout * lay, const std::vector<clip_bitmap> & bitmaps) {
+    const clip_layout_config & cfg = *lay->proc->cfg;
+
+    const bool is_audio = bitmaps[0].is_audio;
+    if ((is_audio && cfg.a == nullptr) || (!is_audio && cfg.v == nullptr)) {
+        return 1;
+    }
+
+    std::vector<const clip_bitmap *> ptrs;
+    for (const auto & b : bitmaps) {
+        ptrs.push_back(&b);
+    }
+    return llama_media_layout_run(lay, [&](clip_tokenizer & tk) { return tk.add_media(ptrs); });
 }
 
 static clip_bitmap llama_media_bitmap_rgb(uint32_t nx, uint32_t ny, const uint8_t * rgb, const char * id) {
@@ -373,6 +391,45 @@ int32_t llama_media_layout_add_audio(struct llama_media_layout * lay, const floa
         b.data.assign((const uint8_t *) pcm, (const uint8_t *) (pcm + n_samples));
     }
     return llama_media_layout_add_bitmaps(lay, { std::move(b) });
+}
+
+int32_t llama_media_layout_begin_track(struct llama_media_layout * lay, const float * const * pcm, const size_t * n_samples, int32_t n_pieces) {
+    if (lay->proc->cfg->a == nullptr) {
+        return 1;
+    }
+    if (n_pieces < 1) {
+        return 2;
+    }
+    auto track = std::make_unique<llama_media_track>();
+    track->pieces.resize(n_pieces);
+    for (int32_t i = 0; i < n_pieces; ++i) {
+        clip_bitmap & b = track->pieces[i];
+        b.nx       = (uint32_t) n_samples[i];
+        b.ny       = 1;
+        b.is_audio = true;
+        if (pcm && pcm[i]) {
+            b.data.assign((const uint8_t *) pcm[i], (const uint8_t *) (pcm[i] + n_samples[i]));
+        }
+    }
+    for (const auto & b : track->pieces) {
+        track->st.pieces.push_back(&b);
+    }
+    lay->track = std::move(track);
+    return 0;
+}
+
+int32_t llama_media_layout_add_track_piece(struct llama_media_layout * lay, const char * id) {
+    llama_media_track * track = lay->track.get();
+    if (track == nullptr || track->next >= track->pieces.size()) {
+        return 2;
+    }
+    clip_bitmap & b = track->pieces[track->next++];
+    b.id = id ? id : "";
+    const int32_t res = llama_media_layout_run(lay, [&](clip_tokenizer & tk) { return tk.add_soundtrack_piece(track->st, b); });
+    if (track->next == track->pieces.size()) {
+        lay->track.reset();
+    }
+    return res;
 }
 
 size_t llama_media_layout_n_pieces(const struct llama_media_layout * lay) {
@@ -689,8 +746,9 @@ struct llama_media * llama_media_init_voice(const struct llama_model * model, co
     if (it == voices.end()) {
         return nullptr;
     }
+    // a voice without rows (lfm3a) is only a name, the chat template puts it in the prompt
     const int64_t n_embd = g.n_mmproj_embd();
-    if (n_embd <= 0 || it->second.rows.empty() || it->second.rows.size() % (size_t) n_embd != 0) {
+    if (n_embd <= 0 || it->second.rows.size() % (size_t) n_embd != 0) {
         return nullptr;
     }
     auto * m = new llama_media;

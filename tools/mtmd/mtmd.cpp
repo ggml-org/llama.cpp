@@ -660,7 +660,7 @@ static llama_context * mtmd_init_encoder(llama_model * model, const mtmd_context
 static llama_context_params mtmd_gen_ctx_params(const mtmd_context_params & ctx_params, uint32_t n_seq_max) {
     llama_context_params cp = llama_context_default_params();
     cp.ctx_type          = LLAMA_CONTEXT_TYPE_GEN_CODE;
-    cp.n_ctx             = 16 * n_seq_max;
+    cp.n_ctx             = 256 * n_seq_max; // the gen states keep no KV, 256 is the smallest context of a sequence
     cp.n_batch           = n_seq_max; // one output per sequence
     cp.n_ubatch          = n_seq_max;
     cp.n_seq_max         = n_seq_max;
@@ -791,10 +791,6 @@ struct mtmd_context {
             }
         }
 
-        if (info.has_audio) {
-            LOG_WRN("%s: audio input is in experimental stage and may have reduced quality:\n"
-                    "    https://github.com/ggml-org/llama.cpp/discussions/13759\n", __func__);
-        }
     }
 
     ~mtmd_context() {
@@ -807,7 +803,7 @@ struct mtmd_context {
     }
 
     bool video_has_soundtrack() const {
-        return info.proj_v == "lfm3vl" && info.proj_a == "lfm3a";
+        return proc && llama_media_proc_video_has_soundtrack(proc);
     }
 };
 
@@ -867,6 +863,10 @@ struct mtmd_tokenizer {
 
     // the layout of the whole prompt, the text goes in too (positions, image numbering)
     llama_media_layout * lay = nullptr;
+
+    // [LFM3_OMNI] the audio pieces of a video are one soundtrack, see llama_media_layout_begin_track()
+    std::vector<std::vector<const mtmd_bitmap *>> soundtracks;
+    std::map<const mtmd_bitmap *, size_t> soundtrack_of; // piece -> index in soundtracks
 
     ~mtmd_tokenizer() {
         llama_media_layout_free(lay);
@@ -948,6 +948,7 @@ struct mtmd_tokenizer {
                 if (is_video && vid_beg[0] != 0) {
                     expanded.push_back({vid_beg, nullptr, true});
                 }
+                std::vector<const mtmd_bitmap *> pieces;
                 for (size_t i = 0;; i++) {
                     char * out_str = nullptr;
                     mtmd_bitmap * out_bm = nullptr;
@@ -960,6 +961,9 @@ struct mtmd_tokenizer {
                         if (out_bm) {
                             auto & ptr = bm_from_lazy.emplace_back(out_bm); // remember to free it later
                             expanded.push_back({"", ptr.ptr.get()});
+                            if (is_video && out_bm->is_audio && ctx->video_has_soundtrack()) {
+                                pieces.push_back(out_bm);
+                            }
                         } else if (out_str) {
                             auto & ptr = text_from_lazy.emplace_back(out_str); // remember to free it later
                             expanded.push_back({ptr, nullptr, parse_special});
@@ -973,6 +977,12 @@ struct mtmd_tokenizer {
                     } else if (res == -2) {
                         throw std::runtime_error("lazy callback returned error");
                     }
+                }
+                if (!pieces.empty()) {
+                    for (const auto * piece : pieces) {
+                        soundtrack_of[piece] = soundtracks.size();
+                    }
+                    soundtracks.push_back(std::move(pieces));
                 }
             } else {
                 expanded.push_back(std::move(p));
@@ -1140,8 +1150,8 @@ struct mtmd_tokenizer {
         // a voice is an encoded media already
         if (b0->is_voice) {
             GGML_ASSERT(bitmaps.size() == 1);
-            if (!b0->lmedia) {
-                LOG_ERR("%s: error: the voice \"%s\" holds no media\n", __func__, b0->id.c_str());
+            if (!b0->lmedia || llama_media_n_tokens(b0->lmedia.get()) == 0) {
+                LOG_ERR("%s: error: the voice \"%s\" holds no embeddings\n", __func__, b0->id.c_str());
                 return 2;
             }
             add_media_chunk(llama_media_ref(b0->lmedia.get()), b0->id);
@@ -1161,7 +1171,23 @@ struct mtmd_tokenizer {
         }
 
         int32_t res;
-        if (b0->is_audio) {
+        if (auto it = soundtrack_of.find(b0); it != soundtrack_of.end()) {
+            // the first piece hands the whole soundtrack to the layout
+            const auto & pieces = soundtracks[it->second];
+            res = 0;
+            if (b0 == pieces.front()) {
+                std::vector<const float *> pcm;
+                std::vector<size_t> n_samples;
+                for (const auto * piece : pieces) {
+                    pcm.push_back(piece->is_placeholder() ? nullptr : (const float *) piece->get_ro_buf().data());
+                    n_samples.push_back(piece->nx);
+                }
+                res = llama_media_layout_begin_track(lay, pcm.data(), n_samples.data(), (int32_t) pieces.size());
+            }
+            if (res == 0) {
+                res = llama_media_layout_add_track_piece(lay, b0->id.c_str());
+            }
+        } else if (b0->is_audio) {
             if (b0->nx == 0) {
                 LOG_ERR("%s: error: empty audio data\n", __func__);
                 return 2;

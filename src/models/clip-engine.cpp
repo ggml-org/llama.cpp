@@ -32,6 +32,10 @@ const clip_model * llama_model_clip::engine_for_ctx(enum llama_context_type type
     return nullptr;
 }
 
+bool llama_model_clip::engine_flash_attn(const clip_model & m, const llama_cparams & cparams) {
+    return cparams.flash_attn && (m.flash_attn_auto || !cparams.auto_fa_user);
+}
+
 uint32_t llama_model_clip::graph_max_nodes_hint() const {
     // native graphs: vision towers are wide (mtmd used 8192), the code predictor unrolls 15 steps with a sampler chain each
     uint32_t res = vhp.has_vision ? 8192 : 32768;
@@ -142,11 +146,11 @@ struct llama_model_clip::graph_engine : public llm_graph_context {
         if (sub == nullptr) {
             const clip_model * cm = clip.engine_for_ctx(cparams.ctx_type);
             GGML_ASSERT(cm != nullptr);
-            sub_reserve = std::make_unique<clip_subcontext>(*cm, cparams.flash_attn);
+            sub_reserve = std::make_unique<clip_subcontext>(*cm, engine_flash_attn(*cm, cparams));
             sub = sub_reserve.get();
         }
 
-        sub->flash_attn_type = cparams.flash_attn ? CLIP_FLASH_ATTN_TYPE_ENABLED : CLIP_FLASH_ATTN_TYPE_DISABLED;
+        sub->flash_attn_type = engine_flash_attn(sub->model, cparams) ? CLIP_FLASH_ATTN_TYPE_ENABLED : CLIP_FLASH_ATTN_TYPE_DISABLED;
         sub->ctx0 = ctx0;
         sub->gf   = gf;
 

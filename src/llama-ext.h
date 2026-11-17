@@ -230,6 +230,8 @@ LLAMA_API bool    llama_media_proc_video_frame_size(const struct llama_media_pro
                                                     int32_t src_w, int32_t src_h, int32_t * w, int32_t * h);
 // the text that opens and closes a video (empty strings if none), with special tokens
 LLAMA_API void    llama_media_proc_video_markers(const struct llama_media_proc * proc, const char ** beg, const char ** end);
+// true if the model hears the soundtrack of a video: its audio goes in pieces, see llama_media_layout_begin_track()
+LLAMA_API bool    llama_media_proc_video_has_soundtrack(const struct llama_media_proc * proc);
 
 // debugging of model ports, unstable: run the encoder on preprocessed input and print its rows
 // image: nx * ny * 3 normalized RGB floats; audio: nx samples broadcast to every mel bin
@@ -252,6 +254,14 @@ LLAMA_API int32_t llama_media_layout_add_frames(struct llama_media_layout * lay,
                                                 const uint8_t * const * rgb, int32_t n_frames, bool is_video, const char * id);
 // mono PCM at llama_media_proc_sample_rate()
 LLAMA_API int32_t llama_media_layout_add_audio (struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id);
+
+// an audio track cut in pieces that go into the prompt one by one, each in its own place (the soundtrack of a video,
+// each piece after its frames, see llama_media_proc_video_has_soundtrack()); it is encoded once, as one clip, and every
+// piece takes its rows of it, without audio markers
+// begin_track copies the pieces (pcm[i] can be NULL for a placeholder), add_track_piece lays out the next one;
+// a piece too short for a row adds no media
+LLAMA_API int32_t llama_media_layout_begin_track    (struct llama_media_layout * lay, const float * const * pcm, const size_t * n_samples, int32_t n_pieces);
+LLAMA_API int32_t llama_media_layout_add_track_piece(struct llama_media_layout * lay, const char * id);
 
 // realtime audio input: audio fed as it arrives, the encoder state is kept between calls
 // how text tokens are mixed into the rows is a model detail hidden inside the stream
@@ -371,7 +381,8 @@ LLAMA_API struct llama_gen_inp  llama_gen_inp_default(const struct llama_model *
 LLAMA_API size_t        llama_model_gen_read_tensor(const struct llama_model * model, const char * name, float * out, size_t n_max);
 // the idx-th predefined voice, idx 0 is the default; nullptr out of range
 LLAMA_API const char *  llama_model_gen_voice_name (const struct llama_model * model, int32_t idx);
-// a predefined voice as an encoded AUDIO media (backbone rows and the gen-side reference), matched case-insensitively
+// a predefined voice as an encoded AUDIO media (backbone rows and the gen-side reference), matched case-insensitively;
+// a voice the chat template names (lfm3a) has no rows
 LLAMA_API struct llama_media * llama_media_init_voice(const struct llama_model * model, const char * name);
 
 // one step of seq_id; returns the batch index, or -1 full, -3 bad seq_id, -6 the context does not run gen steps

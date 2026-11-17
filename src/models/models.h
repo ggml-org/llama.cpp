@@ -429,6 +429,9 @@ struct llama_model_clip : public llama_model_base {
     // the engine model whose graph a context of this type runs when no media is given (reservation)
     const clip_model * engine_for_ctx(enum llama_context_type type) const;
 
+    // flash attention of a tower: the context's, unless it was auto and the tower opts out of auto
+    static bool engine_flash_attn(const clip_model & m, const struct llama_cparams & cparams);
+
     void load_engine_hparams(const clip_model & main);
     void load_engine_tensors(llama_model_loader & ml);
 
