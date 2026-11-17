@@ -1,8 +1,8 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import { AlertTriangle, CheckCircle, Key, RefreshCw, XCircle } from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import { Input } from '#lib/components/ui/input/index.ts';
-	import Label from '#lib/components/ui/label/label.svelte';
 	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '#lib/constants/index.ts';
 	import { KeyboardKey } from '#lib/enums/index.ts';
 	import { serverStore, settingsStore } from '#lib/stores/index.ts';
@@ -129,9 +129,9 @@
 	<div class="w-full max-w-md px-4 text-center">
 		<div in:fade={{ duration: 300 }} class="mb-6">
 			<div
-				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10"
+				class="mx-auto mb-4 flex size-16 items-center justify-center rounded-full bg-destructive/10"
 			>
-				<AlertTriangle class="h-8 w-8 text-destructive" />
+				<AlertTriangle class="size-8 text-destructive" />
 			</div>
 
 			<h2 class="mb-2 text-xl font-semibold">Server Connection Error</h2>

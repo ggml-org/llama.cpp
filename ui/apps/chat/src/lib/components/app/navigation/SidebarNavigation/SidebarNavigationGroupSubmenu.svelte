@@ -1,8 +1,8 @@
 <script lang="ts">
+	import * as ContextMenu from '@ggml-org/llama-ui/ui/context-menu';
+	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import { Check, FolderInput, Plus } from '@lucide/svelte';
 	import { SearchInput } from '#lib/components/app/index.ts';
-	import * as ContextMenu from '#lib/components/ui/context-menu/index.ts';
-	import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.ts';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { MenuKind } from '#lib/enums/index.ts';
 	import { groupsStore, uiStore } from '#lib/stores/index.ts';
@@ -74,11 +74,11 @@
 		<span class="flex-1 whitespace-nowrap">{label}</span>
 	</Menu.SubTrigger>
 
+	<!-- the actions menu it opens from sits above dialogs and toasts (z-[999999]); a submenu renders
+	     apart from it, so it takes the same layer -->
 	<Menu.SubContent
-		alignOffset={-6}
-		class="w-64 p-1.5"
+		class="z-[999999] w-64 p-1.5"
 		onOpenAutoFocus={(event) => event.preventDefault()}
-		sideOffset={6}
 	>
 		<SearchInput
 			bind:ref={searchInput}

@@ -1,14 +1,14 @@
 <script lang="ts">
+	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
+	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Label } from '@ggml-org/llama-ui/ui/label';
+	import { Switch } from '@ggml-org/llama-ui/ui/switch';
 	import { ArrowRight, Copy, Edit, GitBranch, RefreshCw, Trash2 } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatMessageActionIconsBranchingControls,
 		DialogConfirmation
 	} from '#lib/components/app/index.ts';
-	import { Checkbox } from '#lib/components/ui/checkbox/index.ts';
-	import Input from '#lib/components/ui/input/input.svelte';
-	import Label from '#lib/components/ui/label/label.svelte';
-	import { Switch } from '#lib/components/ui/switch/index.ts';
 	import { getChatMessageActionsContext, getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { conversationsStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';

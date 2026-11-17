@@ -1,5 +1,5 @@
 <script lang="ts">
-	import * as AlertDialog from '#lib/components/ui/alert-dialog/index.ts';
+	import * as AlertDialog from '@ggml-org/llama-ui/ui/alert-dialog';
 
 	interface Props {
 		open: boolean;
@@ -25,12 +25,7 @@
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
 
-			<AlertDialog.Action
-				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
-				onclick={onConfirm}
-			>
-				Delete
-			</AlertDialog.Action>
+			<AlertDialog.Action onclick={onConfirm} variant="destructive">Delete</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>

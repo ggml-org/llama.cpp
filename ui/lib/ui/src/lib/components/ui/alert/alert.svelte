@@ -1,0 +1,51 @@
+<script lang="ts" module>
+	import { tv } from '../utils';
+	import type { VariantProps } from 'tailwind-variants';
+
+	export const alertVariants = tv({
+		base: 'relative grid w-full grid-cols-[0_1fr] items-start gap-y-0.5 rounded-lg border px-4 py-3 text-sm has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr] has-[>svg]:gap-x-3 [&>svg]:size-icon-md [&>svg]:translate-y-0.5 [&>svg]:text-current',
+		defaultVariants: {
+			variant: 'default'
+		},
+		variants: {
+			variant: {
+				default: 'bg-card text-card-foreground',
+				// status alerts: a soft surface and line in the status colour, the icon in it, the text as usual
+				destructive:
+					'bg-surface-danger border-line-danger-soft text-card-foreground [&>svg]:text-fg-danger *:data-[slot=alert-description]:text-muted-foreground',
+				info: 'bg-surface-info border-line-info-soft text-card-foreground [&>svg]:text-fg-info *:data-[slot=alert-description]:text-muted-foreground',
+				success:
+					'bg-surface-success border-line-success-soft text-card-foreground [&>svg]:text-fg-success *:data-[slot=alert-description]:text-muted-foreground',
+				warning:
+					'bg-surface-warning border-line-warning-soft text-card-foreground [&>svg]:text-fg-warning *:data-[slot=alert-description]:text-muted-foreground'
+			}
+		}
+	});
+
+	export type AlertVariant = VariantProps<typeof alertVariants>['variant'];
+</script>
+
+<script lang="ts">
+	import { cn, type WithElementRef } from '../utils.js';
+	import type { HTMLAttributes } from 'svelte/elements';
+
+	let {
+		children,
+		class: className,
+		ref = $bindable(null),
+		variant = 'default',
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLDivElement>> & {
+		variant?: AlertVariant;
+	} = $props();
+</script>
+
+<div
+	bind:this={ref}
+	class={cn(alertVariants({ variant }), className)}
+	data-slot="alert"
+	{...restProps}
+	role="alert"
+>
+	{@render children?.()}
+</div>

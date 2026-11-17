@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import ChatForm from '#lib/components/app/chat/ChatForm/ChatForm.svelte';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { untrack } from 'svelte';
 
 	interface Props {

@@ -1,6 +1,6 @@
 <script lang="ts">
+	import * as Dialog from '@ggml-org/llama-ui/ui/dialog';
 	import { MermaidPreview } from '#lib/components/app/content/index.ts';
-	import * as Dialog from '#lib/components/ui/dialog/index.ts';
 
 	interface Props {
 		open: boolean;

@@ -182,7 +182,9 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   webui = stdenvNoCC.mkDerivation {
     pname = "webui";
     version = llamaVersion;
-    src = lib.cleanSource ../../ui/apps/chat;
+    # the app compiles Llama UI from its source in ../../lib/ui, so the source is ui/ as a whole
+    src = lib.cleanSource ../../ui;
+    sourceRoot = "source/apps/chat";
 
     nativeBuildInputs = [
       nodejs

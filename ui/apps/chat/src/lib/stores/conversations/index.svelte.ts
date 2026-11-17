@@ -808,10 +808,14 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * @param nodeId - The new current node ID
 	 */
 	async updateCurrentNode(nodeId: string): Promise<void> {
-		if (!this.activeConversation) return;
+		const conversationId = this.activeConversation?.id;
 
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
-		this.activeConversation.currNode = nodeId;
+		if (!conversationId) return;
+
+		await DatabaseService.updateCurrentNode(conversationId, nodeId);
+
+		// the active conversation can change or close during the write
+		if (this.activeConversation?.id === conversationId) this.activeConversation.currNode = nodeId;
 	}
 
 	/**

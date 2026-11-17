@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
 	import { Plus } from '@lucide/svelte';
-	import { Button } from '#lib/components/ui/button/index.ts';
-	import * as Tooltip from '#lib/components/ui/tooltip/index.ts';
 	import { ATTACHMENT_TOOLTIP_TEXT, ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 
 	interface Props {
@@ -15,7 +15,7 @@
 <Tooltip.Root>
 	<Tooltip.Trigger class="w-full">
 		<Button
-			class="file-upload-button bg-background h-9 w-9 rounded-full p-0 shadow-sm md:h-8 md:w-8 dark:bg-muted-foreground/15"
+			class="file-upload-button bg-background size-9 rounded-full p-0 shadow-(--chat-form-key-shadow) md:size-8 dark:bg-muted-foreground/15"
 			{disabled}
 			{onclick}
 			type="button"
