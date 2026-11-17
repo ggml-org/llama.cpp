@@ -201,6 +201,26 @@ bool use_fa_bin_kernels_prefill(
 
     constexpr bool prefill_only = true;
 
+    // The repacked Q/K/V are 3D images: Q {n_q, n_batch*n_head, dk/4}, K {dk, n_kv/4, n_batch*n_head_kv},
+    // V {n_kv, dv/4, n_batch*n_head_kv}. Past the device's 3D image limits clCreateImage fails and the
+    // call asserts (X2-90: V is n_kv wide, so any prefill past ~16k tokens of context), so decline those shapes.
+    const size_t n_kv   = (size_t) k->ne[1];
+    const size_t n_bh   = (size_t) q->ne[3] * (size_t) q->ne[2];
+    const size_t n_bhkv = (size_t) q->ne[3] * (size_t) k->ne[2];
+    if ((size_t) n_q > backend_ctx->image3d_max_width || n_bh > backend_ctx->image3d_max_height ||
+        (size_t) dk / 4 > backend_ctx->image3d_max_depth ||
+        (size_t) dk > backend_ctx->image3d_max_width || (n_kv + 3) / 4 > backend_ctx->image3d_max_height ||
+        n_kv > backend_ctx->image3d_max_width || (size_t) dv / 4 > backend_ctx->image3d_max_height ||
+        n_bhkv > backend_ctx->image3d_max_depth) {
+        return false;
+    }
+
+    // q8_0 K/V at DK=512 gives wrong results here when V differs from K (f16 K/V is correct).
+    // Decline it, as this backend does without the kernel library.
+    if (is_q8_0 && dk == 512) {
+        return false;
+    }
+
     return (backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
             (is_mixed || is_q8_0) && (dk == dv)
             && (dk == 64 || dk == 128 || dk == 256 || dk == 512)
@@ -2576,6 +2596,7 @@ static void ggml_cl_flash_attn_prefill_bin(ggml_backend_t backend, const ggml_te
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 
     CL_CHECK(clReleaseMemObject(mem_tex_matrixO_1dbuf));
+    CL_CHECK(clReleaseMemObject(mem_tex_mask_fallback_1dbuf));
     CL_CHECK(clReleaseMemObject(img_q_wmm));
     CL_CHECK(clReleaseMemObject(img_k_wmm));
     CL_CHECK(clReleaseMemObject(img_v_wmm));
