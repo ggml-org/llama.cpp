@@ -521,6 +521,87 @@ mtmd_subctx_enc_state * mtmd_subcontext::enc_state_init(int32_t n_frames_max) {
     return st.release();
 }
 
+bool mtmd_subcontext::encode_kokoro(mtmd_subctx_encode_params * params) {
+    const int n_embd  = model.n_mmproj_embd();
+    const int n_style = mtmd_graph_kokoro::n_style;
+    if (params->gen_process != MTMD_SUBCTX_GEN_PROCESS_GEN_WAV || !params->codes || !params->feats || !params->gen_state || !params->out_audio) {
+        LOG_ERR("%s: kokoro takes the phoneme tokens and their backbone states\n", __func__);
+        return false;
+    }
+    const auto & tokens = *params->codes;
+    const auto & feats  = *params->feats;
+    const int n_tok = (int) tokens.size();
+    if (n_tok < 2 || feats.size() != (size_t) 2 * n_style + (size_t) n_tok * n_embd) {
+        LOG_ERR("%s: expected a voice row of %d values, then %d values for each of the %d tokens\n", __func__, 2 * n_style, n_embd, n_tok);
+        return false;
+    }
+    const int64_t n_vocab = model.cbx_tensors.at("a.gen.text.embedding.weight")->ne[1];
+    for (int32_t t : tokens) {
+        if (t < 0 || t >= n_vocab) {
+            LOG_ERR("%s: phoneme token out of range (%d, vocabulary size %lld)\n", __func__, t, (long long) n_vocab);
+            return false;
+        }
+    }
+    const std::vector<float> style_dec(feats.begin(), feats.begin() + n_style);
+    const std::vector<float> style_pred(feats.begin() + n_style, feats.begin() + 2 * n_style);
+    const float * bert = feats.data() + 2 * n_style;
+
+    auto run = [&](mtmd_subctx_kokoro_io & io) {
+        mtmd_subctx_encode_params p = *params;
+        p.kokoro    = &io;
+        p.out_audio = nullptr;
+        return encode(&p);
+    };
+
+    std::vector<float> text_cnn;
+    {
+        mtmd_subctx_kokoro_io io;
+        io.stage  = mtmd_graph_kokoro::STAGE_TEXT;
+        io.n_tok  = n_tok;
+        io.tokens = &tokens;
+        io.out0   = &text_cnn;
+        if (!run(io)) {
+            return false;
+        }
+    }
+
+    std::vector<float> shared, asr;
+    const int n_frames = mtmd_graph_kokoro::prosody(model, bert, n_embd, text_cnn.data(), n_tok, style_pred.data(), params->speed, shared, asr);
+
+    std::vector<float> f0, en;
+    {
+        mtmd_subctx_kokoro_io io;
+        io.stage    = mtmd_graph_kokoro::STAGE_F0N;
+        io.n_frames = n_frames;
+        io.x        = &shared;
+        io.style    = &style_pred;
+        io.out0     = &f0;
+        io.out1     = &en;
+        if (!run(io)) {
+            return false;
+        }
+    }
+
+    std::vector<float> har, spec;
+    {
+        mtmd_subctx_kokoro_io io;
+        io.stage    = mtmd_graph_kokoro::STAGE_DEC;
+        io.n_frames = n_frames;
+        io.n_har    = mtmd_graph_kokoro::har_source(model, f0, params->gen_state->rng, har);
+        io.x        = &asr;
+        io.style    = &style_dec;
+        io.f0       = &f0;
+        io.en       = &en;
+        io.har      = &har;
+        io.out0     = &spec;
+        if (!run(io)) {
+            return false;
+        }
+    }
+    mtmd_graph_kokoro::istft(spec, *params->out_audio);
+    return true;
+}
+
 bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     const mtmd_image_f32_batch & imgs = *params->imgs;
     int n_batch_cur = imgs.entries.size();
@@ -534,6 +615,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     // if buffers are not allocated, we need to do a warmup run to allocate them
     if (!is_allocated) {
         warmup(*params->imgs);
+    }
+
+    if (model.proj_type == PROJECTOR_TYPE_KOKORO && !params->kokoro) {
+        return encode_kokoro(params);
     }
 
     const bool needs_gen_state = params->gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE ||
@@ -1514,6 +1599,29 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             {
                 set_input_f32("inp_feats", *params->feats);
             } break;
+        case PROJECTOR_TYPE_KOKORO:
+            {
+                const auto * io = params->kokoro;
+                GGML_ASSERT(io);
+                switch (io->stage) {
+                    case mtmd_graph_kokoro::STAGE_TEXT:
+                        {
+                            std::vector<int32_t> tokens = *io->tokens;
+                            set_input_i32("inp_tokens", tokens);
+                        } break;
+                    case mtmd_graph_kokoro::STAGE_F0N:
+                        set_input_f32("inp_x",     *io->x);
+                        set_input_f32("inp_style", *io->style);
+                        break;
+                    case mtmd_graph_kokoro::STAGE_DEC:
+                        set_input_f32("inp_asr",   *io->x);
+                        set_input_f32("inp_style", *io->style);
+                        set_input_f32("inp_f0",    *io->f0);
+                        set_input_f32("inp_n",     *io->en);
+                        set_input_f32("inp_har",   *io->har);
+                        break;
+                }
+            } break;
         case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
             {
                 set_input_f32("inp_feats", *params->feats);
@@ -2399,6 +2507,22 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
+    }
+
+    if (model.proj_type == PROJECTOR_TYPE_KOKORO) {
+        const auto * io = params->kokoro;
+        auto read = [&](const char * name, std::vector<float> * out) {
+            ggml_tensor * t = ggml_graph_get_tensor(gf, name);
+            GGML_ASSERT(t != nullptr && out != nullptr);
+            out->resize(ggml_nelements(t));
+            ggml_backend_tensor_get(t, out->data(), 0, ggml_nbytes(t));
+        };
+        switch (io->stage) {
+            case mtmd_graph_kokoro::STAGE_TEXT: read("out_text", io->out0); break;
+            case mtmd_graph_kokoro::STAGE_F0N:  read("out_f0", io->out0); read("out_n", io->out1); break;
+            case mtmd_graph_kokoro::STAGE_DEC:  read("out_spec", io->out0); break;
+        }
+        return true;
     }
 
     if (embeddings != nullptr) {

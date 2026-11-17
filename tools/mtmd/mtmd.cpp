@@ -2694,6 +2694,10 @@ mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx) {
             info.type = MTMD_GEN_AUDIO_TYPE_FISH_S2;
             info.sample_rate = 44100;
             break;
+        case PROJECTOR_TYPE_KOKORO:
+            info.type = MTMD_GEN_AUDIO_TYPE_KOKORO;
+            info.sample_rate = 24000;
+            break;
         default:
             info.type = MTMD_GEN_AUDIO_TYPE_NONE;
             break;
@@ -3091,7 +3095,8 @@ mtmd_bitmap * mtmd_gen_audio_get_voice(const mtmd_context * ctx, const char * na
 
 mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
     mtmd_gen_inp inp{};
-    inp.type = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+    inp.type  = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
+    inp.speed = 1.0f;
     if (!ctx->ctx_gen_a) {
         return inp;
     }
@@ -3110,6 +3115,7 @@ mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx) {
             inp.temp  = 0.3f;
             break;
         case PROJECTOR_TYPE_SOPRANO:
+        case PROJECTOR_TYPE_KOKORO:
             inp.type = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
             break;
         case PROJECTOR_TYPE_MINIMAX_MUSIC3_GEN:
@@ -3736,6 +3742,46 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, mtmd_gen_state * 
             LOG_ERR("%s: soprano requires at least 2 frames of features, without codes\n", __func__);
             return 1;
         }
+    }
+
+    if (sctx->model.proj_type == PROJECTOR_TYPE_KOKORO) {
+        if (inp->type != MTMD_GEN_PROCESS_TYPE_GEN_WAV || !inp->codes || inp->n_codes == 0 || !inp->feats || inp->n_feats == 0) {
+            LOG_ERR("%s: kokoro requires the phoneme tokens and their features\n", __func__);
+            return 1;
+        }
+        if (!std::isfinite(inp->speed) || inp->speed <= 0.0f) {
+            LOG_ERR("%s: speed must be > 0\n", __func__);
+            return 1;
+        }
+        const std::vector<int32_t> in_codes(inp->codes, inp->codes + inp->n_codes);
+        const std::vector<float>   in_feats(inp->feats, inp->feats + inp->n_feats);
+
+        // the batch entry is unused, present to satisfy the encode interface
+        mtmd_image_f32 dummy;
+        dummy.set_size({1, 1}, false, true);
+        dummy.cpy_buf(std::vector<float>(1, 0.0f));
+        mtmd_image_f32_batch batch;
+        batch.is_audio = true;
+        batch.entries.push_back(std::move(dummy));
+
+        mtmd_subctx_encode_params params;
+        params.imgs        = &batch;
+        params.n_threads   = ctx->n_threads;
+        params.gen_process = MTMD_SUBCTX_GEN_PROCESS_GEN_WAV;
+        params.codes       = &in_codes;
+        params.feats       = &in_feats;
+        params.speed       = inp->speed;
+        params.out_audio   = &state->out_audio;
+        params.gen_state   = state->gen_state;
+
+        if (!sctx->encode(&params)) {
+            LOG_ERR("%s: encode failed (gen_wav)\n", __func__);
+            return 1;
+        }
+
+        out->audio     = state->out_audio.data();
+        out->n_samples = state->out_audio.size();
+        return 0;
     }
 
     if (inp->type == MTMD_GEN_PROCESS_TYPE_GEN_WAV && sctx->model.proj_type == PROJECTOR_TYPE_LFM3A_GEN) {

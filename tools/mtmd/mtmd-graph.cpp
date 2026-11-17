@@ -1097,6 +1097,13 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
                 const int n_frames = params && params->feats ? (int) (params->feats->size() / ctx->model.hparams.projection_dim) : 2;
                 builder = std::make_unique<mtmd_graph_soprano>(ctx, img, n_frames);
             } break;
+        case PROJECTOR_TYPE_KOKORO:
+            {
+                // without a stage (warmup), a short decoder graph: 2 frames, 600 samples each, one STFT row per 5 samples
+                const auto * io = params ? params->kokoro : nullptr;
+                builder = io ? std::make_unique<mtmd_graph_kokoro>(ctx, img, (mtmd_graph_kokoro::stage_type) io->stage, io->n_tok, io->n_frames, io->n_har)
+                             : std::make_unique<mtmd_graph_kokoro>(ctx, img, mtmd_graph_kokoro::STAGE_DEC, 0, 2, 241);
+            } break;
         case PROJECTOR_TYPE_YOUTUVL:
             {
                 builder = std::make_unique<mtmd_graph_youtuvl>(ctx, img);

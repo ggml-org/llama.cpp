@@ -258,6 +258,47 @@ struct mtmd_graph_chatterbox : mtmd_graph_chatterbox_base {
     ggml_cgraph * build_vocoder(int n_mel, int n_stft);
 };
 
+struct mtmd_graph_kokoro : mtmd_graph {
+    enum stage_type {
+        STAGE_TEXT, // tokens -> text encoder CNN
+        STAGE_F0N,  // shared LSTM output -> F0 and energy curves
+        STAGE_DEC,  // aligned features + source STFT -> STFT coefficients
+    };
+    static constexpr int n_style = 128; // a voice row is the decoder style, then the predictor style
+
+    stage_type stage;
+    int n_tok    = 0;
+    int n_frames = 0;
+    int n_har    = 0;
+    mtmd_graph_kokoro(mtmd_subcontext * ctx, const mtmd_image_f32 & img, stage_type stage, int n_tok, int n_frames, int n_har)
+        : mtmd_graph(ctx, img), stage(stage), n_tok(n_tok), n_frames(n_frames), n_har(n_har) {}
+    ggml_cgraph * build() override;
+
+    // host side, between the graphs
+    // bert [n_tok, n_embd], text_cnn [n_tok, 512], style is the predictor style
+    // fills shared and asr as [n_frames, 512], returns n_frames
+    static int prosody(const mtmd_model & model, const float * bert, int n_embd, const float * text_cnn, int n_tok,
+                       const float * style, float speed, std::vector<float> & shared, std::vector<float> & asr);
+    // fills har as [n_har, 22], returns n_har
+    static int har_source(const mtmd_model & model, const std::vector<float> & f0, std::mt19937 & rng, std::vector<float> & har);
+    static void istft(const std::vector<float> & spec, std::vector<float> & audio);
+
+  private:
+    ggml_tensor * tensor(const std::string & name) const;
+    bool          has_tensor(const std::string & name) const;
+    ggml_tensor * conv(const std::string & name, ggml_tensor * x, int stride, int pad, int dil) const;
+    ggml_tensor * adain(const std::string & name, ggml_tensor * x, ggml_tensor * style) const;
+    ggml_tensor * snake(const std::string & name, ggml_tensor * x) const;
+    ggml_tensor * interleave(ggml_tensor * a, ggml_tensor * b) const;
+    ggml_tensor * adain_resblk(const std::string & name, ggml_tensor * x, ggml_tensor * style, bool upsample) const;
+    ggml_tensor * gen_resblock(const std::string & name, ggml_tensor * x, ggml_tensor * style) const;
+    ggml_tensor * input(const char * name, ggml_type type, int64_t ne0, int64_t ne1) const;
+    ggml_cgraph * output(const char * name, ggml_tensor * t) const;
+    ggml_cgraph * build_text();
+    ggml_cgraph * build_f0n();
+    ggml_cgraph * build_dec();
+};
+
 struct mtmd_graph_lfm3a : mtmd_graph {
     mtmd_graph_lfm3a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;

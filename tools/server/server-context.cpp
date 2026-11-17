@@ -6984,7 +6984,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_tts_impl(const serve
     // speaker_ref in the request overrides the default voice
     const bool has_speaker_ref   = req.files.count("speaker_ref") > 0 || !json_value(body, "speaker_ref_b64", std::string()).empty();
     const std::string voice      = json_value(body, "voice", has_speaker_ref ? std::string() : params.tts_voice);
-    const std::string tts_prompt = common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
+    // raw_prompt: the input goes to the model as is (e.g. phonemes), the "tts" chat template is skipped
+    const bool raw_prompt        = json_value(body, "raw_prompt", false);
+    const std::string tts_prompt = raw_prompt ? std::string() : common_chat_get_tts_prompt(meta->chat_params.tmpls.get(), prompt, lang, voice);
     // a model with predefined voices only speaks with one of them
     mtmd::bitmap_ptr voice_ref;
     if (!voice.empty() && info.n_voices > 0) {

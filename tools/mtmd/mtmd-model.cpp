@@ -1172,6 +1172,10 @@ struct mtmd_model_loader {
                         hparams.audio_sample_rate = 32000;
                         hparams.audio_hop_len     = 512;
                     } break;
+                case PROJECTOR_TYPE_KOKORO:
+                    {
+                        hparams.audio_sample_rate = 24000;
+                    } break;
                 case PROJECTOR_TYPE_PADDLEOCR:
                     {
                         hparams.n_merge = 2;
@@ -1578,6 +1582,7 @@ struct mtmd_model_loader {
             model.proj_type != PROJECTOR_TYPE_ZONOS3_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_POCKETTTS_GEN &&
             model.proj_type != PROJECTOR_TYPE_SOPRANO &&
+            model.proj_type != PROJECTOR_TYPE_KOKORO &&
             model.proj_type != PROJECTOR_TYPE_MUSE_SPARK_AUDIO &&
             model.proj_type != PROJECTOR_TYPE_VIBEVOICE_ASR &&
             model.proj_type != PROJECTOR_TYPE_CHATTERBOX &&
@@ -3459,6 +3464,21 @@ struct mtmd_model_loader {
                         }
                     }
                 } break;
+            case PROJECTOR_TYPE_KOKORO:
+                {
+                    // the graphs and the host code look the tensors up by name, see models/kokoro.cpp
+                    // a voice is a table of style rows, the audio pipeline reads the row it needs
+                    for (ggml_tensor * t = ggml_get_first_tensor(ctx_meta.get()); t; t = ggml_get_next_tensor(ctx_meta.get(), t)) {
+                        const std::string name = t->name;
+                        if (name.rfind("a.gen.", 0) == 0) {
+                            model.cbx_tensors[name] = get_tensor(name);
+                        } else if (name.rfind("voice.", 0) == 0) {
+                            model.cbx_tensors[name] = get_tensor(name);
+                            model.gen_voices[name.substr(6)] = {};
+                        }
+                    }
+                    LOG_INF("%s: %zu predefined voices\n", __func__, model.gen_voices.size());
+                } break;
             case PROJECTOR_TYPE_SOPRANO:
                 {
                     auto & v = model.vocos;
@@ -4955,6 +4975,7 @@ int mtmd_model::n_mmproj_embd() const {
             // talker conditioning rows, the speaker projection carries their width
             return cbx_tensors.at("a.cenc.spkr_enc.weight")->ne[1];
         case PROJECTOR_TYPE_SOPRANO:
+        case PROJECTOR_TYPE_KOKORO:
             return hparams.projection_dim;
         case PROJECTOR_TYPE_PARAKEET:
             return mm_1_w->ne[1];
