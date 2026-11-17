@@ -368,7 +368,7 @@ static __attribute__((noinline)) void hvx_fast_softmax_f32(
     const int nvec = num_elems / VLEN_FP32;
     const int nloe = num_elems % VLEN_FP32;
 
-    HVX_Vector max_vec = hvx_vec_splat_f32(((const float *) src)[0]);
+    HVX_Vector max_vec = hvx_vec_repl4(v_src[0]);
 
     #pragma unroll(2)
     for (int i = 0; i < nvec; i++) {
