@@ -33,9 +33,9 @@ async function getHarness(): Promise<string> {
 
 	if (!harnessCache[key]) {
 		if (enabled) {
-			const { default: nerdamerJs } = await import('virtual:nerdamer');
+			const { default: loadNerdamer } = await import('virtual:nerdamer');
 
-			harnessCache[key] = buildSandboxHarness(nerdamerJs);
+			harnessCache[key] = buildSandboxHarness(await loadNerdamer());
 		} else {
 			harnessCache[key] = buildSandboxHarness('');
 		}

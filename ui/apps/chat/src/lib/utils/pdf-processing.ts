@@ -6,23 +6,14 @@
 import { MimeTypeApplication, MimeTypeImage } from '#lib/enums/index.ts';
 import { browser } from '$app/env';
 import * as pdfjs from 'pdfjs-dist';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 type TextContent = {
 	items: Array<{ str: string }>;
 };
 
-if (browser) {
-	// Import worker as text and create blob URL for inline bundling
-	import('pdfjs-dist/build/pdf.worker.min.mjs?raw')
-		.then((workerModule) => {
-			const workerBlob = new Blob([workerModule.default], { type: 'application/javascript' });
-
-			pdfjs.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
-		})
-		.catch(() => {
-			console.warn('Failed to load PDF.js worker, PDF processing may not work');
-		});
-}
+// the worker is its own file, so the app loads it only when it opens a PDF
+if (browser) pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
 
 /**
  * Convert a File object to ArrayBuffer for PDF.js processing
