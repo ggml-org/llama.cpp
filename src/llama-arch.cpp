@@ -3,6 +3,7 @@
 #include "llama-ext.h"
 #include "llama-impl.h"
 
+#include <cstring>
 #include <map>
 #include <vector>
 
@@ -1312,6 +1313,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_A_GEN_CODE_OUT_EMBD,        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
     {LLM_TENSOR_A_GEN_CODE_OUTPUT_NORM,     {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
     {LLM_TENSOR_A_GEN_CODE_PROJ_IN,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_NAMED,                      {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
     {LLM_TENSOR_A_GEN_WAV_QUANT_FIRST_OUT     , {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_A_GEN_WAV_QUANT_FIRST_CB      , {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_GET_ROWS}},
     {LLM_TENSOR_A_GEN_WAV_QUANT_REST_OUT      , {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
@@ -1482,7 +1484,25 @@ std::string LLM_KV::operator()(llm_kv kv) const {
 LLM_TN_IMPL::LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid)
     : arch(arch), tensor(tensor), suffix(suffix), bid(bid), xid(xid) {}
 
+LLM_TN_IMPL LLM_TN_IMPL::named(llm_arch arch, const std::string & name) {
+    LLM_TN_IMPL res(arch, LLM_TENSOR_NAMED, nullptr, -1, -1);
+    const_cast<std::string &>(res.name) = name;
+    return res;
+}
+
+bool LLM_TN_IMPL::is_bias() const {
+    if (tensor == LLM_TENSOR_NAMED) {
+        const size_t n = name.size();
+        return n >= 5 && name.compare(n - 5, 5, ".bias") == 0;
+    }
+    return suffix != nullptr && strcmp(suffix, "bias") == 0;
+}
+
 std::string LLM_TN_IMPL::str() const {
+    if (tensor == LLM_TENSOR_NAMED) {
+        return name;
+    }
+
     if (LLM_TENSOR_NAMES.find(tensor) == LLM_TENSOR_NAMES.end()) {
         GGML_ABORT("unknown tensor name for tensor id %d", static_cast<int>(tensor));
     }

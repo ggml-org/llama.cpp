@@ -202,33 +202,75 @@ enum llama_media_type {
 };
 
 struct llama_media_proc_params {
-    int32_t image_min_tokens; // <= 0: model default
-    int32_t image_max_tokens; // <= 0: model default, capped by n_ubatch of the encoder context
-    int32_t n_span_max;       // largest atomic span the decoder takes in one ubatch, 0 = no limit
+    int32_t n_span_max; // largest atomic span the decoder takes in one ubatch, 0 = no limit
 };
 
 LLAMA_API struct llama_media_proc_params llama_media_proc_default_params(void);
 
 // preprocessing and layout for an (encoder context, decoder model) pair
-// thread-safe, reads only constant state, allocates no compute resources
+// the user limits of the image token count are kv overrides of the mmproj model: clip.vision.image_min_tokens and
+// clip.vision.image_max_tokens (int)
+// audio preprocessing computes the log-mel on ctx_enc: do not use the proc while ctx_enc is computing
 LLAMA_API struct llama_media_proc * llama_media_proc_init(
-        const struct llama_context * ctx_enc,
-        const struct llama_model   * model_dec,
+        struct llama_context     * ctx_enc,
+        const struct llama_model * model_dec,
         struct llama_media_proc_params params);
 
 LLAMA_API void    llama_media_proc_free       (struct llama_media_proc * proc);
 LLAMA_API bool    llama_media_proc_has        (const struct llama_media_proc * proc, enum llama_media_type type);
 LLAMA_API int32_t llama_media_proc_sample_rate(const struct llama_media_proc * proc); // -1 without audio
+LLAMA_API int32_t llama_media_proc_n_frame_merge(const struct llama_media_proc * proc); // frames merged into one span, 1 = none
 
 // builder: pieces in prompt order; pos_0 is the position of the first piece
-// rgb == nullptr gives a placeholder: exact counts, cannot be encoded
+// one layout per prompt: images are numbered and aligned within it
+// data == nullptr gives a placeholder: exact counts, cannot be encoded
+// returns 0 on success, 1 if the model does not take this media, 2 on invalid input
 LLAMA_API struct llama_media_layout * llama_media_layout_init(const struct llama_media_proc * proc, llama_pos pos_0);
 LLAMA_API void    llama_media_layout_free      (struct llama_media_layout * lay);
 LLAMA_API int32_t llama_media_layout_add_tokens(struct llama_media_layout * lay, const llama_token * tokens, size_t n);
 LLAMA_API int32_t llama_media_layout_add_image (struct llama_media_layout * lay, uint32_t nx, uint32_t ny, const uint8_t * rgb, const char * id);
-// a video frame pair that the model merges into one span (temporal merge); rgb1 may be null for a lone last frame
+// up to llama_media_proc_n_frame_merge() frames of equal size that become one span; is_video: frames of a video
 LLAMA_API int32_t llama_media_layout_add_frames(struct llama_media_layout * lay, uint32_t nx, uint32_t ny,
-                                                const uint8_t * rgb0, const uint8_t * rgb1, const char * id);
+                                                const uint8_t * const * rgb, int32_t n_frames, bool is_video, const char * id);
+// mono PCM at llama_media_proc_sample_rate()
+LLAMA_API int32_t llama_media_layout_add_audio (struct llama_media_layout * lay, const float * pcm, size_t n_samples, const char * id);
+
+// realtime audio input: audio fed as it arrives, the encoder state is kept between calls
+// how text tokens are mixed into the rows is a model detail hidden inside the stream
+// a stream encodes on the ENCODER context of its proc; streams of one proc are serialized
+struct llama_audio_stream;
+
+struct llama_audio_stream_params {
+    int32_t step_ms; // audio encoded per encoder call, rounded up to the model step (default: 320)
+
+    // tokens that open the stream, they go out with the first rows (default: none)
+    // with the prompt of its "asr" chat template, LFM3-Audio transcribes live
+    const llama_token * prompt;
+    size_t              n_prompt;
+};
+
+LLAMA_API struct llama_audio_stream_params llama_audio_stream_default_params(void);
+
+LLAMA_API bool    llama_media_proc_has_audio_stream(const struct llama_media_proc * proc);
+
+// returns nullptr on failure
+LLAMA_API struct llama_audio_stream * llama_audio_stream_init(const struct llama_media_proc * proc, struct llama_audio_stream_params params);
+LLAMA_API void    llama_audio_stream_free (struct llama_audio_stream * s);
+// PCM F32 at llama_media_proc_sample_rate(); 0 on success, 1 if the stream has ended
+LLAMA_API int32_t llama_audio_stream_push (struct llama_audio_stream * s, const float * pcm, size_t n);
+// pad the stream so that all pending rows can be produced; end: no more push() is accepted
+LLAMA_API int32_t llama_audio_stream_flush(struct llama_audio_stream * s, bool end);
+// the next decoder rows; last_token is the token sampled from the previous row, LLAMA_TOKEN_NULL before the first
+// returns > 0 rows ready (llama_audio_stream_get_output_embd), 0 more audio is needed, -1 end of stream, -2 error
+LLAMA_API int32_t llama_audio_stream_step (struct llama_audio_stream * s, llama_token last_token);
+// rows of the last step, n_rows * llama_model_n_embd_inp(model_dec) floats
+LLAMA_API const float * llama_audio_stream_get_output_embd(const struct llama_audio_stream * s);
+// the rows of the last step start a new sequence: the caller drops its sequence before decoding them
+LLAMA_API bool    llama_audio_stream_is_seq_start     (const struct llama_audio_stream * s);
+// audio rows whose text has been sampled (prefix rows included)
+LLAMA_API int64_t llama_audio_stream_get_n_rows       (const struct llama_audio_stream * s);
+// audio rows up to the end of the last flush
+LLAMA_API int64_t llama_audio_stream_get_n_rows_flushed(const struct llama_audio_stream * s);
 
 LLAMA_API size_t              llama_media_layout_n_pieces  (const struct llama_media_layout * lay);
 LLAMA_API const llama_token * llama_media_layout_get_tokens(const struct llama_media_layout * lay, size_t i, size_t * n); // nullptr for media

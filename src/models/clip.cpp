@@ -2,36 +2,38 @@
 
 #include "llama-impl.h"
 #include "llama-media.h"
-#include "llama-media-image.h"
 #include "llama-vocab.h"
+
+#include "../clip/clip-model.h"
 
 #include "gguf.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
 // mmproj GGUFs keep the "clip" name for compatibility with existing files
 // keys of the vision tower are "clip.vision.<llama key>", see LLM_KV prefix
 
-static const char * KEY_HAS_VISION    = "clip.has_vision_encoder";
-static const char * KEY_PROJ_TYPE     = "clip.projector_type";
-static const char * KEY_V_PROJ_TYPE   = "clip.vision.projector_type";
-static const char * KEY_USE_GELU      = "clip.use_gelu";
-static const char * KEY_USE_SILU      = "clip.use_silu";
-static const char * KEY_IMAGE_SIZE    = "clip.vision.image_size";
-static const char * KEY_PATCH_SIZE    = "clip.vision.patch_size";
-static const char * KEY_IMAGE_MEAN    = "clip.vision.image_mean";
-static const char * KEY_IMAGE_STD     = "clip.vision.image_std";
-static const char * KEY_HEAD_DIM      = "clip.vision.attention.head_dim";
-static const char * KEY_PROJ_DIM      = "clip.vision.projection_dim";
-static const char * KEY_SCALE_FACTOR  = "clip.vision.projector.scale_factor";
-static const char * KEY_SPATIAL_MERGE = "clip.vision.spatial_merge_size";
-static const char * KEY_MIN_PIXELS    = "clip.vision.image_min_pixels";
-static const char * KEY_MAX_PIXELS    = "clip.vision.image_max_pixels";
-static const char * KEY_WA_PATTERN    = "clip.vision.n_wa_pattern";
-static const char * KEY_WINDOW_SIZE   = "clip.vision.window_size";
-static const char * KEY_DEEPSTACK     = "clip.vision.is_deepstack_layers";
+static const char * CKEY_HAS_VISION    = "clip.has_vision_encoder";
+static const char * CKEY_PROJ_TYPE     = "clip.projector_type";
+static const char * CKEY_V_PROJ_TYPE   = "clip.vision.projector_type";
+static const char * CKEY_USE_GELU      = "clip.use_gelu";
+static const char * CKEY_USE_SILU      = "clip.use_silu";
+static const char * CKEY_IMAGE_SIZE    = "clip.vision.image_size";
+static const char * CKEY_PATCH_SIZE    = "clip.vision.patch_size";
+static const char * CKEY_IMAGE_MEAN    = "clip.vision.image_mean";
+static const char * CKEY_IMAGE_STD     = "clip.vision.image_std";
+static const char * CKEY_HEAD_DIM      = "clip.vision.attention.head_dim";
+static const char * CKEY_PROJ_DIM      = "clip.vision.projection_dim";
+static const char * CKEY_SCALE_FACTOR  = "clip.vision.projector.scale_factor";
+static const char * CKEY_SPATIAL_MERGE = "clip.vision.spatial_merge_size";
+static const char * CKEY_MIN_PIXELS    = "clip.vision.image_min_pixels";
+static const char * CKEY_MAX_PIXELS    = "clip.vision.image_max_pixels";
+static const char * CKEY_WA_PATTERN    = "clip.vision.n_wa_pattern";
+static const char * CKEY_WINDOW_SIZE   = "clip.vision.window_size";
+static const char * CKEY_DEEPSTACK     = "clip.vision.is_deepstack_layers";
 
 static llama_clip_projector clip_projector_from_string(const std::string & name) {
     if (name == "gemma3")           { return LLAMA_CLIP_PROJ_GEMMA3; }
@@ -63,15 +65,15 @@ void llama_model_clip::load_vocab(llama_model_loader &) {
 
 // the audio generation tower becomes the main tower of a file without a vision tower
 // other audio-only files are not ported yet; llama-quantize still opens them
-static const char * KEY_HAS_GEN     = "clip.has_gen_audio_encoder";
-static const char * KEY_GEN_PROJ    = "clip.gen.audio.projector_type";
+static const char * CKEY_HAS_GEN     = "clip.has_gen_audio_encoder";
+static const char * CKEY_GEN_PROJ    = "clip.gen.audio.projector_type";
 
 void llama_model_clip::load_gen_hparams(llama_model_loader & ml) {
-    ml.get_key(std::string(KEY_HAS_GEN), ghp.has_gen, false);
+    ml.get_key(std::string(CKEY_HAS_GEN), ghp.has_gen, false);
     if (!ghp.has_gen) {
         return;
     }
-    ml.get_key(std::string(KEY_GEN_PROJ), ghp.proj_name, false);
+    ml.get_key(std::string(CKEY_GEN_PROJ), ghp.proj_name, false);
     ghp.proj = ghp.proj_name == "qwen3tts_gen" ? LLAMA_CLIP_PROJ_QWEN3TTS_GEN : LLAMA_CLIP_PROJ_UNKNOWN;
     if (ghp.proj == LLAMA_CLIP_PROJ_UNKNOWN) {
         return;
@@ -124,17 +126,40 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     hparams.causal_attn = false;
     hparams.n_ctx_train = 8192; // unused, encoders keep no memory
 
-    ml.get_key(std::string(KEY_HAS_VISION), vhp.has_vision, false);
+    // every modality of the file, for the engine graphs and for the layout of all media
+    engine = std::make_unique<clip_models>(clip_model_load_hparams(ml));
+
+    // LLAMA_CLIP_NATIVE=0: run the towers that have native graphs on the engine graphs too
+    const char * env_native = getenv("LLAMA_CLIP_NATIVE");
+    const bool allow_native = env_native == nullptr || atoi(env_native) != 0;
+
+    ml.get_key(std::string(CKEY_HAS_VISION), vhp.has_vision, false);
 
     std::string proj;
-    if (!ml.get_key(std::string(KEY_V_PROJ_TYPE), proj, false)) {
-        ml.get_key(std::string(KEY_PROJ_TYPE), proj, false);
+    if (!ml.get_key(std::string(CKEY_V_PROJ_TYPE), proj, false)) {
+        ml.get_key(std::string(CKEY_PROJ_TYPE), proj, false);
     }
     vhp.proj_name = proj;
     vhp.proj      = clip_projector_from_string(proj);
 
     if (!vhp.has_vision) {
         load_gen_hparams(ml);
+        native_gen = allow_native && ghp.has_gen && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN;
+        if (!native_gen) {
+            ghp = {};
+            const clip_model * main = engine_audio() ? engine_audio() : engine_gen();
+            if (main == nullptr) {
+                throw std::runtime_error("clip: the file has no tower");
+            }
+            load_engine_hparams(*main);
+        }
+        return;
+    }
+
+    native_v = allow_native && vhp.proj != LLAMA_CLIP_PROJ_UNKNOWN;
+    if (!native_v) {
+        GGML_ASSERT(engine_vision() != nullptr);
+        load_engine_hparams(*engine_vision());
         return;
     }
 
@@ -166,20 +191,20 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.begin()      + hparams.n_layer_all, n_ff);
 
     uint32_t head_dim = hparams.n_embd / n_head;
-    ml.get_key(std::string(KEY_HEAD_DIM), head_dim, false);
+    ml.get_key(std::string(CKEY_HEAD_DIM), head_dim, false);
     hparams.n_embd_head_k_full = head_dim;
     hparams.n_embd_head_v_full = head_dim;
     hparams.n_rot_full         = 0;
 
-    clip_get_i32(ml, KEY_IMAGE_SIZE, vhp.image_size);
-    clip_get_i32(ml, KEY_PATCH_SIZE, vhp.patch_size);
-    clip_get_i32(ml, KEY_PROJ_DIM, vhp.n_embd_out, false);
+    clip_get_i32(ml, CKEY_IMAGE_SIZE, vhp.image_size);
+    clip_get_i32(ml, CKEY_PATCH_SIZE, vhp.patch_size);
+    clip_get_i32(ml, CKEY_PROJ_DIM, vhp.n_embd_out, false);
 
     {
         std::vector<float> mean;
         std::vector<float> std;
-        ml.get_arr(std::string(KEY_IMAGE_MEAN), mean, false);
-        ml.get_arr(std::string(KEY_IMAGE_STD),  std,  false);
+        ml.get_arr(std::string(CKEY_IMAGE_MEAN), mean, false);
+        ml.get_arr(std::string(CKEY_IMAGE_STD),  std,  false);
         if (mean.size() < 3 || std.size() < 3) {
             throw std::runtime_error("clip: image_mean/image_std must have 3 elements");
         }
@@ -192,8 +217,8 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
     {
         bool use_gelu = false;
         bool use_silu = false;
-        ml.get_key(std::string(KEY_USE_GELU), use_gelu, false);
-        ml.get_key(std::string(KEY_USE_SILU), use_silu, false);
+        ml.get_key(std::string(CKEY_USE_GELU), use_gelu, false);
+        ml.get_key(std::string(CKEY_USE_SILU), use_silu, false);
         vhp.ffn_op = use_gelu ? LLM_FFN_GELU : use_silu ? LLM_FFN_SILU : LLM_FFN_GELU_QUICK;
     }
 
@@ -201,14 +226,14 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
         case LLAMA_CLIP_PROJ_GEMMA3:
             {
                 vhp.n_merge = 4;
-                clip_get_i32(ml, KEY_SCALE_FACTOR, vhp.n_merge, false);
+                clip_get_i32(ml, CKEY_SCALE_FACTOR, vhp.n_merge, false);
             } break;
         case LLAMA_CLIP_PROJ_QWEN2VL:
         case LLAMA_CLIP_PROJ_QWEN25VL:
         case LLAMA_CLIP_PROJ_QWEN3VL:
             {
                 vhp.n_merge = 2;
-                clip_get_i32(ml, KEY_SPATIAL_MERGE, vhp.n_merge, false);
+                clip_get_i32(ml, CKEY_SPATIAL_MERGE, vhp.n_merge, false);
                 if (vhp.n_merge != 2) {
                     throw std::runtime_error("clip: Qwen-VL needs spatial_merge_size = 2");
                 }
@@ -217,15 +242,15 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
                 const int32_t patch_area = vhp.patch_size * vhp.patch_size * vhp.n_merge * vhp.n_merge;
                 vhp.image_min_pixels = 8    * patch_area;
                 vhp.image_max_pixels = 4096 * patch_area;
-                clip_get_i32(ml, KEY_MIN_PIXELS, vhp.file_min_pixels, false);
-                clip_get_i32(ml, KEY_MAX_PIXELS, vhp.file_max_pixels, false);
+                clip_get_i32(ml, CKEY_MIN_PIXELS, vhp.file_min_pixels, false);
+                clip_get_i32(ml, CKEY_MAX_PIXELS, vhp.file_max_pixels, false);
                 if (vhp.proj == LLAMA_CLIP_PROJ_QWEN25VL) {
-                    clip_get_i32(ml, KEY_WA_PATTERN, vhp.n_wa_pattern);
-                    clip_get_i32(ml, KEY_WINDOW_SIZE, vhp.attn_window, false);
+                    clip_get_i32(ml, CKEY_WA_PATTERN, vhp.n_wa_pattern);
+                    clip_get_i32(ml, CKEY_WINDOW_SIZE, vhp.attn_window, false);
                 }
                 if (vhp.proj == LLAMA_CLIP_PROJ_QWEN3VL) {
                     // bool array, not covered by the loader getters
-                    const int kid = gguf_find_key(ml.metadata, KEY_DEEPSTACK);
+                    const int kid = gguf_find_key(ml.metadata, CKEY_DEEPSTACK);
                     if (kid >= 0 && gguf_get_kv_type(ml.metadata, kid) == GGUF_TYPE_ARRAY &&
                             gguf_get_arr_type(ml.metadata, kid) == GGUF_TYPE_BOOL) {
                         const auto * ds = (const int8_t *) gguf_get_arr_data(ml.metadata, kid);
@@ -243,18 +268,18 @@ void llama_model_clip::load_arch_hparams(llama_model_loader & ml) {
 }
 
 void llama_model_clip::load_arch_tensors(llama_model_loader & ml) {
-    LLAMA_LOAD_LOCALS;
+    if (native_gen) {
+        load_gen_tensors(ml);
+    }
+    if (native_v) {
+        load_vision_tensors(ml);
+    }
+    // after the native weights, which the engine shares
+    load_engine_tensors(ml);
+}
 
-    if (!vhp.has_vision) {
-        if (ghp.has_gen && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN) {
-            load_gen_tensors(ml);
-            return;
-        }
-        throw std::runtime_error("clip: this mmproj has no vision tower, other towers are not supported by libllama yet");
-    }
-    if (vhp.proj == LLAMA_CLIP_PROJ_UNKNOWN) {
-        throw std::runtime_error(format("clip: projector type '%s' is not supported by libllama yet", vhp.proj_name.c_str()));
-    }
+void llama_model_clip::load_vision_tensors(llama_model_loader & ml) {
+    LLAMA_LOAD_LOCALS;
 
     // shape from the file: legacy layouts and projector shapes that do not follow from hparams
     auto create_as_file = [&](const LLM_TN_IMPL & tname, int flags) -> ggml_tensor * {
@@ -1153,7 +1178,16 @@ struct llama_model_clip::graph_qwen3tts_code : public llm_graph_context {
 };
 
 std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params & params) const {
-    if (!vhp.has_vision && ghp.proj == LLAMA_CLIP_PROJ_QWEN3TTS_GEN) {
+    const llama_media_input * mi = params.ubatch.media;
+    const auto ctx_type = params.cparams.ctx_type;
+
+    const bool native = (ctx_type == LLAMA_CONTEXT_TYPE_ENCODER && native_v) ||
+                        (ctx_type != LLAMA_CONTEXT_TYPE_ENCODER && native_gen);
+    if ((mi && mi->clip_req) || !native) {
+        return llama_model_clip_build_engine_graph(*this, params);
+    }
+
+    if (native_gen) {
         if (params.cparams.ctx_type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
             return llama_model_clip_build_wav_graph(*this, params);
         }
@@ -1172,111 +1206,3 @@ std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_
     }
 }
 
-//
-// media preprocessing and layout
-//
-
-bool llama_model_clip::media_preprocess_image(const llama_media_proc & proc, const llama_media_img::image_u8 * frames, int n_frames, llama_media & m) const {
-    GGML_UNUSED(proc);
-
-    using namespace llama_media_img;
-
-    m.inp.type     = LLAMA_MEDIA_TYPE_IMAGE;
-    m.inp.n_frames = n_frames;
-    m.inp.data.clear();
-
-    switch (vhp.proj) {
-        case LLAMA_CLIP_PROJ_GEMMA3:
-            {
-                if (n_frames != 1) {
-                    return false;
-                }
-                image_u8 resized;
-                resize(frames[0], resized, { vhp.image_size, vhp.image_size }, RESIZE_ALGO_BILINEAR, PAD_CEIL, {0, 0, 0});
-                m.inp.nx = vhp.image_size;
-                m.inp.ny = vhp.image_size;
-                if (!frames[0].is_placeholder()) {
-                    to_f32_normalized(resized, vhp.image_mean, vhp.image_std, m.inp.data);
-                }
-                const int32_t side = vhp.image_size / vhp.patch_size / vhp.n_merge;
-                m.grid_x   = side;
-                m.grid_y   = side;
-                m.n_tokens = side * side;
-            } break;
-        case LLAMA_CLIP_PROJ_QWEN2VL:
-        case LLAMA_CLIP_PROJ_QWEN25VL:
-        case LLAMA_CLIP_PROJ_QWEN3VL:
-            {
-                if (n_frames > vhp.n_temporal_merge) {
-                    return false;
-                }
-                const int32_t align = vhp.patch_size * vhp.n_merge;
-                const int64_t area  = (int64_t) align * align;
-
-                // user limits, then file limits, then model defaults
-                int64_t min_px = proc.params.image_min_tokens > 0 ? proc.params.image_min_tokens * area
-                               : vhp.file_min_pixels > 0         ? vhp.file_min_pixels : vhp.image_min_pixels;
-                int64_t max_px = proc.params.image_max_tokens > 0 ? proc.params.image_max_tokens * area
-                               : vhp.file_max_pixels > 0         ? vhp.file_max_pixels : vhp.image_max_pixels;
-                // the encoder context takes at most n_rows_max rows
-                max_px = std::min<int64_t>(max_px, (int64_t) proc.n_rows_max * area);
-                min_px = std::min(min_px, max_px);
-
-                calc_size_opt opt;
-                opt.align_size      = align;
-                opt.min_pixels      = (int) min_px;
-                opt.max_pixels      = (int) max_px;
-                opt.round_half_even = true;
-                const image_size target = calc_size_preserved_ratio(frames[0].get_size(), opt);
-
-                m.inp.nx = target.width;
-                m.inp.ny = target.height;
-                for (int f = 0; f < n_frames; ++f) {
-                    image_u8 resized;
-                    resize(frames[f], resized, target, RESIZE_ALGO_BICUBIC, PAD_NONE, {0, 0, 0});
-                    if (!frames[f].is_placeholder()) {
-                        std::vector<float> one;
-                        to_f32_normalized(resized, vhp.image_mean, vhp.image_std, one);
-                        m.inp.data.insert(m.inp.data.end(), one.begin(), one.end());
-                    }
-                }
-                m.grid_x   = target.width  / align;
-                m.grid_y   = target.height / align;
-                m.n_tokens = m.grid_x * m.grid_y;
-            } break;
-        default:
-            return false;
-    }
-
-    return true;
-}
-
-void llama_model_clip::media_image_wrap(const llama_media_proc & proc, std::vector<llama_token> & beg, std::vector<llama_token> & end) const {
-    beg.clear();
-    end.clear();
-
-    auto lookup = [&](const char * text) {
-        std::vector<llama_token> toks(8);
-        const int32_t n = llama_tokenize(proc.vocab, text, (int32_t) strlen(text), toks.data(), (int32_t) toks.size(), false, true);
-        GGML_ASSERT(n > 0);
-        toks.resize(n);
-        return toks;
-    };
-
-    switch (vhp.proj) {
-        case LLAMA_CLIP_PROJ_GEMMA3:
-            {
-                beg = lookup("<start_of_image>");
-                end = lookup("<end_of_image>");
-            } break;
-        case LLAMA_CLIP_PROJ_QWEN2VL:
-        case LLAMA_CLIP_PROJ_QWEN25VL:
-        case LLAMA_CLIP_PROJ_QWEN3VL:
-            {
-                beg = lookup("<|vision_start|>");
-                end = lookup("<|vision_end|>");
-            } break;
-        default:
-            break;
-    }
-}

@@ -1,0 +1,376 @@
+#pragma once
+
+#include "ggml.h"
+#include "ggml-backend.h"
+#include "clip-model.h"
+
+#include <cstdint>
+#include <vector>
+#include <string>
+
+#define CLIP_INTERNAL_HEADER
+
+struct clip_audio_mel {
+    int64_t n_len;
+    int64_t n_len_org;
+    int64_t n_mel;
+    int64_t n_ctx = 0; // see clip_image_f32::audio_n_ctx
+
+    std::vector<float> data;
+};
+
+struct clip_audio_mel_filters {
+    int64_t n_mel;
+    int64_t n_fft;
+
+    std::vector<float> data;
+};
+
+// cache for audio processing, each processor instance owns its own cache
+struct clip_audio_cache {
+    std::vector<float> sin_vals;
+    std::vector<float> cos_vals;
+
+    std::vector<float> hann_window;
+
+    clip_audio_mel_filters filters;
+
+    void fill_sin_cos_table(uint32_t n);
+
+    void fill_hann_window(uint32_t length, bool periodic);
+
+    // Build mel filterbank matrix [n_mel × n_fft_bins] at runtime.
+    // n_fft_bins must be (N_fft / 2 + 1). Example: if N_fft=512 -> n_fft_bins=257.
+    void fill_mel_filterbank_matrix(int64_t n_mel,
+                                    int64_t n_fft,
+                                    int   sample_rate,               // e.g. 16000
+                                    float fmin             = 0.0f,   // e.g. 0.0
+                                    float fmax             = -1.0f,  // e.g. sr/2; pass -1 for auto
+                                    bool  slaney_area_norm = true,
+                                    float scale            = 1.0f,
+                                    bool  use_htk          = false
+    );
+};
+
+// compute one log10-mel frame from n_fft windowed samples, cache must be initialized for n_fft
+void clip_audio_log_mel_frame(const clip_audio_cache & cache, const float * samples, int n_fft, int n_mel, float * out);
+
+struct clip_audio_mel_config {
+    int64_t n_mel            = 0;
+    int64_t n_fft_bins       = 0;
+    int32_t hann_window_size = 0;
+    int32_t hop_length       = 0;
+    int32_t sample_rate      = 0;
+    bool    no_padding       = false;
+    bool    center_padding   = false;
+    float   preemph          = 0.f;
+    bool    use_natural_log  = false;
+    bool    norm_per_feature = false;
+    bool    use_magnitude    = false;  // |X| instead of |X|^2
+    float   mel_floor        = 5.960464477539063e-08f;
+    bool    mel_floor_add    = false;  // log(x + floor) instead of log(max(x, floor))
+    bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
+    int     n_threads        = 1;
+
+    const clip_audio_cache * cache = nullptr;
+    ggml_backend_sched_t     sched = nullptr;
+};
+
+struct clip_audio_preproc_out {
+    std::vector<clip_image_f32> entries; // one per chunk, empty on failure
+    std::vector<float> samples;          // input of compute(), empty if entries already hold the data
+
+    bool needs_compute() const {
+        return !samples.empty() && (entries.empty() || entries[0].is_placeholder());
+    }
+};
+
+struct clip_audio_preprocessor {
+    const clip_hparams & hparams;
+    clip_audio_mel_config mel_config; // filled by initialize() of the preprocessors that use the log-mel graph
+
+    // mel_config.sched must be set before the first compute(), see clip_context::init_audio()
+    clip_audio_preprocessor(const clip_model * model): hparams(model->hparams) {}
+    clip_audio_preprocessor(const clip_hparams & hparams, ggml_backend_sched_t sched): hparams(hparams) {
+        mel_config.sched = sched;
+    }
+
+    // mel_config points to the cache of this instance
+    clip_audio_preprocessor(const clip_audio_preprocessor &) = delete;
+    clip_audio_preprocessor & operator=(const clip_audio_preprocessor &) = delete;
+
+    virtual ~clip_audio_preprocessor() = default;
+    virtual void initialize() = 0; // NOT thread-safe
+
+    // entries have the final shapes, but no data if needs_compute()
+    clip_audio_preproc_out preprocess(const float * samples, size_t n_samples) const;
+
+    // run it on the thread that encodes, it uses mel_config.sched
+    bool compute(clip_audio_preproc_out & out) const;
+
+  protected:
+    // shape_only skips the log-mel graph: the shapes are right, the data is zero-filled
+    virtual bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const = 0;
+};
+
+struct clip_audio_preprocessor_whisper : clip_audio_preprocessor {
+    clip_audio_preprocessor_whisper(const clip_model * model) : clip_audio_preprocessor(model) {}
+    clip_audio_preprocessor_whisper(const clip_hparams & hparams, ggml_backend_sched_t sched) : clip_audio_preprocessor(hparams, sched) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_muse_spark_audio : clip_audio_preprocessor {
+    clip_audio_preprocessor_muse_spark_audio(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override {}
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+// fish_s2 speaker reference: same as muse spark (raw waveform, whole frames), truncated to fish_s2_max_spk_seconds
+struct clip_audio_preprocessor_fish_s2 : clip_audio_preprocessor_muse_spark_audio {
+    using clip_audio_preprocessor_muse_spark_audio::clip_audio_preprocessor_muse_spark_audio;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+// vibevoice: gain to -25 dBFS RMS, without clipping the peak
+// the RMS is floored at -50 dBFS, so that silence or noise alone is not boosted to full scale
+double clip_audio_vibevoice_gain(double sum_sq, int64_t n_samples, double peak);
+
+// raw 24 kHz waveform, cut in chunks that carry their causal context, see clip_hparams::audio_n_ctx
+struct clip_audio_preprocessor_vibevoice_asr : clip_audio_preprocessor {
+    clip_audio_preprocessor_vibevoice_asr(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override {}
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+struct clip_audio_preprocessor_conformer : clip_audio_preprocessor {
+    clip_audio_preprocessor_conformer(const clip_model * model) : clip_audio_preprocessor(model) {}
+    clip_audio_preprocessor_conformer(const clip_hparams & hparams, ggml_backend_sched_t sched) : clip_audio_preprocessor(hparams, sched) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+// same as conformer, the audio is cut to 30 s and padded to 0.5 s (d1-omni audio.py)
+struct clip_audio_preprocessor_d1omni : clip_audio_preprocessor_conformer {
+    using clip_audio_preprocessor_conformer::clip_audio_preprocessor_conformer;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+struct clip_audio_preprocessor_lfm3a : clip_audio_preprocessor {
+    clip_audio_preprocessor_lfm3a(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_granite_speech : clip_audio_preprocessor {
+    clip_audio_preprocessor_granite_speech(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_gemma4a : clip_audio_preprocessor {
+    // each segment is padded and encoded on its own
+    static constexpr int segment_seconds = 30;
+
+    clip_audio_preprocessor_gemma4a(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_gemma4ua : clip_audio_preprocessor {
+    clip_audio_preprocessor_gemma4ua(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+struct clip_audio_preprocessor_qwen3a : clip_audio_preprocessor {
+    clip_audio_preprocessor_qwen3a(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_dots3note : clip_audio_preprocessor {
+    clip_audio_preprocessor_dots3note(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+// same per-chunk log-mel as dots3note, with 4s chunks
+struct clip_audio_preprocessor_higgs_audio : clip_audio_preprocessor_dots3note {
+    clip_audio_preprocessor_higgs_audio(const clip_model * model) : clip_audio_preprocessor_dots3note(model) {}
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+struct clip_audio_preprocessor_mimo_audio : clip_audio_preprocessor {
+    clip_audio_preprocessor_mimo_audio(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_qwen3tts_spk : clip_audio_preprocessor {
+    clip_audio_preprocessor_qwen3tts_spk(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+// mimi convolves the waveform directly, so this only pads it to a whole number of frames
+struct clip_audio_preprocessor_pockettts : clip_audio_preprocessor {
+    clip_audio_preprocessor_pockettts(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override {}
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+// chatterbox reference front-end: one clip gives five entries, used by position in mtmd.cpp
+//   0: CAMPPlus kaldi fbank            [80 x n_frames]  (mel major)
+//   1: s3 tokenizer log-mel, flow cap  [n_mel x n_frames] (mel major)
+//   2: s3 tokenizer log-mel, t3 cap    [n_mel x n_frames] (mel major)
+//   3: s3gen prompt features           [n_frames x 80]  (frame major, 24 kHz mel rate)
+//   4: voice encoder power mel         [n_frames x 40]  (frame major, trimmed, partial grid)
+// turbo loudness-normalizes the clip to -27 LUFS and caps the t3 clip at 15 s instead of 6 s
+struct clip_audio_preprocessor_chatterbox_ref : clip_audio_preprocessor {
+    clip_audio_preprocessor_chatterbox_ref(const clip_model * model, bool is_mtl) : clip_audio_preprocessor(model), is_mtl(is_mtl) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    bool             is_mtl;
+    clip_audio_cache fbank_cache;  // entry 0, the window slot holds the povey window
+    clip_audio_cache s3tok_cache;  // entries 1 and 2
+    clip_audio_cache matcha_cache; // entry 3
+    clip_audio_cache ve_cache;     // entry 4
+};
+
+// zonos3 speaker encoder front-end: kaldi fbank with a hamming window [80 x n_frames] (mel major)
+struct clip_audio_preprocessor_zonos3_spk : clip_audio_preprocessor {
+    clip_audio_preprocessor_zonos3_spk(const clip_model * model) : clip_audio_preprocessor(model) {}
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  private:
+    clip_audio_cache cache;
+};
+
+struct clip_audio_preprocessor_parakeet : clip_audio_preprocessor {
+    clip_audio_preprocessor_parakeet(const clip_model * model) : clip_audio_preprocessor(model) { }
+    void initialize() override;
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+
+  protected:
+    bool log_mel(const float * samples, size_t n_samples, clip_audio_mel & out, bool shape_only) const;
+
+  private:
+    clip_audio_cache cache;
+};
+
+// one chunk per recording: the raw log-mel of its valid frames
+struct clip_audio_preprocessor_nemotron_transcribe : clip_audio_preprocessor_parakeet {
+    clip_audio_preprocessor_nemotron_transcribe(const clip_model * model) : clip_audio_preprocessor_parakeet(model) { }
+    bool process(const float * samples, size_t n_samples, std::vector<clip_audio_mel> & output, bool shape_only) const override;
+};
+
+//
+// zonos3 iSTFT head, streaming: 2 iSTFT branches, FIR mixer, 44160 -> 44100 Hz resampler
+// ported from the reference ggml runtime (zac.cpp)
+//
+struct clip_audio_zonos3_synth {
+    // mixer [2, fir_kernel], resample [rs_new, rs_orig + 2 * width]
+    clip_audio_zonos3_synth(const std::vector<float> & mixer, const std::vector<float> & resample,
+                            int n_fft0, int n_fft1, int hop, int rs_orig, int rs_new);
+
+    // spec: n_cols frames of [log magnitude, phase] of each branch
+    void push(const float * spec, int64_t n_cols, std::vector<float> & out);
+    void flush(std::vector<float> & out);
+
+  private:
+    struct branch {
+        int n_fft;
+        clip_audio_cache   cache;
+        std::vector<float> ola, env; // from ola_base on
+        int64_t ola_base = 0;
+        std::vector<float> mix_in;   // from mix_base on
+        int64_t mix_avail = 0;
+        std::vector<float> ifft_in, ifft_out;
+    };
+
+    void ola_finalize(branch & b, int64_t pf);
+    void mix_emit(std::vector<float> & out);
+    void resample(bool flush, std::vector<float> & out);
+
+    branch br[2];
+    std::vector<float> mixer;
+    int     fir_kernel;
+    int     hop;
+    int64_t n_frames = 0;
+    int64_t mix_base = 0;
+    int64_t mix_next = 0;
+    bool    done     = false;
+
+    std::vector<float> rs_kernel;
+    int     rs_orig, rs_new, rs_width;
+    std::vector<float> rs_buf; // from rs_base on
+    int64_t rs_base  = 0;
+    int64_t rs_in    = 0;
+    int64_t rs_block = 0;
+};
+
+//
+// streaming ISTFT - converts spectrogram frames back to audio one frame at a time
+//
+struct clip_audio_streaming_istft {
+    clip_audio_streaming_istft(int n_fft, int hop_length);
+
+    // reset streaming state
+    void reset();
+
+    // process a single STFT frame (streaming)
+    // frame_spectrum: [n_fft_bins x 2] interleaved real/imag
+    // returns: up to hop_length samples
+    std::vector<float> process_frame(const float * frame_spectrum);
+
+    // flush remaining samples at end of stream
+    std::vector<float> flush();
+
+  private:
+    int n_fft;
+    int hop_length;
+    int n_fft_bins;
+
+    // Own cache for output processing
+    clip_audio_cache cache;
+
+    // Streaming state
+    std::vector<float> overlap_buffer;
+    std::vector<float> window_sum_buffer;
+    int                padding_to_remove;
+
+    // Working buffers for IFFT
+    std::vector<float> ifft_in;
+    std::vector<float> ifft_out;
+};

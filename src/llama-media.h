@@ -4,11 +4,20 @@
 #include "llama-ext.h"
 
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 struct llama_model;
 struct llama_vocab;
+struct llama_context;
+
+// the clip engine (src/clip/clip-media.h)
+struct clip_image_tokens;
+struct clip_audio_tokens;
+struct clip_layout_config;
+struct clip_audio_preprocessor;
 
 // how the decoder positions the rows of a media span
 enum llama_media_pos_type {
@@ -26,6 +35,10 @@ struct llama_media_input {
 
     // frames back to back, each [ny][nx][3] normalized RGB; empty for placeholders and reservation
     std::vector<float> data;
+
+    // a graph of the clip engine: its runtime and request, see llama_context::clip_exec()
+    struct clip_subcontext           * clip_sub = nullptr;
+    struct clip_subctx_encode_params * clip_req = nullptr;
 };
 
 struct llama_media {
@@ -48,12 +61,21 @@ struct llama_media {
     bool bidirectional = false; // attention inside the span is bidirectional in the decoder
     bool placeholder   = false;
 
+    // the chunk of the clip engine this media is: its preprocessed input and its layout in the decoder
+    // exactly one is set, except for media built from raw input by the native graphs
+    std::shared_ptr<clip_image_tokens> img;
+    std::shared_ptr<clip_audio_tokens> aud;
+
+    // computes the log-mel of aud at encode time (when its source needs it)
+    std::shared_ptr<clip_audio_preprocessor> aud_preproc;
+
     // encoded rows, host memory in this version
     int64_t            n_embd = 0;
     std::vector<float> rows;
 };
 
 struct llama_media_proc {
+    llama_context     * ctx_enc   = nullptr;
     const llama_model * model_enc = nullptr;
     const llama_model * model_dec = nullptr;
     const llama_vocab * vocab     = nullptr;
@@ -61,6 +83,14 @@ struct llama_media_proc {
     llama_media_proc_params params;
 
     uint32_t n_rows_max = 0; // n_ubatch of the encoder context
+
+    // per-projector layout and preprocessors of the clip engine
+    std::unique_ptr<clip_layout_config> cfg;
+
+    // serializes the streams, they all encode on ctx_enc
+    std::mutex stream_mutex;
+
+    ~llama_media_proc();
 };
 
 struct llama_media_layout {
@@ -75,6 +105,9 @@ struct llama_media_layout {
 
     std::vector<piece> pieces;
 
+    size_t   n_tokens       = 0; // tokens of the pieces so far
+    uint32_t n_images_added = 0; // images laid out so far
+
     ~llama_media_layout();
 
     void add_tokens(const llama_token * tokens, size_t n);
@@ -83,3 +116,6 @@ struct llama_media_layout {
 
 // the decoder positions of one row of a media span starting at pos_0, n_pos_per_embd values
 void llama_media_row_pos(const llama_media & m, llama_pos pos_0, uint32_t row, llama_pos * pos, uint32_t n_pos_per_embd);
+
+// the input of the native encoder graphs, built from the preprocessed entries of an engine media
+llama_media_input llama_media_native_input(const llama_media & m);

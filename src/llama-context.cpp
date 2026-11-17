@@ -15,6 +15,11 @@
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include "models/models.h"
+#include "clip/clip-media.h"
+#include "clip/clip-subcontext.h"
+#include "clip/clip-graph.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <cmath>
@@ -1905,6 +1910,236 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     return res;
 }
 
+// a ubatch of n_rows rows of seq 0 at positions 0.., all outputs; the encoder graphs take their input from media
+static llama_ubatch llama_media_ubatch(uint32_t n_rows, const llama_media_input * media) {
+    auto udata = std::make_shared<llama_ubatch::data_t>();
+    udata->pos       .resize(n_rows);
+    udata->n_seq_id  .assign(n_rows, 1);
+    udata->seq_id_data.assign(n_rows, 0);
+    udata->seq_id    .resize(n_rows);
+    udata->seq_id_unq = { 0 };
+    udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
+    udata->seq_idx[0] = 0;
+    udata->output    .assign(n_rows, 1);
+    for (uint32_t i = 0; i < n_rows; ++i) {
+        udata->pos[i]    = i;
+        udata->seq_id[i] = udata->seq_id_data.data() + i;
+    }
+
+    llama_ubatch ubatch {
+        /*.b_equal_seqs =*/ true,
+        /*.n_tokens     =*/ n_rows,
+        /*.n_seq_tokens =*/ n_rows,
+        /*.n_seqs       =*/ 1,
+        /*.n_seqs_unq   =*/ 1,
+        /*.n_pos        =*/ 1,
+        /*.token        =*/ nullptr,
+        /*.embd         =*/ nullptr,
+        /*.embd_state   =*/ nullptr,
+        /*.embd_row     =*/ nullptr,
+        /*.pos          =*/ udata->pos.data(),
+        /*.n_seq_id     =*/ udata->n_seq_id.data(),
+        /*.seq_id       =*/ udata->seq_id.data(),
+        /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
+        /*.seq_idx      =*/ udata->seq_idx.data(),
+        /*.output       =*/ udata->output.data(),
+        /*.type         =*/ nullptr,
+        /*.decision_order =*/ nullptr,
+        /*.span         =*/ nullptr,
+        /*.media        =*/ media,
+        /*.codes        =*/ nullptr,
+        /*.n_codes      =*/ 0,
+        /*.data         =*/ udata,
+    };
+    return ubatch;
+}
+
+ggml_backend_sched_t llama_context::sched_aux() {
+    synchronize();
+    gf_res_prev_active = nullptr;
+    return sched.get();
+}
+
+clip_subcontext * llama_context::clip_sub(const clip_model & m) {
+    auto & sub = clip_subs[&m];
+    if (!sub) {
+        sub = std::make_unique<clip_subcontext>(m, cparams.flash_attn);
+        clip_subcontext * s = sub.get();
+        s->exec = [this, s](clip_subctx_encode_params * req) { return clip_exec(*s, req); };
+        ggml_backend_dev_t dev_state = model.dev_output();
+        s->state_buft = dev_state ? ggml_backend_dev_buffer_type(dev_state) : ggml_backend_cpu_buffer_type();
+
+        // whether the graph takes several media of equal geometry at once, asked on a graph that is not built
+        if (m.modality != CLIP_MODALITY_GEN_AUDIO) {
+            ggml_init_params ip = {
+                /*.mem_size   =*/ ggml_tensor_overhead() * 64 + ggml_graph_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ggml_context_ptr ctx_probe(ggml_init(ip));
+            s->ctx0 = ctx_probe.get();
+            s->gf   = ggml_new_graph(ctx_probe.get());
+            const clip_image_f32_batch batch = s->get_dummy_batch();
+            s->support_batch = clip_get_graph_builder(s, batch)->support_batch();
+            s->ctx0 = nullptr;
+            s->gf   = nullptr;
+        }
+    }
+    return sub.get();
+}
+
+int llama_context::encode_media_engine_group(llama_media * const * media, size_t n) {
+    const auto & clip = static_cast<const llama_model_clip &>(model);
+    const clip_model * cm = clip.engine_vision();
+    clip_subcontext * sub = clip_sub(*cm);
+    const int64_t n_embd = cm->n_mmproj_embd();
+
+    // one graph for the entries of all media, as mtmd_batch did
+    clip_image_f32_batch merged = media[0]->img->batch_f32.clone();
+    size_t n_rows = media[0]->n_tokens;
+    for (size_t i = 1; i < n; ++i) {
+        for (const auto & e : media[i]->img->batch_f32.entries) {
+            merged.entries.push_back(e);
+        }
+        n_rows += media[i]->n_tokens;
+    }
+
+    std::vector<float> out((size_t) n_embd * n_rows);
+    if (!sub->encode_batch((int) cparams.n_threads_batch, &merged, out)) {
+        return -3;
+    }
+
+    size_t off = 0;
+    for (size_t i = 0; i < n; ++i) {
+        const size_t sz = (size_t) n_embd * media[i]->n_tokens;
+        media[i]->n_embd = n_embd;
+        media[i]->rows.assign(out.begin() + off, out.begin() + off + sz);
+        off += sz;
+    }
+    GGML_ASSERT(off == out.size());
+    return 0;
+}
+
+bool llama_context::clip_exec(clip_subcontext & sub, clip_subctx_encode_params * req) {
+    sched_reserve();
+
+    llama_media_input mi;
+    mi.clip_sub = &sub;
+    mi.clip_req = req;
+
+    // the graph takes no tokens, the batched thread count applies
+    const llama_ubatch ubatch = llama_media_ubatch(2, &mi);
+
+    n_outputs = 1;
+
+    ggml_status status;
+    llm_graph_result * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
+    if (!res) {
+        LLAMA_LOG_ERROR("%s: failed to run the graph (status %d)\n", __func__, (int) status);
+        return false;
+    }
+    if (!sub.input_ok) {
+        LLAMA_LOG_ERROR("%s: failed to set the inputs of the graph\n", __func__);
+        return false;
+    }
+
+    synchronize();
+
+    // the graph of the next call depends on its input, do not keep this one
+    gf_res_prev_active = nullptr;
+
+    return sub.read_outputs(res->get_gf(), res->get_embd(), req);
+}
+
+int llama_context::encode_media_engine(llama_media & m) {
+    const auto & clip = static_cast<const llama_model_clip &>(model);
+    const int n_threads = (int) cparams.n_threads_batch;
+
+    std::vector<float> out;
+
+    if (m.img) {
+        const clip_model * cm = clip.engine_vision();
+        GGML_ASSERT(cm != nullptr);
+        clip_subcontext * sub = clip_sub(*cm);
+
+        const clip_image_tokens & it = *m.img;
+        const int64_t n_embd = cm->n_mmproj_embd();
+        out.resize((size_t) n_embd * it.n_tokens());
+
+        if (it.pos == CLIP_POS_TYPE_CANVAS) {
+            // the tiles differ in size, encode them one by one
+            size_t offset = 0;
+            for (const auto & entry : it.batch_f32.entries) {
+                clip_image_f32_batch one;
+                one.entries.push_back(entry);
+                std::vector<float> embd((size_t) n_embd * cm->n_output_tokens(&entry));
+                if (!sub->encode_batch(n_threads, &one, embd)) {
+                    return -3;
+                }
+                GGML_ASSERT(offset + embd.size() <= out.size());
+                std::copy(embd.begin(), embd.end(), out.begin() + offset);
+                offset += embd.size();
+            }
+            GGML_ASSERT(offset == out.size());
+        } else if (!sub->encode_batch(n_threads, &it.batch_f32, out)) {
+            return -3;
+        }
+        m.n_embd = n_embd;
+    } else {
+        const clip_model * cm = clip.engine_audio();
+        GGML_ASSERT(cm != nullptr && m.aud);
+        clip_subcontext * sub = clip_sub(*cm);
+
+        const clip_audio_tokens & at = *m.aud;
+        const int64_t n_embd = cm->n_mmproj_embd();
+
+        // the log-mel of a source is computed by its first encode, its chunks share the result
+        auto encode = [&](const clip_image_f32_batch & batch_f32, clip_audio_preproc_out * source, uint32_t idx, std::vector<float> & dst) {
+            clip_image_f32_batch batch = batch_f32.clone();
+            if (source && source->needs_compute()) {
+                GGML_ASSERT(m.aud_preproc != nullptr);
+                m.aud_preproc->mel_config.sched = sched_aux();
+                if (!m.aud_preproc->compute(*source)) {
+                    LLAMA_LOG_ERROR("%s: unable to compute the mel\n", __func__);
+                    return false;
+                }
+            }
+            if (source) {
+                GGML_ASSERT(idx < source->entries.size());
+                batch.entries[0] = source->entries[idx];
+            }
+            return sub->encode_batch(n_threads, &batch, dst);
+        };
+
+        if (at.track) {
+            auto & track = *at.track;
+            if (track.embd.empty()) {
+                track.embd.resize((size_t) track.n_tokens * n_embd);
+                if (!encode(track.batch_f32, track.source.get(), 0, track.embd)) {
+                    track.embd.clear();
+                    return -3;
+                }
+            }
+            const size_t n_row_embd = track.embd.size() / track.n_tokens;
+            const size_t off = (size_t) at.row_begin * n_row_embd;
+            out.assign(track.embd.begin() + off, track.embd.begin() + off + (size_t) at.n_tokens * n_row_embd);
+        } else {
+            if (cm->proj_type == PROJECTOR_TYPE_CHATTERBOX_SPKENC) {
+                LLAMA_LOG_ERROR("%s: the chatterbox reference encoder is not ported yet\n", __func__);
+                return -1;
+            }
+            out.resize((size_t) at.n_tokens * n_embd);
+            if (!encode(at.batch_f32, at.source.get(), at.source_idx, out)) {
+                return -3;
+            }
+        }
+        m.n_embd = n_embd;
+    }
+
+    m.rows = std::move(out);
+    return 0;
+}
+
 int llama_context::encode_media(const llama_batch_ext & batch_inp) {
     if (cparams.ctx_type != LLAMA_CONTEXT_TYPE_ENCODER) {
         LLAMA_LOG_ERROR("%s: media can only be encoded by an ENCODER context\n", __func__);
@@ -1917,57 +2152,69 @@ int llama_context::encode_media(const llama_batch_ext & batch_inp) {
 
     sched_reserve();
 
-    // one media per ubatch; media of equal geometry could share one in the future
-    for (llama_media * m : batch_inp.media) {
+    const auto & clip = static_cast<const llama_model_clip &>(model);
+
+    for (size_t im = 0; im < batch_inp.media.size(); ++im) {
+        llama_media * m = batch_inp.media[im];
         const uint32_t n_rows = m->n_tokens;
-        if (n_rows == 0 || m->inp.data.empty()) {
+        if (n_rows == 0 || m->placeholder) {
             LLAMA_LOG_ERROR("%s: cannot encode a placeholder media\n", __func__);
             return -1;
         }
+
+        // consecutive images of equal geometry share one graph when the tower takes a batch
+        if (m->img && !clip.native_v && m->img->pos != CLIP_POS_TYPE_CANVAS && clip_sub(*clip.engine_vision())->support_batch) {
+            size_t n = 1;
+            while (im + n < batch_inp.media.size()) {
+                llama_media * mn = batch_inp.media[im + n];
+                if (!mn->img || mn->placeholder || !mn->img->can_batch_with(*m->img)) {
+                    break;
+                }
+                n++;
+            }
+            if (n > 1) {
+                try {
+                    const int ret = encode_media_engine_group(&batch_inp.media[im], n);
+                    if (ret != 0) {
+                        return ret;
+                    }
+                } catch (const std::exception & e) {
+                    LLAMA_LOG_ERROR("%s: %s\n", __func__, e.what());
+                    return -3;
+                }
+                for (size_t k = 0; k < n; ++k) {
+                    n_queued_tokens += batch_inp.media[im + k]->n_tokens;
+                }
+                im += n - 1;
+                continue;
+            }
+        }
+
+        // towers without native graphs
+        if (m->aud || (m->img && !clip.native_v)) {
+            try {
+                const int ret = encode_media_engine(*m);
+                if (ret != 0) {
+                    return ret;
+                }
+            } catch (const std::exception & e) {
+                LLAMA_LOG_ERROR("%s: %s\n", __func__, e.what());
+                return -3;
+            }
+            n_queued_tokens += n_rows;
+            continue;
+        }
+
+        // native graphs: the input is built from the preprocessed entries
+        const llama_media_input inp_native = m->img ? llama_media_native_input(*m) : llama_media_input();
+        const llama_media_input & inp = m->img ? inp_native : m->inp;
+
         if (n_rows > cparams.n_ubatch) {
             LLAMA_LOG_ERROR("%s: media with %u rows exceeds n_ubatch = %u of the encoder context\n", __func__, n_rows, cparams.n_ubatch);
             return -1;
         }
 
-        auto udata = std::make_shared<llama_ubatch::data_t>();
-        udata->pos       .resize(n_rows);
-        udata->n_seq_id  .assign(n_rows, 1);
-        udata->seq_id_data.assign(n_rows, 0);
-        udata->seq_id    .resize(n_rows);
-        udata->seq_id_unq = { 0 };
-        udata->seq_idx   .assign(LLAMA_MAX_SEQ, -1);
-        udata->seq_idx[0] = 0;
-        udata->output    .assign(n_rows, 1);
-        for (uint32_t i = 0; i < n_rows; ++i) {
-            udata->pos[i]    = i;
-            udata->seq_id[i] = udata->seq_id_data.data() + i;
-        }
-
-        llama_ubatch ubatch {
-            /*.b_equal_seqs =*/ true,
-            /*.n_tokens     =*/ n_rows,
-            /*.n_seq_tokens =*/ n_rows,
-            /*.n_seqs       =*/ 1,
-            /*.n_seqs_unq   =*/ 1,
-            /*.n_pos        =*/ 1,
-            /*.token        =*/ nullptr,
-            /*.embd         =*/ nullptr,
-            /*.embd_state   =*/ nullptr,
-            /*.embd_row     =*/ nullptr,
-            /*.pos          =*/ udata->pos.data(),
-            /*.n_seq_id     =*/ udata->n_seq_id.data(),
-            /*.seq_id       =*/ udata->seq_id.data(),
-            /*.seq_id_unq   =*/ udata->seq_id_unq.data(),
-            /*.seq_idx      =*/ udata->seq_idx.data(),
-            /*.output       =*/ udata->output.data(),
-            /*.type         =*/ nullptr,
-            /*.decision_order =*/ nullptr,
-            /*.span         =*/ nullptr,
-            /*.media        =*/ &m->inp,
-            /*.codes        =*/ nullptr,
-            /*.n_codes      =*/ 0,
-            /*.data         =*/ udata,
-        };
+        const llama_ubatch ubatch = llama_media_ubatch(n_rows, &inp);
 
         n_queued_tokens += n_rows;
         n_outputs = n_rows;

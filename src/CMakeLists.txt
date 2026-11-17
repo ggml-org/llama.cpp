@@ -7,6 +7,7 @@ llama_add_compile_flags()
 # llama
 
 file(GLOB LLAMA_MODELS_SOURCES "models/*.cpp")
+file(GLOB LLAMA_CLIP_SOURCES "clip/*.cpp" "clip/models/*.cpp")
 
 set(LLAMA_CORE_SOURCES
     llama.cpp
@@ -28,7 +29,6 @@ set(LLAMA_CORE_SOURCES
     llama-kv-cache-msa.cpp
     llama-kv-cache-dsv4.cpp
     llama-media.cpp
-    llama-media-image.cpp
     llama-memory.cpp
     llama-moe-cache.cpp
     llama-memory-hybrid.cpp
@@ -52,6 +52,7 @@ add_library(llama
             ${LLAMA_CORE_SOURCES}
             unicode.h
             ${LLAMA_MODELS_SOURCES}
+            ${LLAMA_CLIP_SOURCES}
             )
 
 set_target_properties(llama PROPERTIES

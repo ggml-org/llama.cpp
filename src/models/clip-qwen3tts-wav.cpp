@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include "../clip/clip-model.h"
+
 #include "llama-impl.h"
 #include "llama-memory-slots.h"
 
@@ -166,8 +168,13 @@ llama_memory_i * llama_model_clip::create_clip_memory(const llama_memory_params 
 }
 
 uint32_t llama_model_clip::ctx_n_embd_out(enum llama_context_type type) const {
-    if (type == LLAMA_CONTEXT_TYPE_GEN_WAV) {
+    if (type == LLAMA_CONTEXT_TYPE_GEN_WAV && native_gen) {
         return (uint32_t) c2w_samples_per_frame();
+    }
+    if (type == LLAMA_CONTEXT_TYPE_ENCODER && !native_v) {
+        if (const clip_model * m = engine_for_ctx(type)) {
+            return (uint32_t) m->n_mmproj_embd();
+        }
     }
     return hparams.n_embd_out();
 }

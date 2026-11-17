@@ -14,9 +14,16 @@
 
 #include <array>
 #include <map>
+#include <memory>
 #include <vector>
 
 struct llama_model;
+struct llama_media;
+
+// the clip engine (src/clip/)
+struct clip_model;
+struct clip_subcontext;
+struct clip_subctx_encode_params;
 class llama_batch_allocr;
 class llama_moe_cache;
 
@@ -164,6 +171,22 @@ struct llama_context {
     // encode the media of an ENCODER batch into their rows
     int encode_media(const llama_batch_ext & batch_inp);
 
+    // clip engine (src/clip/): encode one media of the engine, see encode_media()
+    int encode_media_engine(llama_media & m);
+
+    // clip engine: encode n images of equal geometry in one graph
+    int encode_media_engine_group(llama_media * const * media, size_t n);
+
+    // the engine runtime of one tower of a clip model, created on first use
+    clip_subcontext * clip_sub(const clip_model & m);
+
+    // runs one engine graph: built by the clip model, inputs set, computed, outputs read back into req
+    bool clip_exec(clip_subcontext & sub, clip_subctx_encode_params * req);
+
+    // the scheduler, for a graph outside of the llm_graph flow (the log-mel of the audio preprocessor)
+    // the next process_ubatch() rebuilds its graph
+    ggml_backend_sched_t sched_aux();
+
     // GEN_CODE context: one frame per entry, codes sampled in the graph
     int gen_code(const llama_batch_ext & batch_inp);
 
@@ -253,6 +276,9 @@ struct llama_context {
             int64_t                          t_loop_start);
 
 private:
+    // clip engine runtimes, one per tower in use
+    std::map<const clip_model *, std::unique_ptr<clip_subcontext>> clip_subs;
+
     //
     // output
     //

@@ -891,6 +891,7 @@ enum llm_tensor {
     LLM_TENSOR_A_GEN_CODE_OUT_EMBD,
     LLM_TENSOR_A_GEN_CODE_OUTPUT_NORM,
     LLM_TENSOR_A_GEN_CODE_PROJ_IN,
+    LLM_TENSOR_NAMED, // name taken verbatim from the file, see LLM_TN_IMPL::named()
     LLM_TENSOR_A_GEN_WAV_QUANT_FIRST_OUT,
     LLM_TENSOR_A_GEN_WAV_QUANT_FIRST_CB,
     LLM_TENSOR_A_GEN_WAV_QUANT_REST_OUT,
@@ -1028,10 +1029,17 @@ struct LLM_TN_IMPL {
     const char * const suffix;
     const int bid;
     const int xid;
+    const std::string name; // LLM_TENSOR_NAMED only
 
     LLM_TN_IMPL(llm_arch arch, llm_tensor tensor, const char * suffix, int bid, int xid);
 
+    // a tensor whose name does not follow LLM_TENSOR_NAMES (clip models): an output-layer weight used by MUL_MAT,
+    // or by ADD when the name ends in ".bias"
+    static LLM_TN_IMPL named(llm_arch arch, const std::string & name);
+
     std::string str() const;
+
+    bool is_bias() const;
 
     operator std::string() const {
         return str();

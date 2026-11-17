@@ -1289,7 +1289,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID;
         // embedded-adapter ".lora_a"/".lora_b" tensors are always used with GGML_OP_MUL_MAT_ID
         ggml_op op;
-        if (tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0) {
+        if (tn.is_bias()) {
             op = info.op == GGML_OP_MUL_MAT_ID ? GGML_OP_ADD_ID : GGML_OP_ADD;
         } else if (hparams.router_layer >= 0 && tn.suffix != nullptr &&
                 (strcmp(tn.suffix, "lora_a") == 0 || strcmp(tn.suffix, "lora_b") == 0)) {
@@ -1626,6 +1626,17 @@ std::vector<llama_model_loader::mapping_range> llama_model_loader::get_mapping_r
 void llama_model_loader::unmap_weight(const llama_tensor_weight & w) const {
     if (!use_mmap) { return; }
     mappings.at(w.idx)->unmap_fragment(w.offs, w.offs + ggml_nbytes(w.tensor));
+}
+
+void llama_model_loader::read_tensor_host(const char * name, void * dst, size_t size) const {
+    const llama_tensor_weight & w = require_weight(name);
+    if (size > ggml_nbytes(w.tensor)) {
+        throw std::runtime_error(format("%s: tensor '%s' holds %zu bytes, %zu requested", __func__, name, ggml_nbytes(w.tensor), size));
+    }
+    GGML_ASSERT(w.idx < files.size());
+    const auto & file = files.at(w.idx);
+    file->seek(w.offs, SEEK_SET);
+    file->read_raw(dst, size);
 }
 
 const void * llama_model_loader::load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const {

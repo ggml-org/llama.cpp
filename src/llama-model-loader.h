@@ -254,6 +254,10 @@ struct llama_model_loader {
     // release a weight's mmap pages
     void unmap_weight(const llama_tensor_weight & w) const;
 
+    // read the first size bytes of a tensor's data into host memory, from the file (independent of mmap)
+    // for small tensors a model keeps on the host instead of creating them
+    void read_tensor_host(const char * name, void * dst, size_t size) const;
+
     // read a byte range of a weight's data
     // with mmap, returns a pointer into the mapping, otherwise reads into buf and returns buf
     const void * load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const;

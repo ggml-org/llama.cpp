@@ -383,6 +383,9 @@ struct llama_model_bloom : public llama_model_base {
 
 struct llama_model_clip;
 
+// graphs of the clip engine (src/clip/), src/models/clip-engine.cpp
+std::unique_ptr<llm_graph_context> llama_model_clip_build_engine_graph(const llama_model_clip & clip, const llm_graph_params & params);
+
 // Qwen3-TTS codec, src/models/clip-qwen3tts-wav.cpp
 void llama_model_clip_load_c2w(llama_model_clip & m, const std::function<ggml_tensor *(const LLM_TN_IMPL &, int)> & create, int not_required);
 std::unique_ptr<llm_graph_context> llama_model_clip_build_wav_graph(const llama_model_clip & clip, const llm_graph_params & params);
@@ -400,10 +403,34 @@ enum llama_clip_projector {
 struct llama_media_input;
 struct llama_media;
 struct llama_media_proc;
-namespace llama_media_img { struct image_u8; }
+
+// the clip engine moved from mtmd, src/clip/
+struct clip_model;
+struct clip_models;
 
 struct llama_model_clip : public llama_model_base {
-    llama_model_clip(const struct llama_model_params & params) : llama_model_base(params) {}
+    llama_model_clip(const struct llama_model_params & params);
+    ~llama_model_clip() override;
+
+    // every modality of the file, with the hparams of the clip engine (src/clip/clip-model.h)
+    // the weights of a modality are created by the engine loader unless its graphs are native (below)
+    std::unique_ptr<clip_models> engine;
+
+    bool native_v   = false; // the vision tower runs on the native graphs of this file
+    bool native_gen = false; // the gen tower runs on the native Qwen3-TTS graphs
+
+    // the engine model of a modality, nullptr if the file has none
+    const clip_model * engine_vision() const;
+    const clip_model * engine_audio()  const;
+    const clip_model * engine_gen()    const;
+
+    // the engine model whose graph a context of this type runs when no media is given (reservation)
+    const clip_model * engine_for_ctx(enum llama_context_type type) const;
+
+    void load_engine_hparams(const clip_model & main);
+    void load_engine_tensors(llama_model_loader & ml);
+
+    struct graph_engine;
 
     // vision tower hparams that have no place in llama_hparams
     struct vision_hparams {
@@ -458,7 +485,7 @@ struct llama_model_clip : public llama_model_base {
     ggml_tensor * gc_proj_in_b = nullptr;
 
     // vision graphs are wide (mtmd used 8192), the code predictor unrolls 15 steps with a sampler chain each
-    uint32_t graph_max_nodes_hint() const override { return vhp.has_vision ? 8192 : 32768; }
+    uint32_t graph_max_nodes_hint() const override;
 
     uint32_t ctx_n_vocab(enum llama_context_type type) const override;
     uint32_t ctx_n_embd_state(enum llama_context_type type) const override;
@@ -543,6 +570,7 @@ struct llama_model_clip : public llama_model_base {
 
     void load_gen_hparams(llama_model_loader & ml);
     void load_gen_tensors(llama_model_loader & ml);
+    void load_vision_tensors(llama_model_loader & ml);
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 
@@ -553,12 +581,6 @@ struct llama_model_clip : public llama_model_base {
     // the largest media the encoder graph is reserved for, given the output row budget
     llama_media_input reserve_media(uint32_t n_rows_max) const;
 
-    // preprocess an image (or a merged frame pair), fill the input and the output geometry of m
-    // returns false if the projector does not take this input
-    bool media_preprocess_image(const llama_media_proc & proc, const llama_media_img::image_u8 * frames, int n_frames, llama_media & m) const;
-
-    // tokens placed before and after an image span
-    void media_image_wrap(const llama_media_proc & proc, std::vector<llama_token> & beg, std::vector<llama_token> & end) const;
 
     struct graph_vit;
     struct graph_gemma3;
