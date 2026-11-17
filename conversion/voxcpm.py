@@ -50,6 +50,7 @@ def _load_voxcpm2_hparams(dir_model: Path) -> dict[str, Any]:
 
 
 @ModelBase.register("VoxCPM2Model")
+@ModelBase.example("openbmb/VoxCPM2")
 class VoxCPM2TextModel(MiniCPMModel):
     model_arch = gguf.MODEL_ARCH.MINICPM
 
@@ -109,6 +110,7 @@ class VoxCPM2TextModel(MiniCPMModel):
 
 
 @ModelBase.register("VoxCPM2Model")
+@ModelBase.example("openbmb/VoxCPM2")
 class VoxCPM2MmprojModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = True  # AudioVAE encoder, for voice cloning
@@ -256,7 +258,7 @@ class VoxCPM2MmprojModel(MmprojModel):
 
         path = self.dir_model / "audiovae.pth"
         logger.info(f"gguf: loading AudioVAE from '{path}'")
-        sd = torch.load(str(path), map_location="cpu", weights_only=True)
+        sd = torch.load(str(path), map_location="cpu", mmap=True, weights_only=True)
         sd = sd.get("state_dict", sd)
         vae = self.global_config["audio_vae_config"]
 

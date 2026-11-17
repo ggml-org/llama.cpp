@@ -319,6 +319,7 @@ Available params:
 - The flow matching uses 10 Euler steps and classifier-free guidance with scale 2.0, like the reference. `llama-server` takes `flow_steps` (2 to 32) and `cfg_scale` to change them
 - Each frame is 4 latents, 7680 samples (160 ms). Generation stops on the stop head of the model, at least 4 frames, at most 6 frames per text token + 10 (the limit of the reference)
 - Not supported yet: the continuation mode of the reference (prompt audio with its transcript)
+- Not supported yet: the bad case retry of the reference (`retry_badcase`, a new seed when the audio reaches 6 frames per text token). Short prompts may then run long and repeat some words, try another seed
 
 Example usage:
 

@@ -3848,6 +3848,10 @@ public:
         temp       = inp->temp;
         cfg_scale  = inp->cfg_scale;
         flow_steps = inp->flow_steps;
+        if (flow_steps != 0 && (flow_steps < 2 || flow_steps > 32)) {
+            LOG_ERR("mtmd_helper_gen_audio: voxcpm2 needs flow_steps in [2, 32] (0 = model default)\n");
+            return 2;
+        }
         if (inp->speaker_ref_text) {
             LOG_WRN("mtmd_helper_gen_audio: voxcpm2 clones the voice without its transcript, the speaker text is ignored\n");
         }
@@ -3855,19 +3859,15 @@ public:
             return 1;
         }
 
-        // same as VoxCPM2._generate() in core.py
+        // re.sub(r"\s+", " ", text) as in VoxCPM._generate() of core.py, a leading or trailing space is kept
         std::string text;
         bool space = false;
         for (char c : std::string(inp->prompt, inp->prompt_len)) {
-            if (std::isspace((unsigned char) c)) {
-                space = true;
-                continue;
+            const bool is_space = std::isspace((unsigned char) c);
+            if (!is_space || !space) {
+                text += is_space ? ' ' : c;
             }
-            if (space && !text.empty()) {
-                text += ' ';
-            }
-            space = false;
-            text += c;
+            space = is_space;
         }
         std::vector<llama_token> ids = tokenize(text);
         if (ids.empty()) {

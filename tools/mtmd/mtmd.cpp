@@ -756,6 +756,8 @@ static llama_model * mtmd_voxcpm2_res_load(const char * fname, ggml_backend_dev_
         gguf_set_val_u32 (dst, key(LLM_KV_BLOCK_COUNT).c_str(),                   n_layer);
         gguf_set_val_u32 (dst, key(LLM_KV_ATTENTION_HEAD_COUNT).c_str(),          (uint32_t) (q->ne[1] / g::head_dim));
         gguf_set_val_u32 (dst, key(LLM_KV_ATTENTION_HEAD_COUNT_KV).c_str(),       (uint32_t) (k->ne[1] / g::head_dim));
+        gguf_set_val_u32 (dst, key(LLM_KV_ATTENTION_KEY_LENGTH).c_str(),          g::head_dim); // kv_channels, may differ from n_embd / n_head
+        gguf_set_val_u32 (dst, key(LLM_KV_ATTENTION_VALUE_LENGTH).c_str(),        g::head_dim);
         gguf_set_val_f32 (dst, key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS).c_str(),   hparams.eps);
         gguf_set_val_f32 (dst, key(LLM_KV_LOGIT_SCALE).c_str(),                   1.0f);
         gguf_set_val_bool(dst, key(LLM_KV_ROPE_SCALING_FINETUNED).c_str(),        false);
@@ -1480,11 +1482,11 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_FISH_S2_SPKENC:
                 {
-                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_fish_s2>(models.a.get());
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_spk_ref>(models.a.get(), mtmd_hparams::fish_s2_max_spk_seconds);
                 } break;
             case PROJECTOR_TYPE_VOXCPM2_SPKENC:
                 {
-                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_voxcpm2>(models.a.get());
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_spk_ref>(models.a.get(), mtmd_hparams::voxcpm2_max_spk_seconds);
                 } break;
             case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
                 {
@@ -3599,7 +3601,7 @@ static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state,
         return 1;
     }
     const int n_steps = inp->n_steps > 0 ? inp->n_steps : g::n_steps_default;
-    if (n_steps < 2 || n_steps > g::n_steps_max) {
+    if (!prompt && (n_steps < 2 || n_steps > g::n_steps_max)) {
         LOG_ERR("%s: flow steps must be in [2, %d]\n", __func__, g::n_steps_max);
         return 1;
     }
@@ -3653,7 +3655,7 @@ static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state,
             }
             const llama_pos p = state->voxcpm2_n_past + i;
             llama_batch_ext_set_pos(lbatch.get(), idx, &p);
-            llama_batch_ext_set_output_embd(lbatch.get(), idx, i == n_rows - 1);
+            llama_batch_ext_set_output_embd(lbatch.get(), idx, true); // required with embeddings on, only the last is read
         }
         if (llama_process(lctx, LLAMA_PROCESS_TYPE_DECODE, lbatch.get()) != 0) {
             LOG_ERR("%s: residual LM decode failed\n", __func__);
@@ -3669,7 +3671,7 @@ static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state,
     }
 
     // flow matching from [FSQ'd hidden state, residual LM output], then LocEnc of the new patch
-    const float * r = llama_get_embeddings(lctx);
+    const float * r = llama_get_embeddings_ith(lctx, -1);
     std::vector<float> rows(res_out.begin() + n_text, res_out.end());
     rows.insert(rows.end(), r, r + n_text);
     batch = make_batch(rows.data(), 2);
@@ -3689,6 +3691,9 @@ static int32_t mtmd_gen_code_voxcpm2(mtmd_context * ctx, mtmd_gen_state * state,
         params.gen_state   = state->gen_state;
         if (!sctx->encode(&params)) {
             LOG_ERR("%s: encode failed (flow)\n", __func__);
+            // drop the row of this frame, so the state stays as before the call
+            state->voxcpm2_n_past -= n_rows;
+            llama_memory_seq_rm(llama_get_memory(lctx), 0, (llama_pos) state->voxcpm2_n_past, -1);
             return 1;
         }
     }
