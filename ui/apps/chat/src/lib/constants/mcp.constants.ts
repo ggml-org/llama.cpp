@@ -1,4 +1,6 @@
-import { Globe, Radio, Zap } from '@lucide/svelte';
+import Globe from '@lucide/svelte/icons/globe';
+import Radio from '@lucide/svelte/icons/radio';
+import Zap from '@lucide/svelte/icons/zap';
 import { MimeTypeImage } from '#lib/enums/files.enums.ts';
 import { MCPTransportType } from '#lib/enums/index.ts';
 import type { ClientCapabilities, Implementation } from '#lib/types/index.ts';

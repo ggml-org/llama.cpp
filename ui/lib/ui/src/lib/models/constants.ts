@@ -2,13 +2,11 @@
 // models-discover-download and model-compatibility).
 import { ModelCapability, ModelModality } from './enums.js';
 import type { ModelModalities } from './types.js';
-import {
-	Eye as VisionIcon,
-	Lightbulb as ReasoningIcon,
-	Mic as AudioIcon,
-	Video as VideoIcon,
-	Wrench as ToolUseIcon
-} from '@lucide/svelte';
+import VisionIcon from '@lucide/svelte/icons/eye';
+import ReasoningIcon from '@lucide/svelte/icons/lightbulb';
+import AudioIcon from '@lucide/svelte/icons/mic';
+import VideoIcon from '@lucide/svelte/icons/video';
+import ToolUseIcon from '@lucide/svelte/icons/wrench';
 import type { Component } from 'svelte';
 
 /** Neutral model badge: params, quantization, tags. */

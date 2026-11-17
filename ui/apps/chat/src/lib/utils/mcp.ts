@@ -1,14 +1,12 @@
 import { extractRootDomain } from './url';
-import {
-	AlertTriangle,
-	Code,
-	Database,
-	File,
-	FileText,
-	Image,
-	Info,
-	XCircle
-} from '@lucide/svelte';
+import AlertTriangle from '@lucide/svelte/icons/alert-triangle';
+import Code from '@lucide/svelte/icons/code';
+import Database from '@lucide/svelte/icons/database';
+import File from '@lucide/svelte/icons/file';
+import FileText from '@lucide/svelte/icons/file-text';
+import Image from '@lucide/svelte/icons/image';
+import Info from '@lucide/svelte/icons/info';
+import XCircle from '@lucide/svelte/icons/x-circle';
 import {
 	CODE_FILE_EXTENSION_REGEX,
 	DEFAULT_RESOURCE_FILENAME,
