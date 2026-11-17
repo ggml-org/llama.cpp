@@ -1732,17 +1732,17 @@ static inline void gdn_init_head_ptrs(
     head->s_update_tiles = VTCM_LAYOUT_PTR(__fp16, vtcm_base, L->off_s_update_tiles + h * L->state_tiles_bytes);
 
     head->q_f32[0] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_q_f32[0] + h * L->dma_chunk_bytes);
-    head->q_f32[1] = L->pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L->off_q_f32[1] + h * L->dma_chunk_bytes) : head->q_f32[0];
+    head->q_f32[1] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_q_f32[1] + h * L->dma_chunk_bytes);
     head->k_f32[0] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_k_f32[0] + h * L->dma_chunk_bytes);
-    head->k_f32[1] = L->pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L->off_k_f32[1] + h * L->dma_chunk_bytes) : head->k_f32[0];
+    head->k_f32[1] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_k_f32[1] + h * L->dma_chunk_bytes);
     head->v_f32[0] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_v_f32[0] + h * L->dma_chunk_bytes);
-    head->v_f32[1] = L->pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L->off_v_f32[1] + h * L->dma_chunk_bytes) : head->v_f32[0];
+    head->v_f32[1] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_v_f32[1] + h * L->dma_chunk_bytes);
     head->g_f32[0] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_g_f32[0] + h * dma_scalar_sz);
-    head->g_f32[1] = L->pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L->off_g_f32[1] + h * dma_scalar_sz) : head->g_f32[0];
+    head->g_f32[1] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_g_f32[1] + h * dma_scalar_sz);
     head->b_f32[0] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_b_f32[0] + h * dma_scalar_sz);
-    head->b_f32[1] = L->pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L->off_b_f32[1] + h * dma_scalar_sz) : head->b_f32[0];
+    head->b_f32[1] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_b_f32[1] + h * dma_scalar_sz);
     head->o_f32[0] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_o_f32[0] + h * L->dma_chunk_bytes);
-    head->o_f32[1] = L->pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L->off_o_f32[1] + h * L->dma_chunk_bytes) : head->o_f32[0];
+    head->o_f32[1] = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_o_f32[1] + h * L->dma_chunk_bytes);
 
     head->v_inter_f32 = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_v_inter_f32 + h * L->dma_chunk_bytes);
     head->o_inter_f32 = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_o_inter_f32 + h * L->dma_chunk_bytes);
@@ -1871,22 +1871,30 @@ static void gdn_hvx_phase1a_worker(const htp_thread_t * th, unsigned int n, unsi
         const HVX_Vector vv = hvx_vec_gather_offsets_w(vtcm_stride);
         const size_t rt_g = (size_t) ((const uint8_t *) bctx->vtcm_g_raw + i * sizeof(float));
         const size_t rt_b = (size_t) ((const uint8_t *) bctx->vtcm_b_raw + i * sizeof(float));
-        const size_t mu   = 64 * vtcm_stride;
+        const size_t mu   = 32 * vtcm_stride - 1;
 
         Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 0),  rt_g, mu, vv);
         Q6_vgather_ARMVw((HVX_Vector *) (head->g_f32[curr_buf] + 32), rt_g + 32 * vtcm_stride, mu, vv);
         Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 0),  rt_b, mu, vv);
         Q6_vgather_ARMVw((HVX_Vector *) (head->b_f32[curr_buf] + 32), rt_b + 32 * vtcm_stride, mu, vv);
+        hvx_gather_sync(head->b_f32[curr_buf] + 32);
     }
 
     const uint32_t t_chunk = bctx->c * 64;
     const uint32_t valid_tokens = hex_smin(64, bctx->kparams->n_tokens - t_chunk);
     if (valid_tokens < 64) {
-        for (uint32_t t = valid_tokens; t < 64; ++t) {
-            head->g_f32[curr_buf][t] = 0.0f;
-            head->b_f32[curr_buf][t] = 0.0f;
-        }
         const HVX_Vector vzero = Q6_V_vzero();
+        if (valid_tokens <= 32) {
+            const HVX_VectorPred mask = Q6_Q_vsetq2_R(valid_tokens * sizeof(float));
+            hvx_vmem(head->g_f32[curr_buf] + 0)  = Q6_V_vand_QV(mask, hvx_vmem(head->g_f32[curr_buf] + 0));
+            hvx_vmem(head->b_f32[curr_buf] + 0)  = Q6_V_vand_QV(mask, hvx_vmem(head->b_f32[curr_buf] + 0));
+            hvx_vmem(head->g_f32[curr_buf] + 32) = vzero;
+            hvx_vmem(head->b_f32[curr_buf] + 32) = vzero;
+        } else {
+            const HVX_VectorPred mask = Q6_Q_vsetq2_R((valid_tokens - 32) * sizeof(float));
+            hvx_vmem(head->g_f32[curr_buf] + 32) = Q6_V_vand_QV(mask, hvx_vmem(head->g_f32[curr_buf] + 32));
+            hvx_vmem(head->b_f32[curr_buf] + 32) = Q6_V_vand_QV(mask, hvx_vmem(head->b_f32[curr_buf] + 32));
+        }
         const uint32_t q_words = (bctx->octx->src[0]->type == HTP_TYPE_F16) ? (S_v / 2) : S_v;
         const uint32_t k_words = (bctx->octx->src[1]->type == HTP_TYPE_F16) ? (S_v / 2) : S_v;
         const uint32_t v_words = (bctx->octx->src[2]->type == HTP_TYPE_F16) ? (S_v / 2) : S_v;
@@ -2244,7 +2252,7 @@ static int gated_delta_net_f32_hmx_chunked(
     const uint32_t n_sv_tiles = S_v / 32;
 
     struct htp_gdn_hmx_vtcm_layout L;
-    htp_gdn_hmx_vtcm_layout_build(&L, S_v, chunk_size, kparams->n_heads_batch, kparams->n_hvx, kparams->pipeline != 0);
+    htp_gdn_hmx_vtcm_layout_build(&L, S_v, chunk_size, kparams->n_heads_batch, kparams->n_hvx);
 
     if (L.total_bytes > octx->ctx->vtcm_size) {
         return HTP_STATUS_VTCM_TOO_SMALL;
@@ -2254,11 +2262,11 @@ static int gated_delta_net_f32_hmx_chunked(
 
     float * vtcm_g_raw[2] = {
         VTCM_LAYOUT_PTR(float, vtcm_base, L.off_g_raw[0]),
-        L.pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L.off_g_raw[1]) : VTCM_LAYOUT_PTR(float, vtcm_base, L.off_g_raw[0])
+        VTCM_LAYOUT_PTR(float, vtcm_base, L.off_g_raw[1])
     };
     float * vtcm_b_raw[2] = {
         VTCM_LAYOUT_PTR(float, vtcm_base, L.off_b_raw[0]),
-        L.pipeline ? VTCM_LAYOUT_PTR(float, vtcm_base, L.off_b_raw[1]) : VTCM_LAYOUT_PTR(float, vtcm_base, L.off_b_raw[0])
+        VTCM_LAYOUT_PTR(float, vtcm_base, L.off_b_raw[1])
     };
 
     uint8_t * vtcm_scales_1 = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L.off_scales_1);

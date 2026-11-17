@@ -548,9 +548,8 @@ static bool htp_kparams_solve_gated_delta_net(
     struct htp_gdn_vtcm_layout hvx_layout;
     uint32_t n_heads_batch = 1;
 
-    if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout, (uint32_t) S_v, HTP_GDN_CHUNK_SIZE, total_rows, vtcm_size, n_hvx, true, &n_heads_batch)) {
+    if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout, (uint32_t) S_v, HTP_GDN_CHUNK_SIZE, total_rows, vtcm_size, n_hvx, &n_heads_batch)) {
         kparams->kernel_type   = HTP_GDN_KERNEL_HMX_CHUNKED;
-        kparams->pipeline      = hmx_layout.pipeline ? 1 : 0;
         kparams->chunk_size    = HTP_GDN_CHUNK_SIZE;
         kparams->n_chunks      = ((uint32_t) n_tokens + HTP_GDN_CHUNK_SIZE - 1) / HTP_GDN_CHUNK_SIZE;
         kparams->n_heads_batch = (uint16_t) n_heads_batch;
@@ -561,7 +560,6 @@ static bool htp_kparams_solve_gated_delta_net(
             return false;
         }
         kparams->kernel_type   = HTP_GDN_KERNEL_HVX_RECURRENT;
-        kparams->pipeline      = 0;
         kparams->n_heads_batch = 1;
         kparams->vtcm_size     = (uint32_t) hvx_layout.total_bytes;
     }
