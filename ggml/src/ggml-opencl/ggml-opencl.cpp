@@ -23660,10 +23660,6 @@ static bool ggml_cl_flash_attn_decompose_dispatch(
         return false;
     }
 
-    // even out the chunks, then align to the 32-wide n-tile
-    const int64_t n_chunks = (n_q + n_q_chunk - 1) / n_q_chunk;
-    n_q_chunk = MIN(n_q_chunk, ((n_q + n_chunks - 1) / n_chunks + 31) & ~(int64_t) 31);
-
     static const int kq_int8_env = [] {
         const char * e = getenv("GGML_OPENCL_FA_KQ_INT8");
         return (e && e[0]) ? (e[0] != '0' ? 1 : 0) : -1;
@@ -23687,6 +23683,20 @@ static bool ggml_cl_flash_attn_decompose_dispatch(
         kq_int8_kernel = dk <= 256 ? backend_ctx->kernel_mul_mm_q8_kq_p8 : backend_ctx->kernel_mul_mm_q8_kq_p8_dk512;
     }
     const bool kq_int8 = kq_int8_kernel != nullptr && backend_ctx->get_kernel_workgroup_size(kq_int8_kernel) >= 64;
+
+    // Fewer query tiles per KV block reduce cache pressure in the int8 KQ kernel.
+    static const int64_t kq_int8_max_chunk = [] {
+        const char * e = getenv("GGML_OPENCL_FA_KQ_INT8_MAX_CHUNK");
+        const int v = (e && e[0]) ? atoi(e) : 96;
+        return (int64_t) (v >= 32 ? (v / 32) * 32 : 96);
+    }();
+    if (kq_int8) {
+        n_q_chunk = MIN(n_q_chunk, kq_int8_max_chunk);
+    }
+
+    // even out the chunks, then align to the 32-wide n-tile
+    const int64_t n_chunks = (n_q + n_q_chunk - 1) / n_q_chunk;
+    n_q_chunk = MIN(n_q_chunk, ((n_q + n_chunks - 1) / n_chunks + 31) & ~(int64_t) 31);
 
     if (kq_p8) {
         ggml_cl_flash_attn_decompose_kq_p8(backend, q, k, dst, n_q_chunk, scale, max_bias, kqv_direct, kq_int8);
