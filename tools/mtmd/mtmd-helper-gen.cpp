@@ -5564,18 +5564,14 @@ public:
 
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
         *out_sample_rate = info.sample_rate;
-        const size_t n_new = audio_pcm.size() - pcm_sent;
+        // the audio delivered by the previous call is not needed again
+        audio_pcm.erase(audio_pcm.begin(), audio_pcm.begin() + pcm_sent);
         if (out_n_samples) {
-            *out_n_samples = (int64_t) n_new;
+            *out_n_samples = (int64_t) audio_pcm.size();
         }
-        *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
-        *out_data_len = n_new * sizeof(float);
+        *out_data     = (const char *) audio_pcm.data();
+        *out_data_len = audio_pcm.size() * sizeof(float);
         pcm_sent = audio_pcm.size();
-        // the delivered audio is not needed again
-        if (pcm_sent > 24000 * 10) {
-            audio_pcm.erase(audio_pcm.begin(), audio_pcm.begin() + pcm_sent);
-            pcm_sent = 0;
-        }
         return 0;
     }
 

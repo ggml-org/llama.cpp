@@ -46,12 +46,7 @@ ggml_cgraph * mtmd_graph_moshi::build() {
 
     // the graph always streams, a zero state encodes a clip from its start
     mtmd_graph_pockettts_seanet seanet(*this);
-    for (const auto & slot : list_moshi_state_slots(hparams, model)) {
-        ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
-        ggml_set_name(t, ("state_in_" + slot.name).c_str());
-        ggml_set_input(t);
-        seanet.state_in[slot.name] = t;
-    }
+    seanet.state_inputs(list_moshi_state_slots(hparams, model));
     ggml_tensor * pos_in = seanet.state_in.at("pos");
 
     cur = seanet.encode(cur);
@@ -72,11 +67,7 @@ ggml_cgraph * mtmd_graph_moshi::build() {
     cur = seanet.conv1d(cur, model.downsample_w, nullptr, hparams.mimi_downsample, 1, false, "down");
     cb(cur, "mimi_downsample", -1);
 
-    for (const auto & s : seanet.state_out) {
-        ggml_set_name(s.second, ("state_out_" + s.first).c_str());
-        ggml_set_output(s.second);
-        ggml_build_forward_expand(gf, s.second);
-    }
+    seanet.state_outputs(gf);
 
     // split RVQ: the semantic codebook, then the residual acoustic ones, all from the same latent
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur)); // [512, n_frames]
@@ -85,15 +76,9 @@ ggml_cgraph * mtmd_graph_moshi::build() {
     const int64_t n_q      = model.mm_a_code_embd->ne[2];
     const int64_t n_embd   = model.mm_a_code_embd->ne[0];
 
-    std::vector<ggml_tensor *> codes;
-    codes.push_back(mtmd_graph_qwen3tts_gen::nearest_code(ctx0, build_mm(c2w.quant_first_in_w, cur), c2w.quant_first_cb_w));
-    ggml_tensor * residual = build_mm(c2w.quant_rest_in_w, cur);
-    for (int64_t i = 0; i < n_q - 1; i++) {
-        ggml_tensor * cb_i = moshi_slice(ctx0, c2w.quant_rest_cb_w, i);
-        ggml_tensor * code = mtmd_graph_qwen3tts_gen::nearest_code(ctx0, residual, cb_i);
-        residual = ggml_sub(ctx0, residual, ggml_get_rows(ctx0, cb_i, code));
-        codes.push_back(code);
-    }
+    const std::vector<ggml_tensor *> codes = mtmd_graph_qwen3tts_gen::rvq_encode(ctx0,
+        build_mm(c2w.quant_first_in_w, cur), c2w.quant_first_cb_w, build_mm(c2w.quant_rest_in_w, cur), c2w.quant_rest_cb_w);
+    GGML_ASSERT((int64_t) codes.size() == n_q);
 
     // [n_embd, n_frames, n_q] -> [n_embd, n_q, n_frames]
     ggml_tensor * embd = nullptr;
@@ -106,12 +91,15 @@ ggml_cgraph * mtmd_graph_moshi::build() {
     embd = ggml_cont(ctx0, ggml_permute(ctx0, embd, 0, 2, 1, 3));
 
     // the initial code is the last entry of every table
-    const int64_t code_initial = model.mm_a_code_embd->ne[1] - 1;
-    ggml_tensor * init = ggml_view_2d(ctx0, model.mm_a_code_embd, n_embd, n_q, model.mm_a_code_embd->nb[2],
-                                      (size_t) code_initial * model.mm_a_code_embd->nb[1]);
-    init = ggml_reshape_3d(ctx0, ggml_cast(ctx0, init, GGML_TYPE_F32), n_embd, n_q, 1);
+    const float   code_initial = (float) (model.mm_a_code_embd->ne[1] - 1);
+    ggml_tensor * idx_initial  = ggml_cast(ctx0, ggml_arange(ctx0, code_initial, code_initial + 1.0f, 1.0f), GGML_TYPE_I32);
+    ggml_tensor * init = nullptr;
+    for (int64_t k = 0; k < n_q; k++) {
+        ggml_tensor * e = ggml_get_rows(ctx0, moshi_slice(ctx0, model.mm_a_code_embd, k), idx_initial);
+        init = init ? ggml_concat(ctx0, init, e, 1) : e;
+    }
+    embd = ggml_concat(ctx0, embd, ggml_reshape_3d(ctx0, init, n_embd, n_q, 1), 2);
 
-    embd = ggml_concat(ctx0, embd, init, 2);
     embd = ggml_reshape_2d(ctx0, embd, n_embd, n_q * (n_frames + 1));
     cb(embd, "moshi_in_embd", -1);
     ggml_build_forward_expand(gf, embd);
@@ -188,20 +176,11 @@ ggml_cgraph * mtmd_graph_moshi_gen::build() {
         cb(cur, "rvq_decode", -1);
 
         mtmd_graph_pockettts_seanet seanet(*this);
-        for (const auto & slot : list_pockettts_state_slots(hparams, model)) {
-            ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
-            ggml_set_name(t, ("state_in_" + slot.name).c_str());
-            ggml_set_input(t);
-            seanet.state_in[slot.name] = t;
-        }
+        seanet.state_inputs(list_pockettts_state_slots(hparams, model));
 
         cur = seanet.mimi_decode(cur, mimi_n_head, mimi_eps);
 
-        for (const auto & s : seanet.state_out) {
-            ggml_set_name(s.second, ("state_out_" + s.first).c_str());
-            ggml_set_output(s.second);
-            ggml_build_forward_expand(gf, s.second);
-        }
+        seanet.state_outputs(gf);
 
         cur = ggml_reshape_1d(ctx0, cur, cur->ne[0]);
         ggml_set_name(cur, "out_audio");

@@ -1074,13 +1074,18 @@ void server_realtime_slot::push(server_realtime_op && op) {
 }
 
 void server_realtime_slot::cancel() {
+    if (duplex) {
+        // in order with the audio: the response of a full duplex model may still be opening
+        ops.push_back({SERVER_CONTROL_ACTION_RESPONSE_CANCEL, {}, {}, {}});
+        return;
+    }
     cancelled = responding;
 }
 
 bool server_realtime_slot::is_idle() const {
     if (duplex) {
         // a full duplex response waits for the next audio
-        return ops.empty() && !(responding && (duplex_pending || cancelled));
+        return ops.empty() && !(responding && duplex_pending);
     }
     return ops.empty() && !responding;
 }
@@ -1294,6 +1299,12 @@ void server_realtime_slot::response_end() {
 //
 
 bool server_realtime_slot::duplex_start() {
+    // the cells past the window are reused, the window itself must fit
+    const int32_t n_swa = llama_model_n_swa(model);
+    if (n_ctx < n_swa) {
+        return fail("the context of a slot (" + std::to_string(n_ctx) + ") must hold the attention window of the model (" +
+                    std::to_string(n_swa) + "), see -c and -np");
+    }
     stream.reset(mtmd_audio_stream_init(mctx, mtmd_audio_stream_params_default()));
     if (!stream) {
         return fail("failed to initialize the audio stream");
@@ -1365,13 +1376,6 @@ bool server_realtime_slot::duplex_frame() {
 }
 
 bool server_realtime_slot::duplex_update() {
-    // a cancel acts before the queued controls, the audio after it opens another response
-    if (responding && cancelled) {
-        stream.reset();
-        gen.reset();
-        duplex_pending = false;
-        response_end();
-    }
     while (!ops.empty()) {
         server_realtime_op op = std::move(ops.front());
         ops.pop_front();
@@ -1385,10 +1389,16 @@ bool server_realtime_slot::duplex_update() {
                     mtmd_audio_stream_push(stream.get(), op.audio.data(), op.audio.size());
                     duplex_pending = true;
                 } break;
-            case SERVER_CONTROL_ACTION_CLEAR:
+            case SERVER_CONTROL_ACTION_RESPONSE_CANCEL:
                 {
-                    llama_memory_seq_rm(llama_get_memory(ctx), seq_id, -1, -1);
-                    n_past = 0;
+                    // the audio after it opens another response
+                    if (responding) {
+                        stream.reset();
+                        gen.reset();
+                        duplex_pending = false;
+                        cancelled      = true;
+                        response_end();
+                    }
                 } break;
             default:
                 break;

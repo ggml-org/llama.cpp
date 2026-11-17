@@ -181,7 +181,7 @@ ggml_tensor * mtmd_graph_pockettts_seanet::decode(ggml_tensor * x) const {
 }
 
 // pre-norm blocks with layer scale on both residual paths, see mimi_transformer.py
-// causal over a window of mimi_tfm_context frames, streams through the slots tfm_pos, tfm_k_<il>, tfm_v_<il>
+// causal over a window of mimi_tfm_context frames, streams through the slots pos, tfm_k_<il>, tfm_v_<il>
 // x: [dim, n_pos] -> [dim, n_pos]
 ggml_tensor * mtmd_graph_pockettts_seanet::transformer(ggml_tensor * cur, const std::vector<mtmd_layer> & layers, int n_head, float eps) const {
     const int64_t n_pos  = cur->ne[1];
@@ -270,4 +270,21 @@ ggml_tensor * mtmd_graph_pockettts_seanet::mimi_decode(ggml_tensor * x, int n_he
 
     cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
     return decode(cur);
+}
+
+void mtmd_graph_pockettts_seanet::state_inputs(const std::vector<c2w_state_slot> & slots) {
+    for (const auto & slot : slots) {
+        ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
+        ggml_set_name(t, ("state_in_" + slot.name).c_str());
+        ggml_set_input(t);
+        state_in[slot.name] = t;
+    }
+}
+
+void mtmd_graph_pockettts_seanet::state_outputs(ggml_cgraph * graph) const {
+    for (const auto & s : state_out) {
+        ggml_set_name(s.second, ("state_out_" + s.first).c_str());
+        ggml_set_output(s.second);
+        ggml_build_forward_expand(graph, s.second);
+    }
 }

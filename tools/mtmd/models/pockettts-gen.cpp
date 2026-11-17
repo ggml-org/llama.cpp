@@ -189,20 +189,11 @@ ggml_cgraph * mtmd_graph_pockettts_gen::build() {
     cb(cur, "quant_out", -1);
 
     mtmd_graph_pockettts_seanet seanet(*this);
-    for (const auto & slot : list_pockettts_state_slots(hparams, model)) {
-        ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
-        ggml_set_name(t, ("state_in_" + slot.name).c_str());
-        ggml_set_input(t);
-        seanet.state_in[slot.name] = t;
-    }
+    seanet.state_inputs(list_pockettts_state_slots(hparams, model));
 
     cur = seanet.mimi_decode(cur, n_head, eps);
 
-    for (const auto & s : seanet.state_out) {
-        ggml_set_name(s.second, ("state_out_" + s.first).c_str());
-        ggml_set_output(s.second);
-        ggml_build_forward_expand(gf, s.second);
-    }
+    seanet.state_outputs(gf);
 
     // [n_samples, 1] -> [n_samples], clamped like the reference output
     cur = ggml_reshape_1d(ctx0, cur, cur->ne[0]);

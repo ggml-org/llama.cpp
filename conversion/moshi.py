@@ -57,6 +57,18 @@ def _load_hparams(dir_model: Path) -> dict[str, Any]:
         raise NotImplementedError(f"moshi checkpoint of type {model_type!r} is not supported yet")
     logger.info(f"gguf: detected a moshi checkpoint ({model_type})")
 
+    # mtmd has the layout of Hibiki: the acoustic codes lag by 2 frames, the depformer has no positional embedding,
+    # its steps past the last weight set reuse it, and the initial code is the extra entry after the mimi codebook
+    n_q = config["dep_q"]
+    schedule = config.get("depformer_weights_per_step_schedule") or list(range(n_q))
+    # text, then the generated and the input codes
+    if config["delays"] != [0] + ([0] + [2] * (n_q - 1)) * 2:
+        raise NotImplementedError(f"unsupported delays {config['delays']}")
+    if schedule != [min(i, max(schedule)) for i in range(n_q)] or config.get("depformer_pos_emb", "none") != "none":
+        raise NotImplementedError("unsupported depformer layout")
+    if config["card"] != 2048 or config["n_q"] != 2 * n_q:
+        raise NotImplementedError("unsupported audio codebooks")
+
     lm_path = dir_model / config["moshi_name"]
     # the gating hidden size is derived from dim_feedforward, read it back from the tensors
     n_ff     = _tensor_shape(lm_path, "transformer.layers.0.gating.linear_out.weight")[1]

@@ -1671,7 +1671,7 @@ Tools go into the system prompt with the chat template, and the tool calls are p
 
 Full duplex models, like Hibiki (French to English speech translation), speak while they listen on the same endpoint. There are no turns: the first `input_audio_buffer.append` opens a response, then every 80 ms of input audio gives 80 ms of output audio (`response.output_audio.delta`) and the text of the translation (`response.output_text.delta`). `response.cancel` ends the response with `response.done`, the next audio opens another one. Audio input and output are PCM16 mono, as for a realtime conversation.
 
-The model attends to the last 120 s of the stream, so the context size (`-c`) only needs to cover that window. Hibiki is trained on sequences of up to 120 s, cancel the response between long segments of speech. `input_audio_buffer.commit`, `conversation.item.create` and `response.create` are rejected. The text and the audio are sampled with the settings of the model, the text settings can be overridden with the server sampling options.
+The model attends to the last 120 s of the stream, so the context of each slot only needs to hold that window (1500 frames for Hibiki, `-c` divided by `-np`). Hibiki is trained on sequences of up to 120 s, cancel the response between long segments of speech. `input_audio_buffer.commit`, `conversation.item.create` and `response.create` are rejected. The text and the audio are sampled with the settings of the model, the text settings can be overridden with the server sampling options.
 
 ### POST `/v1/audio/speech`: OpenAI-compatible Speech API
 

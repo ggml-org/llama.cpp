@@ -433,8 +433,11 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
 
     // MTMD_SUBCTX_GEN_PROCESS_TOKENIZE: reference clip -> codes and their talker input rows
     ggml_cgraph * build_ref_encoder();
-    // also used by the moshi encoder
     static ggml_tensor * nearest_code(ggml_context * ctx0, ggml_tensor * x, ggml_tensor * codebook);
+    // split RVQ (mimi): the first codebook on x_first, the residual ones on x_rest, cb_rest is stacked on dim 2
+    // x_first, x_rest: [dim, T] -> one [T] code tensor per codebook; also used by the moshi encoder
+    static std::vector<ggml_tensor *> rvq_encode(ggml_context * ctx0, ggml_tensor * x_first, ggml_tensor * cb_first,
+                                                 ggml_tensor * x_rest, ggml_tensor * cb_rest);
 
     // reference encoder transformer, see encoder_config in speech_tokenizer/config.json
     static constexpr int   ref_enc_n_head     = 8;
@@ -530,6 +533,8 @@ struct mtmd_graph_qwen3tts_gen : mtmd_graph {
 // pocket-tts: SEANet convolution stack, shared by the voice encoder and the mimi decoder.
 // stateless unless state_in is populated: convs then pad instead of carrying left-context.
 //
+struct c2w_state_slot;
+
 struct mtmd_graph_pockettts_seanet : mtmd_graph {
     mtmd_graph_pockettts_seanet(const mtmd_graph & parent) : mtmd_graph(parent) {}
     ggml_cgraph * build() override { GGML_ABORT("call encode()/decode() instead"); }
@@ -542,6 +547,10 @@ struct mtmd_graph_pockettts_seanet : mtmd_graph {
     // per-call streaming state, keyed by slot name (see list_pockettts_state_slots)
     std::map<std::string, ggml_tensor *> state_in;
     mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    // the "state_in_<slot>" inputs of the slots, then the "state_out_<slot>" outputs written by the graph
+    void state_inputs(const std::vector<c2w_state_slot> & slots);
+    void state_outputs(ggml_cgraph * graph) const;
 
     ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation,
                          bool pad_replicate = false, const std::string & state_name = "") const;
