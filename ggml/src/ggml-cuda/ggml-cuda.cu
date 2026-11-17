@@ -3566,10 +3566,19 @@ static bool ggml_cuda_should_fuse_rms_norm_mul_rope(const ggml_tensor * rms_norm
         return false;
     }
 
-    // the fused kernel handles the norm/neox rope modes only
     const int mode = ((const int32_t *) rope->op_params)[2];
-    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX) {
+    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX &&
+        mode != GGML_ROPE_TYPE_MROPE && mode != GGML_ROPE_TYPE_IMROPE) {
         return false;
+    }
+
+    if (mode & GGML_ROPE_TYPE_MROPE) {
+        int sections[4];
+        memcpy(sections, (const int32_t *) rope->op_params + 11, sizeof(int) * 4);
+        const int sect_dims = sections[0] + sections[1] + sections[2] + sections[3];
+        if ((sections[0] <= 0 && sections[1] <= 0 && sections[2] <= 0) || sect_dims <= 0) {
+            return false;
+        }
     }
 
     const int n_dims = ((const int32_t *) rope->op_params)[1];
