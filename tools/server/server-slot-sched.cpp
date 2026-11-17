@@ -410,6 +410,9 @@ server_slot_plan server_slot_sched::select(const std::vector<server_slot_info> &
         return {};
     }
 
+    // a no-cache task overwrites the whole slot, save it first
+    update_cache = update_cache || !task.params.cache_prompt;
+
     // cache prompts only for the tasks that reuse them
     update_cache = update_cache && !task.is_stateless();
 

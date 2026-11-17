@@ -669,7 +669,8 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             // nor of the stateless slots - no task ever reuses it
-            if (task->is_child() || task->is_stateless() || audio_stream || task->type == SERVER_TASK_TYPE_REALTIME) {
+            // nor of the tasks that disable the prompt cache
+            if (task->is_child() || task->is_stateless() || audio_stream || task->type == SERVER_TASK_TYPE_REALTIME || !task->params.cache_prompt) {
                 prompt_clear();
             }
 
@@ -1824,7 +1825,8 @@ private:
 
         slot.prompt_save(*prompt_cache);
 
-        if (!slot.prompt_load(*prompt_cache, task.tokens)) {
+        // a no-cache task cannot use a loaded prompt
+        if (task.params.cache_prompt && !slot.prompt_load(*prompt_cache, task.tokens)) {
             slot.prompt_clear();
         }
 
@@ -4321,6 +4323,9 @@ private:
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
                             ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ||
                             n_swa > 0);
+
+                    // skip checkpoints for future prompt reuse when caching is disabled
+                    do_checkpoint = do_checkpoint && slot.task->params.cache_prompt;
 
                     // TODO: do the same for all models, then remove process_mtmd_chunk()
                     if (use_mixed_batch() && !slot.can_split() && input_tokens.has_mtmd) {
