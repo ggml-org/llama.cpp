@@ -256,6 +256,19 @@ class Keys:
             CANDIDATE_TOP_K_BLOCKS = "{arch}.attention.indexer.candidate_top_k_blocks"
             CANDIDATE_BLOCK_SIZE   = "{arch}.attention.indexer.candidate_block_size"
 
+    class Loop:
+        START = "{arch}.loop.start"
+        END   = "{arch}.loop.end"
+        COUNT = "{arch}.loop.count"
+
+    class MHC:
+        START          = "{arch}.mhc.start"
+        END            = "{arch}.mhc.end"
+        STREAMS        = "{arch}.mhc.streams"
+        ITERATIONS     = "{arch}.mhc.iterations"
+        PRE_SCALE      = "{arch}.mhc.pre_scale"
+        FIXED_IDENTITY = "{arch}.mhc.fixed_identity"
+
     class HyperConnection:
         COUNT                = "{arch}.hyper_connection.count"
         SINKHORN_ITERATIONS  = "{arch}.hyper_connection.sinkhorn_iterations"
@@ -630,6 +643,7 @@ class MODEL_ARCH(IntEnum):
     QWEN2MOE         = auto()
     QWEN2VL          = auto()
     SENSENOVA_U1     = auto()
+    SENSENOVA_LOOP   = auto()
     QWEN3            = auto()
     QWEN3MOE         = auto()
     FLINT            = auto()
@@ -1629,6 +1643,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2MOE:         "qwen2moe",
     MODEL_ARCH.QWEN2VL:          "qwen2vl",
     MODEL_ARCH.SENSENOVA_U1:     "sensenova_u1",
+    MODEL_ARCH.SENSENOVA_LOOP:   "sensenova_loop",
     MODEL_ARCH.QWEN3:            "qwen3",
     MODEL_ARCH.FLINT:            "flint",
     MODEL_ARCH.QWEN3MOE:         "qwen3moe",
@@ -3644,6 +3659,36 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.SENSENOVA_LOOP: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.CLS_OUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_QKV_GATE,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_BETA,
+        MODEL_TENSOR.SSM_ALPHA,
+        MODEL_TENSOR.SSM_BETA_ALPHA_CAT,
+        MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.HC_ATTN_FN,
+        MODEL_TENSOR.HC_FFN_FN,
     ],
     MODEL_ARCH.CLEF: [
         MODEL_TENSOR.TOKEN_EMBD,

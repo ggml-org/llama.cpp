@@ -2709,9 +2709,12 @@ struct llama_model_qwen35 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
-    struct graph : public llm_build_delta_net_base {
-        graph(const llm_graph_params & params);
-    private:
+    std::vector<uint32_t> layer_tensor_sources;
+
+    struct graph_base : public llm_build_delta_net_base {
+        graph_base(const llm_graph_params & params) : llm_build_delta_net_base(params) {}
+    protected:
+        void build_output(ggml_tensor * cur, ggml_tensor * inp_out_ids);
         ggml_tensor * build_layer_attn(
         llm_graph_input_attn_kv * inp_attn,
                     ggml_tensor * cur,
@@ -2739,8 +2742,34 @@ struct llama_model_qwen35 : public llama_model_base {
                             int   il);
     };
 
+    struct graph : public graph_base {
+        graph(const llm_graph_params & params);
+    };
+
     struct graph_mtp : public llm_graph_context {
         graph_mtp(const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+struct llama_model_sensenova_loop : public llama_model_qwen35 {
+    llama_model_sensenova_loop(const llama_model_params & params) : llama_model_qwen35(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    uint32_t physical_layer(uint32_t il) const;
+
+    struct graph : public llama_model_qwen35::graph_base {
+        graph(const llm_graph_params & params);
+
+        struct routing {
+            ggml_tensor * input;
+            ggml_tensor * post[2];
+            ggml_tensor * mix[4];
+        };
+
+        routing build_route(ggml_tensor * a, ggml_tensor * b, ggml_tensor * weight, ggml_tensor * bias, int il);
+        void build_merge(ggml_tensor * & a, ggml_tensor * & b, ggml_tensor * branch, const routing & route);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

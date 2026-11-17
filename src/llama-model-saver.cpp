@@ -351,6 +351,18 @@ void llama_model_saver::add_kv_from_model() {
     } else {
         add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,         hparams.dsv4_compress_ratios, true);
     }
+    if (hparams.loop_count > 0) {
+        add_kv(LLM_KV_LOOP_START,               hparams.loop_start);
+        add_kv(LLM_KV_LOOP_END,                 hparams.loop_end);
+        add_kv(LLM_KV_LOOP_COUNT,               hparams.loop_count);
+        add_kv(LLM_KV_MHC_START,                hparams.mhc_start);
+        add_kv(LLM_KV_MHC_END,                  hparams.mhc_end);
+        add_kv(LLM_KV_MHC_STREAMS,              hparams.mhc_streams);
+        add_kv(LLM_KV_MHC_ITERATIONS,           hparams.mhc_iterations);
+        add_kv(LLM_KV_MHC_PRE_SCALE,            hparams.mhc_pre_scale);
+        add_kv(LLM_KV_MHC_FIXED_IDENTITY,       hparams.mhc_fixed_identity);
+    }
+
     add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
     add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
     add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);

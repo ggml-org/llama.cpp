@@ -301,6 +301,12 @@ llama_test_cmd(python3
     ARGS -m unittest discover -s tests -p test_conversion_fp8.py -v
 )
 llama_test_cmd(python3
+    NAME test-conversion-sensenova-loop
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_sensenova_loop.py -v
+)
+llama_test_cmd(python3
     NAME test-kv-cache-scales
     LABEL "python behavior"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
